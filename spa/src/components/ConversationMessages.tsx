@@ -1,16 +1,19 @@
 // spa/src/components/ConversationMessages.tsx
-import { useRef, useEffect, type ReactNode } from 'react'
+import { useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import {
   type StreamMessage,
   type AssistantMessage,
   type UserMessage,
 } from '../lib/stream-ws'
+import { partialVersionOf, type PartialAssembly } from '../lib/nex/partial'
+import type { ToolActivity } from '../lib/nex/tool-activity'
 import MessageBubble from './MessageBubble'
 import ToolCallBlock from './ToolCallBlock'
 import ThinkingBlock from './ThinkingBlock'
 import ToolResultBlock from './ToolResultBlock'
 import ThinkingIndicator from './ThinkingIndicator'
+import PartialMessageGroup from './PartialMessageGroup'
 import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
 
 export interface ConversationMessagesProps {
@@ -22,6 +25,10 @@ export interface ConversationMessagesProps {
   scrollKey?: number           // extra auto-scroll dependency (prompt count / optimistic bubble)
   children?: ReactNode         // rendered after the list, BEFORE ThinkingIndicator (Execution: optimistic bubble)
   afterThinking?: ReactNode    // rendered AFTER ThinkingIndicator (Stream: pending prompts — today's DOM order)
+  // P-B2.2 spec §4.4 — Stream mode passes none of these and renders as today.
+  partial?: PartialAssembly | null          // R1: trailing in-flight assistant group
+  tools?: Record<string, ToolActivity>      // R2: status/timing for durable tool_use blocks, by block id
+  now?: number                              // R2: ticker value for running tools
 }
 
 export default function ConversationMessages({
@@ -33,16 +40,22 @@ export default function ConversationMessages({
   scrollKey,
   children,
   afterThinking,
+  partial,
+  tools,
+  now,
 }: ConversationMessagesProps) {
   const t = useI18nStore((s) => s.t)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
+  // R4: follow the typewriter by a length counter, not the assembly's identity.
+  const partialVersion = useMemo(() => partialVersionOf(partial), [partial])
 
-  // Auto-scroll on new messages or control requests
+  // Auto-scroll on new messages, control requests, or partial growth
   useEffect(() => {
     if (scrollRef.current?.scrollTo) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
     }
-  }, [messages, scrollKey])
+  }, [messages, scrollKey, partialVersion])
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -67,7 +80,14 @@ export default function ConversationMessages({
                   return <MessageBubble key={j} role="assistant" content={block.text} />
                 }
                 if (block.type === 'tool_use' && block.name) {
-                  return <ToolCallBlock key={j} tool={block.name} input={block.input || {}} />
+                  // R2: a tools entry (execution pane only) adds status + timing; none → today's DOM.
+                  const activity = block.id ? tools?.[block.id] : undefined
+                  return activity ? (
+                    <ToolCallBlock key={j} tool={block.name} input={block.input || {}}
+                      status={activity.status} startedAt={activity.startedAt} endedAt={activity.endedAt} now={now} />
+                  ) : (
+                    <ToolCallBlock key={j} tool={block.name} input={block.input || {}} />
+                  )
                 }
                 return null
               })}
@@ -127,6 +147,9 @@ export default function ConversationMessages({
 
         return null
       })}
+
+      {/* R1: the in-flight assistant message, after the durable list and before children */}
+      {hasPartial && <PartialMessageGroup key={`${keyPrefix}-partial`} partial={partial} />}
 
       {children}
 

@@ -1,7 +1,7 @@
 // spa/src/lib/nex/partial.test.ts — spec §4.1 T1–T8 (transient frames) and D1
 // (durable assistant frames finalize the partial through applyDurableEvent).
 import { describe, it, expect } from 'vitest'
-import { applyTransientFrame, finalizedFor } from './partial'
+import { applyTransientFrame, finalizedFor, partialHasVisibleContent, partialVersionOf, type PartialAssembly } from './partial'
 import { applyDurableEvent, defaultExecutionState, type ExecutionState } from './event-reducer'
 import type { NexEvent } from './types'
 import type { AssistantMessage } from '../stream-ws'
@@ -331,4 +331,42 @@ describe('applyDurableEvent: D1 finalizes the partial', () => {
     expect(s.partial?.messageId).toBe('m1')
   })
 
+})
+
+describe('partialHasVisibleContent (spec §4.4 R3)', () => {
+  const assembly = (blocks: PartialAssembly['blocks']): PartialAssembly => ({ messageId: 'm', finalized: 0, blocks })
+
+  it('null partial and an assembly with no blocks → false', () => {
+    expect(partialHasVisibleContent(null)).toBe(false)
+    expect(partialHasVisibleContent(assembly({}))).toBe(false)
+  })
+
+  it('blocks whose text / thinking / partialJson are all empty → false', () => {
+    const p = assembly({
+      0: { index: 0, type: 'text', text: '', thinking: '', partialJson: '' },
+      1: { index: 1, type: 'tool_use', text: '', thinking: '', partialJson: '', toolName: 'Bash' },
+      2: { index: 2, type: 'unknown', text: '', thinking: '', partialJson: '' },
+    })
+    expect(partialHasVisibleContent(p)).toBe(false)
+  })
+
+  it('any block with non-empty text, thinking or partialJson → true', () => {
+    const empty = { index: 0, type: 'text' as const, text: '', thinking: '', partialJson: '' }
+    expect(partialHasVisibleContent(assembly({ 0: empty, 1: { ...empty, index: 1, text: 'a' } }))).toBe(true)
+    expect(partialHasVisibleContent(assembly({ 0: empty, 1: { ...empty, index: 1, type: 'thinking', thinking: 't' } }))).toBe(true)
+    expect(partialHasVisibleContent(assembly({ 0: empty, 1: { ...empty, index: 1, type: 'tool_use', partialJson: '{' } }))).toBe(true)
+  })
+})
+
+describe('partialVersionOf (spec §4.4 R4)', () => {
+  it('0 for null / no blocks, otherwise the length sum of text + thinking + partialJson across blocks', () => {
+    expect(partialVersionOf(null)).toBe(0)
+    expect(partialVersionOf(undefined)).toBe(0)
+    expect(partialVersionOf({ messageId: 'm', finalized: 0, blocks: {} })).toBe(0)
+    expect(partialVersionOf({ messageId: 'm', finalized: 0, blocks: {
+      0: { index: 0, type: 'thinking', text: '', thinking: 'abc', partialJson: '' },
+      1: { index: 1, type: 'text', text: 'hello', thinking: '', partialJson: '' },
+      2: { index: 2, type: 'tool_use', text: '', thinking: '', partialJson: '{"a' },
+    } })).toBe('abc'.length + 'hello'.length + '{"a'.length)
+  })
 })

@@ -263,3 +263,94 @@ describe('ExecutionView', () => {
     expect(screen.getByTestId('execution-loading-error')).toHaveTextContent(/Failed to fetch/)
   })
 })
+
+// ---- P-B2.2 spec §4.4 R2 / R3 + the elapsed ticker ------------------------
+
+type Exec = ReturnType<typeof useExecutionStore.getState>['executions'][string]
+const patchExec = (extra: Partial<Exec>) =>
+  useExecutionStore.setState((s) => ({ executions: { ...s.executions, [KEY]: { ...s.executions[KEY], ...extra } } }))
+const textPartial = (text: string): Exec['partial'] =>
+  ({ messageId: 'm', finalized: 0, blocks: { 0: { index: 0, type: 'text', text, thinking: '', partialJson: '' } } })
+const toolUseFrame = (seq: number, created_at: number) => ({
+  seq, execution_id: E, kind: 'assistant', created_at,
+  payload: { type: 'assistant', parent_tool_use_id: null, message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'sleep 9' } }], stop_reason: null } },
+})
+const toolResultFrame = (seq: number, created_at: number) => ({
+  seq, execution_id: E, kind: 'user', created_at,
+  payload: { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'ok', is_error: false }], stop_reason: null } },
+})
+
+describe('ExecutionView — thinking indicator truth table (R3)', () => {
+  it('R3: turnLive alone (observer) → thinking indicator present', () => {
+    patchExec({ turnLive: true })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+  })
+
+  it('R3: turnLive with visible partial text → thinking indicator absent, typewriter present', () => {
+    patchExec({ turnLive: true, partial: textPartial('tokens flowing') })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    expect(screen.getByTestId('partial-group')).toHaveTextContent('tokens flowing')
+    expect(screen.getByTestId('stream-cursor')).toBeInTheDocument()
+  })
+
+  it('R3: turnLive with a partial whose blocks are all empty → thinking indicator still present', () => {
+    patchExec({ turnLive: true, partial: textPartial('') })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+  })
+
+  it('R3: pendingSend queued without turnLive → thinking indicator absent', () => {
+    patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: 'queued' } as Exec['pendingLocal'] })
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+  })
+
+  it('R3: neither turnLive nor pendingSend → thinking indicator absent', () => {
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+  })
+})
+
+describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
+  it('R2: a running tool is marked aborted after execution.turn_orphaned', () => {
+    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
+    expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
+    act(() => {
+      useExecutionStore.getState().applyEvents(H, E, [{ seq: 2, execution_id: E, kind: 'execution.turn_orphaned', payload: { turn_id: 't1' }, created_at: 9_000 }])
+    })
+    expect(screen.getByTestId('tool-aborted')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-icon-spinner')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-elapsed')).not.toBeInTheDocument()
+  })
+
+  it('ticker: the elapsed badge advances every second while a tool runs and stops once its result lands', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(10_000)
+      render(<ExecutionView hostId={H} executionId={E} isActive />)
+      const idleTimers = vi.getTimerCount()
+      act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 10_000)]) })
+      expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('0.0s')
+      expect(vi.getTimerCount()).toBe(idleTimers + 1)
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('1.0s')
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('2.0s')
+      // Any one-shot timers from mount have fired by now; only the interval is left.
+      expect(vi.getTimerCount()).toBe(1)
+
+      act(() => { useExecutionStore.getState().applyEvents(H, E, [toolResultFrame(2, 16_200)]) })
+      expect(screen.queryByTestId('tool-elapsed')).not.toBeInTheDocument()
+      expect(screen.getByTestId('tool-duration')).toHaveTextContent('6.2s')
+      // The interval is cleared: no tool is running any more.
+      expect(vi.getTimerCount()).toBe(0)
+      act(() => { vi.advanceTimersByTime(5_000) })
+      expect(screen.getByTestId('tool-duration')).toHaveTextContent('6.2s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

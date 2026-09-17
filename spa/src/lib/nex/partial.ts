@@ -28,6 +28,31 @@ export interface PartialAssembly {
   blocks: Record<number, PartialBlock>
 }
 
+/**
+ * Spec §4.4 R3: any block with non-empty text / thinking / partialJson.
+ * Gates the ThinkingIndicator — dots while the model is silent, typewriter
+ * once tokens flow.
+ */
+export function partialHasVisibleContent(p: PartialAssembly | null): boolean {
+  if (!p) return false
+  for (const b of Object.values(p.blocks)) {
+    if (b.text.length > 0 || b.thinking.length > 0 || b.partialJson.length > 0) return true
+  }
+  return false
+}
+
+/**
+ * Spec §4.4 R4: cheap change counter (length sum of every partial field) so
+ * the auto-scroll effect follows the typewriter without depending on the
+ * assembly's identity. 0 when there is no partial.
+ */
+export function partialVersionOf(p: PartialAssembly | null | undefined): number {
+  if (!p) return 0
+  let n = 0
+  for (const b of Object.values(p.blocks)) n += b.text.length + b.thinking.length + b.partialJson.length
+  return n
+}
+
 function blockIndex(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null
 }
