@@ -1,5 +1,43 @@
 # Changelog
 
+## [1.0.0-alpha.369] - 2026-09-17
+
+### Fix: Host Launcher 回報的五個缺陷（#1101）
+
+Host Launcher（alpha.357–360）上線後回報的五個問題，一併修掉。
+
+#### 🔴 啟動的 session 根本沒進專案目錄（daemon）
+
+從路徑是 `~/Workspace/wake/malb` 的專案卡片啟動 `cld-yolo`，pane 的提示字元是 `wake [/Users/wake] ❯` —— 指令跑在家目錄，不是專案裡。
+
+根因在 tmux：`tmux new-session -c '~/foo'` **不展開波浪號，也不報錯**，直接把 session 開在 `$HOME`；`-c` 指向不存在的目錄同樣如此（兩者實測都回 exit 0）。而 host 專案路徑是明確允許 `~/…` 的（`hostconfig/validate.go`），`hostconfig/checkpath.go` 也早就正確展開了 —— 只有建 session 這條路徑沒有。
+
+新的 `internal/module/session/cwd.go`：trim → 空字串維持 `/` → 拒絕 NUL → 以 `os.UserHomeDir` 展開開頭的 `~` / `~/` → 拒絕仍是相對路徑的輸入 → `filepath.Clean` → `os.Stat`。目錄不存在或不是目錄一律回 **400**，不再讓 tmux 默默吞掉。
+
+**這是行為變更**：tab rebuild 與 snapshot restore 碰到已刪除的專案目錄，現在會明確失敗，而不是看似成功卻開在 `$HOME`。codex 逐一檢查過所有 `createSession` 呼叫端，沒有任何一個合理需要不存在的 cwd。
+
+另外 `handleCreate` 改為記錄 **tmux 實際使用的目錄**（`#{session_path}`）到 `SessionMeta.Cwd` 與 create 回應，而非「要求的」路徑，讓三條路徑（create / list / get）的 `Cwd` 全都來自 tmux。兩者真正分歧時打 warning；**不殺 session** —— `session_path` 來自 `getcwd()`，會正規化 symlink 與檔名大小寫（macOS `/tmp` → `/private/tmp`），字串比對必然誤判，為誤判殺掉剛建好的 session 比它要防的罕見 race 嚴重得多。判斷改用 `os.SameFile`，純正規化不出聲。
+
+#### New Tab 一開啟就捲到 session 清單最底
+
+`BrowserNewTabSection` 在 mount 時 focus 網址列。`focus()` 會把所有可捲動祖先捲到目標可見為止，而 New Tab 的欄位是 `overflow-y-auto`，於是每次開分頁都被拖過 session 清單。只在 Electron 下會發生（`disabled: !caps.canBrowserPane`）。自動聚焦整個拿掉。
+
+#### Host 頁開在上次看的那台，不是第一台
+
+`pickHostIdFallback` 的優先序是 `lastSelection.hostId` → `activeHostId` → `hostOrder[0]`。未指名 host 的路由現在一律選 `hostOrder[0]`，完全不記憶。子頁記憶保留，且仍會經 `pickSelectableSubPage` 夾取；明確的 `/hosts/<id>/<sub>` 依然優先。
+
+#### New Tab 的「+」靠右並加上底色
+
+每台 host 的 `+` 從 `ml-1` 移到列尾（`ml-auto`），15% 透明度的 accent tint 換成實心 accent 底色；reconnecting 標籤上移到 host 名稱旁。
+
+#### Launcher 卡片壓成一列
+
+`[{專案} {指令}{指令}{指令}]`，最窄一行兩張。永遠可見的路徑列拿掉，路徑、slug 與指令名稱改由 `HoverTooltip` 在 hover 時顯示 —— tooltip 掛在不會 disabled 的 wrapper span 上，所以 `locked` 狀態的按鈕一樣有提示。鍵盤模型、`data-launch-item` 順序與啟動語意皆未變。
+
+#### 部署
+
+daemon 有變更：mlab 需重新 `make build` + 重啟，air-2026 需更新 App 內建的 daemon，第一項修正才會生效。
+
 ## [1.0.0-alpha.368] - 2026-09-17
 
 ### Refactor: 拔掉 cswap 殘留，nexen 升到 v0.11.0（#1098）
