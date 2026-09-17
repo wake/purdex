@@ -1,6 +1,6 @@
 # Spec — P-B2: exec mode live streaming (typewriter + tool activity)
 
-- Status: v1.1 (2026-09-18) — codex spec review `task-mu603x78-fe7zvg` applied (§10)
+- Status: v1.2 (2026-09-18) — codex spec review `task-mu603x78-fe7zvg` applied (§10); acceptance run §6.1 fixes applied (F6/A4/R3)
 - Predecessor: `2026-09-15-pb-execution-pane-spec.md` (P-B, shipped
   alpha.350/351/353). Its §4.2.3 transport and §4.2.4 reducer rules stay
   binding; this spec only adds what P-B explicitly deferred to "P-B2".
@@ -102,7 +102,10 @@ Nexen v0.11.2 (`~/tmp/go/pkg/mod/lab.protype.tw/wake/nexen@v0.11.2`):
   and every turn ending (`ClearAssembly` on interrupt/error/orphan) clear the
   assembly server-side.
 - F6 `created_at` on `NexEvent` is unix **milliseconds**
-  (`store/execution.go:155-157`, `store/event.go:19`).
+  (`store/execution.go:155-157`, `store/event.go:19`) — on the REST history
+  page only; live SSE `data:` is the bare provider payload with no wrapper
+  (`api/sse.go:303-315`), so `frameToEvent` yields `created_at: 0` for live
+  durable frames.
 - F7 Restart reconcile (`execution/reconcile.go`): a turn still `running`
   with no live handle → `execution.turn_orphaned`, execution settles to
   `idle`; never respawns.
@@ -261,9 +264,12 @@ export interface ToolActivity {
 - A3 On D3 events: every `tools[*]` still `running` → `endedAt =
   ev.created_at`, `status = 'aborted'`.
 - A4 `created_at` of 0 (the `frameToEvent` fallback for a frame without a
-  wrapper) → `startedAt = Date.now()` is **not** used in the reducer (pure);
-  instead `startedAt = 0` and the renderer treats `0` as "unknown, show no
-  timer". Nexen always sends the wrapper, so this is a guard, not a path.
+  wrapper, i.e. every live durable frame per F6): the hook stamps a live
+  durable frame whose `created_at` is 0 with client arrival time
+  (`Date.now()`) before it reaches the reducer, mirroring Nexen's console
+  (history = server ms, live = client ms); the reducer stays pure and a
+  literal 0 that somehow survives still means "no timer" (`startedAt = 0`,
+  renderer shows no badge).
 
 Elapsed time is computed in the renderer as `max(0, now - startedAt)` with
 `now` from a 1 s ticker that runs only while at least one tool is
@@ -333,10 +339,12 @@ now?: number                 // ticker value for running tools
   `aborted` → muted "aborted". Missing entry (older history, subagent) →
   today's rendering.
 - R3 `ThinkingIndicator` visibility from `ExecutionView`:
-  `showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued')) && !partialHasVisibleContent`
+  `showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued')) && !partialHasVisibleContent && !anyRunning`
   where `partialHasVisibleContent` is any block with non-empty text /
-  thinking / partialJson. Observers therefore see the dots while the model
-  is thinking and the typewriter once tokens flow.
+  thinking / partialJson and `anyRunning` is any `tools[*].status ===
+  'running'` — a running tool's spinner already shows activity, so the dots
+  would only add noise beside it. Observers therefore see the dots while
+  the model is thinking and the typewriter once tokens flow.
 - R4 Auto-scroll: `ConversationMessages`'s scroll effect also depends on a
   cheap `partialVersion` counter (length sum of partial fields) so the view
   follows the typewriter without depending on the whole object identity.
@@ -476,3 +484,5 @@ durable frames, never from snapshot indices.
   non-goal conflict → A1/A2 skip non-null `parent_tool_use_id`; (6) P2
   "Stream mode untouched" too broad → G5 reworded + default-prop snapshot
   tests; (7) P3 preserved fields listed (§4.1/§4.5).
+- v1.2 — acceptance run §6.1: live frames carry no `created_at` → hook
+  stamps arrival time (F6/A4); dots suppressed while a tool runs (R3).
