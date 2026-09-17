@@ -1195,6 +1195,48 @@ func TestSend_SelfTargetRefused(t *testing.T) {
 	}
 }
 
+// TestSend_RemoteTargetSharingTheOriginsTupleIsNotSelfTarget pins the SCOPE
+// of §4.5 rather than its comparison: L7 refuses "a local send to the origin
+// itself", and the step table (spec §3, step 6b) puts the check in the local
+// column with a dash opposite it. A remote target is on a different host by
+// definition, so the identity tuple — session id, pid, proc start, all of
+// them host-local facts — says nothing about whether it is this caller.
+//
+// Run unconditionally, the check reads that tuple as if it were globally
+// unique and refuses a perfectly ordinary remote send 400 self_target. The
+// collision is not hypothetical: a cloned machine or a restored home
+// directory carries the registry's session ids with it, and beyond that the
+// tuple arrives in a peer's self-report, which this daemon does not audit.
+//
+// The fixture is the one TestSend_RefusalCodesMatchPerAddressForm already
+// uses — the peer host reporting this daemon's own inventory as its own —
+// aimed at the origin's own row, which is the single step that test does not
+// take.
+func TestSend_RemoteTargetSharingTheOriginsTupleIsNotSelfTarget(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	mirrored := s.m.localEnvelope(context.Background(), remoteHostID, remoteAlias)
+	if !mirrored.OK {
+		t.Fatalf("local envelope not ok: %s", mirrored.Error)
+	}
+	s.set(func(s *sendEnv) { s.env = mirrored })
+
+	req := s.sendReq()
+	req.To = remoteAlias + "/" + targetPeerName // the origin's own name, on the OTHER host
+
+	resp := s.sendOK(req)
+	if resp.Result != ipeers.ResultDelivered {
+		t.Errorf("result = %q, want %q", resp.Result, ipeers.ResultDelivered)
+	}
+	post := s.onlyPost()
+	if post.req.To.AgentSessionID != targetSessionID || post.req.To.PID != targetPID {
+		t.Errorf("post to = %+v, want the remote row's tuple (session %q pid %d)", post.req.To, targetSessionID, targetPID)
+	}
+	// What a self-target refusal exists to prevent, and the proof that taking
+	// the remote path did not cause it: the local session whose tuple this is
+	// never sees the frame.
+	s.assertNoLine()
+}
+
 // TestSend_AgentlessLocalTargetIsNotDeliverable guards the ORDER of two
 // checks rather than either check on its own. A `tmux:<name>` address can
 // resolve to a row with no agent at all, so a self-target comparison placed
