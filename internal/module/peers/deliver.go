@@ -31,10 +31,14 @@ const resultClientGone = "client_gone"
 
 // clampMode is the receiver's mode policy: a declared bypass is honoured
 // only for a sender whose host entry has AllowBypass; everything else
-// (prompting, or "" meaning prompting) is prompting.
+// (prompting or unknown) is prompting. Unknown is passed through unchanged
+// so the receiver can treat it as a mismatch (issue #1124, Option 2).
 func clampMode(declared string, allowBypass bool) string {
 	if declared == ipeers.ModeBypass && allowBypass {
 		return ipeers.ModeBypass
+	}
+	if declared == ipeers.ModeUnknown {
+		return ipeers.ModeUnknown
 	}
 	return ipeers.ModePrompting
 }

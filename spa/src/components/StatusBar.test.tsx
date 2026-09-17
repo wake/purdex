@@ -55,8 +55,8 @@ function setupStores() {
   })
   useAgentStore.setState({ agentTypes: {}, oscTitles: {}, models: {}, lastEvents: {}, statuses: {}, unread: {}, subagents: {} })
   useUISettingsStore.setState({ showAgentTitleInStatusBar: false })
-  peerRefresh.mockClear()
-  cwdRefresh.mockClear()
+  peerRefresh.mockReset()
+  cwdRefresh.mockReset()
   copyTextMock.mockClear()
   copyTextMock.mockResolvedValue(undefined)
   usePeerStore.setState({ byHost: {}, refresh: peerRefresh })
@@ -523,6 +523,40 @@ describe('StatusBar peer segments', () => {
     fireEvent.click(seg)
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
     expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  // Seen on a real machine: the bar showed `purdex-4a` for a pane whose tmux
+  // session now held `purdex-bb`. The old agent exited and a new one started
+  // in the SAME tmux session, so the generation guard had nothing to catch.
+  // The SPA does hear about it — the owner SessionStart writes the new session
+  // id into the pane's rebuild record — and that write must re-read the rows.
+  it('re-reads the rows when a SessionStart replaces the Claude Code session behind the pane', async () => {
+    seedPeers({}, { ...PEER_ROW, address: 'mlab/purdex-4a', ref: '_4a4a4a' })
+    const tab = sessionTab()
+    useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: tab.id })
+    act(() => {
+      useTabStore.getState().setPaneRebuild(HOST_ID, 'dev001', GEN, {
+        kind: 'agent-group',
+        record: { tmuxInstance: GEN, agent: { type: 'cc', sessionId: 'sid-4a', updatedAt: 1 }, capturedAt: 1 },
+      })
+    })
+    // The refreshed answer names the new occupant.
+    peerRefresh.mockImplementationOnce(async (hostId) => {
+      usePeerStore.setState((s) => ({
+        byHost: { ...s.byHost, [hostId]: { ...s.byHost[hostId], rows: { dev001: { ...PEER_ROW, address: 'mlab/purdex-bb', ref: '_bbbbbb' } }, fetchedAt: Date.now() } },
+      }))
+    })
+    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-4a [4a4a4a]')
+    peerRefresh.mockClear()
+    act(() => {
+      useAgentStore.getState().handleNormalizedEvent(HOST_ID, 'dev001', {
+        agent_type: 'cc', status: 'idle', raw_event_name: 'PdxSessionStart', broadcast_ts: 2, subagents: [],
+        detail: { pdx_provenance: { owner_session_start: true, agent_type: 'cc', session_id: 'sid-bb', cwd: '/w', tmux_pane_id: '%1', tmux_instance: GEN } },
+      })
+    })
+    await waitFor(() => expect(peerRefresh).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-bb [bbbbbb]'))
   })
 
   it('the refresh control refreshes both stores once', async () => {

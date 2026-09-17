@@ -797,8 +797,8 @@ func TestSend_LocalDeliveryCarriesBothFroms(t *testing.T) {
 	if w.FromName != localAlias+"/"+targetPeerName {
 		t.Errorf("wrapper from-name = %q, want the origin's own address %q", w.FromName, localAlias+"/"+targetPeerName)
 	}
-	if w.FromMode != ipeers.ModePrompting {
-		t.Errorf("wrapper from-mode = %q, want %q", w.FromMode, ipeers.ModePrompting)
+	if w.FromMode != ipeers.ModeUnknown {
+		t.Errorf("wrapper from-mode = %q, want %q", w.FromMode, ipeers.ModeUnknown) // #1124: default mode is now unknown
 	}
 	if w.HopChain != "" {
 		t.Errorf("wrapper hop-chain = %q, want empty (a CLI send is the first hop)", w.HopChain)
@@ -850,7 +850,7 @@ func TestSend_LocalDeliverySendResponse(t *testing.T) {
 		ToAddress:     localAlias + "/" + localPeerName,
 		To:            ipeers.WireTo{AgentSessionID: localPeerSessionID, PID: localPeerPID, ProcStart: targetProcStart},
 		Result:        ipeers.ResultDelivered,
-		EffectiveMode: ipeers.ModePrompting,
+		EffectiveMode: ipeers.ModeUnknown, // #1124: default mode when caller doesn't specify --mode is now unknown
 		OneWay:        false,
 	}
 	if resp != want {

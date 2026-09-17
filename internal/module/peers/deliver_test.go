@@ -520,7 +520,8 @@ func TestDeliver_ModeClamp(t *testing.T) {
 		{"bypass refused", false, ipeers.ModeBypass, ipeers.ModePrompting},
 		{"bypass allowed", true, ipeers.ModeBypass, ipeers.ModeBypass},
 		{"prompting stays", true, ipeers.ModePrompting, ipeers.ModePrompting},
-		{"empty means prompting", true, "", ipeers.ModePrompting},
+		{"empty means unknown", true, "", ipeers.ModeUnknown}, // #1124: empty now means unknown, not prompting
+		{"unknown passed through", true, ipeers.ModeUnknown, ipeers.ModeUnknown},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -539,7 +540,7 @@ func TestDeliver_ModeClamp(t *testing.T) {
 			row := e.onlyRow()
 			wantDeclared := c.declared
 			if wantDeclared == "" {
-				wantDeclared = ipeers.ModePrompting
+				wantDeclared = ipeers.ModeUnknown // ValidateMode("") now returns ModeUnknown
 			}
 			if row.DeclaredMode != wantDeclared || row.EffectiveMode != c.want {
 				t.Errorf("row modes = %q/%q, want %q/%q", row.DeclaredMode, row.EffectiveMode, wantDeclared, c.want)
