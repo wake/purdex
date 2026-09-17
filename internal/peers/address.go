@@ -62,6 +62,16 @@ var ErrLegacyCC = errors.New("cc: addresses were removed; run pdx peers --all to
 // is named rather than silently absorbed into a fallback.
 var ErrRemoteTooOld = errors.New("the peer host's daemon predates Peer Address v3 and reports no canonical ids; upgrade and restart pdx there, or address a session as tmux:<name>")
 
+// ErrNameMismatch is returned for the combined form "<name> [<ref>]" when the
+// ref resolves to a row whose name is not the one typed.
+//
+// It refuses rather than delivering-with-a-warning because the name in a
+// combined address is the reader's only check on the ref beside it.
+// "trusted-name [attackerRef]" is precisely the string worth getting pasted,
+// and a warning arrives after the message has gone. Legitimate drift has an
+// explicit escape hatch: "<host>/_<ref>" asks for the ref outright.
+var ErrNameMismatch = errors.New("the typed name does not match the ref's current name")
+
 // AmbiguousError is returned by Resolve when a tier matches more than one
 // record; Candidates holds only the matches from the tier that decided.
 type AmbiguousError struct {
@@ -73,62 +83,78 @@ func (e *AmbiguousError) Error() string {
 	return fmt.Sprintf("peer address %q is ambiguous (%d candidates)", e.Session, len(e.Candidates))
 }
 
-// Resolve implements Peer Address v3 spec §5.1 for ONE host's records;
-// host has already been matched by the caller. Forms and tiers, in order:
+// Resolve implements Peer Address v4 spec §5.4 for ONE host's records; host
+// has already been matched by the caller. The forms, in the order they are
+// decided:
 //
 //   - "cc:<anything>": the retired v1 form, always ErrNotFound wrapping
-//     ErrLegacyCC, regardless of partial.
-//   - "tmux:<name>": explicit tmux form, bypassing tier 1 entirely;
-//     matches PeerRecord.SessionName == name. "tmux:" with an empty name
-//     is ErrNotFound.
-//   - "<canonical>[:<suffix>]": tier 1, the canonical id — the
-//     sessionId-derived head PeerRecord.Ref carries — matched over
-//     every row that carries a LIVE cc entry, session rows and entry rows
-//     alike, but only those whose Agent is a real registry entry (Type
-//     "cc", PID != 0). Proxy rows and owner-fallback rows (inbox_dead /
-//     ambiguous: Agent.PID == 0, no entry behind them) are excluded —
-//     spec §3.3 makes a row whose holder is not live inert, neither
-//     resolving nor blocking, and that is how the rule reaches
-//     resolution. A typed suffix is ignored (display-only). Several
-//     matches => *AmbiguousError regardless of the snapshot. Exactly one
-//     match and snap.RegistryIncomplete => ErrResolveNotReady (an
-//     unreadable registry file may hide a second process of that
-//     conversation). No match and snap.Partial => ErrResolveNotReady. No
-//     match, not Partial and the head contains no ':' => tier 2: the bare
-//     string as a tmux session name.
+//     ErrLegacyCC, regardless of the snapshot.
+//   - "tmux:<name>": the explicit tmux form, bypassing every tier and every
+//     completeness rule; matches PeerRecord.SessionName == name. "tmux:" with
+//     an empty name is ErrNotFound.
+//   - the stale-version gate (see below), which decides nothing but can
+//     refuse everything under it.
+//   - "<name> [<ref>]": the combined form the peers table prints. The ref
+//     resolves through resolveRefHead and the typed name is then compared
+//     against the resolved row's registry name; a mismatch is
+//     ErrNameMismatch, never a delivery.
+//   - tier 1, "<name>": Agent.PeerName == head, over rows carrying a LIVE cc
+//     entry whose name is routable.
+//   - tiers 2 and 3, "_<ref>" and the same ref without its underscore:
+//     PeerRecord.Ref == head over those same live rows. Only for a head with
+//     nothing after a ':'.
+//   - tier 4, "<name>" read as a bare tmux session name: SessionName == head,
+//     over a complete inventory only.
 //
-// The first tier (or form) with >=1 match decides: exactly one match =>
-// that record (subject to the RegistryIncomplete rule above); several =>
-// *AmbiguousError (never falls through to a lower tier). No tier matches
+// Tiers 1 to 3 see only rows whose Agent is a real registry entry (Type "cc",
+// PID != 0). Proxy rows and owner-fallback rows (inbox_dead / ambiguous:
+// Agent.PID == 0, no entry behind them) are excluded — spec §3.3 makes a row
+// whose holder is not live inert, neither resolving nor blocking, and this is
+// how that rule reaches resolution.
+//
+// The first form or tier with >=1 match decides: exactly one match => that
+// record (subject to the RegistryIncomplete rule below); several =>
+// *AmbiguousError, which never falls through to a lower tier. Nothing matches
 // => ErrNotFound.
 //
-// One exception overrides tier 2 and the Partial rule alike: when the
-// batch itself shows it came from a pre-v3 daemon (hasPreV3Rows), a
-// tier-1 miss is ErrNotFound wrapping ErrRemoteTooOld and nothing else is
-// tried. The explicit "tmux:<name>" form is decided above this and is
-// unaffected — it names a place outright, a v2 daemon reports SessionName
-// exactly as a v3 one does, and it is the escape hatch the refusal points
-// the caller at.
+// Tiers 1 and 2/3 cannot both match one row, and that disjointness is CREATED
+// rather than observed: RoutableName forbids a ref-shaped name (spec §5.2), so
+// no ordering rule between them is needed. Tier 1 is restricted to routable
+// names for the same reason read backwards — an unroutable name could never
+// have produced the address being typed, so it must not win a tier.
 //
-// PeerRecord.Label is matched by NOTHING here, and that is D3: a label is
-// a self-declared display name, read to CHOOSE a peer, never used to
-// reach one. Two conversations may hold one label (D5) precisely because
-// no routing decision rests on it. A bare label therefore misses tier 1,
-// fails tier 2, and comes back ErrNotFound.
+// The stale-version gate sits ABOVE every tier rather than in front of the
+// fallback, which is where v3 put it. In v3 what lay below the gate was a
+// tmux-name guess; in v4 the tier immediately below it would SUCCEED. A row
+// from a daemon that predates v4 still carries a usable registry name in
+// agent.peer_name, so a bare name would resolve against a row whose ref the
+// sender could never have verified. One stale row condemns the batch, because
+// Resolve is called per host and every row in it came from the same daemon.
+// "tmux:<name>" is decided above the gate: it names a place outright, an old
+// daemon reports SessionName exactly as a current one does, and it is the
+// escape hatch the refusal points the caller at.
 //
-// Two conservatisms are deliberate, so that neither reads as an oversight:
+// PeerRecord.Label is matched by NOTHING here, and that is D3: a label is a
+// self-declared display name, read to CHOOSE a peer, never used to reach one.
+// Two conversations may hold one label (D5) precisely because no routing
+// decision rests on it. A bare label therefore misses every tier and comes
+// back ErrNotFound.
 //
-//   - A tier-1 miss under snap.Partial is ErrResolveNotReady even though
-//     a canonical id is derived from the sessionId alone — it depends on
-//     neither the label store nor owner resolution, so a partial
-//     inventory can never be the reason it missed. It is retried anyway
-//     because that is the safe direction: a retry costs one round trip, a
-//     false "not found" costs a message. Splitting Partial by cause is
-//     out of scope (spec §5.1).
-//   - "tmux:<name>" and tier 2 match SessionName without comparing
-//     TmuxInstance, so with two tmux servers holding same-named sessions
-//     they resolve the one the daemon can see, which may not be the one
-//     the operator meant. Pre-existing, out of scope (spec §5.1).
+// Three conservatisms are deliberate, so that none reads as an oversight:
+//
+//   - A ref miss under snap.Partial is ErrResolveNotReady even though a ref is
+//     derived from the sessionId alone — it depends on neither the label store
+//     nor owner resolution, so a partial inventory can never be the reason it
+//     missed. It is retried anyway because that is the safe direction: a retry
+//     costs one round trip, a false "not found" costs a message. Splitting
+//     Partial by cause is out of scope (spec §5.4).
+//   - The combined form carries those same rules, because it resolves its ref
+//     through the same helper the bare-ref tiers use. It cannot quietly
+//     acquire a weaker rule set than the address it contains.
+//   - "tmux:<name>" and tier 4 match SessionName without comparing
+//     TmuxInstance, so with two tmux servers holding same-named sessions they
+//     resolve the one the daemon can see, which may not be the one the
+//     operator meant. Pre-existing, out of scope (spec §5.4).
 func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRecord, error) {
 	if session == "" {
 		return PeerRecord{}, ErrNotFound
@@ -143,14 +169,39 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		}
 		return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == rest })
 	}
-	// Tier 1: the canonical id, over every row backed by a live entry;
-	// the typed suffix is ignored. head != "" carries over the guard v2
-	// spelled as `r.Label != ""`: ":suffix" splits to an empty head, and
-	// these records may come from a REMOTE host — a v2 daemon that has
-	// never heard of `canonical` sends live rows with it empty, and
-	// without the guard every one of them would match that head.
+	// The stale-version gate, ABOVE every tier — not in front of the
+	// fallback, where v3 had it. A pre-v4 row still carries a usable registry
+	// name, so tier 1 would SUCCEED against it and deliver to a conversation
+	// whose ref the sender could never have verified. Refuse by name: "retry,
+	// the inventory is partial" is advice that can never come true against an
+	// old daemon, and a wrong diagnosis costs the operator the time they spend
+	// following it.
+	if hasPreV3Rows(records) {
+		return PeerRecord{}, fmt.Errorf("%w: %w", ErrNotFound, ErrRemoteTooOld)
+	}
+
+	// The combined form "<name> [<ref>]", which the peers table prints and an
+	// operator pastes verbatim. The ref decides where this goes; the name is
+	// the reader's check on it, so a mismatch refuses rather than delivers.
+	if name, ref, ok := splitCombined(session); ok {
+		rec, err := resolveRefHead(records, ref, snap)
+		if err != nil {
+			return PeerRecord{}, err
+		}
+		if rec.Agent.PeerName != name {
+			return PeerRecord{}, fmt.Errorf("%w: typed %q, but %s is now %q",
+				ErrNameMismatch, name, ref, rec.Agent.PeerName)
+		}
+		return rec, nil
+	}
+
+	// Tier 1: the registry name, over live rows whose name is routable. The
+	// RoutableName guard is not decoration — an unroutable name must not win a
+	// tier, because it could never have produced the address being typed. It
+	// also subsumes the `head != ""` guard v3 spelled out: ":suffix" splits to
+	// an empty head, and RoutableName("") is false.
 	rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-		return hasLiveEntry(r) && head != "" && r.Ref == head
+		return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) && r.Agent.PeerName == head
 	})
 	if err == nil && snap.RegistryIncomplete {
 		// One hit, but a registry file for an alive pid could not be
@@ -162,24 +213,73 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 	if !errors.Is(err, ErrNotFound) {
 		return rec, err
 	}
-	// Tier 1 missed. Before anything is guessed at, ask whether this batch
-	// could have answered at all: rows from a pre-v3 daemon carry no
-	// canonical, so a miss says nothing about the head and everything
-	// about the peer's version. Refuse by name. This sits ahead of the
-	// Partial check on purpose — "retry, the inventory is partial" is
-	// advice that can never come true against a v2 daemon, and a wrong
-	// diagnosis costs the operator the time they spend following it.
-	if hasPreV3Rows(records) {
-		return PeerRecord{}, fmt.Errorf("%w: %w", ErrNotFound, ErrRemoteTooOld)
+
+	// Tiers 2/3: the ref, with or without its underscore. No ordering rule is
+	// needed against tier 1: RoutableName forbids a ref-shaped name, so no row
+	// can match both.
+	if rest == "" {
+		rec, err = resolveRefHead(records, head, snap)
+		if !errors.Is(err, ErrNotFound) {
+			return rec, err
+		}
 	}
+
 	if snap.Partial {
 		return PeerRecord{}, ErrResolveNotReady
 	}
-	// Tier 2: bare tmux session name, complete inventory only.
+	// Tier 4: bare tmux session name, complete inventory only.
 	if rest != "" {
 		return PeerRecord{}, ErrNotFound
 	}
 	return resolveTier(records, session, func(r PeerRecord) bool { return r.SessionName == head })
+}
+
+// splitCombined splits "<name> [<ref>]" into its parts. ok is false for
+// anything else, including a nested or doubled bracket group — those are not
+// a form this accepts, and treating them as one would let a crafted string
+// choose which half gets checked.
+func splitCombined(s string) (name, ref string, ok bool) {
+	if !strings.HasSuffix(s, "]") {
+		return "", "", false
+	}
+	i := strings.IndexByte(s, '[')
+	if i <= 0 {
+		return "", "", false
+	}
+	inner := s[i+1 : len(s)-1]
+	if strings.ContainsAny(inner, "[]") {
+		return "", "", false
+	}
+	name = strings.TrimSpace(s[:i])
+	if name == "" || inner == "" {
+		return "", "", false
+	}
+	return name, inner, true
+}
+
+// resolveRefHead resolves a ref with or without its leading underscore,
+// applying every conservatism the bare-ref tier applies.
+//
+// It is shared with the combined form deliberately: a combined address
+// contains a ref, and it must not acquire a weaker rule set than that same
+// ref typed on its own would get.
+func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (PeerRecord, error) {
+	if !strings.HasPrefix(ref, "_") {
+		ref = "_" + ref
+	}
+	if !IsRef(ref) {
+		return PeerRecord{}, ErrNotFound
+	}
+	rec, err := resolveTier(records, ref, func(r PeerRecord) bool {
+		return hasLiveEntry(r) && r.Ref == ref
+	})
+	if err == nil && snap.RegistryIncomplete {
+		return PeerRecord{}, ErrResolveNotReady
+	}
+	if errors.Is(err, ErrNotFound) && snap.Partial {
+		return PeerRecord{}, ErrResolveNotReady
+	}
+	return rec, err
 }
 
 // hasLiveEntry reports whether r's agent is a real, live Claude Code
