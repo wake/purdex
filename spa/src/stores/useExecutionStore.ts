@@ -6,7 +6,7 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import { compositeKey } from '../lib/composite-key'
-import { applyDurableEvent, defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
+import { applyDurableEvent, applyTransientFrame, defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
 import type { ExecutionSummary, NexEvent } from '../lib/nex/types'
 
 export function executionKey(hostId: string, executionId: string): string {
@@ -36,6 +36,15 @@ interface ExecutionStore {
    */
   setSummary: (hostId: string, executionId: string, summary: ExecutionSummary | null, asOfSeq?: number) => void
   applyEvents: (hostId: string, executionId: string, events: NexEvent[]) => void
+  /**
+   * Fold a batch of transient SSE frames (no id / no cursor: `stream_event`,
+   * `stream_snapshot`, `lease.renewed`, …) into the partial assembly in ONE
+   * `set()` (spec §4.3). The hook coalesces deltas per animation frame and
+   * hands them over here. A batch that changes nothing (e.g. only
+   * `lease.renewed`) returns the same state object, so `patch` materialises
+   * no entry for an execution nobody has otherwise touched.
+   */
+  applyTransient: (hostId: string, executionId: string, frames: { kind: string; payload: Record<string, unknown> }[]) => void
   setHistoryLoaded: (hostId: string, executionId: string, v: boolean) => void
   setSse: (hostId: string, executionId: string, status: ExecutionState['sse'], err?: string | null) => void
   setLease: (hostId: string, executionId: string, lease: ExecutionState['lease']) => void
@@ -72,6 +81,9 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
       }),
 
     applyEvents: (h, e, events) => patch(h, e, (c) => events.reduce(applyDurableEvent, c)),
+
+    applyTransient: (h, e, frames) =>
+      patch(h, e, (c) => frames.reduce((s, f) => applyTransientFrame(s, f.kind, f.payload), c)),
 
     setHistoryLoaded: (h, e, v) => patch(h, e, (c) => ({ ...c, historyLoaded: v })),
 
