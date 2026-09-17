@@ -60,7 +60,7 @@ var ErrLegacyCC = errors.New("cc: addresses were removed; run pdx peers --all to
 // Refusing is the whole posture of v3: an address is resolved, never
 // guessed at. A version mismatch is a fact the batch itself reveals, so it
 // is named rather than silently absorbed into a fallback.
-var ErrRemoteTooOld = errors.New("the peer host's daemon predates Peer Address v3 and reports no canonical ids; upgrade and restart pdx there, or address a session as tmux:<name>")
+var ErrRemoteTooOld = errors.New("the peer host's daemon predates Peer Address v4 and reports no refs; upgrade and restart pdx there, or address a session as tmux:<name>")
 
 // ErrNameMismatch is returned for the combined form "<name> [<ref>]" when the
 // ref resolves to a row whose name is not the one typed.

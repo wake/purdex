@@ -190,8 +190,8 @@ const (
 
 	// ErrCodeRemoteTooOld is /send's answer when Resolve came back with
 	// ErrRemoteTooOld: the target host still runs a daemon from before
-	// Peer Address v3, so its rows carry no canonical id and no address
-	// can be resolved against them. Distinct from peer_not_found because
+	// Peer Address v4, so its rows carry no ref and no address can be
+	// resolved against them. Distinct from peer_not_found because
 	// the two ask for opposite things — one says check the address, the
 	// other says upgrade the other host — and the refusal is only useful
 	// if it says which. (The Go sentinel lives in address.go; this is the
