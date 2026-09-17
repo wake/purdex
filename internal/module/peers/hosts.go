@@ -73,13 +73,18 @@ type addHostResponse struct {
 	Verified     bool   `json:"verified"`
 }
 
-// putHostRequest is PUT /api/peers/hosts/{alias}'s body. Both fields are
-// optional and independent: Token (when non-empty) verifies and stores an
-// outbound token; AllowBypass (when non-nil) sets AllowBypass regardless of
-// whether Token was also supplied.
+// putHostRequest is PUT /api/peers/hosts/{alias}'s body. All three fields
+// are optional and independent: Token (when non-empty) verifies and stores
+// an outbound token; AllowBypass (when non-nil) sets AllowBypass; Alias
+// (when non-empty) renames the entry (spec §4.2) — validated with
+// config.ValidateAlias and for case-insensitive uniqueness exactly as an
+// operator-typed name at POST is, because the value the page sends here is
+// the peer's own self-reported alias (v4 spec §7.2: a learned alias must
+// clear the same bar).
 type putHostRequest struct {
 	Token       string `json:"token"`
 	AllowBypass *bool  `json:"allow_bypass"`
+	Alias       string `json:"alias"`
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
@@ -385,14 +390,18 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 
 // handlePutHost serves PUT /api/peers/hosts/{alias}: an optional Token
 // verifies (outside any lock) and stores an outbound token plus the
-// learned host_id, and an optional AllowBypass sets that flag — either,
-// both, or (a no-op) neither may be present. The commit re-checks under
-// the lock that the entry is still present, is still the SAME entry the
-// verify ran against (URL and InboundToken both match the pre-lock
-// snapshot — InboundToken is unique per entry and minted fresh at POST, so
-// this also catches a delete+re-create at the same alias/url as a
-// different entry), its HostID is still empty or equal to the newly
-// learned one, and the learned host_id isn't the local one.
+// learned host_id, an optional AllowBypass sets that flag, and an optional
+// Alias renames the entry (spec §4.2), validated and uniqueness-checked
+// before the verify and again under the lock; the alias write is the last
+// one in the closure. Any subset — including none — may be present. The
+// commit re-checks under the lock that the entry is still present, is
+// still the SAME entry the verify OR the rename ran against (URL and
+// InboundToken both match the pre-lock snapshot — InboundToken is unique
+// per entry and minted fresh at POST, so this also catches a
+// delete+re-create at the same alias/url as a different entry, and the
+// re-check applies whether the request is verifying, renaming, or both),
+// its HostID is still empty or equal to the newly learned one, and the
+// learned host_id isn't the local one.
 func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if !requireAdmin(w, r) {
@@ -408,7 +417,12 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		existingInboundToken = m.core.Cfg.Peers.Hosts[idx].InboundToken
 	}
 	adminToken := m.core.Cfg.Token
+	localAlias := m.core.Cfg.PeerAlias()
 	m.core.CfgMu.RUnlock()
+
+	if m.putHostAfterSnapshot != nil {
+		m.putHostAfterSnapshot()
+	}
 
 	if idx == -1 {
 		writeJSONError(w, http.StatusNotFound, "unknown alias")
@@ -424,6 +438,35 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 	if tokenEqualsAdmin(req.Token, adminToken) {
 		writeJSONError(w, http.StatusBadRequest, "token equals admin token")
 		return
+	}
+
+	// A rename is validated before the verify below dials anyone, for the
+	// same reason handleAddHost validates an explicit alias first: a
+	// request this host will refuse anyway must not cost a network round
+	// trip. Uniqueness excludes the entry itself, so a case-only change
+	// ("air" → "Air") is not a collision. Both checks run again under the
+	// lock at commit.
+	renaming := req.Alias != ""
+	if renaming {
+		if err := config.ValidateAlias(req.Alias, localAlias); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		m.core.CfgMu.RLock()
+		cur := m.core.Cfg.Peers.FindPeerHostByAlias(alias)
+		other := m.core.Cfg.Peers.FindPeerHostByAlias(req.Alias)
+		m.core.CfgMu.RUnlock()
+		// cur and other come from the same snapshot, so "other == cur" means
+		// the entry itself (a case-only rename), whatever index it now sits
+		// at. Comparing against the idx taken under the earlier lock would
+		// mis-report a self-match as a collision after a concurrent delete
+		// shifted the slice. cur == -1 (deleted meanwhile) falls through to
+		// the closure, which answers 404.
+		if other != -1 && other != cur {
+			writeJSONError(w, http.StatusConflict, fmt.Sprintf(
+				"alias %q is already used by another host", req.Alias))
+			return
+		}
 	}
 
 	var learnedHostID string
@@ -444,26 +487,43 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			return &apiError{http.StatusNotFound, "unknown alias"}
 		}
 		h := &cfg.Peers.Hosts[i]
-		if verifying {
+		if verifying || renaming {
 			// InboundToken is unique per entry and minted fresh at POST, so
 			// comparing it (alongside URL) catches an entry that was
 			// deleted and re-created — even at the SAME url — while this
-			// verify was in flight: it is a different entry wearing the
-			// same alias, and the verify's result must not land on it.
+			// request was in flight: it is a different entry wearing the
+			// same alias, and neither a verify's result nor a rename must
+			// land on it.
 			if h.URL != existingURL || h.InboundToken != existingInboundToken {
 				return &apiError{http.StatusConflict, "entry changed concurrently"}
 			}
+		}
+		if verifying {
 			if h.HostID != "" && h.HostID != learnedHostID {
 				return &apiError{http.StatusConflict, "host_id mismatch"}
 			}
 			if learnedHostID == cfg.HostID {
 				return &apiError{http.StatusBadRequest, "cannot pair a host with itself"}
 			}
+		}
+		if renaming {
+			if err := config.ValidateAlias(req.Alias, cfg.PeerAlias()); err != nil {
+				return &apiError{http.StatusBadRequest, err.Error()}
+			}
+			if other := cfg.Peers.FindPeerHostByAlias(req.Alias); other != -1 && other != i {
+				return &apiError{http.StatusConflict, fmt.Sprintf(
+					"alias %q is already used by another host", req.Alias)}
+			}
+		}
+		if verifying {
 			h.Token = req.Token
 			h.HostID = learnedHostID
 		}
 		if req.AllowBypass != nil {
 			h.AllowBypass = *req.AllowBypass
+		}
+		if renaming {
+			h.Alias = req.Alias
 		}
 		// Captured here, inside the mutate closure, so the response
 		// always reflects exactly what THIS request committed — never a

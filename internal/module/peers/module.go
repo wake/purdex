@@ -1,7 +1,9 @@
 // Package peers implements the "peers" daemon module: GET /api/peers, a
 // local inventory of this host's tmux sessions joined with the agent module's
 // owner resolution and the Claude Code session registry; the peer-host
-// management and settings routes; POST /api/peers/send, the outbound half
+// management and settings routes; POST /api/peers/hosts/{alias}/verify
+// (hosts_verify.go) probes one entry the way a scope=all row does; POST
+// /api/peers/send, the outbound half
 // of cross-host messaging (send.go); POST /api/peers/deliver, the
 // inbound half (deliver.go), backed by the per-origin helper manager
 // (helpers.go) and the peer_messages audit store; the reply path that
@@ -177,6 +179,11 @@ type Module struct {
 	// read/written from concurrent request handlers with no other lock
 	// guarding it. Zero value is ready to use.
 	warnedVersions sync.Map
+
+	// putHostAfterSnapshot is a test seam: called by handlePutHost right
+	// after its pre-lock snapshot, so a test can force a concurrent
+	// mutation into that window. No-op in production.
+	putHostAfterSnapshot func()
 }
 
 // New constructs a peers Module with production defaults over audit (the
@@ -193,22 +200,23 @@ func New(audit AuditStore, titles TitleStore) *Module {
 	}
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	m := &Module{
-		registryDir:      registryDir,
-		liveness:         ipeers.DefaultLiveness(),
-		budget:           2 * time.Second,
-		now:              time.Now, // the one clock seam; every other clock reader below takes m.now
-		client:           newRemoteClient(),
-		fetch:            fetchRemote,
-		logf:             log.Printf,
-		audit:            audit,
-		titles:           titles,
-		writeFrame:       ccuds.WriteFrame,
-		sockWriteTimeout: ipeers.SocketWriteTimeout,
-		newMsgID:         uuid.NewString,
-		post:             postDeliver,
-		stopCtx:          stopCtx,
-		stopCancel:       stopCancel,
-		replySem:         make(chan struct{}, replyWorkerCap),
+		registryDir:          registryDir,
+		liveness:             ipeers.DefaultLiveness(),
+		budget:               2 * time.Second,
+		now:                  time.Now, // the one clock seam; every other clock reader below takes m.now
+		client:               newRemoteClient(),
+		fetch:                fetchRemote,
+		logf:                 log.Printf,
+		audit:                audit,
+		titles:               titles,
+		writeFrame:           ccuds.WriteFrame,
+		sockWriteTimeout:     ipeers.SocketWriteTimeout,
+		newMsgID:             uuid.NewString,
+		post:                 postDeliver,
+		stopCtx:              stopCtx,
+		stopCancel:           stopCancel,
+		replySem:             make(chan struct{}, replyWorkerCap),
+		putHostAfterSnapshot: func() {},
 	}
 	m.dedup = newDedupSet(ipeers.DedupWindow, m.now)
 	m.pairs = newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, m.now)
@@ -284,6 +292,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/hosts", m.handleAddHost)
 	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
 	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
+	mux.HandleFunc("POST /api/peers/hosts/{alias}/verify", m.handleVerifyHost)
 	mux.HandleFunc("GET /api/peers/settings", m.handleGetSettings)
 	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
 	mux.HandleFunc("POST /api/peers/send", m.handleSend)
@@ -730,6 +739,12 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	rowErr := env.Error
 	if rowErr != "" {
 		rowErr = "peer: " + boundRemoteText(rowErr)
+	} else if !env.OK {
+		// A peer that says ok=false and nothing else still gets a named
+		// cause: this row is what the verify route (hosts_verify.go) and
+		// the page render, and {ok:false, error:""} would be a red row
+		// with no reason. Same string verifyHost uses for the 502 case.
+		rowErr = "peer reported ok=false"
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -1295,6 +1296,40 @@ func TestHandlePutHost_ConcurrentRecreateSameURL_409NothingRecreated(t *testing.
 	}
 }
 
+// TestHandlePutHost_RenameOnly_ConcurrentRecreate_409NotRenamed forces the
+// interleaving a rename-only PUT can hit — DELETE + re-POST at the same
+// alias between the handler's pre-lock snapshot and its commit — through
+// the putHostAfterSnapshot seam, since a rename-only request has no fetch
+// to block on. The hoisted identity re-check must refuse it.
+func TestHandlePutHost_RenameOnly_ConcurrentRecreate_409NotRenamed(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	fired := false
+	m.putHostAfterSnapshot = func() {
+		if fired {
+			return
+		}
+		fired = true
+		if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
+			t.Errorf("delete status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+		if rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{"alias": "air", "url": "https://a.example"}, adminPrincipal()); rr.Code != http.StatusCreated {
+			t.Errorf("re-add status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "air26"}, adminPrincipal())
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("PUT status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air26") != -1 || reloaded.Peers.FindPeerHostByAlias("air") == -1 {
+		t.Errorf("rename landed on the re-created entry: %+v", reloaded.Peers.Hosts)
+	}
+}
+
 // ---- DELETE /api/peers/hosts/{alias} ----
 
 func TestHandleDeleteHost_204ThenGoneFromList(t *testing.T) {
@@ -1557,5 +1592,244 @@ func TestPairing_TwoRealModulesBothWays(t *testing.T) {
 	}
 	if len(allB.Hosts) != 2 || allB.Hosts[1].Alias != "a" || !allB.Hosts[1].OK || allB.Hosts[1].HostID != "hostA:1" {
 		t.Fatalf("B scope=all hosts = %+v, want [local, a OK]", allB.Hosts)
+	}
+}
+
+// --- rename (spec §4.2) ------------------------------------------------------
+
+func TestHandlePutHost_Rename_PersistsAndOldAliasGone(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: "out", InboundToken: "in-a", AllowBypass: true}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "air26"}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var row struct {
+		Alias           string `json:"alias"`
+		HostID          string `json:"host_id"`
+		HasToken        bool   `json:"has_token"`
+		HasInboundToken bool   `json:"has_inbound_token"`
+		AllowBypass     bool   `json:"allow_bypass"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &row); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if row.Alias != "air26" || row.HostID != "air:1" || !row.HasToken || !row.HasInboundToken || !row.AllowBypass {
+		t.Errorf("row = %+v, want alias renamed and every other field kept", row)
+	}
+
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air") != -1 {
+		t.Errorf("old alias still present: %+v", reloaded.Peers.Hosts)
+	}
+	i := reloaded.Peers.FindPeerHostByAlias("air26")
+	if i == -1 {
+		t.Fatalf("new alias not persisted: %+v", reloaded.Peers.Hosts)
+	}
+	h := reloaded.Peers.Hosts[i]
+	if h.Token != "out" || h.InboundToken != "in-a" || h.HostID != "air:1" || !h.AllowBypass || h.URL != "https://a.example" {
+		t.Errorf("persisted entry = %+v, want only the alias changed", h)
+	}
+
+	if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal()); rr.Code != http.StatusNotFound {
+		t.Errorf("DELETE old alias status = %d, want 404", rr.Code)
+	}
+}
+
+func TestHandlePutHost_Rename_CollisionCaseInsensitive_409Unchanged(t *testing.T) {
+	hosts := []config.PeerHost{
+		{Alias: "air", URL: "https://a.example", InboundToken: "in-a"},
+		{Alias: "Mini", URL: "https://m.example", InboundToken: "in-m"},
+	}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	before, _ := os.ReadFile(cfgPath)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "mini"}, adminPrincipal())
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "already used by another host") {
+		t.Errorf("body = %s, want the collision message", rr.Body.String())
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Errorf("config changed on a refused rename")
+	}
+}
+
+// A rename that only changes case is the entry colliding with ITSELF, which
+// is not a collision (mutation: make uniqueness exclude only exact matches
+// → this 409s).
+func TestHandlePutHost_Rename_CaseChangeOfOwnAliasOK(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "Air"}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 1 || reloaded.Peers.Hosts[0].Alias != "Air" {
+		t.Errorf("persisted = %+v, want exactly one entry spelled Air", reloaded.Peers.Hosts)
+	}
+}
+
+// TestHandlePutHost_Rename_CaseOnly_AfterConcurrentDeleteShiftsIndex pins
+// that the fast-path self-match is decided from one snapshot: with two
+// hosts, the first is deleted (via the seam) after the handler's initial
+// snapshot, shifting the target from index 1 to 0; a case-only rename of
+// the target must still succeed, not 409 against its own new index.
+func TestHandlePutHost_Rename_CaseOnly_AfterConcurrentDeleteShiftsIndex(t *testing.T) {
+	hosts := []config.PeerHost{
+		{Alias: "first", URL: "https://f.example", InboundToken: "in-f"},
+		{Alias: "air", URL: "https://a.example", InboundToken: "in-a"},
+	}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	fired := false
+	m.putHostAfterSnapshot = func() {
+		if fired {
+			return
+		}
+		fired = true
+		if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/first", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
+			t.Errorf("delete status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "Air"}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 1 || reloaded.Peers.Hosts[0].Alias != "Air" || reloaded.Peers.Hosts[0].InboundToken != "in-a" {
+		t.Errorf("persisted = %+v, want exactly the renamed second entry", reloaded.Peers.Hosts)
+	}
+}
+
+func TestHandlePutHost_Rename_Invalid_400(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	before, _ := os.ReadFile(cfgPath)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	for _, bad := range []string{"..", "has/slash", "local", "LOCAL", strings.Repeat("a", 65), "esc\x1b[31m"} {
+		rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": bad}, adminPrincipal())
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("alias %q: status = %d, want 400; body=%s", bad, rr.Code, rr.Body.String())
+		}
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(before) != string(after) {
+		t.Errorf("config changed on a refused rename")
+	}
+}
+
+// Rename plus token in one PUT: the verify dials the url found under the
+// OLD alias and the commit finds the entry by the OLD alias; the final
+// write renames it.
+func TestHandlePutHost_RenameWithToken_VerifiesThenRenames(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	var gotURL string
+	m := newHostsTestModule(t, c, func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error) {
+		gotURL = baseURL
+		return ipeers.Envelope{HostID: "air:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
+	})
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "air26", "token": "new-tok"}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if gotURL != "https://a.example" {
+		t.Errorf("verify dialled %q, want the entry's url", gotURL)
+	}
+	reloaded := loadCfg(t, cfgPath)
+	i := reloaded.Peers.FindPeerHostByAlias("air26")
+	if i == -1 || reloaded.Peers.Hosts[i].Token != "new-tok" || reloaded.Peers.Hosts[i].HostID != "air:1" {
+		t.Errorf("persisted = %+v, want renamed entry with the verified token and host_id", reloaded.Peers.Hosts)
+	}
+}
+
+// The in-closure uniqueness re-check (mutation: remove it → this passes
+// the rename through and two entries share a name). A rename+token PUT's
+// fake fetch blocks; meanwhile another host is POSTed with the target
+// alias; released, the PUT must 409 and persist nothing of its own.
+func TestHandlePutHost_Rename_ConcurrentCollision_409(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fetch := func(ctx context.Context, client *http.Client, baseURL, bearer string) (ipeers.Envelope, error) {
+		entered <- struct{}{}
+		<-release
+		return ipeers.Envelope{HostID: "air:1", OK: true, Peers: []ipeers.PeerRecord{}}, nil
+	}
+	m := newHostsTestModule(t, c, fetch)
+
+	var putResult *httptest.ResponseRecorder
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		putResult = doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "air26", "token": "new-tok"}, adminPrincipal())
+	}()
+	<-entered
+
+	addResult := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{"alias": "AIR26", "url": "https://other.example"}, adminPrincipal())
+	if addResult.Code != http.StatusCreated {
+		t.Fatalf("add status = %d, want 201; body=%s", addResult.Code, addResult.Body.String())
+	}
+
+	close(release)
+	wg.Wait()
+
+	if putResult.Code != http.StatusConflict {
+		t.Fatalf("PUT status = %d, want 409; body=%s", putResult.Code, putResult.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air") == -1 {
+		t.Errorf("original entry lost: %+v", reloaded.Peers.Hosts)
+	}
+	i := reloaded.Peers.FindPeerHostByAlias("air")
+	if i != -1 && reloaded.Peers.Hosts[i].Token != "" {
+		t.Errorf("refused PUT persisted its token: %+v", reloaded.Peers.Hosts[i])
+	}
+}
+
+// An invalid rename must be refused BEFORE the verify dials anyone (spec
+// §4.2 mirrors handleAddHost's rule). Mutation M9: drop the fast-path
+// ValidateAlias → the fake fetch is called.
+func TestHandlePutHost_RenameInvalidWithToken_400NoDial(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "..", "token": "new-tok"}, adminPrincipal())
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// Empty alias in the body means "unchanged", so {allow_bypass:true} alone
+// still works exactly as before this phase.
+func TestHandlePutHost_EmptyAliasIsUnchanged(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "in-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "", "allow_bypass": true}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if i := reloaded.Peers.FindPeerHostByAlias("air"); i == -1 || !reloaded.Peers.Hosts[i].AllowBypass {
+		t.Errorf("persisted = %+v, want alias kept and allow_bypass set", reloaded.Peers.Hosts)
 	}
 }
