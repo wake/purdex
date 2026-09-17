@@ -121,9 +121,25 @@ export default function NexEngineStatus({ hostId, info, onRefresh }: NexEngineSt
           <Field label={t('hosts.nex.status.phase')}>
             <span className="text-sm text-text-primary">{caps ? `${caps.phase} · ${caps.host_id}` : '—'}</span>
           </Field>
+          {host?.credential_warning && (
+            <div
+              data-testid="nex-credential-warning"
+              className="text-sm text-amber-400 bg-amber-500/10 rounded p-2 mb-3"
+            >
+              {host.credential_warning}
+            </div>
+          )}
           <Field label={t('hosts.nex.status.account')}>
             <span className="text-sm text-text-primary">{host?.active_account || '—'}</span>
           </Field>
+          {host?.credential_source && (
+            <Field label={t('hosts.nex.status.credential_source')}>
+              <span className="text-sm text-text-primary">
+                {host.credential_source}
+                {host.account_id ? ` · ${host.account_id}` : ''}
+              </span>
+            </Field>
+          )}
           <Field label={t('hosts.nex.status.quota_5h')}>
             <QuotaBar pct={host?.quota?.five_hour_pct ?? null} unknownLabel={t('hosts.nex.status.quota_unknown')} />
           </Field>

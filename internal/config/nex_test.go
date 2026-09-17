@@ -81,7 +81,6 @@ func TestNexConfigValidateNoHomeDisabledSkipsTildeEntries(t *testing.T) {
 	n2.ClaudeBin = "~/bin/claude"
 	n2.RepoRoots = []string{"~", "~/x"}
 	n2.ServiceRoots = []string{"~/svc"}
-	n2.CswapBin = "~/bin/cswap"
 	if err := n2.Validate(""); err != nil {
 		t.Errorf("disabled section with only ~ entries and home=\"\" should validate, got %v", err)
 	}
@@ -274,7 +273,6 @@ func TestNexConfigTomlRoundTrip(t *testing.T) {
 		RepoRoots:    []string{"/repo1", "/repo2"},
 		ServiceRoots: []string{"/svc1"},
 		ClaudeBin:    "/usr/local/bin/claude",
-		CswapBin:     "/usr/local/bin/cswap",
 		PathPrepend:  []string{"/opt/homebrew/bin"},
 		Sandbox:      config.NexSandboxConfig{MaxProfile: "handoff", DefaultProfile: "trusted"},
 		Timeouts:     config.NexTimeoutsConfig{LeaseTTL: "5m", Interrupt: "10s", Turn: "30m"},

@@ -42,12 +42,6 @@ func writeScript(t *testing.T, dir, name, body string) string {
 	return p
 }
 
-// fakeCswap returns a cswap stand-in that prints an empty JSON object.
-func fakeCswap(t *testing.T) string {
-	t.Helper()
-	return writeScript(t, t.TempDir(), "cswap", "#!/bin/sh\necho '{}'\n")
-}
-
 // fakeClaude returns an executable that Assemble's LookPath accepts. It is
 // never actually spawned by these tests.
 func fakeClaude(t *testing.T) string {
@@ -56,8 +50,8 @@ func fakeClaude(t *testing.T) string {
 }
 
 // baseConfig returns a pdx Config whose [nex] section is complete enough
-// for Init to reach assemble: one existing repo root, a fake cswap, an
-// explicit claude binary, no path_prepend, and a temp DataDir. Tests
+// for Init to reach assemble: one existing repo root, an explicit claude
+// binary, no path_prepend, and a temp DataDir. Tests
 // override individual fields for their failure case.
 func baseConfig(t *testing.T) pdxconfig.Config {
 	t.Helper()
@@ -68,7 +62,6 @@ func baseConfig(t *testing.T) pdxconfig.Config {
 			Enabled:     true,
 			RepoRoots:   []string{t.TempDir()},
 			ClaudeBin:   fakeClaude(t),
-			CswapBin:    fakeCswap(t),
 			PathPrepend: []string{},
 			Sandbox: pdxconfig.NexSandboxConfig{
 				MaxProfile:     "trusted",
@@ -267,7 +260,7 @@ func TestInitHandsBuildOptionsToAssembleAndCreatesDataDir(t *testing.T) {
 // TestInitWithoutHomeAllAbsolutePathsSucceeds: Init mirrors config.Load's
 // HOME rule (codex R2 follow-up). A launchd/Finder-started daemon may have
 // no $HOME (os.UserHomeDir then fails on darwin: "$HOME is not defined");
-// an enabled [nex] whose roots/claude_bin/cswap_bin are absolute and whose
+// an enabled [nex] whose roots/claude_bin are absolute and whose
 // path_prepend is [] has nothing to expand, so Init must still assemble.
 func TestInitWithoutHomeAllAbsolutePathsSucceeds(t *testing.T) {
 	t.Setenv("HOME", "")
@@ -276,7 +269,7 @@ func TestInitWithoutHomeAllAbsolutePathsSucceeds(t *testing.T) {
 		t.Skip("os.UserHomeDir succeeds with HOME empty on this platform; the HOME-less path is not reachable here")
 	}
 
-	cfg := baseConfig(t) // absolute repo root / claude_bin / cswap_bin, path_prepend = []
+	cfg := baseConfig(t) // absolute repo root / claude_bin, path_prepend = []
 	rec := &fakeAssembleRecord{}
 	m := New()
 	m.assemble = newFakeAssemble(rec, noopEngine(), nil)

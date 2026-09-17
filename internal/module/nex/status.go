@@ -31,7 +31,6 @@ func buildStatus(initErr error, opts nexen.Options, expanded pdxconfig.NexConfig
 	st["effective"] = map[string]any{
 		"data_dir":        cfg.DataDir,
 		"claude_bin":      opts.ClaudeBin, // "" = Nexen resolves lazily from PATH
-		"cswap_bin":       cfg.CswapBin,
 		"max_profile":     cfg.Sandbox.MaxProfile,
 		"default_profile": cfg.Sandbox.DefaultProfile,
 		"repo_roots":      expanded.RepoRoots,

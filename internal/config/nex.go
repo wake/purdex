@@ -19,7 +19,6 @@ type NexConfig struct {
 	RepoRoots    []string          `toml:"repo_roots"    json:"repo_roots"`
 	ServiceRoots []string          `toml:"service_roots" json:"service_roots"`
 	ClaudeBin    string            `toml:"claude_bin"    json:"claude_bin"`
-	CswapBin     string            `toml:"cswap_bin"     json:"cswap_bin"`
 	PathPrepend  []string          `toml:"path_prepend"  json:"path_prepend"`
 	Sandbox      NexSandboxConfig  `toml:"sandbox"       json:"sandbox"`
 	Timeouts     NexTimeoutsConfig `toml:"timeouts"      json:"timeouts"`
@@ -89,11 +88,6 @@ func (n *NexConfig) Validate(home string) error {
 			return err
 		}
 	}
-	if n.CswapBin != "" {
-		if err := n.checkAbs("nex.cswap_bin", n.CswapBin, home); err != nil {
-			return err
-		}
-	}
 	for i, p := range n.PathPrepend {
 		if err := n.checkAbs(fmt.Sprintf("nex.path_prepend[%d]", i), p, home); err != nil {
 			return err
@@ -151,7 +145,7 @@ func hasTilde(p string) bool {
 }
 
 // Expanded returns a copy of n with "~" expanded to home and every path
-// (RepoRoots, ServiceRoots, PathPrepend, ClaudeBin, CswapBin) cleaned via
+// (RepoRoots, ServiceRoots, PathPrepend, ClaudeBin) cleaned via
 // filepath.Clean. The receiver's slices are never mutated — every slice
 // field is copied into a fresh backing array.
 func (n NexConfig) Expanded(home string) NexConfig {
@@ -160,7 +154,6 @@ func (n NexConfig) Expanded(home string) NexConfig {
 	out.ServiceRoots = expandTildeAll(n.ServiceRoots, home)
 	out.PathPrepend = expandTildeAll(n.PathPrepend, home)
 	out.ClaudeBin = expandTildeClean(n.ClaudeBin, home)
-	out.CswapBin = expandTildeClean(n.CswapBin, home)
 	return out
 }
 
@@ -209,7 +202,6 @@ func (n NexConfig) Equal(o NexConfig) bool {
 		slices.Equal(n.ServiceRoots, o.ServiceRoots) &&
 		slices.Equal(n.PathPrepend, o.PathPrepend) &&
 		n.ClaudeBin == o.ClaudeBin &&
-		n.CswapBin == o.CswapBin &&
 		n.Sandbox == o.Sandbox &&
 		n.Timeouts == o.Timeouts
 }

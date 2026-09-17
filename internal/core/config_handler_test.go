@@ -448,7 +448,6 @@ func TestPutConfigWithFullNexSectionPersistsNexByteIdentical(t *testing.T) {
 			RepoRoots:    []string{"/repo1", "/repo2"},
 			ServiceRoots: []string{"/svc1"},
 			ClaudeBin:    "/usr/local/bin/claude",
-			CswapBin:     "/usr/local/bin/cswap",
 			PathPrepend:  []string{"/opt/homebrew/bin"},
 			Sandbox:      config.NexSandboxConfig{MaxProfile: "handoff", DefaultProfile: "trusted"},
 			Timeouts:     config.NexTimeoutsConfig{LeaseTTL: "5m", Interrupt: "10s", Turn: "30m"},

@@ -38,7 +38,6 @@ const readyInfo: NexInfo = {
   effective: {
     data_dir: '/d/nex',
     claude_bin: '',
-    cswap_bin: '',
     max_profile: 'standard',
     default_profile: 'standard',
     repo_roots: ['/a'],
@@ -55,7 +54,6 @@ const savedConfig: NexConfig = {
   repo_roots: ['/a'],
   service_roots: [],
   claude_bin: '',
-  cswap_bin: '',
   path_prepend: [],
   sandbox: { max_profile: 'standard', default_profile: 'standard' },
   timeouts: { lease_ttl: '', interrupt: '', turn: '' },
@@ -353,7 +351,7 @@ describe('NexHostSection', () => {
   it('renders the form when /api/config carries null nex lists and no sandbox (older or unset config)', async () => {
     mockHostFetch.mockImplementation((_hostId, path) => {
       if (path !== '/api/config') return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
-      const nex = { enabled: false, repo_roots: null, service_roots: null, path_prepend: null, claude_bin: '', cswap_bin: '', timeouts: { lease_ttl: '', interrupt: '', turn: '' } }
+      const nex = { enabled: false, repo_roots: null, service_roots: null, path_prepend: null, claude_bin: '', timeouts: { lease_ttl: '', interrupt: '', turn: '' } }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ bind: '', port: 0, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 0 }, nex }) } as Response)
     })
     render(<NexHostSection hostId={HOST_ID} />)

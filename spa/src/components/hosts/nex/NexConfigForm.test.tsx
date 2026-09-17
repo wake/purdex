@@ -9,7 +9,7 @@ vi.mock('../../../lib/host-api', async () => {
   return { ...actual, hostFetch: vi.fn() }
 })
 
-const info = { configured: true, mounted: true, ready: true, init_error: '', effective: { data_dir: '/d', claude_bin: '', cswap_bin: '', max_profile: 'handoff', default_profile: 'standard', repo_roots: ['/a'], service_roots: [], path_prefix: '', lease_ttl: '2m0s', interrupt: '10s', turn: '5m0s' } }
+const info = { configured: true, mounted: true, ready: true, init_error: '', effective: { data_dir: '/d', claude_bin: '', max_profile: 'handoff', default_profile: 'standard', repo_roots: ['/a'], service_roots: [], path_prefix: '', lease_ttl: '2m0s', interrupt: '10s', turn: '5m0s' } }
 const saved = { ...emptyNexConfig(), enabled: true, repo_roots: ['/a'], sandbox: { max_profile: 'handoff', default_profile: 'standard' } }
 
 beforeEach(() => vi.mocked(hostApi.hostFetch).mockReset())
@@ -73,7 +73,7 @@ describe('NexConfigForm', () => {
     await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalled())
     const [, , init] = vi.mocked(hostApi.hostFetch).mock.calls[0]
     const body = JSON.parse(init!.body as string)
-    expect(Object.keys(body.nex).sort()).toEqual(['claude_bin', 'cswap_bin', 'enabled', 'path_prepend', 'repo_roots', 'sandbox', 'service_roots', 'timeouts'])
+    expect(Object.keys(body.nex).sort()).toEqual(['claude_bin', 'enabled', 'path_prepend', 'repo_roots', 'sandbox', 'service_roots', 'timeouts'])
     expect(Object.keys(body.nex.sandbox).sort()).toEqual(['default_profile', 'max_profile'])
     expect(Object.keys(body.nex.timeouts).sort()).toEqual(['interrupt', 'lease_ttl', 'turn'])
   })
