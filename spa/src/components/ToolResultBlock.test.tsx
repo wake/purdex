@@ -222,6 +222,18 @@ describe('diff view in the expanded body (P-B3.3 R5)', () => {
     expect(screen.getByTestId('tool-result-content').innerHTML).toBe(plain)
   })
 
+  it('codex R2 A1: facts.diff.hunks: [] + truncated: true expanded → tool-diff with the diff-truncated row', () => {
+    render(<ToolResultBlock content="raw output" isError={false}
+      facts={{ diff: { path: '/x', added: 0, removed: 0, hunks: [], truncated: true } }} />)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    const body = screen.getByTestId('tool-result-content')
+    const diff = screen.getByTestId('tool-diff')
+    expect(body.firstElementChild!.contains(diff)).toBe(true)
+    expect(diff.contains(screen.getByTestId('diff-truncated'))).toBe(true)
+    expect(screen.queryByTestId('diff-hunk')).toBeNull()
+    expect(body.lastChild!.textContent).toBe('raw output')
+  })
+
   it('facts without diff expanded → no tool-diff', () => {
     render(<ToolResultBlock content="raw output" isError={false} facts={{ file: { path: '/x', lines: 1 } }} />)
     fireEvent.click(screen.getByTestId('tool-result-header'))

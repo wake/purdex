@@ -71,7 +71,7 @@ export default function ToolResultBlock({ content, isError, facts }: Props) {
         >
           {/* R5: the diff sits above the raw content; the raw content stays a bare
               text node so the no-diff body is byte-identical to the baseline. */}
-          {facts?.diff && facts.diff.hunks.length > 0 && (
+          {facts?.diff && (facts.diff.hunks.length > 0 || facts.diff.truncated) && (
             <div className="mb-2 border-b border-border-subtle">
               <ToolDiffView diff={facts.diff} />
             </div>

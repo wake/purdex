@@ -24,7 +24,9 @@ const NUM_CLASS = 'w-10 shrink-0 text-right tabular-nums text-text-muted pr-1 se
 
 export default function ToolDiffView({ diff }: Props) {
   const t = useI18nStore((s) => s.t)
-  if (diff.hunks.length === 0) return null
+  // No hunks and nothing dropped → nothing to say. No hunks but truncated →
+  // the daemon dropped every hunk, and that note is the only thing worth showing.
+  if (diff.hunks.length === 0 && !diff.truncated) return null
 
   return (
     <div data-testid="tool-diff" className="font-mono text-xs">

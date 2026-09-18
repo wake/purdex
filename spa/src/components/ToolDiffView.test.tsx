@@ -121,9 +121,19 @@ describe('ToolDiffView', () => {
     expect(screen.queryByTestId('diff-truncated')).toBeNull()
   })
 
-  it('hunks: [] → renders nothing (even when truncated)', () => {
-    const { container } = render(<ToolDiffView diff={diffOf([], true)} />)
+  it('hunks: [] + truncated: false → renders nothing', () => {
+    const { container } = render(<ToolDiffView diff={diffOf([], false)} />)
     expect(container.firstChild).toBeNull()
+  })
+
+  it('codex R2 A1: hunks: [] + truncated: true → tool-diff with only the diff-truncated row (no diff-hunk)', () => {
+    render(<ToolDiffView diff={diffOf([], true)} />)
+    const view = screen.getByTestId('tool-diff')
+    const marker = screen.getByTestId('diff-truncated')
+    expect(marker).toHaveTextContent('diff truncated by the daemon')
+    expect(screen.queryByTestId('diff-hunk')).toBeNull()
+    expect(view.children).toHaveLength(1)
+    expect(view.firstElementChild).toBe(marker)
   })
 
   it('long line text wraps in place (whitespace-pre-wrap keeps leading spaces)', () => {

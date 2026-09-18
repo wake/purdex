@@ -116,8 +116,8 @@ export function recordToolEnds(s: ExecutionState, p: Record<string, unknown>, at
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 /** A non-negative finite number: durations. */
 const nonNeg = (v: unknown): v is number => num(v) && v >= 0
-/** A non-negative integer: line / byte counts and hunk offsets. */
-const count = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0
+/** A non-negative safe integer: line / byte counts and hunk offsets (2**53 and up are not exact, so they fail closed). */
+const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0
 
 /**
  * Defensive upper bound on the total hunk lines of one tool_result diff. The
