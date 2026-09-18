@@ -1,9 +1,10 @@
 // spa/src/components/execution/ExecutionHeader.tsx — the facts strip above
 // an execution conversation (spec §4.3.3): state, provider/profile, cwd,
 // observers, lease holder, turns, cost, SSE status, the two lease-backed
-// actions, and — for executions that came from a tmux session (P-C.3 spec
-// §4.4) — "Take back to terminal". Pure presentation; ExecutionView owns the
-// network.
+// actions, and "Take to terminal" (P-C.3 spec §4.4 for the session-bound
+// path, exec-to-terminal spec §4.2 for every other claude execution). Pure
+// presentation; ExecutionView owns the network and decides when the control
+// is offered.
 import { useEffect, useState } from 'react'
 import { ArrowUUpLeft, Prohibit, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -19,7 +20,7 @@ export interface ExecutionHeaderProps {
   onTerminate: () => void
   /** Gates interrupt/terminate (terminal execution, or a take-back in flight). Take-back has its own flag. */
   busy: boolean
-  /** Present only when the execution has a `from` session to go back to. */
+  /** Present when the execution can be taken to a terminal (ExecutionView decides). */
   onTakeBack?: () => void
   takeBackBusy?: boolean
 }

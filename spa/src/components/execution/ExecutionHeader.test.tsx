@@ -68,8 +68,8 @@ describe('ExecutionHeader', () => {
     expect(screen.getByTestId('execution-sse')).toHaveTextContent(/paused/i)
   })
 
-  // P-C.3b task 4: "Take back to terminal" only exists for executions that
-  // came from a session — the view decides that by passing `onTakeBack`.
+  // P-C.3b task 4 / exec-to-terminal spec §4.2: "Take to terminal" exists
+  // only when the view passes `onTakeBack` (it decides from `from` / summary).
   it('renders no take-back control without onTakeBack', () => {
     render(<ExecutionHeader {...baseProps} summary={summary()} />)
     expect(screen.queryByTestId('take-back')).toBeNull()
@@ -79,7 +79,7 @@ describe('ExecutionHeader', () => {
     const onTakeBack = vi.fn()
     render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} />)
     const btn = screen.getByTestId('take-back') as HTMLButtonElement
-    expect(btn).toHaveTextContent(/take back to terminal/i)
+    expect(btn).toHaveTextContent(/take to terminal/i)
     expect(btn.disabled).toBe(false)
     fireEvent.click(btn)
     expect(onTakeBack).toHaveBeenCalledTimes(1)
