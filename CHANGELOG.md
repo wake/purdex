@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.384] - 2026-09-18
+
+### Feature: Hosts › Peers 頁面 — 兩個方向即時驗證、alias drift 一鍵採用（Peer Pairing D2，#1146 + #1147）
+
+Phase D 的第二段。`/hosts/<id>/peers` 列出這台 daemon 的每個 `[[peers.hosts]]` entry，把它接到「就是那台 peer」的 App host（host_id 優先、URL 只在一側缺 host_id 時當備援），**兩個方向各跑一次 D1 的 verify**（App 是唯一同時握兩把 admin token 的協調者，所以「對方連不連得到我」＝從對方那端跑既有的 outbound verify），狀態五個字擇一：`bidirectional` / `one-way` / `outbound-only`（對端不在 App，永久事實）/ `return-unknown`（對端在 App 但此刻問不到，暫時事實）/ `unpaired`；後兩者畫中性色、永不綠。peer 自報的 alias 跟 entry 名不同就標 drift，一顆 **Rename to `<self_alias>`** → `PUT {alias}` → 重驗，daemon 不知道自己在「採用」。400/409 原句 inline，不重試不加後綴。什麼都不快取：每次 mount／Refresh 都是真的撥號，一顆過期的綠燈正是這頁要拿掉的東西。沒有配對／解除／輪替／toggle（那是 D3/D4）。
+
+#### 三層，各自可測
+
+`host-api.ts` 只多五個 typed wrapper（`HostApiError` 加 `detail`：daemon 的 `{error}` 句子，沒有就 statusText，再沒有就 `HTTP <status>`——HTTP/2 的 statusText 是空字串，舊 daemon 的純文字 404 也是）。`peer-pairing.ts` 是純規則：`matchCounterpart`／`matchReturnEntry`（同一條規則角色對調）、`pairStatus`（spec §5.1 表格逐列）、`aliasDrift`（跟 `pdx peers --all` 同一條）。`peer-pairing-load.ts` 是 §5.2 的編排：X 三個前置呼叫 → 其他 host 的 metadata（或問不到的原因）→ join → 每個 counterpart 只 `list` 一次 → 所有 verify 平行，**join 後 emit 一次、每個 verify 落地再 emit 一次**，每個 snapshot 都是獨立物件，頁面先畫 `checking` 再逐條填。`PeersSection` 只畫 snapshot，generation counter 丟掉過期的 run（換 host、Refresh、StrictMode 雙 mount、換 host 後才回來的 Rename）。
+
+#### review 抓到什麼
+
+plan review 兩條 blocker：一條 mutation 寫法根本不會紅、漏了 HMR-safe count 測試。實作期間 subagent review 抓到 loader 第一次 emit 把之後會被改 rows 的同一個物件交出去（測試只因 `structuredClone` 才過）、loader 讀 `Error.message` 丟掉 daemon 的 detail、元件在 module load 就碰 host-api export 害一個整包 mock 的舊測試整檔不能跑。codex 拆成兩個 PR 各跑 R1 → 攻擊 → critic：D2a 兩條成立——兩台 App host 同 URL 時配對結果跟著 hostOrder 走（改成先取 host_id 已知者、已知互異視為矛盾）、`list(Y)` 失敗一樣繞過 detail；critic 對「已知 host_id 的 entry 不得以 URL 配 unavailable host」有證據反對（spec §5.2 step 2 明定、且那條路徑不對 Y 發任何請求），D-3 補了一句。D2b 一條 medium（row key 只有 alias）修成 `host:alias` 但實測連 prop-change 路徑都到不了；攻擊方一條 high「惡意 peer 把 outbound token 回顯進 error 文字」——鏈成立但那是 peer 自己的 token、CLI 早已印同一字串、SPA 拿不到 token 無從遮罩，裁定遮罩在 daemon `fetchHostResult`，開 #1152 併進 D3。§5.3 wireframe 的 `[Verify]` 按鈕跟 §5.2 自動驗證矛盾，刪掉。
+
+#### 驗收
+
+真機（mlab ↔ air，兩台 alpha.378）：一列 `air`、接到 App 的 Air 2026、兩線綠、`bidirectional`、drift `air26`；按 Rename → 標題 `air26`、`pdx peers host list` 是 `air26`、`pdx peers --all` 零 drift 行、`pdx msg send air26/_64wca8` 送達——**spec §2.1 那個活案例關掉了**。第一次 paint 時 Air 的 runtime 還沒連上，回程先顯示 `could not be asked: unknown`，Refresh 後才綠；「not connected yet」會比 `unknown` 清楚，記進 #1151。mutation record M1–M24（22 全紅、2 條的第二個佐證測試因 fixture 巧合沒紅，主測試都紅）。測試 6648 全綠。純 SPA，daemon 免動。follow-up：#1149（peer-host API 拆出 host-api.ts）、#1150（pre-378 peer 的回程文案）、#1151（rows 等 `list(Y)` 才畫、fetch 無 timeout）、#1152（daemon 遮罩回顯 token）。
+
 ## [1.0.0-alpha.383] - 2026-09-18
 
 ### Feature: Host Color Modes P2 — badge 三態渲染 + 拿掉每 surface 的濃度設定（#1153）
