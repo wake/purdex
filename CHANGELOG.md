@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.407] - 2026-09-19
+
+### Feature: exec pane 顯示 N2 事實——摘要、狀態、時長、result facts（#1223，P-B3.2）
+
+alpha.406 把 daemon 的工具事實放進 `tools` map，這支讓它們上畫面。工具呼叫標頭的摘要改成三段決策（`lib/nex/tool-summary.ts`）：daemon 給的 `primary_arg.value` 優先；`known: false`（MCP／自訂工具）走 console R10——列 input 的前三個 key 寫成 `key: value`；其餘才退回 P-B2 的 client 端 `getSummary` 表（原封搬過去，逐位元組比過）。截 80 字留在 renderer，是顯示裁量不是事實。完成徽章有 `duration_ms` 就用它（daemon 觀測值，含 N2 unseen 路徑 `startedAt` 為 0 的情況），沒有才回 `endedAt − startedAt`。`denied` 工具名劃刪除線、扳手圖示、警示色徽章——而且**時長照顯示**（攻擊方抓到我給 subagent 的指示與 spec R2 矛盾，critic 判這是唯一的 spec drift）。result block 的外觀改由 N2 `status` 主導：`denied` 一律中性色＋ `Prohibit` 圖示（claude 對權限拒絕也標 `is_error: true`，照 raw 畫會每次拒絕都紅一片）、`error` 才紅、沒有 N2 才退回 raw `is_error`；標頭多一段 facts（`lib/nex/tool-result-facts.ts`）：Read `4 lines`、Edit／Write `+1 −1`（U+2212，`+0 −0` 也出——Write 建新檔的 `hunks: []` 是正常狀態）、多行 output 的行數、`truncated`／`non-text` 標記。
+
+守門：先對**未動**的 `ToolResultBlock` 建四段 baseline snapshot 再改 component（codex plan review 抓到原本「render 兩次比 innerHTML」是同版本自比，證明不了東西），之後每個 commit 都不帶 `-u` 跑——沒有 entry／沒有 facts 的 DOM 一字未變。`ConversationMessages`／`ToolUseBlock` 查 `tools` 一律 own-key（`Object.hasOwn`），跟 #1221 同一個原型鏈修法，測試用 `Object.create({tu1: entry})` 證明原型鏈上的 entry 被忽略（單用 `constructor` 當 id 驗不到守衛，mutation 實測過）。
+
+Codex：R1 無 finding；攻擊方三條——result tone 沒吃 N2 `error`（critic 引 nexen `toolevents.go:252-261` 有證據反對：`error` 就是從 `is_error` 導出的，wire 上不可能不一致；但改成有 `facts.status` 就以它為準比推論不變量便宜，照修）、denied 丟時長（同意、修）、R10 fallback 對超大 input 先全量 `JSON.stringify` 再截（疑慮；改成有界 `previewValue`：手走值、額度用完立即停、深度 4、`[Circular]`、getter 炸回 `[unserializable]`；re-review 再抓 `Object.keys` 對寬物件仍 O(n)，改 `for…in` 逐鍵停）。vitest 7185、lint、tsc、build 綠。行號 diff view 是 P-B3.3。
+
 ## [1.0.0-alpha.406] - 2026-09-19
 
 ### Feature: exec pane 開始消費 Nexen N2 `tool_use`／`tool_result`（#1221，P-B3.1）
