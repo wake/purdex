@@ -1,6 +1,6 @@
 # Spec — P-B3: exec pane consumes Nexen N2 `tool_use` / `tool_result`
 
-- Status: v1.0 draft (2026-09-19)
+- Status: v1.1 (2026-09-19) — codex plan+spec review `task-mu7ckdhj-wo5ha7` applied (§9)
 - Predecessors: `2026-09-15-pb-execution-pane-spec.md` (P-B, §4.2.3
   transport / §4.2.4 reducer rules stay binding) and
   `2026-09-18-pb2-exec-live-stream-spec.md` (P-B2, §4.1 partial assembly
@@ -189,10 +189,12 @@ the kinds are then **not** appended to `messages` and do not touch
   already does this for non-lifecycle kinds.)
 - N1 `tool_use` with string `tool_use_id`:
   - unseen → `tools[id] = {name, startedAt: ev.created_at, endedAt: null,
-    status: 'running', primaryArg, known}` (the raw `assistant` normally
-    arrives first per F2 and A1 has already created it; this branch
-    covers the live reorder of issue #83 and keeps A1's "first sighting
-    wins" intact — A1 then skips the existing entry).
+    status: 'running', primaryArg, known}`. The raw `assistant` always
+    arrives first (F2; the raw + derived batch is published in order by
+    the pump goroutine — nexen issue #83's reorder is between the API
+    goroutine's `Emit` and the pump, never inside one batch), so A1 has
+    already created the entry and this branch is a **fail-safe only**;
+    when it does fire, A1's "first sighting wins" then skips the entry.
   - seen → set `name` (if the entry's is empty), `primaryArg`, `known`;
     **never** reset `startedAt`, `endedAt` or `status`.
   - `primaryArg` is copied only when the `primary_arg` key is present in
@@ -229,6 +231,18 @@ the kinds are then **not** appended to `messages` and do not touch
   taken by type check, never by trust; a malformed `diff` (non-array
   hunks, non-numeric counts) is dropped as a whole rather than partially
   copied.
+- N7 Duplicate `tool_use_id` within a turn (contract rule 9 ②): the
+  daemon still emits every `tool_use` but never matches the later
+  `tool_result`s (echo fields `name` / `message_id` / `block_index` and
+  `duration_ms` all `null`, `status` still set). The SPA keeps **one**
+  entry per id — exactly what P-B2 A1 ("first sighting wins") already
+  does for the raw blocks — so both DOM blocks decorate from the same
+  entry: N1 on the second sighting leaves `startedAt` / `status` alone;
+  N2 with `name: null` keeps the entry's name, sets the mapped `status`,
+  `durationMs: null`, and R2 then falls back to `endedAt − startedAt`.
+  This is "寧可不配，不配錯" at the display level: nothing is invented,
+  and the id is never split into two entries (which is what "counted
+  twice" would mean).
 
 #### Equivalence of the two paths (what the user sees per field)
 
@@ -261,12 +275,21 @@ DOM is driven by the raw `assistant` / `user` blocks (unchanged) and the
   when `durationMs` is a number, else the P-B2 `endedAt − startedAt`
   (guarded by `> 0` as today). `ToolCallActivity` gains
   `durationMs?: number | null` on the finished variant and a new
-  `{ status: 'denied'; durationMs?; startedAt; endedAt }` variant.
+  `{ status: 'denied'; durationMs?; startedAt; endedAt }` variant. The
+  badge's `switch` becomes **exhaustive** (`default` replaced by a
+  `never` check) so a future variant cannot silently render nothing.
 - R3 `denied`: tool name rendered `line-through text-text-muted`, badge
   text `t('execution.tool.denied')` in the warning colour, wrench icon
   (not the error glyph — a denial is not a failure, contract rule 2).
+  The **result** block of a denied call carries `is_error: true` on the
+  raw frame (rule 2: claude flags denials as errors too); with
+  `facts.status === 'denied'` `ToolResultBlock` renders the neutral
+  (non-error) colours, the `Prohibit` icon and the same `denied` badge,
+  overriding `isError`.
 - R4 `ToolResultBlock` gains an optional `facts?: ToolResultFacts` prop
-  (`Pick<ToolActivity, 'output' | 'file' | 'diff' | 'status'>`).
+  (`Partial<Pick<ToolActivity, 'output' | 'file' | 'diff' | 'status'>>` —
+  `Partial` because `status` is required on the entry but a caller may
+  hand over only the facts it has).
   `ConversationMessages` passes `tools?.[block.tool_use_id]` for raw
   `user` `tool_result` blocks. Header, after the existing 80-char summary:
   a muted, tabular-nums facts span built by a pure helper
@@ -279,8 +302,11 @@ DOM is driven by the raw `assistant` / `user` blocks (unchanged) and the
     ("truncated") — the body below still shows the raw frame's full
     content, so no byte counts are needed;
   - `output.hasNonText` → `t('execution.tool.non_text')` marker.
-  Absent `facts` → today's header byte-for-byte (the Stream-mode-era
-  snapshot test stays the guard).
+  Absent `facts` → today's header byte-for-byte. `ToolResultBlock` has
+  no snapshot today, so P-B3.2 **first** lands a snapshot of the
+  unchanged component (collapsed + expanded, ok + error) in its own
+  commit; every later renderer task must keep those snapshots
+  byte-identical (a same-version self-comparison proves nothing).
 - R5 Diff view (`components/ToolDiffView.tsx`, pure presentational): when
   `facts.diff` exists and `hunks.length > 0`, the expanded body renders it
   **above** the raw content: per hunk a header row
@@ -321,7 +347,7 @@ hard-coded by any client that shows "showing X of Y".
 Each phase is one PR (≤ 800 lines diff, ≤ 20 files), TDD by subagent,
 independent commits per task, codex R1 + adversarial R2 per PR.
 
-### P-B3.1 — reducer + types (no visible change)
+### P-B3.1 — reducer + types (no visible change on existing data)
 
 - `types.ts`: `tool_events` (§4.5).
 - `tool-activity.ts`: `ToolActivity` v2, `DiffHunk`, `denied` status,
@@ -329,8 +355,13 @@ independent commits per task, codex R1 + adversarial R2 per PR.
   (N1 / N2 / N6) with the `obj()` guards from `content-blocks.ts`.
 - `event-reducer.ts`: route the two kinds through `applyTurnRules` (N0)
   to the new rules; keep them out of `messages`; delete `N2_TOOL_KINDS`.
-- `toToolCallActivity`: `denied` variant, `durationMs` passthrough
-  (renderer consumes it in P-B3.2; until then `TimingBadge` ignores it).
+- `toToolCallActivity`: `denied` variant, `durationMs` passthrough.
+  `TimingBadge` loses its `default` branch (exhaustive `never` check) and
+  gains the minimal `denied` badge + i18n key in the same commit — the
+  only renderer touch in this PR, needed so the widened union cannot fall
+  through silently. `durationMs` itself is consumed in P-B3.2.
+  Also: the daemon-side `status` triple (`ok`/`error`/`denied`) is a
+  closed set, so no other status value can reach the union.
 - Fixture `lib/nex/__fixtures__/n2-tool-events-06GBBX07.json`: the 24
   events of `06GBBX0791PP0RQ4WSWDFY5FPM` (seq 909–932) as returned by
   history, verbatim. Tests: history replay of the fixture yields three
@@ -338,8 +369,11 @@ independent commits per task, codex R1 + adversarial R2 per PR.
   `diff.added 1 / removed 1 / 1 hunk`, Bash no `file` / `diff`; the same
   fixture with the N2 events **filtered out** yields the P-B2 result
   (status / timing identical, no overlay fields) — the equivalence table;
-  reorder (N2 before raw) yields the same map; unmatched result creates an
-  entry; `denied` overrides A2's `done`; malformed `diff` dropped;
+  a synthetic sequence where the N2 event has the **lower** seq (N1
+  fail-safe) yields one entry **and** the raw `assistant` frame still in
+  `messages`; unmatched result creates an entry; duplicate-id result with
+  null echo fields (N7) keeps the name and sets `durationMs: null`;
+  `denied` overrides A2's `done`; malformed `diff` dropped;
   subagent N2 ignored; N2 kinds never in `messages`; `endTurn` after an
   N2-finished entry leaves it finished.
 - Mutation check (feedback memory): the equivalence test must fail when
@@ -348,14 +382,17 @@ independent commits per task, codex R1 + adversarial R2 per PR.
 
 ### P-B3.2 — header summary, status, duration, facts line
 
+- Baseline snapshots of the unchanged `ToolResultBlock` (R4) — first
+  commit of the PR.
 - `tool-summary.ts` (R1) + tests (primary arg / known:false fallback /
   F9 null → client table / no entry → client table / truncation stays in
   renderer).
 - `ToolCallBlock` R1–R3; `ToolUseBlock` passes the entry.
-- `tool-result-facts.ts` + `ToolResultBlock.facts` (R4);
-  `ConversationMessages` passes `tools?.[tool_use_id]`.
+- `tool-result-facts.ts` + `ToolResultBlock.facts` (R4) including the
+  `denied` override of `isError` (R3); `ConversationMessages` passes
+  `tools?.[tool_use_id]`.
 - i18n keys (R6). Snapshot guard: no-`facts` / no-entry rendering
-  byte-identical.
+  byte-identical to the baseline snapshots.
 
 ### P-B3.3 — diff view
 
@@ -393,13 +430,21 @@ mlab host and:
 
 ## 7. Risks
 
-- Issue #83 (nexen): live cross-goroutine reorder could deliver a
-  `tool_use` before its `assistant`. N1's unseen branch handles it; A1's
-  "first sighting wins" then keeps N1's entry.
+- Issue #83 (nexen): the live reorder is between the API goroutine's
+  `Emit` (lifecycle / lease kinds) and the pump (raw + derived batches);
+  a raw + derived batch is never split. Under a real reorder the
+  reducer's seq guard (P-B §4.2.4, `ev.seq <= lastSeq`) **drops the
+  lower-seq event for good** — a reconnect with `Last-Event-ID` cannot
+  bring it back. That is a pre-existing gap of the whole event path,
+  not of this phase; N1's fail-safe cannot fix it (the raw frame would
+  be lost before it reaches the reducer). Tracked as a follow-up issue
+  (SPA: tolerate a bounded backwards seq window, or refetch history on
+  detection); root fix is nexen #83.
 - Store growth: facts per entry are a few hundred bytes plus hunks (≤ 2000
   lines by the daemon cap); the raw frames already dwarf this.
-- `denied` widening the status union touches `toToolCallActivity`'s
-  exhaustive switch; TypeScript will flag any missed site.
+- `denied` widening the status union: `toToolCallActivity` is an
+  exhaustive switch, `TimingBadge` becomes one in P-B3.1 (it has a
+  `default` today, so the compiler alone would not have caught it).
 - Snapshot churn: every renderer change is guarded by "no entry / no
   facts → byte-identical" tests, so the Stream-mode-era snapshots stay.
 
@@ -411,4 +456,15 @@ now (F7 proves they exist).
 
 ## 9. Review log
 
-- (pending) codex plan + spec review, one round (`--model gpt-5.6-sol`).
+- 2026-09-19 codex plan + spec review `task-mu7ckdhj-wo5ha7`
+  (gpt-5.6-sol), six findings: (1) #83 reorder claim — partly agreed:
+  the N1 rationale was wrong (the reorder never splits a raw + derived
+  batch) and the planned swap test would have been masked by the seq
+  guard; rewritten (N1, §7, plan Task 4) and the seq-guard gap filed as
+  a follow-up; (2) denied result block still red — agreed, R3 extended
+  and plan Task 8; (3) duplicate `tool_use_id` — agreed as pre-existing
+  P-B2 behaviour, documented as N7 with a test; (4) self-comparing
+  snapshot — agreed, baseline snapshot task added; (5) `TimingBadge`
+  `default` branch — agreed, exhaustive in P-B3.1; (6) `Pick` types —
+  half: `Pick` keeps optionality so `primaryArg`/`known` are fine,
+  `status` is required so `ToolResultFacts` became `Partial<Pick<…>>`.
