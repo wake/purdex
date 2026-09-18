@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.382] - 2026-09-18
+
+### Feature: sidebar「Executions」view + 每 host 一條共用的 site-wide SSE（P-C.2，#1148）
+
+exec 模式的「看」入口。sidebar 多一個 view（RegionManager 自己加，不會動到既有配置）：每台 host 的未封存 execution 依來源分組（Local／Purdex／其他原樣）、狀態點、單行 brief、相對時間、從 tmux session 交過來的帶 `↩`；點一列開 execution tab（singleton）。
+
+#### 一條 SSE，兩個消費者
+
+Host → Nex 的表格原本自己開 site-wide SSE、自己管清單；sidebar 再開一條就是每 host 兩條長連線。這版把清單搬進 `useExecutionListStore`：**runtime 所有權**（subscriber token、generation、SSE handle、保留車道、debounce）跟**渲染用 cache** 分開放，refcount 到零關流但留資料（重開即顯示）。失效路徑四條：readiness 翻 false（in-flight fetch 與 debounce 一起作廢）、host 身分變更（`ip:port:token` 變 → 清 cache、重新 `ensure`、ready 後重開一次）、host 移除 cascade、SSE terminal close（立刻放掉車道）。表格改讀這個 store，DOM snapshot 位元組相同；封存切換走表格自己的查詢，用 store 的 `refreshRevision`（每次嘗試都 bump，失敗也算）帶動。
+
+#### 連線預算
+
+瀏覽器每個 origin 6 條連線，P-B 把 execution pane 的 live SSE 上限訂 4、留兩條給 REST。site-wide 這條也吃同一個預算，所以 `subscription-slots` 多了 `reserve(host, 'site-wide')`：保留期間 pane 上限降到 3，LRU 立刻 evict。真機驗收用網路紀錄證明：4 個 pane + sidebar 時每次切 tab 都重開串流（cap 4 不可能發生），site-wide 那條恰好一個 200、Hosts → Nex 頁打開也不增。
+
+#### codex 抓到的
+
+攻擊方三條 high：(1) `openNexSse` 在 host 已移除時會在回傳前**同步**發 `closed`，`open()` 在 callback 跑完後才把已關閉的 handle 寫回、還發 fetch——runtime 永遠以為串流活著、車道也沒保留；修法是先記 generation、回傳後比對，變了就丟 handle。回歸測試用真的 `openNexSse` 走那條路。(2) wire payload 沒驗證，`{items:{}}` 或一列 `labels: null` 就讓整個 view 卸載——加了 API 邊界的 `sanitizeExecutionsPage`（壞列丟掉、渲染欄位強制型別、`archived` 只認真布林）。(3) `refreshRevision` 只在成功時 bump，shared fetch 失敗時封存視圖靜默停在舊資料且錯誤不顯示。critic 對「六種職責要改狀態機」有證據反對（沒有可重現缺陷），沒做；另抓到一條 spec drift（gate 用 info-ready 而 spec 寫 `selectReady`）——plan 當時刻意選的，理由是表格不能比以前晚出現，spec 改成 v1.2 對齊。這是第一個照新流程跑的 PR：R1 → 攻擊 → critic 串行，修完只 re-review 增量。
+
+#### 測試與驗收
+
+6357 → 6455；spec §6.2 七項在 mlab 全過。純 SPA，daemon 免動。
+
 ## [1.0.0-alpha.381] - 2026-09-18
 
 ### Feature: Host Color Modes P1 — 每台 host 依 mode 的三色資料層 + 移除 ✳ 標題符號（#1144）
