@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.395] - 2026-09-18
+
+### Refactor: P-D.1 拆除 M0 execution／dispatch 模組（#1182）— P-D 第 1／3 段
+
+P-C 全 ship、真機過關之後，開始拆 Nexen 之前那一代的「Purdex 自己跑 headless」機制。spec `docs/specs/2026-09-18-pd-teardown-spec.md` v1.1 切三段：P-D.1 daemon M0 → P-D.2 daemon Stream／relay／bridge → P-D.3 SPA Stream 家族；純刪除 PR 不套 800 行規則，改以「被編輯的存活檔案數」與爆炸半徑切。
+
+這一段刪 `internal/module/execution/`（6059 行）與 `internal/module/dispatch/`（4133 行）—— alpha.326 的 Ploom 派工 M0，三台機器 0 筆執行、自 Ploom 整合改走 Nexen 起就是死碼。`main.go` 拔兩行接線，`config.DispatchConfig`／`[dispatch]` 表一起走，新測試 `TestLoadIgnoresUnknownDispatchTable` 守住「既有 config.toml 還帶 `[dispatch]` 表照樣載入」。`GET /api/execution/{id}`、`POST /api/dispatch/reclaim` 從此 404；`~/.config/pdx/execution.db` daemon 不再開，可手動刪。`m0-ploom-handoff.md` 標 deprecated 留作歷史，feature-inventory 頁同步改成已移除。
+
+Commit 順序是「先刪 package、再刪它讀的 config」，每個 commit 都用 git archive 匯出實測 `go build ./...` 綠 —— 這是 codex plan review（11 條全採納）抓到的：原 plan 先動 config 會讓中間 commit 紅。攻擊方提的「升級遺棄進行中 M0 dispatch 要加 preflight gate」不採納：mlab `execution.db` 0 筆、無 `pdx-exec-*` session，critic 判有證據反對。
+
+真機（mlab，hash `d892947f`）：`/api/config` 無 `dispatch`、sessions 照列、`nex-handoff` → follow-up 有輸出 → `nex-takeback` 回互動 CC 一趟全過，證明 nex 路徑不依賴 M0。`go test -race ./...` 除既有 `TestConsumeSignals_*_RearmsAfterTeardown` timing flake（origin/main 乾淨樹同樣會紅）全綠。
+
 ## [1.0.0-alpha.394] - 2026-09-18
 
 ### Feature: 色盤與圖示選擇器改成可拖曳的浮動視窗（#1179）
