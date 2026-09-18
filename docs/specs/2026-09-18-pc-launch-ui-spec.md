@@ -651,6 +651,47 @@ No execution was created; nothing to archive. Daemon log has no handoff
 entries (the handlers do not log; the 504 is the only trace). Cleanup:
 `nexacc` killed, scratch dir removed, daemon left running.
 
+### 6.3.1 Re-run 2026-09-18 (daemon alpha.387, after #1166)
+
+Same setup (`nexacc` tmux session in `~/Workspace/wake/nex-acceptance-scratch`,
+`claude` at its prompt, one "reply with the single word ok" exchange).
+Session code `z3hno0`, tmux instance `6901:1789205013`; provenance
+`{found: true, agent_type: cc, session_id: cb732c67-…, cwd: <scratch>,
+tmux_pane_id: %78}`. **Steps 1–4 all PASS.**
+
+1. **PASS** — `POST /nex-handoff {expected_tmux_instance, rollback_command:
+   "claude --resume {id}"}` → 200
+   `{execution_id: 06GB7NCQVYBEKQBQ9G5HRFZ4E4, state: running,
+   effective_profile: handoff, session_id: cb732c67-…, cwd: <scratch>}`.
+   Pane showed the CC exit banner ("Resume this session with: claude
+   --resume cb732c67-…") and an idle shell prompt. `pdx nex show`:
+   `resume_session_id = session_id = cb732c67-…`, `requested_profile =
+   effective_profile = handoff`, labels `{handoff_session: z3hno0, source:
+   purdex, nex.host, nex.provider}`, origin
+   `purdex://host/mini-lab:278cbm/session/z3hno0`, brief "(handed off from
+   tmux session nexacc)"; turn 1 settled `idle` / `final_response` within
+   seconds.
+2. **PASS** — `pdx nex attach --control` → lease; `pdx nex send --lease …
+   "what was the last thing I asked you?"` → `delivered`; settled in ~6 s
+   (turn_count 2). Assistant reply: 「你上一次直接問我的是「reply with the
+   single word ok」…之後只有一則 `/exit` 的本機指令輸出」 — the resumed
+   transcript carries the interactive exchange **and** the `/exit`. Event
+   stream contains 38 `system` frames incl. `hook_started
+   SessionStart:resume` ×3 — hooks load under the handoff profile (F5).
+3. **PASS** — immediate second handoff → 409 `no_identity` ("no Claude
+   Code session identity for this pane"): `/exit` deleted the frame, and
+   identity is checked before liveness (spec step 2 before 3), so `no_cc`
+   is not the code seen here.
+4. **PASS** — `POST /nex-takeback {expected_tmux_instance, execution_id,
+   resume_command: "claude --resume {id}"}` → 200 `{session_id: cb732c67-…,
+   archived: true}`. Pane running Claude Code again; asked "what did I ask
+   you first? one line" → 「你最先問的是「reply with the single word ok」」.
+   `pdx nex ls --all` lists the execution `idle` + `archived: true`.
+
+Cleanup: `/exit`, `tmux kill-session -t nexacc`, `pdx nex ls` empty,
+scratch dir removed; daemon not restarted. Token was read with a single
+`awk` assignment; only its length was printed.
+
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
