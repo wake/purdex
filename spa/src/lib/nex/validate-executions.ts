@@ -44,14 +44,24 @@ function sanitizeRow(raw: unknown): ExecutionSummary | null {
     created_at: num(raw.created_at),
     updated_at: num(raw.updated_at),
     observers: num(raw.observers),
-    archived: Boolean(raw.archived),
+    archived: raw.archived === true,
   }
   const lease = leaseOf(raw.lease)
   if (lease) row.lease = lease
   else delete row.lease
   if (row.origin === undefined) delete row.origin
+  for (const k of OPTIONAL_STRINGS) {
+    const v = optStr(raw[k])
+    if (v === undefined) delete row[k]
+    else row[k] = v
+  }
   return row
 }
+
+const OPTIONAL_STRINGS = [
+  'account_id', 'requested_profile', 'effective_profile', 'reject_reason', 'terminal_reason',
+  'last_turn_reason', 'session_id', 'resume_session_id', 'transcript_path', 'mount_kind', 'principal_id',
+] as const satisfies readonly (keyof ExecutionSummary)[]
 
 /** Never throws: a page that is not `{ items: [...] }` is an empty list with `dropped: 1`. */
 export function sanitizeExecutionsPage(raw: unknown): SanitizedExecutionsPage {
