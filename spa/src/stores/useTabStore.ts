@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern, PaneRebuildRecord, RebuildPatch, TmuxSessionContent } from '../types/tab'
 import type { FileSource } from '../types/fs'
 import { createTab } from '../types/tab'
-import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern, remountLeaf } from '../lib/pane-tree'
+import { getPrimaryPane, findPane, collectLeaves, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern, remountLeaf } from '../lib/pane-tree'
 import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/binding'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
@@ -438,6 +438,17 @@ interface TabState {
   setActiveTab: (id: string | null) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
+  /**
+   * Compare-and-swap `setPaneContent`: reports whether the pane was still
+   * in the live layout AND (when `expect` is given) still showed the content
+   * the caller started from. `setPaneContent` is a silent no-op when the tab
+   * or pane is gone, which is fine for UI writes but not for a write that
+   * follows a daemon side effect (a nex handoff already happened): the
+   * caller must know the pane did NOT take the content so it can offer
+   * another way to reach it. The check and the write happen in one `set()`,
+   * so nothing can slip in between. `false` leaves state untouched.
+   */
+  trySetPaneContent: (tabId: string, paneId: string, content: PaneContent, expect?: (current: PaneContent) => boolean) => boolean
   renameEditorPanes: (source: FileSource, oldPath: string, newPath: string, options?: { untitled?: UntitledDocumentState }) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
   splitPaneBlank: (tabId: string, paneId: string, direction: 'h' | 'v') => void
@@ -503,14 +514,39 @@ export const useTabStore = create<TabState>()(
 
       openSingletonTab: (content, opts) => {
         const state = get()
-        // Scan all tabs' primary pane for matching content
-        for (const id of state.tabOrder) {
-          const tab = state.tabs[id]
-          if (!tab) continue
-          const primary = getPrimaryPane(tab.layout)
-          if (contentMatches(primary.content, content)) {
-            get().setActiveTab(id)
-            return id
+        if (content.kind === 'execution') {
+          // Execution panes may live in any leaf (a handoff swaps the pane
+          // in place, which can be a secondary leaf of a split), so scan
+          // every leaf of every tab. Among matches prefer the pane that
+          // carries `from` — it is the one "Take back" can act on — over a
+          // from-less observer pane opened from a deeplink (P-C.3b).
+          let fallback: string | null = null
+          for (const id of state.tabOrder) {
+            const tab = state.tabs[id]
+            if (!tab) continue
+            for (const leaf of collectLeaves(tab.layout)) {
+              if (!contentMatches(leaf.content, content)) continue
+              if (leaf.content.kind === 'execution' && leaf.content.from) {
+                get().setActiveTab(id)
+                return id
+              }
+              fallback ??= id
+            }
+          }
+          if (fallback) {
+            get().setActiveTab(fallback)
+            return fallback
+          }
+        } else {
+          // Scan all tabs' primary pane for matching content
+          for (const id of state.tabOrder) {
+            const tab = state.tabs[id]
+            if (!tab) continue
+            const primary = getPrimaryPane(tab.layout)
+            if (contentMatches(primary.content, content)) {
+              get().setActiveTab(id)
+              return id
+            }
           }
         }
         // Not found — create + insert at caller-supplied position
@@ -578,6 +614,19 @@ export const useTabStore = create<TabState>()(
           const newLayout = updatePaneInLayout(tab.layout, paneId, content)
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
+
+      trySetPaneContent: (tabId, paneId, content, expect) => {
+        let swapped = false
+        set((state) => {
+          const tab = state.tabs[tabId]
+          if (!tab) return state
+          const pane = findPane(tab.layout, paneId)
+          if (!pane || (expect && !expect(pane.content))) return state
+          swapped = true
+          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: updatePaneInLayout(tab.layout, paneId, content) } } }
+        })
+        return swapped
+      },
 
       renameEditorPanes: (source, oldPath, newPath, options) =>
         set((state) => {

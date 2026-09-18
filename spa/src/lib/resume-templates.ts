@@ -42,6 +42,17 @@ export function buildResumeLookup(overrides: Readonly<Record<string, ResumeTempl
   return (agentType) => lookupResumeTemplate(overrides, agentType)
 }
 
+/**
+ * The exact-form template for `agentType`, `{id}` left unsubstituted, or
+ * `undefined` when the host has no template for that agent. This is what the
+ * SPA sends as `rollback_command` / `resume_command` on the nex handoff
+ * endpoints (spec §4.4): the daemon renders `{id}` from the session id it
+ * read itself, so the SPA must not substitute.
+ */
+export function resumeTemplateFor(lookup: ResumeTemplateLookup, agentType: string): string | undefined {
+  return lookup(agentType)?.exact
+}
+
 const NO_OVERRIDES: Readonly<Record<string, ResumeTemplatePair>> = Object.freeze({})
 
 export const defaultResumeLookup: ResumeTemplateLookup = buildResumeLookup(NO_OVERRIDES)

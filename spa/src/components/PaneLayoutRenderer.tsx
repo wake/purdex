@@ -1,18 +1,27 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import { resolvePaneRenderer } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves, findPane } from '../lib/pane-tree'
+import { compositeKey } from '../lib/composite-key'
+import { isHandoffCandidate } from '../lib/nex/handoff-gate'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
 import { PaneContextMenu, type PaneMenuAction } from './PaneContextMenu'
+import { HandoffConfirmDialog } from './HandoffConfirmDialog'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useAgentStore } from '../stores/useAgentStore'
+import { useSessionStore } from '../stores/useSessionStore'
+import { useNexHostStore, selectHandoffReady } from '../stores/useNexHostStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import {
   useModuleEnabledStore,
   isModuleEnabledIn,
 } from '../stores/useModuleEnabledStore'
 import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
-import type { PaneLayout, Pane } from '../types/tab'
+import type { PaneLayout, Pane, TmuxSessionContent } from '../types/tab'
+
+const notReady = () => false
 
 interface Props {
   layout: PaneLayout
@@ -39,6 +48,24 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   // instance, so this per-instance state is scoped to a single pane.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
 
+  // "Hand to nex" (P-C.3b): a pane-local item, so a terminal pane anywhere
+  // in a split has it. The gate is pure; these subscriptions feed it the
+  // live agent type, the daemon's session row and the host's readiness.
+  // Non-session leaves and split nodes subscribe to constants.
+  const leafContent = layout.type === 'leaf' ? layout.pane.content : null
+  const tmux: TmuxSessionContent | null = leafContent?.kind === 'tmux-session' ? leafContent : null
+  const tmuxHostId = tmux?.hostId ?? null
+  const tmuxCode = tmux?.sessionCode ?? ''
+  const agentType = useAgentStore((s) => (tmuxHostId ? s.agentTypes[compositeKey(tmuxHostId, tmuxCode)] : undefined))
+  const sessionRow = useSessionStore((s) => (tmuxHostId ? s.sessions[tmuxHostId]?.find((r) => r.code === tmuxCode) ?? null : null))
+  const handoffReady = useNexHostStore(tmuxHostId ? selectHandoffReady(tmuxHostId) : notReady)
+  const t = useI18nStore((s) => s.t)
+  const [handoff, setHandoff] = useState<{ tabId: string; paneId: string; content: TmuxSessionContent } | null>(null)
+  useEffect(() => {
+    if (tmuxHostId) void useNexHostStore.getState().ensure(tmuxHostId)
+  }, [tmuxHostId])
+  const handoffCandidate = tmux ? isHandoffCandidate(tmux, { agentType, session: sessionRow, handoffReady }) : false
+
   if (layout.type === 'leaf') {
     const resolution = resolvePaneRenderer(
       layout.pane.content.kind,
@@ -63,15 +90,13 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const paneKind = resolution.paneKind
       Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
     }
-    const leafContent = layout.pane.content
-
     // Right-click interception: editor(Monaco) panes are never intercepted so
     // their native menu survives; Shift+right-click is a universal escape hatch
     // that lets the native menu through (xterm/browser). Everything else opens
     // the PaneContextMenu. stopPropagation prevents ancestor splits from also
     // handling the event.
     const handleContextMenu = (e: React.MouseEvent) => {
-      if (leafContent.kind === 'editor' || e.shiftKey) return
+      if (layout.pane.content.kind === 'editor' || e.shiftKey) return
       e.preventDefault()
       e.stopPropagation()
       setMenu({ x: e.clientX, y: e.clientY })
@@ -84,6 +109,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
           const tab = useTabStore.getState().tabs[tabId]
           return tab ? countLeaves(tab.layout) > 1 : false
         })()}
+        extraItems={handoffCandidate ? [{ label: t('handoff.menu'), action: 'hand-to-nex' }] : undefined}
         onClose={() => setMenu(null)}
         onAction={(action: PaneMenuAction) => {
           const paneId = layout.pane.id
@@ -98,12 +124,19 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
           //    live pane.
           const tab = useTabStore.getState().tabs[tabId]
           if (!tab) { setMenu(null); return }
-          if (!findPane(tab.layout, paneId)) { setMenu(null); return }
+          const livePane = findPane(tab.layout, paneId)
+          if (!livePane) { setMenu(null); return }
           if ((action === 'close' || action === 'detach') && countLeaves(tab.layout) <= 1) {
             setMenu(null)
             return
           }
-          if (action === 'split-h') {
+          if (action === 'hand-to-nex') {
+            // The live content, not the captured one: the dialog hands off
+            // whatever the pane holds now.
+            if (livePane.content.kind === 'tmux-session') {
+              setHandoff({ tabId, paneId, content: livePane.content })
+            }
+          } else if (action === 'split-h') {
             useTabStore.getState().splitPaneBlank(tabId, paneId, 'h')
           } else if (action === 'split-v') {
             useTabStore.getState().splitPaneBlank(tabId, paneId, 'v')
@@ -118,6 +151,18 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             }
           }
         }}
+      />
+    ) : null
+
+    const handoffDialog = handoff ? (
+      <HandoffConfirmDialog
+        hostId={handoff.content.hostId}
+        sessionCode={handoff.content.sessionCode}
+        tmuxInstance={handoff.content.tmuxInstance}
+        cachedName={handoff.content.cachedName}
+        tabId={handoff.tabId}
+        paneId={handoff.paneId}
+        onClose={() => setHandoff(null)}
       />
     ) : null
 
@@ -155,6 +200,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
           />
           <Component pane={layout.pane} isActive={isActive} />
           {paneMenu}
+          {handoffDialog}
         </div>
       )
     }
@@ -170,6 +216,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       <div className="h-full w-full" onContextMenu={handleContextMenu}>
         <Component pane={layout.pane} isActive={isActive} />
         {paneMenu}
+        {handoffDialog}
       </div>
     )
   }

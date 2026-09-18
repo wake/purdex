@@ -1,9 +1,11 @@
 // spa/src/components/execution/ExecutionHeader.tsx — the facts strip above
 // an execution conversation (spec §4.3.3): state, provider/profile, cwd,
-// observers, lease holder, turns, cost, SSE status, and the two lease-backed
-// actions. Pure presentation; ExecutionView owns the network.
+// observers, lease holder, turns, cost, SSE status, the two lease-backed
+// actions, and — for executions that came from a tmux session (P-C.3 spec
+// §4.4) — "Take back to terminal". Pure presentation; ExecutionView owns the
+// network.
 import { useEffect, useState } from 'react'
-import { Prohibit, Power } from '@phosphor-icons/react'
+import { ArrowUUpLeft, Prohibit, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { ExecutionState } from '../../lib/nex/event-reducer'
@@ -15,7 +17,11 @@ export interface ExecutionHeaderProps {
   isMine: (principal: string | undefined) => boolean
   onInterrupt: () => void
   onTerminate: () => void
+  /** Gates interrupt/terminate (terminal execution, or a take-back in flight). Take-back has its own flag. */
   busy: boolean
+  /** Present only when the execution has a `from` session to go back to. */
+  onTakeBack?: () => void
+  takeBackBusy?: boolean
 }
 
 const STATE_DOT: Record<string, string> = {
@@ -25,7 +31,7 @@ const STATE_DOT: Record<string, string> = {
 
 export const TERMINATE_CONFIRM_MS = 4000
 
-export default function ExecutionHeader({ summary, costUsd, sse, isMine, onInterrupt, onTerminate, busy }: ExecutionHeaderProps) {
+export default function ExecutionHeader({ summary, costUsd, sse, isMine, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState(false)
   useEffect(() => {
@@ -55,6 +61,12 @@ export default function ExecutionHeader({ summary, costUsd, sse, isMine, onInter
         {summary?.turn_count != null && <span>{summary.turn_count} {t('execution.turns')}</span>}
         <span>${costUsd.toFixed(2)}</span>
         <div className="flex-1" />
+        {onTakeBack && (
+          <button type="button" data-testid="take-back" disabled={takeBackBusy} onClick={onTakeBack}
+            className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-surface-hover disabled:opacity-40">
+            <ArrowUUpLeft size={12} /> {t('takeback.button')}
+          </button>
+        )}
         <button type="button" disabled={busy} onClick={onInterrupt}
           className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-surface-hover disabled:opacity-40">
           <Prohibit size={12} /> {t('execution.interrupt')}

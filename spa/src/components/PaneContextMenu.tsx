@@ -2,21 +2,27 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 
-export type PaneMenuAction = 'split-h' | 'split-v' | 'close' | 'detach'
+export type PaneMenuAction = 'split-h' | 'split-v' | 'close' | 'detach' | 'hand-to-nex'
 
 interface Props {
   position: { x: number; y: number }
   canDetach: boolean
+  /**
+   * Content-specific items the renderer decides on (e.g. "Hand to nex" for a
+   * CC terminal pane). Rendered after a separator so the layout items above
+   * stay the same on every pane kind.
+   */
+  extraItems?: MenuItem[]
   onClose: () => void
   onAction: (action: PaneMenuAction) => void
 }
 
-interface MenuItem {
+export interface MenuItem {
   label: string
   action: PaneMenuAction
 }
 
-export function PaneContextMenu({ position, canDetach, onClose, onAction }: Props) {
+export function PaneContextMenu({ position, canDetach, extraItems, onClose, onAction }: Props) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -55,6 +61,7 @@ export function PaneContextMenu({ position, canDetach, onClose, onAction }: Prop
           { label: t('pane.detach'), action: 'detach' as const },
         ]
       : []),
+    ...(extraItems && extraItems.length > 0 ? ['separator' as const, ...extraItems] : []),
   ]
 
   return (

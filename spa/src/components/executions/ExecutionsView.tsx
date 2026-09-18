@@ -39,6 +39,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
   const t = useI18nStore((s) => s.t)
   const hostName = useHostStore((s) => s.hosts[id]?.name)
   const entry = useNexHostStore((s) => s.byHost[id])
+  const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const { items, phase, error, refetch } = useHostExecutions(id, { enabled: id !== '' })
   const now = useNowTicker()
   const groups = useMemo(() => groupBySource(items), [items])
@@ -86,7 +87,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} hostId={id} now={now} onOpen={open} />
+          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} onOpen={open} />
         ))}
       </>
     )

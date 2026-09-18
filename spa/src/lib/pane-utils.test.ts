@@ -185,4 +185,13 @@ describe('contentMatches', () => {
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'zzz' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(false)
   })
+
+  it('execution `from` (the session it was handed off from) does not affect matching', () => {
+    useHostStore.setState({ hosts: { a: { id: 'a', name: 'A', ip: '1', port: 1 } } as never, hostOrder: ['a'], activeHostId: 'a', runtime: {} })
+    const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', from }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a' }, { kind: 'execution', executionId: 'exc_1', host: 'a', from })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', from }, { kind: 'execution', executionId: 'exc_1', host: 'a', from: { ...from, sessionCode: 'other' } })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', from }, { kind: 'execution', executionId: 'exc_2', host: 'a', from })).toBe(false)
+  })
 })

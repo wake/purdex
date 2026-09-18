@@ -2,17 +2,36 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
+import { useTabStore } from '../../stores/useTabStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { NexApiError } from '../../lib/nex/types'
+import { HandoffApiError, nexTakeback } from '../../lib/nex/handoff-api'
+import { takeBack } from '../../lib/nex/handoff'
+import { createTab } from '../../types/tab'
+import { getPrimaryPane } from '../../lib/pane-tree'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
+// The take-back path runs the real orchestration (store swap, forget-before-
+// swap) against a mocked daemon call; `takeBack` itself is a pass-through spy
+// so the view's call shape (lease id, forgetLease identity) is observable.
+vi.mock('../../lib/nex/handoff-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/nex/handoff-api')>()),
+  nexTakeback: vi.fn(),
+}))
+vi.mock('../../lib/nex/handoff', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/nex/handoff')>()
+  return { ...actual, takeBack: vi.fn(actual.takeBack) }
+})
 
 const H = 'h', E = 'exc_1', KEY = 'h:exc_1'
+const base = { hostId: H, executionId: E, tabId: 't1', paneId: 'p1' }
 const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn(), forget = vi.fn()
 const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
 
@@ -31,7 +50,7 @@ beforeEach(() => {
 describe('ExecutionView', () => {
   it('renders header facts from the summary', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-me000000', expires_at: 1 } }) as never)
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('execution-state')).toHaveTextContent('idle')
     expect(screen.getByText(/standard/)).toBeInTheDocument()
     expect(screen.getByText(/repo/)).toBeInTheDocument()
@@ -40,7 +59,7 @@ describe('ExecutionView', () => {
 
   it('send: optimistic bubble, lease acquired, message posted, queued tag shown', async () => {
     vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 't1', delivery: 'queued' })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox')
     fireEvent.change(box, { target: { value: 'hello' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -55,7 +74,7 @@ describe('ExecutionView', () => {
   it('locks the input synchronously before the lease resolves, so a second submit while acquisition is in flight is a no-op', async () => {
     let resolveLease!: (v: string) => void
     ensureLease.mockReturnValueOnce(new Promise<string>((resolve) => { resolveLease = resolve }))
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox')
 
     fireEvent.change(box, { target: { value: 'first' } })
@@ -86,7 +105,7 @@ describe('ExecutionView', () => {
   it('does not resurrect pendingLocal once message_accepted already consumed it while the POST is still in flight (I12)', async () => {
     let resolveSend!: (v: { turn_id: string; delivery: 'delivered' | 'queued' }) => void
     vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise((resolve) => { resolveSend = resolve }))
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox')
     fireEvent.change(box, { target: { value: 'hello' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -109,7 +128,7 @@ describe('ExecutionView', () => {
 
   it('send failure withdraws the bubble, re-enables input, restores text, shows the error (I12)', async () => {
     vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(box, { target: { value: 'hello' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -133,7 +152,7 @@ describe('ExecutionView', () => {
       useExecutionStore.getState().setLeaseError(H, E, { code: 'lease_held', heldBy: 'pdx:mlab/t-other' })
       throw new NexApiError(409, 'lease_held', 'held')
     })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(box, { target: { value: 'x' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -153,7 +172,7 @@ describe('ExecutionView', () => {
 
   it('lease_expired | lease_mismatch | lease_required from send drop the local lease via forget() so the next action re-acquires', async () => {
     vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(409, 'lease_mismatch', 'stale'))
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox')
     fireEvent.change(box, { target: { value: 'hello' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -163,7 +182,7 @@ describe('ExecutionView', () => {
   })
 
   it('interrupt acquires the lease and posts; no_live_turn is silent', async () => {
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     fireEvent.click(screen.getByRole('button', { name: /interrupt/i }))
     await waitFor(() => expect(api.interruptExecution).toHaveBeenCalledWith(H, E, 'ls_1'))
     vi.mocked(api.interruptExecution).mockRejectedValueOnce(new NexApiError(409, 'no_live_turn', 'nothing'))
@@ -173,7 +192,7 @@ describe('ExecutionView', () => {
   })
 
   it('terminate needs two clicks, then acquires the lease and posts', async () => {
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     fireEvent.click(screen.getByRole('button', { name: /^terminate$/i }))
     expect(api.terminateExecution).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: /confirm terminate/i }))
@@ -182,17 +201,17 @@ describe('ExecutionView', () => {
 
   it('disables input with a reason when archived or ended', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
-    const { rerender } = render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const { rerender } = render(<ExecutionView {...base} isActive />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/archived/i))
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
-    rerender(<ExecutionView hostId={H} executionId={E} isActive />)
+    rerender(<ExecutionView {...base} isActive />)
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/ended/i))
   })
 
   it('disables the input until history has loaded', () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     // The loading placeholder replaces the conversation, but StreamInput is
     // still rendered below it — must stay disabled while spinner is up.
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
@@ -200,26 +219,26 @@ describe('ExecutionView', () => {
 
   it('a terminally closed live stream (with error) disables input with a disconnected placeholder', () => {
     useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden')
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/lost/i))
   })
 
   it('sse closed with no error (e.g. an in-progress reconnect backoff) does not disable input', () => {
     useExecutionStore.getState().setSse(H, E, 'closed', null)
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
   })
 
   it('archived: input is disabled but Terminate stays enabled (not a terminal state)', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
     expect(screen.getByRole('button', { name: /^terminate$/i })).not.toBeDisabled()
   })
 
   it('shows the thinking indicator once a delivered send has no reply yet', async () => {
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox')
     fireEvent.change(box, { target: { value: 'hello' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -229,7 +248,7 @@ describe('ExecutionView', () => {
 
   it('hides the thinking indicator while the send is still queued', async () => {
     vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 't2', delivery: 'queued' })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox')
     fireEvent.change(box, { target: { value: 'hi' } })
     fireEvent.keyDown(box, { key: 'Enter' })
@@ -239,26 +258,26 @@ describe('ExecutionView', () => {
 
   it('renders the problem states instead of the conversation', () => {
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'not_found', paused: false })
-    const { rerender } = render(<ExecutionView hostId={H} executionId={E} isActive />)
+    const { rerender } = render(<ExecutionView {...base} isActive />)
     expect(screen.getByText(/not found/i)).toBeInTheDocument()
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'host_removed', paused: false })
-    rerender(<ExecutionView hostId={H} executionId={E} isActive />)
+    rerender(<ExecutionView {...base} isActive />)
     expect(screen.getByText(/host removed/i)).toBeInTheDocument()
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'nex_disabled', paused: false })
-    rerender(<ExecutionView hostId={H} executionId={E} isActive />)
+    rerender(<ExecutionView {...base} isActive />)
     expect(screen.getByText(/not enabled/i)).toBeInTheDocument()
   })
 
   it('shows the loading state until history is loaded', () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('execution-loading')).toBeInTheDocument()
   })
 
   it('shows the retrying error text under the loading line while a retry chain is failing', () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
     useExecutionStore.getState().setSse(H, E, 'closed', 'Failed to fetch')
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('execution-loading')).toBeInTheDocument()
     expect(screen.getByTestId('execution-loading-error')).toHaveTextContent(/Failed to fetch/)
   })
@@ -283,13 +302,13 @@ const toolResultFrame = (seq: number, created_at: number) => ({
 describe('ExecutionView — thinking indicator truth table (R3)', () => {
   it('R3: turnLive alone (observer) → thinking indicator present', () => {
     patchExec({ turnLive: true })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
   })
 
   it('R3: turnLive with visible partial text → thinking indicator absent, typewriter present', () => {
     patchExec({ turnLive: true, partial: textPartial('tokens flowing') })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
     expect(screen.getByTestId('partial-group')).toHaveTextContent('tokens flowing')
     expect(screen.getByTestId('stream-cursor')).toBeInTheDocument()
@@ -297,38 +316,38 @@ describe('ExecutionView — thinking indicator truth table (R3)', () => {
 
   it('R3: turnLive with a partial whose blocks are all empty → thinking indicator still present', () => {
     patchExec({ turnLive: true, partial: textPartial('') })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
   })
 
   it('R3: turnLive with a whitespace-only text partial → no bubble, thinking indicator still present', () => {
     patchExec({ turnLive: true, partial: textPartial(' \n ') })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
     expect(screen.queryByTestId('stream-cursor')).not.toBeInTheDocument()
   })
 
   it('R3: turnLive with a started tool_use (no input_json_delta yet) → spinner row, thinking indicator absent', () => {
     patchExec({ turnLive: true, partial: { messageId: 'm', finalized: 0, blocks: { 0: { index: 0, type: 'tool_use', text: '', thinking: '', partialJson: '', toolId: 'tu9', toolName: 'Bash' } } } })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
     expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
   })
 
   it('R3: pendingSend queued without turnLive → thinking indicator absent', () => {
     patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: 'queued' } as Exec['pendingLocal'] })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
   })
 
   it('R3: neither turnLive nor pendingSend → thinking indicator absent', () => {
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
   })
 
   it('R3: turnLive with a running tool → spinner only, no thinking indicator; dots return once the tool_result lands', () => {
     patchExec({ turnLive: true })
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
     act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
     expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
@@ -343,7 +362,7 @@ describe('ExecutionView — thinking indicator truth table (R3)', () => {
 
 describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
   it('R2: a running tool is marked aborted after execution.turn_orphaned', () => {
-    render(<ExecutionView hostId={H} executionId={E} isActive />)
+    render(<ExecutionView {...base} isActive />)
     act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
     expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
     act(() => {
@@ -358,7 +377,7 @@ describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(10_000)
-      render(<ExecutionView hostId={H} executionId={E} isActive />)
+      render(<ExecutionView {...base} isActive />)
       const idleTimers = vi.getTimerCount()
       act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 10_000)]) })
       expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('0.0s')
@@ -380,5 +399,262 @@ describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ---- P-C.3b task 4: "Take back to terminal" ------------------------------
+
+const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+const takebackOk = { session_id: 'sid-1', archived: true }
+const mockedTakeback = vi.mocked(nexTakeback)
+const mockedTakeBack = vi.mocked(takeBack)
+
+/** An execution tab whose primary pane carries `from`; returns the ids the view needs. */
+function executionTab(): { tabId: string; paneId: string } {
+  const tab = createTab({ kind: 'execution', executionId: E, host: H, from })
+  useTabStore.getState().addTab(tab)
+  return { tabId: tab.id, paneId: getPrimaryPane(tab.layout).id }
+}
+const paneContent = (tabId: string) => getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+const toast = () => useUndoToast.getState().toast
+const takeBackBtn = () => screen.getByTestId('take-back') as HTMLButtonElement
+
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((res) => { resolve = res })
+  return { promise, resolve }
+}
+
+describe('ExecutionView — take back to terminal', () => {
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useUndoToast.setState({ toast: null })
+    mockedTakeback.mockReset()
+    mockedTakeBack.mockClear()
+    vi.mocked(api.releaseLease).mockReset().mockResolvedValue(undefined)
+    useExecutionStore.getState().setLease(H, E, { leaseId: 'ls_1', expiresAt: Date.now() + 100_000 })
+  })
+
+  it('no `from` → no take-back control', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('take-back')).toBeNull()
+  })
+
+  it("with `from` → the control is there; idle execution → no confirm, takeBack called with the held lease id and the hook's forget", async () => {
+    mockedTakeback.mockResolvedValueOnce(takebackOk)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(screen.queryByTestId('takeback-dialog')).toBeNull()
+    expect(mockedTakeBack).toHaveBeenCalledTimes(1)
+    expect(mockedTakeBack).toHaveBeenCalledWith({ hostId: H, executionId: E, from, leaseId: 'ls_1', tabId: ids.tabId, paneId: ids.paneId, forgetLease: forget })
+    expect(mockedTakeback).toHaveBeenCalledWith(H, from.sessionCode, {
+      expected_tmux_instance: from.tmuxInstance, execution_id: E, resume_command: 'claude --resume {id}', lease_id: 'ls_1',
+    })
+    expect(forget).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits leaseId when this tab holds no lease', async () => {
+    useExecutionStore.getState().setLease(H, E, null)
+    mockedTakeback.mockResolvedValueOnce(takebackOk)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(mockedTakeBack.mock.calls[0][0].leaseId).toBeUndefined()
+    expect(mockedTakeback.mock.calls[0][2]).not.toHaveProperty('lease_id')
+  })
+
+  it('running execution → confirm dialog first; Cancel sends nothing, Confirm sends the take-back', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running' }) as never)
+    mockedTakeback.mockResolvedValueOnce(takebackOk)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+
+    fireEvent.click(takeBackBtn())
+    expect(screen.getByTestId('takeback-dialog')).toBeInTheDocument()
+    expect(screen.getByText(/taking it back interrupts it/i)).toBeInTheDocument()
+    expect(mockedTakeBack).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('takeback-cancel'))
+    expect(screen.queryByTestId('takeback-dialog')).toBeNull()
+    expect(mockedTakeBack).not.toHaveBeenCalled()
+
+    fireEvent.click(takeBackBtn())
+    await act(async () => { fireEvent.click(screen.getByTestId('takeback-confirm')) })
+    expect(screen.queryByTestId('takeback-dialog')).toBeNull()
+    expect(mockedTakeBack).toHaveBeenCalledTimes(1)
+    expect(mockedTakeBack.mock.calls[0][0]).toMatchObject({ leaseId: 'ls_1', forgetLease: forget })
+  })
+
+  it('success → the pane is the tmux-session content built from `from`, and the success toast shows', async () => {
+    mockedTakeback.mockResolvedValueOnce(takebackOk)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(paneContent(ids.tabId)).toEqual({
+      kind: 'tmux-session', hostId: H, sessionCode: from.sessionCode, mode: 'terminal', cachedName: from.cachedName, tmuxInstance: from.tmuxInstance,
+    })
+    expect(toast()?.message).toBe('Back in the terminal; the execution is archived.')
+    expect(toast()?.action).toBeUndefined()
+  })
+
+  it('the button is busy while the request is in flight and a second click is ignored', async () => {
+    const d = deferred<typeof takebackOk>()
+    mockedTakeback.mockReturnValueOnce(d.promise)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    expect(takeBackBtn().disabled).toBe(true)
+    fireEvent.click(takeBackBtn())
+    expect(mockedTakeBack).toHaveBeenCalledTimes(1)
+    await act(async () => { d.resolve(takebackOk) })
+    expect(paneContent(ids.tabId).kind).toBe('tmux-session')
+  })
+
+  it('freezes execution writes while the take-back is pending: input, Interrupt and Terminate are disabled (R1-1)', async () => {
+    const d = deferred<typeof takebackOk>()
+    mockedTakeback.mockReturnValueOnce(d.promise)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
+    const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
+    const terminate = () => screen.getByRole('button', { name: /^terminate$/i }) as HTMLButtonElement
+    expect(textbox().disabled).toBe(false)
+    expect(interrupt().disabled).toBe(false)
+    expect(terminate().disabled).toBe(false)
+
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    expect(textbox().disabled).toBe(true)
+    expect(interrupt().disabled).toBe(true)
+    expect(terminate().disabled).toBe(true)
+    // Clicks on the frozen controls must not reach the daemon.
+    fireEvent.click(interrupt())
+    fireEvent.click(terminate())
+    expect(api.interruptExecution).not.toHaveBeenCalled()
+    expect(api.terminateExecution).not.toHaveBeenCalled()
+
+    await act(async () => { d.resolve(takebackOk) })
+    expect(paneContent(ids.tabId).kind).toBe('tmux-session')
+  })
+
+  it('a failed take-back thaws the input, Interrupt and Terminate again (R1-1)', async () => {
+    let reject!: (e: unknown) => void
+    const failing = new Promise<typeof takebackOk>((_, rej) => { reject = rej })
+    mockedTakeback.mockReturnValueOnce(failing)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    await act(async () => { reject(new HandoffApiError(409, 'held_by', { code: 'held_by', principal: 'x' })) })
+    expect(toast()?.message).toBe('The execution lease is held by x.')
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: /^terminate$/i }) as HTMLButtonElement).disabled).toBe(false)
+    expect(paneContent(ids.tabId).kind).toBe('execution')
+  })
+
+  it('swapped:false (pane closed while in flight) → the "archived, pane gone" toast', async () => {
+    const d = deferred<typeof takebackOk>()
+    mockedTakeback.mockReturnValueOnce(d.promise)
+    const ids = executionTab()
+    const { unmount } = render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    useTabStore.getState().closeTab(ids.tabId)
+    unmount()
+    await act(async () => { d.resolve(takebackOk) })
+    expect(toast()?.message).toMatch(/archived, but its pane was already closed/)
+  })
+
+  it('HandoffApiError → error toast; pane untouched; lease not forgotten; button re-enabled', async () => {
+    mockedTakeback.mockRejectedValueOnce(new HandoffApiError(404, 'session_missing', { code: 'session_missing' }))
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(toast()?.message).toBe('The tmux session no longer exists.')
+    expect(paneContent(ids.tabId).kind).toBe('execution')
+    expect(forget).not.toHaveBeenCalled()
+    await waitFor(() => expect(takeBackBtn().disabled).toBe(false))
+  })
+
+  it('an error carrying session_id adds the manual-resume line', async () => {
+    mockedTakeback.mockRejectedValueOnce(new HandoffApiError(409, 'cc_already_running', { code: 'cc_already_running', session_id: 'sid-4' }))
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(toast()?.message).toBe('Claude Code is already running in that session.\nResume by hand: claude --resume sid-4')
+  })
+
+  it('a non-API error falls back to the generic toast', async () => {
+    mockedTakeback.mockRejectedValueOnce(new TypeError('boom'))
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(toast()?.message).toBe('Handoff failed (unknown).')
+  })
+})
+
+describe('ExecutionView — take back with the real lease hook', () => {
+  // The daemon consumed the lease as part of the take-back; the pane swap
+  // unmounts this view, and its lease cleanup must NOT DELETE the lease again.
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../../hooks/useExecutionLease')>('../../hooks/useExecutionLease')
+    vi.mocked(lease.useExecutionLease).mockImplementation(actual.useExecutionLease)
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useUndoToast.setState({ toast: null })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H]: { id: H, name: 'h' } as never } }))
+    mockedTakeback.mockReset()
+    vi.mocked(api.releaseLease).mockReset().mockResolvedValue(undefined)
+    useExecutionStore.getState().setLease(H, E, { leaseId: 'ls_1', expiresAt: Date.now() + 100_000 })
+  })
+
+  it('success → unmount does not call releaseLease (the lease was forgotten before the swap)', async () => {
+    mockedTakeback.mockResolvedValueOnce(takebackOk)
+    const ids = executionTab()
+    const { unmount } = render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(paneContent(ids.tabId).kind).toBe('tmux-session')
+    expect(useExecutionStore.getState().executions[KEY].lease).toBeNull()
+    unmount()
+    await act(async () => {})
+    expect(api.releaseLease).not.toHaveBeenCalled()
+  })
+
+  it('control: failure leaves the lease held, so unmount releases it (proves the spy is live)', async () => {
+    mockedTakeback.mockRejectedValueOnce(new HandoffApiError(404, 'session_missing', { code: 'session_missing' }))
+    const ids = executionTab()
+    const { unmount } = render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(useExecutionStore.getState().executions[KEY].lease?.leaseId).toBe('ls_1')
+    unmount()
+    await act(async () => {})
+    expect(api.releaseLease).toHaveBeenCalledWith(H, E, 'ls_1')
+  })
+})
+
+describe('ExecutionView — take-back is refused while another write is in flight (re-review)', () => {
+  beforeEach(() => { mockedTakeback.mockReset() })
+
+  it('a pending send disables the take-back control', () => {
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(false)
+    act(() => { patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: null } as Exec['pendingLocal'] }) })
+    expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(takeBackBtn())
+    expect(mockedTakeback).not.toHaveBeenCalled()
+  })
+
+  it('an in-flight interrupt disables the take-back control until it settles', async () => {
+    let resolveInterrupt!: (v: { turn_id: string; state: string }) => void
+    vi.mocked(api.interruptExecution).mockReturnValueOnce(new Promise((res) => { resolveInterrupt = res }))
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    fireEvent.click(screen.getByRole('button', { name: /interrupt/i }))
+    await waitFor(() => expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(true))
+    await act(async () => { resolveInterrupt({ turn_id: 't1', state: 'idle' }) })
+    await waitFor(() => expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(false))
   })
 })

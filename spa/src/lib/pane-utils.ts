@@ -54,6 +54,8 @@ export function contentMatches(a: PaneContent, b: PaneContent): boolean {
   // (spec §4.3.3) — a *stored* host that no longer exists must NOT be folded
   // into a match with the first host, or a restored tab could collide with
   // a different execution on whichever host now happens to be first.
+  // `from` is provenance, not identity: two panes showing the same execution
+  // are the same singleton whether or not one of them was handed off.
   if (a.kind === 'execution' && b.kind === 'execution') {
     return a.executionId === b.executionId
       && (a.host ?? resolveExecutionHostId(undefined)) === (b.host ?? resolveExecutionHostId(undefined))

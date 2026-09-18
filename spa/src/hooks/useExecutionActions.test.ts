@@ -71,3 +71,23 @@ describe('useExecutionActions — a superseded send never touches the newer one'
     expect(st().lastTurn).toEqual({ turnId: 'tB', delivery: 'queued' })
   })
 })
+
+describe('useExecutionActions — actionPending', () => {
+  it('is true while an interrupt request is in flight and false again afterwards', async () => {
+    let resolveInterrupt!: (v: { turn_id: string; state: string }) => void
+    vi.mocked(api.interruptExecution).mockReset().mockReturnValueOnce(new Promise((res) => { resolveInterrupt = res }))
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    expect(result.current.actionPending).toBe(false)
+    await act(async () => { void result.current.handleInterrupt(); await Promise.resolve() })
+    await vi.waitFor(() => expect(result.current.actionPending).toBe(true))
+    await act(async () => { resolveInterrupt({ turn_id: 't1', state: 'idle' }); await Promise.resolve() })
+    await vi.waitFor(() => expect(result.current.actionPending).toBe(false))
+  })
+
+  it('clears actionPending when a terminate request rejects', async () => {
+    vi.mocked(api.terminateExecution).mockReset().mockRejectedValueOnce(new Error('boom'))
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    await act(async () => { await result.current.handleTerminate() })
+    expect(result.current.actionPending).toBe(false)
+  })
+})

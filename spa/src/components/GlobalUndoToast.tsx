@@ -24,7 +24,7 @@ export function GlobalUndoToast() {
       aria-live="polite"
       className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 flex items-center gap-3 shadow-lg z-50"
     >
-      <span className="text-sm text-zinc-300">{toast.message}</span>
+      <span className="text-sm text-zinc-300 whitespace-pre-line">{toast.message}</span>
       {toast.action && (
         <button
           className="text-sm text-blue-400 hover:text-blue-300 font-medium cursor-pointer"

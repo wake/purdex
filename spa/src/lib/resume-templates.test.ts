@@ -5,6 +5,7 @@ import {
   DEFAULT_RESUME_TEMPLATES,
   defaultResumeLookup,
   resumeLookupFor,
+  resumeTemplateFor,
   useResumeTemplateLookup,
 } from './resume-templates'
 import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
@@ -52,5 +53,22 @@ describe('resume template lookups', () => {
     expect(result.current('cc')).toEqual(DEFAULT_RESUME_TEMPLATES.cc)
     act(() => useHostConfigStore.setState({ byHost: { h1: ready({ cc: { exact: 'x {id}', fallback: 'x' } }) } }))
     expect(result.current('cc')?.exact).toBe('x {id}')
+  })
+})
+
+describe('resumeTemplateFor', () => {
+  it('returns the exact template with {id} intact for cc', () => {
+    expect(resumeTemplateFor(defaultResumeLookup, 'cc')).toBe('claude --resume {id}')
+  })
+
+  it('returns undefined for an unknown agent', () => {
+    expect(resumeTemplateFor(defaultResumeLookup, 'aider')).toBeUndefined()
+    expect(resumeTemplateFor(defaultResumeLookup, 'constructor')).toBeUndefined()
+  })
+
+  it('honours a host override lookup', () => {
+    useHostConfigStore.setState({ byHost: { h1: ready({ cc: { exact: 'cld-yolo --resume {id}', fallback: 'cld-yolo -c' } }) } })
+    expect(resumeTemplateFor(resumeLookupFor('h1'), 'cc')).toBe('cld-yolo --resume {id}')
+    expect(resumeTemplateFor(resumeLookupFor('h2'), 'cc')).toBe('claude --resume {id}')
   })
 })

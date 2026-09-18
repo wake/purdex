@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1.4 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave (§9)
+- Status: v1.6 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave; P-C.3b fix wave (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -423,8 +423,11 @@ resume_command, lease_id?}`.
   beside `composer.ts:27 resolveResumeCommand(record, templates)` that takes
   agent type + id instead of a rebuild record; F14); `POST nex-handoff`; on
   200 → pane content ← `{kind: 'execution', executionId, host: hostId,
-  from: {sessionCode, tmuxInstance, cachedName}}`. If the swap throws (pane
-  gone) → toast with an "open execution" action (`openSingletonTab`). On 409
+  from: {sessionCode, tmuxInstance, cachedName}}` via
+  `useTabStore.trySetPaneContent`, a compare-and-swap on the content the
+  call started from (same host, session code and tmux instance). Pane gone
+  or content changed → `swapped: false` → toast with an "open execution"
+  action (`openSingletonTab`); the handoff itself still happened. On 409
   `delegate_rejected` → toast `handoff.error.rejected` with the reason and
   whether the terminal was restored.
 - `takeBack(hostId, executionId, from, leaseId?)`: compose
@@ -432,19 +435,37 @@ resume_command, lease_id?}`.
   `lease_id` when this tab holds one (the pane's lease hook exposes it; no
   hook is called from `lib/`); on 200 → pane content ← `{kind:
   'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName,
-  tmuxInstance}`. `404 session_missing` / `409 tmux_instance_mismatch` →
+  tmuxInstance}` (compare-and-swap: the pane must still show this
+  execution). `404 session_missing` / `409 tmux_instance_mismatch` →
   toast, **execution pane untouched, no interrupt happened** (daemon
   preflight guarantees it). `409 held_by` → toast with the principal.
 - Both send `expected_tmux_instance` from the pane content / `from`.
+- The wrappers (`handoff-api.ts`) refuse a host id the host store no longer
+  holds (`host_removed`, no request sent — `hostFetch` would otherwise fall
+  back to the active host's daemon), and both orchestrations `await
+  useHostConfigStore.ensureLoaded(hostId)` before reading the resume
+  template so a host override is honoured even when Host › Commands was
+  never visited (a failed load falls through to the defaults).
+- Execution writes (send / interrupt / terminate) are frozen while a
+  take-back is pending; they re-enable if it fails.
 
 #### UI
 
-- Terminal session pane: **"Hand to nex"** in the pane header (plan
-  measures the header component; Q1), shown only when
+- Terminal session pane: **"Hand to nex"** is a **pane context-menu item**
+  (right-click; pane-local, so every terminal leaf of a split has it — the
+  StatusBar only knows the primary pane, Q1), shown only when
   `useNexHostStore.selectHandoffReady(hostId)` and the pane's agent is `cc`
-  (`rebuild.agent.type === 'cc'` or `session.cc_session_id`). Confirm dialog
-  text states "no permission prompts (handoff profile)". Busy spinner; toast
-  on error (`handoff.error.<code>`).
+  by this precedence: live `useAgentStore.agentTypes[host:session]`
+  (a present non-`cc` value hides it even with a stale rebuild record) →
+  `rebuild.agent.type === 'cc'` → `session.cc_session_id`. The daemon
+  re-checks identity, so this is a display gate. Confirm dialog text states
+  "no permission prompts (handoff profile)"; Confirm is single-flight (a
+  second click while pending is ignored, and `lib/nex/handoff.ts` also
+  refuses a second in-flight call per host:session). Toast on error
+  (`handoff.error.<code>`) plus a "resume by hand" line when the daemon
+  returned a `session_id` and did **not** roll back. If the pane vanished
+  while the daemon was working (`trySetPaneContent` → false) the toast
+  carries an "open execution" action.
 - Execution pane header (`ExecutionHeader.tsx`): **"Take back to terminal"**
   when `content.from` is set. When `summary.state === 'running'` the confirm
   dialog says the turn will be interrupted. After success the execution is
@@ -651,6 +672,120 @@ No execution was created; nothing to archive. Daemon log has no handoff
 entries (the handlers do not log; the 504 is the only trace). Cleanup:
 `nexacc` killed, scratch dir removed, daemon left running.
 
+### 6.3.1 Re-run 2026-09-18 (daemon alpha.387, after #1166)
+
+Same setup (`nexacc` tmux session in `~/Workspace/wake/nex-acceptance-scratch`,
+`claude` at its prompt, one "reply with the single word ok" exchange).
+Session code `z3hno0`, tmux instance `6901:1789205013`; provenance
+`{found: true, agent_type: cc, session_id: cb732c67-…, cwd: <scratch>,
+tmux_pane_id: %78}`. **Steps 1–4 all PASS.**
+
+1. **PASS** — `POST /nex-handoff {expected_tmux_instance, rollback_command:
+   "claude --resume {id}"}` → 200
+   `{execution_id: 06GB7NCQVYBEKQBQ9G5HRFZ4E4, state: running,
+   effective_profile: handoff, session_id: cb732c67-…, cwd: <scratch>}`.
+   Pane showed the CC exit banner ("Resume this session with: claude
+   --resume cb732c67-…") and an idle shell prompt. `pdx nex show`:
+   `resume_session_id = session_id = cb732c67-…`, `requested_profile =
+   effective_profile = handoff`, labels `{handoff_session: z3hno0, source:
+   purdex, nex.host, nex.provider}`, origin
+   `purdex://host/mini-lab:278cbm/session/z3hno0`, brief "(handed off from
+   tmux session nexacc)"; turn 1 settled `idle` / `final_response` within
+   seconds.
+2. **PASS** — `pdx nex attach --control` → lease; `pdx nex send --lease …
+   "what was the last thing I asked you?"` → `delivered`; settled in ~6 s
+   (turn_count 2). Assistant reply: 「你上一次直接問我的是「reply with the
+   single word ok」…之後只有一則 `/exit` 的本機指令輸出」 — the resumed
+   transcript carries the interactive exchange **and** the `/exit`. Event
+   stream contains 38 `system` frames incl. `hook_started
+   SessionStart:resume` ×3 — hooks load under the handoff profile (F5).
+3. **PASS** — immediate second handoff → 409 `no_identity` ("no Claude
+   Code session identity for this pane"): `/exit` deleted the frame, and
+   identity is checked before liveness (spec step 2 before 3), so `no_cc`
+   is not the code seen here.
+4. **PASS** — `POST /nex-takeback {expected_tmux_instance, execution_id,
+   resume_command: "claude --resume {id}"}` → 200 `{session_id: cb732c67-…,
+   archived: true}`. Pane running Claude Code again; asked "what did I ask
+   you first? one line" → 「你最先問的是「reply with the single word ok」」.
+   `pdx nex ls --all` lists the execution `idle` + `archived: true`.
+
+Cleanup: `/exit`, `tmux kill-session -t nexacc`, `pdx nex ls` empty,
+scratch dir removed; daemon not restarted. Token was read with a single
+`awk` assignment; only its length was printed.
+
+### 6.4 SPA acceptance 2026-09-18 (P-C.3b, at `9f0267c1` → `d5fd19d7`, daemon alpha.387)
+
+mlab, worktree dev server `npx vite --host 100.64.0.2 --port 5175 --strictPort`,
+playwright cli session `pc-launch-ui`, host `pc3host` seeded into
+`purdex-hosts` (version 1) through a `page.addInitScript({path})` file that
+was deleted afterwards (the token never appeared in a command line or
+output; only its length was printed). tmux session `nexacc` (code `90ln9d`,
+instance `6901:1789205013`) running interactive `claude` in
+`~/Workspace/wake/nex-acceptance-scratch`, one exchange (`reply with the
+single word ok` → `ok`) before the handoff.
+
+3. **PASS** — right-click on the terminal pane → context menu `Split
+   Horizontal / Split Vertical / Hand to nex`. Click → `handoff-dialog`
+   with the body "Claude Code exits in this pane and continues headless
+   under nex with the handoff profile — no permission prompts. You can take
+   it back to the terminal later." → Confirm. The pane became
+   `/execution/pc3host/06GB85EVF6CE14H11T7W05QXEW`: header `idle · claude ·
+   handoff · nex-acceptance-scratch`, "Take back to terminal" button,
+   history `(handed off from tmux session nexacc)` + `ok`. tmux pane: idle
+   shell with CC's own "Resume this session with: claude --resume
+   fe0d6250-…" banner. `pdx nex show`: `resume_session_id = session_id =
+   fe0d6250-…`, `requested/effective_profile handoff`, labels
+   `handoff_session=90ln9d, source=purdex`, `origin
+   purdex://host/mini-lab:278cbm/session/90ln9d`. Follow-up from the pane
+   input (`what was the last thing I asked you?`) → turn 2 `final_response`,
+   reply 「你上一則訊息是要我「reply with the single word ok」…」 (resume
+   carried the interactive exchange). Executions view (added via
+   RegionManager) listed it under **Purdex** as `idle · (handed off from
+   tmux session nexacc) · just now`.
+   **Bug found and fixed in-run**: the `↩` marker was missing — the daemon
+   stamps `origin` with its own host id (`mini-lab:278cbm`, i.e.
+   `capabilities.host_id`) while the SPA compared against the client's host
+   entry id (`pc3host`). Fixed in `d5fd19d7` (`ExecutionsView` passes
+   `capabilities.host_id` as `daemonHostId` to the rows); after HMR the
+   marker rendered with title `from tmux session 90ln9d`. The existing unit
+   test had encoded the wrong namespace and was rewritten.
+4. **PASS** — "Take back to terminal" (idle → no confirm) → the pane
+   returned to `/t/…/terminal` as the `nexacc` tab; the tmux pane shows
+   Claude Code's prompt again with the conversation; `pdx nex show` →
+   `state idle, archived true`; the Executions view no longer lists it;
+   `takeback.success` toast (seen in the a11y tree before it auto-dismissed).
+5. **PASS (partial)** — a plain-shell tmux session (`nexshell`) opened in
+   the SPA: right-click → only `Split Horizontal / Split Vertical`, no
+   "Hand to nex". A host with `max_profile = "trusted"` was not available —
+   that sub-item not exercised.
+6. **PASS** — CC back in `nexacc`: right-click → Hand to nex → two Confirm
+   clicks issued without awaiting the first: both clicks fulfilled, the
+   network log shows **one** `POST /api/sessions/90ln9d/nex-handoff`, one
+   execution `06GB86YPW0DNHB7R4J98WFSWV4` created. `tmux kill-session -t
+   nexacc` → "Take back" → daemon 404 (`nex-takeback` 404 in the console
+   network line), toast "The tmux session no longer exists."
+   (`handoff.error.session_missing`), URL unchanged
+   (`/execution/pc3host/06GB86YP…`), execution still `idle, archived
+   false`. Split check: a fresh CC session `nexsplit` (`ra27pr`,
+   provenance `found: true, cc`) opened as a tab, split vertically, the
+   same session picked into the secondary leaf → its context menu offers
+   `Split Horizontal / Split Vertical / Close pane / Detach to tab / Hand to
+   nex` (pane-local, spec Q1). Note: while `nexshell` was attached by two
+   leaves at once its CC UI opened into an empty picker (`>` `0/0`) — an
+   unrelated double-attach rendering quirk, not exercised further.
+7. **PASS** — after a full reload: console 3 messages, 0 errors, 0
+   warnings. (Two transient `ReferenceError`s were logged earlier by Vite
+   HMR while the marker fix in step 3 was being applied module-by-module;
+   they vanished on reload and are not runtime errors.)
+
+Cleanup: executions `06GB85EV…` (archived by take-back) and `06GB86YP…`
+(archived by hand) — `pdx nex ls` shows only a pre-existing `06GB7PYE…`
+that is not from this run; tmux `nexacc`/`nexshell`/`nexsplit` killed;
+Executions view removed (`primary-sidebar.views` back to
+`["file-tree-workspace"]`); browser closed; :5175 vite stopped by PID
+(:5174 and the daemon untouched); scratch dir and every seed helper file
+removed.
+
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
@@ -672,9 +807,8 @@ entries (the handlers do not log; the 504 is the only trace). Cleanup:
 
 ## 8. Open questions
 
-- Q1 Where exactly does the "Hand to nex" control sit on a terminal pane
-  (pane header vs StatusBar view-mode dropdown)? Plan measures the header
-  component and picks; default = pane header next to the split control.
+- Q1 (resolved v1.5) "Hand to nex" is a pane context-menu item; neither
+  the StatusBar (primary pane only) nor a new pane header.
 - Q2 (resolved v1.1) Take-back archives the execution; re-handoff creates a
   new one.
 
@@ -712,3 +846,13 @@ entries (the handlers do not log; the 504 is the only trace). Cleanup:
   op 10 s, interrupt 20 s > Nexen's 15 s, lease cleanup 5 s); take-back
   requires the execution to be bound to the session (`handoff_session`
   label + origin, step 1b).
+- v1.5 — P-C.3b (plan review `task-mu6rbltg-z25ykx`): pane-context-menu
+  entry (Q1); `useTabStore.trySetPaneContent` so a vanished pane is
+  detected and the toast offers "open execution"; `openSingletonTab` for
+  execution content scans every leaf and prefers the pane carrying `from`;
+  client single-flight per host:session / host:execution; take-back calls
+  the lease hook's `forget()` before the swap so the unmounting hook does
+  not release a consumed lease; the manual-resume hint is suppressed when
+  the daemon rolled back.
+- v1.6 — P-C.3b fix wave: host guard; config-loaded template; CAS pane
+  swap; writes frozen during take-back.
