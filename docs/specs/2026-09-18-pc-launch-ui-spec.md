@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1.4 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave (§9)
+- Status: v1.5 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -439,12 +439,21 @@ resume_command, lease_id?}`.
 
 #### UI
 
-- Terminal session pane: **"Hand to nex"** in the pane header (plan
-  measures the header component; Q1), shown only when
+- Terminal session pane: **"Hand to nex"** is a **pane context-menu item**
+  (right-click; pane-local, so every terminal leaf of a split has it — the
+  StatusBar only knows the primary pane, Q1), shown only when
   `useNexHostStore.selectHandoffReady(hostId)` and the pane's agent is `cc`
-  (`rebuild.agent.type === 'cc'` or `session.cc_session_id`). Confirm dialog
-  text states "no permission prompts (handoff profile)". Busy spinner; toast
-  on error (`handoff.error.<code>`).
+  by this precedence: live `useAgentStore.agentTypes[host:session]`
+  (a present non-`cc` value hides it even with a stale rebuild record) →
+  `rebuild.agent.type === 'cc'` → `session.cc_session_id`. The daemon
+  re-checks identity, so this is a display gate. Confirm dialog text states
+  "no permission prompts (handoff profile)"; Confirm is single-flight (a
+  second click while pending is ignored, and `lib/nex/handoff.ts` also
+  refuses a second in-flight call per host:session). Toast on error
+  (`handoff.error.<code>`) plus a "resume by hand" line when the daemon
+  returned a `session_id` and did **not** roll back. If the pane vanished
+  while the daemon was working (`trySetPaneContent` → false) the toast
+  carries an "open execution" action.
 - Execution pane header (`ExecutionHeader.tsx`): **"Take back to terminal"**
   when `content.from` is set. When `summary.state === 'running'` the confirm
   dialog says the turn will be interrupted. After success the execution is
@@ -713,9 +722,8 @@ scratch dir removed; daemon not restarted. Token was read with a single
 
 ## 8. Open questions
 
-- Q1 Where exactly does the "Hand to nex" control sit on a terminal pane
-  (pane header vs StatusBar view-mode dropdown)? Plan measures the header
-  component and picks; default = pane header next to the split control.
+- Q1 (resolved v1.5) "Hand to nex" is a pane context-menu item; neither
+  the StatusBar (primary pane only) nor a new pane header.
 - Q2 (resolved v1.1) Take-back archives the execution; re-handoff creates a
   new one.
 
@@ -753,3 +761,11 @@ scratch dir removed; daemon not restarted. Token was read with a single
   op 10 s, interrupt 20 s > Nexen's 15 s, lease cleanup 5 s); take-back
   requires the execution to be bound to the session (`handoff_session`
   label + origin, step 1b).
+- v1.5 — P-C.3b (plan review `task-mu6rbltg-z25ykx`): pane-context-menu
+  entry (Q1); `useTabStore.trySetPaneContent` so a vanished pane is
+  detected and the toast offers "open execution"; `openSingletonTab` for
+  execution content scans every leaf and prefers the pane carrying `from`;
+  client single-flight per host:session / host:execution; take-back calls
+  the lease hook's `forget()` before the swap so the unmounting hook does
+  not release a consumed lease; the manual-resume hint is suppressed when
+  the daemon rolled back.
