@@ -12,10 +12,13 @@ import { getPrimaryPane } from '../pane-tree'
 import { useTabStore } from '../../stores/useTabStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useHostConfigStore, emptyHostConfigEntry } from '../../stores/useHostConfigStore'
-import { HandoffApiError, nexHandoff, nexTakeback } from './handoff-api'
+import { useSessionStore } from '../../stores/useSessionStore'
+import type { HostProject } from '../host-config-api'
+import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal } from './handoff-api'
 import {
   handToNex,
   takeBack,
+  takeToTerminal,
   handoffErrorMessage,
   manualResumeHint,
   HANDOFF_ERROR_CODES,
@@ -28,10 +31,12 @@ vi.mock('./handoff-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./handoff-api')>()),
   nexHandoff: vi.fn(),
   nexTakeback: vi.fn(),
+  nexTakeToTerminal: vi.fn(),
 }))
 
 const mockedHandoff = vi.mocked(nexHandoff)
 const mockedTakeback = vi.mocked(nexTakeback)
+const mockedToTerminal = vi.mocked(nexTakeToTerminal)
 
 const H = 'host-mlab'
 const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
@@ -58,8 +63,8 @@ function sessionTab(): { tabId: string; paneId: string } {
   return { tabId: tab.id, paneId: getPrimaryPane(tab.layout).id }
 }
 
-function executionTab(): { tabId: string; paneId: string } {
-  const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: H, from })
+function executionTab(withFrom = true): { tabId: string; paneId: string } {
+  const tab = createTab(withFrom ? { kind: 'execution', executionId: 'exc_1', host: H, from } : { kind: 'execution', executionId: 'exc_1', host: H })
   useTabStore.getState().addTab(tab)
   return { tabId: tab.id, paneId: getPrimaryPane(tab.layout).id }
 }
@@ -88,6 +93,8 @@ function deferred<T>() {
 
 const handoffOk = { execution_id: 'exc_1', state: 'running', effective_profile: 'handoff', session_id: 'sid-1', cwd: '/w' }
 const takebackOk = { session_id: 'sid-1', archived: true }
+const newSession = { code: 'nw1234', name: 'purdex-3', cwd: '/w/purdex/.claude/worktrees/x', mode: 'terminal', tmux_instance: 'inst-9' }
+const toTerminalOk = { session: newSession, session_id: 'sid-1', archived: true }
 
 let ensure: ReturnType<typeof vi.fn>
 let ensureLoaded: ReturnType<typeof vi.fn>
@@ -115,8 +122,25 @@ beforeEach(() => {
   useHostConfigStore.setState({ byHost: {}, ensureLoaded } as never)
   mockedHandoff.mockReset()
   mockedTakeback.mockReset()
+  mockedToTerminal.mockReset()
+  fetchHost = vi.fn().mockResolvedValue(undefined)
+  useSessionStore.setState({ sessions: {}, fetchHost } as never)
 })
 afterEach(() => vi.restoreAllMocks())
+
+let fetchHost: ReturnType<typeof vi.fn>
+
+const project = (id: string, slug: string, path: string): HostProject => ({ id, name: id, slug, path })
+
+/** Seed the host's projects (config already loaded) and its live session names. */
+function seedHostFor(projects: HostProject[], liveNames: string[]) {
+  useHostConfigStore.setState((s) => ({
+    byHost: { ...s.byHost, [H]: { ...emptyHostConfigEntry('ready'), projects } },
+  }))
+  useSessionStore.setState({
+    sessions: { [H]: liveNames.map((name, i) => ({ code: `c${i}`, name, cwd: '/', mode: 'terminal' })) },
+  })
+}
 
 describe('handToNex', () => {
   const args = () => ({ hostId: H, sessionCode: from.sessionCode, tmuxInstance: from.tmuxInstance, cachedName: from.cachedName, ...sessionTab() })
@@ -343,6 +367,155 @@ describe('takeBack', () => {
   })
 })
 
+describe('takeToTerminal (exec-to-terminal spec §4.2)', () => {
+  const CWD = '/w/purdex/.claude/worktrees/x'
+  const args = (over: { leaseId?: string; cwd?: string } = {}) => ({
+    hostId: H, executionId: 'exc_1', cwd: CWD, forgetLease: vi.fn<() => void>(), ...executionTab(false), ...over,
+  })
+
+  it('names the session {project slug}-{N} from the nearest ancestor project and the live list; POSTs name + cc resume template + lease; forgets the lease before swapping to the new session; refreshes the session list', async () => {
+    seedHostFor([project('p1', 'purdex', '/w/purdex'), project('p2', 'w', '/w')], ['purdex-1', 'purdex-2', 'other'])
+    const calls: string[] = []
+    mockedToTerminal.mockImplementationOnce(async () => toTerminalOk)
+    const a = args({ leaseId: 'lease-9' })
+    a.forgetLease.mockImplementation(() => {
+      calls.push('forget')
+      expect(paneContent(a.tabId).kind).toBe('execution') // not swapped yet
+    })
+    const out = await takeToTerminal(a)
+    expect(mockedToTerminal).toHaveBeenCalledTimes(1)
+    expect(mockedToTerminal).toHaveBeenCalledWith(H, 'exc_1', { session_name: 'purdex-3', resume_command: 'claude --resume {id}', lease_id: 'lease-9' })
+    expect(calls).toEqual(['forget'])
+    expect(out).toEqual({ result: toTerminalOk, swapped: true })
+    expect(paneContent(a.tabId)).toEqual({
+      kind: 'tmux-session', hostId: H, sessionCode: 'nw1234', mode: 'terminal', cachedName: 'purdex-3', tmuxInstance: 'inst-9',
+    })
+    expect(fetchHost).toHaveBeenCalledWith(H)
+  })
+
+  it("loads the host config first (projects + resume template), so a not-yet-loaded override is the resume command and the slug is the project's", async () => {
+    ensureLoaded.mockImplementation(async (id: string) => {
+      if (id !== H) return
+      useHostConfigStore.setState((s) => ({
+        byHost: { ...s.byHost, [H]: { ...emptyHostConfigEntry('ready'), projects: [project('p1', 'pdx', '/w/purdex')], resumeTemplates: { cc: { exact: 'cld-yolo --resume {id}', fallback: 'cld-yolo -c' } } } },
+      }))
+    })
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    await takeToTerminal(args())
+    expect(ensureLoaded).toHaveBeenCalledWith(H)
+    expect(mockedToTerminal.mock.calls[0][2]).toEqual({ session_name: 'pdx-1', resume_command: 'cld-yolo --resume {id}' })
+  })
+
+  it('falls back to the cleaned cwd basename when no project matches; omits lease_id without a lease', async () => {
+    seedHostFor([project('p1', 'purdex', '/w/purdex')], [])
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    await takeToTerminal(args({ cwd: '/srv/my app.v2' }))
+    expect(mockedToTerminal.mock.calls[0][2]).toEqual({ session_name: 'my-app-v2-1', resume_command: 'claude --resume {id}' })
+  })
+
+  it('retries once on session_exists with the refused name counted as taken, then rethrows a second refusal', async () => {
+    seedHostFor([project('p1', 'purdex', '/w/purdex')], ['purdex-1'])
+    mockedToTerminal
+      .mockRejectedValueOnce(new HandoffApiError(409, 'session_exists', { code: 'session_exists', session_name: 'purdex-2' }))
+      .mockResolvedValueOnce(toTerminalOk)
+    const a = args()
+    await expect(takeToTerminal(a)).resolves.toMatchObject({ swapped: true })
+    expect(mockedToTerminal.mock.calls.map((c) => c[2].session_name)).toEqual(['purdex-2', 'purdex-3'])
+
+    mockedToTerminal.mockReset()
+    mockedToTerminal.mockRejectedValue(new HandoffApiError(409, 'session_exists', { code: 'session_exists' }))
+    const b = args()
+    const err = await rejection(takeToTerminal(b))
+    expect(err.code).toBe('session_exists')
+    expect(mockedToTerminal).toHaveBeenCalledTimes(2)
+    expect(b.forgetLease).not.toHaveBeenCalled()
+    expect(paneContent(b.tabId).kind).toBe('execution')
+  })
+
+  it('session_create_failed with session_alive → refreshes the session list (the orphan is visible) and rethrows; lease left to the hook, pane untouched', async () => {
+    seedHostFor([], [])
+    mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(500, 'session_create_failed', { code: 'session_create_failed', session_name: 'x-1', session_alive: true }))
+    const a = args({ leaseId: 'lease-9' })
+    const err = await rejection(takeToTerminal(a))
+    expect(err.code).toBe('session_create_failed')
+    expect(fetchHost).toHaveBeenCalledWith(H)
+    expect(a.forgetLease).not.toHaveBeenCalled()
+    expect(paneContent(a.tabId).kind).toBe('execution')
+  })
+
+  it('any other failure (incl. session_create_failed without session_alive) → no refresh, no forget, pane untouched', async () => {
+    seedHostFor([], [])
+    mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(500, 'session_create_failed', { code: 'session_create_failed', session_name: 'x-1', session_alive: false }))
+    const a = args()
+    await rejection(takeToTerminal(a))
+    mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(409, 'cwd_missing', { code: 'cwd_missing' }))
+    const err = await rejection(takeToTerminal(a))
+    expect(err.code).toBe('cwd_missing')
+    expect(fetchHost).not.toHaveBeenCalled()
+    expect(a.forgetLease).not.toHaveBeenCalled()
+    expect(paneContent(a.tabId).kind).toBe('execution')
+  })
+
+  it('a session list refresh failure is swallowed (fire-and-forget)', async () => {
+    seedHostFor([], [])
+    fetchHost.mockRejectedValue(new Error('offline'))
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    await expect(takeToTerminal(args())).resolves.toMatchObject({ swapped: true })
+    await Promise.resolve()
+  })
+
+  it('returns swapped:false when the pane now shows another execution; the lease is still forgotten (the daemon consumed it)', async () => {
+    seedHostFor([], [])
+    const d = deferred<typeof toTerminalOk>()
+    mockedToTerminal.mockReturnValueOnce(d.promise)
+    const a = args()
+    const p = takeToTerminal(a)
+    await vi.waitFor(() => expect(mockedToTerminal).toHaveBeenCalled())
+    const other: PaneContent = { kind: 'execution', executionId: 'exc_other', host: H }
+    useTabStore.getState().setPaneContent(a.tabId, a.paneId, other)
+    d.resolve(toTerminalOk)
+    expect(await p).toEqual({ result: toTerminalOk, swapped: false })
+    expect(paneContent(a.tabId)).toEqual(other)
+    expect(a.forgetLease).toHaveBeenCalledTimes(1)
+  })
+
+  it('an older daemon without tmux_instance on the session → tmuxInstance "" (never a match)', async () => {
+    seedHostFor([], [])
+    const { tmux_instance: _omit, ...bare } = newSession
+    void _omit
+    mockedToTerminal.mockResolvedValueOnce({ ...toTerminalOk, session: bare })
+    const a = args()
+    await takeToTerminal(a)
+    expect(paneContent(a.tabId)).toMatchObject({ kind: 'tmux-session', sessionCode: 'nw1234', tmuxInstance: '' })
+  })
+
+  it('shares the single-flight key with takeBack: neither can start while the other is in flight for the same execution', async () => {
+    seedHostFor([], [])
+    const d = deferred<typeof toTerminalOk>()
+    mockedToTerminal.mockReturnValueOnce(d.promise)
+    const a = args()
+    const first = takeToTerminal(a)
+    await vi.waitFor(() => expect(mockedToTerminal).toHaveBeenCalledTimes(1))
+    let err = await rejection(takeToTerminal(a))
+    expect(err.code).toBe('handoff_in_progress')
+    err = await rejection(takeBack({ hostId: H, executionId: 'exc_1', from, forgetLease: vi.fn(), ...executionTab() }))
+    expect(err.code).toBe('handoff_in_progress')
+    expect(mockedTakeback).not.toHaveBeenCalled()
+    d.resolve(toTerminalOk)
+    await first
+
+    const d2 = deferred<typeof takebackOk>()
+    mockedTakeback.mockReturnValueOnce(d2.promise)
+    const second = takeBack({ hostId: H, executionId: 'exc_1', from, forgetLease: vi.fn(), ...executionTab() })
+    await vi.waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    err = await rejection(takeToTerminal(args()))
+    expect(err.code).toBe('handoff_in_progress')
+    expect(mockedToTerminal).toHaveBeenCalledTimes(1)
+    d2.resolve(takebackOk)
+    await second
+  })
+})
+
 describe('handoffErrorMessage', () => {
   const t = vi.fn((key: string, params?: Record<string, string | number>) => JSON.stringify([key, params ?? null]))
   beforeEach(() => t.mockClear())
@@ -380,6 +553,14 @@ describe('handoffErrorMessage', () => {
     ['send_failed', { session_id: 'sid' }, null],
     ['interrupt_unconfirmed', {}, null],
     ['cc_start_timeout', { session_id: 'sid' }, null],
+    // take-to-terminal endpoint (codes not already above)
+    ['session_exists', { session_name: 'purdex-3' }, { session_name: 'purdex-3' }],
+    ['missing_session_name', {}, null],
+    ['invalid_session_name', {}, null],
+    ['session_create_failed', { session_name: 'purdex-3', session_alive: true }, { session_name: 'purdex-3' }],
+    ['cwd_missing', {}, null],
+    ['provider_unsupported', {}, null],
+    ['takeback_in_progress', {}, null],
     // client-side
     ['network', {}, null],
     ['host_removed', {}, null],
