@@ -4,6 +4,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HostBadge } from '../HostBadge'
+import { INLINE_TAB_ROW_CLASSES } from '../../features/workspace/lib/inline-tab-row-classes'
 import { hasHostBadge, isIconWeight, isPhosphorIconName, resolveHostColors, type HostColorMode } from '../../lib/host-color'
 
 export interface HostBadgePreviewProps {
@@ -38,8 +39,8 @@ export function HostBadgePreview({ hostId, mode }: HostBadgePreviewProps) {
   const show = enabled && hasHostBadge(badge)
 
   const rows: { key: 'normal' | 'active'; active: boolean; label: string; cls: string }[] = [
-    { key: 'normal', active: false, label: t('hosts.color.preview.normal'), cls: 'text-text-muted bg-surface-secondary' },
-    { key: 'active', active: true, label: t('hosts.color.preview.active'), cls: 'text-white bg-surface-active' },
+    { key: 'normal', active: false, label: t('hosts.color.preview.normal'), cls: INLINE_TAB_ROW_CLASSES.inactive },
+    { key: 'active', active: true, label: t('hosts.color.preview.active'), cls: INLINE_TAB_ROW_CLASSES.active },
   ]
 
   return (

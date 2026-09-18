@@ -10,6 +10,7 @@ import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { HostBadge } from '../../../components/HostBadge'
 import { useTabHostBadge } from '../../../hooks/useTabHostBadge'
 import { hasHostBadge } from '../../../lib/host-color'
+import { INLINE_TAB_ROW_CLASSES } from '../lib/inline-tab-row-classes'
 
 interface Props {
   tab: Tab
@@ -95,9 +96,7 @@ export function InlineTab({
 
   // Active surface — no visible border; both states keep a transparent 1px
   // border so sibling rows don't shift when toggling active state.
-  const activeClasses = isActive
-    ? 'bg-surface-active text-white border border-transparent'
-    : 'text-text-muted hover:bg-surface-hover hover:text-text-primary border border-transparent'
+  const activeClasses = isActive ? INLINE_TAB_ROW_CLASSES.active : INLINE_TAB_ROW_CLASSES.inactive
 
   return (
     <div

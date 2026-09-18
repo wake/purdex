@@ -3,11 +3,15 @@ import { render, screen } from '@testing-library/react'
 import { HostBadgePreview } from './HostBadgePreview'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import { getIconPath } from '../../features/workspace/lib/icon-path-cache'
 
 // WorkspaceIcon fetches /icons/<weight>.json for a real Phosphor name — stub the
-// cache so the icon-rendering test doesn't depend on that async load.
+// cache so icon-rendering tests don't depend on that async load. A real `vi.fn`
+// (not a blanket "always return a path") so tests can assert which name/weight
+// the preview actually asked for — e.g. that an invalid stored icon falls back
+// to `DEFAULT_HOST_ICON` rather than silently dropping the badge's icon.
 vi.mock('../../features/workspace/lib/icon-path-cache', () => ({
-  getIconPath: () => 'M0,0L10,10',
+  getIconPath: vi.fn((name: string, weight: string) => (name === 'Laptop' && weight === 'duotone' ? 'M0,0L10,10' : null)),
   isWeightLoaded: () => true,
   prefetchWeight: () => Promise.resolve(),
 }))
@@ -17,6 +21,7 @@ const BLUE = { color: '#3b82f6', alpha: 100 }
 const RED = { color: '#ef4444', alpha: 100 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],
@@ -71,5 +76,25 @@ describe('HostBadgePreview', () => {
     useHostStore.getState().setHostIcon(HOST_ID, 'Laptop', 'duotone')
     render(<HostBadgePreview hostId={HOST_ID} mode="console" />)
     expect(screen.getByTestId('host-badge-preview-badge-normal').querySelector('svg')).not.toBeNull()
+    expect(getIconPath).toHaveBeenCalledWith('Laptop', 'duotone')
+  })
+
+  it('falls back to the default icon when the stored icon is invalid', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { ...useHostStore.getState().hosts[HOST_ID], icon: 'NotAnIcon' } },
+    })
+    render(<HostBadgePreview hostId={HOST_ID} mode="console" />)
+    expect(getIconPath).toHaveBeenCalledWith('Desktop', 'regular')
+  })
+
+  it('mock rows use the real inline-tab row classes, not a copy', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
+    render(<HostBadgePreview hostId={HOST_ID} mode="console" />)
+    const normal = screen.getByTestId('host-badge-preview-normal')
+    const active = screen.getByTestId('host-badge-preview-active')
+    expect(normal.className).toContain('hover:bg-surface-hover')
+    expect(normal.className).not.toContain('bg-surface-secondary')
+    expect(active.className).toContain('bg-surface-active')
   })
 })
