@@ -1,11 +1,13 @@
 // spa/src/lib/nex/event-reducer.ts — pure reducer from Nexen durable events
 // to the per-execution view state (spec §4.2.4), plus the partial assembly
-// fed by transient stream frames (P-B2 spec §4.1). No React, no fetch, no
-// store: the hook feeds it history pages and SSE frames alike.
+// fed by transient stream frames (P-B2 spec §4.1) and the N2 tool overlay
+// from the derived `tool_use` / `tool_result` kinds (P-B3 spec §4.3). No
+// React, no fetch, no store: the hook feeds it history pages and SSE frames
+// alike.
 import type { StreamMessage } from './message-types'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import type { NexSseFrame } from './sse-parser'
-import { endTurn, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'
+import { endTurn, recordN2ToolResult, recordN2ToolUse, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'
 import type { ExecutionSummary, NexEvent } from './types'
 
 export type { PartialAssembly, PartialBlock } from './partial'
@@ -41,7 +43,11 @@ export interface ExecutionState {
   partial: PartialAssembly | null
   /** A turn is running per the event stream (observers see it too, unlike pendingSend). */
   turnLive: boolean
-  /** Keyed by tool_use id; written by the durable A-rules only. */
+  /**
+   * Keyed by tool_use id; written only by the durable A-rules (raw
+   * assistant / user frames) and the N-rules (derived tool_use / tool_result
+   * events, which overlay the daemon's facts onto the same entry).
+   */
   tools: Record<string, ToolActivity>
 }
 
@@ -67,11 +73,17 @@ export function defaultExecutionState(): ExecutionState {
 }
 
 /** Nexen's own (closed-set) kinds; everything else is provider passthrough. */
-/** Derived tool kinds (nexen v0.12.0, `capabilities.tool_events`); ignored until consumed. */
-const N2_TOOL_KINDS: ReadonlySet<string> = new Set(['tool_use', 'tool_result'])
-
 export function isLifecycleKind(kind: string): boolean {
   return kind.startsWith('execution.') || kind.startsWith('lease.')
+}
+
+/**
+ * Nexen's derived tool kinds (v0.12.0, `capabilities.tool_events`). They are
+ * neither lifecycle nor messages: the N-rules fold them into `tools` and they
+ * are never appended to `messages` (P-B3 spec §4.1 / §4.6).
+ */
+export function isToolEventKind(kind: string): boolean {
+  return kind === 'tool_use' || kind === 'tool_result'
 }
 
 /**
@@ -131,11 +143,19 @@ const TURN_ENDING_KINDS = new Set([
   'execution.interrupted', 'execution.turn_orphaned', 'execution.turn_stalled', 'execution.archived',
 ])
 
-/** Spec §4.1 D1–D4 and §4.2 A1–A4; runs after the seq guard, before the per-kind reducers. */
+/**
+ * P-B2 spec §4.1 D1–D4, §4.2 A1–A4 and P-B3 spec §4.3 N0–N2; runs after the
+ * seq guard, before the per-kind reducers.
+ */
 function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
   // A subagent's frames (non-null parent_tool_use_id) — including its own
-  // `result` — must never end the main turn or touch the main partial/tools.
+  // `result` and its N2 tool events (N0) — must never end the main turn or
+  // touch the main partial/tools.
   if (!isLifecycleKind(ev.kind) && p.parent_tool_use_id != null) return s
+  // N1 / N2: the derived kinds only overlay `tools`; they are not in
+  // TURN_ENDING_KINDS, so handling them first is purely for readability.
+  if (ev.kind === 'tool_use') return recordN2ToolUse(s, p, ev.created_at)
+  if (ev.kind === 'tool_result') return recordN2ToolResult(s, p, ev.created_at)
   if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
   if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
   if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
@@ -146,14 +166,14 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
 export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState {
   if (!Number.isFinite(ev.seq) || ev.seq <= s.lastSeq) return s
   const p = ev.payload ?? {}
-  // Nexen v0.12.0 (N2) derives a durable `tool_use` / `tool_result` event
-  // next to every raw frame that carries such a block. The exec pane still
-  // reads tool activity from the raw `assistant` / `user` frames (P-B2), so
-  // until a later phase consumes the derived kinds they only advance the
-  // seq — appending them as messages would leave invisible entries behind.
-  if (N2_TOOL_KINDS.has(ev.kind)) return { ...s, lastSeq: ev.seq }
 
   let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq }, ev, p)
+
+  // The N2 tool kinds are consumed by applyTurnRules alone: not a message
+  // (appending them would leave invisible entries behind), not a turn end,
+  // not a send acknowledgement — pendingSend / turnLive / partial / summary
+  // are untouched.
+  if (isToolEventKind(ev.kind)) return next
 
   if (!isLifecycleKind(ev.kind)) {
     next = { ...next, messages: [...next.messages, p as StreamMessage] }

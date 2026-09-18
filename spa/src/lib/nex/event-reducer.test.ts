@@ -20,13 +20,14 @@ describe('applyDurableEvent', () => {
     expect(s.lastSeq).toBe(2)
   })
 
-  it('advances lastSeq on the N2 tool_use / tool_result kinds but does not append them as messages (nexen v0.12.0; consumed in a later phase)', () => {
+  it('advances lastSeq on the N2 tool_use / tool_result kinds, never appends them as messages, and overlays them onto tools (P-B3 §4.3)', () => {
     let s = defaultExecutionState()
     s = applyDurableEvent(s, ev(1, 'assistant', { type: 'assistant', message: { role: 'assistant', content: [], stop_reason: null } }))
-    s = applyDurableEvent(s, ev(2, 'tool_use', { tool_use_id: 'toolu_1', parent_tool_use_id: null, name: 'Bash', primary_arg: 'ls' }))
+    s = applyDurableEvent(s, ev(2, 'tool_use', { tool_use_id: 'toolu_1', parent_tool_use_id: null, name: 'Bash', primary_arg: { key: 'command', value: 'ls' } }))
     s = applyDurableEvent(s, ev(3, 'tool_result', { tool_use_id: 'toolu_1', parent_tool_use_id: null, status: 'ok', duration_ms: 12 }))
     expect(s.messages).toHaveLength(1)
     expect(s.lastSeq).toBe(3)
+    expect(s.tools.toolu_1).toMatchObject({ name: 'Bash', status: 'done', durationMs: 12, primaryArg: { key: 'command', value: 'ls' } })
     // Not a turn end, not a send acknowledgement either.
     expect(s.pendingSend).toBe(defaultExecutionState().pendingSend)
   })
@@ -270,6 +271,65 @@ describe('applyDurableEvent: turn composition (D2–D4, subagent guard)', () => 
     expect(s.pendingSend).toBe(false)
   })
 
+})
+
+describe('applyDurableEvent: N2 tool events (P-B3 spec §4.3 N0 / N1 / N4)', () => {
+  const at = (seq: number, kind: string, payload: Record<string, unknown>, created_at = seq * 100): NexEvent =>
+    ({ seq, execution_id: 'exc_1', kind, payload, created_at })
+  const assistantWithToolUse = (id: string, name = 'Bash') => ({
+    type: 'assistant', parent_tool_use_id: null,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input: { command: 'ls' } }], stop_reason: 'tool_use' },
+  })
+  const userWithToolResult = (id: string) => ({
+    type: 'user', parent_tool_use_id: null,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+  })
+  const running = (id: string, startedAt = 100) => ({ [id]: { name: 'Bash', startedAt, endedAt: null, status: 'running' as const } })
+
+  it('N0: subagent tool_use / tool_result (non-null parent_tool_use_id) leave tools untouched but advance lastSeq', () => {
+    const base: ExecutionState = { ...defaultExecutionState(), tools: running('toolu_main') }
+    let s = applyDurableEvent(base, at(1, 'tool_use', { tool_use_id: 'toolu_sub', parent_tool_use_id: 'toolu_parent', name: 'Read' }))
+    s = applyDurableEvent(s, at(2, 'tool_result', { tool_use_id: 'toolu_sub', parent_tool_use_id: 'toolu_parent', status: 'ok', duration_ms: 5 }))
+    expect(s.tools).toEqual(base.tools)
+    expect(s.tools.toolu_sub).toBeUndefined()
+    expect(s.messages).toEqual([])
+    expect(s.lastSeq).toBe(2)
+  })
+
+  it('N2 tool_result does not clear pendingSend and leaves turnLive / partial alone (not a turn end, not a message)', () => {
+    const partial: ExecutionState['partial'] = { messageId: 'msg_1', finalized: 0, blocks: { 0: { index: 0, type: 'text', text: 'a', thinking: '', partialJson: '' } } }
+    const base: ExecutionState = { ...defaultExecutionState(), pendingSend: true, turnLive: true, partial, tools: running('toolu_a') }
+    const s = applyDurableEvent(base, at(1, 'tool_result', { tool_use_id: 'toolu_a', parent_tool_use_id: null, status: 'ok', duration_ms: 3 }))
+    expect(s.pendingSend).toBe(true)
+    expect(s.turnLive).toBe(true)
+    expect(s.partial).toBe(partial)
+    expect(s.messages).toEqual([])
+    expect(s.summaryStale).toBe(false)
+    expect(s.tools.toolu_a).toMatchObject({ status: 'done', endedAt: 100, durationMs: 3 })
+  })
+
+  it('N1 fail-safe: tool_use with the lower seq creates the entry, the later raw assistant is still a message and A1 skips the entry', () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, at(1, 'tool_use', { tool_use_id: 'toolu_1', parent_tool_use_id: null, name: 'Bash' }))
+    s = applyDurableEvent(s, at(2, 'assistant', assistantWithToolUse('toolu_1')))
+    expect(Object.keys(s.tools)).toEqual(['toolu_1'])
+    expect(s.tools.toolu_1).toMatchObject({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
+    expect(s.messages).toHaveLength(1)
+    expect(s.messages[0]).toMatchObject({ type: 'assistant' })
+    expect(s.lastSeq).toBe(2)
+  })
+
+  it('N4: an entry finished by the N2 tool_result stays done (with its durationMs) through execution.terminal instead of being aborted', () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, at(1, 'assistant', assistantWithToolUse('toolu_1')))
+    s = applyDurableEvent(s, at(2, 'tool_use', { tool_use_id: 'toolu_1', parent_tool_use_id: null, name: 'Bash', known: true }))
+    s = applyDurableEvent(s, at(3, 'user', userWithToolResult('toolu_1')))
+    s = applyDurableEvent(s, at(4, 'tool_result', { tool_use_id: 'toolu_1', parent_tool_use_id: null, status: 'ok', duration_ms: 42 }))
+    s = applyDurableEvent(s, at(5, 'execution.terminal', { turn_id: 't', reason: 'completed', state: 'idle' }))
+    expect(s.tools.toolu_1).toEqual({ name: 'Bash', startedAt: 100, endedAt: 300, status: 'done', known: true, durationMs: 42 })
+    expect(s.turnLive).toBe(false)
+    expect(s.messages).toHaveLength(2)
+  })
 })
 
 describe('defaultExecutionState', () => {
