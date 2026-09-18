@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.387] - 2026-09-18
+
+### Fix: CC readiness 比對提示符前先去掉 ANSI（#1166）
+
+**daemon 變更，要重啟。** P-C.3a 的 CLI 驗收第一步就撞到：pane 明明停在 `❯`，`nex-handoff` 卻回 504 `cc_exit_timeout {step: interrupt}`。根因是既有 bug：`readiness.go` 用 `capture-pane -e` 抓（活動偵測需要保留顏色），再用 `HasPrefix("❯")` 比對；CC 2.1.276 把提示符渲染成 `\x1b[39m❯ `，前面多了一個顏色重設，所以永遠判 running，`Interrupt` 一路等到逾時。legacy relay handoff 走同一個 checker，早就一起壞了，只是沒人再用它。修法一行：比對前 `probe.StripANSI`。加了三個 readiness case（ANSI 提示符、ANSI 提示符 + 狀態列、ANSI spinner 仍算 running）。
+
 ## [1.0.0-alpha.386] - 2026-09-18
 
 ### Feature: daemon 端「交給 nex」／「接回 terminal」端點（P-C.3a，#1161）
