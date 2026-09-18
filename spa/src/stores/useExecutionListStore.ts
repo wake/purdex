@@ -51,7 +51,10 @@ export const useExecutionListStore = create<ExecutionListState>()(() => ({
  *   but keep the rows, so a daemon blip does not blank the list.
  * - A host's identity (`ip`, `port` or `token`) changes → close and drop
  *   the rows and cursor: they belonged to the old daemon. Readiness of the
- *   new daemon reopens for the surviving subscribers.
+ *   new daemon reopens for the surviving subscribers — and since the
+ *   nex-host watcher (registered before this one in main.tsx) has just
+ *   dropped that host's entry, nobody else would ask the new daemon, so
+ *   `ensure` is called here for any host that still has a subscriber.
  */
 export function startExecutionListInvalidation(): () => void {
   const stopNex = useNexHostStore.subscribe((next, prev) => {
@@ -70,6 +73,7 @@ export function startExecutionListInvalidation(): () => void {
       const after = next.hosts[hostId]
       if (before && after && hostFingerprint(before) !== hostFingerprint(after)) {
         effects.close(hostId, { dropCache: true })
+        if (effects.subscribedHosts().includes(hostId)) void useNexHostStore.getState().ensure(hostId)
       }
     }
   })

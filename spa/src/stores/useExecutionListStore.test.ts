@@ -234,6 +234,50 @@ describe('useExecutionListStore', () => {
     expect(listCallsFor(A)).toBe(2)
   })
 
+  it('identity change with a live subscriber re-ensures nex readiness and reopens once it is ready', async () => {
+    const realEnsure = useNexHostStore.getState().ensure
+    const ensure = vi.fn<(hostId: string) => Promise<void>>().mockResolvedValue(undefined)
+    useNexHostStore.setState({ ensure })
+    try {
+      useExecutionListStore.getState().subscribe(A)
+      await flush()
+      expect(sse.openNexSse).toHaveBeenCalledTimes(1)
+
+      // The nex-host watcher (registered first, as in main.tsx) has already
+      // dropped A's entry when ours runs, so `ensure` fetches fresh info.
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: { ...s.hosts[A], token: 'rotated' } } }))
+      expect(useNexHostStore.getState().byHost[A]).toBeUndefined()
+      expect(ensure).toHaveBeenCalledTimes(1)
+      expect(ensure).toHaveBeenCalledWith(A)
+      expect(sse.openNexSse).toHaveBeenCalledTimes(1)
+
+      // The fresh info lands ready → the readiness watcher reopens exactly once.
+      setNexReady(A, true)
+      expect(sse.openNexSse).toHaveBeenCalledTimes(2)
+      expect(listCallsFor(A)).toBe(2)
+      setNexReady(A, true)
+      expect(sse.openNexSse).toHaveBeenCalledTimes(2)
+    } finally {
+      useNexHostStore.setState({ ensure: realEnsure })
+    }
+  })
+
+  it('identity change without a subscriber does not re-ensure nex readiness', async () => {
+    const realEnsure = useNexHostStore.getState().ensure
+    const ensure = vi.fn<(hostId: string) => Promise<void>>().mockResolvedValue(undefined)
+    useNexHostStore.setState({ ensure })
+    try {
+      const unsubscribe = useExecutionListStore.getState().subscribe(A)
+      await flush()
+      unsubscribe()
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: { ...s.hosts[A], token: 'rotated' } } }))
+      expect(cache(A).items).toEqual([])
+      expect(ensure).not.toHaveBeenCalled()
+    } finally {
+      useNexHostStore.setState({ ensure: realEnsure })
+    }
+  })
+
   it('a host removed and re-added with a new identity mid-fetch does not commit the old daemon rows', async () => {
     const first = deferList()
     useExecutionListStore.getState().subscribe(A)
