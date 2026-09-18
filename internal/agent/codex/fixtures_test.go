@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/agent"
@@ -130,5 +131,44 @@ func TestCodexEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 	ver, err := os.ReadFile(filepath.Join("testdata", "codex-"+codexFrozenVersion+"-version.txt"))
 	if err != nil || string(ver) != codexFrozenVersion+"\n" {
 		t.Errorf("version.txt = %q / %v", ver, err)
+	}
+}
+
+// TestCodexPayloadFixtures_DeriveStatusContract runs every installable
+// fixture through DeriveStatus and asserts Valid plus the status pinned in
+// events.json. Also asserts a fixture exists for every installable entry
+// and that no fixture leaks a real home path.
+func TestCodexPayloadFixtures_DeriveStatusContract(t *testing.T) {
+	p := codex.NewProvider()
+	frozen := loadCodexFrozenEvents(t)
+	dir := filepath.Join("testdata", "codex-"+codexFrozenVersion+"-payloads")
+	for _, e := range frozen.Events {
+		if e.Purdex.Kind != "installable" {
+			continue
+		}
+		e := e
+		t.Run(e.Purdex.PurdexEventName, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(dir, e.Purdex.PurdexEventName+".json"))
+			if err != nil {
+				t.Fatalf("missing payload fixture: %v", err)
+			}
+			if strings.Contains(string(raw), "/Users/wake") {
+				t.Fatalf("fixture leaks a real home path")
+			}
+			var probe map[string]any
+			if err := json.Unmarshal(raw, &probe); err != nil {
+				t.Fatalf("fixture is not a JSON object: %v", err)
+			}
+			if got, _ := probe["hook_event_name"].(string); got != e.UpstreamKey {
+				t.Fatalf("fixture hook_event_name = %q, want %q", got, e.UpstreamKey)
+			}
+			r := p.DeriveStatus(e.Purdex.PurdexEventName, json.RawMessage(raw))
+			if !r.Valid {
+				t.Fatalf("DeriveStatus Valid=false: %+v", r)
+			}
+			if string(r.Status) != e.Purdex.Status {
+				t.Fatalf("DeriveStatus status = %q, want %q", r.Status, e.Purdex.Status)
+			}
+		})
 	}
 }
