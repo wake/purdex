@@ -201,7 +201,7 @@ describe('TerminalSection', () => {
       expect(tabbar.compareDocumentPosition(dynamic) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       for (const surface of SURFACES) {
         expect(lineColorButtons(surface.testId)).toHaveLength(2)
-        for (const id of ['line-opacity', 'bg-opacity', 'box', 'inset', 'radius']) {
+        for (const id of ['box', 'inset', 'radius']) {
           expect(screen.getByTestId(`${surface.testId}-${id}`)).toBeTruthy()
         }
       }
@@ -215,14 +215,6 @@ describe('TerminalSection', () => {
         fireEvent.click(lineColorButtons(surface.testId)[1])
         expect(s()[`hostBadge${surface.store}LineColor`]).toBe('neutral')
         expect(s()[`hostBadge${surface.other}LineColor`]).toBe('host')
-
-        fireEvent.change(screen.getByTestId(`${surface.testId}-line-opacity`), { target: { value: '60' } })
-        expect(s()[`hostBadge${surface.store}LineOpacity`]).toBe(60)
-        expect(s()[`hostBadge${surface.other}LineOpacity`]).toBe(100)
-
-        fireEvent.change(screen.getByTestId(`${surface.testId}-bg-opacity`), { target: { value: '40' } })
-        expect(s()[`hostBadge${surface.store}BgOpacity`]).toBe(40)
-        expect(s()[`hostBadge${surface.other}BgOpacity`]).toBe(22)
 
         fireEvent.change(screen.getByTestId(`${surface.testId}-box`), { target: { value: '99' } })
         expect(s()[`hostBadge${surface.store}Box`]).toBe(24)

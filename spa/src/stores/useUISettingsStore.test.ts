@@ -4,12 +4,6 @@ import {
   KEEPALIVE_MAX_WEBGL,
   KEEPALIVE_MAX_DOM,
   clampKeepAlive,
-  HOST_BADGE_LINE_OPACITY_MIN,
-  HOST_BADGE_LINE_OPACITY_MAX,
-  HOST_BADGE_LINE_OPACITY_DEFAULT,
-  HOST_BADGE_BG_OPACITY_MIN,
-  HOST_BADGE_BG_OPACITY_MAX,
-  HOST_BADGE_BG_OPACITY_DEFAULT,
   HOST_BADGE_BOX_MIN,
   HOST_BADGE_BOX_MAX,
   HOST_BADGE_BOX_DEFAULT,
@@ -20,8 +14,7 @@ import {
   HOST_BADGE_RADIUS_MAX,
   HOST_BADGE_RADIUS_DEFAULT,
   HOST_BADGE_DEFAULTS,
-  clampHostBadgeLineOpacity,
-  clampHostBadgeBgOpacity,
+  HOST_BADGE_REMOVED_FIELDS,
   clampHostBadgeBox,
   clampHostBadgeInset,
   clampHostBadgeRadius,
@@ -273,45 +266,62 @@ describe('host badge settings', () => {
   })
 
   it('exposes the documented bounds as constants', () => {
-    expect([HOST_BADGE_LINE_OPACITY_MIN, HOST_BADGE_LINE_OPACITY_MAX, HOST_BADGE_LINE_OPACITY_DEFAULT]).toEqual([20, 100, 100])
-    expect([HOST_BADGE_BG_OPACITY_MIN, HOST_BADGE_BG_OPACITY_MAX, HOST_BADGE_BG_OPACITY_DEFAULT]).toEqual([0, 100, 22])
     expect([HOST_BADGE_BOX_MIN, HOST_BADGE_BOX_MAX, HOST_BADGE_BOX_DEFAULT]).toEqual([12, 24, 16])
     expect([HOST_BADGE_INSET_MIN, HOST_BADGE_INSET_MAX, HOST_BADGE_INSET_DEFAULT]).toEqual([0, 5, 2])
     expect([HOST_BADGE_RADIUS_MIN, HOST_BADGE_RADIUS_MAX, HOST_BADGE_RADIUS_DEFAULT]).toEqual([0, 8, 4])
   })
 
-  it('defaults all 14 fields per surface', () => {
+  it('defaults all 10 fields per surface', () => {
     const s = useUISettingsStore.getInitialState()
     for (const surface of ['Sidebar', 'TabBar'] as const) {
       expect(s[`hostBadge${surface}Enabled`]).toBe(true)
       expect(s[`hostBadge${surface}LineColor`]).toBe('host')
-      expect(s[`hostBadge${surface}LineOpacity`]).toBe(100)
-      expect(s[`hostBadge${surface}BgOpacity`]).toBe(22)
       expect(s[`hostBadge${surface}Box`]).toBe(16)
       expect(s[`hostBadge${surface}Inset`]).toBe(2)
       expect(s[`hostBadge${surface}Radius`]).toBe(4)
     }
   })
 
-  it('HOST_BADGE_DEFAULTS lists exactly the 14 fields', () => {
+  it('HOST_BADGE_DEFAULTS lists exactly the 10 fields', () => {
     expect(Object.keys(HOST_BADGE_DEFAULTS).sort()).toEqual(
       [
         'hostBadgeSidebarEnabled',
         'hostBadgeSidebarLineColor',
-        'hostBadgeSidebarLineOpacity',
-        'hostBadgeSidebarBgOpacity',
         'hostBadgeSidebarBox',
         'hostBadgeSidebarInset',
         'hostBadgeSidebarRadius',
         'hostBadgeTabBarEnabled',
         'hostBadgeTabBarLineColor',
-        'hostBadgeTabBarLineOpacity',
-        'hostBadgeTabBarBgOpacity',
         'hostBadgeTabBarBox',
         'hostBadgeTabBarInset',
         'hostBadgeTabBarRadius',
       ].sort(),
     )
+  })
+
+  it('has no per-surface opacity fields any more', () => {
+    const s = useUISettingsStore.getState() as unknown as Record<string, unknown>
+    for (const k of HOST_BADGE_REMOVED_FIELDS) expect(k in s).toBe(false)
+    expect(Object.keys(HOST_BADGE_DEFAULTS)).toHaveLength(10)
+  })
+
+  it('sanitizeHostBadgePrefs strips the removed opacity keys', () => {
+    expect(sanitizeHostBadgePrefs({ hostBadgeSidebarBgOpacity: 40, hostBadgeSidebarBox: 16 })).toEqual({
+      hostBadgeSidebarBox: 16,
+    })
+  })
+
+  it('rehydrating v3 persisted state with the removed keys does not carry them into the store', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.UI_SETTINGS,
+      JSON.stringify({
+        state: { ...HOST_BADGE_DEFAULTS, hostBadgeSidebarBgOpacity: 40 },
+        version: 3,
+      }),
+    )
+    await useUISettingsStore.persist.rehydrate()
+    const s = useUISettingsStore.getState() as unknown as Record<string, unknown>
+    for (const k of HOST_BADGE_REMOVED_FIELDS) expect(k in s).toBe(false)
   })
 
   it('isHostBadgeLineColor accepts only host / neutral', () => {
@@ -333,15 +343,6 @@ describe('host badge settings', () => {
     expect(clampHostBadgeInset(9)).toBe(5)
     expect(clampHostBadgeInset(2.6)).toBe(3)
     expect(clampHostBadgeInset(NaN)).toBe(2)
-
-    expect(clampHostBadgeLineOpacity(5)).toBe(20)
-    expect(clampHostBadgeLineOpacity(200)).toBe(100)
-    expect(clampHostBadgeLineOpacity(50.4)).toBe(50)
-    expect(clampHostBadgeLineOpacity(NaN)).toBe(100)
-
-    expect(clampHostBadgeBgOpacity(-5)).toBe(0)
-    expect(clampHostBadgeBgOpacity(200)).toBe(100)
-    expect(clampHostBadgeBgOpacity(NaN)).toBe(22)
 
     expect(clampHostBadgeRadius(20)).toBe(8)
     expect(clampHostBadgeRadius(-1)).toBe(0)
@@ -379,10 +380,6 @@ describe('host badge settings', () => {
     store.setHostBadgeTabBarBox(40)
     store.setHostBadgeSidebarInset(-1)
     store.setHostBadgeTabBarInset(9)
-    store.setHostBadgeSidebarLineOpacity(5)
-    store.setHostBadgeTabBarLineOpacity(200)
-    store.setHostBadgeSidebarBgOpacity(-5)
-    store.setHostBadgeTabBarBgOpacity(200)
     store.setHostBadgeSidebarRadius(20)
     store.setHostBadgeTabBarRadius(2.6)
 
@@ -391,10 +388,6 @@ describe('host badge settings', () => {
     expect(s.hostBadgeTabBarBox).toBe(24)
     expect(s.hostBadgeSidebarInset).toBe(0)
     expect(s.hostBadgeTabBarInset).toBe(5)
-    expect(s.hostBadgeSidebarLineOpacity).toBe(20)
-    expect(s.hostBadgeTabBarLineOpacity).toBe(100)
-    expect(s.hostBadgeSidebarBgOpacity).toBe(0)
-    expect(s.hostBadgeTabBarBgOpacity).toBe(100)
     expect(s.hostBadgeSidebarRadius).toBe(8)
     expect(s.hostBadgeTabBarRadius).toBe(3)
 
@@ -406,8 +399,6 @@ describe('host badge settings', () => {
     const out = sanitizeHostBadgePrefs({
       hostBadgeSidebarEnabled: 'yes',
       hostBadgeSidebarLineColor: 'evil',
-      hostBadgeSidebarLineOpacity: '80',
-      hostBadgeSidebarBgOpacity: NaN,
       hostBadgeSidebarBox: 99,
       hostBadgeSidebarInset: -3,
       hostBadgeSidebarRadius: 2.6,
@@ -418,8 +409,6 @@ describe('host badge settings', () => {
     })
     expect('hostBadgeSidebarEnabled' in out).toBe(false)
     expect('hostBadgeSidebarLineColor' in out).toBe(false)
-    expect('hostBadgeSidebarLineOpacity' in out).toBe(false)
-    expect('hostBadgeSidebarBgOpacity' in out).toBe(false)
     expect('hostBadgeTabBarBox' in out).toBe(false)
     expect(out.hostBadgeSidebarBox).toBe(24)
     expect(out.hostBadgeSidebarInset).toBe(0)
@@ -444,14 +433,11 @@ describe('host badge settings', () => {
         state: {
           hostBadgeSidebarEnabled: 'yes',
           hostBadgeSidebarLineColor: 'evil',
-          hostBadgeSidebarLineOpacity: null,
-          hostBadgeSidebarBgOpacity: 999,
           hostBadgeSidebarBox: 3,
           hostBadgeSidebarInset: 42,
           hostBadgeSidebarRadius: 'big',
           hostBadgeTabBarEnabled: false,
           hostBadgeTabBarLineColor: 'neutral',
-          hostBadgeTabBarLineOpacity: 1,
           hostBadgeTabBarBox: 100,
         },
         version: 3,
@@ -461,15 +447,12 @@ describe('host badge settings', () => {
     const s = useUISettingsStore.getState()
     expect(s.hostBadgeSidebarEnabled).toBe(true)
     expect(s.hostBadgeSidebarLineColor).toBe('host')
-    expect(s.hostBadgeSidebarLineOpacity).toBe(100)
-    expect(s.hostBadgeSidebarBgOpacity).toBe(100)
     expect(s.hostBadgeSidebarBox).toBe(12)
     expect(s.hostBadgeSidebarInset).toBe(5)
     expect(s.hostBadgeSidebarRadius).toBe(4)
     // valid persisted values survive
     expect(s.hostBadgeTabBarEnabled).toBe(false)
     expect(s.hostBadgeTabBarLineColor).toBe('neutral')
-    expect(s.hostBadgeTabBarLineOpacity).toBe(20)
     expect(s.hostBadgeTabBarBox).toBe(24)
   })
 
@@ -480,15 +463,11 @@ describe('host badge settings', () => {
         state: {
           hostBadgeSidebarEnabled: false,
           hostBadgeSidebarLineColor: 'neutral',
-          hostBadgeSidebarLineOpacity: 60,
-          hostBadgeSidebarBgOpacity: 10,
           hostBadgeSidebarBox: 20,
           hostBadgeSidebarInset: 1,
           hostBadgeSidebarRadius: 8,
           hostBadgeTabBarEnabled: true,
           hostBadgeTabBarLineColor: 'host',
-          hostBadgeTabBarLineOpacity: 100,
-          hostBadgeTabBarBgOpacity: 22,
           hostBadgeTabBarBox: 16,
           hostBadgeTabBarInset: 2,
           hostBadgeTabBarRadius: 4,
@@ -500,8 +479,6 @@ describe('host badge settings', () => {
     const s = useUISettingsStore.getState()
     expect(s.hostBadgeSidebarEnabled).toBe(false)
     expect(s.hostBadgeSidebarLineColor).toBe('neutral')
-    expect(s.hostBadgeSidebarLineOpacity).toBe(60)
-    expect(s.hostBadgeSidebarBgOpacity).toBe(10)
     expect(s.hostBadgeSidebarBox).toBe(20)
     expect(s.hostBadgeSidebarInset).toBe(1)
     expect(s.hostBadgeSidebarRadius).toBe(8)

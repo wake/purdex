@@ -242,15 +242,11 @@ describe('createPreferencesContributor', () => {
     const HOST_BADGE_FIELDS = [
       'hostBadgeSidebarEnabled',
       'hostBadgeSidebarLineColor',
-      'hostBadgeSidebarLineOpacity',
-      'hostBadgeSidebarBgOpacity',
       'hostBadgeSidebarBox',
       'hostBadgeSidebarInset',
       'hostBadgeSidebarRadius',
       'hostBadgeTabBarEnabled',
       'hostBadgeTabBarLineColor',
-      'hostBadgeTabBarLineOpacity',
-      'hostBadgeTabBarBgOpacity',
       'hostBadgeTabBarBox',
       'hostBadgeTabBarInset',
       'hostBadgeTabBarRadius',
@@ -259,15 +255,11 @@ describe('createPreferencesContributor', () => {
     const LOCAL = {
       hostBadgeSidebarEnabled: true,
       hostBadgeSidebarLineColor: 'host' as const,
-      hostBadgeSidebarLineOpacity: 100,
-      hostBadgeSidebarBgOpacity: 22,
       hostBadgeSidebarBox: 16,
       hostBadgeSidebarInset: 2,
       hostBadgeSidebarRadius: 4,
       hostBadgeTabBarEnabled: true,
       hostBadgeTabBarLineColor: 'host' as const,
-      hostBadgeTabBarLineOpacity: 100,
-      hostBadgeTabBarBgOpacity: 22,
       hostBadgeTabBarBox: 16,
       hostBadgeTabBarInset: 2,
       hostBadgeTabBarRadius: 4,
@@ -284,7 +276,7 @@ describe('createPreferencesContributor', () => {
       useUISettingsStore.setState(LOCAL)
     })
 
-    it('serialize includes all 14 host badge fields', () => {
+    it('serialize includes all 10 host badge fields', () => {
       const payload = contributor.serialize() as FullPayload
       const keys = Object.keys(payload.data)
       for (const f of HOST_BADGE_FIELDS) {
@@ -302,8 +294,6 @@ describe('createPreferencesContributor', () => {
             data: {
               hostBadgeSidebarEnabled: false,
               hostBadgeSidebarLineColor: 'neutral',
-              hostBadgeSidebarLineOpacity: 60,
-              hostBadgeSidebarBgOpacity: 10,
               hostBadgeSidebarBox: 20,
               hostBadgeSidebarInset: 1,
               hostBadgeSidebarRadius: 8,
@@ -317,8 +307,6 @@ describe('createPreferencesContributor', () => {
         const s = useUISettingsStore.getState()
         expect(s.hostBadgeSidebarEnabled).toBe(false)
         expect(s.hostBadgeSidebarLineColor).toBe('neutral')
-        expect(s.hostBadgeSidebarLineOpacity).toBe(60)
-        expect(s.hostBadgeSidebarBgOpacity).toBe(10)
         expect(s.hostBadgeSidebarBox).toBe(20)
         expect(s.hostBadgeSidebarInset).toBe(1)
         expect(s.hostBadgeSidebarRadius).toBe(8)
@@ -334,8 +322,6 @@ describe('createPreferencesContributor', () => {
             data: {
               hostBadgeSidebarEnabled: 'yes',
               hostBadgeSidebarLineColor: 'evil',
-              hostBadgeSidebarLineOpacity: '60',
-              hostBadgeSidebarBgOpacity: Infinity,
               hostBadgeSidebarBox: 999,
               hostBadgeSidebarInset: -4,
               hostBadgeSidebarRadius: NaN,
@@ -349,8 +335,6 @@ describe('createPreferencesContributor', () => {
         // dropped → local value kept
         expect(s.hostBadgeSidebarEnabled).toBe(true)
         expect(s.hostBadgeSidebarLineColor).toBe('host')
-        expect(s.hostBadgeSidebarLineOpacity).toBe(100)
-        expect(s.hostBadgeSidebarBgOpacity).toBe(22)
         expect(s.hostBadgeSidebarRadius).toBe(4)
         expect(s.hostBadgeTabBarLineColor).toBe('host')
         // clamped
@@ -359,5 +343,16 @@ describe('createPreferencesContributor', () => {
         expect(s.hostBadgeTabBarBox).toBe(12)
       })
     }
+
+    it('deserializing a payload that still carries a removed opacity field drops it', () => {
+      contributor.deserialize(
+        {
+          version: 1,
+          data: { hostBadgeSidebarBgOpacity: 40 },
+        },
+        { type: 'full-replace' },
+      )
+      expect('hostBadgeSidebarBgOpacity' in useUISettingsStore.getState()).toBe(false)
+    })
   })
 })
