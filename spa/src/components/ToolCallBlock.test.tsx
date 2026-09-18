@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import ToolCallBlock from './ToolCallBlock'
+import { formatDuration } from '../lib/nex/format-duration'
 
 beforeEach(() => {
   cleanup()
@@ -147,6 +148,83 @@ describe('ToolCallBlock activity (P-B2.2 R1/R2)', () => {
     expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
     expect(screen.getByTestId('tool-header')).toHaveTextContent(/^Bash$/)
     expect(screen.queryByTestId('tool-elapsed')).toBeNull()
+  })
+})
+
+// P-B3.2 Task 6 — spec §4.4 R1 (server primary_arg via `summaryEntry`),
+// R2 (`durationMs` wins over endedAt − startedAt) and R3 (denied = struck
+// through name, wrench, warning badge, no duration).
+describe('ToolCallBlock N2 overlay (P-B3 R1–R3)', () => {
+  it('R1: summaryEntry.primaryArg → header shows the server value, not the client table', () => {
+    render(<ToolCallBlock tool="Bash" input={{ command: 'ls' }} summaryEntry={{ primaryArg: { key: 'file_path', value: '/srv/x.ts' }, known: true }} />)
+    expect(screen.getByTestId('tool-header')).toHaveTextContent('/srv/x.ts')
+    expect(screen.getByTestId('tool-header')).not.toHaveTextContent(/\bls\b/)
+  })
+
+  it('R1: primaryArg value longer than 80 chars is truncated to 80 in the header', () => {
+    const value = 'y'.repeat(100)
+    render(<ToolCallBlock tool="Bash" input={{}} summaryEntry={{ primaryArg: { key: 'command', value }, known: true }} />)
+    expect(screen.getByTestId('tool-header')).toHaveTextContent(value.slice(0, 80))
+    expect(screen.getByTestId('tool-header')).not.toHaveTextContent(value.slice(0, 81))
+  })
+
+  it('R1: known:false → R10 key: value fallback from the input', () => {
+    render(<ToolCallBlock tool="Mystery" input={{ a: 1, b: 'two' }} summaryEntry={{ known: false }} />)
+    expect(screen.getByTestId('tool-header')).toHaveTextContent('a: 1, b: two')
+  })
+
+  it('R1: streaming rawInput still wins over summaryEntry', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'streaming', rawInput: '{"command":"sl' }} summaryEntry={{ primaryArg: { key: 'command', value: 'nope' }, known: true }} />)
+    expect(screen.getByTestId('tool-header')).toHaveTextContent('{"command":"sl')
+    expect(screen.getByTestId('tool-header')).not.toHaveTextContent('nope')
+  })
+
+  it('R2: done with durationMs=26 → badge formats 26ms (0.0s), not endedAt − startedAt (0.1s)', () => {
+    expect(formatDuration(26)).toBe('0.0s')
+    expect(formatDuration(200 - 100)).toBe('0.1s')
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'done', startedAt: 100, endedAt: 200, durationMs: 26 }} />)
+    expect(screen.getByTestId('tool-duration')).toHaveTextContent(/^0\.0s$/)
+  })
+
+  it('R2: done with durationMs=2600 → 2.6s (endedAt − startedAt would be 0.1s)', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'done', startedAt: 100, endedAt: 200, durationMs: 2600 }} />)
+    expect(screen.getByTestId('tool-duration')).toHaveTextContent(/^2\.6s$/)
+  })
+
+  it('R2: durationMs=null (unmatched result) → falls back to endedAt − startedAt', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'done', startedAt: 1000, endedAt: 7200, durationMs: null }} />)
+    expect(screen.getByTestId('tool-duration')).toHaveTextContent(/^6\.2s$/)
+  })
+
+  it('R2: durationMs=26 with startedAt=0 / endedAt=0 (N2 unseen path) → still shows the badge', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'done', startedAt: 0, endedAt: 0, durationMs: 26 }} />)
+    expect(screen.getByTestId('tool-duration')).toHaveTextContent(/^0\.0s$/)
+  })
+
+  it('R2: error with durationMs keeps the error colour token', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'error', startedAt: 0, endedAt: 0, durationMs: 2600 }} />)
+    expect(screen.getByTestId('tool-duration')).toHaveTextContent(/^2\.6s$/)
+    expect(screen.getByTestId('tool-duration')).toHaveClass('text-status-error')
+  })
+
+  it('R3: denied → name struck through and muted, wrench, warning badge, no duration', () => {
+    render(<ToolCallBlock tool="Bash" input={{ command: 'rm -rf /' }} activity={{ status: 'denied', startedAt: 100, endedAt: 200, durationMs: 26 }} />)
+    const name = screen.getByText('Bash')
+    expect(name).toHaveClass('line-through')
+    expect(name).toHaveClass('text-text-muted')
+    expect(name).toHaveClass('font-semibold')
+    expect(name).not.toHaveClass('text-text-primary')
+    expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-icon-spinner')).toBeNull()
+    expect(screen.getByTestId('tool-denied')).toHaveClass('text-status-warning')
+    expect(screen.queryByTestId('tool-duration')).toBeNull()
+  })
+
+  it('R3: non-denied statuses keep the primary name colour (no strike-through)', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'error', startedAt: 1000, endedAt: 7200 }} />)
+    const name = screen.getByText('Bash')
+    expect(name).toHaveClass('text-text-primary')
+    expect(name).not.toHaveClass('line-through')
   })
 })
 

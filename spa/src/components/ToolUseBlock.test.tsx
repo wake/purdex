@@ -44,3 +44,26 @@ describe('ToolUseBlock', () => {
     expect(screen.getByTestId('tool-header')).toHaveTextContent('tool')
   })
 })
+
+// P-B3.2 Task 6 — the entry's N2 overlay reaches ToolCallBlock as `summaryEntry` (R1).
+describe('ToolUseBlock N2 overlay passthrough (P-B3 R1)', () => {
+  it('entry.primaryArg wins over the client summary of block.input', () => {
+    const entry: ToolActivity = { ...running, endedAt: 7_200, status: 'done', primaryArg: { key: 'file_path', value: '/srv/x.ts' }, known: true }
+    render(<ToolUseBlock block={block} tools={{ tu1: entry }} now={99_999} />)
+    expect(screen.getByTestId('tool-header')).toHaveTextContent('/srv/x.ts')
+    expect(screen.getByTestId('tool-header')).not.toHaveTextContent(/\bls\b/)
+  })
+
+  it('entry.known === false → R10 key: value fallback from block.input', () => {
+    const entry: ToolActivity = { ...running, name: 'Mystery', endedAt: 7_200, status: 'done', known: false }
+    render(<ToolUseBlock block={{ ...block, name: 'Mystery', input: { a: 1, b: 2 } }} tools={{ tu1: entry }} now={99_999} />)
+    expect(screen.getByTestId('tool-header')).toHaveTextContent('a: 1, b: 2')
+  })
+
+  it('entry.durationMs reaches the badge; denied entry strikes the name through', () => {
+    const entry: ToolActivity = { ...running, endedAt: 7_200, status: 'denied', durationMs: 26 }
+    render(<ToolUseBlock block={block} tools={{ tu1: entry }} now={99_999} />)
+    expect(screen.getByTestId('tool-denied')).toBeInTheDocument()
+    expect(screen.getByText('Bash')).toHaveClass('line-through')
+  })
+})

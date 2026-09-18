@@ -3,8 +3,8 @@ import { useState } from 'react'
 import { CaretRight, CaretDown, CircleNotch, Wrench } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { formatDuration } from '../lib/nex/format-duration'
-import { getSummary } from '../lib/nex/tool-summary'
-import type { ToolCallActivity } from '../lib/nex/tool-activity'
+import { toolSummary } from '../lib/nex/tool-summary'
+import type { ToolActivity, ToolCallActivity } from '../lib/nex/tool-activity'
 
 export type { ToolCallActivity }
 
@@ -14,9 +14,16 @@ interface Props {
   /**
    * Lifecycle stage + the timing that stage can show (P-B2.2 R1/R2).
    * Absent → Stream-mode rendering (wrench, no badge). Unix ms server-clock
-   * fields that are 0 mean "unknown" and hide the badge.
+   * fields that are 0 mean "unknown" and hide the badge — unless the
+   * finished variant carries `durationMs` (P-B3 R2), which wins outright.
    */
   activity?: ToolCallActivity
+  /**
+   * N2 overlay for the header summary (P-B3 R1): `primaryArg.value` wins,
+   * `known === false` falls back to the first input keys, otherwise the
+   * client table. Absent → client table, today's DOM.
+   */
+  summaryEntry?: Pick<ToolActivity, 'primaryArg' | 'known'>
 }
 
 const SUMMARY_MAX = 80
@@ -33,9 +40,15 @@ function TimingBadge({ activity, t }: { activity: ToolCallActivity; t: (key: str
     }
     case 'done':
     case 'error': {
-      if (activity.startedAt <= 0 || activity.endedAt <= 0) return null
+      // R2: the daemon's duration_ms wins even when the raw-frame clocks are
+      // unknown (N2 unseen path has startedAt 0); the `> 0` guard only
+      // protects the endedAt − startedAt fallback.
+      const ms = typeof activity.durationMs === 'number'
+        ? activity.durationMs
+        : activity.startedAt > 0 && activity.endedAt > 0 ? activity.endedAt - activity.startedAt : null
+      if (ms === null) return null
       const tone = activity.status === 'error' ? 'text-status-error' : 'text-text-muted'
-      return <span data-testid="tool-duration" className={`text-xs ${tone} tabular-nums flex-shrink-0`}>{formatDuration(activity.endedAt - activity.startedAt)}</span>
+      return <span data-testid="tool-duration" className={`text-xs ${tone} tabular-nums flex-shrink-0`}>{formatDuration(ms)}</span>
     }
     case 'streaming':
       return null
@@ -47,13 +60,15 @@ function TimingBadge({ activity, t }: { activity: ToolCallActivity; t: (key: str
   }
 }
 
-export default function ToolCallBlock({ tool, input, activity }: Props) {
+export default function ToolCallBlock({ tool, input, activity, summaryEntry }: Props) {
   const [expanded, setExpanded] = useState(false)
   const t = useI18nStore((s) => s.t)
   const rawInput = activity?.status === 'streaming' ? activity.rawInput : null
-  const summary = rawInput !== null ? rawInput.slice(0, SUMMARY_MAX) : getSummary(tool, input)
+  const summary = (rawInput !== null ? rawInput : toolSummary(tool, input, summaryEntry)).slice(0, SUMMARY_MAX)
   const detail = rawInput !== null ? rawInput : JSON.stringify(input, null, 2)
   const spinning = activity?.status === 'streaming' || activity?.status === 'running'
+  // R3: a denial is not a failure — the name is struck through, the icon stays the wrench.
+  const nameClass = activity?.status === 'denied' ? 'line-through text-text-muted font-semibold' : 'text-text-primary font-semibold'
 
   return (
     <div className="rounded-lg border border-border-subtle bg-[#1e1e1e] text-sm my-1 overflow-hidden"> {/* TODO: theme token for bg-[#1e1e1e] */}
@@ -73,7 +88,7 @@ export default function ToolCallBlock({ tool, input, activity }: Props) {
         ) : (
           <Wrench size={16} data-testid="tool-icon-wrench" className="text-text-secondary flex-shrink-0" />
         )}
-        <span className="text-text-primary font-semibold">{tool}</span>
+        <span className={nameClass}>{tool}</span>
         {summary && (
           <span className="text-text-muted truncate flex-1 min-w-0">{summary}</span>
         )}
