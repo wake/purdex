@@ -61,6 +61,18 @@ describe('slugForCwd', () => {
     expect(slugForCwd('/Users/w/Workspace/wake/purdex', [])).toBe('purdex')
   })
 
+  it('matches a project stored as ~/… against an absolute cwd (host config keeps the path as typed)', () => {
+    const tilde = [project('t', 'plm', '~/Workspace/wake/ploom'), project('u', 'ws', '~/Workspace')]
+    expect(slugForCwd('/Users/w/Workspace/wake/ploom', tilde)).toBe('plm')
+    expect(slugForCwd('/Users/w/Workspace/wake/ploom/sub', tilde)).toBe('plm')
+    expect(slugForCwd('/Users/w/Workspace/other', tilde)).toBe('ws')
+    // The suffix must start at a segment boundary: `/AltWorkspace` ≠ `/Workspace`,
+    // so nothing matches and the basename fallback answers.
+    expect(slugForCwd('/Users/w/AltWorkspace/wake/ploom', tilde)).toBe('ploom')
+    // A partial hit earlier in the path does not hide a real one later.
+    expect(slugForCwd('/Users/w/Workspace/wake/ploomX/Workspace/wake/ploom', tilde)).toBe('plm')
+  })
+
   it('falls back when the matching project has an empty slug', () => {
     expect(slugForCwd('/x/y', [project('e', '', '/x')])).toBe('y')
   })

@@ -39,11 +39,31 @@ export function slugForCwd(cwd: string, projects: readonly HostProject[]): strin
     if (!p.slug) continue
     const path = stripTrailingSlashes(p.path)
     if (path === '') continue
-    const ancestor = target === path || target.startsWith(`${path}/`)
-    if (ancestor && path.length > bestLen) {
+    if (ancestorOf(path, target) && path.length > bestLen) {
       best = p
       bestLen = path.length
     }
   }
   return best ? best.slug : fallbackSlugFor(cwd)
+}
+
+/**
+ * Is `path` the cwd itself or a segment-wise ancestor of it? A project path
+ * is stored as the user typed it, so `~/…` is common (the daemon expands it
+ * only when it checks the path, `hostconfig/checkpath.go`), while an
+ * execution cwd is always absolute. The SPA does not know the host's home,
+ * so a `~/rest` project matches when `/rest` is a segment-aligned suffix of
+ * some prefix of the cwd — i.e. the cwd is `<home>/rest` or below it.
+ */
+function ancestorOf(path: string, target: string): boolean {
+  if (path === '~' ) return false
+  if (path.startsWith('~/')) {
+    const rest = path.slice(1) // "/Workspace/wake/ploom" — leads with "/", so every hit is segment-aligned
+    for (let at = target.indexOf(rest, 1); at > 0; at = target.indexOf(rest, at + 1)) {
+      const after = target.slice(at + rest.length)
+      if (after === '' || after.startsWith('/')) return true
+    }
+    return false
+  }
+  return target === path || target.startsWith(`${path}/`)
 }
