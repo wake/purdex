@@ -34,6 +34,10 @@ export interface CounterpartCandidate {
  * function, and a default-port peer URL does not occur (the daemon listens
  * on 7860). Unparseable input is returned trimmed so two garbage strings
  * still compare by their own text and never collapse to a shared value.
+ *
+ * An App host configured by hostname and a daemon entry written by IP (or
+ * vice versa) never URL-join — this only matters when the entry has no
+ * host_id or the host is unavailable; identity (host_id) is unaffected.
  */
 export function normalizePeerUrl(raw: string): string {
   const s = raw.trim()

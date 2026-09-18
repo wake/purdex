@@ -138,7 +138,10 @@ second.** `host_id` is learned at verify time and is what authentication is keye
 identity. URL is the fallback only for an entry with `host_id: ""` (added without a token) and is
 compared after `normalizeHostURL` on both sides. An App host is identified by `GET /api/info`
 `host_id`; the page fetches it (and `/api/peers/settings` for the self alias) for every connected
-App host on mount — two small calls per host, nothing cached across mounts.
+App host on mount — two small calls per host, nothing cached across mounts. Read with §5.2 step 2:
+an App host the page could not ask has an unknown `host_id`, so an entry with a known `host_id` may
+still join it by URL — the only case in which a known-host_id entry falls back to URL; a candidate
+whose known `host_id` differs is never joined by URL.
 
 **D-4. A pair whose other side is not an App host is half-verifiable and is drawn as such.** The
 outbound column is verified; the return column reads "not verifiable — <peer> is not a host in this
