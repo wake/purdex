@@ -27,6 +27,7 @@ export interface ExecutionSummary {
   terminal_reason?: string
   last_turn_reason?: string
   session_id?: string
+  resume_session_id?: string
   transcript_path?: string
   pid?: number
   created_at: number
@@ -80,7 +81,33 @@ export interface NexCapabilities {
     release: { method: string; path: string }
   }
   send: { delivery: string[]; max_text_bytes: number }
+  brief?: { max_bytes: number }
+  origin?: { max_bytes: number }
+  labels?: {
+    max_count: number
+    max_key_bytes: number
+    max_value_bytes: number
+    max_total_bytes: number
+    reserved_prefix: string
+  }
+  delegate?: { resume_session_id?: boolean }
   [key: string]: unknown
+}
+
+export interface DelegateRequest {
+  brief: string
+  cwd: string
+  profile?: string
+  labels?: Record<string, string>
+  origin?: string
+  resume_session_id?: string
+}
+
+export interface DelegateResult {
+  id: string
+  state: ExecutionStateName | string
+  reject_reason?: string
+  effective_profile?: string
 }
 
 export interface NexQuota {
