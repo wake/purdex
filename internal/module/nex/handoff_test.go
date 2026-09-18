@@ -305,6 +305,7 @@ func TestHandoffSuccessBodyAndRequest(t *testing.T) {
 		"effective_profile": "handoff",
 		"session_id":        hoSessionID,
 		"cwd":               hoCwd,
+		"session_kept":      true,
 	}, body)
 
 	reqs := env.svc.Requests()
@@ -489,4 +490,105 @@ func TestHandoffDelegateInfraError(t *testing.T) {
 	assert.Equal(t, store.ErrInvalidOrigin.Error(), body["reject_reason"])
 	assert.Equal(t, true, body["rolled_back"], "rollback attempted on an infra error too")
 	assert.Equal(t, []string{"claude --resume " + hoSessionID + "\n"}, rawKeysText(env.tmux))
+}
+
+// --- keep_session (exec-to-terminal spec §4.3, plan T6) ---
+
+// withSessionInTmux registers the handed-off session in the fake tmux server
+// so KillSession has something to kill (the fixture's map-backed provider
+// does not put it there).
+func withSessionInTmux(env *handoffEnv) {
+	env.tmux.AddSessionWithID(hoTmuxID, hoName, hoCwd)
+}
+
+func TestHandoffKeepSessionAbsentKeepsSession(t *testing.T) {
+	env := newHandoffEnv(t)
+	withSessionInTmux(env)
+	status, body := env.post(t, hoCode, goodBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, true, body["session_kept"], "an old SPA keeps today's behaviour")
+	assert.True(t, env.tmux.HasSession(hoName), "not killed")
+}
+
+func TestHandoffKeepSessionTrueKeepsSession(t *testing.T) {
+	env := newHandoffEnv(t)
+	withSessionInTmux(env)
+	env.svc.result.State = store.StateRunning
+	b := goodBody()
+	b["keep_session"] = true
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, true, body["session_kept"])
+	assert.True(t, env.tmux.HasSession(hoName))
+}
+
+// TestHandoffKeepSessionFalseKillsAfterRunning: with keep_session:false the
+// tmux session is killed once the delegate has confirmed the execution
+// running — the shell is idle by then, CC having exited — and the response
+// says so. At delegate time the session is still there.
+func TestHandoffKeepSessionFalseKillsAfterRunning(t *testing.T) {
+	env := newHandoffEnv(t)
+	withSessionInTmux(env)
+	env.svc.result.State = store.StateRunning
+	aliveAtDelegate := false
+	env.svc.onDelegate = func() { aliveAtDelegate = env.tmux.HasSession(hoName) }
+	b := goodBody()
+	b["keep_session"] = false
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, false, body["session_kept"])
+	assert.Equal(t, "exec-1", body["execution_id"])
+	assert.Equal(t, "running", body["state"])
+	assert.True(t, aliveAtDelegate, "killed only after the delegate succeeded")
+	assert.False(t, env.tmux.HasSession(hoName), "killed")
+	assert.Empty(t, env.tmux.RawKeysSent(), "no rollback")
+}
+
+// TestHandoffKeepSessionFalseNotRunningKeeps: the kill waits for a confirmed
+// running execution. A delegate that answers queued (lost the first-turn
+// race) or failed leaves the session alone and reports it kept.
+func TestHandoffKeepSessionFalseNotRunningKeeps(t *testing.T) {
+	for _, state := range []store.State{store.StateQueued, store.StateFailed} {
+		t.Run(string(state), func(t *testing.T) {
+			env := newHandoffEnv(t)
+			withSessionInTmux(env)
+			env.svc.result.State = state
+			b := goodBody()
+			b["keep_session"] = false
+			status, body := env.post(t, hoCode, b)
+			require.Equal(t, http.StatusOK, status, "%v", body)
+			assert.Equal(t, true, body["session_kept"])
+			assert.True(t, env.tmux.HasSession(hoName))
+		})
+	}
+}
+
+func TestHandoffKeepSessionFalseKillErrorLoggedKept(t *testing.T) {
+	env := newHandoffEnv(t)
+	// Not registered in the fake tmux: KillSession answers ErrNoSession.
+	env.svc.result.State = store.StateRunning
+	var logged []string
+	env.m.logf = func(f string, a ...any) { logged = append(logged, f) }
+	b := goodBody()
+	b["keep_session"] = false
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, true, body["session_kept"], "a failed kill is reported as kept")
+	assert.Equal(t, "exec-1", body["execution_id"])
+	assert.Contains(t, strings.Join(logged, "\n"), "kill")
+}
+
+func TestHandoffKeepSessionFalseRejectedNoKill(t *testing.T) {
+	env := newHandoffEnv(t)
+	withSessionInTmux(env)
+	env.svc.result = execution.Result{ID: "exec-1", State: store.StateRejected, RejectReason: "policy"}
+	reviveCCAfterKeys(env)
+	b := goodBody()
+	b["keep_session"] = false
+	status, body := env.post(t, hoCode, b)
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "delegate_rejected", body["code"])
+	assert.True(t, env.tmux.HasSession(hoName), "rejected: the session is rolled back into, never killed")
+	_, has := body["session_kept"]
+	assert.False(t, has, "the error shape is unchanged")
 }
