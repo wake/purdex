@@ -13,10 +13,11 @@
 // with no schema and a number or object there is not a binding a pane may be
 // put on — but does NOT compare the generation against the candidate's own: a same-generation
 // live session is a legitimate recovery target, not a contradiction (a pane
-// can be marked `tmux-restarted` merely because its lookup failed once). A
-// `mode` key that is present but not `'terminal'` is rejected — and `null`
-// counts as present, because the handler `JSON.parse`s the payload with no
-// schema, so an unexpected shape must fail closed.
+// can be marked `tmux-restarted` merely because its lookup failed once).
+// `mode` is not consulted: it is not part of the binding, and since P-D.3
+// every live session is attached as a terminal whatever a pre-P-D.2 daemon
+// reports there (the same policy as device-state reattach and snapshot
+// restore — codex F1 on P-D.3a).
 //
 // `reviveAllowed` is the last check before a decision is applied: it refuses
 // a pane whose current-binding operation is still running (unreachable under
@@ -98,7 +99,6 @@ export function decideRevive(hostId: string, sessions: Session[], candidates: Re
     // matched a string the pane already held.
     if (typeof session.code !== 'string' || session.code.length === 0) continue
     if (typeof session.tmux_instance !== 'string' || session.tmux_instance.length === 0) continue
-    if (session.mode !== undefined && session.mode !== 'terminal') continue
 
     decisions.push({
       tabId: candidate.tabId,

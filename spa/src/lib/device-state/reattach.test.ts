@@ -153,10 +153,15 @@ describe('reattachByName', () => {
     expect(report.failed).toBe(1)
   })
 
-  it('fails a terminal pane against a stream-mode session', async () => {
+  it('reattaches against a live session a pre-P-D.2 daemon still reports as stream (codex F1)', async () => {
+    // A live session is a tmux session whatever its stored mode says; the
+    // terminal WS attaches to it the same way. Rejecting here while
+    // snapshot restore and the session picker accept the same daemon
+    // session made one remote state look alive or lost depending on the
+    // entry point.
     vi.mocked(listSessions).mockResolvedValue([session({ code: 'n', name: 'work', mode: 'stream' })])
     const { remap } = await reattachByName({ h: { old: meta('h', 'old', { name: 'work' }) } })
-    expect(remap.h.old).toEqual({ status: 'failed' })
+    expect(remap.h.old.status).toBe('reattached')
   })
 
   it('reattaches a terminal pane when the session mode is absent', async () => {

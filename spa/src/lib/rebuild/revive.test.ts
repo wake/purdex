@@ -103,10 +103,10 @@ describe('decideRevive', () => {
     expect(decideRevive('h1', [live], [cand])).toEqual([])
   })
 
-  it('S6: rejects when the live session mode is not terminal', () => {
+  it('S6: revives when a pre-P-D.2 daemon still reports the live session as stream (codex F1)', () => {
     const cand = candidate()
     const live = session({ code: 'abc123', name: 'dev', tmux_instance: '222:2000', mode: 'stream' })
-    expect(decideRevive('h1', [live], [cand])).toEqual([])
+    expect(decideRevive('h1', [live], [cand])).toHaveLength(1)
   })
 
   it('S6: revives when mode is absent from the payload', () => {
@@ -116,10 +116,10 @@ describe('decideRevive', () => {
     expect(decideRevive('h1', [live], [cand])).toHaveLength(1)
   })
 
-  it('S6: rejects when mode is present but null (wire shape)', () => {
+  it('S6: revives when mode is present but null — mode is not part of the binding (codex F1)', () => {
     const cand = candidate()
     const live = { ...session({ code: 'abc123', name: 'dev', tmux_instance: '222:2000' }), mode: null } as unknown as Session
-    expect(decideRevive('h1', [live], [cand])).toEqual([])
+    expect(decideRevive('h1', [live], [cand])).toHaveLength(1)
   })
 
   it('S13: ignores candidates on a different host', () => {
