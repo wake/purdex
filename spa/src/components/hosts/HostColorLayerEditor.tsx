@@ -81,6 +81,7 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
   const areaRef = useRef<HTMLDivElement>(null)
   const activePointer = useRef<number | null>(null)
   const fallbackCleanupRef = useRef<(() => void) | null>(null)
+  const fallbackActive = useRef(false)
   const pick = (e: { clientX: number; clientY: number }) => {
     const el = areaRef.current
     if (!el) return
@@ -95,7 +96,13 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
   // matching pointerup (e.g. the pointer leaves the window). Either way we
   // still need to keep tracking the drag: fall back to window-level listeners
   // filtered by pointerId, torn down on pointerup/cancel or unmount.
+  //
+  // A pointermove that lands on the area itself still bubbles up to `window`,
+  // so while the fallback is attached the element's own onPointerMove/onPointerUp
+  // must no-op — otherwise both the element handler and the window listener
+  // would `pick()` the same event.
   const attachWindowPointerFallback = (pointerId: number) => {
+    fallbackActive.current = true
     const onMove = (e: PointerEvent) => {
       if (e.pointerId !== pointerId) return
       pick(e)
@@ -108,6 +115,7 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onEnd)
       window.removeEventListener('pointercancel', onEnd)
+      fallbackActive.current = false
       if (activePointer.current === pointerId) activePointer.current = null
       fallbackCleanupRef.current = null
     }
@@ -131,7 +139,7 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
     write(next)
   }
   const hueHex = hsvToHex({ h: hsv.h, s: 100, v: 100 })
-  const areaValueText = t('hosts.color.area_value', { s: hsv.s, v: hsv.v })
+  const areaLabel = `${t('hosts.color.area')} — ${t('hosts.color.area_value', { s: hsv.s, v: hsv.v })}`
 
   return (
     <div
@@ -187,12 +195,8 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
           <div
             ref={areaRef}
             data-testid="host-color-area"
-            role="slider"
-            aria-label={t('hosts.color.area')}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={hsv.s}
-            aria-valuetext={areaValueText}
+            aria-roledescription="color area"
+            aria-label={areaLabel}
             tabIndex={0}
             onKeyDown={nudge}
             onPointerDown={(e: ReactPointerEvent<HTMLDivElement>) => {
@@ -213,9 +217,11 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
               pick(e)
             }}
             onPointerMove={(e: ReactPointerEvent<HTMLDivElement>) => {
+              if (fallbackActive.current) return // the window fallback listener already handled this (it bubbled there too)
               if (e.pointerId === activePointer.current) pick(e)
             }}
             onPointerUp={(e: ReactPointerEvent<HTMLDivElement>) => {
+              if (fallbackActive.current) return // the window fallback listener already handled this
               if (e.pointerId !== activePointer.current) return
               activePointer.current = null
               if (typeof e.currentTarget.releasePointerCapture === 'function') {

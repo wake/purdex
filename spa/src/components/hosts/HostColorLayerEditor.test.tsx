@@ -142,6 +142,22 @@ describe('HostColorLayerEditor — main', () => {
     expect(onChange.mock.calls.length).toBe(calls)
   })
 
+  it('in fallback mode, a pointermove that bubbles from the area to window is only handled once', () => {
+    // No setPointerCapture stub — the fallback attaches. A pointermove fired
+    // on the area element bubbles up to `window`, so both the element's own
+    // onPointerMove and the window fallback listener would see it; only one
+    // must call onChange.
+    const onChange = vi.fn()
+    render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
+    const area = screen.getByTestId('host-color-area')
+    areaRect(area)
+    fireEvent.pointerDown(area, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    const afterDown = onChange.mock.calls.length
+    fireEvent.pointerMove(area, { clientX: 200, clientY: 0, pointerId: 1 })
+    expect(onChange.mock.calls.length).toBe(afterDown + 1)
+    expect(onChange).toHaveBeenLastCalledWith({ color: '#ff0000', alpha: 100 })
+  })
+
   it('hue strip changes hue only; the area repaints with the new hue', () => {
     const onChange = vi.fn()
     const { rerender } = render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
@@ -174,16 +190,14 @@ describe('HostColorLayerEditor — main', () => {
     expect(onChange).toHaveBeenLastCalledWith({ color: hsvToHex({ h: 0, s: 99, v: 90 }), alpha: 100 })
   })
 
-  it('exposes slider semantics with a live value text', () => {
+  it('is a plain focusable div with a live accessible name (role=slider is wrong for a 2D area)', () => {
     const onChange = vi.fn()
     render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
-    const area = screen.getByRole('slider', { name: /Saturation and brightness/ })
-    expect(area).toHaveAttribute('aria-valuemin', '0')
-    expect(area).toHaveAttribute('aria-valuemax', '100')
-    expect(area).toHaveAttribute('aria-valuenow', '100')
-    expect(area.getAttribute('aria-valuetext')).toContain('100%')
+    const area = screen.getByTestId('host-color-area')
+    expect(area).toHaveAttribute('aria-roledescription', 'color area')
+    expect(area.getAttribute('aria-label')).toContain('100%')
     fireEvent.keyDown(area, { key: 'ArrowLeft' })
-    expect(area.getAttribute('aria-valuetext')).toContain('99%')
+    expect(area.getAttribute('aria-label')).toContain('99%')
   })
 
   it('re-derives HSV when the parent hands in a different color', () => {
