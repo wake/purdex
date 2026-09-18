@@ -422,7 +422,7 @@ func TestTakeToTerminal500CreateFailedBeforeNewSession(t *testing.T) {
 	env.assertNoArchive(t)
 }
 
-// --- resume in the new session (step 7): kill on failure ---
+// --- resume in the new session (step 8): keys go by id to window 0 ---
 
 func TestTakeToTerminalKeysGoToNewSessionWindow0(t *testing.T) {
 	env := newTTEnv(t)
@@ -436,7 +436,48 @@ func TestTakeToTerminalKeysGoToNewSessionWindow0(t *testing.T) {
 	assert.Equal(t, []string{"cld-yolo --resume " + tbSessionID + " --verbose\n"}, rawKeysText(env.tmux))
 }
 
-func TestTakeToTerminal500SendFailedKillsSession(t *testing.T) {
+// --- archive before resume (step 7, codex F2) ---
+
+// The execution is archived BEFORE the resume command is typed: from the
+// moment the keys go out, the terminal may be writing the transcript, and
+// an execution that is still unarchived in that window is a second
+// writer the SPA can resume again. So the archive comes first; a resume
+// failure then kills the session and un-archives, and an archive failure
+// kills the session before any key is sent. Every kill is
+// KillSessionIfInstance by the created session's id under the generation
+// it was created in — never by name.
+
+func TestTakeToTerminal500ArchiveFailedKillsSessionNoResume(t *testing.T) {
+	env := newTTEnv(t)
+	env.scriptRunningThenIdle()
+	env.svc.archiveErr = errors.New("archive exploded")
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "archive_failed", body["code"])
+	assert.Contains(t, body["error"], "archive exploded")
+	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.Equal(t, ttName, body["session_name"])
+	assert.Equal(t, true, body["session_killed"])
+	assert.Empty(t, env.tmux.RawKeysSent(), "no resume was attempted")
+	assert.Len(t, env.sessions.Creates(), 1, "it was created…")
+	assert.False(t, env.tmux.HasSession(ttName), "…and killed again")
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
+	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls(), "settled, archive attempted once, lease released")
+	assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls(), "nothing to un-archive")
+}
+
+func TestTakeToTerminalArchiveHappensBeforeResume(t *testing.T) {
+	env := newTTEnv(t)
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	require.Len(t, env.svc.archiveCtxErrs, 1)
+	assert.NoError(t, env.svc.archiveCtxErrs[0], "archive ran under a live context of its own")
+	assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls())
+	assert.Len(t, env.tmux.RawKeysSent(), 1)
+	assert.Empty(t, env.tmux.KillIfInstanceCalls(), "nothing killed on success")
+}
+
+func TestTakeToTerminal500SendFailedKillsSessionAndUnarchives(t *testing.T) {
 	env := newTTEnv(t)
 	env.tmux.FailSendKeys = true
 	status, body := env.post(t, tbExecID, ttBody())
@@ -445,12 +486,18 @@ func TestTakeToTerminal500SendFailedKillsSession(t *testing.T) {
 	assert.Equal(t, tbSessionID, body["session_id"])
 	assert.Equal(t, ttName, body["session_name"])
 	assert.Equal(t, true, body["session_killed"])
+	assert.Equal(t, true, body["unarchived"])
 	assert.Len(t, env.sessions.Creates(), 1, "it was created…")
 	assert.False(t, env.tmux.HasSession(ttName), "…and killed again (I3)")
-	env.assertNoArchive(t)
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
+	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
+	assert.Equal(t, []execution.ArchiveRequest{
+		{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true},
+		{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: false},
+	}, env.svc.archiveReqs)
 }
 
-func TestTakeToTerminal504CCStartTimeoutKillsSession(t *testing.T) {
+func TestTakeToTerminal504CCStartTimeoutKillsSessionAndUnarchives(t *testing.T) {
 	// A bare take-back env: its reviver watches hoTarget (proj:0), so
 	// nothing ever runs claude in the new session's window.
 	env := &ttEnv{newTakebackEnv(t)}
@@ -460,62 +507,58 @@ func TestTakeToTerminal504CCStartTimeoutKillsSession(t *testing.T) {
 	assert.Equal(t, http.StatusGatewayTimeout, status)
 	assert.Equal(t, "cc_start_timeout", body["code"])
 	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.Equal(t, ttName, body["session_name"])
 	assert.Equal(t, true, body["session_killed"])
+	assert.Equal(t, true, body["unarchived"])
 	assert.Len(t, env.tmux.RawKeysSent(), 1, "keys were sent; CC just never came up")
 	assert.False(t, env.tmux.HasSession(ttName), "killed (I3)")
-	env.assertNoArchive(t)
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
+	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
+}
+
+// The running case releases the lease last — after the un-archive, as
+// the archive has always been under the lease.
+func TestTakeToTerminalResumeFailureUnarchivesBeforeLeaseRelease(t *testing.T) {
+	env := newTTEnv(t)
+	env.scriptRunningThenIdle()
+	env.tmux.FailSendKeys = true
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "send_failed", body["code"])
+	assert.Equal(t, []string{"acquire", "interrupt", "archive", "archive", "release"}, env.svc.Calls())
+	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
 }
 
 // TestTakeToTerminal409MismatchDoesNotKillByName (codex R1 P1): the tmux
 // server restarts between create and send. The generation check declines
 // the send, but `name` no longer identifies the session this call created
-// — a same-named session in the new generation belongs to someone else —
-// so nothing is killed and the detail says so.
+// — a same-named session in the new generation belongs to someone else.
+// The kill is asked of the same generation guard and declined too, so the
+// stranger is left alone; the execution is un-archived for a retry.
 func TestTakeToTerminal409MismatchDoesNotKillByName(t *testing.T) {
 	env := newTTEnv(t)
 	env.sessions.afterCreate = func() {
-		env.tmux.SetInstance("999:999") // restart: the created session is gone with the old server…
+		env.tmux.SetInstance("999:999")                    // restart: the created session is gone with the old server…
 		_ = env.tmux.NewSession(ttName, "/somewhere/else") // …and a stranger reused the name
 	}
 	status, body := env.post(t, tbExecID, ttBody())
 	assert.Equal(t, http.StatusConflict, status)
 	assert.Equal(t, "tmux_instance_mismatch", body["code"])
+	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.Equal(t, ttName, body["session_name"])
 	assert.Equal(t, false, body["session_killed"])
+	assert.Equal(t, true, body["unarchived"])
 	assert.True(t, env.tmux.HasSession(ttName), "the stranger's session is left alone")
-	env.assertNoArchive(t)
-}
-
-// TestTakeToTerminal409Archived (codex R1 P1): an archived execution is not
-// resumed again — a retry of a 200, or a second click from a pane whose
-// swap failed, must not put a second writer on the transcript.
-func TestTakeToTerminal409Archived(t *testing.T) {
-	env := newTTEnv(t)
-	e := ttExec(store.StateIdle)
-	e.ArchivedAt = 1700000000
-	env.store.results = []getResult{{exec: e}}
-	status, body := env.post(t, tbExecID, ttBody())
-	assert.Equal(t, http.StatusConflict, status)
-	assert.Equal(t, "execution_archived", body["code"])
-	assert.Empty(t, env.svc.Calls(), "no lease, no interrupt")
-	env.assertNoSession(t)
-}
-
-// killFailingExecutor: KillSession fails (and is recorded); everything
-// else is the fake.
-type killFailingExecutor struct {
-	*tmux.FakeExecutor
-	kills []string
-}
-
-func (k *killFailingExecutor) KillSession(name string) error {
-	k.kills = append(k.kills, name)
-	return errors.New("kill-session: simulated failure")
+	for _, k := range env.tmux.KillIfInstanceCalls() {
+		assert.Equal(t, hoInstance, k.Expected, "any kill is guarded by the generation the session was created in")
+		assert.Equal(t, "$0", k.SessionID, "and names the created session by id, never by name")
+	}
+	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
 }
 
 func TestTakeToTerminalKillFailureLoggedNotFatal(t *testing.T) {
 	env := newTTEnv(t)
-	kf := &killFailingExecutor{FakeExecutor: env.tmux}
-	env.m.tmux = kf
+	env.tmux.FailKillIfInstance = true
 	env.tmux.FailSendKeys = true
 	var logged []string
 	env.m.logf = func(f string, a ...any) { logged = append(logged, f) }
@@ -523,20 +566,35 @@ func TestTakeToTerminalKillFailureLoggedNotFatal(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, status)
 	assert.Equal(t, "send_failed", body["code"], "the resume failure is what is reported")
 	assert.Equal(t, false, body["session_killed"])
-	assert.Equal(t, []string{ttName}, kf.kills)
+	assert.Equal(t, true, body["unarchived"], "the un-archive still happens")
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
 	assert.True(t, env.tmux.HasSession(ttName), "kill failed: the session lingers")
-	joined := strings.Join(logged, "\n")
-	assert.Contains(t, joined, "kill", "the kill failure is logged")
+	assert.Contains(t, strings.Join(logged, "\n"), "kill", "the kill failure is logged")
 }
 
-// --- archive and response (step 8) ---
+func TestTakeToTerminalUnarchiveFailureLoggedNotFatal(t *testing.T) {
+	env := newTTEnv(t)
+	env.tmux.FailSendKeys = true
+	env.svc.unarchiveErr = errors.New("unarchive exploded")
+	var logged []string
+	env.m.logf = func(f string, a ...any) { logged = append(logged, f) }
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "send_failed", body["code"], "the resume failure is what is reported")
+	assert.Equal(t, true, body["session_killed"])
+	assert.Equal(t, false, body["unarchived"])
+	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls(), "the un-archive was attempted")
+	assert.Contains(t, strings.Join(logged, "\n"), "unarchiv", "the un-archive failure is logged")
+}
+
+// --- response (step 8) ---
 
 func TestTakeToTerminalSuccessResponse(t *testing.T) {
 	env := newTTEnv(t)
 	status, body := env.post(t, tbExecID, ttBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, tbSessionID, body["session_id"])
-	assert.Equal(t, true, body["archived"])
+	assert.Equal(t, true, body["archived"], "a 200 is always archived: archive precedes the resume")
 	assert.Equal(t, []string{"archive"}, env.svc.Calls(), "idle execution: no lease, no interrupt")
 	assert.Equal(t, []execution.ArchiveRequest{{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true}}, env.svc.archiveReqs)
 
@@ -550,14 +608,4 @@ func TestTakeToTerminalSuccessResponse(t *testing.T) {
 	assert.Equal(t, code, sess["code"])
 	_, hasTmuxID := sess["TmuxID"]
 	assert.False(t, hasTmuxID, "the same JSON shape as GET /api/sessions")
-}
-
-func TestTakeToTerminalArchiveFailureStill200(t *testing.T) {
-	env := newTTEnv(t)
-	env.svc.archiveErr = errors.New("archive exploded")
-	status, body := env.post(t, tbExecID, ttBody())
-	require.Equal(t, http.StatusOK, status, "%v", body)
-	assert.Equal(t, false, body["archived"])
-	assert.Equal(t, tbSessionID, body["session_id"])
-	assert.True(t, env.tmux.HasSession(ttName), "the terminal stays; only the archive is missing")
 }

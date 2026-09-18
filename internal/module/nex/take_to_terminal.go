@@ -5,9 +5,13 @@ package nex
 // fresh tmux session the daemon creates in the execution's cwd, resume its
 // Claude Code session there, and archive the execution. The engine steps
 // are the take-back's (settleForResume, resumeInWindow in takeback.go);
-// what differs is the session: created here, and killed again if the
-// resume in it fails, so a failed call never leaves a second writer next
-// to an unarchived execution.
+// what differs is the session — created here, and killed again (by id,
+// under the generation it was created in) if the archive or the resume
+// fails — and the order: the execution is archived before the resume is
+// typed, and un-archived if the resume fails, so a failed call never
+// leaves a second writer next to an unarchived execution, and a
+// succeeding one has no window in which the SPA could resume the
+// execution a second time.
 
 import (
 	"encoding/json"
@@ -35,7 +39,7 @@ func takeToTerminalLockKey(execID string) string { return "exec:" + execID }
 
 // handleTakeToTerminal runs spec §4.1 steps 1–8 in order: lock, body,
 // row, row preflights (provider, state), the preflights that must not cost
-// an interrupt (name free, cwd usable), settle, create, resume, archive.
+// an interrupt (name free, cwd usable), settle, create, archive, resume.
 func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	execID := r.PathValue("id")
 
@@ -164,46 +168,63 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 7: resume in window 0 of the session just created, guarded by
+	// Step 7: archive BEFORE the resume (codex F2). Once the keys go out
+	// the terminal may be writing the transcript, and an execution still
+	// unarchived in that window is one the SPA can resume a second time.
+	// A failure here kills the session just created — ours, nothing ran in
+	// it — and leaves the execution settled and unarchived for a retry.
+	if err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: true}); err != nil {
+		m.logf("nex: take-to-terminal %s: archiving: %v", execID, err)
+		killed := m.killCreatedSession(execID, info, "archive_failed")
+		writeHandoffError(w, http.StatusInternalServerError, "archive_failed", "archiving execution: "+err.Error(),
+			map[string]any{"session_id": sid, "session_name": name, "session_killed": killed})
+		return
+	}
+
+	// Step 8: resume in window 0 of the session just created, guarded by
 	// the generation it was created under. On failure the session is
-	// killed again: it is ours, nothing else ran in it, and a pane that may
-	// still start `claude --resume` next to an unarchived execution would
-	// be two writers on one transcript (I3). The execution stays settled
-	// and unarchived; the detail carries the session id for a manual resume.
+	// killed again — by id, under that same generation, so a server that
+	// restarted in between (tmux_instance_mismatch, or a restart the send
+	// never got to see) declines the kill and a stranger who reused the
+	// name is left alone (I3) — and the execution is un-archived so it can
+	// be retried (a failure there is logged; the detail says which state
+	// the row is in). The detail carries the session id for a manual resume.
 	if herr := m.resumeInWindow(info, info.TmuxInstance, body.ResumeCommand, sid); herr != nil {
-		killed := false
-		switch herr.code {
-		case "tmux_instance_mismatch":
-			// The server restarted between create and send: the session
-			// this call made died with it, and `name` may now belong to
-			// a stranger in the new generation. Nothing to kill by name.
-			m.logf("nex: take-to-terminal %s: tmux restarted before the resume was sent; not killing %s by name", execID, name)
-		default:
-			killed = true
-			if err := m.tmux.KillSession(name); err != nil {
-				killed = false
-				m.logf("nex: take-to-terminal %s: kill-session %s after %s: %v", execID, name, herr.code, err)
-			}
+		killed := m.killCreatedSession(execID, info, herr.code)
+		unarchived := true
+		if err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: false}); err != nil {
+			m.logf("nex: take-to-terminal %s: unarchiving after %s: %v", execID, herr.code, err)
+			unarchived = false
 		}
 		if herr.detail == nil {
 			herr.detail = map[string]any{}
 		}
 		herr.detail["session_name"] = name
 		herr.detail["session_killed"] = killed
+		herr.detail["unarchived"] = unarchived
 		herr.write(w)
 		return
 	}
 
-	// Step 8: the terminal is now the writer of that transcript. Failure
-	// to archive is logged, not fatal.
-	archived := true
-	if err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: true}); err != nil {
-		m.logf("nex: take-to-terminal %s: archiving: %v", execID, err)
-		archived = false
-	}
+	m.logf("nex: take-to-terminal %s → session %s/%s (session %s, archived)", execID, info.Code, info.Name, sid)
+	writeJSON(w, http.StatusOK, map[string]any{"session": info, "session_id": sid, "archived": true})
+}
 
-	m.logf("nex: take-to-terminal %s → session %s/%s (session %s, archived=%v)", execID, info.Code, info.Name, sid, archived)
-	writeJSON(w, http.StatusOK, map[string]any{"session": info, "session_id": sid, "archived": archived})
+// killCreatedSession kills the session this call created — by id, and
+// only under the generation it was created in (KillSessionIfInstance) —
+// after the step named by `after` failed. Reports whether it was killed.
+// A refusal (the server restarted: the session died with the old one, and
+// its id or name may now be somebody else's) and a failure are both
+// logged and reported as not killed.
+func (m *Module) killCreatedSession(execID string, info *session.SessionInfo, after string) bool {
+	killed, err := m.tmux.KillSessionIfInstance(info.TmuxID, info.TmuxInstance)
+	switch {
+	case err != nil:
+		m.logf("nex: take-to-terminal %s: kill-session %s (%s) after %s: %v", execID, info.Name, info.TmuxID, after, err)
+	case !killed:
+		m.logf("nex: take-to-terminal %s: tmux generation moved since %s was created; not killing %s after %s", execID, info.Name, info.TmuxID, after)
+	}
+	return killed
 }
 
 func firstNonEmpty(a, b string) string {
