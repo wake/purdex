@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"lab.protype.tw/wake/nexen"
 
@@ -97,6 +98,13 @@ type Module struct {
 	tmux     tmux.Executor
 	locks    *session.HandoffLocks // per-session-code; same type the stream relay uses
 
+	// Handoff timing (handoff.go); zero values take the defaults in Init.
+	handoffResolveTimeout   time.Duration // ResolveSessionOwner
+	handoffInterruptTimeout time.Duration // CCOperator.Interrupt
+	handoffExitTimeout      time.Duration // CCOperator.Exit
+	rollbackWait            time.Duration // wait for CC after a rollback resume
+	rollbackPoll            time.Duration // liveness poll interval during that wait
+
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)
@@ -160,6 +168,7 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.tmux = c.Tmux
 	m.locks = session.NewHandoffLocks()
+	m.applyHandoffDefaults()
 
 	home, _ := os.UserHomeDir() // "" when unset; Validate decides whether that matters
 	if err := c.Cfg.Nex.Validate(home); err != nil {
@@ -271,7 +280,14 @@ func (m *Module) softFail(err error) error {
 // the URLs it emits stay correct) and containing per-request panics. When
 // Init soft-failed, every path under RoutePrefix instead answers 503
 // nex_unavailable (spec §4.4.1, I8).
+//
+// The handoff endpoint lives under /api/sessions, not RoutePrefix (it
+// orchestrates a tmux pane, the engine is only its last step), and is
+// mounted whether or not the engine assembled: the handler itself answers
+// 503 nex_unavailable, so a client sees the structured error rather than
+// a 404 it would read as "old daemon".
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/sessions/{code}/nex-handoff", m.handleNexHandoff)
 	if m.initErr != nil {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
