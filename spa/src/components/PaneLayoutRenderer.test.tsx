@@ -7,7 +7,6 @@ import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useAgentStore } from '../stores/useAgentStore'
-import { useSessionStore } from '../stores/useSessionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { compositeKey } from '../lib/composite-key'
@@ -553,7 +552,6 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     ensure = vi.fn().mockResolvedValue(undefined)
     useNexHostStore.setState({ byHost: {}, ensure } as never)
     useAgentStore.setState({ agentTypes: {} })
-    useSessionStore.setState({ sessions: {} })
     useUndoToast.setState({ toast: null })
   })
 
@@ -646,11 +644,13 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     expect(useUndoToast.getState().toast?.message).toBe('Handed to nex.')
   })
 
-  it('Cancel closes the dialog without a request (relay id as the only cc source)', () => {
-    seedTab(tmux('p1'))
+  it('Cancel closes the dialog without a request (rebuild record as the only cc source)', () => {
+    // P-D.3b: the session row's relay id used to be the cc source here; the
+    // daemon no longer sends it, so the rebuild record stands in.
+    const recorded = tmux('p1', { rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', updatedAt: 1 }, capturedAt: 1 } })
+    seedTab(recorded)
     seedReady()
-    useSessionStore.setState({ sessions: { [H]: [{ code: CODE, name: 'purdex', cwd: '/', mode: 'terminal', cc_session_id: 'sid', cc_model: '', has_relay: true }] } })
-    render(<PaneLayoutRenderer layout={tmux('p1')} tabId="t1" isActive={true} />)
+    render(<PaneLayoutRenderer layout={recorded} tabId="t1" isActive={true} />)
     rightClick('tmux-p1')
     fireEvent.click(screen.getByText('Hand to nex'))
     expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()

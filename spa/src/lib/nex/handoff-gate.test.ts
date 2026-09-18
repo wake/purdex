@@ -27,7 +27,7 @@ function withRebuildAgent(type: string): TmuxSessionContent {
   })
 }
 
-const ready: HandoffGateDeps = { agentType: undefined, session: null, handoffReady: true }
+const ready: HandoffGateDeps = { agentType: undefined, handoffReady: true }
 
 describe('isHandoffCandidate — agent sources, each alone', () => {
   it('live agentType "cc" alone passes', () => {
@@ -40,28 +40,26 @@ describe('isHandoffCandidate — agent sources, each alone', () => {
     expect(isHandoffCandidate(content, ready)).toBe(true)
   })
 
-  it('session.cc_session_id alone passes', () => {
-    expect(isHandoffCandidate(terminal(), { ...ready, session: { cc_session_id: 'sid-1' } })).toBe(true)
-  })
-
-  it('no information at all → hidden', () => {
+  it('no information at all → hidden (P-D.3b: the daemon session row is no longer a source)', () => {
+    // Until P-D.3b a relay id on the daemon's session row was the third
+    // fallback; the daemon stopped sending it in alpha.396, and the deps no
+    // longer carry a session row at all — so nothing else can say "cc".
     expect(isHandoffCandidate(terminal(), ready)).toBe(false)
-    expect(isHandoffCandidate(terminal(), { ...ready, session: { cc_session_id: '' } })).toBe(false)
   })
 })
 
 describe('isHandoffCandidate — precedence', () => {
-  it('a live agentType that is not "cc" hides even with a stale cc rebuild record and a relay id', () => {
+  it('a live agentType that is not "cc" hides even with a stale cc rebuild record', () => {
     const content = withRebuildAgent('cc')
-    expect(isHandoffCandidate(content, { ...ready, agentType: 'codex', session: { cc_session_id: 'sid-1' } })).toBe(false)
+    expect(isHandoffCandidate(content, { ...ready, agentType: 'codex' })).toBe(false)
   })
 
   it('a live agentType "cc" wins over a rebuild record that says codex', () => {
     expect(isHandoffCandidate(withRebuildAgent('codex'), { ...ready, agentType: 'cc' })).toBe(true)
   })
 
-  it('a rebuild record that says codex hides even when the relay id is set', () => {
-    expect(isHandoffCandidate(withRebuildAgent('codex'), { ...ready, session: { cc_session_id: 'sid-1' } })).toBe(false)
+  it('a rebuild record that says codex hides', () => {
+    expect(isHandoffCandidate(withRebuildAgent('codex'), ready)).toBe(false)
   })
 
   it('an empty-string agentType counts as no live information (falls through)', () => {
