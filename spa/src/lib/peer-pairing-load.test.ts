@@ -34,7 +34,7 @@ function fakeApi(spec: {
   }
 }
 
-const collect = () => { const snaps: PairingSnapshot[] = []; return { snaps, emit: (s: PairingSnapshot) => snaps.push(structuredClone(s)) } }
+const collect = () => { const snaps: PairingSnapshot[] = []; return { snaps, emit: (s: PairingSnapshot) => snaps.push(s) } }
 
 describe('loadPairings — the §2.1 fixture (mlab ↔ air, drift)', () => {
   const api = () => fakeApi({
@@ -69,6 +69,10 @@ describe('loadPairings — the §2.1 fixture (mlab ↔ air, drift)', () => {
     expect(pairStatus(snaps[0].rows[0].outbound, snaps[0].rows[0].inbound)).toBe('checking')
     // one emit per settled verify after the first
     expect(snaps).toHaveLength(3)
+    // every emitted snapshot is an independently stable object — no consumer
+    // (e.g. React setState) should ever see one it stored change under it.
+    expect(snaps[0]).not.toBe(snaps[1])
+    expect(snaps[0].rows).not.toBe(snaps[2].rows)
   })
 
   it('calls verify exactly once per direction and list exactly once per host', async () => {
@@ -144,6 +148,21 @@ describe('loadPairings — the return side (§5.1 inbound states)', () => {
     const a = fakeApi({ ...base, list: { hM: [row({})] }, verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb') } })
     const final = await loadPairings(X, [{ ...AIR, status: 'auth-error' }], a, () => {})
     expect(final.rows[0].counterpartCause).toBe('auth-error')
+    expect(final.rows[0].inbound).toBe('counterpart-unavailable')
+  })
+
+  it('a host with status undefined is unavailable with cause "unknown"', async () => {
+    const a = fakeApi({ ...base, list: { hM: [row({})] }, verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb') } })
+    const final = await loadPairings(X, [{ ...AIR, status: undefined }], a, () => {})
+    expect(final.rows[0].counterpartCause).toBe('unknown')
+    expect(final.rows[0].inbound).toBe('counterpart-unavailable')
+    expect(a.info).not.toHaveBeenCalledWith('hA')
+  })
+
+  it('a reconnecting host is unavailable with cause reconnecting', async () => {
+    const a = fakeApi({ ...base, list: { hM: [row({})] }, verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb') } })
+    const final = await loadPairings(X, [{ ...AIR, status: 'reconnecting' }], a, () => {})
+    expect(final.rows[0].counterpartCause).toBe('reconnecting')
     expect(final.rows[0].inbound).toBe('counterpart-unavailable')
   })
 

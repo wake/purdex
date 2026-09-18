@@ -114,7 +114,7 @@ export async function loadPairings(
   }))
 
   const snap: PairingSnapshot = { self, error: null, rows }
-  emit(snap)
+  emit({ ...snap })
 
   // Step 4: every direction that has an entry, verified in parallel; one emit per settle.
   const settle = (i: number, side: 'outbound' | 'inbound', p: Promise<PeerHostVerify>) =>
