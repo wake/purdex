@@ -43,13 +43,22 @@ export function SelfAliasLine({ hostId, hostName, self, busy, flow, runFlow }: S
   const error = mine && !flow.running ? flow.error : ''
 
   // One PUT with exactly the `alias` key (S-2: a missing key means unchanged,
-  // so `deliver` is never sent from here). A 200 without `alias_source` is an
-  // old daemon that ignored the body — not success (S-5). 400/409 throw and the
-  // runner turns them into the flow's error text (the daemon's own sentence).
+  // so `deliver` is never sent from here). The answer is accepted by the same
+  // rule the CLI applies (S-5, codex A2): a 200 without `alias_source` is an
+  // old daemon that ignored the body; a Save must come back as exactly the
+  // value sent with source `config`; a Clear must come back as a non-empty
+  // alias with source `host_id`. Anything else is "not applied": the editor
+  // stays open with the typed value and the line says what came back.
+  // 400/409 throw and the runner turns them into the flow's error text (the
+  // daemon's own sentence).
   const write = (alias: string) => {
     void runFlow(async () => {
       const r = await updatePeerSettings(hostId, { alias })
       if (!r.alias_source) return { error: t('peers.self_alias_too_old') }
+      const applied = alias === ''
+        ? r.alias_source === 'host_id' && r.alias !== ''
+        : r.alias_source === 'config' && r.alias === alias
+      if (!applied) return { error: t('peers.self_alias_not_applied', { alias: r.alias, source: r.alias_source }) }
       setEditing(false)
       return {}
     })

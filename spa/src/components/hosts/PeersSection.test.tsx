@@ -1171,6 +1171,43 @@ describe('PeersSection — self alias (#1196, spec §4.3)', () => {
     expect(screen.queryByTestId('peer-flow')).toBeNull()
   })
 
+  it('a Save answered with a different alias, or the right alias with source host_id, is NOT applied: error shown, input stays (codex A2)', async () => {
+    for (const answer of [
+      { deliver: true, alias: 'mini-lab', alias_source: 'config' as const },   // echo of the old value
+      { deliver: true, alias: 'mlab', alias_source: 'host_id' as const },      // right value, wrong source
+    ]) {
+      vi.mocked(api.updatePeerSettings).mockResolvedValueOnce(answer)
+      const { unmount } = render(<PeersSection hostId={M} />)
+      await settled('bidirectional')
+      fireEvent.click(screen.getByTestId('peers-self-edit'))
+      fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'mlab' } })
+      fireEvent.click(screen.getByTestId('peers-self-save'))
+      expect(await screen.findByTestId('peers-self-error')).toHaveTextContent('not applied')
+      expect(screen.getByTestId('peers-self-error')).toHaveTextContent(answer.alias)
+      await settled('bidirectional')
+      expect((screen.getByTestId('peers-self-input') as HTMLInputElement).value).toBe('mlab')
+      unmount()
+    }
+  })
+
+  it('a Clear answered with source config, or an empty alias, is NOT applied (codex A2)', async () => {
+    vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) => ({ deliver: true, alias: h === M ? 'mlab' : 'air26', alias_source: 'config' }))
+    for (const answer of [
+      { deliver: true, alias: 'mlab', alias_source: 'config' as const },
+      { deliver: true, alias: '', alias_source: 'host_id' as const },
+    ]) {
+      vi.mocked(api.updatePeerSettings).mockResolvedValueOnce(answer)
+      const { unmount } = render(<PeersSection hostId={M} />)
+      await settled('bidirectional')
+      fireEvent.click(screen.getByTestId('peers-self-edit'))
+      fireEvent.click(screen.getByTestId('peers-self-clear'))
+      await waitFor(() => expect(api.updatePeerSettings).toHaveBeenCalledWith(M, { alias: '' }))
+      expect(await screen.findByTestId('peers-self-error')).toHaveTextContent('not applied')
+      unmount()
+      vi.mocked(api.updatePeerSettings).mockClear()
+    }
+  })
+
   it('a GET without alias_source (daemon < alpha.399): no Edit, no Clear, the too-old text on the line (codex F7)', async () => {
     vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) => ({ deliver: true, alias: h === M ? 'mini-lab' : 'air26' }))
     render(<PeersSection hostId={M} />)
