@@ -141,7 +141,7 @@ describe('FloatingPanel', () => {
     expect(parseInt(panel.style.left)).toBe(left0 + 50)
   })
 
-  it('a drag never moves the panel fully off-screen', () => {
+  it('a drag never moves the panel fully off-screen, nor above the Electron title bar', () => {
     render(<Harness onClose={() => {}} />)
     const panel = screen.getByTestId('floating-panel')
     const handle = screen.getByTestId('floating-panel-handle')
@@ -150,7 +150,46 @@ describe('FloatingPanel', () => {
     fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
     fireEvent.pointerMove(handle, { clientX: -5000, clientY: -5000, pointerId: 1 })
     expect(parseInt(panel.style.left)).toBeGreaterThanOrEqual(-320 + 40)
-    expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(0)
+    expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(36)
+  })
+
+  it('is marked no-drag so the Electron title bar region does not intercept its pointer events', () => {
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    // jsdom doesn't recognize `-webkit-app-region` as a real CSS property, so it
+    // never reaches `cssText` / `getAttribute('style')` via `getPropertyValue` or
+    // `setProperty` — but React sets it with a plain camelCase assignment
+    // (`style.WebkitAppRegion = ...`), which jsdom's CSSStyleDeclaration stores as
+    // an ordinary own property and does expose back under that same name.
+    const withCamel = panel.style as unknown as { WebkitAppRegion?: string }
+    expect(withCamel.WebkitAppRegion).toBe('no-drag')
+  })
+
+  it('never exceeds the viewport height, and scrolls its body instead', () => {
+    Object.defineProperty(window, 'innerHeight', { value: 300, configurable: true })
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(panel.style.maxHeight).toBe('292px')
+    const body = screen.getByTestId('inside').closest('div')
+    expect(body?.style.overflowY).toBe('auto')
+  })
+
+  it('re-applies the max-height clamp on resize', () => {
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    Object.defineProperty(window, 'innerHeight', { value: 250, configurable: true })
+    fireEvent(window, new Event('resize'))
+    expect(panel.style.maxHeight).toBe('242px')
+  })
+
+  it('places the panel below the Electron title bar even when the anchor sits near the bottom of a short viewport', () => {
+    Object.defineProperty(window, 'innerHeight', { value: 40, configurable: true })
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { top: 38, bottom: 40, left: 10, right: 50 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(parseInt(panel.style.top)).toBe(36)
+    expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(36)
   })
 
   it('pointer events inside the body do not start a drag', () => {
