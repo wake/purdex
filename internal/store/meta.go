@@ -12,19 +12,15 @@ import (
 // SessionMeta is the DB representation of session meta cache.
 // It stores ONLY metadata that can't be retrieved from tmux in real-time.
 type SessionMeta struct {
-	TmuxID      string
-	Mode        string
-	CCSessionID string
-	CCModel     string
-	Cwd         string
+	TmuxID string
+	Mode   string
+	Cwd    string
 }
 
 // MetaUpdate supports partial updates (nil = no change).
 type MetaUpdate struct {
-	Mode        *string
-	CCSessionID *string
-	CCModel     *string
-	Cwd         *string
+	Mode *string
+	Cwd  *string
 }
 
 // MetaStore is a lightweight DB for session metadata cache.
@@ -71,8 +67,6 @@ func migrateMetaDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS session_meta (
 			tmux_id       TEXT PRIMARY KEY,
 			mode          TEXT DEFAULT 'terminal',
-			cc_session_id TEXT DEFAULT '',
-			cc_model      TEXT DEFAULT '',
 			cwd           TEXT DEFAULT '',
 			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
@@ -217,14 +211,12 @@ func (m *MetaStore) Close() error { return m.db.Close() }
 // SetMeta upserts a SessionMeta record (INSERT OR REPLACE).
 func (m *MetaStore) SetMeta(tmuxID string, meta SessionMeta) error {
 	_, err := m.db.Exec(`
-		INSERT INTO session_meta (tmux_id, mode, cc_session_id, cc_model, cwd)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO session_meta (tmux_id, mode, cwd)
+		VALUES (?, ?, ?)
 		ON CONFLICT(tmux_id) DO UPDATE SET
-			mode          = excluded.mode,
-			cc_session_id = excluded.cc_session_id,
-			cc_model      = excluded.cc_model,
-			cwd           = excluded.cwd
-	`, tmuxID, meta.Mode, meta.CCSessionID, meta.CCModel, meta.Cwd)
+			mode = excluded.mode,
+			cwd  = excluded.cwd
+	`, tmuxID, meta.Mode, meta.Cwd)
 	return err
 }
 
@@ -232,9 +224,9 @@ func (m *MetaStore) SetMeta(tmuxID string, meta SessionMeta) error {
 func (m *MetaStore) GetMeta(tmuxID string) (*SessionMeta, error) {
 	var meta SessionMeta
 	err := m.db.QueryRow(`
-		SELECT tmux_id, mode, cc_session_id, cc_model, cwd
+		SELECT tmux_id, mode, cwd
 		FROM session_meta WHERE tmux_id = ?
-	`, tmuxID).Scan(&meta.TmuxID, &meta.Mode, &meta.CCSessionID, &meta.CCModel, &meta.Cwd)
+	`, tmuxID).Scan(&meta.TmuxID, &meta.Mode, &meta.Cwd)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -247,7 +239,7 @@ func (m *MetaStore) GetMeta(tmuxID string) (*SessionMeta, error) {
 // ListMeta returns all SessionMeta records ordered by tmux_id.
 func (m *MetaStore) ListMeta() ([]SessionMeta, error) {
 	rows, err := m.db.Query(`
-		SELECT tmux_id, mode, cc_session_id, cc_model, cwd
+		SELECT tmux_id, mode, cwd
 		FROM session_meta ORDER BY tmux_id
 	`)
 	if err != nil {
@@ -257,7 +249,7 @@ func (m *MetaStore) ListMeta() ([]SessionMeta, error) {
 	var out []SessionMeta
 	for rows.Next() {
 		var meta SessionMeta
-		if err := rows.Scan(&meta.TmuxID, &meta.Mode, &meta.CCSessionID, &meta.CCModel, &meta.Cwd); err != nil {
+		if err := rows.Scan(&meta.TmuxID, &meta.Mode, &meta.Cwd); err != nil {
 			return nil, err
 		}
 		out = append(out, meta)
@@ -273,14 +265,6 @@ func (m *MetaStore) UpdateMeta(tmuxID string, update MetaUpdate) error {
 	if update.Mode != nil {
 		setClauses = append(setClauses, "mode = ?")
 		args = append(args, *update.Mode)
-	}
-	if update.CCSessionID != nil {
-		setClauses = append(setClauses, "cc_session_id = ?")
-		args = append(args, *update.CCSessionID)
-	}
-	if update.CCModel != nil {
-		setClauses = append(setClauses, "cc_model = ?")
-		args = append(args, *update.CCModel)
 	}
 	if update.Cwd != nil {
 		setClauses = append(setClauses, "cwd = ?")

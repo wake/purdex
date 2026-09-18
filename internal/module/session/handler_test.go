@@ -31,9 +31,8 @@ func TestListSessionsMergesMeta(t *testing.T) {
 
 	// Set meta for first session only
 	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{
-		TmuxID:  "$0",
-		Mode:    "terminal",
-		CCModel: "opus",
+		TmuxID: "$0",
+		Mode:   "terminal",
 	}))
 
 	sessions, err := mod.ListSessions()
@@ -43,7 +42,6 @@ func TestListSessionsMergesMeta(t *testing.T) {
 	// First session should have merged meta
 	assert.Equal(t, "dev", sessions[0].Name)
 	assert.Equal(t, "terminal", sessions[0].Mode)
-	assert.Equal(t, "opus", sessions[0].CCModel)
 	assert.NotEmpty(t, sessions[0].Code)
 
 	// Second session should have default mode
