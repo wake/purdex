@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HOST_COLOR_PRESETS, normalizeHostColor, type HostColorLayerName } from '../../lib/host-color'
 import { hexToHsv, hsvToHex, rgbaString, type Hsv } from '../../lib/color-space'
@@ -80,6 +80,7 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
 
   const areaRef = useRef<HTMLDivElement>(null)
   const activePointer = useRef<number | null>(null)
+  const fallbackCleanupRef = useRef<(() => void) | null>(null)
   const pick = (e: { clientX: number; clientY: number }) => {
     const el = areaRef.current
     if (!el) return
@@ -89,6 +90,33 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
     const v = Math.round(Math.min(100, Math.max(0, 100 - ((e.clientY - r.top) / r.height) * 100)))
     write({ s, v })
   }
+  // Some environments (older WebViews, jsdom) don't implement
+  // `setPointerCapture`, and even when they do, capture can be lost without a
+  // matching pointerup (e.g. the pointer leaves the window). Either way we
+  // still need to keep tracking the drag: fall back to window-level listeners
+  // filtered by pointerId, torn down on pointerup/cancel or unmount.
+  const attachWindowPointerFallback = (pointerId: number) => {
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return
+      pick(e)
+    }
+    const onEnd = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return
+      detach()
+    }
+    const detach = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+      if (activePointer.current === pointerId) activePointer.current = null
+      fallbackCleanupRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+    fallbackCleanupRef.current = detach
+  }
+  useEffect(() => () => fallbackCleanupRef.current?.(), [])
   const nudge = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 10 : 1
     const delta: Record<string, Partial<Hsv>> = {
@@ -172,9 +200,16 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
               if (activePointer.current !== null) return
               e.preventDefault()
               activePointer.current = e.pointerId
+              let captured = false
               if (typeof e.currentTarget.setPointerCapture === 'function') {
-                e.currentTarget.setPointerCapture(e.pointerId)
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId)
+                  captured = true
+                } catch {
+                  captured = false
+                }
               }
+              if (!captured) attachWindowPointerFallback(e.pointerId)
               pick(e)
             }}
             onPointerMove={(e: ReactPointerEvent<HTMLDivElement>) => {
@@ -193,6 +228,10 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
               if (typeof e.currentTarget.releasePointerCapture === 'function') {
                 e.currentTarget.releasePointerCapture(e.pointerId)
               }
+            }}
+            onLostPointerCapture={() => {
+              fallbackCleanupRef.current?.()
+              activePointer.current = null
             }}
             className="relative w-full h-40 rounded cursor-crosshair touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-border-active"
             style={{ background: `linear-gradient(to top, #000000, transparent), linear-gradient(to right, #ffffff, ${hueHex})` }}

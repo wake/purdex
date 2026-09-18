@@ -104,6 +104,44 @@ describe('HostColorLayerEditor — main', () => {
     expect(onChange).toHaveBeenLastCalledWith({ color: '#000000', alpha: 100 })
   })
 
+  it('recovers when the browser has no setPointerCapture: a window pointerup ends the drag', () => {
+    // No `el.setPointerCapture` stub here — jsdom doesn't implement it, so the
+    // component must fall back to window-level listeners.
+    const onChange = vi.fn()
+    render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
+    const area = screen.getByTestId('host-color-area')
+    areaRect(area)
+    fireEvent.pointerDown(area, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    expect(onChange).toHaveBeenLastCalledWith({ color: '#ffffff', alpha: 100 })
+    fireEvent.pointerUp(window, { pointerId: 1 })
+    fireEvent.pointerDown(area, { clientX: 200, clientY: 200, pointerId: 1, button: 0 })
+    expect(onChange).toHaveBeenLastCalledWith({ color: '#000000', alpha: 100 })
+  })
+
+  it('recovers from a lostpointercapture event', () => {
+    const onChange = vi.fn()
+    render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
+    const area = screen.getByTestId('host-color-area')
+    areaRect(area)
+    fireEvent.pointerDown(area, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.lostPointerCapture(area, { pointerId: 1 })
+    fireEvent.pointerDown(area, { clientX: 200, clientY: 200, pointerId: 1, button: 0 })
+    expect(onChange).toHaveBeenLastCalledWith({ color: '#000000', alpha: 100 })
+  })
+
+  it('without setPointerCapture, tracks the drag via window pointermove filtered by pointerId', () => {
+    const onChange = vi.fn()
+    render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
+    const area = screen.getByTestId('host-color-area')
+    areaRect(area)
+    fireEvent.pointerDown(area, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 0, pointerId: 1 })
+    expect(onChange).toHaveBeenLastCalledWith({ color: '#ff0000', alpha: 100 })
+    const calls = onChange.mock.calls.length
+    fireEvent.pointerMove(window, { clientX: 0, clientY: 200, pointerId: 2 })
+    expect(onChange.mock.calls.length).toBe(calls)
+  })
+
   it('hue strip changes hue only; the area repaints with the new hue', () => {
     const onChange = vi.fn()
     const { rerender } = render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
