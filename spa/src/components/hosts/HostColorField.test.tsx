@@ -139,6 +139,16 @@ describe('HostColorField — remount / ghost state (PR #1160 R1 F1/F2)', () => {
     expect(screen.queryByTestId('host-color-editor')).toBeNull()
     expect(layerBtn('main')).toHaveAttribute('aria-pressed', 'false')
   })
+
+  it('color data returning after a remote clear does not reopen the editor', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('middle'))
+    act(() => useHostStore.getState().clearHostColorMode(HOST_ID, 'console'))
+    act(() => useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+    for (const l of ['main', 'middle', 'light'] as const) expect(layerBtn(l)).toHaveAttribute('aria-pressed', 'false')
+  })
 })
 
 describe('HostColorField — modes', () => {

@@ -43,12 +43,18 @@ export function HostColorField({ hostId }: { hostId: string }) {
   const modeOptions = HOST_COLOR_MODES.map((m) => ({ value: m, label: t(`hosts.color.mode.${m}`) }))
 
   // `resolved` can go null out from under an open editor (a no-op materialise write —
-  // e.g. the host vanished — or a remote clear while it's open). `open` alone would
-  // then keep a swatch pressed and no editor to show for it (spec review PR #1160 F2).
-  const effectiveOpen = resolved ? open : null
+  // e.g. the host vanished — or a remote clear while it's open). Left alone, `open`
+  // would keep a swatch pressed with no editor to show for it (spec review PR #1160
+  // F2) — and worse, a *derived* mask (`resolved ? open : null`) hides that stale
+  // state without clearing it, so if the mode's colors come back later (host
+  // re-added, remote re-sync) the editor pops back open on a layer the user never
+  // reopened (PR #1160 R2 re-review). So reset the state itself, render-phase, the
+  // same "adjust state during render" pattern `HostColorLayerEditor` already uses
+  // for its own `synced` re-sync.
+  if (!resolved && open !== null) setOpen(null)
 
   const openLayer = (layer: HostColorLayerName) => {
-    if (effectiveOpen === layer) {
+    if (open === layer) {
       setOpen(null)
       return
     }
@@ -69,8 +75,11 @@ export function HostColorField({ hostId }: { hostId: string }) {
   }
 
   const editorProps = (() => {
-    if (!effectiveOpen || !resolved) return null
-    const layer = effectiveOpen
+    // The render-phase reset above guarantees `open === null` whenever `resolved`
+    // is null, so `resolved` is non-null here; the `!resolved` check is belt-and-
+    // braces against reordering this block above that reset.
+    if (!open || !resolved) return null
+    const layer = open
     const set = resolved
     const inherited = layer !== 'main' && ownSet?.[layer]?.color === undefined
     return {
@@ -112,10 +121,10 @@ export function HostColorField({ hostId }: { hostId: string }) {
                 type="button"
                 data-testid={`host-color-layer-${layer}`}
                 data-inherits-console={String(inheritsConsole)}
-                aria-pressed={effectiveOpen === layer}
+                aria-pressed={open === layer}
                 onClick={() => openLayer(layer)}
                 className={`flex flex-col items-start gap-1 rounded p-1 cursor-pointer border ${
-                  effectiveOpen === layer ? 'border-border-active' : 'border-transparent hover:border-border-default'
+                  open === layer ? 'border-border-active' : 'border-transparent hover:border-border-default'
                 } ${inheritsConsole ? 'opacity-50' : ''}`}
               >
                 <span
