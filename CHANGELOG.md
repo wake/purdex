@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.401] - 2026-09-18
+
+### Feature: 主機的 self alias 可以從 API／CLI／Peers 頁設定（#1196；#1200 #1201 #1202 #1205）
+
+daemon 對外自稱的名字（對方 Peers 頁的 `calls itself "…"`、對方 POST 不給 alias 時採用的 entry 名、`<alias>/<name>` 位址前綴）＝ `PeerAlias()`：`config.toml` 的 `[peers] alias`，沒設就用 `host_id` 冒號前那段。以前只能手改檔案再重啟；現在三個入口都能改，而且因為所有讀取者都在 `CfgMu` 下即時讀，**不用重啟**。spec `docs/specs/2026-09-18-peer-self-alias-spec.md`、plan `docs/plans/2026-09-18-peer-self-alias-plan.md`。
+
+#### daemon（#1200）
+
+- `config.ValidateSelfAlias(alias, hosts)`：與 entry alias 同一套 pattern／保留字規則（抽成共用 `validateAliasShape`），再加「不得（不分大小寫）等於任何已設定 peer host 的 alias」——本機 alias 與 peer alias 共用 `<alias>/<name>` 命名空間（S-1）。
+- `PUT /api/peers/settings` 收 `alias`：缺或 `null` ＝不動；`""` ＝清回衍生值，**但衍生值也要過同一關**（plan review F1：某個 peer entry 可能剛好叫 host_id 那段）→ 409；其餘驗證後原樣存（S-2）。pattern 400、碰撞 409（S-6），跟 `deliver` 在同一個 `UpdateConfig` closure，alias 被拒時 deliver 也不寫。body 必須恰好一個 JSON 值（尾隨垃圾 400，codex A-1）。
+- 回應多 `alias_source: "config" | "host_id"`（S-3）——這就是舊 daemon 探測：舊版忽略未知 key 回 200 但沒有這欄（S-5）。
+- **`handleAddHost` 的 commit closure 補對即時 `cfg.PeerAlias()` 重驗**（plan review F2）：原本 snapshot 在鎖外、中間還有一次 verify 撥號，self alias 的 PUT 插進來就能建出與新 self alias 同名的 entry；用假 peer 在 verify handler 中途改 alias 重現（修前 201 落盤），修後 409。
+
+#### CLI（#1201）
+
+`pdx peers alias`／`pdx peers alias <name>`／`pdx peers alias --clear`。PUT body 用 CLI 自己的 `{alias}` struct（共用型別的 nil `Deliver` 會序列化成 `"deliver":null`）。回應驗收（S-5，F5 收緊）：`alias_source ∈ {config,host_id}` 且 alias 非空；set 要 alias 精確等於送出值且 source 為 `config`；clear 要 `host_id`；不符 → `daemon did not apply the alias (…; daemon too old?)` exit 1。
+
+#### Peers 頁（#1202）
+
+`peers-self` 那行加 inline 編輯器：`(from host_id)` 標記、Edit → 輸入／Save／Cancel、Clear（只在 `config` 時出現，旁邊寫「(default would be “mini-lab”)」），還有一段說明改名會怎樣（對方保留 entry 名、顯示 drift 直到 Rename；位址變 `<alias>/<name>`；ref 不變——S-4）。全部走 D4 的單一寫入 runner（`selfKey`，頁面鎖＋refresh）。GET 已經沒有 `alias_source` 就不給 Edit、直接說 daemon 太舊（F7）；PUT 回應照 CLI 同一套規則核對（codex A-2）。存衍生值本身是有意義的寫入（把它釘進 config），只有 `config` 且值相同才算 no-op。
+
+#### 驗證
+
+- 測試：Go config 49→58、module/peers 526→542、cmd/pdx 461→501；SPA 6980→7032。mutation 三條（碰撞條款、CLI 接受無 `alias_source` 的 200、Save 繞過 runner）全紅。
+- codex：plan review 7 條全採納；R1 無 finding；攻擊方 A-1／A-2 修完 critic 同意，critic 另抓 §4.3 default hint drift 已補。
+- 真機（記在 #1202）：mlab CLI 負面 409／400；**air26 真改名 `air26x`**：自己的位址立刻變 `air26x/…`，mlab verify 顯示 drift、`pdx peers --all` 仍綠、`pdx msg send air26/_64wca8` 仍送達（entry 名沒變），改回後 drift 消失；頁面把 mlab 從衍生 `mini-lab` 存成 config `mini-lab` → `(config)`、對方無 drift → 頁面負面 `air26`／`..` inline 錯誤 → Clear → 回 `(host_id)`、config.toml `alias = ""`。兩台 daemon 都已在這個 build 上。
+- 部署地雷：把新 binary `cp` 到執行中的 Mach-O 同一 inode 上，之後每次 exec 都被 SIGKILL（137）——要先 `rm` 再 `cp`。
+
 ## [1.0.0-alpha.400] - 2026-09-18
 
 ### Refactor: P-D.3a 拆除 SPA Stream 家族，pane mode 收成 terminal（#1198）— P-D 第 3／3 段主體
