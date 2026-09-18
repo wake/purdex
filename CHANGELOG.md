@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.389] - 2026-09-18
+
+### Feature: 標準款 2D 色盤 + Host 設定頁「外觀」區塊（#1169）
+
+alpha.385 的三條 H／S／L 滑軌使用者用了一下就說不對——「我是要一般的一個大方塊有全域色的那個色盤」。
+
+#### 色盤
+
+編輯面板改成大家熟悉的樣子：一個大方塊（左白→右純色相、往下漸黑）拖標記選飽和度與明度，下面一條色相軸、一條透明度軸、hex 輸入，preset 保留。內部模型從 HSL 換成 HSV（`hexToHsv`／`hsvToHex`，8 個 preset 精確 round-trip），一樣把 HSV 存在本地狀態、只在 prop 的 hex 跟本地模型對不上時重新推導，所以灰／黑／白拖來拖去不會丟色相。方塊支援鍵盤：方向鍵 ±1、Shift ±10。
+
+pointer 處理走了三輪 review：先是多指觸控要記 `pointerId`（任一手指放開不能中斷另一指）；再來是 capture 遺失（`setPointerCapture` 不存在、在視窗外放開）會讓方塊永遠卡在拖曳狀態——加 `lostpointercapture` 處理與 window 層級的 fallback 監聽；最後 fallback 模式下元素與 window 各處理一次移動，改成只走一邊。
+
+無障礙語意在 `role="slider"`（只能報一個值）與一般可聚焦 div（沒有 widget 角色）之間 reviewer 各執一詞，先採可聚焦 div＋`aria-label` 帶目前飽和度／明度出貨，正解（兩個協同的隱藏 slider）→ #1173。
+
+#### 外觀區塊
+
+Color、Icon 與 badge 預覽從 Connection 拆出來，獨立成「Appearance／外觀」小節，放在 Daemon Config 上方；Color 列的 mode 狀態仍由 OverviewSection 持有、兩列共用。
+
+6716 tests 全綠，純 SPA。
+
 ## [1.0.0-alpha.388] - 2026-09-18
 
 ### Feature: Host 設定頁的 badge 即時預覽（#1165）
