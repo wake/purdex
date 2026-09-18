@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.393] - 2026-09-18
+
+### Test: 凍結 codex-cli 0.153.4 hook fixtures 與版本測試（#1159 PR 2/2，#1180）— #1159 完成
+
+純測試 PR，daemon 行為不變。`internal/agent/codex/testdata/codex-0.153.4-*` 照 opencode 1.14.23 的版型：`events.json`（14 條，含 2 條 retired）、`manifest.json`、`version.txt`、`source.md`、`payloads/` 10 份真實 payload —— 7 份取自 daemon 自己的 `agent_trace_chains.root_payload_json.raw_event`（spec 原本指的 `agent_trace_steps.payload_json` 對 codex 是空的），3 份（`PermissionRequest`／`PostToolUse`／`Interrupt`）用 scratch 專案層 `.codex/hooks.json` 現場擷取（`PermissionRequest` 在 DB 裡 0 筆，因為近期全跑 bypass；`~/.codex` 完全沒動）。所有 session/turn id、路徑、prompt、tool input 都洗成範例值，測試拒收含真實家目錄的 fixture。
+
+三個測試：`TestCodexEvents_ClassifyAgainstFrozenManifest`（catalog ⇔ events.json 雙向、manifest 計數含 `upstreamEvents`——這條是 R1 抓的 P2）、`TestCodexPayloadFixtures_DeriveStatusContract`（10 份 fixture 全過 `DeriveStatus`，狀態與 events.json 釘的一致）、`TestCodexCheckHooks_ExceedsSupportAgainstPin`（PATH 上放假 `codex --version`：0.153.4 不超、0.160.0 超、0.124.0 不超）。
+
+#### #1159 收尾（alpha.392 + 393）真機驗收（mlab，2026-09-18）
+
+spec §3 五項全過：Host › Hooks 顯示 0.153.4 無警告；Install 後 hooks.json 恰好 10 個 key、SessionEnd/Interrupt timeout 3、`[features] hooks = true` 無 `codex_hooks`、`[hooks.state]` 11 筆 trusted_hash 保留；codex 啟動無 `deprecated`／`clamping`，`/hooks` 只要求核准 PostToolUse 與 Interrupt；`ls` 後 `PdxPostToolUse status=running`，Ctrl-C 後 `PdxInterrupt status=idle`、projection 1 秒內 idle 不靠 probe；`pdx setup --agent codex --remove` 後 hooks 清空、features 不動。
+
 ## [1.0.0-alpha.392] - 2026-09-18
 
 ### Fix: codex hooks 事件表對齊 codex-cli 0.153.4（#1159 PR 1/2，#1172）
