@@ -499,6 +499,46 @@ Three PRs, in order, each independently shippable.
    Kill the tmux session, then "Take back" → 404 `session_missing`, execution
    still running, pane untouched.
 
+### 6.1 Acceptance run 2026-09-18 (P-C.1, at `2b5496ff`)
+
+mlab, worktree dev server `npx vite --host 100.64.0.2 --port 5175 --strictPort`,
+playwright cli session `pc-launch-ui`, host `pc1host` seeded into
+`purdex-hosts` localStorage with the daemon token, daemon alpha.378 (nex
+`configured: true, ready: true`). Capabilities measured via curl: `roots
+[{path: "/Users/wake/Workspace", kind: "dev"}]`, `sandbox_profiles
+[readonly, standard, trusted, handoff]`, default `standard`, max `handoff`,
+`brief.max_bytes 65536`, `delegate.resume_session_id true`. All executions
+archived afterwards; scratch dir removed.
+
+1. **PASS** — New Tab shows "Headless — mlab" after Editor / Storage /
+   Sessions · mlab. Directory select lists `/Users/wake/Workspace` with the
+   `dev` badge (canonical path, matches capabilities); profile select
+   preselects `standard`; note "host allows up to handoff"; Launch disabled
+   with an empty brief.
+2. **PASS** — brief "reply with the word ok, no tools", sub-path
+   `wake/nex-acceptance-scratch`, default profile → URL became
+   `/execution/pc1host/06GB6GNZWVT3F69YZWSM42FY64`, header
+   `claude · standard`, reply paragraph `ok` arrived, `$0.03`. `pdx nex show`:
+   `origin: purdex://host/pc1host/newtab`, `labels: {source: purdex,
+   nex.host, nex.provider}`, `effective_profile: standard`.
+3. **PASS** — 70 000-byte brief: counter `70000 / 65536 bytes` rendered in
+   the error colour (screenshot), Launch disabled.
+4. **PASS** — sub-path `../x` → inline `.. segments are not allowed`
+   (`headless-subpath-error`), Launch disabled. Sub-path
+   `does-not-exist-q7x2m9` → Launch enabled → server answered `state:
+   rejected`; the form showed `Rejected: mount
+   "/Users/wake/Workspace/does-not-exist-q7x2m9" is not under any
+   allowlisted root` (Nexen's resolver canonicalises via `EvalSymlinks`, so a
+   missing directory fails the root match with this wording — F2 as
+   expected). The pane stayed on New Tab. Hosts → Nex table listed the row
+   `06GB6H1MC4DM` with state `rejected`.
+5. **PASS** — launched once with profile `readonly` (execution
+   `06GB6H9B1W9CB3DMDPWMWZ27HR`, header `claude · readonly`);
+   `purdex-headless-launcher` localStorage held `{pc1host: {root:
+   "/Users/wake/Workspace", profile: "readonly"}}`; after a full page reload
+   a fresh New Tab preselected `/Users/wake/Workspace` and `readonly`.
+6. **PASS** — console: 3 messages, 0 errors, 0 warnings.
+
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
