@@ -1665,6 +1665,8 @@ Each row: apply the one-edit mutation, run the named test(s) with `go test -coun
 | M26 | in the fetch-error branch, `Error: redactSecret(err.Error(), h.Token)` (no bound) | `module.go` | `TestHandleVerifyHost_ErrorBranchesRedactAndBound` (transport body too long) |
 | M27 | in `handleDeliver`, move the note back below the `stopCtx` check | `deliver.go` | `TestHandleDeliver_StoppingStillRecords` |
 | M28 | in `handleRotateCancel`, move `confirmCancelledRotation` back inside the closure (before the file write) | `hosts_rotate.go` | `TestRotateCancel_FailedWriteLeavesRecordAndGateIntact` (record reads "current"; commit passes) |
+| M29 | in `fetchHostResult`'s final return, `HostID: resultHostID` (drop `bound`) | `module.go` | the unpaired-entry learned-host_id test from Task 5's fix round (token in `host_id`) |
+| M30 | in `verifyHost`, delete the `redactSecret(env.HostID, token) != env.HostID` refusal | `hosts.go` | the add/put learn-path tests from Task 5's fix round (201/200 instead of 502; token persisted as host_id) |
 | — | the gates' `rotMu` hold across check→write cannot be turned red by end state (`TestRotateCommit_DialAfterGateCheckIsNotLost` sees the same final row either way); it is enforced by review, and the seam test documents the ordering. Likewise `at` is never served. Record both as "structural, not observable". | `hosts_rotate.go`, `rotation.go` | — |
 
 - [ ] **Step 1: Run every row, record, revert**
@@ -1672,7 +1674,7 @@ Each row: apply the one-edit mutation, run the named test(s) with `go test -coun
 
 ```bash
 git add docs/plans/2026-09-18-peer-pairing-d3-mutations.md
-git commit --only docs/plans/2026-09-18-peer-pairing-d3-mutations.md -m "docs(plan): D3 mutation-test record (M1–M28 all red)
+git commit --only docs/plans/2026-09-18-peer-pairing-d3-mutations.md -m "docs(plan): D3 mutation-test record (M1–M30 all red)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
