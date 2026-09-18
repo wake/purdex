@@ -225,11 +225,11 @@ func (m *Module) verifyHost(ctx context.Context, targetURL, token string) (env i
 
 	env, err := m.fetch(vctx, m.client, targetURL, token)
 	if err != nil {
-		return env, err.Error()
+		return env, boundRemote(err.Error(), token)
 	}
 	if !env.OK {
 		if env.Error != "" {
-			return env, "peer: " + boundRemoteText(env.Error)
+			return env, "peer: " + boundRemote(env.Error, token)
 		}
 		return env, "peer reported ok=false"
 	}

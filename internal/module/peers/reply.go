@@ -180,10 +180,14 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 	resp, remote, err := m.post(postCtx, m.deliverClient, entry.URL, entry.Token, dreq)
 	switch {
 	case err != nil:
-		text := boundRemoteText(err.Error())
+		text := boundRemote(err.Error(), entry.Token)
 		m.setResult(id, "", "", text)
 		m.logf("peers: reply %s to %q: deliver call failed: %s", dreq.MsgID, entry.Alias, text)
 	case remote != nil:
+		// postDeliver already scrubbed the entry's token; m.post is a seam,
+		// so the fields are scrubbed again here rather than trusted (#1152).
+		remote.Error = boundRemote(remote.Error, entry.Token)
+		remote.Detail = boundRemote(remote.Detail, entry.Token)
 		m.setResult(id, "", remote.Error, remote.Detail)
 		m.logf("peers: reply %s to %q refused by peer: %d %s: %s", dreq.MsgID, entry.Alias, remote.Status, remote.Error, remote.Detail)
 		if remote.Error == ipeers.ErrTargetGone {

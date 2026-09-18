@@ -116,6 +116,15 @@ func redactSecret(s, secret string) string {
 	return strings.ReplaceAll(s, secret, "[redacted]")
 }
 
+// boundRemote is redactSecret then boundRemoteText: the one shape every
+// peer-controlled string takes before it reaches a caller, an audit row or
+// the log, with the outbound token of the entry that was dialled (#1152).
+// Redaction runs first so a token straddling the truncation point cannot
+// survive as a prefix.
+func boundRemote(s, token string) string {
+	return boundRemoteText(redactSecret(s, token))
+}
+
 // redactRecord scrubs secret from every string field a peer row carries —
 // Peers rows are the peer's own text as much as its Error is.
 func redactRecord(rec *ipeers.PeerRecord, secret string) {
@@ -739,7 +748,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	// error message, a mismatched host_id, its self-reported alias/version,
 	// the unknown-registry-files list) flows through this before it can
 	// reach a row, a verify response or a returned error (#1152).
-	bound := func(s string) string { return boundRemoteText(redactSecret(s, h.Token)) }
+	bound := func(s string) string { return boundRemote(s, h.Token) }
 
 	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
 	defer cancel()
