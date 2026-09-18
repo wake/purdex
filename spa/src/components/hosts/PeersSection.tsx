@@ -1,18 +1,29 @@
-// spa/src/components/hosts/PeersSection.tsx — Hosts › Peers (Phase D spec §5).
-// Renders a PairingSnapshot from loadPairings and wires three buttons:
-// Refresh, and one Rename per direction when the peer's self alias drifts
-// from the entry name (spec D-5: adoption is a plain PUT {alias}). Nothing
-// here is cached or persisted; the snapshot lives in useState and dies with
-// the component (spec D-6, D-8).
-import { useCallback, useEffect, useRef, useState } from 'react'
+// spa/src/components/hosts/PeersSection.tsx — Hosts › Peers (Phase D spec §5, §7).
+// Renders a PairingSnapshot from loadPairings and wires the page's actions:
+// Refresh, one Rename per direction when the peer's self alias drifts (spec
+// D-5), Unpair per row (§7.2), Rotate / Commit / Cancel per direction line
+// (§7.3, in RotationControls) and "Pair with…" below the rows (§7.1, in
+// PairWithSection). Every write flow ends in a refresh (§7.4): the page's
+// claim is always the result of the last dial, never of the last write.
+//
+// Nothing here is cached or persisted; the snapshot and the one flow's
+// state live in useState and die with the component (spec D-6, D-8). A
+// token value only ever exists inside the flow that consumes it.
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowsClockwise, CheckCircle, WarningCircle, Circle } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { ConfirmDialog } from '../ConfirmDialog'
 import {
-  HostApiError, fetchHostInfo, fetchPeerSettings, listPeerHosts, updatePeerHost, verifyPeerHost,
+  HostApiError, addPeerHost, fetchHostInfo, fetchPeerSettings, listPeerHosts, updatePeerHost, verifyPeerHost,
 } from '../../lib/host-api'
 import { aliasDrift, pairStatus, type PairStatus, type Side } from '../../lib/peer-pairing'
 import { loadPairings, type PairingApi, type PairingAppHost, type PairingRow, type PairingSnapshot } from '../../lib/peer-pairing-load'
+import { unpairHosts, type Report } from '../../lib/peer-pairing-actions'
+import { actionApi, errText, rowKey, candidateKey, type BoundRunFlow, type FlowResult, type FlowState, type RunFlow } from './peers/flow'
+import { FlowNote } from './peers/FlowNote'
+import { PairWithSection } from './peers/PairWithSection'
+import { RotationControls } from './peers/RotationControls'
 
 const STATUS_CLASS: Record<PairStatus, string> = {
   bidirectional: 'text-status-success',
@@ -28,20 +39,24 @@ interface Props { hostId: string }
 export function PeersSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
+  const xUrl = useHostStore((s) => s.getDaemonBase(hostId))
   const host = hosts[hostId]
 
   const [snap, setSnap] = useState<PairingSnapshot | null>(null)
   const [busy, setBusy] = useState(false)
+  // The one write flow at a time: which row/candidate it belongs to, the step
+  // it is on, and what it left behind (kept until the next flow).
+  const [flow, setFlow] = useState<FlowState | null>(null)
   // Generation counter: a snapshot from a run started for a previous hostId
   // (or a previous Refresh) must never paint over the current one.
   const gen = useRef(0)
-  // A row's onRenamed closes over the render-time hostId. If updatePeerHost
-  // resolves after hostId changed (or the section unmounted), calling run()
-  // from that stale closure would start a NEW generation for the OLD hostId
-  // and repaint it over the current page — gen ordering alone does not catch
-  // this because the stale run becomes the newest generation. liveHost /
-  // alive let each onRenamed check "is my hostId still current, and is this
-  // component still mounted" before restarting the page.
+  // A row's callbacks close over the render-time hostId. If a write resolves
+  // after hostId changed (or the section unmounted), calling run() from that
+  // stale closure would start a NEW generation for the OLD hostId and repaint
+  // it over the current page — gen ordering alone does not catch this because
+  // the stale run becomes the newest generation. liveHost / alive let each
+  // callback check "is my hostId still current, and is this component still
+  // mounted" before restarting the page.
   const liveHost = useRef(hostId)
   liveHost.current = hostId
   const alive = useRef(true)
@@ -68,8 +83,47 @@ export function PeersSection({ hostId }: Props) {
     }
   }, [hostId])
 
+  // One flow at a time; every flow ends with the refresh (spec §7.4). What the
+  // flow reports (steps) and returns (error/hint) is text only — no outcome
+  // ever carries a token (D-8).
+  //
+  // A flow is owned by a generation: flowGen is bumped when a flow starts and
+  // when the page changes host, and every write a flow makes — the initial
+  // "running", each report, the final result — is dropped unless it still owns
+  // the current generation (codex D4b R1-1 / A-1: a flow started on host M
+  // whose report lands after the page moved to host A must not lock A's page,
+  // and its final write must not paint over A's own flow). flowGen also makes
+  // the lock synchronous: a second click in the same tick sees a running flow
+  // and is ignored, before any state update has rendered.
+  const flowGen = useRef(0)
+  const flowRunning = useRef(false)
+  const runFlow: RunFlow = useCallback(async (key, fn) => {
+    if (flowRunning.current) return
+    const my = ++flowGen.current
+    const owner = hostId
+    const mine = () => flowGen.current === my && alive.current && liveHost.current === owner
+    flowRunning.current = true
+    setFlow({ key, step: null, running: true, error: '', hint: '' })
+    const report: Report = (step) => { if (mine()) setFlow({ key, step, running: true, error: '', hint: '' }) }
+    let res: FlowResult
+    try {
+      res = await fn(report)
+    } catch (e) {
+      res = { error: errText(e) }
+    }
+    if (!mine()) return
+    flowRunning.current = false
+    setFlow({ key: res.key ?? key, step: null, running: false, error: res.error ?? '', hint: res.hint ?? '' })
+    await run()
+  }, [hostId, run])
+
   useEffect(() => {
     setSnap(null)
+    setFlow(null)
+    // A host change orphans any in-flight flow: it loses the generation, so its
+    // late writes are dropped, and the lock is released for the new host.
+    flowGen.current++
+    flowRunning.current = false
     void run()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- gen is a run counter; the latest value is the point
     return () => { gen.current++ }
@@ -77,11 +131,17 @@ export function PeersSection({ hostId }: Props) {
 
   if (!host) return null
 
+  const locked = busy || (flow?.running ?? false)
+  // A flow note whose owner is no longer on screen (an unpaired row, a candidate that became a row) lands here.
+  const orphanFlow = flow && snap && !snap.error
+    && !snap.rows.some((r) => rowKey(r.entry.alias) === flow.key)
+    && !snap.candidates.some((c) => candidateKey(c.hostId) === flow.key)
+
   return (
     <div className="max-w-3xl">
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-lg font-semibold">{t('hosts.peers')}</h2>
-        <button type="button" data-testid="peers-refresh" disabled={busy} onClick={() => void run()}
+        <button type="button" data-testid="peers-refresh" disabled={locked} onClick={() => void run()}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-50">
           <ArrowsClockwise size={14} className={busy ? 'animate-spin' : ''} />{busy ? t('peers.checking') : t('peers.refresh')}
         </button>
@@ -98,7 +158,7 @@ export function PeersSection({ hostId }: Props) {
       {snap?.error && (
         <div data-testid="peers-banner" className="flex items-start justify-between gap-3 px-3 py-2.5 rounded-md mb-4 bg-red-500/10 border border-red-500/20">
           <p className="text-sm text-red-400">{t('peers.banner', { call: snap.error.call, message: snap.error.message })}</p>
-          <button type="button" data-testid="peers-retry" disabled={busy} onClick={() => void run()}
+          <button type="button" data-testid="peers-retry" disabled={locked} onClick={() => void run()}
             className="text-xs px-2 py-1 rounded bg-surface-tertiary cursor-pointer disabled:opacity-50">{t('peers.retry')}</button>
         </div>
       )}
@@ -113,11 +173,17 @@ export function PeersSection({ hostId }: Props) {
             // Keyed by host + alias: in production HostPage remounts the section
             // per host, this makes the prop-change path safe too, and the
             // unmounted DirectionLine's late setState is a no-op in React 19.
-            <PeerRow key={`${hostId}:${row.entry.alias}`} hostId={hostId} hostName={host.name} self={snap.self!} row={row}
-              busy={busy}
-              onRenamed={() => { if (alive.current && liveHost.current === hostId) void run() }} />
+            <PeerRow key={`${hostId}:${row.entry.alias}`} hostId={hostId} hostName={host.name} xUrl={xUrl} self={snap.self!} row={row}
+              busy={locked} flow={flow} runFlow={(fn) => runFlow(rowKey(row.entry.alias), fn)} />
           ))}
         </div>
+      )}
+
+      {orphanFlow && <FlowNote flow={flow} flowKey={flow.key} />}
+
+      {snap && !snap.error && snap.self && (
+        <PairWithSection hostId={hostId} self={snap.self} xUrl={xUrl} candidates={snap.candidates}
+          busy={locked} flow={flow} runFlow={runFlow} />
       )}
     </div>
   )
@@ -128,19 +194,50 @@ export function PeersSection({ hostId }: Props) {
 interface RowProps {
   hostId: string
   hostName: string
+  xUrl: string
   self: { host_id: string; self_alias: string }
   row: PairingRow
   busy: boolean
-  onRenamed: () => void
+  flow: FlowState | null
+  runFlow: BoundRunFlow
+
 }
 
-function PeerRow({ hostId, hostName, self, row, busy, onRenamed }: RowProps) {
+function PeerRow({ hostId, hostName, xUrl, self, row, busy, flow, runFlow }: RowProps) {
   const t = useI18nStore((s) => s.t)
+  const [confirmUnpair, setConfirmUnpair] = useState(false)
   const status = pairStatus(row.outbound, row.inbound)
   const { entry, counterpart, returnEntry } = row
 
   const outDrift = row.outbound !== 'pending' && row.outbound.ok ? aliasDrift(entry.alias, row.outbound.self_alias) : ''
   const inDrift = returnEntry && typeof row.inbound === 'object' && row.inbound.ok ? aliasDrift(returnEntry.alias, row.inbound.self_alias) : ''
+
+  // Which App host presents on each line, and whether it can be pushed to
+  // (spec §7.3: Rotate needs the counterpart to be an available App host).
+  const counterpartAvailable = counterpart !== null && row.inbound !== 'not-app-host' && row.inbound !== 'counterpart-unavailable'
+  const inboundPush = !counterpartAvailable ? null
+    : returnEntry
+      ? (token: string) => updatePeerHost(counterpart.hostId, returnEntry.alias, { token }).then(() => undefined)
+      : (token: string) => addPeerHost(counterpart.hostId, { alias: self.self_alias, url: xUrl, token }).then(() => undefined)
+  const inboundLabel = returnEntry
+    ? (typeof row.inbound === 'object' && !row.inbound.ok ? 'retry_return' : 'rotate')
+    : 'create_return'
+
+  const unpair = () => {
+    setConfirmUnpair(false)
+    void runFlow(async (report) => {
+      const out = await unpairHosts(
+        { hostId, alias: entry.alias },
+        counterpart && returnEntry ? { hostId: counterpart.hostId, alias: returnEntry.alias } : null,
+        actionApi(), report,
+      )
+      const errors = [
+        out.xError && t('peers.flow_error', { step: t('peers.step.delete-x'), error: out.xError }),
+        out.yError && t('peers.flow_error', { step: t('peers.step.delete-y'), error: out.yError }),
+      ].filter(Boolean)
+      return errors.length ? { error: errors.join(' ') } : {}
+    })
+  }
 
   return (
     <div data-testid={`peer-row-${entry.alias}`} className="border border-border-subtle rounded-lg px-4 py-3 text-sm">
@@ -152,6 +249,10 @@ function PeerRow({ hostId, hostName, self, row, busy, onRenamed }: RowProps) {
         <span data-testid="peer-status" data-status={status} className={`ml-auto text-xs font-medium ${STATUS_CLASS[status]}`}>
           {t('peers.status')}: {t(`peers.status.${status}`)}
         </span>
+        <button type="button" data-testid={`peer-unpair-${entry.alias}`} disabled={busy} onClick={() => setConfirmUnpair(true)}
+          className="text-xs px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary hover:text-status-error cursor-pointer disabled:opacity-50 disabled:cursor-default">
+          {flow?.running && flow.key === rowKey(entry.alias) && (flow.step === 'delete-x' || flow.step === 'delete-y') ? t('peers.unpairing') : t('peers.unpair')}
+        </button>
       </div>
       <div className="font-mono text-xs text-text-muted mt-0.5">
         <span data-testid="peer-url">{entry.url}</span>
@@ -159,23 +260,50 @@ function PeerRow({ hostId, hostName, self, row, busy, onRenamed }: RowProps) {
       </div>
 
       <div className="mt-2 space-y-1.5">
-        {/* Outbound: X → peer, verify(X, E.alias) */}
+        {/* Outbound: X → peer, verify(X, E.alias). Its token lives on the peer's entry for X (returnEntry),
+            so the rotation controls exist only when that entry is known. */}
         <DirectionLine testId="peer-outbound" from={hostName} to={entry.alias} side={row.outbound}
-          drift={outDrift} renameTarget={{ hostId, alias: entry.alias }} busy={busy} onRenamed={onRenamed} />
+          drift={outDrift} renameTarget={{ hostId, alias: entry.alias }} busy={busy} runFlow={runFlow}>
+          {counterpart && returnEntry && (
+            <RotationControls holder={{ hostId: counterpart.hostId, alias: returnEntry.alias }} row={returnEntry}
+              stale={row.gateStale.returnEntry} evidenceDialled
+              push={(token) => updatePeerHost(hostId, entry.alias, { token }).then(() => undefined)}
+              label="rotate" testId="peer-outbound" busy={busy} runFlow={runFlow} />
+          )}
+        </DirectionLine>
 
-        {/* Return: peer → X, verify(Y, E'.alias) or one of the three sentences */}
+        {/* Return: peer → X, verify(Y, E'.alias) or one of the three sentences. Its token lives on X's
+            own entry; the evidence dial is the peer's, so it counts only when this run made one. */}
         {counterpart && returnEntry ? (
           <DirectionLine testId="peer-inbound" from={entry.alias} to={hostName} side={row.inbound as Side}
             note={t('peers.their_entry', { name: counterpart.name, alias: returnEntry.alias })}
-            drift={inDrift} renameTarget={{ hostId: counterpart.hostId, alias: returnEntry.alias }} busy={busy} onRenamed={onRenamed} />
+            drift={inDrift} renameTarget={{ hostId: counterpart.hostId, alias: returnEntry.alias }} busy={busy} runFlow={runFlow}>
+            <RotationControls holder={{ hostId, alias: entry.alias }} row={entry} stale={row.gateStale.entry}
+              evidenceDialled={typeof row.inbound === 'object'} push={inboundPush} label={inboundLabel}
+              testId="peer-inbound" busy={busy} runFlow={runFlow} />
+          </DirectionLine>
         ) : (
-          <div data-testid="peer-inbound" data-ok="none" className="flex items-center gap-2 text-text-muted">
+          <div data-testid="peer-inbound" data-ok="none" className="flex items-center gap-2 flex-wrap text-text-muted">
             <Circle size={14} />
             <span className="font-mono text-xs">{t('peers.direction', { from: entry.alias, to: hostName })}</span>
             <span className="text-xs">{returnSentence(t, row, self, counterpart)}</span>
+            <RotationControls holder={{ hostId, alias: entry.alias }} row={entry} stale={row.gateStale.entry}
+              evidenceDialled={false} push={inboundPush} label={inboundLabel}
+              testId="peer-inbound" busy={busy} runFlow={runFlow} />
           </div>
         )}
       </div>
+
+      <FlowNote flow={flow} flowKey={rowKey(entry.alias)} />
+
+      {confirmUnpair && (
+        <ConfirmDialog testIdPrefix="peer-unpair" busy={busy}
+          title={t('peers.unpair_title', { x: hostName, y: counterpart?.name ?? entry.alias })}
+          body={counterpart && returnEntry
+            ? t('peers.unpair_body_both', { x: hostName, ex: entry.alias, y: counterpart.name, ey: returnEntry.alias })
+            : t('peers.unpair_body_one', { x: hostName, ex: entry.alias, y: counterpart?.name ?? entry.alias })}
+          confirmLabel={t('peers.unpair')} onCancel={() => setConfirmUnpair(false)} onConfirm={unpair} />
+      )}
     </div>
   )
 }
@@ -200,10 +328,13 @@ interface LineProps {
   drift: string
   renameTarget: { hostId: string; alias: string }
   busy: boolean
-  onRenamed: () => void
+  /** Rename runs under the page's flow lock like every other write; the runner refreshes afterwards. */
+  runFlow: BoundRunFlow
+  /** The direction's rotation controls, rendered after the verify reading. */
+  children?: ReactNode
 }
 
-function DirectionLine({ testId, from, to, side, note, drift, renameTarget, busy, onRenamed }: LineProps) {
+function DirectionLine({ testId, from, to, side, note, drift, renameTarget, busy, runFlow, children }: LineProps) {
   const t = useI18nStore((s) => s.t)
   const [renaming, setRenaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -213,18 +344,20 @@ function DirectionLine({ testId, from, to, side, note, drift, renameTarget, busy
   // do) clears the old 409/400 text along with it.
   useEffect(() => { setError(null) }, [drift])
 
-  const rename = async () => {
-    setRenaming(true)
+  const rename = () => {
     setError(null)
-    try {
-      await updatePeerHost(renameTarget.hostId, renameTarget.alias, { alias: drift })
-      onRenamed()
-    } catch (e) {
-      // 400/409 carry the daemon's own sentence; nothing is retried or auto-suffixed (v4 §7.2).
-      setError(e instanceof HostApiError ? e.detail : e instanceof Error ? e.message : String(e))
-    } finally {
-      setRenaming(false)
-    }
+    void runFlow(async () => {
+      setRenaming(true)
+      try {
+        await updatePeerHost(renameTarget.hostId, renameTarget.alias, { alias: drift })
+      } catch (e) {
+        // 400/409 carry the daemon's own sentence; nothing is retried or auto-suffixed (v4 §7.2).
+        setError(e instanceof HostApiError ? e.detail : e instanceof Error ? e.message : String(e))
+      } finally {
+        setRenaming(false)
+      }
+      return {}
+    })
   }
 
   const ok = side === 'pending' ? 'pending' : String(side.ok)
@@ -260,6 +393,7 @@ function DirectionLine({ testId, from, to, side, note, drift, renameTarget, busy
         </button>
       )}
       {error && <span data-testid={`${testId}-rename-error`} className="text-xs text-status-error whitespace-pre-wrap">{error}</span>}
+      {children}
     </div>
   )
 }

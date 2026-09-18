@@ -352,10 +352,17 @@ function statefulApi(spec: {
     info: vi.fn((h) => Promise.resolve({ host_id: spec.info[h] })),
     settings: vi.fn((h) => Promise.resolve({ deliver: true, alias: spec.settings[h] })),
     list: vi.fn((h) => { calls.push(`list:${h}`); return settle(spec.list(h, calls)) }),
-    verify: vi.fn((h, a) => {
+    // `verify:` is logged when the dial is SENT (for order assertions);
+    // `dialled:` only once it has SETTLED, one macrotask later — so a re-read
+    // issued concurrently with the dials (mutation M-A1) still sees the
+    // pre-dial reading, exactly as a real daemon would answer it.
+    verify: vi.fn(async (h, a) => {
       calls.push(`verify:${h}:${a}`)
       const v = spec.verify[`${h}/${a}`]
-      return v === undefined ? Promise.reject(new Error(`unexpected ${h}/${a}`)) : settle(v)
+      await new Promise((r) => setTimeout(r, 0))
+      calls.push(`dialled:${h}:${a}`)
+      if (v === undefined) throw new Error(`unexpected ${h}/${a}`)
+      return settle(v)
     }),
   }
   return { api, calls }
@@ -372,11 +379,12 @@ describe('loadPairings — post-dial re-read of pending rotations (spec §7.3, s
     // Mutation M-A (re-read before the dial) makes the final row read 'current' → red.
     const { api, calls } = statefulApi({ ...META, verify: VERIFY,
       list: (h, seen) => h === 'hM'
-        ? [row({ rotation_pending: true, last_inbound_auth: seen.includes('verify:hA:mini-lab') ? 'prev' : 'current' })]
+        ? [row({ rotation_pending: true, last_inbound_auth: seen.includes('dialled:hA:mini-lab') ? 'prev' : 'current' })]
         : [RETURN] })
     const { snaps, emit } = collect()
     const final = await loadPairings(X, [AIR], api, emit)
-    expect(calls).toEqual(['list:hM', 'list:hA', 'verify:hM:air', 'verify:hA:mini-lab', 'list:hM'])
+    expect(calls.filter((c) => !c.startsWith('dialled:'))).toEqual(['list:hM', 'list:hA', 'verify:hM:air', 'verify:hA:mini-lab', 'list:hM'])
+    expect(calls.lastIndexOf('list:hM')).toBeGreaterThan(calls.indexOf('dialled:hA:mini-lab'))
     expect(calls.lastIndexOf('list:hM')).toBeGreaterThan(calls.indexOf('verify:hA:mini-lab'))
     expect(calls.lastIndexOf('list:hM')).toBeGreaterThan(calls.indexOf('verify:hM:air'))
     expect(final.rows[0].entry.last_inbound_auth).toBe('prev')
@@ -417,7 +425,7 @@ describe('loadPairings — post-dial re-read of pending rotations (spec §7.3, s
   it("both sides pending, only Y's re-list fails → gateStale {entry:false, returnEntry:true} and X's side is fresh (codex F5)", async () => {
     const { api, calls } = statefulApi({ ...META, verify: VERIFY,
       list: (h, seen) => {
-        if (h === 'hM') return [row({ rotation_pending: true, last_inbound_auth: seen.includes('verify:hA:mini-lab') ? 'prev' : '' })]
+        if (h === 'hM') return [row({ rotation_pending: true, last_inbound_auth: seen.includes('dialled:hA:mini-lab') ? 'prev' : '' })]
         if (nth(seen, 'list:hA') >= 2) return new Error('HTTP 500')
         return [{ ...RETURN, rotation_pending: true, last_inbound_auth: '' }]
       } })
@@ -479,7 +487,7 @@ describe('loadPairings — post-dial re-read of pending rotations (spec §7.3, s
       verify: { ...VERIFY, 'hM/air-again': ok('air-again', 'air26', 'wakes-air-2026:oa6drb') },
       list: (h, seen) => {
         if (h !== 'hM') return [RETURN]
-        const fresh = seen.includes('verify:hA:mini-lab')
+        const fresh = seen.includes('dialled:hA:mini-lab')
         return [
           row({ rotation_pending: true, last_inbound_auth: fresh ? 'prev' : '' }),
           { ...second, rotation_pending: true, last_inbound_auth: fresh ? 'current' : '' },
@@ -506,7 +514,7 @@ describe('loadPairings — post-dial re-read of pending rotations (spec §7.3, s
     const { api, calls } = statefulApi({
       info: { ...META.info, hO: 'other:zzzzzz' }, settings: { ...META.settings, hO: 'other' }, verify: VERIFY,
       list: (h, seen) => {
-        if (h === 'hM') return [row({ rotation_pending: true, last_inbound_auth: seen.includes('verify:hA:mini-lab') ? 'prev' : '' })]
+        if (h === 'hM') return [row({ rotation_pending: true, last_inbound_auth: seen.includes('dialled:hA:mini-lab') ? 'prev' : '' })]
         if (h === 'hA') return [RETURN]
         return [row({ alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm', rotation_pending: true, last_inbound_auth: '' })]
       } })
