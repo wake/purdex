@@ -28,7 +28,7 @@ const caps: NexCapabilities = {
 
 /** A settled store entry, as `ensure` would have committed it. */
 function entry(over: Partial<NexHostEntry> = {}): NexHostEntry {
-  return { info: info(), capabilities: caps, phase: 'ready', error: null, fetchedAt: Date.now(), generation: 1, ...over }
+  return { info: info(), capabilities: caps, phase: 'ready', error: null, fetchedAt: Date.now(), generation: 1, fingerprint: '', ...over }
 }
 
 function seed(e: NexHostEntry | undefined, hostId = HOST_ID) {

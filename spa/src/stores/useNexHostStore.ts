@@ -7,7 +7,7 @@ import { fetchInfo, type NexInfo } from '../lib/host-api'
 import { fetchNexCapabilities } from '../lib/nex/nex-api'
 import type { NexCapabilities } from '../lib/nex/types'
 import { isNexReady } from '../components/hosts/nex/nex-ready'
-import { useHostStore, type HostInfo } from './useHostStore'
+import { useHostStore, type HostConfig, type HostInfo } from './useHostStore'
 
 export const NEX_HOST_TTL_MS = 60_000
 
@@ -20,6 +20,8 @@ export interface NexHostEntry {
   error: string | null
   fetchedAt: number
   generation: number
+  /** The host identity (`ip:port:token`) the data came from; see `fingerprintOf`. */
+  fingerprint: string
 }
 
 interface NexHostState {
@@ -69,30 +71,38 @@ async function load(hostId: string): Promise<Loaded> {
 }
 
 /**
- * A host id is not an endpoint: between a request leaving and its answer
- * landing, the id can be re-pointed at another daemon, removed, or removed
- * and re-added. `hostFetch` would even route an unknown id to a different
- * host. So a request captures the entry's generation and the endpoint it
+ * A host id is not a daemon: between a request leaving and its answer
+ * landing, the id can be re-pointed at another address, given another token
+ * (a different identity on the same address), removed, or removed and
+ * re-added. `hostFetch` would even route an unknown id to a different host.
+ * So a request captures the entry's generation and the host identity it
  * went to, and commits only while both still hold — a stale answer is
- * dropped, never written into (or resurrected as) an entry.
+ * dropped, never written into (or resurrected as) an entry. The same
+ * identity is stamped on the entry, so a cached answer is only reused for
+ * the daemon it came from.
  */
-interface RequestToken { generation: number; endpoint: string }
+interface RequestToken { generation: number; fingerprint: string }
 
-/** The address a request for `hostId` goes to, or `null` when the host is unknown. */
-function endpointOf(hostId: string): string | null {
+/** The identity a request for `hostId` goes to (`ip:port:token`), or `null` when the host is unknown. */
+function fingerprintOf(hostId: string): string | null {
   const h = useHostStore.getState().hosts[hostId]
-  return h ? `${h.ip}:${h.port}` : null
+  return h ? hostFingerprint(h) : null
+}
+
+function hostFingerprint(h: Pick<HostConfig, 'ip' | 'port' | 'token'>): string {
+  return `${h.ip}:${h.port}:${h.token ?? ''}`
 }
 
 let nextGeneration = 1
 const inflight = new Map<string, Promise<void>>()
 
-function emptyEntry(): NexHostEntry {
-  return { info: null, capabilities: null, phase: 'loading', error: null, fetchedAt: 0, generation: nextGeneration++ }
+function emptyEntry(fingerprint: string): NexHostEntry {
+  return { info: null, capabilities: null, phase: 'loading', error: null, fetchedAt: 0, generation: nextGeneration++, fingerprint }
 }
 
-function isFresh(entry: NexHostEntry | undefined, now: number): boolean {
+function isFresh(entry: NexHostEntry | undefined, now: number, currentFingerprint: string): boolean {
   if (!entry || entry.fetchedAt === 0 || entry.phase === 'unavailable') return false
+  if (entry.fingerprint !== currentFingerprint) return false
   return now - entry.fetchedAt < NEX_HOST_TTL_MS
 }
 
@@ -106,7 +116,7 @@ export const useNexHostStore = create<NexHostState>()((set, get) => {
     })
 
   const stillCurrent = (hostId: string, token: RequestToken): boolean =>
-    get().byHost[hostId]?.generation === token.generation && endpointOf(hostId) === token.endpoint
+    get().byHost[hostId]?.generation === token.generation && fingerprintOf(hostId) === token.fingerprint
 
   async function fetchAndCommit(hostId: string, token: RequestToken): Promise<void> {
     const loaded = await load(hostId)
@@ -114,7 +124,13 @@ export const useNexHostStore = create<NexHostState>()((set, get) => {
     set((s) => ({
       byHost: {
         ...s.byHost,
-        [hostId]: { ...loaded, phase: phaseOf(loaded), fetchedAt: Date.now(), generation: token.generation },
+        [hostId]: {
+          ...loaded,
+          phase: phaseOf(loaded),
+          fetchedAt: Date.now(),
+          generation: token.generation,
+          fingerprint: token.fingerprint,
+        },
       },
     }))
   }
@@ -125,19 +141,19 @@ export const useNexHostStore = create<NexHostState>()((set, get) => {
     ensure: (hostId) => {
       // Guarded here and again at commit time: `hostFetch` falls back to
       // another host for an unknown id, so an entry must never come from it.
-      const endpoint = endpointOf(hostId)
-      if (endpoint === null) {
+      const fingerprint = fingerprintOf(hostId)
+      if (fingerprint === null) {
         dropEntry(hostId)
         return Promise.resolve()
       }
       const running = inflight.get(hostId)
       if (running) return running
       const existing = get().byHost[hostId]
-      if (isFresh(existing, Date.now())) return Promise.resolve()
+      if (isFresh(existing, Date.now(), fingerprint)) return Promise.resolve()
 
-      const entry = existing ?? emptyEntry()
+      const entry = existing ?? emptyEntry(fingerprint)
       if (!existing) set((s) => ({ byHost: { ...s.byHost, [hostId]: entry } }))
-      const token: RequestToken = { generation: entry.generation, endpoint }
+      const token: RequestToken = { generation: entry.generation, fingerprint }
       const p = fetchAndCommit(hostId, token).finally(() => {
         if (inflight.get(hostId) === p) inflight.delete(hostId)
       })
@@ -176,14 +192,30 @@ export function selectHandoffReady(hostId: string): (s: Pick<NexHostState, 'byHo
 }
 
 /**
- * Refetch a host's readiness when its daemon comes (back) online. Same shape as
+ * Keep the cache honest against the host store. Same shape as
  * `startPeerCacheInvalidation`: one module-level subscription for the app's
- * lifetime, started from main.tsx; returns its unsubscribe. Only hosts someone
- * has already asked about are refetched — a reconnect is not a reason to poll
- * every daemon's Nexen state.
+ * lifetime, started from main.tsx; returns its unsubscribe. Two triggers:
+ *
+ * - a host's daemon comes (back) online → refetch its readiness. Only hosts
+ *   someone has already asked about are refetched — a reconnect is not a
+ *   reason to poll every daemon's Nexen state;
+ * - a host's identity (`ip`, `port` or `token`) changes → drop its entry.
+ *   The capabilities belonged to the old daemon (or the old credentials),
+ *   so they are cleared rather than refetched; whoever needs the host next
+ *   asks again with `ensure`. An in-flight request for the old identity is
+ *   discarded at commit time by the fingerprint check.
  */
 export function startNexHostInvalidation(): () => void {
   return useHostStore.subscribe((next, prev) => {
+    if (next.hosts !== prev.hosts) {
+      for (const hostId of Object.keys(useNexHostStore.getState().byHost)) {
+        const before = prev.hosts[hostId]
+        const after = next.hosts[hostId]
+        if (before && after && hostFingerprint(before) !== hostFingerprint(after)) {
+          useNexHostStore.getState().clearHost(hostId)
+        }
+      }
+    }
     if (next.runtime === prev.runtime) return
     for (const hostId of Object.keys(next.runtime)) {
       const connected = next.runtime[hostId]?.status === 'connected'

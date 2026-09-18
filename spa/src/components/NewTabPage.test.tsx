@@ -608,6 +608,7 @@ describe('NewTabPage — Headless section per host (P-C.1)', () => {
     error: null,
     fetchedAt: 1,
     generation: 1,
+    fingerprint: '',
   })
 
   beforeEach(() => {

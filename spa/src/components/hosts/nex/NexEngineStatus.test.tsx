@@ -25,7 +25,7 @@ function seed(hostId: string, capabilities: NexCapabilities | null, over: Partia
         ...s.byHost,
         [hostId]: {
           info: ready, capabilities, phase: capabilities ? 'ready' : 'unavailable',
-          error: capabilities ? null : 'nexen down', fetchedAt: Date.now(), generation: 1, ...over,
+          error: capabilities ? null : 'nexen down', fetchedAt: Date.now(), generation: 1, fingerprint: '', ...over,
         },
       },
     }))

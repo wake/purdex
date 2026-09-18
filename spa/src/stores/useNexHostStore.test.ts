@@ -318,6 +318,50 @@ describe('stale resolves', () => {
   })
 })
 
+describe('host identity (ip:port:token) is part of the cache key', () => {
+  it('ready entry, host re-pointed to another ip:port within TTL → next ensure refetches', async () => {
+    await ensure()
+    expect(entry().phase).toBe('ready')
+    useHostStore.getState().updateHost(H, { ip: '5.6.7.8', port: 7861 })
+    vi.setSystemTime(T0 + 1000)
+    await ensure()
+    expect(hostApi.fetchInfo).toHaveBeenCalledTimes(2)
+    expect(entry().phase).toBe('ready')
+    expect(entry().fetchedAt).toBe(T0 + 1000)
+  })
+
+  it('token rotated during an in-flight ensure → the resolve is dropped; the entry stays loading until a fresh fetch', async () => {
+    const stale = pendingInfo()
+    const p = ensure()
+    await flush()
+    useHostStore.getState().updateHost(H, { token: 'rotated' })
+    stale.settle()
+    await p
+    expect(entry().phase).toBe('loading')
+    expect(entry().info).toBeNull()
+    await ensure()
+    expect(hostApi.fetchInfo).toHaveBeenCalledTimes(2)
+    expect(entry().phase).toBe('ready')
+  })
+
+  it('TTL reuse after a token rotation is refused', async () => {
+    await ensure()
+    useHostStore.getState().updateHost(H, { token: 'rotated' })
+    vi.setSystemTime(T0 + 1000)
+    await ensure()
+    expect(hostApi.fetchInfo).toHaveBeenCalledTimes(2)
+  })
+
+  it('an unrelated host edit (name only) keeps the cached entry', async () => {
+    await ensure()
+    useHostStore.getState().updateHost(H, { name: 'renamed' })
+    vi.setSystemTime(T0 + 1000)
+    await ensure()
+    expect(hostApi.fetchInfo).toHaveBeenCalledTimes(1)
+    expect(entry().phase).toBe('ready')
+  })
+})
+
 describe('unknown host', () => {
   it('ensure makes no fetch and leaves no entry', async () => {
     await ensure('ghost')
@@ -368,6 +412,41 @@ describe('startNexHostInvalidation', () => {
     expect(hostApi.fetchInfo).toHaveBeenCalledTimes(1)
   })
 
+  it('a host whose ip, port or token changes has its entry dropped (capabilities belong to the old daemon)', async () => {
+    stop = startNexHostInvalidation()
+    registerHost(OTHER)
+    await ensure()
+    await ensure(OTHER)
+    useHostStore.getState().updateHost(H, { token: 'rotated' })
+    expect(entry()).toBeUndefined()
+    expect(useNexHostStore.getState().byHost[OTHER]?.phase).toBe('ready')
+    useHostStore.getState().updateHost(OTHER, { port: 7999 })
+    expect(useNexHostStore.getState().byHost[OTHER]).toBeUndefined()
+  })
+
+  it('a token rotation during an in-flight ensure leaves no entry behind; the next ensure starts fresh', async () => {
+    stop = startNexHostInvalidation()
+    const stale = pendingInfo()
+    const p = ensure()
+    await flush()
+    useHostStore.getState().updateHost(H, { token: 'rotated' })
+    expect(entry()).toBeUndefined()
+    stale.settle()
+    await p
+    expect(entry()).toBeUndefined()
+    await ensure()
+    expect(hostApi.fetchInfo).toHaveBeenCalledTimes(2)
+    expect(entry().phase).toBe('ready')
+  })
+
+  it('a name-only host edit keeps the entry', async () => {
+    stop = startNexHostInvalidation()
+    await ensure()
+    useHostStore.getState().updateHost(H, { name: 'renamed' })
+    expect(entry().phase).toBe('ready')
+    expect(hostApi.fetchInfo).toHaveBeenCalledTimes(1)
+  })
+
   it('a host nobody asked about is not fetched on reconnect', async () => {
     stop = startNexHostInvalidation()
     useHostStore.getState().setRuntime(H, { status: 'disconnected' })
@@ -381,7 +460,7 @@ describe('startNexHostInvalidation', () => {
 describe('selectors', () => {
   const seed = (over: Partial<NexHostEntry>) =>
     useNexHostStore.setState({
-      byHost: { [H]: { info: info(), capabilities: caps(), phase: 'ready', error: null, fetchedAt: T0, generation: 1, ...over } },
+      byHost: { [H]: { info: info(), capabilities: caps(), phase: 'ready', error: null, fetchedAt: T0, generation: 1, fingerprint: '1.2.3.4:7860:t', ...over } },
     })
 
   it('selectReady is phase === ready', () => {

@@ -174,7 +174,7 @@ describe('host delete cascade', () => {
     useExecutionStore.getState().applyEvents(HOST_B, 'exc_1', [
       { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
     ])
-    const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1 }
+    const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1, fingerprint: '' }
     useNexHostStore.setState({ byHost: { [HOST_A]: nexEntry, [HOST_B]: nexEntry } })
 
     deleteHostCascade(HOST_A, false)

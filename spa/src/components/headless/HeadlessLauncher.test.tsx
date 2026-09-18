@@ -38,7 +38,7 @@ function caps(over: Partial<NexCapabilities> = {}): NexCapabilities {
 
 function seedEntry(entry: Partial<NexHostEntry>) {
   useNexHostStore.setState({
-    byHost: { [H]: { info: null, capabilities: null, phase: 'unknown', error: null, fetchedAt: 1, generation: 1, ...entry } },
+    byHost: { [H]: { info: null, capabilities: null, phase: 'unknown', error: null, fetchedAt: 1, generation: 1, fingerprint: '', ...entry } },
     ensure: ensureSpy,
     invalidate: invalidateSpy,
   })
