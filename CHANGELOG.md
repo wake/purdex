@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.391] - 2026-09-18
+
+### Feature: inbound-token rotation，commit／cancel 以「對端最近一次撥入用哪把 token」為閘門（Peer Pairing D3，#1175）
+
+Phase D 的第三段，純 daemon + CLI。配對 entry 多一個 `inbound_token_prev`：`rotate` 鑄一把新的 inbound token、舊的退到 prev，**兩把同時有效**，對端換到新 token 之前不會有任何一秒鎖在外面（D-7）。`MatchInboundToken` 對每個 entry 的 current 與 prev 都比（無 early exit、last match wins），`PeerAuth` 把「用的是哪把」帶上 principal。
+
+#### 閘門靠證據，不靠 App 記憶
+
+daemon 在記憶體裡記每個 alias「對端最近一次認證用的 token」——存的是 token 的 fingerprint（sha256 前 16 hex，不可逆），`last_inbound_auth` 在讀取時對 entry 當下的 current／prev **推導**出 `current` / `prev` / `""`。`rotate/commit`（丟舊的）只在對端最近被看到用**新** token 時放行，`rotate/cancel`（丟新的）只在最近被看到用**舊** token 時放行，`""`（本 epoch 沒撥入）兩者都 409 `rotation unconfirmed`，除非 `force`。刻意不持久化：daemon 重啟後兩把都仍有效、兩個閘門都拒到對端再撥一次為止——fail-closed。record 跟著 entry 走（rename 搬、delete 清）。
+
+#### review 抓到什麼（這段是重點）
+
+plan 過 codex 就抓到一條 critical：spec §6.3 原本說「check 與 write 之間落地的撥入，對端仍握有兩把 token」——錯，對端只存一把。whole-branch review 進一步用臨時測試證明：撥入在 `PeerAuth` 比對**之後**、handler 記錄**之前**，若此時 admin `rotate` 重置了 epoch，那筆記錄會以 `current` 寫進新 epoch → commit 放行 → 鎖死。修法是 fingerprint＋推導（記錄綁 token 身分而不是時刻），原本 cancel 事後把 `prev` 改寫成 `current` 的程式碼整個刪掉。codex 攻擊方再往前推一步：middleware 已比對、handler 尚未記錄的請求對閘門仍不可見——critic 同意，且指出 §6.3 把它歸為 future evidence 是 spec 自打嘴巴。最終做法：`HostMatcher` 在 `CfgMu.RLock` 下完成比對**並同步記錄**（`Core.HostAuthObserver`），閘門跑在 `CfgMu.Lock` 下，所以每一筆先完成的認證閘門都看得到。三個真 middleware 交錯測試釘住。另外：cancel 的記錄改寫曾一度移到落盤後（避免寫檔失敗留下假 `current`）、閘門 body 要求恰好一個 JSON 值、rename／delete 寫檔失敗只會 fail-closed（補測試，不改行為）。
+
+#### #1152 一併關掉
+
+惡意 peer 收到我們的 outbound token（Bearer）後可以原樣回顯。現在 `fetchHostResult`、`send.go`（deliver 回應、resolve candidates、name-mismatch detail、audit、log）、`reply.go`、`verifyHost` 的每一段 peer 文字都先 `redactSecret` 再 `boundRemoteText`，包括 `Peers` 列的每個字串欄位與學到的 host_id；add／put 學 host_id 時若含 token 直接拒絕，不會落進 config。
+
+#### CLI 與驗收
+
+`pdx peers host rotate <alias> [--commit|--cancel] [--force]`，409 時 stderr 直接說「去 peer 上跑 `pdx peers host verify`」；`host list` 多一欄 `ROTATION`（`-` / `pending` / `pending, confirmed`）。真機（mlab ↔ air26，兩台 390+D3）：rotate → 立刻 commit 被拒 → air `set-token` → 兩邊綠 → `pending, confirmed` → commit 200 → `-`；負面：rotate 不推、air 用舊 token 撥入仍綠、`pending`、commit 拒、cancel 200；重啟後 cancel 拒、再撥一次才 200。**mlab→air26 這條現在跑在剛輪替過的 token 上。** mutation record M1–M32（含「`""` 不得當 prev/current」M9/M10）。Go 五個套件 `-race` 全綠。兩台 daemon 已部署。下一步 D4：頁面上的 pair／unpair／rotate。
+
 ## [1.0.0-alpha.390] - 2026-09-18
 
 ### Feature: 「交給 nex」／「接回 terminal」進 SPA（P-C.3b，#1170）— P-C 完成
