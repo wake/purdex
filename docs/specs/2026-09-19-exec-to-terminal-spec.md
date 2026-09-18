@@ -1,6 +1,6 @@
 # Spec — take any execution to a terminal (#1210)
 
-- Status: v1.3 (2026-09-19) — codex R1 on PR #1212: `execution_archived`, no kill-by-name on tmux restart; v1.2: codex plan+spec review `task-mu75q9tz-hn36pf` applied (10 findings: helper boundary, lease cleanup contract, name preflight before settle, post-create partial failure, kill-on-failure instead of double writer, project slug, visibility by state); v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
+- Status: v1.4 (2026-09-19) — codex attacker on PR #1212 (5 findings): execution lock shared by both take-back paths, archive **before** resume, `KillSessionIfInstance` (by id, under generation) everywhere, `CreateSession` generation check, host-home-based slug; v1.3: codex R1 on PR #1212: `execution_archived`, no kill-by-name on tmux restart; v1.2: codex plan+spec review `task-mu75q9tz-hn36pf` applied (10 findings: helper boundary, lease cleanup contract, name preflight before settle, post-create partial failure, kill-on-failure instead of double writer, project slug, visibility by state); v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
 - Predecessor: P-C.3 (`2026-09-18-pc-launch-ui-spec.md` §4.4 "Take back to
   terminal"), which only covers an execution that a `Hand to nex` created.
 - Nexen contract: v0.11.2 `docs/contract/capability-matrix.md` §1.8 (resume
@@ -106,7 +106,11 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
 
 1. Lock `m.locks.TryLock("exec:" + id)` → `409 takeback_in_progress`.
    (`HandoffLocks` is string-keyed; session codes are 6 base36 chars, so
-   the `exec:` prefix cannot collide.)
+   the `exec:` prefix cannot collide.) **The session-bound take-back takes
+   the same execution lock** after its session lock and `boundToSession`
+   check (order session → exec; this endpoint never takes a session lock,
+   so no deadlock) — two clients cannot resume one execution into two
+   panes (codex attacker F1).
 2. Body: `session_name` missing → `400 missing_session_name`; fails the
    session name regex → `400 invalid_session_name`; `resume_command`
    missing → `400 missing_resume_command`; malformed JSON → `400
@@ -129,18 +133,27 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
    (list / id / meta) → `500 session_create_failed` with detail
    `{session_name, session_alive: true}` — the tmux session exists but has
    no code yet; the SPA refreshes the session list so it shows up.
-7. `resumeInWindow` (send keys to window 0, `waitForCC`). On `send_failed`
-   or `cc_start_timeout` the daemon **kills the session it just created**
-   (`KillSession(name)`, logged if that fails) — it is ours, nothing else
-   ran in it, and leaving a pane that may still start `claude --resume`
-   next to an unarchived execution would be two writers on one
-   transcript. On `tmux_instance_mismatch` it does **not** kill by name:
-   the server restarted, the created session died with it, and a
-   same-named session in the new generation belongs to someone else
-   (codex R1). The execution is left settled and unarchived; detail
-   carries `session_id`, `session_name`, `session_killed`.
-8. Archive (failure logged, `archived:false`). Response `200 { "session":
-   <SessionInfo>, "session_id": sid, "archived": bool }`.
+   `CreateSession` samples the tmux generation before `new-session` and
+   after `list-sessions`; a change in between is `generation_changed`
+   (the created session died with the old server; cold start with no
+   server is the one allowed exception). The returned `SessionInfo.
+   TmuxInstance` is the generation the session was created under.
+7. **Archive first** (`SetArchived(true)`): from here on a second client
+   gets `409 execution_archived`, so there is never a window in which two
+   resumes can start (codex attacker F2). Archive failure → kill the
+   created session (`KillSessionIfInstance(info.TmuxID, info.TmuxInstance)`)
+   and answer `500 archive_failed {session_id, session_name,
+   session_killed}`; the execution is untouched and the call can be
+   retried.
+8. `resumeInWindow` (send keys to window 0, `waitForCC`). On `send_failed`
+   / `cc_start_timeout` / `tmux_instance_mismatch` the daemon kills the
+   session **by id under the generation it was created in**
+   (`KillSessionIfInstance`; a moved generation refuses, so a stranger's
+   same-named session in a new server is never touched — codex R1/F4) and
+   **unarchives** the execution (`SetArchived(false)`, failure logged).
+   Detail: `session_id`, `session_name`, `session_killed`, `unarchived`.
+9. Response `200 { "session": <SessionInfo>, "session_id": sid,
+   "archived": true }` — `archived:false` no longer exists.
 
 ### 4.2 SPA
 
@@ -171,19 +184,26 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
   session was killed, nothing else to point at).
 - `HANDOFF_ERROR_CODES` gains `session_exists`, `missing_session_name`,
   `invalid_session_name`, `session_create_failed`, `cwd_missing`,
-  `provider_unsupported`, `takeback_in_progress` with locale strings (en +
-  zh-TW).
+  `provider_unsupported`, `takeback_in_progress`, `execution_archived`,
+  `archive_failed` with locale strings (en + zh-TW).
+- Session name slug: the host project matching the cwd. A project stored
+  as `~/…` is expanded with the host home obtained from
+  `checkHostPath(hostId, '~').resolved` (asked only when such a project
+  exists; on failure `~/…` projects are skipped, never guessed by suffix
+  — codex attacker F5), else the cleaned cwd basename.
 - Copy: `takeback.button` → "Take to terminal"; success toast unchanged.
 
 ### 4.3 Hand-off: `keep_session`
 
 - `POST /api/sessions/{code}/nex-handoff` body gains `keep_session: bool`
   (default `true` when absent — an old SPA keeps today's behaviour).
-- Daemon (`handoff.go`): unchanged through delegate + `connected`
-  broadcast. With `keep_session:false`, after the execution is confirmed
-  running the daemon `KillSession`s the tmux session (the shell is idle —
-  CC has already exited — so nothing is lost) and answers
-  `session_kept: false`. A kill failure is logged, `session_kept: true`
+- Daemon (`handoff.go`): unchanged through delegate. With
+  `keep_session:false`, once `Delegate` reports the execution `running`
+  the daemon kills the tmux session **by id under the generation the
+  request verified** (`KillSessionIfInstance(sess.TmuxID, expected)`; the
+  shell is idle — CC has already exited — so nothing is lost) and answers
+  `session_kept: false`. A refused kill (generation moved during the
+  delegate) or a kill failure is logged and answers `session_kept: true`
   (the session is still there, the SPA keeps `from`). The execution's
   `origin`/labels are written as today; `boundToSession` on a later
   session-bound take-back simply fails with `session_missing` if anyone
@@ -232,10 +252,14 @@ around `resumeInWindow` (4.1 step 7).
 - I2 The new endpoint never touches a session it did not create.
 - I3 A failure before session creation leaves the execution as it was
   (settled, unarchived) and costs no interrupt unless the failure came
-  from the engine itself. A failure in `resumeInWindow` kills the session
-  the daemon created; the only way a session outlives a failed call is
-  `session_create_failed` after `tmux new-session`, and then the detail
-  says `session_alive: true`.
+  from the engine itself. At most one `claude --resume` is ever started
+  per call, and the execution is archived before it starts; a failure in
+  `resumeInWindow` kills the created session (by id, under its
+  generation) and unarchives. The only way a session outlives a failed
+  call is `session_create_failed` after `tmux new-session`, and then the
+  detail says `session_alive: true`.
+- I6 No kill by name anywhere in these paths: every kill is
+  `KillSessionIfInstance(id, generation)`.
 - I4 `nex/imports_test.go` boundary holds; `Dependencies()` stays
   `{"session","agent"}`.
 - I5 With `keep_session` absent or `true` the hand-off request/response is
