@@ -309,6 +309,7 @@ describe('handoffErrorMessage', () => {
     ['cc_start_timeout', { session_id: 'sid' }, null],
     // client-side
     ['network', {}, null],
+    ['host_removed', {}, null],
   ]
 
   it.each(table)('%s → handoff.error.%s with params', (code, body, params) => {

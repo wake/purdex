@@ -812,6 +812,7 @@
   "handoff.not_rolled_back": "終端機未還原",
   "handoff.error.generic": "交接失敗（{{code}}）。",
   "handoff.error.network": "無法連上主機。",
+  "handoff.error.host_removed": "此面板所屬的主機已被移除。",
   "handoff.error.nex_unavailable": "這台主機的 Nexen 無法使用。",
   "handoff.error.malformed_body": "daemon 拒絕了這個請求。",
   "handoff.error.invalid_instance": "這個窗格的 tmux instance 無效；請重新開啟 session 再試。",

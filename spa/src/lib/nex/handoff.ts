@@ -123,7 +123,7 @@ export async function takeBack(args: TakeBackArgs): Promise<TakeBackOutcome> {
 /**
  * Every code the two endpoints emit (plan "Measured baseline", from
  * internal/module/nex/{handoff,takeback}.go) plus the wrapper's own
- * `network`. Each has a `handoff.error.<code>` locale string; anything else
+ * `network` and `host_removed`. Each has a `handoff.error.<code>` locale string; anything else
  * (`http_<status>`, a future code) falls back to `handoff.error.generic`.
  */
 export const HANDOFF_ERROR_CODES: readonly string[] = [
@@ -138,7 +138,7 @@ export const HANDOFF_ERROR_CODES: readonly string[] = [
   'execution_not_settled', 'no_session_id', 'store_error', 'lease_error',
   'interrupt_failed', 'send_failed', 'interrupt_unconfirmed', 'cc_start_timeout',
   // client
-  'network',
+  'network', 'host_removed',
 ]
 
 const KNOWN = new Set(HANDOFF_ERROR_CODES)

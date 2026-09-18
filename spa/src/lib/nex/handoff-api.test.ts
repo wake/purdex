@@ -184,6 +184,32 @@ describe('handoff-api', () => {
     })
   })
 
+  describe('removed host (R1-3/A1)', () => {
+    // A pane can outlive its host entry: the handoff / take-back must not
+    // fall through hostFetch's "any host" fallback onto another daemon.
+    it('nexHandoff against a host id the store no longer holds → host_removed, no fetch', async () => {
+      useHostStore.getState().addHost({ id: 'host-other', name: 'other', ip: '100.64.0.4', port: 7860, token: 'tok-2' })
+      useHostStore.getState().removeHost(hostId)
+      const err = await rejection(nexHandoff(hostId, 'c1', { expected_tmux_instance: 'i' }))
+      expect(err).toMatchObject({ status: 0, code: 'host_removed', body: {} })
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('nexTakeback against a host id the store no longer holds → host_removed, no fetch', async () => {
+      useHostStore.getState().addHost({ id: 'host-other', name: 'other', ip: '100.64.0.4', port: 7860, token: 'tok-2' })
+      useHostStore.getState().removeHost(hostId)
+      const err = await rejection(nexTakeback(hostId, 'c1', takebackBody))
+      expect(err).toMatchObject({ status: 0, code: 'host_removed', body: {} })
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('an unknown host id (never added) is refused the same way', async () => {
+      const err = await rejection(nexHandoff('host-never', 'c1', { expected_tmux_instance: 'i' }))
+      expect(err.code).toBe('host_removed')
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+  })
+
   it('HandoffApiError is an Error with name/status/code/body', () => {
     const e = new HandoffApiError(409, 'no_cc', { error: 'x', code: 'no_cc' }, 'x')
     expect(e).toBeInstanceOf(Error)

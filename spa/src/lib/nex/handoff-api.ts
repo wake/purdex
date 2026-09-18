@@ -10,6 +10,7 @@
 // …), so the whole decoded body is kept on the error for the caller's
 // message map instead of being flattened into a message string.
 import { hostFetch } from '../host-api'
+import { useHostStore } from '../../stores/useHostStore'
 import { getNexClientId } from './client-id'
 
 export class HandoffApiError extends Error {
@@ -92,6 +93,10 @@ function compact(body: Record<string, unknown>): Record<string, unknown> {
 }
 
 async function postSessionJson<T>(hostId: string, code: string, verb: string, body: Record<string, unknown>): Promise<T> {
+  // A pane can outlive its host entry. `hostFetch` on an unknown host id
+  // falls back to the active host (`getDaemonBase`), which would run a
+  // handoff / take-back against a different daemon than the pane's.
+  if (!useHostStore.getState().hosts[hostId]) throw new HandoffApiError(0, 'host_removed', {})
   const headers = new Headers({ 'Content-Type': 'application/json', 'X-Pdx-Client': getNexClientId() })
   let res: Response
   try {

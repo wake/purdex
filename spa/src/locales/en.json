@@ -812,6 +812,7 @@
   "handoff.not_rolled_back": "the terminal was not restored",
   "handoff.error.generic": "Handoff failed ({{code}}).",
   "handoff.error.network": "Could not reach the host.",
+  "handoff.error.host_removed": "This pane's host has been removed.",
   "handoff.error.nex_unavailable": "Nexen is unavailable on this host.",
   "handoff.error.malformed_body": "The daemon rejected the request.",
   "handoff.error.invalid_instance": "This pane's tmux instance is invalid; reopen the session and try again.",
