@@ -747,3 +747,79 @@ func TestInit_InstallsHostAuthObserver(t *testing.T) {
 		t.Fatalf("observer note derives %q, want \"current\"", got)
 	}
 }
+
+// ---- rename/delete write failures are fail-closed for the gate (codex F3) ----
+
+// PUT rename moves the record and DELETE clears it INSIDE the UpdateConfig
+// closure, before the persist. When the persist then fails, the config is
+// restored but the record is not: the entry (still `air`) has lost its
+// evidence, so the next un-forced commit is 409 — the peer must be seen
+// again — and a fresh dial recovers it. That is the fail-closed behaviour
+// spec §6.2 accepts (the "" state refuses both gates); it is never a
+// lock-out, because nothing about the tokens changed.
+func TestRenameAndDelete_FailedWriteIsFailClosed(t *testing.T) {
+	breakPersist := func(t *testing.T, c *core.Core) {
+		t.Helper()
+		// A regular file as CfgPath's parent makes config.WriteFile fail
+		// with ENOTDIR (same trick as TestRotateCancel_FailedWriteLeavesRecordAndGateIntact).
+		blocker := filepath.Join(t.TempDir(), "blocker")
+		if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+			t.Fatalf("write blocker: %v", err)
+		}
+		c.CfgPath = filepath.Join(blocker, "config.toml")
+	}
+	stillAir := func(t *testing.T, c *core.Core) {
+		t.Helper()
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		if len(c.Cfg.Peers.Hosts) != 1 || c.Cfg.Peers.Hosts[0].Alias != "air" || c.Cfg.Peers.Hosts[0].InboundTokenPrev != rotTokPrev {
+			t.Fatalf("config changed despite failed write: %+v", c.Cfg.Peers.Hosts)
+		}
+	}
+	// fail-closed, then recover: 409 on the lost evidence, 200 after a
+	// fresh dial. Persistence is restored first so the commit can land.
+	refuseThenRecover := func(t *testing.T, c *core.Core, m *Module, cfgPath string) {
+		t.Helper()
+		if rr := gate(t, m, "air", "commit", false); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
+			t.Fatalf("commit after the failed write = %d %q; want 409 rotation unconfirmed (evidence lost, fail-closed)", rr.Code, errorOf(t, rr))
+		}
+		c.CfgPath = cfgPath
+		doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+		if rr := gate(t, m, "air", "commit", false); rr.Code != http.StatusOK {
+			t.Fatalf("commit after a fresh current dial = %d; body=%s", rr.Code, rr.Body.String())
+		}
+		if got := loadCfg(t, cfgPath).Peers.Hosts[0]; got.Alias != "air" || got.InboundTokenPrev != "" || got.InboundToken != rotTokCur {
+			t.Fatalf("recovered commit persisted %+v", got)
+		}
+	}
+
+	t.Run("rename", func(t *testing.T) {
+		c, cfgPath := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
+		m := newHostsTestModule(t, c, failIfCalledFetch(t))
+		doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+		breakPersist(t, c)
+		if rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "air26"}, adminPrincipal()); rr.Code != http.StatusInternalServerError {
+			t.Fatalf("rename with failed write = %d; want 500; body=%s", rr.Code, rr.Body.String())
+		}
+		stillAir(t, c)
+		if got := listRow(t, m, "air").LastInboundAuth; got != "" {
+			t.Fatalf("after the failed rename the row still carries evidence %q; want \"\" (the record moved with the rename that did not land)", got)
+		}
+		refuseThenRecover(t, c, m, cfgPath)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		c, cfgPath := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
+		m := newHostsTestModule(t, c, failIfCalledFetch(t))
+		doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+		breakPersist(t, c)
+		if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal()); rr.Code != http.StatusInternalServerError {
+			t.Fatalf("delete with failed write = %d; want 500; body=%s", rr.Code, rr.Body.String())
+		}
+		stillAir(t, c)
+		if got := listRow(t, m, "air").LastInboundAuth; got != "" {
+			t.Fatalf("after the failed delete the row still carries evidence %q; want \"\" (the record was cleared by the delete that did not land)", got)
+		}
+		refuseThenRecover(t, c, m, cfgPath)
+	})
+}
