@@ -181,3 +181,89 @@ func TestValidSessionName(t *testing.T) {
 // The provider interface carries the three new methods (plan T1); the
 // assertion fails to compile if one is dropped.
 var _ SessionProvider = (*SessionModule)(nil)
+
+// --- generation consistency (codex F3) ---
+
+// listHookExecutor runs hook before every ListSessions, then delegates:
+// the seam for "the tmux server restarted between new-session and the
+// list that looks the new session up".
+type listHookExecutor struct {
+	tmux.Executor
+	hook func()
+}
+
+func (e *listHookExecutor) ListSessions() ([]tmux.TmuxSession, error) {
+	if e.hook != nil {
+		e.hook()
+	}
+	return e.Executor.ListSessions()
+}
+
+// The generation is sampled before new-session and again after the list;
+// a difference means the server the session was created on is gone, so
+// the session is too — no meta row, and SessionAlive() says so.
+func TestCreateSession_GenerationChangedDuringCreate(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	fake.SetInstance("111:1000")
+	mod.tmuxInstanceFn = fake.Instance
+	mod.tmux = &listHookExecutor{Executor: fake, hook: func() { fake.SetInstance("222:2000") }}
+
+	info, err := mod.CreateSession("proj-4", t.TempDir())
+	assert.Nil(t, info)
+	require.Error(t, err)
+	var ce *CreateError
+	require.True(t, errors.As(err, &ce))
+	assert.Equal(t, CreateStageGenerationChanged, ce.Stage)
+	assert.Equal(t, "proj-4", ce.Name)
+	assert.False(t, ce.SessionAlive(), "the old server died and the session with it")
+	assert.Contains(t, err.Error(), "111:1000")
+	assert.Contains(t, err.Error(), "222:2000")
+	assert.False(t, errors.Is(err, ErrSessionExists))
+	assert.False(t, errors.Is(err, ErrInvalidSessionName))
+	assert.False(t, errors.Is(err, ErrInvalidCwd))
+	m, err := meta.GetMeta("$0")
+	require.NoError(t, err)
+	assert.Nil(t, m, "no meta row for a session on a dead server")
+}
+
+// On the normal path the stamped generation is the one sampled BEFORE
+// new-session: exactly two samples are taken (before, after), and a later
+// sample — which could belong to a server that restarted after the
+// create — is never what gets stamped.
+func TestCreateSession_TmuxInstanceIsTheOneSampledBeforeCreate(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	calls := 0
+	mod.tmuxInstanceFn = func() string {
+		calls++
+		if calls <= 2 {
+			return "111:1000"
+		}
+		return "333:3000" // a third read would be a bug
+	}
+
+	info, err := mod.CreateSession("proj-5", t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "111:1000", info.TmuxInstance)
+	assert.Equal(t, 2, calls, "sampled before new-session and after the list, nothing more")
+	assert.True(t, fake.HasSession("proj-5"))
+}
+
+// No server before the create: `tmux new-session` starts one, and the
+// generation read afterwards is that server's — the one the session lives
+// on. That is not a restart, and the stamp is the post-create sample.
+func TestCreateSession_NoServerBeforeCreateStampsTheNewServer(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	calls := 0
+	mod.tmuxInstanceFn = func() string {
+		calls++
+		if calls == 1 {
+			return "" // no server running yet
+		}
+		return "444:4000"
+	}
+
+	info, err := mod.CreateSession("proj-6", t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "444:4000", info.TmuxInstance)
+	assert.True(t, fake.HasSession("proj-6"))
+}

@@ -26,8 +26,12 @@ const (
 	CreateStageExists      CreateStage = "exists"       // HasSession(name) was already true
 	CreateStageNewSession  CreateStage = "new_session"  // tmux new-session failed; nothing exists
 	CreateStageList        CreateStage = "list"         // tmux list-sessions failed, or the new session was not in it
-	CreateStageEncode      CreateStage = "encode"       // the new session's id could not be encoded to a code
-	CreateStageMeta        CreateStage = "meta"         // SetMeta failed
+	// The tmux generation read after list-sessions differs from the one read
+	// before new-session: the server the session was created on has been
+	// replaced, and the session died with it. Nothing of ours exists.
+	CreateStageGenerationChanged CreateStage = "generation_changed"
+	CreateStageEncode            CreateStage = "encode" // the new session's id could not be encoded to a code
+	CreateStageMeta              CreateStage = "meta"   // SetMeta failed
 )
 
 // Sentinels for errors.Is on a *CreateError; the stages after new_session
@@ -69,8 +73,10 @@ func (e *CreateError) Is(target error) bool {
 }
 
 // SessionAlive reports whether `tmux new-session` succeeded before the
-// failure: the session exists but has no meta row and no code was returned.
-// A caller that wanted an atomic create decides what to do with it.
+// failure AND the session is still there: it exists but has no meta row
+// and no code was returned. A caller that wanted an atomic create decides
+// what to do with it. generation_changed is false: new-session succeeded,
+// but on a server that has since been replaced.
 func (e *CreateError) SessionAlive() bool {
 	switch e.Stage {
 	case CreateStageList, CreateStageEncode, CreateStageMeta:
@@ -131,6 +137,16 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 		return fail(CreateStageExists, ErrSessionExists)
 	}
 
+	// The generation is sampled on both sides of new-session + list-sessions
+	// and must agree: the caller gets a session id and the generation it is
+	// valid in, and a server that restarted in between would hand it an id
+	// minted by the old server with a stamp read from the new one — a pair
+	// that names a stranger's session on the new server. An empty sample
+	// before the create is "no server running": new-session starts one, and
+	// the sample read after it is that server's, which is the one the
+	// session lives on.
+	before := m.TmuxInstance()
+
 	if err := m.tmux.NewSession(name, cwd); err != nil {
 		return fail(CreateStageNewSession, err)
 	}
@@ -139,6 +155,17 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 	sessions, err := m.tmux.ListSessions()
 	if err != nil {
 		return fail(CreateStageList, err)
+	}
+
+	after := m.TmuxInstance()
+	if before != "" && after != before {
+		return fail(CreateStageGenerationChanged, fmt.Errorf("tmux server restarted during create (generation %s → %s)", before, after))
+	}
+	// The stamp is the pre-create sample; only when there was no server to
+	// sample is it the one new-session started.
+	instance := before
+	if before == "" {
+		instance = after
 	}
 
 	for _, s := range sessions {
@@ -198,8 +225,9 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 			// own stamp. The rebuild engine re-points a pane using the
 			// generation carried here (spec §4.8 step 4); leaving it empty
 			// would give the rebuilt pane an unknown generation until the
-			// next sessions broadcast.
-			TmuxInstance: m.TmuxInstance(),
+			// next sessions broadcast. The value is the pre-create sample
+			// (checked equal to the post-list one above), not a fresh read.
+			TmuxInstance: instance,
 		}, nil
 	}
 
