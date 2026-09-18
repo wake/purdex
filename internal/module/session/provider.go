@@ -15,6 +15,16 @@ type SessionProvider interface {
 	// this provider (internal/module/agent/module.go:33), to stamp the
 	// generation onto the provenance envelope.
 	TmuxInstance() string
+
+	// Session creation for a module that needs a fresh tmux session of its
+	// own (the nex module's take-to-terminal, exec-to-terminal spec §4.1):
+	// SessionExists and ValidateCwd are the preflights a caller runs before
+	// anything irreversible, CreateSession the same path POST /api/sessions
+	// takes (name rule, cwd resolution, critical section, meta). Its error
+	// is a *CreateError; see SessionAlive.
+	SessionExists(name string) bool
+	ValidateCwd(cwd string) error
+	CreateSession(name, cwd string) (*SessionInfo, error)
 }
 
 // SessionInfo combines live tmux data with cached meta.

@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 
@@ -42,6 +43,12 @@ func (f *fakeSessionProvider) HandleTerminalWS(_ http.ResponseWriter, _ *http.Re
 }
 
 func (f *fakeSessionProvider) TmuxInstance() string { return "" }
+
+func (f *fakeSessionProvider) SessionExists(string) bool { return false }
+func (f *fakeSessionProvider) ValidateCwd(string) error  { return nil }
+func (f *fakeSessionProvider) CreateSession(string, string) (*session.SessionInfo, error) {
+	return nil, errors.New("not implemented")
+}
 
 func (f *fakeSessionProvider) setCwd(code, cwd string) {
 	f.sessions[code] = &session.SessionInfo{Code: code, Cwd: cwd, Exists: true}

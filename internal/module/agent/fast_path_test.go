@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 
@@ -46,6 +47,12 @@ func (f *fakeFastSessionProvider) HandleTerminalWS(http.ResponseWriter, *http.Re
 }
 
 func (f *fakeFastSessionProvider) TmuxInstance() string { return f.tmuxInstance }
+
+func (f *fakeFastSessionProvider) SessionExists(string) bool { return false }
+func (f *fakeFastSessionProvider) ValidateCwd(string) error  { return nil }
+func (f *fakeFastSessionProvider) CreateSession(string, string) (*session.SessionInfo, error) {
+	return nil, errors.New("not implemented")
+}
 
 // LookupCodeByName satisfies the unexported sessionCodeLookuper interface in
 // the agent package. Counts every call so tests can assert hit / miss.
