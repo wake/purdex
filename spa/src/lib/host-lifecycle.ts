@@ -3,7 +3,6 @@ import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
-import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
 import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
@@ -17,7 +16,7 @@ import type { Session } from './host-api'
 import type { Tab } from '../types/tab'
 
 /**
- * Execute cascade delete for a host: tabs -> sessions -> agent -> stream -> host.
+ * Execute cascade delete for a host: tabs -> sessions -> agent -> host.
  * Returns an undo function that restores all snapshot data.
  */
 export function deleteHostCascade(hostId: string, closeTabs: boolean): () => void {
@@ -25,13 +24,12 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   const tabStore = useTabStore.getState()
   const sessionStore = useSessionStore.getState()
   const agentStore = useAgentStore.getState()
-  const streamStore = useStreamStore.getState()
 
   // Mirror the veto in `useHostStore.removeHost()` up front: if the host
   // doesn't exist or is the last remaining host (store refuses to delete it),
   // abort the cascade entirely rather than clearing per-host state that
   // won't ever be matched by a real removal. Without this guard the cascade
-  // would wipe sessions/agent/stream/settings, then `removeHost()` would
+  // would wipe sessions/agent/settings, then `removeHost()` would
   // no-op, and the undo callback's recreation guard would treat the still-
   // present host row as a recreation and skip every restore — permanent
   // data loss on the last host.
@@ -57,8 +55,6 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     agentStatuses: Record<string, AgentStatus>
     agentUnread: Record<string, boolean>
     agentModels: Record<string, string>
-    // StreamStore data (exclude non-serializable conn)
-    streamSessions: Record<string, Omit<PerSessionState, 'conn'>>
     // Tab data for undo
     closedTabs: Tab[]
     tabWorkspaces: Record<string, string>  // tabId -> workspaceId
@@ -73,7 +69,6 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     agentStatuses: {},
     agentUnread: {},
     agentModels: {},
-    streamSessions: {},
     closedTabs: [],
     tabWorkspaces: {},
     terminatedTabPaneIds: [],
@@ -93,15 +88,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     if (k.startsWith(prefix)) snapshot.agentModels[k] = v
   }
 
-  // Snapshot StreamStore entries for this host (exclude conn)
-  for (const [k, v] of Object.entries(streamStore.sessions)) {
-    if (k.startsWith(prefix)) {
-      const { conn: _, ...serializable } = v  
-      snapshot.streamSessions[k] = serializable
-    }
-  }
-
-  // Execute cascade: tabs -> sessions -> agent -> stream -> host
+  // Execute cascade: tabs -> sessions -> agent -> host
   if (closeTabs) {
     const wsStore = useWorkspaceStore.getState()
     // Close all tmux-session tabs for this host (scan ALL panes, not just primary)
@@ -151,7 +138,6 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
 
   sessionStore.removeHost(hostId)
   agentStore.removeHost(hostId)
-  streamStore.clearHost(hostId)
   // Nexen execution view state for this host. Runs after the tab-close loop
   // above so no execution pane's hook observes a half-cleared store (spec
   // §4.3.4); undo restores the tabs, whose hooks re-subscribe from scratch,
@@ -231,18 +217,6 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
         statuses: { ...ag.statuses, ...snapshot.agentStatuses },
         unread: { ...ag.unread, ...snapshot.agentUnread },
         models: { ...ag.models, ...snapshot.agentModels },
-      })
-    }
-
-    // --- Restore StreamStore data (conn set to null) ---
-    if (!hostWasRecreated && Object.keys(snapshot.streamSessions).length > 0) {
-      const st = useStreamStore.getState()
-      const restored: Record<string, PerSessionState> = {}
-      for (const [k, v] of Object.entries(snapshot.streamSessions)) {
-        restored[k] = { ...v, conn: null }
-      }
-      useStreamStore.setState({
-        sessions: { ...st.sessions, ...restored },
       })
     }
 

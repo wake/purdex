@@ -94,10 +94,6 @@ describe('getPaneIcon', () => {
     expect(getPaneIcon({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal', cachedName: '', tmuxInstance: '' })).toBe('TerminalWindow')
   })
 
-  it('returns ChatCircleDots for stream session', () => {
-    expect(getPaneIcon({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'x', mode: 'stream', cachedName: '', tmuxInstance: '' })).toBe('ChatCircleDots')
-  })
-
   it('returns House for dashboard', () => {
     expect(getPaneIcon({ kind: 'dashboard' })).toBe('House')
   })

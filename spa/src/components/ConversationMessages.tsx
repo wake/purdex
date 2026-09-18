@@ -5,7 +5,7 @@ import {
   type StreamMessage,
   type AssistantMessage,
   type UserMessage,
-} from '../lib/stream-ws'
+} from '../lib/nex/message-types'
 import { partialVersionOf, type PartialAssembly } from '../lib/nex/partial'
 import type { ToolActivity } from '../lib/nex/tool-activity'
 import MessageBubble from './MessageBubble'

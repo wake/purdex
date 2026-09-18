@@ -56,7 +56,7 @@ function wantsProbe(
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (found) return
-      if (c.kind !== 'tmux-session' || c.mode !== 'terminal' || c.terminated) return
+      if (c.kind !== 'tmux-session' || c.terminated) return
       if (c.hostId !== hostId || c.sessionCode !== sessionCode) return
       // The legacy-compatible rule (`binding.ts`), the same one the store's
       // write uses: a pane whose recorded instance is '' has not learnt its
@@ -130,7 +130,7 @@ export function probeMissingCwds(hostId: string): void {
   for (const tab of Object.values(useTabStore.getState().tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
-      if (c.kind !== 'tmux-session' || c.mode !== 'terminal' || c.terminated) return
+      if (c.kind !== 'tmux-session' || c.terminated) return
       if (c.hostId !== hostId || c.rebuild?.cwd) return
       bindings.set(`${c.sessionCode}\u0000${c.tmuxInstance}`, {
         sessionCode: c.sessionCode, tmuxInstance: c.tmuxInstance,

@@ -208,7 +208,7 @@ describe('useNotificationDispatcher electron click listener', () => {
   })
 
   it('ignores a click payload without action (legacy host-guessing path removed)', () => {
-    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
     useTabStore.getState().addTab(tab)
     useTabStore.setState({ activeTabId: null })
 
@@ -221,7 +221,7 @@ describe('useNotificationDispatcher electron click listener', () => {
   })
 
   it('activates the tab named by payload.action', () => {
-    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tab = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
     useTabStore.getState().addTab(tab)
     useTabStore.setState({ activeTabId: null })
 
@@ -250,7 +250,7 @@ describe('handleNotificationClick workspace switching', () => {
 
   it('switches to workspace containing the tab', () => {
     // Setup: create a tab in workspace B, active workspace is A
-    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
     useTabStore.getState().addTab(tab)
 
     const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
@@ -272,8 +272,8 @@ describe('handleNotificationClick workspace switching', () => {
     // Session codes are a deterministic encoding of tmux `$N`, so host-a and
     // host-b can both have a session with the same code. The host-a tab is
     // inserted first so a code-only lookup would wrongly land on it.
-    const tabA = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
-    const tabB = createTab({ kind: 'tmux-session', hostId: 'host-b', sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tabA = createTab({ kind: 'tmux-session', hostId: 'host-a', sessionCode: SESSION_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    const tabB = createTab({ kind: 'tmux-session', hostId: 'host-b', sessionCode: SESSION_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
     useTabStore.getState().addTab(tabA)
     useTabStore.getState().addTab(tabB)
 
@@ -294,7 +294,7 @@ describe('handleNotificationClick workspace switching', () => {
 
   it('switches to Home when tab is standalone (not in any workspace)', () => {
     // Setup: tab not in any workspace, active workspace is wsA
-    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
     useTabStore.getState().addTab(tab)
 
     const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
@@ -341,6 +341,23 @@ describe('handleNotificationClick workspace switching', () => {
     const tab = Object.values(useTabStore.getState().tabs)[0]
     const content = tab.layout.type === 'leaf' ? tab.layout.pane.content : null
     expect(content?.kind === 'tmux-session' && content.tmuxInstance).toBe('222:2000')
+  })
+
+  it('reopenTabOnClick opens a terminal pane even when the daemon still reports mode stream (P-D.3)', () => {
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: SESSION_CODE, name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '222:2000' },
+        ],
+      },
+    })
+    useNotificationSettingsStore.getState().setReopenTabOnClick('', true)
+
+    handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
+
+    const tab = Object.values(useTabStore.getState().tabs)[0]
+    const content = tab.layout.type === 'leaf' ? tab.layout.pane.content : null
+    expect(content?.kind === 'tmux-session' && content.mode).toBe('terminal')
   })
 
   it('reopenTabOnClick at Home (null workspace) keeps tab standalone', () => {

@@ -252,11 +252,6 @@ export function OverviewSection({ hostId }: Props) {
                 <option value="minimal-first">minimal-first</option>
               </select>
             </Field>
-            <Field label={t('hosts.stream_presets')}>
-              <span className="text-sm text-text-muted">
-                {t('hosts.preset_count', { count: config.stream?.presets?.length ?? 0 })}
-              </span>
-            </Field>
             <Field label={t('hosts.detect_commands')}>
               <span className="text-sm text-text-muted font-mono">
                 {config.detect?.cc_commands?.join(', ') || '—'}

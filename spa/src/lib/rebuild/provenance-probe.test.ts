@@ -192,9 +192,7 @@ describe('probeSessionProvenance', () => {
     expect(recordOf(tab.id)?.unverified).toBeUndefined()
   })
 
-  it('ignores stream-mode, terminated and foreign-generation panes', () => {
-    seed({ mode: 'stream' })
-    trigger()
+  it('ignores terminated and foreign-generation panes', () => {
     seed({ terminated: 'session-closed' })
     trigger()
     seed({ tmuxInstance: '111:1000' })

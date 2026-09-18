@@ -2,7 +2,7 @@
 // to the per-execution view state (spec §4.2.4), plus the partial assembly
 // fed by transient stream frames (P-B2 spec §4.1). No React, no fetch, no
 // store: the hook feeds it history pages and SSE frames alike.
-import type { StreamMessage } from '../stream-ws'
+import type { StreamMessage } from './message-types'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import type { NexSseFrame } from './sse-parser'
 import { endTurn, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'

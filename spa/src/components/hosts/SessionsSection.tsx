@@ -63,12 +63,12 @@ export function SessionsSection({ hostId }: Props) {
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
   const agentStatuses = useAgentStore((s) => s.statuses)
 
-  const handleOpen = (session: Session, mode: string) => {
+  const handleOpen = (session: Session) => {
     const tabId = useTabStore.getState().openSingletonTab({
       kind: 'tmux-session',
       hostId,
       sessionCode: session.code,
-      mode: mode as 'terminal' | 'stream',
+      mode: 'terminal',
       cachedName: session.name,
       // Generation from the session payload we are opening, never from
       // ambient host state (spec §4.5).
@@ -129,7 +129,6 @@ export function SessionsSection({ hostId }: Props) {
             <thead>
               <tr className="bg-surface-tertiary text-text-secondary text-xs">
                 <th className="text-left px-3 py-2">{t('hosts.session_name')}</th>
-                <th className="text-left px-3 py-2">{t('hosts.mode')}</th>
                 <th className="text-left px-3 py-2">{t('hosts.agent')}</th>
                 <th className="text-left px-3 py-2">{t('hosts.cwd')}</th>
                 <th className="text-right px-3 py-2"></th>
@@ -147,7 +146,6 @@ export function SessionsSection({ hostId }: Props) {
                         <span className="text-text-primary">{session.name}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-text-muted">{session.mode}</td>
                     <td className="px-3 py-2">
                       {agent ? (
                         <span className={`text-xs px-1.5 py-0.5 rounded ${
@@ -165,7 +163,7 @@ export function SessionsSection({ hostId }: Props) {
                     <td className="px-3 py-2 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button
-                          onClick={() => handleOpen(session, session.mode)}
+                          onClick={() => handleOpen(session)}
                           disabled={isOffline}
                           title={t('hosts.open')}
                           className="p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-accent cursor-pointer disabled:opacity-50"

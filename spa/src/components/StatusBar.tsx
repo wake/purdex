@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { CaretUp, CircleNotch, CheckCircle, XCircle, LockSimple, Columns, Rows, ArrowsClockwise } from '@phosphor-icons/react'
+import { CircleNotch, CheckCircle, XCircle, LockSimple, Columns, Rows, ArrowsClockwise } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useTabStore } from '../stores/useTabStore'
@@ -9,7 +9,6 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { compositeKey } from '../lib/composite-key'
-import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
 import { usePeerInfo, type PeerInfo } from '../hooks/usePeerInfo'
 import type { PeerRow } from '../stores/usePeerStore'
@@ -180,15 +179,10 @@ function peerIdText(row: PeerRow | null): { display: string; value: string } {
 
 interface Props {
   activeTab: Tab | null
-  onViewModeChange?: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   onNavigateToHost?: (hostId: string) => void
   onStartRename?: (tab: Tab, anchor: Element | null) => void
 }
 
-const VIEW_MODE_COLORS: Record<string, string> = {
-  terminal: 'bg-green-900/40 text-green-400 border-green-700/50',
-  stream: 'bg-blue-900/40 text-blue-400 border-blue-700/50',
-}
 
 function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessionCode: string | null; t: (key: string, params?: Record<string, string | number>) => string }) {
   const ck = hostId && sessionCode ? compositeKey(hostId, sessionCode) : null
@@ -267,10 +261,8 @@ function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessi
   return null
 }
 
-export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onStartRename }: Props) {
+export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props) {
   const t = useI18nStore((s) => s.t)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
 
   // Read agent event for the active session (hooks must be called unconditionally)
   const primaryContent = activeTab?.layout
@@ -290,8 +282,6 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
   const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
   const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
-  const closeMenu = useCallback(() => setMenuOpen(false), [])
-  useClickOutside(menuRef, closeMenu)
 
   // Peer data for the primary pane. The hook owns *when* anything is fetched
   // (spec §3.3); passing nulls — an editor tab, a dashboard, no tab at all —
@@ -363,14 +353,11 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
     )
   }
 
-  // Session pane — show host, session name, status, viewMode toggle
+  // Session pane — show host, session name, status
   const sessionName = session?.name ?? content.sessionCode
   const paneTitle = showAgentTitleInStatusBar && agentType && !content.terminated ? session?.pane_title : null
   const hostName = hostConfig?.name ?? 'Unknown'
   const status = hostRuntime?.status ?? 'disconnected'
-
-  const viewMode = content.mode
-  const viewModes: ('terminal' | 'stream')[] = ['terminal', 'stream']
 
   // The peer id shows the name with its ref and copies the full address with
   // its ref (`peerIdText`): a name alone is not addressable without its host,
@@ -543,32 +530,6 @@ export function StatusBar({ activeTab, onViewModeChange, onNavigateToHost, onSta
             <Rows size={12} />
           </button>
         </span>
-        <div data-testid="status-view-mode" className="relative shrink-0" ref={menuRef}>
-          <button
-            title={t('nav.toggle_view')}
-            onClick={() => setMenuOpen((v) => !v)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] cursor-pointer transition-colors ${VIEW_MODE_COLORS[viewMode] ?? 'bg-surface-secondary text-text-secondary border-border-default'}`}
-          >
-            {viewMode}
-            <CaretUp size={10} className={`transition-transform ${menuOpen ? '' : 'rotate-180'}`} />
-          </button>
-          {menuOpen && (
-            <div className="absolute bottom-full right-0 mb-1 bg-surface-elevated border border-border-default rounded-md shadow-lg py-1 min-w-[100px]">
-              {viewModes.map((vm) => (
-                <button
-                  key={vm}
-                  onClick={() => {
-                    onViewModeChange?.(activeTab.id, primary.id, vm)
-                    setMenuOpen(false)
-                  }}
-                  className={`w-full px-3 py-1 text-left text-[10px] cursor-pointer transition-colors hover:bg-surface-hover ${vm === viewMode ? 'text-white' : 'text-text-secondary'}`}
-                >
-                  {vm} {vm === viewMode && '\u2713'}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   )

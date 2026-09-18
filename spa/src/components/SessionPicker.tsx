@@ -1,6 +1,6 @@
 // spa/src/components/SessionPicker.tsx
 import { useState, useRef, useEffect } from 'react'
-import { Terminal, Lightning } from '@phosphor-icons/react'
+import { Terminal } from '@phosphor-icons/react'
 import type { Session } from '../lib/host-api'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -51,9 +51,8 @@ export function SessionPicker({ sessions, existingTabSessionNames, onSelect, onC
               onClick={() => onSelect(s)}
               className="w-full px-4 py-2.5 flex items-center gap-2 text-sm text-left hover:bg-surface-hover cursor-pointer transition-colors"
             >
-              {s.mode === 'stream' ? <Lightning size={16} className="text-blue-400 flex-shrink-0" /> : <Terminal size={16} className="text-text-secondary flex-shrink-0" />}
+              <Terminal size={16} className="text-text-secondary flex-shrink-0" />
               <span className="flex-1 text-text-primary">{s.name}</span>
-              <span className="text-xs text-text-muted">{s.mode}</span>
               {hasTab(s.name) && <span className="text-xs text-purple-400">{t('session.picker.already_open')}</span>}
             </button>
           ))}

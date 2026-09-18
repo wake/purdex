@@ -6,7 +6,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useConfigStore } from '../stores/useConfigStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import type { Pane, Tab, Workspace } from '../types/tab'
+import type { Pane, PaneContent, Tab, Workspace } from '../types/tab'
 import type { ConfigData } from '../lib/host-api'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
@@ -18,10 +18,6 @@ vi.mock('./TerminalView', () => ({
     terminalViewProps.last = props
     return <div data-testid="terminal-view" />
   },
-}))
-
-vi.mock('./ConversationView', () => ({
-  default: () => <div data-testid="conversation-view" />,
 }))
 
 vi.mock('./TerminatedPane', () => ({
@@ -44,9 +40,16 @@ const makePane = (overrides?: Partial<Pane>): Pane => ({
 const defaultConfig: ConfigData = {
   bind: '0.0.0.0',
   port: 7860,
-  stream: { presets: [{ name: 'cc', command: 'claude -p' }] },
   detect: { cc_commands: [], poll_interval: 5 },
 }
+
+// A tmux-session pane as a pre-P-D.3 blob would have carried it. The type no
+// longer admits 'stream' (tab-store persist v3 rewrites it on rehydrate), so
+// the cast stands in for a value that reached the renderer without going
+// through the migration — the renderer must still take the terminal path.
+const legacyStreamContent = {
+  kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'stream', cachedName: '', tmuxInstance: '',
+} as unknown as PaneContent
 
 function setupTabStore(pane: Pane) {
   const tab: Tab = {
@@ -115,13 +118,13 @@ describe('SessionPaneContent', () => {
     expect(screen.getByTestId('terminal-view')).toBeInTheDocument()
   })
 
-  it('renders ConversationView for stream mode', () => {
-    const pane = makePane({
-      content: { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'stream', cachedName: '', tmuxInstance: '' },
-    })
+  it('renders the terminal path for every live tmux-session pane, legacy stream mode included (P-D.3)', () => {
+    const pane = makePane({ content: legacyStreamContent })
     setupTabStore(pane)
     render(<SessionPaneContent pane={pane} isActive={true} />)
-    expect(screen.getByTestId('conversation-view')).toBeInTheDocument()
+    expect(screen.getByTestId('terminal-view')).toBeInTheDocument()
+    expect(screen.queryByTestId('conversation-view')).not.toBeInTheDocument()
+    expect(terminalViewProps.last?.sessionCode).toBe('dev001')
   })
 
   it('renders TerminatedPane when content.terminated is set', () => {
@@ -224,13 +227,7 @@ describe('SessionPaneContent', () => {
       expect(probeSessionCwd).toHaveBeenCalledWith(HOST_ID, 'dev001', '222:2000')
     })
 
-    it('does not probe a stream-mode or terminated pane', () => {
-      const stream = makePane({
-        content: { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'stream', cachedName: '', tmuxInstance: '222:2000' },
-      })
-      setupTabStore(stream)
-      render(<SessionPaneContent pane={stream} isActive={true} />)
-
+    it('does not probe a terminated pane', () => {
       const dead = makePane({
         content: {
           kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001',
@@ -295,13 +292,7 @@ describe('SessionPaneContent', () => {
       expect(probeSessionProvenance).toHaveBeenCalledWith(HOST_ID, 'dev001', '222:2000')
     })
 
-    it('does not ask for a stream-mode or terminated pane', () => {
-      const stream = makePane({
-        content: { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'stream', cachedName: '', tmuxInstance: '222:2000' },
-      })
-      setupTabStore(stream)
-      render(<SessionPaneContent pane={stream} isActive={true} />)
-
+    it('does not ask for a terminated pane', () => {
       const dead = makePane({
         content: {
           kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001',

@@ -114,51 +114,41 @@ beforeEach(() => {
 describe('StatusBar', () => {
   it('renders host and session info', () => {
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByText('mlab')).toBeTruthy()
     expect(screen.getByText('dev-server')).toBeTruthy()
     expect(screen.getByText('connected')).toBeTruthy()
   })
 
   it('renders empty state when no active tab', () => {
-    render(<StatusBar activeTab={null} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={null} />)
     expect(screen.getByText('No active session')).toBeTruthy()
   })
 
-  it('shows viewMode badge for session tabs', () => {
+  it('shows no view-mode badge or dropdown for session tabs (P-D.3: terminal is the only mode)', () => {
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
-    expect(screen.getByText('terminal')).toBeTruthy()
+    render(<StatusBar activeTab={tab} />)
+    expect(screen.queryByTestId('status-view-mode')).toBeNull()
+    expect(screen.queryByTitle('Toggle view mode')).toBeNull()
+    expect(screen.queryByText('stream')).toBeNull()
   })
 
   it('shows simplified status for non-session tabs', () => {
     const tab = makeTab('t1', { kind: 'dashboard' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByText('dashboard')).toBeTruthy()
     expect(screen.queryByTitle('Toggle view mode')).toBeNull()
   })
 
   it('does not render the global fallback bar for editor tabs', () => {
     const tab = makeTab('t1', { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' })
-    const { container } = render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    const { container } = render(<StatusBar activeTab={tab} />)
     expect(container).toBeEmptyDOMElement()
-  })
-
-  it('opens popup on badge click and calls onViewModeChange', () => {
-    const onChange = vi.fn()
-    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={onChange} />)
-    fireEvent.click(screen.getByTitle('Toggle view mode'))
-    // popup should show both options
-    const streamOption = screen.getAllByText('stream')
-    fireEvent.click(streamOption[streamOption.length - 1])
-    // Should pass tabId, paneId, and mode
-    expect(onChange).toHaveBeenCalledWith('t1', expect.any(String), 'stream')
   })
 
   it('shows split-H / split-V buttons for a tmux-session tab', () => {
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByTitle('Split Horizontal')).toBeInTheDocument()
     expect(screen.getByTitle('Split Vertical')).toBeInTheDocument()
   })
@@ -167,7 +157,7 @@ describe('StatusBar', () => {
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     const paneId = (tab.layout as { pane: { id: string } }).pane.id
     const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     fireEvent.click(screen.getByTitle('Split Horizontal'))
     expect(spy).toHaveBeenCalledWith('t1', paneId, 'h')
     fireEvent.click(screen.getByTitle('Split Vertical'))
@@ -186,7 +176,7 @@ describe('StatusBar', () => {
     }
     const tab = { ...makeTab('t1', { kind: 'new-tab' }), layout }
     const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByTitle('Split Horizontal')).toBeInTheDocument()
     fireEvent.click(screen.getByTitle('Split Horizontal'))
     expect(spy).toHaveBeenCalledWith('t1', 'primary-pane', 'h')
@@ -194,19 +184,19 @@ describe('StatusBar', () => {
 
   it('does not show split buttons for an editor tab (bar is null)', () => {
     const tab = makeTab('t1', { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.queryByTitle('Split Horizontal')).toBeNull()
   })
 
   it('does not show split buttons when there is no active tab', () => {
-    render(<StatusBar activeTab={null} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={null} />)
     expect(screen.queryByTitle('Split Horizontal')).toBeNull()
   })
 
   it('falls back to sessionCode when session not in store', () => {
     useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'unknown999', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByText('unknown999')).toBeTruthy()
   })
 })
@@ -224,7 +214,7 @@ describe('StatusBar upload progress', () => {
       sessions: { [ck]: { total: 5, completed: 1, failed: 0, currentFile: 'photo.png', status: 'uploading' } },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByTestId('upload-status')).toBeTruthy()
     expect(screen.getByText(/photo\.png/)).toBeTruthy()
     expect(screen.getByText(/2\/5/)).toBeTruthy()
@@ -236,7 +226,7 @@ describe('StatusBar upload progress', () => {
       sessions: { [ck]: { total: 2, completed: 2, failed: 0, currentFile: '', status: 'typing' } },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByTestId('upload-status')).toBeTruthy()
     expect(screen.getByText('Typing into session...')).toBeTruthy()
   })
@@ -247,7 +237,7 @@ describe('StatusBar upload progress', () => {
       sessions: { [ck]: { total: 3, completed: 3, failed: 0, currentFile: '', status: 'done' } },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByText(/3 files uploaded/)).toBeTruthy()
   })
 
@@ -257,7 +247,7 @@ describe('StatusBar upload progress', () => {
       sessions: { [ck]: { total: 1, completed: 0, failed: 1, currentFile: '', error: 'bad.mp4', status: 'error' } },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByText(/bad\.mp4/)).toBeTruthy()
   })
 })
@@ -278,7 +268,7 @@ describe('StatusBar agent label badge', () => {
       models: { [ck]: 'Claude Opus 4' },
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     const badge = screen.getByTestId('agent-label')
     expect(badge.textContent).toBe('Claude Opus 4')
     expect(badge.className).toContain('border')
@@ -288,7 +278,7 @@ describe('StatusBar agent label badge', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {} })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.queryByTestId('agent-label')).toBeNull()
     act(() => {
       useAgentStore.setState({ models: { [ck]: 'Claude Sonnet 4' } })
@@ -309,7 +299,7 @@ describe('StatusBar agent label badge', () => {
       models: {},
     })
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.queryByTestId('agent-label')).toBeNull()
   })
 })
@@ -320,7 +310,7 @@ describe('StatusBar agent pane title', () => {
     useUploadStore.setState({ sessions: {} })
   })
 
-  it('shows pane_title left of the terminal/stream switch when showAgentTitleInStatusBar=true', () => {
+  it('shows pane_title left of the split buttons when showAgentTitleInStatusBar=true', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useSessionStore.setState({
       sessions: {
@@ -335,11 +325,11 @@ describe('StatusBar agent pane title', () => {
     useUISettingsStore.setState({ showAgentTitleInStatusBar: true })
 
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
 
     const title = screen.getByTestId('agent-pane-title')
     expect(title.textContent).toBe('plan review')
-    expect(title.compareDocumentPosition(screen.getByTitle('Toggle view mode')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(title.compareDocumentPosition(screen.getByTestId('status-split-buttons')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('hides title when showAgentTitleInStatusBar=false', () => {
@@ -357,7 +347,7 @@ describe('StatusBar agent pane title', () => {
     useUISettingsStore.setState({ showAgentTitleInStatusBar: false })
 
     const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
 
     expect(screen.queryByTestId('agent-pane-title')).toBeNull()
   })
@@ -373,7 +363,7 @@ describe('StatusBar peer segments', () => {
   })
 
   it('renders host, cwd, peer name, peer id and status, each in its own element', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
     expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
     expect(screen.getByTestId('status-seg-agent').textContent).toBe('ai-chat-story-3a')
@@ -387,7 +377,7 @@ describe('StatusBar peer segments', () => {
   // the ref, because a copied address is pasted hours later — exactly the window
   // in which a name drifts or is taken by someone else.
   it('shows the name with its ref and copies the exact form', async () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByText(/purdex-b0 \[q34psn\]/)
     expect(seg.textContent).not.toContain('mlab/')
     fireEvent.click(seg)
@@ -398,7 +388,7 @@ describe('StatusBar peer segments', () => {
   // title is usually empty and never identified a row, so an untitled peer must
   // still appear — its name is what identifies it.
   it('renders a peer that has no title', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(PEER_ROW.title).toBe('')
     expect(screen.queryByText(/purdex-b0/)).not.toBeNull()
     expect(screen.getByTestId('status-seg-peer-id')).not.toBeDisabled()
@@ -406,7 +396,7 @@ describe('StatusBar peer segments', () => {
 
   it('renders a set title beside the name rather than instead of it', () => {
     seedPeers({}, { ...PEER_ROW, title: 'Purdex Tester 01', titleSource: 'user' })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toContain('purdex-b0 [q34psn]')
     expect(seg.textContent).toContain('Purdex Tester 01')
@@ -416,7 +406,7 @@ describe('StatusBar peer segments', () => {
   // the address already ends in it. Bracketing would say the same thing twice.
   it('leaves an address that is already its ref unbracketed', async () => {
     seedPeers({}, { ...PEER_ROW, address: 'mlab/_q34psn' })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toBe('_q34psn')
     fireEvent.click(seg)
@@ -425,7 +415,7 @@ describe('StatusBar peer segments', () => {
 
   it('renders and copies the address unchanged when the row has no ref', async () => {
     seedPeers({}, { ...PEER_ROW, ref: '' })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toBe('purdex-b0')
     fireEvent.click(seg)
@@ -433,7 +423,7 @@ describe('StatusBar peer segments', () => {
   })
 
   it('separates segments with border rules, never a pipe glyph that would be copied with the text', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seps = screen.getAllByTestId('status-separator')
     expect(seps.length).toBeGreaterThan(0)
     for (const sep of seps) {
@@ -449,7 +439,7 @@ describe('StatusBar peer segments', () => {
     ['status-seg-agent', 'ai-chat-story-3a', 'copied: agent'],
     ['status-seg-peer-id', 'mlab/purdex-b0 [q34psn]', 'copied: peer id'],
   ])('%s copies its value and confirms in the fixed slot', async (testId, value, message) => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     fireEvent.click(screen.getByTestId(testId))
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith(value))
     await waitFor(() => expect(screen.getByTestId('status-copy-feedback').textContent).toBe(message))
@@ -466,7 +456,7 @@ describe('StatusBar peer segments', () => {
 
     it('a double-click navigates and copies nothing', () => {
       const onNavigateToHost = vi.fn()
-      render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} onNavigateToHost={onNavigateToHost} />)
+      render(<StatusBar activeTab={sessionTab()} onNavigateToHost={onNavigateToHost} />)
       const seg = screen.getByTestId('status-seg-host')
       // What a browser actually sends for one double-click.
       fireEvent.click(seg)
@@ -479,7 +469,7 @@ describe('StatusBar peer segments', () => {
     })
 
     it('a single click still copies once the double-click window has passed', async () => {
-      render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} onNavigateToHost={vi.fn()} />)
+      render(<StatusBar activeTab={sessionTab()} onNavigateToHost={vi.fn()} />)
       fireEvent.click(screen.getByTestId('status-seg-host'))
       expect(copyTextMock).not.toHaveBeenCalled()
       await act(async () => { vi.advanceTimersByTime(2000) })
@@ -488,26 +478,26 @@ describe('StatusBar peer segments', () => {
     })
 
     it('a segment with no double-click gesture copies immediately', async () => {
-      render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+      render(<StatusBar activeTab={sessionTab()} />)
       await act(async () => { fireEvent.click(screen.getByTestId('status-seg-cwd')) })
       expect(copyTextMock).toHaveBeenCalledWith('/Users/wake/Workspace/wake/purdex')
     })
   })
 
   it('the status segment is not a button — it is not a value to copy', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-status').tagName).not.toBe('BUTTON')
   })
 
   it('shows a distinct message when copyText rejects', async () => {
     copyTextMock.mockRejectedValueOnce(new Error('copy unsupported'))
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     fireEvent.click(screen.getByTestId('status-seg-cwd'))
     await waitFor(() => expect(screen.getByTestId('status-copy-feedback').textContent).toBe('copy failed'))
   })
 
   it('keeps the feedback slot present and fixed-width before any copy, so a copy does not reflow the row', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const slot = screen.getByTestId('status-copy-feedback')
     expect(slot.textContent).toBe('')
     expect(slot.className).toMatch(/\bw-\[?\d/)
@@ -516,7 +506,7 @@ describe('StatusBar peer segments', () => {
 
   it('dims a stale peer id but still copies it on click — it does not refresh (spec §3.4)', async () => {
     seedPeers({ fetchedAt: Date.now() - 90_000 })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg).toHaveAttribute('data-dim', 'true')
     peerRefresh.mockClear()
@@ -546,7 +536,7 @@ describe('StatusBar peer segments', () => {
         byHost: { ...s.byHost, [hostId]: { ...s.byHost[hostId], rows: { dev001: { ...PEER_ROW, address: 'mlab/purdex-bb', ref: '_bbbbbb' } }, fetchedAt: Date.now() } },
       }))
     })
-    render(<StatusBar activeTab={tab} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={tab} />)
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-4a [4a4a4a]')
     peerRefresh.mockClear()
     act(() => {
@@ -560,7 +550,7 @@ describe('StatusBar peer segments', () => {
   })
 
   it('the refresh control refreshes both stores once', async () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     peerRefresh.mockClear()
     cwdRefresh.mockClear()
     fireEvent.click(screen.getByTestId('status-peer-refresh'))
@@ -571,19 +561,19 @@ describe('StatusBar peer segments', () => {
 
   it('disables the refresh control while loading', () => {
     seedPeers({ loading: true })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-peer-refresh')).toBeDisabled()
   })
 
   it('disables the refresh control when the host is not connected', () => {
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-peer-refresh')).toBeDisabled()
   })
 
   it('dims the peer id and agent when the host is not connected', () => {
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-peer-id')).toHaveAttribute('data-dim', 'true')
     expect(screen.getByTestId('status-seg-agent')).toHaveAttribute('data-dim', 'true')
   })
@@ -597,7 +587,7 @@ describe('StatusBar peer segments', () => {
   it('a stale peer id is as bright as its neighbours, and the refresh control carries the state', () => {
     seedPeers({ fetchedAt: Date.now() - 90_000 })
     seedCwd('/tmp/here')
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
 
     const peerId = screen.getByTestId('status-seg-peer-id')
     const host = screen.getByTestId('status-seg-host')
@@ -611,7 +601,7 @@ describe('StatusBar peer segments', () => {
 
   it('the refresh control is not marked stale for a fresh answer', () => {
     seedPeers()
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-peer-refresh')).not.toHaveAttribute('data-stale')
   })
 
@@ -621,7 +611,7 @@ describe('StatusBar peer segments', () => {
     ['a complete envelope with no row', {} as Partial<PeerHostEntry>, /no peer/],
   ])('renders an em dash for %s, with the reason in the tooltip', (_label, entry, tooltip) => {
     seedPeers(entry, null)
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toBe('—')
     expect(seg.getAttribute('title')).toMatch(tooltip)
@@ -633,7 +623,7 @@ describe('StatusBar peer segments', () => {
   // segment is click-to-copy — the value would go into `pdx msg send`.
   it('shows an em dash, not the last known address, when the refresh failed', () => {
     seedPeers({ error: 'connection refused' })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toBe('—')
     expect(seg.getAttribute('title')).toMatch(/connection refused/)
@@ -643,7 +633,7 @@ describe('StatusBar peer segments', () => {
 
   it('offers nothing to copy while the refresh is failing', () => {
     seedPeers({ error: 'connection refused' })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     for (const testId of ['status-seg-peer-id', 'status-seg-agent']) {
       const seg = screen.getByTestId(testId)
       expect(seg, testId).toBeDisabled()
@@ -654,13 +644,13 @@ describe('StatusBar peer segments', () => {
 
   it('renders an em dash for a row that has neither a ref nor an address', () => {
     seedPeers({}, { ...PEER_ROW, ref: '', address: '', agent: null })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
   })
 
   it.each(['inbox_dead', 'ambiguous'])('shows an %s row dimmed, with its reason in the tooltip', (reason) => {
     seedPeers({}, { ...PEER_ROW, deliverable: false, reason })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toBe('purdex-b0 [q34psn]')
     expect(seg).toHaveAttribute('data-dim', 'true')
@@ -668,7 +658,7 @@ describe('StatusBar peer segments', () => {
   })
 
   it('each copy control is a native focusable button (Enter/Space activation is the platform’s — jsdom does not simulate it)', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-agent', 'status-seg-peer-id', 'status-peer-refresh']) {
       const el = screen.getByTestId(testId)
       expect(el.tagName, testId).toBe('BUTTON')
@@ -699,7 +689,7 @@ describe('StatusBar peer segments', () => {
     })
     useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
     useUISettingsStore.setState({ showAgentTitleInStatusBar: true })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
 
     // Dropped, in the order spec §4.3 gives up on them.
     expect(screen.getByTestId('status-seg-cwd').className).toContain('max-[600px]:hidden')
@@ -713,11 +703,10 @@ describe('StatusBar peer segments', () => {
     expect(screen.getByTestId('agent-label').className).toMatch(/max-w-\[\d+ch\]/)
     expect(screen.getByTestId('status-split-buttons').className).toContain('max-[500px]:hidden')
     // Never dropped.
-    for (const testId of ['status-seg-status', 'status-view-mode', 'upload-status', 'status-seg-host', 'status-seg-peer-id']) {
+    for (const testId of ['status-seg-status', 'upload-status', 'status-seg-host', 'status-seg-peer-id']) {
       expect(screen.getByTestId(testId).className, testId).not.toContain(':hidden')
     }
     expect(screen.getByTestId('status-seg-status').className).toContain('shrink-0')
-    expect(screen.getByTestId('status-view-mode').className).toContain('shrink-0')
     // Host survives by shrinking to 8ch, not by disappearing.
     expect(screen.getByTestId('status-seg-host').className).toContain('max-[500px]:max-w-[8ch]')
     // Truncation, per segment.
@@ -729,7 +718,7 @@ describe('StatusBar peer segments', () => {
   })
 
   it('lays the row out as three containers, with ml-auto only on the controls', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const segments = screen.getByTestId('status-segments')
     const controls = screen.getByTestId('status-controls')
     expect(segments.className).toContain('min-w-0')
@@ -751,7 +740,7 @@ describe('StatusBar peer segments', () => {
       cachedName: '', tmuxInstance: GEN, terminated: 'tmux-restarted',
     } as PaneContent],
   ])('does not fetch peer data for %s', (_label, content) => {
-    render(<StatusBar activeTab={content ? makeTab('t1', content) : null} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={content ? makeTab('t1', content) : null} />)
     expect(peerRefresh).not.toHaveBeenCalled()
     expect(cwdRefresh).not.toHaveBeenCalled()
   })
@@ -783,7 +772,7 @@ describe('StatusBar peer generation', () => {
   }
 
   it('shows the peer id when the pane and the row share a generation', () => {
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
   })
 
@@ -795,14 +784,14 @@ describe('StatusBar peer generation', () => {
   ])('shows no peer when %s', (_label, paneGen, rowGen) => {
     setSessionGeneration(paneGen)
     seedPeers({}, { ...PEER_ROW, tmuxInstance: rowGen })
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
     expect(screen.getByTestId('status-seg-agent').textContent).toBe('—')
   })
 
   it('offers nothing to copy for a row from another generation', () => {
     setSessionGeneration('4242:1700000000')
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg).toBeDisabled()
     fireEvent.click(seg)
@@ -811,13 +800,13 @@ describe('StatusBar peer generation', () => {
 
   it('shows no peer for a session the store has not reconciled yet — no generation to match on', () => {
     setSessionGeneration(undefined)
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
   })
 
   it('still shows the cwd on a generation mismatch — that reading is the daemon’s answer for this pane', () => {
     setSessionGeneration('4242:1700000000')
-    render(<StatusBar activeTab={sessionTab()} onViewModeChange={vi.fn()} />)
+    render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
   })
 })

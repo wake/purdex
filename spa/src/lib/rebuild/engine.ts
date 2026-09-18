@@ -188,13 +188,13 @@ function isGenerationConflict(err: unknown): boolean {
     && (err as { status?: unknown }).status === 409
 }
 
-/** The pane's live content, or null if it is gone / not a terminal tmux pane. */
+/** The pane's live content, or null if it is gone / not a tmux pane. */
 function readTerminalPane(tabId: string, paneId: string): TmuxSessionContent | null {
   const tab = useTabStore.getState().tabs[tabId]
   if (!tab) return null
   const pane = findPane(tab.layout, paneId)
   const content = pane?.content
-  if (!content || content.kind !== 'tmux-session' || content.mode !== 'terminal') return null
+  if (!content || content.kind !== 'tmux-session') return null
   return content
 }
 
@@ -251,7 +251,7 @@ export function repointPane(tabId: string, paneId: string, session: Session): vo
     kind: 'tmux-session',
     hostId: content.hostId,
     sessionCode: session.code,
-    mode: content.mode,
+    mode: 'terminal',
     cachedName: session.name,
     tmuxInstance,
     // `terminated` is deliberately absent — dropping it is what re-attaches the pane.

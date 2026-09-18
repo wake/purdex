@@ -5,7 +5,7 @@ import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 
-function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
+function makeSessionTab(code: string, mode: 'terminal' = 'terminal') {
   return createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
@@ -30,7 +30,7 @@ describe('useTabStore', () => {
 
   it('addTab does not change activeTabId when adding second tab', () => {
     const tab1 = makeSessionTab('dev001')
-    const tab2 = makeSessionTab('cld001', 'stream')
+    const tab2 = makeSessionTab('cld001')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     expect(useTabStore.getState().activeTabId).toBe(tab1.id)
@@ -274,21 +274,6 @@ describe('useTabStore', () => {
       expect(ws.tabs).toEqual([s1.id])
       expect(useTabStore.getState().tabs[newId]).toBeDefined()
     })
-  })
-
-  it('setViewMode updates pane mode', () => {
-    const tab = makeSessionTab('dev001')
-    useTabStore.getState().addTab(tab)
-    const paneId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
-    useTabStore.getState().setViewMode(tab.id, paneId, 'stream')
-    const updated = useTabStore.getState().tabs[tab.id]
-    const content = updated.layout.type === 'leaf' ? updated.layout.pane.content : undefined
-    expect(content?.kind === 'tmux-session' && content.mode).toBe('stream')
-  })
-
-  it('setViewMode is no-op for nonexistent tab', () => {
-    useTabStore.getState().setViewMode('nonexistent', 'pane1', 'stream')
-    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
   })
 
   it('reorderTabs updates tabOrder', () => {
@@ -558,7 +543,7 @@ describe('useTabStore', () => {
 
     it('updates multiple matching tabs', () => {
       const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev001', 'stream')
+      const tab2 = makeSessionTab('dev001')
       useTabStore.getState().addTab(tab1)
       useTabStore.getState().addTab(tab2)
 

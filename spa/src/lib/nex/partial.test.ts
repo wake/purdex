@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { applyTransientFrame, finalizedFor, isPartialBlockVisible, partialHasVisibleContent, partialVersionOf, type PartialAssembly, type PartialBlock } from './partial'
 import { applyDurableEvent, defaultExecutionState, type ExecutionState } from './event-reducer'
 import type { NexEvent } from './types'
-import type { AssistantMessage } from '../stream-ws'
+import type { AssistantMessage } from './message-types'
 
 describe('applyTransientFrame', () => {
   const MSG = 'msg_011Cf9fLxdWgh5jkA2b9MjXt'

@@ -153,10 +153,15 @@ describe('reattachByName', () => {
     expect(report.failed).toBe(1)
   })
 
-  it('fails a terminal pane against a stream-mode session', async () => {
+  it('reattaches against a live session a pre-P-D.2 daemon still reports as stream (codex F1)', async () => {
+    // A live session is a tmux session whatever its stored mode says; the
+    // terminal WS attaches to it the same way. Rejecting here while
+    // snapshot restore and the session picker accept the same daemon
+    // session made one remote state look alive or lost depending on the
+    // entry point.
     vi.mocked(listSessions).mockResolvedValue([session({ code: 'n', name: 'work', mode: 'stream' })])
     const { remap } = await reattachByName({ h: { old: meta('h', 'old', { name: 'work' }) } })
-    expect(remap.h.old).toEqual({ status: 'failed' })
+    expect(remap.h.old.status).toBe('reattached')
   })
 
   it('reattaches a terminal pane when the session mode is absent', async () => {
@@ -165,18 +170,22 @@ describe('reattachByName', () => {
     expect(remap.h.old.status).toBe('reattached')
   })
 
-  it('never reattaches a stream pane', async () => {
+  it('reattaches a legacy stream-mode meta as a terminal pane (P-D.3)', async () => {
+    // A device-state payload written before P-D.3 can still carry
+    // mode: 'stream' on its meta; the pane it describes is a terminal pane now,
+    // so a live terminal session by that name is adopted like any other.
     vi.mocked(listSessions).mockResolvedValue([
-      session({ code: 'n', name: 'work', mode: 'stream' }),
+      session({ code: 'n', name: 'work', mode: 'terminal' }),
       session({ code: 'm', name: 'work2', mode: 'terminal' }),
     ])
-    const { remap } = await reattachByName({
-      h: {
-        s1: meta('h', 's1', { name: 'work', mode: 'stream' }),
-        s2: meta('h', 's2', { name: 'work2', mode: 'stream' }),
-      },
+    const legacy = (code: string, name: string) =>
+      ({ ...meta('h', code, { name }), mode: 'stream' }) as unknown as SessionMeta
+    const { remap, report } = await reattachByName({
+      h: { s1: legacy('s1', 'work'), s2: legacy('s2', 'work2') },
     })
-    expect(remap.h).toEqual({ s1: { status: 'failed' }, s2: { status: 'failed' } })
+    expect(remap.h.s1.status).toBe('reattached')
+    expect(remap.h.s2.status).toBe('reattached')
+    expect(report).toEqual({ reattached: 2, rebuilt: 0, failed: 0 })
   })
 
   it('counts a mixed report and never calls createSession', async () => {

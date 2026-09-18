@@ -112,15 +112,15 @@ describe('SessionsSection', () => {
     expect(screen.getByText('No sessions on this host')).toBeInTheDocument()
   })
 
-  it('renders session table with name, mode, cwd columns', () => {
+  it('renders session table with name and cwd columns, no mode column (P-D.3)', () => {
     render(<SessionsSection hostId={HOST_ID} />)
     // Column headers
     expect(screen.getByText('Session Name')).toBeInTheDocument()
-    expect(screen.getByText('Mode')).toBeInTheDocument()
+    expect(screen.queryByText('Mode')).not.toBeInTheDocument()
     expect(screen.getByText('CWD')).toBeInTheDocument()
     // Session data
     expect(screen.getByText('dev')).toBeInTheDocument()
-    expect(screen.getByText('terminal')).toBeInTheDocument()
+    expect(screen.queryByText('terminal')).not.toBeInTheDocument()
     expect(screen.getByText('/tmp')).toBeInTheDocument()
   })
 

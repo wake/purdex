@@ -2,7 +2,6 @@
 import { useEffect, useRef } from 'react'
 import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useStreamStore } from '../stores/useStreamStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
@@ -17,7 +16,7 @@ import { closeAttachGate, openAttachGate } from '../lib/rebuild/attach-gate'
 import { noteReconciledSessions, runRevivePass, runRevivePassAll } from '../lib/rebuild/revive'
 import { probeMissingCwds } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
-import { hostWsUrl, fetchWsTicket, fetchHistory, type Session } from '../lib/host-api'
+import { hostWsUrl, fetchWsTicket, type Session } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
 
@@ -47,7 +46,7 @@ function provenanceBindings(
   for (const tab of Object.values(useTabStore.getState().tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
-      if (c.kind !== 'tmux-session' || c.mode !== 'terminal' || c.terminated) return
+      if (c.kind !== 'tmux-session' || c.terminated) return
       if (c.hostId !== hostId) return
       if (sessionCode !== undefined && c.sessionCode !== sessionCode) return
       bindings.set(`${c.sessionCode}\u0000${c.tmuxInstance}`, {
@@ -235,9 +234,6 @@ export function useMultiHostEventWs() {
               }
             } catch { /* ignore */ }
           }
-          if (event.type === 'relay') {
-            useStreamStore.getState().setRelayStatus(hostId, event.session, event.value === 'connected')
-          }
           if (event.type === 'tmux') {
             useHostStore.getState().setRuntime(hostId, {
               tmuxState: event.value === 'ok' ? 'ok' : 'unavailable',
@@ -249,28 +245,9 @@ export function useMultiHostEventWs() {
             dispatchBackupWsEvent(hostId, event)
             return
           }
-          if (event.type === 'handoff') {
-            const store = useStreamStore.getState()
-            if (event.value === 'connected') {
-              store.setHandoffProgress(hostId, event.session, '')
-              useSessionStore.getState().fetchHost(hostId).then(() => {
-                const sess = (useSessionStore.getState().sessions[hostId] ?? [])
-                  .find((s) => s.code === event.session)
-                if (sess && sess.mode !== 'terminal') {
-                  fetchHistory(hostId, sess.code).then((msgs) => {
-                    useStreamStore.getState().loadHistory(hostId, event.session, msgs)
-                  }).catch(() => {})
-                } else {
-                  useStreamStore.getState().clearSession(hostId, event.session)
-                }
-              }).catch(() => {})
-            } else if (event.value.startsWith('failed')) {
-              store.setHandoffProgress(hostId, event.session, '')
-              useSessionStore.getState().fetchHost(hostId).catch(() => {})
-            } else {
-              store.setHandoffProgress(hostId, event.session, event.value)
-            }
-          }
+          // `handoff` / `relay` events: the daemon stopped emitting them in
+          // P-D.2 and the SPA has no Stream state since P-D.3. One from an
+          // older peer daemon falls through here untouched.
           // Whitelist sourced from agent-ws/index.ts — single source so adding
           // a new agent.* handler only requires updating AGENT_WS_EVENT_TYPES
           // (R2-F2). No broad startsWith filter (defender review #9).

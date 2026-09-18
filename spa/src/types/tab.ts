@@ -83,7 +83,7 @@ export interface PaneRebuildRecord {
 
 export type PaneContent =
   | { kind: 'new-tab' }
-  | { kind: 'tmux-session'; hostId: string; sessionCode: string; mode: 'terminal' | 'stream'; cachedName: string; tmuxInstance: string; terminated?: TerminatedReason; rebuild?: PaneRebuildRecord }
+  | { kind: 'tmux-session'; hostId: string; sessionCode: string; mode: 'terminal'; cachedName: string; tmuxInstance: string; terminated?: TerminatedReason; rebuild?: PaneRebuildRecord }
   | { kind: 'dashboard' }
   | { kind: 'hosts' }
   | { kind: 'history' }

@@ -146,7 +146,6 @@ describe('useMultiHostEventWs provenance sweep', () => {
         sessionName: 'dev', tmuxInstance: GEN, capturedAt: 1,
         agent: { type: 'cc', sessionId: 's', updatedAt: 1 },
       } },
-      { sessionCode: 'ccc', mode: 'stream' },                    // out of scope
       { sessionCode: 'ddd', terminated: 'session-closed' },      // dead
       { sessionCode: 'eee', hostId: 'h2' },                      // another host
     )

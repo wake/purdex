@@ -159,7 +159,9 @@ failure is a visible error state, not a white screen.
 ### P-D.3 — SPA Stream family
 
 Order inside the PR matters; each bullet is its own commit and **every
-commit must pass `tsc --noEmit`** — so consumers are unwired *before* the
+commit must pass `tsc --noEmit -p tsconfig.app.json`** (or `tsc -b`; the
+bare `tsc --noEmit` is a no-op because `spa/tsconfig.json` is
+solution-style with `files: []`) — so consumers are unwired *before* the
 files they import are deleted.
 
 1. **Type move** (pure move, no codex): `StreamMessage`, `ContentBlock`,
@@ -279,7 +281,8 @@ WS event `handoff` is never emitted. `agent.*` events unchanged.
 ### SPA phase (P-D.3)
 
 1. `cd spa && npx vitest run && pnpm run lint && pnpm run build` green;
-   `npx tsc --noEmit` green on every commit of the branch.
+   `npx tsc --noEmit -p tsconfig.app.json` green on every commit of the
+   branch.
 2. Grep guard (I4) on `spa/src`.
 3. Main checkout `git pull --ff-only` + `pnpm install`; :5174 HMR picks it
    up.

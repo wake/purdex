@@ -72,10 +72,6 @@ describe('isHandoffCandidate — precedence', () => {
 describe('isHandoffCandidate — structural checks', () => {
   const cc: HandoffGateDeps = { ...ready, agentType: 'cc' }
 
-  it('stream mode → hidden', () => {
-    expect(isHandoffCandidate(terminal({ mode: 'stream' }), cc)).toBe(false)
-  })
-
   it('terminated pane → hidden', () => {
     expect(isHandoffCandidate(terminal({ terminated: 'session-closed' }), cc)).toBe(false)
   })

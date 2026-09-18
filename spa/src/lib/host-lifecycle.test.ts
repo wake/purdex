@@ -5,7 +5,6 @@ import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
-import { useStreamStore } from '../stores/useStreamStore'
 import { useExecutionStore } from '../stores/useExecutionStore'
 import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
 import { useExecutionListStore, type HostListCache } from '../stores/useExecutionListStore'
@@ -21,7 +20,6 @@ import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { STORAGE_KEYS } from './storage/keys'
 import type { Tab } from '../types/tab'
-import type { StreamMessage } from './stream-ws'
 import type { Session } from './host-api'
 
 vi.mock('../lib/nex/nex-api', () => ({ releaseLease: vi.fn() }))
@@ -33,7 +31,7 @@ function makeSession(code: string, name: string = code): Session {
 const HOST_A = 'host-a'
 const HOST_B = 'host-b'
 
-function makeSessionTab(hostId: string, code: string, mode: 'terminal' | 'stream' = 'terminal'): Tab {
+function makeSessionTab(hostId: string, code: string, mode: 'terminal' = 'terminal'): Tab {
   return createTab({ kind: 'tmux-session', hostId, sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
@@ -52,7 +50,6 @@ function resetAllStores() {
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
   useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
-  useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ byHost: {} })
   useExecutionListStore.setState({ byHost: {} })
@@ -158,15 +155,6 @@ describe('host delete cascade', () => {
 
     expect(useAgentStore.getState().lastEvents[`${HOST_A}:dev001`]).toBeUndefined()
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBeUndefined()
-  })
-
-  it('cascade cleans StreamStore entries', () => {
-    useStreamStore.getState().addMessage(HOST_A, 'dev001', { type: 'assistant' } as StreamMessage)
-    expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeDefined()
-
-    deleteHostCascade(HOST_A, true)
-
-    expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeUndefined()
   })
 
   it('clears useExecutionStore and useNexHostStore entries for the removed host only', () => {
@@ -362,20 +350,6 @@ describe('host delete cascade', () => {
     expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBe('claude-sonnet-4-20250514')
   })
 
-  it('undo restores StreamStore data', () => {
-    const msg = { type: 'assistant' } as StreamMessage
-    useStreamStore.getState().addMessage(HOST_A, 'dev001', msg)
-
-    const restore = deleteHostCascade(HOST_A, true)
-    expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeUndefined()
-
-    restore()
-    const restored = useStreamStore.getState().sessions[`${HOST_A}:dev001`]
-    expect(restored).toBeDefined()
-    expect(restored.messages).toHaveLength(1)
-    expect(restored.conn).toBeNull()
-  })
-
   it('undo restores closed tabs (closeTabs=true)', () => {
     const tab = makeSessionTab(HOST_A, 'dev001')
     useTabStore.getState().addTab(tab)
@@ -489,14 +463,12 @@ describe('host delete cascade', () => {
       broadcast_ts: Date.now(),
     }
     useAgentStore.getState().handleNormalizedEvent(HOST_B, 'stg001', eventB)
-    useStreamStore.getState().addMessage(HOST_B, 'stg001', { type: 'user' } as StreamMessage)
 
     deleteHostCascade(HOST_A, true)
 
     // HOST_B data should be untouched
     expect(useTabStore.getState().tabs[tabB.id]).toBeDefined()
     expect(useAgentStore.getState().statuses[`${HOST_B}:stg001`]).toBe('running')
-    expect(useStreamStore.getState().sessions[`${HOST_B}:stg001`]).toBeDefined()
   })
 
   it('cascade (closeTabs=true) does not record to history store', () => {
@@ -676,7 +648,6 @@ describe('#541 cross-store rehydrate order invariants', () => {
       oscTitles: {},
       ccStatus: {},
     })
-    useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
     useWorkspaceStore.getState().reset()
     useUndoToast.setState({ toast: null })
@@ -806,9 +777,9 @@ describe('#541 cross-store rehydrate order invariants', () => {
     expect(useHostStore.getState().hosts[hA]?.name).toBe('Host A (fresh)')
   })
 
-  // ── Case 5: hostWasRecreated gate covers all 6 restore categories ─────────
+  // ── Case 5: hostWasRecreated gate covers all 5 restore categories ─────────
 
-  it('hostWasRecreated: recreating same-id host during undo window blocks all 6 restore categories', () => {
+  it('hostWasRecreated: recreating same-id host during undo window blocks all 5 restore categories', () => {
     seedBothRehydrated()
 
     // Seed additional data in all cascaded stores so we can assert each is gated
@@ -824,9 +795,8 @@ describe('#541 cross-store rehydrate order invariants', () => {
     useAgentStore.setState((s) => ({
       statuses: { ...s.statuses, [`${hA}:dev001`]: 'running' as const },
     }))
-    useStreamStore.getState().addMessage(hA, 'dev001', { type: 'assistant' } as StreamMessage)
     useSessionStore.getState().replaceHost(hA, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~', cc_session_id: '', cc_model: '', has_relay: false }])
-    // Seed a tab in a workspace so the tab-restore gate (category 6) can be asserted
+    // Seed a tab in a workspace so the tab-restore gate (category 5) can be asserted
     const ws6 = useWorkspaceStore.getState().addWorkspace('WS for gate test')
     const tab6 = makeSessionTab(hA, 'dev001')
     useTabStore.getState().addTab(tab6)
@@ -845,7 +815,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
 
     restore()
 
-    // hostWasRecreated = true → all 6 restore categories must be blocked:
+    // hostWasRecreated = true → all 5 restore categories must be blocked:
     // 1. host position/order — recreated entry stays, snapshot hostOrder NOT applied
     expect(useHostStore.getState().hosts[hA]?.name).toBe('Recreated A')
     // 2. hostSettings — not restored (stays undefined)
@@ -854,9 +824,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
     expect(useSessionStore.getState().sessions[hA]).toBeUndefined()
     // 4. agentStore statuses — not restored (seeded directly above; snapshot captured it; gate must block)
     expect(useAgentStore.getState().statuses[`${hA}:dev001`]).toBeUndefined()
-    // 5. streamStore data — not restored
-    expect(useStreamStore.getState().sessions[`${hA}:dev001`]).toBeUndefined()
-    // 6. tab/workspace-membership restore — tab must NOT be re-added to the workspace
+    // 5. tab/workspace-membership restore — tab must NOT be re-added to the workspace
     expect(useTabStore.getState().tabs[tab6.id]).toBeUndefined()
     expect(useWorkspaceStore.getState().findWorkspaceByTab(tab6.id)).toBeNull()
   })

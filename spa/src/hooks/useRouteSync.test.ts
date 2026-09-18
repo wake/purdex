@@ -18,7 +18,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import type { Tab } from '../types/tab'
 
-function makeTab(id: string, contentKind: 'tmux-session' | 'dashboard' | 'history' | 'settings', mode?: 'terminal' | 'stream'): Tab {
+function makeTab(id: string, contentKind: 'tmux-session' | 'dashboard' | 'history' | 'settings', mode?: 'terminal'): Tab {
   const content = contentKind === 'tmux-session'
     ? { kind: 'tmux-session' as const, hostId: 'test-host', sessionCode: 'test', mode: mode ?? 'terminal' as const, cachedName: '', tmuxInstance: '' }
     : contentKind === 'settings'
@@ -115,25 +115,6 @@ describe('useRouteSync', () => {
     })
 
     expect(mem.history).toContain('/t/abc123/terminal')
-  })
-
-  it('viewMode change updates URL', () => {
-    const tab = makeTab('abc123', 'tmux-session', 'terminal')
-    resetStore({
-      tabs: { abc123: tab },
-      tabOrder: ['abc123'],
-      activeTabId: 'abc123',
-    })
-
-    const mem = memoryLocation({ path: '/t/abc123/terminal', record: true })
-    renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
-
-    // Change view mode
-    act(() => {
-      useTabStore.getState().setViewMode('abc123', 'pane-abc123', 'stream')
-    })
-
-    expect(mem.history).toContain('/t/abc123/stream')
   })
 
   it('/ route does not open any tab (no-op)', () => {

@@ -48,9 +48,14 @@ function usable(s: Session): boolean {
     && typeof s.tmux_instance === 'string' && s.tmux_instance !== ''
 }
 
-function compatible(meta: SessionMeta, s: Session): boolean {
-  if (meta.mode !== 'terminal') return false // stream panes are never reattached
-  return s.mode === undefined || s.mode === 'terminal'
+// No mode gate on either side since P-D.3: every pane is a terminal pane,
+// and a live session is a tmux session whatever a pre-P-D.2 peer daemon
+// still reports as its mode — the terminal WS attaches to it the same way.
+// Snapshot restore, revive and the session picker apply the same policy, so
+// one remote state cannot look alive from one entry point and lost from
+// another (codex F1 on P-D.3a).
+function compatible(_meta: SessionMeta, _s: Session): boolean {
+  return true
 }
 
 /** Upper bound for one host's session listing; a hung host must not hold the

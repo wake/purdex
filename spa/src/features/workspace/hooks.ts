@@ -22,8 +22,7 @@ export interface RenameTargetPane {
   sessionCode: string
   tmuxInstance: string
   cachedName: string
-  /** Stream panes carry no rebuild record; they only get the legacy rename. */
-  mode: 'terminal' | 'stream'
+  mode: 'terminal'
   /** Set when the pane's session is gone — its name row edits the record only. */
   terminated?: TerminatedReason
   record: PaneRebuildRecord
@@ -53,31 +52,29 @@ function collectSessionPanes(tab: Tab): RenameTargetPane[] {
 }
 
 /**
- * The panes the popover renders a rebuild detail block for: terminal panes,
- * dead ones included — a dead pane is exactly the one whose record the user
- * needs to fix. Stream panes are out of scope for the record, as everywhere
- * else in this feature.
+ * The panes the popover renders a rebuild detail block for: every session
+ * pane, dead ones included — a dead pane is exactly the one whose record the
+ * user needs to fix. (Before P-D.3 this excluded stream panes, which carried
+ * no record; every tmux-session pane is a terminal pane now.)
  */
 export function collectRenameTargets(tab: Tab): RenameTargetPane[] {
-  return collectSessionPanes(tab).filter((target) => target.mode === 'terminal')
+  return collectSessionPanes(tab)
 }
 
 /**
  * The popover's entry condition: any pane it could do something useful with.
  *
- * Wider than {@link collectRenameTargets} in one direction and narrower in
- * another. A stream pane has no rebuild record, but it is still a named tmux
- * session that double-click has always renamed through the legacy single
- * input — gating the entry point on terminal panes alone took that away.
- * A terminated stream pane is left out, matching the pre-feature rule: there
- * is no live session to rename and no record to edit.
+ * Since P-D.3 this is the same set as {@link collectRenameTargets} — the two
+ * differed only in how they treated stream panes. It stays a separate name
+ * because it answers a different question (may the popover open at all?)
+ * than the other (which panes get a detail block?).
  *
  * Looking at the tab's *primary* pane alone (the pre-Task-15 behaviour) left
  * the popover unreachable whenever the first pane happened to be an editor or
  * a dead session, even though another pane in the tab was a good target.
  */
 export function collectRenameEntryPanes(tab: Tab): RenameTargetPane[] {
-  return collectSessionPanes(tab).filter((target) => target.mode === 'terminal' || !target.terminated)
+  return collectSessionPanes(tab)
 }
 
 export function useTabWorkspaceActions(displayTabs: Tab[]) {
@@ -194,10 +191,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     if (!contextMenu) return
     const { tab } = contextMenu
     const store = useTabStore.getState()
-    const primaryPaneId = getPrimaryPane(tab.layout).id
     switch (action) {
-      case 'viewMode-terminal': store.setViewMode(tab.id, primaryPaneId, 'terminal'); break
-      case 'viewMode-stream': store.setViewMode(tab.id, primaryPaneId, 'stream'); break
       case 'lock': case 'unlock': store.toggleLock(tab.id); break
       case 'pin': case 'unpin': store.togglePin(tab.id); break
       case 'close': handleCloseTab(tab.id); break

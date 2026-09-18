@@ -80,19 +80,27 @@ describe('SessionPanel', () => {
     expect(setActive).toHaveBeenCalledWith(HOST_ID, 'abc001')
   })
 
-  it('shows terminal icon for term mode', () => {
+  it('shows the terminal icon and no mode text, whatever mode the daemon reports (P-D.3)', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
           { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
         ],
       },
       activeHostId: HOST_ID,
       activeCode: null,
     })
-    render(<SessionPanel />)
-    // Terminal icon should be present (Phosphor Terminal icon)
-    expect(screen.getByTestId('session-icon-abc001')).toBeInTheDocument()
+    const { container } = render(<SessionPanel />)
+    // Both rows carry the same (Terminal) icon: one icon component, one path.
+    const iconA = screen.getByTestId('session-icon-abc001')
+    const iconB = screen.getByTestId('session-icon-abc002')
+    expect(iconA.innerHTML).toBe(iconB.innerHTML)
+    expect(iconB.getAttribute('class') ?? '').not.toContain('text-blue-400')
+    // The mode label is gone from the row.
+    expect(screen.queryByText('terminal')).toBeNull()
+    expect(screen.queryByText('stream')).toBeNull()
+    expect(container.textContent).not.toContain('stream')
   })
 
   it('shows agent status badge when agent is active', () => {

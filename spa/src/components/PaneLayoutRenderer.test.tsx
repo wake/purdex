@@ -585,15 +585,6 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     expect(screen.queryByText('Hand to nex')).not.toBeInTheDocument()
   })
 
-  it('hides it for a stream-mode pane', () => {
-    seedTab(tmux('p1', { mode: 'stream' }))
-    seedReady()
-    liveCc()
-    render(<PaneLayoutRenderer layout={tmux('p1', { mode: 'stream' })} tabId="t1" isActive={true} />)
-    rightClick('tmux-p1')
-    expect(screen.queryByText('Hand to nex')).not.toBeInTheDocument()
-  })
-
   it('a non-session pane never shows it', () => {
     seedTab(dash('p1'))
     seedReady()

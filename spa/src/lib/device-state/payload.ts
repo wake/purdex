@@ -42,10 +42,10 @@ export function buildDeviceStatePayload(now: number): WorkspaceSnapshot {
   for (const t of orderedTabs(tabs, tabOrder)) {
     scanPaneTree(t.layout, (pane) => {
       if (pane.content.kind !== 'tmux-session') return
-      const { hostId, sessionCode, mode, cachedName, rebuild } = pane.content
+      const { hostId, sessionCode, cachedName, rebuild } = pane.content
       const perHost = (sessionMeta[hostId] ??= {})
       if (perHost[sessionCode]) return // first pane wins
-      const meta: SessionMeta = { hostId, sessionCode, name: cachedName, mode, restorable: false }
+      const meta: SessionMeta = { hostId, sessionCode, name: cachedName, mode: 'terminal', restorable: false }
       const cwd = rebuild?.cwd
       if (typeof cwd === 'string' && cwd !== '') meta.cwd = cwd
       perHost[sessionCode] = meta

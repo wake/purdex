@@ -1,6 +1,9 @@
-// spa/src/lib/stream-ws.ts
-
-// --- Message Types ---
+// spa/src/lib/nex/message-types.ts — Claude Code `stream-json` message shapes
+// (assistant / user / result / system / control_request / stream_event) as
+// consumed by the exec pane: event-reducer, ConversationMessages,
+// ToolUseBlock, useExecutionStore. Moved verbatim in P-D.3 from the
+// Stream-mode WS client module that the same phase deleted; the
+// declarations below are byte-identical to the originals.
 
 export interface ContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
@@ -79,64 +82,3 @@ export type StreamMessage =
   | ControlRequest
   | StreamEvent
   | { type: string; [key: string]: unknown }
-
-export function parseStreamMessage(raw: string): StreamMessage | null {
-  try {
-    return JSON.parse(raw) as StreamMessage
-  } catch {
-    return null
-  }
-}
-
-// --- Connection ---
-
-export interface StreamConnection {
-  send: (msg: object) => void
-  sendControlResponse: (requestId: string, response: object) => void
-  interrupt: () => void
-  close: () => void
-}
-
-export function connectStream(
-  url: string,
-  onMessage: (msg: StreamMessage) => void,
-  onClose: () => void,
-  onOpen?: () => void,
-): StreamConnection {
-  const ws = new WebSocket(url)
-
-  ws.onopen = () => onOpen?.()
-  ws.onmessage = (e) => {
-    const msg = parseStreamMessage(e.data)
-    if (msg) onMessage(msg)
-  }
-  ws.onerror = () => {}
-  ws.onclose = () => onClose()
-
-  const sendJSON = (data: object) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(data))
-    }
-  }
-
-  return {
-    send: sendJSON,
-    sendControlResponse: (requestId, response) => {
-      sendJSON({
-        type: 'control_response',
-        response: {
-          subtype: 'success',
-          request_id: requestId,
-          response,
-        },
-      })
-    },
-    interrupt: () => {
-      sendJSON({
-        type: 'control_response',
-        response: { subtype: 'interrupt' },
-      })
-    },
-    close: () => ws.close(),
-  }
-}

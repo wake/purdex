@@ -9,7 +9,6 @@ import type { Tab } from '../../types/tab'
 interface CapturedPaneRef {
   hostId: string
   sessionCode: string
-  mode: 'terminal' | 'stream'
   cachedName: string
 }
 
@@ -18,12 +17,12 @@ function collectTmuxPanesByHost(tabs: Record<string, Tab>): Map<string, Captured
   for (const t of Object.values(tabs)) {
     scanPaneTree(t.layout, (pane) => {
       if (pane.content.kind !== 'tmux-session') return
-      const { hostId, sessionCode, mode, cachedName } = pane.content
+      const { hostId, sessionCode, cachedName } = pane.content
       const refs = byHost.get(hostId)
       if (refs) {
-        refs.push({ hostId, sessionCode, mode, cachedName })
+        refs.push({ hostId, sessionCode, cachedName })
       } else {
-        byHost.set(hostId, [{ hostId, sessionCode, mode, cachedName }])
+        byHost.set(hostId, [{ hostId, sessionCode, cachedName }])
       }
     })
   }
@@ -70,7 +69,7 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
               hostId,
               sessionCode: ref.sessionCode,
               name: ref.cachedName,
-              mode: ref.mode,
+              mode: 'terminal',
               cwd: undefined,
               restorable: false,
               captureError: 'session-dead-at-capture',
@@ -100,7 +99,7 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
                 hostId,
                 sessionCode: ref.sessionCode,
                 name: live.name,
-                mode: ref.mode,
+                mode: 'terminal',
                 cwd,
                 currentCommand: live.current_command,
                 restorable: true,
@@ -114,7 +113,7 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
                 hostId,
                 sessionCode: ref.sessionCode,
                 name: live.name,
-                mode: ref.mode,
+                mode: 'terminal',
                 cwd: undefined,
                 currentCommand: live.current_command,
                 restorable: false,
@@ -127,7 +126,7 @@ export async function buildSnapshot(now: number): Promise<WorkspaceSnapshot> {
           hostId,
           sessionCode: ref.sessionCode,
           name: ref.cachedName,
-          mode: ref.mode,
+          mode: 'terminal',
           cwd: undefined,
           restorable: false,
           captureError: 'host-unreachable',

@@ -108,6 +108,20 @@ describe('ensureSessions', () => {
     expect(report).toEqual({ reattached: 1, rebuilt: 3, failed: 0 })
   })
 
+  it('2b. a v1 snapshot entry with mode stream is rebuilt as a terminal session (P-D.3)', async () => {
+    // SessionMeta.mode is the literal 'terminal' now, but a snapshot written
+    // before P-D.3 still says 'stream'; the request must not echo it.
+    const legacy = { ...meta({ hostId: 'hostA', sessionCode: 'dead', name: 'd', cwd: '/a' }), mode: 'stream' } as unknown as SessionMeta
+    vi.mocked(listSessions).mockResolvedValue([])
+    vi.mocked(createSession).mockImplementation(async (_h, name) => session({ code: `new-${name}`, name }))
+
+    const { remap } = await ensureSessions({ hostA: { dead: legacy } })
+
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(createSession).toHaveBeenCalledWith('hostA', 'd', '/a', 'terminal')
+    expect(remap.hostA.dead.status).toBe('rebuilt')
+  })
+
   it('3. dead entry with restorable=false → failed; createSession not called for it', async () => {
     const sessionMeta: Record<string, Record<string, SessionMeta>> = {
       hostA: {

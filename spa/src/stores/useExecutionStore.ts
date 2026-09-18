@@ -1,8 +1,8 @@
 // spa/src/stores/useExecutionStore.ts — per-(host, execution) view state for
 // Nexen executions (spec §4.2.4). Holds data only: no sockets, no timers —
 // those live in the P-B.2 hooks so HMR / StrictMode double-mount can never
-// leak a connection through the store. Successor of useStreamStore, which
-// P-D removes.
+// leak a connection through the store. Successor of the Stream-mode store
+// that P-D.3 removed.
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import { compositeKey } from '../lib/composite-key'

@@ -69,7 +69,7 @@ function recordedAgentSessionId(tabs: Record<string, Tab>, hostId: string, sessi
     scanPaneTree(tab.layout, (pane) => {
       if (found) return
       const c = pane.content
-      if (c.kind !== 'tmux-session' || c.mode !== 'terminal' || c.terminated) return
+      if (c.kind !== 'tmux-session' || c.terminated) return
       if (c.hostId !== hostId || c.sessionCode !== sessionCode) return
       found = c.rebuild?.agent?.sessionId ?? ''
     })

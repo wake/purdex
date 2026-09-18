@@ -51,7 +51,6 @@ beforeEach(() => {
       bind: '0.0.0.0',
       port: 7860,
       terminal: { sizing_mode: 'auto' },
-      stream: { presets: [] },
       detect: { cc_commands: ['claude'], poll_interval: 5 },
     }),
   } as Response)
@@ -176,8 +175,10 @@ describe('OverviewSection', () => {
 
     await waitFor(() => {
       expect(screen.getByText('claude')).toBeInTheDocument()
-      expect(screen.getByText('0 preset(s)')).toBeInTheDocument()
     })
+    // P-D.3: the "Stream Presets" field is gone with Stream mode.
+    expect(screen.queryByText('Stream Presets')).not.toBeInTheDocument()
+    expect(screen.queryByText(/preset\(s\)/)).not.toBeInTheDocument()
   })
 
   it('clears stale testResult when runtime transitions to connected', async () => {

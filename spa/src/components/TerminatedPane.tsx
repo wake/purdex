@@ -34,14 +34,12 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
       kind: 'tmux-session',
       hostId: sel.hostId,
       sessionCode: sel.sessionCode,
-      mode: content.mode,
+      mode: 'terminal',
       cachedName: sel.cachedName,
       tmuxInstance: sel.tmuxInstance,
     })
   }
 
-  // Stream panes are out of scope for rebuild, so they keep the picker alone.
-  const rebuildable = content.mode === 'terminal'
   // A pane that never accumulated a record still has a name and a generation:
   // the same shape `applyRebuildPatch` seeds a first write with.
   const record: PaneRebuildRecord = content.rebuild ?? {
@@ -75,19 +73,17 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
       }}>
         {t('terminated.close_tab')}
       </button>
-      {rebuildable && (
-        <div className="w-full max-w-lg mb-8">
-          <RebuildActionSet
-            tabId={tabId}
-            paneId={paneId}
-            record={record}
-            terminated={reason}
-            binding={{ hostId: content.hostId, sessionCode: content.sessionCode, tmuxInstance: content.tmuxInstance }}
-            onRebuild={handleRebuild}
-            onEdit={handleEdit}
-          />
-        </div>
-      )}
+      <div className="w-full max-w-lg mb-8">
+        <RebuildActionSet
+          tabId={tabId}
+          paneId={paneId}
+          record={record}
+          terminated={reason}
+          binding={{ hostId: content.hostId, sessionCode: content.sessionCode, tmuxInstance: content.tmuxInstance }}
+          onRebuild={handleRebuild}
+          onEdit={handleEdit}
+        />
+      </div>
       <div className="w-full max-w-sm">
         <SessionPickerList onSelect={handleSelect} />
       </div>

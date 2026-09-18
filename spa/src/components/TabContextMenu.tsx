@@ -6,7 +6,6 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { getPlatformCapabilities } from '../lib/platform'
 
 export type ContextMenuAction =
-  | 'viewMode-terminal' | 'viewMode-stream'
   | 'lock' | 'unlock' | 'pin' | 'unpin'
   | 'close' | 'closeOthers' | 'closeRight'
   | 'tearOff' | 'mergeTo' | 'mergeToTab'
@@ -59,14 +58,9 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
 
   const primary = getPrimaryPane(tab.layout)
   const isSession = primary.content.kind === 'tmux-session'
-  const currentMode = isSession ? (primary.content as { kind: 'tmux-session'; mode: string }).mode : undefined
   const isTerminated = isSession && !!(primary.content as { terminated?: string }).terminated
 
   const items: (MenuItem | 'separator')[] = [
-    // ViewMode section
-    ...(isSession && currentMode !== 'terminal' ? [{ label: t('tab.switch_terminal'), action: 'viewMode-terminal' as const, show: true }] : []),
-    ...(isSession && currentMode !== 'stream' ? [{ label: t('tab.switch_stream'), action: 'viewMode-stream' as const, show: true }] : []),
-    ...(isSession ? ['separator' as const] : []),
     // Rename section (session only, non-terminated)
     ...(isSession && !isTerminated ? [{ label: t('tab.rename_session'), action: 'rename' as const, show: true }] : []),
     // Lock/Pin section

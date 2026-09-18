@@ -76,7 +76,7 @@ describe('isStandaloneTab', () => {
   })
 
   it('returns false when tab is in a workspace', () => {
-    const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'xyz', mode: 'stream', cachedName: '', tmuxInstance: '' })
+    const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'xyz', mode: 'terminal', cachedName: '', tmuxInstance: '' })
     const ws = createWorkspace('WS1')
     ws.tabs = [tab.id]
     expect(isStandaloneTab(tab.id, [ws])).toBe(false)

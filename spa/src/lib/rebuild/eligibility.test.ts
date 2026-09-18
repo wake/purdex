@@ -134,11 +134,9 @@ describe('collectRecordRows', () => {
     expect(rows[1].terminated).toBeUndefined()
   })
 
-  it('ignores stream panes and non-tmux panes', () => {
-    seedPane('t1', 'p1', { mode: 'stream' })
+  it('ignores non-tmux panes', () => {
     useTabStore.setState({
       tabs: {
-        ...useTabStore.getState().tabs,
         t2: { id: 't2', pinned: false, locked: false, createdAt: 0,
               layout: { type: 'leaf', pane: { id: 'p2', content: { kind: 'new-tab' } } } },
       },

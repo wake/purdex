@@ -28,18 +28,41 @@ function migrateLayout(layout: PaneLayout): PaneLayout {
   return { ...layout, children: layout.children.map(migrateLayout) }
 }
 
+// Version 3 (P-D.3): `PaneContent.mode` for tmux-session panes narrowed to
+// the literal 'terminal'. Every tmux-session leaf whose stored mode is
+// anything else (a 'stream' pane, or a leaf with no mode at all) is rewritten.
+function migrateLayoutModeToTerminal(layout: PaneLayout): PaneLayout {
+  if (layout.type === 'leaf') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const content = layout.pane.content as any
+    if (content.kind === 'tmux-session' && content.mode !== 'terminal') {
+      return {
+        ...layout,
+        pane: { ...layout.pane, content: { ...content, mode: 'terminal' } },
+      }
+    }
+    return layout
+  }
+  return { ...layout, children: layout.children.map(migrateLayoutModeToTerminal) }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapTabLayouts(state: any, fn: (layout: PaneLayout) => PaneLayout): any {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tabs: Record<string, any> = {}
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const [id, tab] of Object.entries(state.tabs as Record<string, any>)) {
+    tabs[id] = { ...tab, layout: fn(tab.layout) }
+  }
+  return { ...state, tabs }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function migrateTabStore(state: any, version: number): any {
-  if (version < 2) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const tabs: Record<string, any> = {}
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const [id, tab] of Object.entries(state.tabs as Record<string, any>)) {
-      tabs[id] = { ...tab, layout: migrateLayout(tab.layout) }
-    }
-    return { ...state, tabs }
-  }
-  return state
+  let next = state
+  if (version < 2) next = mapTabLayouts(next, migrateLayout)
+  if (version < 3) next = mapTabLayouts(next, migrateLayoutModeToTerminal)
+  return next
 }
 
 // --- Terminated marking helpers ---
@@ -111,14 +134,15 @@ function sessionBindingMatches(
     && bindingMatchesLegacy(c, { hostId, sessionCode, tmuxInstance: expectedTmuxInstance })
 }
 
-/** As above, minus stream-mode panes, which are out of scope for rebuild. */
+/** As above. (Until P-D.3 this also excluded stream-mode panes; every
+ * tmux-session pane is a terminal pane now.) */
 function rebuildBindingMatches(
   c: PaneContent,
   hostId: string,
   sessionCode: string,
   expectedTmuxInstance: string,
 ): c is TmuxSessionContent {
-  return sessionBindingMatches(c, hostId, sessionCode, expectedTmuxInstance) && c.mode === 'terminal'
+  return sessionBindingMatches(c, hostId, sessionCode, expectedTmuxInstance)
 }
 
 /**
@@ -436,7 +460,6 @@ interface TabState {
   openSingletonTab: (content: PaneContent, opts?: OpenSingletonOpts) => string
   closeTab: (id: string) => void
   setActiveTab: (id: string | null) => void
-  setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
   /**
    * Compare-and-swap `setPaneContent`: reports whether the pane was still
@@ -585,26 +608,6 @@ export const useTabStore = create<TabState>()(
             ? [...state.visitHistory.filter((tid) => tid !== id), state.activeTabId]
             : state.visitHistory.filter((tid) => tid !== id)
           return { activeTabId: id, visitHistory: newHistory }
-        }),
-
-      setViewMode: (tabId, paneId, mode) =>
-        set((state) => {
-          const tab = state.tabs[tabId]
-          if (!tab) return state
-          const pane = findPane(tab.layout, paneId)
-          if (!pane || pane.content.kind !== 'tmux-session') return state
-          const newLayout = updatePaneInLayout(tab.layout, paneId, {
-            kind: 'tmux-session',
-            hostId: pane.content.hostId,
-            sessionCode: pane.content.sessionCode,
-            mode,
-            cachedName: pane.content.cachedName,
-            tmuxInstance: pane.content.tmuxInstance,
-            // Carried explicitly: this content is rebuilt field by field, and
-            // the rebuild record describes the tmux session, not the view.
-            rebuild: pane.content.rebuild,
-          })
-          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
       setPaneContent: (tabId, paneId, content) =>
@@ -892,7 +895,7 @@ export const useTabStore = create<TabState>()(
     {
       name: STORAGE_KEYS.TABS,
       storage: purdexStorage,
-      version: 2,
+      version: 3,
       migrate: migrateTabStore,
       partialize: (state) => ({
         tabs: state.tabs,

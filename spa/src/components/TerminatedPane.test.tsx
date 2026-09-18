@@ -30,7 +30,7 @@ vi.mock('./SessionPickerList', () => ({
 const TAB_ID = 'tab-1'
 const PANE_ID = 'pane-1'
 
-function makeContent(reason: 'session-closed' | 'tmux-restarted' | 'host-removed', mode: 'terminal' | 'stream' = 'terminal'): Extract<PaneContent, { kind: 'tmux-session' }> {
+function makeContent(reason: 'session-closed' | 'tmux-restarted' | 'host-removed', mode: 'terminal' = 'terminal'): Extract<PaneContent, { kind: 'tmux-session' }> {
   return {
     kind: 'tmux-session',
     hostId: 'host-1',
@@ -105,8 +105,8 @@ describe('TerminatedPane', () => {
     expect(useTabStore.getState().tabs[TAB_ID]).toBeUndefined()
   })
 
-  it('session selection calls setPaneContent with correct data, preserving mode', () => {
-    const content = makeContent('session-closed', 'stream')
+  it('session selection calls setPaneContent with correct data, as a terminal pane', () => {
+    const content = makeContent('session-closed')
     setupTab(content)
     render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
 
@@ -120,7 +120,7 @@ describe('TerminatedPane', () => {
         kind: 'tmux-session',
         hostId: 'new-host',
         sessionCode: 'new001',
-        mode: 'stream', // preserved from original tab
+        mode: 'terminal',
         cachedName: 'new-session',
         tmuxInstance: 'tmux:inst',
       })
@@ -187,13 +187,6 @@ describe('TerminatedPane rebuild action set', () => {
     const create = screen.getByRole('checkbox', { name: 'Create tmux session' })
     expect(create).toBeChecked()
     expect(create).toBeDisabled()
-  })
-
-  it('omits the action set on a stream pane', () => {
-    const content = makeContent('tmux-restarted', 'stream')
-    setupTab(content)
-    render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
-    expect(screen.queryByTestId('rebuild-action-set')).toBeNull()
   })
 
   it('hides Rebuild when the host is gone', () => {

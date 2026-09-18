@@ -10,7 +10,7 @@ vi.mock('../lib/platform', () => ({
 
 import { getPlatformCapabilities } from '../lib/platform'
 
-function makeSessionTab(mode: 'terminal' | 'stream' = 'terminal', opts?: { pinned?: boolean; locked?: boolean }): Tab {
+function makeSessionTab(mode: 'terminal' = 'terminal', opts?: { pinned?: boolean; locked?: boolean }): Tab {
   const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'tst001', mode, cachedName: '', tmuxInstance: '' }, { pinned: opts?.pinned })
   if (opts?.locked) return { ...tab, locked: true }
   return tab
@@ -39,20 +39,18 @@ describe('TabContextMenu', () => {
     delete (window as unknown as Record<string, unknown>).electronAPI
   })
 
-  // --- ViewMode section ---
-  it('shows "Switch to Stream" for session tab in terminal mode', () => {
-    renderMenu()
-    expect(screen.getByText('Switch to Stream')).toBeInTheDocument()
-    expect(screen.queryByText('Switch to Terminal')).not.toBeInTheDocument()
-  })
-
-  it('shows "Switch to Terminal" for session tab in stream mode', () => {
-    renderMenu({ tab: makeSessionTab('stream') })
-    expect(screen.getByText('Switch to Terminal')).toBeInTheDocument()
+  // --- ViewMode section (removed in P-D.3: terminal is the only mode) ---
+  it('shows no view-mode items for a session tab', () => {
+    const { onAction } = renderMenu()
     expect(screen.queryByText('Switch to Stream')).not.toBeInTheDocument()
+    expect(screen.queryByText('Switch to Terminal')).not.toBeInTheDocument()
+    expect(screen.queryByText(/stream/i)).not.toBeInTheDocument()
+    // The session-only actions are still there.
+    fireEvent.click(screen.getByText('Rename Session'))
+    expect(onAction).toHaveBeenCalledWith('rename', undefined)
   })
 
-  it('hides viewMode toggle for non-session tab', () => {
+  it('shows no view-mode items for non-session tab', () => {
     renderMenu({ tab: makeNonSessionTab() })
     expect(screen.queryByText('Switch to Stream')).not.toBeInTheDocument()
     expect(screen.queryByText('Switch to Terminal')).not.toBeInTheDocument()
