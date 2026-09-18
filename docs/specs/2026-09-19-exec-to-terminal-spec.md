@@ -1,6 +1,6 @@
 # Spec — take any execution to a terminal (#1210)
 
-- Status: v1.2 (2026-09-19) — codex plan+spec review `task-mu75q9tz-hn36pf` applied (10 findings: helper boundary, lease cleanup contract, name preflight before settle, post-create partial failure, kill-on-failure instead of double writer, project slug, visibility by state); v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
+- Status: v1.3 (2026-09-19) — codex R1 on PR #1212: `execution_archived`, no kill-by-name on tmux restart; v1.2: codex plan+spec review `task-mu75q9tz-hn36pf` applied (10 findings: helper boundary, lease cleanup contract, name preflight before settle, post-create partial failure, kill-on-failure instead of double writer, project slug, visibility by state); v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
 - Predecessor: P-C.3 (`2026-09-18-pc-launch-ui-spec.md` §4.4 "Take back to
   terminal"), which only covers an execution that a `Hand to nex` created.
 - Nexen contract: v0.11.2 `docs/contract/capability-matrix.md` §1.8 (resume
@@ -112,7 +112,9 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
    missing → `400 missing_resume_command`; malformed JSON → `400
    malformed_body`.
 3. `getExecution` → `404 execution_not_found`; `Provider != "claude"` →
-   `409 provider_unsupported`; state `queued` or `rejected` → `409
+   `409 provider_unsupported`; `ArchivedAt != 0` → `409 execution_archived`
+   (a retried 200 or a second click must not put a second writer on the
+   transcript — codex R1); state `queued` or `rejected` → `409
    execution_not_settled` (before any lease).
 4. **Preflights that must not cost an interrupt**: `SessionProvider.
    SessionExists(name)` → `409 session_exists`; `SessionProvider.
@@ -132,8 +134,11 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
    (`KillSession(name)`, logged if that fails) — it is ours, nothing else
    ran in it, and leaving a pane that may still start `claude --resume`
    next to an unarchived execution would be two writers on one
-   transcript. The execution is left settled and unarchived; detail
-   carries `session_id` for the manual-resume hint.
+   transcript. On `tmux_instance_mismatch` it does **not** kill by name:
+   the server restarted, the created session died with it, and a
+   same-named session in the new generation belongs to someone else
+   (codex R1). The execution is left settled and unarchived; detail
+   carries `session_id`, `session_name`, `session_killed`.
 8. Archive (failure logged, `archived:false`). Response `200 { "session":
    <SessionInfo>, "session_id": sid, "archived": bool }`.
 
@@ -154,8 +159,9 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
   session.tmux_instance}` with the same `trySetPaneContent` predicate;
   `useSessionStore.fetchHost(hostId)` so the sidebar lists the new session.
 - `ExecutionView`: `onTakeBack` is passed when `from` is set **or**
-  `canTakeToTerminal` = `summary.provider === 'claude'` ∧ (`session_id` ∨
-  `resume_session_id`) ∧ `state ∈ {running, idle, failed, terminated}` —
+  `canTakeToTerminal` = `summary.provider === 'claude'` ∧ ¬`archived` ∧
+  (`session_id` ∨ `resume_session_id`) ∧ `state ∈ {running, idle, failed,
+  terminated}` —
   never on `queued` (the daemon would answer `execution_not_settled`) or
   `rejected`; it dispatches to `takeBack` or `takeToTerminal`. The
   running-turn confirm dialog is shared.

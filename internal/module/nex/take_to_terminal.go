@@ -98,6 +98,14 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"provider": exec.Provider})
 		return
 	}
+	// Archived: the terminal (or whoever archived it) owns that transcript
+	// now. A retried 200, or a second click from a pane whose swap failed,
+	// must not start a second `claude --resume` on the same session file.
+	if exec.ArchivedAt != 0 {
+		writeHandoffError(w, http.StatusConflict, "execution_archived", "execution is archived; its session is already resumed elsewhere",
+			map[string]any{"session_id": firstNonEmpty(exec.SessionID, exec.ResumeSessionID)})
+		return
+	}
 	// queued / rejected: nothing to interrupt and nothing to resume yet —
 	// refused before any lease (settleForResume would say the same, but
 	// after the preflights below, and the SPA never shows the button here).
@@ -163,10 +171,19 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	// be two writers on one transcript (I3). The execution stays settled
 	// and unarchived; the detail carries the session id for a manual resume.
 	if herr := m.resumeInWindow(info, info.TmuxInstance, body.ResumeCommand, sid); herr != nil {
-		killed := true
-		if err := m.tmux.KillSession(name); err != nil {
-			killed = false
-			m.logf("nex: take-to-terminal %s: kill-session %s after %s: %v", execID, name, herr.code, err)
+		killed := false
+		switch herr.code {
+		case "tmux_instance_mismatch":
+			// The server restarted between create and send: the session
+			// this call made died with it, and `name` may now belong to
+			// a stranger in the new generation. Nothing to kill by name.
+			m.logf("nex: take-to-terminal %s: tmux restarted before the resume was sent; not killing %s by name", execID, name)
+		default:
+			killed = true
+			if err := m.tmux.KillSession(name); err != nil {
+				killed = false
+				m.logf("nex: take-to-terminal %s: kill-session %s after %s: %v", execID, name, herr.code, err)
+			}
 		}
 		if herr.detail == nil {
 			herr.detail = map[string]any{}
@@ -187,4 +204,11 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 
 	m.logf("nex: take-to-terminal %s → session %s/%s (session %s, archived=%v)", execID, info.Code, info.Name, sid, archived)
 	writeJSON(w, http.StatusOK, map[string]any{"session": info, "session_id": sid, "archived": archived})
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

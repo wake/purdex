@@ -60,6 +60,7 @@ type handoffSessions struct {
 	cwdErr    error                // ValidateCwd's answer
 	cwdChecks []string             // ValidateCwd arguments
 	createErr *session.CreateError // CreateSession's scripted failure
+	afterCreate func()               // runs after a successful create, before the info is returned (models a tmux restart in the window)
 	creates   []createCall         // CreateSession arguments
 }
 
@@ -120,6 +121,9 @@ func (f *handoffSessions) CreateSession(name, cwd string) (*session.SessionInfo,
 		info := &session.SessionInfo{Code: code, TmuxID: s.ID, Name: s.Name, Exists: true, Mode: "terminal", Cwd: s.Cwd, TmuxInstance: f.tmux.Instance()}
 		f.sessions[code] = info
 		cp := *info
+		if f.afterCreate != nil {
+			f.afterCreate()
+		}
 		return &cp, nil
 	}
 	return nil, &session.CreateError{Stage: session.CreateStageList, Name: name, Err: errors.New("session created but not found")}
