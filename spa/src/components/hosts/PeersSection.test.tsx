@@ -860,6 +860,61 @@ describe('PeersSection — Rotate (spec §7.3, §6.4, §8.4)', () => {
     expect(api.commitRotation).not.toHaveBeenCalled()
   })
 
+  it('Commit holds the page lock: while it is in flight, Unpair, Rotate, Refresh and Rename are disabled and a second click is ignored (codex D4b A-2)', async () => {
+    // Both sides pending so the outbound line has a gate button too; a drift on the outbound line gives a Rename button.
+    vi.mocked(api.listPeerHosts).mockImplementation(async (h) => (h === M ? [pending(AIR_ROW, 'current')] : [pending(MLAB_ROW, 'current')]))
+    vi.mocked(api.verifyPeerHost).mockImplementation(async (h, alias) =>
+      h === M ? ok(alias, 'air-2026', 'wakes-air-2026:oa6drb') : ok(alias, 'mini-lab', 'mini-lab:278cbm'))
+    let releaseCommit!: (v: PeerHostRow) => void
+    vi.mocked(api.commitRotation).mockImplementation(() => new Promise<PeerHostRow>((r) => { releaseCommit = r }))
+    render(<PeersSection hostId={M} />)
+    const row = await settled('bidirectional')
+    expect(within(row).getByTestId('peer-outbound-rename')).toBeEnabled()
+    fireEvent.click(within(row).getByTestId('peer-inbound-commit'))
+    await waitFor(() => expect(api.commitRotation).toHaveBeenCalledTimes(1))
+    // Everything that writes is locked while the commit is out.
+    expect(within(row).getByTestId('peer-inbound-commit')).toBeDisabled()
+    expect(within(row).getByTestId('peer-outbound-commit')).toBeDisabled()
+    expect(within(row).getByTestId('peer-unpair-air')).toBeDisabled()
+    expect(within(row).getByTestId('peer-outbound-rename')).toBeDisabled()
+    expect(screen.getByTestId('peers-refresh')).toBeDisabled()
+    // A second click on the other line's gate (even bypassing `disabled`) is ignored by the lock.
+    fireEvent.click(within(row).getByTestId('peer-outbound-commit'))
+    fireEvent.click(within(row).getByTestId('peer-unpair-air'))
+    expect(api.commitRotation).toHaveBeenCalledTimes(1)
+    expect(api.deletePeerHost).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('peer-unpair-dialog')).toBeNull()
+    releaseCommit(AIR_ROW)
+    await waitFor(() => expect(screen.getByTestId('peers-refresh')).toBeEnabled())
+  })
+
+  it("a flow started on one host whose step lands after the page moved to another host neither locks nor repaints the new page (codex D4b A-1)", async () => {
+    // rotate on M parks; the page moves to A; then the parked rotate resolves and the old flow reports its next step.
+    let releaseRotate!: (v: { alias: string; inbound_token: string }) => void
+    vi.mocked(api.rotatePeerHost).mockImplementation(() => new Promise((r) => { releaseRotate = r }))
+    vi.mocked(api.updatePeerHost).mockResolvedValue(MLAB_ROW)
+    const { rerender } = render(<PeersSection hostId={M} />)
+    const row = await settled('bidirectional')
+    fireEvent.click(within(row).getByTestId('peer-inbound-rotate'))
+    await waitFor(() => expect(api.rotatePeerHost).toHaveBeenCalledWith(M, 'air'))
+    expect(screen.getByTestId('peers-refresh')).toBeDisabled()
+
+    rerender(<PeersSection hostId={A} />)
+    const aRow = await screen.findByTestId('peer-row-mini-lab')
+    await waitFor(() => expect(within(aRow).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
+    await waitFor(() => expect(screen.getByTestId('peers-refresh')).toBeEnabled())   // A's page is not locked by M's flow
+
+    const listsBefore = vi.mocked(api.listPeerHosts).mock.calls.length
+    releaseRotate({ alias: 'air', inbound_token: TOK_R })                             // M's flow now reports 'push' and finishes
+    await waitFor(() => expect(api.updatePeerHost).toHaveBeenCalledWith(A, 'mini-lab', { token: TOK_R }))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.getByTestId('peers-refresh')).toBeEnabled()                         // the late report did not lock A's page
+    expect(screen.queryByTestId('peer-flow-step')).toBeNull()                          // and painted no step on it
+    expect(vi.mocked(api.listPeerHosts).mock.calls.length).toBe(listsBefore)           // and did not restart A's page
+    expect(screen.queryByTestId('peer-row-air')).toBeNull()
+    assertNoTokenInDom()
+  })
+
   it("a non-App counterpart: a CLI-started rotation gets the button by the rule as of the peer's last dial; Rotate is absent with the tooltip", async () => {
     let committed = false
     vi.mocked(api.listPeerHosts).mockImplementation(async () => [committed

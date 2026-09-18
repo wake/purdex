@@ -28,10 +28,10 @@ interface Props {
   busy: boolean
   flow: FlowState | null
   runFlow: RunFlow
-  onChanged: () => void
+
 }
 
-export function PairWithSection({ hostId, self, xUrl, candidates, busy, flow, runFlow, onChanged }: Props) {
+export function PairWithSection({ hostId, self, xUrl, candidates, busy, flow, runFlow }: Props) {
   const t = useI18nStore((s) => s.t)
   return (
     <div data-testid="peers-pair" className="mt-6">
@@ -42,7 +42,7 @@ export function PairWithSection({ hostId, self, xUrl, candidates, busy, flow, ru
         <div className="space-y-2">
           {candidates.map((c) => (
             <CandidateLine key={`${hostId}:${c.hostId}`} hostId={hostId} self={self} xUrl={xUrl} candidate={c}
-              busy={busy} flow={flow} runFlow={runFlow} onChanged={onChanged} />
+              busy={busy} flow={flow} runFlow={runFlow} />
           ))}
         </div>
       )}
@@ -54,7 +54,7 @@ type Aliases = { onY?: string; onX?: string }
 
 interface LineProps extends Omit<Props, 'candidates'> { candidate: PairCandidate }
 
-function CandidateLine({ hostId, self, xUrl, candidate: c, busy, flow, runFlow, onChanged }: LineProps) {
+function CandidateLine({ hostId, self, xUrl, candidate: c, busy, flow, runFlow }: LineProps) {
   const t = useI18nStore((s) => s.t)
   // The alias prompt after a 409: which side asked, and the aliases the
   // failed attempt already carried (the other side's typed alias is kept).
@@ -120,7 +120,7 @@ function CandidateLine({ hostId, self, xUrl, candidate: c, busy, flow, runFlow, 
           <span className="text-xs text-status-warning">{t('peers.pair_blocked_pending', { name: c.name })}</span>
           <RotationControls holder={{ hostId: c.hostId, alias: c.returnEntry.alias }} row={c.returnEntry}
             stale={false} evidenceDialled={false} push={null} label="rotate" testId={`peers-cand-${c.hostId}`}
-            busy={busy} onDone={onChanged} runFlow={(fn) => runFlow(candidateKey(c.hostId), fn)} />
+            busy={busy} runFlow={(fn) => runFlow(candidateKey(c.hostId), fn)} />
         </div>
       )}
       {prompt && (

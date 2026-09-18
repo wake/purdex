@@ -10,6 +10,9 @@
 // commitRotation / cancelRotation, always with two args: no body, no `force`
 // (spec D-7). A 409 (the peer dialled with the other token between the read
 // and the click) is shown as the daemon wrote it and the row is re-read.
+// They run through the page's single flow runner like Rotate does, so no other
+// write control (another line's gate, Pair, Unpair, Rename, Refresh) can start
+// while one is in flight (codex D4b R1-2 / A-2).
 import { useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { cancelRotation, commitRotation, type PeerHostRow } from '../../../lib/host-api'
@@ -32,9 +35,7 @@ export interface RotationProps {
   /** 'peer-inbound' | 'peer-outbound' | 'peers-cand-<hostId>' — the prefix of every test id here. */
   testId: string
   busy: boolean
-  /** Refresh (spec §7.4) after a Commit or Cancel. */
-  onDone: () => void
-  /** Runs the Rotate flow under the owner's key; the runner refreshes afterwards. */
+  /** Runs Rotate / Commit / Cancel under the owner's key; the runner holds the page lock and refreshes afterwards (spec §7.4). */
   runFlow: BoundRunFlow
 }
 
@@ -46,25 +47,25 @@ const NOTE: Record<'' | 'current' | 'prev', string> = {
 
 const BTN = 'text-xs px-2 py-0.5 rounded cursor-pointer disabled:opacity-50 disabled:cursor-default'
 
-export function RotationControls({ holder, row, stale, evidenceDialled, push, label, testId, busy, onDone, runFlow }: RotationProps) {
+export function RotationControls({ holder, row, stale, evidenceDialled, push, label, testId, busy, runFlow }: RotationProps) {
   const t = useI18nStore((s) => s.t)
-  const [acting, setActing] = useState(false)
   const [gateError, setGateError] = useState('')
-  const locked = busy || acting
+  const locked = busy
 
-  // Commit / Cancel: one call, two args, then the refresh. The error text is
-  // the daemon's and survives the refresh until the next click.
-  const gate = async (fn: typeof commitRotation) => {
-    setActing(true)
+  // Commit / Cancel: one call, two args, under the page lock, then the
+  // runner's refresh. The error text is the daemon's, kept on this line (it
+  // belongs to the gate, not to the row's flow note) and survives the refresh
+  // until the next click.
+  const gate = (fn: typeof commitRotation) => {
     setGateError('')
-    try {
-      await fn(holder.hostId, holder.alias)
-    } catch (e) {
-      setGateError(errText(e))
-    } finally {
-      setActing(false)
-    }
-    onDone()
+    void runFlow(async () => {
+      try {
+        await fn(holder.hostId, holder.alias)
+      } catch (e) {
+        setGateError(errText(e))
+      }
+      return {}
+    })
   }
 
   const rotate = () => {
