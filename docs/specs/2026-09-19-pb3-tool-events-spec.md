@@ -1,6 +1,6 @@
 # Spec — P-B3: exec pane consumes Nexen N2 `tool_use` / `tool_result`
 
-- Status: v1.4 (2026-09-19) — codex plan review, PR #1221 / #1223 / #1225 R1/R2 applied (§9)
+- Status: v1.5 (2026-09-19) — shipped alpha.406–408; acceptance §6.1 passed; review log §9
 - Predecessors: `2026-09-15-pb-execution-pane-spec.md` (P-B, §4.2.3
   transport / §4.2.4 reducer rules stay binding) and
   `2026-09-18-pb2-exec-live-stream-spec.md` (P-B2, §4.1 partial assembly
@@ -440,6 +440,19 @@ mlab host and:
    tries `Write`: the Write call renders struck through with the `denied`
    badge; its result block is not shown as an error.
 6. Archive the executions created for acceptance.
+
+### 6.1 Acceptance run 2026-09-19 (mlab, origin/main `9f65efa2` = post-#1225, worktree dev server :5175 + playwright cli session `pb3-tool-events`, daemon alpha.405 `cf11a7f3`)
+
+Host seeded via `localstorage-set purdex-hosts` with the daemon token; pane opened by deeplink `/execution/<host>/<id>`; DOM probed by `eval` (tool headers, `tool-duration` / `tool-denied` / `tool-result-facts` / `tool-result-denied`, diff rows) and screenshots.
+
+1. **PASS** — history, N2 (`06GBBX0791PP0RQ4WSWDFY5FPM`): three calls, summaries are the daemon's `primary_arg` values; Read facts `4 lines`, Edit facts `+1 −1`, Bash `0.8s` (= `formatDuration(752)`); expanded Edit result shows `@@ -1,3 +1,3 @@` and rows `1 1  hello` / `2   -world` (red) / `  2 +nexen` (green) / `3 3  three` above the raw content; console 0 errors. Observation: 26 / 24 ms render as `0.0s` (formatDuration granularity) → #1229.
+2. **PASS** — history, raw-only (`06GB2ZFDHNCW2ZWQ33EG9D1ZXM`, seven P-B2-era Bash calls): client summaries, `endedAt − startedAt` badges (`8.8s`, `6.5s`, …), no facts span, no diff, the two rejected results still red from raw `is_error` — byte-for-byte what alpha.405 showed.
+3. **PASS** — mixed: unarchived the step-2 execution and sent a turn from the pane input. The old seven calls did not change; the new call decorated from N2; total tool blocks 8, then 9 after a second turn — no duplicates.
+4. **PASS** — live: `sleep 6 && echo ok-pb3` from the pane input — spinner + `tool-elapsed` `1.0s` → `4.0s`, then `tool-duration` `6.9s` = `formatDuration(6862)` from the N2 `tool_result` (`duration_ms: 6862`, seq 971).
+5. **PASS (unplanned, real)** — the first mixed turn asked for a Read outside the execution's cwd and the `standard` sandbox denied it: the call rendered struck-through with the `denied` badge (+ `0.0s`, `duration_ms: 6`), its result block neutral with the `Prohibit` icon and `denied` — while the older raw-only rejection two blocks above stayed red. Exactly R3's two paths side by side.
+6. Both executions archived afterwards, scratch dir removed, playwright session closed.
+
+Not exercised: `output.truncated` / `has_non_text` markers, `diff.truncated` (needs a > 8 KB output or a > 2000-line patch; covered by unit tests), a `known: false` MCP tool (no MCP server in the sandbox profile; R10 covered by unit tests).
 
 ## 7. Risks
 
