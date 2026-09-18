@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.406] - 2026-09-19
+
+### Feature: exec pane 開始消費 Nexen N2 `tool_use`／`tool_result`（#1221，P-B3.1）
+
+alpha.405 只是把這兩種 kind 跳過不當訊息；這支 PR 讓 reducer 真的吃它們。做法不是 brief 裡提的「看 `capabilities.tool_events` 決定整顆 execution 走 N2 還是 P-B2」——那個切換沒有正確的粒度：契約 §2 #53 不回填，pre-N2 的 execution 在新 daemon 上收到新 turn 後，同一份 log 裡就同時有 raw-only 的舊 turn 與 raw＋N2 的新 turn，per-execution 選哪邊都有一半錯。改成 **per-tool-call overlay**：P-B2 的 raw 規則 A1–A4 照跑建 entry，N2 事件把 server 事實（`primary_arg`／`known`／`duration_ms`／`output` 摘要事實／`file`／`diff` hunks／`status` 含 `denied`）疊到**同一個 `tool_use_id`** 的 entry 上，N2 有的欄位以 N2 為準、沒有的留 P-B2 值。單一 map、單一 key，不可能算兩次；pure reducer 也不必碰 capabilities（型別照樣加了 `tool_events`，只是 pane 不靠它分支）。N2 `output.text` 不存——raw `user` 幀本來就在 `messages` 裡，存第二份是浪費。
+
+真機量到的事實進了 spec §3：N2 事件的 `created_at` 與 raw 幀完全相等，`duration_ms` 與 raw 幀 `created_at` 差在 1 ms 內（26／24／752 vs 753）。那顆 execution（Read → Edit → Bash）的 history 頁直接當 golden fixture：全量 replay 得到三個 entry 的完整事實；把 N2 事件濾掉再 replay 得到的 status／時間與全量一致但沒有任何 overlay 欄位——這條等價測試就是 mutation guard，把 N2 規則 stub 掉會炸 4 條斷言。
+
+Codex：plan review 六條（#83 亂序的論述錯了——那是 API goroutine 與泵之間、不會拆開 raw＋derived 同一批，原本的 swap 測試會被 seq guard 吃掉；denied 的 result block 要覆寫 `is_error` 外觀；重複 `tool_use_id` 是 P-B2 既有的共用 entry 行為，寫成 N7；snapshot 守門不能同版本自比；`TimingBadge` 的 `default` 讓 union 擴充悄悄漏掉，改 exhaustive；`Pick` 的 `status` 必填要 `Partial`）全套進 spec v1.1。PR R1 無 finding；攻擊方兩條——`tool_use_id` 為 `constructor`／`__proto__` 會命中原型鏈被當成既有 entry（raw 路徑也有同病，四個函式全改 `Object.hasOwn`）、數值不檢 finite／非負且 hunks 無上限（加 `DIFF_LINES_SANITY_CAP` 10 000，超限在 map 前短路）；critic 同意 A1、A2 列疑慮、無 spec drift。vitest 7109、lint、tsc、build 綠。摘要／狀態／facts 渲染是 P-B3.2，行號 diff 是 P-B3.3；seq guard 對真亂序會永久丟掉低 seq 事件的既有缺口開 follow-up。
+
 ## [1.0.0-alpha.405] - 2026-09-19
 
 ### Chore: nexen 升 v0.12.0 — N2 `tool_use`／`tool_result` 正規化事件（#1219）
