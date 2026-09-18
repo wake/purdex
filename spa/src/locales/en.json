@@ -799,6 +799,7 @@
   "execution.error.turn_stalled": "The turn was withdrawn; resend if still wanted",
   "execution.error.interrupt_unconfirmed": "Interrupt sent but not confirmed; the turn may still be running",
   "execution.tool.aborted": "aborted",
+  "execution.tool.denied": "denied",
   "execution.tool.unknown": "tool",
   "handoff.menu": "Hand to nex",
   "handoff.confirm_title": "Hand this session to nex?",

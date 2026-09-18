@@ -799,6 +799,7 @@
   "execution.error.turn_stalled": "這一輪已被撤回，需要的話請重送",
   "execution.error.interrupt_unconfirmed": "已送出中斷但未確認，這一輪可能仍在執行",
   "execution.tool.aborted": "已中止",
+  "execution.tool.denied": "已拒絕",
   "execution.tool.unknown": "工具",
   "handoff.menu": "交給 nex",
   "handoff.confirm_title": "把這個 session 交給 nex？",

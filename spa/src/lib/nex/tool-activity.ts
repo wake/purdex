@@ -3,12 +3,36 @@
 import { contentBlocks } from './content-blocks'
 import type { ExecutionState } from './event-reducer'
 
+/**
+ * ToolActivity v2 (P-B3 spec §4.2). The first four fields are the P-B2
+ * timing derived from the raw frames; everything after the marker is the
+ * N2 overlay copied from the daemon's `tool_use` / `tool_result` events.
+ * Overlay fields are optional and absent until seen — absent ≠ null.
+ */
 export interface ToolActivity {
   name: string
-  /** ev.created_at (unix ms, server clock); 0 = unknown, renderer shows no timer. */
+  /** ev.created_at (unix ms, server clock) of the raw assistant frame; 0 = unknown, renderer shows no timer. */
   startedAt: number
+  /** ev.created_at of the raw user frame. */
   endedAt: number | null
-  status: 'running' | 'done' | 'error' | 'aborted'
+  status: 'running' | 'done' | 'error' | 'denied' | 'aborted'
+  // ---- N2 overlay (all optional; absent = not (yet) seen from N2) ----
+  /** null = known tool with no primary key (F9). */
+  primaryArg?: { key: string; value: string } | null
+  known?: boolean
+  /** null = unmatched result (contract rule 9). */
+  durationMs?: number | null
+  output?: { totalLines: number; totalBytes: number; truncated: boolean; hasNonText: boolean }
+  file?: { path: string; lines: number }
+  diff?: { path: string; added: number; removed: number; hunks: DiffHunk[]; truncated: boolean }
+}
+
+export interface DiffHunk {
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: string[]
 }
 
 /**
@@ -21,7 +45,8 @@ export interface ToolActivity {
 export type ToolCallActivity =
   | { status: 'streaming'; rawInput: string }
   | { status: 'running'; startedAt: number; now: number }
-  | { status: 'done' | 'error'; startedAt: number; endedAt: number }
+  | { status: 'done' | 'error'; startedAt: number; endedAt: number; durationMs?: number | null }
+  | { status: 'denied'; startedAt: number; endedAt: number; durationMs?: number | null }
   | { status: 'aborted' }
 
 /**
@@ -35,7 +60,15 @@ export function toToolCallActivity(entry: ToolActivity, now: number): ToolCallAc
       return { status: 'running', startedAt: entry.startedAt, now }
     case 'done':
     case 'error':
-      return entry.endedAt == null ? undefined : { status: entry.status, startedAt: entry.startedAt, endedAt: entry.endedAt }
+    case 'denied':
+      if (entry.endedAt == null) return undefined
+      // Spread so an entry without durationMs yields a variant without the key (absent ≠ null).
+      return {
+        status: entry.status,
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+        ...('durationMs' in entry ? { durationMs: entry.durationMs } : {}),
+      }
     case 'aborted':
       return { status: 'aborted' }
   }
@@ -55,9 +88,11 @@ export function recordToolEnds(s: ExecutionState, p: Record<string, unknown>, at
   for (const b of contentBlocks(p)) {
     if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
     const t = tools[b.tool_use_id]
-    // done/error are final; an 'aborted' tool (A3 fired on a turn-ending
-    // event before its tool_result landed) is still corrected by that result.
-    if (!t || t.status === 'done' || t.status === 'error') continue
+    // done/error/denied are final (denied only comes from N2 — spec N5: a raw
+    // result must not downgrade it); an 'aborted' tool (A3 fired on a
+    // turn-ending event before its tool_result landed) is still corrected by
+    // that result.
+    if (!t || t.status === 'done' || t.status === 'error' || t.status === 'denied') continue
     tools = { ...tools, [b.tool_use_id]: { ...t, endedAt: at, status: b.is_error === true ? 'error' : 'done' } }
   }
   return tools === s.tools ? s : { ...s, tools }

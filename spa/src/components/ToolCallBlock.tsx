@@ -44,6 +44,8 @@ function TimingBadge({ activity, t }: { activity: ToolCallActivity; t: (key: str
   switch (activity.status) {
     case 'aborted':
       return <span data-testid="tool-aborted" className="text-xs text-text-muted flex-shrink-0">{t('execution.tool.aborted')}</span>
+    case 'denied':
+      return <span data-testid="tool-denied" className="text-xs text-status-warning flex-shrink-0">{t('execution.tool.denied')}</span>
     case 'running': {
       if (activity.startedAt <= 0) return null
       return <span data-testid="tool-elapsed" className="text-xs text-text-muted tabular-nums flex-shrink-0">{formatDuration(Math.max(0, activity.now - activity.startedAt))}</span>
@@ -54,8 +56,13 @@ function TimingBadge({ activity, t }: { activity: ToolCallActivity; t: (key: str
       const tone = activity.status === 'error' ? 'text-status-error' : 'text-text-muted'
       return <span data-testid="tool-duration" className={`text-xs ${tone} tabular-nums flex-shrink-0`}>{formatDuration(activity.endedAt - activity.startedAt)}</span>
     }
-    default:
+    case 'streaming':
       return null
+    default: {
+      const _exhaustive: never = activity
+      void _exhaustive
+      return null
+    }
   }
 }
 

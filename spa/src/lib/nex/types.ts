@@ -91,6 +91,15 @@ export interface NexCapabilities {
     reserved_prefix: string
   }
   delegate?: { resume_session_id?: boolean }
+  /**
+   * Presence = the daemon emits the N2 `tool_use` / `tool_result` events
+   * (nexen contract §0). The exec pane does NOT branch on it (P-B3 spec
+   * §4.1: N2 is an overlay on the raw frames, never a switch). The numbers
+   * are the daemon's actual caps for `output.text` / `diff.hunks`; a client
+   * that shows "showing X of Y" must read them from here and never hard-code
+   * them (P-B3 spec §4.5).
+   */
+  tool_events?: { output_max_bytes: number; diff_max_lines: number }
   [key: string]: unknown
 }
 

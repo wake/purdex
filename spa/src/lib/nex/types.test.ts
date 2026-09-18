@@ -59,6 +59,15 @@ describe('NexCapabilities typed limit/delegate fields (F1)', () => {
     expect(caps.brief).toBeUndefined()
   })
 
+  it('P-B3 §4.5: tool_events {output_max_bytes, diff_max_lines} type-checks and stays optional', () => {
+    const withCaps = { phase: 'P1a', tool_events: { output_max_bytes: 8192, diff_max_lines: 2000 } } as Partial<NexCapabilities>
+    expect(withCaps.tool_events).toEqual({ output_max_bytes: 8192, diff_max_lines: 2000 })
+    const bytes: number | undefined = withCaps.tool_events?.output_max_bytes
+    expect(bytes).toBe(8192)
+    const older = { phase: 'P1a' } as Partial<NexCapabilities>
+    expect(older.tool_events).toBeUndefined()
+  })
+
   it('ExecutionSummary carries resume_session_id / requested_profile / effective_profile', () => {
     const row = { id: 'exc_1', state: 'idle', resume_session_id: 'sid-1', requested_profile: 'handoff', effective_profile: 'trusted' } as Partial<ExecutionSummary>
     expect(row.resume_session_id).toBe('sid-1')

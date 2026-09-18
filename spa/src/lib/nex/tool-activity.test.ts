@@ -47,6 +47,13 @@ describe('applyDurableEvent: tool activity', () => {
     expect(applyDurableEvent(base, at(5, 'user', toolResult('toolu_never'))).tools).toEqual({ toolu_x: ended })
   })
 
+  it('N5: a raw tool_result never downgrades a denied entry (P-B3)', () => {
+    const denied = { name: 'Bash', startedAt: 100, endedAt: 200, status: 'denied' as const, durationMs: 7 }
+    const base: ExecutionState = { ...defaultExecutionState(), tools: { toolu_d: denied } }
+    expect(applyDurableEvent(base, at(4, 'user', toolResult('toolu_d'))).tools.toolu_d).toEqual(denied)
+    expect(applyDurableEvent(base, at(5, 'user', toolResult('toolu_d', true))).tools.toolu_d).toEqual(denied)
+  })
+
   it('F3: a tool_result arriving after the turn-ending result overrides the aborted status with done at its own created_at', () => {
     const fold = (...events: NexEvent[]) => events.reduce(applyDurableEvent, defaultExecutionState())
     const s = fold(
@@ -98,6 +105,25 @@ describe('toToolCallActivity: durable ToolActivity → ToolCallBlock activity pr
   it('done / error with endedAt null (malformed) → undefined, so the block renders plain', () => {
     expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: null, status: 'done' }, 5)).toBeUndefined()
     expect(toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: null, status: 'error' }, 5)).toBeUndefined()
+  })
+
+  it('P-B3: denied with an endedAt → { status: denied, startedAt, endedAt, durationMs }', () => {
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 100, endedAt: 200, status: 'denied', durationMs: 7 }, 0))
+      .toEqual({ status: 'denied', startedAt: 100, endedAt: 200, durationMs: 7 })
+    expect(toToolCallActivity({ name: 'Bash', startedAt: 100, endedAt: null, status: 'denied' }, 0)).toBeUndefined()
+  })
+
+  it('P-B3: done with durationMs 26 carries it through to the finished variant', () => {
+    expect(toToolCallActivity({ name: 'Read', startedAt: 1_000, endedAt: 7_200, status: 'done', durationMs: 26 }, 99_999))
+      .toEqual({ status: 'done', startedAt: 1_000, endedAt: 7_200, durationMs: 26 })
+    expect(toToolCallActivity({ name: 'Read', startedAt: 1_000, endedAt: 7_200, status: 'error', durationMs: null }, 99_999))
+      .toEqual({ status: 'error', startedAt: 1_000, endedAt: 7_200, durationMs: null })
+  })
+
+  it('P-B3: done without durationMs → the variant has no durationMs property at all', () => {
+    const v = toToolCallActivity({ name: 'Bash', startedAt: 1_000, endedAt: 7_200, status: 'done' }, 99_999)
+    expect(v).toEqual({ status: 'done', startedAt: 1_000, endedAt: 7_200 })
+    expect(v && 'durationMs' in v).toBe(false)
   })
 
   it('aborted → { status: aborted } with no timing', () => {
