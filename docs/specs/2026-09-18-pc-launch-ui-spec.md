@@ -543,6 +543,44 @@ archived afterwards; scratch dir removed.
    a fresh New Tab preselected `/Users/wake/Workspace` and `readonly`.
 6. **PASS** — console: 3 messages, 0 errors, 0 warnings.
 
+### 6.2 Acceptance run 2026-09-18 (P-C.2, at `2e9019ca`)
+
+mlab, worktree dev server `npx vite --host 100.64.0.2 --port 5175 --strictPort`,
+playwright cli session `pc-launch-ui`, host `pc2host` seeded into
+`purdex-hosts` (version 1, daemon token) then navigated with `goto` — note
+`open` recreates the context and the seed is lost; `goto` keeps it. Daemon
+alpha.378. All executions archived afterwards; the Executions view removed
+from the region again (`primary-sidebar.views` back to
+`["file-tree-workspace"]`); scratch dir removed.
+
+1. **PASS** — Headless section launch (`reply ok, no tools`, sub-path
+   `wake/nex-acceptance-scratch`) → `/execution/pc2host/06GB7156KB46T161926B1EREEG`,
+   reply `ok`.
+2. **PASS** — RegionManager lists "Executions" under 可加入; after Add it
+   renders: header `mlab` with the nex phase dot, group **Purdex**, one row
+   `idle · reply ok, no tools · just now`, no `↩` marker (NewTab origin).
+3. **PASS** — `pdx nex delegate` (no source label) → row appeared under
+   **Local** as `running` within 2 s without reload
+   (`06GB71CPGG1THZXZB9C3DH41GR`); `pdx nex archive` → gone within 2 s.
+4. **PASS** — clicking a row opens the execution tab; clicking again
+   focuses the same tab (single `tab "Execution"`, same ref).
+5. **PASS** — connection budget: three more executions
+   (`06GB71HQJ5…`, `06GB71HRQM…`, `06GB71HT1K…`), four execution tabs +
+   sidebar. Every tab reads `live` when viewed (activation claims a slot and
+   pauses the hidden LRU sibling), and the network log shows the cap in
+   action: after the four initial `events?execution_id=` streams
+   (#587–#614) each tab activation re-opened its stream (#622–#646) — with a
+   cap of 4 no pane would ever have been paused and re-opened. Site-wide
+   `/api/nex/v1/events` (no `execution_id`): exactly **one** `200` (#575;
+   #573 was aborted by the view remount when the manager was toggled), and
+   the count stayed at one with Hosts → Nex open alongside the sidebar.
+   Hosts → Nex table **Refresh** completed (`/v1/executions` 200) within the
+   2 s window with 3 pane streams + the site-wide stream open.
+6. **PASS** — second browser tab shows the same list; a CLI delegate
+   (`06GB724GGFR325RPV4VYDCVJFW`) appeared as `running` within 1.5 s and
+   vanished within 1.5 s of `pdx nex archive`.
+7. **PASS** — console: both tabs 0 errors, 0 warnings.
+
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
