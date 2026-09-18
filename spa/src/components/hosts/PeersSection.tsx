@@ -110,7 +110,10 @@ export function PeersSection({ hostId }: Props) {
       {snap && !snap.error && snap.rows.length > 0 && (
         <div className="space-y-3">
           {snap.rows.map((row) => (
-            <PeerRow key={row.entry.alias} hostId={hostId} hostName={host.name} self={snap.self!} row={row}
+            // Keyed by host + alias: in production HostPage remounts the section
+            // per host, this makes the prop-change path safe too, and the
+            // unmounted DirectionLine's late setState is a no-op in React 19.
+            <PeerRow key={`${hostId}:${row.entry.alias}`} hostId={hostId} hostName={host.name} self={snap.self!} row={row}
               busy={busy}
               onRenamed={() => { if (alive.current && liveHost.current === hostId) void run() }} />
           ))}

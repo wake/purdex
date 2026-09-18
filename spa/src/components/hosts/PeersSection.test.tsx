@@ -270,6 +270,39 @@ describe('PeersSection — page states', () => {
     expect(document.body.innerHTML).not.toContain(SECRET_A)
   })
 
+  it('an in-flight Rename on one host does not leak error or busy state onto another host\'s row with the same alias', async () => {
+    // M's page runs the unmodified §2.1 fixture first (so it reaches
+    // bidirectional and its Rename can be held in flight). Only once we are
+    // about to switch to A's page do A's own entries become the 'air' row
+    // that points at a stranger host_id 'other:111111' (so A's row has no
+    // counterpart and lands on outbound-only, no return line to wait on) —
+    // both hosts then have a same-alias, same-drift 'air' row at the same
+    // list position, which is what lets the alias-only key collide.
+    let rejectPut!: (e: unknown) => void
+    vi.mocked(api.updatePeerHost).mockImplementation(() => new Promise<PeerHostRow>((_resolve, reject) => { rejectPut = reject }))
+
+    const { rerender } = render(<PeersSection hostId={M} />)
+    const row = await screen.findByTestId('peer-row-air')
+    await waitFor(() => expect(within(row).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
+    fireEvent.click(within(row).getByTestId('peer-outbound-rename'))
+    await waitFor(() => expect(api.updatePeerHost).toHaveBeenCalledWith(M, 'air', { alias: 'air26' }))
+
+    vi.mocked(api.listPeerHosts).mockImplementation(async (h) =>
+      h === M ? [AIR_ROW] : [{ ...AIR_ROW, alias: 'air', host_id: 'other:111111', url: 'http://10.9.9.9:7860' }])
+    vi.mocked(api.verifyPeerHost).mockImplementation(async (h, alias) =>
+      h === M ? ok(alias, 'air26', 'wakes-air-2026:oa6drb') : ok('air', 'air26', 'other:111111'))
+
+    rerender(<PeersSection hostId={A} />)
+    const rowA = await screen.findByTestId('peer-row-air')
+    await waitFor(() => expect(within(rowA).getByTestId('peer-status')).toHaveAttribute('data-status', 'outbound-only'))
+
+    rejectPut(new HostApiError(409, 'Conflict', 'alias "air26" is already used by another host'))
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(screen.queryByTestId('peer-outbound-rename-error')).toBeNull()
+    expect(screen.getByTestId('peer-outbound-rename')).toBeEnabled()
+  })
+
   it('under StrictMode (dev double-mount) the page renders once and ends bidirectional', async () => {
     render(<StrictMode><PeersSection hostId={M} /></StrictMode>)
     const row = await screen.findByTestId('peer-row-air')
