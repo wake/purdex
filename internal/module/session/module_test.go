@@ -95,3 +95,27 @@ func TestSessionModuleStartResetsStaleModes(t *testing.T) {
 	assert.Equal(t, "terminal", m1.Mode)
 	assert.Equal(t, "terminal", m2.Mode)
 }
+
+// TestSessionModuleRegistersHandoffLocks: the per-session handoff lock is
+// one instance for the whole daemon, owned by the session module and
+// published under HandoffLocksKey — stream and nex take it from the
+// registry rather than each building their own, so a legacy handoff and a
+// nex handoff/take-back on the same session exclude each other.
+func TestSessionModuleRegistersHandoffLocks(t *testing.T) {
+	meta, err := store.OpenMeta(":memory:")
+	require.NoError(t, err)
+	defer meta.Close()
+
+	reg := core.NewServiceRegistry()
+	c := core.New(core.CoreDeps{Tmux: tmux.NewFakeExecutor(), Registry: reg})
+	mod := NewSessionModule(meta)
+	require.NoError(t, mod.Init(c))
+
+	svc, ok := reg.Get(HandoffLocksKey)
+	require.True(t, ok, "HandoffLocks should be registered under %q", HandoffLocksKey)
+	locks, ok := svc.(*HandoffLocks)
+	require.True(t, ok, "registered value is a *HandoffLocks, got %T", svc)
+	assert.True(t, locks.TryLock("abc"))
+	assert.False(t, locks.TryLock("abc"), "the registered instance is a live lock")
+	locks.Unlock("abc")
+}

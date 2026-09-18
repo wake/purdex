@@ -27,10 +27,13 @@ func TestInit_RegistersRelayGateway(t *testing.T) {
 	reg.Register(session.RegistryKey, session.SessionProvider(&fakeSessionProvider{}))
 	reg.Register(agentcc.OperatorKey, agentcc.CCOperator(&fakeCCOperator{}))
 	reg.Register("agent.prober", probe.New(tmux.NewFakeExecutor()))
+	locks := session.NewHandoffLocks()
+	reg.Register(session.HandoffLocksKey, locks)
 
 	c := core.New(core.CoreDeps{Registry: reg})
 	m := New()
 	require.NoError(t, m.Init(c))
+	require.Same(t, locks, m.locks, "the handoff lock is the session module's registered instance")
 
 	svc, ok := reg.Get(RelayGatewayKey)
 	require.True(t, ok, "relay gateway must be registered under %q", RelayGatewayKey)

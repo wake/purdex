@@ -65,13 +65,16 @@ var (
 )
 
 // requiredProviders is every registry entry Init demands, keyed as the
-// session and agent modules register them.
+// session and agent modules register them. The lock instance is the
+// session module's (one per daemon, shared with stream), so it is a
+// provider like the others, not something Init builds.
 func requiredProviders() map[string]any {
 	return map[string]any{
-		session.RegistryKey:    fakeSessionProvider{},
-		agent.OwnerResolverKey: fakeOwnerResolver{},
-		proberKey:              fakeProber{},
-		agentcc.OperatorKey:    fakeCCOperator{},
+		session.RegistryKey:     fakeSessionProvider{},
+		session.HandoffLocksKey: session.NewHandoffLocks(),
+		agent.OwnerResolverKey:  fakeOwnerResolver{},
+		proberKey:               fakeProber{},
+		agentcc.OperatorKey:     fakeCCOperator{},
 	}
 }
 
@@ -131,8 +134,9 @@ func TestInitRejectsAProviderOfTheWrongType(t *testing.T) {
 }
 
 // TestInitWiresProvidersAndLock: a successful Init keeps what it looked up
-// (the handoff endpoints of task 3/4 read these fields) and builds the
-// per-session lock.
+// (the handoff endpoints of task 3/4 read these fields), and the
+// per-session lock is the registry's instance — the same one the session
+// module registered and the stream module holds — not a private copy.
 func TestInitWiresProvidersAndLock(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", launchdPath)
@@ -149,6 +153,8 @@ func TestInitWiresProvidersAndLock(t *testing.T) {
 	assert.NotNil(t, m.ccOps)
 	assert.Equal(t, c.Tmux, m.tmux)
 	require.NotNil(t, m.locks)
+	shared, _ := c.Registry.Get(session.HandoffLocksKey)
+	assert.Same(t, shared, m.locks, "the lock is the registered instance, not a new one")
 	assert.True(t, m.locks.TryLock("code"))
 	assert.False(t, m.locks.TryLock("code"))
 }

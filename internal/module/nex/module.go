@@ -167,7 +167,6 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("nex: init: %w", err)
 	}
 	m.tmux = c.Tmux
-	m.locks = session.NewHandoffLocks()
 	m.applyHandoffDefaults()
 
 	home, _ := os.UserHomeDir() // "" when unset; Validate decides whether that matters
@@ -222,6 +221,16 @@ func (m *Module) resolveProviders(c *core.Core) error {
 	}
 	if m.sessions, ok = svc.(session.SessionProvider); !ok {
 		return fmt.Errorf("service %q does not implement session.SessionProvider (%T)", session.RegistryKey, svc)
+	}
+
+	// The daemon's one handoff lock instance (session module's), shared
+	// with the stream module's legacy /handoff: a private lock here would
+	// let the two run on the same session at once.
+	if svc, ok = c.Registry.Get(session.HandoffLocksKey); !ok {
+		return fmt.Errorf("service %q not registered", session.HandoffLocksKey)
+	}
+	if m.locks, ok = svc.(*session.HandoffLocks); !ok {
+		return fmt.Errorf("service %q is not a *session.HandoffLocks (%T)", session.HandoffLocksKey, svc)
 	}
 
 	if svc, ok = c.Registry.Get(agent.OwnerResolverKey); !ok {

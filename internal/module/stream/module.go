@@ -80,7 +80,10 @@ func (m *StreamModule) Init(c *core.Core) error {
 	m.sessions = c.Registry.MustGet(session.RegistryKey).(session.SessionProvider)
 	m.ccOps = c.Registry.MustGet(agentcc.OperatorKey).(agentcc.CCOperator)
 	m.prober = c.Registry.MustGet("agent.prober").(*probe.Prober)
-	m.locks = session.NewHandoffLocks()
+	// The session module's shared lock instance, not a private one: the nex
+	// module's handoff/take-back take the same lock, so the two cannot run
+	// on one session at once.
+	m.locks = c.Registry.MustGet(session.HandoffLocksKey).(*session.HandoffLocks)
 	return nil
 }
 

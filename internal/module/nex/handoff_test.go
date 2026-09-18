@@ -29,6 +29,7 @@ import (
 	pdxagent "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/probe"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
@@ -347,6 +348,11 @@ var _ nexStore = (*fakeNexStore)(nil)
 // handoffEnv is one wired module behind an httptest server, in the
 // all-good starting state: session known, generation matches, CC idle in
 // the pane, identity resolves to a cc session, service accepts.
+//
+// registry carries the shared *session.HandoffLocks under
+// session.HandoffLocksKey, and m.locks is resolved from it the way Init
+// does — so a test can hold the lock "as the stream module" through the
+// same instance.
 type handoffEnv struct {
 	m        *Module
 	tmux     *tmux.FakeExecutor
@@ -355,6 +361,7 @@ type handoffEnv struct {
 	ops      *recordingCCOperator
 	svc      *fakeNexService
 	srv      *httptest.Server
+	registry *core.ServiceRegistry
 }
 
 func newHandoffEnv(t *testing.T) *handoffEnv {
@@ -362,6 +369,9 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	fakeTx := tmux.NewFakeExecutor()
 	fakeTx.SetInstance(hoInstance)
 	setPaneCCIdle(fakeTx, hoTarget)
+
+	registry := core.NewServiceRegistry()
+	registry.Register(session.HandoffLocksKey, session.NewHandoffLocks())
 
 	sessions := &handoffSessions{
 		tmux: fakeTx,
@@ -387,7 +397,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		prober:   &handoffProber{tmux: fakeTx, readiness: agentcc.NewReadinessChecker(fakeTx)},
 		ccOps:    ops,
 		tmux:     fakeTx,
-		locks:    session.NewHandoffLocks(),
+		locks:    registry.MustGet(session.HandoffLocksKey).(*session.HandoffLocks),
 		logf:     discardLogf,
 
 		handoffResolveTimeout:   time.Second,
@@ -402,7 +412,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv}
+	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv, registry: registry}
 }
 
 // post sends body (a value marshalled to JSON, or a raw string) and decodes
@@ -543,6 +553,32 @@ func TestHandoff409HandoffInProgressWhileFirstParkedInExit(t *testing.T) {
 	// Lock released after the first completes.
 	assert.True(t, env.m.locks.TryLock(hoCode))
 	env.m.locks.Unlock(hoCode)
+}
+
+// TestHandoffAndTakebackExcludedByTheSharedLockInstance: the lock is one
+// instance per daemon, published by the session module and taken from the
+// registry by stream and nex alike (R1-1/A1). Holding it through the
+// registry's instance — as the legacy /handoff in the stream module does —
+// makes both nex endpoints answer 409 handoff_in_progress without touching
+// anything. A private lock per module would let a legacy handoff and a nex
+// handoff run on the same pane at once.
+func TestHandoffAndTakebackExcludedByTheSharedLockInstance(t *testing.T) {
+	env := newTakebackEnv(t)
+	shared := env.registry.MustGet(session.HandoffLocksKey).(*session.HandoffLocks)
+	require.True(t, shared.TryLock(hoCode), "held as the stream module would hold it")
+	defer shared.Unlock(hoCode)
+
+	status, body := env.handoffEnv.post(t, hoCode, goodBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "handoff_in_progress", body["code"])
+
+	status, body = env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "handoff_in_progress", body["code"])
+
+	assert.Equal(t, 0, env.owners.calls, "identity never resolved")
+	assert.Empty(t, env.ops.Calls())
+	env.assertUntouched(t)
 }
 
 // --- session / generation / identity / liveness ---
