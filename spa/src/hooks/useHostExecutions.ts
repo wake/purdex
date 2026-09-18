@@ -16,13 +16,19 @@ export interface HostExecutions {
   refreshRevision: number
 }
 
+export interface HostExecutionsOptions {
+  /** `false` keeps the component off the store entirely (no ensure, no subscription) while still reading the cache. Default `true`. */
+  enabled?: boolean
+}
+
 const EMPTY: ExecutionSummary[] = []
 
-export function useHostExecutions(hostId: string): HostExecutions {
+export function useHostExecutions(hostId: string, { enabled = true }: HostExecutionsOptions = {}): HostExecutions {
   useEffect(() => {
+    if (!enabled) return
     void useNexHostStore.getState().ensure(hostId)
     return useExecutionListStore.getState().subscribe(hostId)
-  }, [hostId])
+  }, [hostId, enabled])
 
   const cache = useExecutionListStore((s) => s.byHost[hostId])
   const refetch = useCallback(() => useExecutionListStore.getState().refetch(hostId), [hostId])

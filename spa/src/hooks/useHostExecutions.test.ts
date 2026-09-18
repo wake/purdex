@@ -74,6 +74,26 @@ describe('useHostExecutions', () => {
     expect(sse.openNexSse).toHaveBeenCalledTimes(2)
   })
 
+  it('enabled: false neither ensures nor subscribes; flipping it true subscribes once', async () => {
+    const { result, rerender } = renderHook(({ enabled }) => useHostExecutions(H, { enabled }), { initialProps: { enabled: false } })
+    expect(ensure).not.toHaveBeenCalled()
+    expect(sse.openNexSse).not.toHaveBeenCalled()
+    expect(api.listExecutions).not.toHaveBeenCalled()
+    expect(useExecutionListStore.getState().byHost[H]).toBeUndefined()
+    expect(result.current.phase).toBe('idle')
+
+    rerender({ enabled: true })
+    expect(ensure).toHaveBeenCalledTimes(1)
+    expect(sse.openNexSse).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(result.current.items).toHaveLength(1)
+
+    rerender({ enabled: false })
+    expect(sseClose).toHaveBeenCalledTimes(1)
+    // The cache is kept, so the rows stay visible across the gate.
+    expect(result.current.items).toHaveLength(1)
+  })
+
   it('returns a stable empty array and idle phase for a host that is not nex-ready', () => {
     const { result, rerender } = renderHook(() => useHostExecutions('ghost'))
     const items = result.current.items
