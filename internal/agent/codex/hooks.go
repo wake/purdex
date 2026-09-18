@@ -12,7 +12,30 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-const codexHooksSupportedVersion = "0.124.0"
+const codexHooksSupportedVersion = "0.153.4"
+
+// codexHookTimeouts is the per-event hook timeout in seconds. codex clamps
+// SessionEnd and Interrupt to 3 s and warns at every start if the file says
+// more (measured on codex-cli 0.153.4 startup, 2026-09-18).
+var codexHookTimeouts = map[string]int{
+	"SessionEnd": 3,
+	"Interrupt":  3,
+}
+
+const codexHookDefaultTimeout = 5
+
+func codexHookTimeoutSeconds(upstreamKey string) int {
+	if t, ok := codexHookTimeouts[upstreamKey]; ok {
+		return t
+	}
+	return codexHookDefaultTimeout
+}
+
+// codexRetiredUpstreamEvents are hooks.json keys the pre-0.153 installer
+// wrote that codex never fires (#1159). Install and remove strip pdx-owned
+// entries under them and drop the key when it empties; third-party entries
+// are left alone.
+var codexRetiredUpstreamEvents = []string{"Notification", "StopFailure"}
 
 func (p *Provider) InstallHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
@@ -94,7 +117,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	}
 	if !featureEnabled {
 		allInstalled = false
-		issues = append(issues, "codex hooks feature flag disabled; run install to enable features.codex_hooks")
+		issues = append(issues, "codex hooks feature flag disabled; run install to enable features.hooks")
 	}
 	return agent.HookStatus{
 		Installed:         allInstalled,
@@ -124,10 +147,16 @@ func installCodexHooks(configPath, hooksPath, pdxPath string) error {
 	if err := mergeCodexHooksFile(hooksFile, pdxPath, false); err != nil {
 		return err
 	}
-	if err := writeCodexHooksFile(hooksPath, hooksFile); err != nil {
+	// Write config.toml before hooks.json (#1159): if the config write
+	// fails, hooks.json must stay untouched rather than end up upgraded
+	// (retired keys stripped) with the feature flag not migrated. A failed
+	// hooks.json write after a successful config write leaves
+	// features.hooks = true with an untouched hooks.json, which is
+	// harmless — that's the upstream default anyway.
+	if err := writeCodexConfig(configPath, config); err != nil {
 		return err
 	}
-	return writeCodexConfig(configPath, config)
+	return writeCodexHooksFile(hooksPath, hooksFile)
 }
 
 // codexHooksManaged reports whether hooks.json contains any pdx-owned
@@ -282,6 +311,7 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 		hooksFile["hooks"] = hooks
 		return nil
 	}
+	stripRetiredPdxCodexEntries(hooks)
 	for _, spec := range codexEventSpecs {
 		installable := agent.IsInstallableHookSpec(spec)
 		if !installable {
@@ -299,7 +329,7 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 				map[string]any{
 					"type":    "command",
 					"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, spec.PurdexName),
-					"timeout": 5,
+					"timeout": codexHookTimeoutSeconds(key),
 				},
 			},
 		})
@@ -308,6 +338,29 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 	hooksFile["hooks"] = hooks
 	return nil
 
+}
+
+// stripRetiredPdxCodexEntries removes pdx-owned entries under retired keys
+// and deletes the key when nothing else lives there. Non-array values are
+// not ours to interpret and are preserved as-is. The remove path does not
+// call this: its all-keys loop already strips them because
+// codexOwnedCleanupEventNames includes the retired names.
+func stripRetiredPdxCodexEntries(hooks map[string]any) {
+	for _, key := range codexRetiredUpstreamEvents {
+		existing, ok := hooks[key]
+		if !ok {
+			continue
+		}
+		if _, isArr := existing.([]any); !isArr {
+			continue
+		}
+		entries := filterOutPdxCodexKnownEvents(existing)
+		if len(entries) == 0 {
+			delete(hooks, key)
+		} else {
+			hooks[key] = entries
+		}
+	}
 }
 
 func readCodexHooksFile(path string) (map[string]any, error) {
@@ -396,15 +449,27 @@ func existingFileMode(path string, defaultMode os.FileMode) (os.FileMode, error)
 	return 0, err
 }
 
+// setCodexHooksFeature enables the canonical [features].hooks flag and
+// drops the deprecated codex_hooks alias (codex 0.153 warns on it at
+// every start).
 func setCodexHooksFeature(config map[string]any) {
 	features, _ := config["features"].(map[string]any)
 	if features == nil {
 		features = make(map[string]any)
 	}
-	features["codex_hooks"] = true
+	features["hooks"] = true
+	delete(features, "codex_hooks")
 	config["features"] = features
 }
 
+// codexHooksFeatureEnabled reports whether codex will run hooks. Upstream
+// default is enabled, so an absent [features] table (or absent keys within
+// it) means true. The canonical `hooks` key wins over the deprecated
+// `codex_hooks` alias whenever it is *present*, regardless of its type: a
+// present-but-non-bool value (string, number, table) counts as disabled
+// rather than falling through to the alias or the default — a hand-edited
+// or malformed flag must never silently re-enable hooks. Only when `hooks`
+// is entirely absent do we consult `codex_hooks` under the same rule.
 func codexHooksFeatureEnabled(path string) (bool, error) {
 	config, err := readCodexConfig(path)
 	if err != nil {
@@ -412,10 +477,17 @@ func codexHooksFeatureEnabled(path string) (bool, error) {
 	}
 	features, _ := config["features"].(map[string]any)
 	if features == nil {
-		return false, nil
+		return true, nil
 	}
-	enabled, _ := features["codex_hooks"].(bool)
-	return enabled, nil
+	if v, ok := features["hooks"]; ok {
+		b, isBool := v.(bool)
+		return isBool && b, nil
+	}
+	if v, ok := features["codex_hooks"]; ok {
+		b, isBool := v.(bool)
+		return isBool && b, nil
+	}
+	return true, nil
 }
 
 // isPdxCommandCodex is the relaxed shape check used by filter / legacy
@@ -709,7 +781,8 @@ func codexKnownEventNames() map[string]bool {
 }
 
 // codexOwnedCleanupEventNames is the two-set union per spec §6.1 invariant
-// 6 post-cleanup: installable specs' UpstreamKeys ∪ PurdexName. codex has
+// 6 post-cleanup: installable specs' UpstreamKeys ∪ PurdexName ∪ retired
+// upstream keys ∪ Pdx+retired (cleanup only; never installed). codex has
 // one-to-one upstream/Pdx mapping so pre-W2 command-tail tokens (e.g.
 // `Stop`) are still recognised via the UpstreamKey leg; the redundant
 // legacy Name set retired in PR-W2-cleanup-followup (plan §5.3 CLEANUP-T1)
@@ -724,6 +797,10 @@ func codexOwnedCleanupEventNames() map[string]bool {
 			owned[key] = true
 		}
 		owned[spec.PurdexName] = true
+	}
+	for _, key := range codexRetiredUpstreamEvents {
+		owned[key] = true
+		owned["Pdx"+key] = true
 	}
 	return owned
 }

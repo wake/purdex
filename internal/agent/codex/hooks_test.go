@@ -306,29 +306,24 @@ func TestMergeCodexHooks_RemoveMode(t *testing.T) {
 	}
 }
 
-// expectedCodexInstallerNames is the post-expansion installer set
-// (plan §1.4 / issue #613, plus L2 PreToolUse for codex non-prompt turn
-// proxy attach). Shared across TestMergeCodexHooks_* so the installer
-// tests migrate off codexHookEvents cleanly.
+// expectedCodexInstallerNames is the 0.153.4 installer set (#1159).
 var expectedCodexInstallerNames = []string{
 	"SessionStart",
 	"UserPromptSubmit",
 	"SubagentStart",
 	"SubagentStop",
 	"Stop",
-	"StopFailure",
-	"Notification",
 	"PermissionRequest",
 	"SessionEnd",
 	"PreToolUse",
+	"PostToolUse",
+	"Interrupt",
 }
 
-// TestCodexInstallHooks_Writes9EventsAfterExpansion is the primary issue
-// #613 regression guard: installer must write the full 9-event set,
-// especially the 6 newly added (SubagentStart/Stop, StopFailure,
-// Notification, PermissionRequest, SessionEnd). Any future change that
-// shrinks the installer back to the pre-expansion 3-event set trips here.
-func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
+// TestCodexInstallHooks_Writes10Events is the primary issue #613/#1159
+// regression guard: installer must write the full 10-event set. Any future
+// change that shrinks the installer set trips here.
+func TestCodexInstallHooks_Writes10Events(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hooks.json")
 
@@ -343,15 +338,7 @@ func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
 		t.Errorf("codex installer wrote %d events, want %d (issue #613 expansion + L2 PreToolUse)", len(hooks), len(expectedCodexInstallerNames))
 	}
 
-	wantExpanded := []string{
-		"SubagentStart",
-		"SubagentStop",
-		"StopFailure",
-		"Notification",
-		"PermissionRequest",
-		"SessionEnd",
-		"PreToolUse",
-	}
+	wantExpanded := []string{"SubagentStart", "SubagentStop", "PermissionRequest", "SessionEnd", "PreToolUse", "PostToolUse", "Interrupt"}
 	for _, name := range wantExpanded {
 		if _, ok := hooks[name]; !ok {
 			t.Errorf("expanded event %q not written to hooks.json (issue #613 regression)", name)
@@ -367,6 +354,110 @@ func TestCodexInstallHooks_Writes9EventsAfterExpansion(t *testing.T) {
 		if len(groups) == 0 {
 			t.Errorf("event %q has no matcher groups", name)
 		}
+	}
+	for _, retired := range codexRetiredUpstreamEvents {
+		if _, ok := hooks[retired]; ok {
+			t.Errorf("retired key %q written by installer", retired)
+		}
+	}
+}
+
+// Install strips pdx-owned entries under retired keys and drops the key
+// when it empties (spec §2.3).
+func TestCodexInstallHooks_StripsRetiredPdxEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"Notification": []any{pdxGroupEntry("PdxNotification")},
+			"StopFailure":  []any{pdxGroupEntry("PdxStopFailure")},
+			"Stop":         []any{pdxGroupEntry("PdxStop")},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, path))
+	for _, key := range []string{"Notification", "StopFailure"} {
+		if _, ok := hooks[key]; ok {
+			t.Errorf("retired key %q survived install: %v", key, hooks[key])
+		}
+	}
+	if len(hooks) != len(expectedCodexInstallerNames) {
+		t.Errorf("hooks has %d keys, want %d: %v", len(hooks), len(expectedCodexInstallerNames), hooks)
+	}
+}
+
+// A third-party entry under a retired key is preserved and the key kept.
+func TestCodexInstallHooks_PreservesNonPdxUnderRetiredKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	third := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/opt/other/notify.sh"}}}
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{
+			"Notification": []any{pdxGroupEntry("PdxNotification"), third},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, path))
+	groups := codexMatcherGroups(hooks["Notification"])
+	if len(groups) != 1 {
+		t.Fatalf("Notification groups = %d, want 1 (third-party only): %v", len(groups), hooks["Notification"])
+	}
+	if findPdxCommandInCodexForEvent(hooks["Notification"], "PdxNotification") != "" {
+		t.Fatal("pdx Notification entry survived install")
+	}
+}
+
+// Remove strips retired pdx entries too (they are pdx-owned for cleanup).
+func TestCodexRemoveHooks_StripsRetiredPdxEntries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"Notification": []any{pdxGroupEntry("PdxNotification")},
+		"StopFailure":  []any{pdxGroupEntry("PdxStopFailure")},
+		"Stop":         []any{pdxGroupEntry("PdxStop")},
+	})
+	status, err := (&Provider{}).CheckHooks()
+	if err != nil {
+		t.Fatalf("CheckHooks: %v", err)
+	}
+	if !status.Managed {
+		t.Fatal("Managed=false with retired pdx entries present; Remove button would be dead")
+	}
+	if err := (&Provider{}).RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, filepath.Join(home, ".codex", "hooks.json")))
+	if len(hooks) != 0 {
+		t.Fatalf("hooks after remove = %v, want empty", hooks)
+	}
+}
+
+// A non-array value under a retired key is left alone by install.
+func TestCodexInstallHooks_RetiredKeyNonArrayValuePreserved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	data, _ := json.MarshalIndent(map[string]any{
+		"hooks": map[string]any{"StopFailure": "weird"},
+	}, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, path))
+	if hooks["StopFailure"] != "weird" {
+		t.Fatalf("StopFailure = %v, want untouched \"weird\"", hooks["StopFailure"])
 	}
 }
 
@@ -391,10 +482,13 @@ func TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{`model = "gpt-5"`, "other = true", "codex_hooks = true"} {
+	for _, want := range []string{`model = "gpt-5"`, "other = true", "hooks = true"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config.toml missing %q after install:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "codex_hooks") {
+		t.Fatalf("config.toml still contains deprecated codex_hooks after install:\n%s", text)
 	}
 	info, err := os.Stat(configPath)
 	if err != nil {
@@ -476,7 +570,14 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		}
 	})
 
-	t.Run("hooks write failure leaves config unchanged", func(t *testing.T) {
+	t.Run("hooks write failure leaves hooks.json unchanged", func(t *testing.T) {
+		// #1159: config.toml is written before hooks.json, so a hooks.json
+		// write failure happens *after* config.toml has already been
+		// legitimately migrated (features.hooks = true) — that migration
+		// is intentional and harmless (it's the upstream default) even
+		// though the subsequent hooks.json write never lands. What must
+		// stay true is that hooks.json itself is untouched by the failed
+		// write.
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 		configPath := filepath.Join(home, ".codex", "config.toml")
@@ -485,11 +586,11 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		if err := os.MkdirAll(codexDir, 0755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		originalConfig := []byte("model = \"gpt-5\"\n")
-		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+		originalHooks := []byte(`{"hooks":{}}`)
+		if err := os.WriteFile(configPath, []byte("model = \"gpt-5\"\n"), 0644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
-		if err := os.WriteFile(hooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+		if err := os.WriteFile(hooksPath, originalHooks, 0644); err != nil {
 			t.Fatalf("write hooks: %v", err)
 		}
 		if err := os.Mkdir(hooksPath+".tmp", 0755); err != nil {
@@ -498,9 +599,13 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
 			t.Fatal("InstallHooks succeeded with hooks temp path blocked by directory")
 		}
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotHooks) != string(originalHooks) {
+			t.Fatalf("hooks.json changed after hooks write failure; got %q", gotHooks)
+		}
 		gotConfig, _ := os.ReadFile(configPath)
-		if string(gotConfig) != string(originalConfig) {
-			t.Fatalf("config changed after hooks write failure; got %q", gotConfig)
+		if !strings.Contains(string(gotConfig), "hooks = true") {
+			t.Fatalf("config.toml must be migrated before hooks.json write is attempted; got %q", gotConfig)
 		}
 	})
 
@@ -694,9 +799,9 @@ func TestCodexInstallHooks_ExcludesNonInstallableSpecs(t *testing.T) {
 	}
 }
 
-// TestCodexCheckHooks_ReportsAll9Events asserts CheckHooks sees every event
+// TestCodexCheckHooks_ReportsAll10Events asserts CheckHooks sees every event
 // in the expanded set.
-func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
+func TestCodexCheckHooks_ReportsAll10Events(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -735,14 +840,26 @@ func TestCodexCheckHooks_ReportsAll9Events(t *testing.T) {
 	}
 }
 
-func TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks(t *testing.T) {
+// Absent flag = enabled (upstream default); explicit false on either key
+// blocks; canonical `hooks` wins over the deprecated alias when both exist.
+func TestCodexCheckHooks_FeatureFlagSemantics(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		writeFlag bool
-		value     bool
+		name        string
+		config      string // "" = no config.toml
+		wantBlocked bool
 	}{
-		{name: "missing"},
-		{name: "false", writeFlag: true, value: false},
+		{name: "absent config", config: "", wantBlocked: false},
+		{name: "absent features", config: "model = \"x\"\n", wantBlocked: false},
+		{name: "hooks true", config: "[features]\nhooks = true\n", wantBlocked: false},
+		{name: "hooks false", config: "[features]\nhooks = false\n", wantBlocked: true},
+		{name: "legacy alias true", config: "[features]\ncodex_hooks = true\n", wantBlocked: false},
+		{name: "legacy alias false", config: "[features]\ncodex_hooks = false\n", wantBlocked: true},
+		{name: "canonical true beats alias false", config: "[features]\nhooks = true\ncodex_hooks = false\n", wantBlocked: false},
+		{name: "canonical false beats alias true", config: "[features]\nhooks = false\ncodex_hooks = true\n", wantBlocked: true},
+		{name: "hooks string true is disabled", config: "[features]\nhooks = \"true\"\n", wantBlocked: true},
+		{name: "hooks string beats alias true", config: "[features]\nhooks = \"true\"\ncodex_hooks = true\n", wantBlocked: true},
+		{name: "alias string true is disabled", config: "[features]\ncodex_hooks = \"true\"\n", wantBlocked: true},
+		{name: "hooks integer is disabled", config: "[features]\nhooks = 1\n", wantBlocked: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -751,21 +868,21 @@ func TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks(t *testing.T) {
 			if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
 				t.Fatalf("seed install: %v", err)
 			}
-			if tt.writeFlag {
-				writeCodexFeatureFlag(t, home, tt.value)
+			if tt.config != "" {
+				writeCodexConfigText(t, home, tt.config)
 			}
 			status, err := (&Provider{}).CheckHooks()
 			if err != nil {
 				t.Fatalf("CheckHooks: %v", err)
 			}
-			if status.Installed {
-				t.Fatal("Installed=true with codex hooks feature flag disabled")
+			if status.Installed == tt.wantBlocked {
+				t.Fatalf("Installed=%v, want %v (issues=%v)", status.Installed, !tt.wantBlocked, status.Issues)
+			}
+			if tt.wantBlocked && !issuesContain(status.Issues, "codex hooks feature flag disabled") {
+				t.Fatalf("issues=%v, want feature flag disabled issue", status.Issues)
 			}
 			if !status.Managed {
-				t.Fatal("Managed=false with valid hooks but disabled feature flag")
-			}
-			if !issuesContain(status.Issues, "codex hooks feature flag disabled") {
-				t.Fatalf("issues=%v, want feature flag disabled issue", status.Issues)
+				t.Fatal("Managed=false with valid hooks")
 			}
 		})
 	}
@@ -970,14 +1087,19 @@ func writeHooksFile(t *testing.T, home string, hooksSect map[string]any) {
 	writeCodexFeatureFlag(t, home, true)
 }
 
+// writeCodexFeatureFlag writes the canonical [features] hooks key.
 func writeCodexFeatureFlag(t *testing.T, home string, enabled bool) {
+	t.Helper()
+	writeCodexConfigText(t, home, fmt.Sprintf("[features]\nhooks = %t\n", enabled))
+}
+
+func writeCodexConfigText(t *testing.T, home, text string) {
 	t.Helper()
 	path := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
-	data := []byte(fmt.Sprintf("[features]\ncodex_hooks = %t\n", enabled))
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, []byte(text), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 }
@@ -1002,6 +1124,8 @@ func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 		"UserPromptSubmit":  []any{pdxGroupEntry("PdxUserPromptSubmit")},
 		"Stop":              []any{pdxGroupEntry("PdxStop")},
 		"PermissionRequest": []any{pdxGroupEntry("PdxPermissionRequest")},
+		"PostToolUse":       []any{pdxGroupEntry("PdxPostToolUse")},
+		"Interrupt":         []any{pdxGroupEntry("PdxInterrupt")},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -1014,8 +1138,10 @@ func TestCheckHooks_LegacyThreeEvent_ReportsInstalled(t *testing.T) {
 	if len(status.Issues) != 0 {
 		t.Fatalf("legacy 3-event user: Issues=%v, want empty", status.Issues)
 	}
-	// status.Events keyed by PurdexName post P3-T4.
-	futureOnly := []string{"PdxSubagentStart", "PdxSubagentStop", "PdxStopFailure", "PdxNotification", "PdxSessionEnd"}
+	// status.Events keyed by PurdexName post P3-T4. Notification/StopFailure
+	// are retired (#1159): Handling=Ignored excludes them from specs
+	// entirely, so they no longer appear in status.Events at all.
+	futureOnly := []string{"PdxSubagentStart", "PdxSubagentStop", "PdxSessionEnd", "PdxPreToolUse"}
 	for _, name := range futureOnly {
 		info, ok := status.Events[name]
 		if !ok {
@@ -1088,10 +1214,15 @@ func TestCheckHooks_FutureOnlyBroken_WarnsAndBlocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("PdxSessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("PdxUserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("PdxStop")},
-		"Notification": []any{
+		"SessionStart":      []any{pdxGroupEntry("PdxSessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("PdxStop")},
+		"PermissionRequest": []any{pdxGroupEntry("PdxPermissionRequest")},
+		"PostToolUse":       []any{pdxGroupEntry("PdxPostToolUse")},
+		"Interrupt":         []any{pdxGroupEntry("PdxInterrupt")},
+		// SessionEnd (FutureOnly, #1159 replaces the retired Notification
+		// example) with a non-pdx command: broken, not absent.
+		"SessionEnd": []any{
 			map[string]any{
 				"hooks": []any{
 					map[string]any{
@@ -1111,11 +1242,11 @@ func TestCheckHooks_FutureOnlyBroken_WarnsAndBlocks(t *testing.T) {
 	if status.Installed {
 		t.Fatal("FutureOnly broken: allInstalled=true, want false")
 	}
-	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
-		t.Fatalf("FutureOnly broken: issues=%v, want malformed warning for Notification", status.Issues)
+	if !issuesContain(status.Issues, "SessionEnd hook: pdx command malformed") {
+		t.Fatalf("FutureOnly broken: issues=%v, want malformed warning for SessionEnd", status.Issues)
 	}
-	if status.Events["Notification"].Installed {
-		t.Fatal("Notification Installed=true, want false")
+	if status.Events["PdxSessionEnd"].Installed {
+		t.Fatal("PdxSessionEnd Installed=true, want false")
 	}
 }
 
@@ -1126,14 +1257,16 @@ func TestCheckHooks_FutureOnlyAbsent_DoesNotBlock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	writeHooksFile(t, home, map[string]any{
-		"SessionStart":     []any{pdxGroupEntry("PdxSessionStart")},
-		"UserPromptSubmit": []any{pdxGroupEntry("PdxUserPromptSubmit")},
-		"Stop":             []any{pdxGroupEntry("PdxStop")},
-		// 3 FutureOnly valid
-		"StopFailure":       []any{pdxGroupEntry("PdxStopFailure")},
-		"Notification":      []any{pdxGroupEntry("PdxNotification")},
+		"SessionStart":      []any{pdxGroupEntry("PdxSessionStart")},
+		"UserPromptSubmit":  []any{pdxGroupEntry("PdxUserPromptSubmit")},
+		"Stop":              []any{pdxGroupEntry("PdxStop")},
 		"PermissionRequest": []any{pdxGroupEntry("PdxPermissionRequest")},
-		// SubagentStart / SubagentStop / SessionEnd intentionally absent.
+		"PostToolUse":       []any{pdxGroupEntry("PdxPostToolUse")},
+		"Interrupt":         []any{pdxGroupEntry("PdxInterrupt")},
+		// 2 FutureOnly valid
+		"SessionEnd": []any{pdxGroupEntry("PdxSessionEnd")},
+		"PreToolUse": []any{pdxGroupEntry("PdxPreToolUse")},
+		// SubagentStart / SubagentStop intentionally absent.
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -1147,12 +1280,12 @@ func TestCheckHooks_FutureOnlyAbsent_DoesNotBlock(t *testing.T) {
 		t.Fatalf("mixed FutureOnly absent/valid: Issues=%v, want empty", status.Issues)
 	}
 	// status.Events keyed by PurdexName post P3-T4.
-	for _, absent := range []string{"PdxSubagentStart", "PdxSubagentStop", "PdxSessionEnd"} {
+	for _, absent := range []string{"PdxSubagentStart", "PdxSubagentStop"} {
 		if status.Events[absent].Installed {
 			t.Errorf("absent FutureOnly %q Installed=true, want false", absent)
 		}
 	}
-	for _, valid := range []string{"PdxStopFailure", "PdxNotification", "PdxPermissionRequest"} {
+	for _, valid := range []string{"PdxSessionEnd", "PdxPreToolUse"} {
 		if !status.Events[valid].Installed {
 			t.Errorf("valid FutureOnly %q Installed=false, want true", valid)
 		}
@@ -1401,6 +1534,8 @@ func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 		"UserPromptSubmit":  []any{pdxGroupEntry("PdxUserPromptSubmit")},
 		"Stop":              []any{pdxGroupEntry("PdxStop")},
 		"PermissionRequest": []any{pdxGroupEntry("PdxPermissionRequest")},
+		"PostToolUse":       []any{pdxGroupEntry("PdxPostToolUse")},
+		"Interrupt":         []any{pdxGroupEntry("PdxInterrupt")},
 	})
 	status, err := (&Provider{}).CheckHooks()
 	if err != nil {
@@ -1412,11 +1547,11 @@ func TestCheckHooks_UpgradesAvailable_PopulatedForLegacyCodex(t *testing.T) {
 	// UpgradesAvailable is populated with PurdexName values post P3-T4 (the
 	// daemon's HookStatus map flipped to PurdexName-keyed events; the upgrade
 	// list mirrors that convention so the SPA can index both with the same id).
+	// Notification/StopFailure are retired (#1159) and excluded from specs
+	// entirely, so they are no longer upgrade candidates.
 	want := map[string]bool{
 		"PdxSubagentStart": true,
 		"PdxSubagentStop":  true,
-		"PdxStopFailure":   true,
-		"PdxNotification":  true,
 		"PdxSessionEnd":    true,
 		"PdxPreToolUse":    true,
 	}
@@ -1465,14 +1600,15 @@ func TestCheckHooks_EventInfoCarriesFutureOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckHooks: %v", err)
 	}
-	// status.Events keyed by PurdexName post P3-T4.
-	requiredFalse := []string{"PdxSessionStart", "PdxUserPromptSubmit", "PdxStop", "PdxPermissionRequest"}
+	// status.Events keyed by PurdexName post P3-T4. Notification/StopFailure
+	// are retired (#1159) and excluded from specs entirely.
+	requiredFalse := []string{"PdxSessionStart", "PdxUserPromptSubmit", "PdxStop", "PdxPermissionRequest", "PdxPostToolUse", "PdxInterrupt"}
 	for _, name := range requiredFalse {
 		if status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=true, want false", name)
 		}
 	}
-	futureOnly := []string{"PdxSubagentStart", "PdxSubagentStop", "PdxStopFailure", "PdxNotification", "PdxSessionEnd"}
+	futureOnly := []string{"PdxSubagentStart", "PdxSubagentStop", "PdxSessionEnd", "PdxPreToolUse"}
 	for _, name := range futureOnly {
 		if !status.Events[name].FutureOnly {
 			t.Errorf("event %q FutureOnly=false, want true", name)
@@ -1493,9 +1629,10 @@ func TestCheckHooks_WrongEventNameCommand_ClassifiesAsBroken(t *testing.T) {
 		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
 		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
 		"Stop":             []any{pdxGroupEntry("Stop")},
-		// Notification key with a pdx command whose event-name token is
-		// "Stop" — must be classified as broken for Notification, not valid.
-		"Notification": []any{pdxGroupEntry("Stop")},
+		// SessionEnd key (FutureOnly, #1159 replaces the retired
+		// Notification example) with a pdx command whose event-name token
+		// is "Stop" — must be classified as broken for SessionEnd, not valid.
+		"SessionEnd": []any{pdxGroupEntry("Stop")},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -1505,10 +1642,10 @@ func TestCheckHooks_WrongEventNameCommand_ClassifiesAsBroken(t *testing.T) {
 	if status.Installed {
 		t.Fatal("wrong-event-name command: allInstalled=true, want false")
 	}
-	if status.Events["Notification"].Installed {
-		t.Fatal("Notification Installed=true, want false (command tail is 'Stop', not 'Notification')")
+	if status.Events["PdxSessionEnd"].Installed {
+		t.Fatal("PdxSessionEnd Installed=true, want false (command tail is 'Stop', not 'SessionEnd')")
 	}
-	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
+	if !issuesContain(status.Issues, "SessionEnd hook: pdx command malformed") {
 		t.Fatalf("wrong-event-name: issues=%v, want malformed warning", status.Issues)
 	}
 }
@@ -1523,12 +1660,15 @@ func TestCheckHooks_WrongAgentCommand_ClassifiesAsBroken(t *testing.T) {
 		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
 		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
 		"Stop":             []any{pdxGroupEntry("Stop")},
-		"Notification": []any{
+		// SessionEnd (FutureOnly, #1159 replaces the retired Notification
+		// example) with a command that targets --agent cc instead of
+		// --agent codex.
+		"SessionEnd": []any{
 			map[string]any{
 				"hooks": []any{
 					map[string]any{
 						"type":    "command",
-						"command": `"/usr/local/bin/pdx" hook --agent cc Notification`,
+						"command": `"/usr/local/bin/pdx" hook --agent cc SessionEnd`,
 						"timeout": 5,
 					},
 				},
@@ -1543,10 +1683,10 @@ func TestCheckHooks_WrongAgentCommand_ClassifiesAsBroken(t *testing.T) {
 	if status.Installed {
 		t.Fatal("wrong-agent command: allInstalled=true, want false")
 	}
-	if status.Events["Notification"].Installed {
-		t.Fatal("Notification Installed=true, want false (--agent cc, not codex)")
+	if status.Events["PdxSessionEnd"].Installed {
+		t.Fatal("PdxSessionEnd Installed=true, want false (--agent cc, not codex)")
 	}
-	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
+	if !issuesContain(status.Issues, "SessionEnd hook: pdx command malformed") {
 		t.Fatalf("wrong-agent: issues=%v, want malformed warning", status.Issues)
 	}
 }
@@ -1666,7 +1806,9 @@ func TestCheckHooks_FutureOnlyEmptyArray_ClassifiesAsBroken(t *testing.T) {
 		"SessionStart":     []any{pdxGroupEntry("SessionStart")},
 		"UserPromptSubmit": []any{pdxGroupEntry("UserPromptSubmit")},
 		"Stop":             []any{pdxGroupEntry("Stop")},
-		"Notification":     []any{}, // present key, empty array — must be broken not absent
+		// SessionEnd (FutureOnly, #1159 replaces the retired Notification
+		// example), present key, empty array — must be broken not absent.
+		"SessionEnd": []any{},
 	})
 
 	status, err := (&Provider{}).CheckHooks()
@@ -1676,11 +1818,11 @@ func TestCheckHooks_FutureOnlyEmptyArray_ClassifiesAsBroken(t *testing.T) {
 	if status.Installed {
 		t.Fatal("FutureOnly empty-array: allInstalled=true, want false")
 	}
-	if !issuesContain(status.Issues, "Notification hook: pdx command malformed") {
+	if !issuesContain(status.Issues, "SessionEnd hook: pdx command malformed") {
 		t.Fatalf("FutureOnly empty-array: issues=%v, want malformed warning", status.Issues)
 	}
-	if status.Events["Notification"].Installed {
-		t.Fatal("Notification Installed=true, want false (empty array = broken)")
+	if status.Events["PdxSessionEnd"].Installed {
+		t.Fatal("PdxSessionEnd Installed=true, want false (empty array = broken)")
 	}
 }
 
@@ -1801,11 +1943,11 @@ func TestCodexKnownEventNames_DerivedFromUpstreamKeys(t *testing.T) {
 }
 
 // TestCodexOwnedCleanupEventNames_TwoSetUnion asserts the cleanup set is
-// the two-set union per spec §6.1 invariant 6 post-cleanup: installable
-// specs' UpstreamKeys ∪ PurdexName. codex has one-to-one upstream/Pdx
-// mapping so the union has 2× the installable count keys. Legacy Name set
-// retired in CLEANUP-T1 (W2 alpha.255 + reinstall assumed; cc/codex
-// 1:1 mapping makes the legacy Name set redundant with UpstreamKeys).
+// installable UpstreamKeys ∪ PurdexName ∪ retired keys ∪ Pdx+retired.
+// codex has one-to-one upstream/Pdx mapping so the installable half of the
+// union has 2× the installable count keys. Legacy Name set retired in
+// CLEANUP-T1 (W2 alpha.255 + reinstall assumed; cc/codex 1:1 mapping makes
+// the legacy Name set redundant with UpstreamKeys).
 func TestCodexOwnedCleanupEventNames_TwoSetUnion(t *testing.T) {
 	got := codexOwnedCleanupEventNames()
 	want := map[string]bool{}
@@ -1817,6 +1959,10 @@ func TestCodexOwnedCleanupEventNames_TwoSetUnion(t *testing.T) {
 			want[key] = true
 		}
 		want[spec.PurdexName] = true
+	}
+	for _, key := range codexRetiredUpstreamEvents {
+		want[key] = true
+		want["Pdx"+key] = true
 	}
 	if len(got) != len(want) {
 		t.Errorf("codexOwnedCleanupEventNames size = %d, want %d", len(got), len(want))
@@ -1956,8 +2102,121 @@ func TestCheckCodexEvent_LooksUpByUpstreamKey(t *testing.T) {
 	}
 	// Sanity: feature flag preserved separately by the config.toml writer.
 	if data, err := os.ReadFile(configPath); err == nil {
-		if !strings.Contains(string(data), "codex_hooks = true") {
-			t.Errorf("config.toml must keep codex_hooks=true after install:\n%s", string(data))
+		if !strings.Contains(string(data), "hooks = true") {
+			t.Errorf("config.toml must keep hooks=true after install:\n%s", string(data))
 		}
+	}
+}
+
+func TestCodexHooksSupportedVersion_Pinned(t *testing.T) {
+	if codexHooksSupportedVersion != "0.153.4" {
+		t.Fatalf("codexHooksSupportedVersion = %q, want 0.153.4", codexHooksSupportedVersion)
+	}
+}
+
+func TestCodexHookTimeoutSeconds_ClampedEvents(t *testing.T) {
+	for _, key := range []string{"SessionEnd", "Interrupt"} {
+		if got := codexHookTimeoutSeconds(key); got != 3 {
+			t.Errorf("%s timeout = %d, want 3 (codex clamps SessionEnd and Interrupt to 3s)", key, got)
+		}
+	}
+	for _, key := range []string{"SessionStart", "Stop", "PostToolUse", "Unknown"} {
+		if got := codexHookTimeoutSeconds(key); got != 5 {
+			t.Errorf("%s timeout = %d, want 5", key, got)
+		}
+	}
+}
+
+func TestCodexInstallHooks_WritesPerEventTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, path))
+	timeoutOf := func(key string) float64 {
+		groups := codexMatcherGroups(hooks[key])
+		if len(groups) != 1 {
+			t.Fatalf("%s: %d matcher groups, want 1", key, len(groups))
+		}
+		inner := toCodexEntrySlice(groups[0].(map[string]any)["hooks"])
+		m, _ := inner[0].(map[string]any)
+		v, _ := m["timeout"].(float64)
+		return v
+	}
+	if got := timeoutOf("SessionEnd"); got != 3 {
+		t.Errorf("SessionEnd timeout = %v, want 3", got)
+	}
+	if got := timeoutOf("Interrupt"); got != 3 {
+		t.Errorf("Interrupt timeout = %v, want 3", got)
+	}
+	if got := timeoutOf("Stop"); got != 5 {
+		t.Errorf("Stop timeout = %v, want 5", got)
+	}
+}
+
+// installCodexHooks must write config.toml before hooks.json: a config
+// write failure must leave hooks.json byte-for-byte untouched, so a partial
+// install never upgrades hooks.json (stripping retired keys) without also
+// migrating the feature flag.
+func TestCodexInstallHooks_ConfigWriteFailureLeavesHooksUntouched(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"Notification": []any{pdxGroupEntry("PdxNotification")},
+	})
+
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	before, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("read pre-seeded hooks.json: %v", err)
+	}
+
+	// Force the config.toml write (not the read) to fail: leave the valid
+	// config.toml that writeHooksFile seeded in place — readCodexConfig
+	// must still succeed — and pre-create config.toml.tmp as a directory,
+	// so os.WriteFile(configPath+".tmp", ...) fails with EISDIR (verified
+	// on macOS). This isolates the write-order bug: with hooks.json written
+	// before config.toml, hooks.json would already be upgraded by the time
+	// this failure happens.
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.Mkdir(configPath+".tmp", 0755); err != nil {
+		t.Fatalf("mkdir config.toml.tmp: %v", err)
+	}
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+		t.Fatal("InstallHooks: want error when config.toml write fails, got nil")
+	}
+
+	after, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("read hooks.json after failed install: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("hooks.json changed despite config write failure:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+// The codex approval cache lives under [hooks.state."<path>:<event>:<n>:<m>"]
+// with a trusted_hash; install must not lose it or the user re-approves
+// every hook on the next start.
+func TestCodexInstallHooks_PreservesHooksStateTrustedHash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stateKey := filepath.Join(home, ".codex", "hooks.json") + ":stop:0:0"
+	writeCodexConfigText(t, home, "[features]\ncodex_hooks = true\n\n[hooks.state]\n\n[hooks.state.\""+stateKey+"\"]\ntrusted_hash = \"abc123\"\n")
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+	config, err := readCodexConfig(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("readCodexConfig: %v", err)
+	}
+	hooksTbl, _ := config["hooks"].(map[string]any)
+	state, _ := hooksTbl["state"].(map[string]any)
+	entry, _ := state[stateKey].(map[string]any)
+	if got, _ := entry["trusted_hash"].(string); got != "abc123" {
+		t.Fatalf("hooks.state[%q].trusted_hash = %q, want abc123 (config=%v)", stateKey, got, config)
 	}
 }

@@ -1873,3 +1873,255 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		}
 	})
 }
+
+// #1159 (a): PostToolUse on a codex frame parked at waiting (after a
+// PermissionRequest) moves it to running via the generic narrow update.
+func TestApplyFrameEvent_CodexPostToolUse_WaitingToRunning(t *testing.T) {
+	m := newProxyTestModule(t)
+	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
+	frame.Status = agentpkg.StatusWaiting
+	if _, err := m.frames.Upsert(frame); err != nil {
+		t.Fatalf("park frame at waiting: %v", err)
+	}
+	turnAwareEnvAlive(t, 1, "t-init")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxPostToolUse",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: json.RawMessage(`{"tool_name":"Bash","turn_id":"t_a"}`),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"tool_name": "Bash"}}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	final, err := m.frames.GetByIdentity("%5", 42, "t1")
+	if err != nil || final == nil {
+		t.Fatalf("reload: %v / %v", err, final)
+	}
+	if final.Status != agentpkg.StatusRunning {
+		t.Fatalf("status = %q, want running", final.Status)
+	}
+}
+
+// #1159 (c): PostToolUse from a codex sender that owns no frame and has no
+// proxy parent must skip — not materialize a standalone frame. The broker
+// is a proxy ref on a cc parent; without a parent this is either a late
+// event after SessionEnd/sweep, or turn activity with nothing to attach to.
+// Either way it must route through the same no-parent guard PreToolUse
+// already uses (row20), not the generic LifecycleNone Upsert path.
+func TestApplyFrameEvent_CodexPostToolUse_NoFrameNoParent_SkipsWithoutCreatingFrame(t *testing.T) {
+	m := newProxyTestModule(t)
+	turnAwareEnvNoParent(t)
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxPostToolUse",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: json.RawMessage(`{"tool_name":"Bash","turn_id":"t_a"}`),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "skipped" || meta.Reason != "post_tool_without_proxy_parent" {
+		t.Fatalf("meta = %+v, want Decision=skipped Reason=post_tool_without_proxy_parent", meta)
+	}
+
+	final, err := m.frames.GetByIdentity("%5", 42, "t1")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if final != nil {
+		t.Fatalf("GetByIdentity = %+v, want nil (no standalone frame created)", final)
+	}
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("pane has %d frames, want 0 (no phantom frame materialized); frames=%+v", len(frames), frames)
+	}
+}
+
+// #1159 (d): PostToolUse from a codex sender that owns no frame but DOES
+// have an alive proxy parent is turn activity on the broker — it must
+// upsert the parent's proxy ref exactly like PreToolUse (row02), not
+// materialize a standalone frame either.
+func TestApplyFrameEvent_CodexPostToolUse_NoFrameWithProxyParent_UpsertsRef(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+	}})
+	turnAwareEnvAlive(t, 100, "t100")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxPostToolUse",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_upserted_on_user_prompt" {
+		t.Fatalf("reason = %q, want proxy_subagent_upserted_on_user_prompt; meta=%+v", meta.Reason, meta)
+	}
+
+	parent, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || parent == nil {
+		t.Fatalf("reload parent: %v / %v", err, parent)
+	}
+	if len(parent.Subagents) != 1 {
+		t.Fatalf("Subagents = %+v, want exactly 1 ref (upsert in place, no append)", parent.Subagents)
+	}
+	if parent.Subagents[0].SourceTurnID != "t_a" {
+		t.Fatalf("ref.SourceTurnID = %q, want t_a", parent.Subagents[0].SourceTurnID)
+	}
+
+	standalone, err := m.frames.GetByIdentity("%5", 42, "t1")
+	if err != nil {
+		t.Fatalf("GetByIdentity sender: %v", err)
+	}
+	if standalone != nil {
+		t.Fatalf("GetByIdentity sender = %+v, want nil (no standalone frame created)", standalone)
+	}
+}
+
+// #1159 round-2 P2 fix: a frameless codex PostToolUse whose proxy parent
+// vanishes (SessionEnd / sweep) in the gap between findProxyParent's
+// candidate read and upsertProxyRefForBroker's OCC write must skip, not
+// fall through to the generic frame path — that path has no Status=""
+// guard for PostToolUse and would materialize a standalone `running` frame,
+// violating the same invariant the NoFrameNoParent test above protects.
+//
+// Injection: classifyAncestor's walk (ancestor.go:116-149) fetches the
+// candidate frame via FindByPanePID, then verifies liveness/identity
+// through the existing isPidAliveFn/processStartTimeFn test seams BEFORE
+// returning that (already-fetched) candidate as the proxy parent. Deleting
+// the parent row from inside the processStartTimeFn stub — after
+// FindByPanePID already captured its snapshot, but before findProxyParent
+// returns it to applyFrameEvent — reproduces the real mid-flight race
+// end-to-end through applyFrameEvent without any new production seam:
+// findProxyParent still hands back the (now-stale) parent snapshot, and
+// upsertProxyRefForBroker's OCC write then finds the row gone, exactly
+// mirroring TestUpsertProxyRefForBroker_RetryOnConflict's reload-nil path
+// (frame_ops.go:1713-1719).
+func TestApplyFrameEvent_CodexPostToolUse_ParentVanishedMidFlight_Skips(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+	}})
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	deleted := false
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			if !deleted {
+				deleted = true
+				if err := m.frames.Delete(parent.FrameID); err != nil {
+					t.Fatalf("delete parent mid-flight: %v", err)
+				}
+			}
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxPostToolUse",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "skipped" || meta.Reason != "post_tool_parent_vanished" {
+		t.Fatalf("meta = %+v, want Decision=skipped Reason=post_tool_parent_vanished", meta)
+	}
+
+	final, err := m.frames.GetByIdentity("%5", 42, "t1")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if final != nil {
+		t.Fatalf("GetByIdentity = %+v, want nil (no standalone frame created)", final)
+	}
+}
+
+// #1159 (b): Interrupt from a codex broker detaches its proxy ref by
+// turn_id exactly like Stop (LifecycleStop path).
+func TestApplyFrameEvent_CodexInterrupt_DetachesProxyByTurn(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+	}})
+	turnAwareEnvAlive(t, 100, "t100")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxInterrupt",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_detached_on_stop_turn" {
+		t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop_turn; meta=%+v", meta.Reason, meta)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil || len(final.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty after Interrupt detach", final.Subagents)
+	}
+}
+
+// #1159 (b'): Interrupt on a standalone codex frame moves running → idle.
+func TestApplyFrameEvent_CodexInterrupt_StandaloneRunningToIdle(t *testing.T) {
+	m := newProxyTestModule(t)
+	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
+	frame.Status = agentpkg.StatusRunning
+	if _, err := m.frames.Upsert(frame); err != nil {
+		t.Fatalf("set running: %v", err)
+	}
+	turnAwareEnvAlive(t, 1, "t-init")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxInterrupt",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 42, "t1")
+	if final == nil || final.Status != agentpkg.StatusIdle {
+		t.Fatalf("frame = %+v, want idle", final)
+	}
+}

@@ -259,3 +259,46 @@ func TestCodexDeriveStatus_SessionStart_OmitsAbsentKeys(t *testing.T) {
 		t.Fatalf("cwd present for a payload that has none: %+v", r.Detail)
 	}
 }
+
+// TestCodexDeriveStatus_PdxPostToolUse: running + tool_name detail (#1159).
+func TestCodexDeriveStatus_PdxPostToolUse(t *testing.T) {
+	r := deriveWithRaw("PdxPostToolUse", `{"tool_name":"Bash","turn_id":"t1"}`)
+	if !r.Valid || r.Status != agent.StatusRunning {
+		t.Fatalf("expected running, got %+v", r)
+	}
+	if got, _ := r.Detail["tool_name"].(string); got != "Bash" {
+		t.Fatalf("Detail[tool_name] = %v, want Bash", r.Detail["tool_name"])
+	}
+}
+
+// TestCodexDeriveStatus_PdxInterrupt: idle + turn_id detail (#1159).
+func TestCodexDeriveStatus_PdxInterrupt(t *testing.T) {
+	r := deriveWithRaw("PdxInterrupt", `{"turn_id":"t9","permission_mode":"default"}`)
+	if !r.Valid || r.Status != agent.StatusIdle {
+		t.Fatalf("expected idle, got %+v", r)
+	}
+	if got, _ := r.Detail["turn_id"].(string); got != "t9" {
+		t.Fatalf("Detail[turn_id] = %v, want t9", r.Detail["turn_id"])
+	}
+}
+
+func TestCodexDeriveStatus_PdxInterrupt_NoTurnID(t *testing.T) {
+	r := deriveViaProvider("PdxInterrupt")
+	if !r.Valid || r.Status != agent.StatusIdle {
+		t.Fatalf("expected idle, got %+v", r)
+	}
+	if _, ok := r.Detail["turn_id"]; ok {
+		t.Fatalf("Detail should omit absent turn_id, got %+v", r.Detail)
+	}
+}
+
+// Retired entries keep parsing so an in-flight hook from a pre-0.153
+// install still resolves (spec §2.1).
+func TestCodexDeriveStatus_RetiredEntriesStillParse(t *testing.T) {
+	if r := deriveWithRaw("PdxNotification", `{"notification_type":"permission_prompt"}`); !r.Valid || r.Status != agent.StatusWaiting {
+		t.Fatalf("PdxNotification: %+v", r)
+	}
+	if r := deriveWithRaw("PdxStopFailure", `{"error":"x"}`); !r.Valid || r.Status != agent.StatusError {
+		t.Fatalf("PdxStopFailure: %+v", r)
+	}
+}

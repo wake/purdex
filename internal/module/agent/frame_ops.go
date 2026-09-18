@@ -163,6 +163,18 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	}
 	before := summarizeFrame(frame)
 
+	// #1159: codex PostToolUse from a sender that owns no frame is turn
+	// activity of a broker (proxy ref on a cc parent) or a late event after
+	// SessionEnd/sweep. Neither may materialise a standalone frame, so route
+	// it through the turn-aware proxy path that PreToolUse already uses:
+	// proxy parent → upsert the ref by turn_id; no parent → skip. The catalog
+	// lifecycle stays None (spec §2.1) so the handler's error guard is
+	// unchanged; only this dispatch is reclassified.
+	if lifecycle == agentpkg.LifecycleNone && req.AgentType == "codex" &&
+		req.PurdexName == "PdxPostToolUse" && frame == nil {
+		lifecycle = agentpkg.LifecycleUserPromptSubmit
+	}
+
 	switch lifecycle {
 	case agentpkg.LifecycleSessionEnd:
 		if frame != nil {
@@ -322,12 +334,20 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// contradicting "broker is starting work for a turn" semantics
 			// (spec §3.3.C.1 + §5 row 20). UserPromptSubmit's existing
 			// Status=Running derive path stays unchanged for backward compat
-			// (v4 behavior).
-			if req.PurdexName == "PdxPreToolUse" {
+			// (v4 behavior). PostToolUse without a frame is reclassified into
+			// this same lifecycle above (#1159) for the identical reason: a
+			// frameless codex PostToolUse with no proxy parent must not
+			// materialize a standalone (possibly resurrected-after-SessionEnd)
+			// frame either.
+			if req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUse" {
+				reason := "pre_tool_without_proxy_parent"
+				if req.PurdexName == "PdxPostToolUse" {
+					reason = "post_tool_without_proxy_parent"
+				}
 				projection, perr2 := m.projectPane(req.TmuxPaneID)
 				return projection, FrameTraceMeta{
 					Decision: "skipped",
-					Reason:   "pre_tool_without_proxy_parent",
+					Reason:   reason,
 					Before:   map[string]any{},
 					After:    map[string]any{},
 				}, perr2
@@ -348,8 +368,27 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			return nil, FrameTraceMeta{}, uerr
 		}
 		if !persisted {
-			// Parent vanished mid-flight (concurrent SessionEnd / sweep).
-			// Fall through to the generic frame path as a recovery.
+			// Parent vanished mid-flight (concurrent SessionEnd / sweep,
+			// between findProxyParent's read and this helper's OCC write).
+			// PostToolUse must skip here exactly like the no-parent guard
+			// above (#1159 round-2 P2 fix), not fall through to the
+			// generic frame path: that path has no Status="" guard for
+			// PostToolUse (DeriveResult carries Status=Running for it) and
+			// would materialize a standalone `running` frame, violating
+			// the invariant that a frameless codex PostToolUse never
+			// creates a frame. UserPromptSubmit/PreToolUse still fall
+			// through: PreToolUse has Status="" so the generic path
+			// creates an idle frame instead — pre-existing behavior, out
+			// of scope here.
+			if req.PurdexName == "PdxPostToolUse" {
+				projection, perr2 := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					Decision: "skipped",
+					Reason:   "post_tool_parent_vanished",
+					Before:   map[string]any{},
+					After:    map[string]any{},
+				}, perr2
+			}
 			break
 		}
 		reason := "proxy_subagent_upserted_on_user_prompt"
