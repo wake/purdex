@@ -21,8 +21,6 @@ import (
 	backupmod "github.com/wake/purdex/internal/module/backup"
 	"github.com/wake/purdex/internal/module/dev"
 	devicestatemod "github.com/wake/purdex/internal/module/devicestate"
-	"github.com/wake/purdex/internal/module/dispatch"
-	"github.com/wake/purdex/internal/module/execution"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	"github.com/wake/purdex/internal/module/logs"
@@ -290,8 +288,6 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(devicestatemod.New())
 	c.AddModule(hostconfigmod.New())
 	c.AddModule(backupmod.New())
-	c.AddModule(execution.New())
-	c.AddModule(dispatch.New())
 	c.AddModule(monitor.New())
 	c.AddModule(codexbroker.New())
 
