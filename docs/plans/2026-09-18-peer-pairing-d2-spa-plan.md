@@ -1300,17 +1300,21 @@ describe('PeersSection — page states', () => {
   })
 
   it('a result that lands after hostId changed is dropped', async () => {
-    let release!: (v: PeerHostVerify) => void
+    // Every verify(M, …) parks until released, in call order — the FIRST one
+    // belongs to the run for hostId=M that the rerender abandons.
+    const releases: Array<(v: PeerHostVerify) => void> = []
     vi.mocked(api.verifyPeerHost).mockImplementation((h, alias) =>
-      h === M ? new Promise<PeerHostVerify>((r) => { release = r }) : Promise.resolve(ok(alias, 'mini-lab', 'mini-lab:278cbm')))
+      h === M ? new Promise<PeerHostVerify>((r) => { releases.push(r) }) : Promise.resolve(ok(alias, 'mini-lab', 'mini-lab:278cbm')))
     const { rerender } = render(<PeersSection hostId={M} />)
     await screen.findByTestId('peer-row-air')
-    vi.mocked(api.listPeerHosts).mockImplementation(async (h) => (h === A ? [MLAB_ROW] : [AIR_ROW]))
+    expect(releases).toHaveLength(1)
     rerender(<PeersSection hostId={A} />)
-    await screen.findByTestId('peer-row-mini-lab')
-    release(ok('air', 'air26', 'wakes-air-2026:oa6drb'))
+    await screen.findByTestId('peer-row-mini-lab')       // A's page: its entry for mlab
+    expect(releases).toHaveLength(2)                     // A's run dialled M for the return path
+    releases[0](ok('air', 'air26', 'wakes-air-2026:oa6drb'))   // the abandoned run's dial lands late
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.queryByTestId('peer-row-air')).toBeNull()
+    expect(screen.getByTestId('peer-row-mini-lab')).toBeInTheDocument()
   })
 
   it('never renders a token value (spec D-8): neither host admin token reaches the DOM, even in attributes', async () => {
