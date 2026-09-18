@@ -1,10 +1,10 @@
 # Plan — P-B3: exec pane consumes Nexen N2 `tool_use` / `tool_result`
 
-- Spec: `2026-09-19-pb3-tool-events-spec.md` (v1.0). Rule ids (N0–N6,
+- Spec: `2026-09-19-pb3-tool-events-spec.md` (v1.1). Rule ids (N0–N7,
   R1–R6, F1–F9) refer to it.
 - Worktree: `.claude/worktrees/pb3-tool-events`, branch
   `worktree-pb3-tool-events`, based on `origin/main` alpha.405
-  (`cf11a7f3`). Three PRs: P-B3.1 (tasks 1–4), P-B3.2 (tasks 5–8),
+  (`cf11a7f3`). Three PRs: P-B3.1 (tasks 1–4), P-B3.2 (tasks 5a–8),
   P-B3.3 (tasks 9–10). Each later PR starts after the previous one merges;
   fast-forward the branch to `origin/main` and continue.
 - Every task: subagent, TDD (failing test first, then the code), one
@@ -49,7 +49,7 @@
 - i18n: `spa/src/locales/{en,zh-TW}.json`, keys `execution.tool.aborted` /
   `execution.tool.unknown` at line 801–802; `t(key, params)` interpolates
   `{{name}}`.
-- Fixture already in the worktree (untracked):
+- Fixture already committed (`2cf315c5`):
   `spa/src/lib/nex/__fixtures__/n2-tool-events-06GBBX07.json` — the
   history page `{items: [24 events, seq 909–932], next_cursor: 0}` of
   execution `06GBBX0791PP0RQ4WSWDFY5FPM`, verbatim. N2 events at seq 915
@@ -64,7 +64,8 @@
 ### Task 1 — `tool_events` capability type + `ToolActivity` v2 shape
 
 Files: `lib/nex/types.ts`, `lib/nex/tool-activity.ts`, `lib/nex/types.test.ts`
-(exists), `lib/nex/tool-activity.test.ts`.
+(exists), `lib/nex/tool-activity.test.ts`, `components/ToolCallBlock.tsx`,
+`components/ToolCallBlock.test.tsx`, `locales/en.json`, `locales/zh-TW.json`.
 
 1. Test (types.test.ts): a `NexCapabilities` literal with
    `tool_events: {output_max_bytes: 8192, diff_max_lines: 2000}` type-checks
@@ -73,7 +74,10 @@ Files: `lib/nex/types.ts`, `lib/nex/tool-activity.ts`, `lib/nex/types.test.ts`
    'denied', durationMs: 7}, 0)` → `{status: 'denied', startedAt: 100,
    endedAt: 200, durationMs: 7}`; a `done` entry with `durationMs: 26`
    carries it through; a `done` entry without `durationMs` → variant has
-   `durationMs: undefined` (property absent).
+   `durationMs: undefined` (property absent). Test (ToolCallBlock):
+   `activity {status: 'denied', startedAt: 100, endedAt: 200}` → badge
+   `data-testid="tool-denied"` with text `denied`; existing snapshots
+   unchanged (run, do not update).
 2. Code: `types.ts` add `tool_events?: { output_max_bytes: number;
    diff_max_lines: number }` with the §4.5 doc comment. `tool-activity.ts`:
    `ToolActivity` v2 exactly as spec §4.2 (+ `DiffHunk` export),
@@ -81,6 +85,13 @@ Files: `lib/nex/types.ts`, `lib/nex/tool-activity.ts`, `lib/nex/types.test.ts`
    and a `denied` variant `{status: 'denied'; startedAt; endedAt;
    durationMs?}`; `toToolCallActivity` maps `denied` (with `endedAt` guard
    like done/error); `recordToolEnds` skips `denied` too (N5).
+   `ToolCallBlock.TimingBadge`: replace the `default` branch with an
+   exhaustive check (`const _exhaustive: never = activity; return null`)
+   and add the `denied` case (badge only — the strike-through name and
+   the wrench/colour rules are Task 6). i18n `execution.tool.denied`
+   en "denied" / zh-TW "已拒絕". This is the only renderer touch in PR 1;
+   without it the widened union falls through `default` silently (codex
+   finding 5).
 3. Commit: `feat(spa): ToolActivity v2 — N2 overlay fields, denied status, tool_events capability type`.
 
 ### Task 2 — N1 / N2 / N6 rules in `tool-activity.ts`
@@ -102,6 +113,12 @@ Files: `lib/nex/tool-activity.ts`, `lib/nex/tool-activity.test.ts`.
      still copied.
    - N2 unseen → entry created with `startedAt: 0`, `name` from payload or
      `''` when null.
+   - N7 duplicate id: an existing `running` entry `{name: 'Bash'}`
+     receives a `tool_result` with `name: null, message_id: null,
+     block_index: null, duration_ms: null, status: 'ok'` → `status
+     'done'`, `durationMs: null`, `name` still `'Bash'`, `endedAt: at`.
+     Then `toToolCallActivity` of that entry → finished variant with
+     `durationMs: null` (R2 falls back to `endedAt − startedAt`).
    - N2 after A3 `aborted` → corrected to the mapped status.
    - N2 seen with `endedAt` already set (A2 ran first) → `endedAt` kept,
      not overwritten.
@@ -126,10 +143,13 @@ Files: `lib/nex/event-reducer.ts`, `lib/nex/event-reducer.test.ts`,
    and now populate `tools` (assert `durationMs: 12`). New: subagent N2
    (`parent_tool_use_id: 'toolu_parent'`) → `tools` untouched, `lastSeq`
    advanced (N0); N2 `tool_result` does not clear `pendingSend` / does not
-   change `turnLive` / `partial`; `tool_use` before its raw `assistant`
-   (seq swapped) → single entry with `startedAt` from the N2 event and
-   A1 skipping (N1 reorder); the sequence `assistant, tool_use, user,
-   tool_result, execution.terminal` → entry `done`, not `aborted` (N4).
+   change `turnLive` / `partial`; N1 fail-safe: a synthetic sequence
+   `tool_use(seq 1), assistant(seq 2)` (the N2 event carrying the
+   **lower** seq — a real batch never does this, F2) → single entry with
+   `startedAt` from the N2 event, A1 skipping, **and** `messages` contains
+   the `assistant` frame (the seq guard must not have eaten it); the
+   sequence `assistant, tool_use, user, tool_result, execution.terminal`
+   → entry `done`, not `aborted` (N4).
 2. Code: delete `N2_TOOL_KINDS` and the early return; in
    `applyTurnRules` add `if (ev.kind === 'tool_use') return
    recordN2ToolUse(s, p, ev.created_at)` / `tool_result` likewise (after
@@ -165,8 +185,12 @@ Files: `lib/nex/__fixtures__/n2-tool-events-06GBBX07.json` (add to git),
      `toMatchObject` — this is the mutation guard: stubbing the N2 rules
      would make the full replay equal the filtered one and fail the
      `durationMs` assertions above).
-   - Reorder: swap each `tool_use` with its preceding `assistant` (same
-     `created_at`) → `tools` deep-equal to the in-order replay.
+   - Do **not** add a "swap array order, keep seq" replay: with the seq
+     guard the swapped `assistant` would be dropped and the N1 fail-safe
+     entry would mask that (codex finding 1). The fail-safe is covered by
+     Task 3's synthetic renumbered sequence; the golden replay asserts the
+     **exact** `messages` count (raw kinds only) so a dropped raw frame
+     fails loudly.
 2. Commit: `test(spa): golden replay of a real N2 history page + raw-only equivalence`.
 
 PR 1 checklist: full `npx vitest run`, lint, `tsc -p tsconfig.app.json`,
@@ -175,6 +199,21 @@ exec-pane reducer`. Body links the spec §4.1–4.3 and the fixture
 execution id.
 
 ## PR 2 — P-B3.2 header summary, status, duration, facts line
+
+### Task 5a — baseline snapshots of `ToolResultBlock` (unchanged component)
+
+Files: `components/ToolResultBlock.test.tsx`,
+`components/__snapshots__/ToolResultBlock.test.tsx.snap` (new).
+
+1. Add four `toMatchSnapshot()` cases against the **unmodified**
+   component: collapsed ok, collapsed error, expanded ok, expanded error
+   (content `'line one\nline two'`, long content > 80 chars for the `...`
+   summary). Commit the `.snap`. No source change in this task.
+2. Commit: `test(spa): baseline snapshots for ToolResultBlock before P-B3.2`.
+
+Every later task in PR 2 and PR 3 runs these snapshots **without**
+`-u`; a diff means the no-`facts` DOM moved and the task must fix the
+component, not the snapshot.
 
 ### Task 5 — `tool-summary.ts` (R1)
 
@@ -199,8 +238,7 @@ unchanged).
 ### Task 6 — `ToolCallBlock` R1–R3 + `ToolUseBlock` entry passthrough
 
 Files: `components/ToolCallBlock.tsx`, `components/ToolUseBlock.tsx`,
-`components/ToolCallBlock.test.tsx`, `components/ToolUseBlock.test.tsx`,
-`locales/en.json`, `locales/zh-TW.json`.
+`components/ToolCallBlock.test.tsx`, `components/ToolUseBlock.test.tsx`.
 
 1. Tests (ToolCallBlock): new optional prop `summaryEntry?: Pick<ToolActivity,
    'primaryArg' | 'known'>` — with `primaryArg` the header shows its
@@ -215,7 +253,7 @@ Files: `components/ToolCallBlock.tsx`, `components/ToolUseBlock.tsx`,
 2. Code: `TimingBadge` uses `durationMs` when `typeof === 'number'`;
    `denied` case; name span class conditional; `summary = rawInput ?? toolSummary(tool, input, summaryEntry)`
    sliced to `SUMMARY_MAX`. `ToolUseBlock` passes `summaryEntry={entry}`.
-   i18n: `execution.tool.denied` en "denied" / zh-TW "已拒絕".
+   (`execution.tool.denied` and the badge itself landed in Task 1.)
 3. Commit: `feat(spa): tool call header — server primary_arg, duration_ms, denied rendering`.
 
 ### Task 7 — `tool-result-facts.ts` (R4 helper)
@@ -241,15 +279,22 @@ Files: `lib/nex/tool-result-facts.ts` (new), `lib/nex/tool-result-facts.test.ts`
 Files: `components/ToolResultBlock.tsx`, `components/ToolResultBlock.test.tsx`,
 `components/ConversationMessages.tsx`, `components/ConversationMessages.test.tsx`.
 
-1. Tests (ToolResultBlock): without `facts` → DOM identical to a
-   baseline render captured in the same test (render twice, compare
-   `innerHTML`); with `facts {file: {lines: 4}}` → header contains
-   `data-testid="tool-result-facts"` with `4 lines`; with `diff` → `+1 −1`.
+1. Tests (ToolResultBlock): the Task 5a snapshots still pass unchanged
+   (no `facts` → byte-identical DOM); with `facts {file: {lines: 4}}` →
+   header contains `data-testid="tool-result-facts"` with `4 lines`; with
+   `diff` → `+1 −1`; `facts {status: 'denied'}` + `isError: true` → the
+   neutral (non-error) classes, `data-testid="tool-result-denied"` badge
+   with `t('execution.tool.denied')`, `Prohibit` icon instead of
+   `XCircle`, and `tool-result-content` still shows the raw content (R3
+   result override — codex finding 2).
    Tests (ConversationMessages): a `user` `tool_result` block whose
    `tool_use_id` has a `tools` entry with `diff` → facts span present; no
    entry → absent; `tools` undefined → absent.
-2. Code: `facts?: ToolResultFacts` prop (`Pick<ToolActivity, 'output' |
-   'file' | 'diff' | 'status'>`), facts span after the summary
+2. Code: `facts?: ToolResultFacts` prop (`Partial<Pick<ToolActivity,
+   'output' | 'file' | 'diff' | 'status'>>` — `status` is required on the
+   entry, `Partial` lets tests and callers pass only the facts they have;
+   codex finding 6), `const denied = facts?.status === 'denied'` drives
+   the colour / icon selection ahead of `isError`, facts span after the summary
    (`text-text-muted tabular-nums flex-shrink-0`, segments joined by
    ` · `); `ConversationMessages` passes `facts={tools?.[block.tool_use_id ?? '']}`.
 3. Commit: `feat(spa): tool result header shows N2 facts`.
@@ -299,6 +344,8 @@ PR 3 checklist as PR 1. Title `feat(spa): P-B3.3 — line-numbered diff view for
 - Follow-up issues (labels: type + `spa`): subagent tool tracking (raw +
   N2 together), console R16 error-expanded default, cost hover per turn
   (R13) as a P-B4 candidate, theme tokens for the tool blocks (existing
-  TODO, may already exist — search before opening).
+  TODO, may already exist — search before opening), **seq guard drops a
+  lower-seq live event for good under nexen #83's reorder** (spec §7;
+  `bug`, `spa`, references nexen #83).
 - Bump PR (`VERSION` + `CHANGELOG.md`), no codex; then `git pull
   --ff-only` on the main checkout.
