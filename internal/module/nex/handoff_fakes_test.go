@@ -57,11 +57,11 @@ type handoffSessions struct {
 	tmux     *tmux.FakeExecutor
 
 	// take-to-terminal seams (take_to_terminal_test.go)
-	cwdErr    error                // ValidateCwd's answer
-	cwdChecks []string             // ValidateCwd arguments
-	createErr *session.CreateError // CreateSession's scripted failure
+	cwdErr      error                // ValidateCwd's answer
+	cwdChecks   []string             // ValidateCwd arguments
+	createErr   *session.CreateError // CreateSession's scripted failure
 	afterCreate func()               // runs after a successful create, before the info is returned (models a tmux restart in the window)
-	creates   []createCall         // CreateSession arguments
+	creates     []createCall         // CreateSession arguments
 }
 
 func (f *handoffSessions) ListSessions() ([]session.SessionInfo, error) { return nil, nil }
@@ -310,6 +310,7 @@ type fakeNexService struct {
 	archiveReqs    []execution.ArchiveRequest
 	archiveCtxErrs []error // ctx.Err() as seen on entry to each Archive
 	archiveErr     error
+	unarchiveErr   error // answer to an Archive with Archived:false (archiveErr answers both when set)
 }
 
 type releaseCall struct{ ExecutionID, LeaseID, PrincipalID string }
@@ -318,6 +319,22 @@ func (f *fakeNexService) record(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, name)
+}
+
+// record calls "archive" for every Archive; ArchiveCalls tells the two
+// directions apart: "archive" for Archived:true, "unarchive" for false.
+func (f *fakeNexService) ArchiveCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, r := range f.archiveReqs {
+		if r.Archived {
+			out = append(out, "archive")
+		} else {
+			out = append(out, "unarchive")
+		}
+	}
+	return out
 }
 
 func (f *fakeNexService) Calls() []string {
@@ -386,7 +403,13 @@ func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveReque
 	defer f.mu.Unlock()
 	f.archiveReqs = append(f.archiveReqs, req)
 	f.archiveCtxErrs = append(f.archiveCtxErrs, ctx.Err())
-	return f.archiveErr
+	if f.archiveErr != nil {
+		return f.archiveErr
+	}
+	if !req.Archived {
+		return f.unarchiveErr
+	}
+	return nil
 }
 
 var _ nexService = (*fakeNexService)(nil)
