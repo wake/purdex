@@ -77,7 +77,7 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
 
   const applyMaxHeight = (top: number) => {
     const el = panelRef.current
-    if (el) el.style.maxHeight = `${window.innerHeight - top - PADDING}px`
+    if (el) el.style.maxHeight = `${Math.max(MIN_PANEL_HEIGHT, window.innerHeight - top - PADDING)}px`
   }
 
   const clamp = (left: number, top: number) => ({
@@ -232,6 +232,9 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
           draggedRef.current = true
           const next = clamp(d.left + (e.clientX - d.startX), d.top + (e.clientY - d.startY))
           applyPos(next.left, next.top)
+          // Re-derive as the drag moves: dragged down near the bottom, the panel
+          // must not extend past the viewport; dragged back up, it grows back.
+          applyMaxHeight(next.top)
         }}
         onPointerUp={(e) => { if (drag.current?.pointerId === e.pointerId) drag.current = null }}
         onPointerCancel={() => { drag.current = null }}

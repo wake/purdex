@@ -356,6 +356,24 @@ describe('FloatingPanel', () => {
     expect(panel.style.maxHeight).toBe('496px')
   })
 
+  it('recomputes maxHeight live while dragging: shrinks moving down, grows back moving up', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 100 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    expect(parseInt(panel.style.top)).toBe(104)
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: 396, pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(500)
+    expect(panel.style.maxHeight).toBe('296px')
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: 0, pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(104)
+    expect(panel.style.maxHeight).toBe('692px')
+  })
+
   it('does not re-anchor on scroll once the panel has been dragged', () => {
     render(<Harness onClose={() => {}} />)
     const panel = screen.getByTestId('floating-panel')
