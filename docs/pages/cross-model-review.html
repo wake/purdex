@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>跨模型 Review 省配額研究</title>
+<style>
+:root{
+  --bg:#0e1116; --bg2:#161b22; --card:#1a2029; --line:#2b333f; --line2:#222935;
+  --fg:#e6edf3; --fg2:#9aa7b4; --fg3:#6e7b8a; --accent:#58a6ff;
+  --hi:#3fb950; --mid:#d29922; --lo:#f85149; --pur:#bc8cff; --pink:#f778ba;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif;
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#f6f8fa;--bg2:#fff;--card:#fff;--line:#d8dee4;--line2:#eaeef2;--fg:#1f2328;--fg2:#57606a;--fg3:#8b949e;--hi:#1a7f37;--mid:#9a6700;--lo:#cf222e;--pur:#8250df;--pink:#bf3989}
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.6;font-size:14.5px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:30px 18px 90px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:600}
+h1{font-size:28px;margin:.25em 0 .2em;letter-spacing:-.01em;line-height:1.2}
+.sub{color:var(--fg2);font-size:15px;max-width:80ch;margin:.3em 0}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+code{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:0 5px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+h2{margin:46px 0 8px;font-size:19px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+h2 .n{font-family:var(--mono);font-size:12px;color:var(--fg3);border:1px solid var(--line);border-radius:6px;padding:0 7px}
+h3{margin:24px 0 8px;font-size:15px;color:var(--fg2);font-weight:650}
+p{margin:.4em 0}
+.hint{color:var(--fg3);font-size:13px;margin:2px 0 12px}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:650;white-space:nowrap;border:1px solid currentColor;border-radius:999px;padding:0 7px;line-height:18px;vertical-align:middle}
+.b-hi{color:var(--hi)} .b-mid{color:var(--mid)} .b-lo{color:var(--lo)} .b-fact{color:var(--pur)} .b-est{color:var(--fg3)}
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);margin:10px 0}
+table{border-collapse:collapse;width:100%;font-size:13.3px}
+th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line2);vertical-align:top}
+th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg3);font-weight:650;background:var(--bg2)}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap;font-family:var(--mono);font-size:12.5px}
+td.k{font-weight:600;min-width:130px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px}
+.card h4{margin:0 0 6px;font-size:14.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.card p,.card li{color:var(--fg2);font-size:13.3px}
+.card ul{margin:6px 0 0;padding-left:18px}
+.card li{margin:3px 0}
+.card.hot{border-top:3px solid var(--lo)} .card.good{border-top:3px solid var(--hi)} .card.info{border-top:3px solid var(--accent)} .card.warn{border-top:3px solid var(--mid)}
+.callout{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--lo);border-radius:10px;padding:12px 15px;margin:14px 0;color:var(--fg2);font-size:13.8px}
+.callout b{color:var(--fg)}
+.callout.ok{border-left-color:var(--hi)}
+.flow{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:stretch;margin:12px 0}
+@media (max-width:760px){.flow{grid-template-columns:1fr}.flow .arrow{display:none}}
+.flow .col{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+.flow .col h4{margin:0 0 8px;font-size:14px}
+.flow .arrow{display:flex;align-items:center;color:var(--fg3);font-size:22px}
+.step{display:flex;gap:9px;padding:6px 0;border-top:1px dashed var(--line2);font-size:13.2px}
+.step:first-of-type{border-top:0}
+.step .i{font-family:var(--mono);font-size:11px;color:var(--fg3);border:1px solid var(--line);border-radius:5px;padding:0 6px;height:19px;line-height:19px;flex:none;margin-top:2px}
+.step .t{flex:1}
+.step .t small{display:block;color:var(--fg3);font-size:12px}
+.old{color:var(--fg2)} .new{color:var(--hi)} .del{text-decoration:line-through;color:var(--lo)}
+.stars{color:var(--mid);letter-spacing:1px;font-size:12px;white-space:nowrap}
+.src{font-size:12.3px;color:var(--fg3);columns:2;column-gap:28px;margin-top:8px}
+@media (max-width:700px){.src{columns:1}}
+.src div{break-inside:avoid;margin:2px 0}
+footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">研究頁 · 兩個 subagent 上網調查 ＋ 本機驗證 · 2026-09-18</div>
+  <h1>跨模型 Review：怎麼花更少、抓得更多</h1>
+  <p class="sub">前提：Claude Code（Opus 5）主開發，OpenAI Codex CLI（ChatGPT 訂閱）當第二意見；每個 PR 跑 R1 標準 review ＋ R2 三視角 adversarial，spec／plan 各一輪。痛點是配額。這頁回答三件事：<b>現在的流程哪裡在浪費</b>、<b>證據說什麼形態最有效</b>、<b>該不該加第三家模型、加哪家</b>。</p>
+  <p class="hint">
+    <span class="badge b-fact">本機驗證</span> 我在這台機器實測過的事實
+    <span class="badge b-hi">高</span><span class="badge b-mid">中</span><span class="badge b-lo">低</span> 來源可信度／推論強度
+    <span class="badge b-est">估算</span> 沒有量測、只是推估
+  </p>
+</header>
+
+<!-- ============ 0 ============ -->
+<h2><span class="n">00</span>先講結論</h2>
+<div class="grid">
+  <div class="card hot">
+    <h4>🕳️ 現在最大的漏洞：所有 review 都跑在 <code>low</code> effort <span class="badge b-fact">本機驗證</span></h4>
+    <p>plugin 的 <code>handleReviewCommand</code> 只收 <code>base / scope / model / cwd</code>，<code>--effort</code> 只有 <code>task</code> 子指令有。所以 R1、R2 三視角、spec／plan review 全部吃 <code>~/.codex/config.toml</code> 的 <code>model_reasoning_effort = "low"</code>。社群實測 low 在需要語意判斷的工作上通過率 12%，high 是 38%。我們現在是「低推理 × 很多次」，證據說應該反過來。</p>
+  </div>
+  <div class="card warn">
+    <h4>📉 R2 三個獨立平行視角，正好落在證據說「最沒增益」的那格 <span class="badge b-mid">中高</span></h4>
+    <p>ICML 2026 的 Adversarial Review 論文：reviewer 從 1 → 2 → 5 個 F1 幾乎不動（0.495／0.503／0.501）；三個沒約束的 agent 反而更差（0.457，互相附和）；有效的是「必須引用 file:line 才能反對」（0.533）。Cursor Bugbot 把 8 路平行改成單一 agentic reviewer 後解決率 52% → 70%+。</p>
+  </div>
+  <div class="card good">
+    <h4>🧭 該加第三家：DeepSeek V4 Pro（按量、無配額）；第二選 Gemini 3.1 Pro <span class="badge b-hi">高</span></h4>
+    <p>證據支持「2–3 個<b>不同家族</b>各自獨立 review → 主模型仲裁」，超過 3 家沒有 code review 的實證。我們現在是 Claude ＋ OpenAI，補一家就到甜蜜點。DeepSeek 一次 review 約 $0.05–0.5、沒有訂閱配額這件事，正對痛點。</p>
+  </div>
+  <div class="card info">
+    <h4>📏 比換模型更有效的：把 diff 切小、加 confidence 門檻 <span class="badge b-hi">高</span></h4>
+    <p>diff 大小是召回率最強的預測因子（&lt;10 行 F1 0.657，&gt;150 行 0.043，差 15×）。結構化輸出 ＋ confidence 門檻 ＋ 要求引用是所有主流工具和論文的共同做法，證據最強。adversarial 的 schema 早就有 confidence 0–1，我們只是沒用它過濾。</p>
+  </div>
+</div>
+
+<!-- ============ 1 ============ -->
+<h2><span class="n">01</span>現況：三個對配額有直接影響的事實</h2>
+<div class="tablebox"><table>
+  <thead><tr><th>#</th><th>事實</th><th>影響</th><th>可信度</th></tr></thead>
+  <tbody>
+    <tr><td class="num">1</td><td><b>review／adversarial-review 不傳 effort</b>。companion script 的 <code>handleReviewCommand</code> valueOptions 只有 <code>base, scope, model, cwd</code>；<code>review/start</code> 與 <code>turn/start</code> 都沒帶 effort。</td><td>所有 review 跑 config 的 <code>low</code>；目前 <code>model = "gpt-5.6-sol"</code>、<code>model_reasoning_effort = "low"</code>（不是記憶裡寫的 gpt-6-astra）。</td><td><span class="badge b-fact">本機驗證</span></td></tr>
+    <tr><td class="num">2</td><td><b>adversarial 把整支 branch diff 全文內嵌進 prompt</b>（<code>collectBranchContext</code> 用 <code>git diff &lt;merge-base&gt;..HEAD</code>，無截斷），再給 read-only sandbox 自己翻檔案。</td><td>R2 三視角 ＝ 同一份 diff 送三次 ＋ 三段獨立探索；成本隨 diff 線性 × 3。</td><td><span class="badge b-fact">本機驗證</span></td></tr>
+    <tr><td class="num">3</td><td><b>adversarial 的輸出 schema 本來就要求 <code>severity / confidence(0–1) / file / line</code></b>，但我們這端沒有用 confidence 做任何門檻，全部進彙整表。</td><td>低信心 finding 一樣消耗主 Claude 的討論／修復 token。</td><td><span class="badge b-fact">本機驗證</span></td></tr>
+    <tr><td class="num">4</td><td>09-14 以來 591 次派發全部有帶 <code>--model</code>（gpt-5.5 × 391、gpt-5.6-sol × 18 在 aigora）。</td><td>模型這層沒問題；問題在 effort 與形態。</td><td><span class="badge b-fact">本機驗證</span></td></tr>
+  </tbody>
+</table></div>
+
+<!-- ============ 2 ============ -->
+<h2><span class="n">02</span>ChatGPT 訂閱配額怎麼算</h2>
+<div class="grid">
+  <div class="card">
+    <h4>計量單位 <span class="badge b-hi">官方</span></h4>
+    <ul>
+      <li>2026-04-09 起 Plus／Pro／Business 改 <b>token 計量</b>：prompt、讀進的檔案、工具／終端輸出、模型回應全算。不是算訊息數。</li>
+      <li>5 小時滾動窗口 ＋ 週上限並存。</li>
+      <li><b>2026-08-25 起 Plus 恢復 5 小時限制；Pro（$100／$200）「接下來幾個月」不啟用 5 小時限制</b>，只剩週上限。→ 如果帳號是 Pro，「5 小時」不是現在的痛點。</li>
+      <li>effort 不改每 token 費率，但 help center 明寫「high reasoning 會顯著提高消耗」（reasoning token 變多）。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>模型倍率（官方 credit rate card，每 1M token） <span class="badge b-hi">官方</span></h4>
+    <div class="tablebox" style="margin:6px 0"><table>
+      <thead><tr><th>模型</th><th>input</th><th>cached</th><th>output</th><th>相對 Sol</th></tr></thead>
+      <tbody>
+        <tr><td>GPT-6 Astra</td><td class="num">250</td><td class="num">25</td><td class="num">1,250</td><td class="num"><b>2.5×</b></td></tr>
+        <tr><td>GPT-5.6 Sol</td><td class="num">100</td><td class="num">10</td><td class="num">500</td><td class="num">1×</td></tr>
+        <tr><td>GPT-5.6 Terra</td><td class="num">50</td><td class="num">5</td><td class="num">300</td><td class="num">0.5–0.6×</td></tr>
+        <tr><td>GPT-5.6 Luna</td><td class="num">5</td><td class="num">0.5</td><td class="num">30</td><td class="num">0.05×</td></tr>
+      </tbody>
+    </table></div>
+    <p>GPT-5.5 在 credit 表上沒單獨列；API 價與 Sol 同級，且 Sol 有促銷（−20%，至少到 2026-11-21，名單含 Codex credits）。<b>推論</b>：5.6-sol 可能比 5.5 便宜 20–33% <span class="badge b-mid">中低</span>。促銷是否套用到訂閱內含配額：<b>沒找到證據</b>。cached input 便宜 10×，但三個平行 thread 能否共享 prefix cache：<b>沒找到證據</b>。</p>
+  </div>
+  <div class="card">
+    <h4>effort 倍率（社群近似，非官方） <span class="badge b-mid">中</span></h4>
+    <ul>
+      <li>minimal ≈ 0.1× · low ≈ 0.3× · medium 1× · high ≈ 3–5× · xhigh ≈ 8–15×（model-dependent）</li>
+      <li>Stet 用 GPT-5.5 跑 26 個真實 repo 任務：<b>review 通過率 low 12% → medium 19% → high 38% → xhigh 69%</b>；成本 $2.65 → $3.13 → $4.49 → $9.77。high 是品質／成本轉折點，xhigh 貴 2.2× 換語意品質。</li>
+      <li>社群一致建議：review 用 <code>high</code>，security sweep 才 <code>xhigh</code>。</li>
+      <li>官方沒有「review 該用哪個 model／effort」的正式建議；只說 GitHub 雲端 review 只回 P0／P1。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><code>codex review</code> 子指令與 <code>review_model</code> <span class="badge b-hi">官方</span></h4>
+    <ul>
+      <li><code>--base</code>／<code>--uncommitted</code>／<code>--commit</code>／自訂 PROMPT <b>四者互斥</b>——內建 reviewer 沒辦法同時「指定 base ＋ 自訂 focus」，所以 plugin 才把 focus 導到 adversarial（走一般對話）。</li>
+      <li>config 有 root key <code>review_model</code>，只影響 <code>/review</code> 與 <code>review/start</code>（R1），<b>不影響</b> adversarial（吃 session model 或 <code>--model</code>）。我們沒設。</li>
+      <li>內建 reviewer findings schema：title／body／<code>confidence_score</code> 0–1／priority P0–P3／code_location。</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============ 3 ============ -->
+<h2><span class="n">03</span>證據：什麼形態的 review 有效</h2>
+<div class="tablebox"><table>
+  <thead><tr><th>題目</th><th>證據</th><th>結論</th><th>可信度</th></tr></thead>
+  <tbody>
+    <tr><td class="k">多視角平行 vs 單次高 effort</td><td>Adversarial Review（ICML 2026 DL4C，SWE-PRBench 100 PR）：單一 0.495、兩個 0.503、五個 0.501；三 agent 無約束 <b>0.457</b>（false consensus）；三 agent ＋「引用程式碼才准 disagree」<b>0.533</b>。Scaling Agent Systems：獨立平行 agent 錯誤放大 17.2×、overhead +58%。Cursor Bugbot 8 路平行 → 單一 agentic reviewer，解決率 52% → 70%+。</td><td>agent 數量不是變因；<b>有證據的反對</b>才是。獨立平行三視角是最容易互相附和的形態。</td><td><span class="badge b-mid">中高</span></td></tr>
+    <tr><td class="k">便宜模型先過濾（cascade）</td><td>Is Escalation Worth It（2605.06350）：cascade 永遠先付便宜模型的錢，pre-generation router 在 4/5 benchmark 贏 cascade。Triage（2604.07494）：用程式碼健康度當路由訊號。<b>Bigger Isn't Always Better</b>（2606.15689）：Haiku 4.5 在 PR diff 找 bug F1 0.365 &gt; Sonnet 4.6 的 0.343，recall 高 18%、便宜 3.2×。</td><td>「按風險路由」比「先跑便宜再升級」有證據；「便宜模型 review 一定較差」<b>沒有證據，甚至有反證</b>。</td><td><span class="badge b-mid">中</span></td></tr>
+    <tr><td class="k">diff 大小</td><td>2606.15689：diff &lt;10 行 F1 0.657，&gt;150 行 0.043（15×）；真實 PR 比合成 PR 難得多（最佳 F1 只有 0.066 vs 合成 0.847）。ultrareview 上限 500 檔／8,000 行。</td><td><b>縮小 diff 比換模型有效</b>，且對所有模型都成立。</td><td><span class="badge b-hi">高</span></td></tr>
+    <tr><td class="k">scope：diff＋相關檔 vs 整 repo</td><td>Defect-focused ACR（2505.17928）：改動點的上游依賴切片 &gt; 整個函式 &gt; 純 diff；太長 context 反而分心。Anthropic／Copilot／Bugbot 都是「diff ＋ agent 自己翻周邊」。</td><td>現在「diff 內嵌 ＋ read-only sandbox」是主流形態；省錢空間在縮小 diff，不在砍 sandbox。</td><td><span class="badge b-mid">中高</span></td></tr>
+    <tr><td class="k">結構化輸出、confidence 門檻、先驗證再回報</td><td>Anthropic Code Review：候選 → 驗證過濾 → 去重 → 分級，誤判 &lt;1%。Anthropic 開源 code-review plugin：每個 issue 打 0–100，<b>只輸出 ≥80</b>。REVIEW.md 建議「行為主張需 file:line 引用」「第二輪起只回 Important」。Refute-or-Promote（2604.19049）：專治 80+ agent 一致「確認」不存在漏洞的假陽性。</td><td>所有主流工具與論文的共同做法，<b>證據最強的一項</b>。</td><td><span class="badge b-hi">高</span></td></tr>
+    <tr><td class="k">同模型自審 vs 跨模型</td><td>Cross-Context Review（2603.12123，150 植入錯誤、360 次）：乾淨 session 只看成品 F1 28.6% vs 同 session 自審 24.6%（p=0.008）；<b>同 session 再審一次沒有增益</b>。Cross-Model LLM Code Review（2607.21656，Opus 4.7 × GPT-5.5）：Claude 審 Codex 稿 +18.1pp；<b>Codex 審 Claude 稿 −8.6pp</b>（13 壞 3 修，原因是整段重寫）。c-CRAB：四工具聯集 32.1% → 41.5%。</td><td>有效的是<b>切斷生產脈絡</b>；不同家族抓的是不同問題；但 <b>reviewer 只能回 findings，不能回改好的碼</b>——這跟「Claude 主開發、Codex review」直接相關。「跨模型 vs 同模型 fresh context」的量化差距：<b>沒找到</b>。</td><td><span class="badge b-mid">中</span></td></tr>
+    <tr><td class="k">幾個模型是甜蜜點</td><td>PoLL（2404.18796）：3 個不同家族的小模型當評審勝過單一 GPT-4、便宜 7×、bias 較低；同家族多個沒有去偏效果。Multi-Agent Debate for coding（TOSEM）：結果不一致。</td><td><b>主模型 ＋ 2 個不同家族 reviewer</b>。不要做 debate loop。</td><td><span class="badge b-mid">中高</span></td></tr>
+  </tbody>
+</table></div>
+
+<h3>review 專屬 benchmark 的現況（別拿 SWE-bench 當 review 指標）</h3>
+<div class="tablebox"><table>
+  <thead><tr><th>基準</th><th>關鍵數字</th><th>對本題的意義</th></tr></thead>
+  <tbody>
+    <tr><td class="k">SWR-Bench（FSE 2026，1000 個人工驗證 PR）</td><td>GPT-5 F1 20.85%、Gemini-2.5-Pro 19.38%、DeepSeek-R1 18.58%、Claude-4-Opus 16.99%；開源 32B 級 13–15%。<b>Gemini-2.5-Flash 自聚合 n=10 F1 +43.67%</b>。</td><td>推理型較強；便宜模型多跑幾次取交集能逼近大模型。</td></tr>
+    <tr><td class="k">c-CRAB（2603.23448）</td><td>Claude Code 32.1%、Devin 24.8%、PR-Agent 23.1%、Codex 20.1%；<b>四工具聯集 41.5%</b>。</td><td>不同工具找到的是不同問題——多模型交叉最直接的實證。</td></tr>
+    <tr><td class="k">Martian Code Review Bench（20 萬+ 真實 PR，量產品）</td><td>Greptile F1 60.8%、Qodo 曾 64.3%、CodeRabbit 51.2%。</td><td>產品層（多模型 ＋ AST ＋ 規則）比裸模型高很多；沒有裸模型排名。</td></tr>
+    <tr><td class="k">CRScore／RevBench 對 2026 新模型</td><td colspan="2">沒找到正式排名——review 基準都落後模型迭代一至兩代。</td></tr>
+  </tbody>
+</table></div>
+
+<!-- ============ 4 ============ -->
+<h2><span class="n">04</span>業界工具怎麼省成本</h2>
+<div class="tablebox"><table>
+  <thead><tr><th>工具</th><th>策略</th></tr></thead>
+  <tbody>
+    <tr><td class="k">Anthropic Code Review</td><td>多 agent → 驗證過濾 → 去重；只標 Important／Nit／Pre-existing；每次 $15–25；trigger 可選「開 PR 一次／每次 push／手動」，官方明說每次 push 最貴；REVIEW.md 可設「二輪起只回 Important」。</td></tr>
+    <tr><td class="k">Claude Code <code>/code-review</code></td><td><code>low</code>／<code>medium</code> 只回最有信心的；<code>high</code>–<code>max</code> 放寬涵蓋；<code>ultra</code> 上雲多 agent ＋ 重現驗證，$5–25／次。全 Claude，不算跨模型。</td></tr>
+    <tr><td class="k">OpenAI Codex cloud review</td><td>GitHub 上只貼 P0／P1；AGENTS.md「Code Review Rules」。是否只重看新 commit：官方未說明。</td></tr>
+    <tr><td class="k">Cursor Bugbot</td><td>precision 優先 → 改單 agentic reviewer；從 dismiss 學規則；自報解決率 80%。</td></tr>
+    <tr><td class="k">CodeRabbit</td><td>push 後<b>增量 review</b>；每小時次數上限；從 dismiss 學習，2–4 週後噪音下降。宣稱「frontier 模型 ensemble」但沒有公開量化證據。</td></tr>
+    <tr><td class="k">GitHub Copilot</td><td>2026-03 agentic review；2026-06 起按 token 計 AI credits ＋ 私有 repo 另扣 Actions 分鐘。</td></tr>
+  </tbody>
+</table></div>
+<p class="hint">共同點：<b>(a)</b> 只看 diff ＋ 按需翻周邊；<b>(b)</b> 嚴格 severity／confidence 門檻；<b>(c)</b> 再 review 只看增量或只回高嚴重度；<b>(d)</b> 貴的深度 review 是顯式觸發、按次付費，不是每 PR 預設。</p>
+
+<!-- ============ 5 ============ -->
+<h2><span class="n">05</span>第三家模型：候選比較</h2>
+<p class="hint">價格為 2026-09 各家官方頁或可查到的二手整理，會變。「一次 review 估算」以非 agentic 30K 輸入／3K 輸出計；agentic（自己 grep／read）通常放大 5–20×。</p>
+<div class="tablebox"><table>
+  <thead><tr><th>模型／工具</th><th>取得方式</th><th>價格或配額</th><th>review 強項</th><th>接進 Claude Code</th><th>推薦</th></tr></thead>
+  <tbody>
+    <tr><td class="k">DeepSeek V4 Pro</td><td>API 按量；有 Anthropic／OpenAI 相容端點</td><td class="num">$1.32/$3.96，離峰半價；~$0.05–0.5/次</td><td>開源第一 SWE-bench Verified 80.6%；真實專案 Tier A；家族獨立；<b>沒有訂閱配額</b></td><td>低：<code>opencode run</code> 或 <code>claude -p</code> 換 base URL</td><td><span class="stars">★★★★★</span></td></tr>
+    <tr><td class="k">DeepSeek V4.1 Flash</td><td>同上</td><td class="num">$0.30/$1.20；~$0.01/次</td><td>最便宜可用 reviewer；1M 脈絡</td><td>低</td><td><span class="stars">★★★★</span> 當快速檔</td></tr>
+    <tr><td class="k">Gemini 3.1 Pro（<code>agy</code>）</td><td>Antigravity CLI headless；帳號配額或 <code>GEMINI_API_KEY</code></td><td class="num">API $2/$12（~$0.10–2/次）；AI Pro $19.99/月</td><td>SWR-Bench 前段；2M 脈絡；<code>--json-schema</code> 原生結構化輸出；Google 官方明說外部程式跑 headless 是支援用法</td><td>中：包 <code>agy -p</code>，或等 gemini-plugin-cc 改支援 agy</td><td><span class="stars">★★★★</span></td></tr>
+    <tr><td class="k">Gemini 3.8 Flash</td><td>同上／API 免費層（5–15 RPM、1000/日）</td><td class="num">$0.75/$3.75（促銷至年底）</td><td>自聚合 n=10 可逼近 Pro</td><td>中</td><td><span class="stars">★★★</span> 免費層備援</td></tr>
+    <tr><td class="k">GLM-5.3 Coding Plan</td><td>訂閱 $18/月 Lite（年繳 ~$12.6）</td><td class="num">5h 2000／週 10000 credits</td><td>開源 SWE-bench Pro 62.1%；官方支援 Claude Code／OpenCode</td><td>低</td><td><span class="stars">★★★</span> 固定月費派；別跟 DeepSeek 同時買</td></tr>
+    <tr><td class="k">Kimi K2.6</td><td>API；Anthropic 相容端點；Kimi CLI 開源</td><td class="num">$0.95/$4.00；~$0.04/次</td><td>真實專案 Tier A、最便宜的 Tier A</td><td>低–中（CLI 文字輸出有 bug，走 API 較穩）</td><td><span class="stars">★★★</span> DeepSeek 備援</td></tr>
+    <tr><td class="k">OpenRouter</td><td>一把 key 打所有家</td><td class="num">+5.5%；≥$10 餘額每日 1000 次免費模型</td><td>方便 A/B</td><td>低</td><td><span class="stars">★★★</span> 作為接入層</td></tr>
+    <tr><td class="k">gemini-plugin-cc</td><td>Claude Code plugin</td><td class="num">依 Gemini 計費</td><td><code>/gemini:review --base</code>，UX 同 codex plugin</td><td>低（需先確認已從 <code>gemini --acp</code> 改 agy）</td><td><span class="stars">★★★★</span> 需驗證</td></tr>
+    <tr><td class="k">Kimi K3</td><td>API</td><td class="num">$3/$15</td><td>1M 脈絡</td><td>低</td><td><span class="stars">★★</span> 已是 Claude 價位</td></tr>
+    <tr><td class="k">Grok 4.6／Grok Build</td><td>API $2/$6；CLI 需 SuperGrok／X Premium+</td><td class="num">又一個訂閱配額</td><td>無 review 專屬證據；Tier B</td><td>中</td><td><span class="stars">★★</span></td></tr>
+    <tr><td class="k">Qwen3.8（雲端）</td><td>Coder Plan $50/月</td><td class="num">免費 OAuth 2026-04-15 已關</td><td>SWE-bench Pro 67.7%；真實專案測試出現捏造 API</td><td>中</td><td><span class="stars">★★</span></td></tr>
+    <tr><td class="k">本機 Qwen3.5-9B／Gemma 4 E4B</td><td>MLX／Ollama</td><td class="num">電費；5–6 GB RAM</td><td>無可信 review 證據；真實 PR 對前沿模型 F1 也只有 0.07 級</td><td>低</td><td><span class="stars">★</span> 不當閘門</td></tr>
+    <tr><td class="k">CodeRabbit／Qodo／Greptile</td><td>SaaS per-seat</td><td class="num">$20–30+/月/人</td><td>Martian 榜 F1 50–65%</td><td>低，但綁 GitHub App，Gitea 多半接不上</td><td><span class="stars">★★</span></td></tr>
+  </tbody>
+</table></div>
+
+<div class="callout">
+  <b>Gemini CLI 已於 2026-06-18 對免費／個人／AI Pro／Ultra 帳號停服</b>，別再照舊文件裝 <code>gemini</code>；接替者是 Antigravity CLI <code>agy</code>（閉源 Go 二進位，1.1.13 起可 <code>GEMINI_API_KEY</code> 走 API 計費不登入）。另外：<b>沒有任何一個第三方 CLI 內建「<code>--base &lt;ref&gt;</code> ＋ 結構化 findings」</b>，都要自己包，跟現在對 Codex 做的 companion script 一樣。
+</div>
+
+<h3>本機模型（16 GB M4）為什麼不建議</h3>
+<div class="grid">
+  <div class="card"><h4>能跑什麼</h4><p>Qwen3.5/3.6 9B MLX 4-bit（5.5 GB ＋ KV）是甜蜜點；Qwen3-Coder-30B-A3B Q4 要 19 GB、得 CPU offload；Gemma 4 26B-A4B MXFP4 約 15 GB；27B dense 只能 1–2 bit。</p></div>
+  <div class="card"><h4>證據</h4><p>最好的本機模型（Qwen 3.5 35B）在真實專案測試只到 Tier C（55/100），且要 RTX 5090 級硬體；本機 9B 級沒有任何 review 基準數字。合成注入 bug 的「9 模型抓 7 個」測試跟真實 PR 差 10 倍以上。</p></div>
+  <div class="card"><h4>這台機器的現實</h4><p>MySQL、Redis、pdx daemon、3 個 MCP daemon、Playwright 每 session ~700 MB、Electron dev。放 10–15 GB 常駐模型等於把其他東西全趕去 swap。DeepSeek Flash 每次 $0.01 比電費便宜。</p></div>
+</div>
+
+<!-- ============ 6 ============ -->
+<h2><span class="n">06</span>建議流程：現況 → 改法</h2>
+<div class="flow">
+  <div class="col">
+    <h4 class="old">現況（每個 feature）</h4>
+    <div class="step"><span class="i">S</span><div class="t">spec review × 1<small>codex，low effort</small></div></div>
+    <div class="step"><span class="i">P</span><div class="t">plan review × 1<small>codex，low effort</small></div></div>
+    <div class="step"><span class="i">R1</span><div class="t">標準 review × 1<small>內建 reviewer，low effort</small></div></div>
+    <div class="step"><span class="i">R2</span><div class="t">攻擊／防守／體質 × 3 平行<small>同一份 diff 送三次；不看 confidence</small></div></div>
+    <div class="step"><span class="i">R3</span><div class="t">修完常重跑整支 branch<small>直到收斂（經驗 2–3 輪）</small></div></div>
+    <div class="step"><span class="i">Σ</span><div class="t">≈ 6–8 次呼叫／feature，全部 low</div></div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="col">
+    <h4 class="new">建議</h4>
+    <div class="step"><span class="i">S+P</span><div class="t">合併成一輪：plan review 附 spec<small>spec 單獨審只在 phase 切分或介面契約有爭議時。依據：同脈絡重複審沒有增益（CCR）</small></div></div>
+    <div class="step"><span class="i">R1</span><div class="t">內建 reviewer，<b>high</b> effort<small>config 設 <code>review_model = "gpt-5.6-sol"</code>；effort 需 patch plugin 透傳或全域改 medium/high</small></div></div>
+    <div class="step"><span class="i">R2</span><div class="t"><b>1 個 high-effort 攻擊方 ＋ 1 個「必須引 file:line 才能反對」的 critic</b><small>把 R1＋攻擊方 findings 餵給 critic 逐條同意／有證據反對／疑慮。依據：AR 0.457 → 0.533</small></div></div>
+    <div class="step"><span class="i">X</span><div class="t">第三家族：DeepSeek V4 Pro 獨立 review 一次，report-only JSON<small>主 Claude 仲裁：兩家交集＝高信心；單方＝待驗證。依據：PoLL 3 家族、c-CRAB 聯集</small></div></div>
+    <div class="step"><span class="i">⊘</span><div class="t">confidence &lt; 0.6 不進主表，先驗證<small>依據：Anthropic plugin ≥80 門檻、誤判 &lt;1%</small></div></div>
+    <div class="step"><span class="i">Δ</span><div class="t">修完只 re-review 修正 commit<small><code>--scope working-tree</code> 或 <code>codex review --commit &lt;sha&gt;</code>；R2 起只回 Important</small></div></div>
+    <div class="step"><span class="i">■</span><div class="t">停止條件：無 critical／P1 且 critic 無「有證據的反對」→ ship<small>第三輪只在第二輪新出現 critical 時</small></div></div>
+    <div class="step"><span class="i">Σ</span><div class="t">≈ 4–5 次呼叫（含 1 次 DeepSeek 按量）；OpenAI 端 −35–45% 呼叫量 <span class="badge b-est">估算</span></div></div>
+  </div>
+</div>
+
+<div class="callout ok">
+  <b>淨效果估算：</b>R2 減一次、S+P 合併、增量 re-review、停止條件四項合計約 −35–45% 呼叫量；把省下的預算投到 effort low → high（reasoning token 約 3–5×），OpenAI 配額大致打平到 −20%，但 review 的抓錯能力應明顯上升——目前 low effort 是最弱的環節。<b>這是估算不是量測</b>，建議下一個 PR 用 <code>/status</code> 記錄前後 token 數驗證。
+</div>
+
+<h3>逐項建議</h3>
+<div class="tablebox"><table>
+  <thead><tr><th>#</th><th>建議</th><th>預期效果</th><th>依據</th><th>信心</th></tr></thead>
+  <tbody>
+    <tr><td class="num">1</td><td><b>review effort 從 low 拉到 high</b>。做法：config <code>model_reasoning_effort = "medium"</code>（日常）＋ <code>review_model = "gpt-5.6-sol"</code>；因 plugin 不傳 effort，要不本機 patch <code>handleReviewCommand</code> 加 <code>--effort</code> 透傳（<code>turn/start</code> 本來就支援），要不對 plugin 提 issue。</td><td>不省、反而多花 3–5× reasoning token；但這是品質最大漏洞，用 2／4／6 的節省來抵</td><td>Stet low 12% vs high 38%；社群一致建議</td><td><span class="badge b-fact">事實</span> <span class="badge b-mid">效果中</span></td></tr>
+    <tr><td class="num">2</td><td><b>R2 三平行 → 「1 攻擊 ＋ 1 有證據的反駁」</b>：不再三個角色各找一遍，把 R1 ＋ 攻擊方 findings 餵給 critic，要求逐條「同意／有證據反對（必引 file:line）／疑慮」。</td><td>R2 成本 −33%，假陽性下降</td><td>AR 論文；Scaling paper 獨立平行錯誤放大 17.2×</td><td><span class="badge b-mid">中高</span></td></tr>
+    <tr><td class="num">3</td><td><b>confidence 門檻</b>：adversarial schema 已有 confidence 0–1；&lt;0.6 歸「待驗證」不進主表，主 Claude 用測試／重現驗證後才決定修不修。</td><td>主 Claude 修復／討論 token −20–40% <span class="badge b-est">估算</span></td><td>Anthropic plugin ≥80；Code Review 誤判 &lt;1%；REVIEW.md verification bar</td><td><span class="badge b-hi">高</span></td></tr>
+    <tr><td class="num">4</td><td><b>spec 與 plan review 合併一輪</b>：plan review 帶 spec 當附件；spec 單獨審只在 phase 切分或介面契約有爭議時。</td><td>每 feature −1 次</td><td>CCR：重複 review 無增益，有增益的是脈絡切換</td><td><span class="badge b-mid">中</span></td></tr>
+    <tr><td class="num">5</td><td><b>模型</b>：spec／plan 與 R1 用 <code>gpt-5.6-sol</code>（純文字推理，可能比 5.5 便宜 20–33%）；<code>gpt-6-astra</code> 只保留給「R2 找到 critical 但兩方互不同意」的仲裁單次呼叫。</td><td>相對全用 Astra −60%；相對 5.5 可能 −20–33%（促銷期）</td><td>官方費率表；Bigger-isn't-better</td><td><span class="badge b-mid">中</span></td></tr>
+    <tr><td class="num">6</td><td><b>縮小 diff</b>：PR 超過 ~800 行或 20 檔就拆；bump／純搬移 PR 跳過 codex review（用逐宣告位元組比對代替）。</td><td>每次 review 成本與 diff 線性；召回率差 15×</td><td>2606.15689；ultrareview 8,000 行上限</td><td><span class="badge b-mid">中高</span></td></tr>
+    <tr><td class="num">7</td><td><b>增量 re-review</b>：修完不重跑整支 branch，<code>--scope working-tree</code> 或 <code>codex review --commit &lt;fix sha&gt;</code>。</td><td>每次 re-review −50–80%</td><td>CodeRabbit／REVIEW.md re-review convergence</td><td><span class="badge b-mid">中</span></td></tr>
+    <tr><td class="num">8</td><td><b>停止條件</b>：R1 無 critical／P1 且 critic 無「有證據的反對」→ ship；第三輪只在第二輪新出現 critical 時。</td><td>避免第三輪（≈ −25%／PR）</td><td>AR false-consensus；CCR；既有記憶 <code>feedback_codex_review_termination</code></td><td><span class="badge b-mid">中高</span></td></tr>
+    <tr><td class="num">9</td><td><b>加 DeepSeek V4 Pro 當第三家族</b>，複製現有 codex companion 的殼：slash command → script 做 <code>git diff &lt;base&gt;...HEAD</code> → 組 prompt（<b>只回 findings、禁止改碼、指定 JSON schema</b>）→ <code>opencode run --format json</code> 或 <code>ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic claude -p --output-format json</code>。key 進 <code>~/.config/mcp-tokens.zsh</code>，script 只讀變數名。<b>只送 diff、不送 secret</b>（中國供應商）。</td><td>每次 $0.05–0.5、無配額；月 100 次不到 $20</td><td>PoLL 3 家族；c-CRAB 聯集；DeepSeek 官方 Claude Code 整合文件</td><td><span class="badge b-hi">高</span>（能力）<span class="badge b-mid">中</span>（<code>ANTHROPIC_BASE_URL</code> 那條 Anthropic 端條款未逐字查；保守走 OpenCode）</td></tr>
+    <tr><td class="num">10</td><td><b>外部 reviewer 一律 report-only</b>：Codex 審 Claude 稿是淨負的主因是「整段重寫引入新 bug」。若 companion 允許 review 直接產 patch，關掉；第三家接進來時 prompt 一開始就鎖死。</td><td>避免 −8.6pp 那種倒退</td><td>Cross-Model LLM Code Review（2607.21656）</td><td><span class="badge b-mid">中高</span></td></tr>
+    <tr><td class="num">11</td><td>若帳號是 <b>Pro</b>：5 小時限制目前不啟用，review 可集中跑、只管週配額；若是 <b>Plus</b>：R2 排在 5 小時窗口剛重置後。</td><td>—</td><td>2026-08-25 政策</td><td><span class="badge b-hi">高</span>（政策）<span class="badge b-lo">低</span>（持續多久）</td></tr>
+  </tbody>
+</table></div>
+
+<h3>不推薦（現在）</h3>
+<div class="tablebox"><table>
+  <thead><tr><th>項目</th><th>原因</th></tr></thead>
+  <tbody>
+    <tr><td class="k">本機模型當 review 閘門</td><td>真實 PR review 連前沿模型 F1 都只有 0.07 級；16 GB 只能 9B 或 1–3 bit；跟 daemon／Playwright 搶記憶體。</td></tr>
+    <tr><td class="k">Grok／Grok Build</td><td>CLI 綁 SuperGrok／X Premium+（又一個配額）；review 無專屬證據；定價來源互相矛盾。</td></tr>
+    <tr><td class="k">Qwen 雲端</td><td>免費 OAuth 已關；Coder Plan $50/月比 GLM 貴近三倍；真實專案測試出現捏造 API。</td></tr>
+    <tr><td class="k">Kimi K3</td><td>$3/$15 已是 Claude 價位，失去「便宜第三意見」的意義；K2.6 可當 DeepSeek 備援。</td></tr>
+    <tr><td class="k">CodeRabbit／Qodo／Greptile SaaS</td><td>per-seat、綁 GitHub App，Gitea 專案接不上（Qodo Merge 例外）。</td></tr>
+    <tr><td class="k"><code>/ultrareview</code></td><td>全 Claude 不算跨模型，$5–20/次。</td></tr>
+    <tr><td class="k">MCP server 形式接第三家</td><td>每 session 多一個行程，跟 MCP 收斂方向相反；用 slash command 包 CLI。</td></tr>
+    <tr><td class="k">Debate／多輪辯論</td><td>實證弱且不一致；獨立 review ＋ 主模型仲裁的證據更強。</td></tr>
+  </tbody>
+</table></div>
+
+<!-- ============ 7 ============ -->
+<h2><span class="n">07</span>沒找到證據、別當事實</h2>
+<div class="grid">
+  <div class="card"><h4>配額面</h4><ul><li>各 effort 等級的精確配額倍率（官方未公布）</li><li>Sol 促銷價是否套用到 Plus／Pro 內含配額</li><li>三個平行 thread 能否共享 prefix cache</li><li>Codex cloud review 是否只重看新 commit</li></ul></div>
+  <div class="card"><h4>證據面</h4><ul><li>「跨模型」相對「同模型 fresh context」的量化差距</li><li>CRScore／RevBench 對 2026 新模型的正式排名</li><li>Aider polyglot／LiveCodeBench 2026 可信整表</li><li>超過 3 個模型的 code review 實證</li></ul></div>
+  <div class="card"><h4>接法面（要自己驗證）</h4><ul><li>agy 能否匯入舊 Gemini CLI <code>code-review</code> extension</li><li>gemini-plugin-cc 是否已從 <code>gemini --acp</code> 改 <code>agy</code></li><li>Anthropic 對 <code>ANTHROPIC_BASE_URL</code> 指向第三方的條款</li><li>grok-build-0.1 定價（$1/$2 vs $0.20/$2.00 矛盾）</li></ul></div>
+</div>
+
+<!-- ============ 8 ============ -->
+<h2><span class="n">08</span>來源</h2>
+<div class="src">
+  <div><b>官方</b></div>
+  <div><a href="https://learn.chatgpt.com/docs/developer-commands?surface=cli">Codex CLI reference</a> · <a href="https://learn.chatgpt.com/docs/config-file/config-reference">config reference</a> · <a href="https://learn.chatgpt.com/docs/pricing">pricing</a> · <a href="https://learn.chatgpt.com/docs/third-party/github">Codex GitHub review</a></div>
+  <div><a href="https://community.openai.com/t/20-price-reduction-for-gpt-5-6-sol-api-codex-credits-and-chatgpt-work/1391726">Sol 促銷公告</a> · <a href="https://community.openai.com/t/understanding-the-new-codex-limit-system-after-the-april-9-update/1378768">April 9 配額討論</a></div>
+  <div><a href="https://code.claude.com/docs/en/code-review">Claude Code Review</a> · <a href="https://code.claude.com/docs/en/ultrareview">ultrareview</a> · <a href="https://github.com/anthropics/claude-code/tree/main/plugins/code-review">code-review plugin</a> · <a href="https://code.claude.com/docs/en/hooks">hooks</a></div>
+  <div><a href="https://antigravity.google/docs/cli/headless/">agy headless</a> · <a href="https://discuss.ai.google.dev/t/is-external-orchestration-of-antigravity-cli-headless-mode-supported-with-account-based-usage/183051">Google 論壇：外部編排是否合規</a> · <a href="https://ai.google.dev/gemini-api/docs/pricing">Gemini 定價</a></div>
+  <div><a href="https://api-docs.deepseek.com/quick_start/pricing">DeepSeek 定價</a> · <a href="https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/">DeepSeek × Claude Code</a> · <a href="https://docs.z.ai/devpack/overview">Z.ai DevPack</a> · <a href="https://opencode.ai/docs/cli/">OpenCode CLI</a> · <a href="https://openrouter.ai/docs/faq">OpenRouter</a></div>
+  <div><b>論文</b></div>
+  <div><a href="https://arxiv.org/abs/2608.18167">Adversarial Review（ICML 2026 DL4C）</a> · <a href="https://arxiv.org/html/2512.08296v1">Scaling Agent Systems</a> · <a href="https://arxiv.org/html/2604.02460v1">Single-Agent &gt; MAS</a></div>
+  <div><a href="https://arxiv.org/html/2606.15689">Bigger Isn't Always Better</a> · <a href="https://arxiv.org/abs/2605.06350">Is Escalation Worth It</a> · <a href="https://arxiv.org/abs/2604.07494">Triage</a> · <a href="https://arxiv.org/pdf/2505.17928">Defect-focused ACR</a></div>
+  <div><a href="https://arxiv.org/html/2603.12123">Cross-Context Review</a> · <a href="https://arxiv.org/html/2607.21656v1">Cross-Model LLM Code Review</a> · <a href="https://arxiv.org/html/2603.23448v2">c-CRAB</a> · <a href="https://arxiv.org/html/2509.01494v2">SWR-Bench</a></div>
+  <div><a href="https://arxiv.org/abs/2404.18796">PoLL</a> · <a href="https://arxiv.org/abs/2503.12029">MAD for coding</a> · <a href="https://arxiv.org/pdf/2604.19049">Refute-or-Promote</a> · <a href="https://arxiv.org/pdf/2604.22891">self-preference bias</a></div>
+  <div><b>社群／廠商</b></div>
+  <div><a href="https://www.stet.sh/blog/gpt-55-codex-graphql-reasoning-curve">Stet：GPT-5.5 effort 曲線</a> · <a href="https://codex.danielvaughan.com/2026/03/27/reasoning-effort-tuning/">effort 倍率</a> · <a href="https://codex.danielvaughan.com/2026/07/21/codex-four-surface-code-review-cli-desktop-pr-chat-github-cloud-unified-review-architecture/">Codex 四 surface review</a></div>
+  <div><a href="https://cursor.com/blog/building-bugbot">Building Bugbot</a> · <a href="https://www.augmentcode.com/guides/deep-code-review-recall-vs-precision">Augment 7 工具基準</a> · <a href="https://codereview.withmartian.com/">Martian Code Review Bench</a></div>
+  <div><a href="https://9to5mac.com/2026/08/24/openai-restores-5-hour-codex-and-work-limits-for-chatgpt-plus-users/">Plus 恢復 5 小時限制</a> · <a href="https://simplemetrics.xyz/chatgpt-codex-limits-2026/">SimpleMetrics 配額</a> · <a href="https://thedailyunemployed.com/articles/2026-09-07-gpt-6-astra-usage-vs-sol-benchmarks">Astra vs Sol</a></div>
+  <div><a href="https://akitaonrails.com/en/2026/04/24/llm-benchmarks-parte-3-deepseek-kimi-mimo/">akitaonrails 24 模型實測</a> · <a href="https://inventivehq.com/blog/gemini-cli-deprecated-antigravity-cli-migration">Gemini CLI 停服</a> · <a href="https://insiderllm.com/guides/best-local-coding-models-2026/">16 GB 本機模型</a></div>
+  <div><a href="https://github.com/m-ghalib/gemini-plugin-cc">gemini-plugin-cc</a> · <a href="https://github.com/baiyanmo/claude-code-multi-model-review">multi-model-review</a> · <a href="https://github.com/kodustech/kodus-ai">Kodus</a> · <a href="https://github.com/garrytan/gstack/issues/1428">gstack#1428</a></div>
+</div>
+
+<footer>
+  <span>Purdex · docs/pages/cross-model-review.html · 兩份 subagent 研究合併 ＋ 本機 plugin 原始碼驗證</span>
+  <span class="mono">2026-09-18</span>
+</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>委派架構合成檢討 · ai-coop × Purdex M0</title>
+<style>
+:root{
+  --bg:#0e1116; --bg2:#161b22; --card:#1a2029; --line:#2b333f;
+  --fg:#e6edf3; --fg2:#9aa7b4; --fg3:#6e7b8a;
+  --accent:#58a6ff;
+  --coop:#e3a008;        /* ai-coop 側 */
+  --pdx:#58a6ff;         /* Purdex 側 */
+  --ok:#3fb950;
+  --warn:#f85149;
+  --mid:#bc8cff;
+  --radius:14px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif;
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --bg:#f6f8fa; --bg2:#fff; --card:#fff; --line:#d8dee4;
+    --fg:#1f2328; --fg2:#57606a; --fg3:#8b949e;
+    --coop:#9a6700; --warn:#cf222e; --ok:#1a7f37;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.62;font-size:15px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:32px 22px 90px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:12.5px;background:var(--bg2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--fg)}
+.mono{font-family:var(--mono)}
+
+header.hero{margin-bottom:8px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:600}
+h1{font-size:29px;margin:.28em 0 .2em;letter-spacing:-.01em;line-height:1.2}
+.sub{color:var(--fg2);font-size:15.5px;max-width:78ch}
+.sub b{color:var(--fg)}
+
+.sec-title{margin:44px 0 6px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:700}
+.sec-lede{color:var(--fg2);font-size:14px;max-width:82ch;margin:0 0 14px}
+
+/* 兩側速覽 */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+@media (max-width:820px){.two{grid-template-columns:1fr}}
+.side{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:0;overflow:hidden;position:relative}
+.side .bar{position:absolute;left:0;top:0;bottom:0;width:5px}
+.side.coop .bar{background:var(--coop)}
+.side.pdx .bar{background:var(--pdx)}
+.side .inner{padding:16px 18px 18px 22px}
+.side h3{margin:0 0 2px;font-size:17px;font-weight:650}
+.side .tag{font-family:var(--mono);font-size:11.5px;color:var(--fg3)}
+.side .one{margin:10px 0 12px;font-size:14px;color:var(--fg2)}
+.side .one b{color:var(--fg)}
+pre.topo{margin:0;font-family:var(--mono);font-size:11.6px;line-height:1.55;color:var(--fg2);
+  background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:12px 13px;overflow-x:auto}
+.kv{margin-top:12px;font-size:13.3px;color:var(--fg2)}
+.kv div{margin:3px 0}
+.kv b{color:var(--fg);font-weight:600}
+
+/* 對照表 */
+.tblwrap{overflow-x:auto;margin-top:14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:820px;font-size:13.5px}
+th,td{text-align:left;vertical-align:top;padding:11px 14px;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:none}
+th{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);font-weight:700;background:var(--bg2);white-space:nowrap}
+th.c{color:var(--coop)} th.p{color:var(--pdx)}
+td.axis{font-weight:650;color:var(--fg);white-space:nowrap}
+td.verdict{font-size:12.6px;color:var(--fg3)}
+td code{font-size:11.8px}
+.mark{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
+.mark.same{color:var(--fg3)}
+.mark.c{color:var(--coop);border-color:var(--coop)}
+.mark.p{color:var(--pdx);border-color:var(--pdx)}
+
+/* 卡片 */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;margin-top:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;position:relative}
+.card h4{margin:0 0 4px;font-size:15px;font-weight:650;display:flex;gap:8px;align-items:baseline}
+.card h4 .n{font-family:var(--mono);font-size:11px;color:#0e1116;background:var(--coop);width:19px;height:19px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;flex:none;font-weight:700}
+.card.rev h4 .n{background:var(--pdx)}
+.card.risk{border-color:var(--warn)}
+.card.risk h4 .n{background:var(--warn);color:#fff}
+.card .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);font-weight:700;margin-top:11px}
+.card p{margin:3px 0 0;font-size:13.5px;color:var(--fg2)}
+.card p b{color:var(--fg)}
+.meta{margin-top:13px;padding-top:11px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px}
+.meta span{font-family:var(--mono);font-size:11px;color:var(--fg2);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.meta span.hot{color:var(--ok);border-color:var(--ok)}
+.meta span.cold{color:var(--fg3)}
+
+/* 問題 */
+.qs{margin-top:14px;display:flex;flex-direction:column;gap:11px}
+.q{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 17px}
+.q.unverified{border-color:var(--warn)}
+.q .qh{font-weight:650;font-size:14.6px;margin-bottom:5px}
+.q .qb{color:var(--fg2);font-size:13.6px}
+.q .qb b{color:var(--fg)}
+.q .badge{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:8px;
+  vertical-align:middle;color:var(--mid);text-transform:uppercase;letter-spacing:.06em}
+.q.unverified .badge{color:var(--warn);border-color:var(--warn)}
+
+.callout{margin-top:16px;background:var(--bg2);border:1px solid var(--line);
+  border-radius:10px;padding:16px 19px;font-size:14.5px;color:var(--fg2)}
+.callout b{color:var(--fg)}
+
+footer{margin-top:50px;padding-top:16px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">派工架構 · 合成檢討</div>
+  <h1>ai-coop 的委派 × Purdex M0 的派工</h1>
+  <p class="sub">
+    兩套系統在做同一件事的兩個切面：<b>把一段人的意圖交給 agent 去跑，並把過程與結果收回來</b>。
+    coop 走「對話驅動的即席委派」，Purdex M0 走「工單驅動的非同席派工」。
+    這頁把兩邊的機制逐軸攤開對照，找出<b>可以互相移植的資產</b>與<b>各自的結構性缺口</b>。
+  </p>
+</header>
+
+<div class="callout">
+  <b>結論先講。</b>coop 已經把「一次委派的執行期語意」做得比 Purdex M0 完整——<b>對話續接（<code>--resume</code>）、增量餵食（watermark）、過程步驟流（agent_steps）、中斷雙層保險</b>四項都是現貨，而這四項正好是 Purdex M1／M1.5 的清單。
+  反向，Purdex 已把「跨行程／對外可稽核」的地基做完——<b>穩定 handle、原子 outbox、admission 鎖、sandbox clamp</b>，而 coop 這四項全缺，且其中一項（repo 併發）<b>在 coop 現有功能下已可觸發真實資料事故</b>。
+  兩邊不是誰抄誰，是兩層不同高度的東西，最終應該疊在一起。
+</div>
+
+<div class="sec-title">一 · 兩邊速覽</div>
+<div class="two">
+
+  <div class="side coop">
+    <div class="bar"></div>
+    <div class="inner">
+      <h3>ai-coop</h3>
+      <div class="tag">0.22.1 · Fastify + SQLite + React · 單機 mlab</div>
+      <p class="one">5 人聊天室，房主帶自己的訂閱，<b>@claude / @codex 像朋友一樣同席</b>。委派單位＝<b>房間 × provider</b>，被 @ 或按鈕觸發才跑一輪。</p>
+<pre class="topo">瀏覽器 ──SSE── Fastify :8787 ── SQLite(WAL)
+                    │
+                    ├─ ClaudeAdapter
+                    │    每輪 spawn: claude -p --resume &lt;uuid&gt;
+                    │    (無常駐 · 天生耐重啟)
+                    └─ CodexAdapter
+                         1 × codex app-server (JSON-RPC/stdio)
+                         └ N × thread (per-thread mutex)
+
+room ─ agent_session(provider) ─ agent_turn ─ agent_steps
+        externalId=claude uuid / codex threadId
+        watermark_seq ← 只在成功時推進</pre>
+      <div class="kv">
+        <div><b>觸發</b>：push（@mention／按鈕）· 記憶體鎖 <code>roomId:provider</code> · pending 深度 1 後蓋前</div>
+        <div><b>續接</b>：claude 磁碟 session（<code>~/.claude</code>）／codex <code>thread/resume</code></div>
+        <div><b>對外身分</b>：無。房號＋provider 就是全部座標</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="side pdx">
+    <div class="bar"></div>
+    <div class="inner">
+      <h3>Purdex M0 dispatch</h3>
+      <div class="tag">1.0.0-alpha.326 · Go daemon · Ploom 為控制面</div>
+      <p class="one">Ploom 上的 issue 被派工，<b>Purdex daemon 主動輪詢領工</b>，本地起 tmux + headless <code>claude -p</code> 跑，結果回報成 issue 投影。</p>
+<pre class="topo">Ploom (控制面/projection SOT)
+   ▲ poll ─ claim ─ report        ← 全部 pull，無 inbound endpoint
+   │
+Purdex daemon (runtime SOT)
+   ├─ dispatch: client/worker/consumer
+   └─ execution: store + outbox（同一顆 DB · 原子交易）
+        admission → WithRepoLock → launch → terminal
+
+issue ─ dispatch ─ execution ─ attempt(=1) ─ session
+                   ▲ execution_id = 穩定 handle
+                   status: accepted→running→completed/failed
+                   launch_state: none→launching→launched (fence)</pre>
+      <div class="kv">
+        <div><b>觸發</b>：pull（輪詢 <code>/daemon/dispatches?status=pending</code> → claim）</div>
+        <div><b>續接</b>：<span style="color:var(--warn)">無</span>。每個 execution 從零起一次 <code>claude -p</code></div>
+        <div><b>對外身分</b>：<code>execution_id</code> · deeplink <code>purdex://execution/&lt;id&gt;</code></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="sec-title">二 · 逐軸對照</div>
+<p class="sec-lede">同一個問題，兩邊各自怎麼答。最右欄是我的判讀：誰的答案更完整，或兩邊在解不同的問題。</p>
+
+<div class="tblwrap">
+<table>
+<thead>
+<tr><th>軸</th><th class="c">ai-coop</th><th class="p">Purdex M0</th><th>判讀</th></tr>
+</thead>
+<tbody>
+
+<tr>
+  <td class="axis">委派單位</td>
+  <td>房間 × provider → <code>agent_session</code> → <code>agent_turn</code>（三層）</td>
+  <td>issue → dispatch → execution → attempt → session（五層）</td>
+  <td class="verdict"><span class="mark p">Purdex</span> 五層是為「一 issue 多次執行／多 attempt」預留；coop 的 session 是長命對話、turn 才是執行單位。<b>兩邊的「session」不同義</b>，見 §五-Q3。</td>
+</tr>
+
+<tr>
+  <td class="axis">觸發模型</td>
+  <td>push · 記憶體鎖 · pending 深度 1（後蓋前，不排隊成串）</td>
+  <td>pull · 輪詢 + claim · dispatch_id upsert 冪等</td>
+  <td class="verdict"><span class="mark same">解不同問題</span> coop 人在場，延遲優先；Purdex 要穿內外網分離（Ploom 純 server），只能 pull。</td>
+</tr>
+
+<tr>
+  <td class="axis">provider 抽象</td>
+  <td><b>執行期多型</b>：<code>AgentAdapter</code> 介面（<code>createSession / send→AsyncIterable&lt;AgentEvent&gt; / interrupt / compact? / release? / readQuota?</code>），optional method＝capability 宣告</td>
+  <td><b>跨行程契約</b>：wire contract + golden fixtures 為 provider 中立；daemon 內只有 claude launch adapter，codex 僅 observe 骨架（launch 排 M1）</td>
+  <td class="verdict"><span class="mark c">coop</span> 已證明<b>兩種截然不同的行程拓樸可以藏在同一介面後</b>。Purdex M1 要做的正是這件事，介面形狀可直接照抄。</td>
+</tr>
+
+<tr>
+  <td class="axis">行程拓樸</td>
+  <td>claude 每輪 spawn（一次性）／codex 單例 app-server 多 thread。<b>依據是實測記憶體</b>，與計價無關</td>
+  <td>一 execution 一 tmux pane，pane 內 <code>pdx relay -- claude -p …</code></td>
+  <td class="verdict"><span class="mark c">coop 有數字</span> 實測：one-shot 與 long-lived <b>延遲無差異</b>（穩態 2190 vs 2345ms），差別只在記憶體與耐重啟；claude long-lived <b>364MB／session</b>。Purdex 的 tmux+relay 拓樸吃的就是這個量級，見 §五-Q2。</td>
+</tr>
+
+<tr>
+  <td class="axis">對話續接</td>
+  <td><b>UUID 由我們產生</b>，首輪 <code>--session-id</code>、之後 <code>--resume</code>，兩者互為 fallback。狀態在 <code>~/.claude</code> 磁碟，關機數日仍接得回</td>
+  <td><span style="color:var(--warn)">無</span>。<code>claudeBaseCommand</code> 不帶 <code>--session-id</code>，跑完即散</td>
+  <td class="verdict"><span class="mark c">coop 完勝</span> 這是 <b>M1.5「free-text follow-up」的前置</b>，且移植成本近乎零（launch 時多一個旗標）。見 §三-1。</td>
+</tr>
+
+<tr>
+  <td class="axis">餵什麼進去</td>
+  <td><b>watermark</b>：每輪餵 <code>(from, to]</code> 增量；<b>只在成功時推進</b>，失敗重試不漏訊息。純函式，三種初值情境（首次／後加入／<code>/clear</code>）</td>
+  <td>一次性 <code>buildPrompt(title + body)</code></td>
+  <td class="verdict"><span class="mark c">coop 完勝</span> 一旦 Purdex 要續談，「這輪該餵什麼」立刻是問題。coop 的答案語意剛好對得上 Ploom 的 <code>issue_event</code> append-only 時間軸。見 §三-2。</td>
+</tr>
+
+<tr>
+  <td class="axis">過程可觀測</td>
+  <td><code>agent_steps</code>：<code>ref</code> 配對 upsert（claude tool_use id／codex item id）· kind 分 tool/command/file/search/thinking/commentary · <b>SSE 不帶 detail</b>，detail 走展開 API</td>
+  <td>pointer-first artifact（diff numstat + untracked，無 blob）。執行過程對 Ploom 是<b>黑箱</b></td>
+  <td class="verdict"><span class="mark c">coop 更細</span> 兩邊<b>同一個原則（pointer-first）</b>，但 coop 在 step 層也套用了，Purdex 只在 artifact 層。見 §三-3。</td>
+</tr>
+
+<tr>
+  <td class="axis">中斷／逃生</td>
+  <td>interrupt → <b>30s 寬限 → forceStop 讓事件迴圈脫身</b>（adapter 掛死也走得掉）＋整輪 10min timeout</td>
+  <td>M0 <b>完全沒有</b>控制面（<code>ExecutionControlRequest</code> 於 V1 整個移出契約，stop/interrupt 歸 M1）</td>
+  <td class="verdict"><span class="mark c">coop</span> 形狀值得照抄，而且 Purdex <b>更需要</b>——它多隔一層 WS relay，掛死面更大。</td>
+</tr>
+
+<tr>
+  <td class="axis">授權／沙箱</td>
+  <td>三級 <code>off/workspace/full</code> · 房間層 + <b>oneShot（僅下一輪）</b>：不落盤、讀取即刪、失敗不退還、<code>/clear</code> 作廢、<code>/compact</code> 不消費。每輪明確傳（codex override 是 sticky）</td>
+  <td><code>sandbox_profile</code> = dispatch 的 <b>request</b>；daemon host policy 為唯一權威，<b>clamp 只能降不能升</b>，unknown → 最嚴（read-only）</td>
+  <td class="verdict"><span class="mark p">Purdex 的權威模型對</span>／<span class="mark c">coop 的時效語意對</span>。coop 房間可自行升到 full（明文接受，互信前提）＝<b>產品前提而非架構能力</b>。兩者互補，見 §三-4／§四-2。</td>
+</tr>
+
+<tr>
+  <td class="axis">路徑圍堵</td>
+  <td><code>assertUnderRoots</code>：allowlist + <b>雙 realpath + 分隔符邊界</b>（防 <code>/root</code> 涵蓋 <code>/rootette</code>）· 每次使用都重驗 · 壞設定<b>安全回退</b>成預設目錄</td>
+  <td><code>allowed_repo_roots</code> <b>fail-closed</b>（未設一律拒）· canonical <code>EvalSymlinks</code> + segment 邊界</td>
+  <td class="verdict"><span class="mark same">高度一致</span> 兩邊獨立收斂到同一組防護（realpath + 邊界 + 每次重驗）。差別只在壞設定的處置：coop 回退、Purdex 拒絕。</td>
+</tr>
+
+<tr>
+  <td class="axis">子行程 env</td>
+  <td><code>buildAgentEnv</code> 白名單（<code>PATH/HOME/SHELL/TMPDIR/LANG</code> + 明示 extra）· <code>COOP_*</code> 出現就 <b>throw 而非靜默剔除</b></td>
+  <td>relay 繼承 daemon 環境（M0 未見等價白名單）</td>
+  <td class="verdict"><span class="mark c">coop</span> 「寧可炸在測試也不要默默漏密」這個取向值得移植——Purdex daemon 環境裡有 token。</td>
+</tr>
+
+<tr>
+  <td class="axis">崩潰一致性</td>
+  <td>串流 delta <b>逐筆落盤（不節流）</b>→ 重整／斷線／重啟接得回。三支 boot repair：訊息標 interrupted、busy session 復位、running steps 收尾＋回填 count。<br><b>但</b> pending／oneShot／鎖／額度門檻全在記憶體，重啟即失（設計如此）</td>
+  <td>outbox <b>併入 execution DB</b>，四個複合交易單 txn（狀態轉換＋enqueue 原子）· 單調 seq · ack cursor · 重啟 replay · reconcile 矩陣 + manual reclaim</td>
+  <td class="verdict"><span class="mark p">Purdex 完勝</span> coop 是「單機單行程、重啟就重來」的假設；<b>一旦要對外回報或跨主機，這假設立刻破</b>。這正是 Purdex F1 那一刀（兩獨立 DB → 單一原子交易）解掉的洞。</td>
+</tr>
+
+<tr>
+  <td class="axis">穩定 handle</td>
+  <td>無。對外座標＝房號 + provider，<b>指不到「那一次執行」</b></td>
+  <td><code>execution_id</code>（早於 session_code 抽出）· <code>session_name</code> 為 crash-recovery handle · <code>session_code</code> 為衍生 deeplink handle</td>
+  <td class="verdict"><span class="mark p">Purdex 完勝</span> coop 不需要（人就在房裡）；Purdex 沒有就整個派工閉環不成立。</td>
+</tr>
+
+<tr>
+  <td class="axis">併發正確性</td>
+  <td>鎖只到 <code>roomId:provider</code>。<b>跨房共享資源無協調</b>：同一顆 codex app-server 單例、同一份訂閱額度、（自訂後）同一個 workDir</td>
+  <td>admission：canonical repo → <b>同 repo 單一 live execution</b> + <code>head_at_start/dirty_at_start</code> 快照 + per-repo lock 消 TOCTOU</td>
+  <td class="verdict"><span class="mark p">Purdex 完勝</span> 且 coop 這個缺口<b>已可觸發真實事故</b>，見 §四-1。</td>
+</tr>
+
+<tr>
+  <td class="axis">帳號／額度</td>
+  <td>claude 多 OAuth token：<b>每輪解析帳號並落 <code>agent_turns.account</code> 供事後歸帳</b>；額度門檻按 <code>provider:account</code> 各自追蹤；即時查額度不花 token（<code>/api/oauth/usage</code>、<code>account/rateLimits/read</code>）</td>
+  <td>無此維度</td>
+  <td class="verdict"><span class="mark c">coop</span> 「零 API 成本 ≠ 免費」的具體管線。Purdex 多 execution 併發撞額度時會需要同一套歸帳。</td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<div class="sec-title">三 · 可移植資產：coop → Purdex</div>
+<p class="sec-lede">每張卡＝一個 Purdex 現況缺口 + coop 的現成答案 + 我對移植成本與落點的判讀。排序按「價值 ÷ 成本」。</p>
+
+<div class="cards">
+
+  <div class="card">
+    <h4><span class="n">1</span>自產 session UUID → <code>--resume</code></h4>
+    <div class="lbl">Purdex 現況缺口</div>
+    <p><code>claudeBaseCommand</code> ＝ <code>claude -p --verbose --input-format stream-json --output-format stream-json</code>，<b>沒有 <code>--session-id</code></b>。execution 跑完，那段對話 context 就撿不回來。M1.5 的「free-text follow-up／rerun」等於要從零重述整個 issue。</p>
+    <div class="lbl">coop 的答案</div>
+    <p>UUID 由我們產生並存進 DB，首輪 <code>--session-id</code>、之後 <code>--resume</code>，<b>兩者互為 fallback</b>（首輪失敗後磁碟 session 可能已存在，反向亦然——實測踩到）。session 狀態在 <code>~/.claude</code> 磁碟上，後端可重啟、換版本、關機數日。</p>
+    <div class="lbl">移植</div>
+    <p>launch 時多一個旗標，UUID 從 <code>execution_id</code> 衍生（或另存一欄）。<b>M0 不加，M1.5 就得補一次 launch 路徑改動</b>——現在加最便宜。</p>
+    <div class="meta"><span class="hot">成本 極低</span><span>落點 M1（或 M0 補丁）</span><span>解鎖 M1.5 follow-up</span></div>
+  </div>
+
+  <div class="card">
+    <h4><span class="n">2</span>watermark 增量餵食</h4>
+    <div class="lbl">Purdex 現況缺口</div>
+    <p>prompt ＝ <code>title + body</code> 一次性。沒有「上次餵到哪」的概念，所以也沒有「續談時該餵什麼」的答案。</p>
+    <div class="lbl">coop 的答案</div>
+    <p><code>watermark_seq</code> 存在 session 上，每輪餵 <code>(from, to]</code>，<b>只在 <code>done</code> 時推進</b>——失敗／中斷保持原位，重試不漏訊息。三種初值情境明確（首次 0＝餵全歷史／後加入 0／<code>/clear</code> 從當下 seq）。整個機制是 <b>38 行純函式</b>，DB 讀寫留在上層。</p>
+    <div class="lbl">移植</div>
+    <p>語意天然對得上 Ploom 的 <code>issue_event</code>（append-only + seq）：execution 記「餵到哪個 event」，follow-up 就是餵增量。<b>這是兩邊資料模型少見的直接咬合點。</b></p>
+    <div class="meta"><span class="hot">成本 低</span><span>落點 M1.5</span><span>咬合 Ploom issue_event</span></div>
+  </div>
+
+  <div class="card">
+    <h4><span class="n">3</span>step 事件流（過程透明度）</h4>
+    <div class="lbl">Purdex 現況缺口</div>
+    <p>M0 只回 pointer-first artifact（diff numstat / transcript 指標）。<b>執行過程對控制面完全是黑箱</b>——Ploom 看不到 agent 現在在跑哪一步。而業界研究早已定調「thread＝控制面＋通知面」需要輕量狀態訊號。</p>
+    <div class="lbl">coop 的答案</div>
+    <p><code>agent_steps</code>：<code>UNIQUE(turn_id, ref)</code> 以 adapter 事件的天然 id 配對 upsert（claude <code>tool_use.id</code>／codex <code>item.id</code>），<code>started</code> 可重複發（後到豐富 label 不新建列），<code>finished</code> 無前置也能直接插。kind 六類。<b><code>started</code> 走 <code>content_block_start</code> 搶即時性、<code>assistant</code> 事件再校正 label</b>——即時與精確兩件事分開拿。<br>關鍵取捨：<b>SSE 不帶 detail</b>（省流量、降暴露面），detail 只從展開 API 取。</p>
+    <div class="lbl">移植</div>
+    <p>Purdex relay <b>目前只逐行 tee stdout→WS、完全沒 parse</b>。要做 step 層就得在 daemon 側加一個 stream-json parser——這是真成本，但 coop 的分類表與 upsert 語意可整套照搬，省掉設計輪。</p>
+    <div class="meta"><span>成本 中</span><span>落點 M1.5／M4</span><span>需 relay 端 parser</span></div>
+  </div>
+
+  <div class="card">
+    <h4><span class="n">4</span>oneShot 一次性授權的邊界語意</h4>
+    <div class="lbl">Purdex 現況缺口</div>
+    <p><code>sandbox_profile</code> 是 per-dispatch 的 request + clamp，權威模型正確；但沒有「僅這一次」與「語境換掉即作廢」的時效語意。M1 一旦有了控制面（stop/interrupt/attach），就會需要「這次准、下次不准」。</p>
+    <div class="lbl">coop 的答案</div>
+    <p>oneShot <b>刻意不落盤</b>（重啟即失效＝該輪未開跑視同未授權）。邊界全部明寫：消費時點在取得鎖之後、建 turn 之前；<b>讀取即刪，不論 done/error/interrupted 都不退還</b>；busy 中設定 → 排隊的下一輪吃到；<code>/compact</code> 不消費；<code>/clear</code> 清除（換 session＝授權語境失效，安全取向）。</p>
+    <div class="lbl">移植</div>
+    <p>是<b>一套決策，不是一段程式</b>。Purdex 抄的是這張邊界表，尤其「失敗不退還」與「換語境即作廢」兩條安全取向。</p>
+    <div class="meta"><span class="hot">成本 極低（設計移植）</span><span>落點 M1</span></div>
+  </div>
+
+  <div class="card">
+    <h4><span class="n">5</span>interrupt 的雙層保險</h4>
+    <div class="lbl">Purdex 現況缺口</div>
+    <p>M0 沒有控制面。M1 要做 stop/interrupt 時，會直接撞上「adapter／relay 掛死怎麼脫身」。</p>
+    <div class="lbl">coop 的答案</div>
+    <p>三層：整輪 10min timeout → interrupt → <b>30s 寬限後 <code>forceStop</code> 讓事件迴圈自己走掉</b>（<code>Promise.race([stream.next(), forceStop])</code>，不等對方回應）。刪房收尾另有 45s 上限並「逾時放行，殘留交給 boot repair 兜底」。</p>
+    <div class="lbl">移植</div>
+    <p>Purdex 多隔一層 WS relay，掛死面比 coop 大。這個「永不無限等待 + 殘留交給 reconcile」的分工，跟 Purdex 已有的 reconcile 矩陣是同一套哲學，接得上。</p>
+    <div class="meta"><span class="hot">成本 低</span><span>落點 M1</span></div>
+  </div>
+
+  <div class="card">
+    <h4><span class="n">6</span>optional method ＝ capability 宣告</h4>
+    <div class="lbl">Purdex 現況缺口</div>
+    <p>Purdex 的 provider 差異目前散在契約層與 config；daemon 內只有一種 launch 路徑。M1 加 codex launch adapter 時需要一個表達「這家有／那家沒有」的地方。</p>
+    <div class="lbl">coop 的答案</div>
+    <p><code>AgentAdapter</code> 用 <b>optional method 直接當能力宣告</b>：<code>compact?</code>（未實作＝不支援）、<code>release?</code>（未實作＝無常駐資源可釋放）、<code>readQuota?</code>（未實作＝查不到）、<code>supportsPdfInput?</code>。呼叫端一律失敗容忍。比 capability flag 表乾淨——<b>能力與實作綁在同一處，不會漂移</b>。</p>
+    <div class="lbl">移植</div>
+    <p>Go 沒有 optional method，但等價形狀＝小介面 + type assertion（<code>if r, ok := a.(Releaser); ok</code>）。這是慣用 Go，不是硬套 TS。</p>
+    <div class="meta"><span class="hot">成本 極低</span><span>落點 M1（codex launch adapter）</span></div>
+  </div>
+
+</div>
+
+<div class="sec-title">四 · 反向：Purdex 有而 coop 缺的</div>
+<p class="sec-lede">不是「coop 應該變成 Purdex」——coop 的取捨多半合理（單機、互信、人在場）。但有一項不是取捨，是缺口。</p>
+
+<div class="cards">
+
+  <div class="card risk">
+    <h4><span class="n">!</span>自訂 workDir 指向真 repo ＝ 無防護的併發寫</h4>
+    <div class="lbl">現況（已可觸發，非假設）</div>
+    <p>coop 支援自訂工作目錄：<code>COOP_WORKDIR_ROOTS</code> allowlist + 覆蓋鏈 <code>room.work_dir ?? workspace.work_dir</code>。路徑圍堵做得很好（雙 realpath + 邊界 + 每次重驗），<b>但圍堵解決的是「跑到界外」，不是「界內互相踩」</b>。</p>
+    <div class="lbl">缺什麼</div>
+    <p>一旦 roots 指向真 git repo：<b>沒有 per-repo 鎖、沒有「同 repo 單一 live」、沒有 <code>base_commit</code>／dirty 快照</b>。兩個房間（或同房 claude + codex，兩把鎖是 <code>roomId:provider</code> 各自獨立）可以同時在同一顆 working tree 上寫。加上 <code>accessLevel: full</code> ＝ <code>bypassPermissions</code>，agent 能 commit。</p>
+    <div class="lbl">這正是 Purdex admission 想擋的</div>
+    <p>Purdex 的 <b>「repo clean OR 同 repo 單一 live execution」admission rule</b> 是 codex review 硬塞進 M0 的（原話：不補後面一定 rework），理由就是「無 worktree 下防 dirty tree／併發資料事故」。coop 落在同一個區域，只是還沒被踩到。</p>
+    <div class="lbl">建議</div>
+    <p>最小修法不需要整套 admission：<b>把鎖從 <code>roomId:provider</code> 升到「canonical workDir」維度</b>（自訂目錄時才生效，預設 per-session 目錄天然無衝突）。這跟 coop 現有的鎖機制同構，改動很小。要更穩再加 dirty 檢查。</p>
+    <div class="meta"><span class="hot">關聯 高</span><span class="hot">信心 高</span><span>複雜度 低（升鎖維度）</span></div>
+  </div>
+
+  <div class="card rev">
+    <h4><span class="n">2</span>沒有 clamp：授權是產品前提而非架構能力</h4>
+    <div class="lbl">現況</div>
+    <p>coop spec §1 明文：<b>暱稱即身分、無帳號，無法限制誰能授權</b>。任何在房裡的人都能把 agent 升到 <code>full</code>（完全存取主機）。風險由房主承擔，UI 標紅字警告。</p>
+    <div class="lbl">判讀</div>
+    <p>在「房主自己主機 + 5 人互信」下這是<b>合理取捨</b>，不是 bug。但要注意它的性質：<b>缺的不是設定，是「請求 vs 權威」的分層</b>。Purdex 的 <code>sandbox_profile</code> = request、host policy = 唯一權威、clamp only-down、unknown → 最嚴——這一層 coop 完全沒有。</p>
+    <div class="lbl">什麼時候會痛</div>
+    <p>coop 已經有 admin／帳號／密碼分享（v0.20/v0.21 在做的正是這些）。<b>一旦房間可以分享給非互信的人，clamp 這層就得補</b>，且補的時機晚於「分享功能上線」就已經遲了。</p>
+    <div class="meta"><span>關聯 中（隨分享功能升高）</span><span class="hot">信心 高</span><span>複雜度 中</span></div>
+  </div>
+
+  <div class="card rev">
+    <h4><span class="n">3</span>記憶體狀態的邊界</h4>
+    <div class="lbl">現況</div>
+    <p>coop 的 pending trigger、oneShot、執行鎖、額度警示門檻、codex 的 liveThreads／世代計數／idle timer 全在記憶體。串流內容本身逐筆落盤（很好），但<b>「排隊中的那一輪」重啟就沒了</b>。</p>
+    <div class="lbl">判讀</div>
+    <p>對 coop 是<b>正確取捨</b>——人在場，重啟後再按一次就好，反而比「復活一個沒人記得的排隊輪次」乾淨。Purdex 不能這樣，因為 Ploom 那頭有一個 dispatch row 在等，<b>不回報就永遠卡著</b>（這正是 F1／F2 兩個 finding 的本質）。</p>
+    <div class="lbl">要留意的是</div>
+    <p>coop 若哪天加了「排程觸發／非同席委派」（人不在場也要跑），這個取捨立刻失效，且會以「任務靜默消失」的形式出現——最難查的一類。</p>
+    <div class="meta"><span>關聯 低（現況）</span><span class="hot">信心 高</span><span>複雜度 高（若要改）</span></div>
+  </div>
+
+</div>
+
+<div class="sec-title">五 · 尖銳問題 · 待驗證</div>
+<p class="sec-lede">前三題是我在對照過程中發現的、需要拍板或實證的；標紅的是<b>我沒有驗證過的推論</b>，不要當結論用。</p>
+
+<div class="qs">
+
+  <div class="q unverified">
+    <div class="qh">Q1 · Purdex M0 的 execution 真的會 terminal 嗎？<span class="badge">未驗證</span></div>
+    <div class="qb">
+      Purdex 的 terminal 時點<b>權威是 process exit</b>（relay 在 subprocess 退出時送 binary terminal frame 帶 exit code；<code>result</code> event 只當 enrichment）。
+      但 relay 的 stdin 是 <b>WS → subprocess stdin 的長命管線，直到 WS 收線才 <code>stdin.Close()</code></b>。
+      而 coop 的 claude adapter 是<b>寫完一則就 <code>stdin.end()</code></b>——那正是它保證行程會退出的手段。<br>
+      → <b>問題</b>：<code>claude -p --input-format stream-json</code> 在 stdin 未關閉時，答完一輪會自行 exit，還是繼續等下一則輸入？若是後者，M0 的 execution 只會靠 timeout／reconcile 收尾，terminal report 的時點就不是設計預期的那個。
+      <br>→ <b>怎麼驗</b>：真跑一個 dispatch（非 fake subprocess 的單測），看 <code>claude</code> 行程在 result 之後是否還活著。M0 全套單測用 fake，這條路徑天然測不到。
+    </div>
+  </div>
+
+  <div class="q">
+    <div class="qh">Q2 · Purdex 選了 long-lived 拓樸，但拿到的是 one-shot 的語意——值得嗎？<span class="badge">設計拍板</span></div>
+    <div class="qb">
+      coop 的實測給了兩個硬數字：<b>(a) one-shot 與 long-lived 延遲無差異</b>（瓶頸在 API 來回 1.4–1.7s，spawn 只 ~0.5s，低於 API 抖動）；<b>(b) claude long-lived ＝ 364MB／session／行程</b>。
+      Purdex 每個 execution 起一個 tmux session + 一個 pane + 一個 relay + 一個 claude，成本在 (b) 的量級，<b>但因為跑完就散、又沒帶 <code>--session-id</code>，換不到 long-lived 該有的好處（續接）</b>。
+      <br>→ <b>拍板題</b>：tmux 這一層在 M0 買到的是什麼？我的判讀是<b>「非 Claude 子進程的 runtime 現場」＋人可 attach 的逃生艙</b>（這也是 codex 先前的定調：<code>--resume</code> 只解模型對話續接，不解整個 terminal process tree）。若同意，那 §三-1 就不只是加旗標，而是<b>把兩邊好處都拿到</b>：tmux 保現場、<code>--session-id</code> 保續接。
+    </div>
+  </div>
+
+  <div class="q">
+    <div class="qh">Q3 · 兩邊的「session」不同義，五層模型少了一層<span class="badge">概念釘死</span></div>
+    <div class="qb">
+      <b>coop 的 session</b> ＝ 對話續接單位（<code>externalId</code> ＝ claude UUID／codex threadId，長命、跨行程、跨重啟）。
+      <b>Purdex 的 session</b> ＝ tmux/relay 的 runtime 生命週期（<code>session_code</code>）。
+      兩者<b>同名不同物</b>。<br>
+      對到五層 <code>issue→dispatch→execution→attempt→session</code>：Purdex 的 session 對應的是 coop 的 <b>process</b>，而 coop 的 session（對話續接）<b>在 Purdex 五層裡沒有位置</b>。
+      → 這解釋了為什麼「M0 沒有 <code>--session-id</code>」看起來像小疏漏、實際是<b>模型層缺一格</b>：沒有那一格，follow-up／rerun 語意就無處掛（rerun ＝ 新 dispatch 新 execution，那 follow-up 掛哪？）。
+      <br>→ <b>建議</b>：M1.5 設計時先把這一格命名清楚（例如 <code>conversation</code> 或 <code>agent_session</code>，明確與 tmux session 區分），別讓兩個 session 在同一份 spec 裡打架。
+    </div>
+  </div>
+
+  <div class="q">
+    <div class="qh">Q4 · 兩邊都在長「同一個東西」，要不要收斂？<span class="badge">戰略</span></div>
+    <div class="qb">
+      coop 的 <code>AgentAdapter</code> + step 流 + watermark，本質是<b>「provider 中立的 agent 執行期」</b>——跟 Purdex 想在 daemon 裡長的東西高度重疊，只是一個在 TS 一個在 Go、一個服務聊天室一個服務工單。
+      <br>→ <b>不建議</b>做成共用元件（跨語言、兩邊生命週期不同、YAGNI）。
+      <b>建議</b>把 coop 當成 <b>Purdex 執行期的參考實作與踩雷紀錄</b>：它已經在真實使用中跑過 sticky override、崩潰後 resume 自癒、per-thread mutex、commentary 誤分流、空 thinking block 這些坑。
+      M1 加 codex launch adapter 時，<b>coop 的 <code>codex.ts</code>（641 行）幾乎是一份可讀的規格書</b>——它把 app-server JSON-RPC 的生命週期全部處理完了（idle unsubscribe 15min + 退避重試 3 次 + 世代計數防 race + 崩潰清 liveThreads 觸發 resume）。
+    </div>
+  </div>
+
+</div>
+
+<div class="sec-title">六 · 共同體質債</div>
+<p class="sec-lede">兩邊同型的問題，寫在一起比較省事。</p>
+
+<div class="cards">
+  <div class="card">
+    <h4><span class="n">A</span>單一巨型方法／檔案</h4>
+    <p><b>coop</b>：<code>server.ts</code> 1995 行；<code>turns.ts</code> 的 <code>#run</code> 一個方法約 340 行，做七件事——plan + prompt 組裝 + 附檔處理 + 事件迴圈 + 收尾交易 + 產圖回收 + watermark 結算 + pending 補跑。</p>
+    <p><b>Purdex</b>：M0 已刻意拆檔（execution 18 檔／dispatch 8 檔），這點比 coop 健康；但 <code>dispatch/module.go</code> 已 16.7KB，是同一個徵兆的起點。</p>
+    <p class="lbl">判讀</p>
+    <p>coop 的 <code>#run</code> 是<b>會在 codex「檔案體質」視角被抓的典型</b>。抽法很清楚：事件迴圈（switch 十一個 case）可獨立成 turn event processor，附檔處理可獨立成 attachment resolver，兩塊各自可測。</p>
+  </div>
+
+  <div class="card">
+    <h4><span class="n">B</span>provider 中立做在不同高度，兩層都需要</h4>
+    <p>coop 做在 <b>執行期介面</b>（同行程多型），Purdex 做在 <b>wire contract</b>（跨行程契約）。兩邊各只做一層。</p>
+    <p class="lbl">判讀</p>
+    <p>這<b>不是二選一</b>。Purdex 未來要在 daemon 內同時 launch claude 與 codex，缺的正是 coop 那一層；coop 若要把 agent 執行移出行程（或跨主機），缺的正是 Purdex 那一層。<b>兩層之間的介面該是同一組事件語彙</b>——Purdex 的「中性事件契約」與 coop 的 <code>AgentEvent</code> 是同一件事的兩個版本，合併時應該對齊而非各長一套。</p>
+  </div>
+
+  <div class="card">
+    <h4><span class="n">C</span>執行期的 activity 都靠 stdout 解析</h4>
+    <p>兩邊都在做同一件苦工：把 CLI 吐的 stream-json／JSON-RPC 反解成結構化事件。coop 已經解完（<code>claude.ts</code> 412 行 + <code>codex.ts</code> 641 行），Purdex relay <b>刻意只 tee 不 parse</b>（M0 決策，避免動 relay）。</p>
+    <p class="lbl">判讀</p>
+    <p>Purdex 遲早要 parse（step 流／terminal 分類已經需要 <code>result</code> event）。<b>M0 已經在 daemon 側開了 seam（<code>SetTerminalHandler</code>）並且 P.8 有 <code>captureInitMetadata</code></b>——parser 的落點已經有了，不是從零。要做的時候，coop 的兩支 adapter 是免費的欄位地圖。</p>
+  </div>
+</div>
+
+<div class="sec-title">七 · 我建議的動作</div>
+<div class="qs">
+  <div class="q">
+    <div class="qh">立刻（低成本、擋住未來 rework）</div>
+    <div class="qb">
+      ① <b>coop：把執行鎖從 <code>roomId:provider</code> 升到 canonical workDir 維度</b>（§四-1）——自訂 workDir 指真 repo 的併發寫是現成風險，改動小。<br>
+      ② <b>Purdex：launch 帶 <code>--session-id</code></b>（§三-1）——一個旗標，換到 M1.5 的前置與「重試接得回」。<br>
+      ③ <b>Purdex：驗 Q1</b>（真跑一次 dispatch 看 claude 行程是否自行 exit）——若推論成立，terminal 時點的設計前提要修。
+    </div>
+  </div>
+  <div class="q">
+    <div class="qh">M1 規劃時帶進去</div>
+    <div class="qb">
+      ④ 控制面（stop/interrupt）照 coop 的<b>三層逃生</b>（timeout → interrupt → forceStop 寬限）＋<b>oneShot 邊界表</b>。<br>
+      ⑤ codex launch adapter 直接把 coop 的 <code>codex.ts</code> 當規格讀（sticky override 每輪明傳、崩潰後 <code>thread/resume</code> 自癒、per-thread mutex + 世代計數）。<br>
+      ⑥ 介面形狀用 Go 的小介面 + type assertion 表達 optional capability。
+    </div>
+  </div>
+  <div class="q">
+    <div class="qh">M1.5 之前要先釘死的概念</div>
+    <div class="qb">
+      ⑦ <b>五層補「對話續接」那一格並改名，別讓兩個 session 打架</b>（§五-Q3）。<br>
+      ⑧ watermark 語意對齊 Ploom <code>issue_event</code>（§三-2）——這決定 follow-up 餵什麼。<br>
+      ⑨ step 流要不要做、做到哪一層（§三-3）：這是 M4「review console」的前置，但需要 relay 端 parser，成本是 M0 以來最大的一筆。
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span class="mono">docs/pages/dispatch-coop-vs-purdex.html</span>
+  <span class="mono">來源：coop 0.22.1 · purdex 1.0.0-alpha.326（M0 shipped）· 2026-07-26</span>
+</footer>
+
+</div>
+</body>
+</html>

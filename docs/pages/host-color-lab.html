@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host 顏色標示 — 視覺實驗室</title>
+<style>
+  :root{
+    --surface-primary:#0a0a1a; --surface-secondary:#12122a; --surface-hover:#1a1a32;
+    --surface-active:#272444; --text-primary:#e0e0e0; --text-secondary:#a0a0b0;
+    --text-muted:#6b7280; --border-default:#404040; --border-active:#7a6aaa;
+    --panel:#0f0f22; --accent:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#07070f;color:var(--text-primary);
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif}
+  header{padding:18px 22px 10px;border-bottom:1px solid #1e1e33}
+  h1{margin:0 0 4px;font-size:17px;font-weight:600}
+  header p{margin:0;color:var(--text-muted);font-size:12px}
+  .wrap{display:flex;gap:20px;align-items:flex-start;padding:18px 22px 60px;flex-wrap:wrap}
+  .stage{flex:1 1 560px;min-width:340px;display:flex;flex-direction:column;gap:18px}
+  .controls{flex:0 0 330px;min-width:290px;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--panel);border:1px solid #1e1e33;border-radius:10px;padding:14px}
+  .card h2{margin:0 0 10px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);font-weight:600}
+  label{display:block;font-size:12px;color:var(--text-secondary);margin:9px 0 4px}
+  select,input[type=text]{width:100%;background:#15152c;border:1px solid #2a2a45;color:var(--text-primary);
+    border-radius:6px;padding:6px 8px;font-size:12px}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .row{display:flex;align-items:center;gap:8px}
+  .row .val{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--text-muted);font-size:11px;min-width:46px;text-align:right}
+  .swatches{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .sw{width:22px;height:22px;border-radius:6px;border:2px solid transparent;cursor:pointer}
+  .sw[aria-pressed=true]{border-color:#fff}
+  .iconpick{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+  .iconpick button{width:28px;height:28px;border-radius:7px;background:#15152c;border:1px solid #2a2a45;
+    color:#b9b9d0;display:grid;place-items:center;cursor:pointer;padding:0}
+  .iconpick button svg{width:16px;height:16px}
+  .iconpick button[aria-pressed=true]{border-color:var(--accent);background:#241f47;color:#fff}
+  .presets{display:flex;flex-wrap:wrap;gap:6px}
+  .presets button{background:#18183a;border:1px solid #2c2c50;color:var(--text-primary);border-radius:999px;
+    padding:5px 11px;font-size:12px;cursor:pointer}
+  .presets button:hover{background:#22224a}
+  .presets button.on{background:#332a63;border-color:var(--accent)}
+  .hint{color:var(--text-muted);font-size:11px;margin-top:8px;line-height:1.6}
+  .sub{border-top:1px dashed #262643;margin-top:12px;padding-top:6px}
+
+  /* ---------- app mock ---------- */
+  .app{background:var(--surface-primary);border:1px solid #1e1e33;border-radius:12px;overflow:hidden}
+  .caption{font-size:11px;color:var(--text-muted);padding:8px 12px;border-bottom:1px solid #1a1a30;
+    display:flex;gap:10px;align-items:center}
+  .caption b{color:var(--text-secondary);font-weight:600}
+  .mock{display:flex;min-height:430px}
+  .sidebar{width:280px;flex:0 0 280px;background:var(--surface-primary);padding:8px 0;border-right:1px solid #1a1a30}
+  .main{flex:1;display:flex;flex-direction:column;background:var(--surface-primary)}
+  .tabbar{display:flex;gap:2px;padding:6px 8px;background:var(--surface-primary);border-bottom:1px solid #1a1a30;flex-wrap:wrap}
+  .body{flex:1;padding:14px;color:#3f3f56;font-size:12px}
+
+  /* WorkspaceRow.tsx: mx-2 pl-1.5 pr-1.5 rounded-md text-sm, py-1.5 on the button */
+  .ws{display:flex;align-items:center;gap:8px;padding:6px;margin:2px 8px;border-radius:6px;
+    color:var(--text-primary);font-size:13px;font-weight:500}
+  .ws.active{border:1px solid var(--border-active);background:#1b1533}
+  .ws .chev{margin-left:auto;color:var(--text-muted)}
+
+  /* InlineTab.tsx: mx-2 pl-[18px] pr-1.5 py-1 rounded-md text-xs */
+  .tab{position:relative;display:flex;align-items:center;gap:6px;margin:1px 8px;padding:4px 6px 4px 18px;
+    border-radius:6px;font-size:12px;color:var(--text-muted);overflow:hidden}
+  .tab.active{background:var(--surface-active);color:#fff}
+  /* icon slot = w-4 h-4, plain icon, NO background (renderInlineTabIcon) */
+  .tab .icon{position:relative;width:16px;height:16px;display:grid;place-items:center;flex:0 0 auto;color:#8f8fa6}
+  .tab.active .icon{color:#cfcfe6}
+  .tab .icon svg{width:14px;height:14px}
+  /* agent marker = the ✳️ emoji, part of the title group */
+  .tab .agent{width:16px;height:16px;display:grid;place-items:center;font-size:13px;line-height:1;flex:0 0 auto}
+  .tab .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tab .pip{position:absolute;top:2px;left:30px;width:5px;height:5px;border-radius:50%;background:#ef4444}
+  .tab .x{color:#8b8b9e;font-size:12px}
+  .hosticon{display:grid;place-items:center;flex:0 0 auto}
+  .leaf{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 22px;color:var(--text-muted);font-size:12.5px}
+  .hostgroup{display:flex;align-items:center;gap:8px;padding:9px 12px 5px;color:var(--text-primary);font-size:13px}
+
+  /* top tab */
+  .ttab{position:relative;display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;border-radius:6px;
+    background:var(--surface-secondary);color:var(--text-muted);font-size:12px;min-width:140px;overflow:hidden}
+  .ttab.active{background:var(--surface-active);color:#fff}
+  .ttab .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .mark{position:absolute;pointer-events:none}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-muted);padding:0 12px 10px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  pre{margin:0;background:#101024;border:1px solid #23233d;border-radius:8px;padding:10px;
+    font-size:11px;color:#b9b9d0;white-space:pre-wrap;word-break:break-all}
+</style>
+</head>
+<body>
+<header>
+  <h1>Host 顏色標示 — 視覺實驗室</h1>
+  <p>左邊是模擬畫面（用 app 真實深色主題色值、真實縮排與圖示），右邊旋鈕即時套用。挑到順眼的組合，把底部「目前設定」貼回對話即可。</p>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+    <div class="card" style="padding:0">
+      <div class="caption"><b>候選</b> 依右側旋鈕即時變化</div>
+      <div class="app" id="candidate"></div>
+      <div class="legend">
+        <span><i style="background:#f97316"></i>a26</span>
+        <span><i style="background:#3b82f6"></i>mlab</span>
+        <span><i style="background:#22c55e"></i>c5n</span>
+        <span>灰色列＝未設定顏色的 host</span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0" id="beforeCard">
+      <div class="caption"><b>現況 alpha.352</b> 24px 漸層 / 45% 透明度（你截圖那版）</div>
+      <div class="app" id="current"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="card">
+      <h2>預設組合</h2>
+      <div class="presets" id="presets"></div>
+      <p class="hint">點一個預設，再用下面旋鈕微調。</p>
+    </div>
+
+    <div class="card">
+      <h2>側欄分頁列</h2>
+      <label>標示樣式</label>
+      <select id="sb-style"></select>
+      <div id="sb-geo">
+        <label>粗細 / 尺寸</label>
+        <div class="row"><input type="range" id="sb-width" min="1" max="10" step="1"><span class="val" id="sb-width-v"></span></div>
+        <label>長度（漸層寬 / 柱高比例）</label>
+        <div class="row"><input type="range" id="sb-len" min="6" max="64" step="1"><span class="val" id="sb-len-v"></span></div>
+        <label>濃度</label>
+        <div class="row"><input type="range" id="sb-op" min="10" max="100" step="5"><span class="val" id="sb-op-v"></span></div>
+        <label>內縮</label>
+        <div class="row"><input type="range" id="sb-inset" min="0" max="10" step="1"><span class="val" id="sb-inset-v"></span></div>
+        <label>圓角</label>
+        <div class="row"><input type="range" id="sb-radius" min="0" max="8" step="1"><span class="val" id="sb-radius-v"></span></div>
+      </div>
+      <div id="sb-hi" class="sub">
+        <label>圖示呈現方式</label>
+        <select id="sb-himode"></select>
+        <label>線條顏色</label>
+        <select id="sb-hiline"><option value="host">host 顏色</option><option value="neutral">中性灰</option></select>
+        <label>線條濃度</label>
+        <div class="row"><input type="range" id="sb-hilineop" min="20" max="100" step="5"><span class="val" id="sb-hilineop-v"></span></div>
+        <label>底色濃度</label>
+        <div class="row"><input type="range" id="sb-hibgop" min="0" max="100" step="2"><span class="val" id="sb-hibgop-v"></span></div>
+        <label>底色區塊大小（貼齊文字）</label>
+        <div class="row"><input type="range" id="sb-hibox" min="12" max="24" step="1"><span class="val" id="sb-hibox-v"></span></div>
+        <label>圖示內縮</label>
+        <div class="row"><input type="range" id="sb-hipad" min="0" max="5" step="1"><span class="val" id="sb-hipad-v"></span></div>
+        <label>圖示大小（無底色的模式才用）</label>
+        <div class="row"><input type="range" id="sb-hisize" min="10" max="22" step="1"><span class="val" id="sb-hisize-v"></span></div>
+        <label>底色圓角</label>
+        <div class="row"><input type="range" id="sb-radius2" min="0" max="8" step="1"><span class="val" id="sb-radius2-v"></span></div>
+      </div>
+      <label class="row" style="gap:6px"><input type="checkbox" id="sb-activeonly"> 只在非作用中的列顯示</label>
+    </div>
+
+    <div class="card">
+      <h2>上方分頁</h2>
+      <label>標示樣式</label>
+      <select id="tb-style"></select>
+      <div id="tb-geo">
+        <label>粗細 / 尺寸</label>
+        <div class="row"><input type="range" id="tb-width" min="1" max="10" step="1"><span class="val" id="tb-width-v"></span></div>
+        <label>長度（漸層寬 / 柱高比例）</label>
+        <div class="row"><input type="range" id="tb-len" min="6" max="64" step="1"><span class="val" id="tb-len-v"></span></div>
+        <label>濃度</label>
+        <div class="row"><input type="range" id="tb-op" min="10" max="100" step="5"><span class="val" id="tb-op-v"></span></div>
+        <label>內縮</label>
+        <div class="row"><input type="range" id="tb-inset" min="0" max="10" step="1"><span class="val" id="tb-inset-v"></span></div>
+        <label>圓角</label>
+        <div class="row"><input type="range" id="tb-radius" min="0" max="8" step="1"><span class="val" id="tb-radius-v"></span></div>
+      </div>
+      <div id="tb-hi" class="sub">
+        <label>圖示呈現方式</label>
+        <select id="tb-himode"></select>
+        <label>線條顏色</label>
+        <select id="tb-hiline"><option value="host">host 顏色</option><option value="neutral">中性灰</option></select>
+        <label>線條濃度</label>
+        <div class="row"><input type="range" id="tb-hilineop" min="20" max="100" step="5"><span class="val" id="tb-hilineop-v"></span></div>
+        <label>底色濃度</label>
+        <div class="row"><input type="range" id="tb-hibgop" min="0" max="100" step="2"><span class="val" id="tb-hibgop-v"></span></div>
+        <label>底色區塊大小（貼齊文字）</label>
+        <div class="row"><input type="range" id="tb-hibox" min="12" max="24" step="1"><span class="val" id="tb-hibox-v"></span></div>
+        <label>圖示內縮</label>
+        <div class="row"><input type="range" id="tb-hipad" min="0" max="5" step="1"><span class="val" id="tb-hipad-v"></span></div>
+        <label>圖示大小（無底色的模式才用）</label>
+        <div class="row"><input type="range" id="tb-hisize" min="10" max="22" step="1"><span class="val" id="tb-hisize-v"></span></div>
+        <label>底色圓角</label>
+        <div class="row"><input type="range" id="tb-radius2" min="0" max="8" step="1"><span class="val" id="tb-radius2-v"></span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>每台 Host：顏色與圖示</h2>
+      <p class="hint" style="margin-top:0">每台 host 自己選圖示，如同 workspace（實作時用同一個 Phosphor 選擇器，這裡先放常見幾個）。</p>
+      <div data-host="a26">
+        <label>a26</label>
+        <div class="swatches"></div>
+        <div class="iconpick"></div>
+      </div>
+      <div data-host="mlab" class="sub">
+        <label>mlab</label>
+        <div class="swatches"></div>
+        <div class="iconpick"></div>
+      </div>
+      <div data-host="c5n" class="sub">
+        <label>c5n</label>
+        <div class="swatches"></div>
+        <div class="iconpick"></div>
+      </div>
+      <label class="row" style="gap:6px;margin-top:12px"><input type="checkbox" id="showBefore" checked> 顯示「現況」對照</label>
+    </div>
+
+    <div class="card">
+      <h2>目前設定</h2>
+      <pre id="dump"></pre>
+      <p class="hint">把這段貼回對話，我就照它實作。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const STYLES = [
+  ['none','不標示'],
+  ['host-icon','主機圖示（終端機圖示之後、標題群組之前）'],
+  ['gradient','左緣漸層（現況）'],
+  ['left-line','左邊線'],
+  ['left-bar','左側短柱（內縮圓角）'],
+  ['bottom-line','底線'],
+  ['top-line','頂線'],
+  ['icon-ring','終端機圖示外框'],
+  ['icon-tint','終端機圖示上色'],
+  ['dot','小圓點'],
+  ['text-tint','標題文字上色'],
+  ['row-tint','整列淡底色'],
+  ['edge-glow','左緣內光暈'],
+];
+
+const HI_MODES = [
+  ['soft','淡底色（色塊底＋線條，兩色可調）'],
+  ['duotone','Phosphor duotone（同色雙層：實線＋淡填色）'],
+  ['tint','上色（只有線條帶色）'],
+  ['plain','原色（中性灰，不帶色）'],
+  ['badge','實心底色（色底＋深色線條）'],
+  ['ring','色框（host 色外框）'],
+];
+
+const HOSTS = {a26:'#f97316', mlab:'#3b82f6', c5n:'#22c55e'};
+const HOST_ICONS = {a26:'laptop', mlab:'desktopTower', c5n:'cloud'};
+const PALETTE = ['#ef4444','#f97316','#eab308','#22c55e','#14b8a6','#3b82f6','#8b5cf6','#ec4899','#94a3b8',''];
+
+const ICONS = {
+  headset:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14v-2a8 8 0 0116 0v2"/><rect x="2.5" y="13" width="4" height="6" rx="1.5"/><rect x="17.5" y="13" width="4" height="6" rx="1.5"/></svg>',
+  book:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5A2.5 2.5 0 016.5 3H20v16H6.5A2.5 2.5 0 004 21.5z"/></svg>',
+  eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/></svg>',
+  // Phosphor TerminalWindow, duotone-ish: faint fill + outline (this IS the
+  // "rounded square" in the real app — there is no separate icon background).
+  term:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2.5" y="4.5" width="19" height="15" rx="2.5" fill="currentColor" fill-opacity="0.18"/><path d="M6.5 10l2.6 2-2.6 2M12.5 14h5"/></svg>',
+  slider:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg>',
+  hosts:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="5" rx="2"/></svg>',
+  // host icon choices (Phosphor-like)
+  laptop:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2 19h20"/></svg>',
+  desktopTower:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M10 7h4M10 10.5h4"/><circle cx="12" cy="16.5" r="1.2"/></svg>',
+  monitor:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>',
+  cloud:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M7 18h10a4 4 0 000-8 6 6 0 00-11.3 2.2A3.5 3.5 0 007 18z"/></svg>',
+  hardDrives:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>',
+  cpu:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>',
+  house:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 11l8-6 8 6v8a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 19z"/></svg>',
+  globe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17M12 3.5c-2.5 2.6-2.5 14.4 0 17"/></svg>',
+  lightning:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg>',
+  planet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="6"/><path d="M4.5 16.5c-2 1.5-3 3-2.4 3.9.8 1.2 4.6.2 9-2.4s7.3-5.8 6.6-7c-.4-.7-1.9-.6-3.9.1"/></svg>',
+};
+const HOST_ICON_CHOICES = ['laptop','desktopTower','monitor','cloud','hardDrives','cpu','house','globe','lightning','planet'];
+
+const state = {
+  sb:{style:'host-icon',width:3,len:60,op:100,inset:3,radius:4,activeOnly:false,hiMode:'soft',hiSize:14,hiLine:'host',hiLineOp:100,hiBgOp:22,hiBox:16,hiPad:2},
+  tb:{style:'host-icon',width:3,len:60,op:100,inset:4,radius:4,hiMode:'soft',hiSize:13,hiLine:'host',hiLineOp:100,hiBgOp:22,hiBox:16,hiPad:2},
+};
+
+const PRESETS = {
+  '現況 alpha.352': {sb:{style:'gradient',width:2,len:24,op:45,inset:0,radius:0,activeOnly:false,hiMode:'plain',hiSize:14}, tb:{style:'bottom-line',width:2,len:24,op:100,inset:0,radius:0,hiMode:'plain',hiSize:13}},
+  '主機圖示 · 上色': {sb:{style:'host-icon',width:3,len:60,op:100,inset:3,radius:3,activeOnly:false,hiMode:'tint',hiSize:14}, tb:{style:'host-icon',width:3,len:60,op:100,inset:4,radius:3,hiMode:'tint',hiSize:13}},
+  '主機圖示 · 原色': {sb:{style:'host-icon',width:3,len:60,op:100,inset:3,radius:3,activeOnly:false,hiMode:'plain',hiSize:14}, tb:{style:'host-icon',width:3,len:60,op:100,inset:4,radius:3,hiMode:'plain',hiSize:13}},
+  '主機圖示 · 淡底': {sb:{style:'host-icon',width:3,len:60,op:100,inset:3,radius:4,activeOnly:false,hiMode:'soft',hiSize:14}, tb:{style:'host-icon',width:3,len:60,op:100,inset:4,radius:4,hiMode:'soft',hiSize:13}},
+  '主機圖示 · 實底': {sb:{style:'host-icon',width:3,len:60,op:100,inset:3,radius:4,activeOnly:false,hiMode:'badge',hiSize:14}, tb:{style:'host-icon',width:3,len:60,op:100,inset:4,radius:4,hiMode:'badge',hiSize:13}},
+  '主機圖示 · 色框': {sb:{style:'host-icon',width:2,len:60,op:100,inset:3,radius:4,activeOnly:false,hiMode:'ring',hiSize:14}, tb:{style:'host-icon',width:2,len:60,op:100,inset:4,radius:4,hiMode:'ring',hiSize:13}},
+  '主機圖示 · duotone': {sb:{style:'host-icon',width:3,len:60,op:100,inset:3,radius:4,activeOnly:false,hiMode:'duotone',hiSize:15,hiLine:'host',hiLineOp:100,hiBgOp:30}, tb:{style:'host-icon',width:3,len:60,op:100,inset:4,radius:4,hiMode:'duotone',hiSize:14,hiLine:'host',hiLineOp:100,hiBgOp:30}},
+  '細左柱':        {sb:{style:'left-bar',width:3,len:60,op:100,inset:3,radius:3,activeOnly:false,hiMode:'plain',hiSize:14}, tb:{style:'left-bar',width:3,len:60,op:100,inset:4,radius:3,hiMode:'plain',hiSize:13}},
+  '圖示外框':      {sb:{style:'icon-ring',width:2,len:24,op:100,inset:0,radius:5,activeOnly:false,hiMode:'plain',hiSize:14}, tb:{style:'bottom-line',width:2,len:24,op:90,inset:0,radius:0,hiMode:'plain',hiSize:13}},
+  '小圓點':        {sb:{style:'dot',width:5,len:24,op:100,inset:4,radius:0,activeOnly:false,hiMode:'plain',hiSize:14}, tb:{style:'dot',width:5,len:24,op:100,inset:5,radius:0,hiMode:'plain',hiSize:13}},
+  '標題上色':      {sb:{style:'text-tint',width:2,len:24,op:85,inset:0,radius:0,activeOnly:false,hiMode:'plain',hiSize:14}, tb:{style:'text-tint',width:2,len:24,op:85,inset:0,radius:0,hiMode:'plain',hiSize:13}},
+  '極淡整列':      {sb:{style:'row-tint',width:2,len:24,op:14,inset:0,radius:0,activeOnly:false,hiMode:'plain',hiSize:14}, tb:{style:'row-tint',width:2,len:24,op:14,inset:0,radius:0,hiMode:'plain',hiSize:13}},
+};
+
+const ROWS = [
+  {ws:'CSP 客服中心', icon:'headset'},
+  {tab:'Hear 規格更新 - c...', host:'mlab', unread:true},
+  {ws:'AI Story 故事', icon:'book'},
+  {tab:'大廳一幕缺漏檢查 ...', host:'c5n', unread:true},
+  {ws:'Infra', icon:'eye', active:true},
+  {tab:'多主機 tab 顏色標...', host:'a26', active:true},
+  {tab:'功能和設定清單整...', host:'a26', unread:true},
+  {tab:'Session interface...', host:'a26', unread:true},
+  {tab:'Image discussion...', host:'mlab', unread:true, blue:true},
+  {tab:'Cswap 資訊抽離 -...', host:null, unread:true},
+  {tab:'Invoice-plane 和 ...', host:'mlab'},
+  {leaf:'Settings'},
+  {leaf:'Hosts'},
+  {host:'a26'},
+];
+const TTABS = [
+  {t:'多主機 tab 顏色標示', host:'a26', active:true},
+  {t:'Session interface', host:'a26'},
+  {t:'Image discussion', host:'mlab'},
+  {t:'Cswap 資訊抽離', host:null},
+];
+
+const mono = (c,op)=> c ? `color-mix(in srgb, ${c} ${op}%, transparent)` : 'transparent';
+
+function hostIconEl(cfg, color, hostKey){
+  if(!hostKey) return null;                         // no host → nothing
+  const name = HOST_ICONS[hostKey] || 'laptop';
+  const el = document.createElement('span');
+  el.className = 'hosticon';
+  // Boxed modes (soft/badge/ring): the tinted block matches the text box and the
+  // icon sits inset inside it. Unboxed modes just use the plain icon size.
+  const padded = cfg.hiMode==='badge' || cfg.hiMode==='soft' || cfg.hiMode==='ring';
+  const box  = padded ? cfg.hiBox : cfg.hiSize;
+  const size = padded ? Math.max(6, cfg.hiBox - cfg.hiPad*2) : cfg.hiSize;
+  el.style.width = box+'px'; el.style.height = box+'px';
+  el.innerHTML = ICONS[name];
+  const svg = el.firstChild;
+  svg.setAttribute('width', size); svg.setAttribute('height', size);
+  if(!color){ el.style.color = '#6b7280'; return el; }   // host without a colour
+
+  // line colour: host colour at its own opacity, or a neutral grey
+  const line = cfg.hiLine === 'neutral' ? '#8f8fa6' : mono(color, cfg.hiLineOp);
+  const bg   = mono(color, cfg.hiBgOp);
+
+  switch(cfg.hiMode){
+    case 'tint':  el.style.color = line; break;
+    case 'plain': el.style.color = '#8f8fa6'; break;
+    case 'badge': el.style.background = mono(color, cfg.hiBgOp); el.style.color = '#0a0a14';
+                  el.style.borderRadius = (cfg.radius||4)+'px'; break;
+    case 'soft':  el.style.background = bg; el.style.color = line;
+                  el.style.borderRadius = (cfg.radius||4)+'px'; break;
+    case 'ring':  el.style.color = line;
+                  el.style.boxShadow = `0 0 0 ${Math.max(1,cfg.width)}px ${line}`;
+                  el.style.borderRadius = (cfg.radius||4)+'px'; break;
+    case 'duotone':
+      // Phosphor duotone = one colour, two layers: solid stroke + translucent
+      // fill underneath (its default underlay is ~20%).
+      el.style.color = line;
+      svg.querySelectorAll('rect,path,circle').forEach(p=>{
+        if(p.getAttribute('fill')==='none' || !p.hasAttribute('fill')) p.setAttribute('fill', bg);
+        else p.setAttribute('fill', bg);
+        p.removeAttribute('fill-opacity');
+      });
+      break;
+  }
+  return el;
+}
+
+function markFor(cfg, color){
+  if(!color || cfg.style==='none' || cfg.style==='host-icon') return null;
+  const el = document.createElement('span');
+  el.className = 'mark';
+  const w = cfg.width, op = cfg.op, inset = cfg.inset, r = cfg.radius;
+  const c = mono(color, op);
+  const s = el.style;
+  switch(cfg.style){
+    case 'gradient':
+      s.left='0';s.top='0';s.bottom='0';s.width=cfg.len+'px';
+      s.background=`linear-gradient(to right, ${c}, transparent)`; break;
+    case 'left-line':
+      s.left='0';s.top='0';s.bottom='0';s.width=w+'px';s.background=c; break;
+    case 'left-bar':
+      s.left=inset+'px';s.top=`calc((100% - ${cfg.len}%) / 2)`;s.height=cfg.len+'%';
+      s.width=w+'px';s.background=c;s.borderRadius=r+'px'; break;
+    case 'bottom-line':
+      s.left='0';s.right='0';s.bottom='0';s.height=w+'px';s.background=c; break;
+    case 'top-line':
+      s.left='0';s.right='0';s.top='0';s.height=w+'px';s.background=c; break;
+    case 'dot':
+      s.left=inset+'px';s.top='50%';s.transform='translateY(-50%)';
+      s.width=w+'px';s.height=w+'px';s.borderRadius='50%';s.background=c; break;
+    case 'row-tint':
+      s.inset='0';s.background=c;s.borderRadius='inherit'; break;
+    case 'edge-glow':
+      s.inset='0';s.borderRadius='inherit';
+      s.boxShadow=`inset ${cfg.len}px 0 ${cfg.len}px -${Math.round(cfg.len*0.7)}px ${c}`; break;
+    default: return null;
+  }
+  return el;
+}
+
+function applySpecial(cfg, color, iconEl, titleEl){
+  if(!color) return;
+  if(cfg.style==='icon-ring' && iconEl){
+    iconEl.style.boxShadow = `0 0 0 ${cfg.width}px ${mono(color,cfg.op)}`;
+    iconEl.style.borderRadius = (cfg.radius||5)+'px';
+  }
+  if(cfg.style==='icon-tint' && iconEl){ iconEl.style.color = mono(color, cfg.op); }
+  if(cfg.style==='text-tint' && titleEl){ titleEl.style.color = mono(color, cfg.op); }
+}
+
+function buildApp(cfgSb, cfgTb){
+  const app = document.createElement('div'); app.className='mock';
+  const side = document.createElement('div'); side.className='sidebar';
+  ROWS.forEach(r=>{
+    if(r.ws){
+      const d=document.createElement('div'); d.className='ws'+(r.active?' active':'');
+      d.innerHTML = `<span style="width:17px;height:17px;display:grid;place-items:center;color:#cfcfe6">${ICONS[r.icon]}</span>
+        <span>${r.ws}</span><span class="chev">⌄</span>`;
+      side.appendChild(d); return;
+    }
+    if(r.leaf){
+      const d=document.createElement('div'); d.className='leaf';
+      d.innerHTML=`<span style="width:16px;height:16px;display:grid;place-items:center">${r.leaf==='Settings'?ICONS.slider:ICONS.hosts}</span>${r.leaf}`;
+      side.appendChild(d); return;
+    }
+    if(r.host!==undefined && r.tab===undefined){
+      const d=document.createElement('div'); d.className='hostgroup';
+      d.innerHTML=`<span style="width:17px;height:17px;display:grid;place-items:center;color:#cfcfe6">${ICONS.laptop}</span>${r.host}<span class="chev" style="margin-left:auto;color:#6b7280">⌄</span>`;
+      side.appendChild(d); return;
+    }
+    const d=document.createElement('div'); d.className='tab'+(r.active?' active':'');
+    const color = r.host ? HOSTS[r.host] : null;
+    d.innerHTML = `<span class="icon">${ICONS.term}</span>
+      <span class="agent">✳️</span>
+      <span class="title">${r.tab}</span>
+      ${r.active?'<span class="x">✕</span>':''}`;
+    if(r.unread){ const p=document.createElement('span'); p.className='pip'; if(r.blue) p.style.background='#3b82f6'; d.appendChild(p); }
+    const skip = cfgSb.activeOnly && r.active;
+    if(!skip){
+      if(cfgSb.style==='host-icon'){
+        const hi = hostIconEl(cfgSb, color, r.host);
+        // the green agent icon belongs to the title group → host emoji goes
+        // BEFORE it, i.e. between the terminal icon and the agent icon.
+        if(hi) d.insertBefore(hi, d.querySelector('.agent'));
+      }
+      const m = markFor(cfgSb, color); if(m) d.appendChild(m);
+      applySpecial(cfgSb, color, d.querySelector('.icon'), d.querySelector('.title'));
+    }
+    side.appendChild(d);
+  });
+
+  const main=document.createElement('div'); main.className='main';
+  const bar=document.createElement('div'); bar.className='tabbar';
+  TTABS.forEach(t=>{
+    const d=document.createElement('div'); d.className='ttab'+(t.active?' active':'');
+    d.innerHTML=`<span class="agent" style="width:14px;height:14px;font-size:12px">✳️</span><span class="title">${t.t}</span>`;
+    const color = t.host ? HOSTS[t.host] : null;
+    if(cfgTb.style==='host-icon'){
+      const hi = hostIconEl(cfgTb, color, t.host);
+      if(hi) d.insertBefore(hi, d.querySelector('.agent'));
+    }
+    const m = markFor(cfgTb, color); if(m) d.appendChild(m);
+    applySpecial(cfgTb, color, null, d.querySelector('.title'));
+    bar.appendChild(d);
+  });
+  const body=document.createElement('div'); body.className='body';
+  body.textContent='（終端機內容）';
+  main.appendChild(bar); main.appendChild(body);
+  app.appendChild(side); app.appendChild(main);
+  return app;
+}
+
+function render(){
+  const c=document.getElementById('candidate'); c.innerHTML=''; c.appendChild(buildApp(state.sb, state.tb));
+  const b=document.getElementById('current'); b.innerHTML='';
+  b.appendChild(buildApp(PRESETS['現況 alpha.352'].sb, PRESETS['現況 alpha.352'].tb));
+  const icons = {}; Object.keys(HOSTS).forEach(h=>icons[h]=HOST_ICONS[h]);
+  document.getElementById('dump').textContent = JSON.stringify(
+    {側欄:state.sb, 上方分頁:state.tb, host顏色:HOSTS, host圖示:icons}, null, 2);
+  // show only the relevant knob group
+  ['sb','tb'].forEach(p=>{
+    const isHi = state[p==='sb'?'sb':'tb'].style==='host-icon';
+    document.getElementById(p+'-geo').style.display = isHi ? 'none':'';
+    document.getElementById(p+'-hi').style.display  = isHi ? '':'none';
+  });
+}
+
+function bind(prefix, key){
+  const sel=document.getElementById(prefix+'-style');
+  STYLES.forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;sel.appendChild(o)});
+  sel.addEventListener('change',()=>{state[key].style=sel.value;syncUI();render()});
+  const hm=document.getElementById(prefix+'-himode');
+  HI_MODES.forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;hm.appendChild(o)});
+  hm.addEventListener('change',()=>{state[key].hiMode=hm.value;render()});
+  const hl=document.getElementById(prefix+'-hiline');
+  hl.addEventListener('change',()=>{state[key].hiLine=hl.value;render()});
+  ['width','len','op','inset','radius','hisize','hilineop','hibgop','radius2','hibox','hipad'].forEach(f=>{
+    const el=document.getElementById(`${prefix}-${f}`); if(!el) return;
+    el.addEventListener('input',()=>{
+      state[key][FIELD_KEY[f]||f]=+el.value;
+      document.getElementById(`${prefix}-${f}-v`).textContent = fmt(key,f,+el.value);
+      render();});
+  });
+  const ao=document.getElementById(prefix+'-activeonly');
+  if(ao) ao.addEventListener('change',()=>{state[key].activeOnly=ao.checked;render()});
+}
+
+const FIELD_KEY = {hisize:'hiSize', hilineop:'hiLineOp', hibgop:'hiBgOp', radius2:'radius',
+                   hibox:'hiBox', hipad:'hiPad'};
+
+function fmt(key,f,v){
+  if(f==='op'||f==='hilineop'||f==='hibgop') return v+'%';
+  if(f==='len' && state[key].style==='left-bar') return v+'%';
+  return v+'px';
+}
+
+function syncUI(){
+  [['sb','sb'],['tb','tb']].forEach(([p,k])=>{
+    document.getElementById(p+'-style').value=state[k].style;
+    document.getElementById(p+'-himode').value=state[k].hiMode;
+    document.getElementById(p+'-hiline').value=state[k].hiLine||'host';
+    ['width','len','op','inset','radius','hisize','hilineop','hibgop','radius2','hibox','hipad'].forEach(f=>{
+      const el=document.getElementById(`${p}-${f}`); if(!el) return;
+      const v = state[k][FIELD_KEY[f]||f]; el.value=v;
+      document.getElementById(`${p}-${f}-v`).textContent = fmt(k,f,v);
+    });
+    const ao=document.getElementById(p+'-activeonly'); if(ao) ao.checked=!!state[k].activeOnly;
+  });
+}
+
+const pbox=document.getElementById('presets');
+Object.keys(PRESETS).forEach(name=>{
+  const b=document.createElement('button'); b.textContent=name;
+  b.addEventListener('click',()=>{
+    const D={hiLine:'host',hiLineOp:100,hiBgOp:22,hiSize:14,hiMode:'soft',hiBox:16,hiPad:2};
+    state.sb={...D,...PRESETS[name].sb}; state.tb={...D,hiSize:13,...PRESETS[name].tb};
+    [...pbox.children].forEach(x=>x.classList.remove('on')); b.classList.add('on');
+    syncUI(); render();
+  });
+  pbox.appendChild(b);
+});
+
+document.querySelectorAll('[data-host]').forEach(box=>{
+  const host=box.dataset.host;
+  const sw=box.querySelector('.swatches');
+  PALETTE.forEach(col=>{
+    const s=document.createElement('button'); s.className='sw';
+    s.style.background = col || 'repeating-linear-gradient(45deg,#2a2a45 0 4px,#1a1a32 4px 8px)';
+    s.title = col || '不上色';
+    s.setAttribute('aria-pressed', String(HOSTS[host]===col));
+    s.addEventListener('click',()=>{
+      HOSTS[host]= col || null;
+      [...sw.children].forEach(x=>x.setAttribute('aria-pressed','false'));
+      s.setAttribute('aria-pressed','true'); render();
+    });
+    sw.appendChild(s);
+  });
+  const ip=box.querySelector('.iconpick');
+  HOST_ICON_CHOICES.forEach(name=>{
+    const b=document.createElement('button'); b.innerHTML=ICONS[name]; b.title=name;
+    b.setAttribute('aria-pressed', String(HOST_ICONS[host]===name));
+    b.addEventListener('click',()=>{
+      HOST_ICONS[host]=name;
+      [...ip.children].forEach(x=>x.setAttribute('aria-pressed','false'));
+      b.setAttribute('aria-pressed','true'); render();
+    });
+    ip.appendChild(b);
+  });
+});
+
+document.getElementById('showBefore').addEventListener('change',e=>{
+  document.getElementById('beforeCard').style.display = e.target.checked ? '' : 'none';
+});
+
+bind('sb','sb'); bind('tb','tb'); syncUI(); render();
+</script>
+</body>
+</html>

@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Purdex 功能盤點</title>
+<style>
+:root{
+  --bg:#0e1116; --bg2:#161b22; --card:#1a2029; --line:#2b333f; --line2:#222935;
+  --fg:#e6edf3; --fg2:#9aa7b4; --fg3:#6e7b8a;
+  --accent:#58a6ff;
+  --keep:#3fb950; --tidy:#58a6ff; --decide:#d29922; --remove:#f85149; --pd:#bc8cff; --sup:#f778ba;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif;
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --bg:#f6f8fa; --bg2:#fff; --card:#fff; --line:#d8dee4; --line2:#eaeef2;
+    --fg:#1f2328; --fg2:#57606a; --fg3:#8b949e;
+    --keep:#1a7f37; --tidy:#0969da; --decide:#9a6700; --remove:#cf222e; --pd:#8250df; --sup:#bf3989;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.55;font-size:14.5px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:30px 18px 90px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:600}
+h1{font-size:28px;margin:.25em 0 .2em;letter-spacing:-.01em;line-height:1.2}
+.sub{color:var(--fg2);font-size:15px;max-width:80ch;margin:.3em 0}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+code{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:0 5px}
+a{color:var(--accent);text-decoration:none}
+h2{margin:46px 0 6px;font-size:19px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+h2 .n{font-family:var(--mono);font-size:12px;color:var(--fg3);border:1px solid var(--line);border-radius:6px;padding:0 7px}
+h3{margin:24px 0 8px;font-size:15px;color:var(--fg2);font-weight:650}
+.hint{color:var(--fg3);font-size:13px;margin:2px 0 12px}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:20px}
+.stat{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+.stat b{display:block;font-size:24px;font-variant-numeric:tabular-nums;line-height:1.1}
+.stat span{font-size:12.5px;color:var(--fg2)}
+.stat.v-keep b{color:var(--keep)} .stat.v-tidy b{color:var(--tidy)} .stat.v-decide b{color:var(--decide)}
+.stat.v-remove b{color:var(--remove)} .stat.v-pd b{color:var(--pd)} .stat.v-sup b{color:var(--sup)}
+
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;white-space:nowrap;
+  border:1px solid currentColor;border-radius:999px;padding:0 8px;line-height:19px}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.b-keep{color:var(--keep)} .b-tidy{color:var(--tidy)} .b-decide{color:var(--decide)}
+.b-remove{color:var(--remove)} .b-pd{color:var(--pd)} .b-sup{color:var(--sup)}
+.b-ok{color:var(--keep)} .b-dead{color:var(--remove)} .b-hidden{color:var(--fg3)}
+.b-split{color:var(--decide)} .b-noui{color:var(--pd)} .b-stub{color:var(--remove)} .b-new{color:var(--keep)}
+
+.callout{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--decide);border-radius:10px;padding:12px 15px;margin:14px 0;color:var(--fg2);font-size:13.8px}
+.callout b{color:var(--fg)}
+.callout.hot{border-left-color:var(--sup)}
+
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line2);vertical-align:top}
+th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg3);font-weight:650;background:var(--bg2);position:sticky;top:0}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;font-family:var(--mono);font-size:12.5px}
+td .desc{color:var(--fg2);font-size:12.8px;margin-top:2px}
+td.name{min-width:170px;font-weight:600}
+td.sig{color:var(--fg2);font-size:12.8px;min-width:150px}
+tr.area-row td{background:var(--bg2);font-weight:700;font-size:12.5px;color:var(--fg2);letter-spacing:.04em;padding:7px 11px}
+tr.hidden-row{display:none}
+
+.toolbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding:10px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px solid var(--line);margin-bottom:12px}
+.chip{font:inherit;font-size:12.5px;background:var(--bg2);color:var(--fg2);border:1px solid var(--line);border-radius:999px;padding:3px 11px;cursor:pointer}
+.chip[aria-pressed="true"]{color:var(--fg);border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.search{font:inherit;font-size:13px;background:var(--bg2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:5px 10px;min-width:0;flex:1 1 180px;max-width:280px}
+.spacer{flex:1}
+.btn{font:inherit;font-size:12.5px;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:5px 12px;cursor:pointer;font-weight:600}
+.btn.ghost{background:transparent;color:var(--fg2);border:1px solid var(--line)}
+
+.mark{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;white-space:nowrap}
+.mark button{font:inherit;font-size:11.5px;background:transparent;color:var(--fg3);border:0;padding:2px 7px;cursor:pointer}
+.mark button+button{border-left:1px solid var(--line)}
+.mark button[aria-pressed="true"][data-m="use"]{background:var(--keep);color:#fff}
+.mark button[aria-pressed="true"][data-m="no"]{background:var(--remove);color:#fff}
+.mark button[aria-pressed="true"][data-m="unsure"]{background:var(--decide);color:#fff}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
+@media (max-width:420px){.grid{grid-template-columns:1fr}}
+.page{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+.page .ph{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.page .ph b{font-size:14.5px}
+.page .ph .cond{font-size:11.5px;color:var(--fg3);font-family:var(--mono)}
+.page ul{list-style:none;margin:0;padding:0}
+.page li{display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-top:1px dashed var(--line2);font-size:13.2px}
+.page li:first-child{border-top:0}
+.page li .it{flex:1;min-width:0}
+.page li .it small{display:block;color:var(--fg3);font-size:12px}
+.page li .badge{margin-top:1px}
+.page.flagged{border-color:color-mix(in srgb,var(--remove) 45%,var(--line))}
+
+.cols2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.ta{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px}
+.ta h4{margin:0 0 6px;font-size:14.5px;display:flex;gap:8px;align-items:center}
+.ta ul{margin:6px 0 0;padding-left:18px;color:var(--fg2);font-size:13.3px}
+.ta li{margin:3px 0}
+.ta.remove{border-top:3px solid var(--remove)} .ta.pd{border-top:3px solid var(--pd)}
+.ta.decide{border-top:3px solid var(--decide)} .ta.tidy{border-top:3px solid var(--tidy)}
+.ta.sup{border-top:3px solid var(--sup)}
+
+.req{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--sup);border-radius:var(--radius);padding:14px 16px;margin:12px 0}
+.req h4{margin:0 0 4px;font-size:15.5px}
+.req .who{font-size:12px;color:var(--fg3);font-family:var(--mono);margin-bottom:8px}
+.req ol{margin:8px 0 0;padding-left:20px;color:var(--fg2);font-size:13.6px}
+.req ol li{margin:4px 0}
+.req .q{margin-top:10px;font-size:13px;color:var(--fg3);border-left:2px solid var(--line);padding-left:11px}
+
+.ia{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:10px}
+.ia .col{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+.ia .col b{display:block;margin-bottom:4px}
+.ia .col div{color:var(--fg2);padding:2px 0}
+.ia .col .new{color:var(--keep)} .ia .col .gone{color:var(--remove);text-decoration:line-through}
+.ia .col .mv{color:var(--tidy)}
+
+dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;max-width:min(720px,92vw);width:100%}
+dialog textarea{width:100%;height:50vh;font-family:var(--mono);font-size:12px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px}
+footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">收束前盤點 · origin/main <span class="mono">1.0.0-alpha.376</span> · 2026-09-18 重掃</div>
+  <h1>Purdex 功能與設定盤點</h1>
+  <p class="sub">把 SPA、Electron、daemon 三層的功能，以及所有設定頁的每一個項目攤開成一頁。每列附上<b>程式碼證據</b>（規模、最後異動、有沒有呼叫端）與<b>實際使用訊號</b>（mlab／air-2026／air-2019 三台 daemon 的資料表筆數）。處置欄是建議；可逐列標記「用／沒用／？」，按「複製標記」把結果帶回討論。</p>
+  <div class="stats" id="stats"></div>
+</header>
+
+<div class="callout">
+  <b>讀法：</b>
+  <span class="badge b-keep">保留</span> 在用、健康
+  <span class="badge b-tidy">收束</span> 功能留，入口／命名／存法要整併
+  <span class="badge b-decide">待決</span> 看你有沒有在用
+  <span class="badge b-remove">建議移除</span> 死碼、空殼、無效設定
+  <span class="badge b-pd">已排 P-D</span> Nexen 整併收尾時拆除
+  <span class="badge b-sup">併入 Profile</span> 由下面的 Profile 機制取代
+</div>
+
+<!-- ============ 待討論需求 ============ -->
+<h2><span class="n">01</span>新方向：待討論需求（2026-09-18 提出）</h2>
+<p class="hint">這兩項還沒討論定案，但會決定下面很多列的處置，所以放最前面。</p>
+
+<div class="req">
+  <h4>① Profile 機制 — 取代 Home 按鈕，成為整份狀態的同步單位</h4>
+  <div class="who">動機：a19 與 a26 兩台同步並用，兩邊 Purdex 的 tab 經常混淆、腦袋無法快速切換 → 需要的是同步架構</div>
+  <ol>
+    <li><b>a.</b> Client 增加 profile 機制；<b>原本完全沒在用的 Home 按鈕改為切換 profile</b>。</li>
+    <li><b>b.</b> 一個 profile 記錄完整整份 purdex 資料：workspace ＋ tab ＋ session ＋ cwd ＋ hosts ＋ 所有設定參數。</li>
+    <li><b>c.</b> 不同 client 的同一個 profile <b>半即時同步（目標 1 秒內）</b>；衝突排 event queue、先進先出。</li>
+    <li><b>d.</b> profile 可以複製。</li>
+  </ol>
+  <div class="q">
+    <b>已查證：</b>daemon → client 的 push <b>有</b> —— <code>/ws/host-events</code>（<code>internal/core/events.go</code> 的 <code>EventsBroadcaster</code>，同一台 host 的所有 client 都收到）。但 payload 目前是 <code>(session, eventType, value)</code> 這種 session／agent 導向的字串，profile 同步要在同一條通道加 event type，不必另建傳輸層。<br>
+    <b>範圍界線：</b>tab rebuild <b>保留</b>，整合成 profile 的形狀跟著 tab 走（cwd 本來就跟著 tab）；<b>直接被取代的是 snapshot／device-state 那條線</b>（見下方 <span class="badge b-sup">併入 Profile</span> 各列）。<br>
+    <b>待討論：</b>profile 的 SOT 放哪台 daemon（沿用 devHostId 還是每個 profile 綁一台）／「所有設定參數」是否含 host token 這類機密／1 秒內的延遲預算與 event queue 語意（誰先進、client 端要不要樂觀套用）／與現有 Sync 模組的關係（三台都 0 筆，建議直接拔）。
+  </div>
+</div>
+
+<div class="req">
+  <h4>② Project icon — 用 cwd 比對，命中就換掉 tab 上的 host 圖示</h4>
+  <div class="who">底色仍舊是 host color，只換圖示那一層</div>
+  <ol>
+    <li>提供 project icon 設定，用 <b>cwd 資訊比對</b>；有 match 時該 tab 的 host icon 改用 project icon 顯示。</li>
+  </ol>
+  <div class="q">
+    <b>銜接點：</b>alpha.362 的 host badge（<code>HostBadge.tsx</code> ＋ <code>useTabHostBadge.ts</code>，每台 host 自選 Phosphor 圖示＋淡底色）正好是同一個元件的兩層資料來源——底色留給 host、圖示改吃 project，不是新元件。Host › Projects（alpha.359）已經有 name／slug／path 的 CRUD 存在 daemon（<code>host_config.db</code>，mlab 上已有 <code>projects</code> rev 1），可以直接當 project 定義來源。<br>
+    <b>待討論：</b>cwd 比對規則（前綴？最長匹配？多層專案）／icon 存在 daemon 的 projects 還是 client 端／圖示選擇器沿用 <code>CommandIconPicker</code> 那套 Phosphor search。
+  </div>
+</div>
+
+<!-- ============ 使用訊號 ============ -->
+<h2><span class="n">02</span>實際使用訊號（三台 daemon 的資料庫）</h2>
+<p class="hint">唯讀查詢各台 <code>~/.config/pdx/*.db</code> 的資料表筆數。SPA 端存在 localStorage 的狀態（工作區快照、主題等）不在這裡。air-2019 跑的是一顆<b>舊版空 daemon</b>（沒有 peer 相關表），該機的 client 實際上是連 mlab。</p>
+<div class="tablebox"><table>
+  <thead><tr><th>資料</th><th>對應功能</th><th class="num">mlab</th><th class="num">air-2026</th><th class="num">air-2019</th><th>解讀</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">device_state</td><td>各電腦狀態備份（alpha.354–356）</td><td class="num">2</td><td class="num">0</td><td class="num">—</td><td><b>就是「兩邊 tab 混淆」的實證</b>：mlab 存著 a26（6 workspace／18 tab）與 a19（7 workspace／13 tab）兩份，彼此無關</td></tr>
+    <tr><td class="mono">host_config</td><td>Host Launcher 的 projects／commands</td><td class="num">2</td><td class="num">0</td><td class="num">—</td><td>09-17 才寫入，剛開始用；project icon 可沿用這份</td></tr>
+    <tr><td class="mono">sync.db · 4 表</td><td>設定同步（Sync）</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td><b style="color:var(--remove)">三台都從未用過</b></td></tr>
+    <tr><td class="mono">execution.db · executions</td><td>M0 Ploom 派工</td><td class="num">0</td><td class="num">0</td><td class="num">—</td><td><b style="color:var(--remove)">從未跑過</b>，已排 P-D</td></tr>
+    <tr><td class="mono">backup.db · snapshots／blobs</td><td>Storage（in-app buffer）自動備份</td><td class="num">114 / 18</td><td class="num">3 / 1</td><td class="num">—</td><td>mlab 有實際 buffer 內容；備份是 debounce 自動產生，筆數多不等於常開</td></tr>
+    <tr><td class="mono">meta.db · peer_messages</td><td>跨主機 peer 訊息</td><td class="num">38</td><td class="num">31</td><td class="num">—</td><td>在用且成長中（v4 剛上線）</td></tr>
+    <tr><td class="mono">meta.db · peer_labels</td><td>Peer title／label</td><td class="num">4</td><td class="num">0</td><td class="num">—</td><td>—</td></tr>
+    <tr><td class="mono">meta.db · session_meta</td><td>Session 記錄（重建、provenance）</td><td class="num">12</td><td class="num">8</td><td class="num">0</td><td>在用</td></tr>
+    <tr><td class="mono">agent_events.db · trace_chains／steps</td><td>Agent trace（保留上限 10000／100000）</td><td class="num">10000 / 39224</td><td class="num">10000 / 42111</td><td class="num">0</td><td>兩台都<b>頂到 chain 上限</b>；<b>mlab 檔案 198 MB、air26 58 MB</b>，而 SPA 已無讀者（見死碼區）</td></tr>
+    <tr><td class="mono">agent_events.db · agent_events</td><td>舊版事件表（legacy fallback）</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td>空表，legacy 路徑可清</td></tr>
+    <tr><td class="mono">nex/nex.db</td><td>Nexen 引擎</td><td class="num">0 exec</td><td class="num">未啟用</td><td class="num">—</td><td>剛上線（P-A／P-B），mlab 已 enabled</td></tr>
+  </tbody>
+</table></div>
+
+<!-- ============ 功能清單 ============ -->
+<h2><span class="n">03</span>功能清單 <span class="hint" style="margin:0" id="featCount"></span></h2>
+<div class="toolbar" id="toolbar">
+  <input class="search" id="q" type="search" placeholder="搜尋功能、入口、說明…">
+  <span id="chips"></span>
+  <span class="spacer"></span>
+  <button class="btn ghost" id="clearMarks" type="button">清除標記</button>
+  <button class="btn" id="export" type="button">複製標記</button>
+</div>
+<div class="tablebox"><table id="feat">
+  <thead><tr><th>功能</th><th>入口</th><th class="num">規模</th><th class="num">最後異動</th><th>訊號／問題</th><th>建議</th><th>你的標記</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+
+<!-- ============ 設定頁 ============ -->
+<h2><span class="n">04</span>設定頁逐項清單</h2>
+<p class="hint">
+  <span class="badge b-ok">正常</span>
+  <span class="badge b-new">新增</span> alpha.353 之後才有
+  <span class="badge b-dead">無效</span> 改了不會有任何作用
+  <span class="badge b-stub">空殼</span>
+  <span class="badge b-split">分散</span> 放錯頁或存法不一致
+  <span class="badge b-noui">缺 UI</span> 程式有讀，但沒有地方可以設
+  <span class="badge b-hidden">條件顯示</span>
+</p>
+
+<h3>全域設定 <code>/settings/*</code>（11 列，依側欄順序）</h3>
+<div class="grid" id="gset"></div>
+
+<h3>Workspace 設定 <code>/w/&lt;id&gt;/settings</code></h3>
+<div class="grid" id="wset"></div>
+
+<h3>Host 頁 <code>/hosts/&lt;id&gt;/*</code>（11 個子頁，其中 4 個是 alpha.353–359 新增）</h3>
+<div class="grid" id="hset"></div>
+
+<h3>Daemon 設定面 <code>config.toml</code>、環境變數、CLI</h3>
+<div class="tablebox"><table>
+  <thead><tr><th>設定鍵</th><th>預設</th><th>作用</th><th>狀態</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">host_id · bind · port · token · allow · data_dir</td><td class="mono">隨機 / 127.0.0.1 / 7860</td><td>連線與身分；只能改檔案或用 CLI</td><td><span class="badge b-ok">正常</span></td></tr>
+    <tr><td class="mono">upload_dir</td><td class="mono">~/tmp/purdex-upload</td><td>上傳暫存；Host › 上傳暫存頁可改</td><td><span class="badge b-ok">正常</span></td></tr>
+    <tr><td class="mono">allowed_paths</td><td class="mono">nil</td><td>沒有任何程式讀取</td><td><span class="badge b-dead">無效</span></td></tr>
+    <tr><td class="mono">[features] fs · git</td><td class="mono">false</td><td>沒有任何程式讀取；fs 模組永遠註冊、git 模組不存在</td><td><span class="badge b-dead">無效</span></td></tr>
+    <tr><td class="mono">[terminal] sizing_mode</td><td class="mono">auto</td><td>tmux 視窗尺寸策略（Host 總覽可改）</td><td><span class="badge b-ok">正常</span></td></tr>
+    <tr><td class="mono">[[stream.presets]]</td><td class="mono">cc = claude -p …</td><td>Stream 模式啟動指令</td><td><span class="badge b-pd">隨 Stream 移除</span></td></tr>
+    <tr><td class="mono">[detect] cc_commands · poll_interval</td><td class="mono">["claude"] / 2</td><td>判斷哪些行程是 CC</td><td><span class="badge b-ok">正常</span></td></tr>
+    <tr><td class="mono">[monitor] refresh_interval_ms · top_process_limit</td><td class="mono">5000 / 10</td><td>效能監控（另有 PUT /api/monitor/config）</td><td><span class="badge b-ok">正常</span></td></tr>
+    <tr><td class="mono">[dev] update · repo_root</td><td class="mono">false / cwd</td><td>dev update 模組；<b>雙重 gate</b>（還需 <code>PDX_DEV_MODE≠0</code>）</td><td><span class="badge b-hidden">dev</span></td></tr>
+    <tr><td class="mono">[dispatch] sandbox_host_policy · allowed_repo_roots</td><td class="mono">ask / []（fail-closed）</td><td>M0 派工；另需 env <code>PDX_PLOOM_URL</code> 才啟動</td><td><span class="badge b-pd">P-D 移除</span></td></tr>
+    <tr><td class="mono">[peers] alias · deliver · [[peers.hosts]]×6 鍵</td><td class="mono">— / false</td><td>跨主機 peer；只能用 CLI <code>pdx peers host</code> ／ <code>pdx msg deliver</code></td><td><span class="badge b-noui">無 SPA UI</span></td></tr>
+    <tr><td class="mono">[nex] enabled · repo_roots · service_roots · claude_bin · path_prepend · [nex.sandbox]×2 · [nex.timeouts]×3</td><td class="mono">false / trusted</td><td>Nexen 引擎；<b>Host › Nexen 頁有完整表單</b>，存檔後需 <code>pdx stop &amp;&amp; pdx start</code></td><td><span class="badge b-new">新增</span></td></tr>
+  </tbody>
+</table></div>
+<p class="hint" style="margin-top:10px">
+  <b>環境變數：</b><code>PDX_DEV_MODE</code>（預設開）· <code>PDX_TOKEN</code>（relay）· <code>PDX_NEX_ADDR/TOKEN</code> · <code>PDX_PLOOM_URL/TOKEN</code>（M0，註解自稱 placeholder）· <code>PDX_CODEX_STATE_ROOT/SOCKET_ROOTS</code> · <code>PDX_STATUSLINE_TEST_SESSION</code><br>
+  <b>CLI <code>pdx</code>：</b>serve · start · stop · status · token · setup · hook · statusline-proxy · peers · msg（send／log／deliver／selftest／name／whoami）· nex（delegate／ls／show／watch／events／attach／send／interrupt／archive／terminate／host）· <b>path（link／add-to-shell，alpha.364 新增）</b> · version · <span style="color:var(--pd)">relay（P-D 移除）</span> · peer-proxy（隱藏）<br>
+  <b>已移除（別再找）：</b><code>cswap_bin</code>（alpha.368）· <code>/api/agent/monitor/*</code> 三條與 Tmux Agent 監控頁（alpha.361）· 快速指令整組約 5900 行（alpha.359）· host color mark（alpha.362 換成 host badge）
+</p>
+
+<!-- ============ 收束建議 ============ -->
+<h2><span class="n">05</span>收束建議（草案）</h2>
+<div class="cols2">
+  <div class="ta sup">
+    <h4>🔁 A. 併入 Profile（方向已定，範圍待討論）</h4>
+    <ul>
+      <li><b>各電腦狀態備份 device-state</b>（SPA 1762 行 ＋ daemon 460 行 ＋ <code>device_state.db</code>）：完整取代／合併／刪除那套 UI，正是 profile 要做的事，但只同步「結構」且要手動按</li>
+      <li><b>工作區快照 snapshot</b>（1576 行，存 localStorage）：擷取／還原全部／還原版面／undo 都被 profile 的持續同步取代</li>
+      <li><b>Host › Snapshots 頁</b>：device 區塊與 tmux 區塊都跟著重整；只有「rebuild 紀錄」要留</li>
+      <li><b>tab rebuild ＋ resume 範本（2975 行）＝保留</b>，改成跟著 profile 的 tab 走（cwd／agent／resume 本來就掛在 tab 上）</li>
+      <li>順帶決定 <b>Sync 模組</b>的去留：三台 0 筆、<code>file-provider</code> 是死碼、6 條路由無人呼叫 → 建議直接拔，profile 就是新的同步架構</li>
+    </ul>
+  </div>
+  <div class="ta remove">
+    <h4>🧹 B. 直接清掉（零風險）</h4>
+    <ul>
+      <li><b>SPA 死碼共約 1.3k 行</b>（零非測試 import）：<code>SessionPanel</code> 132 ／ <code>SessionPicker</code> 67 ／ <code>NewPanePage</code> 33 ／ <code>useGlobalSettingsStore</code> 74 ／ <code>useIsMobile</code> 7 ／ <code>tab-state</code> 11 ／ <code>open-clustered-tab</code> 27 ／ <code>agent-ws-dispatch</code> 4 ／ <code>sync/providers/file-provider</code> 182</li>
+      <li><b>statusline UI 整組約 750 行</b>：<code>AgentExtensionRow</code>（130）沒有任何 import，連帶 <code>StatuslineTestPanel</code> 94 ／ <code>StatuslineConflictDialog</code> 59 ／ <code>useStatuslineInstall</code> 116 ／ <code>useStatuslineTest</code> 350 全部到不了（daemon 端 API 仍在，要接回或一起清）</li>
+      <li><b>Dashboard 模組</b>（12 行）：唯一能開它的 <code>NewPanePage</code> 本身就是死碼</li>
+      <li><b>Files 的 session 檔案樹</b>（14 行，寫著「尚未實作」）；<b>介面設定的 Pane／Sidebar 兩個分頁</b>（<code>() =&gt; null</code> ＋ coming soon）</li>
+      <li><b>桌面 App 頁的 3 個瀏覽器欄位</b>：uncontrolled、沒有 onChange、沒有 store，實際值寫死在 <code>browser-view-manager.ts</code></li>
+      <li><b>ModuleConfigSection ＋ <code>workspaceConfig</code>／<code>globalConfig</code></b>：沒有模組宣告，永遠 render null，registry 還在印 deprecation 警告</li>
+      <li><b>daemon 死路由／死鍵</b>：<code>/api/ready</code>、<code>/api/execution/{id}</code>（SPA 端 alpha.351 就刪了）、<code>/api/dispatch/reclaim</code>、codexbroker 2 條、sync group／pair 6 條、<code>allowed_paths</code>、<code>[features]</code></li>
+      <li><b>legacy 相容路徑</b>：空的 <code>agent_events</code> 表與其 fallback 分支、codex pre-0.121 hook 容錯、<code>StreamCapable</code>（保留欄位但從來沒有實作者）</li>
+    </ul>
+  </div>
+  <div class="ta pd">
+    <h4>🗓️ C. 已排 P-D（Nexen 整併收尾）</h4>
+    <ul>
+      <li><b>Stream 模式</b>：SPA 約 1450 行（<code>ConversationMessages</code> 已抽出給 execution pane 共用）＋ daemon <code>stream</code> 789／<code>relay</code> 246／<code>bridge</code> 140／<code>history</code> 101 ＋ <code>pdx relay</code></li>
+      <li>入口要一起收：分頁右鍵「切換 Stream」、狀態列 view-mode 選單、<code>/t/:id/stream</code> 路由、<b>通知點擊目前預設開 stream 模式</b>、<code>stream.presets</code></li>
+      <li><b>M0</b>：daemon <code>execution</code> 2758 ＋ <code>dispatch</code> 1518（三台 0 筆）、<code>[dispatch]</code>、<code>PDX_PLOOM_*</code>、<code>m0-*.md</code> spec</li>
+      <li>alpha.360 已註記：<b>stream 模式之後會以 Nexen 模式回歸</b>，Session Launcher 已經不再提供 stream 選項</li>
+    </ul>
+  </div>
+  <div class="ta decide">
+    <h4>❓ D. 要你決定</h4>
+    <ul>
+      <li><b>4 區 sidebar 版面</b>（737 行，04-18 後沒動）：四個區塊只註冊 2 個 view，其中一個還是空殼。補 view 還是縮成單一側欄</li>
+      <li><b>agent trace（trace_chains／steps）</b>：兩台都頂到 10000 chain 上限、mlab 佔 198 MB，但 alpha.361 把讀取端整個刪了，<b>現在只寫不讀</b>。Lights Phase 5「Dev Inspector」從未實作 → 要停寫、要縮上限，還是要把讀者做回來</li>
+      <li><b>codexbroker</b>（4903 行 Go）：無 UI、只能 curl，P3 自動觸發從未實作</li>
+      <li><b>內嵌瀏覽器</b>（SPA 430 ＋ Electron 640 行，只有桌面版）</li>
+      <li><b>自訂主題編輯器</b>（263）／<b>自訂語系編輯器</b>（242）：內建 4 主題與 en／zh-TW 保留</li>
+      <li><b>分頁首頁 layout 編輯器</b>（417）：3／2 欄 profile 預設都關，只有 1 欄強制啟用</li>
+      <li><b>History 頁</b>（158，06-30）：只顯示 raw kind 字串</li>
+      <li><b>效能監控</b>（688）：pane kind 沒有任何入口，只能從設定進 → 補 pane 入口或收掉</li>
+    </ul>
+  </div>
+  <div class="ta tidy">
+    <h4>🔀 E. 設定面整併（功能不刪，只換位置）</h4>
+    <ul>
+      <li><b>連結偵測</b>：終端機頁放「純檔名」1 項，編輯器頁放「絕對／tilde／相對」3 項，但四者同一個 store、同一個消費端（<code>terminal-link/register.ts</code>）、都只作用在終端 → 全部集中到終端機頁</li>
+      <li><b>通知設定</b>：store 有被 <code>useNotificationDispatcher</code> 讀、也進了 sync，但<b>四個 setter 零呼叫端</b>，且 <code>settings.agent.*</code> 與 <code>settings.section.agent</code> 的 en／zh-TW 字串都還在 → 一個 Agent 設定頁被拆掉後留下的殘骸，要接回來</li>
+      <li><b>同一 scope 兩套存法</b>：Workspace 的「專案路徑」存 <code>useWorkspaceStore.moduleConfig</code>，Home Path 存 <code>useWorkspaceSettingsStore</code>；同一頁兩個持久化 key</li>
+      <li><b>「快照」語意重疊</b>：Host › Snapshots（工作區／裝置）vs 設定 › 同步 › 歷史（sync bundle）</li>
+      <li><b>三套 host 選擇器</b>：同步主機、開發主機（也兼 device-state 目標與 snapshot 區塊的顯示條件）、resume 範本測試對象</li>
+      <li><b>終端機頁偏長</b>：host badge 有側欄／上方分頁兩組各 7 個旋鈕（共 14 項）擠在同一頁</li>
+      <li>小問題：外觀頁兩個都叫「自訂」／編輯器頁 6 個布林有 4 個是原生 checkbox／<code>WorkspaceSettingsPage</code> 的「Workspace not found」與「Danger Zone」硬編英文／分頁右鍵的「加入 … tab 成為 pane」是全 app 唯一沒 i18n 的選單字串／<code>tabNameTooltipMode</code> 與 4 個 <code>linkDetect*</code> 沒進同步／<code>setTerminalRenderer</code> 等 store action 已無生產呼叫端</li>
+    </ul>
+  </div>
+</div>
+
+<h3>設定頁 IA 草案（對照現況）</h3>
+<p class="hint"><span style="color:var(--keep)">綠＝新增</span>　<span style="color:var(--tidy)">藍＝搬入／合併</span>　<span style="color:var(--remove)">刪除線＝移除</span></p>
+<div class="ia">
+  <div class="col"><b>一般</b><div>主題 · 語言 · 分頁位置</div><div class="mv">← 模組開關</div><div class="gone">介面 › Pane／Sidebar</div></div>
+  <div class="col"><b>終端機</b><div>渲染 · keep-alive · 分頁標籤</div><div class="mv">← 連結偵測（4 項全收）</div><div class="mv">host badge → 收成一組＋進階展開</div></div>
+  <div class="col"><b>編輯器</b><div>Monaco 選項 · 開檔行為</div><div class="gone">檔案路徑連結偵測</div></div>
+  <div class="col"><b>通知</b><div class="new">＋ 各 agent 事件開關 · 無 tab 時通知 · 點擊重開（store 與字串都已存在）</div></div>
+  <div class="col"><b>Profile</b><div class="new">＋ 切換 · 複製 · 同步狀態</div><div class="mv">← 工作區快照</div><div class="mv">← 各電腦狀態備份</div><div class="gone">同步（Sync）</div></div>
+  <div class="col"><b>桌面 App</b><div>選單列圖示</div><div class="gone">3 個瀏覽器欄位</div></div>
+  <div class="col"><b>開發者</b><div class="mv">開發環境 ＋ 本機 daemon ＋ pdx path</div></div>
+  <div class="col"><b>Host 頁</b><div>總覽 · Sessions · Nexen · Projects · Commands · 上傳 · 日誌</div><div class="mv">Hooks ＋ Agents → 「整合」</div><div class="mv">Snapshots → 只留 rebuild 紀錄</div><div class="new">＋ Projects 加 icon 欄（需求②）</div></div>
+  <div class="col"><b>移出設定</b><div class="mv">效能監控 → pane 入口</div><div class="gone">瀏覽器／檔案 placeholder 頁</div></div>
+</div>
+
+<dialog id="dlg"><p style="margin-top:0"><b>標記結果</b>（剪貼簿寫入失敗時，請從這裡手動複製）</p><textarea id="dlgText" readonly></textarea><p style="text-align:right;margin-bottom:0"><button class="btn" type="button" onclick="this.closest('dialog').close()">關閉</button></p></dialog>
+
+<footer>
+  <span>Purdex · docs/pages/feature-inventory.html · 依 origin/main alpha.376（ef5e0360）靜態掃描 ＋ 三台 daemon DB 唯讀查詢</span>
+  <span class="mono">2026-09-18</span>
+</footer>
+</div>
+
+<script>
+const V = {keep:'保留', tidy:'收束', decide:'待決', remove:'建議移除', pd:'已排 P-D', sup:'併入 Profile'};
+// [area, id, name, desc, entry, size, last, signal, verdict]
+const F = [
+ ['殼層與版面','home','Home 按鈕','活動列最上方的 Home 列','activity bar','110','09-16','<b>使用者：完全沒在用</b>（東西都進了 workspace）→ 需求① 要改成 profile 切換','sup'],
+ ['殼層與版面','ws','Activity bar ＋ Workspaces','窄／寬兩態、workspace 拖曳排序、inline 分頁列、icon picker、刪除與搬移分頁對話框','左側邊緣','3.4k','09-16','核心在用','keep'],
+ ['殼層與版面','tabbar','Tab bar','dnd 排序、釘選（36px 純圖示）、鎖定、中鍵關閉、overflow 捲動','上方','~560','09-16','在用','keep'],
+ ['殼層與版面','tabmenu','分頁右鍵選單','切換 terminal/stream、改名、鎖定、釘選、開新視窗、併入成 pane、關閉其他／右側','右鍵分頁','136','04-10','「加入 … tab 成為 pane」是全 app 唯一沒 i18n 的選單字串','tidy'],
+ ['殼層與版面','split','Pane 分割樹','水平／垂直分割、拖曳分隔線、pane header、swap、detach 成獨立 tab','pane 右鍵、狀態列','~800','09-16','在用','keep'],
+ ['殼層與版面','region','4 區 sidebar 版面','四區各可釘選／收合／隱藏、可調寬、可選 view','區塊右鍵、TitleBar','737','04-18','只註冊 2 個 view（檔案樹 ×2，其中 session 版是空殼）；04-18 後沒動','decide'],
+ ['殼層與版面','newtab','分頁首頁 ＋ layout 編輯器','provider 區塊（每台 host 一個 Sessions block、瀏覽器、最近檔案、Manage Buffers）；3／2／1 欄 profile','Cmd+T','684＋417','09-16','1 欄強制啟用，3／2 欄預設關','decide'],
+ ['殼層與版面','launcher','Session Launcher','名稱欄 ＋ 專案卡片格（每卡帶該 host 的指令圖示），點指令＝建 session＋送指令；{slug}-{N} 自動命名含 409 重試','分頁首頁 host 的「+」、Host › Sessions','400+','09-17','alpha.360 新增、alpha.369 修 5 個缺陷；取代了舊的 cwd 輸入框','keep'],
+ ['殼層與版面','history','History 頁','最近關閉的分頁、可重開','Cmd+Y','158','06-30','只顯示 raw kind 字串','decide'],
+ ['殼層與版面','dashboard','Dashboard 模組','render 一個 i18n 字串','<b>無入口</b>','12','04-21','唯一能開它的 NewPanePage 本身是死碼','remove'],
+ ['殼層與版面','statusbar','狀態列','host／session／cwd／agent／peer id／狀態各段可點擊複製；view-mode badge；上傳進度','底部','575','09-17','peer 段是 alpha.365／366／376 新做的','keep'],
+ ['殼層與版面','alive','分頁 keep-alive pool','背景分頁保持掛載（數量／釘選可調）','被動','192','07-01','—','keep'],
+ ['殼層與版面','keys','鍵盤快捷鍵 ＋ App 選單','切換分頁／workspace、開設定／hosts／history、重開已關閉分頁、瀏覽器快捷鍵','原生選單','334','04-15','<b>只有 Electron</b>；web 版沒有；不能改綁','keep'],
+ ['殼層與版面','undo','全域 Undo toast','刪 workspace、刪 storage、launcher 送出失敗等可復原','被動','69','04-28','—','keep'],
+
+ ['Session 與終端','term','Terminal pane','xterm.js over WS（ticket 認證）、拖曳上傳、連結點擊、reveal delay、renderer 選擇','Session Launcher、分頁首頁、Host › Sessions','616','09-15','核心','keep'],
+ ['Session 與終端','link','終端連結偵測','URL → 內嵌瀏覽器或外部；檔案路徑（絕對／~／./／純檔名）→ 編輯器','Cmd+click','~500','09-15','設定被拆在兩頁；檔案 matcher 只在編輯器模組啟用時註冊','tidy'],
+ ['Session 與終端','stream','Stream 模式（claude -p）','對話 UI、思考區塊、工具呼叫／結果、權限提示、AskUserQuestion、handoff','分頁右鍵、狀態列 view-mode、通知點擊','~1450','09-15','入口還有 5 處；alpha.360 已宣告「之後以 Nexen 模式回歸」','pd'],
+ ['Session 與終端','terminated','Terminated pane ＋ 同名接回','session 死掉時顯示原因、重建動作組、重新指定 session','自動','586','09-07','在用','keep'],
+
+ ['Agent 狀態與通知','lights','Agent 狀態燈','running／waiting／idle／error ＋ 未讀點；來自 hook WS 與 statusline（刻意不走 trace）','分頁圖示、inline tab','~680','09-08','核心在用','keep'],
+ ['Agent 狀態與通知','dots','Subagent dots','每個 session 的 subagent 活動點','分頁圖示旁','77','05-03','—','keep'],
+ ['Agent 狀態與通知','badge','Host badge','淡底色方塊 ＋ 每台 host 自選 Phosphor 圖示，畫在分頁圖示與標題之間','設定 › 終端機','293','09-16','alpha.362 取代了 alpha.352 的漸層；<b>需求② 要在這裡換成 project icon</b>','keep'],
+ ['Agent 狀態與通知','notif','系統通知','agent 事件觸發原生通知；點擊聚焦視窗並開／建 session tab','自動','512','09-15','<b>只有 Electron</b>；設定 store 有讀者但四個 setter 零呼叫端；點擊固定開 stream 模式','tidy'],
+ ['Agent 狀態與通知','peerui','Peer 資訊 UI','狀態列 peer 段（顯示 name [ref]、複製完整地址）；分頁資訊面板 peer 區塊（地址、agent、可達性與原因）','雙擊分頁、狀態列','467','09-18','最新改的 SPA 檔案；fetch 政策：不輪詢、60 秒 stale 邊界','keep'],
+ ['Agent 狀態與通知','hooks','Hook 安裝（tmux／cc／codex／opencode）','安裝／移除／升級卡片、drift 與問題、最後觸發時間','Host › Hooks','~350','09-17','在用','keep'],
+ ['Agent 狀態與通知','title','Agent 動態標題整合','改 ~/.tmux.conf ＋ allow-set-title','Host › Agents','—','09-17','—','keep'],
+ ['Agent 狀態與通知','statusline','Statusline 安裝／測試 UI','CC statusLine 包 pdx statusline-proxy、衝突對話框、即時自我測試面板','<b>無入口</b>','~750','04-22','<code>AgentExtensionRow</code> 零 import，整組到不了；daemon 端 API 仍在','remove'],
+ ['Agent 狀態與通知','trace','Agent trace（chains／steps）','hook 事件鏈與步驟，寫進 agent_events.db','<b>無讀者</b>','Go 大量','09-16','alpha.361 刪掉監控頁與 3 條讀取 API；兩台都頂到 10000 上限、mlab 198 MB，<b>只寫不讀</b>','decide'],
+ ['Agent 狀態與通知','cxb','codexbroker 治理','盤點與清理 codex broker 殭屍行程、判定引擎、quarantine、audit','只能 curl','Go 4.9k','05-03','無 UI；P3 自動觸發從未實作；doc.go 描述過時','decide'],
+
+ ['檔案與編輯','editor','編輯器（Monaco ＋ Tiptap）','程式碼與 Markdown WYSIWYG、麵包屑、工具列、狀態列、diff（對已存檔或指定版本）、untitled、存檔／改名','分頁首頁、終端連結、檔案樹','2.9k','08-19','在用','keep'],
+ ['檔案與編輯','storage','Storage／Buffers pane','in-app /buffer 檔案系統：樹、拖曳（含 OS 檔案）、備份側欄／歷史／快照','分頁首頁 › Manage Buffers','3.9k','08-19','mlab 有 114 份備份、18 個 blob','keep'],
+ ['檔案與編輯','preview','圖片／PDF 預覽','依副檔名開啟','檔案 opener','196','08-19','—','keep'],
+ ['檔案與編輯','fileopen','開檔管線','stat → 路徑快取 → 找不到彈窗 → fs 搜尋 → opener → singleton tab','終端連結、檔案樹、最近檔案','~700','04-28','—','keep'],
+ ['檔案與編輯','fsb','FS backend（in-app／daemon／本機）','三種來源＋解析器；daemon 版對未知 host 一律拒絕','被動','~900','08-18','本機版只有 Electron','keep'],
+ ['檔案與編輯','tree','檔案樹（workspace）','側欄檔案樹 view','sidebar region','186','05-03','要先開 region 才看得到','keep'],
+ ['檔案與編輯','treesess','檔案樹（session）','—','sidebar region','14','05-03','空殼，寫著「尚未實作」（daemon cwd API 其實已經有了）','remove'],
+ ['檔案與編輯','recent','最近檔案 ＋ 新建 .txt/.md','kind 篩選；新建會實際預留 /buffer/Untitled-N 並登記 placeholder','分頁首頁','336','08-19','—','keep'],
+ ['檔案與編輯','home','Home Path（workspace／host 兩層）','編輯器預設目錄','workspace 設定、Host 頁','250','04-28','與「專案路徑」存法不一致','tidy'],
+ ['檔案與編輯','browser','內嵌瀏覽器 ＋ mini 視窗','每個 pane 一個 WebContentsView：導覽、上下頁、列印、連結攔截、移到分頁','分頁首頁、終端 URL','430＋640','07-01','只有 Electron；設定頁是 placeholder ＋ 3 個無效欄位','decide'],
+
+ ['快照／重建／備份','devstate','各電腦狀態備份 device-state','每台 client 自動把 workspace／tab 結構上傳到 devHostId；列出各裝置，可完整取代／合併／刪除','Host › Snapshots（dev host）','1762＋Go 460','09-16','<b>mlab 存著 a26 與 a19 兩份</b>；只同步結構、要手動按 → 需求① 取代','sup'],
+ ['快照／重建／備份','snap','工作區快照','擷取／還原全部／只還原版面／undo，存 localStorage','Host › Snapshots','1576','09-16','與 sync 歷史的「快照」語意重疊 → 需求① 取代','sup'],
+ ['快照／重建／備份','rebuild','Tab rebuild ＋ resume 範本','pane rebuild 紀錄（多來源排名寫入）、逐一或批次重建、attach gate、per-host resume 範本','Terminated pane、分頁資訊面板、Host › Snapshots','2975','09-16','<b>使用者：保留</b>，整合成 profile 的形狀跟著 tab 走','tidy'],
+ ['快照／重建／備份','sbackup','Storage 備份','in-app FS 自動備份到 daemon、manifest、歷史、還原與 pane 對帳','Storage pane 側欄','1607','08-19','在用','keep'],
+
+ ['同步','sync','設定同步（Sync）','6 個 contributor、三方合併、衝突橫幅、快照歷史與 diff、匯出／匯入','設定 › 同步','2.5k＋Go 780','09-16','<b>三台 0 筆</b>；file provider 是死碼；6 條路由無人呼叫；模組不能停用','decide'],
+
+ ['主機管理','hostpage','Host 頁 ＋ 11 個子頁','側欄、子頁記憶（host 不記憶）、配對碼新增 host','活動列、Cmd+Shift+H、狀態列雙擊 host','374','09-17','核心','keep'],
+ ['主機管理','overview','Host › 總覽','位址／port／token、健康與資訊、<b>host 顏色</b>（8 預設＋hex）、<b>host 圖示</b>（Phosphor 6 種 weight）、daemon sizing','Host 頁','465','09-17','顏色與圖示是 host badge 的資料來源','keep'],
+ ['主機管理','nexpage','Host › Nexen','引擎狀態卡（含額度、credential 警告）、完整 [nex] 設定表單、executions 表（SSE 刷新、終止／封存）','Host 頁','1258','09-17','alpha.353 新增（P-B.3）；mlab 已啟用','keep'],
+ ['主機管理','projects','Host › Projects','name／slug／path CRUD、即時路徑檢查、拖曳排序、上限 200、409 自動重載','Host 頁','441','09-16','alpha.359 新增；mlab 已有資料 → <b>需求② 的 project 定義來源</b>','keep'],
+ ['主機管理','commands','Host › Commands','Normal（名稱／指令／圖示，含指令解析測試）與 Resume（per-host 範本）兩個 tab','Host 頁','~990','09-16','alpha.359 新增，取代了整組快速指令（刪約 5900 行）','keep'],
+ ['主機管理','hostsess','Host › Sessions','tmux session 清單：開啟、建立、改名、刪除','Host 頁','219','09-17','—','keep'],
+ ['主機管理','uplog','Host › 上傳暫存／日誌','上傳統計與清理；daemon log、crash log','Host 頁','378','09-17','—','keep'],
+ ['主機管理','perf','效能監控','host CPU／記憶體／磁碟、top process、per-session daemon 指標','<b>只能從設定進</b>','688＋Go 1.2k','04-30','pane kind 沒有任何入口','tidy'],
+ ['主機管理','hostlife','多主機連線生命週期','多 host WS 事件匯入、epoch／generation 守衛、重連狀態機、attach gate、cwd／provenance 探測','被動','~1200','09-16','核心','keep'],
+
+ ['跨主機與 Nexen','peers','跨主機 Peers（daemon ＋ CLI）','v4 地址（name／ref／tmux 三種寫法）、send／deliver／log、peer host 表、title','CLI（pdx msg／peers）','Go 4.5k','09-18','兩台各 38／31 則訊息；<b>peer host 表與 deliver 開關沒有 SPA UI</b>','keep'],
+ ['跨主機與 Nexen','nex','Nexen 引擎 ＋ execution pane','daemon 掛 /api/nex；SPA 端 client（SSE resume、lease、LRU）＋ 即時對話 pane','deeplink、/execution 路由、Host › Nexen','Go 583＋SPA 2.7k','09-17','進行中（P-B2 exec 串流）','keep'],
+ ['跨主機與 Nexen','m0','M0 Ploom 派工','輪詢／claim／launch／report、sandbox clamp、outbox','需 PDX_PLOOM_URL','Go 4.3k','07-19','三台 0 筆；SPA 端 alpha.351 已刪；<code>/api/execution/{id}</code> 現在也沒有呼叫端','pd'],
+ ['跨主機與 Nexen','deeplink','purdex:// deeplink','protocol handler、單視窗投遞、冷啟動緩衝','OS','~100','09-15','原為 M0，現由 execution pane 接手','keep'],
+
+ ['Electron 桌面','multiwin','多視窗／tear-off／merge','分頁與 workspace 可拆到新視窗或併回','右鍵選單、Cmd+N','~720','09-16','—','keep'],
+ ['Electron 桌面','tray','選單列圖示','tray 圖示、顯示／隱藏、交易式切換（先寫 prefs 再動 tray）','設定 › 桌面應用程式','~300','09-15','alpha.348 修好','keep'],
+ ['Electron 桌面','devupd','Dev update ＋ SPA 來源切換','app info、檢查（含串流 log）、套用更新、dev／bundled 互切','設定 › 開發環境','768','09-14','開發流程必需','keep'],
+ ['Electron 桌面','localdaemon','本機 daemon 安裝／管理 ＋ pdx path','安裝到 ~/.config/pdx/bin、lsof 判斷歸屬、token 產生、<code>pdx path link／add-to-shell</code> 按鈕與啟動 gate','設定 › 開發環境','~1.5k','09-16','alpha.364 加了 path 三指令','keep'],
+ ['Electron 桌面','localfs','本機檔案 IPC','fs read／write／stat／list／mkdir／delete／rename','編輯器（local 來源）','252','09-16','—','keep'],
+
+ ['外觀與語系','theme','主題（內建 4 款）','Dark／Light／Nord／Dracula，CSS 變數注入','設定 › 外觀','~400','04-18','Stream UI 沒吃 theme token','keep'],
+ ['外觀與語系','themeed','自訂主題編輯器／匯入匯出','逐 token 編輯','設定 › 外觀 › 自訂','~300','04-18','—','decide'],
+ ['外觀與語系','i18n','i18n（en／zh-TW）','語系登記、偵測、複數處理','設定 › 外觀','~200','04-18','有硬編字串外漏','keep'],
+ ['外觀與語系','localeed','自訂語系編輯器／匯入匯出','逐 key 翻譯','設定 › 外觀 › 自訂','~260','04-18','—','decide'],
+ ['外觀與語系','scroll','全域細捲軸','thin scrollbar ＋ 兩個例外 class；xterm viewport 刻意排除','被動','5 rules','09-16','alpha.361 新增','keep'],
+
+ ['死碼與殘留','deadspa','SPA 零 import 檔案','SessionPanel 132／SessionPicker 67／NewPanePage 33／useGlobalSettingsStore 74／useIsMobile 7／tab-state 11／open-clustered-tab 27／agent-ws-dispatch 4／sync file-provider 182','—','~540','04–08','只剩測試在 import（file-provider 連測試都沒接）','remove'],
+ ['死碼與殘留','deadmodcfg','ModuleConfigSection ＋ 兩個 deprecated 欄位','workspaceConfig／globalConfig 沒有任何模組宣告','Workspace 設定頁','80','—','永遠 render null；registry 仍在印 deprecation 警告','remove'],
+ ['死碼與殘留','shims','過渡 shim 與 legacy 別名','register-modules.tsx（6 行）、LEGACY_SECTION_MODULE_ID、LEGACY_ID=sessions、URL_ALIASES、file-opener 別名、event-name 舊名對照','—','小','—','多為刻意保留的遷移橋樑，可逐一收','decide'],
+ ['死碼與殘留','deadd','daemon 死路由與死鍵','/api/ready、/api/execution/{id}、/api/dispatch/reclaim、codexbroker ×2、sync group／pair ×6、allowed_paths、[features] fs／git','—','—','—','逐條 grep 過三處（spa／electron／cmd）皆無呼叫端','remove'],
+ ['死碼與殘留','legacy','daemon legacy 相容路徑','空的 agent_events 表與 fallback 分支、codex pre-0.121 hook 容錯、opencode 舊 emit 寫法、StreamCapable（保留但無實作者）','—','散在各處','—','alpha 階段不需 migration','decide'],
+];
+
+// settings: [title, cond, flagged, items:[name, sub, status]]
+const S = {
+ gset:[
+  ['外觀','always',0,[['主題 ＋ 匯出／刪除','4 內建 ＋ 自訂','ok'],['自訂（主題編輯器、匯入）','與語系那列同名','split'],['語言 ＋ 匯出／刪除','en／zh-TW ＋ 自訂','ok'],['自訂（語系編輯器、匯入）','—','ok'],['分頁位置 top／left／both','選 left 會強制寬版活動列','ok']]],
+  ['終端機','always',1,[['渲染器 webgl／dom','寫入時同時 bump version 並 clamp keep-alive','ok'],['背景保持連線數 ＋ 固定分頁保持連線','0–6（webgl）／0–10','ok'],['顯示延遲','0–2000 ms','ok'],['分頁 agent 指示樣式','icon／dot／iconDot／badge','ok'],['側欄 host 標記（7 個旋鈕）','啟用／host 或中性色／圖示不透明／底色不透明／方塊大小／內距／圓角','new'],['上方分頁 host 標記（7 個旋鈕）','同上，另一組','new'],['動態分頁名稱 ＋ 名稱 tooltip','tooltip 沒有加入同步','split'],['agent 標題顯示於狀態列','—','ok'],['Claude Code／Codex 圖示','—','ok'],['連結偵測 › 純檔名','另外 3 項在編輯器頁','split'],['終端字型大小','寫死 14，沒有設定','noui']]],
+  ['介面','always',1,[['分頁首頁 layout 編輯器','module palette ＋ 拖曳畫布 ＋ 3／2／1 欄 profile','ok'],['Pane 分頁','coming soon，component 是 () => null','stub'],['Sidebar 分頁','coming soon，同上','stub']]],
+  ['桌面應用程式','Electron',1,[['顯示於選單列','IPC → app-prefs.json；無 store','ok'],['瀏覽器分頁閒置逾時','uncontrolled、無 onChange，程式寫死 5 分','dead'],['瀏覽器分頁記憶體上限','寫死 512 MB','dead'],['背景分頁上限','寫死 3','dead']]],
+  ['模組','always',0,[['4 個可停用模組開關','瀏覽器／編輯器／檔案／效能監控；改完需 reload','ok'],['需重新載入橫幅','與啟動時 baseline 比對','ok']]],
+  ['瀏覽器','模組啟用',1,[['（無項目）','placeholder，只為滿足「可停用模組須有全域設定列」','stub']]],
+  ['編輯器','模組啟用',1,[['Tab 寬度／空格／換行／行號／縮圖／字型','6 項中有 4 個是原生 checkbox','ok'],['開檔行為 › 找不到檔案時彈窗','—','ok'],['開檔行為 › 自動套用快取候選','—','ok'],['檔案路徑連結偵測 › 絕對／tilde／相對','存在終端 store、只作用於終端、未同步','split'],['內容寬度 narrow／wide','只能從編輯器狀態列切換','noui'],['Tiptap 註腳','「後續版本再整合」','stub']]],
+  ['檔案','模組啟用',1,[['（無項目）','placeholder','stub']]],
+  ['監控','模組啟用',0,[['整個效能監控面板','不是設定表單；含 daemon 的刷新秒數／top N 表單','split']]],
+  ['同步','always（不能停用）',1,[['Provider off／daemon／file','file 選得到，但 createFileProvider 從未被呼叫','dead'],['同步主機','provider = daemon 時顯示','hidden'],['立即同步','provider = file 時只會警告','dead'],['同步模組勾選（6 個 contributor）','顯示 raw contributor id','ok'],['匯出／匯入','.purdex-sync；匯入前自動存安全快照','ok'],['同步歷史子頁','Local／Remote、diff、還原對話框','ok']]],
+  ['開發環境','Electron ＋ getAppInfo',0,[['開發主機','第 2 套 host 選擇器，同時是 device-state 目標','hidden'],['SPA 來源 dev／bundled','—','hidden'],['App 版本／hash、檢查／更新／重載','含串流 log','hidden'],['Daemon 檢查／重建','SSE log','hidden'],['本機 daemon：安裝／啟動／重啟／更新／加入 hosts','含 token 顯示與複製','hidden'],['pdx path link／add-to-shell','alpha.364；pdx 不可達時擋住啟動','new']]],
+  ['（不存在）通知','—',1,[['各 agent 通知開關、事件勾選、無 tab 時通知、點擊重開 tab','store 有被 dispatcher 讀、也進了 sync，但 4 個 setter 零呼叫端；settings.agent.* 與 settings.section.agent 的 en／zh-TW 字串都還在','noui']]],
+ ],
+ wset:[
+  ['Workspace 設定','—',1,[['名稱','maxLength 64，blur／Enter 提交','ok'],['Icon ＋ weight','Phosphor picker','ok'],['Module Settings','沒有模組宣告 workspaceConfig → 永遠 null','dead'],['Home Path（Workspace）','存 useWorkspaceSettingsStore','ok'],['檔案 › 專案路徑','存 useWorkspaceStore.moduleConfig（另一套存法）；也可從檔案樹空狀態設','split'],['危險區塊 › 刪除 Workspace','標題與「Workspace not found」硬編英文','ok']]],
+ ],
+ hset:[
+  ['總覽','always',0,[['名稱／IP／Port／Token','Token 存檔後強制重連','ok'],['Host 顏色','8 個預設 ＋ hex 輸入 ＋ 清除','new'],['Host 圖示','Phosphor picker ＋ 6 種 weight','new'],['測試連線／刪除 host','刪除需 >1 台，含「一併關閉分頁」與 undo','ok'],['Daemon sizing mode','PUT /api/config','ok'],['Stream presets／detect／poll（唯讀）','presets 隨 P-D 移除','ok'],['系統資訊','purdex／tmux／OS','ok']]],
+  ['Sessions','always',0,[['New Session → Session Launcher','取代舊的 cwd 輸入與 terminal/stream 下拉','new'],['開啟／改名／刪除','離線或 tmux 不可用時停用','ok']]],
+  ['Hooks','always',0,[['tmux／cc／codex／opencode 卡片','安裝／移除／升級、drift、逐事件矩陣、最後觸發','ok']]],
+  ['Agents','always',1,[['Agent 標題整合 安裝／移除','allow-set-title ＋ runtime 狀態','ok'],['各 agent 偵測結果（唯讀）','版本、路徑、動態標題能力','ok'],['Statusline 安裝／測試','元件存在但整組沒有被 render','dead']]],
+  ['Nexen','always',0,[['引擎狀態卡','phase／host_id／額度／credential 警告／roots／profiles','new'],['[nex] 設定表單','list editor、profile 選單、durations；400 會對應到欄位','new'],['Executions 表','SSE 刷新、開啟、終止、封存','new'],['需重啟橫幅','存檔不會即時生效','new']]],
+  ['Projects','always',0,[['name／slug／path CRUD','即時路徑檢查（dir／not_dir／missing／error）','new'],['拖曳排序、上限 200','409 自動重載','new']]],
+  ['Commands','always',0,[['Normal：名稱／指令／圖示','含指令首字解析測試（只給建議、不擋存檔）','new'],['Resume：per-host 範本','exact／fallback ＋ 測試、{id} 警告、全部重設','new']]],
+  ['Snapshots','always',1,[['Rebuild 紀錄','逐一／全部重建，來自即時 tab 樹','ok'],['已擷取的 tmux sessions','可編輯 cwd；純 shell 警告','ok'],['裝置區塊：擷取／還原全部／還原版面／undo','只在 dev host（或第一台）顯示','hidden'],['各電腦狀態備份','裝置清單、完整取代／合併／刪除、裝置名稱','hidden']]],
+  ['上傳暫存','always',0,[['統計、全部清除、依 session 清除、刪單檔','上傳目錄可改（PUT /api/config）','ok']]],
+  ['日誌','always',0,[['Daemon log、crash log','唯讀 ＋ 重新整理','ok']]],
+  ['Home Path（Host）','編輯器模組啟用',0,[['路徑 ＋ 清除','存 useHostSettingsStore','ok']]],
+ ]
+};
+const ST = {ok:'正常',dead:'無效',stub:'空殼',split:'分散',noui:'缺 UI',hidden:'條件',new:'新增'};
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// allow a small set of inline tags in desc/signal cells
+const rich = s => esc(s).replace(/&lt;(\/?)(b|code)&gt;/g, '<$1$2>');
+const KEY = 'purdex-inventory-marks-v2';
+let marks = {};
+try { marks = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { marks = {}; }
+const saveMarks = () => { try { localStorage.setItem(KEY, JSON.stringify(marks)); } catch (e) {} };
+
+const counts = {}; F.forEach(r => counts[r[8]] = (counts[r[8]] || 0) + 1);
+const flagged = Object.values(S).flat().flatMap(p => p[3]).filter(i => !['ok','new'].includes(i[2])).length;
+document.getElementById('stats').innerHTML =
+  `<div class="stat"><b>${F.length}</b><span>功能項</span></div>` +
+  Object.keys(V).map(k => `<div class="stat v-${k}"><b>${counts[k] || 0}</b><span>${V[k]}</span></div>`).join('') +
+  `<div class="stat v-remove"><b>${flagged}</b><span>有問題的設定項</span></div>`;
+
+const tbody = document.querySelector('#feat tbody');
+let html = '', lastArea = '';
+F.forEach(([area, id, name, desc, entry, size, last, sig, v]) => {
+  if (area !== lastArea) { html += `<tr class="area-row" data-area="${esc(area)}"><td colspan="7">${esc(area)}</td></tr>`; lastArea = area; }
+  const m = marks[id];
+  html += `<tr data-id="${id}" data-v="${v}" data-area="${esc(area)}" data-text="${esc((name+desc+entry+sig).toLowerCase())}">
+    <td class="name">${esc(name)}<div class="desc">${rich(desc)}</div></td>
+    <td class="sig">${rich(entry)}</td>
+    <td class="num">${esc(size)}</td>
+    <td class="num">${esc(last)}</td>
+    <td class="sig">${rich(sig)}</td>
+    <td><span class="badge b-${v}">${V[v]}</span></td>
+    <td><span class="mark" role="group" aria-label="標記 ${esc(name)}">${[['use','用'],['no','沒用'],['unsure','？']].map(([k,l]) => `<button type="button" data-m="${k}" aria-pressed="${m===k}">${l}</button>`).join('')}</span></td>
+  </tr>`;
+});
+tbody.innerHTML = html;
+
+tbody.addEventListener('click', e => {
+  const b = e.target.closest('.mark button'); if (!b) return;
+  const tr = b.closest('tr'), id = tr.dataset.id, k = b.dataset.m;
+  marks[id] = marks[id] === k ? undefined : k;
+  if (!marks[id]) delete marks[id];
+  tr.querySelectorAll('.mark button').forEach(x => x.setAttribute('aria-pressed', marks[id] === x.dataset.m));
+  saveMarks();
+});
+
+const active = new Set();
+const chips = document.getElementById('chips');
+chips.innerHTML = Object.keys(V).map(k => `<button class="chip" type="button" data-v="${k}" aria-pressed="false">${V[k]} ${counts[k]||0}</button>`).join(' ')
+  + ' <button class="chip" type="button" data-v="unmarked" aria-pressed="false">未標記</button>';
+const q = document.getElementById('q');
+function applyFilter(){
+  const t = q.value.trim().toLowerCase();
+  const vs = [...active].filter(x => x !== 'unmarked'), um = active.has('unmarked');
+  const shownAreas = new Set(); let n = 0;
+  tbody.querySelectorAll('tr[data-id]').forEach(tr => {
+    const ok = (!vs.length || vs.includes(tr.dataset.v)) && (!t || tr.dataset.text.includes(t)) && (!um || !marks[tr.dataset.id]);
+    tr.classList.toggle('hidden-row', !ok); if (ok) { shownAreas.add(tr.dataset.area); n++; }
+  });
+  tbody.querySelectorAll('tr.area-row').forEach(tr => tr.classList.toggle('hidden-row', !shownAreas.has(tr.dataset.area)));
+  document.getElementById('featCount').textContent = `顯示 ${n} / ${F.length}`;
+}
+chips.addEventListener('click', e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  const v = c.dataset.v; active.has(v) ? active.delete(v) : active.add(v);
+  c.setAttribute('aria-pressed', active.has(v)); applyFilter();
+});
+q.addEventListener('input', applyFilter);
+applyFilter();
+
+document.getElementById('clearMarks').addEventListener('click', () => {
+  if (!Object.keys(marks).length || !confirm('清除所有標記？')) return;
+  marks = {}; saveMarks();
+  tbody.querySelectorAll('.mark button').forEach(x => x.setAttribute('aria-pressed', 'false')); applyFilter();
+});
+document.getElementById('export').addEventListener('click', async () => {
+  const label = {use:'✅ 有在用', no:'❌ 沒在用', unsure:'❓ 不確定'};
+  const strip = s => s.replace(/<\/?[a-z]+>/g, '');
+  const lines = ['# Purdex 功能盤點標記（alpha.376）', ''];
+  ['use','no','unsure'].forEach(k => {
+    const rows = F.filter(r => marks[r[1]] === k);
+    if (!rows.length) return;
+    lines.push(`## ${label[k]}（${rows.length}）`);
+    rows.forEach(r => lines.push(`- [${r[0]}] ${strip(r[2])}　（建議：${V[r[8]]}）`));
+    lines.push('');
+  });
+  lines.push(`未標記：${F.filter(r => !marks[r[1]]).length} 項`);
+  const txt = lines.join('\n');
+  try { await navigator.clipboard.writeText(txt); const b = document.getElementById('export'); b.textContent = '已複製 ✓'; setTimeout(() => b.textContent = '複製標記', 1600); }
+  catch (e) { document.getElementById('dlgText').value = txt; document.getElementById('dlg').showModal(); }
+});
+
+for (const [target, pages] of Object.entries(S)) {
+  document.getElementById(target).innerHTML = pages.map(([title, cond, fl, items]) => `
+    <div class="page${fl ? ' flagged' : ''}">
+      <div class="ph"><b>${esc(title)}</b><span class="cond">${esc(cond)}</span></div>
+      <ul>${items.map(([n, sub, st]) => `<li><div class="it">${esc(n)}<small>${esc(sub)}</small></div><span class="badge b-${st}">${ST[st]}</span></li>`).join('')}</ul>
+    </div>`).join('');
+}
+</script>
+</body>
+</html>

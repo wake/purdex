@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexen · Type 2 執行平面</title>
+<style>
+:root{
+  --bg:#0e1116; --bg2:#161b22; --card:#1a2029; --line:#2b333f;
+  --fg:#e6edf3; --fg2:#9aa7b4; --fg3:#6e7b8a;
+  --accent:#58a6ff;
+  --t1:#bc8cff;          /* type 1 常駐 */
+  --t2:#2dd4a7;          /* type 2 單次執行 */
+  --ok:#3fb950;
+  --warn:#f85149;
+  --amber:#e3a008;
+  --radius:14px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif;
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --bg:#f6f8fa; --bg2:#fff; --card:#fff; --line:#d8dee4;
+    --fg:#1f2328; --fg2:#57606a; --fg3:#8b949e;
+    --t1:#8250df; --t2:#0f766e; --amber:#9a6700; --warn:#cf222e; --ok:#1a7f37;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.62;font-size:15px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1140px;margin:0 auto;padding:32px 22px 90px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:12.5px;background:var(--bg2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--fg)}
+.mono{font-family:var(--mono)}
+
+header.hero{margin-bottom:10px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:600}
+h1{font-size:30px;margin:.28em 0 .2em;letter-spacing:-.01em;line-height:1.2}
+.sub{color:var(--fg2);font-size:15.5px;max-width:80ch}
+.sub b{color:var(--fg)}
+
+.sec-title{margin:46px 0 6px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);font-weight:700}
+h2{font-size:21px;margin:2px 0 8px;letter-spacing:-.005em}
+.lede{color:var(--fg2);font-size:14.3px;max-width:84ch;margin:0 0 16px}
+.lede b{color:var(--fg)}
+
+.callout{margin-top:18px;background:var(--bg2);border:1px solid var(--line);border-radius:11px;
+  padding:17px 20px;font-size:14.5px;color:var(--fg2)}
+.callout b{color:var(--fg)}
+.callout.warn{border-color:var(--warn)}
+.callout.warn b{color:var(--warn)}
+.callout .ct{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:var(--fg3);margin-bottom:6px}
+
+/* 兩型對照 */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+@media (max-width:860px){.two{grid-template-columns:1fr}}
+.ty{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:17px 19px}
+.ty .badge{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.06em;
+  border-radius:999px;padding:2px 10px;margin-bottom:9px}
+.ty.a .badge{color:var(--t1);border:1px solid var(--t1)}
+.ty.b .badge{color:var(--t2);border:1px solid var(--t2)}
+.ty h3{margin:0 0 4px;font-size:17px;font-weight:650}
+.ty .who{font-size:12.5px;font-family:var(--mono);color:var(--fg3);margin-bottom:10px}
+.ty ul{margin:0;padding-left:18px;color:var(--fg2);font-size:13.6px}
+.ty li{margin:4px 0}
+
+/* 表格 */
+.tblwrap{overflow-x:auto;margin-top:14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:760px;font-size:13.3px}
+th,td{text-align:left;vertical-align:top;padding:11px 14px;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:none}
+th{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);font-weight:700;background:var(--bg2);white-space:nowrap}
+td.k{font-weight:650;color:var(--fg)}
+td.k .u{display:block;font-weight:400;font-size:11.5px;font-family:var(--mono);color:var(--fg3);margin-top:2px}
+td code{font-size:11.7px}
+table.survey{min-width:880px}
+.pill{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;white-space:nowrap;display:inline-block}
+.pill.buy{color:var(--ok);border-color:var(--ok)}
+.pill.ref{color:var(--fg3)}
+.pill.no{color:var(--warn);border-color:var(--warn)}
+.pill.dead{color:var(--fg3);border-color:var(--fg3);text-decoration:line-through}
+.num{font-family:var(--mono);font-size:12.5px;color:var(--fg)}
+
+/* 卡片 */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+.card.hi{border-color:var(--ok)}
+.card.risk{border-color:var(--warn)}
+.card h4{margin:0 0 3px;font-size:15.5px;font-weight:650}
+.card .meta{font-family:var(--mono);font-size:11.5px;color:var(--fg3);margin-bottom:9px}
+.card .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);font-weight:700;margin-top:11px}
+.card p{margin:3px 0 0;font-size:13.5px;color:var(--fg2)}
+.card p b{color:var(--fg)}
+
+/* 步驟 */
+.steps{margin-top:14px;display:flex;flex-direction:column;gap:10px}
+.step{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 17px;display:flex;gap:14px}
+.step .n{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--bg);background:var(--accent);
+  width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+.step .b{flex:1}
+.step h4{margin:0 0 3px;font-size:14.8px;font-weight:650}
+.step p{margin:0;color:var(--fg2);font-size:13.5px}
+.step p b{color:var(--fg)}
+
+.q{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 18px;margin-top:11px}
+.q.open{border-color:var(--amber)}
+.q .qh{font-weight:650;font-size:15px;margin-bottom:6px}
+.q .qb{color:var(--fg2);font-size:13.6px}
+.q .qb b{color:var(--fg)}
+.q .tag{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;
+  margin-left:8px;vertical-align:middle;color:var(--fg3);text-transform:uppercase;letter-spacing:.06em}
+.q.open .tag{color:var(--amber);border-color:var(--amber)}
+
+ul.plain{margin:10px 0 0;padding-left:19px;color:var(--fg2);font-size:13.8px}
+ul.plain li{margin:5px 0}
+ul.plain b{color:var(--fg)}
+
+footer{margin-top:54px;padding-top:16px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">架構拆分 · 開源選型 · 決策文件</div>
+  <h1>Nexen · Type 2 執行平面</h1>
+  <p class="sub">
+    把「常駐 agent」與「單次執行 agent」拆成兩型，釐清 Purdex 該留什麼、該卸什麼，
+    並盤點 2026-07 的開源選項判斷 build-vs-buy。
+    <b>新服務定名 <code>Nexen</code>，指令 <code>nex</code></b>——與 Purdex(<code>pdx</code>) / Ploom(<code>plm</code>) 同一系列。
+  </p>
+</header>
+
+<div class="callout">
+  <div class="ct">一句話</div>
+  <b>Type 2 的空隙是真的（跨主機執行全場只有四家做到），自建有正當性；但不該從零開始——Purdex 的 dispatch/execution 有八成可以直接搬。</b>
+  真正待拍板的只有一題：Aigora 遷不遷。
+</div>
+
+<div class="sec-title">§1</div>
+<h2>兩型 agent，兩種本質</h2>
+<p class="lede">先把環境與需求拆開。這條軸能一次解釋掉後面所有的設計差異。</p>
+
+<div class="two">
+  <div class="ty a">
+    <span class="badge">TYPE 1</span>
+    <h3>常駐 agent</h3>
+    <div class="who">Purdex · 現在的主力開發工具</div>
+    <ul>
+      <li>在 terminal 中<b>持續存活</b>，有工作目錄</li>
+      <li>長時間作業與互動，人在現場</li>
+      <li>tmux 是<b>基質</b>，不是實作細節</li>
+      <li>需要跨主機 UI：host picker、composite key、WS ticket、nested store</li>
+      <li>逃生艙價值高：背景 job、watch、半跑的 pipeline 都活在 pane 裡</li>
+    </ul>
+  </div>
+  <div class="ty b">
+    <span class="badge">TYPE 2</span>
+    <h3>單次執行 agent</h3>
+    <div class="who">Ploom 與 Aigora 的共同底層需求</div>
+    <ul>
+      <li>以<b>服務</b>形式存在：<code>claude -p</code> stream / <code>codex app-server</code></li>
+      <li>一次執行一個工作單元，人多半不在現場</li>
+      <li><b>沒有 tmux 可管</b>——沒有終端機語意可用</li>
+      <li>需要的是：行程生命週期、事件串流、崩潰後可回復、對外可稽核</li>
+      <li>跨主機靠 pull 模型自然成立，不需要 UI 層的多主機機制</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout">
+  <div class="ct">現況的問題</div>
+  <b>Type 2 的需求正被分兩邊各自處理，而且 Purdex 那一份是歷史偶然。</b>
+  Ploom 的派工需求疊到 Purdex 上，起因只是「這邊已經有 daemon」——那是機緣，不是設計理由。
+  Aigora 則自己的伺服器解決掉。於是同一種能力有兩份實作，而承載其中一份的 Purdex 本質是 type 1。
+  <br><br>
+  <b>而 Purdex 是現在的開發主力，即使 Aigora 進入狀況也還是會兩邊作業。</b>
+  所以「把 Purdex 改造成 type 2 平台」這個選項直接出局——不該把每天在用的工具改成別的東西。
+</div>
+
+<div class="sec-title">§2</div>
+<h2>耦合實測：能搬多少</h2>
+<p class="lede">這是整份決策最關鍵的事實。直覺會以為「對外可稽核骨架」跟 Purdex 綁死，實測不是。</p>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th>模組</th><th>非測試碼</th><th>碰 Purdex 內部的檔案</th><th>判讀</th></tr></thead>
+<tbody>
+<tr>
+  <td class="k">execution<span class="u">internal/module/execution</span></td>
+  <td class="num">2,758 行<br><span style="color:var(--fg3);font-size:11.5px">36 檔</span></td>
+  <td><code>launcher.go</code> 一個（tmux）</td>
+  <td>狀態機／outbox／原子交易／admission／canonical／reconcile／sandbox clamp／artifact／read 全部只 import <code>config</code> + <code>core</code></td>
+</tr>
+<tr>
+  <td class="k">dispatch<span class="u">internal/module/dispatch</span></td>
+  <td class="num">1,518 行<br><span style="color:var(--fg3);font-size:11.5px">8 檔</span></td>
+  <td><code>module.go</code> 一個（wiring：relay／stream／session）</td>
+  <td>client／worker／consumer／report 都是純的</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="cards">
+  <div class="card hi">
+    <h4>可以直接搬（約八成）</h4>
+    <p>execution 狀態機、launch fence、outbox + 單調 seq + ack cursor、四個複合原子交易、admission（canonical + allowlist + per-repo lock + head/dirty 快照）、reconcile 矩陣、manual reclaim、sandbox clamp、pointer-first artifact、dispatch client/worker/consumer/report。</p>
+    <p class="lbl">而且會變簡單</p>
+    <p>新 repo 的 launcher <b>不用 tmux、不用 relay</b>——就是 <code>exec.CommandContext</code> + pipe。wiring 也少掉三個依賴。</p>
+  </div>
+  <div class="card">
+    <h4>要重建的</h4>
+    <p><b>daemon 外殼</b>：HTTP server + bearer auth + config + module registry。Purdex 有，新 repo 要自己的——但 type 2 版本更小：不託管 SPA、不做終端機 WS 多工。</p>
+    <p class="lbl">還有</p>
+    <p>事件串流給即時 client 的介面（Aigora 那條路若要接就需要）。</p>
+  </div>
+  <div class="card hi">
+    <h4>意外便宜的：跨主機</h4>
+    <p><b>pull 模型下幾乎免費。</b>每台機器起一個 daemon，各自帶自己的 <code>allowed_repo_roots</code>，各自輪詢 Ploom、claim 服務得了的工單。<b>沒有中央排程器要寫，沒有 host 路由要設計。</b></p>
+    <p class="lbl">對照</p>
+    <p>Purdex 那套昂貴的跨主機機制（SPA nested store、composite key <code>hostId:sessionCode</code>、host picker、WS ticket auth）<b>全部是 type 1 的需求</b>——人要在 UI 上選連哪台。</p>
+  </div>
+  <div class="card hi">
+    <h4>沒有白工，也沒有拆除風險</h4>
+    <p><b>PR-Ploom-M0 還沒開工</b>，契約可以從第一天就指向新服務。而且<b>整套 Ploom+Purdex 派工從未端到端跑過、零使用者</b>——Purdex 那份是 shipped 但未啟用的死碼，<b>遷完直接拆，沒有 gating</b>。</p>
+    <p class="lbl">測試就是搬遷的驗證</p>
+    <p>execution + dispatch 共 10,192 行，其中<b>測試約 5,900 行——比實作還多</b>，且編碼的正是 F1-F5 那些 crash-consistency 情境（兩獨立 DB 原子性／缺依賴 claim-and-drop／rejection 無 backing row／seq gap／allowlist fail-closed）。<b>新 repo 測試全綠＝搬遷忠實</b>，綠了原始碼就沒有保留價值。</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <div class="ct">⚠️ 「八成可搬」的適用範圍</div>
+  這個數字量的是 <b>Ploom 那條路</b>的耦合度。一旦 Aigora 也要接（見 §6），Nexen 的範圍就變大，而<b>新增的那塊 Purdex 沒有</b>：
+  <br><br>
+  <b>搬得動（Purdex M0，Go）</b>：dispatch consumer · outbox + seq + ack + 原子交易 · admission · execution 狀態機 + launch fence
+  <br>
+  <b>要用 Go 重寫（Aigora 現有 TS 設計可照抄，程式碼不能）</b>：provider adapter 抽象 · 事件正規化（<code>claude.ts</code> 412 行 + <code>codex.ts</code> 641 行）· resume/interrupt/compact 語意 · 額度讀取與多帳號解析
+  <br>
+  <b>全新</b>：live 串流給即時 client 的出口
+  <br><br>
+  結論不變（還是該建 Nexen），但<b>工時估算要往上調</b>。
+</div>
+
+<div class="sec-title">§3</div>
+<h2>開源選型：2026-07-28 盤點</h2>
+<p class="lede">
+  兩支 subagent 分頭查證（OSS runtime 現況 / 協定與 SDK 層），星數與日期取自 GitHub API，抓取日 2026-07-28。
+  <b>結論：沒有能直接買來用的完整解，但有兩個可以「買一半」。</b>
+</p>
+
+<div class="callout">
+  <div class="ct">兩個生態級判斷</div>
+  <b>① 真正的跨主機執行極稀有</b>——全場只有 AgentsMesh（BSL，非開源）、Paseo、Goose、Symphony（SSH）做到。這正是空隙所在，而 Purdex 已經有這塊。
+  <br><br>
+  <b>② 直接 parse <code>stream-json</code> 已經是少數路徑</b>——沒有任何有採用度的 parser library 存在（最佳命中 1 星），主流收斂到 ACP／<code>codex app-server</code>／Agent SDK 三個較高層介面。
+  但 Claude 走 ACP 是合規死角（見 §5），Agent SDK 沒有 Go——<b>所以對 Go daemon 來說直接 parse 仍是唯一可行，只是要知道自己站在少數派</b>。
+</div>
+
+<div class="tblwrap">
+<table class="survey">
+<thead><tr><th>專案</th><th>License / 語言 / ★</th><th>形態</th><th>怎麼管 claude / codex</th><th>多主機</th><th>判定</th></tr></thead>
+<tbody>
+<tr>
+  <td class="k">Paseo<span class="u">getpaseo/paseo</span></td><td>AGPL-3.0 · TS · <span class="num">11.5k</span></td>
+  <td>常駐 daemon + WS API；Electron/iOS/Web/CLI 皆平等 client</td>
+  <td>Claude 直接 provider；Codex 走 app-server JSON-RPC；<b>統一 <code>AgentStreamEvent</code></b></td>
+  <td>✅ 一等公民</td><td><span class="pill buy">最接近可買</span></td>
+</tr>
+<tr>
+  <td class="k">Symphony<span class="u">openai/symphony</span></td><td>Apache-2.0 · Elixir · <span class="num">26.3k</span></td>
+  <td><b>SPEC.md 規格</b> + 參考 daemon</td>
+  <td><b>只有 Codex</b>，app-server 完整 thread/turn 生命週期</td>
+  <td>✅ SSH worker</td><td><span class="pill buy">規格可抄</span></td>
+</tr>
+<tr>
+  <td class="k">Goose<span class="u">aaif-goose/goose</span></td><td>Apache-2.0 · Rust · <span class="num">51.8k</span></td>
+  <td>CLI + Desktop + server daemon</td>
+  <td><code>--input-format stream-json</code> <b>雙向控制協定</b>；Codex 走 <code>codex exec --json</code>（較弱）</td>
+  <td>✅ <code>serve --tls</code></td><td><span class="pill buy">治理最中立</span></td>
+</tr>
+<tr>
+  <td class="k">mosoo-agent-driver<span class="u">langgenius/…</span></td><td>Apache-2.0 · TS · <span class="num">66</span></td>
+  <td>library（host 自帶 transport）</td>
+  <td><b>Driver Kernel 把 3 種 backend 投影成單一事件協定</b></td>
+  <td>反向撥 WS</td><td><span class="pill ref">中性契約的形狀</span></td>
+</tr>
+<tr>
+  <td class="k">codex-sdk-go<span class="u">pmenglund/…</span></td><td>Apache-2.0 · <b>Go</b> · <span class="num">11</span></td>
+  <td>library</td>
+  <td>spawn app-server；<code>Steer()</code> 中途插話、ctx-cancel → 2s bounded interrupt、<code>Fork</code></td>
+  <td>—</td><td><span class="pill ref">Go 接 Codex 最佳參考</span></td>
+</tr>
+<tr>
+  <td class="k">Sortie<span class="u">sortie-ai/sortie</span></td><td>Apache-2.0 · Go · <span class="num">115</span></td>
+  <td>單一 Go binary daemon + SQLite</td>
+  <td>tracker 輪詢 → per-issue workspace → 派 session；退避重試／stall 偵測／狀態對帳</td>
+  <td>✅ SSH / K8s</td><td><span class="pill ref">概念最貼 issue 端</span></td>
+</tr>
+<tr>
+  <td class="k">AgentsMesh</td><td><b>BSL-1.1（非 OSS）</b> · Go · <span class="num">2.3k</span></td>
+  <td>control plane / data plane 分離；gRPC+mTLS；PTY 走無狀態 Relay</td>
+  <td>AgentPod = PTY + worktree 沙箱</td>
+  <td>✅ <b>最完整</b></td><td><span class="pill ref">只能讀架構</span></td>
+</tr>
+<tr>
+  <td class="k">Sculptor<span class="u">imbue-ai/sculptor</span></td><td>MIT · Python · <span class="num">211</span></td>
+  <td>桌面 app + 本機 server，Docker 隔離</td>
+  <td><b>最純的 CLI 包裝</b>；resume 前先驗 <code>~/.claude/*.jsonl</code> 有效性</td>
+  <td>❌</td><td><span class="pill ref">flag 組合可抄</span></td>
+</tr>
+<tr>
+  <td class="k">Jinn<span class="u">hristo2612/jinn</span></td><td>MIT · TS · <span class="num">293</span></td>
+  <td>daemon :7777</td>
+  <td><b>用 Claude Code hooks 判 turn 邊界</b>（避免 screen-scraping）</td>
+  <td>❌</td><td><span class="pill ref">前端最全</span></td>
+</tr>
+<tr>
+  <td class="k">Claudexor<span class="u">razzant/claudexor</span></td><td>MIT · TS · <span class="num">329</span></td>
+  <td>本機 control plane</td>
+  <td>多組訂閱 profile 輪替，撞 vendor limit 才換</td>
+  <td>❌</td><td><span class="pill ref">額度感知唯一專門解</span></td>
+</tr>
+<tr>
+  <td class="k">opencode<span class="u">anomalyco/opencode</span></td><td>MIT · TS · <span class="num">190k</span></td>
+  <td><code>serve</code> + OpenAPI 3.1 + SSE</td>
+  <td><b>不包官方 CLI</b>，自建 harness</td>
+  <td>✅</td><td><span class="pill no">違反前提</span></td>
+</tr>
+<tr>
+  <td class="k">Multica</td><td>改造 Apache（禁 SaaS 轉售）· Go · <span class="num">42.3k</span></td>
+  <td>Web + Go server + 本機 daemon</td>
+  <td>一次性 spawn per task，HTTP 輪詢 3s</td>
+  <td>⚠️ 無編排</td><td><span class="pill no">是看板不是執行層</span></td>
+</tr>
+<tr>
+  <td class="k">Overstory</td><td>MIT · TS · <span class="num">1.3k</span></td>
+  <td>—</td><td>曾用 <code>-p stream-json</code> + <code>parseEvents</code></td><td>—</td>
+  <td><span class="pill dead">已封存 05-28</span></td>
+</tr>
+<tr>
+  <td class="k">Crystal</td><td>—</td><td>—</td><td>—</td><td>—</td>
+  <td><span class="pill dead">2026-02 廢棄</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <div class="ct">舊盤點的更正</div>
+  <b>2026-07-18 那份競品盤點已過期三處</b>：<b>Overstory 已封存</b>（2026-05-28，原本被標為「stream-json parse 同路數」的參考對象）、<b>Crystal 已廢棄</b>（2026-02 → Nimbalyst）、<b>zed-industries/codex-acp 已封存</b>（被 app-server 原生化取代）。
+  <br>改名：<code>block/goose</code> → <code>aaif-goose/goose</code>、<code>docker/cagent</code> → <code>docker/docker-agent</code>、<code>sst/opencode</code> → <code>anomalyco/opencode</code>。舊 URL 仍轉址，但別寫死。
+</div>
+
+<div class="cards">
+  <div class="card hi">
+    <h4>Paseo — 唯一「產品形態已完成」的</h4>
+    <div class="meta">AGPL-3.0 · 11.5k★ · v0.2.3 (07-27)</div>
+    <p>架構跟要蓋的東西幾乎同構：daemon 跑在任意機器上管 agent 行程、輸出即時串成 WebSocket，各種 client 平等。<b>已經有中性契約</b>——各 provider 正規化成 <code>AgentStreamEvent</code>。生命週期成熟：durable session 恢復不重放歷史、閒置 30 分鐘回收、<b>中斷必須等 provider 確認才改狀態</b>（明確為了避免 split-brain）。額度感知內建。</p>
+    <p class="lbl">落差</p>
+    <p>沒有 issue 輪詢也沒有聊天室入口——<b>兩個前端都要自己接</b>。897 open issues。</p>
+    <p class="lbl">AGPL 沒想像中可怕</p>
+    <p>義務是「網路提供服務時要給使用者源碼」，使用者是自己和幾個朋友就給 repo 連結。<b>只要是「用它的 API」而非「fork 它」，Ploom 和 Aigora 就不是衍生作品。</b>真代價不是授權，是<b>把執行層的演進速度交給別人</b>。</p>
+    <p class="lbl">選它之前必做</p>
+    <p>讀原始碼確認 Claude provider 到底是 spawn binary 還是用 Agent SDK——文件自相矛盾，而這決定了合規（見 §5）。</p>
+  </div>
+
+  <div class="card">
+    <h4>Symphony — issue 端該抄的規格</h4>
+    <div class="meta">Apache-2.0 · 26.3k★ · Elixir 只是參考實作</div>
+    <p>它不是 runtime，是 <code>SPEC.md</code>。解的正是「issue 被動輪詢 + 排程派工」那一半：輪詢 tracker → per-issue 隔離 workspace → 跑 agent → 產 PR。有個漂亮的設計決策：<b>回寫看板由 agent 自己用 provider-native tool 做，不是 orchestrator 代勞</b>。state machine 值得抄：<code>Unclaimed / Claimed / Running / RetryQueued / Released</code> + run attempt 的 <code>PreparingWorkspace / StreamingTurn / Succeeded / TimedOut</code>。</p>
+    <p class="lbl">落差</p>
+    <p><b>Codex-only</b>（整棵樹零個 claude）。而且<b>排程狀態純記憶體</b>——重啟後清殘留、重新輪詢、從頭派工，重試計時器與執行中 session 都不持久化。它說的 crash recovery 指 agent 掛掉，不是 orchestrator 掛掉。</p>
+    <p class="lbl">反過來的意義</p>
+    <p><b>Purdex M0 的 outbox + 原子交易 + reconcile 在這點上比 OpenAI 的參考實作完整。</b>那四輪 codex review 不是過度工程。</p>
+  </div>
+
+  <div class="card">
+    <h4>Goose — 唯一治理中立的長期押注</h4>
+    <div class="meta">Apache-2.0 · 51.8k★ · Linux Foundation AAIF</div>
+    <p>已捐給 Agentic AI Foundation（與 MCP、AGENTS.md 並列創始，Anthropic 與 OpenAI 都是 Platinum 會員）——<b>全場唯一不綁單一廠商的 durability 訊號</b>。</p>
+    <p class="lbl">技術上最該注意的</p>
+    <p><code>claude_code.rs</code> 用了完整的 <code>--input-format stream-json</code> <b>雙向控制協定</b>，實作 <code>ControlResponse</code> / <code>PermissionResponse</code>，能<b>程式化仲裁 Claude Code 的權限詢問</b>，且 CLI 跨 turn 保持存活。<b>這是無人值守派工的關鍵能力，Purdex M0 完全沒有</b>（只有 <code>--permission-mode</code> 一刀切）。</p>
+    <p class="lbl">落差</p>
+    <p>Codex 那側只走 <code>codex exec --json</code> 一次性路徑，弱一截。整體是通用 agent 平台，issue/chat 前端與跨機編排都不在裡面。</p>
+  </div>
+</div>
+
+<div class="sec-title">§4</div>
+<h2>協定層：契約不用自己發明</h2>
+<p class="lede">中性事件契約已經有事實標準可以站；但 orchestration 那一半（觸發來源、佇列、workspace、任務生命週期）沒有標準，還是得自己寫。</p>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th>層</th><th>現況</th><th>對本場景的適配</th></tr></thead>
+<tbody>
+<tr>
+  <td class="k">ACP<span class="u">Agent Client Protocol</span></td>
+  <td>v1 穩定（v2 draft 2026-07-20，勿用 production）· Apache-2.0 · 中立 org + JetBrains · Registry 25+ agents · <b>Go SDK = <code>coder/acp-go-sdk</code></b></td>
+  <td><b>詞彙可抄，transport 別跑。</b>事件模型涵蓋 content/thinking chunk、tool_call（status/kind/locations/diff）、plan、request_permission、cancel、session/load。但 v1 是 <b>1:1 point-to-point</b>，多 client 看同一 session 沒有語意。</td>
+</tr>
+<tr>
+  <td class="k">Claude Agent SDK</td>
+  <td><b>就是 <code>claude -p</code> 的 typed wrapper</b>（官方 hosting 文件明說 SDK spawn <code>claude</code> CLI 走 stdio）。只有 TS/Python，無官方 Go。</td>
+  <td>官方文件明確指路：<b>非 TS/Python 語言就用 <code>-p</code></b>。所以 Go daemon + <code>claude -p</code> 是官方指的路，不是繞路。</td>
+</tr>
+<tr>
+  <td class="k">codex app-server</td>
+  <td>官方文件化規格 · Thread→Turn→Item 三層 · <code>thread/resume</code>（server-side 從 rollout JSONL 還原）、<code>turn/interrupt</code>、delta opt-out <b>全在協定內非 capability 選配</b></td>
+  <td><b>四塊裡最貼場景。</b>它本來就是設計給「你自己的產品」用的 server 端協定。<b><code>generate-json-schema</code> 可產 Go 型別</b>（不只 <code>generate-ts</code>），schema 隨 CLI 版本走要 pin。</td>
+</tr>
+<tr>
+  <td class="k">AHP<span class="u">microsoft/agent-host-protocol</span></td>
+  <td>自稱「ACP 之上的 mutex」：N clients 對 shared session、pure reducer + write-ahead reconciliation。有 Go client。152★，無 production 宣告。</td>
+  <td><b>正是 interactive lease 問題的成熟解法</b>（多來源看同一 session 誰有寫入權）。<b>抄它的 state model，別依賴它的實作。</b></td>
+</tr>
+<tr>
+  <td class="k">MCP</td>
+  <td>2026-07-28 spec 改版：core 改 stateless、Tasks 降為 extension、<b>Sampling / Roots / Logging 標記 deprecated</b></td>
+  <td><b>不是 agent lifecycle 層。</b>位置是「agent 用它接外部工具」，不是「daemon 用它管 agent」。Sampling 曾是最接近反向驅動的機制，正要被拿掉。</td>
+</tr>
+<tr>
+  <td class="k">A2A</td>
+  <td>Linux Foundation · 150+ 組織 · production 使用</td>
+  <td><b>粒度太粗</b>——處理「把任務丟給遠端 agent」，不處理逐 token 串流 + 工具呼叫 + 權限請求。</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout">
+  <div class="ct">建議的組合</div>
+  詞彙抄 ACP（Go 型別參考 <code>coder/acp-go-sdk</code>）→ <b>Claude 直接 <code>claude -p --output-format stream-json --include-partial-messages</code></b>（不經 ACP adapter，見 §5）→ <b>Codex 直接講 app-server</b>（不經 <code>codex-acp</code>，用 <code>generate-json-schema</code> 產 Go 型別並 pin 版本）→ orchestration 抄 Symphony 的 state machine + Sortie 的 workspace 隔離／stall 偵測／SQLite 跨重啟 resume。
+</div>
+
+<div class="callout warn">
+  <div class="ct">⚠️ 無文件保證的介面</div>
+  <b><code>--input-format stream-json</code> 官方零文件</b>（<code>anthropics/claude-code</code> issue #24594 明確指出「除了 CLI flag 表格外完全沒有文件」），而這是 print mode 唯一的雙向程式化通道。
+  自建就是在無文件保證的介面上蓋房子。緩解：用 <code>system/init</code> 事件的 <code>capabilities</code> 陣列做 feature detection（如 <code>interrupt_receipt_v1</code>），<b>不要比版本號</b>。
+</div>
+
+<div class="sec-title">§5</div>
+<h2>合規紅線</h2>
+<p class="lede">兩家強度不對稱，這會直接影響架構——不是法務問題，是設計約束。</p>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th></th><th>Anthropic</th><th>OpenAI</th></tr></thead>
+<tbody>
+<tr>
+  <td class="k">非互動自動化的官方立場</td>
+  <td><b>只有「沒被禁的縫」。</b>條款明文禁第三方 offer claude.ai login、禁代使用者路由訂閱請求，且<b>保留無預警執法權</b>。</td>
+  <td><b>有官方祝福的路徑。</b>Codex access tokens 定位就是「trusted scripts, schedulers, private CI runners」+ app-server automation。</td>
+</tr>
+<tr>
+  <td class="k">時間線</td>
+  <td>2026-01-09 server 端限制 → 02-19 條款明文 → 04-04 全面執行</td>
+  <td>CI/CD 指南允許搬 <code>auth.json</code>，但要求私有基礎設施 / 單機或序列化 / 非公開 repo</td>
+</tr>
+<tr>
+  <td class="k">mlab daemon 的處境</td>
+  <td>灰區——spawn 官方 CLI 而非拿 token 自己打 API，官方也指引用 <code>-p</code>，<b>但沒有任何文件正面說「wrap 官方 CLI 的自建服務可以」</b></td>
+  <td><b>符合官方指南的全部條件</b></td>
+</tr>
+<tr>
+  <td class="k">分水嶺</td>
+  <td colspan="2"><b>「自己用」vs「服務他人」。</b>條款針對的是 offer login 與代使用者路由。自建自用屬 ordinary use 的合理解釋；<b>一旦讓別人透過你的服務吃你的額度就明確踩線</b>——Aigora「5 人共用房主訂閱」要特別注意這條。</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="cards">
+  <div class="card risk">
+    <h4>⚠️ <code>--bare</code> 將成為 <code>-p</code> 的預設</h4>
+    <p>官方文件：bare mode「skips OAuth and keychain reads」，認證必須來自 <code>ANTHROPIC_API_KEY</code> 或 <code>apiKeyHelper</code>，且<b>「will become the default for <code>-p</code> in a future release」</b>。</p>
+    <p class="lbl">影響</p>
+    <p>這打在「走訂閱＝零 API token 成本」這個護城河上。<b>不論最後選哪條路，auth 必須從第一天就是可切換的一等設計</b>（訂閱 OAuth ↔ API key ↔ Bedrock/Vertex），不能像現在隱含綁死在 spawn env 裡。</p>
+    <p class="lbl">信心</p>
+    <p><b>單一來源，未交叉驗證</b>（另一支 agent 沒查這條）。但方向與 Anthropic 持續收緊一致，當成要防的風險而非既成事實。</p>
+  </div>
+
+  <div class="card risk">
+    <h4>Claude 走 ACP adapter 是合規死路</h4>
+    <p>官方 <code>agentclientprotocol/claude-agent-acp</code> <b>包的是 Agent SDK 不是 CLI</b>，實測撞牆——2026-04 有 issue 回報 Pro 訂閱失效，錯誤訊息「does not support using claude.ai subscriptions」，<b>至今無 maintainer 回應</b>。而且會多一層 Node 進程（Go daemon → Node adapter → 實際 agent）。</p>
+    <p class="lbl">所以</p>
+    <p>抄 ACP 的<b>詞彙</b>，但 Claude 這條直連 <code>claude -p</code>。</p>
+  </div>
+
+  <div class="card">
+    <h4>計價現況</h4>
+    <p>Agent SDK 獨立 credit pool 宣布後<b>已取消／暫停</b>，目前 <code>claude -p</code>、Agent SDK 仍走一般訂閱額度。官方說會重做方案並提前通知。</p>
+    <p class="lbl">一處未解的矛盾</p>
+    <p>一支 agent 引 Help Center 說「ACP 用量照舊走訂閱」；另一支引 GitHub issue 說「ACP adapter 撞訂閱牆」。判讀是<b>「計費歸屬」vs「auth 被擋」兩件事</b>，但無權威來源調和。<b>實測最快</b>——跑一次 ACP adapter 就知道。</p>
+  </div>
+</div>
+
+<div class="sec-title">§6</div>
+<h2>選項與決策</h2>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th>選項</th><th>要重寫什麼</th><th>狀態</th></tr></thead>
+<tbody>
+<tr><td class="k">1 · Purdex 加 HeadlessLauncher</td><td>幾乎沒有（Launcher 已是介面）</td>
+  <td>❌ 淘汰——<b>兩個產品共用一個 repo</b>，而 Purdex 是每天在用的主力</td></tr>
+<tr><td class="k">2 · Purdex 轉型成工作台</td><td>移植 Aigora 的執行期經驗</td>
+  <td>❌ 淘汰——<b>type 1 是 Purdex 的本質且是主力開發工具</b>，不該改造它</td></tr>
+<tr><td class="k">3 · Paseo 當執行層</td><td>執行層完全不寫，只接它的 WS API</td>
+  <td>⚪️ 仍可考慮——代價是<b>把執行層演進速度交給別人</b></td></tr>
+<tr><td class="k">4 · 獨立 repo 專做 type 2</td><td>daemon 外殼（小）；Ploom 那半用搬的；Aigora 那半 Go 重寫</td>
+  <td>✅ <b>定案</b>——Purdex 回歸純 tmux，type 2 有自己的家</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="q">
+  <div class="qh">已定：Aigora 與 Ploom 兩邊都遷<span class="tag">decided</span></div>
+  <div class="qb">
+    Aigora 後端的 agent 層一定改接 Nexen。所以 Nexen 從第一天就是<b>兩個一等 consumer</b>，不是「Ploom 主 + 串流選配」。
+    <br><br>
+    <b>但這不是「同一個 API 兩個人用」，是兩種消費模式</b>——設計成一套去兼顧，很容易兩邊都難用。
+  </div>
+</div>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th></th><th>Ploom</th><th>Aigora</th></tr></thead>
+<tbody>
+<tr><td class="k">觸發</td><td>pull（daemon 輪詢 claim）</td><td>push（房裡有人 @）</td></tr>
+<tr><td class="k">回報</td><td><b>durable outbox + 單調 seq + ack cursor</b><br>可以慢、不能丟</td><td><b>live stream</b><br>可以丟（重連補齊）、不能慢</td></tr>
+<tr><td class="k">生命週期</td><td>一 execution 一次性</td><td>一 session 多輪</td></tr>
+<tr><td class="k">人在不在</td><td>不在</td><td>在</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout">
+  <div class="ct">建議形狀</div>
+  <b>核心一套、出口兩套。</b>execution 引擎與事件產生是同一份，對外分「durable report sink」與「live event stream」兩個獨立消費端，各有各的可靠性語意。
+  這剛好對應 Purdex M0 已有的 outbox 抽象——它本來就是一個 sink。
+</div>
+
+<div class="q open">
+  <div class="qh">待決：Aigora 直接接，還是 proxy 過去？<span class="tag">open</span></div>
+  <div class="qb">
+    <b>直接接</b> — <code>TurnManager</code> 換成 Nexen 的薄 client，Nexen 事件回來後 Aigora 只負責落 messages 表 + SSE 廣播。乾淨，但對 Nexen 可用性有硬依賴（Nexen 掛了房間就啞）。
+    <br>
+    <b>Proxy</b> — Aigora 保留自己一層包在前面。多一跳，但能自訂降級行為、保留未來換掉 Nexen 的餘地。
+    <br><br>
+    同機延遲差別可忽略，真正差別是<b>故障域</b>與<b>Aigora 想不想保留自主性</b>。
+  </div>
+</div>
+
+<div class="sec-title">§6.5</div>
+<h2>Workspace 模型</h2>
+<p class="lede">
+  目錄分<b>兩種型態</b>，而非兩種 workspace「模式」。
+  <b>Nexen 只持有 allowlist 母路徑（policy）；具體用哪些目錄由 consumer 送入（intent）。</b>
+  這是 M0 已定原則的推廣——sandbox profile 是 request、host policy 是權威、不合就拒；現在同一個模式套到路徑上。
+</p>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th></th><th>服務層</th><th>開發層</th></tr></thead>
+<tbody>
+<tr><td class="k">是什麼</td><td>Aigora room、Ploom project<span class="u">日後會擴充</span></td><td>repo——agent 開發的地方<span class="u">兩個 consumer 都會用到</span></td></tr>
+<tr><td class="k">誰造的</td><td>服務</td><td>使用者（自己 clone 的）</td></tr>
+<tr><td class="k">服務的自動版本安全網<br><span style="font-weight:400;font-size:12px;color:var(--fg3)">init + 機械 auto-commit</span></td>
+  <td>✅ 套用</td>
+  <td>❌ <b>不套用</b>——改用 admission 單一 live + <code>head_at_start</code>/<code>dirty_at_start</code> 快照（＋M3 worktree）</td></tr>
+<tr><td class="k">admission 生效</td><td>不用（每實體獨立，天然無衝突）</td><td><b>要</b>（同 repo 併發寫是資料事故）</td></tr>
+<tr><td class="k">交付物</td><td>通常落在這裡</td><td>diff 本身就是交付物</td></tr>
+<tr><td class="k">生命週期</td><td>跟服務實體綁（房刪了目錄刪）</td><td>跟使用者的 checkout 綁</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout">
+  <div class="ct">釘死：型態由「路徑落在哪組 root」決定，不由 consumer 宣告</div>
+<pre class="topo" style="margin-top:10px">nexen config
+  service_roots: [ …/aigora/data/rooms, …/ploom/data/projects ]
+  repo_roots:    [ /Users/wake/Workspace ]</pre>
+  只有一組 roots、靠 consumer 送進來時標型態的話，<b>consumer 搞錯或說謊，Nexen 就會往使用者的 repo 塞 commit</b>。
+  由落點決定，consumer 就無法把 <code>/Users/wake/Workspace/foo</code> 標成服務層來繞過保護。
+  跟 M0 的 <code>unknown profile → reject</code> 同一個 fail-closed 精神。
+  <br><br>
+  <b>再加一道目錄層偵測</b>：動任何 git 寫入前先 <code>git rev-parse --git-dir</code>——服務層 root 底下也可能有人放了 repo，或 consumer 把服務層目錄覆寫到 repo 裡（Aigora 的 <code>files_dir</code> 可覆寫）。
+  已在某個 repo 裡就退回「不 init、不 commit、不顯示版本」。<b>roots 分類決定意圖，目錄偵測是最後保險。</b>
+</div>
+
+<div class="callout warn">
+  <div class="ct">⚠️ 別誤讀：被禁的只有「服務偷偷幫使用者的 repo 存快照」</div>
+  <b>agent 自己在使用者 repo 裡 <code>git add</code> / <code>commit</code> / 開分支 —— 完全正常，那就是委派的目的，不受任何限制。</b>
+  兩者是不同的行為者：
+  <br><br>
+  <b>agent 的 commit</b>＝有意圖的交付（「我完成了 X」），訊息有意義，時點由 agent 判斷。<br>
+  <b>服務的 auto-commit</b>＝機械快照（「時間點 T 的檔案狀態」），本質是用 git 實作的 undo buffer，agent 根本不知道發生了。
+  <br><br>
+  auto-commit 套在使用者 repo 上最致命的是：<b>它會把使用者自己未提交的 WIP 一起 commit 掉</b>——它只看「<code>git status</code> 有變動」，分不出哪些是 agent 動的。其餘問題：turn 結束 ≠ 工作完成（三輪才做完會產出三個半成品 commit）／歷史被兩種語意交錯污染／可能撞到使用者正在進行的 rebase/stash/detached HEAD。
+  <br><br>
+  <b>M0 現在做得是對的</b>：daemon 對使用者的 repo 只讀（<code>rev-parse HEAD</code>、<code>status --porcelain</code>、<code>diff --numstat</code>），零寫入。
+  <code>dirty_at_start</code> 這個欄位的存在本身就是證據——知道使用者可能有未提交的東西，所以不動它，只記錄它存在過，好讓最後的 diff 能被正確解讀。
+  <br><br>
+  worktree 是<b>開發層安全網的升級</b>（從「限制併發」變成「真隔離所以不必限制併發」），不是這條規則的前提。<code>git worktree add</code> 本身是服務對使用者 repo 的寫入，但那是<b>明示的產品功能</b>，不是偷偷做的安全網。
+</div>
+
+<div class="sec-title">§6.6</div>
+<h2>收斂後的介面形狀</h2>
+<pre class="topo" style="font-size:12.2px">// consumer → Nexen
+session.create {
+  mounts: [
+    { path: "/…/aigora/data/rooms/&lt;id&gt;/files", role: "artifact", writable: true  },
+    { path: "/Users/wake/Workspace/foo",        role: "cwd",      writable: true  },
+    { path: "/Users/wake/Workspace/bar",        role: "aux",      writable: false }  // claude 會降級
+  ],
+  sandbox_profile: "…",        // request，Nexen clamp（只能降）
+  provider: "claude" | "codex"
+}</pre>
+<p class="lede" style="margin-top:12px">
+  Nexen 收到後：canonicalize 每個 path → 依落點判型態 → 開發層那些取<b>有序多鎖</b> + 快照 → clamp profile → 組 <code>--add-dir</code> / <code>writableRoots</code> → launch。
+  <b>Nexen 完全不需要知道什麼是「房間」或「project」</b>；日後服務層擴充只是多一組 root，零設計改動。
+</p>
+
+<div class="cards">
+  <div class="card risk">
+    <h4>M0 要改的那一小部分：admission 從單 repo 變多 repo</h4>
+    <p>M0 簽名是 <code>WithRepoLock(ctx, repoLocation string, fn)</code>，<code>Admission{CanonicalPath, HeadAtStart, DirtyAtStart}</code>——<b>單一 repo 的假設寫死在裡面</b>。但 Aigora 的 <code>MAX_WORK_DIRS = 8</code> 說明「一個執行掛多個工作目錄」已是既有能力。</p>
+    <p class="lbl">要動的</p>
+    <p><b>有序多鎖</b>（canonical path 排序後依序取得，避免死鎖）· <code>Admission</code> 變 slice，每 repo 各自快照 · <b>衝突判定＝開發層 mount 集合有交集就擋</b>（A 掛 repo1+repo2、B 掛 repo2 也要擋）· terminal diff 每 repo 各做一份。</p>
+  </div>
+  <div class="card">
+    <h4>cwd 由 consumer 送，但 Nexen 要驗</h4>
+    <p>cwd 是產品邏輯（有無工作目錄時該用哪個，是 consumer 的事）。Nexen 驗兩件事：<b>cwd 必須是 mounts 之一</b>；<b>codex resume 時若送來不同 cwd 要明確報錯</b>——codex 的 cwd 在 thread 建立時固定改不了，靜默忽略會讓 consumer 以為改成功了。</p>
+  </div>
+  <div class="card">
+    <h4>服務層的 git 由 consumer 做，不是 Nexen</h4>
+    <p>commit 時機、作者名、要不要 commit 全是產品語意（Aigora 掛 agent 名字、Ploom 可能根本不 commit）。Nexen 回報 terminal + artifact 清單，consumer 自己決定。這也對齊「git 失敗不影響主流程」——那是產品層容錯決策。</p>
+    <p class="lbl">Nexen 只做一件</p>
+    <p><b>偵測並拒絕在開發層 mount 上做任何 git 寫入</b>，含拒絕 consumer 要求。</p>
+  </div>
+  <div class="card">
+    <h4>有了 artifact sink，就不用掃了</h4>
+    <p>M0 的 artifact ＝ 對 <code>head_at_start</code> 的 diff，隱含假設<b>交付物在 repo 裡</b>——對「改 code 產 PR」成立，但 agent 產的報告／SVG／試算表不屬於任何 repo。</p>
+    <p class="lbl">所以</p>
+    <p>Aigora 現在靠掃 workDir 比對 mtime 猜哪些是產出（<code>scanProducedImages</code>）。有了明確的 <code>role: "artifact"</code> mount 之後<b>根本不用掃</b>——落在 sink 裡的就是。</p>
+  </div>
+  <div class="card">
+    <h4>權限不對稱要在契約層明示</h4>
+    <p>codex 能「掛上但唯讀」（不列進 <code>writableRoots</code>）；<b>claude 沒有 per-path 規則，<code>writable: false</code> 會靜默降級成可寫</b>。</p>
+    <p class="lbl">所以</p>
+    <p>契約要明講，不能讓 Ploom 以為它請求的唯讀真的生效。這跟 Aigora 在 UI 誠實寫「claude 的 workspace 是軟限制」是同一件事，只是搬到契約層。</p>
+  </div>
+  <div class="card">
+    <h4>憑證歸 Nexen 持有</h4>
+    <p>Aigora 現在每輪解析帳號、把 OAuth token 塞進 spawn env。搬到 Nexen 後<b>憑證應歸 Nexen</b>（它才是 spawn 的人），consumer 只送「用哪個帳號」的意向。</p>
+    <p class="lbl">連帶</p>
+    <p>這剛好是 §5 那個「auth 可切換」設計的落點。</p>
+  </div>
+</div>
+
+<div class="sec-title">§7</div>
+<h2>委派模型</h2>
+<p class="lede">
+  最後一輪收斂出的形狀：<b>Aigora 保有自己的 agent system，但可以向 Nexen 派送任務</b>。
+  這讓 Aigora 與 Ploom 變成同一份資訊框架，差別只在<b>主動／被動</b>。
+</p>
+
+<div class="callout">
+  <div class="ct">關鍵區分：輔助對話 ≠ 執行任務</div>
+  房間裡的 claude/codex 存在的目的是<b>輔助對話</b>，它的 conversation <b>就該活在房間裡</b>——那正是它的價值。
+  長效開發任務則該<b>委派出去</b>成為獨立執行體。兩者不是同一種東西。
+</div>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th></th><th>常駐對話 agent</th><th>委派執行體</th></tr></thead>
+<tbody>
+<tr><td class="k">是誰</td><td>房間的 claude / codex</td><td>Nexen 的 execution body（例：Adam）</td></tr>
+<tr><td class="k">目的</td><td>輔助對話</td><td>執行任務（尤其長效開發）</td></tr>
+<tr><td class="k">conversation</td><td>活在房間、長命、跨話題</td><td>自己的、任務範圍、獨立</td></tr>
+<tr><td class="k">workDir</td><td>房間檔案目錄（服務層）</td><td>委派時指定的 repo mount（開發層）</td></tr>
+<tr><td class="k">runtime 控制權</td><td>Aigora 持有</td><td><b>Nexen 持有</b></td></tr>
+<tr><td class="k">生命週期</td><td>跟房間綁</td><td>跟任務綁，可跨房存在</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="lede" style="margin-top:14px">
+  這剛好<b>補完了原本「常駐角色 vs 任務執行」那條軸</b>——codex 當初指出它不完整、缺的是「誰有 runtime 控制權」。
+  兩條軸都到齊而且正交，模型才站得住。
+</p>
+
+<pre class="topo" style="margin-top:14px">我:      cc 請你用 nn 進行這項開發任務
+claude:  好的，任務派送中....
+         [Agent Adam 加入]
+claude:  任務派送完成，目前由 Adam 進行執行中</pre>
+
+<div class="cards">
+  <div class="card hi">
+    <h4>「Adam 加入」的三個設計含意</h4>
+    <p><b>① 執行體是房間的一等參與者</b>，不是一則狀態訊息——有席位、名字、狀態徽章（⏳ 執行中／✅ 完成／❌ 失敗／👀 等你回答）。Aigora 現成的 presence 三態 + hover 選單可直接擴充。</p>
+    <p><b>② @ Adam ＝ attach with control lease。</b>房裡的人跟它講話就是取得寫入權，lease 因此有了自然的 UI 語意。</p>
+    <p><b>③ Adam 的 transcript 不進 claude 的 conversation。</b><b>這是最大收益</b>——輔助對話的 context 保持乾淨，不會被任務細節灌爆（也就不用一直 <code>/clear</code> 付那 20k tokens）。</p>
+    <p class="lbl">推論</p>
+    <p><b>房間 agent 不該等待。</b>說完「派送完成」這一輪就結束，任務獨立跑、之後 Adam 自己回報。fire-and-forget + 事後通知，是「不污染 conversation」能成立的前提。</p>
+  </div>
+
+  <div class="card">
+    <h4>「類似 subagent 但不是」</h4>
+    <div class="tblwrap" style="margin-top:8px">
+    <table style="min-width:0">
+    <thead><tr><th></th><th>真 subagent</th><th>Nexen 執行體</th></tr></thead>
+    <tbody>
+    <tr><td class="k">住在哪</td><td>父 agent 行程內</td><td>獨立行程</td></tr>
+    <tr><td class="k">身分</td><td>無</td><td><code>execution_id</code></td></tr>
+    <tr><td class="k">可 attach</td><td>不行</td><td>可以</td></tr>
+    <tr><td class="k">壽命</td><td>隨父 turn 死</td><td>獨立、可續</td></tr>
+    <tr><td class="k">誰看得到</td><td>只有父</td><td>任何有權的 consumer</td></tr>
+    </tbody>
+    </table>
+    </div>
+    <p style="margin-top:9px">UX 隱喻是 subagent，架構上是<b>生一個對等體</b>。</p>
+  </div>
+
+  <div class="card hi">
+    <h4>派送有兩種模式，但不是二選一</h4>
+    <p>照 Ploom 已定的 <b>API-first</b> 原則：核心先有 API，CLI 與 MCP 都是它的外皮。</p>
+    <pre class="topo" style="margin-top:8px;font-size:11.5px">Nexen core API   ← 唯一真相
+   ├─ nex CLI    ← 人 · 腳本 · CI · 有 Bash 的 session
+   └─ MCP server ← 同一組操作的 tool 化外皮</pre>
+    <p class="lbl">🔑 但有個實際差異</p>
+    <p><b>MCP 可以在不給 Bash 的情況下開放派送。</b>Aigora 的 <code>accessLevel</code> 預設是 <code>off</code>（只有 Write），這種房間沒有 Bash，<code>nex delegate</code> 走不通；但 MCP tool 能單獨加進允許清單（<code>--tools Write,mcp__nexen__delegate</code>）——<b>房間 agent 拿得到派送能力，但拿不到 shell</b>。</p>
+    <p class="lbl">分工</p>
+    <p><b>MCP</b>：房間 agent 派送（尤其 <code>off</code> 級）· 要 schema 驗證與稽核的動作 · 讓模型知道能力存在而不必寫進 prompt。<br>
+    <b>CLI</b>：人 · 腳本 · CI · 已有 Bash 的高權限 session · <b>執行體自己要再派子任務</b>。</p>
+  </div>
+
+  <div class="card">
+    <h4>Aigora ↔ Nexen 的重疊度</h4>
+    <p><b>Aigora 房間 agent 需要</b>：spawn · 事件解析 · delta 串流 · resume · interrupt · compact · 額度+多帳號 · 多目錄掛載 · model 切換 · accessLevel · steps · 產圖回收</p>
+    <p><b>Nexen 需要</b>：↑ 全部，<b>再加</b> admission · durable outbox · reconcile · attach+lease · pull adapter · 跨主機</p>
+    <p class="lbl">所以</p>
+    <p><b>adapter 層近乎 100% 重疊；orchestration 層近乎 0% 重疊。</b><br>
+    → <b>兩套 orchestration 天經地義</b>（服務不同產品語意）；<b>兩套 adapter 才是痛點</b>——那恰好是最麻煩的部分（<code>--input-format stream-json</code> 官方零文件、codex schema pin 在 CLI 版本），而且要在兩個語言各修一次、各踩一次才發現。</p>
+  </div>
+
+  <div class="card">
+    <h4>不急著合併，但盯兩個訊號</h4>
+    <p><b>訊號一</b>：同一個 provider 漂移造成的 bug，你<b>修了第二次</b>（在另一個語言裡）。發生兩三次，重複維護成本就超過遷移成本。</p>
+    <p><b>訊號二</b>：Aigora 想讓房間 agent <b>跑在別台機器上</b>。跨主機是 Nexen 結構上有、Aigora 結構上沒有的東西——這是唯一「不遷就做不到」的需求。</p>
+    <p class="lbl">路徑</p>
+    <p><b>b → a 可行</b>：先兩套並行（Aigora 保有自己的，只有委派走 Nexen），有證據再決定要不要收斂。</p>
+  </div>
+
+  <div class="card">
+    <h4>跨 consumer attach 的授權</h4>
+    <p>在 Aigora 房裡接上正在跑的 Ploom execution，在這個模型下<b>自然成立</b>（執行體不屬於 Ploom）。作法：<b>Ploom 依專案產出授權金鑰 → Aigora room 設定填入</b>。</p>
+    <p class="lbl">三個要補的細節</p>
+    <p><b>① 金鑰帶 scope，預設只給觀察</b>——<code>attach:observe</code> 與 <code>attach:control</code> 分開。<br>
+    <b>② 每把綁一個 room</b>，不是一個 project 共用一把，才能單獨撤銷。<br>
+    <b>③ 歸因誠實</b>——Aigora 暱稱即身分，Ploom 只能記「經由 room X（暱稱：…）」，不能假裝是具名帳號。</p>
+    <p class="lbl">反方向另計</p>
+    <p>房裡長出的任務要掛回 Ploom issue，是 Aigora→Ploom 的寫入，另一組憑證、另一套授權。</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <div class="ct">⚠️ 這個模型帶來的四個待辦</div>
+  <b>① interactive lease 從逃生艙變核心。</b>M0 是用「deeplink observe-only」迴避 <code>SubscriberToRelay</code> 多 writer race 的；attach-and-converse 成為核心功能後這招不能用。需要：一 execution 一 controller、lease 有期限可 detach、訊息帶 <code>execution_id + lease_id + seq</code> 做冪等、狀態機 detached/attaching/attached/stale/terminated。<b>抄 AHP 的 state model</b>（實作太早期不能依賴）。
+  <br><br>
+  <b>② subagent 要誠實分兩件事。</b><b>觀察 ✅ 可行</b>（<code>parent_tool_use_id</code> 樹狀歸屬）；<b>對話 ❌ 現有 CLI 介面做不到</b>——subagent 沒有獨立 stdin，是父 agent 一個 tool call 內部的東西。能做的最接近版本是「跟父 agent 說話請它轉達」。這限制要早點寫進設計，否則會畫出做不到的 UI。
+  <br><br>
+  <b>③ execution body 的生命週期動詞。</b><code>run terminal ≠ body 終結</code>。需要 active → idle → sleep → archived → terminated，而且有實際成本（一條 claude 磁碟 session／一條 codex thread）。Aigora 的 codex adapter 已有 idle 15 分鐘 unsubscribe + 退避重試可搬。
+  <br><br>
+  <b>④ 契約要改：<code>execution_id</code> 會分裂成兩個概念。</b>M0 的 <code>execution_id</code> 同時是「可回報的工作單元」與「deeplink handle」。新模型下 <b>body ＝ attach handle（長命）</b>、<b>run ＝ 可回報單元（一次性）</b>。M0 契約在 Ploom 側還沒實作，<b>現在改零成本</b>。
+</div>
+
+<div class="callout">
+  <div class="ct">Core 動詞（修正版）</div>
+  我先前說「統一之後 Nexen 反而變小、core 只有三個動詞」——<b>這個框架下不成立，範圍是變大的</b>。<code>run</code> 降級成內部階段，對外是執行體：
+<pre class="topo" style="margin-top:10px;font-size:12px">execution.delegate(context, mounts, profile, provider) → execution_id
+execution.attach(execution_id, mode: observe | control)  → 事件流 [+ lease]
+execution.send(execution_id, lease_id, message)          ← 需 lease
+execution.interrupt(execution_id, lease_id)
+execution.lifecycle(execution_id, sleep | archive | terminate)</pre>
+  <b>第一版切線</b>：單一 controller + observer 唯讀 · 不做 subagent 寫入 · 不做跨 consumer attach（介面留好、預設關閉）。模型不用重畫，第一版不會失控。
+</div>
+
+<div class="sec-title">§8</div>
+<h2>順序</h2>
+<div class="callout">
+  <div class="ct">為什麼 Aigora 排在 Ploom 前面</div>
+  <b>dogfood 的路徑是 Aigora，不是 Ploom。</b>Aigora 是活的、天天在用；Ploom 的端點還不存在。
+  用一個沒人用的 consumer 去定義 API 是經典錯誤——先做 Ploom、之後才補串流，會得到一個對即時場景很難用的介面。
+  Ploom 那條契約已經寫死在 <code>m0-contract.md</code>，之後對齊就好。
+</div>
+<div class="steps">
+  <div class="step"><span class="n">1</span><div class="b">
+    <h4>Nexen 立起來</h4>
+    <p>搬 execution + dispatch 核心 → 用 Go 重寫 adapter 層（照抄 Aigora 的 TS 設計）→ headless launcher（<code>exec</code> + pipe，比 tmux 版簡單）→ 薄 daemon 外殼。<b>auth 一開始就做可切換</b>。</p>
+  </div></div>
+  <div class="step"><span class="n">2</span><div class="b">
+    <h4>Aigora 先接 —— 第一個 consumer</h4>
+    <p>活的使用者、最快回饋，API 立刻被真實使用打磨。先決定<b>直接接 vs proxy</b>（見 §6）與三個設計張力（§6.5）。</p>
+  </div></div>
+  <div class="step"><span class="n">3</span><div class="b">
+    <h4>Ploom 對接</h4>
+    <p><code>docs/specs/m0-ploom-handoff.md</code> 改指向 Nexen。契約已有，對齊即可。</p>
+  </div></div>
+  <div class="step"><span class="n">4</span><div class="b">
+    <h4>Purdex 卸下 dispatch/execution</h4>
+    <p><b>隨時可做，無 gating</b>——整套從未端到端跑過、零使用者。實務上等 Nexen 測試全綠（＝搬遷忠實的證據）就可以拆。</p>
+  </div></div>
+</div>
+
+<div class="sec-title">§9</div>
+<h2>給新 repo 的設計清單</h2>
+<p class="lede">從這輪研究直接導出的具體項目，不是通則。</p>
+<ul class="plain">
+  <li><b>auth 可切換</b>是一等設計（訂閱 OAuth ↔ API key ↔ Bedrock/Vertex）——<code>--bare</code> 風險與 Anthropic 的無預警執法權都指向這裡。</li>
+  <li><b>feature detection 用 <code>system/init</code> 的 <code>capabilities</code> 陣列</b>，不要比版本號。</li>
+  <li><b>權限仲裁</b>：Goose 的 <code>ControlResponse</code>/<code>PermissionResponse</code> 雙向控制協定＝無人值守派工的關鍵，M0 的 <code>--permission-mode</code> 一刀切不夠。</li>
+  <li><b>中斷要 bounded</b>：Aigora 的三層（整輪 timeout → interrupt → 寬限後 forceStop 讓事件迴圈脫身）＋ Paseo 的「中斷必須等 provider 確認才改狀態」防 split-brain。</li>
+  <li><b>resume 前先驗屍</b>：Sculptor 會先檢查 <code>~/.claude/*.jsonl</code> 還有效才 <code>--resume</code>。</li>
+  <li><b>對話續接要有自己的一格</b>：<code>claude -p</code> 自產 UUID → <code>--resume</code>；別跟 runtime session 混名（見<a href="/wake/purdex/dispatch-coop-vs-purdex.html">委派架構合成檢討</a> §五-Q3）。</li>
+  <li><b>額度歸帳</b>：每輪解析帳號並落在執行紀錄上（Aigora 已有）；Claudexor 是多 profile 輪替的專門解。</li>
+  <li><b>multi-client 寫入權</b>：抄 AHP 的 immutable state + pure reducer + write-ahead reconciliation，別自創。</li>
+  <li><b>codex schema pin 版本</b>：<code>generate-json-schema</code> 產出隨 CLI 版本走，升級要 regenerate + 回歸測試。</li>
+</ul>
+
+<div class="callout">
+  <div class="ct">自建時的讀序</div>
+  <code>langgenius/mosoo-agent-driver</code>（中性契約的形狀）→ <code>pmenglund/codex-sdk-go</code>（Go 接 app-server，含 Steer/bounded interrupt）→ <code>imbue-ai/sculptor</code> 的 <code>process_manager_utils.py</code>（Claude flag 組合 + resume 前驗屍）→ <code>openai/symphony</code> 的 <code>SPEC.md</code>（issue 派工契約 + SSH worker）→ AgentsMesh 架構文件（control/data plane 分離，backend 不碰任何 PTY byte）→ <code>hristo2612/jinn</code>（hook 判 turn 邊界）。
+</div>
+
+<div class="callout" style="margin-top:34px;border-color:var(--ok)">
+  <div class="ct" style="color:var(--ok)">📦 這份文件的角色到此為止</div>
+  <b>Nexen repo 已建立</b>：<code>wake/nexen</code>（Gitea，private）· 本機 <code>~/Workspace/wake/nexen</code>。
+  <br>
+  這頁是<b>「導致 Nexen 誕生的決策紀錄」</b>，保留當時的推導過程與被淘汰的選項。
+  往後的設計演進、spec 與實作決策<b>都在 nexen repo 內</b>（<code>docs/CONTEXT.md</code> 為交接主文件），不再回頭更新這頁。
+</div>
+
+<footer>
+  <span class="mono">docs/pages/agent-execution-plane.html</span>
+  <span class="mono">盤點資料日 2026-07-28 · purdex 1.0.0-alpha.326 · Nexen (nex) · Purdex (pdx) · Ploom (plm)</span>
+</footer>
+
+</div>
+</body>
+</html>
