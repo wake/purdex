@@ -1,11 +1,12 @@
 // spa/src/components/execution/ExecutionView.tsx — the {kind:'execution'}
 // pane (spec §4.3.3). Composes the observe subscription, the lazy control
 // lease, the pane's actions (useExecutionActions: send/interrupt/terminate,
-// the only writes), the shared message renderer and StreamInput. For an
-// execution that came from a tmux session (`from`, P-C.3 spec §4.4) it also
-// owns "Take back to terminal": confirm when a turn is running, then
-// `lib/nex/handoff.ts` `takeBack` does the request, the lease forget and the
-// pane swap (which unmounts this view).
+// the only writes), the shared message renderer and StreamInput. It also
+// owns "Take to terminal": confirm when a turn is running, then
+// `lib/nex/handoff.ts` does the request, the lease forget and the pane swap
+// (which unmounts this view) — `takeBack` to the origin session when the
+// execution came from one (`from`, P-C.3 spec §4.4), else `takeToTerminal`
+// into a fresh session in the execution's cwd (exec-to-terminal spec §4.2).
 import { useCallback, useMemo, useRef, useState } from 'react'
 import ConversationMessages from '../ConversationMessages'
 import StreamInput from '../StreamInput'
@@ -22,7 +23,7 @@ import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { partialHasVisibleContent } from '../../lib/nex/partial'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
-import { takeBack, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
+import { takeBack, takeToTerminal, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
 import type { ExecutionFrom } from '../../types/tab'
 
 export interface ExecutionViewProps {
@@ -32,12 +33,17 @@ export interface ExecutionViewProps {
   /** The pane this view lives in — the take-back swaps its content. */
   tabId: string
   paneId: string
-  /** Set when the execution was handed off from a tmux session; enables "Take back to terminal". */
+  /** Set when the execution was handed off from a tmux session; "Take to terminal" then returns to that session. */
   from?: ExecutionFrom
 }
 
 const EMPTY = defaultExecutionState()
 const TERMINAL_STATES = new Set(['rejected', 'failed', 'terminated'])
+/**
+ * States the daemon's take-to-terminal can settle (spec §4.2): never `queued`
+ * (it would answer `execution_not_settled`) nor `rejected`.
+ */
+const TAKEABLE_STATES = new Set(['running', 'idle', 'failed', 'terminated'])
 const KNOWN_ERROR_KEYS = new Set(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])
 
 export default function ExecutionView({ hostId, executionId, isActive, tabId, paneId, from }: ExecutionViewProps) {
@@ -58,13 +64,21 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const takeBackInFlight = useRef(false)
   const [confirmTakeBack, setConfirmTakeBack] = useState(false)
   const runTakeBack = useCallback(async () => {
-    if (!from || takeBackInFlight.current) return
+    if (takeBackInFlight.current) return
+    const exec = useExecutionStore.getState().executions[key]
+    // Without `from` the request needs the execution's cwd; the control is
+    // only offered once the summary is in, so this is a same-tick race guard.
+    const cwd = from ? undefined : exec?.summary?.cwd
+    if (!from && !cwd) return
     takeBackInFlight.current = true
     setTakeBackBusy(true)
     const toast = useUndoToast.getState()
     try {
-      const leaseId = useExecutionStore.getState().executions[key]?.lease?.leaseId
-      const { swapped } = await takeBack({ hostId, executionId, from, leaseId, tabId, paneId, forgetLease: lease.forget })
+      const leaseId = exec?.lease?.leaseId
+      const common = { hostId, executionId, leaseId, tabId, paneId, forgetLease: lease.forget }
+      const { swapped } = from
+        ? await takeBack({ ...common, from })
+        : await takeToTerminal({ ...common, cwd: cwd! })
       // On `swapped` this view is already unmounted (the pane is a terminal
       // again); the toast is global, so it still lands.
       toast.show(swapped ? t('takeback.success') : t('takeback.archived_no_pane'))
@@ -107,6 +121,12 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
 
   const terminal = !!st.summary && TERMINAL_STATES.has(st.summary.state)
   const ended = terminal || !!st.summary?.archived
+  // Spec §4.2: every claude execution with a session id can go to a terminal
+  // — a fresh one when there is no origin session to return to.
+  // Archived is excluded too: the daemon refuses it (`execution_archived`) —
+  // whoever archived it already resumed that transcript elsewhere.
+  const canTakeToTerminal = !from && !!st.summary && st.summary.provider === 'claude' && !st.summary.archived
+    && !!(st.summary.session_id || st.summary.resume_session_id) && TAKEABLE_STATES.has(st.summary.state)
   // The SSE handle can die terminally (401/403, or a non-retryable
   // structured error) after history has loaded, with no reconnect ever
   // coming — the pane looks live but a send would 2xx into the void with
@@ -133,7 +153,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     <div className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} costUsd={costUsd} sse={st.sse} isMine={isMine}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
-        onTakeBack={from ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight} />
+        onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight} />
       {confirmTakeBack && (
         <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}
           confirmLabel={t('takeback.button')} onCancel={() => setConfirmTakeBack(false)}

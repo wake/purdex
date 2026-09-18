@@ -638,7 +638,7 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('handoff-confirm')) })
     expect(mockedHandToNex).toHaveBeenCalledTimes(1)
     expect(mockedHandToNex).toHaveBeenCalledWith({
-      hostId: H, sessionCode: CODE, tmuxInstance: 'inst-1', cachedName: 'purdex', tabId: 't1', paneId: 'p2',
+      hostId: H, sessionCode: CODE, tmuxInstance: 'inst-1', cachedName: 'purdex', tabId: 't1', paneId: 'p2', keepSession: true,
     })
     expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
     expect(useUndoToast.getState().toast?.message).toBe('Handed to nex.')

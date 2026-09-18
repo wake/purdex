@@ -1,7 +1,9 @@
-// spa/src/lib/nex/handoff.ts — "Hand to nex" / "Take back to terminal"
-// orchestration (P-C.3 spec §4.4 SPA). Imperative, no hooks: the daemon does
-// the whole sequence under one per-session lock; this side only gates on
-// readiness, composes the resume template, asks, and swaps pane content.
+// spa/src/lib/nex/handoff.ts — "Hand to nex" / "Take back to terminal" /
+// "Take to terminal" orchestration (P-C.3 spec §4.4 SPA, exec-to-terminal
+// spec §4.2). Imperative, no hooks: the daemon does the whole sequence under
+// one per-session (or per-execution) lock; this side only gates on readiness,
+// composes the resume template and the session name, asks, and swaps pane
+// content.
 //
 // Two things the daemon cannot do for us live here:
 //
@@ -19,10 +21,17 @@
 import { useTabStore } from '../../stores/useTabStore'
 import { useNexHostStore, selectHandoffReady } from '../../stores/useNexHostStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
+import { checkHostPath, type HostProject } from '../host-config-api'
+import { useSessionStore } from '../../stores/useSessionStore'
 import { resumeLookupFor, resumeTemplateFor } from '../resume-templates'
+import { nextProjectSessionName } from '../launch-session-name'
+import { slugForCwd } from './session-slug'
 import type { TFunction } from '../pane-labels'
 import type { ExecutionFrom, PaneContent } from '../../types/tab'
-import { HandoffApiError, nexHandoff, nexTakeback, type NexHandoffResult, type NexTakebackResult } from './handoff-api'
+import {
+  HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal,
+  type NexHandoffResult, type NexTakebackResult, type NexTakeToTerminalResult,
+} from './handoff-api'
 
 /** In-flight keys: `handoff:<host>:<session>` and `takeback:<host>:<execution>`. */
 const inFlight = new Set<string>()
@@ -44,6 +53,8 @@ export interface HandToNexArgs {
   cachedName: string
   tabId: string
   paneId: string
+  /** G4: keep the idle tmux session as the anchor to come back to (default `true`). */
+  keepSession?: boolean
 }
 
 export interface HandToNexOutcome {
@@ -52,13 +63,25 @@ export interface HandToNexOutcome {
   swapped: boolean
 }
 
-/** The execution content a successful handoff writes into the pane (also what the recovery toast opens). */
-export function executionContentFor(hostId: string, executionId: string, from: ExecutionFrom): PaneContent {
-  return { kind: 'execution', executionId, host: hostId, from }
+/**
+ * The execution content a successful handoff writes into the pane (also what
+ * the recovery toast opens). `from` is omitted when the session was not kept:
+ * the pane then has nothing to return to, and "Take to terminal" creates a
+ * new session instead.
+ */
+export function executionContentFor(hostId: string, executionId: string, from?: ExecutionFrom): PaneContent {
+  return from ? { kind: 'execution', executionId, host: hostId, from } : { kind: 'execution', executionId, host: hostId }
+}
+
+/** `from` for the execution pane, or undefined when the daemon says the session is gone. */
+export function handoffFromFor(args: Pick<HandToNexArgs, 'sessionCode' | 'tmuxInstance' | 'cachedName'>, result: Pick<NexHandoffResult, 'session_kept'>): ExecutionFrom | undefined {
+  // An old daemon omits the field: it never kills, so the session is there.
+  if (result.session_kept === false) return undefined
+  return { sessionCode: args.sessionCode, tmuxInstance: args.tmuxInstance, cachedName: args.cachedName }
 }
 
 export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> {
-  const { hostId, sessionCode, tmuxInstance, cachedName, tabId, paneId } = args
+  const { hostId, sessionCode, tmuxInstance, keepSession = true, tabId, paneId } = args
   return singleFlight(`handoff:${hostId}:${sessionCode}`, async () => {
     const nexHosts = useNexHostStore.getState()
     await nexHosts.ensure(hostId)
@@ -72,14 +95,31 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
       expected_tmux_instance: tmuxInstance,
       // `{id}` left for the daemon: it read the session id itself.
       rollback_command: resumeTemplateFor(resumeLookupFor(hostId), 'cc'),
+      keep_session: keepSession,
     })
-    const from: ExecutionFrom = { sessionCode, tmuxInstance, cachedName }
     const swapped = useTabStore.getState().trySetPaneContent(
-      tabId, paneId, executionContentFor(hostId, result.execution_id, from),
+      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result)),
       (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
     )
     return { result, swapped }
   })
+}
+
+/**
+ * The host's home, resolved by the daemon (`check-path` expands `~`), only
+ * when a project is stored as `~/…` — the slug lookup needs it to compare
+ * against an absolute execution cwd. Best effort: on any failure the
+ * `~/…` projects are skipped (never guessed), so the name falls back to the
+ * cwd basename.
+ */
+async function hostHomeFor(hostId: string, projects: readonly HostProject[]): Promise<string | undefined> {
+  if (!projects.some((p) => p.path === '~' || p.path.startsWith('~/'))) return undefined
+  try {
+    const check = await checkHostPath(hostId, '~')
+    return check.status === 'dir' ? check.resolved : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export interface TakeBackArgs {
@@ -126,13 +166,95 @@ export async function takeBack(args: TakeBackArgs): Promise<TakeBackOutcome> {
   })
 }
 
+export interface TakeToTerminalArgs {
+  hostId: string
+  executionId: string
+  /** The execution's cwd: the new tmux session is created there and its name follows the project it is in. */
+  cwd: string
+  leaseId?: string
+  tabId: string
+  paneId: string
+  /** Same contract as `TakeBackArgs.forgetLease`. */
+  forgetLease: () => void
+}
+
+export interface TakeToTerminalOutcome {
+  result: NexTakeToTerminalResult
+  swapped: boolean
+}
+
+/**
+ * One retry after `session_exists` on a generated name (the daemon knew a
+ * session the cached list did not); the refused name is counted as taken so
+ * the second attempt strictly advances.
+ */
+const TAKE_TO_TERMINAL_NAME_RETRIES = 1
+
+/** Refresh the host's session list so the sidebar shows (or drops) a session the daemon just changed; never throws. */
+function refreshSessions(hostId: string): void {
+  useSessionStore.getState().fetchHost(hostId).catch(() => { /* the next poll catches up */ })
+}
+
+/**
+ * Take an execution with no origin session to a fresh terminal: the daemon
+ * creates `{slug}-{N}` in the execution's cwd, resumes CC there and archives
+ * the execution; the pane becomes that terminal. Shares the take-back
+ * single-flight key so the two can never interleave on one execution.
+ */
+export async function takeToTerminal(args: TakeToTerminalArgs): Promise<TakeToTerminalOutcome> {
+  const { hostId, executionId, cwd, leaseId, tabId, paneId, forgetLease } = args
+  return singleFlight(`takeback:${hostId}:${executionId}`, async () => {
+    // The host config carries both the resume template override and the
+    // projects the slug is looked up from; neither is visible until loaded.
+    await useHostConfigStore.getState().ensureLoaded(hostId)
+    const resume_command = resumeTemplateFor(resumeLookupFor(hostId), 'cc')
+    if (!resume_command) throw new HandoffApiError(0, 'missing_resume_command', {})
+    const projects = useHostConfigStore.getState().byHost[hostId]?.projects ?? []
+    const slug = slugForCwd(cwd, projects, await hostHomeFor(hostId, projects))
+    const liveNames = (useSessionStore.getState().sessions[hostId] ?? []).map((s) => s.name)
+    const refused: string[] = []
+    const request = async (): Promise<NexTakeToTerminalResult> => {
+      const session_name = nextProjectSessionName(slug, [...liveNames, ...refused])
+      try {
+        return await nexTakeToTerminal(hostId, executionId, {
+          session_name,
+          resume_command,
+          ...(leaseId ? { lease_id: leaseId } : {}),
+        })
+      } catch (err) {
+        if (err instanceof HandoffApiError) {
+          if (err.code === 'session_exists' && refused.length < TAKE_TO_TERMINAL_NAME_RETRIES) {
+            refused.push(session_name)
+            return request()
+          }
+          // The tmux session exists but has no code yet (spec §4.1 step 6):
+          // list it so the user can find and clean up the orphan.
+          if (err.code === 'session_create_failed' && err.body.session_alive === true) refreshSessions(hostId)
+        }
+        throw err
+      }
+    }
+    const result = await request()
+    forgetLease()
+    const { session } = result
+    const swapped = useTabStore.getState().trySetPaneContent(
+      tabId, paneId,
+      { kind: 'tmux-session', hostId, sessionCode: session.code, mode: 'terminal', cachedName: session.name, tmuxInstance: session.tmux_instance ?? '' },
+      (c) => c.kind === 'execution' && c.executionId === executionId && (c.host ?? hostId) === hostId,
+    )
+    refreshSessions(hostId)
+    return { result, swapped }
+  })
+}
+
 // --- error map -------------------------------------------------------------
 
 /**
- * Every code the two endpoints emit (plan "Measured baseline", from
- * internal/module/nex/{handoff,takeback}.go) plus the wrapper's own
- * `network` and `host_removed`. Each has a `handoff.error.<code>` locale string; anything else
- * (`http_<status>`, a future code) falls back to `handoff.error.generic`.
+ * Every code the three endpoints emit (plan "Measured baseline", from
+ * internal/module/nex/{handoff,takeback}.go, plus exec-to-terminal spec §4.1
+ * for take_to_terminal.go) plus the wrapper's own `network` and
+ * `host_removed`. Each has a `handoff.error.<code>` locale string; anything
+ * else (`http_<status>`, a future code) falls back to `handoff.error.generic`.
  */
 export const HANDOFF_ERROR_CODES: readonly string[] = [
   // handoff
@@ -145,6 +267,9 @@ export const HANDOFF_ERROR_CODES: readonly string[] = [
   'cc_already_running', 'execution_not_bound', 'held_by',
   'execution_not_settled', 'no_session_id', 'store_error', 'lease_error',
   'interrupt_failed', 'send_failed', 'interrupt_unconfirmed', 'cc_start_timeout',
+  // take-to-terminal (codes not already above)
+  'session_exists', 'missing_session_name', 'invalid_session_name', 'session_create_failed',
+  'cwd_missing', 'provider_unsupported', 'takeback_in_progress', 'execution_archived', 'archive_failed',
   // client
   'network', 'host_removed',
 ]
@@ -158,7 +283,7 @@ const KNOWN = new Set(HANDOFF_ERROR_CODES)
  */
 export const SESSION_ID_CODES: ReadonlySet<string> = new Set([
   'tmux_instance_mismatch', 'delegate_rejected', // handoff
-  'cc_already_running', 'send_failed', 'cc_start_timeout', // takeback
+  'cc_already_running', 'send_failed', 'cc_start_timeout', // takeback + take-to-terminal
 ])
 
 function str(body: Record<string, unknown>, field: string): string {
@@ -183,6 +308,13 @@ function paramsFor(t: TFunction, err: HandoffApiError): Record<string, string | 
       return { principal: str(b, 'principal') }
     case 'execution_not_settled':
       return { state: str(b, 'state') }
+    case 'session_exists':
+    case 'session_create_failed':
+      return { session_name: str(b, 'session_name') }
+    case 'execution_archived':
+      // Recovery contract (spec §4.5): name the session so the user can
+      // Unarchive under Host › Nex or resume by hand.
+      return { session_id: str(b, 'session_id') }
     default:
       return undefined
   }

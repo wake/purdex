@@ -1,15 +1,17 @@
 // spa/src/lib/nex/handoff-api.ts — SPA wrappers for the daemon-orchestrated
-// "hand to nex" / "take back to terminal" endpoints (P-C.3 spec §4.4,
-// internal/module/nex/{handoff,takeback}.go). These live under
-// /api/sessions/{code}/…, not /api/nex, so they go through hostFetch directly
-// (Bearer from the host store) plus the same per-tab X-Pdx-Client principal
-// the /api/nex path uses — the daemon derives the lease principal from it.
+// "hand to nex" / "take back to terminal" / "take to terminal" endpoints
+// (P-C.3 spec §4.4, exec-to-terminal spec §4.1;
+// internal/module/nex/{handoff,takeback,take_to_terminal}.go). These are
+// purdex orchestration, not Nexen routes, so they go through hostFetch
+// directly (Bearer from the host store) plus the same per-tab X-Pdx-Client
+// principal the /api/nex path uses — the daemon derives the lease principal
+// from it.
 //
 // Errors: every non-2xx body is `{error, code, …}` and the extra fields
 // differ per code (reject_reason, rolled_back, session_id, step, principal,
 // …), so the whole decoded body is kept on the error for the caller's
 // message map instead of being flattened into a message string.
-import { hostFetch } from '../host-api'
+import { hostFetch, type Session } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
 import { getNexClientId } from './client-id'
 
@@ -32,6 +34,12 @@ export interface NexHandoffRequest {
   profile?: string
   /** Host resume template with `{id}` left unsubstituted; the daemon renders it. */
   rollback_command?: string
+  /**
+   * `false` asks the daemon to kill the tmux session once the execution is
+   * running (exec-to-terminal spec §4.3 / G4); absent means `true` (an old SPA
+   * keeps today's behaviour).
+   */
+  keep_session?: boolean
 }
 
 export interface NexHandoffResult {
@@ -40,6 +48,11 @@ export interface NexHandoffResult {
   effective_profile?: string
   session_id: string
   cwd: string
+  /**
+   * Whether the tmux session is still there: `true` when kept or when the
+   * kill failed. Absent on a daemon older than the field — treated as kept.
+   */
+  session_kept?: boolean
 }
 
 export interface NexTakebackRequest {
@@ -51,6 +64,21 @@ export interface NexTakebackRequest {
 }
 
 export interface NexTakebackResult {
+  session_id: string
+  archived: boolean
+}
+
+export interface NexTakeToTerminalRequest {
+  /** `{slug}-{N}` from the launcher rule; the daemon answers `session_exists` when taken. */
+  session_name: string
+  /** Host resume template with `{id}` left unsubstituted; the daemon renders it. */
+  resume_command: string
+  lease_id?: string
+}
+
+export interface NexTakeToTerminalResult {
+  /** The tmux session the daemon created, as the session list would show it. */
+  session: Session
   session_id: string
   archived: boolean
 }
@@ -92,7 +120,7 @@ function compact(body: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
-async function postSessionJson<T>(hostId: string, code: string, verb: string, body: Record<string, unknown>): Promise<T> {
+async function postJson<T>(hostId: string, path: string, body: Record<string, unknown>): Promise<T> {
   // A pane can outlive its host entry. `hostFetch` on an unknown host id
   // falls back to the active host (`getDaemonBase`), which would run a
   // handoff / take-back against a different daemon than the pane's.
@@ -100,7 +128,7 @@ async function postSessionJson<T>(hostId: string, code: string, verb: string, bo
   const headers = new Headers({ 'Content-Type': 'application/json', 'X-Pdx-Client': getNexClientId() })
   let res: Response
   try {
-    res = await hostFetch(hostId, `/api/sessions/${encodeURIComponent(code)}/${verb}`, {
+    res = await hostFetch(hostId, path, {
       method: 'POST',
       headers,
       body: JSON.stringify(compact(body)),
@@ -115,6 +143,10 @@ async function postSessionJson<T>(hostId: string, code: string, verb: string, bo
   return (await res.json()) as T
 }
 
+function postSessionJson<T>(hostId: string, code: string, verb: string, body: Record<string, unknown>): Promise<T> {
+  return postJson<T>(hostId, `/api/sessions/${encodeURIComponent(code)}/${verb}`, body)
+}
+
 /** `POST /api/sessions/{code}/nex-handoff` — exit CC in the pane and delegate to nex. */
 export function nexHandoff(hostId: string, code: string, body: NexHandoffRequest): Promise<NexHandoffResult> {
   return postSessionJson<NexHandoffResult>(hostId, code, 'nex-handoff', { ...body })
@@ -123,4 +155,12 @@ export function nexHandoff(hostId: string, code: string, body: NexHandoffRequest
 /** `POST /api/sessions/{code}/nex-takeback` — settle the execution and resume CC in the pane. */
 export function nexTakeback(hostId: string, code: string, body: NexTakebackRequest): Promise<NexTakebackResult> {
   return postSessionJson<NexTakebackResult>(hostId, code, 'nex-takeback', { ...body })
+}
+
+/**
+ * `POST /api/nex/executions/{id}/take-to-terminal` — create a tmux session in
+ * the execution's cwd, resume CC there and archive the execution.
+ */
+export function nexTakeToTerminal(hostId: string, executionId: string, body: NexTakeToTerminalRequest): Promise<NexTakeToTerminalResult> {
+  return postJson<NexTakeToTerminalResult>(hostId, `/api/nex/executions/${encodeURIComponent(executionId)}/take-to-terminal`, { ...body })
 }
