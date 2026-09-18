@@ -867,6 +867,7 @@
   "hosts.logs_refresh": "Refresh",
   "hosts.logs_offline": "Host is offline",
   "hosts.connection": "Connection",
+  "hosts.appearance": "Appearance",
   "hosts.name": "Name",
   "hosts.color.label": "Color",
   "hosts.color.clear": "No color",

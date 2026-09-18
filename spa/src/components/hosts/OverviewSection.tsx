@@ -129,8 +129,6 @@ export function OverviewSection({ hostId }: Props) {
           value={host.name}
           onSave={(v) => updateHost(hostId, { name: v })}
         />
-        <HostColorField hostId={hostId} mode={colorMode} onModeChange={setColorMode} />
-        <HostIconField hostId={hostId} mode={colorMode} />
         <EditableField
           label={t('hosts.ip')}
           value={host.ip}
@@ -231,6 +229,12 @@ export function OverviewSection({ hostId }: Props) {
             </div>
           </div>
         )}
+      </Section>
+
+      {/* ─── Appearance ─── */}
+      <Section title={t('hosts.appearance')}>
+        <HostColorField hostId={hostId} mode={colorMode} onModeChange={setColorMode} />
+        <HostIconField hostId={hostId} mode={colorMode} />
       </Section>
 
       {/* ─── Daemon Config ─── */}

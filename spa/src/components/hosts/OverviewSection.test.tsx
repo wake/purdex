@@ -76,17 +76,33 @@ describe('OverviewSection', () => {
     expect(color.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('shows connection, daemon config, system info sections', async () => {
+  it('shows connection, appearance, daemon config, system info sections', async () => {
     render(<OverviewSection hostId={HOST_ID} />)
 
     // Connection section
     expect(screen.getByText('Connection')).toBeInTheDocument()
+
+    // Appearance section
+    expect(screen.getByText('Appearance')).toBeInTheDocument()
 
     // Daemon Config section
     expect(screen.getByText('Daemon Config')).toBeInTheDocument()
 
     // System Info section
     expect(screen.getByText('System Info')).toBeInTheDocument()
+  })
+
+  it('Appearance section sits between Connection and Daemon Config and holds the color + icon fields', async () => {
+    render(<OverviewSection hostId={HOST_ID} />)
+
+    const connectionHeading = screen.getByText('Connection')
+    const appearanceHeading = screen.getByText('Appearance')
+    const daemonConfigHeading = screen.getByText('Daemon Config')
+    expect(connectionHeading.compareDocumentPosition(appearanceHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(appearanceHeading.compareDocumentPosition(daemonConfigHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    expect(screen.getByTestId('host-color-mode')).toBeInTheDocument()
+    expect(screen.getByTestId('host-icon-preview')).toBeInTheDocument()
   })
 
   it('Test Connection button works', async () => {
