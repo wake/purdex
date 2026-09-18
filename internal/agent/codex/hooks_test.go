@@ -2099,11 +2099,13 @@ func TestCodexHooksSupportedVersion_Pinned(t *testing.T) {
 	}
 }
 
-func TestCodexHookTimeoutSeconds_SessionEndClampedTo3(t *testing.T) {
-	if got := codexHookTimeoutSeconds("SessionEnd"); got != 3 {
-		t.Fatalf("SessionEnd timeout = %d, want 3 (codex clamps SessionEnd to 3s)", got)
+func TestCodexHookTimeoutSeconds_ClampedEvents(t *testing.T) {
+	for _, key := range []string{"SessionEnd", "Interrupt"} {
+		if got := codexHookTimeoutSeconds(key); got != 3 {
+			t.Errorf("%s timeout = %d, want 3 (codex clamps SessionEnd and Interrupt to 3s)", key, got)
+		}
 	}
-	for _, key := range []string{"SessionStart", "Stop", "PostToolUse", "Interrupt", "Unknown"} {
+	for _, key := range []string{"SessionStart", "Stop", "PostToolUse", "Unknown"} {
 		if got := codexHookTimeoutSeconds(key); got != 5 {
 			t.Errorf("%s timeout = %d, want 5", key, got)
 		}
@@ -2129,6 +2131,9 @@ func TestCodexInstallHooks_WritesPerEventTimeout(t *testing.T) {
 	}
 	if got := timeoutOf("SessionEnd"); got != 3 {
 		t.Errorf("SessionEnd timeout = %v, want 3", got)
+	}
+	if got := timeoutOf("Interrupt"); got != 3 {
+		t.Errorf("Interrupt timeout = %v, want 3", got)
 	}
 	if got := timeoutOf("Stop"); got != 5 {
 		t.Errorf("Stop timeout = %v, want 5", got)

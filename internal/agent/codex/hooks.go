@@ -15,9 +15,11 @@ import (
 const codexHooksSupportedVersion = "0.153.4"
 
 // codexHookTimeouts is the per-event hook timeout in seconds. codex clamps
-// SessionEnd to 3 s and warns at every start if the file says more.
+// SessionEnd and Interrupt to 3 s and warns at every start if the file says
+// more (measured on codex-cli 0.153.4 startup, 2026-09-18).
 var codexHookTimeouts = map[string]int{
 	"SessionEnd": 3,
+	"Interrupt":  3,
 }
 
 const codexHookDefaultTimeout = 5
