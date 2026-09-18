@@ -108,11 +108,6 @@ describe('useNexHostData', () => {
     await waitFor(() => expect(result.current.phase).toBe('failed'))
   })
 
-  it('a store entry whose initial /api/info fetch failed (no info) is a page-level failure', async () => {
-    seed(entry({ info: null, capabilities: null, phase: 'unavailable', error: '/api/info: 500' }))
-    const { result } = renderHook(() => useNexHostData(HOST_ID))
-    await waitFor(() => expect(result.current.phase).toBe('failed'))
-  })
 
   it('capabilities 503 (store unavailable) with info.ready true keeps the page ready', async () => {
     seed(entry({ capabilities: null, phase: 'unavailable', error: 'engine down' }))
@@ -149,20 +144,48 @@ describe('useNexHostData', () => {
     expect(configCalls()).toBe(before)
   })
 
-  it('a failed refresh keeps the cards on the last info with refreshError; the next success clears it', async () => {
-    seed(entry())
-    const { result } = renderHook(() => useNexHostData(HOST_ID))
-    await waitFor(() => expect(result.current.phase).toBe('ready'))
+  // Pre-migration contract (origin/main useNexHostData.ts, before the store):
+  // `refresh()` ended in `.catch(() => { setRefreshError(true) })` and its
+  // doc comment read "A failure sets `refreshError` and leaves the loaded
+  // data and `infoStatus` alone" — so a failed manual Refresh kept `info`
+  // and the page `ready`, while a failed *first* load (`infoStatus ===
+  // 'failed'`) was a page-level failure. The store-backed hook keeps both.
+  describe('refresh-failure semantics (pinned pre-migration contract)', () => {
+    it('a failed refresh keeps the cards on the last info with refreshError and the page ready; the next success clears it', async () => {
+      seed(entry())
+      const { result } = renderHook(() => useNexHostData(HOST_ID))
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
 
-    // What the store commits when the refetch behind `invalidate` fails.
-    seed(entry({ info: null, capabilities: null, phase: 'unavailable', error: '/api/info: 502' }))
-    expect(result.current.phase).toBe('ready')
-    expect(result.current.refreshError).toBe(true)
-    expect(result.current.info?.ready).toBe(true)
+      // What the store commits when the refetch behind `invalidate` fails.
+      seed(entry({ info: null, capabilities: null, phase: 'unavailable', error: '/api/info: 502' }))
+      expect(result.current.phase).toBe('ready')
+      expect(result.current.refreshError).toBe(true)
+      expect(result.current.info?.ready).toBe(true)
 
-    seed(entry({ info: info({ init_error: 'back' }) }))
-    expect(result.current.refreshError).toBe(false)
-    expect(result.current.info?.init_error).toBe('back')
+      seed(entry({ info: info({ init_error: 'back' }) }))
+      expect(result.current.refreshError).toBe(false)
+      expect(result.current.info?.init_error).toBe('back')
+    })
+
+    it('a first load whose /api/info fetch failed (no prior info) is a page-level failure, not a refreshError', async () => {
+      seed(entry({ info: null, capabilities: null, phase: 'unavailable', error: '/api/info: 500' }))
+      const { result } = renderHook(() => useNexHostData(HOST_ID))
+      await waitFor(() => expect(result.current.phase).toBe('failed'))
+      expect(result.current.info).toBeNull()
+      expect(result.current.refreshError).toBe(false)
+    })
+
+    it('the same failed store entry is a page failure on a fresh mount even though a previous mount had seen info', async () => {
+      seed(entry())
+      const first = renderHook(() => useNexHostData(HOST_ID))
+      await waitFor(() => expect(first.result.current.phase).toBe('ready'))
+      first.unmount()
+
+      seed(entry({ info: null, capabilities: null, phase: 'unavailable', error: '/api/info: 502' }))
+      const { result } = renderHook(() => useNexHostData(HOST_ID))
+      await waitFor(() => expect(result.current.phase).toBe('failed'))
+      expect(result.current.refreshError).toBe(false)
+    })
   })
 
   it('retry invalidates the host and reloads /api/config', async () => {
