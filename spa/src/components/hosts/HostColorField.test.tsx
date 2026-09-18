@@ -104,7 +104,11 @@ describe('HostColorField — remount / ghost state (PR #1160 R1 F1/F2)', () => {
     fireEvent.click(layerBtn('middle'))
     fireEvent.click(screen.getByTestId('host-color-inherit'))
     expect((screen.getByTestId('host-color-range-h') as HTMLInputElement).value).toBe('0')
-    fireEvent.input(screen.getByTestId('host-color-range-s'), { target: { value: '100' } })
+    const area = screen.getByTestId('host-color-area')
+    area.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 200, height: 200, right: 200, bottom: 200, x: 0, y: 0, toJSON() {} }) as DOMRect
+    area.setPointerCapture = () => {}
+    fireEvent.pointerDown(area, { clientX: 200, clientY: 0, pointerId: 1, button: 0 })
     expect(host().colors?.console?.middle?.color).not.toBe('#00ff00')
   })
 

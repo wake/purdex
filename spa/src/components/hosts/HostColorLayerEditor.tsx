@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HOST_COLOR_PRESETS, normalizeHostColor, type HostColorLayerName } from '../../lib/host-color'
-import { hexToHsl, hslToHex, rgbaString, type Hsl } from '../../lib/color-space'
+import { hexToHsv, hsvToHex, rgbaString, type Hsv } from '../../lib/color-space'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
 
 export interface HostColorLayerEditorProps {
@@ -24,27 +24,28 @@ function track(stops: string[]): string {
 
 /**
  * Inline editor for one color layer (spec §6.3, D8 as amended: inline panel, not a
- * popover). Every slider writes through `onChange` on `input`, so the badge on
+ * popover). Every control writes through `onChange` live, so the badge on
  * every tab row follows the drag.
  *
- * HSL lives in local state: a hex cannot carry hue at s=0 or hue+saturation at
- * l=0/100, so re-deriving from the prop on every render would snap the sliders
- * back (grey → hue drag → still grey → hue lost). The local HSL is replaced only
- * when the prop color no longer matches what the local HSL renders to — i.e. the
- * parent changed the color some other way (preset click, store sync).
+ * HSV lives in local state: a hex cannot carry hue at s=0 or hue+saturation at
+ * v=0, so re-deriving from the prop on every render would snap the picker back
+ * (grey → hue drag → still grey → hue lost). The local HSV is replaced only
+ * when the prop color no longer matches what the local HSV renders to — i.e.
+ * the parent changed the color some other way (preset click, store sync).
  */
 /**
- * Every H/S/L range is integer-stepped, so the local HSL is kept rounded to
- * whole degrees/percent — otherwise a hex whose channel isn't an exact multiple
- * of 255 (e.g. `#808080` → l≈50.196) leaves a fractional remainder sitting in
- * `l` that a later, unrelated saturation/hue edit then bakes into the result
- * (grey → hue 120° → saturation 100% landed on `#01ff01`, not `#00ff00`).
+ * The hue strip is integer-stepped and the area is picked/nudged in integer
+ * steps too, so the local HSV is kept rounded to whole degrees/percent —
+ * otherwise a hex whose channel isn't an exact multiple of 255 (e.g. `#808080`
+ * → v≈50.196) leaves a fractional remainder sitting in `v` that a later,
+ * unrelated saturation/hue edit then bakes into the result.
  */
-const roundHsl = ({ h, s, l }: Hsl): Hsl => ({ h: Math.round(h), s: Math.round(s), l: Math.round(l) })
+const roundHsv = ({ h, s, v }: Hsv): Hsv => ({ h: Math.round(h), s: Math.round(s), v: Math.round(v) })
+const fallbackHsv: Hsv = { h: 0, s: 0, v: 50 }
 
 export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange, onClose }: HostColorLayerEditorProps) {
   const t = useI18nStore((s) => s.t)
-  const [hsl, setHsl] = useState<Hsl>(() => roundHsl(hexToHsl(color) ?? { h: 0, s: 0, l: 50 }))
+  const [hsv, setHsv] = useState<Hsv>(() => roundHsv(hexToHsv(color) ?? fallbackHsv))
   const [draft, setDraft] = useState(color)
   const [invalid, setInvalid] = useState(false)
   const [synced, setSynced] = useState(color)
@@ -53,13 +54,13 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
     setSynced(color)
     setDraft(color)
     setInvalid(false)
-    if (hslToHex(hsl) !== color) setHsl(roundHsl(hexToHsl(color) ?? { h: 0, s: 0, l: 50 }))
+    if (hsvToHex(hsv) !== color) setHsv(roundHsv(hexToHsv(color) ?? fallbackHsv))
   }
 
-  const write = (next: Partial<Hsl>, nextAlpha = alpha) => {
-    const merged = { ...hsl, ...next }
-    setHsl(merged)
-    onChange({ color: hslToHex(merged), alpha: nextAlpha })
+  const write = (next: Partial<Hsv>, nextAlpha = alpha) => {
+    const merged = { ...hsv, ...next }
+    setHsv(merged)
+    onChange({ color: hsvToHex(merged), alpha: nextAlpha })
   }
   const writeAlpha = (nextAlpha: number) => {
     if (inherited) onChange({ alpha: nextAlpha })
@@ -77,14 +78,68 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
     onChange({ color: normalized, alpha })
   }
 
-  const ranges: { id: 'h' | 's' | 'l'; labelKey: string; max: number; value: number; stops: string[] }[] = [
-    { id: 'h', labelKey: 'hosts.color.hue', max: 360, value: hsl.h,
-      stops: [0, 60, 120, 180, 240, 300, 360].map((h) => hslToHex({ h, s: hsl.s, l: hsl.l })) },
-    { id: 's', labelKey: 'hosts.color.saturation', max: 100, value: hsl.s,
-      stops: [hslToHex({ ...hsl, s: 0 }), hslToHex({ ...hsl, s: 100 })] },
-    { id: 'l', labelKey: 'hosts.color.lightness', max: 100, value: hsl.l,
-      stops: [hslToHex({ ...hsl, l: 0 }), hslToHex({ ...hsl, l: 50 }), hslToHex({ ...hsl, l: 100 })] },
-  ]
+  const areaRef = useRef<HTMLDivElement>(null)
+  const activePointer = useRef<number | null>(null)
+  const fallbackCleanupRef = useRef<(() => void) | null>(null)
+  const fallbackActive = useRef(false)
+  const pick = (e: { clientX: number; clientY: number }) => {
+    const el = areaRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    if (r.width === 0 || r.height === 0) return
+    const s = Math.round(Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)))
+    const v = Math.round(Math.min(100, Math.max(0, 100 - ((e.clientY - r.top) / r.height) * 100)))
+    write({ s, v })
+  }
+  // Some environments (older WebViews, jsdom) don't implement
+  // `setPointerCapture`, and even when they do, capture can be lost without a
+  // matching pointerup (e.g. the pointer leaves the window). Either way we
+  // still need to keep tracking the drag: fall back to window-level listeners
+  // filtered by pointerId, torn down on pointerup/cancel or unmount.
+  //
+  // A pointermove that lands on the area itself still bubbles up to `window`,
+  // so while the fallback is attached the element's own onPointerMove/onPointerUp
+  // must no-op — otherwise both the element handler and the window listener
+  // would `pick()` the same event.
+  const attachWindowPointerFallback = (pointerId: number) => {
+    fallbackActive.current = true
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return
+      pick(e)
+    }
+    const onEnd = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return
+      detach()
+    }
+    const detach = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+      fallbackActive.current = false
+      if (activePointer.current === pointerId) activePointer.current = null
+      fallbackCleanupRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+    fallbackCleanupRef.current = detach
+  }
+  useEffect(() => () => fallbackCleanupRef.current?.(), [])
+  const nudge = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 10 : 1
+    const delta: Record<string, Partial<Hsv>> = {
+      ArrowLeft: { s: Math.max(0, hsv.s - step) },
+      ArrowRight: { s: Math.min(100, hsv.s + step) },
+      ArrowUp: { v: Math.min(100, hsv.v + step) },
+      ArrowDown: { v: Math.max(0, hsv.v - step) },
+    }
+    const next = delta[e.key]
+    if (!next) return
+    e.preventDefault()
+    write(next)
+  }
+  const hueHex = hsvToHex({ h: hsv.h, s: 100, v: 100 })
+  const areaLabel = `${t('hosts.color.area')} — ${t('hosts.color.area_value', { s: hsv.s, v: hsv.v })}`
 
   return (
     <div
@@ -135,25 +190,84 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
         </div>
       )}
 
-      {!inherited &&
-        ranges.map((r) => (
-          <label key={r.id} className="block space-y-1">
-            <span className="text-[11px] text-text-muted">{t(r.labelKey)}</span>
+      {!inherited && (
+        <>
+          <div
+            ref={areaRef}
+            data-testid="host-color-area"
+            aria-roledescription="color area"
+            aria-label={areaLabel}
+            tabIndex={0}
+            onKeyDown={nudge}
+            onPointerDown={(e: ReactPointerEvent<HTMLDivElement>) => {
+              if (e.button !== 0) return
+              if (activePointer.current !== null) return
+              e.preventDefault()
+              activePointer.current = e.pointerId
+              let captured = false
+              if (typeof e.currentTarget.setPointerCapture === 'function') {
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId)
+                  captured = true
+                } catch {
+                  captured = false
+                }
+              }
+              if (!captured) attachWindowPointerFallback(e.pointerId)
+              pick(e)
+            }}
+            onPointerMove={(e: ReactPointerEvent<HTMLDivElement>) => {
+              if (fallbackActive.current) return // the window fallback listener already handled this (it bubbled there too)
+              if (e.pointerId === activePointer.current) pick(e)
+            }}
+            onPointerUp={(e: ReactPointerEvent<HTMLDivElement>) => {
+              if (fallbackActive.current) return // the window fallback listener already handled this
+              if (e.pointerId !== activePointer.current) return
+              activePointer.current = null
+              if (typeof e.currentTarget.releasePointerCapture === 'function') {
+                e.currentTarget.releasePointerCapture(e.pointerId)
+              }
+            }}
+            onPointerCancel={(e: ReactPointerEvent<HTMLDivElement>) => {
+              if (e.pointerId !== activePointer.current) return
+              activePointer.current = null
+              if (typeof e.currentTarget.releasePointerCapture === 'function') {
+                e.currentTarget.releasePointerCapture(e.pointerId)
+              }
+            }}
+            onLostPointerCapture={() => {
+              fallbackCleanupRef.current?.()
+              activePointer.current = null
+            }}
+            className="relative w-full h-40 rounded cursor-crosshair touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-border-active"
+            style={{ background: `linear-gradient(to top, #000000, transparent), linear-gradient(to right, #ffffff, ${hueHex})` }}
+          >
+            <span
+              data-testid="host-color-area-marker"
+              aria-hidden="true"
+              className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,.6)] pointer-events-none"
+              style={{ left: `${hsv.s}%`, top: `${100 - hsv.v}%`, background: color }}
+            />
+          </div>
+
+          <label className="block space-y-1">
+            <span className="text-[11px] text-text-muted">{t('hosts.color.hue')}</span>
             <input
               type="range"
-              data-testid={`host-color-range-${r.id}`}
-              aria-label={t(r.labelKey)}
+              data-testid="host-color-range-h"
+              aria-label={t('hosts.color.hue')}
               min={0}
-              max={r.max}
+              max={360}
               step={1}
-              value={Math.round(r.value)}
-              onInput={(e) => write({ [r.id]: Number((e.target as HTMLInputElement).value) })}
+              value={hsv.h}
+              onInput={(e) => write({ h: Number((e.target as HTMLInputElement).value) })}
               onChange={() => {}}
               className={RANGE_CLASS}
-              style={{ background: track(r.stops) }}
+              style={{ background: track(['#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff', '#ff0000']) }}
             />
           </label>
-        ))}
+        </>
+      )}
 
       <label className="block space-y-1">
         <span className="text-[11px] text-text-muted">{t('hosts.color.alpha')} · {alpha}%</span>
