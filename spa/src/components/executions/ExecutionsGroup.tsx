@@ -13,12 +13,13 @@ const KNOWN_SOURCES: Record<string, string> = {
 
 interface Props {
   group: ExecutionGroup
-  hostId: string
+  /** The daemon's own host id (`capabilities.host_id`) — what it stamps into `origin`; null until known. */
+  daemonHostId: string | null
   now: number
   onOpen: (executionId: string) => void
 }
 
-export function ExecutionsGroup({ group, hostId, now, onOpen }: Props) {
+export function ExecutionsGroup({ group, daemonHostId, now, onOpen }: Props) {
   const t = useI18nStore((s) => s.t)
   const key = KNOWN_SOURCES[group.source]
   const label = key ? t(key) : group.source
@@ -27,7 +28,7 @@ export function ExecutionsGroup({ group, hostId, now, onOpen }: Props) {
     <div data-testid={`executions-group-${group.source}`} className="flex flex-col">
       <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-text-muted truncate">{label}</div>
       {group.rows.map((row) => (
-        <ExecutionRowCompact key={row.id} row={row} hostId={hostId} now={now} onOpen={() => onOpen(row.id)} />
+        <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} onOpen={() => onOpen(row.id)} />
       ))}
     </div>
   )

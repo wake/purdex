@@ -153,11 +153,15 @@ describe('ExecutionsView', () => {
     expect(screen.getByTestId('executions-age').textContent).toBe('1m')
   })
 
-  it('marker only for same-host /session/ origins (other host origin → no marker)', () => {
+  it('marker only for /session/ origins stamped with the DAEMON host id from capabilities (the client entry id never matches)', () => {
+    // The daemon writes origins with its own id (`purdex://host/<daemon host_id>/session/<code>`);
+    // the SPA's host entry id (`H`) is a client-local name and must not be what the marker compares.
+    const DAEMON = 'mini-lab:278cbm'
+    useNexHostStore.setState({ byHost: { [H]: entryWith({ capabilities: { host_id: DAEMON } as NexHostEntry['capabilities'] }) } })
     seedList([
-      row({ id: 'exc_mine', origin: `purdex://host/${H}/session/zk16vd`, updated_at: NOW - 1 }),
-      row({ id: 'exc_other', origin: `purdex://host/${OTHER}/session/zk16vd`, updated_at: NOW - 2 }),
-      row({ id: 'exc_nosess', origin: `purdex://host/${H}/somethingelse`, updated_at: NOW - 3 }),
+      row({ id: 'exc_mine', origin: `purdex://host/${DAEMON}/session/zk16vd`, updated_at: NOW - 1 }),
+      row({ id: 'exc_client_id', origin: `purdex://host/${H}/session/zk16vd`, updated_at: NOW - 2 }),
+      row({ id: 'exc_nosess', origin: `purdex://host/${DAEMON}/somethingelse`, updated_at: NOW - 3 }),
       row({ id: 'exc_none', updated_at: NOW - 4 }),
     ])
     render(<ExecutionsView hostId={H} isActive />)

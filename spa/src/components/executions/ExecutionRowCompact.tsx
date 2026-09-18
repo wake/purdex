@@ -11,15 +11,16 @@ import type { ExecutionSummary } from '../../lib/nex/types'
 
 interface Props {
   row: ExecutionSummary
-  hostId: string
+  /** The daemon's own host id (`capabilities.host_id`), not the client's host entry id — `origin` is stamped by the daemon. */
+  daemonHostId: string | null
   now: number
   onOpen: () => void
 }
 
-export function ExecutionRowCompact({ row, hostId, now, onOpen }: Props) {
+export function ExecutionRowCompact({ row, daemonHostId, now, onOpen }: Props) {
   const t = useI18nStore((s) => s.t)
   const age = relativeAge(row.updated_at, now)
-  const sessionCode = sameHostSessionCode(row.origin, hostId)
+  const sessionCode = daemonHostId ? sameHostSessionCode(row.origin, daemonHostId) : null
 
   return (
     <button
