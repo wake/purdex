@@ -7,6 +7,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useExecutionStore } from '../stores/useExecutionStore'
+import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceSettingsStore } from '../stores/useWorkspaceSettingsStore'
@@ -52,6 +53,7 @@ function resetAllStores() {
   useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
   useExecutionStore.setState({ executions: {} })
+  useNexHostStore.setState({ byHost: {} })
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   useHostSettingsStore.setState({ hosts: {} })
   useWorkspaceStore.getState().reset()
@@ -165,17 +167,20 @@ describe('host delete cascade', () => {
     expect(useStreamStore.getState().sessions[`${HOST_A}:dev001`]).toBeUndefined()
   })
 
-  it('clears useExecutionStore entries for the removed host only', () => {
+  it('clears useExecutionStore and useNexHostStore entries for the removed host only', () => {
     useExecutionStore.getState().applyEvents(HOST_A, 'exc_1', [
       { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
     ])
     useExecutionStore.getState().applyEvents(HOST_B, 'exc_1', [
       { seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
     ])
+    const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1 }
+    useNexHostStore.setState({ byHost: { [HOST_A]: nexEntry, [HOST_B]: nexEntry } })
 
     deleteHostCascade(HOST_A, false)
 
     expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
+    expect(Object.keys(useNexHostStore.getState().byHost)).toEqual([HOST_B])
   })
 
   it('closeTabs releases held leases on the removed host before clearing execution state (I13)', () => {
