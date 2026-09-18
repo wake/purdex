@@ -1,6 +1,6 @@
 # Spec — P-B3: exec pane consumes Nexen N2 `tool_use` / `tool_result`
 
-- Status: v1.1 (2026-09-19) — codex plan+spec review `task-mu7ckdhj-wo5ha7` applied (§9)
+- Status: v1.2 (2026-09-19) — codex plan+spec review `task-mu7ckdhj-wo5ha7` and PR #1221 R1/R2 applied (§9)
 - Predecessors: `2026-09-15-pb-execution-pane-spec.md` (P-B, §4.2.3
   transport / §4.2.4 reducer rules stay binding) and
   `2026-09-18-pb2-exec-live-stream-spec.md` (P-B2, §4.1 partial assembly
@@ -231,7 +231,15 @@ the kinds are then **not** appended to `messages` and do not touch
   `tool_use_id` only advances `lastSeq` (as today). Payload fields are
   taken by type check, never by trust; a malformed `diff` (non-array
   hunks, non-numeric counts) is dropped as a whole rather than partially
-  copied.
+  copied. Numbers must be finite and, for counts / line numbers / byte and
+  line totals, non-negative integers (`duration_ms` non-negative, may be
+  0); a `diff` whose hunks total more than `DIFF_LINES_SANITY_CAP`
+  (10 000 — 5× the contract's `diff_max_lines`, a defensive bound, not a
+  display value) is dropped **before** any copy is made. Entry lookup is
+  by own key (`Object.hasOwn`) in every rule, raw and N2 alike: a
+  `tool_use_id` of `constructor` / `__proto__` must never hit
+  `Object.prototype` and be mistaken for an existing entry (codex R2 A1;
+  the raw A1/A2 rules had the same latent bug).
 - N7 Duplicate `tool_use_id` within a turn (contract rule 9 ②): the
   daemon still emits every `tool_use` but never matches the later
   `tool_result`s (echo fields `name` / `message_id` / `block_index` and
@@ -469,3 +477,10 @@ now (F7 proves they exist).
   `default` branch — agreed, exhaustive in P-B3.1; (6) `Pick` types —
   half: `Pick` keeps optionality so `primaryArg`/`known` are fine,
   `status` is required so `ToolResultFacts` became `Partial<Pick<…>>`.
+- 2026-09-19 PR #1221 (P-B3.1): codex R1 (built-in reviewer) — no
+  findings; R2 attacker — A1 prototype-chain `tool_use_id` (high), A2
+  unbounded / non-finite numeric facts (medium); R2 critic — A1 agreed
+  (also latent in raw A1/A2), A2 "concern" (contract already caps at
+  2000 lines; NaN/Infinity are not valid JSON), **no spec drift** against
+  §4.2 / N0–N7 / §5. Both fixed (own-key lookup everywhere, finite
+  non-negative ints, `DIFF_LINES_SANITY_CAP`), rule N6 extended above.
