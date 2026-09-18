@@ -78,11 +78,15 @@ clearHostColorMode(hostId, mode: HostColorMode): void   // removes the whole set
 - `setHostColorLayer(..., 'main', value)` with a valid `color` creates the mode's set when absent
   (`middle`/`light` stay absent = inherit). With `null` on `main` it behaves as `clearHostColorMode`.
 - `setHostColorLayer(..., 'middle' | 'light', value)`: `value.color` may be omitted (inherit) but
-  when present must pass `isValidHostColor`; `alpha` is clamped to an integer 0–100. `null`
-  removes the layer (back to inherit + default alpha). Setting middle/light on a mode whose set
-  does not exist is a no-op (the UI creates the set first by writing `main`).
-- Any write to `colors` on a host that still has legacy `color` deletes `color` in the same
-  update (D10).
+  when present must pass `isValidHostColor` (the store lowercases but never normalizes — the UI
+  normalizes user input first); `alpha` must be a finite number and is clamped to an integer
+  0–100; any other shape is a no-op and never throws. `null` removes the layer (back to inherit +
+  default alpha). Setting middle/light on a mode whose set does not exist is a no-op (the UI
+  creates the set first by writing `main`).
+- `clearHostColorMode` on a mode that has no set is a no-op, except `console` on a legacy-only
+  host, where it removes the legacy `color` (that is the "No color" button).
+- Any **applied** write to `colors` on a host that still has legacy `color` deletes `color` in
+  the same update (D10); a rejected (no-op) write leaves it alone.
 - Unknown host / invalid input → no-op, like today.
 
 ### 4.2 Validation (`lib/host-color.ts`)
@@ -206,7 +210,7 @@ Layout inside the existing `Field label="Color"`:
 
 | Phase | PR content | Tests |
 |---|---|---|
-| **P1 data** | §4 in full: types, store actions, validation, sanitize, `resolveHostColors`, `stripAgentTitleMarker` + `stripAgentTitleMarker` setting + `useTabDisplay` wiring, `preferences.ts` key list, delete `resolveTabHostColor`. `HostBadge` and its consumers keep compiling via a **temporary** adapter: `useTabHostBadge` still returns `color` = resolved main hex (no visual change yet). | Store actions incl. legacy `color` deletion, sanitize corner cases (mode key junk, bad `main`, bad `middle` kept-set), resolver inheritance table (every row of §4.3), strip-marker table, `useTabDisplay` with toggle on/off and empty-after-strip. |
+| **P1 data** | §4.1–4.3 and §4.5 in full, plus the **addition** in §4.4 (`stripAgentTitleMarker` setting, its `preferences.ts` entry, the `useTabDisplay` wiring and the Settings toggle from §5.4's last sentence); the **removal** of the opacity settings in §4.4 is P2. Delete `resolveTabHostColor`. `HostBadge` and its consumers keep compiling via a **temporary** adapter: `useTabHostBadge` still returns `color` = resolved main hex (no visual change yet). | Store actions incl. legacy `color` deletion, sanitize corner cases (mode key junk, bad `main`, bad `middle` kept-set), resolver inheritance table (every row of §4.3), strip-marker table, `useTabDisplay` with toggle on/off and empty-after-strip. |
 | **P2 render + settings** | §5 in full; remove the two opacity settings end to end; captions; the temporary adapter from P1 disappears. | `HostBadge` custom properties + neutral path; `useTabHostBadge` mode selection (`agentType` present/absent) and memo identity; both tab rows carry `data-active`; `HostBadgeSetting` renders three captioned inputs and no opacity inputs; locale completeness. |
 | **P3 picker** | §6 in full. | `color-space` round-trips; `HostColorField` mode switch, inherit-from-console dimmed state + copy-on-click, clear per mode; popover: preset click writes main, inherit toggle removes/creates `color`, alpha slider clamps, hex invalid ⇒ no write. |
 

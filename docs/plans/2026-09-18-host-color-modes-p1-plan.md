@@ -20,6 +20,7 @@
 - Modes are exactly `'console' | 'terminal' | 'execution'` (spec D1). Nothing resolves to `execution` in P1.
 - Locale keys must exist in both `spa/src/locales/en.json` and `zh-TW.json` (`locale-completeness.test.ts`).
 - P1 must not change what the user sees: badge colors and titles (with the new toggle **on**, `✳` disappears — that is the one intended visible change of P1).
+- Spec §4.4's **removal** of the four `hostBadge*{LineOpacity,BgOpacity}` settings is P2 (spec §7), not this plan — P1 only **adds** `stripAgentTitleMarker`. Do not touch those fields here.
 
 ---
 
@@ -245,12 +246,86 @@ In `spa/src/lib/host-color.test.ts` delete the whole `describe('resolveTabHostCo
     expect('color' in out).toBe(false)
     expect(out.colors).toEqual({ console: set('#3b82f6') })
   })
+
+  it('keeps the colors map and every set by reference when all valid, even if another key is cleaned', () => {
+    const colors = { console: set('#3b82f6'), terminal: { ...set('#ef4444'), middle: { alpha: 40 } } }
+    const out = sanitizeHostConfig({ ...base, icon: 'NotAnIcon', colors } as never)
+    expect(out.colors).toBe(colors)
+    expect(out.colors?.terminal).toBe(colors.terminal)
+  })
+
+  it('rebuilds only the set that had an invalid layer; sibling sets keep their reference', () => {
+    const consoleSet = set('#3b82f6')
+    const terminalSet = { ...set('#ef4444'), light: { alpha: 900 } }
+    const out = sanitizeHostConfig({ ...base, colors: { console: consoleSet, terminal: terminalSet } } as never)
+    expect(out.colors?.console).toBe(consoleSet)
+    expect(out.colors?.terminal).not.toBe(terminalSet)
+    expect(out.colors?.terminal).toEqual(set('#ef4444'))
+  })
+```
+
+Also append to `spa/src/lib/sync/contributors/hosts.test.ts` a new describe after `hostsContributor.deserialize (hostile color payloads)` (same `beforeEach` / `payload` shape as that block; `payload` here takes the `colors` value for host `a`):
+
+```ts
+describe('hostsContributor.deserialize (hostile colors payloads)', () => {
+  const VALID = { console: { main: { color: '#3b82f6', alpha: 100 } } }
+  const HOSTILE: unknown[] = ['x', 42, null, [], { shell: VALID.console }, { console: { main: { alpha: 100 } } }]
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: { a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0 } },
+      hostOrder: ['a'],
+      activeHostId: 'a',
+    })
+  })
+
+  function payload(colors: unknown): FullPayload {
+    return {
+      version: 1,
+      data: {
+        hosts: {
+          a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, order: 0, colors },
+          b: { id: 'b', name: 'b', ip: '10.0.0.2', port: 7860, order: 1, colors: VALID },
+        },
+        hostOrder: ['a', 'b'],
+        activeHostId: 'a',
+      },
+    }
+  }
+
+  it.each(HOSTILE)('full-replace strips hostile colors %j, keeps the valid map and token contract', (bad) => {
+    createHostsContributor().deserialize(payload(bad), { type: 'full-replace' })
+    const s = useHostStore.getState()
+    expect('colors' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.colors).toEqual(VALID)
+    expect(s.hosts.a.token).toBe('TOK')
+    expect(s.hosts.b.token).toBeNull()
+  })
+
+  it.each(HOSTILE)('field-merge strips hostile colors %j, keeps the valid map and token contract', (bad) => {
+    createHostsContributor().deserialize(payload(bad), {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'remote' },
+    })
+    const s = useHostStore.getState()
+    expect('colors' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.colors).toEqual(VALID)
+  })
+
+  it('a partially bad set keeps its valid layers after full-replace', () => {
+    createHostsContributor().deserialize(
+      payload({ console: { main: { color: '#3b82f6', alpha: 100 }, middle: { alpha: 500 }, light: { alpha: 10 } } }),
+      { type: 'full-replace' },
+    )
+    expect(useHostStore.getState().hosts.a.colors).toEqual({ console: { main: { color: '#3b82f6', alpha: 100 }, light: { alpha: 10 } } })
+  })
+})
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd spa && npx vitest run src/lib/host-color.test.ts`
-Expected: the new sanitize tests FAIL (colors passes through untouched); typecheck errors on `colors` are fine at this point.
+Run: `cd spa && npx vitest run src/lib/host-color.test.ts src/lib/sync/contributors/hosts.test.ts`
+Expected: the new sanitize / contributor tests FAIL (colors passes through untouched); typecheck errors on `colors` are fine at this point.
 
 - [ ] **Step 3: Implement**
 
@@ -325,13 +400,13 @@ export function sanitizeHostConfig(host: HostConfig): HostConfig {
 
 - [ ] **Step 4: Run to verify pass + typecheck**
 
-Run: `cd spa && npx vitest run src/lib/host-color.test.ts && npx tsc --noEmit -p tsconfig.app.json`
+Run: `cd spa && npx vitest run src/lib/host-color.test.ts src/lib/sync/contributors/hosts.test.ts && npx tsc --noEmit -p tsconfig.app.json`
 Expected: PASS, no type errors (search the repo for any other `resolveTabHostColor` usage first: `rg resolveTabHostColor spa/src` must return nothing).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only spa/src/lib/host-color.ts spa/src/lib/host-color.test.ts spa/src/stores/useHostStore.ts -m "feat(spa): HostConfig.colors with sanitize; drop dead resolveTabHostColor"
+git commit --only spa/src/lib/host-color.ts spa/src/lib/host-color.test.ts spa/src/lib/sync/contributors/hosts.test.ts spa/src/stores/useHostStore.ts -m "feat(spa): HostConfig.colors with sanitize; drop dead resolveTabHostColor"
 ```
 
 ---
@@ -447,6 +522,17 @@ describe('resolveHostColorSet / resolveHostColors', () => {
 
   it('an invalid legacy color yields null instead of throwing', () => {
     expect(resolveHostColorSet({ color: 'red' }, 'console')).toBeNull()
+  })
+
+  it('malformed colors that bypassed sanitize resolve to null (or legacy) without throwing', () => {
+    expect(resolveHostColorSet({ colors: 'x' as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: 42 as never }, 'terminal')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { main: { alpha: 100 } } } as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { main: { color: 'red', alpha: 100 } } } as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { ...console_, middle: { alpha: 900 } } } as never }, 'console')).toBeNull()
+    // A null set for the mode is "absent": legacy color still applies.
+    expect(resolveHostColorSet({ colors: { console: null } as never, color: '#22c55e' }, 'console')?.main.color).toBe('#22c55e')
+    expect(resolveHostColors({ colors: [] as never }, 'console')).toBeNull()
   })
 
   it('resolveHostColors emits rgba strings', () => {
@@ -614,18 +700,53 @@ In `spa/src/stores/useHostStore.test.ts` replace the two existing `setHostColor`
       expect(host().colors?.terminal).toEqual({ main: { color: '#ef4444', alpha: 100 }, middle: { alpha: 50 } })
     })
 
-    it('setHostColorLayer clamps alpha and lowercases color', () => {
+    it('setHostColorLayer clamps a finite alpha and lowercases a valid color', () => {
       useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: '#3B82F6', alpha: 250.4 })
       expect(host().colors?.console?.main).toEqual({ color: '#3b82f6', alpha: 100 })
       useHostStore.getState().setHostColorLayer(id(), 'console', 'light', { color: '#000000', alpha: -3 })
       expect(host().colors?.console?.light).toEqual({ color: '#000000', alpha: 0 })
     })
 
-    it('setHostColorLayer rejects a main without color, an invalid color, or an unknown mode', () => {
-      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { alpha: 100 } as never)
-      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: 'red', alpha: 100 })
-      useHostStore.getState().setHostColorLayer(id(), 'shell' as never, 'main', { color: '#3b82f6', alpha: 100 })
+    it.each([
+      ['main without color', 'main', { alpha: 100 }],
+      ['color not #rrggbb', 'main', { color: 'red', alpha: 100 }],
+      ['color without hash (no normalize in the store)', 'main', { color: '3b82f6', alpha: 100 }],
+      ['color with padding', 'main', { color: ' #3b82f6 ', alpha: 100 }],
+      ['non-string color', 'main', { color: 42, alpha: 100 }],
+      ['missing alpha', 'main', { color: '#3b82f6' }],
+      ['string alpha', 'main', { color: '#3b82f6', alpha: '50' }],
+      ['NaN alpha', 'main', { color: '#3b82f6', alpha: NaN }],
+      ['Infinity alpha', 'main', { color: '#3b82f6', alpha: Infinity }],
+      ['non-object value', 'main', 'x'],
+    ] as const)('setHostColorLayer is a no-op and never throws on %s', (_label, layer, value) => {
+      expect(() => useHostStore.getState().setHostColorLayer(id(), 'console', layer, value as never)).not.toThrow()
       expect(host().colors).toBeUndefined()
+    })
+
+    it('setHostColorLayer rejects an unknown mode and an unknown layer', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'shell' as never, 'main', { color: '#3b82f6', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'glow' as never, { color: '#3b82f6', alpha: 100 })
+      expect(host().colors).toBeUndefined()
+    })
+
+    it('a rejected write leaves a legacy color untouched', () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: 'red', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'middle', { alpha: 50 })   // no set yet → no-op
+      expect(host().color).toBe('#22c55e')
+    })
+
+    it('setHostColor(null) on a legacy-only host removes the legacy color (the "No color" button)', () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
+      useHostStore.getState().setHostColor(id(), null)
+      expect('color' in host()).toBe(false)
+      expect('colors' in host()).toBe(false)
+    })
+
+    it('clearHostColorMode on a non-console mode that has no set is a no-op (legacy color kept)', () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
+      useHostStore.getState().clearHostColorMode(id(), 'terminal')
+      expect(host().color).toBe('#22c55e')
     })
 
     it('setHostColorLayer(null) on middle/light removes the layer; on main clears the mode', () => {
@@ -662,16 +783,20 @@ Expected: FAIL (`setHostColorLayer` is not a function; `setHostColor` still writ
   /**
    * Write one layer of one mode (spec §4.1). `main` with a valid color creates the
    * set when absent; `null` on `main` clears the mode. `middle` / `light` require an
-   * existing set (no-op otherwise); `null` removes just that layer. Alpha is clamped,
-   * color lowercased; invalid input / unknown host / unknown mode are no-ops.
-   * Every write deletes the legacy `color` key.
+   * existing set (no-op otherwise); `null` removes just that layer.
+   * Validation is strict and never throws: `color` (when present) must already pass
+   * `isValidHostColor` (it is lowercased, never normalized — the UI normalizes), `alpha`
+   * must be a finite number (then clamped to an integer 0–100). Anything else, an
+   * unknown host / mode / layer, is a no-op. Every *applied* write deletes the legacy
+   * `color` key (spec D10); clearing a mode that has no set is a no-op, except
+   * `console`, which also clears a legacy-only color (that is the "No color" button).
    */
   setHostColorLayer: (hostId: string, mode: HostColorMode, layer: HostColorLayerName, value: HostColorLayer | null) => void
   /** Remove the whole set for a mode; drops `colors` when it becomes empty. */
   clearHostColorMode: (hostId: string, mode: HostColorMode) => void
 ```
 
-Implementation (replace the `setHostColor` body; add the two new actions right after it). Also extend the value import from `'../lib/host-color'` with `clampHostAlpha, isHostColorMode, normalizeHostColor` and the type import with `HostColorLayer, HostColorLayerName`:
+Implementation (replace the `setHostColor` body; add the two new actions right after it). Also extend the value import from `'../lib/host-color'` with `clampHostAlpha, isHostColorMode` and the type import with `HostColorLayer, HostColorLayerName`:
 
 ```ts
       setHostColor: (hostId, color) => {
@@ -687,22 +812,30 @@ Implementation (replace the `setHostColor` body; add the two new actions right a
       setHostColorLayer: (hostId, mode, layer, value) =>
         set((state) => {
           const host = state.hosts[hostId]
-          if (!host || !isHostColorMode(mode)) return state
-          const { color: _legacy, ...hostSansLegacy } = host
+          if (!host || !isHostColorMode(mode) || !HOST_COLOR_LAYER_NAMES.includes(layer)) return state
           const colors = { ...host.colors }
           const existing = colors[mode]
 
           if (value === null) {
-            if (layer === 'main') delete colors[mode]
-            else if (existing) {
+            if (layer === 'main') {
+              // Clearing a mode that has no set is a no-op — unless it is `console` on a
+              // legacy-only host, where "clear" must drop the legacy color.
+              if (!existing && !(mode === 'console' && 'color' in host)) return state
+              delete colors[mode]
+            } else if (existing) {
               const { [layer]: _dropped, ...rest } = existing
               colors[mode] = rest as HostColorSet
             } else return state
           } else {
             if (typeof value !== 'object' || value === null) return state
-            const alpha = clampHostAlpha(Number(value.alpha))
-            const color = value.color === undefined ? undefined : normalizeHostColor(value.color)
-            if (value.color !== undefined && color === null) return state
+            const { alpha: rawAlpha, color: rawColor } = value as { alpha?: unknown; color?: unknown }
+            if (typeof rawAlpha !== 'number' || !Number.isFinite(rawAlpha)) return state
+            const alpha = clampHostAlpha(rawAlpha)
+            let color: string | undefined
+            if (rawColor !== undefined) {
+              if (!isValidHostColor(rawColor)) return state
+              color = rawColor.toLowerCase()
+            }
             if (layer === 'main') {
               if (!color) return state
               colors[mode] = { ...existing, main: { color, alpha } }
@@ -712,15 +845,22 @@ Implementation (replace the `setHostColor` body; add the two new actions right a
             }
           }
 
-          const next: HostConfig = { ...hostSansLegacy }
+          const { color: _legacy, ...next } = host as HostConfig
+          delete next.colors
           if (Object.keys(colors).length > 0) next.colors = colors
-          return { hosts: { ...state.hosts, [hostId]: next } }
+          return { hosts: { ...state.hosts, [hostId]: next as HostConfig } }
         }),
 
       clearHostColorMode: (hostId, mode) => get().setHostColorLayer(hostId, mode, 'main', null),
 ```
 
-Import `HOST_COLOR_ALPHA_DEFAULTS` and `HostColorSet` as well. The store's `create` callback must expose `get` — check the existing signature `(set, get) =>`; it already uses `get()` in `getDaemonBase`.
+Import `HOST_COLOR_ALPHA_DEFAULTS`, `HOST_COLOR_LAYER_NAMES` and `HostColorSet` as well (`normalizeHostColor` is **not** used here — the store accepts only already-valid `#rrggbb`). Add to `lib/host-color.ts` next to `HostColorLayerName`:
+
+```ts
+export const HOST_COLOR_LAYER_NAMES: readonly HostColorLayerName[] = ['main', 'middle', 'light']
+```
+
+The store's `create` callback must expose `get` — check the existing signature `(set, get) =>`; it already uses `get()` in `getDaemonBase`.
 
 - [ ] **Step 4: Run to verify pass + full store tests + typecheck**
 
@@ -730,7 +870,7 @@ Expected: PASS. If `hosts.test.ts` asserted the legacy `color` round-trip, keep 
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only spa/src/stores/useHostStore.ts spa/src/stores/useHostStore.test.ts -m "feat(spa): setHostColorLayer/clearHostColorMode; setHostColor writes colors.console.main"
+git commit --only spa/src/lib/host-color.ts spa/src/stores/useHostStore.ts spa/src/stores/useHostStore.test.ts -m "feat(spa): setHostColorLayer/clearHostColorMode; setHostColor writes colors.console.main"
 ```
 
 ---
@@ -1041,6 +1181,10 @@ git commit --only spa/src/stores/useUISettingsStore.ts spa/src/stores/useUISetti
 ```
 
 ---
+
+## Out of scope (tracked separately)
+
+- `sanitizeHostConfig` (and the `hosts.ts` contributor that casts every incoming map entry to `HostConfig`) assume each host entry is an object; a `null` / primitive entry in a hostile payload throws before P1 code runs. Pre-existing; filed as a GitHub issue, not fixed in P1.
 
 ## Done criteria (P1)
 
