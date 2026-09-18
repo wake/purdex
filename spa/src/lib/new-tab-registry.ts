@@ -47,6 +47,13 @@ export interface NewTabProviderSource {
    * only while the source is ready so `to` reflects the real state.
    */
   migrations?: () => NewTabProviderMigration[]
+  /**
+   * Optional — the module that owns this source. `unregisterNewTabProvidersByModule`
+   * removes matching sources too (and `subscribeNewTabProviders` releases the
+   * subscription it holds on them). Sources without one (e.g. sessions) are
+   * never module-owned and only go away via `unregisterNewTabProviderSource`.
+   */
+  moduleId?: string
 }
 
 export interface NewTabProviderMigration {
@@ -90,16 +97,29 @@ export function registerNewTabProviderSource(source: NewTabProviderSource): void
   notifyRegistryChange()
 }
 
+/** Remove one dynamic source by id. No-op (no notification) for unknown ids. */
+export function unregisterNewTabProviderSource(id: string): void {
+  if (sources.delete(id)) notifyRegistryChange()
+}
+
 /**
- * Drop every provider tagged with `moduleId === ownerModuleId`. Used by
- * `registerEditorNewTabProviders()` (and any future module-owned helper) to
- * stay idempotent across HMR / re-bootstrap.
+ * Drop every provider AND every source tagged with `moduleId === ownerModuleId`.
+ * Used by `registerEditorNewTabProviders()` (and any future module-owned
+ * helper) to stay idempotent across HMR / re-bootstrap, and by a module's
+ * disable path. Subscribers re-sync on the registry notification, which
+ * releases the per-source subscription each of them holds on a removed source.
  */
 export function unregisterNewTabProvidersByModule(ownerModuleId: string): void {
   let changed = false
   for (const [id, p] of providers) {
     if (p.moduleId === ownerModuleId) {
       providers.delete(id)
+      changed = true
+    }
+  }
+  for (const [id, s] of sources) {
+    if (s.moduleId === ownerModuleId) {
+      sources.delete(id)
       changed = true
     }
   }
