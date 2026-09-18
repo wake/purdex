@@ -1,3 +1,5 @@
+> **Deprecated (2026-09-18).** M0 execution/dispatch were removed in P-D.1 (spec `2026-09-18-pd-teardown-spec.md`); Ploom's integration point is Nexen. Kept for history.
+
 # Ploom-M0 Handoff Brief
 
 > **給根在 `~/Workspace/wake/ploom` 的獨立 Claude session 開場用。** 本 session（Purdex 側）平行推 PR-Purdex-M0；兩邊靠共享契約解耦。
