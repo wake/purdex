@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.399] - 2026-09-18
+
+### Fix: badge 預覽三態＋跟側欄同底；浮動面板一律開在欄位下方（#1197）
+
+三個使用者回報：
+
+- **預覽顏色跟側欄看起來不一樣**——badge 底色是 22% 透明的 `light`，側欄的列坐在活動列 `surface-tertiary` 面板上，預覽卻坐在設定頁底色上，同一個半透明綠疊在不同底就不同色。預覽列現在包在一塊 `surface-tertiary` 面板裡。
+- **預覽少了三態**——原本只有「一般」與「Hover · 作用中」兩列，但真實側欄 hover 的列底（`surface-hover`）跟作用中（`surface-active`）不同。改成一般／Hover／作用中三列，class 取自 `INLINE_TAB_ROW_CLASSES`（新增 `hoverPreview`＝inactive 去掉 `hover:` 前綴，靜態呈現 hover 面）。色塊本身仍照 spec：圖示一般用 middle、hover 與作用中用 main，底色三態一律 light。
+- **高的 Main 色盤跑到視窗頂端**——欄位下方放不下就退到「放上方」再被夾到頂。`FloatingPanel` 改成一律開在 anchor 下方，`maxHeight`＝從那裡到視窗底的剩餘空間、內容可捲，最少保留 160px（貼底時只往上滑到剛好夠）。R1 與 re-review 補了拖曳時 maxHeight 要跟著 top 重算、極小視窗不套 160 下限。
+
+6988 tests 全綠，純 SPA。
+
 ## [1.0.0-alpha.398] - 2026-09-18
 
 ### Feature: Peers 頁面可以 Pair／Unpair／Rotate（Peer Pairing D4，#1184 #1185 #1191）— Phase D 完結
