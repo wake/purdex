@@ -101,6 +101,10 @@ var fakeDefaultEvents = []agentpkg.HookEventSpec{
 	// path — pre-L2 cc behavior unchanged.
 	{PurdexName: "PdxPreToolUse", UpstreamKeys: []string{"PreToolUse"}, Lifecycle: agentpkg.LifecycleUserPromptSubmit},
 	{PurdexName: "PdxStop", UpstreamKeys: []string{"Stop"}, Lifecycle: agentpkg.LifecycleStop},
+	// #1159: codex 0.153 catalog. PostToolUse is a plain status event;
+	// Interrupt shares LifecycleStop so the codex turn-aware detach runs.
+	{PurdexName: "PdxPostToolUse", UpstreamKeys: []string{"PostToolUse"}, Lifecycle: agentpkg.LifecycleNone},
+	{PurdexName: "PdxInterrupt", UpstreamKeys: []string{"Interrupt"}, Lifecycle: agentpkg.LifecycleStop},
 	{PurdexName: "PdxStopFailure", UpstreamKeys: []string{"StopFailure"}, Lifecycle: agentpkg.LifecycleStopFailure},
 	{PurdexName: "PdxSessionEnd", UpstreamKeys: []string{"SessionEnd"}, Lifecycle: agentpkg.LifecycleSessionEnd},
 	{PurdexName: "PdxSubagentStart", UpstreamKeys: []string{"SubagentStart"}, Lifecycle: agentpkg.LifecycleSubagentStart},

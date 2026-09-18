@@ -1873,3 +1873,94 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		}
 	})
 }
+
+// #1159 (a): PostToolUse on a codex frame parked at waiting (after a
+// PermissionRequest) moves it to running via the generic narrow update.
+func TestApplyFrameEvent_CodexPostToolUse_WaitingToRunning(t *testing.T) {
+	m := newProxyTestModule(t)
+	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
+	frame.Status = agentpkg.StatusWaiting
+	if _, err := m.frames.Upsert(frame); err != nil {
+		t.Fatalf("park frame at waiting: %v", err)
+	}
+	turnAwareEnvAlive(t, 1, "t-init")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxPostToolUse",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: json.RawMessage(`{"tool_name":"Bash","turn_id":"t_a"}`),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"tool_name": "Bash"}}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	final, err := m.frames.GetByIdentity("%5", 42, "t1")
+	if err != nil || final == nil {
+		t.Fatalf("reload: %v / %v", err, final)
+	}
+	if final.Status != agentpkg.StatusRunning {
+		t.Fatalf("status = %q, want running", final.Status)
+	}
+}
+
+// #1159 (b): Interrupt from a codex broker detaches its proxy ref by
+// turn_id exactly like Stop (LifecycleStop path).
+func TestApplyFrameEvent_CodexInterrupt_DetachesProxyByTurn(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+	}})
+	turnAwareEnvAlive(t, 100, "t100")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxInterrupt",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_detached_on_stop_turn" {
+		t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop_turn; meta=%+v", meta.Reason, meta)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil || len(final.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty after Interrupt detach", final.Subagents)
+	}
+}
+
+// #1159 (b'): Interrupt on a standalone codex frame moves running → idle.
+func TestApplyFrameEvent_CodexInterrupt_StandaloneRunningToIdle(t *testing.T) {
+	m := newProxyTestModule(t)
+	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
+	frame.Status = agentpkg.StatusRunning
+	if _, err := m.frames.Upsert(frame); err != nil {
+		t.Fatalf("set running: %v", err)
+	}
+	turnAwareEnvAlive(t, 1, "t-init")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxInterrupt",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 42, "t1")
+	if final == nil || final.Status != agentpkg.StatusIdle {
+		t.Fatalf("frame = %+v, want idle", final)
+	}
+}
