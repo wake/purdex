@@ -186,9 +186,15 @@ export function handoffErrorMessage(t: TFunction, err: HandoffApiError): string 
   return t(`handoff.error.${err.code}`, paramsFor(t, err))
 }
 
-/** The CC session id to resume by hand, when the failure left one detached; else null. */
+/**
+ * The CC session id to resume by hand, when the failure left one detached;
+ * else null. `rolled_back: true` means the daemon already restarted CC in
+ * the terminal, so there is nothing to resume by hand even though the body
+ * still names the session.
+ */
 export function manualResumeHint(err: HandoffApiError): string | null {
   if (!SESSION_ID_CODES.has(err.code)) return null
+  if (err.body.rolled_back === true) return null
   const id = err.body.session_id
   return typeof id === 'string' && id !== '' ? id : null
 }

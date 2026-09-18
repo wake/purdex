@@ -370,4 +370,13 @@ describe('manualResumeHint', () => {
     expect(manualResumeHint(new HandoffApiError(409, 'delegate_rejected', { code: 'delegate_rejected', session_id: '' }))).toBeNull()
     expect(manualResumeHint(new HandoffApiError(409, 'delegate_rejected', { code: 'delegate_rejected', session_id: 42 }))).toBeNull()
   })
+
+  it('returns null when the daemon already rolled back (CC is back in the terminal, nothing to resume by hand)', () => {
+    expect(manualResumeHint(new HandoffApiError(409, 'delegate_rejected', { reject_reason: 'quota', rolled_back: true, session_id: 'sid-9' }))).toBeNull()
+    expect(manualResumeHint(new HandoffApiError(409, 'tmux_instance_mismatch', { after_exit: true, rolled_back: true, session_id: 'sid-9' }))).toBeNull()
+    // Not rolled back, or the field is absent / not a boolean: the id stands.
+    expect(manualResumeHint(new HandoffApiError(409, 'delegate_rejected', { reject_reason: 'quota', rolled_back: false, session_id: 'sid-9' }))).toBe('sid-9')
+    expect(manualResumeHint(new HandoffApiError(409, 'tmux_instance_mismatch', { after_exit: true, session_id: 'sid-9' }))).toBe('sid-9')
+    expect(manualResumeHint(new HandoffApiError(409, 'delegate_rejected', { rolled_back: 'true', session_id: 'sid-9' }))).toBe('sid-9')
+  })
 })

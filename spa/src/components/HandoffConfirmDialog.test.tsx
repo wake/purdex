@@ -131,12 +131,12 @@ describe('HandoffConfirmDialog — errors keep the dialog open', () => {
     expect(cancelBtn().disabled).toBe(false)
   })
 
-  it('delegate_rejected rolled back → reason + restored; the resume line follows session_id presence', async () => {
+  it('delegate_rejected rolled back → reason + restored; no manual-resume line even when session_id is present (CC is already back)', async () => {
     await failWith(new HandoffApiError(409, 'delegate_rejected', { reject_reason: 'quota', rolled_back: true }))
     expect(toast()?.message).toBe('nex rejected the handoff (quota); the terminal was restored.')
     cleanup()
     await failWith(new HandoffApiError(409, 'delegate_rejected', { reject_reason: 'quota', rolled_back: true, session_id: 'sid-9' }))
-    expect(toast()?.message).toBe('nex rejected the handoff (quota); the terminal was restored.\nResume by hand: claude --resume sid-9')
+    expect(toast()?.message).toBe('nex rejected the handoff (quota); the terminal was restored.')
   })
 
   it('delegate_rejected NOT rolled back → second line with the manual resume command', async () => {
