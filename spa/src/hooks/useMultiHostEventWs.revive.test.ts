@@ -209,16 +209,6 @@ describe('useMultiHostEventWs revive — the sessions-payload trigger', () => {
     view.unmount()
   })
 
-  it('S6: leaves a stream pane alone', async () => {
-    const view = await mount()
-    seedPane('t1', 'p1', { mode: 'stream' })
-
-    emit([NEW1])
-
-    expect(paneContent('t1', 'p1')).toMatchObject({ ...dead, mode: 'stream' })
-    view.unmount()
-  })
-
   it('S4: a live session with no generation is no evidence; the next one with a generation revives', async () => {
     const view = await mount()
     seedPane('t1', 'p1')

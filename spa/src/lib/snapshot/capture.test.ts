@@ -18,7 +18,7 @@ function tmuxContent(
   hostId: string,
   sessionCode: string,
   cachedName: string,
-  mode: 'terminal' | 'stream' = 'terminal',
+  mode: 'terminal' = 'terminal',
 ): PaneContent {
   return { kind: 'tmux-session', hostId, sessionCode, mode, cachedName, tmuxInstance: '' }
 }

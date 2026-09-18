@@ -345,17 +345,6 @@ describe('setPaneRebuild', () => {
     expect(recordOfPane(tab.id, 'p2')).toBeUndefined()
   })
 
-  it('leaves stream-mode panes alone', () => {
-    const tab = createTab({
-      kind: 'tmux-session', hostId: 'h1', sessionCode: 'abc123',
-      mode: 'stream', cachedName: 'dev', tmuxInstance: '111:1000',
-    })
-    useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: tab.id })
-    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
-      kind: 'field', field: 'cwd', value: '/nope',
-    })
-    expect(rec(tab.id)).toBeUndefined()
-  })
 })
 
 // The `agent-backfill` patch (spec §5.5): the daemon's ownership answer, applied

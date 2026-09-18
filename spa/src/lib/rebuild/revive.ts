@@ -56,7 +56,7 @@ export function noteReconciledSessions(hostId: string, sessions: Session[]): voi
 }
 
 /** A terminated pane eligible for revive-by-name — the caller has already
- * filtered for `kind === 'tmux-session'`, `mode === 'terminal'`, and
+ * filtered for `kind === 'tmux-session'` and
  * `terminated === 'tmux-restarted'`. */
 export interface ReviveCandidate {
   hostId: string
@@ -129,7 +129,7 @@ export function collectCandidates(hostId: string): ReviveCandidate[] {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (c.kind !== 'tmux-session' || c.hostId !== hostId) return
-      if (c.mode !== 'terminal' || c.terminated !== 'tmux-restarted') return
+      if (c.terminated !== 'tmux-restarted') return
       candidates.push({
         hostId, tabId: tab.id, paneId: pane.id,
         sessionCode: c.sessionCode, tmuxInstance: c.tmuxInstance, cachedName: c.cachedName,

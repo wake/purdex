@@ -122,7 +122,7 @@ export function collectRecordRows(tabs: Record<string, Tab>): RecordRow[] {
   for (const tab of Object.values(tabs)) {
     for (const pane of collectLeaves(tab.layout)) {
       const content = pane.content
-      if (content.kind !== 'tmux-session' || content.mode !== 'terminal') continue
+      if (content.kind !== 'tmux-session') continue
       rows.push({
         paneId: pane.id,
         tabId: tab.id,

@@ -64,7 +64,7 @@ export function getPaneIcon(content: PaneContent): string {
       return 'Plus'
     case 'tmux-session':
       if (content.terminated) return 'SmileySad'
-      return content.mode === 'terminal' ? 'TerminalWindow' : 'ChatCircleDots'
+      return 'TerminalWindow'
     case 'dashboard':
       return 'House'
     case 'history':

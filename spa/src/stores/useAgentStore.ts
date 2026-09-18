@@ -117,7 +117,7 @@ function flagUnverifiedAgent(hostId: string, sessionCode: string, agentType: str
   for (const tab of Object.values(useTabStore.getState().tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
-      if (c.kind !== 'tmux-session' || c.mode !== 'terminal') return
+      if (c.kind !== 'tmux-session') return
       if (c.hostId !== hostId || c.sessionCode !== sessionCode) return
       const recorded = c.rebuild?.agent?.type
       if (!recorded || recorded === agentType || c.rebuild?.unverified === true) return

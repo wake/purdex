@@ -112,9 +112,7 @@ describe('probeSessionCwd', () => {
     expect(fetchSessionCwd).not.toHaveBeenCalled()
   })
 
-  it('ignores stream-mode, terminated and foreign-generation panes', () => {
-    seed({ mode: 'stream' })
-    probeSessionCwd('h1', 'abc123', '222:2000')
+  it('ignores terminated and foreign-generation panes', () => {
     seed({ terminated: 'session-closed' })
     probeSessionCwd('h1', 'abc123', '222:2000')
     seed({ tmuxInstance: '111:1000' })

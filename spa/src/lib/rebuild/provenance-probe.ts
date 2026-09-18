@@ -98,7 +98,7 @@ function wantsProbe(
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (found) return
-      if (c.kind !== 'tmux-session' || c.mode !== 'terminal' || c.terminated) return
+      if (c.kind !== 'tmux-session' || c.terminated) return
       if (c.hostId !== hostId || c.sessionCode !== sessionCode) return
       // The legacy-compatible rule (`binding.ts`), the same one the store's
       // write uses: a pane whose recorded instance is '' has not learnt its

@@ -26,7 +26,7 @@ export interface HandoffGateDeps {
 
 export function isHandoffCandidate(content: PaneContent, deps: HandoffGateDeps): boolean {
   if (content.kind !== 'tmux-session') return false
-  if (content.mode !== 'terminal' || content.terminated) return false
+  if (content.terminated) return false
   if (!deps.handoffReady) return false
   if (deps.agentType) return deps.agentType === 'cc'
   const recorded = content.rebuild?.agent?.type

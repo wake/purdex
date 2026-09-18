@@ -31,7 +31,7 @@ function makeSession(code: string, name: string = code): Session {
 const HOST_A = 'host-a'
 const HOST_B = 'host-b'
 
-function makeSessionTab(hostId: string, code: string, mode: 'terminal' | 'stream' = 'terminal'): Tab {
+function makeSessionTab(hostId: string, code: string, mode: 'terminal' = 'terminal'): Tab {
   return createTab({ kind: 'tmux-session', hostId, sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 

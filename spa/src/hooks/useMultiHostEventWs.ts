@@ -46,7 +46,7 @@ function provenanceBindings(
   for (const tab of Object.values(useTabStore.getState().tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
-      if (c.kind !== 'tmux-session' || c.mode !== 'terminal' || c.terminated) return
+      if (c.kind !== 'tmux-session' || c.terminated) return
       if (c.hostId !== hostId) return
       if (sessionCode !== undefined && c.sessionCode !== sessionCode) return
       bindings.set(`${c.sessionCode}\u0000${c.tmuxInstance}`, {

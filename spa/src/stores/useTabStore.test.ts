@@ -5,7 +5,7 @@ import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 
-function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
+function makeSessionTab(code: string, mode: 'terminal' = 'terminal') {
   return createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
@@ -30,7 +30,7 @@ describe('useTabStore', () => {
 
   it('addTab does not change activeTabId when adding second tab', () => {
     const tab1 = makeSessionTab('dev001')
-    const tab2 = makeSessionTab('cld001', 'stream')
+    const tab2 = makeSessionTab('cld001')
     useTabStore.getState().addTab(tab1)
     useTabStore.getState().addTab(tab2)
     expect(useTabStore.getState().activeTabId).toBe(tab1.id)
@@ -543,7 +543,7 @@ describe('useTabStore', () => {
 
     it('updates multiple matching tabs', () => {
       const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev001', 'stream')
+      const tab2 = makeSessionTab('dev001')
       useTabStore.getState().addTab(tab1)
       useTabStore.getState().addTab(tab2)
 

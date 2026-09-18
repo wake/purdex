@@ -517,13 +517,6 @@ describe('RenamePopover peer section', () => {
       expect(screen.getByTestId('peer-address-p2').textContent).toContain('mini-lab/ai-chat-story-3a')
     })
 
-    it('renders no block at all for a stream pane — the collector never offers one', () => {
-      seedSession(H1, 'abc123')
-      seedHost(H1, 'abc123', ROW)
-      render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane({ mode: 'stream' }))} />)
-      expect(screen.queryByTestId('rename-pane-block-p1')).toBeNull()
-      expect(screen.queryByTestId('peer-section-p1')).toBeNull()
-    })
   })
 
   // Opening the panel is the one moment it fetches (spec §3.3), and the call

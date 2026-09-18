@@ -53,7 +53,7 @@ function makeTab(id: string, content: import('../types/tab').PaneContent, opts?:
 
 const mockTabs: Tab[] = [
   makeTab('t1', { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' }),
-  makeTab('t2', { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'cld001', mode: 'stream', cachedName: '', tmuxInstance: '' }),
+  makeTab('t2', { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'cld001', mode: 'terminal', cachedName: '', tmuxInstance: '' }),
   makeTab('t3', { kind: 'dashboard' }),
 ]
 

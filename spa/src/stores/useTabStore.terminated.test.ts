@@ -3,7 +3,7 @@ import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 
-function makeSessionTab(code: string, mode: 'terminal' | 'stream' = 'terminal') {
+function makeSessionTab(code: string, mode: 'terminal' = 'terminal') {
   return createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
 }
 
@@ -61,7 +61,7 @@ describe('useTabStore — markTerminated / markHostTerminated', () => {
 
     it('marks multiple matching tabs', () => {
       const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev001', 'stream')
+      const tab2 = makeSessionTab('dev001')
       useTabStore.getState().addTab(tab1)
       useTabStore.getState().addTab(tab2)
       useTabStore.getState().markTerminated('test-host', 'dev001', 'session-closed')
@@ -86,7 +86,7 @@ describe('useTabStore — markTerminated / markHostTerminated', () => {
   describe('markHostTerminated', () => {
     it('marks all panes for a host', () => {
       const tab1 = makeSessionTab('dev001')
-      const tab2 = makeSessionTab('dev002', 'stream')
+      const tab2 = makeSessionTab('dev002')
       useTabStore.getState().addTab(tab1)
       useTabStore.getState().addTab(tab2)
       useTabStore.getState().markHostTerminated('test-host', 'tmux-restarted')
