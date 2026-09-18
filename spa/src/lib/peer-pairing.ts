@@ -59,6 +59,13 @@ export function normalizePeerUrl(raw: string): string {
  *     makes such an entry `counterpart-unavailable` instead of `not-app-host`.
  * A candidate whose KNOWN host_id differs is never joined by URL: that is a
  * different daemon at the same address.
+ *
+ * When several App hosts share that URL, the URL fallback is order-invariant
+ * (codex F2): collect every candidate the URL condition allows; if none, null;
+ * among those, prefer the ones with a known host_id — if they all agree, that
+ * daemon is the counterpart, if they disagree that is contradictory data and
+ * the join is null; if none has a known host_id, take the first, since an
+ * unavailable counterpart is never dialled, only reported as unaskable.
  */
 export function matchCounterpart(
   entry: { host_id: string; url: string },
@@ -70,9 +77,15 @@ export function matchCounterpart(
   }
   const url = normalizePeerUrl(entry.url)
   if (url === '') return null
-  return hosts.find((h) =>
+  const matches = hosts.filter((h) =>
     (entry.host_id === '' || h.host_id === '') && normalizePeerUrl(h.url) === url,
-  ) ?? null
+  )
+  if (matches.length === 0) return null
+  const known = matches.filter((h) => h.host_id !== '')
+  if (known.length > 0) {
+    return known.every((h) => h.host_id === known[0].host_id) ? known[0] : null
+  }
+  return matches[0]
 }
 
 /**

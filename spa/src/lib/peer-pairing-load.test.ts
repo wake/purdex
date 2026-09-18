@@ -224,4 +224,24 @@ describe('loadPairings — the return side (§5.1 inbound states)', () => {
     expect(final.rows[0].returnEntry?.alias).toBe('mlab-by-url')
     expect(a.verify).toHaveBeenCalledWith('hA', 'mlab-by-url')
   })
+
+  it('a URL-only entry joins the known App host over an unavailable one at the same URL, order-invariant (codex F2)', async () => {
+    const entryByUrl = row({ host_id: '', url: 'http://100.64.0.4:7860' })
+    const air2 = { hostId: 'hA2', name: 'Air again', url: 'http://100.64.0.4:7860', status: 'connected' as const }
+    const spec = {
+      info: { hM: 'mini-lab:278cbm', hA2: 'wakes-air-2026:oa6drb' },
+      settings: { hM: 'mini-lab', hA2: 'air26' },
+      list: { hM: [entryByUrl], hA2: [row({ alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm' })] },
+      verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb'), 'hA2/mini-lab': ok('mini-lab', 'mini-lab', 'mini-lab:278cbm') },
+    }
+    const a1 = fakeApi(spec)
+    const final1 = await loadPairings(X, [{ ...AIR, status: 'disconnected' }, air2], a1, () => {})
+    expect(final1.rows[0].counterpart?.hostId).toBe('hA2')
+    expect(a1.list).not.toHaveBeenCalledWith('hA')
+
+    const a2 = fakeApi(spec)
+    const final2 = await loadPairings(X, [air2, { ...AIR, status: 'disconnected' }], a2, () => {})
+    expect(final2.rows[0].counterpart?.hostId).toBe('hA2')
+    expect(a2.list).not.toHaveBeenCalledWith('hA')
+  })
 })

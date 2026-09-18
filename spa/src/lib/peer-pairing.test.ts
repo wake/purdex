@@ -49,6 +49,38 @@ describe('matchCounterpart (spec D-3, §5.2 step 2)', () => {
     const entry = { host_id: '', url: 'http://9.9.9.9:1' }
     expect(matchCounterpart(entry, [unknown])).toBeNull()
   })
+
+  describe('order-invariance when several App hosts share a URL (codex F2)', () => {
+    const U = 'http://100.64.0.7:7860'
+    it('an unavailable and an available host at the same URL always resolve to the available one', () => {
+      const entry = { host_id: '', url: U }
+      const A = { hostId: 'hA', host_id: '', url: U }               // unavailable
+      const B = { hostId: 'hB', host_id: 'b:1', url: U }             // available
+      expect(matchCounterpart(entry, [A, B])).toBe(B)
+      expect(matchCounterpart(entry, [B, A])).toBe(B)
+    })
+    it('two App entries pointing at the same daemon (same known host_id) at the same URL are the same peer', () => {
+      const entry = { host_id: '', url: U }
+      const B1 = { hostId: 'h1', host_id: 'same:1', url: U }
+      const B2 = { hostId: 'h2', host_id: 'same:1', url: U }
+      expect(matchCounterpart(entry, [B1, B2])?.host_id).toBe('same:1')
+      expect(matchCounterpart(entry, [B2, B1])?.host_id).toBe('same:1')
+    })
+    it('two DIFFERENT known host_ids at the same URL is contradictory data → null', () => {
+      const entry = { host_id: '', url: U }
+      const C1 = { hostId: 'hC1', host_id: 'c:1', url: U }
+      const C2 = { hostId: 'hC2', host_id: 'c:2', url: U }
+      expect(matchCounterpart(entry, [C1, C2])).toBeNull()
+      expect(matchCounterpart(entry, [C2, C1])).toBeNull()
+    })
+    it('all URL matches unavailable → the first one, since none is ever dialled', () => {
+      const entry = { host_id: 'known:9', url: U }
+      const A = { hostId: 'hA', host_id: '', url: U }
+      const A2 = { hostId: 'hA2', host_id: '', url: U }
+      expect(matchCounterpart(entry, [A, A2])).toBe(A)
+      expect(matchCounterpart(entry, [A2, A])).toBe(A2)
+    })
+  })
 })
 
 describe('matchReturnEntry — the same rule with the roles swapped', () => {
