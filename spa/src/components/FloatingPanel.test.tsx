@@ -18,6 +18,23 @@ function Harness({ onClose, open = true }: { onClose: () => void; open?: boolean
   )
 }
 
+function TwoPanelHarness({ onCloseFirst, onCloseSecond }: { onCloseFirst: () => void; onCloseSecond: () => void }) {
+  const anchor1 = useRef<HTMLButtonElement>(null)
+  const anchor2 = useRef<HTMLButtonElement>(null)
+  return (
+    <div>
+      <button ref={anchor1} data-testid="anchor-1">a1</button>
+      <button ref={anchor2} data-testid="anchor-2">a2</button>
+      <FloatingPanel title="First" anchorRef={anchor1} onClose={onCloseFirst}>
+        <input data-testid="inside-1" />
+      </FloatingPanel>
+      <FloatingPanel title="Second" anchorRef={anchor2} onClose={onCloseSecond}>
+        <input data-testid="inside-2" />
+      </FloatingPanel>
+    </div>
+  )
+}
+
 function NoFocusableHarness({ onClose }: { onClose: () => void }) {
   const anchor = useRef<HTMLButtonElement>(null)
   return (
@@ -133,5 +150,65 @@ describe('FloatingPanel', () => {
   it('focuses the panel root when it has no focusable child', () => {
     render(<NoFocusableHarness onClose={() => {}} />)
     expect(document.activeElement).toBe(screen.getByTestId('floating-panel'))
+  })
+
+  it('re-anchors on scroll when it has not been dragged (follows the anchor to its new rect)', () => {
+    render(<Harness onClose={() => {}} />)
+    const anchor = screen.getByTestId('anchor')
+    const panel = screen.getByTestId('floating-panel')
+    rect(anchor, { bottom: 300 })
+    fireEvent.scroll(document)
+    expect(parseInt(panel.style.top)).toBe(300 + 4)
+  })
+
+  it('clamps the dragged position to the viewport on resize instead of re-anchoring', () => {
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 900, clientY: 700, pointerId: 1 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    Object.defineProperty(window, 'innerWidth', { value: 300, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 200, configurable: true })
+    fireEvent(window, new Event('resize'))
+    expect(parseInt(panel.style.left)).toBeLessThanOrEqual(300 - 40)
+    expect(parseInt(panel.style.top)).toBeLessThanOrEqual(200 - 40)
+  })
+
+  it('does not re-anchor on scroll once the panel has been dragged', () => {
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 50, clientY: 30, pointerId: 1 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    const left0 = panel.style.left
+    const top0 = panel.style.top
+    rect(screen.getByTestId('anchor'), { bottom: 700 })
+    fireEvent.scroll(document)
+    expect(panel.style.left).toBe(left0)
+    expect(panel.style.top).toBe(top0)
+  })
+
+  it('ignores an Escape sent by IME composition; a plain Escape still closes', () => {
+    const onClose = vi.fn()
+    render(<Harness onClose={onClose} />)
+    fireEvent.keyDown(document, { key: 'Escape', isComposing: true })
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('Escape only closes the topmost (last-mounted) panel when several are open', () => {
+    const onCloseFirst = vi.fn()
+    const onCloseSecond = vi.fn()
+    render(<TwoPanelHarness onCloseFirst={onCloseFirst} onCloseSecond={onCloseSecond} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCloseFirst).not.toHaveBeenCalled()
+    expect(onCloseSecond).toHaveBeenCalledTimes(1)
   })
 })
