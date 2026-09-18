@@ -14,6 +14,21 @@ import (
 
 const codexHooksSupportedVersion = "0.153.4"
 
+// codexHookTimeouts is the per-event hook timeout in seconds. codex clamps
+// SessionEnd to 3 s and warns at every start if the file says more.
+var codexHookTimeouts = map[string]int{
+	"SessionEnd": 3,
+}
+
+const codexHookDefaultTimeout = 5
+
+func codexHookTimeoutSeconds(upstreamKey string) int {
+	if t, ok := codexHookTimeouts[upstreamKey]; ok {
+		return t
+	}
+	return codexHookDefaultTimeout
+}
+
 // codexRetiredUpstreamEvents are hooks.json keys the pre-0.153 installer
 // wrote that codex never fires (#1159). Install and remove strip pdx-owned
 // entries under them and drop the key when it empties; third-party entries
@@ -100,7 +115,7 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 	}
 	if !featureEnabled {
 		allInstalled = false
-		issues = append(issues, "codex hooks feature flag disabled; run install to enable features.codex_hooks")
+		issues = append(issues, "codex hooks feature flag disabled; run install to enable features.hooks")
 	}
 	return agent.HookStatus{
 		Installed:         allInstalled,
@@ -306,7 +321,7 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 				map[string]any{
 					"type":    "command",
 					"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, spec.PurdexName),
-					"timeout": 5,
+					"timeout": codexHookTimeoutSeconds(key),
 				},
 			},
 		})
@@ -426,15 +441,23 @@ func existingFileMode(path string, defaultMode os.FileMode) (os.FileMode, error)
 	return 0, err
 }
 
+// setCodexHooksFeature enables the canonical [features].hooks flag and
+// drops the deprecated codex_hooks alias (codex 0.153 warns on it at
+// every start).
 func setCodexHooksFeature(config map[string]any) {
 	features, _ := config["features"].(map[string]any)
 	if features == nil {
 		features = make(map[string]any)
 	}
-	features["codex_hooks"] = true
+	features["hooks"] = true
+	delete(features, "codex_hooks")
 	config["features"] = features
 }
 
+// codexHooksFeatureEnabled reports whether codex will run hooks. Upstream
+// default is enabled, so absent flags mean true. The canonical `hooks` key
+// wins; the deprecated `codex_hooks` alias is consulted only when the
+// canonical key is absent.
 func codexHooksFeatureEnabled(path string) (bool, error) {
 	config, err := readCodexConfig(path)
 	if err != nil {
@@ -442,10 +465,15 @@ func codexHooksFeatureEnabled(path string) (bool, error) {
 	}
 	features, _ := config["features"].(map[string]any)
 	if features == nil {
-		return false, nil
+		return true, nil
 	}
-	enabled, _ := features["codex_hooks"].(bool)
-	return enabled, nil
+	if v, ok := features["hooks"].(bool); ok {
+		return v, nil
+	}
+	if v, ok := features["codex_hooks"].(bool); ok {
+		return v, nil
+	}
+	return true, nil
 }
 
 // isPdxCommandCodex is the relaxed shape check used by filter / legacy

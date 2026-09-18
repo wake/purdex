@@ -482,10 +482,13 @@ func TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{`model = "gpt-5"`, "other = true", "codex_hooks = true"} {
+	for _, want := range []string{`model = "gpt-5"`, "other = true", "hooks = true"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config.toml missing %q after install:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "codex_hooks") {
+		t.Fatalf("config.toml still contains deprecated codex_hooks after install:\n%s", text)
 	}
 	info, err := os.Stat(configPath)
 	if err != nil {
@@ -826,14 +829,22 @@ func TestCodexCheckHooks_ReportsAll10Events(t *testing.T) {
 	}
 }
 
-func TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks(t *testing.T) {
+// Absent flag = enabled (upstream default); explicit false on either key
+// blocks; canonical `hooks` wins over the deprecated alias when both exist.
+func TestCodexCheckHooks_FeatureFlagSemantics(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		writeFlag bool
-		value     bool
+		name        string
+		config      string // "" = no config.toml
+		wantBlocked bool
 	}{
-		{name: "missing"},
-		{name: "false", writeFlag: true, value: false},
+		{name: "absent config", config: "", wantBlocked: false},
+		{name: "absent features", config: "model = \"x\"\n", wantBlocked: false},
+		{name: "hooks true", config: "[features]\nhooks = true\n", wantBlocked: false},
+		{name: "hooks false", config: "[features]\nhooks = false\n", wantBlocked: true},
+		{name: "legacy alias true", config: "[features]\ncodex_hooks = true\n", wantBlocked: false},
+		{name: "legacy alias false", config: "[features]\ncodex_hooks = false\n", wantBlocked: true},
+		{name: "canonical true beats alias false", config: "[features]\nhooks = true\ncodex_hooks = false\n", wantBlocked: false},
+		{name: "canonical false beats alias true", config: "[features]\nhooks = false\ncodex_hooks = true\n", wantBlocked: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -842,21 +853,21 @@ func TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks(t *testing.T) {
 			if err := mergeCodexHooks(hooksPath, "/usr/local/bin/pdx", false); err != nil {
 				t.Fatalf("seed install: %v", err)
 			}
-			if tt.writeFlag {
-				writeCodexFeatureFlag(t, home, tt.value)
+			if tt.config != "" {
+				writeCodexConfigText(t, home, tt.config)
 			}
 			status, err := (&Provider{}).CheckHooks()
 			if err != nil {
 				t.Fatalf("CheckHooks: %v", err)
 			}
-			if status.Installed {
-				t.Fatal("Installed=true with codex hooks feature flag disabled")
+			if status.Installed == tt.wantBlocked {
+				t.Fatalf("Installed=%v, want %v (issues=%v)", status.Installed, !tt.wantBlocked, status.Issues)
+			}
+			if tt.wantBlocked && !issuesContain(status.Issues, "codex hooks feature flag disabled") {
+				t.Fatalf("issues=%v, want feature flag disabled issue", status.Issues)
 			}
 			if !status.Managed {
-				t.Fatal("Managed=false with valid hooks but disabled feature flag")
-			}
-			if !issuesContain(status.Issues, "codex hooks feature flag disabled") {
-				t.Fatalf("issues=%v, want feature flag disabled issue", status.Issues)
+				t.Fatal("Managed=false with valid hooks")
 			}
 		})
 	}
@@ -1061,14 +1072,19 @@ func writeHooksFile(t *testing.T, home string, hooksSect map[string]any) {
 	writeCodexFeatureFlag(t, home, true)
 }
 
+// writeCodexFeatureFlag writes the canonical [features] hooks key.
 func writeCodexFeatureFlag(t *testing.T, home string, enabled bool) {
+	t.Helper()
+	writeCodexConfigText(t, home, fmt.Sprintf("[features]\nhooks = %t\n", enabled))
+}
+
+func writeCodexConfigText(t *testing.T, home, text string) {
 	t.Helper()
 	path := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
-	data := []byte(fmt.Sprintf("[features]\ncodex_hooks = %t\n", enabled))
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, []byte(text), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 }
@@ -2071,8 +2087,8 @@ func TestCheckCodexEvent_LooksUpByUpstreamKey(t *testing.T) {
 	}
 	// Sanity: feature flag preserved separately by the config.toml writer.
 	if data, err := os.ReadFile(configPath); err == nil {
-		if !strings.Contains(string(data), "codex_hooks = true") {
-			t.Errorf("config.toml must keep codex_hooks=true after install:\n%s", string(data))
+		if !strings.Contains(string(data), "hooks = true") {
+			t.Errorf("config.toml must keep hooks=true after install:\n%s", string(data))
 		}
 	}
 }
@@ -2080,5 +2096,65 @@ func TestCheckCodexEvent_LooksUpByUpstreamKey(t *testing.T) {
 func TestCodexHooksSupportedVersion_Pinned(t *testing.T) {
 	if codexHooksSupportedVersion != "0.153.4" {
 		t.Fatalf("codexHooksSupportedVersion = %q, want 0.153.4", codexHooksSupportedVersion)
+	}
+}
+
+func TestCodexHookTimeoutSeconds_SessionEndClampedTo3(t *testing.T) {
+	if got := codexHookTimeoutSeconds("SessionEnd"); got != 3 {
+		t.Fatalf("SessionEnd timeout = %d, want 3 (codex clamps SessionEnd to 3s)", got)
+	}
+	for _, key := range []string{"SessionStart", "Stop", "PostToolUse", "Interrupt", "Unknown"} {
+		if got := codexHookTimeoutSeconds(key); got != 5 {
+			t.Errorf("%s timeout = %d, want 5", key, got)
+		}
+	}
+}
+
+func TestCodexInstallHooks_WritesPerEventTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, path))
+	timeoutOf := func(key string) float64 {
+		groups := codexMatcherGroups(hooks[key])
+		if len(groups) != 1 {
+			t.Fatalf("%s: %d matcher groups, want 1", key, len(groups))
+		}
+		inner := toCodexEntrySlice(groups[0].(map[string]any)["hooks"])
+		m, _ := inner[0].(map[string]any)
+		v, _ := m["timeout"].(float64)
+		return v
+	}
+	if got := timeoutOf("SessionEnd"); got != 3 {
+		t.Errorf("SessionEnd timeout = %v, want 3", got)
+	}
+	if got := timeoutOf("Stop"); got != 5 {
+		t.Errorf("Stop timeout = %v, want 5", got)
+	}
+}
+
+// The codex approval cache lives under [hooks.state."<path>:<event>:<n>:<m>"]
+// with a trusted_hash; install must not lose it or the user re-approves
+// every hook on the next start.
+func TestCodexInstallHooks_PreservesHooksStateTrustedHash(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stateKey := filepath.Join(home, ".codex", "hooks.json") + ":stop:0:0"
+	writeCodexConfigText(t, home, "[features]\ncodex_hooks = true\n\n[hooks.state]\n\n[hooks.state.\""+stateKey+"\"]\ntrusted_hash = \"abc123\"\n")
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+	config, err := readCodexConfig(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("readCodexConfig: %v", err)
+	}
+	hooksTbl, _ := config["hooks"].(map[string]any)
+	state, _ := hooksTbl["state"].(map[string]any)
+	entry, _ := state[stateKey].(map[string]any)
+	if got, _ := entry["trusted_hash"].(string); got != "abc123" {
+		t.Fatalf("hooks.state[%q].trusted_hash = %q, want abc123 (config=%v)", stateKey, got, config)
 	}
 }
