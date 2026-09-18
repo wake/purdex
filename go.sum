@@ -45,8 +45,8 @@ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-lab.protype.tw/wake/nexen v0.11.2 h1:bwTH+nphtPIM8zl0spuJP0UjkTTTZ6Wi+mLCNJ05LZM=
-lab.protype.tw/wake/nexen v0.11.2/go.mod h1:PtPV5o9VbcYpUFPoQFfKBVyecjYwG7ESq+QsjreOl6w=
+lab.protype.tw/wake/nexen v0.12.0 h1:ekvHswUDo2E06ryjgI4pvuXBWp9c7zowKGBA3WCcNIY=
+lab.protype.tw/wake/nexen v0.12.0/go.mod h1:PtPV5o9VbcYpUFPoQFfKBVyecjYwG7ESq+QsjreOl6w=
 modernc.org/cc/v4 v4.29.0 h1:CXgwL8cvxmyzBQZzbSl/6xFtMCryb6u8IOqDci39cgc=
 modernc.org/cc/v4 v4.29.0/go.mod h1:OnovgIhbbMXMu1aISnJ0wvVD1KnW+cAUJkIrAWh+kVI=
 modernc.org/ccgo/v4 v4.34.6 h1:sBgfIwyN0TQ9C5hwIeuqyeAKyMWnbvj2fvpF4L11uzU=
