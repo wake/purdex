@@ -24,6 +24,10 @@ type Principal struct {
 	Kind   PrincipalKind
 	Alias  string // host only
 	HostID string // host only; "" when the entry is unverified
+	// UsedPrevToken is true when a host principal authenticated with the
+	// entry's InboundTokenPrev (a rotation is pending and the peer is still
+	// on the old token). The peers module records it per alias (spec §6.2).
+	UsedPrevToken bool
 }
 
 type principalCtxKey struct{}
@@ -63,12 +67,12 @@ func PeerAuth(adminToken func() string, peers func() config.PeersConfig, hostAll
 				return
 			}
 
-			if host, matched := peers().MatchInboundToken(bearer); matched {
+			if host, usedPrev, matched := peers().MatchInboundToken(bearer); matched {
 				if !hostAllowed(r) {
 					http.Error(w, "forbidden", http.StatusForbidden)
 					return
 				}
-				p := Principal{Kind: PrincipalHost, Alias: host.Alias, HostID: host.HostID}
+				p := Principal{Kind: PrincipalHost, Alias: host.Alias, HostID: host.HostID, UsedPrevToken: usedPrev}
 				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
 				return
 			}

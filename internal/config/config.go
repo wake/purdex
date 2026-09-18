@@ -56,7 +56,12 @@ type PeerHost struct {
 	HostID       string `toml:"host_id"       json:"host_id"`       // "" until verified
 	Token        string `toml:"token"         json:"token"`         // outbound: what we present to that host
 	InboundToken string `toml:"inbound_token" json:"inbound_token"` // what that host must present to us
-	AllowBypass  bool   `toml:"allow_bypass"  json:"allow_bypass"`
+	// InboundTokenPrev is the outgoing inbound token during a rotation
+	// (spec §6): non-empty means a rotation is pending and BOTH values
+	// authenticate. Cleared by rotate/commit (drop the old) or
+	// rotate/cancel (restore the old as the only one).
+	InboundTokenPrev string `toml:"inbound_token_prev" json:"inbound_token_prev"`
+	AllowBypass      bool   `toml:"allow_bypass"  json:"allow_bypass"`
 }
 
 type PeersConfig struct {
@@ -106,27 +111,30 @@ func (p PeersConfig) FindPeerHostByAlias(alias string) int {
 	return -1
 }
 
-// MatchInboundToken compares bearer against every host's non-empty
-// InboundToken in constant time, returning a copy of the matching host and
-// true. An empty bearer never matches.
-func (p PeersConfig) MatchInboundToken(bearer string) (PeerHost, bool) {
+// MatchInboundToken returns the host whose InboundToken OR InboundTokenPrev
+// equals bearer, and whether it was the prev one. Every non-empty field of
+// every entry is compared with subtle.ConstantTimeCompare and there is no
+// early exit; when more than one field matches, the LAST one wins (an
+// operator who pasted one token into two entries gets a deterministic
+// answer, not a random one). An empty bearer never matches.
+func (p PeersConfig) MatchInboundToken(bearer string) (host PeerHost, usedPrev bool, ok bool) {
 	if bearer == "" {
-		return PeerHost{}, false
+		return PeerHost{}, false, false
 	}
 	matchIdx := -1
 	bearerBytes := []byte(bearer)
 	for i, h := range p.Hosts {
-		if h.InboundToken == "" {
-			continue
+		if h.InboundToken != "" && subtle.ConstantTimeCompare(bearerBytes, []byte(h.InboundToken)) == 1 {
+			matchIdx, usedPrev = i, false
 		}
-		if subtle.ConstantTimeCompare(bearerBytes, []byte(h.InboundToken)) == 1 {
-			matchIdx = i
+		if h.InboundTokenPrev != "" && subtle.ConstantTimeCompare(bearerBytes, []byte(h.InboundTokenPrev)) == 1 {
+			matchIdx, usedPrev = i, true
 		}
 	}
 	if matchIdx == -1 {
-		return PeerHost{}, false
+		return PeerHost{}, false, false
 	}
-	return p.Hosts[matchIdx], true
+	return p.Hosts[matchIdx], usedPrev, true
 }
 
 // DispatchConfig holds the Ploom-dispatch (M0) daemon-side settings.
@@ -184,6 +192,7 @@ func (c Config) Redacted() Config {
 	for i := range out.Peers.Hosts {
 		out.Peers.Hosts[i].Token = ""
 		out.Peers.Hosts[i].InboundToken = ""
+		out.Peers.Hosts[i].InboundTokenPrev = ""
 	}
 	return out
 }

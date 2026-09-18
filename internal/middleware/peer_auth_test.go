@@ -259,3 +259,30 @@ func TestPeerAuthHostWithEmptyInboundTokenNeverMatchesEmptyBearer(t *testing.T) 
 		t.Fatal("want next NOT called")
 	}
 }
+
+// TestPeerAuthPrevTokenSetsUsedPrevToken: during a rotation the old token
+// still authenticates as the same host, and the principal says so.
+func TestPeerAuthPrevTokenSetsUsedPrevToken(t *testing.T) {
+	peersFn := func() config.PeersConfig {
+		return config.PeersConfig{Hosts: []config.PeerHost{
+			{Alias: "beta", HostID: "host-beta", InboundToken: "tok-new", InboundTokenPrev: "tok-old"},
+		}}
+	}
+	for _, tc := range []struct {
+		bearer   string
+		wantPrev bool
+	}{{"tok-new", false}, {"tok-old", true}} {
+		next, called, seen := nextRecordingPrincipal()
+		h := middleware.PeerAuth(func() string { return "admin-secret" }, peersFn, allowAll)(next)
+		req := httptest.NewRequest("GET", "/api/peers", nil)
+		req.Header.Set("Authorization", "Bearer "+tc.bearer)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 || !*called {
+			t.Fatalf("%s: want 200 and next called, got %d called=%v", tc.bearer, rec.Code, *called)
+		}
+		if seen.Kind != middleware.PrincipalHost || seen.Alias != "beta" || seen.UsedPrevToken != tc.wantPrev {
+			t.Fatalf("%s: principal = %+v, want host beta UsedPrevToken=%v", tc.bearer, *seen, tc.wantPrev)
+		}
+	}
+}

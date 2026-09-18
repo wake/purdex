@@ -316,7 +316,7 @@ func TestMatchInboundToken(t *testing.T) {
 		},
 	}
 
-	host, ok := peers.MatchInboundToken("pdxp_cccccccccccccccccccccccccccccccc")
+	host, _, ok := peers.MatchInboundToken("pdxp_cccccccccccccccccccccccccccccccc")
 	if !ok {
 		t.Fatal("expected match for office's token")
 	}
@@ -324,16 +324,77 @@ func TestMatchInboundToken(t *testing.T) {
 		t.Errorf("MatchInboundToken: want alias %q, got %q", "office", host.Alias)
 	}
 
-	if _, ok := peers.MatchInboundToken(""); ok {
+	if _, _, ok := peers.MatchInboundToken(""); ok {
 		t.Error("empty bearer must never match")
 	}
 
-	if _, ok := peers.MatchInboundToken(""); ok {
+	if _, _, ok := peers.MatchInboundToken(""); ok {
 		t.Error("empty bearer must never match (host with empty InboundToken)")
 	}
 
-	if _, ok := peers.MatchInboundToken("pdxp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"); ok {
+	if _, _, ok := peers.MatchInboundToken("pdxp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"); ok {
 		t.Error("unknown bearer must not match")
+	}
+}
+
+// TestMatchInboundToken_PendingRotation_BothTokensSameAlias pins spec §6.2:
+// while a rotation is pending, the old token (prev) and the new one
+// (current) both authenticate as the same alias, and usedPrev is true only
+// for the old one.
+func TestMatchInboundToken_PendingRotation_BothTokensSameAlias(t *testing.T) {
+	peers := config.PeersConfig{Hosts: []config.PeerHost{
+		{Alias: "air", InboundToken: "pdxp_11111111111111111111111111111111", InboundTokenPrev: "pdxp_00000000000000000000000000000000"},
+	}}
+	h, usedPrev, ok := peers.MatchInboundToken("pdxp_11111111111111111111111111111111")
+	if !ok || h.Alias != "air" || usedPrev {
+		t.Fatalf("current: ok=%v alias=%q usedPrev=%v; want ok air false", ok, h.Alias, usedPrev)
+	}
+	h, usedPrev, ok = peers.MatchInboundToken("pdxp_00000000000000000000000000000000")
+	if !ok || h.Alias != "air" || !usedPrev {
+		t.Fatalf("prev: ok=%v alias=%q usedPrev=%v; want ok air true", ok, h.Alias, usedPrev)
+	}
+}
+
+// TestMatchInboundToken_LastMatchWinsAcrossPrev pins "no early exit across
+// configured non-empty token fields" without a comparison seam (spec §8.3):
+// the bearer equals entry 1's current AND entry 3's prev; the result must
+// be entry 3 with usedPrev — an implementation that returns on the first
+// match, or that never looks at prev, yields entry 1.
+func TestMatchInboundToken_LastMatchWinsAcrossPrev(t *testing.T) {
+	const bearer = "pdxp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	peers := config.PeersConfig{Hosts: []config.PeerHost{
+		{Alias: "one", InboundToken: bearer},
+		{Alias: "two", InboundToken: "pdxp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", InboundTokenPrev: "pdxp_cccccccccccccccccccccccccccccccc"},
+		{Alias: "three", InboundToken: "pdxp_dddddddddddddddddddddddddddddddd", InboundTokenPrev: bearer},
+	}}
+	h, usedPrev, ok := peers.MatchInboundToken(bearer)
+	if !ok || h.Alias != "three" || !usedPrev {
+		t.Fatalf("got ok=%v alias=%q usedPrev=%v; want ok three true", ok, h.Alias, usedPrev)
+	}
+}
+
+// A prev with no current is not a state the API produces, but a hand-edited
+// config may hold one; the field is a token, not a flag, so it authenticates.
+func TestMatchInboundToken_PrevOnlyStillAuthenticates(t *testing.T) {
+	peers := config.PeersConfig{Hosts: []config.PeerHost{
+		{Alias: "air", InboundToken: "", InboundTokenPrev: "pdxp_00000000000000000000000000000000"},
+	}}
+	h, usedPrev, ok := peers.MatchInboundToken("pdxp_00000000000000000000000000000000")
+	if !ok || h.Alias != "air" || !usedPrev {
+		t.Fatalf("got ok=%v alias=%q usedPrev=%v; want ok air true", ok, h.Alias, usedPrev)
+	}
+	if _, _, ok := peers.MatchInboundToken(""); ok {
+		t.Fatal("empty bearer must never match an empty current")
+	}
+}
+
+func TestRedacted_BlanksInboundTokenPrev(t *testing.T) {
+	cfg := config.Config{Peers: config.PeersConfig{Hosts: []config.PeerHost{
+		{Alias: "air", Token: "out", InboundToken: "in", InboundTokenPrev: "in-prev"},
+	}}}
+	got := cfg.Redacted().Peers.Hosts[0]
+	if got.Token != "" || got.InboundToken != "" || got.InboundTokenPrev != "" {
+		t.Fatalf("Redacted left a token value: %+v", got)
 	}
 }
 
