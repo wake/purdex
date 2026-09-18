@@ -457,9 +457,13 @@ func setCodexHooksFeature(config map[string]any) {
 }
 
 // codexHooksFeatureEnabled reports whether codex will run hooks. Upstream
-// default is enabled, so absent flags mean true. The canonical `hooks` key
-// wins; the deprecated `codex_hooks` alias is consulted only when the
-// canonical key is absent.
+// default is enabled, so an absent [features] table (or absent keys within
+// it) means true. The canonical `hooks` key wins over the deprecated
+// `codex_hooks` alias whenever it is *present*, regardless of its type: a
+// present-but-non-bool value (string, number, table) counts as disabled
+// rather than falling through to the alias or the default — a hand-edited
+// or malformed flag must never silently re-enable hooks. Only when `hooks`
+// is entirely absent do we consult `codex_hooks` under the same rule.
 func codexHooksFeatureEnabled(path string) (bool, error) {
 	config, err := readCodexConfig(path)
 	if err != nil {
@@ -469,11 +473,13 @@ func codexHooksFeatureEnabled(path string) (bool, error) {
 	if features == nil {
 		return true, nil
 	}
-	if v, ok := features["hooks"].(bool); ok {
-		return v, nil
+	if v, ok := features["hooks"]; ok {
+		b, isBool := v.(bool)
+		return isBool && b, nil
 	}
-	if v, ok := features["codex_hooks"].(bool); ok {
-		return v, nil
+	if v, ok := features["codex_hooks"]; ok {
+		b, isBool := v.(bool)
+		return isBool && b, nil
 	}
 	return true, nil
 }

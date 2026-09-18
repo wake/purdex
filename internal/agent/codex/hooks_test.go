@@ -845,6 +845,10 @@ func TestCodexCheckHooks_FeatureFlagSemantics(t *testing.T) {
 		{name: "legacy alias false", config: "[features]\ncodex_hooks = false\n", wantBlocked: true},
 		{name: "canonical true beats alias false", config: "[features]\nhooks = true\ncodex_hooks = false\n", wantBlocked: false},
 		{name: "canonical false beats alias true", config: "[features]\nhooks = false\ncodex_hooks = true\n", wantBlocked: true},
+		{name: "hooks string true is disabled", config: "[features]\nhooks = \"true\"\n", wantBlocked: true},
+		{name: "hooks string beats alias true", config: "[features]\nhooks = \"true\"\ncodex_hooks = true\n", wantBlocked: true},
+		{name: "alias string true is disabled", config: "[features]\ncodex_hooks = \"true\"\n", wantBlocked: true},
+		{name: "hooks integer is disabled", config: "[features]\nhooks = 1\n", wantBlocked: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
