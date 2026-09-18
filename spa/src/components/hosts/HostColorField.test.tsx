@@ -93,6 +93,30 @@ describe('HostColorField — editing', () => {
     expect(host().colors).toBeUndefined()
     expect(screen.queryByTestId('host-color-editor')).toBeNull()
   })
+
+  it('opens the editor in a floating dialog titled with the layer name; outside mousedown closes it; the swatch still toggles', () => {
+    render(<div><HostColorField hostId={HOST_ID} /><button data-testid="outside">x</button></div>)
+    fireEvent.click(layerBtn('main'))
+    const dialog = screen.getByRole('dialog', { name: 'Main' })
+    expect(dialog.parentElement).toBe(document.body)
+    expect(dialog.contains(screen.getByTestId('host-color-editor'))).toBe(true)
+    fireEvent.mouseDown(screen.getByTestId('outside'))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+    fireEvent.mouseDown(layerBtn('main'))
+    fireEvent.click(layerBtn('main'))
+    expect(screen.getByTestId('host-color-editor')).toBeInTheDocument()
+    fireEvent.mouseDown(layerBtn('main'))
+    fireEvent.click(layerBtn('main'))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+  })
+
+  it('mousedown on another swatch does not close first and then fail to open: it switches layers', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('main'))
+    fireEvent.mouseDown(layerBtn('light'))
+    fireEvent.click(layerBtn('light'))
+    expect(screen.getByRole('dialog', { name: 'Light' })).toBeInTheDocument()
+  })
 })
 
 describe('HostColorField — remount / ghost state (PR #1160 R1 F1/F2)', () => {

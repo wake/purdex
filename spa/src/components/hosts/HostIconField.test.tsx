@@ -51,13 +51,26 @@ describe('HostIconField', () => {
     expect(iconButtons()).toHaveLength(0)
   })
 
-  it('toggles the inline picker from the preview button', () => {
+  it('toggles the picker (a floating dialog) from the preview button', () => {
     render(<HostIconField hostId={HOST_ID} />)
     openPicker()
     expect(screen.getByTestId('host-icon-preview')).toHaveAttribute('aria-expanded', 'true')
+    const dialog = screen.getByRole('dialog', { name: 'Change host icon' })
+    expect(dialog.parentElement).toBe(document.body)
     expect(iconButtons().length).toBeGreaterThan(0)
     fireEvent.click(screen.getByTestId('host-icon-preview'))
     expect(iconButtons()).toHaveLength(0)
+  })
+
+  it('closes on outside mousedown; the preview button still toggles', () => {
+    render(<div><HostIconField hostId={HOST_ID} /><button data-testid="outside">x</button></div>)
+    openPicker()
+    expect(screen.getByRole('dialog', { name: 'Change host icon' })).toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByTestId('outside'))
+    expect(screen.queryByRole('dialog', { name: 'Change host icon' })).toBeNull()
+    fireEvent.mouseDown(screen.getByTestId('host-icon-preview'))
+    fireEvent.click(screen.getByTestId('host-icon-preview'))
+    expect(screen.getByRole('dialog', { name: 'Change host icon' })).toBeInTheDocument()
   })
 
   it('does not render the picker dialog header (inline mode)', () => {

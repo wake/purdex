@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { DEFAULT_HOST_ICON, isIconWeight, type HostColorMode } from '../../lib/host-color'
@@ -6,6 +6,7 @@ import { WorkspaceIcon } from '../../features/workspace/components/WorkspaceIcon
 import { WorkspaceIconPicker } from '../../features/workspace/components/WorkspaceIconPicker'
 import { Field } from './form-fields'
 import { HostBadgePreview } from './HostBadgePreview'
+import { FloatingPanel } from '../FloatingPanel'
 
 /**
  * Per-host icon picker. Wraps `WorkspaceIconPicker` in `inline` mode (which
@@ -21,6 +22,7 @@ export function HostIconField({ hostId, mode }: { hostId: string; mode?: HostCol
   const storedWeight = useHostStore((s) => s.hosts[hostId]?.iconWeight)
   const setHostIcon = useHostStore((s) => s.setHostIcon)
   const [open, setOpen] = useState(false)
+  const buttonsRef = useRef<HTMLDivElement>(null)
 
   const weight = isIconWeight(storedWeight) ? storedWeight : 'regular'
 
@@ -33,7 +35,7 @@ export function HostIconField({ hostId, mode }: { hostId: string; mode?: HostCol
     <Field label={t('hosts.icon.label')}>
       <div className="flex items-start gap-6">
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
+          <div ref={buttonsRef} className="flex items-center gap-2">
             <button
               type="button"
               data-testid="host-icon-preview"
@@ -55,7 +57,7 @@ export function HostIconField({ hostId, mode }: { hostId: string; mode?: HostCol
             </button>
           </div>
           {open && (
-            <div className="border border-border-default rounded-lg p-3 bg-surface-secondary">
+            <FloatingPanel title={t('hosts.icon.change')} anchorRef={buttonsRef} onClose={() => setOpen(false)} width={360}>
               <WorkspaceIconPicker
                 inline
                 currentIcon={icon}
@@ -71,7 +73,7 @@ export function HostIconField({ hostId, mode }: { hostId: string; mode?: HostCol
                 onWeightChange={(w) => setHostIcon(hostId, icon ?? DEFAULT_HOST_ICON, w)}
                 onCancel={() => setOpen(false)}
               />
-            </div>
+            </FloatingPanel>
           )}
         </div>
         {mode && <HostBadgePreview hostId={hostId} mode={mode} />}
