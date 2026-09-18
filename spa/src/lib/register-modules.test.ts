@@ -80,7 +80,7 @@ describe('registerBuiltinModules', () => {
     const hostContributions = listContributions('host')
     const builtins = hostContributions.filter((c) => c.moduleId === HOST_BUILTIN_MODULE_ID)
     expect(builtins.map((c) => c.localId)).toEqual([
-      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex', 'projects', 'commands', 'snapshots',
+      'overview', 'sessions', 'hooks', 'agents', 'uploads', 'logs', 'nex', 'projects', 'commands', 'snapshots', 'peers',
     ])
 
     const nex = builtins.find((c) => c.localId === 'nex')
@@ -153,12 +153,12 @@ describe('registerBuiltinModules', () => {
     expect(getSettingsSections().find((s) => s.id === 'snapshot')).toBeUndefined()
   })
 
-  it('registers host sub-pages projects / commands / snapshots after nex (7/8/9)', () => {
+  it('registers host sub-pages projects / commands / snapshots / peers after nex (7/8/9/10)', () => {
     registerBuiltinModules()
     const host = listContributions('host')
-      .filter((c) => ['nex', 'projects', 'commands', 'snapshots'].includes(c.localId))
+      .filter((c) => ['nex', 'projects', 'commands', 'snapshots', 'peers'].includes(c.localId))
       .sort((a, b) => a.order - b.order)
-    expect(host.map((c) => [c.localId, c.order])).toEqual([['nex', 6], ['projects', 7], ['commands', 8], ['snapshots', 9]])
+    expect(host.map((c) => [c.localId, c.order])).toEqual([['nex', 6], ['projects', 7], ['commands', 8], ['snapshots', 9], ['peers', 10]])
   })
 
   it('both locales carry the hosts.snapshots label', () => {
@@ -166,6 +166,13 @@ describe('registerBuiltinModules', () => {
     const zh = zhLocale as Record<string, string>
     expect(en['hosts.snapshots']).toBe('Snapshots')
     expect(zh['hosts.snapshots']).toBe('快照')
+  })
+
+  it('both locales carry the hosts.peers label', () => {
+    const en = enLocale as Record<string, string>
+    const zh = zhLocale as Record<string, string>
+    expect(en['hosts.peers']).toBe('Peers')
+    expect(zh['hosts.peers']).toBe('對等主機')
   })
 
   it('registers interface section with order=2', () => {
