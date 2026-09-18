@@ -116,6 +116,14 @@ describe('ToolCallBlock activity (P-B2.2 R1/R2)', () => {
     expect(screen.queryByTestId('tool-duration')).toBeNull()
   })
 
+  it('denied → warning-coloured localized badge, wrench, no duration (P-B3 Task 1: badge only)', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'denied', startedAt: 100, endedAt: 200 }} />)
+    expect(screen.getByTestId('tool-denied')).toHaveTextContent('denied')
+    expect(screen.getByTestId('tool-denied')).toHaveClass('text-status-warning')
+    expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-duration')).toBeNull()
+  })
+
   it('streaming with rawInput → header shows the raw prefix, expanded shows it in <pre>, spinner present', () => {
     const raw = '{"command":"sleep 8'
     render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'streaming', rawInput: raw }} />)
