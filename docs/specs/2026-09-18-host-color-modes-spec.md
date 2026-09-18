@@ -17,7 +17,7 @@ v2 lab's "display mode B" (color on the tab icon itself) and equal-width spacer 
 
 | # | Decision |
 |---|----------|
-| D1 | **Modes** = `console` (tab whose primary pane has no `agentType`), `terminal` (primary pane has an `agentType`), `execution` (reserved for the P-C execution tab; enum + settings UI only, nothing resolves to it yet). "console/terminal" is *not* a real pane kind — it is the agentType split. |
+| D1 | **Modes** = `console` (tab whose primary pane has no live `agentType`), `terminal` (primary pane has an `agentType` **and is not terminated** — the same rule that picks the agent icon in `useTabDisplay`; a terminated agent pane is `console`), `execution` (reserved for the P-C execution tab; enum + settings UI only, nothing resolves to it yet). "console/terminal" is *not* a real pane kind — it is the agentType split. |
 | D2 | **Three layers per mode**: `main` = active/hover icon color; `middle` = inactive icon color; `light` = badge background. |
 | D3 | `middle` and `light` **inherit `main`'s hue when their own color is unset** and then only carry an alpha. The user can break inheritance and pick a different color. |
 | D4 | `terminal` / `execution` **inherit the whole `console` set** when unset. `console.main` unset ⇒ the host has no color (existing "沒設定就沒有" behaviour: no color and no icon ⇒ no badge, no space). |
@@ -116,7 +116,9 @@ in §4.1 defaults. Output is `rgba(r, g, b, a)` with `a` in 0–1, so callers ne
 ### 4.4 UI settings (`useUISettingsStore`)
 
 Remove `hostBadge{Sidebar,TabBar}{LineOpacity,BgOpacity}` (+ their clamps/constants/setters and
-the 4 entries in `preferences.ts`). Add:
+the 4 entries in `preferences.ts`). A stale key must not survive into runtime state: persist
+`version` bumps 3 → 4 with a `migrate` that drops the four keys, and `sanitizeHostBadgePrefs`
+strips them (covers the sync path). Add:
 
 ```ts
 stripAgentTitleMarker: boolean   // default true; synced via preferences.ts like dynamicTabName

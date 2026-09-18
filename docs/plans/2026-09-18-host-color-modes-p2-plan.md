@@ -21,16 +21,22 @@
 - The four settings `hostBadge{Sidebar,TabBar}{LineOpacity,BgOpacity}` and every constant / clamp / setter / locale key / sync entry that exists only for them are deleted (spec D6). No persist migration: a stale persisted key is simply ignored by zustand's shallow merge.
 - Captions: `settings.terminal.host_badge.box.caption` = "Size", `.inset.caption` = "Inset", `.radius.caption` = "Radius" (zh-TW: "大小" / "內縮" / "圓角"); existing long `aria-label` strings stay (spec D7).
 - Locale keys must exist in both `spa/src/locales/en.json` and `zh-TW.json`.
-- Diff budget ≤ 800 lines / 20 files. `tsc` for the whole app is green only after Task 3 (Task 1 changes `HostBadge`'s props, Task 3 updates its consumers); each task's own vitest files must pass at that task's commit.
+- Diff budget ≤ 800 lines / 20 files. **Every commit must typecheck**: Task 1 changes `HostBadge`'s props, the hook and both consumers together and lands as ONE commit (its three parts 1a/1b/1c are TDD sub-steps, not commits).
+- Mode for a **terminated** agent pane is `console` (spec D1 as amended 2026-09-18: matches the tab-icon rule in `useTabDisplay`).
 
 ---
 
-### Task 1: `HostBadge` takes resolved colors and exposes CSS custom properties
+### Task 1: Three-state badge rendering (one commit: `HostBadge` + hook + both rows)
+
+Task 1 has three TDD parts. Run each part's tests as you go; the whole-app typecheck and the single commit happen at the end of part 1c.
+
+#### Part 1a: `HostBadge` takes resolved colors and exposes CSS custom properties
 
 **Files:**
 - Modify: `spa/src/components/HostBadge.tsx`
 - Modify: `spa/src/index.css` (append one rule)
 - Test: `spa/src/components/HostBadge.test.tsx` (rewrite the `base` fixture and the two color describes)
+- Test: `spa/src/index.css.test.ts` (new — guards the hover/active rule)
 
 **Interfaces:**
 - Consumes: `ResolvedHostColors` from `spa/src/lib/host-color.ts`.
@@ -111,10 +117,36 @@ describe('colors set', () => {
 
 Delete the old `colorMix` helper if it becomes unused.
 
+jsdom cannot evaluate the cascade, so the hover/active rule is guarded at the source level. Create `spa/src/index.css.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+describe('index.css — host badge state rule', () => {
+  const css = readFileSync(resolve(__dirname, 'index.css'), 'utf8')
+
+  it('switches the badge icon to --hb-main on a hovered or active .group row', () => {
+    const rule = /\.group:hover \[data-host-badge\],\s*\.group\[data-active="true"\] \[data-host-badge\]\s*\{\s*--hb-icon:\s*var\(--hb-main\);\s*\}/
+    expect(css).toMatch(rule)
+  })
+
+  it('keeps the rule outside any @layer so utilities cannot outrank it', () => {
+    const idx = css.indexOf('[data-host-badge]')
+    const before = css.slice(0, idx)
+    const opened = (before.match(/@layer\s+[a-z]+\s*\{/g) ?? []).length
+    const closed = 0 // Tailwind 4 `@import` lines open no block; a hand-written @layer block would.
+    expect(opened).toBe(closed)
+  })
+})
+```
+(If `__dirname` is unavailable under the project's vitest ESM config, use `new URL('./index.css', import.meta.url)` with `fileURLToPath`.) Live acceptance (§8.1) remains the real check for hover.
+
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd spa && npx vitest run src/components/HostBadge.test.tsx`
-Expected: FAIL (prop `colors` unknown / old props required).
+Run: `cd spa && npx vitest run src/components/HostBadge.test.tsx src/index.css.test.ts`
+Expected: FAIL (prop `colors` unknown / old props required; CSS rule absent).
 
 - [ ] **Step 3: Implement**
 
@@ -202,18 +234,10 @@ If TypeScript rejects the `--hb-*` keys on `CSSProperties`, build the object as 
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `cd spa && npx vitest run src/components/HostBadge.test.tsx`
-Expected: PASS. (Whole-app `tsc` will still fail in `SortableTab.tsx` / `InlineTab.tsx` until Task 3 — expected.)
+Run: `cd spa && npx vitest run src/components/HostBadge.test.tsx src/index.css.test.ts`
+Expected: PASS. (Whole-app `tsc` fails in `SortableTab.tsx` / `InlineTab.tsx` until part 1c — expected; do not commit yet.)
 
-- [ ] **Step 5: Commit**
-
-```bash
-git commit --only spa/src/components/HostBadge.tsx spa/src/components/HostBadge.test.tsx spa/src/index.css -m "feat(spa): HostBadge renders resolved tri-colors via CSS custom properties"
-```
-
----
-
-### Task 2: `useTabHostBadge` resolves per-mode colors; `hasHostBadge` follows
+#### Part 1b: `useTabHostBadge` resolves per-mode colors; `hasHostBadge` follows
 
 **Files:**
 - Modify: `spa/src/hooks/useTabHostBadge.ts`
@@ -384,17 +408,9 @@ export function useTabHostBadge(tab: Tab): TabHostBadge | null {
 - [ ] **Step 4: Run to verify pass**
 
 Run: `cd spa && npx vitest run src/hooks/useTabHostBadge.test.ts src/lib/host-color.test.ts`
-Expected: PASS.
+Expected: PASS. (Still no commit.)
 
-- [ ] **Step 5: Commit**
-
-```bash
-git commit --only spa/src/hooks/useTabHostBadge.ts spa/src/hooks/useTabHostBadge.test.ts spa/src/lib/host-color.ts spa/src/lib/host-color.test.ts -m "feat(spa): useTabHostBadge resolves per-mode badge colors"
-```
-
----
-
-### Task 3: Tab rows pass `colors`, carry `data-active`, drop opacity props
+#### Part 1c: Tab rows pass `colors`, carry `data-active`, drop opacity props
 
 **Files:**
 - Modify: `spa/src/components/SortableTab.tsx` (badge selectors + `<HostBadge>` + root `data-active`)
@@ -428,6 +444,18 @@ In both test files, remove `hostBadge*LineOpacity` / `hostBadge*BgOpacity` from 
 ```
 For `SortableTab.test.tsx` the row is `screen.getByRole('tab')` and the render helper takes `isActive` — read the file's existing helper signature and pass it the same way. If the InlineTab render helper has no `isActive` option, add one (default `false`) that forwards to the `isActive` prop.
 
+`SortableTab` has a second root for **pinned** tabs (the `w-9` icon-only `<button>` branch, which renders no badge). Add to `SortableTab.test.tsx`:
+
+```tsx
+  it('pinned tab root also carries data-active', () => {
+    renderSortable({ pinned: true, isActive: true })      // use the file's helper; pass pinned + isActive the way it expects
+    expect(screen.getByRole('button')).toHaveAttribute('data-active', 'true')
+    renderSortable({ pinned: true, isActive: false })
+    expect(screen.getAllByRole('button').at(-1)).toHaveAttribute('data-active', 'false')
+  })
+```
+(Adjust the role query to whatever the pinned branch actually renders — read `SortableTab.tsx` lines ~95–115 first; if it is a `div role="tab"` too, query by `getAllByRole('tab')`.)
+
 - [ ] **Step 2: Run to verify failure**
 
 Run: `cd spa && npx vitest run src/components/SortableTab.test.tsx src/features/workspace/components/InlineTab.test.tsx`
@@ -442,18 +470,18 @@ In both files:
 
 - [ ] **Step 4: Run to verify pass + whole-app typecheck**
 
-Run: `cd spa && npx vitest run src/components/SortableTab.test.tsx src/features/workspace/components/InlineTab.test.tsx src/components/HostBadge.test.tsx src/hooks && npx tsc --noEmit -p tsconfig.app.json`
-Expected: PASS; tsc green again (only `TerminalSection`/`HostBadgeSetting` still reference the opacity settings, which still exist until Task 4).
+Run: `cd spa && npx vitest run src/components/SortableTab.test.tsx src/features/workspace/components/InlineTab.test.tsx src/components/HostBadge.test.tsx src/index.css.test.ts src/hooks src/lib/host-color.test.ts && npx tsc --noEmit -p tsconfig.app.json && pnpm run lint`
+Expected: PASS; tsc green (the opacity settings still exist in the store until Task 2, and `TerminalSection`/`HostBadgeSetting` still use them — that is fine).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit (the only commit of Task 1)**
 
 ```bash
-git commit --only spa/src/components/SortableTab.tsx spa/src/components/SortableTab.test.tsx spa/src/features/workspace/components/InlineTab.tsx spa/src/features/workspace/components/InlineTab.test.tsx -m "feat(spa): tab rows carry data-active and pass resolved badge colors"
+git commit --only spa/src/components/HostBadge.tsx spa/src/components/HostBadge.test.tsx spa/src/index.css spa/src/index.css.test.ts spa/src/hooks/useTabHostBadge.ts spa/src/hooks/useTabHostBadge.test.ts spa/src/lib/host-color.ts spa/src/lib/host-color.test.ts spa/src/components/SortableTab.tsx spa/src/components/SortableTab.test.tsx spa/src/features/workspace/components/InlineTab.tsx spa/src/features/workspace/components/InlineTab.test.tsx -m "feat(spa): host badge renders per-mode tri-colors (main on active/hover, middle inactive, light background)"
 ```
 
 ---
 
-### Task 4: Remove the per-surface opacity settings; caption the remaining inputs
+### Task 2: Remove the per-surface opacity settings; caption the remaining inputs
 
 **Files:**
 - Modify: `spa/src/stores/useUISettingsStore.ts` (constants `HOST_BADGE_{LINE,BG}_OPACITY_*`, `clampHostBadge{Line,Bg}Opacity`, the two entries per surface in `HOST_BADGE_NUMERIC_CLAMPS`, `HOST_BADGE_DEFAULTS`, the interface fields + setters, the initial state + setter implementations; update the "14 host badge fields" comment to 10)
@@ -468,20 +496,30 @@ git commit --only spa/src/components/SortableTab.tsx spa/src/components/Sortable
 
 - [ ] **Step 1: Write the failing tests**
 
-- `useUISettingsStore.test.ts`: remove the `clampHostBadgeLineOpacity` / `clampHostBadgeBgOpacity` imports and their assertions (~lines 337–343); remove the `LineOpacity` / `BgOpacity` expectations (~288–289) and list entries (~301–309); add
+- `useUISettingsStore.test.ts`: first `rg -n 'LineOpacity|BgOpacity' spa/src/stores/useUISettingsStore.test.ts` and handle **every** hit: remove the `clampHostBadgeLineOpacity` / `clampHostBadgeBgOpacity` imports and their assertions (~lines 337–343); remove the `LineOpacity` / `BgOpacity` expectations (~288–289) and list entries (~301–309); in the **rehydrate** tests that seed the four keys into persisted state and assert them back, delete those seeds/assertions. Then add:
   ```ts
+  const REMOVED = ['hostBadgeSidebarLineOpacity', 'hostBadgeSidebarBgOpacity', 'hostBadgeTabBarLineOpacity', 'hostBadgeTabBarBgOpacity'] as const
+
   it('has no per-surface opacity fields any more', () => {
     const s = useUISettingsStore.getState() as Record<string, unknown>
-    for (const k of ['hostBadgeSidebarLineOpacity', 'hostBadgeSidebarBgOpacity', 'hostBadgeTabBarLineOpacity', 'hostBadgeTabBarBgOpacity']) {
-      expect(k in s).toBe(false)
-    }
+    for (const k of REMOVED) expect(k in s).toBe(false)
     expect(Object.keys(HOST_BADGE_DEFAULTS)).toHaveLength(10)
   })
-  it('sanitizeHostBadgePrefs passes an unknown legacy opacity key through untouched (it is simply ignored)', () => {
-    expect(sanitizeHostBadgePrefs({ hostBadgeSidebarBgOpacity: 40 })).toEqual({ hostBadgeSidebarBgOpacity: 40 })
+
+  it('sanitizeHostBadgePrefs strips the removed opacity keys', () => {
+    expect(sanitizeHostBadgePrefs({ hostBadgeSidebarBgOpacity: 40, hostBadgeSidebarBox: 16 })).toEqual({ hostBadgeSidebarBox: 16 })
+  })
+
+  it('rehydrating v3 persisted state with the removed keys does not carry them into the store', async () => {
+    // Follow the file's existing rehydrate harness (it writes a JSON blob under STORAGE_KEYS.UI_SETTINGS
+    // and calls useUISettingsStore.persist.rehydrate()); seed { version: 3, state: { ...defaults, hostBadgeSidebarBgOpacity: 40 } }.
+    await rehydrateWith({ hostBadgeSidebarBgOpacity: 40 })
+    const s = useUISettingsStore.getState() as Record<string, unknown>
+    for (const k of REMOVED) expect(k in s).toBe(false)
   })
   ```
-- `preferences.test.ts`: remove the four field names from the expected list(s).
+  Implementation for the last test (in `useUISettingsStore.ts`): export `HOST_BADGE_REMOVED_FIELDS = REMOVED`; `sanitizeHostBadgePrefs` deletes them; bump persist `version: 3 → 4` and, in `migrate`, when `version < 4` delete the four keys from the incoming state (keep the existing v1/v2 handling intact). A `migrate` step is the only hook that can *remove* keys — `onRehydrateStorage` + `setState` can only add or overwrite. In `preferences.ts` `normalizeIncoming` already runs `sanitizeHostBadgePrefs`, so a stale remote key is stripped on the sync path too.
+- `preferences.test.ts`: `rg -n 'LineOpacity|BgOpacity' spa/src/lib/sync/contributors/preferences.test.ts` — remove the four names from the expected field list(s) AND from every valid/hostile deserialize fixture and assertion; add one test: deserializing a payload that still carries `hostBadgeSidebarBgOpacity: 40` leaves `'hostBadgeSidebarBgOpacity' in useUISettingsStore.getState()` false.
 - `HostBadgeSetting.test.tsx`: remove props/tests for `line-opacity` / `bg-opacity`; add
   ```tsx
   it('shows a caption above each numeric input', () => {
@@ -542,7 +580,7 @@ Locales (`en.json`, next to the existing `settings.terminal.host_badge.*` keys; 
 ```
 `zh-TW.json`: `"大小"`, `"內縮"`, `"圓角"`.
 
-Store / sync / TerminalSection: delete as listed under **Files**. Grep afterwards: `rg -n 'LineOpacity|BgOpacity|LINE_OPACITY|BG_OPACITY|line_opacity|bg_opacity' spa/src` must return nothing.
+Store / sync / TerminalSection: delete as listed under **Files**, plus the `HOST_BADGE_REMOVED_FIELDS` strip in `sanitizeHostBadgePrefs` and the v4 `migrate` step described in Step 1. Grep afterwards: `rg -n 'LineOpacity|BgOpacity|LINE_OPACITY|BG_OPACITY|line_opacity|bg_opacity' spa/src` must return only the `HOST_BADGE_REMOVED_FIELDS` list and its tests.
 
 - [ ] **Step 4: Run to verify pass + full suite**
 
@@ -559,6 +597,6 @@ git commit --only spa/src/stores/useUISettingsStore.ts spa/src/stores/useUISetti
 
 ## Done criteria (P2)
 
-- Full suite, lint, tsc green; `rg 'LineOpacity|BgOpacity|line_opacity|bg_opacity' spa/src` empty.
+- Full suite, lint, tsc green; `rg 'LineOpacity|BgOpacity|line_opacity|bg_opacity' spa/src` hits only `HOST_BADGE_REMOVED_FIELDS` and its tests.
 - Live (`:5174`, after merge): spec §8 items 1, 2, 5 — legacy-colored host looks like alpha.362 on the active tab, dimmer (60%) on inactive tabs, full on hover; Settings → Terminal shows Size / Inset / Radius captions and no percent fields.
 - ≤ 20 files / ≤ 800 lines (expected ≈ 18 files).
