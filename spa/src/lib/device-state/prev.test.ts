@@ -45,7 +45,7 @@ function world(): WorkspaceSnapshot {
     sessionMeta: {
       h1: {
         c1: { hostId: 'h1', sessionCode: 'c1', name: 'work', mode: 'terminal', cwd: '/tmp', restorable: true },
-        c2: { hostId: 'h1', sessionCode: 'c2', name: 'other', mode: 'stream', cwd: '/srv', restorable: true },
+        c2: { hostId: 'h1', sessionCode: 'c2', name: 'other', mode: 'terminal', cwd: '/srv', restorable: true },
       },
       h2: {
         c9: { hostId: 'h2', sessionCode: 'c9', name: 'far', mode: 'terminal', cwd: '/x', restorable: false },

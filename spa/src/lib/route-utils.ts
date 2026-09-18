@@ -7,10 +7,10 @@ export type ParsedRoute =
   | { kind: 'hosts'; hostId?: string; subPage?: HostSubPage }
   | { kind: 'hosts-invalid'; hostId?: string; subPage?: string }
   | { kind: 'settings'; scope: 'global'; section?: string; subsection?: string }
-  | { kind: 'session-tab'; tabId: string; mode: 'terminal' | 'stream' }
+  | { kind: 'session-tab'; tabId: string; mode: 'terminal' }
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'workspace-settings'; workspaceId: string }
-  | { kind: 'workspace-session-tab'; workspaceId: string; tabId: string; mode: 'terminal' | 'stream' }
+  | { kind: 'workspace-session-tab'; workspaceId: string; tabId: string; mode: 'terminal' }
   | { kind: 'execution'; executionId: string; host?: string }
 
 const ID_PATTERN = /^[0-9a-z]{6}$/
@@ -28,8 +28,11 @@ const HOST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 const SETTINGS_SECTION_PATTERN = SETTINGS_LOCAL_ID_RE
 const SETTINGS_SUBSECTION_PATTERN = SETTINGS_LOCAL_ID_RE
 
-function validateMode(mode: string): 'terminal' | 'stream' {
-  return mode === 'stream' ? 'stream' : 'terminal'
+// The mode segment of a session-tab path. Terminal is the only mode since
+// P-D.3; the segment is still parsed so an old `/…/stream` deep link (or any
+// other value) resolves to a terminal tab instead of a dead route.
+function validateMode(_segment: string): 'terminal' {
+  return 'terminal'
 }
 
 export function parseRoute(path: string): ParsedRoute | null {

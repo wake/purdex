@@ -16,7 +16,7 @@ function tmux(
   hostId: string,
   sessionCode: string,
   cachedName: string,
-  opts: { mode?: 'terminal' | 'stream'; rebuild?: PaneRebuildRecord } = {},
+  opts: { mode?: 'terminal'; rebuild?: PaneRebuildRecord } = {},
 ): PaneContent {
   return {
     kind: 'tmux-session', hostId, sessionCode, mode: opts.mode ?? 'terminal', cachedName, tmuxInstance: '',
@@ -76,9 +76,12 @@ describe('buildDeviceStatePayload', () => {
     expect(snap.sessionMeta).toEqual({})
   })
 
-  it('builds sessionMeta from tmux panes with cachedName, mode, restorable false, cwd only from non-empty rebuild.cwd', () => {
+  it('builds sessionMeta from tmux panes with cachedName, mode terminal, restorable false, cwd only from non-empty rebuild.cwd', () => {
     const tabs = {
-      a: tab('a', leaf('pa', tmux('h1', 'c1', 'alpha', { mode: 'stream', rebuild: rebuild('/work/a') }))),
+      // 'stream' on a live pane cannot happen after the tab-store v3 migration;
+      // the cast covers a blob that reached the payload builder unmigrated —
+      // the meta must still say 'terminal'.
+      a: tab('a', leaf('pa', tmux('h1', 'c1', 'alpha', { mode: 'stream' as unknown as 'terminal', rebuild: rebuild('/work/a') }))),
       b: tab('b', leaf('pb', tmux('h1', 'c2', 'beta'))),
       c: tab('c', leaf('pc', tmux('h2', 'c3', 'gamma', { rebuild: rebuild('') }))),
       d: tab('d', leaf('pd', tmux('h2', 'c4', 'delta', { rebuild: rebuild(undefined) }))),
@@ -89,7 +92,7 @@ describe('buildDeviceStatePayload', () => {
 
     expect(snap.sessionMeta).toEqual({
       h1: {
-        c1: { hostId: 'h1', sessionCode: 'c1', name: 'alpha', mode: 'stream', restorable: false, cwd: '/work/a' },
+        c1: { hostId: 'h1', sessionCode: 'c1', name: 'alpha', mode: 'terminal', restorable: false, cwd: '/work/a' },
         c2: { hostId: 'h1', sessionCode: 'c2', name: 'beta', mode: 'terminal', restorable: false },
       },
       h2: {

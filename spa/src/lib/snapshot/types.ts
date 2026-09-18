@@ -3,7 +3,9 @@ import type { Session } from '../host-api'
 
 export interface SessionMeta {
   hostId: string; sessionCode: string; name: string
-  mode: 'terminal' | 'stream'
+  /** Always 'terminal' since P-D.3. A snapshot written earlier may still
+   *  carry 'stream'; readers ignore the stored value and restore a terminal. */
+  mode: 'terminal'
   cwd?: string; currentCommand?: string
   restorable: boolean
   captureError?: 'host-unreachable' | 'session-dead-at-capture' | 'cwd-probe-failed'

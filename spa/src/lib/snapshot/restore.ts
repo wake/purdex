@@ -78,7 +78,10 @@ export async function ensureSessions(
       }
 
       try {
-        const created = await createSession(hostId, meta.name, meta.cwd, meta.mode)
+        // 'terminal' regardless of what the snapshot says: a pre-P-D.3
+        // snapshot can still carry mode: 'stream', and that mode no longer
+        // exists on either side.
+        const created = await createSession(hostId, meta.name, meta.cwd, 'terminal')
         // §8.1: trust the returned object, never the request values.
         perHostRemap[oldCode] = { status: 'rebuilt', newCode: created.code, session: created }
         report.rebuilt++

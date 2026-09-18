@@ -48,8 +48,11 @@ function usable(s: Session): boolean {
     && typeof s.tmux_instance === 'string' && s.tmux_instance !== ''
 }
 
-function compatible(meta: SessionMeta, s: Session): boolean {
-  if (meta.mode !== 'terminal') return false // stream panes are never reattached
+// The meta side no longer gates on mode: every pane is a terminal pane since
+// P-D.3, including one whose stored meta still says 'stream'. The live side
+// keeps its guard for a peer daemon that predates P-D.2 and can still report
+// a session in stream mode.
+function compatible(_meta: SessionMeta, s: Session): boolean {
   return s.mode === undefined || s.mode === 'terminal'
 }
 

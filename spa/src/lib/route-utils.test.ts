@@ -117,9 +117,9 @@ describe('parseRoute', () => {
     })
   })
 
-  it('parses /t/:tabId/stream', () => {
+  it('parses an old /t/:tabId/stream deep link as a terminal session tab (P-D.3)', () => {
     expect(parseRoute('/t/abc123/stream')).toEqual({
-      kind: 'session-tab', tabId: 'abc123', mode: 'stream',
+      kind: 'session-tab', tabId: 'abc123', mode: 'terminal',
     })
   })
 
@@ -141,9 +141,9 @@ describe('parseRoute', () => {
     })
   })
 
-  it('parses /w/:workspaceId/t/:tabId/:mode', () => {
+  it('parses /w/:workspaceId/t/:tabId/:mode (an old stream segment resolves to terminal)', () => {
     expect(parseRoute('/w/ws0001/t/abc123/stream')).toEqual({
-      kind: 'workspace-session-tab', workspaceId: 'ws0001', tabId: 'abc123', mode: 'stream',
+      kind: 'workspace-session-tab', workspaceId: 'ws0001', tabId: 'abc123', mode: 'terminal',
     })
   })
 
