@@ -1,0 +1,54 @@
+// spa/src/components/executions/ExecutionRowCompact.tsx — one row of the
+// sidebar Executions view (P-C spec §4.3): state dot, one-line brief,
+// relative age, and the ↩ marker when the execution was handed over from a
+// tmux session on this same host.
+import { useI18nStore } from '../../stores/useI18nStore'
+import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
+import { firstLine } from '../../lib/nex/format'
+import { relativeAge } from '../../lib/nex/relative-age'
+import { sameHostSessionCode } from '../../lib/nex/execution-groups'
+import type { ExecutionSummary } from '../../lib/nex/types'
+
+interface Props {
+  row: ExecutionSummary
+  hostId: string
+  now: number
+  onOpen: () => void
+}
+
+export function ExecutionRowCompact({ row, hostId, now, onOpen }: Props) {
+  const t = useI18nStore((s) => s.t)
+  const age = relativeAge(row.updated_at, now)
+  const sessionCode = sameHostSessionCode(row.origin, hostId)
+
+  return (
+    <button
+      type="button"
+      data-testid="executions-row"
+      onClick={onOpen}
+      title={row.id}
+      className="flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left cursor-pointer hover:bg-surface-hover"
+    >
+      <span
+        data-testid="executions-state-dot"
+        className={`shrink-0 inline-block w-2 h-2 rounded-full ${STATE_DOT_CLASSES[row.state] ?? 'bg-text-muted'}`}
+        title={row.state}
+      />
+      <span data-testid="executions-brief" className="flex-1 min-w-0 truncate text-xs text-text-primary">
+        {firstLine(row.brief)}
+      </span>
+      {sessionCode !== null && (
+        <span
+          data-testid="executions-marker"
+          className="shrink-0 text-xs text-text-muted"
+          title={t('executions.marker_title', { code: sessionCode })}
+        >
+          ↩
+        </span>
+      )}
+      <span data-testid="executions-age" className="shrink-0 text-xs text-text-muted tabular-nums">
+        {t(`executions.age.${age.key}`, { n: age.n })}
+      </span>
+    </button>
+  )
+}

@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { SidebarRegion } from './SidebarRegion'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
-import { List } from '@phosphor-icons/react'
+import { Lightning, List } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
+import { useHostStore } from '../stores/useHostStore'
+import { useNexHostStore } from '../stores/useNexHostStore'
+import { ExecutionsView } from './executions/ExecutionsView'
+
+vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn().mockResolvedValue({ items: [], next_cursor: '' }) }))
+vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn(() => ({ close: vi.fn() })) }))
 
 const DummyView = ({ isActive }: { isActive: boolean }) => (
   <div data-testid="dummy-view">{isActive ? 'active' : 'inactive'}</div>
@@ -134,5 +140,48 @@ describe('SidebarRegion', () => {
     useLayoutStore.getState().setRegionMode('primary-sidebar', 'hidden')
     const { container } = render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
     expect(container.firstChild).toBeNull()
+  })
+
+  describe('Executions view', () => {
+    function registerExecutionsView() {
+      registerModule({
+        id: 'execution',
+        name: 'Execution',
+        views: [{ id: 'executions', label: 'Executions', icon: Lightning, scope: 'system', component: ExecutionsView }],
+      })
+    }
+
+    beforeEach(() => {
+      useHostStore.setState({
+        hosts: {
+          'host-a': { id: 'host-a', name: 'Mini Lab', ip: '1', port: 1, token: 't', order: 0 },
+          'host-b': { id: 'host-b', name: 'Air', ip: '2', port: 2, token: 't', order: 1 },
+        },
+        hostOrder: ['host-a', 'host-b'], activeHostId: 'host-b', runtime: {},
+      })
+      useNexHostStore.setState({ byHost: {}, ensure: vi.fn().mockResolvedValue(undefined) })
+    })
+
+    it('region without the view configured renders no Executions', () => {
+      registerExecutionsView()
+      registerTestModule()
+      useLayoutStore.getState().setRegionViews('primary-sidebar', ['test-view'])
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(screen.getByTestId('dummy-view')).toBeInTheDocument()
+      expect(screen.queryByTestId('executions-view')).toBeNull()
+      expect(screen.queryByText('Executions')).toBeNull()
+    })
+
+    it('configured → renders with the active host id', () => {
+      registerExecutionsView()
+      useLayoutStore.getState().setRegionViews('primary-sidebar', ['executions'])
+      useLayoutStore.getState().setActiveView('primary-sidebar', 'executions')
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(screen.getByTestId('executions-view')).toBeInTheDocument()
+      expect(within(screen.getByTestId('executions-header')).getByText('Air')).toBeInTheDocument()
+      expect(useNexHostStore.getState().ensure).toHaveBeenCalledWith('host-b')
+    })
   })
 })
