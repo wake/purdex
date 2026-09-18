@@ -144,4 +144,16 @@ describe('useTabHostBadge', () => {
     const { result } = renderHook(() => useTabHostBadge(tmuxTab('ghost')))
     expect(result.current).toEqual({ color: null, icon: undefined, iconWeight: undefined })
   })
+
+  it('reads the console main color from colors, preferring it over legacy color', () => {
+    seedHosts({ ...hostA, color: '#22c55e', colors: { console: { main: { color: '#3b82f6', alpha: 100 } } } })
+    const { result } = renderHook(() => useTabHostBadge(tmuxTab('host-a')))
+    expect(result.current?.color).toBe('#3b82f6')
+  })
+
+  it('still honours a legacy-only color', () => {
+    seedHosts({ ...hostA, color: '#22c55e' })
+    const { result } = renderHook(() => useTabHostBadge(tmuxTab('host-a')))
+    expect(result.current?.color).toBe('#22c55e')
+  })
 })

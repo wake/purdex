@@ -34,7 +34,7 @@ describe('HostColorField', () => {
     render(<HostColorField hostId={HOST_ID} />)
     const hex = HOST_COLOR_PRESETS[5]
     fireEvent.click(screen.getByRole('button', { name: hex }))
-    expect(host().color).toBe(hex)
+    expect(host().colors?.console?.main.color).toBe(hex)
     expect(screen.getByRole('button', { name: hex })).toHaveAttribute('aria-pressed', 'true')
     expect(hexInput().value).toBe(hex)
   })
@@ -43,7 +43,7 @@ describe('HostColorField', () => {
     render(<HostColorField hostId={HOST_ID} />)
     fireEvent.change(hexInput(), { target: { value: 'ABCDEF' } })
     fireEvent.keyDown(hexInput(), { key: 'Enter' })
-    expect(host().color).toBe('#abcdef')
+    expect(host().colors?.console?.main.color).toBe('#abcdef')
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -51,7 +51,7 @@ describe('HostColorField', () => {
     render(<HostColorField hostId={HOST_ID} />)
     fireEvent.change(hexInput(), { target: { value: '#123456' } })
     fireEvent.blur(hexInput())
-    expect(host().color).toBe('#123456')
+    expect(host().colors?.console?.main.color).toBe('#123456')
   })
 
   it('invalid hex shows alert and does not change store', () => {
@@ -60,7 +60,7 @@ describe('HostColorField', () => {
     fireEvent.change(hexInput(), { target: { value: 'red' } })
     fireEvent.keyDown(hexInput(), { key: 'Enter' })
     expect(screen.getByRole('alert')).toBeInTheDocument()
-    expect(host().color).toBe('#3b82f6')
+    expect(host().colors?.console?.main.color).toBe('#3b82f6')
   })
 
   it('valid commit after invalid clears the alert', () => {
@@ -71,7 +71,7 @@ describe('HostColorField', () => {
     fireEvent.change(hexInput(), { target: { value: '#00ff00' } })
     fireEvent.blur(hexInput())
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(host().color).toBe('#00ff00')
+    expect(host().colors?.console?.main.color).toBe('#00ff00')
   })
 
   it('empty input commit clears the color', () => {
@@ -155,5 +155,11 @@ describe('HostColorField', () => {
     })
     expect(hexInput().value).toBe('')
     expect(() => fireEvent.blur(hexInput())).not.toThrow()
+  })
+
+  it('marks the preset pressed from colors.console.main', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', { color: '#3b82f6', alpha: 70 })
+    render(<HostColorField hostId={HOST_ID} />)
+    expect(screen.getByRole('button', { name: '#3b82f6' })).toHaveAttribute('aria-pressed', 'true')
   })
 })
