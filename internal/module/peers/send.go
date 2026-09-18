@@ -353,6 +353,14 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			remoteRefused("peer: " + text)
 			return
 		}
+		// Every string field of a remote row is the peer's text, and the
+		// resolve arm echoes some of them back — an ambiguous refusal's
+		// candidates (address, cwd, agent name) and the name-mismatch
+		// detail (the ref's current name). Scrub the entry's token from
+		// them before anything reads them, as fetchHostResult does (#1152).
+		for i := range env.Peers {
+			redactRecord(&env.Peers[i], entry.Token)
+		}
 		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID)
 		rsnap = ipeers.ResolveSnapshot{
 			Partial:            env.Partial,

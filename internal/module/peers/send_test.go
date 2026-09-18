@@ -2020,9 +2020,11 @@ func TestSend_RemoteTextBounded(t *testing.T) {
 // the caller's wire response, the audit row or the log.
 func TestSend_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 	const echo = "echo " + remoteToken + " back"
+	canonical := ipeers.RefID(remoteSessionID)
 	cases := []struct {
 		name    string
 		prepare func(s *sendEnv)
+		to      string // request address; "" = sendReq()'s default
 		status  int
 		rows    int // audit rows expected (pre-insert refusals are unaudited)
 	}{
@@ -2049,12 +2051,32 @@ func TestSend_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 			row.Agent.ProcStart = echo
 			s.env = remoteEnvelope(row)
 		}, status: http.StatusBadRequest},
+		// The resolve arm: rows reach Resolve straight from m.fetch, and an
+		// ambiguous refusal echoes their cwd/agent name as candidates.
+		{name: "ambiguous candidates", prepare: func(s *sendEnv) {
+			a, b := remoteRow("", ""), remoteRow("", "")
+			b.Agent.PID = 778
+			a.Ref, b.Ref = canonical, canonical
+			a.Agent.PeerName, b.Agent.PeerName = "pn-"+remoteToken+"-1", "pn-"+remoteToken+"-2"
+			a.Cwd, b.Cwd = "/w/"+remoteToken+"/one", "/w/"+remoteToken+"/two"
+			s.env = remoteEnvelope(a, b)
+		}, to: remoteAlias + "/" + canonical, status: http.StatusConflict},
+		// The name-mismatch detail names the name the ref answers to now.
+		{name: "name mismatch detail", prepare: func(s *sendEnv) {
+			row := remoteRow(remoteSession, "fooc")
+			row.Agent.PeerName = "pn-" + remoteToken
+			s.env = remoteEnvelope(row)
+		}, to: remoteAlias + "/decoy-name [" + strings.TrimPrefix(canonical, "_") + "]", status: http.StatusConflict},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSendEnv(t, envOpts{})
 			s.set(c.prepare)
-			rr := s.send(adminCtx(), s.sendReq())
+			req := s.sendReq()
+			if c.to != "" {
+				req.To = c.to
+			}
+			rr := s.send(adminCtx(), req)
 			if rr.Code != c.status {
 				t.Fatalf("status = %d, want %d; body=%s", rr.Code, c.status, rr.Body.String())
 			}
