@@ -45,3 +45,33 @@ describe('ToolResultBlock', () => {
     expect(block?.className).toContain('border-[#2a302a]')
   })
 })
+
+// P-B3.2 guard: the no-`facts` DOM must stay byte-identical while Task 8
+// adds the optional `facts` prop. Taken BEFORE any renderer change; later
+// tasks run these WITHOUT `-u` — a diff means fix the component, not the snap.
+describe('baseline snapshots (P-B3.2 guard)', () => {
+  const content = 'line one\nline two'
+  const longContent = 'error: '.repeat(20) // 140 chars → `...` summary in header
+
+  it('collapsed ok', () => {
+    const { container } = render(<ToolResultBlock content={content} isError={false} />)
+    expect(container.firstChild).toMatchSnapshot()
+  })
+
+  it('collapsed error with long content (summary truncated)', () => {
+    const { container } = render(<ToolResultBlock content={longContent} isError={true} />)
+    expect(container.firstChild).toMatchSnapshot()
+  })
+
+  it('expanded ok', () => {
+    const { container } = render(<ToolResultBlock content={content} isError={false} />)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    expect(container.firstChild).toMatchSnapshot()
+  })
+
+  it('expanded error', () => {
+    const { container } = render(<ToolResultBlock content={content} isError={true} />)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    expect(container.firstChild).toMatchSnapshot()
+  })
+})
