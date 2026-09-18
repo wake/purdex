@@ -44,6 +44,7 @@ beforeEach(() => {
     codexIconVariant: 'openai',
     dynamicTabName: false,
     showAgentTitleInStatusBar: false,
+    stripAgentTitleMarker: true,
   })
   useI18nStore.setState({ t: (k: string) => k })
 })
@@ -138,6 +139,42 @@ describe('useTabDisplay — agent title override', () => {
     })
     const { result } = renderHook(() => useTabDisplay(makeTab({ terminated: true, cachedName: 'base' })))
     expect(result.current.displayTitle).toBe('base（Terminated）')
+  })
+
+  it('strips the cc marker from pane_title by default', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'base', pane_title: '✳ plan review' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: true })
+    useAgentStore.setState({ agentTypes: { 'h1:sc1': 'cc' } })
+    const { result } = renderHook(() => useTabDisplay(makeTab()))
+    expect(result.current.displayTitle).toBe('plan review - base')
+  })
+
+  it('keeps the marker when stripAgentTitleMarker is off', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'base', pane_title: '✳ plan review' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: true, stripAgentTitleMarker: false })
+    useAgentStore.setState({ agentTypes: { 'h1:sc1': 'cc' } })
+    const { result } = renderHook(() => useTabDisplay(makeTab()))
+    expect(result.current.displayTitle).toBe('✳ plan review - base')
+  })
+
+  it('falls back to the base label when the title is only the marker', () => {
+    useSessionStore.setState({
+      sessions: { h1: [{ code: 'sc1', name: 'base', pane_title: '✳ ' }] as never },
+      activeHostId: null,
+      activeCode: null,
+    })
+    useUISettingsStore.setState({ dynamicTabName: true })
+    useAgentStore.setState({ agentTypes: { 'h1:sc1': 'cc' } })
+    const { result } = renderHook(() => useTabDisplay(makeTab()))
+    expect(result.current.displayTitle).toBe('base')
   })
 })
 

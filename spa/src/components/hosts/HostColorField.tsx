@@ -2,15 +2,16 @@ import { useState } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { HOST_COLOR_PRESETS, isValidHostColor, normalizeHostColor } from '../../lib/host-color'
+import { HOST_COLOR_PRESETS, normalizeHostColor, resolveHostColorSet } from '../../lib/host-color'
 import { Field } from './form-fields'
 
 export function HostColorField({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const stored = useHostStore((s) => s.hosts[hostId]?.color)
+  const colors = useHostStore((s) => s.hosts[hostId]?.colors)
+  const legacy = useHostStore((s) => s.hosts[hostId]?.color)
   const setHostColor = useHostStore((s) => s.setHostColor)
-  // Stored color may be malformed (sync / corrupted persist); treat it as no color.
-  const current = isValidHostColor(stored) ? stored : ''
+  // Resolver already validates; an unresolvable host is "no color".
+  const current = resolveHostColorSet({ colors, color: legacy }, 'console')?.main.color ?? ''
 
   const [draft, setDraft] = useState(current)
   const [invalid, setInvalid] = useState(false)

@@ -8,8 +8,15 @@ import {
   isPhosphorIconName,
   normalizeHostColor,
   getTabHostId,
-  resolveTabHostColor,
   sanitizeHostConfig,
+  HOST_COLOR_MODES,
+  HOST_COLOR_ALPHA_DEFAULTS,
+  isHostColorMode,
+  clampHostAlpha,
+  isHostColorLayer,
+  isHostColorSet,
+  resolveHostColorSet,
+  resolveHostColors,
 } from './host-color'
 import type { PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
@@ -41,11 +48,6 @@ function splitH(...children: PaneLayout[]): PaneLayout {
 
 function tab(layout: PaneLayout): Tab {
   return { id: 't1', pinned: false, locked: false, createdAt: 0, layout }
-}
-
-function host(id: string, color?: unknown): HostConfig {
-  const base = { id, name: id, ip: '100.64.0.2', port: 7860, order: 0 }
-  return (color === undefined ? base : { ...base, color }) as HostConfig
 }
 
 describe('HOST_COLOR_PRESETS', () => {
@@ -110,32 +112,6 @@ describe('getTabHostId', () => {
   it('returns null when there is no tmux-session pane', () => {
     const layout = splitH(leaf('p-new', { kind: 'new-tab' }), leaf('p-dash', { kind: 'dashboard' }))
     expect(getTabHostId(tab(layout))).toBeNull()
-  })
-})
-
-describe('resolveTabHostColor', () => {
-  it('returns the stored color of the tab host', () => {
-    const hosts = { h1: host('h1', '#3b82f6') }
-    expect(resolveTabHostColor(tab(tmuxLeaf('h1')), hosts)).toBe('#3b82f6')
-  })
-
-  it('returns null when the tab has no tmux-session pane', () => {
-    const hosts = { h1: host('h1', '#3b82f6') }
-    expect(resolveTabHostColor(tab(leaf('p', { kind: 'dashboard' })), hosts)).toBeNull()
-  })
-
-  it('returns null when the host is missing from the store', () => {
-    expect(resolveTabHostColor(tab(tmuxLeaf('h1')), {})).toBeNull()
-  })
-
-  it('returns null when the host has no color', () => {
-    const hosts = { h1: host('h1') }
-    expect(resolveTabHostColor(tab(tmuxLeaf('h1')), hosts)).toBeNull()
-  })
-
-  it.each(['red', 'url(x)', '#abc', '', 42])('returns null for invalid stored color %j', (bad) => {
-    const hosts = { h1: host('h1', bad) }
-    expect(resolveTabHostColor(tab(tmuxLeaf('h1')), hosts)).toBeNull()
   })
 })
 
@@ -300,5 +276,191 @@ describe('sanitizeHostConfig', () => {
       iconWeight: 'evil' as never,
     })
     expect(out).toEqual(base)
+  })
+
+  const set = (color: string) => ({ main: { color, alpha: 100 } })
+
+  it('keeps a fully valid colors map (same object)', () => {
+    const h: HostConfig = { ...base, colors: { console: set('#3b82f6'), terminal: { ...set('#ef4444'), middle: { alpha: 40 } } } }
+    expect(sanitizeHostConfig(h)).toBe(h)
+  })
+
+  it.each([null, 'x', 42, []])('drops colors when it is not a plain object: %j', (bad) => {
+    const out = sanitizeHostConfig({ ...base, colors: bad as never })
+    expect('colors' in out).toBe(false)
+  })
+
+  it('drops unknown mode keys and keeps the valid ones', () => {
+    const out = sanitizeHostConfig({ ...base, colors: { console: set('#3b82f6'), shell: set('#000000') } as never })
+    expect(out.colors).toEqual({ console: set('#3b82f6') })
+  })
+
+  it('drops a set whose main is invalid', () => {
+    const out = sanitizeHostConfig({ ...base, colors: { console: set('#3b82f6'), terminal: { main: { alpha: 100 } } } as never })
+    expect(out.colors).toEqual({ console: set('#3b82f6') })
+  })
+
+  it('drops an invalid middle/light layer but keeps the rest of the set', () => {
+    const out = sanitizeHostConfig({
+      ...base,
+      colors: { console: { ...set('#3b82f6'), middle: { alpha: 500 }, light: { color: '#000000', alpha: 10 } } } as never,
+    })
+    expect(out.colors).toEqual({ console: { ...set('#3b82f6'), light: { color: '#000000', alpha: 10 } } })
+  })
+
+  it('removes colors entirely when no mode survives', () => {
+    const out = sanitizeHostConfig({ ...base, colors: { bogus: set('#3b82f6') } as never })
+    expect('colors' in out).toBe(false)
+  })
+
+  it('cleans colors and legacy color independently', () => {
+    const out = sanitizeHostConfig({ ...base, color: 'red', colors: { console: set('#3b82f6') } } as never)
+    expect('color' in out).toBe(false)
+    expect(out.colors).toEqual({ console: set('#3b82f6') })
+  })
+
+  it('keeps the colors map and every set by reference when all valid, even if another key is cleaned', () => {
+    const colors = { console: set('#3b82f6'), terminal: { ...set('#ef4444'), middle: { alpha: 40 } } }
+    const out = sanitizeHostConfig({ ...base, icon: 'NotAnIcon', colors } as never)
+    expect(out.colors).toBe(colors)
+    expect(out.colors?.terminal).toBe(colors.terminal)
+  })
+
+  it('rebuilds only the set that had an invalid layer; sibling sets keep their reference', () => {
+    const consoleSet = set('#3b82f6')
+    const terminalSet = { ...set('#ef4444'), light: { alpha: 900 } }
+    const out = sanitizeHostConfig({ ...base, colors: { console: consoleSet, terminal: terminalSet } } as never)
+    expect(out.colors?.console).toBe(consoleSet)
+    expect(out.colors?.terminal).not.toBe(terminalSet)
+    expect(out.colors?.terminal).toEqual(set('#ef4444'))
+  })
+})
+
+describe('host color modes — guards', () => {
+  it('HOST_COLOR_MODES is exactly console/terminal/execution', () => {
+    expect(HOST_COLOR_MODES).toEqual(['console', 'terminal', 'execution'])
+  })
+
+  it.each(['console', 'terminal', 'execution'])('isHostColorMode accepts %s', (m) => {
+    expect(isHostColorMode(m)).toBe(true)
+  })
+  it.each(['shell', '', 'Console', 1, null, undefined])('isHostColorMode rejects %j', (m) => {
+    expect(isHostColorMode(m)).toBe(false)
+  })
+
+  it('HOST_COLOR_ALPHA_DEFAULTS is main 100 / middle 60 / light 22', () => {
+    expect(HOST_COLOR_ALPHA_DEFAULTS).toEqual({ main: 100, middle: 60, light: 22 })
+  })
+
+  it.each([
+    [50, 50], [-5, 0], [150, 100], [33.4, 33], [33.5, 34], [NaN, 0], [Infinity, 100],
+  ])('clampHostAlpha(%j) = %j', (input, expected) => {
+    expect(clampHostAlpha(input)).toBe(expected)
+  })
+
+  it('isHostColorLayer accepts alpha-only and color+alpha layers', () => {
+    expect(isHostColorLayer({ alpha: 60 })).toBe(true)
+    expect(isHostColorLayer({ color: '#3b82f6', alpha: 100 })).toBe(true)
+  })
+  it.each([
+    { alpha: 101 }, { alpha: -1 }, { alpha: 1.5 }, { alpha: '60' }, {}, { color: '#3b82f6' },
+    { color: 'red', alpha: 50 }, { color: '#ABC', alpha: 50 }, null, 'x', [],
+  ])('isHostColorLayer rejects %j', (bad) => {
+    expect(isHostColorLayer(bad)).toBe(false)
+  })
+  it('isHostColorLayer with requireColor rejects an alpha-only layer', () => {
+    expect(isHostColorLayer({ alpha: 100 }, { requireColor: true })).toBe(false)
+    expect(isHostColorLayer({ color: '#3b82f6', alpha: 100 }, { requireColor: true })).toBe(true)
+  })
+
+  it('isHostColorSet requires main with a color; middle/light optional', () => {
+    expect(isHostColorSet({ main: { color: '#3b82f6', alpha: 100 } })).toBe(true)
+    expect(isHostColorSet({ main: { color: '#3b82f6', alpha: 100 }, middle: { alpha: 60 }, light: { color: '#000000', alpha: 10 } })).toBe(true)
+  })
+  it.each([
+    { main: { alpha: 100 } },
+    { middle: { alpha: 60 } },
+    { main: { color: '#3b82f6', alpha: 100 }, middle: { alpha: 200 } },
+    { main: { color: '#3b82f6', alpha: 100 }, light: 'x' },
+    null, {}, [],
+  ])('isHostColorSet rejects %j', (bad) => {
+    expect(isHostColorSet(bad)).toBe(false)
+  })
+})
+
+describe('resolveHostColorSet / resolveHostColors', () => {
+  const console_ = { main: { color: '#3b82f6', alpha: 100 } }
+
+  it('returns null for undefined host / no colors / no legacy color', () => {
+    expect(resolveHostColorSet(undefined, 'console')).toBeNull()
+    expect(resolveHostColorSet({}, 'terminal')).toBeNull()
+    expect(resolveHostColors({}, 'console')).toBeNull()
+  })
+
+  it('fills middle/light from main with default alphas', () => {
+    expect(resolveHostColorSet({ colors: { console: console_ } }, 'console')).toEqual({
+      main: { color: '#3b82f6', alpha: 100 },
+      middle: { color: '#3b82f6', alpha: 60 },
+      light: { color: '#3b82f6', alpha: 22 },
+    })
+  })
+
+  it('keeps explicit middle/light colors and alphas', () => {
+    const set = { ...console_, middle: { alpha: 40 }, light: { color: '#000000', alpha: 10 } }
+    expect(resolveHostColorSet({ colors: { console: set } }, 'console')).toEqual({
+      main: { color: '#3b82f6', alpha: 100 },
+      middle: { color: '#3b82f6', alpha: 40 },
+      light: { color: '#000000', alpha: 10 },
+    })
+  })
+
+  it('terminal / execution fall back to console when unset', () => {
+    const host = { colors: { console: console_ } }
+    expect(resolveHostColorSet(host, 'terminal')?.main.color).toBe('#3b82f6')
+    expect(resolveHostColorSet(host, 'execution')?.main.color).toBe('#3b82f6')
+  })
+
+  it('a mode with its own set does not inherit console layers', () => {
+    const host = { colors: { console: { ...console_, middle: { alpha: 10 } }, terminal: { main: { color: '#ef4444', alpha: 90 } } } }
+    expect(resolveHostColorSet(host, 'terminal')).toEqual({
+      main: { color: '#ef4444', alpha: 90 },
+      middle: { color: '#ef4444', alpha: 60 },
+      light: { color: '#ef4444', alpha: 22 },
+    })
+  })
+
+  it('legacy color acts as console main with default alphas, for every mode', () => {
+    expect(resolveHostColorSet({ color: '#22c55e' }, 'terminal')).toEqual({
+      main: { color: '#22c55e', alpha: 100 },
+      middle: { color: '#22c55e', alpha: 60 },
+      light: { color: '#22c55e', alpha: 22 },
+    })
+  })
+
+  it('colors wins over legacy color', () => {
+    expect(resolveHostColorSet({ color: '#22c55e', colors: { console: console_ } }, 'console')?.main.color).toBe('#3b82f6')
+  })
+
+  it('an invalid legacy color yields null instead of throwing', () => {
+    expect(resolveHostColorSet({ color: 'red' }, 'console')).toBeNull()
+  })
+
+  it('malformed colors that bypassed sanitize resolve to null (or legacy) without throwing', () => {
+    expect(resolveHostColorSet({ colors: 'x' as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: 42 as never }, 'terminal')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { main: { alpha: 100 } } } as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { main: { color: 'red', alpha: 100 } } } as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { ...console_, middle: { alpha: 900 } } } as never }, 'console')).toBeNull()
+    // A null set for the mode is "absent": legacy color still applies.
+    expect(resolveHostColorSet({ colors: { console: null } as never, color: '#22c55e' }, 'console')?.main.color).toBe('#22c55e')
+    expect(resolveHostColors({ colors: [] as never }, 'console')).toBeNull()
+  })
+
+  it('resolveHostColors emits rgba strings', () => {
+    expect(resolveHostColors({ colors: { console: console_ } }, 'console')).toEqual({
+      main: 'rgba(59, 130, 246, 1)',
+      middle: 'rgba(59, 130, 246, 0.6)',
+      light: 'rgba(59, 130, 246, 0.22)',
+    })
   })
 })

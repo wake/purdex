@@ -319,6 +319,8 @@
   "settings.terminal.host_badge.px": "px",
   "settings.terminal.dynamic_tab_name.label": "Dynamic tab name",
   "settings.terminal.dynamic_tab_name.desc": "When enabled, agent session tabs show the tmux pane title before the session name.",
+  "settings.terminal.strip_agent_title_marker.label": "Strip agent title marker",
+  "settings.terminal.strip_agent_title_marker.desc": "Remove the marker an agent prefixes to its pane title (Claude Code's ✳)",
   "settings.terminal.tab_name_tooltip.label": "Tab name tooltip",
   "settings.terminal.tab_name_tooltip.desc": "Where to show the full tab name on hover.",
   "settings.terminal.tab_name_tooltip.none": "None",

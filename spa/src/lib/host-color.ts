@@ -1,6 +1,7 @@
 import type { IconWeight, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
 import { collectTmuxSessionHostIds } from './infer-workspace-host-id'
+import { rgbaString } from './color-space'
 // Static import on purpose: `CommandIconPicker` already pulls icon-meta into the
 // main chunk, so the catalog costs nothing extra here.
 import iconMetaData from '../features/workspace/generated/icon-meta.json'
@@ -67,20 +68,54 @@ export function normalizeHostColor(v: string): string | null {
 }
 
 /**
- * Drops present-but-invalid identity keys (`color`, `icon`, `iconWeight`) from an
- * untrusted host config (sync payload, persisted state). Returns the same object
- * when every present key is valid.
+ * Returns a cleaned `colors` map, or `undefined` when nothing valid survives.
+ * `same` is true when the input can be kept by reference.
+ */
+function sanitizeHostColors(v: unknown): { value: HostConfig['colors']; same: boolean } {
+  if (!isPlainObject(v)) return { value: undefined, same: false }
+  let same = true
+  const out: Partial<Record<HostColorMode, HostColorSet>> = {}
+  for (const [mode, rawSet] of Object.entries(v)) {
+    if (!isHostColorMode(mode) || !isPlainObject(rawSet) || !isHostColorLayer(rawSet.main, { requireColor: true })) {
+      same = false
+      continue
+    }
+    const cleaned: HostColorSet = { main: rawSet.main as HostColorLayer & { color: string } }
+    let setSame = true
+    for (const layer of ['middle', 'light'] as const) {
+      if (!(layer in rawSet)) continue
+      if (isHostColorLayer(rawSet[layer])) cleaned[layer] = rawSet[layer]
+      else setSame = false
+    }
+    if (Object.keys(rawSet).some((k) => k !== 'main' && k !== 'middle' && k !== 'light')) setSame = false
+    out[mode] = setSame ? (rawSet as unknown as HostColorSet) : cleaned
+    if (!setSame) same = false
+  }
+  if (Object.keys(out).length === 0) return { value: undefined, same: false }
+  return { value: out, same }
+}
+
+/**
+ * Drops present-but-invalid identity keys (`color`, `colors`, `icon`, `iconWeight`)
+ * from an untrusted host config (sync payload, persisted state). Returns the same
+ * object when every present key is valid.
  */
 export function sanitizeHostConfig(host: HostConfig): HostConfig {
   const badColor = 'color' in host && !isValidHostColor(host.color)
   const badIcon = 'icon' in host && !isPhosphorIconName(host.icon)
   const badWeight = 'iconWeight' in host && !isIconWeight(host.iconWeight)
-  if (!badColor && !badIcon && !badWeight) return host
+  const colors = 'colors' in host ? sanitizeHostColors(host.colors) : null
+  const badColors = colors !== null && !colors.same
+  if (!badColor && !badIcon && !badWeight && !badColors) return host
 
   const cleaned = { ...host }
   if (badColor) delete cleaned.color
   if (badIcon) delete cleaned.icon
   if (badWeight) delete cleaned.iconWeight
+  if (badColors) {
+    if (colors.value === undefined) delete cleaned.colors
+    else cleaned.colors = colors.value
+  }
   return cleaned
 }
 
@@ -104,10 +139,115 @@ export function getTabHostId(tab: Tab): string | null {
   return collectTmuxSessionHostIds(tab.layout)[0] ?? null
 }
 
-/** Validated color of the tab's host, or null when unresolvable / invalid. */
-export function resolveTabHostColor(tab: Tab, hosts: Record<string, HostConfig>): string | null {
-  const hostId = getTabHostId(tab)
-  if (!hostId) return null
-  const color = hosts[hostId]?.color
-  return isValidHostColor(color) ? color : null
+/* ─── Per-mode tri-color (spec 2026-09-18 host-color-modes §4.1) ─── */
+
+export type HostColorMode = 'console' | 'terminal' | 'execution'
+export const HOST_COLOR_MODES: readonly HostColorMode[] = ['console', 'terminal', 'execution']
+
+export type HostColorLayerName = 'main' | 'middle' | 'light'
+export const HOST_COLOR_LAYER_NAMES: readonly HostColorLayerName[] = ['main', 'middle', 'light']
+
+export interface HostColorLayer {
+  /** `#rrggbb`. Absent on middle/light = inherit the mode's main color. Required on main. */
+  color?: string
+  /** Integer 0–100. */
+  alpha: number
+}
+
+export interface HostColorSet {
+  main: HostColorLayer & { color: string }
+  middle?: HostColorLayer
+  light?: HostColorLayer
+}
+
+/** Alpha used when a layer is absent (light 22 = the alpha.362 background default). */
+export const HOST_COLOR_ALPHA_DEFAULTS: Readonly<Record<HostColorLayerName, number>> = {
+  main: 100,
+  middle: 60,
+  light: 22,
+}
+
+export function isHostColorMode(v: unknown): v is HostColorMode {
+  return typeof v === 'string' && (HOST_COLOR_MODES as readonly string[]).includes(v)
+}
+
+/** Rounds and bounds to an integer 0–100. NaN → 0. */
+export function clampHostAlpha(n: number): number {
+  if (Number.isNaN(n)) return 0
+  return Math.min(100, Math.max(0, Math.round(n)))
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * Structural guard for a stored layer: `alpha` must already be an integer 0–100
+ * (sanitize drops, it does not clamp); `color`, when present, must be `#rrggbb`.
+ */
+export function isHostColorLayer(v: unknown, opts?: { requireColor?: boolean }): v is HostColorLayer {
+  if (!isPlainObject(v)) return false
+  const { alpha, color } = v
+  if (typeof alpha !== 'number' || !Number.isInteger(alpha) || alpha < 0 || alpha > 100) return false
+  if ('color' in v && !isValidHostColor(color)) return false
+  if (opts?.requireColor && !('color' in v)) return false
+  return true
+}
+
+export function isHostColorSet(v: unknown): v is HostColorSet {
+  if (!isPlainObject(v)) return false
+  if (!isHostColorLayer(v.main, { requireColor: true })) return false
+  if ('middle' in v && !isHostColorLayer(v.middle)) return false
+  if ('light' in v && !isHostColorLayer(v.light)) return false
+  return true
+}
+
+/* ─── Resolver (spec §4.3) ─── */
+
+export type HostColorSource = Pick<HostConfig, 'colors' | 'color'>
+
+export interface ResolvedHostColorLayer { color: string; alpha: number }
+export interface ResolvedHostColorSet {
+  main: ResolvedHostColorLayer
+  middle: ResolvedHostColorLayer
+  light: ResolvedHostColorLayer
+}
+
+/**
+ * Hex-level resolution with every inheritance applied:
+ * `colors[mode]` → `colors.console` → legacy `color` → null.
+ * Within the chosen set, middle/light take main's color when their own is absent
+ * and the §4.1 default alpha when the layer is absent.
+ */
+export function resolveHostColorSet(host: HostColorSource | undefined, mode: HostColorMode): ResolvedHostColorSet | null {
+  if (!host) return null
+  const set = host.colors?.[mode] ?? host.colors?.console
+  if (set) {
+    if (!isHostColorSet(set)) return null
+    const main = set.main.color
+    return {
+      main: { color: main, alpha: set.main.alpha },
+      middle: { color: set.middle?.color ?? main, alpha: set.middle?.alpha ?? HOST_COLOR_ALPHA_DEFAULTS.middle },
+      light: { color: set.light?.color ?? main, alpha: set.light?.alpha ?? HOST_COLOR_ALPHA_DEFAULTS.light },
+    }
+  }
+  if (!isValidHostColor(host.color)) return null
+  return {
+    main: { color: host.color, alpha: HOST_COLOR_ALPHA_DEFAULTS.main },
+    middle: { color: host.color, alpha: HOST_COLOR_ALPHA_DEFAULTS.middle },
+    light: { color: host.color, alpha: HOST_COLOR_ALPHA_DEFAULTS.light },
+  }
+}
+
+export interface ResolvedHostColors { main: string; middle: string; light: string }
+
+/** `resolveHostColorSet` rendered to `rgba()` strings, ready for inline CSS. */
+export function resolveHostColors(host: HostColorSource | undefined, mode: HostColorMode): ResolvedHostColors | null {
+  const set = resolveHostColorSet(host, mode)
+  if (!set) return null
+  const main = rgbaString(set.main.color, set.main.alpha)
+  const middle = rgbaString(set.middle.color, set.middle.alpha)
+  const light = rgbaString(set.light.color, set.light.alpha)
+  if (!main || !middle || !light) return null
+  return { main, middle, light }
 }

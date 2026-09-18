@@ -171,6 +171,9 @@ interface UISettings {
   setTabNameTooltipMode: (mode: TabNameTooltipMode) => void
   showAgentTitleInStatusBar: boolean
   setShowAgentTitleInStatusBar: (show: boolean) => void
+  /** Strip the marker an agent writes at the start of its pane title (e.g. Claude Code's `✳`). */
+  stripAgentTitleMarker: boolean
+  setStripAgentTitleMarker: (v: boolean) => void
 
 
   hostBadgeSidebarEnabled: boolean
@@ -240,6 +243,8 @@ export const useUISettingsStore = create<UISettings>()(
       setTabNameTooltipMode: (mode) => set({ tabNameTooltipMode: mode }),
       showAgentTitleInStatusBar: false,
       setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
+      stripAgentTitleMarker: true,
+      setStripAgentTitleMarker: (v) => set({ stripAgentTitleMarker: v }),
 
 
       ...HOST_BADGE_DEFAULTS,

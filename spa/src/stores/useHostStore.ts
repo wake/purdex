@@ -2,11 +2,21 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { isIconWeight, isPhosphorIconName, isValidHostColor, sanitizeHostConfig } from '../lib/host-color'
+import {
+  clampHostAlpha,
+  HOST_COLOR_ALPHA_DEFAULTS,
+  HOST_COLOR_LAYER_NAMES,
+  isHostColorMode,
+  isIconWeight,
+  isPhosphorIconName,
+  isValidHostColor,
+  sanitizeHostConfig,
+} from '../lib/host-color'
 // host-api.ts imports useHostStore at runtime, so this must stay a type-only
 // import to avoid a require cycle.
 import type { NexInfo } from '../lib/host-api'
 import type { IconWeight } from '../types/tab'
+import type { HostColorLayer, HostColorLayerName, HostColorMode, HostColorSet } from '../lib/host-color'
 
 /* ─── Interfaces ─── */
 
@@ -21,11 +31,17 @@ export interface HostConfig {
   token?: string | null
   order: number
   /**
-   * Per-host mark color, strict `#rrggbb` (see `isValidHostColor`). Absent means
-   * "no color" (the key is removed, never set to null). Synced with the host
-   * config; always re-validated with `isValidHostColor` before reaching CSS.
+   * @deprecated Legacy single color; read-only (spec D10). New code writes `colors`.
+   * Strict `#rrggbb` (see `isValidHostColor`). Absent means "no color" (the key is
+   * removed, never set to null). Synced with the host config; always re-validated
+   * with `isValidHostColor` before reaching CSS.
    */
   color?: string
+  /**
+   * Per-mode tri-color for the host badge (spec 2026-09-18 host-color-modes §4.1).
+   * Absent mode → inherits `console`; absent `console` → legacy `color`, then "no color".
+   */
+  colors?: Partial<Record<HostColorMode, HostColorSet>>
   /**
    * Phosphor icon name shown in the host badge, e.g. `'Laptop'`. Absent means
    * "use `DEFAULT_HOST_ICON`" (the key is removed, never set to null).
@@ -72,8 +88,25 @@ interface HostState {
 
   addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
-  /** Set a valid `#rrggbb` color, or `null` to remove it. Invalid values and unknown hosts are no-ops. */
+  /** Legacy entry point kept for the current color UI: writes `colors.console.main` (alpha preserved, default 100); `null` clears the console set. */
   setHostColor: (hostId: string, color: string | null) => void
+  /**
+   * Write one layer of one mode (spec §4.1). `main` with a valid color creates the
+   * set when absent; `null` on `main` clears the mode. `middle` / `light` require an
+   * existing set (no-op otherwise); `null` removes just that layer.
+   * Validation is strict and never throws: `color` (when present) must already pass
+   * `isValidHostColor` (it is lowercased, never normalized — the UI normalizes), `alpha`
+   * must be a finite number (then clamped to an integer 0–100). Anything else, an
+   * unknown host / mode / layer, is a no-op. Every *applied* write deletes the legacy
+   * `color` key (spec D10); clearing a mode that has no set is a no-op, except
+   * `console` on a host that has a legacy `color` and no console set (whether or not
+   * other mode sets exist): there it removes the legacy `color`, because the resolver
+   * shows the legacy color as the console color and "No color" must clear what the
+   * user sees. Removing a middle/light layer that is already absent is a no-op.
+   */
+  setHostColorLayer: (hostId: string, mode: HostColorMode, layer: HostColorLayerName, value: HostColorLayer | null) => void
+  /** Remove the whole set for a mode; drops `colors` when it becomes empty. */
+  clearHostColorMode: (hostId: string, mode: HostColorMode) => void
   /**
    * Set the host's Phosphor icon (and optionally its weight), or `null` / a blank
    * string to remove both keys. An invalid weight is ignored; unknown hosts are no-ops.
@@ -153,17 +186,60 @@ export const useHostStore = create<HostState>()(
           }
         }),
 
-      setHostColor: (hostId, color) =>
+      setHostColor: (hostId, color) => {
+        const { setHostColorLayer, clearHostColorMode, hosts } = get()
+        if (color === null) {
+          clearHostColorMode(hostId, 'console')
+          return
+        }
+        const alpha = hosts[hostId]?.colors?.console?.main.alpha ?? HOST_COLOR_ALPHA_DEFAULTS.main
+        setHostColorLayer(hostId, 'console', 'main', { color, alpha })
+      },
+
+      setHostColorLayer: (hostId, mode, layer, value) =>
         set((state) => {
           const host = state.hosts[hostId]
-          if (!host) return state
-          if (color === null) {
-            const { color: _c, ...rest } = host
-            return { hosts: { ...state.hosts, [hostId]: rest } }
+          if (!host || !isHostColorMode(mode) || !HOST_COLOR_LAYER_NAMES.includes(layer)) return state
+          const colors = { ...host.colors }
+          const existing = colors[mode]
+
+          if (value === null) {
+            if (layer === 'main') {
+              // Clearing a mode that has no set is a no-op — unless it is `console` on a
+              // host with a legacy color and no console set, where "clear" must drop
+              // the legacy color regardless of other mode sets.
+              if (!existing && !(mode === 'console' && 'color' in host)) return state
+              delete colors[mode]
+            } else if (existing && layer in existing) {
+              const { [layer]: _dropped, ...rest } = existing
+              colors[mode] = rest as HostColorSet
+            } else return state
+          } else {
+            if (typeof value !== 'object' || value === null) return state
+            const { alpha: rawAlpha, color: rawColor } = value as { alpha?: unknown; color?: unknown }
+            if (typeof rawAlpha !== 'number' || !Number.isFinite(rawAlpha)) return state
+            const alpha = clampHostAlpha(rawAlpha)
+            let color: string | undefined
+            if (rawColor !== undefined) {
+              if (!isValidHostColor(rawColor)) return state
+              color = rawColor.toLowerCase()
+            }
+            if (layer === 'main') {
+              if (!color) return state
+              colors[mode] = { ...existing, main: { color, alpha } }
+            } else {
+              if (!existing) return state
+              colors[mode] = { ...existing, [layer]: color ? { color, alpha } : { alpha } }
+            }
           }
-          if (!isValidHostColor(color)) return state
-          return { hosts: { ...state.hosts, [hostId]: { ...host, color } } }
+
+          const { color: _legacy, ...next } = host as HostConfig
+          delete next.colors
+          if (Object.keys(colors).length > 0) next.colors = colors
+          return { hosts: { ...state.hosts, [hostId]: next as HostConfig } }
         }),
+
+      clearHostColorMode: (hostId, mode) => get().setHostColorLayer(hostId, mode, 'main', null),
 
       setHostIcon: (hostId, icon, weight) =>
         set((state) => {

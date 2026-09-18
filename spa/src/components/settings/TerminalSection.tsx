@@ -30,6 +30,8 @@ export function TerminalSection() {
   const setCodexIconVariant = useUISettingsStore((s) => s.setCodexIconVariant)
   const dynamicTabName = useUISettingsStore((s) => s.dynamicTabName)
   const setDynamicTabName = useUISettingsStore((s) => s.setDynamicTabName)
+  const stripAgentTitleMarker = useUISettingsStore((s) => s.stripAgentTitleMarker)
+  const setStripAgentTitleMarker = useUISettingsStore((s) => s.setStripAgentTitleMarker)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
   const setTabNameTooltipMode = useUISettingsStore((s) => s.setTabNameTooltipMode)
   const hostBadgeSidebarEnabled = useUISettingsStore((s) => s.hostBadgeSidebarEnabled)
@@ -198,6 +200,17 @@ export function TerminalSection() {
 
       <SettingItem label={t('settings.terminal.dynamic_tab_name.label')} description={t('settings.terminal.dynamic_tab_name.desc')}>
         <ToggleSwitch label={t('settings.terminal.dynamic_tab_name.label')} checked={dynamicTabName} onChange={setDynamicTabName} />
+      </SettingItem>
+
+      <SettingItem
+        label={t('settings.terminal.strip_agent_title_marker.label')}
+        description={t('settings.terminal.strip_agent_title_marker.desc')}
+      >
+        <ToggleSwitch
+          label={t('settings.terminal.strip_agent_title_marker.label')}
+          checked={stripAgentTitleMarker}
+          onChange={setStripAgentTitleMarker}
+        />
       </SettingItem>
 
       <SettingItem label={t('settings.terminal.tab_name_tooltip.label')} description={t('settings.terminal.tab_name_tooltip.desc')}>

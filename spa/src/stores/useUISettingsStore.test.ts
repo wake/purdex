@@ -214,6 +214,17 @@ describe('useUISettingsStore — tab/icon preferences', () => {
     expect(useUISettingsStore.getState().showAgentTitleInStatusBar).toBe(false)
   })
 
+  it('stripAgentTitleMarker defaults to true', () => {
+    expect(useUISettingsStore.getState().stripAgentTitleMarker).toBe(true)
+  })
+
+  it('setStripAgentTitleMarker toggles the flag', () => {
+    useUISettingsStore.getState().setStripAgentTitleMarker(false)
+    expect(useUISettingsStore.getState().stripAgentTitleMarker).toBe(false)
+    useUISettingsStore.getState().setStripAgentTitleMarker(true)
+    expect(useUISettingsStore.getState().stripAgentTitleMarker).toBe(true)
+  })
+
   it('migration maps old showOscTitle to both new flags', async () => {
     localStorage.setItem(
       STORAGE_KEYS.UI_SETTINGS,

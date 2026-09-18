@@ -20,6 +20,7 @@ const DATA_FIELDS = [
   'codexIconVariant',
   'dynamicTabName',
   'showAgentTitleInStatusBar',
+  'stripAgentTitleMarker',
   'hostBadgeSidebarEnabled',
   'hostBadgeSidebarLineColor',
   'hostBadgeSidebarLineOpacity',
