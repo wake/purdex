@@ -81,9 +81,12 @@ describe('PeersSection — the §2.1 fixture', () => {
     expect(within(row).getByTestId('peer-outbound')).toHaveTextContent('1.0.0-alpha.378')
     expect(within(row).getByTestId('peer-inbound')).toHaveAttribute('data-ok', 'true')
     expect(within(row).getByTestId('peer-inbound')).toHaveTextContent('mini-lab')     // "(Air 2026's entry: mini-lab)"
-    expect(within(row).getByTestId('peer-outbound-drift')).toHaveTextContent('air26')
+    expect(within(row).getByTestId('peer-outbound-self-alias')).toHaveTextContent('air26')
+    expect(within(row).getByTestId('peer-outbound-drift')).toBeInTheDocument()
     expect(within(row).getByTestId('peer-outbound-rename')).toHaveTextContent('air26')
-    expect(within(row).queryByTestId('peer-inbound-drift')).toBeNull()               // mlab's self alias equals air's entry name
+    // mlab's self alias equals air's entry name: self alias still shown, no drift/Rename.
+    expect(within(row).getByTestId('peer-inbound-self-alias')).toHaveTextContent('mini-lab')
+    expect(within(row).queryByTestId('peer-inbound-drift')).toBeNull()
     expect(within(row).queryByTestId('peer-inbound-rename')).toBeNull()
   })
 
@@ -121,6 +124,21 @@ describe('PeersSection — the §2.1 fixture', () => {
     expect(await within(row).findByTestId('peer-outbound-rename-error')).toHaveTextContent('alias "air26" is already used by another host')
     expect(screen.getByTestId('peer-row-air')).toBeInTheDocument()
     expect(within(row).getByTestId('peer-outbound-rename')).toBeEnabled()
+  })
+
+  it('a stale Rename error is cleared once a Refresh removes the drift', async () => {
+    vi.mocked(api.updatePeerHost).mockRejectedValue(new HostApiError(409, 'Conflict', 'alias "air26" is already used by another host'))
+    render(<PeersSection hostId={M} />)
+    const row = await screen.findByTestId('peer-row-air')
+    await waitFor(() => expect(within(row).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
+    fireEvent.click(within(row).getByTestId('peer-outbound-rename'))
+    await within(row).findByTestId('peer-outbound-rename-error')
+    // The alias has already been adopted some other way (e.g. from another client) — the next Refresh sees no drift.
+    vi.mocked(api.listPeerHosts).mockImplementation(async (h) => (h === M ? [{ ...AIR_ROW, alias: 'air26' }] : [MLAB_ROW]))
+    fireEvent.click(screen.getByTestId('peers-refresh'))
+    const row2 = await screen.findByTestId('peer-row-air26')
+    await waitFor(() => expect(within(row2).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
+    expect(within(row2).queryByTestId('peer-outbound-rename-error')).toBeNull()
   })
 
   it('Rename on the return line acts on the counterpart host', async () => {
@@ -197,6 +215,7 @@ describe('PeersSection — page states', () => {
     await waitFor(() => expect(screen.getByTestId('peers-refresh')).toBeEnabled())
     const n = vi.mocked(api.verifyPeerHost).mock.calls.length
     fireEvent.click(screen.getByTestId('peers-refresh'))
+    expect(screen.getByTestId('peers-refresh')).toBeDisabled()
     await waitFor(() => expect(vi.mocked(api.verifyPeerHost).mock.calls.length).toBe(n + 2))
   })
 
@@ -227,7 +246,7 @@ describe('PeersSection — page states', () => {
     expect(document.body.innerHTML).not.toContain(SECRET_A)
   })
 
-  it('under StrictMode (dev double-mount) the page still ends bidirectional and does not paint the discarded first run', async () => {
+  it('under StrictMode (dev double-mount) the page renders once and ends bidirectional', async () => {
     render(<StrictMode><PeersSection hostId={M} /></StrictMode>)
     const row = await screen.findByTestId('peer-row-air')
     await waitFor(() => expect(within(row).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))

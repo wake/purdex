@@ -55,6 +55,7 @@ export function PeersSection({ hostId }: Props) {
   useEffect(() => {
     setSnap(null)
     void run()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gen is a run counter; the latest value is the point
     return () => { gen.current++ }
   }, [run])
 
@@ -187,6 +188,11 @@ function DirectionLine({ testId, from, to, side, note, drift, renameTarget, busy
   const [renaming, setRenaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // A stale rename error must not survive past the drift it was about — a
+  // Refresh that adopts the alias (or otherwise changes what Rename would
+  // do) clears the old 409/400 text along with it.
+  useEffect(() => { setError(null) }, [drift])
+
   const rename = async () => {
     setRenaming(true)
     setError(null)
@@ -215,16 +221,23 @@ function DirectionLine({ testId, from, to, side, note, drift, renameTarget, busy
           : t('peers.failed', { error: side.error })}
       </span>
       {note && <span className="text-xs text-text-muted">{note}</span>}
+      {/* The peer's self alias, spec §5.3: shown whenever it is known, with a
+          separate drift marker + Rename only when it disagrees with the entry name. */}
+      {side !== 'pending' && side.ok && side.self_alias && (
+        <span data-testid={`${testId}-self-alias`} className={`text-xs ${drift ? 'text-status-warning' : 'text-text-muted'}`}>
+          {t('peers.calls_itself', { alias: side.self_alias })}
+        </span>
+      )}
       {drift && (
-        <>
-          <span data-testid={`${testId}-drift`} className="text-xs text-status-warning">
-            {t('peers.calls_itself', { alias: drift })} ({t('peers.drift')})
-          </span>
-          <button type="button" data-testid={`${testId}-rename`} disabled={busy || renaming} onClick={() => void rename()}
-            className="text-xs px-2 py-0.5 rounded bg-accent text-white cursor-pointer disabled:opacity-50">
-            {renaming ? t('peers.renaming') : t('peers.rename_to', { alias: drift })}
-          </button>
-        </>
+        <span data-testid={`${testId}-drift`} className="text-xs text-status-warning">
+          ({t('peers.drift')})
+        </span>
+      )}
+      {drift && (
+        <button type="button" data-testid={`${testId}-rename`} disabled={busy || renaming} onClick={() => void rename()}
+          className="text-xs px-2 py-0.5 rounded bg-accent text-white cursor-pointer disabled:opacity-50">
+          {renaming ? t('peers.renaming') : t('peers.rename_to', { alias: drift })}
+        </button>
       )}
       {error && <span data-testid={`${testId}-rename-error`} className="text-xs text-status-error whitespace-pre-wrap">{error}</span>}
     </div>
