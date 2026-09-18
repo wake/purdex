@@ -169,10 +169,18 @@ export interface PeerHostVerify {
   daemon_version: string
 }
 
-/** `GET /api/peers/settings`: this daemon's deliver toggle and its own alias. */
+/**
+ * `GET`/`PUT /api/peers/settings`: this daemon's deliver toggle and its own
+ * effective alias. `alias_source` says where the alias comes from (self alias
+ * spec S-3): `'config'` = `[peers] alias` is set, `'host_id'` = derived from
+ * `host_id`. It is absent on a daemon older than alpha.399 — and that absence
+ * is how a PUT that was silently ignored is told apart from one that was
+ * applied (S-5): the wrapper passes the body through and never invents it.
+ */
 export interface PeerSettings {
   deliver: boolean
   alias: string
+  alias_source?: 'config' | 'host_id'
 }
 
 export interface ConfigData {
@@ -452,6 +460,24 @@ export function updatePeerHost(
 
 export function fetchPeerSettings(hostId: string): Promise<PeerSettings> {
   return hostFetch(hostId, '/api/peers/settings').then(peerHostJson<PeerSettings>)
+}
+
+/**
+ * `PUT /api/peers/settings`: any subset of `{alias, deliver}`; the JSON body
+ * is exactly the keys given, because absent means unchanged on the daemon
+ * (S-2) — `{alias: ''}` clears the self alias back to the `host_id` default,
+ * a missing `alias` key leaves it alone. 400 pattern/reserved, 409 collision
+ * with a configured peer host's alias (S-6). Read `alias_source` on the
+ * answer before calling the write a success (S-5).
+ */
+export function updatePeerSettings(
+  hostId: string, patch: { alias?: string; deliver?: boolean },
+): Promise<PeerSettings> {
+  return hostFetch(hostId, '/api/peers/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  }).then(peerHostJson<PeerSettings>)
 }
 
 /** Typed `/api/info` (the untyped `fetchInfo` above stays for its existing callers). */

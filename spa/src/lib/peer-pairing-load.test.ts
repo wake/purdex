@@ -86,6 +86,20 @@ describe('loadPairings — the §2.1 fixture (mlab ↔ air, drift)', () => {
     expect(a.info).toHaveBeenCalledTimes(2)
     expect(a.settings).toHaveBeenCalledTimes(2)
   })
+
+  it("carries X's alias_source from the step-0 settings call into self (self alias #1196) — no second call", async () => {
+    const a = api()
+    a.settings = vi.fn(async (h: string) => ({ deliver: true, alias: h === 'hM' ? 'mlab' : 'air26', alias_source: 'config' as const }))
+    const final = await loadPairings(X, [AIR], a, () => {})
+    expect(final.self).toEqual({ host_id: 'mini-lab:278cbm', self_alias: 'mlab', self_alias_source: 'config' })
+    expect(a.settings).toHaveBeenCalledTimes(2)
+  })
+
+  it('an old daemon (settings without alias_source) leaves self.self_alias_source undefined', async () => {
+    const final = await loadPairings(X, [AIR], api(), () => {})
+    expect(final.self?.self_alias).toBe('mini-lab')
+    expect(final.self?.self_alias_source).toBeUndefined()
+  })
 })
 
 describe('loadPairings — page-level preconditions (§5.2 step 0)', () => {
