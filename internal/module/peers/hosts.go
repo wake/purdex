@@ -236,6 +236,16 @@ func (m *Module) verifyHost(ctx context.Context, targetURL, token string) (env i
 	if !validHostID(env.HostID) {
 		return env, "peer returned an invalid host_id"
 	}
+	// A host_id that passes validHostID's shape check can still carry (or
+	// embed) the very outbound token we just sent as this request's Bearer
+	// — validHostID only checks length/printable/no-whitespace, not
+	// content. Learning that value would persist it into config and serve
+	// it back out of every hostRow.host_id forever, so it is refused here
+	// exactly as any other shape violation is: same message, since it is
+	// just as invalid for us (#1152).
+	if redactSecret(env.HostID, token) != env.HostID {
+		return env, "peer returned an invalid host_id"
+	}
 	return env, ""
 }
 

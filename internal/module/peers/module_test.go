@@ -1125,6 +1125,31 @@ func TestHandlePeers_ScopeAll_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 	}
 }
 
+// TestHandlePeers_ScopeAll_LearnedHostIDRedacted (#1152 fix round 1): an
+// unpaired host's top-level HostID in a scope=all row falls back to the
+// peer's own reported host_id, which can carry our outbound token and
+// still pass validHostID's shape check. Mirrors
+// TestHandleVerifyHost_LearnedHostIDRedacted through the scope=all path.
+func TestHandlePeers_ScopeAll_LearnedHostIDRedacted(t *testing.T) {
+	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ipeers.Envelope{HostID: tok, OK: true, Peers: []ipeers.PeerRecord{}})
+	}))
+	defer srv.Close()
+	hosts := []config.PeerHost{{Alias: "host-a", URL: srv.URL, Token: tok, HostID: ""}}
+	c := newTestCoreWithHosts(t, "mlab:abc123", "mlab", hosts)
+	m := newTestModule(t, c, &fakeSessions{}, &fakeOwners{owners: map[string]agent.PaneOwner{}}, "", ipeers.DefaultLiveness(), &fakeClock{times: []time.Time{time.Unix(0, 0)}}, 2*time.Second)
+
+	rr := doHostsRequest(t, m, http.MethodGet, "/api/peers?scope=all", nil, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), tok) {
+		t.Fatalf("outbound token echoed into the aggregate host_id: %s", rr.Body.String())
+	}
+}
+
 // TestHandlePeers_ScopeAll_RemoteNotOKWithoutText pins spec §4.1: a peer
 // that answers ok=false with NO error text must still produce a row whose
 // Error names the cause. Before this, the row copied env.Error verbatim and

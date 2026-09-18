@@ -854,7 +854,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	return ipeers.HostResult{
 		Alias:                h.Alias,
 		SelfAlias:            bound(env.Alias),
-		HostID:               resultHostID,
+		HostID:               bound(resultHostID),
 		OK:                   env.OK,
 		Error:                rowErr,
 		Partial:              env.Partial,

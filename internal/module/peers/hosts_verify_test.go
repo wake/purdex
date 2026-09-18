@@ -297,3 +297,26 @@ func TestHandleVerifyHost_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestHandleVerifyHost_LearnedHostIDRedacted (#1152 fix round 1): an
+// unpaired entry (no configured host_id) falls back to the peer's own
+// reported env.HostID as resultHostID. That value can equal or embed our
+// own outbound token — the very Bearer this request sent — and still pass
+// validHostID's shape check (length/printable/no-whitespace only, not
+// content). It must still be scrubbed before it reaches the top-level
+// host_id this route returns.
+func TestHandleVerifyHost_LearnedHostIDRedacted(t *testing.T) {
+	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "", Token: tok, InboundToken: "in-a"}}
+	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: tok, OK: true, Peers: []ipeers.PeerRecord{}}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts/air/verify", nil, adminPrincipal())
+	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), tok) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	got := decodeVerify(t, rr.Body.Bytes())
+	if got.HostID != "[redacted]" {
+		t.Errorf("host_id = %q, want %q", got.HostID, "[redacted]")
+	}
+}
