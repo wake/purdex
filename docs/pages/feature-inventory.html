@@ -404,7 +404,7 @@ const F = [
 
  ['跨主機與 Nexen','peers','跨主機 Peers（daemon ＋ CLI）','v4 地址（name／ref／tmux 三種寫法）、send／deliver／log、peer host 表、title','CLI（pdx msg／peers）','Go 4.5k','09-18','兩台各 38／31 則訊息；<b>peer host 表與 deliver 開關沒有 SPA UI</b>','keep'],
  ['跨主機與 Nexen','nex','Nexen 引擎 ＋ execution pane','daemon 掛 /api/nex；SPA 端 client（SSE resume、lease、LRU）＋ 即時對話 pane','deeplink、/execution 路由、Host › Nexen','Go 583＋SPA 2.7k','09-17','進行中（P-B2 exec 串流）','keep'],
- ['跨主機與 Nexen','m0','M0 Ploom 派工','輪詢／claim／launch／report、sandbox clamp、outbox','需 PDX_PLOOM_URL','Go 4.3k','07-19','三台 0 筆；SPA 端 alpha.351 已刪；<b>daemon 端 P-D.1 已移除</b>（execution／dispatch 模組、[dispatch]、PDX_PLOOM_*、兩條 API）','remove'],
+ ['跨主機與 Nexen','m0','M0 Ploom 派工','輪詢／claim／launch／report、sandbox clamp、outbox（已刪）','—（P-D.1 已移除）','0（原 Go 4.3k）','07-19','三台 0 筆；SPA 端 alpha.351 已刪；<b>daemon 端 P-D.1 已移除</b>（execution／dispatch 模組、[dispatch]、PDX_PLOOM_*、兩條 API）','remove'],
  ['跨主機與 Nexen','deeplink','purdex:// deeplink','protocol handler、單視窗投遞、冷啟動緩衝','OS','~100','09-15','原為 M0，現由 execution pane 接手','keep'],
 
  ['Electron 桌面','multiwin','多視窗／tear-off／merge','分頁與 workspace 可拆到新視窗或併回','右鍵選單、Cmd+N','~720','09-16','—','keep'],
@@ -422,7 +422,7 @@ const F = [
  ['死碼與殘留','deadspa','SPA 零 import 檔案','SessionPanel 132／SessionPicker 67／NewPanePage 33／useGlobalSettingsStore 74／useIsMobile 7／tab-state 11／open-clustered-tab 27／agent-ws-dispatch 4／sync file-provider 182','—','~540','04–08','只剩測試在 import（file-provider 連測試都沒接）','remove'],
  ['死碼與殘留','deadmodcfg','ModuleConfigSection ＋ 兩個 deprecated 欄位','workspaceConfig／globalConfig 沒有任何模組宣告','Workspace 設定頁','80','—','永遠 render null；registry 仍在印 deprecation 警告','remove'],
  ['死碼與殘留','shims','過渡 shim 與 legacy 別名','register-modules.tsx（6 行）、LEGACY_SECTION_MODULE_ID、LEGACY_ID=sessions、URL_ALIASES、file-opener 別名、event-name 舊名對照','—','小','—','多為刻意保留的遷移橋樑，可逐一收','decide'],
- ['死碼與殘留','deadd','daemon 死路由與死鍵','/api/ready、/api/execution/{id}、/api/dispatch/reclaim、codexbroker ×2、sync group／pair ×6、allowed_paths、[features] fs／git','—','—','—','逐條 grep 過三處（spa／electron／cmd）皆無呼叫端','remove'],
+ ['死碼與殘留','deadd','daemon 死路由與死鍵','/api/ready、codexbroker ×2、sync group／pair ×6、allowed_paths、[features] fs／git（/api/execution/{id} 與 /api/dispatch/reclaim 已隨 P-D.1 移除）','—','—','—','逐條 grep 過三處（spa／electron／cmd）皆無呼叫端','remove'],
  ['死碼與殘留','legacy','daemon legacy 相容路徑','空的 agent_events 表與 fallback 分支、codex pre-0.121 hook 容錯、opencode 舊 emit 寫法、StreamCapable（保留但無實作者）','—','散在各處','—','alpha 階段不需 migration','decide'],
 ];
 
