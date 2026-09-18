@@ -436,7 +436,6 @@ interface TabState {
   openSingletonTab: (content: PaneContent, opts?: OpenSingletonOpts) => string
   closeTab: (id: string) => void
   setActiveTab: (id: string | null) => void
-  setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
   /**
    * Compare-and-swap `setPaneContent`: reports whether the pane was still
@@ -585,26 +584,6 @@ export const useTabStore = create<TabState>()(
             ? [...state.visitHistory.filter((tid) => tid !== id), state.activeTabId]
             : state.visitHistory.filter((tid) => tid !== id)
           return { activeTabId: id, visitHistory: newHistory }
-        }),
-
-      setViewMode: (tabId, paneId, mode) =>
-        set((state) => {
-          const tab = state.tabs[tabId]
-          if (!tab) return state
-          const pane = findPane(tab.layout, paneId)
-          if (!pane || pane.content.kind !== 'tmux-session') return state
-          const newLayout = updatePaneInLayout(tab.layout, paneId, {
-            kind: 'tmux-session',
-            hostId: pane.content.hostId,
-            sessionCode: pane.content.sessionCode,
-            mode,
-            cachedName: pane.content.cachedName,
-            tmuxInstance: pane.content.tmuxInstance,
-            // Carried explicitly: this content is rebuilt field by field, and
-            // the rebuild record describes the tmux session, not the view.
-            rebuild: pane.content.rebuild,
-          })
-          return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
       setPaneContent: (tabId, paneId, content) =>

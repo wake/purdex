@@ -412,8 +412,6 @@
   "locale.import.url.fetching": "Fetching...",
   "locale.import.url.fetch_button": "Fetch & Import",
 
-  "tab.switch_terminal": "Switch to Terminal",
-  "tab.switch_stream": "Switch to Stream",
   "tab.lock": "Lock tab",
   "tab.unlock": "Unlock tab",
   "tab.pin": "Pin tab",
@@ -436,7 +434,6 @@
   "nav.new_workspace": "New workspace",
   "nav.settings": "Settings",
   "nav.hosts": "Hosts",
-  "nav.toggle_view": "Toggle view mode",
   "nav.collapse_activity_bar": "Collapse activity bar",
   "nav.expand_activity_bar": "Expand activity bar",
   "nav.workspace_empty": "No tabs yet",

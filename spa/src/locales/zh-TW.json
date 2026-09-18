@@ -412,8 +412,6 @@
   "locale.import.url.fetching": "擷取中...",
   "locale.import.url.fetch_button": "擷取並匯入",
 
-  "tab.switch_terminal": "切換至 Terminal",
-  "tab.switch_stream": "切換至 Stream",
   "tab.lock": "鎖定分頁",
   "tab.unlock": "解鎖分頁",
   "tab.pin": "固定分頁",
@@ -436,7 +434,6 @@
   "nav.new_workspace": "新增工作區",
   "nav.settings": "設定",
   "nav.hosts": "主機管理",
-  "nav.toggle_view": "切換檢視模式",
   "nav.collapse_activity_bar": "收合側邊欄",
   "nav.expand_activity_bar": "展開側邊欄",
   "nav.workspace_empty": "尚無分頁",

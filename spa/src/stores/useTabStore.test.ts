@@ -276,21 +276,6 @@ describe('useTabStore', () => {
     })
   })
 
-  it('setViewMode updates pane mode', () => {
-    const tab = makeSessionTab('dev001')
-    useTabStore.getState().addTab(tab)
-    const paneId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
-    useTabStore.getState().setViewMode(tab.id, paneId, 'stream')
-    const updated = useTabStore.getState().tabs[tab.id]
-    const content = updated.layout.type === 'leaf' ? updated.layout.pane.content : undefined
-    expect(content?.kind === 'tmux-session' && content.mode).toBe('stream')
-  })
-
-  it('setViewMode is no-op for nonexistent tab', () => {
-    useTabStore.getState().setViewMode('nonexistent', 'pane1', 'stream')
-    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
-  })
-
   it('reorderTabs updates tabOrder', () => {
     const tab1 = makeSessionTab('a')
     const tab2 = makeSessionTab('b')

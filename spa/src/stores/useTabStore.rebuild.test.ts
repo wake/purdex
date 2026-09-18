@@ -319,16 +319,6 @@ describe('setPaneRebuild', () => {
     })
   })
 
-  it('survives a view-mode round trip', () => {
-    const tab = seed()
-    const paneId = getPrimaryPane(tab.layout).id
-    const store = useTabStore.getState()
-    store.setPaneRebuild('h1', 'abc123', '111:1000', { kind: 'field', field: 'cwd', value: '/w/p' })
-    store.setViewMode(tab.id, paneId, 'stream')
-    store.setViewMode(tab.id, paneId, 'terminal')
-    expect(rec(tab.id)?.cwd).toBe('/w/p')
-  })
-
   it('skips a pane that terminated while the write was in flight', () => {
     // The probe asks about a binding, not a pane. If pane A dies while the
     // answer is in flight and its sibling B is still on the same reused code,

@@ -194,10 +194,7 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     if (!contextMenu) return
     const { tab } = contextMenu
     const store = useTabStore.getState()
-    const primaryPaneId = getPrimaryPane(tab.layout).id
     switch (action) {
-      case 'viewMode-terminal': store.setViewMode(tab.id, primaryPaneId, 'terminal'); break
-      case 'viewMode-stream': store.setViewMode(tab.id, primaryPaneId, 'stream'); break
       case 'lock': case 'unlock': store.toggleLock(tab.id); break
       case 'pin': case 'unpin': store.togglePin(tab.id); break
       case 'close': handleCloseTab(tab.id); break

@@ -14,7 +14,6 @@ import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useHostStore } from './stores/useHostStore'
 import { useLayoutStore } from './stores/useLayoutStore'
-import { useRelayWsManager } from './hooks/useRelayWsManager'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
@@ -68,7 +67,6 @@ export default function App() {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
 
   // --- Extracted hooks ---
-  useRelayWsManager()
   useMultiHostEventWs()
   useRouteSync()
   useShortcuts()
@@ -208,10 +206,6 @@ export default function App() {
     openSingletonAndSelect({ kind: 'settings', scope: 'global' })
   }, [openSingletonAndSelect])
 
-  const handleViewModeChange = useCallback((tabId: string, paneId: string, mode: 'terminal' | 'stream') => {
-    useTabStore.getState().setViewMode(tabId, paneId, mode)
-  }, [])
-
   const handleNavigateToHost = useCallback((hostId: string) => {
     openSingletonAndSelect({ kind: 'hosts' })
     useHostStore.getState().setActiveHost(hostId)
@@ -296,7 +290,6 @@ export default function App() {
             </div>
             <StatusBar
               activeTab={activeTab ?? null}
-              onViewModeChange={handleViewModeChange}
               onNavigateToHost={handleNavigateToHost}
               onStartRename={openRenameForTab}
             />
