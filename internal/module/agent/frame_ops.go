@@ -368,8 +368,27 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			return nil, FrameTraceMeta{}, uerr
 		}
 		if !persisted {
-			// Parent vanished mid-flight (concurrent SessionEnd / sweep).
-			// Fall through to the generic frame path as a recovery.
+			// Parent vanished mid-flight (concurrent SessionEnd / sweep,
+			// between findProxyParent's read and this helper's OCC write).
+			// PostToolUse must skip here exactly like the no-parent guard
+			// above (#1159 round-2 P2 fix), not fall through to the
+			// generic frame path: that path has no Status="" guard for
+			// PostToolUse (DeriveResult carries Status=Running for it) and
+			// would materialize a standalone `running` frame, violating
+			// the invariant that a frameless codex PostToolUse never
+			// creates a frame. UserPromptSubmit/PreToolUse still fall
+			// through: PreToolUse has Status="" so the generic path
+			// creates an idle frame instead — pre-existing behavior, out
+			// of scope here.
+			if req.PurdexName == "PdxPostToolUse" {
+				projection, perr2 := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					Decision: "skipped",
+					Reason:   "post_tool_parent_vanished",
+					Before:   map[string]any{},
+					After:    map[string]any{},
+				}, perr2
+			}
 			break
 		}
 		reason := "proxy_subagent_upserted_on_user_prompt"

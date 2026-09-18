@@ -1993,6 +1993,81 @@ func TestApplyFrameEvent_CodexPostToolUse_NoFrameWithProxyParent_UpsertsRef(t *t
 	}
 }
 
+// #1159 round-2 P2 fix: a frameless codex PostToolUse whose proxy parent
+// vanishes (SessionEnd / sweep) in the gap between findProxyParent's
+// candidate read and upsertProxyRefForBroker's OCC write must skip, not
+// fall through to the generic frame path — that path has no Status=""
+// guard for PostToolUse and would materialize a standalone `running` frame,
+// violating the same invariant the NoFrameNoParent test above protects.
+//
+// Injection: classifyAncestor's walk (ancestor.go:116-149) fetches the
+// candidate frame via FindByPanePID, then verifies liveness/identity
+// through the existing isPidAliveFn/processStartTimeFn test seams BEFORE
+// returning that (already-fetched) candidate as the proxy parent. Deleting
+// the parent row from inside the processStartTimeFn stub — after
+// FindByPanePID already captured its snapshot, but before findProxyParent
+// returns it to applyFrameEvent — reproduces the real mid-flight race
+// end-to-end through applyFrameEvent without any new production seam:
+// findProxyParent still hands back the (now-stale) parent snapshot, and
+// upsertProxyRefForBroker's OCC write then finds the row gone, exactly
+// mirroring TestUpsertProxyRefForBroker_RetryOnConflict's reload-nil path
+// (frame_ops.go:1713-1719).
+func TestApplyFrameEvent_CodexPostToolUse_ParentVanishedMidFlight_Skips(t *testing.T) {
+	m := newProxyTestModule(t)
+	parent := seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		SourcePID: 42, SourceStartTime: "t1", IsProxy: true,
+	}})
+
+	origInfo := readProcessInfoFn
+	origStart := processStartTimeFn
+	origAlive := isPidAliveFn
+	deleted := false
+	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
+		return agentpkg.ProcessInfo{PID: pid, PPID: 100}, nil
+	}
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 100 {
+			if !deleted {
+				deleted = true
+				if err := m.frames.Delete(parent.FrameID); err != nil {
+					t.Fatalf("delete parent mid-flight: %v", err)
+				}
+			}
+			return "t100", nil
+		}
+		return "other", nil
+	}
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() {
+		readProcessInfoFn = origInfo
+		processStartTimeFn = origStart
+		isPidAliveFn = origAlive
+	})
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxPostToolUse",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "skipped" || meta.Reason != "post_tool_parent_vanished" {
+		t.Fatalf("meta = %+v, want Decision=skipped Reason=post_tool_parent_vanished", meta)
+	}
+
+	final, err := m.frames.GetByIdentity("%5", 42, "t1")
+	if err != nil {
+		t.Fatalf("GetByIdentity: %v", err)
+	}
+	if final != nil {
+		t.Fatalf("GetByIdentity = %+v, want nil (no standalone frame created)", final)
+	}
+}
+
 // #1159 (b): Interrupt from a codex broker detaches its proxy ref by
 // turn_id exactly like Stop (LifecycleStop path).
 func TestApplyFrameEvent_CodexInterrupt_DetachesProxyByTurn(t *testing.T) {
