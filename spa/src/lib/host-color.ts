@@ -145,6 +145,7 @@ export type HostColorMode = 'console' | 'terminal' | 'execution'
 export const HOST_COLOR_MODES: readonly HostColorMode[] = ['console', 'terminal', 'execution']
 
 export type HostColorLayerName = 'main' | 'middle' | 'light'
+export const HOST_COLOR_LAYER_NAMES: readonly HostColorLayerName[] = ['main', 'middle', 'light']
 
 export interface HostColorLayer {
   /** `#rrggbb`. Absent on middle/light = inherit the mode's main color. Required on main. */

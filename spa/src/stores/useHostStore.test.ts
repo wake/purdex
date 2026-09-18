@@ -66,35 +66,110 @@ describe('useHostStore', () => {
     expect(updated.hosts[defaultId].port).toBe(8080)
   })
 
-  it('setHostColor stores a valid color', () => {
-    const id = useHostStore.getState().activeHostId!
-    useHostStore.getState().setHostColor(id, '#3b82f6')
-    expect(useHostStore.getState().hosts[id].color).toBe('#3b82f6')
-  })
+  describe('host colors (spec 2026-09-18 §4.1)', () => {
+    const id = () => useHostStore.getState().activeHostId!
+    const host = () => useHostStore.getState().hosts[id()]
 
-  it('setHostColor(null) removes the color key entirely', () => {
-    const id = useHostStore.getState().activeHostId!
-    useHostStore.getState().setHostColor(id, '#3b82f6')
-    useHostStore.getState().setHostColor(id, null)
-    const host = useHostStore.getState().hosts[id]
-    expect('color' in host).toBe(false)
-    expect(host.name).toBe('mlab')
-  })
+    it('setHostColor writes colors.console.main with alpha 100 and no legacy color key', () => {
+      useHostStore.getState().setHostColor(id(), '#3b82f6')
+      expect(host().colors).toEqual({ console: { main: { color: '#3b82f6', alpha: 100 } } })
+      expect('color' in host()).toBe(false)
+    })
 
-  it('setHostColor ignores invalid values', () => {
-    const id = useHostStore.getState().activeHostId!
-    useHostStore.getState().setHostColor(id, '#22c55e')
-    useHostStore.getState().setHostColor(id, 'red')
-    expect(useHostStore.getState().hosts[id].color).toBe('#22c55e')
-    useHostStore.getState().setHostColor(id, '#abc')
-    expect(useHostStore.getState().hosts[id].color).toBe('#22c55e')
-  })
+    it('setHostColor keeps the existing console main alpha and other layers', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: '#3b82f6', alpha: 80 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'light', { alpha: 30 })
+      useHostStore.getState().setHostColor(id(), '#ef4444')
+      expect(host().colors?.console).toEqual({ main: { color: '#ef4444', alpha: 80 }, light: { alpha: 30 } })
+    })
 
-  it('setHostColor on an unknown host is a no-op', () => {
-    const before = useHostStore.getState().hosts
-    useHostStore.getState().setHostColor('nope', '#22c55e')
-    expect(useHostStore.getState().hosts).toBe(before)
-    expect(useHostStore.getState().hosts.nope).toBeUndefined()
+    it('setHostColor(null) clears the console set only', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: '#3b82f6', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'terminal', 'main', { color: '#ef4444', alpha: 100 })
+      useHostStore.getState().setHostColor(id(), null)
+      expect(host().colors).toEqual({ terminal: { main: { color: '#ef4444', alpha: 100 } } })
+    })
+
+    it('any colors write deletes a legacy color key', () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
+      useHostStore.getState().setHostColorLayer(id(), 'terminal', 'main', { color: '#ef4444', alpha: 100 })
+      expect('color' in host()).toBe(false)
+      expect(host().colors?.terminal?.main).toEqual({ color: '#ef4444', alpha: 100 })
+    })
+
+    it('setHostColorLayer main creates the mode set; middle/light on a missing set are no-ops', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'terminal', 'middle', { alpha: 50 })
+      expect(host().colors).toBeUndefined()
+      useHostStore.getState().setHostColorLayer(id(), 'terminal', 'main', { color: '#ef4444', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'terminal', 'middle', { alpha: 50 })
+      expect(host().colors?.terminal).toEqual({ main: { color: '#ef4444', alpha: 100 }, middle: { alpha: 50 } })
+    })
+
+    it('setHostColorLayer clamps a finite alpha and lowercases a valid color', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: '#3B82F6', alpha: 250.4 })
+      expect(host().colors?.console?.main).toEqual({ color: '#3b82f6', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'light', { color: '#000000', alpha: -3 })
+      expect(host().colors?.console?.light).toEqual({ color: '#000000', alpha: 0 })
+    })
+
+    it.each([
+      ['main without color', 'main', { alpha: 100 }],
+      ['color not #rrggbb', 'main', { color: 'red', alpha: 100 }],
+      ['color without hash (no normalize in the store)', 'main', { color: '3b82f6', alpha: 100 }],
+      ['color with padding', 'main', { color: ' #3b82f6 ', alpha: 100 }],
+      ['non-string color', 'main', { color: 42, alpha: 100 }],
+      ['missing alpha', 'main', { color: '#3b82f6' }],
+      ['string alpha', 'main', { color: '#3b82f6', alpha: '50' }],
+      ['NaN alpha', 'main', { color: '#3b82f6', alpha: NaN }],
+      ['Infinity alpha', 'main', { color: '#3b82f6', alpha: Infinity }],
+      ['non-object value', 'main', 'x'],
+    ] as const)('setHostColorLayer is a no-op and never throws on %s', (_label, layer, value) => {
+      expect(() => useHostStore.getState().setHostColorLayer(id(), 'console', layer, value as never)).not.toThrow()
+      expect(host().colors).toBeUndefined()
+    })
+
+    it('setHostColorLayer rejects an unknown mode and an unknown layer', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'shell' as never, 'main', { color: '#3b82f6', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'glow' as never, { color: '#3b82f6', alpha: 100 })
+      expect(host().colors).toBeUndefined()
+    })
+
+    it('a rejected write leaves a legacy color untouched', () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: 'red', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'middle', { alpha: 50 })   // no set yet → no-op
+      expect(host().color).toBe('#22c55e')
+    })
+
+    it('setHostColor(null) on a legacy-only host removes the legacy color (the "No color" button)', () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
+      useHostStore.getState().setHostColor(id(), null)
+      expect('color' in host()).toBe(false)
+      expect('colors' in host()).toBe(false)
+    })
+
+    it('clearHostColorMode on a non-console mode that has no set is a no-op (legacy color kept)', () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
+      useHostStore.getState().clearHostColorMode(id(), 'terminal')
+      expect(host().color).toBe('#22c55e')
+    })
+
+    it('setHostColorLayer(null) on middle/light removes the layer; on main clears the mode', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: '#3b82f6', alpha: 100 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'light', { alpha: 5 })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'light', null)
+      expect(host().colors?.console).toEqual({ main: { color: '#3b82f6', alpha: 100 } })
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', null)
+      expect(host().colors).toBeUndefined()
+    })
+
+    it('clearHostColorMode removes the set and drops colors when empty; unknown host is a no-op', () => {
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: '#3b82f6', alpha: 100 })
+      useHostStore.getState().clearHostColorMode('nope', 'console')
+      expect(host().colors?.console).toBeDefined()
+      useHostStore.getState().clearHostColorMode(id(), 'console')
+      expect('colors' in host()).toBe(false)
+    })
   })
 
   it('setHostIcon stores an icon name', () => {
@@ -176,7 +251,7 @@ describe('useHostStore', () => {
     useHostStore.getState().setHostColor(id, '#3b82f6')
     useHostStore.getState().setHostIcon(id, 'Laptop', 'bold')
     const host = useHostStore.getState().hosts[id]
-    expect(host.color).toBe('#3b82f6')
+    expect(host.colors?.console?.main.color).toBe('#3b82f6')
     expect(host.icon).toBe('Laptop')
   })
 
@@ -195,7 +270,7 @@ describe('useHostStore', () => {
     useHostStore.getState().updateHost(id, { name: 'renamed' })
     const host = useHostStore.getState().hosts[id]
     expect(host.name).toBe('renamed')
-    expect(host.color).toBe('#ec4899')
+    expect(host.colors?.console?.main.color).toBe('#ec4899')
   })
 
   it('setRuntime updates runtime status for a host', () => {
