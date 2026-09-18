@@ -132,8 +132,8 @@ func prepare(probe []string) Result {
 		// spawns inherits the same PATH, so its panes can find tmux too.
 		//
 		// 🔴 APPENDED, never prepended. That same inheritance is why: panes are
-		// sent bare `pdx relay ...` (module/execution/launcher.go:166,
-		// module/stream/orchestrator.go:120), so winning precedence here would
+		// sent bare `pdx relay ...` (module/stream/orchestrator.go:120, and a
+		// legacy launcher did the same), so winning precedence here would
 		// let an unrelated `pdx` in a Homebrew directory outrank the one the
 		// daemon is actually running — a version mismatch that surfaces as an
 		// agent timeout, nowhere near tmux. Appending cannot do that: this

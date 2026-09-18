@@ -166,9 +166,6 @@ func TestCloneDeepCopiesSlices(t *testing.T) {
 		Stream: config.StreamConfig{
 			Presets: []config.Preset{{Name: "cc", Command: "claude -p"}},
 		},
-		Dispatch: config.DispatchConfig{
-			AllowedRepoRoots: []string{"/repos"},
-		},
 		Peers: config.PeersConfig{
 			Deliver: true,
 			Hosts:   []config.PeerHost{{Alias: "air", Token: "t1"}},
@@ -187,7 +184,6 @@ func TestCloneDeepCopiesSlices(t *testing.T) {
 	clone.Allow = append(clone.Allow, "192.168.0.0/16")
 	clone.AllowedPaths = append(clone.AllowedPaths, "/etc")
 	clone.Stream.Presets[0].Name = "mutated"
-	clone.Dispatch.AllowedRepoRoots = append(clone.Dispatch.AllowedRepoRoots, "/more")
 
 	if len(cfg.Peers.Hosts) != 1 {
 		t.Errorf("original Peers.Hosts length mutated: got %d", len(cfg.Peers.Hosts))
@@ -203,9 +199,6 @@ func TestCloneDeepCopiesSlices(t *testing.T) {
 	}
 	if cfg.Stream.Presets[0].Name != "cc" {
 		t.Errorf("original Stream.Presets[0].Name mutated: got %q", cfg.Stream.Presets[0].Name)
-	}
-	if len(cfg.Dispatch.AllowedRepoRoots) != 1 {
-		t.Errorf("original Dispatch.AllowedRepoRoots length mutated: got %d", len(cfg.Dispatch.AllowedRepoRoots))
 	}
 }
 
@@ -239,9 +232,6 @@ func TestCloneEmptySliceStaysEmptyNilStaysNil(t *testing.T) {
 	}
 	if clone.Stream.Presets != nil {
 		t.Errorf("Stream.Presets = %v, want nil (source was nil)", clone.Stream.Presets)
-	}
-	if clone.Dispatch.AllowedRepoRoots != nil {
-		t.Errorf("Dispatch.AllowedRepoRoots = %v, want nil (source was nil)", clone.Dispatch.AllowedRepoRoots)
 	}
 	if clone.Peers.Hosts != nil {
 		t.Errorf("Peers.Hosts = %v, want nil (source was nil)", clone.Peers.Hosts)

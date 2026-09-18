@@ -217,3 +217,27 @@ func TestPeerAliasRoundTripWriteFileAndLoad(t *testing.T) {
 		t.Errorf("PeerAlias after load: want %q, got %q", "test-peer", loadedCfg.PeerAlias())
 	}
 }
+
+// TestLoadIgnoresUnknownDispatchTable pins the P-D.1 compatibility guarantee:
+// a config.toml that still carries the removed `[dispatch]` table must keep
+// loading (toml.Unmarshal ignores unknown tables) and known keys must still
+// parse.
+func TestLoadIgnoresUnknownDispatchTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+port = 7861
+
+[dispatch]
+allowed_repo_roots = ["/x"]
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load with stale [dispatch] table: %v", err)
+	}
+	if cfg.Port != 7861 {
+		t.Errorf("port: want 7861, got %d", cfg.Port)
+	}
+}

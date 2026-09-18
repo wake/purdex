@@ -185,7 +185,7 @@ footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:v
     <tr><td class="mono">device_state</td><td>各電腦狀態備份（alpha.354–356）</td><td class="num">2</td><td class="num">0</td><td class="num">—</td><td><b>就是「兩邊 tab 混淆」的實證</b>：mlab 存著 a26（6 workspace／18 tab）與 a19（7 workspace／13 tab）兩份，彼此無關</td></tr>
     <tr><td class="mono">host_config</td><td>Host Launcher 的 projects／commands</td><td class="num">2</td><td class="num">0</td><td class="num">—</td><td>09-17 才寫入，剛開始用；project icon 可沿用這份</td></tr>
     <tr><td class="mono">sync.db · 4 表</td><td>設定同步（Sync）</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td><b style="color:var(--remove)">三台都從未用過</b></td></tr>
-    <tr><td class="mono">execution.db · executions</td><td>M0 Ploom 派工</td><td class="num">0</td><td class="num">0</td><td class="num">—</td><td><b style="color:var(--remove)">從未跑過</b>，已排 P-D</td></tr>
+    <tr><td class="mono">execution.db · executions</td><td>M0 Ploom 派工</td><td class="num">0</td><td class="num">0</td><td class="num">—</td><td><b style="color:var(--remove)">從未跑過</b>；<b>P-D.1 已移除</b>（daemon 不再開此檔，<code>~/.config/pdx/execution.db</code> 可手動刪）</td></tr>
     <tr><td class="mono">backup.db · snapshots／blobs</td><td>Storage（in-app buffer）自動備份</td><td class="num">114 / 18</td><td class="num">3 / 1</td><td class="num">—</td><td>mlab 有實際 buffer 內容；備份是 debounce 自動產生，筆數多不等於常開</td></tr>
     <tr><td class="mono">meta.db · peer_messages</td><td>跨主機 peer 訊息</td><td class="num">38</td><td class="num">31</td><td class="num">—</td><td>在用且成長中（v4 剛上線）</td></tr>
     <tr><td class="mono">meta.db · peer_labels</td><td>Peer title／label</td><td class="num">4</td><td class="num">0</td><td class="num">—</td><td>—</td></tr>
@@ -244,13 +244,13 @@ footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:v
     <tr><td class="mono">[detect] cc_commands · poll_interval</td><td class="mono">["claude"] / 2</td><td>判斷哪些行程是 CC</td><td><span class="badge b-ok">正常</span></td></tr>
     <tr><td class="mono">[monitor] refresh_interval_ms · top_process_limit</td><td class="mono">5000 / 10</td><td>效能監控（另有 PUT /api/monitor/config）</td><td><span class="badge b-ok">正常</span></td></tr>
     <tr><td class="mono">[dev] update · repo_root</td><td class="mono">false / cwd</td><td>dev update 模組；<b>雙重 gate</b>（還需 <code>PDX_DEV_MODE≠0</code>）</td><td><span class="badge b-hidden">dev</span></td></tr>
-    <tr><td class="mono">[dispatch] sandbox_host_policy · allowed_repo_roots</td><td class="mono">ask / []（fail-closed）</td><td>M0 派工；另需 env <code>PDX_PLOOM_URL</code> 才啟動</td><td><span class="badge b-pd">P-D 移除</span></td></tr>
+    <tr><td class="mono">[dispatch] sandbox_host_policy · allowed_repo_roots</td><td class="mono">ask / []（fail-closed）</td><td>M0 派工（原另需 env <code>PDX_PLOOM_URL</code>）；<b>P-D.1 已移除</b>，既有 config 的 <code>[dispatch]</code> 表被靜默忽略</td><td><span class="badge b-dead">已移除</span></td></tr>
     <tr><td class="mono">[peers] alias · deliver · [[peers.hosts]]×6 鍵</td><td class="mono">— / false</td><td>跨主機 peer；只能用 CLI <code>pdx peers host</code> ／ <code>pdx msg deliver</code></td><td><span class="badge b-noui">無 SPA UI</span></td></tr>
     <tr><td class="mono">[nex] enabled · repo_roots · service_roots · claude_bin · path_prepend · [nex.sandbox]×2 · [nex.timeouts]×3</td><td class="mono">false / trusted</td><td>Nexen 引擎；<b>Host › Nexen 頁有完整表單</b>，存檔後需 <code>pdx stop &amp;&amp; pdx start</code></td><td><span class="badge b-new">新增</span></td></tr>
   </tbody>
 </table></div>
 <p class="hint" style="margin-top:10px">
-  <b>環境變數：</b><code>PDX_DEV_MODE</code>（預設開）· <code>PDX_TOKEN</code>（relay）· <code>PDX_NEX_ADDR/TOKEN</code> · <code>PDX_PLOOM_URL/TOKEN</code>（M0，註解自稱 placeholder）· <code>PDX_CODEX_STATE_ROOT/SOCKET_ROOTS</code> · <code>PDX_STATUSLINE_TEST_SESSION</code><br>
+  <b>環境變數：</b><code>PDX_DEV_MODE</code>（預設開）· <code>PDX_TOKEN</code>（relay）· <code>PDX_NEX_ADDR/TOKEN</code> · <s><code>PDX_PLOOM_URL/TOKEN</code></s>（M0，P-D.1 已移除）· <code>PDX_CODEX_STATE_ROOT/SOCKET_ROOTS</code> · <code>PDX_STATUSLINE_TEST_SESSION</code><br>
   <b>CLI <code>pdx</code>：</b>serve · start · stop · status · token · setup · hook · statusline-proxy · peers · msg（send／log／deliver／selftest／name／whoami）· nex（delegate／ls／show／watch／events／attach／send／interrupt／archive／terminate／host）· <b>path（link／add-to-shell，alpha.364 新增）</b> · version · <span style="color:var(--pd)">relay（P-D 移除）</span> · peer-proxy（隱藏）<br>
   <b>已移除（別再找）：</b><code>cswap_bin</code>（alpha.368）· <code>/api/agent/monitor/*</code> 三條與 Tmux Agent 監控頁（alpha.361）· 快速指令整組約 5900 行（alpha.359）· host color mark（alpha.362 換成 host badge）
 </p>
@@ -277,7 +277,7 @@ footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:v
       <li><b>Files 的 session 檔案樹</b>（14 行，寫著「尚未實作」）；<b>介面設定的 Pane／Sidebar 兩個分頁</b>（<code>() =&gt; null</code> ＋ coming soon）</li>
       <li><b>桌面 App 頁的 3 個瀏覽器欄位</b>：uncontrolled、沒有 onChange、沒有 store，實際值寫死在 <code>browser-view-manager.ts</code></li>
       <li><b>ModuleConfigSection ＋ <code>workspaceConfig</code>／<code>globalConfig</code></b>：沒有模組宣告，永遠 render null，registry 還在印 deprecation 警告</li>
-      <li><b>daemon 死路由／死鍵</b>：<code>/api/ready</code>、<code>/api/execution/{id}</code>（SPA 端 alpha.351 就刪了）、<code>/api/dispatch/reclaim</code>、codexbroker 2 條、sync group／pair 6 條、<code>allowed_paths</code>、<code>[features]</code></li>
+      <li><b>daemon 死路由／死鍵</b>：<code>/api/ready</code>、<s><code>/api/execution/{id}</code>、<code>/api/dispatch/reclaim</code></s>（P-D.1 已移除）、codexbroker 2 條、sync group／pair 6 條、<code>allowed_paths</code>、<code>[features]</code></li>
       <li><b>legacy 相容路徑</b>：空的 <code>agent_events</code> 表與其 fallback 分支、codex pre-0.121 hook 容錯、<code>StreamCapable</code>（保留欄位但從來沒有實作者）</li>
     </ul>
   </div>
@@ -286,7 +286,7 @@ footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:v
     <ul>
       <li><b>Stream 模式</b>：SPA 約 1450 行（<code>ConversationMessages</code> 已抽出給 execution pane 共用）＋ daemon <code>stream</code> 789／<code>relay</code> 246／<code>bridge</code> 140／<code>history</code> 101 ＋ <code>pdx relay</code></li>
       <li>入口要一起收：分頁右鍵「切換 Stream」、狀態列 view-mode 選單、<code>/t/:id/stream</code> 路由、<b>通知點擊目前預設開 stream 模式</b>、<code>stream.presets</code></li>
-      <li><b>M0</b>：daemon <code>execution</code> 2758 ＋ <code>dispatch</code> 1518（三台 0 筆）、<code>[dispatch]</code>、<code>PDX_PLOOM_*</code>、<code>m0-*.md</code> spec</li>
+      <li><b>M0</b>：<b>P-D.1 已移除</b> — daemon <code>execution</code> ＋ <code>dispatch</code>（三台 0 筆）、<code>[dispatch]</code>、<code>PDX_PLOOM_*</code>；<code>m0-*.md</code> spec 留作歷史（<code>m0-ploom-handoff.md</code> 已標 deprecated）</li>
       <li>alpha.360 已註記：<b>stream 模式之後會以 Nexen 模式回歸</b>，Session Launcher 已經不再提供 stream 選項</li>
     </ul>
   </div>
@@ -404,7 +404,7 @@ const F = [
 
  ['跨主機與 Nexen','peers','跨主機 Peers（daemon ＋ CLI）','v4 地址（name／ref／tmux 三種寫法）、send／deliver／log、peer host 表、title','CLI（pdx msg／peers）','Go 4.5k','09-18','兩台各 38／31 則訊息；<b>peer host 表與 deliver 開關沒有 SPA UI</b>','keep'],
  ['跨主機與 Nexen','nex','Nexen 引擎 ＋ execution pane','daemon 掛 /api/nex；SPA 端 client（SSE resume、lease、LRU）＋ 即時對話 pane','deeplink、/execution 路由、Host › Nexen','Go 583＋SPA 2.7k','09-17','進行中（P-B2 exec 串流）','keep'],
- ['跨主機與 Nexen','m0','M0 Ploom 派工','輪詢／claim／launch／report、sandbox clamp、outbox','需 PDX_PLOOM_URL','Go 4.3k','07-19','三台 0 筆；SPA 端 alpha.351 已刪；<code>/api/execution/{id}</code> 現在也沒有呼叫端','pd'],
+ ['跨主機與 Nexen','m0','M0 Ploom 派工','輪詢／claim／launch／report、sandbox clamp、outbox（已刪）','—（P-D.1 已移除）','0（原 Go 4.3k）','07-19','三台 0 筆；SPA 端 alpha.351 已刪；<b>daemon 端 P-D.1 已移除</b>（execution／dispatch 模組、[dispatch]、PDX_PLOOM_*、兩條 API）','remove'],
  ['跨主機與 Nexen','deeplink','purdex:// deeplink','protocol handler、單視窗投遞、冷啟動緩衝','OS','~100','09-15','原為 M0，現由 execution pane 接手','keep'],
 
  ['Electron 桌面','multiwin','多視窗／tear-off／merge','分頁與 workspace 可拆到新視窗或併回','右鍵選單、Cmd+N','~720','09-16','—','keep'],
@@ -422,7 +422,7 @@ const F = [
  ['死碼與殘留','deadspa','SPA 零 import 檔案','SessionPanel 132／SessionPicker 67／NewPanePage 33／useGlobalSettingsStore 74／useIsMobile 7／tab-state 11／open-clustered-tab 27／agent-ws-dispatch 4／sync file-provider 182','—','~540','04–08','只剩測試在 import（file-provider 連測試都沒接）','remove'],
  ['死碼與殘留','deadmodcfg','ModuleConfigSection ＋ 兩個 deprecated 欄位','workspaceConfig／globalConfig 沒有任何模組宣告','Workspace 設定頁','80','—','永遠 render null；registry 仍在印 deprecation 警告','remove'],
  ['死碼與殘留','shims','過渡 shim 與 legacy 別名','register-modules.tsx（6 行）、LEGACY_SECTION_MODULE_ID、LEGACY_ID=sessions、URL_ALIASES、file-opener 別名、event-name 舊名對照','—','小','—','多為刻意保留的遷移橋樑，可逐一收','decide'],
- ['死碼與殘留','deadd','daemon 死路由與死鍵','/api/ready、/api/execution/{id}、/api/dispatch/reclaim、codexbroker ×2、sync group／pair ×6、allowed_paths、[features] fs／git','—','—','—','逐條 grep 過三處（spa／electron／cmd）皆無呼叫端','remove'],
+ ['死碼與殘留','deadd','daemon 死路由與死鍵','/api/ready、codexbroker ×2、sync group／pair ×6、allowed_paths、[features] fs／git（/api/execution/{id} 與 /api/dispatch/reclaim 已隨 P-D.1 移除）','—','—','—','逐條 grep 過三處（spa／electron／cmd）皆無呼叫端','remove'],
  ['死碼與殘留','legacy','daemon legacy 相容路徑','空的 agent_events 表與 fallback 分支、codex pre-0.121 hook 容錯、opencode 舊 emit 寫法、StreamCapable（保留但無實作者）','—','散在各處','—','alpha 階段不需 migration','decide'],
 ];
 

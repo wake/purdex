@@ -151,23 +151,6 @@ func (p PeersConfig) MatchInboundToken(bearer string) (host PeerHost, usedPrev b
 	return p.Hosts[matchIdx], usedPrev, true
 }
 
-// DispatchConfig holds the Ploom-dispatch (M0) daemon-side settings.
-//
-// SandboxHostPolicy is the daemon's authoritative sandbox policy: every
-// dispatch's requested profile is clamped down to it (spec §8.1). Empty →
-// least-privilege default (ask).
-//
-// AllowedRepoRoots is the repo containment boundary (spec §7.1): a dispatch's
-// repo_location.local_dir must resolve to a path inside one of these roots. Both
-// the roots and the requested path are symlink-resolved before comparison, and
-// the list is FAIL CLOSED — unset/empty admits no dispatch at all, since the path
-// is supplied by Ploom and the sandbox clamp bounds what an execution may do, not
-// which repos it may touch.
-type DispatchConfig struct {
-	SandboxHostPolicy string   `toml:"sandbox_host_policy" json:"sandbox_host_policy"`
-	AllowedRepoRoots  []string `toml:"allowed_repo_roots"  json:"allowed_repo_roots"`
-}
-
 // GetSizingMode returns the sizing mode, defaulting to "auto".
 func (tc TerminalConfig) GetSizingMode() string {
 	if tc.SizingMode == "" {
@@ -228,8 +211,6 @@ func (c Config) Clone() Config {
 
 	out.Detect.CCCommands = slices.Clone(c.Detect.CCCommands)
 
-	out.Dispatch.AllowedRepoRoots = slices.Clone(c.Dispatch.AllowedRepoRoots)
-
 	out.Peers.Hosts = slices.Clone(c.Peers.Hosts)
 
 	out.Nex.RepoRoots = slices.Clone(c.Nex.RepoRoots)
@@ -254,7 +235,6 @@ type Config struct {
 	Monitor      MonitorConfig  `toml:"monitor"        json:"monitor"`
 	Features     FeaturesConfig `toml:"features"       json:"features"`
 	Dev          DevConfig      `toml:"dev"            json:"dev"`
-	Dispatch     DispatchConfig `toml:"dispatch"       json:"dispatch"`
 	Peers        PeersConfig    `toml:"peers"          json:"peers"`
 	Nex          NexConfig      `toml:"nex"            json:"nex"`
 }
