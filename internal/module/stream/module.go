@@ -42,7 +42,7 @@ type StreamModule struct {
 	sessions session.SessionProvider
 	ccOps    agentcc.CCOperator
 	prober   livenessProber
-	locks    *handoffLocks
+	locks    *session.HandoffLocks
 
 	// termMu guards termHandler, the single upper-layer seam that consumes the
 	// authoritative process-exit terminal signal (spec §5.3). The execution
@@ -80,7 +80,7 @@ func (m *StreamModule) Init(c *core.Core) error {
 	m.sessions = c.Registry.MustGet(session.RegistryKey).(session.SessionProvider)
 	m.ccOps = c.Registry.MustGet(agentcc.OperatorKey).(agentcc.CCOperator)
 	m.prober = c.Registry.MustGet("agent.prober").(*probe.Prober)
-	m.locks = newHandoffLocks()
+	m.locks = session.NewHandoffLocks()
 	return nil
 }
 

@@ -94,7 +94,7 @@ func setupStreamModule(t *testing.T, sessions map[string]*session.SessionInfo) (
 		core:     &core.Core{Events: core.NewEventsBroadcaster()},
 		bridge:   bridge.New(),
 		sessions: fp,
-		locks:    newHandoffLocks(),
+		locks:    session.NewHandoffLocks(),
 	}
 
 	mux := http.NewServeMux()
@@ -386,25 +386,4 @@ func TestSendRelaySnapshot(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for relay snapshot")
 	}
-}
-
-// --- handoffLocks tests ---
-
-func TestHandoffLocks_TryLockAndUnlock(t *testing.T) {
-	locks := newHandoffLocks()
-
-	assert.True(t, locks.TryLock("abc"), "first lock should succeed")
-	assert.False(t, locks.TryLock("abc"), "second lock should fail")
-
-	locks.Unlock("abc")
-	assert.True(t, locks.TryLock("abc"), "lock after unlock should succeed")
-}
-
-func TestHandoffLocks_IndependentKeys(t *testing.T) {
-	locks := newHandoffLocks()
-
-	assert.True(t, locks.TryLock("a"))
-	assert.True(t, locks.TryLock("b"))
-	assert.False(t, locks.TryLock("a"))
-	assert.True(t, locks.TryLock("c"))
 }
