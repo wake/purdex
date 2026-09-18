@@ -182,6 +182,8 @@ func TestCodexSupportedStatuses(t *testing.T) {
 		t.Fatal("codex.Provider must implement agent.StatusSupporter")
 	}
 	got := ss.SupportedStatuses()
+	// #1159: retired Notification/StopFailure keep their EmitsStatus, so
+	// this set is unchanged by the 0.153 catalog refresh (spec §2.5).
 	want := map[agent.Status]bool{
 		agent.StatusRunning: true,
 		agent.StatusWaiting: true,

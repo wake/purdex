@@ -85,6 +85,28 @@ func deriveCodexStatus(eventName string, rawEvent json.RawMessage) agent.DeriveR
 		// applyFrameEvent then attaches the codex broker proxy ref for
 		// non-prompt turns (spec §3.3.C strategy a).
 		return agent.DeriveResult{Valid: true}
+
+	case "PdxPostToolUse":
+		// 0.153: fires after every tool call, including the first one
+		// after a granted PermissionRequest — the only hook that can move
+		// waiting → running (mirrors cc/status.go W6-1a).
+		return agent.DeriveResult{
+			Valid:  true,
+			Status: agent.StatusRunning,
+			Detail: map[string]any{
+				"tool_name": raw["tool_name"],
+			},
+		}
+
+	case "PdxInterrupt":
+		// Turn cancelled by the user. The turn is over → idle; turn_id is
+		// surfaced so frame_ops can detach the broker proxy ref (it reads
+		// RawEvent directly, the detail is for the Inspector).
+		return agent.DeriveResult{
+			Valid:  true,
+			Status: agent.StatusIdle,
+			Detail: agent.DetailStrings(raw, "turn_id"),
+		}
 	}
 
 	return agent.DeriveResult{Valid: false}
