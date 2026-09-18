@@ -538,8 +538,11 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			h.AllowBypass = *req.AllowBypass
 		}
 		if renaming {
+			// The record is keyed by the STORED alias; the path's spelling
+			// only matched case-insensitively.
+			oldAlias := h.Alias
 			h.Alias = req.Alias
-			m.renameInboundAuth(alias, req.Alias)
+			m.renameInboundAuth(oldAlias, req.Alias)
 		}
 		// Captured here, inside the mutate closure, so the response
 		// always reflects exactly what THIS request committed — never a
@@ -569,8 +572,9 @@ func (m *Module) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 		if i == -1 {
 			return &apiError{http.StatusNotFound, "unknown alias"}
 		}
+		stored := cfg.Peers.Hosts[i].Alias // the record's key, not the path's spelling
 		cfg.Peers.Hosts = append(cfg.Peers.Hosts[:i], cfg.Peers.Hosts[i+1:]...)
-		m.resetInboundAuth(alias)
+		m.resetInboundAuth(stored)
 		return nil
 	})
 	if err != nil {

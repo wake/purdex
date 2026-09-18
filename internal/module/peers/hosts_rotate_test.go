@@ -162,6 +162,28 @@ func TestInboundAuthRecord_FollowsRenameAndDelete(t *testing.T) {
 	if got := listRow(t, m, "air26").LastInboundAuth; got != "" {
 		t.Fatalf("re-created entry inherited a record: %q", got)
 	}
+
+	// FindPeerHostByAlias is case-insensitive; the record is keyed by the
+	// entry's STORED alias, so a request spelled differently must still
+	// move (and clear) the right record.
+	c, _ = newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
+	m = newHostsTestModule(t, c, failIfCalledFetch(t))
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+	if rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/AIR", map[string]any{"alias": "air26"}, adminPrincipal()); rr.Code != http.StatusOK {
+		t.Fatalf("rename via upper-case path = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := listRow(t, m, "air26").LastInboundAuth; got != "current" {
+		t.Fatalf("record did not follow a rename addressed as AIR: %q", got)
+	}
+	if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/AIR26", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete via upper-case path = %d", rr.Code)
+	}
+	m.rotMu.Lock()
+	_, stale := m.lastInbound["air26"]
+	m.rotMu.Unlock()
+	if stale {
+		t.Fatal("delete addressed as AIR26 left the record under air26")
+	}
 }
 
 // ---- routes (spec §6.3) ----
