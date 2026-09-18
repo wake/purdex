@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { CheckCircle, XCircle, Prohibit, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { toolResultFacts, type ToolResultFacts } from '../lib/nex/tool-result-facts'
+import ToolDiffView from './ToolDiffView'
 
 interface Props {
   content: string
@@ -68,6 +69,13 @@ export default function ToolResultBlock({ content, isError, facts }: Props) {
             errorTone ? 'border-[#302a2a] text-[#c99]' : 'border-[#2a302a] text-[#9b9]'
           }`} /* TODO: theme token */
         >
+          {/* R5: the diff sits above the raw content; the raw content stays a bare
+              text node so the no-diff body is byte-identical to the baseline. */}
+          {facts?.diff && facts.diff.hunks.length > 0 && (
+            <div className="mb-2 border-b border-border-subtle">
+              <ToolDiffView diff={facts.diff} />
+            </div>
+          )}
           {content}
         </div>
       )}

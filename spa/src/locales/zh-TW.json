@@ -803,6 +803,7 @@
   "execution.tool.lines": "{{n}} 行",
   "execution.tool.truncated": "已截斷",
   "execution.tool.non_text": "含非文字",
+  "execution.tool.diff_truncated": "diff 已由 daemon 截斷",
   "execution.tool.unknown": "工具",
   "handoff.menu": "交給 nex",
   "handoff.confirm_title": "把這個 session 交給 nex？",
