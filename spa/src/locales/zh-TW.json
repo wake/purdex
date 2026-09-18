@@ -958,7 +958,6 @@
   "hosts.new_session": "新增 Session",
   "hosts.session_name": "Session 名稱",
   "hosts.no_sessions": "此主機上沒有 Session",
-  "hosts.mode": "模式",
   "hosts.agent": "Agent",
   "hosts.cwd": "工作目錄",
   "hosts.open": "開啟",

@@ -25,6 +25,22 @@ describe('SessionPicker', () => {
     expect(screen.getByText('claude-code')).toBeTruthy()
   })
 
+  it('shows no mode text and the same icon for every row (P-D.3)', () => {
+    render(
+      <SessionPicker
+        sessions={mockSessions}
+        existingTabSessionNames={[]}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+    const devItem = screen.getByText('dev-server').closest('button')!
+    const ccItem = screen.getByText('claude-code').closest('button')!
+    expect(devItem.textContent).not.toContain('terminal')
+    expect(ccItem.textContent).not.toContain('stream')
+    expect(devItem.querySelector('svg')?.innerHTML).toBe(ccItem.querySelector('svg')?.innerHTML)
+  })
+
   it('marks sessions that already have tabs', () => {
     render(
       <SessionPicker

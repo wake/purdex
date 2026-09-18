@@ -3,17 +3,13 @@ import { useState } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useHostStore } from '../stores/useHostStore'
-import { Terminal, Lightning, Sliders, Circle, Spinner, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { Terminal, Sliders, Circle, Spinner, CaretDown, CaretRight } from '@phosphor-icons/react'
 import SessionStatusBadge from './SessionStatusBadge'
 import { useI18nStore } from '../stores/useI18nStore'
 import { compositeKey } from '../lib/composite-key'
 
-function SessionIcon({ mode, code }: { mode: string; code: string }) {
-  const props = { size: 16, 'data-testid': `session-icon-${code}` }
-  switch (mode) {
-    case 'stream': return <Lightning {...props} weight="fill" className="text-blue-400" />
-    default: return <Terminal {...props} className="text-text-secondary" />
-  }
+function SessionIcon({ code }: { code: string }) {
+  return <Terminal size={16} data-testid={`session-icon-${code}`} className="text-text-secondary" />
 }
 
 interface Props {
@@ -103,10 +99,9 @@ export default function SessionPanel({ onSettingsOpen, onSelectSession, activeSe
                             isActiveSession(hostId, s) ? 'bg-surface-secondary text-text-primary' : 'text-text-secondary hover:bg-surface-secondary/50'
                           }`}
                         >
-                          <SessionIcon mode={s.mode} code={s.code} />
+                          <SessionIcon code={s.code} />
                           <span className="flex-1 truncate">{s.name}</span>
                           {status && <SessionStatusBadge status={status} />}
-                          <span className="text-xs text-text-muted">{s.mode}</span>
                         </button>
                       )
                     })}

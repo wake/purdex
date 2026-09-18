@@ -958,7 +958,6 @@
   "hosts.new_session": "New Session",
   "hosts.session_name": "Session Name",
   "hosts.no_sessions": "No sessions on this host",
-  "hosts.mode": "Mode",
   "hosts.agent": "Agent",
   "hosts.cwd": "CWD",
   "hosts.open": "Open",
