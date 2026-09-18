@@ -845,6 +845,7 @@
   "handoff.error.session_create_failed": "Could not create the tmux session {{session_name}}; check the session list.",
   "handoff.error.cwd_missing": "The execution's working directory no longer exists on the host.",
   "handoff.error.provider_unsupported": "Only Claude executions can be taken to a terminal.",
+  "handoff.error.execution_archived": "This execution is archived; its session was already resumed elsewhere.",
   "handoff.error.takeback_in_progress": "This execution is already being taken to a terminal.",
   "takeback.button": "Take to terminal",
   "takeback.confirm_running": "A turn is running; taking it back interrupts it. Continue?",

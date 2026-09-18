@@ -123,7 +123,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const ended = terminal || !!st.summary?.archived
   // Spec §4.2: every claude execution with a session id can go to a terminal
   // — a fresh one when there is no origin session to return to.
-  const canTakeToTerminal = !from && !!st.summary && st.summary.provider === 'claude'
+  // Archived is excluded too: the daemon refuses it (`execution_archived`) —
+  // whoever archived it already resumed that transcript elsewhere.
+  const canTakeToTerminal = !from && !!st.summary && st.summary.provider === 'claude' && !st.summary.archived
     && !!(st.summary.session_id || st.summary.resume_session_id) && TAKEABLE_STATES.has(st.summary.state)
   // The SSE handle can die terminally (401/403, or a non-retryable
   // structured error) after history has loaded, with no reconnect ever
