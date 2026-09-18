@@ -438,6 +438,15 @@ interface TabState {
   setActiveTab: (id: string | null) => void
   setViewMode: (tabId: string, paneId: string, mode: 'terminal' | 'stream') => void
   setPaneContent: (tabId: string, paneId: string, content: PaneContent) => void
+  /**
+   * `setPaneContent` that reports whether the pane was still in the live
+   * layout. `setPaneContent` is a silent no-op when the tab or pane is gone,
+   * which is fine for UI writes but not for a write that follows a daemon
+   * side effect (a nex handoff already happened): the caller must know the
+   * pane did NOT take the content so it can offer another way to reach it.
+   * `false` leaves state untouched.
+   */
+  trySetPaneContent: (tabId: string, paneId: string, content: PaneContent) => boolean
   renameEditorPanes: (source: FileSource, oldPath: string, newPath: string, options?: { untitled?: UntitledDocumentState }) => void
   splitPane: (tabId: string, paneId: string, direction: 'h' | 'v', content: PaneContent) => void
   splitPaneBlank: (tabId: string, paneId: string, direction: 'h' | 'v') => void
@@ -578,6 +587,13 @@ export const useTabStore = create<TabState>()(
           const newLayout = updatePaneInLayout(tab.layout, paneId, content)
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
+
+      trySetPaneContent: (tabId, paneId, content) => {
+        const tab = get().tabs[tabId]
+        if (!tab || !findPane(tab.layout, paneId)) return false
+        get().setPaneContent(tabId, paneId, content)
+        return true
+      },
 
       renameEditorPanes: (source, oldPath, newPath, options) =>
         set((state) => {

@@ -278,6 +278,36 @@ describe('useTabStore', () => {
     })
   })
 
+  describe('trySetPaneContent', () => {
+    it('returns true after writing a live pane', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const paneId = getPrimaryPane(tab.layout).id
+      const ok = useTabStore.getState().trySetPaneContent(tab.id, paneId, { kind: 'dashboard' })
+      expect(ok).toBe(true)
+      expect(getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content).toEqual({ kind: 'dashboard' })
+    })
+
+    it('returns false for a missing tab and leaves state untouched', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const before = useTabStore.getState()
+      const ok = useTabStore.getState().trySetPaneContent('nonexistent', 'pane1', { kind: 'dashboard' })
+      expect(ok).toBe(false)
+      expect(useTabStore.getState()).toBe(before)
+    })
+
+    it('returns false for a missing pane and leaves state untouched', () => {
+      const tab = makeSessionTab('dev001')
+      useTabStore.getState().addTab(tab)
+      const before = useTabStore.getState()
+      const ok = useTabStore.getState().trySetPaneContent(tab.id, 'nonexistent-pane', { kind: 'dashboard' })
+      expect(ok).toBe(false)
+      expect(useTabStore.getState()).toBe(before)
+      expect(getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content.kind).toBe('tmux-session')
+    })
+  })
+
   describe('remountPane', () => {
     it('replaces the target pane id in place and returns the new id', () => {
       const content: PaneContent = { kind: 'image-preview', source: { type: 'inapp' }, filePath: '/buffer/a.png' }
