@@ -713,6 +713,79 @@ Cleanup: `/exit`, `tmux kill-session -t nexacc`, `pdx nex ls` empty,
 scratch dir removed; daemon not restarted. Token was read with a single
 `awk` assignment; only its length was printed.
 
+### 6.4 SPA acceptance 2026-09-18 (P-C.3b, at `9f0267c1` → `d5fd19d7`, daemon alpha.387)
+
+mlab, worktree dev server `npx vite --host 100.64.0.2 --port 5175 --strictPort`,
+playwright cli session `pc-launch-ui`, host `pc3host` seeded into
+`purdex-hosts` (version 1) through a `page.addInitScript({path})` file that
+was deleted afterwards (the token never appeared in a command line or
+output; only its length was printed). tmux session `nexacc` (code `90ln9d`,
+instance `6901:1789205013`) running interactive `claude` in
+`~/Workspace/wake/nex-acceptance-scratch`, one exchange (`reply with the
+single word ok` → `ok`) before the handoff.
+
+3. **PASS** — right-click on the terminal pane → context menu `Split
+   Horizontal / Split Vertical / Hand to nex`. Click → `handoff-dialog`
+   with the body "Claude Code exits in this pane and continues headless
+   under nex with the handoff profile — no permission prompts. You can take
+   it back to the terminal later." → Confirm. The pane became
+   `/execution/pc3host/06GB85EVF6CE14H11T7W05QXEW`: header `idle · claude ·
+   handoff · nex-acceptance-scratch`, "Take back to terminal" button,
+   history `(handed off from tmux session nexacc)` + `ok`. tmux pane: idle
+   shell with CC's own "Resume this session with: claude --resume
+   fe0d6250-…" banner. `pdx nex show`: `resume_session_id = session_id =
+   fe0d6250-…`, `requested/effective_profile handoff`, labels
+   `handoff_session=90ln9d, source=purdex`, `origin
+   purdex://host/mini-lab:278cbm/session/90ln9d`. Follow-up from the pane
+   input (`what was the last thing I asked you?`) → turn 2 `final_response`,
+   reply 「你上一則訊息是要我「reply with the single word ok」…」 (resume
+   carried the interactive exchange). Executions view (added via
+   RegionManager) listed it under **Purdex** as `idle · (handed off from
+   tmux session nexacc) · just now`.
+   **Bug found and fixed in-run**: the `↩` marker was missing — the daemon
+   stamps `origin` with its own host id (`mini-lab:278cbm`, i.e.
+   `capabilities.host_id`) while the SPA compared against the client's host
+   entry id (`pc3host`). Fixed in `d5fd19d7` (`ExecutionsView` passes
+   `capabilities.host_id` as `daemonHostId` to the rows); after HMR the
+   marker rendered with title `from tmux session 90ln9d`. The existing unit
+   test had encoded the wrong namespace and was rewritten.
+4. **PASS** — "Take back to terminal" (idle → no confirm) → the pane
+   returned to `/t/…/terminal` as the `nexacc` tab; the tmux pane shows
+   Claude Code's prompt again with the conversation; `pdx nex show` →
+   `state idle, archived true`; the Executions view no longer lists it;
+   `takeback.success` toast (seen in the a11y tree before it auto-dismissed).
+5. **PASS (partial)** — a plain-shell tmux session (`nexshell`) opened in
+   the SPA: right-click → only `Split Horizontal / Split Vertical`, no
+   "Hand to nex". A host with `max_profile = "trusted"` was not available —
+   that sub-item not exercised.
+6. **PASS** — CC back in `nexacc`: right-click → Hand to nex → two Confirm
+   clicks issued without awaiting the first: both clicks fulfilled, the
+   network log shows **one** `POST /api/sessions/90ln9d/nex-handoff`, one
+   execution `06GB86YPW0DNHB7R4J98WFSWV4` created. `tmux kill-session -t
+   nexacc` → "Take back" → daemon 404 (`nex-takeback` 404 in the console
+   network line), toast "The tmux session no longer exists."
+   (`handoff.error.session_missing`), URL unchanged
+   (`/execution/pc3host/06GB86YP…`), execution still `idle, archived
+   false`. Split check: a fresh CC session `nexsplit` (`ra27pr`,
+   provenance `found: true, cc`) opened as a tab, split vertically, the
+   same session picked into the secondary leaf → its context menu offers
+   `Split Horizontal / Split Vertical / Close pane / Detach to tab / Hand to
+   nex` (pane-local, spec Q1). Note: while `nexshell` was attached by two
+   leaves at once its CC UI opened into an empty picker (`>` `0/0`) — an
+   unrelated double-attach rendering quirk, not exercised further.
+7. **PASS** — after a full reload: console 3 messages, 0 errors, 0
+   warnings. (Two transient `ReferenceError`s were logged earlier by Vite
+   HMR while the marker fix in step 3 was being applied module-by-module;
+   they vanished on reload and are not runtime errors.)
+
+Cleanup: executions `06GB85EV…` (archived by take-back) and `06GB86YP…`
+(archived by hand) — `pdx nex ls` shows only a pre-existing `06GB7PYE…`
+that is not from this run; tmux `nexacc`/`nexshell`/`nexsplit` killed;
+Executions view removed (`primary-sidebar.views` back to
+`["file-tree-workspace"]`); browser closed; :5175 vite stopped by PID
+(:5174 and the daemon untouched); scratch dir and every seed helper file
+removed.
+
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
