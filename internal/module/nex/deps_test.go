@@ -8,6 +8,7 @@ package nex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,11 @@ func (fakeSessionProvider) GetSession(string) (*session.SessionInfo, error)     
 func (fakeSessionProvider) UpdateMeta(string, session.MetaUpdate) error                 { return nil }
 func (fakeSessionProvider) HandleTerminalWS(http.ResponseWriter, *http.Request, string) {}
 func (fakeSessionProvider) TmuxInstance() string                                        { return "" }
+func (fakeSessionProvider) SessionExists(string) bool                                   { return false }
+func (fakeSessionProvider) ValidateCwd(string) error                                    { return nil }
+func (fakeSessionProvider) CreateSession(string, string) (*session.SessionInfo, error) {
+	return nil, errors.New("not implemented")
+}
 
 type fakeOwnerResolver struct{}
 

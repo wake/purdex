@@ -72,6 +72,12 @@ func (f *fakeSessions) UpdateMeta(code string, update session.MetaUpdate) error 
 
 func (f *fakeSessions) HandleTerminalWS(w http.ResponseWriter, r *http.Request, code string) {}
 
+func (f *fakeSessions) SessionExists(string) bool { return false }
+func (f *fakeSessions) ValidateCwd(string) error  { return nil }
+func (f *fakeSessions) CreateSession(string, string) (*session.SessionInfo, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (f *fakeSessions) TmuxInstance() string {
 	if f.instances == nil {
 		return ""

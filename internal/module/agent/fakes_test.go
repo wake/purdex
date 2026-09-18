@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -46,6 +47,12 @@ func (f *fakeSessionProvider) HandleTerminalWS(http.ResponseWriter, *http.Reques
 }
 
 func (f *fakeSessionProvider) TmuxInstance() string { return f.tmuxInstance }
+
+func (f *fakeSessionProvider) SessionExists(string) bool { return false }
+func (f *fakeSessionProvider) ValidateCwd(string) error  { return nil }
+func (f *fakeSessionProvider) CreateSession(string, string) (*session.SessionInfo, error) {
+	return nil, errors.New("not implemented")
+}
 
 // fakeAgentProvider is a configurable AgentProvider for tests. The events
 // slice is optional: tests exercising the metadata-driven lifecycle dispatch

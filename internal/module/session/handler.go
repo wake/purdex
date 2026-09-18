@@ -3,13 +3,11 @@ package session
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
 	"time"
 
-	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -74,127 +72,41 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" || !nameRegex.MatchString(req.Name) {
-		http.Error(w, "invalid session name: must match ^[a-zA-Z0-9_-]+$", http.StatusBadRequest)
-		return
-	}
-
-	// tmux neither expands ~ nor fails on an unusable -c: it silently starts
-	// the session in $HOME. Resolve here so the pane really lands where the
-	// caller asked, and so the recorded cwd matches the pane's directory.
-	cwd, err := resolveCwd(req.Cwd, os.UserHomeDir)
-	if err != nil {
-		http.Error(w, "invalid cwd: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	req.Cwd = cwd
-
 	// Validate and normalise mode. Since P-D.2 the only mode is `terminal`;
 	// the legacy `stream` value is still accepted (old workspace snapshots
 	// and device-state backups may carry it) and coerced, never rejected.
+	// (CreateSession records `terminal`; the coercion is kept here so the
+	// legacy value is answered the way it always was.)
 	switch req.Mode {
 	case "", "terminal", "stream":
-		req.Mode = "terminal"
 	default:
 		http.Error(w, "invalid mode: must be terminal", http.StatusBadRequest)
 		return
 	}
 
-	// Serialize the HasSession→NewSession→SetMeta critical section so two
-	// concurrent POSTs with the same name can't both slip past the duplicate
-	// check. Input validation stays outside the lock.
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
-
-	// Check for duplicate session name
-	if m.tmux.HasSession(req.Name) {
-		http.Error(w, "session already exists: "+req.Name, http.StatusConflict)
-		return
-	}
-
-	// Create the tmux session
-	if err := m.tmux.NewSession(req.Name, req.Cwd); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Find the newly created session to get its tmux ID
-	sessions, err := m.tmux.ListSessions()
+	// Name rule, cwd resolution and the HasSession→NewSession→SetMeta
+	// critical section live in CreateSession (shared with the nex module);
+	// this handler only maps its stages onto the HTTP codes and texts the
+	// SPA has always seen.
+	info, err := m.CreateSession(req.Name, req.Cwd)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var info *SessionInfo
-	for _, s := range sessions {
-		if s.Name == req.Name {
-			code, err := EncodeSessionID(s.ID)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			// `s.Cwd` is tmux's own `#{session_path}` — the directory the
-			// session is actually in — so it, not `req.Cwd`, is what gets
-			// recorded. resolveCwd stat'd the directory a moment ago, but tmux
-			// ran after that: if it vanished in between, tmux silently started
-			// the session in $HOME, and recording the request would have the
-			// daemon report a directory the session is not in. This also puts
-			// create on the same footing as list/get, which already source Cwd
-			// from tmux.
-			//
-			// A mismatch is logged, not fatal. Killing the session on mismatch
-			// was considered and rejected: `session_path` comes from getcwd(),
-			// which canonicalises symlinks and filesystem case (/tmp →
-			// /private/tmp on macOS), so a string comparison produces false
-			// mismatches — and killing a live session on a false positive is
-			// far worse than the rare race it would guard.
-			//
-			// That same canonicalisation is why the warning is gated on
-			// sameDirectory (os.SameFile) rather than on the string compare
-			// alone: every create through a symlinked path or a /tmp request
-			// comes back spelled differently while being the very same
-			// directory, and warning on those would bury the one case the
-			// warning is for — the requested directory vanished and tmux
-			// silently fell back to $HOME.
-			if s.Cwd != req.Cwd && !sameDirectory(s.Cwd, req.Cwd) {
-				log.Printf("session: tmux did not honour the requested directory for %q: requested %q, session is in %q", req.Name, req.Cwd, s.Cwd)
-			}
-
-			// Set initial meta
-			if err := m.meta.SetMeta(s.ID, store.SessionMeta{
-				TmuxID: s.ID,
-				Mode:   req.Mode,
-				Cwd:    s.Cwd,
-			}); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			info = &SessionInfo{
-				Code:   code,
-				TmuxID: s.ID,
-				Name:   s.Name,
-				Exists: true,
-				Mode:   req.Mode,
-				Cwd:    s.Cwd,
-				// This response is built by hand rather than via ListSessions,
-				// so it needs its own stamp. The rebuild engine re-points a
-				// pane using the generation carried here (spec §4.8 step 4);
-				// leaving it empty would give the rebuilt pane an unknown
-				// generation until the next sessions broadcast.
-				TmuxInstance: m.TmuxInstance(),
-			}
-			break
+		var ce *CreateError
+		if !errors.As(err, &ce) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-	}
-
-	if info == nil {
-		http.Error(w, "session created but not found", http.StatusInternalServerError)
+		switch ce.Stage {
+		case CreateStageInvalidName:
+			http.Error(w, "invalid session name: must match ^[a-zA-Z0-9_-]+$", http.StatusBadRequest)
+		case CreateStageInvalidCwd:
+			http.Error(w, "invalid cwd: "+ce.Err.Error(), http.StatusBadRequest)
+		case CreateStageExists:
+			http.Error(w, "session already exists: "+ce.Name, http.StatusConflict)
+		default:
+			http.Error(w, ce.Err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
-
-	m.invalidateNameCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
