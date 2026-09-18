@@ -184,23 +184,27 @@ describe('hasHostBadge', () => {
   })
 
   it('is false when the host set neither a color nor an icon', () => {
-    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: undefined })).toBe(false)
+    expect(hasHostBadge({ colors: null, icon: undefined, iconWeight: undefined })).toBe(false)
   })
 
   it('is true when the host set a color only', () => {
-    expect(hasHostBadge({ color: '#3b82f6', icon: undefined, iconWeight: undefined })).toBe(true)
+    expect(
+      hasHostBadge({ colors: { main: 'x', middle: 'y', light: 'z' }, icon: undefined, iconWeight: undefined }),
+    ).toBe(true)
   })
 
   it('is true when the host set an icon only', () => {
-    expect(hasHostBadge({ color: null, icon: 'Laptop', iconWeight: undefined })).toBe(true)
+    expect(hasHostBadge({ colors: null, icon: 'Laptop', iconWeight: undefined })).toBe(true)
   })
 
   it('is true when the host set both', () => {
-    expect(hasHostBadge({ color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' })).toBe(true)
+    expect(
+      hasHostBadge({ colors: { main: 'x', middle: 'y', light: 'z' }, icon: 'Laptop', iconWeight: 'duotone' }),
+    ).toBe(true)
   })
 
   it('ignores a weight on its own — a weight is not something to show', () => {
-    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: 'duotone' })).toBe(false)
+    expect(hasHostBadge({ colors: null, icon: undefined, iconWeight: 'duotone' })).toBe(false)
   })
 })
 

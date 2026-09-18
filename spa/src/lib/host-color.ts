@@ -124,14 +124,14 @@ export function sanitizeHostConfig(host: HostConfig): HostConfig {
  *
  * "沒設定就沒有": a host that picked neither a color nor an icon renders nothing —
  * a grey default box on every row is noise for a single-host setup. Either half
- * alone is enough (color only → default icon; icon only → neutral box).
+ * alone is enough (colors only → default icon; icon only → neutral box).
  *
  * Structurally typed so `lib/` need not depend on the hook that owns `TabHostBadge`.
  */
-export function hasHostBadge<T extends { color: string | null; icon?: string | undefined }>(
+export function hasHostBadge<T extends { colors: ResolvedHostColors | null; icon?: string | undefined }>(
   badge: T | null,
 ): badge is T {
-  return badge !== null && (badge.color !== null || badge.icon !== undefined)
+  return badge !== null && (badge.colors !== null || badge.icon !== undefined)
 }
 
 /** hostId of the first tmux-session pane in pre-order, or null. */
