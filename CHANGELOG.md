@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.404] - 2026-09-19
+
+### Feature: 任何 execution 都能接進終端機 — SPA 端（#1216，#1210 2／2）
+
+exec pane header 那顆按鈕改叫「Take to terminal」，凡是 claude execution、有 session id、狀態在 running／idle／failed／terminated 且未 archive 就出現——不再限定「從 session 交過來的」。有來源 session 的走原本的 `nex-takeback` 回到同一個 session；沒有的走 alpha.403 的 `take-to-terminal`，pane 就地變成新建的終端機、sidebar 多一個 session。session 名照 launcher 規則 `<slug>-N`：slug 取 cwd 命中的 host project（存成 `~/…` 的專案用 `checkHostPath(host, '~')` 跟 daemon 要 home 展開後比對——攻擊方抓到我原本的 suffix 猜法會把 `~/w` 配到 `/x/other/w`；拿不到 home 就不猜），沒命中就用目錄名清成合法字元。撞名 `session_exists` 重試一次。
+
+Hand to nex 的確認框多一個「保留 tmux session」勾選——**每次開啟都預設勾選、不記憶**（使用者定案）。取消就在 execution 起來後把 tmux session 砍掉，pane 不記來源，之後 Take to terminal 走新建那條路；session 還有別的 pane 在用時多一行「另有 N 個窗格使用這個 session」提醒。確認框標題與成功 toast 改成不再假設「回到」終端機；`execution_archived` 的錯誤文案直接寫恢復方法（Host › Nex 取消封存，或手動 `claude --resume <id>`），這是 critic 對「archive 之後 crash」視窗要求的恢復契約。
+
+真機兩輪（見 #1212）：v2 headless／CLI 起的 execution 接回、running 中確認框、`~/` 專案命中 `e2t-1`、`cwd_missing` toast、兩個 pane 同 session 不保留的提醒與 terminated 顯示。第二輪在那個瀏覽器 session 裡右鍵「Hand to nex」沒出現（daemon／provenance／rebuild record 都說 cc，第一輪同一份 gate 是過的）→ #1214 追蹤 gate 的可觀測性。vitest 7039、lint、build 綠。
+
 ## [1.0.0-alpha.403] - 2026-09-19
 
 ### Feature: 任何 execution 都能接進終端機 — daemon 端（#1215，#1210 1／2）
