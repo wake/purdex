@@ -1,0 +1,22 @@
+{
+  "version": "0.153.4",
+  "tag": "rust-v0.153.4",
+  "sourceDocs": "https://developers.openai.com/codex/hooks",
+  "fetchedAt": "2026-09-18",
+  "events": [
+    {"upstreamKey": "SessionStart",      "purdex": {"kind": "installable", "purdexEventName": "PdxSessionStart",      "status": "idle"}},
+    {"upstreamKey": "SessionEnd",        "purdex": {"kind": "installable", "purdexEventName": "PdxSessionEnd",        "status": "clear"}},
+    {"upstreamKey": "SubagentStart",     "purdex": {"kind": "installable", "purdexEventName": "PdxSubagentStart"}},
+    {"upstreamKey": "SubagentStop",      "purdex": {"kind": "installable", "purdexEventName": "PdxSubagentStop"}},
+    {"upstreamKey": "PreToolUse",        "purdex": {"kind": "installable", "purdexEventName": "PdxPreToolUse"}},
+    {"upstreamKey": "PermissionRequest", "purdex": {"kind": "installable", "purdexEventName": "PdxPermissionRequest", "status": "waiting"}},
+    {"upstreamKey": "PostToolUse",       "purdex": {"kind": "installable", "purdexEventName": "PdxPostToolUse",       "status": "running"}},
+    {"upstreamKey": "PreCompact",        "purdex": {"kind": "ignored",     "purdexEventName": "PdxPreCompact"}},
+    {"upstreamKey": "PostCompact",       "purdex": {"kind": "ignored",     "purdexEventName": "PdxPostCompact"}},
+    {"upstreamKey": "UserPromptSubmit",  "purdex": {"kind": "installable", "purdexEventName": "PdxUserPromptSubmit",  "status": "running"}},
+    {"upstreamKey": "Stop",              "purdex": {"kind": "installable", "purdexEventName": "PdxStop",              "status": "idle"}},
+    {"upstreamKey": "Interrupt",         "purdex": {"kind": "installable", "purdexEventName": "PdxInterrupt",         "status": "idle"}},
+    {"upstreamKey": "Notification",      "purdex": {"kind": "retired",     "purdexEventName": "PdxNotification",      "reason": "never fired by codex; written by pre-0.153 installer"}},
+    {"upstreamKey": "StopFailure",       "purdex": {"kind": "retired",     "purdexEventName": "PdxStopFailure",       "reason": "never fired by codex; written by pre-0.153 installer"}}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "agent_id": "01a00000-0000-7000-8000-000000000003",
+  "agent_type": "default",
+  "cwd": "/Users/example/project",
+  "hook_event_name": "SubagentStart",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "bypassPermissions",
+  "session_id": "01a00000-0000-7000-8000-000000000001",
+  "transcript_path": "/Users/example/.codex/sessions/2026/09/18/rollout-example.jsonl",
+  "turn_id": "01a00000-0000-7000-8000-000000000002"
+}
