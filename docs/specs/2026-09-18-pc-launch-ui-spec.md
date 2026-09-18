@@ -605,6 +605,52 @@ from the region again (`primary-sidebar.views` back to
    vanished within 1.5 s of `pdx nex archive`.
 7. **PASS** — console: both tabs 0 errors, 0 warnings.
 
+### 6.3 CLI acceptance 2026-09-18 (P-C.3a, daemon alpha.386)
+
+Daemon `bcaf13d2` on mlab; tmux session `nexacc` (code `7yrdft`,
+instance `6901:1789205013`) in `~/Workspace/wake/nex-acceptance-scratch`,
+Claude Code 2.1.276 at its prompt after one exchange ("reply with the
+single word ok" → "ok"). `GET /api/sessions/7yrdft/provenance` →
+`{found: true, agent_type: "cc", session_id:
+"8dd6e772-ab00-4807-8859-c4647e2ee1b6", cwd: <scratch>, tmux_pane_id: "%77"}`.
+
+1. **FAIL — blocked by a pre-existing daemon bug, not by this PR's code.**
+   `POST /nex-handoff {expected_tmux_instance, rollback_command: "claude
+   --resume {id}"}` → **504** `{"code":"cc_exit_timeout","error":"interrupt
+   Claude Code: context deadline exceeded","step":"interrupt"}`. The pane
+   was idle at the `❯` prompt the whole time. Root cause:
+   `internal/agent/cc/readiness.go` captures with `tmux capture-pane -e`
+   (ANSI preserved) and matches `strings.HasPrefix(strings.TrimSpace(line),
+   "❯")`; CC 2.1.276 renders the prompt line as `\x1b[39m❯ `, so no line
+   ever starts with `❯` → readiness is always `running` → `Interrupt`
+   polls until its deadline. Proof: `tmux capture-pane -e … | sed
+   's/\x1b\[[0-9;]*m//g' | grep -c '^❯'` → 3; without stripping → 0. The
+   legacy stream handoff uses the same checker
+   (`stream/orchestrator.go:78`, `cc/operator.go:28`) and is equally
+   broken against this CC version. No delegate was attempted; nothing was
+   rolled back (correct — CC never exited). Steps 2–4 could not run.
+   → Hotfix needed: strip ANSI (or capture without `-e`) in
+   `ccReadinessChecker.CheckReadiness` before matching; then re-run 1–4.
+2. **NOT RUN** (depends on 1).
+3. **NOT RUN** (depends on 1).
+4. **NOT RUN** (depends on 1).
+5. **PASS (partial)** — take-back preflight while CC is in the pane:
+   bogus `execution_id` → **409** `{"code":"cc_already_running"}` (liveness
+   precedes the execution lookup, as specified); wrong
+   `expected_tmux_instance` → **409** `{"code":"tmux_instance_mismatch"}`.
+   After `/exit`: bogus `execution_id` → **404**
+   `{"code":"execution_not_found"}`.
+6. **PASS** — handoff with wrong `expected_tmux_instance` → **409**
+   `{"code":"tmux_instance_mismatch"}` (before any key is sent); handoff on
+   the session after `/exit` → **409** `{"code":"no_identity","error":"no
+   Claude Code session identity for this pane"}` — `PdxSessionEnd` had
+   deleted the frame, so identity (step 2) fails before liveness (step 3);
+   `no_cc` is only reachable when a frame survives without a live process.
+
+No execution was created; nothing to archive. Daemon log has no handoff
+entries (the handlers do not log; the 504 is the only trace). Cleanup:
+`nexacc` killed, scratch dir removed, daemon left running.
+
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
