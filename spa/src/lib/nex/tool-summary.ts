@@ -30,14 +30,110 @@ export function getSummary(tool: string, input: Record<string, unknown>): string
 
 const R10_KEYS = 3
 
-function r10Value(v: unknown): string {
+/**
+ * Header summary width. `ToolCallBlock` truncates to this many characters,
+ * so the R10 preview never needs to serialise more than this (codex R2 A3).
+ */
+export const SUMMARY_LIMIT = 80
+
+const PREVIEW_DEPTH = 4
+const ELLIPSIS = '…'
+
+/** Thrown internally once the accumulated output passes the limit. */
+class PreviewLimit extends Error {}
+
+class PreviewWriter {
+  out = ''
+  private readonly seen = new WeakSet<object>()
+  private readonly limit: number
+  constructor(limit: number) {
+    this.limit = limit
+  }
+
+  /** Appends `s`; keeps only what fits under `limit` and aborts the walk once full. */
+  write(s: string): void {
+    const room = this.limit - this.out.length
+    if (s.length > room) {
+      this.out += s.slice(0, room)
+      throw new PreviewLimit()
+    }
+    this.out += s
+  }
+
+  value(v: unknown, depth: number): void {
+    switch (typeof v) {
+      case 'string':
+        // A string only ever contributes up to `limit` characters: slice
+        // first so a megabyte payload is never escaped in full.
+        this.write(JSON.stringify(v.length > this.limit ? v.slice(0, this.limit) : v))
+        return
+      case 'number':
+      case 'boolean':
+        this.write(String(v))
+        return
+      case 'undefined':
+        this.write('undefined')
+        return
+      case 'object':
+        if (v === null) { this.write('null'); return }
+        if (this.seen.has(v)) { this.write('[Circular]'); return }
+        if (depth >= PREVIEW_DEPTH) { this.write(ELLIPSIS); return }
+        this.seen.add(v)
+        if (Array.isArray(v)) {
+          this.write('[')
+          for (let i = 0; i < v.length; i++) {
+            if (i > 0) this.write(',')
+            this.value(v[i], depth + 1)
+          }
+          this.write(']')
+        } else {
+          this.write('{')
+          const keys = Object.keys(v)
+          for (let i = 0; i < keys.length; i++) {
+            if (i > 0) this.write(',')
+            this.write(JSON.stringify(keys[i]) + ':')
+            this.value((v as Record<string, unknown>)[keys[i]], depth + 1)
+          }
+          this.write('}')
+        }
+        this.seen.delete(v)
+        return
+      default:
+        // function / symbol / bigint: JSON.stringify would drop or throw;
+        // spell the type so the header still says something.
+        this.write(`[${typeof v}]`)
+    }
+  }
+}
+
+/**
+ * Bounded, JSON-flavoured preview of one input value for the R10 fallback.
+ * Strings come back verbatim (the renderer truncates); scalars via
+ * `String`; objects / arrays are walked by hand and the walk stops the
+ * moment the output passes `limit` (returning what was written plus `…`),
+ * so a 100 000-element array costs O(limit), never O(n). Nesting deeper
+ * than four levels prints `…`, cycles print `[Circular]`, and a value whose
+ * getter throws yields `[unserializable]`.
+ */
+export function previewValue(v: unknown, limit: number): string {
   switch (typeof v) {
     case 'string':
+      return v
     case 'number':
     case 'boolean':
       return String(v)
+    case 'undefined':
+      return 'undefined'
     default:
-      return JSON.stringify(v)
+      if (v === null) return 'null'
+  }
+  const w = new PreviewWriter(limit)
+  try {
+    w.value(v, 0)
+    return w.out
+  } catch (e) {
+    if (e instanceof PreviewLimit) return w.out + ELLIPSIS
+    return '[unserializable]'
   }
 }
 
@@ -45,7 +141,7 @@ function r10Value(v: unknown): string {
 function unknownToolSummary(input: Record<string, unknown>): string {
   return Object.keys(input)
     .slice(0, R10_KEYS)
-    .map((k) => `${k}: ${r10Value(input[k])}`)
+    .map((k) => `${k}: ${previewValue(input[k], SUMMARY_LIMIT)}`)
     .join(', ')
 }
 

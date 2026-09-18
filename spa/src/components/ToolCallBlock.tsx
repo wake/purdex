@@ -3,10 +3,22 @@ import { useState } from 'react'
 import { CaretRight, CaretDown, CircleNotch, Wrench } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { formatDuration } from '../lib/nex/format-duration'
-import { toolSummary } from '../lib/nex/tool-summary'
+import { toolSummary, SUMMARY_LIMIT } from '../lib/nex/tool-summary'
 import type { ToolActivity, ToolCallActivity } from '../lib/nex/tool-activity'
 
 export type { ToolCallActivity }
+
+type FinishedActivity = Extract<ToolCallActivity, { status: 'done' | 'error' | 'denied' }>
+
+/**
+ * R2: the daemon's duration_ms wins even when the raw-frame clocks are
+ * unknown (N2 unseen path has startedAt 0); the `> 0` guard only protects
+ * the endedAt − startedAt fallback. `null` → nothing to show.
+ */
+function finishedMs(activity: FinishedActivity): number | null {
+  if (typeof activity.durationMs === 'number') return activity.durationMs
+  return activity.startedAt > 0 && activity.endedAt > 0 ? activity.endedAt - activity.startedAt : null
+}
 
 interface Props {
   tool: string
@@ -26,26 +38,33 @@ interface Props {
   summaryEntry?: Pick<ToolActivity, 'primaryArg' | 'known'>
 }
 
-const SUMMARY_MAX = 80
+// Header summary width; the same constant bounds the R10 preview (A3).
+const SUMMARY_MAX = SUMMARY_LIMIT
 
 function TimingBadge({ activity, t }: { activity: ToolCallActivity; t: (key: string) => string }) {
   switch (activity.status) {
     case 'aborted':
       return <span data-testid="tool-aborted" className="text-xs text-text-muted flex-shrink-0">{t('execution.tool.aborted')}</span>
-    case 'denied':
-      return <span data-testid="tool-denied" className="text-xs text-status-warning flex-shrink-0">{t('execution.tool.denied')}</span>
+    case 'denied': {
+      // R3 badge, then the R2 duration (codex R2 A2: a denial still took time
+      // to be decided; muted, not the error colour — a denial is not a failure).
+      const ms = finishedMs(activity)
+      return (
+        <>
+          <span data-testid="tool-denied" className="text-xs text-status-warning flex-shrink-0">{t('execution.tool.denied')}</span>
+          {ms !== null && (
+            <span data-testid="tool-duration" className="text-xs text-text-muted tabular-nums flex-shrink-0">{formatDuration(ms)}</span>
+          )}
+        </>
+      )
+    }
     case 'running': {
       if (activity.startedAt <= 0) return null
       return <span data-testid="tool-elapsed" className="text-xs text-text-muted tabular-nums flex-shrink-0">{formatDuration(Math.max(0, activity.now - activity.startedAt))}</span>
     }
     case 'done':
     case 'error': {
-      // R2: the daemon's duration_ms wins even when the raw-frame clocks are
-      // unknown (N2 unseen path has startedAt 0); the `> 0` guard only
-      // protects the endedAt − startedAt fallback.
-      const ms = typeof activity.durationMs === 'number'
-        ? activity.durationMs
-        : activity.startedAt > 0 && activity.endedAt > 0 ? activity.endedAt - activity.startedAt : null
+      const ms = finishedMs(activity)
       if (ms === null) return null
       const tone = activity.status === 'error' ? 'text-status-error' : 'text-text-muted'
       return <span data-testid="tool-duration" className={`text-xs ${tone} tabular-nums flex-shrink-0`}>{formatDuration(ms)}</span>

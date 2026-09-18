@@ -117,12 +117,12 @@ describe('ToolCallBlock activity (P-B2.2 R1/R2)', () => {
     expect(screen.queryByTestId('tool-duration')).toBeNull()
   })
 
-  it('denied → warning-coloured localized badge, wrench, no duration (P-B3 Task 1: badge only)', () => {
+  it('denied → warning-coloured localized badge, wrench; duration follows R2 (endedAt − startedAt here)', () => {
     render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'denied', startedAt: 100, endedAt: 200 }} />)
     expect(screen.getByTestId('tool-denied')).toHaveTextContent('denied')
     expect(screen.getByTestId('tool-denied')).toHaveClass('text-status-warning')
     expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
-    expect(screen.queryByTestId('tool-duration')).toBeNull()
+    expect(screen.getByTestId('tool-duration')).toHaveTextContent(/^0\.1s$/)
   })
 
   it('streaming with rawInput → header shows the raw prefix, expanded shows it in <pre>, spinner present', () => {
@@ -207,8 +207,8 @@ describe('ToolCallBlock N2 overlay (P-B3 R1–R3)', () => {
     expect(screen.getByTestId('tool-duration')).toHaveClass('text-status-error')
   })
 
-  it('R3: denied → name struck through and muted, wrench, warning badge, no duration', () => {
-    render(<ToolCallBlock tool="Bash" input={{ command: 'rm -rf /' }} activity={{ status: 'denied', startedAt: 100, endedAt: 200, durationMs: 26 }} />)
+  it('R3: denied → name struck through and muted, wrench, warning badge; R2 durationMs still shown (codex R2 A2)', () => {
+    render(<ToolCallBlock tool="Bash" input={{ command: 'rm -rf /' }} activity={{ status: 'denied', startedAt: 100, endedAt: 200, durationMs: 2600 }} />)
     const name = screen.getByText('Bash')
     expect(name).toHaveClass('line-through')
     expect(name).toHaveClass('text-text-muted')
@@ -216,8 +216,26 @@ describe('ToolCallBlock N2 overlay (P-B3 R1–R3)', () => {
     expect(name).not.toHaveClass('text-text-primary')
     expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
     expect(screen.queryByTestId('tool-icon-spinner')).toBeNull()
-    expect(screen.getByTestId('tool-denied')).toHaveClass('text-status-warning')
+    const badge = screen.getByTestId('tool-denied')
+    expect(badge).toHaveClass('text-status-warning')
+    // durationMs wins over endedAt − startedAt (0.1s); muted, not the error colour
+    const duration = screen.getByTestId('tool-duration')
+    expect(duration).toHaveTextContent(/^2\.6s$/)
+    expect(duration).toHaveClass('text-text-muted')
+    expect(duration).not.toHaveClass('text-status-error')
+    // order: denied badge first, then the duration
+    expect(badge.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('R2/A2: denied with startedAt 0 / endedAt 0 and no durationMs → only the denied badge', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'denied', startedAt: 0, endedAt: 0 }} />)
+    expect(screen.getByTestId('tool-denied')).toBeInTheDocument()
     expect(screen.queryByTestId('tool-duration')).toBeNull()
+  })
+
+  it('R2/A2: denied with durationMs but unknown clocks → duration still shown', () => {
+    render(<ToolCallBlock tool="Bash" input={{}} activity={{ status: 'denied', startedAt: 0, endedAt: 0, durationMs: 26 }} />)
+    expect(screen.getByTestId('tool-duration')).toHaveTextContent(/^0\.0s$/)
   })
 
   it('R3: non-denied statuses keep the primary name colour (no strike-through)', () => {

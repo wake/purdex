@@ -155,4 +155,33 @@ describe('facts prop (P-B3.2 R3 / R4)', () => {
     expect(statusIconPath(container as HTMLElement)).toBe(XCIRCLE_PATH)
     expect(screen.getByTestId('tool-result-facts')).toHaveTextContent('3 lines')
   })
+
+  // codex R2 A1: whenever N2 supplies a status it decides the tone; the raw
+  // `is_error` flag is only the pre-N2 fallback.
+  it('A1: facts.status error + isError false → error colours and the XCircle icon (N2 wins)', () => {
+    const { container } = render(<ToolResultBlock content="boom" isError={false} facts={{ status: 'error' }} />)
+    const block = container.querySelector('[data-testid="tool-result-block"]')!
+    expect(block.className).toContain('border-[#302a2a]')
+    expect(block.className).not.toContain('border-[#2a302a]')
+    expect(screen.getByTestId('tool-result-header').className).toContain('text-[#c77]')
+    expect(statusIconPath(container as HTMLElement)).toBe(XCIRCLE_PATH)
+    expect(screen.queryByTestId('tool-result-denied')).toBeNull()
+  })
+
+  it('A1: facts.status done + isError true → ok colours and the CheckCircle icon (N2 wins)', () => {
+    const { container } = render(<ToolResultBlock content="fine" isError={true} facts={{ status: 'done' }} />)
+    const block = container.querySelector('[data-testid="tool-result-block"]')!
+    expect(block.className).toContain('border-[#2a302a]')
+    expect(block.className).not.toContain('border-[#302a2a]')
+    expect(screen.getByTestId('tool-result-header').className).toContain('text-[#8bc]')
+    expect(statusIconPath(container as HTMLElement)).toBe(CHECKCIRCLE_PATH)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    expect(screen.getByTestId('tool-result-content').className).toContain('text-[#9b9]')
+  })
+
+  it('A1: facts without status → falls back to isError', () => {
+    const { container } = render(<ToolResultBlock content="boom" isError={true} facts={{ file: { path: '/x', lines: 1 } }} />)
+    expect(container.querySelector('[data-testid="tool-result-block"]')!.className).toContain('border-[#302a2a]')
+    expect(statusIconPath(container as HTMLElement)).toBe(XCIRCLE_PATH)
+  })
 })

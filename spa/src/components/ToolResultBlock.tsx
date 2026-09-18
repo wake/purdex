@@ -9,21 +9,31 @@ interface Props {
   content: string
   isError: boolean
   /**
-   * N2 overlay for the header (P-B3.2 spec §4.4 R3 / R4): `status: 'denied'`
-   * overrides `isError` (a denial is not a failure — neutral colours, the
-   * Prohibit icon and a `denied` badge); `file` / `diff` / `output` feed the
-   * facts span. Absent → today's DOM byte-for-byte (baseline snapshots).
+   * N2 overlay for the header (P-B3.2 spec §4.4 R3 / R4): when `status` is
+   * present it decides the tone — `denied` is neutral with the Prohibit icon
+   * and a `denied` badge (a denial is not a failure), `error` is the error
+   * tone, anything else (`done` / `aborted` / `running`: the result arrived)
+   * is the ok tone — and `isError` is only consulted when N2 has no status.
+   * `file` / `diff` / `output` feed the facts span. Absent → today's DOM
+   * byte-for-byte (baseline snapshots).
    */
   facts?: ToolResultFacts
 }
+
+type Tone = 'ok' | 'error' | 'denied'
 
 export default function ToolResultBlock({ content, isError, facts }: Props) {
   const t = useI18nStore((s) => s.t)
   const [expanded, setExpanded] = useState(false)
   const summary = content.slice(0, 80) + (content.length > 80 ? '...' : '')
-  const denied = facts?.status === 'denied'
-  // R3: the raw frame flags a denial as an error too; N2's status wins.
-  const errorTone = isError && !denied
+  // R3 / codex R2 A1: the raw frame's is_error is the pre-N2 fallback only;
+  // an N2 status (denial flagged as error, or an error the frame missed) wins.
+  const tone: Tone = facts?.status === 'denied' ? 'denied'
+    : facts?.status === 'error' ? 'error'
+    : facts?.status ? 'ok'
+    : isError ? 'error' : 'ok'
+  const denied = tone === 'denied'
+  const errorTone = tone === 'error'
   const segs = toolResultFacts(facts, t)
 
   return (
@@ -42,7 +52,7 @@ export default function ToolResultBlock({ content, isError, facts }: Props) {
         onClick={() => setExpanded(v => !v)}
       >
         {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
-        {denied ? <Prohibit size={14} /> : isError ? <XCircle size={14} /> : <CheckCircle size={14} />}
+        {denied ? <Prohibit size={14} /> : errorTone ? <XCircle size={14} /> : <CheckCircle size={14} />}
         <span className="truncate flex-1">{summary}</span>
         {segs.length > 0 && (
           <span data-testid="tool-result-facts" className="text-text-muted tabular-nums flex-shrink-0">{segs.join(' · ')}</span>
