@@ -19,6 +19,7 @@ const DEFAULT_STATE = {
   terminalSettingsVersion: 0,
   dynamicTabName: false,
   showAgentTitleInStatusBar: false,
+  stripAgentTitleMarker: true,
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +84,7 @@ describe('createPreferencesContributor', () => {
     expect(keys).toContain('terminalSettingsVersion')
     expect(keys).toContain('dynamicTabName')
     expect(keys).toContain('showAgentTitleInStatusBar')
+    expect(keys).toContain('stripAgentTitleMarker')
 
     // Must NOT contain setter functions
     expect(keys).not.toContain('setTerminalRevealDelay')

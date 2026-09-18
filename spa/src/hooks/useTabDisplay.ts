@@ -9,6 +9,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
+import { stripAgentTitleMarker } from '../lib/agent-title-marker'
 import { compositeKey } from '../lib/composite-key'
 import { ICON_MAP } from '../components/tab-icon-map'
 import type { Session } from '../lib/host-api'
@@ -53,6 +54,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const subagentCount = subagentRefs.length
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const dynamicTabName = useUISettingsStore((s) => s.dynamicTabName)
+  const stripMarker = useUISettingsStore((s) => s.stripAgentTitleMarker)
 
   const isHostOffline = useHostStore((s) => {
     if (!hostId || isTerminated) return false
@@ -69,7 +71,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
   const session = sessionCode ? sessionLookup.getByCode(sessionCode) : undefined
 
-  const paneTitle = dynamicTabName && !isTerminated && !!agentType ? session?.pane_title : undefined
+  const rawPaneTitle = dynamicTabName && !isTerminated && !!agentType ? session?.pane_title : undefined
+  const paneTitle = rawPaneTitle && stripMarker ? stripAgentTitleMarker(rawPaneTitle, agentType) : rawPaneTitle
   const displayTitle = paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
 
   return {
