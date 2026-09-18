@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.383] - 2026-09-18
+
+### Feature: Host Color Modes P2 — badge 三態渲染 + 拿掉每 surface 的濃度設定（#1153）
+
+alpha.381 換完資料層，這版把它畫出來：**作用中／hover 的分頁用 `main`、非作用中用 `middle`、底色一律 `light`**，而且純 shell 分頁（console）與 agent 分頁（terminal）各吃各的一組。
+
+#### 怎麼畫
+
+`HostBadge` 現在收的是解析好的 `{ main, middle, light }` rgba；底色直接畫 `light`，`main` / `middle` 以 CSS custom property 掛在色塊上，圖示顏色讀 `var(--hb-icon, var(--hb-middle))`。`index.css` 一條規則 `.group:hover [data-host-badge], .group[data-active="true"] [data-host-badge] { --hb-icon: var(--hb-main) }` 負責切換——hover 不追 JS 狀態，兩條分頁列（含釘選分支）都帶 `data-active`。`lineColor = neutral` 照舊畫灰圖示但保留底色；沒顏色的 host 照舊只畫圖示不畫底。
+
+`useTabHostBadge` 依主 pane 有沒有**活著的** agentType 決定 mode（terminated 的 agent pane 算 console，跟分頁圖示同一條規則，spec D1 補寫），`useMemo` 包住 resolver 所以無關的 store 寫入不會讓每列重畫。
+
+#### 拿掉的設定
+
+側欄／上方分頁各自的「圖示濃度」「底色濃度」四個欄位整個刪掉——濃度已經跟著每台 host 的顏色層走，兩處都留會打架。store 欄位、clamp、setter、sync 欄位表、設定 UI、locale key 全清；persist `version` 3→4 的 migrate 把舊 key 從 persisted state 裡丟掉，`sanitizeHostBadgePrefs` 在 sync 路徑也會剝掉（`HOST_BADGE_REMOVED_FIELDS`）。剩下的大小／內縮／圓角三個數字框終於有標籤了（之前那排「100 % 22 % 16 px 2 px 4 px」使用者看不懂是什麼）。
+
+#### review 抓到什麼
+
+codex plan review 六條：stale persisted key 靠 shallow merge「忽略」是錯的（要 migrate 才刪得掉）、terminated pane 的 mode 要寫進 spec、三個渲染 task 中間會有編不過的 commit（合成一個）、釘選分支與 CSS 規則沒測試、既有 opacity 測試沒交代處置——全進 plan。PR 攻擊方抓到一條真 bug：hook 的 host 取「前序第一個 tmux pane」、mode 卻取 `getPrimaryPane`，split tab 第一格不是 tmux 時會拿 A pane 的 host 配 B pane 的 mode——改成同一個 pane（`getTabBadgePane`）同時給 host、sessionCode、terminated。結構問題（`useUISettingsStore` 一次要改六條路徑）→ #1154。
+
+6487 tests 全綠。純 SPA。下一步 P3：Host 設定頁的 mode 切換＋Main／Middle／Light 三色塊＋色盤 popover。
+
 ## [1.0.0-alpha.382] - 2026-09-18
 
 ### Feature: sidebar「Executions」view + 每 host 一條共用的 site-wide SSE（P-C.2，#1148）
