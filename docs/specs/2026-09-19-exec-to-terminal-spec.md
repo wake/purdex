@@ -1,6 +1,6 @@
 # Spec — take any execution to a terminal (#1210)
 
-- Status: v1.1 (2026-09-19) — draft; v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
+- Status: v1.2 (2026-09-19) — codex plan+spec review `task-mu75q9tz-hn36pf` applied (10 findings: helper boundary, lease cleanup contract, name preflight before settle, post-create partial failure, kill-on-failure instead of double writer, project slug, visibility by state); v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
 - Predecessor: P-C.3 (`2026-09-18-pc-launch-ui-spec.md` §4.4 "Take back to
   terminal"), which only covers an execution that a `Hand to nex` created.
 - Nexen contract: v0.11.2 `docs/contract/capability-matrix.md` §1.8 (resume
@@ -18,8 +18,9 @@ the conversation cannot be continued interactively. The user's ruling
 ## 2. Measured facts (worktree at alpha.402, nexen v0.11.2)
 
 - The claude subprocess inherits `HOME` (`account/env.go` `BaseEnvKeys`);
-  Nexen injects only `CLAUDE_CODE_OAUTH_TOKEN` and
-  `CLAUDE_SECURESTORAGE_CONFIG_DIR` and blocks `CLAUDE_CODE_CHILD_SESSION`,
+  Nexen injects `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`
+  and the unconditional `CLAUDE_CODE_FORWARD_SUBAGENT_TEXT=1`, and blocks
+  `CLAUDE_CODE_CHILD_SESSION`,
   so the transcript is written to `~/.claude/projects/<slug(cwd)>/<sid>.jsonl`
   exactly as an interactive session's. `claude --resume <sid>` from a shell
   in the same cwd finds it. (Today's P-D acceptance proved the reverse
@@ -38,7 +39,13 @@ the conversation cannot be continued interactively. The user's ruling
   validates the name with `SESSION_NAME_REGEX` (handler.go:13).
 - The SPA names launched sessions `{slug}-{N}` via
   `lib/launch-session-name.ts` `nextProjectSessionName(slug, liveNames)`
-  and retries on 409 by appending the refused name.
+  and retries on 409 by appending the refused name. `slug` is the host
+  project's configured slug (`HostProject.slug`, `host-config-api.ts:12`),
+  not the cwd basename.
+- `ExecutionSummary.resume_session_id` is stored at delegate time, so it
+  exists while the execution is still `queued`; `session_id` appears only
+  once the provider has launched (nexen `execution/launch.go:171,211`).
+  `settled` on the daemon is idle / failed / terminated.
 - `ExecutionHeader` renders the button iff `onTakeBack` is passed;
   `ExecutionView` passes it iff `from` is set. `lib/nex/handoff.ts`
   `takeBack` swaps the pane to `{kind:'tmux-session', …from}` after the
@@ -95,49 +102,71 @@ purdex orchestration, not a Nexen route). Body:
 - `resume_command`: required, `{id}` placeholder, same as take-back.
 - `lease_id`: optional, same semantics as take-back.
 
-Sequence (one function shared with `handleNexTakeback`, see 4.3):
+Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
 
 1. Lock `m.locks.TryLock("exec:" + id)` → `409 takeback_in_progress`.
-2. `getExecution` → 404; `Provider != "claude"` → `409 provider_unsupported`.
-3. Lease-if-running → interrupt → re-read → `settled` check (existing code).
-4. Session id (`SessionID` else `ResumeSessionID`) → `409 no_session_id`.
-5. **Create the session** via a new `SessionProvider.CreateSession(name,
-   cwd string) (*SessionInfo, error)` — the session module extracts the
-   body of `handleCreate` into it (mode is always terminal; the handler
-   becomes a thin wrapper). Errors map to `409 session_exists` /
-   `400 invalid_session_name` / `500 session_create_failed`. cwd must exist
-   (`tmux new-session -c` silently falls back to `$HOME`, see memory
-   `reference_tmux_new_session_cwd_silent_fallback`): stat it first →
-   `409 cwd_missing` with the path.
-6. Send the resume keys to the new session's window 0 with
-   `SendKeysIfInstanceTarget`, `waitForCC` (existing), archive (existing;
-   failure logged, `archived:false`).
-7. Response `200 { "session": <SessionInfo>, "session_id": sid,
-   "archived": bool }`. On a failure after the session was created the
-   session is **left alive** (a shell in the right cwd is useful; the
-   error detail carries `session_code` and `session_id` so the SPA can
-   offer the manual `claude --resume` hint, as take-back does today).
+   (`HandoffLocks` is string-keyed; session codes are 6 base36 chars, so
+   the `exec:` prefix cannot collide.)
+2. Body: `session_name` missing → `400 missing_session_name`; fails the
+   session name regex → `400 invalid_session_name`; `resume_command`
+   missing → `400 missing_resume_command`; malformed JSON → `400
+   malformed_body`.
+3. `getExecution` → `404 execution_not_found`; `Provider != "claude"` →
+   `409 provider_unsupported`; state `queued` or `rejected` → `409
+   execution_not_settled` (before any lease).
+4. **Preflights that must not cost an interrupt**: `SessionProvider.
+   SessionExists(name)` → `409 session_exists`; `SessionProvider.
+   ValidateCwd(exec.Cwd)` (the module's `resolveCwd`) → `409 cwd_missing`
+   with the path.
+5. `settleForResume(exec, leaseID, principal)` — lease-if-running →
+   interrupt → re-read → settled → session id (`SessionID` else
+   `ResumeSessionID`, else `409 no_session_id`). See 4.4 for the lease
+   contract.
+6. `SessionProvider.CreateSession(name, cwd)`; a race with step 4 →
+   `409 session_exists`; failure **after** `tmux new-session` succeeded
+   (list / id / meta) → `500 session_create_failed` with detail
+   `{session_name, session_alive: true}` — the tmux session exists but has
+   no code yet; the SPA refreshes the session list so it shows up.
+7. `resumeInWindow` (send keys to window 0, `waitForCC`). On `send_failed`
+   or `cc_start_timeout` the daemon **kills the session it just created**
+   (`KillSession(name)`, logged if that fails) — it is ours, nothing else
+   ran in it, and leaving a pane that may still start `claude --resume`
+   next to an unarchived execution would be two writers on one
+   transcript. The execution is left settled and unarchived; detail
+   carries `session_id` for the manual-resume hint.
+8. Archive (failure logged, `archived:false`). Response `200 { "session":
+   <SessionInfo>, "session_id": sid, "archived": bool }`.
 
 ### 4.2 SPA
 
 - `lib/nex/handoff-api.ts`: `nexTakeToTerminal(hostId, executionId, body)`.
 - `lib/nex/handoff.ts`: `takeToTerminal(args)` — single-flight per
-  execution; loads the host config for the resume template; computes
-  `session_name = nextProjectSessionName(basename(summary.cwd), liveNames)`
-  from `useSessionStore` (retry once on `session_exists` with the refused
-  name appended, like `session-launch.ts`); calls the endpoint; `forgetLease`;
+  execution; loads the host config for the resume template **and the
+  projects list**; `slug` = the slug of the host project whose `path`
+  equals the execution cwd (or is its nearest ancestor), else a fallback
+  built from the cwd basename with every character outside
+  `[a-zA-Z0-9_-]` replaced by `-`, collapsed and trimmed, `nex` if empty;
+  `session_name = nextProjectSessionName(slug, liveNames)` from
+  `useSessionStore` (retry once on `session_exists` with the refused name
+  appended, like `session-launch.ts`); calls the endpoint; `forgetLease`;
   swaps the pane to `{kind:'tmux-session', hostId, sessionCode:
   session.code, mode:'terminal', cachedName: session.name, tmuxInstance:
   session.tmux_instance}` with the same `trySetPaneContent` predicate;
   `useSessionStore.fetchHost(hostId)` so the sidebar lists the new session.
 - `ExecutionView`: `onTakeBack` is passed when `from` is set **or**
-  (`summary.provider === 'claude'` and (`summary.session_id ||
-  summary.resume_session_id`)); it dispatches to `takeBack` or
-  `takeToTerminal`. The running-turn confirm dialog is shared.
-- `HANDOFF_ERROR_CODES` gains `session_exists`, `invalid_session_name`,
-  `session_create_failed`, `cwd_missing`, `provider_unsupported`,
-  `takeback_in_progress` with locale strings (en + zh-Hant, the two files
-  that exist).
+  `canTakeToTerminal` = `summary.provider === 'claude'` ∧ (`session_id` ∨
+  `resume_session_id`) ∧ `state ∈ {running, idle, failed, terminated}` —
+  never on `queued` (the daemon would answer `execution_not_settled`) or
+  `rejected`; it dispatches to `takeBack` or `takeToTerminal`. The
+  running-turn confirm dialog is shared.
+- Error handling: `session_create_failed` with `session_alive` → toast +
+  `fetchHost` so the orphan session is visible; `cc_start_timeout` /
+  `send_failed` → the existing manual-resume hint from `session_id` (the
+  session was killed, nothing else to point at).
+- `HANDOFF_ERROR_CODES` gains `session_exists`, `missing_session_name`,
+  `invalid_session_name`, `session_create_failed`, `cwd_missing`,
+  `provider_unsupported`, `takeback_in_progress` with locale strings (en +
+  zh-TW).
 - Copy: `takeback.button` → "Take to terminal"; success toast unchanged.
 
 ### 4.3 Hand-off: `keep_session`
@@ -166,13 +195,28 @@ Sequence (one function shared with `handleNexTakeback`, see 4.3):
 
 ### 4.4 Shared engine sequence
 
-`takeback.go` splits into `settleForResume(ctx, execID, leaseID,
-principal) (exec, sid, release func, *takebackError)` (steps 3–4 of 4.1,
-today's lines ~132–210) and `resumeInPane(sess, expected, keys)` (send +
-wait). `handleNexTakeback` and the new handler both call them; the
-session-bound handler keeps its `boundToSession` and `cc_already_running`
-preflights. Pure move for the extracted parts — proved by the existing
-take-back tests passing unchanged.
+`takeback.go` splits into two helpers; both handlers read the execution
+**once** themselves (the existing tests count store reads) and run their
+own preflights (`boundToSession`, `cc_already_running` for the
+session-bound path; name / cwd / provider / state for the new one) before
+calling:
+
+- `settleForResume(parent ctx, exec store.Execution, leaseID, principal)
+  (settled store.Execution, sid string, release func(), herr
+  *handoffError)` — takes the already-read row; lease-if-running →
+  interrupt → re-read → settled → session id. **Lease contract**: if the
+  helper acquired the lease, it releases it (fresh detached context)
+  before returning any error, and on success returns `release` for the
+  caller to `defer` (so it runs after archive, as today); a caller-provided
+  lease is never released (`release` is a no-op). Helper-level tests pin
+  every error exit.
+- `resumeInWindow(tmuxID, window, expected, resumeCommand, sid)
+  (herr *handoffError)` — send keys + `waitForCC`, the same two error
+  codes as today.
+
+`handleNexTakeback` keeps its order and `takeback_test.go` passes
+unchanged — the pure-move proof. The new handler adds kill-on-failure
+around `resumeInWindow` (4.1 step 7).
 
 ## 5. Invariants
 
@@ -181,8 +225,11 @@ take-back tests passing unchanged.
   helper moves).
 - I2 The new endpoint never touches a session it did not create.
 - I3 A failure before session creation leaves the execution as it was
-  (settled, unarchived); a failure after leaves the session alive and the
-  execution unarchived, and the response says which.
+  (settled, unarchived) and costs no interrupt unless the failure came
+  from the engine itself. A failure in `resumeInWindow` kills the session
+  the daemon created; the only way a session outlives a failed call is
+  `session_create_failed` after `tmux new-session`, and then the detail
+  says `session_alive: true`.
 - I4 `nex/imports_test.go` boundary holds; `Dependencies()` stays
   `{"session","agent"}`.
 - I5 With `keep_session` absent or `true` the hand-off request/response is
@@ -201,7 +248,9 @@ take-back tests passing unchanged.
 4. Session-bound path unchanged: Hand to nex → Take to terminal returns to
    the original session (P-C §6 steps 3–4).
 5. Negative: cwd deleted after delegate → `cwd_missing` toast, execution
-   still there; name collision → second attempt succeeds with `-N+1`.
+   still there and **not interrupted** (do it on a running turn); name
+   collision → second attempt succeeds with `-N+1`; execution still
+   `queued` (delegate then click within the first second) → no button.
 6. `pdx nex delegate` from the CLI → open it from the sidebar → Take to
    terminal works the same (no `from`).
 7. Hand to nex with **Keep** unchecked: tmux session gone (`tmux ls`),
