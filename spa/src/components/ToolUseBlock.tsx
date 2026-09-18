@@ -3,7 +3,7 @@
 // maps it to the renderer's activity variant and hands ToolCallBlock the
 // result. No `tools` (Stream mode) or no entry → today's plain DOM.
 import { useI18nStore } from '../stores/useI18nStore'
-import type { ContentBlock } from '../lib/stream-ws'
+import type { ContentBlock } from '../lib/nex/message-types'
 import { toToolCallActivity, type ToolActivity } from '../lib/nex/tool-activity'
 import ToolCallBlock from './ToolCallBlock'
 

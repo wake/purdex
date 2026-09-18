@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import ToolUseBlock from './ToolUseBlock'
-import type { ContentBlock } from '../lib/stream-ws'
+import type { ContentBlock } from '../lib/nex/message-types'
 import type { ToolActivity } from '../lib/nex/tool-activity'
 
 const block: ContentBlock = { type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'ls' } }

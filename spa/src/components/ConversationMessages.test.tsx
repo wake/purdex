@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import ConversationMessages from './ConversationMessages'
-import type { StreamMessage } from '../lib/stream-ws'
+import type { StreamMessage } from '../lib/nex/message-types'
 import type { PartialAssembly, PartialBlock } from '../lib/nex/partial'
 import type { ToolActivity } from '../lib/nex/tool-activity'
 
