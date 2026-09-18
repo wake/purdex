@@ -17,6 +17,7 @@ const PADDING = 4
 const Z_INDEX = 100
 /** How much of the panel must stay on screen when dragged. */
 const MIN_VISIBLE = 40
+const FOCUSABLE_SELECTOR = 'input, button, [tabindex]:not([tabindex="-1"]), select, textarea'
 
 /**
  * Draggable floating window rendered into `document.body`: opens under `anchorRef`,
@@ -60,6 +61,23 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Focus management: non-modal, but still moves focus in on open (to the first
+  // focusable descendant, skipping the × close button — it shouldn't steal the
+  // opening keystroke's follow-through) and restores it to whatever had focus
+  // before opening, once on unmount (only if that element is still around).
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    const panel = panelRef.current
+    if (panel) {
+      const candidates = panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
+      const target = Array.from(candidates).find((el) => el.dataset.testid !== 'floating-panel-close')
+      ;(target ?? panel).focus()
+    }
+    return () => {
+      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus()
+    }
+  }, [])
+
   useEffect(() => {
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as Node
@@ -90,6 +108,8 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
       ref={panelRef}
       role="dialog"
       aria-label={title}
+      aria-modal="false"
+      tabIndex={-1}
       data-testid={testId}
       className="fixed bg-surface-elevated border border-border-default rounded-lg shadow-xl flex flex-col"
       style={{ position: 'fixed', left: posRef.current.left, top: posRef.current.top, width, zIndex: Z_INDEX }}

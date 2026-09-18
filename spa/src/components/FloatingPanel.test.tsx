@@ -18,6 +18,18 @@ function Harness({ onClose, open = true }: { onClose: () => void; open?: boolean
   )
 }
 
+function NoFocusableHarness({ onClose }: { onClose: () => void }) {
+  const anchor = useRef<HTMLButtonElement>(null)
+  return (
+    <div>
+      <button ref={anchor} data-testid="anchor">anchor</button>
+      <FloatingPanel title="Main" anchorRef={anchor} onClose={onClose}>
+        <span data-testid="inside">no focusable content</span>
+      </FloatingPanel>
+    </div>
+  )
+}
+
 function rect(el: HTMLElement, r: Partial<DOMRect>) {
   el.getBoundingClientRect = () => ({ left: 100, top: 50, width: 40, height: 20, right: 140, bottom: 70, x: 100, y: 50, toJSON() {} , ...r }) as DOMRect
 }
@@ -100,5 +112,26 @@ describe('FloatingPanel', () => {
     fireEvent.pointerDown(screen.getByTestId('inside'), { clientX: 10, clientY: 10, pointerId: 1, button: 0 })
     fireEvent.pointerMove(screen.getByTestId('inside'), { clientX: 60, clientY: 40, pointerId: 1 })
     expect(panel.style.left).toBe(left0)
+  })
+
+  it('moves focus into the panel on mount, to the first focusable descendant', () => {
+    render(<Harness onClose={() => {}} />)
+    expect(document.activeElement).toBe(screen.getByTestId('inside'))
+  })
+
+  it('restores focus to whatever had it before opening, once the panel unmounts', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    const anchor = screen.getByTestId('anchor')
+    anchor.focus()
+    expect(document.activeElement).toBe(anchor)
+    rerender(<Harness onClose={() => {}} open />)
+    expect(document.activeElement).toBe(screen.getByTestId('inside'))
+    rerender(<Harness onClose={() => {}} open={false} />)
+    expect(document.activeElement).toBe(anchor)
+  })
+
+  it('focuses the panel root when it has no focusable child', () => {
+    render(<NoFocusableHarness onClose={() => {}} />)
+    expect(document.activeElement).toBe(screen.getByTestId('floating-panel'))
   })
 })
