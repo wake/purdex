@@ -805,6 +805,8 @@
   "handoff.confirm_body": "Claude Code 會在這個窗格結束，改由 nex 以 handoff profile 在背景接手執行——不會再有權限詢問。之後可以隨時接回終端機。",
   "handoff.success": "已交給 nex。",
   "handoff.open_execution": "開啟執行",
+  "handoff.keep_session": "保留 tmux session",
+  "handoff.other_panes": "另有 {{count}} 個窗格使用這個 session；不保留的話它們會顯示為已終止。",
   "handoff.rolled_back": "終端機已還原",
   "handoff.not_rolled_back": "終端機未還原",
   "handoff.error.generic": "交接失敗（{{code}}）。",

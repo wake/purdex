@@ -106,6 +106,27 @@ export function findTabBySessionCode(
   return undefined
 }
 
+/**
+ * Panes (across every tab, any depth) showing `hostId`/`sessionCode`, minus
+ * `excludePaneId` — what a hand-off that does not keep the session will mark
+ * terminated (exec-to-terminal spec §4.3).
+ */
+export function countPanesOnSession(
+  tabs: Record<string, { layout: PaneLayout }>,
+  hostId: string,
+  sessionCode: string,
+  excludePaneId?: string,
+): number {
+  let n = 0
+  for (const tab of Object.values(tabs)) {
+    for (const pane of collectLeaves(tab.layout)) {
+      const c = pane.content
+      if (c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && pane.id !== excludePaneId) n++
+    }
+  }
+  return n
+}
+
 export function splitAtPane(layout: PaneLayout, paneId: string, direction: 'h' | 'v', newContent: PaneContent): PaneLayout {
   if (layout.type === 'leaf') {
     if (layout.pane.id === paneId) {

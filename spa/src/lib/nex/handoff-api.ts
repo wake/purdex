@@ -34,6 +34,12 @@ export interface NexHandoffRequest {
   profile?: string
   /** Host resume template with `{id}` left unsubstituted; the daemon renders it. */
   rollback_command?: string
+  /**
+   * `false` asks the daemon to kill the tmux session once the execution is
+   * running (exec-to-terminal spec §4.3 / G4); absent means `true` (an old SPA
+   * keeps today's behaviour).
+   */
+  keep_session?: boolean
 }
 
 export interface NexHandoffResult {
@@ -42,6 +48,11 @@ export interface NexHandoffResult {
   effective_profile?: string
   session_id: string
   cwd: string
+  /**
+   * Whether the tmux session is still there: `true` when kept or when the
+   * kill failed. Absent on a daemon older than the field — treated as kept.
+   */
+  session_kept?: boolean
 }
 
 export interface NexTakebackRequest {

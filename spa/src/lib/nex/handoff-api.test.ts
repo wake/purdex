@@ -52,6 +52,14 @@ describe('handoff-api', () => {
       expect(h.get('X-Pdx-Client')).toMatch(NEX_CLIENT_ID_RE)
     })
 
+    it('sends keep_session and parses session_kept (exec-to-terminal spec §4.3)', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ execution_id: 'e', state: 'running', session_id: 's', cwd: '/', session_kept: false }))
+      const r = await nexHandoff(hostId, 'c1', { expected_tmux_instance: 'i', keep_session: false })
+      const [, init] = testGlobal.fetch.mock.calls[0]
+      expect(JSON.parse(init.body)).toEqual({ expected_tmux_instance: 'i', keep_session: false })
+      expect(r.session_kept).toBe(false)
+    })
+
     it('encodes the session code in the path', async () => {
       testGlobal.fetch.mockResolvedValueOnce(json({ execution_id: 'e', state: 'running', session_id: 's', cwd: '/' }))
       await nexHandoff(hostId, 'a b/c', { expected_tmux_instance: 'i' })

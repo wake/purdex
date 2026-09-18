@@ -2,8 +2,9 @@
 // nex confirm steps ("Hand to nex", "Take back to terminal"): backdrop, title
 // + body, Cancel / Confirm. Presentational: the caller owns whatever the
 // confirm does. While `busy`, Escape, the backdrop and both buttons are inert
-// and the confirm button shows a spinner.
-import { useEffect } from 'react'
+// and the confirm button shows a spinner. `children` render under the body
+// for the caller's own controls (a checkbox, a warning line).
+import { useEffect, type ReactNode } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -16,9 +17,10 @@ export interface ConfirmDialogProps {
   busy?: boolean
   onCancel: () => void
   onConfirm: () => void
+  children?: ReactNode
 }
 
-export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = false, onCancel, onConfirm }: ConfirmDialogProps) {
+export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = false, onCancel, onConfirm, children }: ConfirmDialogProps) {
   const t = useI18nStore((s) => s.t)
 
   useEffect(() => {
@@ -46,6 +48,7 @@ export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = 
         <div className="border-b border-border-subtle px-4 py-3">
           <h3 id={titleId} className="text-sm font-medium text-text-primary">{title}</h3>
           <p className="mt-1 text-xs text-text-muted">{body}</p>
+          {children}
         </div>
         <div className="flex justify-end gap-2 px-4 py-3">
           <button

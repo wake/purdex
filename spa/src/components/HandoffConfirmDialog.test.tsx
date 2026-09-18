@@ -8,6 +8,8 @@ import { handToNex } from '../lib/nex/handoff'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
+import { createTab } from '../types/tab'
+import { getPrimaryPane } from '../lib/pane-tree'
 
 vi.mock('../lib/nex/handoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/nex/handoff')>()),
@@ -17,7 +19,7 @@ vi.mock('../lib/nex/handoff', async (importOriginal) => ({
 const mockedHandToNex = vi.mocked(handToNex)
 
 const args = { hostId: 'h1', sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex', tabId: 't1', paneId: 'p1' }
-const ok = { execution_id: 'exc_1', state: 'running', effective_profile: 'handoff', session_id: 'sid-1', cwd: '/w' }
+const ok = { execution_id: 'exc_1', state: 'running', effective_profile: 'handoff', session_id: 'sid-1', cwd: '/w', session_kept: true }
 
 function deferred<T>() {
   let resolve!: (v: T) => void
@@ -34,12 +36,21 @@ function renderDialog() {
 
 const confirmBtn = () => screen.getByTestId('handoff-confirm') as HTMLButtonElement
 const cancelBtn = () => screen.getByTestId('handoff-cancel') as HTMLButtonElement
+const keepBox = () => screen.getByTestId('handoff-keep-session') as HTMLInputElement
 const toast = () => useUndoToast.getState().toast
+
+/** A tab whose primary pane shows the given session (or a different one). */
+function sessionTab(hostId: string, sessionCode: string): string {
+  const tab = createTab({ kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: 'x', tmuxInstance: 'inst-1' })
+  useTabStore.getState().addTab(tab)
+  return tab.id
+}
 
 beforeEach(() => {
   cleanup()
   mockedHandToNex.mockReset()
   useUndoToast.setState({ toast: null })
+  useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -67,6 +78,83 @@ describe('HandoffConfirmDialog — rendering', () => {
   })
 })
 
+describe('HandoffConfirmDialog — keep the tmux session (exec-to-terminal spec §4.3 / G4)', () => {
+  it('shows the checkbox, labelled and checked by default', () => {
+    renderDialog()
+    expect(keepBox().checked).toBe(true)
+    expect(screen.getByLabelText('Keep the tmux session')).toBe(keepBox())
+  })
+
+  it('unchecked → handToNex gets keepSession:false', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: { ...ok, session_kept: false }, swapped: true })
+    renderDialog()
+    fireEvent.click(keepBox())
+    expect(keepBox().checked).toBe(false)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).toHaveBeenCalledWith({ ...args, keepSession: false })
+  })
+
+  it('is checked again on every open — never remembered (user ruling 2026-09-19)', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: { ...ok, session_kept: false }, swapped: true })
+    const { onClose } = renderDialog()
+    fireEvent.click(keepBox())
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    cleanup()
+    renderDialog()
+    expect(keepBox().checked).toBe(true)
+
+    // Also after a plain cancel.
+    fireEvent.click(keepBox())
+    fireEvent.click(cancelBtn())
+    cleanup()
+    renderDialog()
+    expect(keepBox().checked).toBe(true)
+  })
+
+  it('the checkbox is inert while busy', async () => {
+    const d = deferred<{ result: typeof ok; swapped: boolean }>()
+    mockedHandToNex.mockReturnValueOnce(d.promise)
+    renderDialog()
+    fireEvent.click(confirmBtn())
+    expect(keepBox().disabled).toBe(true)
+    await act(async () => { d.resolve({ result: ok, swapped: true }) })
+  })
+
+  it('names the other panes on this session (same host + code, this pane excluded); silent when there are none', () => {
+    // This pane's own tab + two more tabs on the same session, one on another
+    // session and one on the same code but another host.
+    const own = sessionTab(args.hostId, args.sessionCode)
+    const ownPane = getPrimaryPane(useTabStore.getState().tabs[own].layout).id
+    sessionTab(args.hostId, args.sessionCode)
+    sessionTab(args.hostId, args.sessionCode)
+    sessionTab(args.hostId, 'other1')
+    sessionTab('h2', args.sessionCode)
+    const onClose = vi.fn()
+    render(<HandoffConfirmDialog {...args} tabId={own} paneId={ownPane} onClose={onClose} />)
+    expect(screen.getByTestId('handoff-other-panes')).toHaveTextContent('2 other panes use this session')
+    cleanup()
+
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    const alone = sessionTab(args.hostId, args.sessionCode)
+    const alonePane = getPrimaryPane(useTabStore.getState().tabs[alone].layout).id
+    sessionTab(args.hostId, 'other1')
+    render(<HandoffConfirmDialog {...args} tabId={alone} paneId={alonePane} onClose={onClose} />)
+    expect(screen.queryByTestId('handoff-other-panes')).toBeNull()
+  })
+
+  it('swapped:false with session_kept:false → the "Open execution" action opens the execution WITHOUT `from`', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: { ...ok, session_kept: false }, swapped: false })
+    const open = vi.spyOn(useTabStore.getState(), 'openSingletonTab').mockReturnValue('tab-x')
+    renderDialog()
+    fireEvent.click(keepBox())
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    toast()!.action!()
+    expect(open).toHaveBeenCalledWith({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
+    expect(open.mock.calls[0][0]).not.toHaveProperty('from')
+  })
+})
+
 describe('HandoffConfirmDialog — confirm', () => {
   it('rapid double-click on Confirm → exactly one handToNex call, both buttons disabled while busy', async () => {
     const d = deferred<{ result: typeof ok; swapped: boolean }>()
@@ -76,7 +164,7 @@ describe('HandoffConfirmDialog — confirm', () => {
     fireEvent.click(confirmBtn())
     fireEvent.click(confirmBtn())
     expect(mockedHandToNex).toHaveBeenCalledTimes(1)
-    expect(mockedHandToNex).toHaveBeenCalledWith(args)
+    expect(mockedHandToNex).toHaveBeenCalledWith({ ...args, keepSession: true })
     expect(confirmBtn().disabled).toBe(true)
     expect(cancelBtn().disabled).toBe(true)
     fireEvent.keyDown(document, { key: 'Escape' })

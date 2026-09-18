@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent, remountLeaf } from './pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
 import type { PaneLayout, Pane, PaneContent } from '../types/tab'
 
 // ── helpers for new tests ──────────────────────────────────────────────────
@@ -387,5 +387,24 @@ describe('remountLeaf', () => {
       expect(next.id).toBe('s1')
       expect(next.sizes).toEqual(layout.sizes)
     }
+  })
+})
+
+describe('countPanesOnSession (exec-to-terminal spec §4.3)', () => {
+  const sess = (id: string, hostId: string, sessionCode: string): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: '', tmuxInstance: '' } } })
+
+  it('counts every pane on the host+code across tabs and nested splits, minus the excluded one', () => {
+    const tabs = {
+      t1: { layout: mkSplit('s1', 'h', [sess('p1', 'h', 'abc123'), mkSplit('s2', 'v', [sess('p2', 'h', 'abc123'), mkLeaf('p3')])]) },
+      t2: { layout: sess('p4', 'h', 'abc123') },
+      t3: { layout: sess('p5', 'h', 'other1') },
+      t4: { layout: sess('p6', 'h2', 'abc123') },
+    }
+    expect(countPanesOnSession(tabs, 'h', 'abc123')).toBe(3)
+    expect(countPanesOnSession(tabs, 'h', 'abc123', 'p1')).toBe(2)
+    expect(countPanesOnSession(tabs, 'h', 'abc123', 'p6')).toBe(3)
+    expect(countPanesOnSession(tabs, 'h', 'zzz')).toBe(0)
+    expect(countPanesOnSession({}, 'h', 'abc123')).toBe(0)
   })
 })
