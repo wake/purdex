@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } fr
 import { createPortal } from 'react-dom'
 import { X } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
+import { getPlatformCapabilities } from '../lib/platform'
 
 export interface FloatingPanelProps {
   title: string
@@ -17,11 +18,14 @@ const PADDING = 4
 const Z_INDEX = 100
 /** How much of the panel must stay on screen when dragged. */
 const MIN_VISIBLE = 40
-/** Height of the Electron title bar's OS drag region (see `TitleBar.tsx`). The
- * panel's top must never land inside it — that region intercepts pointer
- * events for window-dragging, so a panel header there could be neither
- * dragged nor have its × clicked. */
-const TOP_INSET = 36
+/** Height of the Electron title bar's OS drag region (see `TitleBar.tsx`, which
+ * is only rendered under Electron — `App.tsx` gates it on the same
+ * `getPlatformCapabilities().isElectron` check used below). The panel's top
+ * must never land inside it — that region intercepts pointer events for
+ * window-dragging, so a panel header there could be neither dragged nor have
+ * its × clicked. In the browser there's no such region, so the inset is just
+ * the ordinary viewport padding. */
+const TITLE_BAR_HEIGHT = 36
 const FOCUSABLE_SELECTOR = 'input, button, [tabindex]:not([tabindex="-1"]), select, textarea'
 /** IME composition sends a synthetic Escape to close the IME's own suggestion
  * popup; `keyCode === 229` is the legacy fallback for engines that don't set
@@ -46,6 +50,10 @@ const openPanels: symbol[] = []
  */
 export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId = 'floating-panel', children }: FloatingPanelProps) {
   const t = useI18nStore((s) => s.t)
+  // Only the Electron title bar's drag region needs the panel pushed down —
+  // `App.tsx` renders `TitleBar` under the same check, so this stays in sync
+  // with whether that region actually exists on screen.
+  const topInset = getPlatformCapabilities().isElectron ? TITLE_BAR_HEIGHT : PADDING
   const panelRef = useRef<HTMLDivElement>(null)
   const posRef = useRef<{ left: number; top: number }>({ left: PADDING, top: PADDING })
   const drag = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number } | null>(null)
@@ -65,12 +73,12 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
 
   const applyMaxHeight = () => {
     const el = panelRef.current
-    if (el) el.style.maxHeight = `${window.innerHeight - 2 * PADDING}px`
+    if (el) el.style.maxHeight = `${window.innerHeight - topInset - PADDING}px`
   }
 
   const clamp = (left: number, top: number) => ({
     left: Math.max(MIN_VISIBLE - width, Math.min(left, window.innerWidth - MIN_VISIBLE)),
-    top: Math.max(TOP_INSET, Math.min(top, window.innerHeight - MIN_VISIBLE)),
+    top: Math.max(topInset, Math.min(top, window.innerHeight - MIN_VISIBLE)),
   })
 
   // Below the anchor, clamped so the whole panel is visible. Used for the initial
@@ -85,9 +93,9 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
     // Doesn't fit below the anchor: try above it. If it doesn't fit there either
     // (the panel is taller than the viewport), fall back to just under the
     // Electron title bar's drag region rather than sliding it up underneath it.
-    if (top + h > window.innerHeight - PADDING) top = Math.max(TOP_INSET, (a ? a.top : window.innerHeight) - PADDING - h)
+    if (top + h > window.innerHeight - PADDING) top = Math.max(topInset, (a ? a.top : window.innerHeight) - PADDING - h)
     top = Math.min(top, window.innerHeight - PADDING)
-    top = Math.max(TOP_INSET, top)
+    top = Math.max(topInset, top)
     applyPos(left, top)
     applyMaxHeight()
   }
@@ -198,7 +206,7 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
         top: posRef.current.top,
         width,
         zIndex: Z_INDEX,
-        maxHeight: window.innerHeight - 2 * PADDING,
+        maxHeight: window.innerHeight - topInset - PADDING,
         // Otherwise the panel sits inside the Electron title bar's OS drag
         // region and can neither be dragged nor have its × clicked (see `TitleBar.tsx`).
         WebkitAppRegion: 'no-drag',
