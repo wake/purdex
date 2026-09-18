@@ -2220,3 +2220,46 @@ func TestCodexInstallHooks_PreservesHooksStateTrustedHash(t *testing.T) {
 		t.Fatalf("hooks.state[%q].trusted_hash = %q, want abc123 (config=%v)", stateKey, got, config)
 	}
 }
+
+func fakeCodexVersion(t *testing.T, output string) {
+	t.Helper()
+	agent.ResetHookAgentVersionCache()
+	t.Cleanup(agent.ResetHookAgentVersionCache)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestCodexCheckHooks_ExceedsSupportAgainstPin(t *testing.T) {
+	for _, tc := range []struct {
+		versionOut  string
+		wantVersion string
+		wantExceeds bool
+	}{
+		{"codex-cli 0.153.4", "0.153.4", false},
+		{"codex-cli 0.160.0", "0.160.0", true},
+		{"codex-cli 0.124.0", "0.124.0", false},
+	} {
+		t.Run(tc.versionOut, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			fakeCodexVersion(t, tc.versionOut)
+			status, err := (&Provider{}).CheckHooks()
+			if err != nil {
+				t.Fatalf("CheckHooks: %v", err)
+			}
+			if status.AgentVersion != tc.wantVersion {
+				t.Fatalf("AgentVersion = %q, want %q", status.AgentVersion, tc.wantVersion)
+			}
+			if status.SupportedVersion != "0.153.4" {
+				t.Fatalf("SupportedVersion = %q, want 0.153.4", status.SupportedVersion)
+			}
+			if status.ExceedsSupport != tc.wantExceeds {
+				t.Fatalf("ExceedsSupport = %v, want %v", status.ExceedsSupport, tc.wantExceeds)
+			}
+		})
+	}
+}
