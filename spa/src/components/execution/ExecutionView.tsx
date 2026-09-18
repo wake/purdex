@@ -50,7 +50,10 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
 
   // Take-back: `takeBack` is single-flight per execution, but the busy flag
   // is what the header shows; the ref keeps a same-tick second click from
-  // reaching it before React commits the state.
+  // reaching it before React commits the state. While it is pending every
+  // write to the execution (send / interrupt / terminate) is frozen too: the
+  // daemon is interrupting and archiving it, and a write racing that would
+  // land on an execution that is about to be gone.
   const [takeBackBusy, setTakeBackBusy] = useState(false)
   const takeBackInFlight = useRef(false)
   const [confirmTakeBack, setConfirmTakeBack] = useState(false)
@@ -125,7 +128,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   return (
     <div className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} costUsd={costUsd} sse={st.sse} isMine={isMine}
-        onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal}
+        onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
         onTakeBack={from ? onTakeBack : undefined} takeBackBusy={takeBackBusy} />
       {confirmTakeBack && (
         <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}
@@ -162,7 +165,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
       <StreamInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)} showAttach={false}
-        disabled={st.pendingSend || ended || !st.historyLoaded || streamDead} placeholder={placeholder} focused={isActive} />
+        disabled={st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy} placeholder={placeholder} focused={isActive} />
     </div>
   )
 }

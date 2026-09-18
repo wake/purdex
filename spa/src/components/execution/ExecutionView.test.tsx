@@ -511,6 +511,50 @@ describe('ExecutionView — take back to terminal', () => {
     expect(paneContent(ids.tabId).kind).toBe('tmux-session')
   })
 
+  it('freezes execution writes while the take-back is pending: input, Interrupt and Terminate are disabled (R1-1)', async () => {
+    const d = deferred<typeof takebackOk>()
+    mockedTakeback.mockReturnValueOnce(d.promise)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
+    const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
+    const terminate = () => screen.getByRole('button', { name: /^terminate$/i }) as HTMLButtonElement
+    expect(textbox().disabled).toBe(false)
+    expect(interrupt().disabled).toBe(false)
+    expect(terminate().disabled).toBe(false)
+
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    expect(textbox().disabled).toBe(true)
+    expect(interrupt().disabled).toBe(true)
+    expect(terminate().disabled).toBe(true)
+    // Clicks on the frozen controls must not reach the daemon.
+    fireEvent.click(interrupt())
+    fireEvent.click(terminate())
+    expect(api.interruptExecution).not.toHaveBeenCalled()
+    expect(api.terminateExecution).not.toHaveBeenCalled()
+
+    await act(async () => { d.resolve(takebackOk) })
+    expect(paneContent(ids.tabId).kind).toBe('tmux-session')
+  })
+
+  it('a failed take-back thaws the input, Interrupt and Terminate again (R1-1)', async () => {
+    let reject!: (e: unknown) => void
+    const failing = new Promise<typeof takebackOk>((_, rej) => { reject = rej })
+    mockedTakeback.mockReturnValueOnce(failing)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    await act(async () => { reject(new HandoffApiError(409, 'held_by', { code: 'held_by', principal: 'x' })) })
+    expect(toast()?.message).toBe('The execution lease is held by x.')
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: /^terminate$/i }) as HTMLButtonElement).disabled).toBe(false)
+    expect(paneContent(ids.tabId).kind).toBe('execution')
+  })
+
   it('swapped:false (pane closed while in flight) → the "archived, pane gone" toast', async () => {
     const d = deferred<typeof takebackOk>()
     mockedTakeback.mockReturnValueOnce(d.promise)

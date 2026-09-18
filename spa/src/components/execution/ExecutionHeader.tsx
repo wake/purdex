@@ -17,7 +17,7 @@ export interface ExecutionHeaderProps {
   isMine: (principal: string | undefined) => boolean
   onInterrupt: () => void
   onTerminate: () => void
-  /** Gates interrupt/terminate (terminal execution). Take-back has its own flag. */
+  /** Gates interrupt/terminate (terminal execution, or a take-back in flight). Take-back has its own flag. */
   busy: boolean
   /** Present only when the execution has a `from` session to go back to. */
   onTakeBack?: () => void
