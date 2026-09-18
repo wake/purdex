@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.385] - 2026-09-18
+
+### Feature: Host Color Modes P3 — Host 設定頁的三 mode × 三色層色盤（#1160）
+
+Host Color Modes 的最後一段：資料層（alpha.381）與三態渲染（alpha.383）之後，這版把調色的介面放到 Host 設定頁的 Color 列上。
+
+#### 長什麼樣
+
+第一行 `Console / Terminal / Execution` 切 mode；第二行三個色塊 **Main / Middle / Light**，各自顯示 hex＋透明度（繼承時寫 `inherit 60%`，整組繼承 Console 時三塊都標 `Inherits Console` 並變淡，沒顏色時寫 `No color`）；點任一塊就在下面展開該層的編輯面板——跟 Host 圖示選擇器同一種「原地展開」的做法，不是浮動 popover（spec D8 改字：repo 裡根本沒人用 `@floating-ui/react`，使用者要的是滑軌和即時預覽，不是容器）。
+
+面板裡：Main 有 8 個 preset；**色相／飽和度／明度／透明度四條 range 滑軌**，軌道底色是依目前顏色算出來的漸層，拖哪條就預覽哪條的結果；hex 輸入框；Middle／Light 多一個「繼承主色」開關，開著只剩透明度軸。**每次拖動都直接寫 store**，所以側欄與上方分頁的色塊會跟著手指動。
+
+#### 兩個邊界
+
+- 灰／黑／白的 hex 存不住色相（與飽和度），編輯器如果每次都從 prop 重算 HSL，拖 hue 會被下一次 render 拉回去卡死。所以 HSL 存在本地狀態，只在 prop 顏色跟本地 HSL 算出來的 hex 對不上（別處改了顏色）時才重新推導。codex plan review 抓到的。
+- 沒 set 的 mode 不能寫 middle／light（P1 的 store 規則）。所以在繼承 Console 的 mode 點任一色塊，會先把 Console 的 main 複製過來再開；完全沒顏色的 host 點任一色塊，先寫 main＝第一個 preset 再開——點下去就是「選了顏色」這個動作。
+
+#### review 抓到什麼
+
+plan review 五條（HSL 卡死、無色 host 開 Middle 全是 no-op、繼承 mode 的 caption 不合 spec、缺 picker→store→badge 的跨元件測試、OverviewSection 既有測試會掛）全進 plan。PR R1 與攻擊方同指一條：編輯器沒 key，兩層解析成同一個 hex 時 React 沿用同一個 instance，上一層的隱藏色相／未送出的 hex 草稿會跨層殘留——改成 `key=mode:layer`。攻擊方另抓「materialise 被 store 拒絕或遠端清掉後，色塊還亮著卻沒面板」；第一版用 derived mask 遮，增量 re-review 再抓到「顏色回來時面板會自己重開」→ 改成 render-phase 直接重設 open 狀態。
+
+新增 `HostColorField.integration.test.tsx`：拖 Middle 透明度 → 側欄分頁色塊的 `--hb-middle` 立刻變；Terminal 設不同 main → agentType 出現時 badge 變紅、清掉時回藍。6699 tests 全綠，純 SPA。
+
+**下一步是真機**：`:5174` 把主 checkout 拉到 main 之後，依 spec §8 看兩台 host 的實際效果，再決定預設 alpha（100／60／22）要不要調。
+
 ## [1.0.0-alpha.384] - 2026-09-18
 
 ### Feature: Hosts › Peers 頁面 — 兩個方向即時驗證、alias drift 一鍵採用（Peer Pairing D2，#1146 + #1147）
