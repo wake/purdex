@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.405] - 2026-09-19
+
+### Chore: nexen 升 v0.12.0 — N2 `tool_use`／`tool_result` 正規化事件（#1219）
+
+Nexen 側（nexen-0d，PR #82／#87）把工具呼叫正規化成獨立的 durable kind：每個 `assistant` 幀的 `tool_use` block、`user` 幀的 `tool_result` block 各推導一筆，跟 raw 幀同一筆 transaction 落庫、seq 緊跟其後，payload 帶事實（配對、`status ok|error|denied`、`duration_ms`、工具名＋主參數完整值、行數、hunks、子代關係）不帶裁好的顯示字串——跟 Q3 定案唯一的差別是「截字／預覽行數留給 client」。feature-detect 看 `capabilities.tool_events` 存不存在，不比版本號。
+
+purdex 這邊升 pin 的三個面：**wire** 只加不改，exec pane 的 reducer 對這兩種 kind 只推進 seq、不當訊息塞進去（否則會留一堆 `type` 為空的隱形項目；打字機與工具計時暫時仍從 raw 幀算）；**schema** `user_version` 仍是 5，**不用刪 `nex.db`**，升級前的 execution 不回填；**CLI printer** `pdx nex events`／`watch` 多印兩種 row，`host`／`ls` 對線上 daemon 驗過輸出不變。
+
+下一步（要先問使用者）：SPA 改吃正規化事件取代 P-B2 的 client 端推導（三個 client 共用一份），並用 `capabilities.tool_events` 對舊 execution 退回 raw 幀。
+
 ## [1.0.0-alpha.404] - 2026-09-19
 
 ### Feature: 任何 execution 都能接進終端機 — SPA 端（#1216，#1210 2／2）
