@@ -61,7 +61,8 @@ export interface PairingRow {
 }
 
 export interface PairingSnapshot {
-  self: { host_id: string; self_alias: string } | null
+  /** X's own identity. `self_alias_source` is absent on a daemon < alpha.399 (self alias spec S-5): the page then offers no editor. */
+  self: { host_id: string; self_alias: string; self_alias_source?: PeerSettings['alias_source'] } | null
   /** Page-level failure of one of X's three precondition calls (spec §5.2 step 0). */
   error: { call: 'info' | 'settings' | 'list'; message: string } | null
   rows: PairingRow[]
@@ -113,6 +114,7 @@ export async function loadPairings(
   const self = {
     host_id: (info as PromiseFulfilledResult<{ host_id: string }>).value.host_id,
     self_alias: (settings as PromiseFulfilledResult<PeerSettings>).value.alias,
+    self_alias_source: (settings as PromiseFulfilledResult<PeerSettings>).value.alias_source,
   }
   const entries = (list as PromiseFulfilledResult<PeerHostRow[]>).value
 

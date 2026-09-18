@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import {
   HostApiError, listPeerHosts, verifyPeerHost, updatePeerHost, fetchPeerSettings, fetchHostInfo,
-  addPeerHost, deletePeerHost, rotatePeerHost, commitRotation, cancelRotation,
+  addPeerHost, deletePeerHost, rotatePeerHost, commitRotation, cancelRotation, updatePeerSettings,
 } from './host-api'
 
 const H = 'hx'
@@ -260,6 +260,51 @@ describe('peer-host wrappers', () => {
       await expect(cancelRotation(H, 'air')).rejects.toMatchObject({ status: 409, detail: 'no rotation pending' })
       fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: 'rotation unconfirmed' }))
       await expect(cancelRotation(H, 'air')).rejects.toMatchObject({ status: 409, detail: 'rotation unconfirmed' })
+    })
+  })
+
+  describe('updatePeerSettings (self alias, #1196)', () => {
+    it('PUTs /api/peers/settings as JSON with exactly {alias} and returns the body verbatim', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { deliver: true, alias: 'mlab', alias_source: 'config' }))
+      await expect(updatePeerSettings(H, { alias: 'mlab' })).resolves.toEqual({ deliver: true, alias: 'mlab', alias_source: 'config' })
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${BASE}/api/peers/settings`)
+      expect(init?.method).toBe('PUT')
+      expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json')
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer adm')
+      // The raw body, not a parsed view of it: no `deliver` key may sneak in (S-2: absent = unchanged).
+      expect(String(init?.body)).toBe('{"alias":"mlab"}')
+    })
+
+    it('{alias: ""} sends {"alias":""} (S-2: empty clears, absent leaves it)', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { deliver: true, alias: 'mini-lab', alias_source: 'host_id' }))
+      await expect(updatePeerSettings(H, { alias: '' })).resolves.toMatchObject({ alias: 'mini-lab', alias_source: 'host_id' })
+      expect(String(fetchMock.mock.calls[0][1]?.body)).toBe('{"alias":""}')
+    })
+
+    it('{deliver: true} alone sends {"deliver":true} and no alias key', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { deliver: true, alias: 'mini-lab', alias_source: 'host_id' }))
+      await updatePeerSettings(H, { deliver: true })
+      expect(String(fetchMock.mock.calls[0][1]?.body)).toBe('{"deliver":true}')
+    })
+
+    it('an old daemon\'s 200 without alias_source is returned as is — the wrapper invents nothing (S-5)', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { deliver: true, alias: 'mini-lab' }))
+      const r = await updatePeerSettings(H, { alias: 'mlab' })
+      expect(r).toEqual({ deliver: true, alias: 'mini-lab' })
+      expect(r.alias_source).toBeUndefined()
+    })
+
+    it('409 (collision with a peer host) rejects with HostApiError{status:409, detail}', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: 'alias "air26" is already used by a peer host' }))
+      const err = await updatePeerSettings(H, { alias: 'air26' }).catch((e) => e)
+      expect(err).toBeInstanceOf(HostApiError)
+      expect(err).toMatchObject({ status: 409, detail: 'alias "air26" is already used by a peer host' })
+    })
+
+    it('400 (pattern / reserved) rejects with the daemon text', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: 'alias ".." is reserved' }))
+      await expect(updatePeerSettings(H, { alias: '..' })).rejects.toMatchObject({ status: 400, detail: 'alias ".." is reserved' })
     })
   })
 

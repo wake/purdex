@@ -18,6 +18,7 @@ vi.mock('../../lib/host-api', async (importOriginal) => ({
   rotatePeerHost: vi.fn(),
   commitRotation: vi.fn(),
   cancelRotation: vi.fn(),
+  updatePeerSettings: vi.fn(),
 }))
 
 const M = 'hM'
@@ -44,7 +45,7 @@ const X_URL = 'http://100.64.0.2:7860'
 const Y_URL = 'http://100.64.0.4:7860'
 
 const MOCKS = () => [api.fetchHostInfo, api.fetchPeerSettings, api.listPeerHosts, api.verifyPeerHost, api.updatePeerHost,
-  api.addPeerHost, api.deletePeerHost, api.rotatePeerHost, api.commitRotation, api.cancelRotation].map((m) => vi.mocked(m))
+  api.addPeerHost, api.deletePeerHost, api.rotatePeerHost, api.commitRotation, api.cancelRotation, api.updatePeerSettings].map((m) => vi.mocked(m))
 
 /** §8.4: no token value reaches a store or localStorage after any flow. */
 function assertNoTokenLeak() {
@@ -86,7 +87,9 @@ function seedFixture() {
     host_id: h === M ? 'mini-lab:278cbm' : 'wakes-air-2026:oa6drb',
     tmux_instance: '', purdex_version: '', tmux_version: '', os: '', arch: '',
   }))
-  vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) => ({ deliver: true, alias: h === M ? 'mini-lab' : 'air26' }))
+  // mlab's alias is derived from its host_id (the live fact, spec §2); air26's is configured.
+  vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) =>
+    h === M ? { deliver: true, alias: 'mini-lab', alias_source: 'host_id' } : { deliver: true, alias: 'air26', alias_source: 'config' })
   vi.mocked(api.listPeerHosts).mockImplementation(async (h) => (h === M ? [AIR_ROW] : [MLAB_ROW]))
   vi.mocked(api.verifyPeerHost).mockImplementation(async (h, alias) =>
     h === M ? ok(alias, 'air26', 'wakes-air-2026:oa6drb') : ok(alias, 'mini-lab', 'mini-lab:278cbm'))
@@ -104,6 +107,7 @@ beforeEach(() => {
   vi.mocked(api.rotatePeerHost).mockReset()
   vi.mocked(api.commitRotation).mockReset()
   vi.mocked(api.cancelRotation).mockReset()
+  vi.mocked(api.updatePeerSettings).mockReset()
   localStorage.clear()
   seedHosts()
   seedFixture()
@@ -1030,5 +1034,247 @@ describe('PeersSection — Rotate (spec §7.3, §6.4, §8.4)', () => {
     expect(api.updatePeerHost).not.toHaveBeenCalled()
     await settled('bidirectional')
     expect(within(row).getByTestId('peer-inbound-rotate')).toBeEnabled()
+  })
+})
+
+describe('PeersSection — self alias (#1196, spec §4.3)', () => {
+  const TOO_OLD = 'older than alpha.399'
+
+  /** A settings fake whose answer follows what the page wrote — the refresh after Save/Clear must show it. */
+  function seedSettings(alias: string, source: 'config' | 'host_id') {
+    const live = { alias, source }
+    vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) =>
+      h === M ? { deliver: true, alias: live.alias, alias_source: live.source } : { deliver: true, alias: 'air26', alias_source: 'config' })
+    vi.mocked(api.updatePeerSettings).mockImplementation(async (_h, patch) => {
+      if (patch.alias === '') { live.alias = 'mini-lab'; live.source = 'host_id' }
+      else if (patch.alias !== undefined) { live.alias = patch.alias; live.source = 'config' }
+      return { deliver: true, alias: live.alias, alias_source: live.source }
+    })
+    return live
+  }
+  const settingsCalls = () => vi.mocked(api.fetchPeerSettings).mock.calls.filter(([h]) => h === M).length
+
+  it('a derived alias shows "(from host_id)", offers Edit and no Clear; the D2 line text is unchanged', async () => {
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    const self = screen.getByTestId('peers-self')
+    expect(self).toHaveTextContent('mlab · self alias: mini-lab · mini-lab:278cbm')
+    expect(self).toHaveTextContent('(from host_id)')
+    expect(screen.getByTestId('peers-self-edit')).toBeEnabled()
+    expect(screen.queryByTestId('peers-self-clear')).toBeNull()
+    expect(screen.queryByTestId('peers-self-input')).toBeNull()
+    expect(screen.queryByTestId('peers-self-too-old')).toBeNull()
+  })
+
+  it('Edit opens the input prefilled; Save is disabled on empty, enabled on the same string while the alias is derived (§6: pinning it into config is a real write)', async () => {
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    const input = screen.getByTestId('peers-self-input') as HTMLInputElement
+    expect(input.value).toBe('mini-lab')
+    expect(screen.getByTestId('peers-self-save')).toBeEnabled()
+    fireEvent.change(input, { target: { value: '' } })
+    expect(screen.getByTestId('peers-self-save')).toBeDisabled()
+    fireEvent.change(input, { target: { value: 'mlab' } })
+    expect(screen.getByTestId('peers-self-save')).toBeEnabled()
+    expect(screen.getByText(/Refs do not change/)).toBeInTheDocument()   // peers.self_alias_note (S-4)
+    fireEvent.click(screen.getByTestId('peers-self-cancel'))
+    expect(screen.queryByTestId('peers-self-input')).toBeNull()
+    expect(api.updatePeerSettings).not.toHaveBeenCalled()
+  })
+
+  it('a configured alias: Save is disabled while the value equals it (a no-op write), Clear is offered', async () => {
+    seedSettings('mlab', 'config')
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    expect(screen.getByTestId('peers-self')).not.toHaveTextContent('(from host_id)')
+    expect(screen.getByTestId('peers-self-clear')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    expect((screen.getByTestId('peers-self-input') as HTMLInputElement).value).toBe('mlab')
+    expect(screen.getByTestId('peers-self-save')).toBeDisabled()
+    fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'mlab2' } })
+    expect(screen.getByTestId('peers-self-save')).toBeEnabled()
+  })
+
+  it('Save → updatePeerSettings(hM, {alias:"mlab"}) exactly, then the refresh re-reads settings and the line shows the new alias', async () => {
+    seedSettings('mini-lab', 'host_id')
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    const before = settingsCalls()
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'mlab' } })
+    fireEvent.click(screen.getByTestId('peers-self-save'))
+    await waitFor(() => expect(api.updatePeerSettings).toHaveBeenCalledTimes(1))
+    expect(api.updatePeerSettings).toHaveBeenCalledWith(M, { alias: 'mlab' })
+    expect(Object.keys(vi.mocked(api.updatePeerSettings).mock.calls[0][1])).toEqual(['alias'])
+    await waitFor(() => expect(settingsCalls()).toBeGreaterThan(before))
+    await settled('bidirectional')
+    const self = screen.getByTestId('peers-self')
+    expect(self).toHaveTextContent('mlab · self alias: mlab · mini-lab:278cbm')
+    expect(self).not.toHaveTextContent('(from host_id)')
+    expect(screen.queryByTestId('peers-self-input')).toBeNull()       // the editor closed on success
+    expect(screen.getByTestId('peers-self-clear')).toBeEnabled()       // now there is something to clear
+    // Spec §4.3: Clear says what the alias WOULD become — host_id up to the first ':'.
+    expect(screen.getByTestId('peers-self-default-hint')).toHaveTextContent('mini-lab')
+    expect(screen.getByTestId('peers-self-default-hint')).not.toHaveTextContent('278cbm')
+    expect(screen.queryByTestId('peers-self-error')).toBeNull()
+  })
+
+  it('Clear → updatePeerSettings(hM, {alias:""}), then the refresh shows the derived alias again', async () => {
+    seedSettings('mlab', 'config')
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    const before = settingsCalls()
+    fireEvent.click(screen.getByTestId('peers-self-clear'))
+    await waitFor(() => expect(api.updatePeerSettings).toHaveBeenCalledWith(M, { alias: '' }))
+    await waitFor(() => expect(settingsCalls()).toBeGreaterThan(before))
+    await settled('bidirectional')
+    expect(screen.getByTestId('peers-self')).toHaveTextContent('self alias: mini-lab ·')
+    expect(screen.getByTestId('peers-self')).toHaveTextContent('(from host_id)')
+    expect(screen.queryByTestId('peers-self-clear')).toBeNull()
+  })
+
+  it('409 → peers-self-error shows the daemon text, the input stays open with the typed value, and no orphan flow note is painted (codex F3)', async () => {
+    vi.mocked(api.updatePeerSettings).mockRejectedValue(new HostApiError(409, 'Conflict', 'alias "air26" is already used by a peer host'))
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'air26' } })
+    fireEvent.click(screen.getByTestId('peers-self-save'))
+    expect(await screen.findByTestId('peers-self-error')).toHaveTextContent('alias "air26" is already used by a peer host')
+    await settled('bidirectional')                                                   // the runner still refreshed
+    expect((screen.getByTestId('peers-self-input') as HTMLInputElement).value).toBe('air26')
+    expect(screen.getByTestId('peers-self-save')).toBeEnabled()
+    // The flow ran under selfKey: the line owns its note; the page must not ALSO render it as an orphan.
+    expect(screen.queryByTestId('peer-flow')).toBeNull()
+    expect(screen.queryByTestId('peer-flow-error')).toBeNull()
+    expect(screen.getAllByText('alias "air26" is already used by a peer host')).toHaveLength(1)
+  })
+
+  it('400 (reserved) → the daemon text inline', async () => {
+    vi.mocked(api.updatePeerSettings).mockRejectedValue(new HostApiError(400, 'Bad Request', 'alias ".." is reserved'))
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: '..' } })
+    fireEvent.click(screen.getByTestId('peers-self-save'))
+    expect(await screen.findByTestId('peers-self-error')).toHaveTextContent('alias ".." is reserved')
+  })
+
+  it('a PUT answered 200 without alias_source is NOT success: the too-old text, the input stays open (S-5)', async () => {
+    vi.mocked(api.updatePeerSettings).mockResolvedValue({ deliver: true, alias: 'mini-lab' })
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'mlab' } })
+    fireEvent.click(screen.getByTestId('peers-self-save'))
+    expect(await screen.findByTestId('peers-self-error')).toHaveTextContent(TOO_OLD)
+    await settled('bidirectional')
+    expect((screen.getByTestId('peers-self-input') as HTMLInputElement).value).toBe('mlab')
+    expect(screen.queryByTestId('peer-flow')).toBeNull()
+  })
+
+  it('a Save answered with a different alias, or the right alias with source host_id, is NOT applied: error shown, input stays (codex A2)', async () => {
+    for (const answer of [
+      { deliver: true, alias: 'mini-lab', alias_source: 'config' as const },   // echo of the old value
+      { deliver: true, alias: 'mlab', alias_source: 'host_id' as const },      // right value, wrong source
+    ]) {
+      vi.mocked(api.updatePeerSettings).mockResolvedValueOnce(answer)
+      const { unmount } = render(<PeersSection hostId={M} />)
+      await settled('bidirectional')
+      fireEvent.click(screen.getByTestId('peers-self-edit'))
+      fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'mlab' } })
+      fireEvent.click(screen.getByTestId('peers-self-save'))
+      expect(await screen.findByTestId('peers-self-error')).toHaveTextContent('not applied')
+      expect(screen.getByTestId('peers-self-error')).toHaveTextContent(answer.alias)
+      await settled('bidirectional')
+      expect((screen.getByTestId('peers-self-input') as HTMLInputElement).value).toBe('mlab')
+      unmount()
+    }
+  })
+
+  it('a Clear answered with source config, or an empty alias, is NOT applied (codex A2)', async () => {
+    vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) => ({ deliver: true, alias: h === M ? 'mlab' : 'air26', alias_source: 'config' }))
+    for (const answer of [
+      { deliver: true, alias: 'mlab', alias_source: 'config' as const },
+      { deliver: true, alias: '', alias_source: 'host_id' as const },
+    ]) {
+      vi.mocked(api.updatePeerSettings).mockResolvedValueOnce(answer)
+      const { unmount } = render(<PeersSection hostId={M} />)
+      await settled('bidirectional')
+      fireEvent.click(screen.getByTestId('peers-self-edit'))
+      fireEvent.click(screen.getByTestId('peers-self-clear'))
+      await waitFor(() => expect(api.updatePeerSettings).toHaveBeenCalledWith(M, { alias: '' }))
+      expect(await screen.findByTestId('peers-self-error')).toHaveTextContent('not applied')
+      unmount()
+      vi.mocked(api.updatePeerSettings).mockClear()
+    }
+  })
+
+  it('a GET without alias_source (daemon < alpha.399): no Edit, no Clear, the too-old text on the line (codex F7)', async () => {
+    vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) => ({ deliver: true, alias: h === M ? 'mini-lab' : 'air26' }))
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    expect(screen.getByTestId('peers-self')).toHaveTextContent('mlab · self alias: mini-lab · mini-lab:278cbm')
+    expect(screen.queryByTestId('peers-self-edit')).toBeNull()
+    expect(screen.queryByTestId('peers-self-clear')).toBeNull()
+    expect(screen.queryByTestId('peers-self-input')).toBeNull()
+    expect(screen.getByTestId('peers-self-too-old')).toHaveTextContent(TOO_OLD)
+    expect(api.updatePeerSettings).not.toHaveBeenCalled()
+  })
+
+  it('Save holds the page lock: while the PUT is parked Refresh, Rotate, Unpair and Save itself are disabled and a second click is ignored', async () => {
+    let release!: (v: api.PeerSettings) => void
+    vi.mocked(api.updatePeerSettings).mockImplementation(() => new Promise<api.PeerSettings>((r) => { release = r }))
+    render(<PeersSection hostId={M} />)
+    const row = await settled('bidirectional')
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'mlab' } })
+    fireEvent.click(screen.getByTestId('peers-self-save'))
+    await waitFor(() => expect(api.updatePeerSettings).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId('peers-self-save')).toBeDisabled()
+    expect(screen.getByTestId('peers-self-save')).toHaveTextContent('Saving')
+    expect(screen.getByTestId('peers-refresh')).toBeDisabled()
+    expect(within(row).getByTestId('peer-inbound-rotate')).toBeDisabled()
+    expect(within(row).getByTestId('peer-unpair-air')).toBeDisabled()
+    expect(within(row).getByTestId('peer-outbound-rename')).toBeDisabled()
+    // Bypassing `disabled`: the lock ignores the second write.
+    fireEvent.click(screen.getByTestId('peers-self-save'))
+    fireEvent.click(within(row).getByTestId('peer-inbound-rotate'))
+    expect(api.updatePeerSettings).toHaveBeenCalledTimes(1)
+    expect(api.rotatePeerHost).not.toHaveBeenCalled()
+    release({ deliver: true, alias: 'mlab', alias_source: 'config' })
+    await waitFor(() => expect(screen.getByTestId('peers-refresh')).toBeEnabled())
+    expect(screen.queryByTestId('peers-self-input')).toBeNull()
+  })
+
+  it('Edit and Clear are disabled while another flow (a Commit) holds the lock', async () => {
+    seedSettings('mlab', 'config')
+    vi.mocked(api.listPeerHosts).mockImplementation(async (h) => (h === M ? [pending(AIR_ROW, 'current')] : [MLAB_ROW]))
+    let releaseCommit!: (v: PeerHostRow) => void
+    vi.mocked(api.commitRotation).mockImplementation(() => new Promise<PeerHostRow>((r) => { releaseCommit = r }))
+    render(<PeersSection hostId={M} />)
+    const row = await settled('bidirectional')
+    fireEvent.click(within(row).getByTestId('peer-inbound-commit'))
+    await waitFor(() => expect(api.commitRotation).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId('peers-self-edit')).toBeDisabled()
+    expect(screen.getByTestId('peers-self-clear')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('peers-self-clear'))
+    expect(api.updatePeerSettings).not.toHaveBeenCalled()
+    releaseCommit(AIR_ROW)
+    await waitFor(() => expect(screen.getByTestId('peers-refresh')).toBeEnabled())
+  })
+
+  it('never renders a token value around the editor (spec D-8)', async () => {
+    seedSettings('mini-lab', 'host_id')
+    render(<PeersSection hostId={M} />)
+    await settled('bidirectional')
+    fireEvent.click(screen.getByTestId('peers-self-edit'))
+    fireEvent.change(screen.getByTestId('peers-self-input'), { target: { value: 'mlab' } })
+    fireEvent.click(screen.getByTestId('peers-self-save'))
+    await waitFor(() => expect(api.updatePeerSettings).toHaveBeenCalledTimes(1))
+    await settled('bidirectional')
+    assertNoTokenInDom()
+    expect(document.body.innerHTML).not.toContain(SECRET_M)
   })
 })

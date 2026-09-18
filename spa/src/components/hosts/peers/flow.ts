@@ -37,6 +37,8 @@ export type BoundRunFlow = (fn: (report: Report) => Promise<FlowResult>) => Prom
 
 export const rowKey = (alias: string) => `row:${alias}`
 export const candidateKey = (hostId: string) => `cand:${hostId}`
+/** The self-alias editor's flow (self alias spec §4.3): owned by the `peers-self` line, never an orphan. */
+export const selfKey = 'self'
 
 /** Built inside a handler, per call — never at module load. No `cancel` member: no flow cancels. */
 export function actionApi(): ActionApi {

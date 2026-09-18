@@ -20,10 +20,11 @@ import {
 import { aliasDrift, pairStatus, type PairStatus, type Side } from '../../lib/peer-pairing'
 import { loadPairings, type PairingApi, type PairingAppHost, type PairingRow, type PairingSnapshot } from '../../lib/peer-pairing-load'
 import { unpairHosts, type Report } from '../../lib/peer-pairing-actions'
-import { actionApi, errText, rowKey, candidateKey, type BoundRunFlow, type FlowResult, type FlowState, type RunFlow } from './peers/flow'
+import { actionApi, errText, rowKey, candidateKey, selfKey, type BoundRunFlow, type FlowResult, type FlowState, type RunFlow } from './peers/flow'
 import { FlowNote } from './peers/FlowNote'
 import { PairWithSection } from './peers/PairWithSection'
 import { RotationControls } from './peers/RotationControls'
+import { SelfAliasLine } from './peers/SelfAliasLine'
 
 const STATUS_CLASS: Record<PairStatus, string> = {
   bidirectional: 'text-status-success',
@@ -133,7 +134,9 @@ export function PeersSection({ hostId }: Props) {
 
   const locked = busy || (flow?.running ?? false)
   // A flow note whose owner is no longer on screen (an unpaired row, a candidate that became a row) lands here.
+  // The self-alias flow is always owned by the `peers-self` line (codex F3), never by this fallback.
   const orphanFlow = flow && snap && !snap.error
+    && flow.key !== selfKey
     && !snap.rows.some((r) => rowKey(r.entry.alias) === flow.key)
     && !snap.candidates.some((c) => candidateKey(c.hostId) === flow.key)
 
@@ -147,12 +150,11 @@ export function PeersSection({ hostId }: Props) {
         </button>
       </div>
       <p className="text-xs text-text-muted mb-1">{t('peers.desc')}</p>
-      {/* The selected host's own identity, labelled: the third of the three names (spec §2.1).
-          It is what the return direction's entry on the counterpart must point at. */}
+      {/* The selected host's own identity (the third of the three names, spec §2.1) and its
+          self-alias editor (#1196). Keyed by host so the editor's state dies with a host change. */}
       {snap?.self && (
-        <p data-testid="peers-self" className="text-xs text-text-muted mb-4 font-mono">
-          {host.name} · {t('peers.self_alias_label')}: <span className="text-text-secondary">{snap.self.self_alias}</span> · {snap.self.host_id}
-        </p>
+        <SelfAliasLine key={hostId} hostId={hostId} hostName={host.name} self={snap.self}
+          busy={locked} flow={flow} runFlow={(fn) => runFlow(selfKey, fn)} />
       )}
 
       {snap?.error && (
