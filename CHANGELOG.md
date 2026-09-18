@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.396] - 2026-09-18
+
+### Refactor: P-D.2 拆除 Stream 模組、relay 與 bridge（#1190）— P-D 第 2／3 段
+
+daemon 端的 Stream 那一代全部下線：`internal/module/stream`、`internal/relay`、`internal/bridge` 三個套件（含 `pdx relay` 子指令與 usage 字串）、legacy `POST /api/sessions/{code}/handoff`、`/ws/cli-bridge/{code}`、`/ws/cli-bridge-sub/{code}`、`POST /api/sessions/{code}/mode`、`GET /api/sessions/{code}/history`（只有 stream 的 `handoff` WS 分支在打，連同 `agent.HistoryProvider`／`cc/history.go`／孤兒套件 `internal/history` 一起走）、config `[stream]` 與它的 PATCH 欄位。互動 CC ↔ headless 的往返從此只有 `nex-handoff`／`nex-takeback`。
+
+`Session` JSON 少了 `cc_session_id`、`cc_model`、`has_relay`（後者從來沒人設成 true）；`mode` 留著但只會是 `terminal`。**建 session 時送 legacy `"stream"` 不會 400，會被正規化成 `terminal`** —— 這是 codex plan review 抓的：舊 workspace snapshot／device-state 的 `SessionMeta.mode` 可能還是 `stream`，restore 會原樣送上來；拒絕就等於把舊快照弄壞。`session_meta` 表的 `cc_session_id`／`cc_model` 欄位不做 migration，舊 DB 留著（有 `DEFAULT ''`），`TestMetaStore_OldSchemaWithExtraColumns` 用舊 schema 建表證明 UPSERT／SELECT 照常。`cmd/pdx` 多了 `TestRemovedRoutesAre404`：七條拆掉的路由在真正的 composed mux 上都是 404，附一條 control request 證明 mux 是活的。
+
+P-D.2 → P-D.3 之間 SPA 還帶著 Stream 家族：真機確認 persisted `mode:'stream'` 的 pane 會渲染成空的 ConversationView、按 Handoff 拿 404 只在 console 報錯、不炸也不擋其他 tab；`config.stream` 用 optional chaining、`PUT /api/config` 帶 `stream` 鍵回 200 被忽略。
+
+三份 codex review 零 material finding（critic 只點名兩處過時註解，已清）。真機（mlab，hash `9f474c0e`）：scratch daemon 開 live `meta.db` 副本＋帶 `[stream]`/`[dispatch]` 的 config 全過；nex 往返前後 session 都是 `terminal` 且無三舊欄位。重啟時 log 裡既有的 `hookTraceSink` shutdown panic → #1189。
+
 ## [1.0.0-alpha.395] - 2026-09-18
 
 ### Refactor: P-D.1 拆除 M0 execution／dispatch 模組（#1182）— P-D 第 1／3 段
