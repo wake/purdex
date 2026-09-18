@@ -153,9 +153,9 @@ Sequence (one function shared with `handleNexTakeback`, see 4.3):
   `origin`/labels are written as today; `boundToSession` on a later
   session-bound take-back simply fails with `session_missing` if anyone
   tries — the SPA never does, because `from` is absent.
-- SPA: `HandoffConfirmDialog` gains a checkbox "Keep the tmux session"
-  (default checked; the last choice is remembered per client in
-  `localStorage` as a convenience, wrapped in try/catch). `handToNex` sends
+- SPA: `HandoffConfirmDialog` gains a checkbox "Keep the tmux session",
+  **default checked on every open, never remembered** (user ruling
+  2026-09-19: 預設保留、每次都問). `handToNex` sends
   `keep_session` and sets `from` only when the response says
   `session_kept: true`. The tab's `cachedName` for the execution pane
   stays the session name either way (it is the tab title).
@@ -207,7 +207,8 @@ take-back tests passing unchanged.
 7. Hand to nex with **Keep** unchecked: tmux session gone (`tmux ls`),
    pane is the execution, header shows Take to terminal → click → a new
    `<slug>-N` session appears with the conversation. With Keep checked:
-   today's behaviour, and the choice is pre-filled next time.
+   today's behaviour. Re-open the dialog after either choice: the box is
+   checked again.
 8. A session with two panes, hand-off from one with Keep unchecked: the
    dialog warns; after confirm the other pane shows terminated.
 

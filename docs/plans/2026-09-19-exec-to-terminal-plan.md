@@ -119,14 +119,14 @@ measured on `4b7f4aee` (alpha.402). One PR (daemon + SPA, estimated
 ## T7 SPA hand-off dialog + `from` (TDD)
 
 - `HandoffConfirmDialog.tsx`: checkbox `keep-session` (label
-  `handoff.keep_session`, default checked; remembered in
-  `localStorage['purdex-handoff-keep-session']` with try/catch); when the
+  `handoff.keep_session`, default checked on every open, not persisted
+  anywhere); when the
   session has other panes (count via `useTabStore` panes bound to the same
   host+code, minus this one) the body appends `handoff.other_panes` with N.
 - `handoff-api.ts` request type `keep_session?: boolean`, result
   `session_kept: boolean`; `handoff.ts` `handToNex` takes `keepSession`,
   sends it, and builds `from` only when `result.session_kept`.
-- Tests: dialog default/remembered state, N-panes warning, `handToNex`
+- Tests: dialog defaults to checked on every mount (no persistence), N-panes warning, `handToNex`
   omits `from` on `session_kept:false`, includes it on `true`; ExecutionView
   then shows Take to terminal routed to `takeToTerminal` for that pane.
 
