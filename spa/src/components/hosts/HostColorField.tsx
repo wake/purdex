@@ -42,8 +42,13 @@ export function HostColorField({ hostId }: { hostId: string }) {
 
   const modeOptions = HOST_COLOR_MODES.map((m) => ({ value: m, label: t(`hosts.color.mode.${m}`) }))
 
+  // `resolved` can go null out from under an open editor (a no-op materialise write —
+  // e.g. the host vanished — or a remote clear while it's open). `open` alone would
+  // then keep a swatch pressed and no editor to show for it (spec review PR #1160 F2).
+  const effectiveOpen = resolved ? open : null
+
   const openLayer = (layer: HostColorLayerName) => {
-    if (open === layer) {
+    if (effectiveOpen === layer) {
       setOpen(null)
       return
     }
@@ -64,17 +69,16 @@ export function HostColorField({ hostId }: { hostId: string }) {
   }
 
   const editorProps = (() => {
-    // `openLayer` always materialises a set before opening, so `resolved` is non-null here;
-    // the guard covers a concurrent clear from another client.
-    if (!open || !resolved) return null
+    if (!effectiveOpen || !resolved) return null
+    const layer = effectiveOpen
     const set = resolved
-    const inherited = open !== 'main' && ownSet?.[open]?.color === undefined
+    const inherited = layer !== 'main' && ownSet?.[layer]?.color === undefined
     return {
-      layer: open,
-      color: set[open].color,
-      alpha: set[open].alpha,
+      layer,
+      color: set[layer].color,
+      alpha: set[layer].alpha,
       inherited,
-      onChange: (next: { color?: string; alpha: number }) => setHostColorLayer(hostId, mode, open, next),
+      onChange: (next: { color?: string; alpha: number }) => setHostColorLayer(hostId, mode, layer, next),
       onClose: () => setOpen(null),
     }
   })()
@@ -108,10 +112,10 @@ export function HostColorField({ hostId }: { hostId: string }) {
                 type="button"
                 data-testid={`host-color-layer-${layer}`}
                 data-inherits-console={String(inheritsConsole)}
-                aria-pressed={open === layer}
+                aria-pressed={effectiveOpen === layer}
                 onClick={() => openLayer(layer)}
                 className={`flex flex-col items-start gap-1 rounded p-1 cursor-pointer border ${
-                  open === layer ? 'border-border-active' : 'border-transparent hover:border-border-default'
+                  effectiveOpen === layer ? 'border-border-active' : 'border-transparent hover:border-border-default'
                 } ${inheritsConsole ? 'opacity-50' : ''}`}
               >
                 <span
@@ -139,7 +143,7 @@ export function HostColorField({ hostId }: { hostId: string }) {
           </button>
         </div>
 
-        {editorProps && <HostColorLayerEditor {...editorProps} />}
+        {editorProps && <HostColorLayerEditor key={`${mode}:${editorProps.layer}`} {...editorProps} />}
       </div>
     </Field>
   )

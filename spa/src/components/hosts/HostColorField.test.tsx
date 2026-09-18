@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { HostColorField } from './HostColorField'
 import { useHostStore } from '../../stores/useHostStore'
 import { HOST_COLOR_PRESETS } from '../../lib/host-color'
@@ -92,6 +92,52 @@ describe('HostColorField — editing', () => {
     fireEvent.click(screen.getByTestId('host-color-clear'))
     expect(host().colors).toBeUndefined()
     expect(screen.queryByTestId('host-color-editor')).toBeNull()
+  })
+})
+
+describe('HostColorField — remount / ghost state (PR #1160 R1 F1/F2)', () => {
+  it('switching layers never carries editor state across', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', { color: '#808080', alpha: 100 })
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('main'))
+    fireEvent.input(screen.getByTestId('host-color-range-h'), { target: { value: '120' } })
+    fireEvent.click(layerBtn('middle'))
+    fireEvent.click(screen.getByTestId('host-color-inherit'))
+    expect((screen.getByTestId('host-color-range-h') as HTMLInputElement).value).toBe('0')
+    fireEvent.input(screen.getByTestId('host-color-range-s'), { target: { value: '100' } })
+    expect(host().colors?.console?.middle?.color).not.toBe('#00ff00')
+  })
+
+  it('an unsaved hex draft does not leak into another layer', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('main'))
+    fireEvent.change(screen.getByTestId('host-color-hex'), { target: { value: 'red' } })
+    fireEvent.blur(screen.getByTestId('host-color-hex'))
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    fireEvent.click(layerBtn('light'))
+    fireEvent.click(screen.getByTestId('host-color-inherit'))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect((screen.getByTestId('host-color-hex') as HTMLInputElement).value).toBe('#3b82f6')
+  })
+
+  it('a remote clear while the editor is open closes it', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('middle'))
+    act(() => useHostStore.getState().clearHostColorMode(HOST_ID, 'console'))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+    expect(layerBtn('middle')).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(layerBtn('middle'))
+    expect(host().colors?.console).toEqual({ main: { color: HOST_COLOR_PRESETS[0], alpha: 100 } })
+    expect(screen.getByTestId('host-color-editor')).toHaveAttribute('aria-label', 'Middle')
+  })
+
+  it('unknown host: clicking a swatch does not leave a ghost open state', () => {
+    render(<HostColorField hostId="nope" />)
+    fireEvent.click(layerBtn('main'))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+    expect(layerBtn('main')).toHaveAttribute('aria-pressed', 'false')
   })
 })
 
