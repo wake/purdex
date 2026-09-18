@@ -570,7 +570,14 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		}
 	})
 
-	t.Run("hooks write failure leaves config unchanged", func(t *testing.T) {
+	t.Run("hooks write failure leaves hooks.json unchanged", func(t *testing.T) {
+		// #1159: config.toml is written before hooks.json, so a hooks.json
+		// write failure happens *after* config.toml has already been
+		// legitimately migrated (features.hooks = true) — that migration
+		// is intentional and harmless (it's the upstream default) even
+		// though the subsequent hooks.json write never lands. What must
+		// stay true is that hooks.json itself is untouched by the failed
+		// write.
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 		configPath := filepath.Join(home, ".codex", "config.toml")
@@ -579,11 +586,11 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		if err := os.MkdirAll(codexDir, 0755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		originalConfig := []byte("model = \"gpt-5\"\n")
-		if err := os.WriteFile(configPath, originalConfig, 0644); err != nil {
+		originalHooks := []byte(`{"hooks":{}}`)
+		if err := os.WriteFile(configPath, []byte("model = \"gpt-5\"\n"), 0644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
-		if err := os.WriteFile(hooksPath, []byte(`{"hooks":{}}`), 0644); err != nil {
+		if err := os.WriteFile(hooksPath, originalHooks, 0644); err != nil {
 			t.Fatalf("write hooks: %v", err)
 		}
 		if err := os.Mkdir(hooksPath+".tmp", 0755); err != nil {
@@ -592,9 +599,13 @@ func TestCodexInstallHooks_ParseFailureDoesNotPartiallyWrite(t *testing.T) {
 		if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
 			t.Fatal("InstallHooks succeeded with hooks temp path blocked by directory")
 		}
+		gotHooks, _ := os.ReadFile(hooksPath)
+		if string(gotHooks) != string(originalHooks) {
+			t.Fatalf("hooks.json changed after hooks write failure; got %q", gotHooks)
+		}
 		gotConfig, _ := os.ReadFile(configPath)
-		if string(gotConfig) != string(originalConfig) {
-			t.Fatalf("config changed after hooks write failure; got %q", gotConfig)
+		if !strings.Contains(string(gotConfig), "hooks = true") {
+			t.Fatalf("config.toml must be migrated before hooks.json write is attempted; got %q", gotConfig)
 		}
 	})
 
@@ -2141,6 +2152,48 @@ func TestCodexInstallHooks_WritesPerEventTimeout(t *testing.T) {
 	}
 	if got := timeoutOf("Stop"); got != 5 {
 		t.Errorf("Stop timeout = %v, want 5", got)
+	}
+}
+
+// installCodexHooks must write config.toml before hooks.json: a config
+// write failure must leave hooks.json byte-for-byte untouched, so a partial
+// install never upgrades hooks.json (stripping retired keys) without also
+// migrating the feature flag.
+func TestCodexInstallHooks_ConfigWriteFailureLeavesHooksUntouched(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeHooksFile(t, home, map[string]any{
+		"Notification": []any{pdxGroupEntry("PdxNotification")},
+	})
+
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	before, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("read pre-seeded hooks.json: %v", err)
+	}
+
+	// Force the config.toml write (not the read) to fail: leave the valid
+	// config.toml that writeHooksFile seeded in place — readCodexConfig
+	// must still succeed — and pre-create config.toml.tmp as a directory,
+	// so os.WriteFile(configPath+".tmp", ...) fails with EISDIR (verified
+	// on macOS). This isolates the write-order bug: with hooks.json written
+	// before config.toml, hooks.json would already be upgraded by the time
+	// this failure happens.
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.Mkdir(configPath+".tmp", 0755); err != nil {
+		t.Fatalf("mkdir config.toml.tmp: %v", err)
+	}
+
+	if err := (&Provider{}).InstallHooks("/usr/local/bin/pdx"); err == nil {
+		t.Fatal("InstallHooks: want error when config.toml write fails, got nil")
+	}
+
+	after, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("read hooks.json after failed install: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("hooks.json changed despite config write failure:\nbefore=%s\nafter=%s", before, after)
 	}
 }
 

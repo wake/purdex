@@ -147,10 +147,16 @@ func installCodexHooks(configPath, hooksPath, pdxPath string) error {
 	if err := mergeCodexHooksFile(hooksFile, pdxPath, false); err != nil {
 		return err
 	}
-	if err := writeCodexHooksFile(hooksPath, hooksFile); err != nil {
+	// Write config.toml before hooks.json (#1159): if the config write
+	// fails, hooks.json must stay untouched rather than end up upgraded
+	// (retired keys stripped) with the feature flag not migrated. A failed
+	// hooks.json write after a successful config write leaves
+	// features.hooks = true with an untouched hooks.json, which is
+	// harmless — that's the upstream default anyway.
+	if err := writeCodexConfig(configPath, config); err != nil {
 		return err
 	}
-	return writeCodexConfig(configPath, config)
+	return writeCodexHooksFile(hooksPath, hooksFile)
 }
 
 // codexHooksManaged reports whether hooks.json contains any pdx-owned
