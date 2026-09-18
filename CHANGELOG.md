@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.0-alpha.390] - 2026-09-18
+
+### Feature: 「交給 nex」／「接回 terminal」進 SPA（P-C.3b，#1170）— P-C 完成
+
+exec 模式的最後一塊：互動 CC 與 headless execution 之間可以從畫面上來回。至此 P-C 三段（Headless 啟動、Executions view、handoff）全部落地，Stream／relay 可以進 P-D 拆除。
+
+#### 交給 nex
+
+在跑 Claude Code 的 terminal pane 上**右鍵 → Hand to nex**（pane-local，split 後每個 leaf 都有；不放 StatusBar 因為它只認 primary pane）。顯示條件：host 的 nex 支援 handoff，且這個 session 是 CC——判定順序是即時的 `agentTypes`（若說是別的 agent，舊的 rebuild 記錄也擋不回來）→ `rebuild.agent.type` → legacy `cc_session_id`；daemon 反正會再驗身分。確認框說明「不會有權限提示（handoff profile）」，送出前先把該 host 的 CC resume 範本載入好當回滾指令。成功後那個 pane 直接變成 execution pane，`from` 記住原本的 tmux session。
+
+#### 接回 terminal
+
+從 session 交過來的 execution pane 標題列多一個 **Take back**：running 先確認；send／interrupt／terminate 任一在飛就不給按；送出時把這個分頁的 lease 交給 daemon，並先叫 lease hook `forget()`——否則 pane 換掉時 hook 會去 release 一個 daemon 已經用掉的 lease。成功後 pane 變回 terminal，execution 由 daemon 封存。
+
+#### 三個「pane 不一定還在」的防線
+
+- `trySetPaneContent` 改成 compare-and-swap：daemon 做完事回來時 pane 若已不存在、或內容已被換成別的 session／execution，不覆蓋，改出 toast 帶「開啟 execution」動作。
+- execution 的 singleton 查找掃全部 leaf、優先帶 `from` 的那個，route 打開同一個 execution 不會另開一個沒有 Take back 的分頁。
+- host 已被刪除時直接拒絕（`hostFetch` 對未知 host 會 fallback 到別台）。
+
+#### 真機驗收抓到的
+
+`↩`「來自 session」marker 從來沒亮過：daemon 在 origin 裡寫的是它自己的 `host_id`（`mini-lab:278cbm`），SPA 拿 client 端的 host entry id 去比。單元測試把錯的命名空間也寫進去了，所以全綠。改用 capabilities 的 `host_id`。這已是 P-C 第三次「測試全綠、真機才抓到」（前兩次：live SSE 無 `created_at`、CC 提示符帶 ANSI）。
+
+codex：R1 兩 P1（take-back 期間要凍結 execution 寫入；resume 範本要等 host config 載入）、攻擊方 host 移除 fallback 與非原子 pane swap，critic 全同意；「handoff.ts 200 行」有證據反對不改。daemon 端「送鍵前再確認 settled」→ #1171。
+
+#### 測試
+
+6455 → 6853；spec §6.4 五項在 mlab 全過（含雙擊只建一個、殺掉 tmux 後 Take back 回 404 且 pane 不動）。純 SPA，daemon 免動。
+
 ## [1.0.0-alpha.389] - 2026-09-18
 
 ### Feature: 標準款 2D 色盤 + Host 設定頁「外觀」區塊（#1169）
