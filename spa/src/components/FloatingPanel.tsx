@@ -26,6 +26,10 @@ const MIN_VISIBLE = 40
  * its × clicked. In the browser there's no such region, so the inset is just
  * the ordinary viewport padding. */
 const TITLE_BAR_HEIGHT = 36
+/** Floor on the panel's usable height when auto-placed below an anchor near the
+ * bottom of the viewport — it slides up only as much as needed to keep at least
+ * this much room, rather than opening with almost nothing to show. */
+const MIN_PANEL_HEIGHT = 160
 const FOCUSABLE_SELECTOR = 'input, button, [tabindex]:not([tabindex="-1"]), select, textarea'
 /** IME composition sends a synthetic Escape to close the IME's own suggestion
  * popup; `keyCode === 229` is the legacy fallback for engines that don't set
@@ -71,9 +75,13 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
     }
   }
 
-  const applyMaxHeight = () => {
+  // No `MIN_PANEL_HEIGHT` floor here — that belongs only to `place()`, which
+  // chooses `top` so 160px fits when the viewport allows it. Flooring the
+  // *height* here too would let a dragged-down or resized-small panel grow
+  // past the bottom of the viewport; the only floor a height needs is 0.
+  const applyMaxHeight = (top: number) => {
     const el = panelRef.current
-    if (el) el.style.maxHeight = `${window.innerHeight - topInset - PADDING}px`
+    if (el) el.style.maxHeight = `${Math.max(0, window.innerHeight - top - PADDING)}px`
   }
 
   const clamp = (left: number, top: number) => ({
@@ -81,23 +89,24 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
     top: Math.max(topInset, Math.min(top, window.innerHeight - MIN_VISIBLE)),
   })
 
-  // Below the anchor, clamped so the whole panel is visible. Used for the initial
-  // placement and to re-anchor on scroll/resize while the panel hasn't been dragged.
+  // Always below the anchor — never the "above" fallback, so the panel stays next
+  // to the field that opened it instead of jumping to wherever it happens to fit.
+  // Clamped on both ends: never above `topInset` (the Electron title bar's drag
+  // region, or ordinary padding in the browser), and never so low that less than
+  // `MIN_PANEL_HEIGHT` of the viewport remains below it — past that point the
+  // panel slides up just enough to keep that floor, rather than opening with
+  // almost nothing to show. `maxHeight` then fits the panel from there to the
+  // bottom edge, with the body scrolling for the rest. Used for the initial
+  // placement and to re-anchor on scroll/resize while the panel hasn't been
+  // dragged.
   const place = () => {
-    const el = panelRef.current
     const a = anchorRef.current?.getBoundingClientRect()
-    const h = el?.offsetHeight ?? 0
     let left = a ? a.left : PADDING
     let top = a ? a.bottom + PADDING : PADDING
     left = Math.max(PADDING, Math.min(left, window.innerWidth - width - PADDING))
-    // Doesn't fit below the anchor: try above it. If it doesn't fit there either
-    // (the panel is taller than the viewport), fall back to just under the
-    // Electron title bar's drag region rather than sliding it up underneath it.
-    if (top + h > window.innerHeight - PADDING) top = Math.max(topInset, (a ? a.top : window.innerHeight) - PADDING - h)
-    top = Math.min(top, window.innerHeight - PADDING)
-    top = Math.max(topInset, top)
+    top = Math.max(topInset, Math.min(top, window.innerHeight - PADDING - MIN_PANEL_HEIGHT))
     applyPos(left, top)
-    applyMaxHeight()
+    applyMaxHeight(top)
   }
 
   // Initial position. Runs once per mount (a fresh instance every time the caller
@@ -116,7 +125,7 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
       if (draggedRef.current) {
         const next = clamp(posRef.current.left, posRef.current.top)
         applyPos(next.left, next.top)
-        applyMaxHeight()
+        applyMaxHeight(next.top)
       } else {
         place()
       }
@@ -206,7 +215,7 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
         top: posRef.current.top,
         width,
         zIndex: Z_INDEX,
-        maxHeight: window.innerHeight - topInset - PADDING,
+        maxHeight: window.innerHeight - posRef.current.top - PADDING,
         // Otherwise the panel sits inside the Electron title bar's OS drag
         // region and can neither be dragged nor have its × clicked (see `TitleBar.tsx`).
         WebkitAppRegion: 'no-drag',
@@ -227,6 +236,9 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
           draggedRef.current = true
           const next = clamp(d.left + (e.clientX - d.startX), d.top + (e.clientY - d.startY))
           applyPos(next.left, next.top)
+          // Re-derive as the drag moves: dragged down near the bottom, the panel
+          // must not extend past the viewport; dragged back up, it grows back.
+          applyMaxHeight(next.top)
         }}
         onPointerUp={(e) => { if (drag.current?.pointerId === e.pointerId) drag.current = null }}
         onPointerCancel={() => { drag.current = null }}

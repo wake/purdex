@@ -127,16 +127,45 @@ describe('FloatingPanel', () => {
     expect(panel.style.position).toBe('fixed')
   })
 
-  it('positions below the anchor rect, clamped to the viewport', () => {
+  it('positions below the anchor rect, clamping only the left edge to the viewport', () => {
     const { unmount } = render(<Harness onClose={() => {}} />)
     unmount()
     // re-render with a stubbed anchor rect: stub before the panel mounts by rendering closed first
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
-    rect(screen.getByTestId('anchor'), { left: 990, top: 790, bottom: 800, right: 1000 })
+    // Near the right edge (exercises left clamping) but not near the bottom, so
+    // placement stays the plain "below the anchor" case, not the near-bottom one.
+    rect(screen.getByTestId('anchor'), { left: 990, top: 50, bottom: 70, right: 1000 })
     rerender(<Harness onClose={() => {}} open />)
     const panel = screen.getByTestId('floating-panel')
     expect(parseInt(panel.style.left)).toBeLessThanOrEqual(1000 - 320 - 4)
-    expect(parseInt(panel.style.top)).toBeLessThanOrEqual(800 - 4)
+    expect(parseInt(panel.style.top)).toBe(70 + 4)
+  })
+
+  it('opens below the anchor when there is plenty of room', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 100 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(parseInt(panel.style.top)).toBe(104)
+    expect(panel.style.maxHeight).toBe('692px')
+  })
+
+  it('slides up just enough to keep MIN_PANEL_HEIGHT of room when the anchor is near the bottom', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 790 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(parseInt(panel.style.top)).toBe(636)
+    expect(panel.style.maxHeight).toBe('160px')
+  })
+
+  it('applies the same floor even when placing below the anchor would still leave less than MIN_PANEL_HEIGHT', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 700 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(parseInt(panel.style.top)).toBe(636)
+    expect(panel.style.maxHeight).toBe('160px')
   })
 
   it('closes on mousedown outside, not on mousedown inside or on the anchor', () => {
@@ -237,7 +266,7 @@ describe('FloatingPanel', () => {
     expect(panel.style.maxHeight).toBe('242px')
   })
 
-  it('places the panel below the Electron title bar even when the anchor sits near the bottom of a short viewport', () => {
+  it('still opens below the anchor under Electron, but the MIN_PANEL_HEIGHT floor never pushes it above the title bar', () => {
     mockElectron(true)
     Object.defineProperty(window, 'innerHeight', { value: 40, configurable: true })
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
@@ -310,6 +339,57 @@ describe('FloatingPanel', () => {
     fireEvent(window, new Event('resize'))
     expect(parseInt(panel.style.left)).toBeLessThanOrEqual(300 - 40)
     expect(parseInt(panel.style.top)).toBeLessThanOrEqual(200 - 40)
+  })
+
+  it('re-derives maxHeight from the dragged top on resize, not from the topInset', () => {
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    const top0 = parseInt(panel.style.top)
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: 300 - top0, pointerId: 1 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(300)
+    fireEvent(window, new Event('resize'))
+    expect(panel.style.maxHeight).toBe('496px')
+  })
+
+  it('recomputes maxHeight live while dragging: shrinks moving down, grows back moving up', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 100 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    expect(parseInt(panel.style.top)).toBe(104)
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: 396, pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(500)
+    expect(panel.style.maxHeight).toBe('296px')
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: 0, pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(104)
+    expect(panel.style.maxHeight).toBe('692px')
+  })
+
+  it('drag/resize max height never exceeds the remaining viewport, even below the 160px place() floor', () => {
+    Object.defineProperty(window, 'innerHeight', { value: 100, configurable: true })
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    const top0 = parseInt(panel.style.top)
+    expect(top0).toBe(4)
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: 4 - top0, pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(4)
+    expect(panel.style.maxHeight).toBe('92px')
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    fireEvent(window, new Event('resize'))
+    expect(panel.style.maxHeight).toBe('92px')
   })
 
   it('does not re-anchor on scroll once the panel has been dragged', () => {
