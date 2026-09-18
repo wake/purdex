@@ -1,18 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { HostColorField } from './HostColorField'
 import { useHostStore } from '../../stores/useHostStore'
 import { HOST_COLOR_PRESETS } from '../../lib/host-color'
 
 const HOST_ID = 'h1'
-
-function host() {
-  return useHostStore.getState().hosts[HOST_ID]
-}
-
-function hexInput() {
-  return screen.getByTestId('host-color-hex') as HTMLInputElement
-}
+const host = () => useHostStore.getState().hosts[HOST_ID]
+const layerBtn = (l: 'main' | 'middle' | 'light') => screen.getByTestId(`host-color-layer-${l}`)
+const modeBtn = (name: string) => screen.getByRole('button', { name })
+const BLUE = { color: '#3b82f6', alpha: 100 }
 
 beforeEach(() => {
   useHostStore.setState({
@@ -22,144 +18,125 @@ beforeEach(() => {
   })
 })
 
-describe('HostColorField', () => {
-  it('renders 8 preset swatches, none pressed without a color', () => {
+describe('HostColorField — layout', () => {
+  it('shows the mode switch on Console and three layer swatches, no editor', () => {
     render(<HostColorField hostId={HOST_ID} />)
-    for (const hex of HOST_COLOR_PRESETS) {
-      expect(screen.getByRole('button', { name: hex })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('host-color-mode')).toBeInTheDocument()
+    for (const l of ['main', 'middle', 'light'] as const) expect(layerBtn(l)).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+  })
+
+  it('uncolored host: swatches read "No color"; clicking any layer first materialises main = first preset, then opens that layer', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    expect(layerBtn('main').textContent).toContain('No color')
+    fireEvent.click(layerBtn('light'))
+    expect(host().colors?.console).toEqual({ main: { color: HOST_COLOR_PRESETS[0], alpha: 100 } })
+    expect(screen.getByTestId('host-color-editor')).toHaveAttribute('aria-label', 'Light')
+    // Editing light now writes for real (the set exists).
+    fireEvent.input(screen.getByTestId('host-color-range-a'), { target: { value: '30' } })
+    expect(host().colors?.console?.light).toEqual({ alpha: 30 })
+  })
+
+  it('uncolored host: opening Main and clicking a preset replaces the materialised default', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('main'))
+    fireEvent.click(screen.getByRole('button', { name: HOST_COLOR_PRESETS[3] }))
+    expect(host().colors?.console?.main).toEqual({ color: HOST_COLOR_PRESETS[3], alpha: 100 })
+  })
+
+  it('legacy color shows as the console main swatch', () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [HOST_ID]: { ...s.hosts[HOST_ID], color: '#22c55e' } } }))
+    render(<HostColorField hostId={HOST_ID} />)
+    expect(layerBtn('main').textContent).toContain('#22c55e')
+    expect(layerBtn('middle').textContent).toContain('inherit')
+    expect(layerBtn('middle').textContent).toContain('60%')
+  })
+})
+
+describe('HostColorField — editing', () => {
+  beforeEach(() => useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE))
+
+  it('opening Main and dragging alpha writes console.main live', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('main'))
+    fireEvent.input(screen.getByTestId('host-color-range-a'), { target: { value: '70' } })
+    expect(host().colors?.console?.main).toEqual({ color: '#3b82f6', alpha: 70 })
+  })
+
+  it('Middle starts inherited; alpha drag writes { alpha } only; inherit off writes the color', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('middle'))
+    expect(screen.getByTestId('host-color-inherit')).toHaveAttribute('aria-checked', 'true')
+    fireEvent.input(screen.getByTestId('host-color-range-a'), { target: { value: '45' } })
+    expect(host().colors?.console?.middle).toEqual({ alpha: 45 })
+    fireEvent.click(screen.getByTestId('host-color-inherit'))
+    expect(host().colors?.console?.middle).toEqual({ color: '#3b82f6', alpha: 45 })
+    fireEvent.click(screen.getByTestId('host-color-inherit'))
+    expect(host().colors?.console?.middle).toEqual({ alpha: 45 })
+  })
+
+  it('clicking the open layer again closes the editor; Done closes it too', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('light'))
+    expect(layerBtn('light')).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(layerBtn('light'))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+    fireEvent.click(layerBtn('light'))
+    fireEvent.click(screen.getByTestId('host-color-editor-close'))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+  })
+
+  it('clear removes the console set and closes the editor', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(layerBtn('main'))
+    fireEvent.click(screen.getByTestId('host-color-clear'))
+    expect(host().colors).toBeUndefined()
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
+  })
+})
+
+describe('HostColorField — modes', () => {
+  beforeEach(() => useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE))
+
+  it('Terminal without its own set shows dimmed swatches that say it inherits Console', () => {
+    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(modeBtn('Terminal'))
+    for (const l of ['main', 'middle', 'light'] as const) {
+      expect(layerBtn(l)).toHaveAttribute('data-inherits-console', 'true')
+      expect(layerBtn(l).textContent).toContain('Inherits Console')
     }
   })
 
-  it('preset click saves that hex and marks it pressed', () => {
+  it('clicking a swatch on an inheriting mode copies console main into that mode and opens the editor', () => {
     render(<HostColorField hostId={HOST_ID} />)
-    const hex = HOST_COLOR_PRESETS[5]
-    fireEvent.click(screen.getByRole('button', { name: hex }))
-    expect(host().colors?.console?.main.color).toBe(hex)
-    expect(screen.getByRole('button', { name: hex })).toHaveAttribute('aria-pressed', 'true')
-    expect(hexInput().value).toBe(hex)
+    fireEvent.click(modeBtn('Terminal'))
+    fireEvent.click(layerBtn('light'))
+    expect(host().colors?.terminal).toEqual({ main: BLUE })
+    expect(screen.getByTestId('host-color-editor')).toHaveAttribute('aria-label', 'Light')
+    expect(layerBtn('main')).toHaveAttribute('data-inherits-console', 'false')
   })
 
-  it('valid hex + Enter saves normalized value', () => {
+  it('edits under Terminal never touch the console set', () => {
     render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: 'ABCDEF' } })
-    fireEvent.keyDown(hexInput(), { key: 'Enter' })
-    expect(host().colors?.console?.main.color).toBe('#abcdef')
-    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.click(modeBtn('Terminal'))
+    fireEvent.click(layerBtn('main'))
+    fireEvent.click(screen.getByRole('button', { name: HOST_COLOR_PRESETS[0] }))
+    expect(host().colors?.terminal?.main.color).toBe(HOST_COLOR_PRESETS[0])
+    expect(host().colors?.console?.main).toEqual(BLUE)
   })
 
-  it('blur commits', () => {
+  it('switching mode closes any open editor', () => {
     render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: '#123456' } })
-    fireEvent.blur(hexInput())
-    expect(host().colors?.console?.main.color).toBe('#123456')
+    fireEvent.click(layerBtn('main'))
+    fireEvent.click(modeBtn('Execution'))
+    expect(screen.queryByTestId('host-color-editor')).toBeNull()
   })
 
-  it('invalid hex shows alert and does not change store', () => {
-    useHostStore.getState().setHostColor(HOST_ID, '#3b82f6')
+  it('clear on Terminal removes only the terminal set', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'terminal', 'main', { color: '#ef4444', alpha: 100 })
     render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: 'red' } })
-    fireEvent.keyDown(hexInput(), { key: 'Enter' })
-    expect(screen.getByRole('alert')).toBeInTheDocument()
-    expect(host().colors?.console?.main.color).toBe('#3b82f6')
-  })
-
-  it('valid commit after invalid clears the alert', () => {
-    render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: 'red' } })
-    fireEvent.blur(hexInput())
-    expect(screen.getByRole('alert')).toBeInTheDocument()
-    fireEvent.change(hexInput(), { target: { value: '#00ff00' } })
-    fireEvent.blur(hexInput())
-    expect(screen.queryByRole('alert')).toBeNull()
-    expect(host().colors?.console?.main.color).toBe('#00ff00')
-  })
-
-  it('empty input commit clears the color', () => {
-    useHostStore.getState().setHostColor(HOST_ID, '#3b82f6')
-    render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: '  ' } })
-    fireEvent.keyDown(hexInput(), { key: 'Enter' })
-    expect('color' in host()).toBe(false)
-  })
-
-  it('clear button removes the color key', () => {
-    useHostStore.getState().setHostColor(HOST_ID, '#3b82f6')
-    render(<HostColorField hostId={HOST_ID} />)
+    fireEvent.click(modeBtn('Terminal'))
     fireEvent.click(screen.getByTestId('host-color-clear'))
-    expect('color' in host()).toBe(false)
-    expect(hexInput().value).toBe('')
-  })
-
-  it('clear on uncolored host resets invalid draft and alert', () => {
-    render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: 'red' } })
-    fireEvent.keyDown(hexInput(), { key: 'Enter' })
-    expect(screen.getByRole('alert')).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId('host-color-clear'))
-    expect(hexInput().value).toBe('')
-    expect(screen.queryByRole('alert')).toBeNull()
-    expect(host().color).toBeUndefined()
-  })
-
-  it('clear on colored host with uncommitted invalid draft resets draft and removes color', () => {
-    useHostStore.getState().setHostColor(HOST_ID, '#3b82f6')
-    render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: 'nope' } })
-    fireEvent.click(screen.getByTestId('host-color-clear'))
-    expect(hexInput().value).toBe('')
-    expect('color' in host()).toBe(false)
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
-
-  it('Enter during IME composition does not commit', () => {
-    render(<HostColorField hostId={HOST_ID} />)
-    fireEvent.change(hexInput(), { target: { value: 'abcdef' } })
-    fireEvent.keyDown(hexInput(), { key: 'Enter', isComposing: true })
-    expect(host().color).toBeUndefined()
-  })
-
-  it('re-syncs draft when stored color changes externally', () => {
-    render(<HostColorField hostId={HOST_ID} />)
-    act(() => useHostStore.getState().setHostColor(HOST_ID, '#ec4899'))
-    expect(hexInput().value).toBe('#ec4899')
-  })
-
-  it.each([
-    ['non-string object', {}],
-    ['css injection string', 'url(x)'],
-  ])('tolerates malformed stored color (%s): no throw, empty input, nothing pressed', (_label, bad) => {
-    useHostStore.setState({
-      hosts: { [HOST_ID]: { id: HOST_ID, name: 'H', ip: '1.2.3.4', port: 7860, order: 0, color: bad as never } },
-    })
-    render(<HostColorField hostId={HOST_ID} />)
-    expect(hexInput().value).toBe('')
-    for (const hex of HOST_COLOR_PRESETS) {
-      expect(screen.getByRole('button', { name: hex })).toHaveAttribute('aria-pressed', 'false')
-    }
-    expect(() => {
-      fireEvent.focus(hexInput())
-      fireEvent.blur(hexInput())
-    }).not.toThrow()
-    expect(() => fireEvent.keyDown(hexInput(), { key: 'Enter' })).not.toThrow()
-    expect(hexInput().value).toBe('')
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
-
-  it('resyncs to empty when stored color turns malformed externally', () => {
-    useHostStore.getState().setHostColor(HOST_ID, '#3b82f6')
-    render(<HostColorField hostId={HOST_ID} />)
-    act(() => {
-      useHostStore.setState({
-        hosts: { [HOST_ID]: { id: HOST_ID, name: 'H', ip: '1.2.3.4', port: 7860, order: 0, color: {} as never } },
-      })
-    })
-    expect(hexInput().value).toBe('')
-    expect(() => fireEvent.blur(hexInput())).not.toThrow()
-  })
-
-  it('marks the preset pressed from colors.console.main', () => {
-    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', { color: '#3b82f6', alpha: 70 })
-    render(<HostColorField hostId={HOST_ID} />)
-    expect(screen.getByRole('button', { name: '#3b82f6' })).toHaveAttribute('aria-pressed', 'true')
+    expect(host().colors).toEqual({ console: { main: BLUE } })
   })
 })

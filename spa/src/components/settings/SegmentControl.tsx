@@ -19,6 +19,7 @@ export function SegmentControl<T extends string>({ options, value, onChange }: P
         return (
           <button
             key={opt.value}
+            type="button"
             onClick={() => { if (!isActive) onChange(opt.value) }}
             className={`px-4 py-1.5 text-xs border transition-colors cursor-pointer ${
               isActive

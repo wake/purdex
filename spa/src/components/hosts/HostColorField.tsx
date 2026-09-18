@@ -2,97 +2,144 @@ import { useState } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { HOST_COLOR_PRESETS, normalizeHostColor, resolveHostColorSet } from '../../lib/host-color'
+import {
+  HOST_COLOR_ALPHA_DEFAULTS,
+  HOST_COLOR_MODES,
+  HOST_COLOR_PRESETS,
+  resolveHostColorSet,
+  type HostColorLayerName,
+  type HostColorMode,
+} from '../../lib/host-color'
+import { rgbaString } from '../../lib/color-space'
+import { SegmentControl } from '../settings/SegmentControl'
 import { Field } from './form-fields'
+import { HostColorLayerEditor } from './HostColorLayerEditor'
 
+const LAYERS: readonly HostColorLayerName[] = ['main', 'middle', 'light']
+
+/**
+ * Per-host color row (spec §6): mode switch → three layer swatches → inline
+ * editor for the open layer. Reads the raw set for inherit flags and the
+ * resolved set for what to paint; every edit goes straight to the store so the
+ * badge on every tab row follows.
+ */
 export function HostColorField({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const colors = useHostStore((s) => s.hosts[hostId]?.colors)
   const legacy = useHostStore((s) => s.hosts[hostId]?.color)
-  const setHostColor = useHostStore((s) => s.setHostColor)
-  // Resolver already validates; an unresolvable host is "no color".
-  const current = resolveHostColorSet({ colors, color: legacy }, 'console')?.main.color ?? ''
+  const setHostColorLayer = useHostStore((s) => s.setHostColorLayer)
+  const clearHostColorMode = useHostStore((s) => s.clearHostColorMode)
 
-  const [draft, setDraft] = useState(current)
-  const [invalid, setInvalid] = useState(false)
-  const [synced, setSynced] = useState(current)
+  const [mode, setMode] = useState<HostColorMode>('console')
+  const [open, setOpen] = useState<HostColorLayerName | null>(null)
 
-  // Re-sync the draft when the stored color changes (render-phase adjust, no effect).
-  if (synced !== current) {
-    setSynced(current)
-    setDraft(current)
-    setInvalid(false)
-  }
+  const ownSet = colors?.[mode]
+  const resolved = resolveHostColorSet({ colors, color: legacy }, mode)
+  // A non-console mode with no own set inherits console (spec D4); console itself
+  // may still be showing a legacy color, which counts as "has color".
+  const inheritsConsole = mode !== 'console' && ownSet === undefined && resolved !== null
+  const hasColor = resolved !== null
 
-  const commit = () => {
-    if (draft.trim() === '') {
-      setInvalid(false)
-      setHostColor(hostId, null)
+  const modeOptions = HOST_COLOR_MODES.map((m) => ({ value: m, label: t(`hosts.color.mode.${m}`) }))
+
+  const openLayer = (layer: HostColorLayerName) => {
+    if (open === layer) {
+      setOpen(null)
       return
     }
-    const normalized = normalizeHostColor(draft)
-    if (!normalized) {
-      setInvalid(true)
-      return
+    if (inheritsConsole && resolved) {
+      // Materialise the mode from console's resolved main so edits stay per-mode.
+      setHostColorLayer(hostId, mode, 'main', { color: resolved.main.color, alpha: resolved.main.alpha })
+    } else if (!resolved) {
+      // No color at all: the store refuses middle/light writes without a set (spec §4.1),
+      // so give the mode a main first. The user's click *is* the act of picking a color.
+      setHostColorLayer(hostId, mode, 'main', { color: HOST_COLOR_PRESETS[0], alpha: HOST_COLOR_ALPHA_DEFAULTS.main })
     }
-    setInvalid(false)
-    setHostColor(hostId, normalized)
-    setDraft(normalized)
+    setOpen(layer)
   }
+
+  const clear = () => {
+    clearHostColorMode(hostId, mode)
+    setOpen(null)
+  }
+
+  const editorProps = (() => {
+    // `openLayer` always materialises a set before opening, so `resolved` is non-null here;
+    // the guard covers a concurrent clear from another client.
+    if (!open || !resolved) return null
+    const set = resolved
+    const inherited = open !== 'main' && ownSet?.[open]?.color === undefined
+    return {
+      layer: open,
+      color: set[open].color,
+      alpha: set[open].alpha,
+      inherited,
+      onChange: (next: { color?: string; alpha: number }) => setHostColorLayer(hostId, mode, open, next),
+      onClose: () => setOpen(null),
+    }
+  })()
 
   return (
     <Field label={t('hosts.color.label')}>
-      <div className="space-y-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {HOST_COLOR_PRESETS.map((hex) => {
-            const pressed = current === hex
+      <div className="space-y-2">
+        <div data-testid="host-color-mode">
+          <SegmentControl
+            options={modeOptions}
+            value={mode}
+            onChange={(m) => {
+              setMode(m)
+              setOpen(null)
+            }}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-start gap-2">
+          {LAYERS.map((layer) => {
+            const l = resolved?.[layer]
+            const own = layer === 'main' || ownSet?.[layer]?.color !== undefined
+            const caption = !hasColor
+              ? t('hosts.color.none')
+              : inheritsConsole
+                ? t('hosts.color.inherits_console')
+                : `${own ? l!.color : t('hosts.color.inherit_short')} ${l!.alpha}%`
             return (
               <button
-                key={hex}
+                key={layer}
                 type="button"
-                aria-label={hex}
-                aria-pressed={pressed}
-                onClick={() => setHostColor(hostId, hex)}
-                className={`w-[18px] h-[18px] rounded cursor-pointer border border-border-default ${
-                  pressed ? 'ring-2 ring-offset-1 ring-offset-surface-primary ring-text-primary' : ''
-                }`}
-                style={{ background: hex }}
-              />
+                data-testid={`host-color-layer-${layer}`}
+                data-inherits-console={String(inheritsConsole)}
+                aria-pressed={open === layer}
+                onClick={() => openLayer(layer)}
+                className={`flex flex-col items-start gap-1 rounded p-1 cursor-pointer border ${
+                  open === layer ? 'border-border-active' : 'border-transparent hover:border-border-default'
+                } ${inheritsConsole ? 'opacity-50' : ''}`}
+              >
+                <span
+                  aria-hidden="true"
+                  className="w-[26px] h-[18px] rounded border border-border-default"
+                  style={{
+                    background: l ? (rgbaString(l.color, l.alpha) ?? undefined) : undefined,
+                    backgroundImage: l ? undefined : 'repeating-linear-gradient(45deg, transparent 0 4px, var(--border-default) 4px 5px)',
+                  }}
+                />
+                <span className="text-[11px] leading-none text-text-secondary">{t(`hosts.color.layer.${layer}`)}</span>
+                <span className="text-[10px] leading-none text-text-muted font-mono">{caption}</span>
+              </button>
             )
           })}
           <button
             type="button"
-            aria-label={t('hosts.color.clear')}
-            title={t('hosts.color.clear')}
+            aria-label={t('hosts.color.clear_mode')}
+            title={t('hosts.color.clear_mode')}
             data-testid="host-color-clear"
-            onClick={() => {
-              // The store selector may not change (already uncolored), so reset local state directly.
-              setDraft('')
-              setInvalid(false)
-              setHostColor(hostId, null)
-            }}
-            className="w-[18px] h-[18px] rounded cursor-pointer border border-border-default flex items-center justify-center text-text-muted hover:text-text-secondary"
+            onClick={clear}
+            className="w-[26px] h-[18px] mt-1 rounded cursor-pointer border border-border-default flex items-center justify-center text-text-muted hover:text-text-secondary"
           >
             <Prohibit size={12} />
           </button>
-          <input
-            type="text"
-            aria-label={t('hosts.color.custom_aria')}
-            aria-invalid={invalid}
-            data-testid="host-color-hex"
-            placeholder="#3b82f6"
-            spellCheck={false}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
-              commit()
-            }}
-            className="ml-1 bg-surface-secondary border border-border-default rounded px-2 py-0.5 text-xs text-text-primary font-mono w-24"
-          />
         </div>
-        {invalid && <span role="alert" className="block text-xs text-red-400">{t('hosts.color.invalid')}</span>}
+
+        {editorProps && <HostColorLayerEditor {...editorProps} />}
       </div>
     </Field>
   )
