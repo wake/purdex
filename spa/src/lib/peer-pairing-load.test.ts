@@ -9,7 +9,8 @@ const OTHER: PairingAppHost = { hostId: 'hO', name: 'Other', url: 'http://100.64
 
 const row = (p: Partial<PeerHostRow>): PeerHostRow => ({
   alias: 'air', url: 'http://100.64.0.4:7860', host_id: 'wakes-air-2026:oa6drb',
-  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true, ...p,
+  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true,
+  rotation_pending: false, last_inbound_auth: '', ...p,
 })
 const ok = (alias: string, self_alias: string, host_id: string): PeerHostVerify =>
   ({ alias, host_id, ok: true, self_alias, daemon_version: '1.0.0-alpha.378' })

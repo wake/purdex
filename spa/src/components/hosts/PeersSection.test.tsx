@@ -19,9 +19,11 @@ const M = 'hM'
 const A = 'hA'
 
 const AIR_ROW: PeerHostRow = { alias: 'air', url: 'http://100.64.0.4:7860', host_id: 'wakes-air-2026:oa6drb',
-  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true }
+  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true,
+  rotation_pending: false, last_inbound_auth: '' }
 const MLAB_ROW: PeerHostRow = { alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm',
-  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true }
+  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true,
+  rotation_pending: false, last_inbound_auth: '' }
 const ok = (alias: string, self_alias: string, host_id: string): PeerHostVerify =>
   ({ alias, host_id, ok: true, self_alias, daemon_version: '1.0.0-alpha.378' })
 

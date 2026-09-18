@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import {
   HostApiError, listPeerHosts, verifyPeerHost, updatePeerHost, fetchPeerSettings, fetchHostInfo,
+  addPeerHost, deletePeerHost, rotatePeerHost, commitRotation, cancelRotation,
 } from './host-api'
 
 const H = 'hx'
@@ -27,7 +28,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 const ROW = { alias: 'air', url: 'http://100.64.0.4:7860', host_id: 'wakes-air-2026:oa6drb',
-  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true }
+  verified: true, has_token: true, has_inbound_token: true, allow_bypass: true,
+  rotation_pending: false, last_inbound_auth: '' as const }
+
+// Live token values in the `pdxp_` + 32 hex form (internal/config/config.go:94)
+// so a leak anywhere is greppable (spec D-8).
+const TOKEN_NEW = 'pdxp_0123456789abcdef0123456789abcdef'
+const TOKEN_OUT = 'pdxp_fedcba9876543210fedcba9876543210'
+const BASE = 'http://100.64.0.2:7860'
 
 describe('peer-host wrappers', () => {
   it('listPeerHosts unwraps {hosts} and hits GET /api/peers/hosts with the admin token', async () => {
@@ -102,5 +110,175 @@ describe('peer-host wrappers', () => {
   it('fetchHostInfo rejects with HostApiError on a non-2xx (the untyped fetchInfo would have resolved)', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: 'boom' }))
     await expect(fetchHostInfo(H)).rejects.toMatchObject({ name: 'HostApiError', status: 500, detail: 'boom' })
+  })
+
+  describe('rotation fields (D3, alpha.391)', () => {
+    it('listPeerHosts normalises a pre-391 row (both keys absent) to rotation_pending=false, last_inbound_auth=""', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { rotation_pending, last_inbound_auth, ...pre391 } = ROW
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { hosts: [pre391] }))
+      const rows = await listPeerHosts(H)
+      expect(rows).toHaveLength(1)
+      expect(rows[0].rotation_pending).toBe(false)
+      expect(rows[0].last_inbound_auth).toBe('')
+      expect(rows[0]).toEqual(ROW)
+    })
+
+    it('listPeerHosts passes a 391 row {rotation_pending:true, last_inbound_auth:"prev"} through unchanged', async () => {
+      const live = { ...ROW, rotation_pending: true, last_inbound_auth: 'prev' }
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { hosts: [live] }))
+      const rows = await listPeerHosts(H)
+      expect(rows).toEqual([live])
+      expect(rows[0].last_inbound_auth).toBe('prev')
+    })
+
+    it('listPeerHosts coerces an unknown last_inbound_auth value to "" and a non-boolean rotation_pending to false', async () => {
+      const odd = { ...ROW, rotation_pending: 'yes', last_inbound_auth: 'bogus' }
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { hosts: [odd] }))
+      const rows = await listPeerHosts(H)
+      expect(rows[0].rotation_pending).toBe(false)
+      expect(rows[0].last_inbound_auth).toBe('')
+    })
+  })
+
+  describe('addPeerHost', () => {
+    const ADDED = { alias: 'air', url: 'http://100.64.0.4:7860', host_id: 'wakes-air-2026:oa6drb',
+      inbound_token: TOKEN_NEW, verified: true }
+
+    it('POSTs /api/peers/hosts as JSON with exactly {url, token} (no alias key) and returns the 201 body verbatim', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(201, ADDED))
+      await expect(addPeerHost(H, { url: 'http://100.64.0.4:7860', token: TOKEN_OUT })).resolves.toEqual(ADDED)
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${BASE}/api/peers/hosts`)
+      expect(init?.method).toBe('POST')
+      expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json')
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer adm')
+      const sent = JSON.parse(String(init?.body))
+      expect(sent).toEqual({ url: 'http://100.64.0.4:7860', token: TOKEN_OUT })
+      expect(Object.keys(sent).sort()).toEqual(['token', 'url'])
+    })
+
+    it('POSTs exactly {alias, url} (no token key) when no token is given', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(201, { ...ADDED, verified: false }))
+      await addPeerHost(H, { alias: 'air', url: 'http://100.64.0.4:7860' })
+      const sent = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+      expect(sent).toEqual({ alias: 'air', url: 'http://100.64.0.4:7860' })
+      expect('token' in sent).toBe(false)
+    })
+
+    it('409 (alias taken) rejects with HostApiError{status:409, detail}', async () => {
+      const msg = 'alias "mini-lab" is already used by another host; pass an explicit alias for this one'
+      fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: msg }))
+      const err = await addPeerHost(H, { url: 'http://100.64.0.4:7860' }).catch((e) => e)
+      expect(err).toBeInstanceOf(HostApiError)
+      expect(err).toMatchObject({ status: 409, detail: msg })
+    })
+
+    it('502 (verify failed) rejects with HostApiError{status:502, detail}', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(502, { error: 'verify: dial tcp 100.64.0.4:7860: connection refused' }))
+      await expect(addPeerHost(H, { url: 'http://100.64.0.4:7860', token: TOKEN_OUT }))
+        .rejects.toMatchObject({ name: 'HostApiError', status: 502, detail: 'verify: dial tcp 100.64.0.4:7860: connection refused' })
+    })
+  })
+
+  describe('deletePeerHost', () => {
+    it('sends DELETE /api/peers/hosts/<encoded alias> and resolves undefined on 204', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      await expect(deletePeerHost(H, 'a b/c')).resolves.toBeUndefined()
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${BASE}/api/peers/hosts/a%20b%2Fc`)
+      expect(init?.method).toBe('DELETE')
+      expect(init?.body).toBeUndefined()
+    })
+
+    it('404 rejects with HostApiError{status:404, detail:"unknown alias"} — the wrapper does not swallow it', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(404, { error: 'unknown alias' }))
+      const err = await deletePeerHost(H, 'ghost').catch((e) => e)
+      expect(err).toBeInstanceOf(HostApiError)
+      expect(err).toMatchObject({ status: 404, detail: 'unknown alias' })
+    })
+  })
+
+  describe('rotatePeerHost', () => {
+    it('POSTs /api/peers/hosts/<alias>/rotate with no body and returns {alias, inbound_token}', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { alias: 'air', inbound_token: TOKEN_NEW }))
+      await expect(rotatePeerHost(H, 'air')).resolves.toEqual({ alias: 'air', inbound_token: TOKEN_NEW })
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${BASE}/api/peers/hosts/air/rotate`)
+      expect(init?.method).toBe('POST')
+      expect(init?.body).toBeUndefined()
+    })
+
+    it('encodes the alias in the path', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { alias: 'a b/c', inbound_token: TOKEN_NEW }))
+      await rotatePeerHost(H, 'a b/c')
+      expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/api/peers/hosts/a%20b%2Fc/rotate`)
+    })
+
+    it('409 "rotation already pending" surfaces in detail', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: 'rotation already pending' }))
+      await expect(rotatePeerHost(H, 'air')).rejects.toMatchObject({ name: 'HostApiError', status: 409, detail: 'rotation already pending' })
+    })
+
+    it('404 (unknown alias) surfaces in detail', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(404, { error: 'unknown alias' }))
+      await expect(rotatePeerHost(H, 'ghost')).rejects.toMatchObject({ status: 404, detail: 'unknown alias' })
+    })
+  })
+
+  describe('commitRotation / cancelRotation (spec D-7: the page never sends force)', () => {
+    it('commitRotation POSTs …/rotate/commit with NO body and NO Content-Type, returns the row', async () => {
+      const after = { ...ROW, rotation_pending: false, last_inbound_auth: '' }
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, after))
+      await expect(commitRotation(H, 'air')).resolves.toEqual(after)
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${BASE}/api/peers/hosts/air/rotate/commit`)
+      expect(init?.method).toBe('POST')
+      expect(init?.body).toBeUndefined()
+      expect(new Headers(init?.headers).get('Content-Type')).toBeNull()
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer adm')
+    })
+
+    it('cancelRotation POSTs …/rotate/cancel with NO body and NO Content-Type, returns the row', async () => {
+      const after = { ...ROW, rotation_pending: false, last_inbound_auth: 'current' }
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, after))
+      await expect(cancelRotation(H, 'a b/c')).resolves.toEqual(after)
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(`${BASE}/api/peers/hosts/a%20b%2Fc/rotate/cancel`)
+      expect(init?.method).toBe('POST')
+      expect(init?.body).toBeUndefined()
+      expect(new Headers(init?.headers).get('Content-Type')).toBeNull()
+    })
+
+    it('commitRotation 409 "rotation unconfirmed" surfaces in detail', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: 'rotation unconfirmed' }))
+      await expect(commitRotation(H, 'air')).rejects.toMatchObject({ name: 'HostApiError', status: 409, detail: 'rotation unconfirmed' })
+    })
+
+    it('cancelRotation 409 "no rotation pending" / "rotation unconfirmed" surface in detail', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: 'no rotation pending' }))
+      await expect(cancelRotation(H, 'air')).rejects.toMatchObject({ status: 409, detail: 'no rotation pending' })
+      fetchMock.mockResolvedValueOnce(jsonResponse(409, { error: 'rotation unconfirmed' }))
+      await expect(cancelRotation(H, 'air')).rejects.toMatchObject({ status: 409, detail: 'rotation unconfirmed' })
+    })
+  })
+
+  it('no wrapper ever sends `force` (spec D-7)', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(201, { alias: 'air', url: 'http://100.64.0.4:7860', host_id: 'x', inbound_token: TOKEN_NEW, verified: true }))
+      .mockResolvedValueOnce(jsonResponse(200, { alias: 'air', inbound_token: TOKEN_NEW }))
+      .mockResolvedValueOnce(jsonResponse(200, ROW))
+      .mockResolvedValueOnce(jsonResponse(200, ROW))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await addPeerHost(H, { alias: 'air', url: 'http://100.64.0.4:7860', token: TOKEN_OUT })
+    await rotatePeerHost(H, 'air')
+    await commitRotation(H, 'air')
+    await cancelRotation(H, 'air')
+    await deletePeerHost(H, 'air')
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    for (const [, init] of fetchMock.mock.calls) {
+      const body = init?.body === undefined ? '' : String(init.body)
+      expect(body).not.toContain('force')
+    }
   })
 })

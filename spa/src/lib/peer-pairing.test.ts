@@ -86,7 +86,8 @@ describe('matchCounterpart (spec D-3, §5.2 step 2)', () => {
 describe('matchReturnEntry — the same rule with the roles swapped', () => {
   const row = (p: Partial<PeerHostRow>): PeerHostRow => ({
     alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm',
-    verified: true, has_token: true, has_inbound_token: true, allow_bypass: true, ...p,
+    verified: true, has_token: true, has_inbound_token: true, allow_bypass: true,
+    rotation_pending: false, last_inbound_auth: '', ...p,
   })
   const self = { host_id: 'mini-lab:278cbm', url: 'http://100.64.0.2:7860' }
 
