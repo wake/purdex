@@ -10,6 +10,8 @@ import {
   NexApiError,
   type AttachControlResponse,
   type AttachObserveResponse,
+  type DelegateRequest,
+  type DelegateResult,
   type EventsPage,
   type ExecutionSummary,
   type ExecutionsPage,
@@ -87,6 +89,30 @@ export function listExecutions(hostId: string, opts: ListExecutionsOptions = {})
   if (opts.limit) q.set('limit', String(opts.limit))
   const qs = q.toString()
   return nexFetch(hostId, `/v1/executions${qs ? `?${qs}` : ''}`).then((r) => okJson<ExecutionsPage>(r))
+}
+
+export function delegateExecution(
+  hostId: string,
+  req: DelegateRequest,
+  caps: Pick<NexCapabilities, 'delegate'> | null,
+): Promise<DelegateResult> {
+  // Fail-closed (spec F1): only an explicit `true` from the host's own
+  // capabilities proves it will honour resume_session_id; anything else
+  // (older daemon, capabilities not yet fetched) must not silently start a
+  // fresh session under a brief that assumed continuity.
+  if (req.resume_session_id !== undefined && caps?.delegate?.resume_session_id !== true) {
+    return Promise.reject(new NexApiError(0, 'resume_unsupported', 'host does not support resume_session_id'))
+  }
+  const body: Record<string, unknown> = {
+    provider: 'claude',
+    brief: req.brief,
+    mounts: [{ path: req.cwd, role: 'cwd', writable: true }],
+  }
+  if (req.profile !== undefined) body.sandbox_profile = req.profile
+  if (req.labels !== undefined) body.labels = req.labels
+  if (req.origin !== undefined) body.origin = req.origin
+  if (req.resume_session_id !== undefined) body.resume_session_id = req.resume_session_id
+  return postJson(hostId, '/v1/executions', body).then((r) => okJson<DelegateResult>(r))
 }
 
 export function getExecution(hostId: string, executionId: string): Promise<ExecutionSummary> {

@@ -1,20 +1,59 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import NexEngineStatus from './NexEngineStatus'
 import * as api from '../../../lib/nex/nex-api'
+import { useHostStore } from '../../../stores/useHostStore'
+import { useNexHostStore, type NexHostEntry } from '../../../stores/useNexHostStore'
 import type { NexInfo } from '../../../lib/host-api'
+import type { NexCapabilities } from '../../../lib/nex/types'
 
 vi.mock('../../../lib/nex/nex-api', () => ({ fetchNexHost: vi.fn(), fetchNexCapabilities: vi.fn() }))
 
 const ready: NexInfo = { configured: true, mounted: true, ready: true, init_error: '', effective: { data_dir: '/d/nex', claude_bin: '', max_profile: 'handoff', default_profile: 'standard', repo_roots: ['/Users/w/Workspace'], service_roots: [], path_prefix: '/opt/bin', lease_ttl: '2m0s', interrupt: '10s', turn: '5m0s' } }
 
+// sandbox_default_profile/sandbox_max_profile deliberately differ from
+// `ready.effective.{default_profile,max_profile}` so a fix#1 regression
+// (reading the clamped live capability instead of the configured
+// effective value) shows up as a wrong string, not a false pass.
+const caps: NexCapabilities = { phase: 'P1a', host_id: 'mlab', verbs: [], providers: ['claude'], events: [], provider_events: [], transient_events: [], sandbox_profiles: ['readonly', 'standard'], sandbox_default_profile: 'readonly', sandbox_max_profile: 'standard', roots: [{ path: '/Users/w/Workspace', kind: 'dev' }], lease: { ttl_seconds: 120, scope: 'execution', renew: { method: 'POST', path: '' }, release: { method: 'DELETE', path: '' } }, send: { delivery: [], max_text_bytes: 65536 } }
+
+/** Seed the store with a settled entry, as `ensure` would have committed it. */
+function seed(hostId: string, capabilities: NexCapabilities | null, over: Partial<NexHostEntry> = {}) {
+  act(() => {
+    useNexHostStore.setState((s) => ({
+      byHost: {
+        ...s.byHost,
+        [hostId]: {
+          info: ready, capabilities, phase: capabilities ? 'ready' : 'unavailable',
+          error: capabilities ? null : 'nexen down', fetchedAt: Date.now(), generation: 1, fingerprint: '', ...over,
+        },
+      },
+    }))
+  })
+}
+
+let ensureSpy: Mock<(hostId: string) => Promise<void>>
+let invalidateSpy: Mock<(hostId: string) => Promise<void>>
+
 beforeEach(() => {
   vi.mocked(api.fetchNexHost).mockReset().mockResolvedValue({ active_account: 'wake@example.com', quota: { five_hour_pct: 12.5, seven_day_pct: 80, resets_at: 0, source: 'usage_api' } })
-  // sandbox_default_profile/sandbox_max_profile deliberately differ from
-  // `ready.effective.{default_profile,max_profile}` so a fix#1 regression
-  // (reading the clamped live capability instead of the configured
-  // effective value) shows up as a wrong string, not a false pass.
-  vi.mocked(api.fetchNexCapabilities).mockReset().mockResolvedValue({ phase: 'P1a', host_id: 'mlab', verbs: [], providers: ['claude'], events: [], provider_events: [], transient_events: [], sandbox_profiles: ['readonly', 'standard'], sandbox_default_profile: 'readonly', sandbox_max_profile: 'standard', roots: [{ path: '/Users/w/Workspace', kind: 'dev' }], lease: { ttl_seconds: 120, scope: 'execution', renew: { method: 'POST', path: '' }, release: { method: 'DELETE', path: '' } }, send: { delivery: [], max_text_bytes: 65536 } })
+  vi.mocked(api.fetchNexCapabilities).mockReset()
+  const host = (id: string, ip: string) => ({ id, name: id, ip, port: 7860, order: 0 })
+  useHostStore.setState({
+    hosts: { h: host('h', '1.2.3.4'), a: host('a', '1.2.3.5'), b: host('b', '1.2.3.6') },
+    hostOrder: ['h', 'a', 'b'],
+    runtime: { h: { status: 'connected' }, a: { status: 'connected' }, b: { status: 'connected' } },
+  })
+  // The store's fetching is covered by its own suite; the card only asks it
+  // to `ensure`/`invalidate` and renders what it holds.
+  ensureSpy = vi.fn<(hostId: string) => Promise<void>>().mockResolvedValue(undefined)
+  invalidateSpy = vi.fn<(hostId: string) => Promise<void>>().mockResolvedValue(undefined)
+  useNexHostStore.setState({ byHost: {}, ensure: ensureSpy, invalidate: invalidateSpy })
+  seed('h', caps)
+})
+
+afterEach(() => {
+  useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {} })
 })
 
 describe('NexEngineStatus', () => {
@@ -22,6 +61,7 @@ describe('NexEngineStatus', () => {
     render(<NexEngineStatus hostId="h" info={{ configured: false, mounted: false, ready: false, init_error: '', effective: null }} onRefresh={() => {}} />)
     expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/disabled/i)
     expect(api.fetchNexHost).not.toHaveBeenCalled()
+    expect(ensureSpy).not.toHaveBeenCalled()
   })
 
   it('shows "not running" when configured but not mounted', () => {
@@ -40,13 +80,17 @@ describe('NexEngineStatus', () => {
     render(<NexEngineStatus hostId="h" info={{ configured: true, mounted: true, ready: false, init_error: 'nex: init: assembling engine: boom', effective: null }} onRefresh={() => {}} />)
     expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/unavailable/i)
     expect(screen.getByText(/boom/)).toBeInTheDocument()
-    expect(api.fetchNexCapabilities).not.toHaveBeenCalled()
+    expect(ensureSpy).not.toHaveBeenCalled()
+    expect(api.fetchNexHost).not.toHaveBeenCalled()
   })
 
-  it('when ready, renders effective config, account, quota bars, roots, profiles', async () => {
+  it('when ready, ensures the store entry and renders effective config, account, quota bars, roots, profiles', async () => {
     render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)
     expect(screen.getByTestId('nex-status-badge')).toHaveTextContent(/ready/i)
     await waitFor(() => expect(screen.getByText('wake@example.com')).toBeInTheDocument())
+    expect(ensureSpy).toHaveBeenCalledWith('h')
+    // Capabilities come from the store, not a fetch of the card's own.
+    expect(api.fetchNexCapabilities).not.toHaveBeenCalled()
     expect(screen.getByText('P1a · mlab')).toBeInTheDocument()
     expect(screen.getByText('12.5%')).toBeInTheDocument()
     expect(screen.getByText('80%')).toBeInTheDocument()
@@ -58,14 +102,22 @@ describe('NexEngineStatus', () => {
     expect(screen.getByText('/d/nex')).toBeInTheDocument()
   })
 
-  it('profiles row shows effective values even when fetchNexCapabilities rejects', async () => {
-    vi.mocked(api.fetchNexCapabilities).mockRejectedValueOnce(new Error('nexen down'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('profiles row shows effective values even when the store has no capabilities (engine unavailable)', async () => {
+    seed('h', null)
     render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)
     expect(screen.getByText('standard / handoff')).toBeInTheDocument()
-    await waitFor(() => expect(api.fetchNexCapabilities).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByText('wake@example.com')).toBeInTheDocument())
     expect(screen.getByText('standard / handoff')).toBeInTheDocument()
-    warn.mockRestore()
+    expect(screen.queryByText('P1a · mlab')).not.toBeInTheDocument()
+  })
+
+  it('re-renders the phase row when the store gains capabilities later', async () => {
+    useNexHostStore.setState({ byHost: {} })
+    render(<NexEngineStatus hostId="h" info={ready} onRefresh={() => {}} />)
+    await waitFor(() => expect(screen.getByText('wake@example.com')).toBeInTheDocument())
+    expect(screen.queryByText('P1a · mlab')).not.toBeInTheDocument()
+    seed('h', caps)
+    expect(screen.getByText('P1a · mlab')).toBeInTheDocument()
   })
 
   // nexen v0.11.0 resolves the host's own Claude Code login out of two
@@ -102,31 +154,41 @@ describe('NexEngineStatus', () => {
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
   })
 
-  it('Refresh calls onRefresh and refetches', async () => {
+  it('Refresh calls onRefresh (the page invalidates the store) and refetches the account card', async () => {
     const onRefresh = vi.fn()
     render(<NexEngineStatus hostId="h" info={ready} onRefresh={onRefresh} />)
     await waitFor(() => expect(api.fetchNexHost).toHaveBeenCalledTimes(1))
+    expect(ensureSpy).toHaveBeenCalledTimes(1)
     screen.getByRole('button', { name: /refresh/i }).click()
     expect(onRefresh).toHaveBeenCalled()
     await waitFor(() => expect(api.fetchNexHost).toHaveBeenCalledTimes(2))
+    // One store refetch per Refresh: the page's onRefresh owns `invalidate`;
+    // the card only re-ensures (a no-op while that refetch is in flight).
+    await waitFor(() => expect(ensureSpy).toHaveBeenCalledTimes(2))
+    expect(invalidateSpy).not.toHaveBeenCalled()
   })
 
   it('drops the previous host\'s account and phase when the next host\'s fetch fails', async () => {
+    seed('a', caps)
+    seed('b', null)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { rerender } = render(<NexEngineStatus hostId="a" info={ready} onRefresh={() => {}} />)
     await waitFor(() => expect(screen.getByText('wake@example.com')).toBeInTheDocument())
     expect(screen.getByText('P1a · mlab')).toBeInTheDocument()
 
-    vi.mocked(api.fetchNexCapabilities).mockRejectedValueOnce(new Error('host b down'))
+    vi.mocked(api.fetchNexHost).mockRejectedValueOnce(new Error('host b down'))
     rerender(<NexEngineStatus hostId="b" info={ready} onRefresh={() => {}} />)
 
-    await waitFor(() => expect(api.fetchNexCapabilities).toHaveBeenCalledWith('b'))
+    await waitFor(() => expect(api.fetchNexHost).toHaveBeenCalledWith('b'))
+    expect(ensureSpy).toHaveBeenCalledWith('b')
     await waitFor(() => expect(screen.queryByText('wake@example.com')).not.toBeInTheDocument())
     expect(screen.queryByText('P1a · mlab')).not.toBeInTheDocument()
     warn.mockRestore()
   })
 
   it('ignores a stale response for the previous host that resolves after the switch', async () => {
+    seed('a', caps)
+    seed('b', caps)
     let resolveA!: (h: Awaited<ReturnType<typeof api.fetchNexHost>>) => void
     vi.mocked(api.fetchNexHost).mockImplementationOnce(() => new Promise((r) => { resolveA = r }))
     const { rerender } = render(<NexEngineStatus hostId="a" info={ready} onRefresh={() => {}} />)

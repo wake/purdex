@@ -5,6 +5,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useStreamStore, type PerSessionState } from '../stores/useStreamStore'
 import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
+import { useNexHostStore } from '../stores/useNexHostStore'
 import { releaseLease } from './nex/nex-api'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { usePeerStore } from '../stores/usePeerStore'
@@ -173,6 +174,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
   }
   useExecutionStore.getState().clearHost(hostId)
+  useNexHostStore.getState().clearHost(hostId)
   useHostSettingsStore.getState().clearHost(hostId)
   // Peer rows are a cache of a daemon that is no longer configured. Nothing to
   // snapshot: undo restores the host, and the first render that needs its peers

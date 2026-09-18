@@ -5,6 +5,7 @@ import {
   clearNewTabRegistry,
   unregisterNewTabProvidersByModule,
   registerNewTabProviderSource,
+  unregisterNewTabProviderSource,
   subscribeNewTabProviders,
   getStaleNewTabProviderIds,
   getReadyNewTabProviders,
@@ -222,5 +223,77 @@ describe('new-tab-registry — dynamic provider sources', () => {
     expect(getNewTabProviders().map((p) => p.id)).toEqual(['dyn:z'])
     clearNewTabRegistry()
     expect(getNewTabProviders()).toHaveLength(0)
+  })
+})
+
+describe('new-tab-registry — source teardown', () => {
+  function makeSource(id: string, ids: string[], moduleId?: string) {
+    const listeners = new Set<() => void>()
+    return {
+      source: {
+        id,
+        moduleId,
+        getProviders: () => ids.map((x) => ({ id: `${id}:${x}`, label: id, icon: 'List', order: 1, component: Stub })),
+        subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } },
+        ownsId: (pid: string) => pid.startsWith(`${id}:`),
+      },
+      emit() { listeners.forEach((l) => l()) },
+      listenerCount: () => listeners.size,
+    }
+  }
+
+  it('unregisterNewTabProvidersByModule removes sources with that moduleId and releases their subscriptions', () => {
+    const owned = makeSource('headless', ['h1', 'h2'], 'execution')
+    const sessions = makeSource('sessions', ['h1']) // no moduleId — never module-owned
+    registerNewTabProvider({ id: 'static', label: 's', icon: 'S', order: 0, component: Stub, moduleId: 'execution' })
+    registerNewTabProviderSource(owned.source)
+    registerNewTabProviderSource(sessions.source)
+    let calls = 0
+    const unsub = subscribeNewTabProviders(() => { calls++ })
+    expect(owned.listenerCount()).toBe(1)
+
+    unregisterNewTabProvidersByModule('execution')
+
+    expect(getNewTabProviders().map((p) => p.id)).toEqual(['sessions:h1'])
+    expect(owned.listenerCount()).toBe(0)
+    const before = calls
+    owned.emit()
+    expect(calls).toBe(before) // the removed source no longer reaches the registry listener
+    expect(sessions.listenerCount()).toBe(1)
+    sessions.emit()
+    expect(calls).toBe(before + 1)
+    expect(getStaleNewTabProviderIds(['headless:h1'])).toEqual([]) // nobody owns it any more
+    unsub()
+  })
+
+  it('unregisterNewTabProvidersByModule leaves sources without a moduleId untouched', () => {
+    const sessions = makeSource('sessions', ['h1'])
+    registerNewTabProviderSource(sessions.source)
+    let calls = 0
+    const unsub = subscribeNewTabProviders(() => { calls++ })
+    unregisterNewTabProvidersByModule('execution')
+    expect(calls).toBe(0) // nothing changed → no registry notification
+    expect(getNewTabProviders().map((p) => p.id)).toEqual(['sessions:h1'])
+    expect(sessions.listenerCount()).toBe(1)
+    unsub()
+  })
+
+  it('unregisterNewTabProviderSource removes one source by id and notifies; unknown ids are a no-op', () => {
+    const a = makeSource('a', ['x'])
+    const b = makeSource('b', ['y'])
+    registerNewTabProviderSource(a.source)
+    registerNewTabProviderSource(b.source)
+    let calls = 0
+    const unsub = subscribeNewTabProviders(() => { calls++ })
+
+    unregisterNewTabProviderSource('a')
+    expect(calls).toBe(1)
+    expect(getNewTabProviders().map((p) => p.id)).toEqual(['b:y'])
+    expect(a.listenerCount()).toBe(0)
+    expect(b.listenerCount()).toBe(1)
+
+    unregisterNewTabProviderSource('missing')
+    expect(calls).toBe(1)
+    unsub()
   })
 })

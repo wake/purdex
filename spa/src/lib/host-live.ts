@@ -12,3 +12,13 @@ export function isHostLive(hostId: string): boolean {
   const rt = s.runtime[hostId]
   return !!s.hosts[hostId] && !!rt && rt.status === 'connected' && rt.tmuxState !== 'unavailable'
 }
+
+/**
+ * The host still exists and its daemon is connected — tmux is not consulted.
+ * The gate for work the daemon does on its own (a headless Nexen delegation
+ * needs no tmux session, so a host whose tmux is unavailable is still fine).
+ */
+export function isHostDaemonLive(hostId: string): boolean {
+  const s = useHostStore.getState()
+  return !!s.hosts[hostId] && s.runtime[hostId]?.status === 'connected'
+}

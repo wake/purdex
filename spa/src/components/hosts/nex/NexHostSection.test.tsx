@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { NexHostSection } from './NexHostSection'
 import { useHostStore } from '../../../stores/useHostStore'
+import { startNexHostInvalidation, useNexHostStore } from '../../../stores/useNexHostStore'
 import type { ConfigData, NexConfig, NexInfo } from '../../../lib/host-api'
 
 vi.mock('../../../lib/host-api', async (importOriginal) => {
@@ -98,8 +99,15 @@ function setRuntimeStatus(status: 'connected' | 'disconnected' | 'reconnecting' 
   })
 }
 
+// `/api/info` now reaches the page through useNexHostStore (spec §4.1): the
+// `fetchInfo` mock feeds the store's fetch, and the reconnect refetch is the
+// store watcher's — started here as main.tsx does.
+let stopNexHostInvalidation: () => void
+
 beforeEach(() => {
   vi.clearAllMocks()
+  for (const id of ['test-host', 'host-b']) useNexHostStore.getState().clearHost(id)
+  stopNexHostInvalidation = startNexHostInvalidation()
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'TestHost', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],
@@ -116,6 +124,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  stopNexHostInvalidation()
   useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {} })
 })
 

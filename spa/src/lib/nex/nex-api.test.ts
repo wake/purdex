@@ -5,6 +5,7 @@ import {
   nexFetch, fetchNexCapabilities, listExecutions, fetchExecutionEvents,
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
   getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
+  delegateExecution,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -189,6 +190,108 @@ describe('nex-api', () => {
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/terminate')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+  })
+
+  describe('delegateExecution', () => {
+    const supported = { delegate: { resume_session_id: true } }
+    const unsupported = { delegate: {} }
+
+    it('maps the minimal request onto the F2 body: provider claude, one writable cwd mount, no optional fields', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_1', state: 'queued' }))
+      const r = await delegateExecution(hostId, { brief: 'do it', cwd: '/w/repo' }, unsupported)
+      expect(r).toEqual({ id: 'exc_1', state: 'queued' })
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions')
+      expect(init.method).toBe('POST')
+      expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+      expect(JSON.parse(init.body)).toEqual({
+        provider: 'claude',
+        brief: 'do it',
+        mounts: [{ path: '/w/repo', role: 'cwd', writable: true }],
+      })
+    })
+
+    it('sends sandbox_profile only when profile is given', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_1', state: 'queued' }))
+      await delegateExecution(hostId, { brief: 'b', cwd: '/w', profile: 'trusted' }, unsupported)
+      expect(JSON.parse(testGlobal.fetch.mock.calls[0][1].body).sandbox_profile).toBe('trusted')
+
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_2', state: 'queued' }))
+      await delegateExecution(hostId, { brief: 'b', cwd: '/w' }, unsupported)
+      expect(JSON.parse(testGlobal.fetch.mock.calls[1][1].body)).not.toHaveProperty('sandbox_profile')
+    })
+
+    it('passes labels and origin through verbatim', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_1', state: 'queued' }))
+      await delegateExecution(hostId, { brief: 'b', cwd: '/w', labels: { team: 'a', 'x-y': 'z' }, origin: 'purdex/newtab' }, unsupported)
+      const body = JSON.parse(testGlobal.fetch.mock.calls[0][1].body)
+      expect(body.labels).toEqual({ team: 'a', 'x-y': 'z' })
+      expect(body.origin).toBe('purdex/newtab')
+    })
+
+    it('puts resume_session_id on the wire when capabilities.delegate.resume_session_id === true', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_1', state: 'queued' }))
+      await delegateExecution(hostId, { brief: 'b', cwd: '/w', resume_session_id: 'sid-1' }, supported)
+      expect(JSON.parse(testGlobal.fetch.mock.calls[0][1].body).resume_session_id).toBe('sid-1')
+    })
+
+    it('rejects resume_unsupported before any fetch when resume_session_id is set but the host does not advertise it', async () => {
+      const err = await delegateExecution(hostId, { brief: 'b', cwd: '/w', resume_session_id: 'sid-1' }, unsupported).catch((e) => e)
+      expect(err).toBeInstanceOf(NexApiError)
+      expect(err).toMatchObject({ status: 0, code: 'resume_unsupported' })
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('treats a non-boolean-true advertisement as unsupported (fail-closed)', async () => {
+      const err = await delegateExecution(hostId, { brief: 'b', cwd: '/w', resume_session_id: 'sid-1' }, { delegate: { resume_session_id: 'true' as never } }).catch((e) => e)
+      expect(err).toMatchObject({ code: 'resume_unsupported' })
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('rejects resume_unsupported when capabilities are null (unknown) and resume_session_id is set', async () => {
+      const err = await delegateExecution(hostId, { brief: 'b', cwd: '/w', resume_session_id: 'sid-1' }, null).catch((e) => e)
+      expect(err).toBeInstanceOf(NexApiError)
+      expect(err).toMatchObject({ status: 0, code: 'resume_unsupported' })
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('does not require capabilities when no resume_session_id is requested', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_1', state: 'queued' }))
+      await expect(delegateExecution(hostId, { brief: 'b', cwd: '/w' }, null)).resolves.toMatchObject({ id: 'exc_1' })
+      expect(JSON.parse(testGlobal.fetch.mock.calls[0][1].body)).not.toHaveProperty('resume_session_id')
+    })
+
+    it('returns a 200 rejected row as data, not an error', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'exc_1', state: 'rejected', reject_reason: 'cwd_outside_roots' }))
+      await expect(delegateExecution(hostId, { brief: 'b', cwd: '/nope' }, unsupported))
+        .resolves.toEqual({ id: 'exc_1', state: 'rejected', reject_reason: 'cwd_outside_roots' })
+    })
+
+    it('throws NexApiError(400, invalid_brief) from the body code', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'brief too long', code: 'invalid_brief' }, 400))
+      const err = await delegateExecution(hostId, { brief: 'b', cwd: '/w' }, unsupported).catch((e) => e)
+      expect(err).toBeInstanceOf(NexApiError)
+      expect(err).toMatchObject({ status: 400, code: 'invalid_brief', message: 'brief too long' })
+    })
+
+    it('throws NexApiError(400, invalid_origin) from the body code', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'origin too long', code: 'invalid_origin' }, 400))
+      await expect(delegateExecution(hostId, { brief: 'b', cwd: '/w', origin: 'x' }, unsupported))
+        .rejects.toMatchObject({ status: 400, code: 'invalid_origin' })
+    })
+
+    it('throws NexApiError(503, nex_unavailable) when pdx has no nex mounted', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'nex not mounted', code: 'nex_unavailable' }, 503))
+      await expect(delegateExecution(hostId, { brief: 'b', cwd: '/w' }, unsupported))
+        .rejects.toMatchObject({ status: 503, code: 'nex_unavailable' })
+    })
+
+    it('rejects host_removed for an unknown host without calling fetch', async () => {
+      const err = await delegateExecution('unknown-host', { brief: 'b', cwd: '/w' }, unsupported).catch((e) => e)
+      expect(err).toBeInstanceOf(NexApiError)
+      expect(err).toMatchObject({ status: 0, code: 'host_removed' })
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
   })
 
   it('resolveExecutionHostId returns a present hint verbatim — even an unknown one — and only falls back when the hint is absent (spec §4.3.2 step 5)', () => {

@@ -5,6 +5,7 @@ import {
   registerNewTabProvider,
   registerNewTabProviderSource,
   clearNewTabRegistry,
+  getNewTabProviders,
   type NewTabProviderProps,
 } from '../lib/new-tab-registry'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
@@ -18,6 +19,9 @@ import type { Session } from '../lib/host-api'
 import { createTab, type PaneContent, type Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import * as paneMove from '../lib/pane-move'
+import { createHeadlessProviderSource } from '../lib/headless-new-tab-providers'
+import { useHostStore } from '../stores/useHostStore'
+import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
 
 // Keep MOVABLE_KINDS (imported by NewTabPage) real; only spy the mover.
 vi.mock('../lib/pane-move', async (importOriginal) => {
@@ -585,5 +589,97 @@ describe('NewTabPage — dynamic providers', () => {
     expect(screen.queryByText('dyn-b')).toBeNull()
     act(() => { ids = ['a', 'b']; listeners.forEach((l) => l()) })
     expect(screen.getByText('dyn-b')).toBeTruthy()
+  })
+})
+
+// P-C.1 task 5 — the Headless source adds one `headless:<hostId>` block per
+// host and nothing else: the sessions / editor / browser entries keep their
+// ids and relative order (spec §4.2 ordering guard).
+describe('NewTabPage — Headless section per host (P-C.1)', () => {
+  const FakeEditor: React.FC<NewTabProviderProps> = () => <div data-testid="card-editor">editor</div>
+  const FakeBrowser: React.FC<NewTabProviderProps> = () => <div data-testid="card-browser">browser</div>
+  const FakeSessions = (hostId: string): React.FC<NewTabProviderProps> => () => (
+    <div data-testid={`card-sessions-${hostId}`}>sessions</div>
+  )
+  const disabledEntry = (): NexHostEntry => ({
+    info: { configured: false, mounted: false, ready: false, init_error: '', effective: null } as never,
+    capabilities: null,
+    phase: 'disabled',
+    error: null,
+    fetchedAt: 1,
+    generation: 1,
+    fingerprint: '',
+  })
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'mlab', ip: '1', port: 7860, order: 0 },
+        h2: { id: 'h2', name: 'air', ip: '2', port: 7860, order: 1 },
+      },
+      hostOrder: ['h1', 'h2'],
+      activeHostId: 'h1',
+    })
+    // `disabled` renders the one-line hint and performs no fetch; `ensure` is
+    // stubbed so mounting never reaches the network either.
+    useNexHostStore.setState({
+      byHost: { h1: disabledEntry(), h2: disabledEntry() },
+      ensure: vi.fn(async () => {}),
+    })
+    useI18nStore.setState({ t: (k: string, p?: Record<string, string | number>) => (p?.host ? `${k}:${p.host}` : k) })
+  })
+
+  afterEach(() => {
+    useNexHostStore.setState({ byHost: {} })
+  })
+
+  function registerLikeBootstrap() {
+    // Same shape and order as register-modules/index.tsx: browser (static,
+    // order -10), sessions source (order 0), headless source (order 5),
+    // editor (static, order 5).
+    registerNewTabProvider({ id: 'browser', label: 'browser.provider_label', icon: 'Globe', order: -10, component: FakeBrowser })
+    registerNewTabProviderSource({
+      id: 'sessions',
+      getProviders: () => useHostStore.getState().hostOrder.map((h) => ({
+        id: `sessions:${h}`, label: 'session.provider_label_host', labelParams: { host: h }, icon: 'List', order: 0, component: FakeSessions(h),
+      })),
+      subscribe: () => () => {},
+      ownsId: (id) => id.startsWith('sessions:'),
+    })
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    registerNewTabProvider({ id: 'editor', label: 'editor.provider_label', icon: 'File', order: 5, component: FakeEditor, moduleId: 'editor' })
+  }
+
+  it('adds only headless:<hostId> ids, after every pre-existing provider of lower or equal order', () => {
+    registerLikeBootstrap()
+    expect(getNewTabProviders().map((p) => p.id)).toEqual([
+      'browser', 'sessions:h1', 'sessions:h2', 'editor', 'headless:h1', 'headless:h2',
+    ])
+  })
+
+  it('renders one Headless section per host while the sessions / editor / browser sections keep their order', () => {
+    registerLikeBootstrap()
+    const ids = ['browser', 'sessions:h1', 'sessions:h2', 'editor', 'headless:h1', 'headless:h2']
+    primeLayout(ids)
+
+    const { container } = render(<NewTabPage onSelect={() => {}} />)
+
+    const headings = [...container.querySelectorAll('section > h3')].map((h) => h.textContent)
+    expect(headings).toEqual([
+      'browser.provider_label',
+      'session.provider_label_host:h1',
+      'session.provider_label_host:h2',
+      'editor.provider_label',
+      'newtab.headless.title:mlab',
+      'newtab.headless.title:air',
+    ])
+    expect(screen.getByTestId('card-browser')).toBeTruthy()
+    expect(screen.getByTestId('card-sessions-h1')).toBeTruthy()
+    expect(screen.getByTestId('card-sessions-h2')).toBeTruthy()
+    expect(screen.getByTestId('card-editor')).toBeTruthy()
+    // Two Headless blocks, each on its `disabled` line; ensure() ran per host, no fetch.
+    expect(screen.getAllByTestId('headless-disabled')).toHaveLength(2)
+    const ensure = vi.mocked(useNexHostStore.getState().ensure)
+    expect(ensure.mock.calls.map((c) => c[0]).sort()).toEqual(['h1', 'h2'])
   })
 })

@@ -9,6 +9,7 @@ import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger
 import { startDeviceStateUploader } from './lib/device-state/uploader'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
+import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -31,6 +32,8 @@ startHostConfigLoader()
 // Peer cache: drop a host's cached peer rows when its daemon identity changes
 // (removed, re-pointed, token rotated) — a cached address belongs to a daemon.
 startPeerCacheInvalidation()
+// Nex readiness cache: refetch a host's /api/info + capabilities when its daemon reconnects.
+startNexHostInvalidation()
 
 useLayoutStore.getState().reconcileViews()
 
