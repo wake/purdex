@@ -72,9 +72,8 @@ func (m *SessionModule) Init(c *core.Core) error {
 	m.core = c
 	m.tmux = c.Tmux
 	c.Registry.Register(RegistryKey, SessionProvider(m))
-	// One handoff lock instance for the daemon (HandoffLocksKey): the
-	// stream and nex modules both depend on "session", so it exists before
-	// either Init reads it.
+	// One handoff lock instance for the daemon (HandoffLocksKey): the nex
+	// module depends on "session", so it exists before its Init reads it.
 	c.Registry.Register(HandoffLocksKey, NewHandoffLocks())
 	return nil
 }
