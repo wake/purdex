@@ -20,6 +20,17 @@ describe('applyDurableEvent', () => {
     expect(s.lastSeq).toBe(2)
   })
 
+  it('advances lastSeq on the N2 tool_use / tool_result kinds but does not append them as messages (nexen v0.12.0; consumed in a later phase)', () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, ev(1, 'assistant', { type: 'assistant', message: { role: 'assistant', content: [], stop_reason: null } }))
+    s = applyDurableEvent(s, ev(2, 'tool_use', { tool_use_id: 'toolu_1', parent_tool_use_id: null, name: 'Bash', primary_arg: 'ls' }))
+    s = applyDurableEvent(s, ev(3, 'tool_result', { tool_use_id: 'toolu_1', parent_tool_use_id: null, status: 'ok', duration_ms: 12 }))
+    expect(s.messages).toHaveLength(1)
+    expect(s.lastSeq).toBe(3)
+    // Not a turn end, not a send acknowledgement either.
+    expect(s.pendingSend).toBe(defaultExecutionState().pendingSend)
+  })
+
   it('is idempotent by seq', () => {
     let s = defaultExecutionState()
     s = applyDurableEvent(s, ev(5, 'assistant', { type: 'assistant' }))
