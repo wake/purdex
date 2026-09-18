@@ -1,6 +1,6 @@
 # Spec — P-B3: exec pane consumes Nexen N2 `tool_use` / `tool_result`
 
-- Status: v1.3 (2026-09-19) — codex plan review, PR #1221 and PR #1223 R1/R2 applied (§9)
+- Status: v1.4 (2026-09-19) — codex plan review, PR #1221 / #1223 / #1225 R1/R2 applied (§9)
 - Predecessors: `2026-09-15-pb-execution-pane-spec.md` (P-B, §4.2.3
   transport / §4.2.4 reducer rules stay binding) and
   `2026-09-18-pb2-exec-live-stream-spec.md` (P-B2, §4.1 partial assembly
@@ -232,7 +232,7 @@ the kinds are then **not** appended to `messages` and do not touch
   taken by type check, never by trust; a malformed `diff` (non-array
   hunks, non-numeric counts) is dropped as a whole rather than partially
   copied. Numbers must be finite and, for counts / line numbers / byte and
-  line totals, non-negative integers (`duration_ms` non-negative, may be
+  line totals, non-negative **safe** integers (`duration_ms` non-negative, may be
   0); a `diff` whose hunks total more than `DIFF_LINES_SANITY_CAP`
   (10 000 — 5× the contract's `diff_max_lines`, a defensive bound, not a
   display value) is dropped **before** any copy is made. Entry lookup is
@@ -326,7 +326,11 @@ DOM is driven by the raw `assistant` / `user` blocks (unchanged) and the
   one, `\` (no-newline marker) rows render muted and italic with no
   numbers. Line numbers are computed from `old_start` / `new_start` by
   walking the lines (` ` advances both, `-` old, `+` new, `\` neither).
-  `diff.truncated` → trailing muted row `t('execution.tool.diff_truncated')`.
+  `diff.truncated` → trailing muted row `t('execution.tool.diff_truncated')`,
+  shown even when every hunk was dropped (`hunks: []`, `truncated: true`
+  — the daemon drops whole hunks from the tail, so the first one alone
+  can exceed the cap); the view is mounted whenever there are hunks **or**
+  the diff is truncated.
   Long lines wrap (`whitespace-pre-wrap break-all`), unified only.
   Colours are hard-coded like the neighbouring blocks with the same TODO
   comment; no theme-token work in this phase.
@@ -496,3 +500,12 @@ now (F7 proves they exist).
   than reasoning about the invariant; denied badge + duration; bounded
   `previewValue` with depth 4 / `[Circular]` / `[unserializable]`); R4
   and R3 text below unchanged in intent.
+- 2026-09-19 PR #1225 (P-B3.3): R1 — no findings; attacker — A1
+  `hunks: []` + `truncated` hides the truncation note (high), A2 a 2000-line
+  diff is ~10k DOM nodes rendered synchronously on expand (medium), A3
+  `Number.isInteger` lets unsafe integers through to the `++` walker
+  (medium); critic — A1 / A3 agreed, A2 concern → follow-up (collapsed by
+  default, rendered only on click, no measurement yet), no other drift
+  (ASCII `-` in the sign column vs U+2212 in the R4 facts serve different
+  purposes). A1 / A3 fixed: R5 now mounts whenever `diff.truncated` even
+  with no hunks; N6 counts must be safe integers.
