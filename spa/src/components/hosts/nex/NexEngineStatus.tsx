@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { fetchNexCapabilities, fetchNexHost } from '../../../lib/nex/nex-api'
-import type { NexCapabilities, NexHostInfo } from '../../../lib/nex/types'
+import { useNexHostStore } from '../../../stores/useNexHostStore'
+import { fetchNexHost } from '../../../lib/nex/nex-api'
+import type { NexHostInfo } from '../../../lib/nex/types'
 import type { NexInfo } from '../../../lib/host-api'
 import { Field } from '../form-fields'
 import { isNexReady } from './nex-ready'
@@ -48,46 +49,54 @@ export default function NexEngineStatus({ hostId, info, onRefresh }: NexEngineSt
   const t = useI18nStore((s) => s.t)
   const [tick, setTick] = useState(0)
   const [host, setHost] = useState<NexHostInfo | null>(null)
-  const [caps, setCaps] = useState<NexCapabilities | null>(null)
+  // Capabilities (phase, roots, providers) come from the shared readiness
+  // store (spec §4.1) — already scoped per host, null while the engine is
+  // unavailable — so the card renders whatever it holds and only asks it to
+  // `ensure`. The account/quota card is not part of readiness and stays a
+  // local fetch.
+  const caps = useNexHostStore((s) => s.byHost[hostId]?.capabilities ?? null)
+  const ensure = useNexHostStore((s) => s.ensure)
 
   const ready = isNexReady(info)
 
-  // Clear the previous fetch's host/caps the moment a new one starts (host
+  // Clear the previous fetch's host the moment a new one starts (host
   // switch, ready flip, Refresh) — using the render-time adjust-state idiom
-  // so the effect below only fetches — so another host's account or phase
-  // is never shown while this host's request is pending or after it fails.
+  // so the effect below only fetches — so another host's account is never
+  // shown while this host's request is pending or after it fails.
   const fetchKey = `${hostId}:${ready}:${tick}`
   const [prevFetchKey, setPrevFetchKey] = useState(fetchKey)
   if (fetchKey !== prevFetchKey) {
     setPrevFetchKey(fetchKey)
     setHost(null)
-    setCaps(null)
   }
 
   useEffect(() => {
     if (!ready) return
     let cancelled = false
-    Promise.all([fetchNexHost(hostId), fetchNexCapabilities(hostId)])
-      .then(([h, c]) => {
+    void ensure(hostId)
+    fetchNexHost(hostId)
+      .then((h) => {
         if (cancelled) return
         setHost(h)
-        setCaps(c)
       })
       .catch((err) => {
         // Nexen can be down (network, 503) even when `info.ready` said it
         // was up moments ago — the card degrades to empty rows, never throws.
         if (cancelled) return
         setHost(null)
-        setCaps(null)
-        console.warn('NexEngineStatus: failed to load Nexen host/capabilities', err)
+        console.warn('NexEngineStatus: failed to load Nexen host', err)
       })
     return () => {
       cancelled = true
     }
-  }, [hostId, ready, tick])
+  }, [hostId, ready, tick, ensure])
 
   const state = badgeState(info)
 
+  // `onRefresh` is the page's refresh, which invalidates the store entry
+  // (one refetch per click — the card must not invalidate it a second time);
+  // the tick refetches the account card and re-ensures, a no-op while that
+  // refetch is in flight.
   const handleRefresh = () => {
     setTick((n) => n + 1)
     onRefresh()

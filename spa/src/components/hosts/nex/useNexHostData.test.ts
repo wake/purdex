@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { useNexHostData } from './useNexHostData'
 import { useHostStore } from '../../../stores/useHostStore'
-import type { NexInfo } from '../../../lib/host-api'
+import { useNexHostStore, type NexHostEntry } from '../../../stores/useNexHostStore'
+import type { NexConfig, NexInfo } from '../../../lib/host-api'
+import type { NexCapabilities } from '../../../lib/nex/types'
 
 vi.mock('../../../lib/host-api', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>
@@ -17,15 +19,37 @@ const HOST_ID = 'h1'
 
 const info = (over: Partial<NexInfo> = {}): NexInfo => ({ configured: true, mounted: true, ready: true, init_error: '', effective: null, ...over })
 
-function infoResponse(nex: NexInfo): Response {
+const caps: NexCapabilities = {
+  phase: 'P1a', host_id: 'h', verbs: [], providers: [], events: [], provider_events: [], transient_events: [],
+  sandbox_profiles: [], sandbox_default_profile: '', sandbox_max_profile: '', roots: [],
+  lease: { ttl_seconds: 0, scope: '', renew: { method: '', path: '' }, release: { method: '', path: '' } },
+  send: { delivery: [], max_text_bytes: 0 },
+}
+
+/** A settled store entry, as `ensure` would have committed it. */
+function entry(over: Partial<NexHostEntry> = {}): NexHostEntry {
+  return { info: info(), capabilities: caps, phase: 'ready', error: null, fetchedAt: Date.now(), generation: 1, ...over }
+}
+
+function seed(e: NexHostEntry | undefined, hostId = HOST_ID) {
+  act(() => {
+    useNexHostStore.setState((s) => {
+      const byHost = { ...s.byHost }
+      if (e) byHost[hostId] = e
+      else delete byHost[hostId]
+      return { byHost }
+    })
+  })
+}
+
+function configResponse(nex: NexConfig | { enabled: boolean } | undefined): Response {
   return { ok: true, json: () => Promise.resolve({ nex }) } as Response
 }
 
-function deferred() {
-  let resolve!: (r: Response) => void
-  const promise = new Promise<Response>((r) => { resolve = r })
-  return { promise, resolve }
-}
+const configCalls = () => mockHostFetch.mock.calls.filter((c) => c[1] === '/api/config').length
+
+let ensureSpy: Mock<(hostId: string) => Promise<void>>
+let invalidateSpy: Mock<(hostId: string) => Promise<void>>
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -34,8 +58,13 @@ beforeEach(() => {
     hostOrder: [HOST_ID],
     runtime: { [HOST_ID]: { status: 'connected' } },
   })
-  mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse(info())))
-  mockHostFetch.mockImplementation(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ nex: { enabled: true } }) } as Response))
+  // The store's own fetching is covered by useNexHostStore.test.ts; here it
+  // is stubbed so every `fetchInfo` call would be the hook's — and there
+  // must be none.
+  ensureSpy = vi.fn<(hostId: string) => Promise<void>>().mockResolvedValue(undefined)
+  invalidateSpy = vi.fn<(hostId: string) => Promise<void>>().mockResolvedValue(undefined)
+  useNexHostStore.setState({ byHost: {}, ensure: ensureSpy, invalidate: invalidateSpy })
+  mockHostFetch.mockImplementation(() => Promise.resolve(configResponse({ enabled: true })))
 })
 
 afterEach(() => {
@@ -43,59 +72,146 @@ afterEach(() => {
 })
 
 describe('useNexHostData', () => {
-  it('loads info and a normalised config, then reports ready', async () => {
+  it('reads info from the store, loads a normalised config, and never fetches /api/info itself', async () => {
+    seed(entry())
     const { result } = renderHook(() => useNexHostData(HOST_ID))
     expect(result.current.phase).toBe('loading')
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     expect(result.current.info?.ready).toBe(true)
     expect(result.current.config?.repo_roots).toEqual([])
+    expect(mockFetchInfo).not.toHaveBeenCalled()
+    expect(ensureSpy).toHaveBeenCalledWith(HOST_ID)
   })
 
   it('reports offline (and nothing else) while the host is not connected', () => {
+    seed(entry())
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
     const { result } = renderHook(() => useNexHostData(HOST_ID))
     expect(result.current.phase).toBe('offline')
   })
 
-  it('an older Refresh resolving after a newer one does not overwrite it', async () => {
+  it('stays loading until the store has info for the host, then re-renders on the store change', async () => {
     const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(configCalls()).toBe(1))
+    expect(result.current.phase).toBe('loading')
+    expect(result.current.info).toBeNull()
+
+    seed(entry({ info: info({ init_error: 'from store' }) }))
     await waitFor(() => expect(result.current.phase).toBe('ready'))
-
-    const older = deferred()
-    const newer = deferred()
-    mockFetchInfo.mockImplementationOnce(() => older.promise).mockImplementationOnce(() => newer.promise)
-    act(() => result.current.refresh())
-    act(() => result.current.refresh())
-
-    await act(async () => {
-      newer.resolve(infoResponse(info({ init_error: 'newer' })))
-      await newer.promise
-    })
-    await waitFor(() => expect(result.current.info?.init_error).toBe('newer'))
-
-    await act(async () => {
-      older.resolve(infoResponse(info({ init_error: 'older' })))
-      await older.promise
-    })
-    expect(result.current.info?.init_error).toBe('newer')
+    expect(result.current.info?.init_error).toBe('from store')
   })
 
-  it('a Refresh that fails after a newer successful one does not raise refreshError', async () => {
+  it('a config load failure yields failed even though the store has ready info', async () => {
+    seed(entry())
+    mockHostFetch.mockImplementation(() => Promise.reject(new Error('config unreachable')))
+    const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(result.current.phase).toBe('failed'))
+  })
+
+  it('a store entry whose initial /api/info fetch failed (no info) is a page-level failure', async () => {
+    seed(entry({ info: null, capabilities: null, phase: 'unavailable', error: '/api/info: 500' }))
+    const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(result.current.phase).toBe('failed'))
+  })
+
+  it('capabilities 503 (store unavailable) with info.ready true keeps the page ready', async () => {
+    seed(entry({ capabilities: null, phase: 'unavailable', error: 'engine down' }))
+    const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    expect(result.current.info?.ready).toBe(true)
+    expect(result.current.refreshError).toBe(false)
+  })
+
+  it('onConfigSaved applies the saved config and invalidates the host', async () => {
+    seed(entry())
+    const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    const before = configCalls()
+
+    act(() => result.current.onConfigSaved({
+      bind: '', port: 0, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 0 },
+      nex: { enabled: false, repo_roots: ['/x'], service_roots: [], claude_bin: '', path_prepend: [], sandbox: { max_profile: '', default_profile: '' }, timeouts: { lease_ttl: '', interrupt: '', turn: '' } },
+    }))
+
+    expect(invalidateSpy).toHaveBeenCalledWith(HOST_ID)
+    expect(result.current.config?.repo_roots).toEqual(['/x'])
+    expect(result.current.phase).toBe('ready')
+    expect(configCalls()).toBe(before)
+  })
+
+  it('refresh invalidates the host without refetching /api/config', async () => {
+    seed(entry())
+    const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    const before = configCalls()
+    act(() => result.current.refresh())
+    expect(invalidateSpy).toHaveBeenCalledWith(HOST_ID)
+    expect(configCalls()).toBe(before)
+  })
+
+  it('a failed refresh keeps the cards on the last info with refreshError; the next success clears it', async () => {
+    seed(entry())
     const { result } = renderHook(() => useNexHostData(HOST_ID))
     await waitFor(() => expect(result.current.phase).toBe('ready'))
 
-    let rejectOlder!: (e: Error) => void
-    mockFetchInfo
-      .mockImplementationOnce(() => new Promise<Response>((_r, rej) => { rejectOlder = rej }))
-      .mockImplementationOnce(() => Promise.resolve(infoResponse(info())))
-    act(() => result.current.refresh())
-    act(() => result.current.refresh())
-    await waitFor(() => expect(mockFetchInfo).toHaveBeenCalledTimes(3))
+    // What the store commits when the refetch behind `invalidate` fails.
+    seed(entry({ info: null, capabilities: null, phase: 'unavailable', error: '/api/info: 502' }))
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.refreshError).toBe(true)
+    expect(result.current.info?.ready).toBe(true)
 
-    await act(async () => {
-      rejectOlder(new Error('late failure'))
-      await Promise.resolve()
-    })
+    seed(entry({ info: info({ init_error: 'back' }) }))
     expect(result.current.refreshError).toBe(false)
+    expect(result.current.info?.init_error).toBe('back')
+  })
+
+  it('retry invalidates the host and reloads /api/config', async () => {
+    seed(entry())
+    mockHostFetch.mockImplementationOnce(() => Promise.reject(new Error('config unreachable')))
+    const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(result.current.phase).toBe('failed'))
+    const before = configCalls()
+
+    act(() => result.current.retry())
+    expect(invalidateSpy).toHaveBeenCalledWith(HOST_ID)
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    expect(configCalls()).toBe(before + 1)
+  })
+
+  it('a reconnect reloads /api/config and re-ensures the host (the store watcher owns the invalidate)', async () => {
+    seed(entry())
+    const { result } = renderHook(() => useNexHostData(HOST_ID))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    const before = configCalls()
+    const ensures = ensureSpy.mock.calls.length
+
+    act(() => { useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } }) })
+    expect(result.current.phase).toBe('offline')
+    act(() => { useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected' } } }) })
+
+    await waitFor(() => expect(configCalls()).toBe(before + 1))
+    expect(ensureSpy.mock.calls.length).toBe(ensures + 1)
+    expect(invalidateSpy).not.toHaveBeenCalled()
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+  })
+
+  it('switching host drops the previous host\'s info and loads the new one', async () => {
+    const OTHER = 'h2'
+    useHostStore.setState((s) => ({
+      hosts: { ...s.hosts, [OTHER]: { id: OTHER, name: 'O', ip: '1.2.3.5', port: 7860, order: 1 } },
+      runtime: { ...s.runtime, [OTHER]: { status: 'connected' } },
+    }))
+    seed(entry({ info: info({ init_error: 'host one' }) }))
+    const { result, rerender } = renderHook(({ id }) => useNexHostData(id), { initialProps: { id: HOST_ID } })
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    rerender({ id: OTHER })
+    expect(result.current.phase).toBe('loading')
+    expect(result.current.info).toBeNull()
+    expect(ensureSpy).toHaveBeenCalledWith(OTHER)
+
+    seed(entry({ info: info({ init_error: 'host two' }) }), OTHER)
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    expect(result.current.info?.init_error).toBe('host two')
   })
 })
