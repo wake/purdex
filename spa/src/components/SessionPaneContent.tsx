@@ -1,61 +1,23 @@
-import { useCallback, useEffect } from 'react'
+import { useEffect } from 'react'
 import TerminalView from './TerminalView'
-import ConversationView from './ConversationView'
 import { TerminatedPane } from './TerminatedPane'
-import { useSessionStore } from '../stores/useSessionStore'
-import { useStreamStore } from '../stores/useStreamStore'
-import { useConfigStore } from '../stores/useConfigStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { handoff, fetchWsTicket } from '../lib/host-api'
+import { fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import type { PaneRendererProps } from '../lib/module-registry'
 
-const EMPTY_PRESETS: Array<{ name: string; command: string }> = []
-
 export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   const content = pane.content
   const sessionCode = content.kind === 'tmux-session' ? content.sessionCode : ''
   const hostId = content.kind === 'tmux-session' ? content.hostId : ''
-  const mode = content.kind === 'tmux-session' ? content.mode : 'terminal'
   const tmuxInstance = content.kind === 'tmux-session' ? content.tmuxInstance : ''
   const terminated = content.kind === 'tmux-session' ? content.terminated : undefined
 
   const wsBase = useHostStore((s) => s.getWsBase(hostId))
-  const fetchHost = useSessionStore((s) => s.fetchHost)
-  const streamPresets = useConfigStore((s) => s.config?.stream?.presets ?? EMPTY_PRESETS)
-
-  const session = useSessionStore((s) =>
-    (s.sessions[hostId] ?? []).find((sess) => sess.code === sessionCode) ?? null,
-  )
-
-  const handleHandoff = useCallback(async () => {
-    if (!session) return
-    try {
-      const preset = streamPresets[0]?.name ?? 'cc'
-      useStreamStore.getState().setHandoffProgress(hostId, session.code, 'starting')
-      await handoff(hostId, session.code, 'stream', preset)
-      await fetchHost(hostId)
-    } catch (e) {
-      console.error('Handoff failed:', e)
-      useStreamStore.getState().setHandoffProgress(hostId, session.code, '')
-    }
-  }, [session, hostId, fetchHost, streamPresets])
-
-  const handleHandoffToTerm = useCallback(async () => {
-    if (!session) return
-    try {
-      useStreamStore.getState().setHandoffProgress(hostId, session.code, 'starting')
-      await handoff(hostId, session.code, 'terminal')
-      await fetchHost(hostId)
-    } catch (e) {
-      console.error('Handoff to term failed:', e)
-      useStreamStore.getState().setHandoffProgress(hostId, session.code, '')
-    }
-  }, [session, hostId, fetchHost])
 
   // Second of the two cwd-probe triggers (spec §4.4): a pane opened after the
   // session list has settled gets no further `sessions` broadcast, so it would
@@ -69,7 +31,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   // the probe fires when the gate opens under an already-mounted pane.
   const attachGateOpen = useHostStore((s) => (hostId ? s.runtime[hostId]?.attachReady === true : true))
   useEffect(() => {
-    if (mode !== 'terminal' || terminated) return
+    if (terminated) return
     if (!attachGateOpen) return
     probeSessionCwd(hostId, sessionCode, tmuxInstance)
     // The third provenance trigger (spec §5.4), under the same gate and the
@@ -78,7 +40,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     // would ever ask on its behalf. The probe itself decides whether this
     // binding still wants an answer.
     probeSessionProvenance(hostId, sessionCode, tmuxInstance)
-  }, [hostId, sessionCode, tmuxInstance, mode, terminated, attachGateOpen])
+  }, [hostId, sessionCode, tmuxInstance, terminated, attachGateOpen])
 
   // Look up tabId from store (pane renderers don't receive tabId as a prop)
   const tabId = useTabStore((s) => {
@@ -100,21 +62,12 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
 
   if (content.kind !== 'tmux-session') return null
 
-  if (mode === 'stream') {
-    return (
-      <ConversationView
-        hostId={hostId}
-        sessionCode={sessionCode}
-        isActive={isActive}
-        onHandoff={handleHandoff}
-        onHandoffToTerm={handleHandoffToTerm}
-      />
-    )
-  }
-
+  // Terminal is the only view a tmux-session pane has (P-D.3 tore down
+  // Stream mode), so the key no longer carries a mode suffix: nothing about
+  // the pane can change that would call for a remount here.
   return (
     <TerminalView
-      key={`${pane.id}-${mode}`}
+      key={pane.id}
       wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
       visible={isActive}
       hostId={hostId}
