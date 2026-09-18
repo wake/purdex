@@ -4,14 +4,13 @@ import "sync"
 
 // HandoffLocksKey is the service registry key for the daemon's one
 // *HandoffLocks. The session module creates the instance in Init and
-// registers it here; the stream module (legacy /handoff) and the nex module
-// (nex-handoff, nex-takeback) resolve it from the registry rather than
-// constructing their own, so every handoff-shaped operation on a session
-// code excludes every other one, whichever module drives it.
+// registers it here; the nex module (nex-handoff, nex-takeback) resolves it
+// from the registry rather than constructing its own, so every
+// handoff-shaped operation on a session code excludes every other one.
 const HandoffLocksKey = "session.handoff-locks"
 
 // HandoffLocks provides per-session mutual exclusion for handoff operations.
-// It is shared by the stream and nex modules.
+// The nex module is its only consumer.
 type HandoffLocks struct {
 	mu    sync.Mutex
 	locks map[string]struct{}

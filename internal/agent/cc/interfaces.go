@@ -2,7 +2,7 @@ package cc
 
 import "context"
 
-// CCOperator interface for use by stream module.
+// CCOperator interface for use by the nex module.
 type CCOperator interface {
 	Exit(ctx context.Context, tmuxTarget string) error
 	Launch(ctx context.Context, tmuxTarget string, cmd string) error
