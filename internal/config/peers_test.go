@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -260,6 +261,53 @@ func TestValidateAlias(t *testing.T) {
 		if err := config.ValidateAlias(alias, localAlias); err == nil {
 			t.Errorf("ValidateAlias(%q) vs local %q: want reject, got nil error", alias, localAlias)
 		}
+	}
+}
+
+// TestValidateSelfAlias pins spec S-1 (#1196): the self alias clears the
+// same shape/reserved rules as an entry alias, plus it must not
+// case-insensitively equal any configured peer host's alias. The empty
+// string is not this function's business (the handler clears without
+// validating), so it is deliberately absent from the table.
+func TestValidateSelfAlias(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air26", URL: "http://air:7860"}}
+
+	cases := []struct {
+		name      string
+		alias     string
+		hosts     []config.PeerHost
+		wantErr   bool
+		collision bool
+		wantText  string
+	}{
+		{name: "collides with a host alias", alias: "air26", hosts: hosts, wantErr: true, collision: true, wantText: `alias "air26" is already used by a peer host`},
+		{name: "collides case-insensitively", alias: "AIR26", hosts: hosts, wantErr: true, collision: true, wantText: `alias "AIR26" is already used by a peer host`},
+		{name: "distinct from every host", alias: "mlab", hosts: hosts},
+		{name: "reserved dot-dot", alias: "..", hosts: hosts, wantErr: true, wantText: "reserved"},
+		{name: "reserved dot", alias: ".", hosts: hosts, wantErr: true, wantText: "reserved"},
+		{name: "bad pattern", alias: "bad alias!", hosts: hosts, wantErr: true, wantText: "must match"},
+		{name: "no hosts", alias: "x", hosts: nil},
+		{name: "too long", alias: strings.Repeat("a", 65), hosts: nil, wantErr: true, wantText: "must match"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := config.ValidateSelfAlias(tc.alias, tc.hosts)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("ValidateSelfAlias(%q): want accept, got %v", tc.alias, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateSelfAlias(%q): want reject, got nil", tc.alias)
+			}
+			if tc.wantText != "" && !strings.Contains(err.Error(), tc.wantText) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantText)
+			}
+			if got := errors.Is(err, config.ErrSelfAliasCollision); got != tc.collision {
+				t.Errorf("errors.Is(err, ErrSelfAliasCollision) = %v, want %v (err=%v)", got, tc.collision, err)
+			}
+		})
 	}
 }
 
