@@ -104,15 +104,19 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Not r.Context(), as with Delegate in the handoff: from the first
-	// engine call on, a client that disconnects must not cancel the
-	// sequence halfway — an interrupted execution whose pane never received
-	// its resume, or an acquired lease whose release was cancelled, is
-	// worse than finishing for a caller who is no longer listening.
-	ctx := context.Background()
+	// Every engine call below runs under detachedContext(r.Context(), …),
+	// as Delegate does in the handoff: from the first engine call on, a
+	// client that disconnects must not cancel the sequence halfway — an
+	// interrupted execution whose pane never received its resume, or an
+	// acquired lease whose release was cancelled, is worse than finishing
+	// for a caller who is no longer listening. Each call has its own
+	// budget, so an engine that never answers ends in a 500 and the lock
+	// is released; release and archive get fresh contexts of their own so
+	// an expired interrupt budget cannot take them down with it.
+	parent := r.Context()
 	execID := body.ExecutionID
 
-	exec, err := m.sys.store.Get(ctx, execID)
+	exec, err := m.getExecution(parent, execID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeHandoffError(w, http.StatusNotFound, "execution_not_found", "execution not found", nil)
@@ -125,7 +129,7 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	if exec.State == store.StateRunning {
 		leaseID := body.LeaseID
 		if leaseID == "" {
-			lease, err := m.sys.service.AcquireLease(ctx, execID, principal)
+			lease, err := m.acquireLease(parent, execID, principal)
 			if err != nil {
 				if errors.Is(err, store.ErrLeaseHeld) {
 					writeHandoffError(w, http.StatusConflict, "held_by", "execution lease is held by "+exec.LeasePrincipalID,
@@ -139,15 +143,16 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 			// Released on every path out of here — unconfirmed, failed,
 			// store error, success — so the daemon never sits on a lease
 			// the SPA would then have to wait out. A caller-provided lease
-			// stays the caller's.
+			// stays the caller's. Fresh context: the interrupt's may have
+			// expired, and that must not stop the release.
 			defer func() {
-				if err := m.sys.service.ReleaseLease(ctx, execID, leaseID, principal); err != nil {
+				if err := m.releaseLease(parent, execID, leaseID, principal); err != nil {
 					m.logf("nex: takeback %s: releasing lease %s on %s: %v", code, leaseID, execID, err)
 				}
 			}()
 		}
 
-		_, err = m.sys.service.Interrupt(ctx, execution.InterruptRequest{ExecutionID: execID, LeaseID: leaseID, PrincipalID: principal})
+		_, err = m.interruptExecution(parent, execution.InterruptRequest{ExecutionID: execID, LeaseID: leaseID, PrincipalID: principal})
 		switch {
 		case err == nil, errors.Is(err, execution.ErrNoLiveTurn):
 			// Idle by the time the signal went out: nothing to stop.
@@ -159,7 +164,7 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if exec, err = m.sys.store.Get(ctx, execID); err != nil {
+		if exec, err = m.getExecution(parent, execID); err != nil {
 			writeHandoffError(w, http.StatusInternalServerError, "store_error", "re-reading execution: "+err.Error(), nil)
 			return
 		}
@@ -212,11 +217,44 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	// The terminal is now the writer of that transcript; a second handoff
 	// creates a new execution. Failure to archive is logged, not fatal.
 	archived := true
-	if err := m.sys.service.Archive(ctx, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: true}); err != nil {
+	if err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: true}); err != nil {
 		m.logf("nex: takeback %s: archiving %s: %v", code, execID, err)
 		archived = false
 	}
 
 	m.logf("nex: takeback %s ← execution %s (session %s, archived=%v)", code, execID, sid, archived)
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": sid, "archived": archived})
+}
+
+// The engine calls of the take-back, each under its own detached, bounded
+// context (see handleNexTakeback and detachedContext).
+
+func (m *Module) getExecution(parent context.Context, id string) (store.Execution, error) {
+	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
+	defer cancel()
+	return m.sys.store.Get(ctx, id)
+}
+
+func (m *Module) acquireLease(parent context.Context, execID, principal string) (store.Lease, error) {
+	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
+	defer cancel()
+	return m.sys.service.AcquireLease(ctx, execID, principal)
+}
+
+func (m *Module) releaseLease(parent context.Context, execID, leaseID, principal string) error {
+	ctx, cancel := detachedContext(parent, m.leaseCleanupTimeout)
+	defer cancel()
+	return m.sys.service.ReleaseLease(ctx, execID, leaseID, principal)
+}
+
+func (m *Module) interruptExecution(parent context.Context, req execution.InterruptRequest) (execution.InterruptResult, error) {
+	ctx, cancel := detachedContext(parent, m.engineInterruptTimeout)
+	defer cancel()
+	return m.sys.service.Interrupt(ctx, req)
+}
+
+func (m *Module) archiveExecution(parent context.Context, req execution.ArchiveRequest) error {
+	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
+	defer cancel()
+	return m.sys.service.Archive(ctx, req)
 }

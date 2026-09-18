@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,6 +158,26 @@ func TestInitWiresProvidersAndLock(t *testing.T) {
 	assert.Same(t, shared, m.locks, "the lock is the registered instance, not a new one")
 	assert.True(t, m.locks.TryLock("code"))
 	assert.False(t, m.locks.TryLock("code"))
+}
+
+// TestInitAppliesEngineCallBudgets: Init fills every engine-call budget;
+// a zero budget would make each detached context expire on creation. The
+// interrupt budget sits above Nexen's own 15 s interruptTimeout so the
+// engine's verdict (confirmed / unconfirmed) is what the caller sees.
+func TestInitAppliesEngineCallBudgets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", launchdPath)
+	cfg := baseConfig(t)
+	m := New()
+	m.assemble = newFakeAssemble(&fakeAssembleRecord{}, noopEngine(), nil)
+	m.logf = discardLogf
+	require.NoError(t, m.Init(newTestCore(&cfg)))
+
+	assert.Equal(t, 30*time.Second, m.delegateTimeout)
+	assert.Equal(t, 10*time.Second, m.engineOpTimeout)
+	assert.Equal(t, 20*time.Second, m.engineInterruptTimeout)
+	assert.Greater(t, m.engineInterruptTimeout, 15*time.Second, "above Nexen's interruptTimeout")
+	assert.Equal(t, 5*time.Second, m.leaseCleanupTimeout)
 }
 
 // TestPrincipalDelegatesToEngineAuth: m.principal(r) is exactly what the

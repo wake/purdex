@@ -22,7 +22,25 @@ const (
 	defaultHandoffExitTimeout      = 10 * time.Second       // CCOperator.Exit
 	defaultRollbackWait            = 15 * time.Second       // wait for CC after a rollback resume
 	defaultRollbackPoll            = 250 * time.Millisecond // liveness poll interval during that wait
+
+	defaultDelegateTimeout = 30 * time.Second // Service.Delegate: admission + sandbox + spawn
+	defaultEngineOpTimeout = 10 * time.Second // Store.Get, AcquireLease, Archive
+	// Service.Interrupt: Nexen confirms or reports ErrInterruptUnconfirmed
+	// within its own interruptTimeout (15 s); this budget sits above it so
+	// the engine's verdict — not a bare deadline — is what the caller sees.
+	defaultEngineInterruptTimeout = 20 * time.Second
+	defaultLeaseCleanupTimeout    = 5 * time.Second // ReleaseLease
 )
+
+// detachedContext derives a context for an engine call from the request's:
+// detached from its cancellation (a client that disconnects mid-sequence
+// must not cancel an admission, an interrupt, or a lease release — the
+// half state is worse than finishing for a caller who is no longer
+// listening) but bounded by d, so an engine that never answers cannot
+// hold the per-session lock forever. Request values are kept.
+func detachedContext(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), d)
+}
 
 // handoffProfile is the sandbox profile a handoff runs under unless the
 // body names another one; it must be usable under the host policy.
@@ -43,6 +61,18 @@ func (m *Module) applyHandoffDefaults() {
 	}
 	if m.rollbackPoll == 0 {
 		m.rollbackPoll = defaultRollbackPoll
+	}
+	if m.delegateTimeout == 0 {
+		m.delegateTimeout = defaultDelegateTimeout
+	}
+	if m.engineOpTimeout == 0 {
+		m.engineOpTimeout = defaultEngineOpTimeout
+	}
+	if m.engineInterruptTimeout == 0 {
+		m.engineInterruptTimeout = defaultEngineInterruptTimeout
+	}
+	if m.leaseCleanupTimeout == 0 {
+		m.leaseCleanupTimeout = defaultLeaseCleanupTimeout
 	}
 }
 
@@ -182,10 +212,13 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		Labels:          map[string]string{"source": "purdex", "handoff_session": code},
 		ResumeSessionID: owner.SessionID,
 	}
-	// Not r.Context(): CC is already gone, and a client that disconnects
-	// mid-delegate must not cancel the admission and leave the pane idle
-	// with nothing to show for it.
-	result, err := m.sys.service.Delegate(context.Background(), req)
+	// Detached from r.Context(): CC is already gone, and a client that
+	// disconnects mid-delegate must not cancel the admission and leave the
+	// pane idle with nothing to show for it. Bounded: a deadline is an
+	// infra error and takes the rollback path below.
+	ctx, cancel := detachedContext(r.Context(), m.delegateTimeout)
+	result, err := m.sys.service.Delegate(ctx, req)
+	cancel()
 	if err != nil || result.State == store.StateRejected {
 		reason := result.RejectReason
 		extra := map[string]any{"session_id": owner.SessionID}

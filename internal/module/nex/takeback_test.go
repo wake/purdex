@@ -7,6 +7,7 @@ package nex
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -237,6 +238,65 @@ func TestTakeback500StoreError(t *testing.T) {
 	assert.Contains(t, body["error"], "disk on fire")
 	assert.Empty(t, env.svc.Calls())
 	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+// TestTakebackGetTimeout500ReleasesLock: the store read runs under a
+// detached, bounded context (review A3/A4). A store that never answers
+// ends in 500 store_error at the deadline, and the handler returns — so
+// the deferred Unlock runs and the next request gets past TryLock instead
+// of 409 handoff_in_progress forever.
+func TestTakebackGetTimeout500ReleasesLock(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.m.engineOpTimeout = 50 * time.Millisecond
+	env.store.getGate = make(chan struct{}) // never released
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "store_error", body["code"])
+	assert.Contains(t, body["error"], context.DeadlineExceeded.Error())
+	assert.Empty(t, env.svc.Calls())
+	assert.Empty(t, env.tmux.RawKeysSent())
+
+	// A following request is not refused by the lock: it reaches the store
+	// (and times out there again — the store is still stuck).
+	status, body = env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "store_error", body["code"], "got past TryLock: %v", body)
+	assert.Equal(t, 2, env.store.Calls())
+}
+
+// TestTakebackInterruptTimeoutReleasesLeaseUnderFreshContext: the
+// interrupt's context expires (500 interrupt_failed), and the acquired
+// lease is still released — under its own fresh context, not the expired
+// one, or the release would fail the same way and the daemon would sit on
+// the lease until it lapsed.
+func TestTakebackInterruptTimeoutReleasesLeaseUnderFreshContext(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	env.m.engineInterruptTimeout = 50 * time.Millisecond
+	env.svc.interruptGate = make(chan struct{}) // never released
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "interrupt_failed", body["code"])
+	assert.Contains(t, body["error"], context.DeadlineExceeded.Error())
+	assert.Equal(t, []string{"acquire", "interrupt", "release"}, env.svc.Calls())
+	assert.Equal(t, []releaseCall{{tbExecID, tbLeaseID, tbPrincipal}}, env.svc.releases)
+	require.Len(t, env.svc.releaseCtxErrs, 1)
+	assert.NoError(t, env.svc.releaseCtxErrs[0], "release ran under a live context of its own")
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+// TestTakebackArchiveAndReleaseUseLiveContextsAfterSuccess: on the success
+// path too, archive and release each get a fresh context — neither is a
+// leftover of the interrupt's.
+func TestTakebackArchiveAndReleaseUseLiveContextsAfterSuccess(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	require.Len(t, env.svc.archiveCtxErrs, 1)
+	assert.NoError(t, env.svc.archiveCtxErrs[0])
+	require.Len(t, env.svc.releaseCtxErrs, 1)
+	assert.NoError(t, env.svc.releaseCtxErrs[0])
 }
 
 // --- running: lease + interrupt ---

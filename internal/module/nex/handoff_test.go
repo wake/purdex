@@ -210,24 +210,31 @@ func (f *recordingCCOperator) GetStatus(context.Context, string) (*agentcc.Statu
 // fakeNexService records every call in order ("delegate" | "acquire" |
 // "interrupt" | "release" | "archive") with its arguments, and answers each
 // with a configurable result/error. onDelegate (when set) runs before the
-// Delegate answer.
+// Delegate answer. A gate channel parks the call until it is closed or the
+// call's ctx expires — which is how the handler's ctx sizing is observed:
+// a parked call returns ctx.Err() exactly when the handler's deadline
+// passes (the same device as recordingCCOperator).
 type fakeNexService struct {
-	mu         sync.Mutex
-	calls      []string
-	requests   []execution.Request
-	result     execution.Result
-	err        error
-	onDelegate func()
+	mu           sync.Mutex
+	calls        []string
+	requests     []execution.Request
+	result       execution.Result
+	err          error
+	onDelegate   func()
+	delegateGate chan struct{}
 
-	lease         store.Lease // answer to AcquireLease
-	acquireErr    error
-	acquires      []string // principal per AcquireLease call
-	interruptReqs []execution.InterruptRequest
-	interruptErr  error
-	releases      []releaseCall
-	releaseErr    error
-	archiveReqs   []execution.ArchiveRequest
-	archiveErr    error
+	lease          store.Lease // answer to AcquireLease
+	acquireErr     error
+	acquires       []string // principal per AcquireLease call
+	interruptReqs  []execution.InterruptRequest
+	interruptErr   error
+	interruptGate  chan struct{}
+	releases       []releaseCall
+	releaseCtxErrs []error // ctx.Err() as seen on entry to each ReleaseLease
+	releaseErr     error
+	archiveReqs    []execution.ArchiveRequest
+	archiveCtxErrs []error // ctx.Err() as seen on entry to each Archive
+	archiveErr     error
 }
 
 type releaseCall struct{ ExecutionID, LeaseID, PrincipalID string }
@@ -244,13 +251,16 @@ func (f *fakeNexService) Calls() []string {
 	return append([]string(nil), f.calls...)
 }
 
-func (f *fakeNexService) Delegate(_ context.Context, req execution.Request) (execution.Result, error) {
+func (f *fakeNexService) Delegate(ctx context.Context, req execution.Request) (execution.Result, error) {
 	f.record("delegate")
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
 	f.mu.Unlock()
 	if f.onDelegate != nil {
 		f.onDelegate()
+	}
+	if err := wait(ctx, f.delegateGate); err != nil {
+		return execution.Result{}, err
 	}
 	return f.result, f.err
 }
@@ -272,30 +282,35 @@ func (f *fakeNexService) AcquireLease(_ context.Context, _, principalID string) 
 	return f.lease, nil
 }
 
-func (f *fakeNexService) ReleaseLease(_ context.Context, executionID, leaseID, principalID string) error {
+func (f *fakeNexService) ReleaseLease(ctx context.Context, executionID, leaseID, principalID string) error {
 	f.record("release")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.releases = append(f.releases, releaseCall{executionID, leaseID, principalID})
+	f.releaseCtxErrs = append(f.releaseCtxErrs, ctx.Err())
 	return f.releaseErr
 }
 
-func (f *fakeNexService) Interrupt(_ context.Context, req execution.InterruptRequest) (execution.InterruptResult, error) {
+func (f *fakeNexService) Interrupt(ctx context.Context, req execution.InterruptRequest) (execution.InterruptResult, error) {
 	f.record("interrupt")
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.interruptReqs = append(f.interruptReqs, req)
+	f.mu.Unlock()
+	if err := wait(ctx, f.interruptGate); err != nil {
+		return execution.InterruptResult{}, err
+	}
 	if f.interruptErr != nil {
 		return execution.InterruptResult{}, f.interruptErr
 	}
 	return execution.InterruptResult{State: store.StateIdle}, nil
 }
 
-func (f *fakeNexService) Archive(_ context.Context, req execution.ArchiveRequest) error {
+func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveRequest) error {
 	f.record("archive")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.archiveReqs = append(f.archiveReqs, req)
+	f.archiveCtxErrs = append(f.archiveCtxErrs, ctx.Err())
 	return f.archiveErr
 }
 
@@ -305,12 +320,14 @@ var _ nexService = (*fakeNexService)(nil)
 // last one repeats once the script is exhausted (so "first Get says running,
 // re-Get says idle" is a two-entry script). onGet (when set) runs before
 // each answer with the call index, the seam for "the tmux server restarted
-// while the execution was being read".
+// while the execution was being read". getGate parks every Get until it is
+// closed or the call's ctx expires (see fakeNexService).
 type fakeNexStore struct {
 	mu      sync.Mutex
 	results []getResult
 	calls   int
 	onGet   func(call int)
+	getGate chan struct{}
 }
 
 type getResult struct {
@@ -318,7 +335,7 @@ type getResult struct {
 	err  error
 }
 
-func (f *fakeNexStore) Get(context.Context, string) (store.Execution, error) {
+func (f *fakeNexStore) Get(ctx context.Context, _ string) (store.Execution, error) {
 	f.mu.Lock()
 	call := f.calls
 	f.calls++
@@ -333,6 +350,9 @@ func (f *fakeNexStore) Get(context.Context, string) (store.Execution, error) {
 	f.mu.Unlock()
 	if f.onGet != nil {
 		f.onGet(call)
+	}
+	if err := wait(ctx, f.getGate); err != nil {
+		return store.Execution{}, err
 	}
 	return res.exec, res.err
 }
@@ -405,6 +425,10 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		handoffExitTimeout:      100 * time.Millisecond,
 		rollbackWait:            2 * time.Second,
 		rollbackPoll:            5 * time.Millisecond,
+		delegateTimeout:         2 * time.Second,
+		engineOpTimeout:         2 * time.Second,
+		engineInterruptTimeout:  2 * time.Second,
+		leaseCleanupTimeout:     2 * time.Second,
 	}
 
 	mux := http.NewServeMux()
@@ -850,6 +874,71 @@ func TestHandoffRejectedWithoutRollbackCommand(t *testing.T) {
 	assert.Equal(t, false, body["rolled_back"])
 	assert.Equal(t, hoSessionID, body["session_id"])
 	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+// TestHandoffDelegateTimeoutRollsBack: Delegate runs under a detached,
+// bounded context (review A3/A4) — detached so a client that disconnects
+// mid-admission does not cancel it, bounded so an engine that never
+// answers cannot hold the lock and the exited pane forever. A deadline is
+// an infra error: the existing delegate_rejected rollback path, CC resumed.
+func TestHandoffDelegateTimeoutRollsBack(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.delegateTimeout = 50 * time.Millisecond
+	env.svc.delegateGate = make(chan struct{}) // never released: only the deadline ends it
+	reviveCCAfterKeys(env)
+	status, body := env.post(t, hoCode, goodBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "delegate_rejected", body["code"])
+	assert.Equal(t, true, body["infra_error"])
+	assert.Contains(t, body["reject_reason"], context.DeadlineExceeded.Error())
+	assert.Equal(t, true, body["rolled_back"])
+	assert.Equal(t, []string{"claude --resume " + hoSessionID + "\n"}, rawKeysText(env.tmux))
+	assert.True(t, env.m.locks.TryLock(hoCode), "lock released after the timeout")
+	env.m.locks.Unlock(hoCode)
+}
+
+// TestHandoffDelegateSurvivesClientDisconnect: the client goes away while
+// Delegate is parked; the admission still completes (the context is
+// detached from the request's).
+func TestHandoffDelegateSurvivesClientDisconnect(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.delegateGate = make(chan struct{})
+	delegateEntered := make(chan struct{})
+	env.svc.onDelegate = func() { close(delegateEntered) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	raw, _ := json.Marshal(goodBody())
+	req, err := http.NewRequestWithContext(ctx, "POST", env.srv.URL+"/api/sessions/"+hoCode+"/nex-handoff", bytes.NewReader(raw))
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
+	select {
+	case <-delegateEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("request never reached Delegate")
+	}
+	cancel() // client disconnects
+	<-done
+	close(env.svc.delegateGate)
+
+	// The handler finishes regardless: the delegate result is recorded and
+	// the lock is released. Poll: the handler runs on the server goroutine.
+	deadline := time.Now().Add(3 * time.Second)
+	for !env.m.locks.TryLock(hoCode) {
+		if time.Now().After(deadline) {
+			t.Fatal("handler never released the lock after the client disconnected")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	env.m.locks.Unlock(hoCode)
+	require.Len(t, env.svc.Requests(), 1)
+	assert.Empty(t, env.tmux.RawKeysSent(), "delegate succeeded: no rollback")
 }
 
 func TestHandoffDelegateInfraError(t *testing.T) {

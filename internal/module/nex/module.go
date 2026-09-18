@@ -105,6 +105,15 @@ type Module struct {
 	rollbackWait            time.Duration // wait for CC after a rollback resume
 	rollbackPoll            time.Duration // liveness poll interval during that wait
 
+	// Engine call budgets (handoff.go, takeback.go): every Service/Store
+	// call runs under a context detached from the request's (a client that
+	// disconnects must not cancel it) but bounded by one of these (an
+	// engine that never answers must not hold the per-session lock).
+	delegateTimeout        time.Duration // Service.Delegate
+	engineOpTimeout        time.Duration // Store.Get, AcquireLease, Archive
+	engineInterruptTimeout time.Duration // Service.Interrupt; > Nexen's own interruptTimeout so its verdict wins
+	leaseCleanupTimeout    time.Duration // ReleaseLease, under its own fresh context
+
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)
