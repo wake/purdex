@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1.1 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied (§9)
+- Status: v1.2 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -272,7 +272,11 @@ selectReady(hostId): boolean      // phase === 'ready'
   `NexExecutionsTable.tsx:94-152`'s list + site-wide-SSE-as-refetch-signal
   logic. **One** site-wide SSE per host, refcounted by subscribers
   (the table and the sidebar view share it); 500 ms debounce; refetch on
-  reconnect; gated by `useNexHostStore.selectReady`. `NexExecutionsTable`
+  reconnect; gated by info readiness (`isNexReady(byHost[hostId].info)`),
+  the same predicate the Host → Nex table used before P-C.2 — the list
+  needs the engine to be serving, not the capabilities document; gating on
+  `selectReady` would make the table appear later than it did before (codex
+  plan review `task-mu6lptei-rhye4d` §11). `NexExecutionsTable`
   switches to the hook in the same PR (pure behaviour move, its 256-line test
   file is the guard).
 - **Connection budget** (codex §9.7): the site-wide stream is a long-lived
@@ -582,3 +586,6 @@ archived afterwards; scratch dir removed.
   templates)`, `pinHost().sendKeys`) → corrected in 4.3/4.4/F14; (9) P3 §4.5
   rewritten as blast radius; (10) P2 P-C.3 not shippable as written →
   redesigned per (1)–(4).
+- v1.2 — P-C.2 fix wave: list gate is info readiness (drift resolved in
+  favour of the plan); validation at the API boundary; refresh revision per
+  attempt.
