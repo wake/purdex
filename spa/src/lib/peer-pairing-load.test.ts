@@ -93,7 +93,7 @@ describe('loadPairings — page-level preconditions (§5.2 step 0)', () => {
     const a = fakeApi({ info: { hM: 'mini-lab:278cbm' }, settings: { hM: new Error('HTTP 500') }, list: { hM: [row({})] } })
     const { snaps, emit } = collect()
     const final = await loadPairings(X, [AIR], a, emit)
-    expect(final).toEqual({ self: null, error: { call: 'settings', message: 'HTTP 500' }, rows: [] })
+    expect(final).toEqual({ self: null, error: { call: 'settings', message: 'HTTP 500' }, rows: [], candidates: [] })
     expect(snaps).toEqual([final])
     expect(a.info).not.toHaveBeenCalledWith('hA')
     expect(a.verify).not.toHaveBeenCalled()
@@ -252,5 +252,268 @@ describe('loadPairings — the return side (§5.1 inbound states)', () => {
     const final2 = await loadPairings(X, [air2, { ...AIR, status: 'disconnected' }], a2, () => {})
     expect(final2.rows[0].counterpart?.hostId).toBe('hA2')
     expect(a2.list).not.toHaveBeenCalledWith('hA')
+  })
+})
+
+describe('loadPairings — pair candidates (spec §7.1: available App hosts with no entry on X)', () => {
+  const base = { info: { hM: 'mini-lab:278cbm', hA: 'wakes-air-2026:oa6drb' }, settings: { hM: 'mini-lab', hA: 'air26' } }
+  const RETURN = row({ alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm' })
+
+  it('an available host with no entry on X is listed with returnEntry null, listError "" and costs exactly one extra list call', async () => {
+    const a = fakeApi({ ...base, list: { hM: [], hA: [] } })
+    const { snaps, emit } = collect()
+    const final = await loadPairings(X, [AIR], a, emit)
+    expect(final.rows).toEqual([])
+    expect(final.candidates).toEqual([
+      { hostId: 'hA', name: 'Air 2026', url: 'http://100.64.0.4:7860', host_id: 'wakes-air-2026:oa6drb', returnEntry: null, listError: '' },
+    ])
+    expect(a.list).toHaveBeenCalledTimes(2)
+    expect(a.list).toHaveBeenCalledWith('hM')
+    expect(a.list).toHaveBeenCalledWith('hA')
+    // candidates are in the pre-dial emit already
+    expect(snaps[0].candidates).toEqual(final.candidates)
+  })
+
+  it('the repair case — Y already holds an entry for X → returnEntry is that row', async () => {
+    const a = fakeApi({ ...base, list: { hM: [], hA: [RETURN] } })
+    const final = await loadPairings(X, [AIR], a, () => {})
+    expect(final.candidates).toHaveLength(1)
+    expect(final.candidates[0].hostId).toBe('hA')
+    expect(final.candidates[0].returnEntry).toEqual(RETURN)
+    expect(final.candidates[0].listError).toBe('')
+    expect(a.verify).not.toHaveBeenCalled()
+  })
+
+  it("a host that is some row's counterpart is not a candidate (the D2 fixture → empty)", async () => {
+    const a = fakeApi({ ...base, list: { hM: [row({})], hA: [RETURN] },
+      verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb'), 'hA/mini-lab': ok('mini-lab', 'mini-lab', 'mini-lab:278cbm') } })
+    const { snaps, emit } = collect()
+    const final = await loadPairings(X, [AIR], a, emit)
+    expect(final.rows).toHaveLength(1)
+    expect(final.candidates).toEqual([])
+    for (const s of snaps) expect(s.candidates).toEqual([])
+    expect(a.list).toHaveBeenCalledTimes(2)   // the shared memo: Y listed once, not once per role
+  })
+
+  it('an unavailable host is not a candidate and is never listed', async () => {
+    const a = fakeApi({ ...base, list: { hM: [], hA: [] } })
+    const final = await loadPairings(X, [{ ...AIR, status: 'disconnected' }], a, () => {})
+    expect(final.candidates).toEqual([])
+    expect(a.list).not.toHaveBeenCalledWith('hA')
+    expect(a.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('a connected host whose info() fails is not a candidate either (§7.1: info could not be fetched)', async () => {
+    const a = fakeApi({ info: { hM: 'mini-lab:278cbm', hA: new Error('HTTP 502') }, settings: base.settings, list: { hM: [], hA: [] } })
+    const final = await loadPairings(X, [AIR], a, () => {})
+    expect(final.candidates).toEqual([])
+    expect(a.list).not.toHaveBeenCalledWith('hA')
+  })
+
+  it('a failing list(Y) lists Y with returnEntry null and listError = the message', async () => {
+    const a = fakeApi({ ...base, list: { hM: [], hA: new Error('HTTP 500') } })
+    const final = await loadPairings(X, [AIR], a, () => {})
+    expect(final.candidates).toHaveLength(1)
+    expect(final.candidates[0]).toMatchObject({ hostId: 'hA', returnEntry: null, listError: 'HTTP 500' })
+  })
+
+  it('a failing list(Y) that is a HostApiError keeps the daemon detail in listError', async () => {
+    const a = fakeApi({ ...base, list: { hM: [], hA: new HostApiError(403, 'Forbidden', 'admin required') } })
+    const final = await loadPairings(X, [AIR], a, () => {})
+    expect(final.candidates[0]).toMatchObject({ hostId: 'hA', returnEntry: null, listError: 'admin required' })
+  })
+
+  it('a counterpart host and another available host with no entry: only the second is a candidate', async () => {
+    const a = fakeApi({
+      info: { ...base.info, hO: 'other:zzzzzz' }, settings: { ...base.settings, hO: 'other' },
+      list: { hM: [row({})], hA: [RETURN], hO: [] },
+      verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb'), 'hA/mini-lab': ok('mini-lab', 'mini-lab', 'mini-lab:278cbm') },
+    })
+    const final = await loadPairings(X, [AIR, OTHER], a, () => {})
+    expect(final.candidates.map((c) => c.hostId)).toEqual(['hO'])
+    expect(a.list).toHaveBeenCalledTimes(3)
+  })
+})
+
+/**
+ * A fake whose `list` is a function of the call history, so a row can read
+ * differently before and after a dial (the §8.4 mutation fixture: read the row
+ * BEFORE the evidence dial and the page acts on stale evidence).
+ */
+function statefulApi(spec: {
+  info: Record<string, string>
+  settings: Record<string, string>
+  verify: Record<string, PeerHostVerify | Error>
+  list: (hostId: string, calls: readonly string[]) => PeerHostRow[] | Error
+}): { api: PairingApi; calls: string[] } {
+  const calls: string[] = []
+  const settle = <T,>(v: T | Error): Promise<T> => (v instanceof Error ? Promise.reject(v) : Promise.resolve(v))
+  const api: PairingApi = {
+    info: vi.fn((h) => Promise.resolve({ host_id: spec.info[h] })),
+    settings: vi.fn((h) => Promise.resolve({ deliver: true, alias: spec.settings[h] })),
+    list: vi.fn((h) => { calls.push(`list:${h}`); return settle(spec.list(h, calls)) }),
+    verify: vi.fn((h, a) => {
+      calls.push(`verify:${h}:${a}`)
+      const v = spec.verify[`${h}/${a}`]
+      return v === undefined ? Promise.reject(new Error(`unexpected ${h}/${a}`)) : settle(v)
+    }),
+  }
+  return { api, calls }
+}
+
+describe('loadPairings — post-dial re-read of pending rotations (spec §7.3, step 5)', () => {
+  const META = { info: { hM: 'mini-lab:278cbm', hA: 'wakes-air-2026:oa6drb' }, settings: { hM: 'mini-lab', hA: 'air26' } }
+  const VERIFY = { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb'), 'hA/mini-lab': ok('mini-lab', 'mini-lab', 'mini-lab:278cbm') }
+  const RETURN = row({ alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm' })
+  const nth = (calls: readonly string[], c: string) => calls.filter((k) => k === c).length
+
+  it("a pending rotation on X's entry re-lists X after BOTH dials settle, and the row shows the fresh last_inbound_auth", async () => {
+    // X's row reads 'current' until the peer has dialled us (verify(A, mini-lab)), then 'prev'.
+    // Mutation M-A (re-read before the dial) makes the final row read 'current' → red.
+    const { api, calls } = statefulApi({ ...META, verify: VERIFY,
+      list: (h, seen) => h === 'hM'
+        ? [row({ rotation_pending: true, last_inbound_auth: seen.includes('verify:hA:mini-lab') ? 'prev' : 'current' })]
+        : [RETURN] })
+    const { snaps, emit } = collect()
+    const final = await loadPairings(X, [AIR], api, emit)
+    expect(calls).toEqual(['list:hM', 'list:hA', 'verify:hM:air', 'verify:hA:mini-lab', 'list:hM'])
+    expect(calls.lastIndexOf('list:hM')).toBeGreaterThan(calls.indexOf('verify:hA:mini-lab'))
+    expect(calls.lastIndexOf('list:hM')).toBeGreaterThan(calls.indexOf('verify:hM:air'))
+    expect(final.rows[0].entry.last_inbound_auth).toBe('prev')
+    expect(final.rows[0].entry.rotation_pending).toBe(true)
+    expect(final.rows[0].gateStale).toEqual({ entry: false, returnEntry: false })
+    // pre-dial emit: the row is pending and therefore stale by definition
+    expect(snaps[0].rows[0].entry.last_inbound_auth).toBe('current')
+    expect(snaps[0].rows[0].gateStale).toEqual({ entry: true, returnEntry: false })
+    // every settle emit is still pre-re-read → still stale
+    expect(snaps[1].rows[0].gateStale.entry).toBe(true)
+    expect(snaps[2].rows[0].gateStale.entry).toBe(true)
+    // exactly one more emit for the re-read, carrying the fresh row
+    expect(snaps).toHaveLength(4)
+    expect(snaps[3].rows[0].entry.last_inbound_auth).toBe('prev')
+    expect(snaps[3].rows[0].gateStale.entry).toBe(false)
+    // the verify outcomes survive the row replacement
+    expect(final.rows[0].outbound).toMatchObject({ ok: true })
+    expect(final.rows[0].inbound).toMatchObject({ ok: true })
+  })
+
+  it("pending on Y's entry re-lists Y, not X", async () => {
+    const { api, calls } = statefulApi({ ...META, verify: VERIFY,
+      list: (h, seen) => h === 'hM'
+        ? [row({})]
+        : [{ ...RETURN, rotation_pending: true, last_inbound_auth: seen.includes('verify:hM:air') ? 'current' : '' }] })
+    const { snaps, emit } = collect()
+    const final = await loadPairings(X, [AIR], api, emit)
+    expect(nth(calls, 'list:hM')).toBe(1)
+    expect(nth(calls, 'list:hA')).toBe(2)
+    expect(calls.lastIndexOf('list:hA')).toBeGreaterThan(calls.indexOf('verify:hA:mini-lab'))
+    expect(calls.lastIndexOf('list:hA')).toBeGreaterThan(calls.indexOf('verify:hM:air'))
+    expect(snaps[0].rows[0].gateStale).toEqual({ entry: false, returnEntry: true })
+    expect(snaps[0].rows[0].returnEntry?.last_inbound_auth).toBe('')
+    expect(final.rows[0].returnEntry?.last_inbound_auth).toBe('current')
+    expect(final.rows[0].gateStale).toEqual({ entry: false, returnEntry: false })
+  })
+
+  it("both sides pending, only Y's re-list fails → gateStale {entry:false, returnEntry:true} and X's side is fresh (codex F5)", async () => {
+    const { api, calls } = statefulApi({ ...META, verify: VERIFY,
+      list: (h, seen) => {
+        if (h === 'hM') return [row({ rotation_pending: true, last_inbound_auth: seen.includes('verify:hA:mini-lab') ? 'prev' : '' })]
+        if (nth(seen, 'list:hA') >= 2) return new Error('HTTP 500')
+        return [{ ...RETURN, rotation_pending: true, last_inbound_auth: '' }]
+      } })
+    const final = await loadPairings(X, [AIR], api, () => {})
+    expect(nth(calls, 'list:hM')).toBe(2)
+    expect(nth(calls, 'list:hA')).toBe(2)
+    expect(final.error).toBeNull()
+    expect(final.rows[0].gateStale).toEqual({ entry: false, returnEntry: true })
+    expect(final.rows[0].entry.last_inbound_auth).toBe('prev')
+    // the pre-dial return row is kept, not dropped
+    expect(final.rows[0].returnEntry).toEqual({ ...RETURN, rotation_pending: true, last_inbound_auth: '' })
+    expect(final.rows[0].inbound).toMatchObject({ ok: true })
+  })
+
+  it('the second list(X) failing leaves that side stale and keeps the pre-dial row', async () => {
+    const { api, calls } = statefulApi({ ...META, verify: VERIFY,
+      list: (h, seen) => {
+        if (h === 'hM') return nth(seen, 'list:hM') >= 2 ? new Error('HTTP 500') : [row({ rotation_pending: true, last_inbound_auth: 'current' })]
+        return [RETURN]
+      } })
+    const { snaps, emit } = collect()
+    const final = await loadPairings(X, [AIR], api, emit)
+    expect(nth(calls, 'list:hM')).toBe(2)
+    expect(final.error).toBeNull()
+    expect(final.rows[0].entry).toEqual(row({ rotation_pending: true, last_inbound_auth: 'current' }))
+    expect(final.rows[0].gateStale).toEqual({ entry: true, returnEntry: false })
+    expect(snaps).toHaveLength(4)
+    expect(snaps[3].rows[0].gateStale.entry).toBe(true)
+  })
+
+  it('no pending rotation anywhere → no extra list call, both sides false everywhere', async () => {
+    const { api, calls } = statefulApi({ ...META, verify: VERIFY, list: (h) => (h === 'hM' ? [row({})] : [RETURN]) })
+    const { snaps, emit } = collect()
+    const final = await loadPairings(X, [AIR], api, emit)
+    expect(nth(calls, 'list:hM')).toBe(1)
+    expect(nth(calls, 'list:hA')).toBe(1)
+    expect(api.list).toHaveBeenCalledTimes(2)     // unchanged from the D2 test
+    expect(snaps).toHaveLength(3)                  // no re-read emit
+    for (const s of snaps) expect(s.rows[0].gateStale).toEqual({ entry: false, returnEntry: false })
+    expect(final.rows[0].gateStale).toEqual({ entry: false, returnEntry: false })
+  })
+
+  it('the alias vanished between the two lists → old row kept, side stays stale', async () => {
+    const { api, calls } = statefulApi({ ...META, verify: VERIFY,
+      list: (h, seen) => {
+        if (h === 'hM') return nth(seen, 'list:hM') >= 2 ? [] : [row({ rotation_pending: true, last_inbound_auth: 'current' })]
+        return [RETURN]
+      } })
+    const final = await loadPairings(X, [AIR], api, () => {})
+    expect(nth(calls, 'list:hM')).toBe(2)
+    expect(final.rows).toHaveLength(1)
+    expect(final.rows[0].entry).toEqual(row({ rotation_pending: true, last_inbound_auth: 'current' }))
+    expect(final.rows[0].gateStale).toEqual({ entry: true, returnEntry: false })
+  })
+
+  it('two rows pending on X share ONE fresh list(X), and each takes the row of its own alias', async () => {
+    const second = row({ alias: 'air-again', url: 'http://air.local:7860' })
+    const { api, calls } = statefulApi({ ...META,
+      verify: { ...VERIFY, 'hM/air-again': ok('air-again', 'air26', 'wakes-air-2026:oa6drb') },
+      list: (h, seen) => {
+        if (h !== 'hM') return [RETURN]
+        const fresh = seen.includes('verify:hA:mini-lab')
+        return [
+          row({ rotation_pending: true, last_inbound_auth: fresh ? 'prev' : '' }),
+          { ...second, rotation_pending: true, last_inbound_auth: fresh ? 'current' : '' },
+        ]
+      } })
+    const final = await loadPairings(X, [AIR], api, () => {})
+    expect(nth(calls, 'list:hM')).toBe(2)
+    expect(final.rows.map((r) => r.entry.last_inbound_auth)).toEqual(['prev', 'current'])
+    expect(final.rows.map((r) => r.gateStale.entry)).toEqual([false, false])
+  })
+
+  it('a pending entry with no App counterpart still re-reads X; the returnEntry side is false (nothing there)', async () => {
+    const stranger = row({ host_id: 'stranger:aaaaaa', url: 'http://10.0.0.1:7860', rotation_pending: true, last_inbound_auth: 'current' })
+    const { api, calls } = statefulApi({ ...META, verify: { 'hM/air': ok('air', 'stranger', 'stranger:aaaaaa') },
+      list: (h, seen) => (h === 'hM' ? [{ ...stranger, last_inbound_auth: seen.includes('verify:hM:air') ? 'prev' : 'current' }] : []) })
+    const final = await loadPairings(X, [AIR], api, () => {})
+    expect(nth(calls, 'list:hM')).toBe(2)
+    expect(final.rows[0].counterpart).toBeNull()
+    expect(final.rows[0].entry.last_inbound_auth).toBe('prev')
+    expect(final.rows[0].gateStale).toEqual({ entry: false, returnEntry: false })
+  })
+
+  it('candidates are not re-read in step 5 (X cannot dial a host it has no entry for)', async () => {
+    const { api, calls } = statefulApi({
+      info: { ...META.info, hO: 'other:zzzzzz' }, settings: { ...META.settings, hO: 'other' }, verify: VERIFY,
+      list: (h, seen) => {
+        if (h === 'hM') return [row({ rotation_pending: true, last_inbound_auth: seen.includes('verify:hA:mini-lab') ? 'prev' : '' })]
+        if (h === 'hA') return [RETURN]
+        return [row({ alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm', rotation_pending: true, last_inbound_auth: '' })]
+      } })
+    const final = await loadPairings(X, [AIR, OTHER], api, () => {})
+    expect(nth(calls, 'list:hM')).toBe(2)
+    expect(nth(calls, 'list:hO')).toBe(1)
+    expect(final.candidates.map((c) => c.hostId)).toEqual(['hO'])
+    expect(final.rows[0].gateStale.entry).toBe(false)
   })
 })
