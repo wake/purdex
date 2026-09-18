@@ -1,182 +1,35 @@
 // spa/src/stores/useNexHostStore.ts — per-host cache of "is Nexen ready
 // here?" (P-C spec §4.1): `/api/info.nex` plus `GET /v1/capabilities`, one
 // truth shared by the Host → Nex page, the Headless NewTab section and the
-// hand-off entry points. Not persisted, not synced.
+// hand-off entry points. Not persisted, not synced. This file is the zustand
+// shell, the selectors and the host-store watcher; the entry shape and
+// transitions live in `lib/nex/nex-host-reducer.ts`, the fetching in
+// `lib/nex/nex-host-effects.ts`.
 import { create } from 'zustand'
-import { fetchInfo, type NexInfo } from '../lib/host-api'
-import { fetchNexCapabilities } from '../lib/nex/nex-api'
-import type { NexCapabilities } from '../lib/nex/types'
-import { isNexReady } from '../components/hosts/nex/nex-ready'
-import { useHostStore, type HostConfig, type HostInfo } from './useHostStore'
+import { createNexHostEffects, type NexHostEntries } from '../lib/nex/nex-host-effects'
+import { hostFingerprint } from '../lib/nex/nex-host-reducer'
+import { useHostStore } from './useHostStore'
 
-export const NEX_HOST_TTL_MS = 60_000
-
-export type NexHostPhase = 'unknown' | 'loading' | 'ready' | 'disabled' | 'unavailable'
-
-export interface NexHostEntry {
-  info: NexInfo | null
-  capabilities: NexCapabilities | null
-  phase: NexHostPhase
-  error: string | null
-  fetchedAt: number
-  generation: number
-  /** The host identity (`ip:port:token`) the data came from; see `fingerprintOf`. */
-  fingerprint: string
-}
+export { NEX_HOST_TTL_MS, type NexHostEntry, type NexHostPhase } from '../lib/nex/nex-host-reducer'
 
 interface NexHostState {
-  byHost: Record<string, NexHostEntry>
+  byHost: NexHostEntries
   ensure: (hostId: string) => Promise<void>
   invalidate: (hostId: string) => Promise<void>
   clearHost: (hostId: string) => void
 }
 
-type Loaded = Pick<NexHostEntry, 'info' | 'capabilities' | 'error'>
-
-/** The one place `phase` is derived, so `ready` can never outlive its inputs. */
-function phaseOf({ info, capabilities, error }: Loaded): NexHostPhase {
-  if (!info) return 'unavailable'
-  if (!info.configured || !info.mounted) return 'disabled'
-  if (info.init_error) return 'unavailable'
-  if (!isNexReady(info)) return 'unavailable'
-  if (error !== null || capabilities === null) return 'unavailable'
-  return 'ready'
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
-
-function readJson(r: Response, path: string): Promise<HostInfo> {
-  return r.ok ? r.json() : Promise.reject(new Error(`${path}: ${r.status}`))
-}
-
-async function load(hostId: string): Promise<Loaded> {
-  let info: NexInfo | null
-  try {
-    const data = await fetchInfo(hostId).then((r) => readJson(r, '/api/info'))
-    info = data.nex ?? null
-  } catch (err) {
-    return { info: null, capabilities: null, error: errorText(err) }
-  }
-  if (!info) return { info, capabilities: null, error: '/api/info: no nex section' }
-  if (!info.configured || !info.mounted) return { info, capabilities: null, error: null }
-  if (info.init_error) return { info, capabilities: null, error: info.init_error }
-  if (!isNexReady(info)) return { info, capabilities: null, error: null }
-  try {
-    return { info, capabilities: await fetchNexCapabilities(hostId), error: null }
-  } catch (err) {
-    return { info, capabilities: null, error: errorText(err) }
-  }
-}
-
-/**
- * A host id is not a daemon: between a request leaving and its answer
- * landing, the id can be re-pointed at another address, given another token
- * (a different identity on the same address), removed, or removed and
- * re-added. `hostFetch` would even route an unknown id to a different host.
- * So a request captures the entry's generation and the host identity it
- * went to, and commits only while both still hold — a stale answer is
- * dropped, never written into (or resurrected as) an entry. The same
- * identity is stamped on the entry, so a cached answer is only reused for
- * the daemon it came from.
- */
-interface RequestToken { generation: number; fingerprint: string }
-
-/** The identity a request for `hostId` goes to (`ip:port:token`), or `null` when the host is unknown. */
-function fingerprintOf(hostId: string): string | null {
-  const h = useHostStore.getState().hosts[hostId]
-  return h ? hostFingerprint(h) : null
-}
-
-function hostFingerprint(h: Pick<HostConfig, 'ip' | 'port' | 'token'>): string {
-  return `${h.ip}:${h.port}:${h.token ?? ''}`
-}
-
-let nextGeneration = 1
-const inflight = new Map<string, Promise<void>>()
-
-function emptyEntry(fingerprint: string): NexHostEntry {
-  return { info: null, capabilities: null, phase: 'loading', error: null, fetchedAt: 0, generation: nextGeneration++, fingerprint }
-}
-
-function isFresh(entry: NexHostEntry | undefined, now: number, currentFingerprint: string): boolean {
-  if (!entry || entry.fetchedAt === 0 || entry.phase === 'unavailable') return false
-  if (entry.fingerprint !== currentFingerprint) return false
-  return now - entry.fetchedAt < NEX_HOST_TTL_MS
-}
-
-export const useNexHostStore = create<NexHostState>()((set, get) => {
-  const dropEntry = (hostId: string) =>
-    set((s) => {
-      if (!(hostId in s.byHost)) return s
-      const byHost = { ...s.byHost }
-      delete byHost[hostId]
-      return { byHost }
-    })
-
-  const stillCurrent = (hostId: string, token: RequestToken): boolean =>
-    get().byHost[hostId]?.generation === token.generation && fingerprintOf(hostId) === token.fingerprint
-
-  async function fetchAndCommit(hostId: string, token: RequestToken): Promise<void> {
-    const loaded = await load(hostId)
-    if (!stillCurrent(hostId, token)) return
-    set((s) => ({
-      byHost: {
-        ...s.byHost,
-        [hostId]: {
-          ...loaded,
-          phase: phaseOf(loaded),
-          fetchedAt: Date.now(),
-          generation: token.generation,
-          fingerprint: token.fingerprint,
-        },
-      },
-    }))
-  }
-
-  return {
-    byHost: {},
-
-    ensure: (hostId) => {
-      // Guarded here and again at commit time: `hostFetch` falls back to
-      // another host for an unknown id, so an entry must never come from it.
-      const fingerprint = fingerprintOf(hostId)
-      if (fingerprint === null) {
-        dropEntry(hostId)
-        return Promise.resolve()
-      }
-      const running = inflight.get(hostId)
-      if (running) return running
-      const existing = get().byHost[hostId]
-      if (isFresh(existing, Date.now(), fingerprint)) return Promise.resolve()
-
-      const entry = existing ?? emptyEntry(fingerprint)
-      if (!existing) set((s) => ({ byHost: { ...s.byHost, [hostId]: entry } }))
-      const token: RequestToken = { generation: entry.generation, fingerprint }
-      const p = fetchAndCommit(hostId, token).finally(() => {
-        if (inflight.get(hostId) === p) inflight.delete(hostId)
-      })
-      inflight.set(hostId, p)
-      return p
-    },
-
-    invalidate: (hostId) => {
-      inflight.delete(hostId)
+export const useNexHostStore = create<NexHostState>()((set, get) => ({
+  byHost: {},
+  ...createNexHostEffects({
+    get: () => get().byHost,
+    set: (update) =>
       set((s) => {
-        const cur = s.byHost[hostId]
-        if (!cur) return s
-        return { byHost: { ...s.byHost, [hostId]: { ...cur, fetchedAt: 0, generation: nextGeneration++ } } }
-      })
-      return get().ensure(hostId)
-    },
-
-    clearHost: (hostId) => {
-      inflight.delete(hostId)
-      dropEntry(hostId)
-    },
-  }
-})
+        const next = update(s.byHost)
+        return next === s.byHost ? s : { byHost: next }
+      }),
+  }),
+}))
 
 export function selectReady(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => s.byHost[hostId]?.phase === 'ready'

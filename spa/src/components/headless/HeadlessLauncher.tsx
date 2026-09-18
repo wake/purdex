@@ -1,20 +1,20 @@
 // spa/src/components/headless/HeadlessLauncher.tsx — the New Tab "Headless"
-// section for one host (P-C spec §4.2): renders the host's Nexen readiness
-// from `useNexHostStore` and, when ready, a delegate form driven entirely by
-// the host's own capabilities (roots, profiles, brief limit). It owns the
-// submit path and its outcome mapping; the caller decides what a created
-// execution becomes.
-import { useEffect, useRef, useState } from 'react'
+// section for one host (P-C spec §4.2): routes on the host's Nexen readiness
+// from `useNexHostStore` and, when ready, renders a delegate form driven
+// entirely by the host's own capabilities (roots, profiles, brief limit).
+// The form owns its field state and validity; sending and the outcome
+// mapping live in `useHeadlessLaunchSubmit`; the caller decides what a
+// created execution becomes.
+import { useEffect, useState } from 'react'
 import { useLocation } from 'wouter'
-import { delegateExecution } from '../../lib/nex/nex-api'
-import { NexApiError, type NexCapabilities } from '../../lib/nex/types'
+import type { NexCapabilities } from '../../lib/nex/types'
 import { joinCwd, utf8ByteLength, validateSubPath } from '../../lib/nex/cwd-input'
-import { isHostDaemonLive } from '../../lib/host-live'
 import { encodeHostRouteId } from '../../lib/host-routes'
 import type { PaneContent } from '../../types/tab'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useHeadlessLauncherMemoryStore } from '../../stores/useHeadlessLauncherMemoryStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHeadlessLaunchSubmit } from '../../hooks/useHeadlessLaunchSubmit'
 import { HeadlessLauncherFields } from './HeadlessLauncherFields'
 
 interface Props {
@@ -74,21 +74,12 @@ function pick(choice: string | null, remembered: string | undefined, offered: st
 }
 
 function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilities }) {
-  const t = useI18nStore((s) => s.t)
   const remembered = useHeadlessLauncherMemoryStore((s) => s.byHost[hostId])
   const [brief, setBrief] = useState('')
   const [rootChoice, setRootChoice] = useState<string | null>(null)
   const [sub, setSub] = useState('')
   const [profileChoice, setProfileChoice] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const busyRef = useRef(false)
-  const aliveRef = useRef(true)
-
-  useEffect(() => {
-    aliveRef.current = true
-    return () => { aliveRef.current = false }
-  }, [])
+  const { busy, error, submit } = useHeadlessLaunchSubmit(hostId, caps, onSelect)
 
   const rootPaths = caps.roots.map((r) => r.path)
   const root = pick(rootChoice, remembered?.root, rootPaths, rootPaths[0] ?? '')
@@ -98,42 +89,9 @@ function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilitie
   const subVerdict = validateSubPath(sub)
   const canSubmit = !busy && rootPaths.length > 0 && brief.trim() !== '' && usedBytes <= maxBytes && subVerdict.ok
 
-  const run = async () => {
-    if (busyRef.current || !canSubmit || !subVerdict.ok) return
-    // Daemon-only gate: a delegation runs inside Nexen, not in a tmux pane.
-    if (!isHostDaemonLive(hostId)) { setError(t('newtab.headless.offline')); return }
-    busyRef.current = true
-    setBusy(true)
-    setError('')
-    try {
-      const result = await delegateExecution(hostId, {
-        brief,
-        cwd: joinCwd(root, subVerdict.value),
-        profile,
-        labels: { source: 'purdex' },
-        origin: `purdex://host/${hostId}/newtab`,
-      }, caps)
-      if (!aliveRef.current) return
-      if (result.state === 'rejected') {
-        setError(t('newtab.headless.rejected', { reason: result.reject_reason ?? result.state }))
-        return
-      }
-      useHeadlessLauncherMemoryStore.getState().remember(hostId, { root, profile })
-      onSelect({ kind: 'execution', executionId: result.id, host: hostId })
-    } catch (err) {
-      if (!aliveRef.current) return
-      if (err instanceof NexApiError && err.status === 400) {
-        setError(t('newtab.headless.bad_request', { code: err.code }))
-        return
-      }
-      setError(t('newtab.headless.unavailable', { error: err instanceof Error ? err.message : String(err) }))
-      if (err instanceof NexApiError && (err.status === 503 || err.code === 'network')) {
-        void useNexHostStore.getState().invalidate(hostId)
-      }
-    } finally {
-      busyRef.current = false
-      if (aliveRef.current) setBusy(false)
-    }
+  const run = () => {
+    if (!canSubmit || !subVerdict.ok) return
+    void submit({ brief, cwd: joinCwd(root, subVerdict.value), root, profile })
   }
 
   return (
@@ -153,7 +111,7 @@ function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilitie
       onRoot={setRootChoice}
       onSub={setSub}
       onProfile={setProfileChoice}
-      onSubmit={() => { void run() }}
+      onSubmit={run}
     />
   )
 }
