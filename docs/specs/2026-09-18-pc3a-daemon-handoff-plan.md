@@ -1,15 +1,16 @@
 # Plan — P-C.3a: daemon `nex-handoff` / `nex-takeback`
 
 - Spec: `2026-09-18-pc-launch-ui-spec.md` v1.2 §4.4 (daemon parts), §5
-  (P-C.3), §6.3–6.6. P-C.3b (SPA) is a separate plan/PR.
+  (P-C.3), §6 items 3–6. P-C.3b (SPA) is a separate plan/PR.
 - Worktree `.claude/worktrees/pc-launch-ui`, branch `worktree-pc-launch-ui`
   (at alpha.382). One PR, Go only (`internal/`), ≤ 800 lines target.
 - Every task: subagent, TDD (`go test ./internal/module/nex/... ./internal/module/stream/... ./internal/module/session/...`
   green per commit), one commit with `git commit --only <files>`. Every
   Bash call prefixed with
   `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pc-launch-ui && `.
-  Before the PR: `go build ./... && go vet ./... && go test ./...` and
-  `gofmt -l internal/ cmd/` empty for touched files.
+  **After every task commit**: `go build ./... && go vet ./... && go test
+  ./...` (whole module — task 1 crosses packages, task 2 changes `Init`
+  hard dependencies) and `gofmt -l` empty for touched files.
 - **Tasks 1→2→3→4 sequential.** No SPA, no Nexen change.
 
 ## Spec corrections carried by this plan (amend spec §4.4 in task 2)
@@ -164,21 +165,31 @@ Files: new `internal/module/nex/handoff.go` + `handoff_test.go`,
 Implement spec §4.4 "Daemon: nex-handoff" exactly:
 - Preconditions (no lock): `m.sys.service == nil` → 503 `nex_unavailable`;
   `handoff ∉ sandbox.UsableProfiles(m.opts.Config.Sandbox)` → 409
-  `handoff_unsupported` (`resume_session_id` is always supported in this
-  Nexen build — assert via capabilities in a test comment, not at runtime).
+  `handoff_unsupported`. `delegate.resume_session_id` is a property of the
+  pinned Nexen, not of host config: pin it with a test that serves
+  `GET /v1/capabilities` through the real assembled `m.sys.handler`
+  (`httptest`, as `TestInitRealAssemble…` does) and asserts
+  `delegate.resume_session_id === true` — a future pin bump that drops it
+  fails this test rather than silently breaking handoff (spec §4.4
+  precondition, amended to say so).
 - Body `{expected_tmux_instance, profile?, rollback_command?}`; 400 on
   invalid instance (`tmux.ValidInstance`) or malformed JSON.
 - `TryLock(code)` → 409 `handoff_in_progress`; `defer Unlock`.
 - Session: `GetSession(code)` nil → 404 `session_missing`. Generation
   sample `TmuxInstance()` ≠ expected → 409 `tmux_instance_mismatch`.
 - Identity: `ResolveSessionOwner(ctx 5 s, code)`; `!found || AgentType !=
-  "cc" || SessionID == ""` → 409 `no_identity`. Re-sample generation →
-  mismatch → 409 (nothing sent yet).
+  "cc" || SessionID == ""` → 409 `no_identity`.
 - `IsAliveFor("cc", name+":0")` false → 409 `no_cc`.
+- **Last generation sample before any key is sent** (spec step 1's
+  re-sample comes *after* step 3's liveness check): `TmuxInstance()` ≠
+  expected → 409 `tmux_instance_mismatch` (nothing sent yet).
 - `CheckReadiness` ≠ idle → `Interrupt(ctx 10 s)`; then `Exit(ctx 10 s)`;
   error → 504 `cc_exit_timeout` (`{step: "interrupt"|"exit"}`).
 - Re-sample generation after exit → mismatch → 409 `tmux_instance_mismatch`
-  with `{after_exit: true}` (CC is gone; SPA tells the user).
+  `{after_exit: true, rolled_back: false, session_id}`: **no rollback** —
+  a changed generation means a different tmux server; sending a resume
+  command into it is not the pane we exited (spec §4.4 step 6 amended to
+  state this; the SPA shows the session id so the user can resume by hand).
 - Delegate via `m.sys.service.Delegate` with `Request{PrincipalID:
   m.principal(r), Provider: "claude", Brief: "(handed off from tmux session
   <name>)", SandboxProfile: profile ?? "handoff", Mounts: [{Path: cwd,
@@ -188,22 +199,31 @@ Implement spec §4.4 "Daemon: nex-handoff" exactly:
   session_id, cwd}`.
 - Rejected or `Delegate` error → rollback: if `rollback_command != ""`,
   `SendKeysIfInstance(TmuxID, expected, strings.ReplaceAll(cmd, "{id}",
-  sid) + "\n")`, then poll `IsAliveFor("cc")` ≤ 15 s; respond 409
-  `delegate_rejected` `{reject_reason, rolled_back bool, session_id}` (or
-  500 `delegate_failed` for infra errors, same rollback).
+  sid) + "\n")` (a send error or `!sent` → `rolled_back: false`), then
+  poll `IsAliveFor("cc")` ≤ 15 s; respond 409 `delegate_rejected`
+  `{reject_reason, rolled_back bool, session_id}` — for a `Delegate` infra
+  error `reject_reason` is the error text and the response additionally
+  carries `infra_error: true` (same status/code, spec §4.4 step 6).
 - Tests (fake session provider / owner resolver / prober over
   `tmux.FakeExecutor` / `fakeCCOperator` / fake service; `httptest`):
   lock 409 (second concurrent request while the first is parked in `Exit`);
   400 bad instance; 404 session missing; generation mismatch before
   identity → nothing called on the operator; `no_identity` → operator never
-  called; `no_cc`; busy → interrupt then exit ordering (call log); exit
-  timeout → 504, no delegate; generation mismatch after exit → 409 with
-  `after_exit`, no delegate; success body and the exact `Request` the fake
-  service received (labels, origin, profile default `handoff`, mount);
-  rejected with rollback → keys sent contain the substituted id + newline,
-  `rolled_back: true` when the prober flips alive, `false` on timeout;
-  rejected without rollback command → `rolled_back: false`, no keys; 503
-  when service nil; 409 `handoff_unsupported` when policy max is `trusted`.
+  called; `no_cc`; generation mismatch after liveness but before
+  interrupt → operator never called; busy → interrupt then exit ordering
+  (call log); **interrupt timeout** → 504 `{step: interrupt}`, no exit, no
+  delegate; **exit timeout** → 504 `{step: exit}`, no delegate; generation
+  mismatch after exit → 409 `after_exit`, no delegate, no keys sent;
+  success body and the exact `Request` the fake service received (labels,
+  origin, profile default `handoff`, mount); rejected with rollback → keys
+  sent contain the substituted id + newline, `rolled_back: true` when the
+  prober flips alive, `false` on timeout; **rollback send error / `!sent`**
+  → `rolled_back: false`; rejected without rollback command →
+  `rolled_back: false`, no keys; **`Delegate` infra error** → 409
+  `delegate_rejected` with `infra_error: true` and rollback attempted; 503
+  when service nil; 409 `handoff_unsupported` when policy max is `trusted`;
+  capabilities pin test (`delegate.resume_session_id === true` through the
+  real handler).
 - Commit: `feat(nex): POST /api/sessions/{code}/nex-handoff — hand an interactive CC session to the engine (P-C.3a task 3)`.
 
 ## Task 4 — `POST /api/sessions/{code}/nex-takeback`
@@ -217,14 +237,18 @@ Files: `handoff.go` + test (same lock).
   nil → 404 `session_missing`; generation mismatch → 409
   `tmux_instance_mismatch`; `IsAliveFor("cc", target)` → 409
   `cc_already_running`.
-- `store.Get(execution_id)` error → 404 `execution_not_found`. If
-  `State == Running`: lease = given `lease_id` (validated by Nexen at
-  interrupt) or `AcquireLease(principal)`; `ErrLeaseHeld` → 409 `held_by`
-  `{principal: exec.LeasePrincipalID}`; `Interrupt` — `ErrNoLiveTurn` is
-  fine; `ErrInterruptUnconfirmed` → 504 `interrupt_unconfirmed` (release
-  the acquired lease first; nothing else done); release an acquired lease
-  afterwards (never release a caller-provided one). Re-`Get`; state ∉
-  {Idle, Failed, Terminated} → 409 `execution_not_settled` `{state}`.
+- `store.Get(execution_id)`: `store.ErrNotFound` (measure the exact
+  sentinel in `store/execution.go`) → 404 `execution_not_found`; any other
+  error → 500 `store_error`. If `State == Running`: lease = given
+  `lease_id` (validated by Nexen at interrupt) or `AcquireLease(principal)`
+  — **an acquired lease is released by `defer` on every exit path** from
+  this point (unconfirmed, orphaned, store error, context error, success);
+  a caller-provided lease is never released. `ErrLeaseHeld` → 409
+  `held_by` `{principal: exec.LeasePrincipalID}`; `Interrupt` —
+  `ErrNoLiveTurn` is fine; `ErrInterruptUnconfirmed` → 504
+  `interrupt_unconfirmed` (nothing else done); any other error → 500
+  `interrupt_failed`. Re-`Get` (error → 500 `store_error`); state ∉ {Idle,
+  Failed, Terminated} → 409 `execution_not_settled` `{state}`.
 - `sid = exec.SessionID`, fallback `exec.ResumeSessionID`; empty → 409
   `no_session_id`.
 - `SendKeysIfInstance(TmuxID, expected, replace(resume_command, "{id}", sid)
@@ -234,12 +258,17 @@ Files: `handoff.go` + test (same lock).
 - `Archive{Archived: true}`; error logged → `archived: false`. 200
   `{session_id, archived}`.
 - Tests: preflight order (session missing → service never called;
-  generation mismatch → never called; cc alive → never called); running →
-  acquire → interrupt → release call log; caller lease → no acquire/release;
-  `held_by`; `ErrNoLiveTurn` tolerated; unconfirmed → 504 + release; not
-  settled → 409; `session_id` preferred over `resume_session_id`; keys sent
-  with substituted id; cc never appears → 504 `cc_start_timeout`; archive
-  success / archive failure → `archived: false` still 200.
+  generation mismatch → never called; cc alive → never called); `Get`
+  not-found → 404 vs other error → 500; running → acquire → interrupt →
+  release call log; caller lease → no acquire/release; `held_by`;
+  `ErrNoLiveTurn` tolerated; unconfirmed → 504 + acquired lease released;
+  **generic interrupt error → 500 + acquired lease released**; re-`Get`
+  error → 500 + lease released; not settled → 409; `session_id` preferred
+  over `resume_session_id`; keys sent with substituted id;
+  `SendKeysIfInstance` returns error → 500 `send_failed`, **no archive**;
+  `!sent` → 409, no archive; cc never appears → 504 `cc_start_timeout`,
+  **no archive**; archive success / archive failure → `archived: false`
+  still 200.
 - Commit: `feat(nex): POST /api/sessions/{code}/nex-takeback — resume the session in its tmux pane and archive the execution (P-C.3a task 4)`.
 
 ## Task 5 — PR
@@ -247,9 +276,23 @@ Files: `handoff.go` + test (same lock).
 `go build ./... && go vet ./... && go test ./...` + `gofmt`; PR
 "feat(nex): daemon handoff endpoints — hand to nex / take back (P-C.3a)";
 codex R1 (`--model gpt-5.6-sol`), R2 attack → critic. Real-machine
-acceptance for this PR is CLI-level only (spec §6.3/§6.4 need the SPA):
+acceptance for this PR is CLI-level only (spec §6 items 3–6 need the SPA):
 `make build`, restart mlab daemon (`pdx stop`/`pdx start`), then `curl`
 the two endpoints against a scratch tmux session running `claude` (token
 in a variable) and observe `pdx nex show`. Deploy note: this PR changes
 the daemon — mlab needs `make build` + restart; air26 stays behind until
 its App updates.
+
+## Review log
+
+- codex `task-mu6om8rv-beojrl` (gpt-5.6-sol), 9 findings, all applied: (1)
+  second generation sample moved after the liveness check; (2) after-exit
+  generation change → no rollback, spec amended with the rationale; (3)
+  resume-support precondition pinned by a capabilities test through the
+  real handler; (4) delegate infra error → 409 `delegate_rejected` +
+  rollback (`infra_error: true`); (5) acquired lease released by `defer` on
+  every exit path; (6) `store.ErrNotFound` → 404, other → 500; (7) test
+  matrix extended (interrupt vs exit timeout, rollback send error, infra
+  error rollback, store errors, no-archive on every take-back failure);
+  (8) `go test ./...` after every task commit; (9) spec §6 item references
+  fixed.
