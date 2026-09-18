@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1.2 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave (§9)
+- Status: v1.4 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -318,8 +318,14 @@ session and the embedded Nexen `Service` is a Go call, not an HTTP hop.
 
 #### Daemon: `POST /api/sessions/{code}/nex-handoff`
 
-Lives in `internal/module/nex/handoff.go` (the nex module already depends on
-the session provider; **not** `internal/module/stream`, which P-D deletes).
+Lives in `internal/module/nex/handoff.go` (**not** `internal/module/stream`,
+which P-D deletes). The nex module today declares no dependencies
+(`module.go:91`) and its engine seam keeps only the HTTP handler; P-C.3a
+makes it depend on `session` + `agent` (session provider, owner resolver,
+prober, CC operator via the registry), widens the seam to carry the
+embedded `Service`/`Store` behind narrow interfaces, and relaxes the
+package's import-boundary test to admit `nexen/execution` and
+`nexen/store`.
 The per-session lock type moves from `internal/module/stream/locks.go` to
 `internal/module/session/locks.go` as a pure move (both callers share it;
 stream's imports/tests are updated — see §4.5).
@@ -331,8 +337,12 @@ with the session id placeholder left as `{id}` (e.g. `claude --resume {id}`,
 all inside `TryLock(code)` (409 `handoff_in_progress`):
 
 1. Generation: sample `TmuxInstance()`; mismatch with `expected_tmux_instance`
-   → 409 `tmux_instance_mismatch`. Re-sampled after step 3; any change →
-   abort with 409 (before exit: nothing changed; after exit: see step 6).
+   → 409 `tmux_instance_mismatch`. Re-sampled **after step 3 and before
+   any key is sent**, and again after step 4. A change after exit → 409
+   `tmux_instance_mismatch` `{after_exit: true, rolled_back: false,
+   session_id}` with **no rollback**: a new generation is a different tmux
+   server, so the pane we exited no longer exists to receive a resume
+   command; the SPA shows the session id for a manual resume.
 2. Identity: the agent module's provenance resolver (exported as a provider
    interface the nex module receives at `Init`, like `session` is today) →
    `{found, agent_type, session_id, cwd}`. `!found || agent_type != "cc" ||
@@ -359,9 +369,12 @@ all inside `TryLock(code)` (409 `handoff_in_progress`):
 7. No `cc_session_id` write, no mode change, no WS `handoff` event.
 
 Precondition checks the daemon makes before step 1 (cheap, no lock):
-`m.sys` ready (else 503 `nex_unavailable`); capabilities
-`delegate.resume_session_id` true and `handoff` ∈ `sandbox_profiles` (else
-409 `handoff_unsupported`).
+`m.sys` ready (else 503 `nex_unavailable`); `handoff` ∈
+`sandbox.UsableProfiles(policy)` (else 409 `handoff_unsupported`).
+`delegate.resume_session_id` is a property of the pinned Nexen build, not
+of host config, so it is pinned by a test that serves `GET /v1/capabilities`
+through the real assembled handler and asserts `true` — a pin bump that
+drops it fails the suite instead of failing handoffs at runtime.
 
 #### Daemon: `POST /api/sessions/{code}/nex-takeback`
 
@@ -372,6 +385,14 @@ resume_command, lease_id?}`.
    the session provider (else 404 `session_missing`); generation matches
    (else 409 `tmux_instance_mismatch`); `!IsAliveFor("cc", target)` (else 409
    `cc_already_running` — the user already resumed by hand).
+   1b. **Binding, after `Store.Get` and before any lease / interrupt / send
+   / archive** (v1.4): the execution must be the one a handoff of *this*
+   session created — `labels.handoff_session == code` **and** `origin ==
+   purdex://host/<hostId>/session/<code>` (both as step 5 of the handoff
+   wrote them; labels are the store's canonical JSON text, decoded here).
+   Else 409 `execution_not_bound` `{execution_id, session_code}`; a
+   running unbound execution is **not** interrupted — the caller cannot
+   resume it in this pane, so stopping it would only strand it.
 2. Execution: `Service.Get(execution_id)`; `state == running` → needs a
    control lease: if `lease_id` given and valid, `Service.Interrupt` with it;
    otherwise acquire one (`AttachControl`) → interrupt → release. `lease_held`
@@ -380,7 +401,10 @@ resume_command, lease_id?}`.
    require `state ∈ {idle, failed, terminated}`.
 3. `sid = summary.session_id ?? summary.resume_session_id` (F3); none → 409
    `no_session_id`.
-4. `SendKeys(target, render(resume_command, sid))`, wait `IsAliveFor("cc")`
+4. Re-check `!IsAliveFor("cc", target)` immediately before the send, lock
+   still held (v1.4; else 409 `cc_already_running` `{session_id}`, nothing
+   sent, nothing archived — the user resumed by hand during step 2). Then
+   `SendKeys(target, render(resume_command, sid))`, wait `IsAliveFor("cc")`
    ≤ 15 s (else 504 `cc_start_timeout`; the execution is already idle — the
    response says which step failed so the SPA can offer "retry resume").
 5. `Service.Archive(execution_id)` (no lease needed, idle) — **archive on
@@ -627,3 +651,18 @@ from the region again (`primary-sidebar.views` back to
 - v1.2 — P-C.2 fix wave: list gate is info readiness (drift resolved in
   favour of the plan); validation at the API boundary; refresh revision per
   attempt.
+- v1.3 — P-C.3a plan review `task-mu6om8rv-beojrl` (9 findings applied):
+  nex module dependencies/seam/import boundary stated as they are; second
+  generation sample placed after the liveness check; after-exit generation
+  change does not roll back (different tmux server); resume-support
+  precondition pinned by a capabilities test; delegate infra error shares
+  the `delegate_rejected` rollback path; acquired lease released on every
+  exit path; `store.ErrNotFound` vs other store errors distinguished.
+- v1.4 — P-C.3a fix wave: shared lock instance via registry
+  (`session.HandoffLocksKey`, one `*HandoffLocks` for stream and nex);
+  window-0 send target (`SendKeysIfInstanceTarget`, the pane liveness and
+  the operator read); pre-send liveness re-check (take-back step 4);
+  bounded detached contexts for every engine call (delegate 30 s, engine
+  op 10 s, interrupt 20 s > Nexen's 15 s, lease cleanup 5 s); take-back
+  requires the execution to be bound to the session (`handoff_session`
+  label + origin, step 1b).

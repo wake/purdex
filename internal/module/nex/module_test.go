@@ -71,8 +71,12 @@ func baseConfig(t *testing.T) pdxconfig.Config {
 	}
 }
 
+// newTestCore builds a core whose registry already carries every provider
+// Init demands (session provider, owner resolver, prober, CC operator), as
+// the session and agent modules would have registered them by the time the
+// core reaches nex (Dependencies orders it after both).
 func newTestCore(cfg *pdxconfig.Config) *core.Core {
-	return core.New(core.CoreDeps{Config: cfg})
+	return newTestCoreWithout(cfg, "")
 }
 
 // fakeEngine builds an engine plus a fake assembleFn that records what it
@@ -108,8 +112,10 @@ func TestNameAndDependencies(t *testing.T) {
 	if got := m.Name(); got != "nex" {
 		t.Errorf("Name() = %q, want %q", got, "nex")
 	}
-	if got := m.Dependencies(); got != nil {
-		t.Errorf("Dependencies() = %v, want nil", got)
+	// session + agent: Init looks their services up in the registry, so the
+	// core must init them first (spec §4.4, P-C.3a).
+	if got, want := m.Dependencies(), []string{"session", "agent"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Dependencies() = %v, want %v", got, want)
 	}
 }
 

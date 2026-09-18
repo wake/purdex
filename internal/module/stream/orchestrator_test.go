@@ -161,7 +161,7 @@ func setupHandoffModule(t *testing.T, opts handoffTestOpts) *handoffTestEnv {
 		sessions: fp,
 		ccOps:    fakeOps,
 		prober:   prober,
-		locks:    newHandoffLocks(),
+		locks:    session.NewHandoffLocks(),
 	}
 
 	mux := http.NewServeMux()

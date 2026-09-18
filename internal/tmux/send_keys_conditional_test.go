@@ -137,6 +137,85 @@ func TestSendKeysIfInstance_RejectsNonSessionIDTarget(t *testing.T) {
 	}
 }
 
+// SendKeysIfInstanceTarget names a window: `-t '$N:<window>'` sends to that
+// window's active pane — the pane a caller that checks liveness on
+// `<name>:0` actually means — rather than to whichever window the session
+// currently has active. Same single if-shell invocation otherwise.
+func TestSendKeysIfInstanceTarget_TargetsTheWindow(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+if [ "$1" != "if-shell" ] || [ "$2" != "-F" ]; then
+  printf 'not a single conditional invocation: %s\n' "$*" >&2
+  exit 2
+fi
+if [ "$3" != '#{==:#{pid}:#{start_time},4471:1788740000}' ]; then
+  printf 'unexpected condition: %s\n' "$3" >&2
+  exit 2
+fi
+if [ "$4" != "send-keys -t '\$3:0' -H 68 69 0a" ]; then
+  printf 'unexpected send: %s\n' "$4" >&2
+  exit 2
+fi
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	sent, err := (&tmux.RealExecutor{}).SendKeysIfInstanceTarget("$3", "0", "4471:1788740000", "hi\n")
+	if err != nil {
+		t.Fatalf("SendKeysIfInstanceTarget returned error: %v", err)
+	}
+	if !sent {
+		t.Fatal("SendKeysIfInstanceTarget reported the keys were not sent")
+	}
+}
+
+// The window is interpolated into the nested send-keys command string, so
+// only a window index is accepted — anything else could re-shape the
+// command or re-point the target.
+func TestSendKeysIfInstanceTarget_RejectsNonIndexWindow(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte(`#!/bin/sh
+printf 'tmux must not be invoked at all: %s\n' "$*" >&2
+exit 3
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, bad := range []string{"", "main", "0.1", "0'", "-1", "0 1"} {
+		sent, err := (&tmux.RealExecutor{}).SendKeysIfInstanceTarget("$0", bad, "4471:1788740000", "hi\n")
+		if sent || err == nil {
+			t.Fatalf("window %q must be refused, got sent=%v err=%v", bad, sent, err)
+		}
+	}
+}
+
+// The fake records the windowed target the same way.
+func TestFakeExecutor_SendKeysIfInstanceTarget(t *testing.T) {
+	f := tmux.NewFakeExecutor()
+	f.SetInstance("111:1000")
+
+	sent, err := f.SendKeysIfInstanceTarget("$0", "0", "222:2000", "nope\n")
+	if err != nil || sent {
+		t.Fatalf("mismatch must refuse: sent=%v err=%v", sent, err)
+	}
+	if len(f.RawKeysSent()) != 0 {
+		t.Fatalf("a refused send must deliver nothing, got %v", f.RawKeysSent())
+	}
+
+	sent, err = f.SendKeysIfInstanceTarget("$0", "0", "111:1000", "yes\n")
+	if err != nil || !sent {
+		t.Fatalf("match must send: sent=%v err=%v", sent, err)
+	}
+	calls := f.RawKeysSent()
+	if len(calls) != 1 || calls[0].Target != "$0:0" || calls[0].Keys[0] != "yes\n" {
+		t.Fatalf("unexpected delivery: %+v", calls)
+	}
+}
+
 // The fake models the same contract: it holds a generation, and refuses —
 // recording nothing — when the caller's expectation does not match it.
 func TestFakeExecutor_SendKeysIfInstance(t *testing.T) {
