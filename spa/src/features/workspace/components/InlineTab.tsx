@@ -36,8 +36,6 @@ export function InlineTab({
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
   const badgeEnabled = useUISettingsStore((s) => s.hostBadgeSidebarEnabled)
   const badgeLineColor = useUISettingsStore((s) => s.hostBadgeSidebarLineColor)
-  const badgeLineOpacity = useUISettingsStore((s) => s.hostBadgeSidebarLineOpacity)
-  const badgeBgOpacity = useUISettingsStore((s) => s.hostBadgeSidebarBgOpacity)
   const badgeBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
   const badgeInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
   const badgeRadius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
@@ -106,6 +104,7 @@ export function InlineTab({
       ref={setNodeRef}
       style={style}
       data-testid="inline-tab-row"
+      data-active={String(isActive)}
       {...attributes}
       {...otherListeners}
       onPointerDown={handlePointerDown}
@@ -127,15 +126,13 @@ export function InlineTab({
       })}
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
-          color={hostBadge.color}
+          colors={hostBadge.colors}
           icon={hostBadge.icon}
           iconWeight={hostBadge.iconWeight}
           box={badgeBox}
           inset={badgeInset}
           radius={badgeRadius}
           lineColor={badgeLineColor}
-          lineOpacity={badgeLineOpacity}
-          bgOpacity={badgeBgOpacity}
         />
       )}
       <span data-testid="inline-tab-title" className="flex-1 truncate">

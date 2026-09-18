@@ -8,6 +8,7 @@ import {
   isPhosphorIconName,
   normalizeHostColor,
   getTabHostId,
+  getTabBadgePane,
   sanitizeHostConfig,
   HOST_COLOR_MODES,
   HOST_COLOR_ALPHA_DEFAULTS,
@@ -115,6 +116,35 @@ describe('getTabHostId', () => {
   })
 })
 
+describe('getTabBadgePane', () => {
+  it('returns the first tmux-session pane content in pre-order — non-tmux leaf first', () => {
+    const layout = splitH(leaf('p-new', { kind: 'new-tab' }), tmuxLeaf('host-a'))
+    const pane = getTabBadgePane(tab(layout))
+    expect(pane?.kind).toBe('tmux-session')
+    expect(pane?.hostId).toBe('host-a')
+  })
+
+  it('returns the first tmux-session pane content in pre-order — two tmux leaves', () => {
+    const layout = splitH(tmuxLeaf('host-b'), tmuxLeaf('host-a'))
+    const pane = getTabBadgePane(tab(layout))
+    expect(pane?.hostId).toBe('host-b')
+  })
+
+  it('returns null when there is no tmux-session pane', () => {
+    const layout = splitH(leaf('p-new', { kind: 'new-tab' }), leaf('p-dash', { kind: 'dashboard' }))
+    expect(getTabBadgePane(tab(layout))).toBeNull()
+  })
+
+  it('agrees with getTabHostId on hostId', () => {
+    const layout = splitH(leaf('p-new', { kind: 'new-tab' }), tmuxLeaf('host-a'))
+    expect(getTabBadgePane(tab(layout))?.hostId).toBe(getTabHostId(tab(layout)))
+
+    const empty = splitH(leaf('p-new', { kind: 'new-tab' }), leaf('p-dash', { kind: 'dashboard' }))
+    expect(getTabBadgePane(tab(empty))).toBeNull()
+    expect(getTabHostId(tab(empty))).toBeNull()
+  })
+})
+
 describe('DEFAULT_HOST_ICON', () => {
   it('is the Desktop Phosphor icon', () => {
     expect(DEFAULT_HOST_ICON).toBe('Desktop')
@@ -184,23 +214,27 @@ describe('hasHostBadge', () => {
   })
 
   it('is false when the host set neither a color nor an icon', () => {
-    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: undefined })).toBe(false)
+    expect(hasHostBadge({ colors: null, icon: undefined, iconWeight: undefined })).toBe(false)
   })
 
   it('is true when the host set a color only', () => {
-    expect(hasHostBadge({ color: '#3b82f6', icon: undefined, iconWeight: undefined })).toBe(true)
+    expect(
+      hasHostBadge({ colors: { main: 'x', middle: 'y', light: 'z' }, icon: undefined, iconWeight: undefined }),
+    ).toBe(true)
   })
 
   it('is true when the host set an icon only', () => {
-    expect(hasHostBadge({ color: null, icon: 'Laptop', iconWeight: undefined })).toBe(true)
+    expect(hasHostBadge({ colors: null, icon: 'Laptop', iconWeight: undefined })).toBe(true)
   })
 
   it('is true when the host set both', () => {
-    expect(hasHostBadge({ color: '#3b82f6', icon: 'Laptop', iconWeight: 'duotone' })).toBe(true)
+    expect(
+      hasHostBadge({ colors: { main: 'x', middle: 'y', light: 'z' }, icon: 'Laptop', iconWeight: 'duotone' }),
+    ).toBe(true)
   })
 
   it('ignores a weight on its own — a weight is not something to show', () => {
-    expect(hasHostBadge({ color: null, icon: undefined, iconWeight: 'duotone' })).toBe(false)
+    expect(hasHostBadge({ colors: null, icon: undefined, iconWeight: 'duotone' })).toBe(false)
   })
 })
 

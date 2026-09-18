@@ -1,36 +1,61 @@
+import { useMemo } from 'react'
 import type { IconWeight, Tab } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
-import { getTabHostId, isIconWeight, isPhosphorIconName, resolveHostColorSet } from '../lib/host-color'
+import { useAgentStore } from '../stores/useAgentStore'
+import { compositeKey } from '../lib/composite-key'
+import {
+  getTabBadgePane,
+  isIconWeight,
+  isPhosphorIconName,
+  resolveHostColors,
+  type HostColorMode,
+  type ResolvedHostColors,
+} from '../lib/host-color'
 
-/** Validated host identity for a tab's badge. `null` / `undefined` mean "fall back to the neutral default". */
+/** Resolved badge identity for a tab. `colors` null = host has no color; `icon` undefined = default icon. */
 export interface TabHostBadge {
-  color: string | null
+  colors: ResolvedHostColors | null
   icon: string | undefined
   iconWeight: IconWeight | undefined
 }
 
 /**
- * Identity of the tab's host (first tmux pane) for the host badge, or `null` when
- * the tab has no tmux pane.
+ * Badge identity of the tab's host (first tmux pane in pre-order), or `null` when
+ * the tab has no tmux pane. Mode (spec D1): `terminal` when THAT SAME pane has a
+ * live agentType, otherwise `console`; `execution` is not wired yet.
  *
- * Uses primitive selectors plus the `colors` object, whose identity only changes on
- * a write: a single selector returning a fresh `{ color, icon, iconWeight }` object
- * would compare unequal on every read and re-render every tab row on unrelated
- * store writes.
+ * Host and mode must come from the same pane — reading host from
+ * `getTabBadgePane` (pre-order) but mode from `getPrimaryPane` let a split tab
+ * whose first leaf isn't a tmux pane (e.g. `new-tab` before a live agent tmux
+ * pane) pick that pane's host under the wrong mode (P2 Task 1 review finding,
+ * PR #1153).
+ *
+ * Primitive selectors plus the `colors` object (identity changes only on a write),
+ * resolved under `useMemo` so tab rows do not re-render on unrelated store writes.
  */
 export function useTabHostBadge(tab: Tab): TabHostBadge | null {
-  const hostId = getTabHostId(tab)
+  const badgePane = getTabBadgePane(tab)
+  const hostId = badgePane?.hostId ?? null
+  const ck =
+    badgePane && badgePane.sessionCode && !badgePane.terminated
+      ? compositeKey(badgePane.hostId, badgePane.sessionCode)
+      : undefined
   // Hooks run unconditionally (Rules of Hooks); the `hostId` bail-out happens after.
   const colors = useHostStore((s) => (hostId ? s.hosts[hostId]?.colors : undefined))
   const legacyColor = useHostStore((s) => (hostId ? s.hosts[hostId]?.color : undefined))
   const icon = useHostStore((s) => (hostId ? s.hosts[hostId]?.icon : undefined))
   const iconWeight = useHostStore((s) => (hostId ? s.hosts[hostId]?.iconWeight : undefined))
+  const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
+  const mode: HostColorMode = agentType ? 'terminal' : 'console'
+
+  const resolved = useMemo(
+    () => resolveHostColors({ colors, color: legacyColor }, mode),
+    [colors, legacyColor, mode],
+  )
 
   if (!hostId) return null
-  // P1 adapter: the badge still takes one hex; per-mode rgba arrives with P2.
-  const resolved = resolveHostColorSet({ colors, color: legacyColor }, 'console')
   return {
-    color: resolved?.main.color ?? null,
+    colors: resolved,
     // Last line of defence: a value stored before the guard existed (or written by
     // a stranger) must never reach `WorkspaceIcon`, which renders an unknown name
     // as literal text inside the badge.

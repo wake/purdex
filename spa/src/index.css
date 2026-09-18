@@ -8,6 +8,14 @@
    below 1.5x DPR, where browsers round half-pixels inconsistently. */
 @custom-variant lowdpi (@media (max-resolution: 1.5dppx));
 
+/* Host badge (components/HostBadge.tsx): the icon uses `--hb-middle` on an inactive
+   row and `--hb-main` when the row is hovered or active. Rows are `.group` elements
+   carrying `data-active`. */
+.group:hover [data-host-badge],
+.group[data-active="true"] [data-host-badge] {
+  --hb-icon: var(--hb-main);
+}
+
 body {
   background-color: var(--surface-primary);
 }

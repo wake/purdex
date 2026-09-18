@@ -42,8 +42,6 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
   const badgeEnabled = useUISettingsStore((s) => s.hostBadgeTabBarEnabled)
   const badgeLineColor = useUISettingsStore((s) => s.hostBadgeTabBarLineColor)
-  const badgeLineOpacity = useUISettingsStore((s) => s.hostBadgeTabBarLineOpacity)
-  const badgeBgOpacity = useUISettingsStore((s) => s.hostBadgeTabBarBgOpacity)
   const badgeBox = useUISettingsStore((s) => s.hostBadgeTabBarBox)
   const badgeInset = useUISettingsStore((s) => s.hostBadgeTabBarInset)
   const badgeRadius = useUISettingsStore((s) => s.hostBadgeTabBarRadius)
@@ -97,6 +95,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}
+        data-active={String(isActive)}
         className={`group relative flex items-center justify-center w-9 rounded-[6px] cursor-pointer transition-colors duration-150 ease-out ${
           isActive
             ? 'text-white bg-surface-active border border-transparent'
@@ -130,6 +129,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       {...listeners}
       role="tab"
       aria-selected={isActive}
+      data-active={String(isActive)}
       onClick={() => onSelect(tab.id)}
       onDoubleClick={handleDoubleClick}
       onPointerDown={handlePointerDown}
@@ -147,15 +147,13 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
-          color={hostBadge.color}
+          colors={hostBadge.colors}
           icon={hostBadge.icon}
           iconWeight={hostBadge.iconWeight}
           box={badgeBox}
           inset={badgeInset}
           radius={badgeRadius}
           lineColor={badgeLineColor}
-          lineOpacity={badgeLineOpacity}
-          bgOpacity={badgeBgOpacity}
         />
       )}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>

@@ -8,8 +8,6 @@ function renderSetting(overrides: { enabled?: boolean } = {}) {
   const handlers = {
     onEnabledChange: vi.fn(),
     onLineColorChange: vi.fn(),
-    onLineOpacityChange: vi.fn(),
-    onBgOpacityChange: vi.fn(),
     onBoxChange: vi.fn(),
     onInsetChange: vi.fn(),
     onRadiusChange: vi.fn(),
@@ -20,8 +18,6 @@ function renderSetting(overrides: { enabled?: boolean } = {}) {
       description="desc"
       enabled={overrides.enabled ?? true}
       lineColor="host"
-      lineOpacity={100}
-      bgOpacity={22}
       box={16}
       inset={2}
       radius={4}
@@ -32,7 +28,7 @@ function renderSetting(overrides: { enabled?: boolean } = {}) {
   return { ...utils, ...handlers }
 }
 
-const NUMERIC_IDS = ['line-opacity', 'bg-opacity', 'box', 'inset', 'radius'] as const
+const NUMERIC_IDS = ['box', 'inset', 'radius'] as const
 
 function numeric(id: (typeof NUMERIC_IDS)[number]) {
   return screen.getByTestId(`${PREFIX}-${id}`) as HTMLInputElement
@@ -42,8 +38,24 @@ function lineColorButtons() {
   return within(screen.getByTestId(`${PREFIX}-line-color`)).getAllByRole('button')
 }
 
+const base = {
+  label: 'Sidebar host badge',
+  description: 'desc',
+  enabled: true,
+  lineColor: 'host' as const,
+  box: 16,
+  inset: 2,
+  radius: 4,
+  onEnabledChange: vi.fn(),
+  onLineColorChange: vi.fn(),
+  onBoxChange: vi.fn(),
+  onInsetChange: vi.fn(),
+  onRadiusChange: vi.fn(),
+  testIdPrefix: PREFIX,
+}
+
 describe('HostBadgeSetting', () => {
-  it('renders the group label and one toggle, one segment control, five number inputs', () => {
+  it('renders the group label and one toggle, one segment control, three number inputs', () => {
     renderSetting()
     expect(screen.getByText('Sidebar host badge')).toBeTruthy()
     expect(screen.getByRole('switch', { name: /Sidebar host badge/ })).toBeTruthy()
@@ -68,12 +80,7 @@ describe('HostBadgeSetting', () => {
   })
 
   it('each number input calls its own handler', () => {
-    const { onLineOpacityChange, onBgOpacityChange, onBoxChange, onInsetChange, onRadiusChange } =
-      renderSetting()
-    fireEvent.change(numeric('line-opacity'), { target: { value: '60' } })
-    expect(onLineOpacityChange).toHaveBeenLastCalledWith(60)
-    fireEvent.change(numeric('bg-opacity'), { target: { value: '30' } })
-    expect(onBgOpacityChange).toHaveBeenLastCalledWith(30)
+    const { onBoxChange, onInsetChange, onRadiusChange } = renderSetting()
     fireEvent.change(numeric('box'), { target: { value: '20' } })
     expect(onBoxChange).toHaveBeenLastCalledWith(20)
     fireEvent.change(numeric('inset'), { target: { value: '3' } })
@@ -83,14 +90,7 @@ describe('HostBadgeSetting', () => {
   })
 
   it('clamps out-of-range numbers before calling the handlers', () => {
-    const { onLineOpacityChange, onBgOpacityChange, onBoxChange, onInsetChange, onRadiusChange } =
-      renderSetting()
-    fireEvent.change(numeric('line-opacity'), { target: { value: '5' } })
-    expect(onLineOpacityChange).toHaveBeenLastCalledWith(20)
-    fireEvent.change(numeric('line-opacity'), { target: { value: '500' } })
-    expect(onLineOpacityChange).toHaveBeenLastCalledWith(100)
-    fireEvent.change(numeric('bg-opacity'), { target: { value: '-5' } })
-    expect(onBgOpacityChange).toHaveBeenLastCalledWith(0)
+    const { onBoxChange, onInsetChange, onRadiusChange } = renderSetting()
     fireEvent.change(numeric('box'), { target: { value: '99' } })
     expect(onBoxChange).toHaveBeenLastCalledWith(24)
     fireEvent.change(numeric('box'), { target: { value: '1' } })
@@ -120,5 +120,17 @@ describe('HostBadgeSetting', () => {
     const { onEnabledChange } = renderSetting({ enabled: false })
     fireEvent.click(screen.getByRole('switch', { name: /Sidebar host badge/ }))
     expect(onEnabledChange).toHaveBeenCalledWith(true)
+  })
+
+  it('shows a caption above each numeric input', () => {
+    render(<HostBadgeSetting {...base} />)
+    for (const [id, caption] of [['box', 'Size'], ['inset', 'Inset'], ['radius', 'Radius']] as const) {
+      const input = screen.getByTestId(`${base.testIdPrefix}-${id}`)
+      const label = input.closest('label')
+      expect(label).not.toBeNull()
+      expect(label!.textContent).toContain(caption)
+    }
+    expect(screen.queryByTestId(`${base.testIdPrefix}-line-opacity`)).toBeNull()
+    expect(screen.queryByTestId(`${base.testIdPrefix}-bg-opacity`)).toBeNull()
   })
 })

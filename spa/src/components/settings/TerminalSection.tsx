@@ -38,10 +38,6 @@ export function TerminalSection() {
   const setHostBadgeSidebarEnabled = useUISettingsStore((s) => s.setHostBadgeSidebarEnabled)
   const hostBadgeSidebarLineColor = useUISettingsStore((s) => s.hostBadgeSidebarLineColor)
   const setHostBadgeSidebarLineColor = useUISettingsStore((s) => s.setHostBadgeSidebarLineColor)
-  const hostBadgeSidebarLineOpacity = useUISettingsStore((s) => s.hostBadgeSidebarLineOpacity)
-  const setHostBadgeSidebarLineOpacity = useUISettingsStore((s) => s.setHostBadgeSidebarLineOpacity)
-  const hostBadgeSidebarBgOpacity = useUISettingsStore((s) => s.hostBadgeSidebarBgOpacity)
-  const setHostBadgeSidebarBgOpacity = useUISettingsStore((s) => s.setHostBadgeSidebarBgOpacity)
   const hostBadgeSidebarBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
   const setHostBadgeSidebarBox = useUISettingsStore((s) => s.setHostBadgeSidebarBox)
   const hostBadgeSidebarInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
@@ -53,10 +49,6 @@ export function TerminalSection() {
   const setHostBadgeTabBarEnabled = useUISettingsStore((s) => s.setHostBadgeTabBarEnabled)
   const hostBadgeTabBarLineColor = useUISettingsStore((s) => s.hostBadgeTabBarLineColor)
   const setHostBadgeTabBarLineColor = useUISettingsStore((s) => s.setHostBadgeTabBarLineColor)
-  const hostBadgeTabBarLineOpacity = useUISettingsStore((s) => s.hostBadgeTabBarLineOpacity)
-  const setHostBadgeTabBarLineOpacity = useUISettingsStore((s) => s.setHostBadgeTabBarLineOpacity)
-  const hostBadgeTabBarBgOpacity = useUISettingsStore((s) => s.hostBadgeTabBarBgOpacity)
-  const setHostBadgeTabBarBgOpacity = useUISettingsStore((s) => s.setHostBadgeTabBarBgOpacity)
   const hostBadgeTabBarBox = useUISettingsStore((s) => s.hostBadgeTabBarBox)
   const setHostBadgeTabBarBox = useUISettingsStore((s) => s.setHostBadgeTabBarBox)
   const hostBadgeTabBarInset = useUISettingsStore((s) => s.hostBadgeTabBarInset)
@@ -164,15 +156,11 @@ export function TerminalSection() {
         description={t('settings.terminal.host_badge.sidebar.desc')}
         enabled={hostBadgeSidebarEnabled}
         lineColor={hostBadgeSidebarLineColor}
-        lineOpacity={hostBadgeSidebarLineOpacity}
-        bgOpacity={hostBadgeSidebarBgOpacity}
         box={hostBadgeSidebarBox}
         inset={hostBadgeSidebarInset}
         radius={hostBadgeSidebarRadius}
         onEnabledChange={setHostBadgeSidebarEnabled}
         onLineColorChange={setHostBadgeSidebarLineColor}
-        onLineOpacityChange={setHostBadgeSidebarLineOpacity}
-        onBgOpacityChange={setHostBadgeSidebarBgOpacity}
         onBoxChange={setHostBadgeSidebarBox}
         onInsetChange={setHostBadgeSidebarInset}
         onRadiusChange={setHostBadgeSidebarRadius}
@@ -183,15 +171,11 @@ export function TerminalSection() {
         description={t('settings.terminal.host_badge.tab_bar.desc')}
         enabled={hostBadgeTabBarEnabled}
         lineColor={hostBadgeTabBarLineColor}
-        lineOpacity={hostBadgeTabBarLineOpacity}
-        bgOpacity={hostBadgeTabBarBgOpacity}
         box={hostBadgeTabBarBox}
         inset={hostBadgeTabBarInset}
         radius={hostBadgeTabBarRadius}
         onEnabledChange={setHostBadgeTabBarEnabled}
         onLineColorChange={setHostBadgeTabBarLineColor}
-        onLineOpacityChange={setHostBadgeTabBarLineOpacity}
-        onBgOpacityChange={setHostBadgeTabBarBgOpacity}
         onBoxChange={setHostBadgeTabBarBox}
         onInsetChange={setHostBadgeTabBarInset}
         onRadiusChange={setHostBadgeTabBarRadius}

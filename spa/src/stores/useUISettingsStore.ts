@@ -28,12 +28,6 @@ export function isHostBadgeLineColor(v: unknown): v is HostBadgeLineColor {
   return typeof v === 'string' && (HOST_BADGE_LINE_COLORS as readonly string[]).includes(v)
 }
 
-export const HOST_BADGE_LINE_OPACITY_MIN = 20
-export const HOST_BADGE_LINE_OPACITY_MAX = 100
-export const HOST_BADGE_LINE_OPACITY_DEFAULT = 100
-export const HOST_BADGE_BG_OPACITY_MIN = 0
-export const HOST_BADGE_BG_OPACITY_MAX = 100
-export const HOST_BADGE_BG_OPACITY_DEFAULT = 22
 export const HOST_BADGE_BOX_MIN = 12
 export const HOST_BADGE_BOX_MAX = 24
 export const HOST_BADGE_BOX_DEFAULT = 16
@@ -50,10 +44,6 @@ function clampRounded(n: number, min: number, max: number, fallback: number): nu
   return Math.min(max, Math.max(min, Math.round(n)))
 }
 
-export const clampHostBadgeLineOpacity = (n: number): number =>
-  clampRounded(n, HOST_BADGE_LINE_OPACITY_MIN, HOST_BADGE_LINE_OPACITY_MAX, HOST_BADGE_LINE_OPACITY_DEFAULT)
-export const clampHostBadgeBgOpacity = (n: number): number =>
-  clampRounded(n, HOST_BADGE_BG_OPACITY_MIN, HOST_BADGE_BG_OPACITY_MAX, HOST_BADGE_BG_OPACITY_DEFAULT)
 export const clampHostBadgeBox = (n: number): number =>
   clampRounded(n, HOST_BADGE_BOX_MIN, HOST_BADGE_BOX_MAX, HOST_BADGE_BOX_DEFAULT)
 export const clampHostBadgeInset = (n: number): number =>
@@ -67,27 +57,32 @@ const HOST_BADGE_BOOL_FIELDS = HOST_BADGE_SURFACES.map((s) => `hostBadge${s}Enab
 const HOST_BADGE_ENUM_FIELDS = HOST_BADGE_SURFACES.map((s) => `hostBadge${s}LineColor`)
 const HOST_BADGE_NUMERIC_CLAMPS: Record<string, (n: number) => number> = Object.fromEntries(
   HOST_BADGE_SURFACES.flatMap((s) => [
-    [`hostBadge${s}LineOpacity`, clampHostBadgeLineOpacity],
-    [`hostBadge${s}BgOpacity`, clampHostBadgeBgOpacity],
     [`hostBadge${s}Box`, clampHostBadgeBox],
     [`hostBadge${s}Inset`, clampHostBadgeInset],
     [`hostBadge${s}Radius`, clampHostBadgeRadius],
   ]),
 )
 
-/** Initial values for the 14 host badge fields; also the rehydrate fallback. */
+/**
+ * Per-surface opacity fields removed in P2 (§4.4): host badge tint is now
+ * driven by the host color mode, not independent line/background opacity
+ * sliders. Kept as a named list so stale persisted/synced keys can be
+ * stripped rather than silently resurrected.
+ */
+export const HOST_BADGE_REMOVED_FIELDS = HOST_BADGE_SURFACES.flatMap((s) => [
+  `hostBadge${s}LineOpacity`,
+  `hostBadge${s}BgOpacity`,
+]) as readonly string[]
+
+/** Initial values for the 10 host badge fields; also the rehydrate fallback. */
 export const HOST_BADGE_DEFAULTS = {
   hostBadgeSidebarEnabled: true,
   hostBadgeSidebarLineColor: 'host' as HostBadgeLineColor,
-  hostBadgeSidebarLineOpacity: HOST_BADGE_LINE_OPACITY_DEFAULT,
-  hostBadgeSidebarBgOpacity: HOST_BADGE_BG_OPACITY_DEFAULT,
   hostBadgeSidebarBox: HOST_BADGE_BOX_DEFAULT,
   hostBadgeSidebarInset: HOST_BADGE_INSET_DEFAULT,
   hostBadgeSidebarRadius: HOST_BADGE_RADIUS_DEFAULT,
   hostBadgeTabBarEnabled: true,
   hostBadgeTabBarLineColor: 'host' as HostBadgeLineColor,
-  hostBadgeTabBarLineOpacity: HOST_BADGE_LINE_OPACITY_DEFAULT,
-  hostBadgeTabBarBgOpacity: HOST_BADGE_BG_OPACITY_DEFAULT,
   hostBadgeTabBarBox: HOST_BADGE_BOX_DEFAULT,
   hostBadgeTabBarInset: HOST_BADGE_INSET_DEFAULT,
   hostBadgeTabBarRadius: HOST_BADGE_RADIUS_DEFAULT,
@@ -101,6 +96,9 @@ export const HOST_BADGE_DEFAULTS = {
  */
 export function sanitizeHostBadgePrefs<T extends object>(data: T): T {
   const out = { ...data } as Record<string, unknown>
+  for (const field of HOST_BADGE_REMOVED_FIELDS) {
+    delete out[field]
+  }
   for (const field of HOST_BADGE_BOOL_FIELDS) {
     if (field in out && typeof out[field] !== 'boolean') delete out[field]
   }
@@ -180,10 +178,6 @@ interface UISettings {
   setHostBadgeSidebarEnabled: (v: boolean) => void
   hostBadgeSidebarLineColor: HostBadgeLineColor
   setHostBadgeSidebarLineColor: (v: HostBadgeLineColor) => void
-  hostBadgeSidebarLineOpacity: number
-  setHostBadgeSidebarLineOpacity: (pct: number) => void
-  hostBadgeSidebarBgOpacity: number
-  setHostBadgeSidebarBgOpacity: (pct: number) => void
   hostBadgeSidebarBox: number
   setHostBadgeSidebarBox: (px: number) => void
   hostBadgeSidebarInset: number
@@ -195,10 +189,6 @@ interface UISettings {
   setHostBadgeTabBarEnabled: (v: boolean) => void
   hostBadgeTabBarLineColor: HostBadgeLineColor
   setHostBadgeTabBarLineColor: (v: HostBadgeLineColor) => void
-  hostBadgeTabBarLineOpacity: number
-  setHostBadgeTabBarLineOpacity: (pct: number) => void
-  hostBadgeTabBarBgOpacity: number
-  setHostBadgeTabBarBgOpacity: (pct: number) => void
   hostBadgeTabBarBox: number
   setHostBadgeTabBarBox: (px: number) => void
   hostBadgeTabBarInset: number
@@ -252,8 +242,6 @@ export const useUISettingsStore = create<UISettings>()(
       setHostBadgeSidebarLineColor: (v) => {
         if (isHostBadgeLineColor(v)) set({ hostBadgeSidebarLineColor: v })
       },
-      setHostBadgeSidebarLineOpacity: (pct) => set({ hostBadgeSidebarLineOpacity: clampHostBadgeLineOpacity(pct) }),
-      setHostBadgeSidebarBgOpacity: (pct) => set({ hostBadgeSidebarBgOpacity: clampHostBadgeBgOpacity(pct) }),
       setHostBadgeSidebarBox: (px) => set({ hostBadgeSidebarBox: clampHostBadgeBox(px) }),
       setHostBadgeSidebarInset: (px) => set({ hostBadgeSidebarInset: clampHostBadgeInset(px) }),
       setHostBadgeSidebarRadius: (px) => set({ hostBadgeSidebarRadius: clampHostBadgeRadius(px) }),
@@ -262,8 +250,6 @@ export const useUISettingsStore = create<UISettings>()(
       setHostBadgeTabBarLineColor: (v) => {
         if (isHostBadgeLineColor(v)) set({ hostBadgeTabBarLineColor: v })
       },
-      setHostBadgeTabBarLineOpacity: (pct) => set({ hostBadgeTabBarLineOpacity: clampHostBadgeLineOpacity(pct) }),
-      setHostBadgeTabBarBgOpacity: (pct) => set({ hostBadgeTabBarBgOpacity: clampHostBadgeBgOpacity(pct) }),
       setHostBadgeTabBarBox: (px) => set({ hostBadgeTabBarBox: clampHostBadgeBox(px) }),
       setHostBadgeTabBarInset: (px) => set({ hostBadgeTabBarInset: clampHostBadgeInset(px) }),
       setHostBadgeTabBarRadius: (px) => set({ hostBadgeTabBarRadius: clampHostBadgeRadius(px) }),
@@ -271,10 +257,9 @@ export const useUISettingsStore = create<UISettings>()(
     {
       name: STORAGE_KEYS.UI_SETTINGS,
       storage: purdexStorage,
-      version: 3,
+      version: 4,
       migrate: (persisted: unknown, fromVersion: number): unknown => {
         const base = (persisted ?? {}) as Record<string, unknown>
-        if (fromVersion >= 3) return base
 
         const migrateShowOscTitle = (state: Record<string, unknown>): Record<string, unknown> => {
           const { showOscTitle, ...rest } = state
@@ -284,26 +269,42 @@ export const useUISettingsStore = create<UISettings>()(
           return rest
         }
 
-        if (fromVersion >= 2) return migrateShowOscTitle(base)
-
-        // Import UI prefs that used to live in useAgentStore's persist slice (v4 or v5).
-        // Keep it best-effort: any parse/shape error just falls back to defaults.
-        try {
-          if (typeof window === 'undefined') return migrateShowOscTitle(base)
-          const raw = window.localStorage.getItem(STORAGE_KEYS.AGENT)
-          if (!raw) return migrateShowOscTitle(base)
-          const parsed = JSON.parse(raw)
-          const oldState = parsed?.state as Record<string, unknown> | undefined
-          if (!oldState) return migrateShowOscTitle(base)
-          const imported: Record<string, unknown> = {}
-          if (typeof oldState.tabIndicatorStyle === 'string') imported.tabIndicatorStyle = oldState.tabIndicatorStyle
-          if (typeof oldState.ccIconVariant === 'string') imported.ccIconVariant = oldState.ccIconVariant
-          if (typeof oldState.codexIconVariant === 'string') imported.codexIconVariant = oldState.codexIconVariant
-          if (typeof oldState.showOscTitle === 'boolean') imported.showOscTitle = oldState.showOscTitle
-          return migrateShowOscTitle({ ...base, ...imported })
-        } catch {
-          return migrateShowOscTitle(base)
+        // v4 dropped the four per-surface host badge opacity fields (§4.4): a
+        // migrate step is the only hook that can remove keys (onRehydrateStorage
+        // + setState can only add/overwrite), so strip them here regardless of
+        // which branch below produced the migrated state.
+        const stripRemovedHostBadgeFields = (state: Record<string, unknown>): Record<string, unknown> => {
+          const out = { ...state }
+          for (const k of HOST_BADGE_REMOVED_FIELDS) delete out[k]
+          return out
         }
+
+        const migrated = ((): Record<string, unknown> => {
+          if (fromVersion >= 3) return base
+
+          if (fromVersion >= 2) return migrateShowOscTitle(base)
+
+          // Import UI prefs that used to live in useAgentStore's persist slice (v4 or v5).
+          // Keep it best-effort: any parse/shape error just falls back to defaults.
+          try {
+            if (typeof window === 'undefined') return migrateShowOscTitle(base)
+            const raw = window.localStorage.getItem(STORAGE_KEYS.AGENT)
+            if (!raw) return migrateShowOscTitle(base)
+            const parsed = JSON.parse(raw)
+            const oldState = parsed?.state as Record<string, unknown> | undefined
+            if (!oldState) return migrateShowOscTitle(base)
+            const imported: Record<string, unknown> = {}
+            if (typeof oldState.tabIndicatorStyle === 'string') imported.tabIndicatorStyle = oldState.tabIndicatorStyle
+            if (typeof oldState.ccIconVariant === 'string') imported.ccIconVariant = oldState.ccIconVariant
+            if (typeof oldState.codexIconVariant === 'string') imported.codexIconVariant = oldState.codexIconVariant
+            if (typeof oldState.showOscTitle === 'boolean') imported.showOscTitle = oldState.showOscTitle
+            return migrateShowOscTitle({ ...base, ...imported })
+          } catch {
+            return migrateShowOscTitle(base)
+          }
+        })()
+
+        return fromVersion < 4 ? stripRemovedHostBadgeFields(migrated) : migrated
       },
       onRehydrateStorage: () => (state) => {
         if (!state) return

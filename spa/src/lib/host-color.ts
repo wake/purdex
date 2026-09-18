@@ -1,6 +1,5 @@
-import type { IconWeight, Tab } from '../types/tab'
+import type { IconWeight, PaneContent, PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
-import { collectTmuxSessionHostIds } from './infer-workspace-host-id'
 import { rgbaString } from './color-space'
 // Static import on purpose: `CommandIconPicker` already pulls icon-meta into the
 // main chunk, so the catalog costs nothing extra here.
@@ -124,19 +123,43 @@ export function sanitizeHostConfig(host: HostConfig): HostConfig {
  *
  * "沒設定就沒有": a host that picked neither a color nor an icon renders nothing —
  * a grey default box on every row is noise for a single-host setup. Either half
- * alone is enough (color only → default icon; icon only → neutral box).
+ * alone is enough (colors only → default icon; icon only → neutral box).
  *
  * Structurally typed so `lib/` need not depend on the hook that owns `TabHostBadge`.
  */
-export function hasHostBadge<T extends { color: string | null; icon?: string | undefined }>(
+export function hasHostBadge<T extends { colors: ResolvedHostColors | null; icon?: string | undefined }>(
   badge: T | null,
 ): badge is T {
-  return badge !== null && (badge.color !== null || badge.icon !== undefined)
+  return badge !== null && (badge.colors !== null || badge.icon !== undefined)
+}
+
+function findFirstTmuxPane(layout: PaneLayout): Extract<PaneContent, { kind: 'tmux-session' }> | null {
+  if (layout.type === 'leaf') {
+    return layout.pane.content.kind === 'tmux-session' ? layout.pane.content : null
+  }
+  for (const child of layout.children) {
+    const found = findFirstTmuxPane(child)
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * Content of the first tmux-session pane in pre-order (the pane the host badge
+ * represents), or null.
+ *
+ * `getTabHostId` derives from this so host and mode are always read from the same
+ * pane — resolving them independently (e.g. host from pre-order, mode from
+ * `getPrimaryPane`) let a split tab whose first leaf isn't a tmux pane pick one
+ * host's colors under a different pane's mode (P2 Task 1 review finding, PR #1153).
+ */
+export function getTabBadgePane(tab: Tab): Extract<PaneContent, { kind: 'tmux-session' }> | null {
+  return findFirstTmuxPane(tab.layout)
 }
 
 /** hostId of the first tmux-session pane in pre-order, or null. */
 export function getTabHostId(tab: Tab): string | null {
-  return collectTmuxSessionHostIds(tab.layout)[0] ?? null
+  return getTabBadgePane(tab)?.hostId ?? null
 }
 
 /* ─── Per-mode tri-color (spec 2026-09-18 host-color-modes §4.1) ─── */

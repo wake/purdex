@@ -1,14 +1,8 @@
 import {
   type HostBadgeLineColor,
-  clampHostBadgeLineOpacity,
-  clampHostBadgeBgOpacity,
   clampHostBadgeBox,
   clampHostBadgeInset,
   clampHostBadgeRadius,
-  HOST_BADGE_LINE_OPACITY_MIN,
-  HOST_BADGE_LINE_OPACITY_MAX,
-  HOST_BADGE_BG_OPACITY_MIN,
-  HOST_BADGE_BG_OPACITY_MAX,
   HOST_BADGE_BOX_MIN,
   HOST_BADGE_BOX_MAX,
   HOST_BADGE_INSET_MIN,
@@ -26,15 +20,11 @@ interface HostBadgeSettingProps {
   description: string
   enabled: boolean
   lineColor: HostBadgeLineColor
-  lineOpacity: number
-  bgOpacity: number
   box: number
   inset: number
   radius: number
   onEnabledChange: (v: boolean) => void
   onLineColorChange: (v: HostBadgeLineColor) => void
-  onLineOpacityChange: (pct: number) => void
-  onBgOpacityChange: (pct: number) => void
   onBoxChange: (px: number) => void
   onInsetChange: (px: number) => void
   onRadiusChange: (px: number) => void
@@ -49,15 +39,11 @@ export function HostBadgeSetting({
   description,
   enabled,
   lineColor,
-  lineOpacity,
-  bgOpacity,
   box,
   inset,
   radius,
   onEnabledChange,
   onLineColorChange,
-  onLineOpacityChange,
-  onBgOpacityChange,
   onBoxChange,
   onInsetChange,
   onRadiusChange,
@@ -73,36 +59,17 @@ export function HostBadgeSetting({
   const numbers: {
     id: string
     labelKey: string
+    captionKey: string
     value: number
     min: number
     max: number
     clamp: (n: number) => number
     onChange: (n: number) => void
-    suffix?: string
   }[] = [
-    {
-      id: 'line-opacity',
-      labelKey: 'settings.terminal.host_badge.line_opacity',
-      value: lineOpacity,
-      min: HOST_BADGE_LINE_OPACITY_MIN,
-      max: HOST_BADGE_LINE_OPACITY_MAX,
-      clamp: clampHostBadgeLineOpacity,
-      onChange: onLineOpacityChange,
-      suffix: '%',
-    },
-    {
-      id: 'bg-opacity',
-      labelKey: 'settings.terminal.host_badge.bg_opacity',
-      value: bgOpacity,
-      min: HOST_BADGE_BG_OPACITY_MIN,
-      max: HOST_BADGE_BG_OPACITY_MAX,
-      clamp: clampHostBadgeBgOpacity,
-      onChange: onBgOpacityChange,
-      suffix: '%',
-    },
     {
       id: 'box',
       labelKey: 'settings.terminal.host_badge.box',
+      captionKey: 'settings.terminal.host_badge.box.caption',
       value: box,
       min: HOST_BADGE_BOX_MIN,
       max: HOST_BADGE_BOX_MAX,
@@ -112,6 +79,7 @@ export function HostBadgeSetting({
     {
       id: 'inset',
       labelKey: 'settings.terminal.host_badge.inset',
+      captionKey: 'settings.terminal.host_badge.inset.caption',
       value: inset,
       min: HOST_BADGE_INSET_MIN,
       max: HOST_BADGE_INSET_MAX,
@@ -121,6 +89,7 @@ export function HostBadgeSetting({
     {
       id: 'radius',
       labelKey: 'settings.terminal.host_badge.radius',
+      captionKey: 'settings.terminal.host_badge.radius.caption',
       value: radius,
       min: HOST_BADGE_RADIUS_MIN,
       max: HOST_BADGE_RADIUS_MAX,
@@ -152,25 +121,26 @@ export function HostBadgeSetting({
           />
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex flex-wrap items-start justify-end gap-3">
           {numbers.map((n) => (
-            <span key={n.id} className="flex items-center gap-1">
-              <input
-                type="number"
-                data-testid={`${testIdPrefix}-${n.id}`}
-                aria-label={`${label}: ${t(n.labelKey)}`}
-                min={n.min}
-                max={n.max}
-                step={1}
-                disabled={!enabled}
-                value={n.value}
-                onChange={(e) => { if (enabled) n.onChange(n.clamp(Number(e.target.value))) }}
-                className={INPUT_CLASS}
-              />
-              <span className="text-xs text-text-muted">
-                {n.suffix ?? t('settings.terminal.host_badge.px')}
+            <label key={n.id} className="flex flex-col items-start gap-0.5">
+              <span className="text-[11px] leading-none text-text-muted">{t(n.captionKey)}</span>
+              <span className="flex items-center gap-1">
+                <input
+                  type="number"
+                  data-testid={`${testIdPrefix}-${n.id}`}
+                  aria-label={`${label}: ${t(n.labelKey)}`}
+                  min={n.min}
+                  max={n.max}
+                  step={1}
+                  disabled={!enabled}
+                  value={n.value}
+                  onChange={(e) => { if (enabled) n.onChange(n.clamp(Number(e.target.value))) }}
+                  className={INPUT_CLASS}
+                />
+                <span className="text-xs text-text-muted">{t('settings.terminal.host_badge.px')}</span>
               </span>
-            </span>
+            </label>
           ))}
         </div>
       </div>

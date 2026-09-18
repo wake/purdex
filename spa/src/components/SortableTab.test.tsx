@@ -69,8 +69,6 @@ beforeEach(() => {
     tabNameTooltipMode: 'both',
     hostBadgeTabBarEnabled: true,
     hostBadgeTabBarLineColor: 'host',
-    hostBadgeTabBarLineOpacity: 100,
-    hostBadgeTabBarBgOpacity: 22,
     hostBadgeTabBarBox: 16,
     hostBadgeTabBarInset: 2,
     hostBadgeTabBarRadius: 4,
@@ -186,14 +184,13 @@ describe('SortableTab — host badge', () => {
       hostBadgeTabBarBox: 20,
       hostBadgeTabBarInset: 1,
       hostBadgeTabBarRadius: 6,
-      hostBadgeTabBarBgOpacity: 40,
     })
     render(<SortableTab {...defaultProps} />)
     const badge = screen.getByTestId('host-badge')
     expect(badge.style.width).toBe('20px')
     expect(badge.style.height).toBe('20px')
     expect(badge.style.borderRadius).toBe('6px')
-    expect(badge.style.background).toContain('40%')
+    expect(badge.style.background).toBe('rgba(59, 130, 246, 0.22)')
     // icon size = box − 2×inset
     expect(badge.querySelector('svg')).toHaveAttribute('width', '18')
   })
@@ -216,6 +213,30 @@ describe('SortableTab — host badge', () => {
     const { container } = render(<SortableTab {...defaultProps} tab={pinnedTab} pinned />)
     expect(screen.queryByTestId('host-badge')).toBeNull()
     expect(container.querySelector('[data-tab-id="t1"]')!.className).toContain('w-9')
+  })
+
+  it('marks the row data-active and lets the badge read main on the active row', () => {
+    setH1Color('#3b82f6')
+    render(<SortableTab {...defaultProps} isActive />)
+    const row = screen.getByRole('tab')
+    expect(row).toHaveAttribute('data-active', 'true')
+    const badge = screen.getByTestId('host-badge')
+    expect(badge.style.getPropertyValue('--hb-main')).toBe('rgba(59, 130, 246, 1)')
+    expect(badge.style.getPropertyValue('--hb-middle')).toBe('rgba(59, 130, 246, 0.6)')
+  })
+
+  it('marks an inactive row data-active=false', () => {
+    setH1Color('#3b82f6')
+    render(<SortableTab {...defaultProps} isActive={false} />)
+    expect(screen.getByRole('tab')).toHaveAttribute('data-active', 'false')
+  })
+
+  it('pinned tab root also carries data-active', () => {
+    const pinnedTab = makeTestTab('t1', { pinned: true })
+    render(<SortableTab {...defaultProps} tab={pinnedTab} pinned isActive />)
+    expect(screen.getByRole('button')).toHaveAttribute('data-active', 'true')
+    render(<SortableTab {...defaultProps} tab={pinnedTab} pinned isActive={false} />)
+    expect(screen.getAllByRole('button').at(-1)).toHaveAttribute('data-active', 'false')
   })
 })
 

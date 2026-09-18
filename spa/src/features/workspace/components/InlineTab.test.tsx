@@ -61,8 +61,6 @@ beforeEach(() => {
     codexIconVariant: 'openai',
     hostBadgeSidebarEnabled: true,
     hostBadgeSidebarLineColor: 'host',
-    hostBadgeSidebarLineOpacity: 100,
-    hostBadgeSidebarBgOpacity: 22,
     hostBadgeSidebarBox: 16,
     hostBadgeSidebarInset: 2,
     hostBadgeSidebarRadius: 4,
@@ -89,11 +87,11 @@ function setH1Icon(icon: string) {
   useHostStore.setState({ hosts: { h1: { ...h1, icon } } })
 }
 
-function renderInline(tab: Tab = baseTab) {
+function renderInline(tab: Tab = baseTab, opts: { isActive?: boolean } = {}) {
   return render(
     <InlineTab
       tab={tab}
-      isActive={false}
+      isActive={opts.isActive ?? false}
       onSelect={() => {}}
       onClose={() => {}}
       onMiddleClick={() => {}}
@@ -207,14 +205,13 @@ describe('InlineTab — host badge', () => {
       hostBadgeSidebarBox: 20,
       hostBadgeSidebarInset: 1,
       hostBadgeSidebarRadius: 6,
-      hostBadgeSidebarBgOpacity: 40,
     })
     renderInline()
     const badge = screen.getByTestId('host-badge')
     expect(badge.style.width).toBe('20px')
     expect(badge.style.height).toBe('20px')
     expect(badge.style.borderRadius).toBe('6px')
-    expect(badge.style.background).toContain('40%')
+    expect(badge.style.background).toBe('rgba(59, 130, 246, 0.22)')
     // icon size = box − 2×inset
     expect(badge.querySelector('svg')).toHaveAttribute('width', '18')
   })
@@ -227,6 +224,22 @@ describe('InlineTab — host badge', () => {
     renderInline()
     const path = screen.getByTestId('host-badge').querySelector('path')
     expect(path).toHaveAttribute('d', 'M Laptop duotone')
+  })
+
+  it('marks the row data-active and lets the badge read main on the active row', () => {
+    setH1Color('#3b82f6')
+    renderInline(undefined, { isActive: true })
+    const row = screen.getByTestId('inline-tab-row')
+    expect(row).toHaveAttribute('data-active', 'true')
+    const badge = screen.getByTestId('host-badge')
+    expect(badge.style.getPropertyValue('--hb-main')).toBe('rgba(59, 130, 246, 1)')
+    expect(badge.style.getPropertyValue('--hb-middle')).toBe('rgba(59, 130, 246, 0.6)')
+  })
+
+  it('marks an inactive row data-active=false', () => {
+    setH1Color('#3b82f6')
+    renderInline(undefined, { isActive: false })
+    expect(screen.getByTestId('inline-tab-row')).toHaveAttribute('data-active', 'false')
   })
 })
 
