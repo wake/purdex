@@ -388,7 +388,8 @@ describe('pairHosts — repair path (Y already holds an entry for X, spec §7.1 
     update: { 'A/mini-lab': row({ rotation_pending: true }) },
     verify: { 'X/air26': verify },
     list: { A: (calls) => [calls.includes('verify:X:air26') ? afterDial : row({ rotation_pending: true, last_inbound_auth: '' })] },
-    commit: { 'A/mini-lab': row({}) },
+    // A real commit answers with the row whose current token X's last dial matched.
+    commit: { 'A/mini-lab': row({ rotation_pending: false, last_inbound_auth: 'current' }) },
   })
 
   it('rotate on Y\'s entry instead of add; add on X with that token; PUT Y; then dial → read → commit (§7.1 "then commit on Y"); paired', async () => {
@@ -439,6 +440,16 @@ describe('pairHosts — repair path (Y already holds an entry for X, spec §7.1 
     ;(f.api.commit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err(409, 'rotation unconfirmed'))
     const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
     expect(outcome).toEqual({ kind: 'repair-pending', aliasOnX: 'air26', aliasOnY: 'mini-lab', offer: 'commit', commitError: 'rotation unconfirmed' })
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('repair finish: commit answered 200 but as a no-op (a cancel raced the read) → repair-pending / none, not paired (codex re-review P1)', async () => {
+    const f = repairHappy(row({ rotation_pending: true, last_inbound_auth: 'current' }))
+    // After a cancel Y is back on the old token; X's last dial (new token) matches neither → ''.
+    ;(f.api.commit as ReturnType<typeof vi.fn>).mockResolvedValueOnce(row({ rotation_pending: false, last_inbound_auth: '' }))
+    const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
+    expect(outcome).toMatchObject({ kind: 'repair-pending', offer: 'none' })
+    expect((outcome as { commitError: string }).commitError).toMatch(/cancelled concurrently/)
     noLeak(outcome, f.steps, f.calls)
   })
 

@@ -165,6 +165,17 @@ export async function pairHosts(
   report('commit')
   const committed = await settle(api.commit(y.hostId, aliasOnY))
   if (!committed.ok) return { kind: 'repair-pending', aliasOnX, aliasOnY, offer, commitError: msg(committed.error) }
+  // Commit is an idempotent no-op (200) when nothing is pending, so a cancel
+  // that raced between the read and this request also answers 200 — with Y
+  // back on the old token and X holding the new one. The returned row tells
+  // them apart: after a real commit X's last dial matches the (new) current
+  // token; after a cancel it matches neither (codex re-review P1).
+  if (committed.value.last_inbound_auth !== 'current') {
+    return {
+      kind: 'repair-pending', aliasOnX, aliasOnY, offer: 'none',
+      commitError: 'the commit found no pending rotation (cancelled concurrently?); the peer no longer accepts the token stored here — rotate this direction again',
+    }
+  }
   return { kind: 'paired', aliasOnX, aliasOnY }
 }
 
