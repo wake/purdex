@@ -36,8 +36,8 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
+          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -52,7 +52,7 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -68,7 +68,7 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -84,8 +84,9 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
-          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
+          // Legacy input: a pre-P-D.2 daemon still reports 'stream'.
+          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream' },
         ],
       },
       activeHostId: HOST_ID,
@@ -107,7 +108,7 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -124,7 +125,7 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -139,7 +140,7 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -161,10 +162,10 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -191,10 +192,10 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -223,10 +224,10 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -255,10 +256,10 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -285,10 +286,10 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,

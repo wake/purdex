@@ -47,9 +47,6 @@ function session(over: Partial<Session> & Pick<Session, 'code' | 'name'>): Sessi
   return {
     cwd: '/tmp',
     mode: 'terminal',
-    cc_session_id: '',
-    cc_model: '',
-    has_relay: false,
     ...over,
   }
 }

@@ -92,7 +92,6 @@ beforeEach(() => {
     sessions: {
       [HOST_ID]: [{
         code: 'dev001', name: 'dev001', cwd: '/tmp', mode: 'terminal',
-        cc_session_id: '', cc_model: '', has_relay: false,
       }],
     },
     activeHostId: HOST_ID,

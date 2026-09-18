@@ -46,9 +46,6 @@ function session(overrides: Partial<Session> & { code: string }): Session {
     name: overrides.code,
     cwd: '/tmp',
     mode: 'terminal',
-    cc_session_id: '',
-    cc_model: '',
-    has_relay: false,
     tmux_instance: 'new-inst',
     ...overrides,
   }

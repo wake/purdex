@@ -30,7 +30,7 @@ function meta(hostId: string, sessionCode: string, overrides: Partial<SessionMet
 
 function session(overrides: Partial<Session> & { code: string }): Session {
   return {
-    name: overrides.code, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false,
+    name: overrides.code, cwd: '/tmp', mode: 'terminal',
     tmux_instance: '9:9', ...overrides,
   }
 }

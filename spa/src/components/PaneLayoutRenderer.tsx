@@ -11,7 +11,6 @@ import { HandoffConfirmDialog } from './HandoffConfirmDialog'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useAgentStore } from '../stores/useAgentStore'
-import { useSessionStore } from '../stores/useSessionStore'
 import { useNexHostStore, selectHandoffReady } from '../stores/useNexHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import {
@@ -50,21 +49,20 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
 
   // "Hand to nex" (P-C.3b): a pane-local item, so a terminal pane anywhere
   // in a split has it. The gate is pure; these subscriptions feed it the
-  // live agent type, the daemon's session row and the host's readiness.
+  // live agent type and the host's readiness.
   // Non-session leaves and split nodes subscribe to constants.
   const leafContent = layout.type === 'leaf' ? layout.pane.content : null
   const tmux: TmuxSessionContent | null = leafContent?.kind === 'tmux-session' ? leafContent : null
   const tmuxHostId = tmux?.hostId ?? null
   const tmuxCode = tmux?.sessionCode ?? ''
   const agentType = useAgentStore((s) => (tmuxHostId ? s.agentTypes[compositeKey(tmuxHostId, tmuxCode)] : undefined))
-  const sessionRow = useSessionStore((s) => (tmuxHostId ? s.sessions[tmuxHostId]?.find((r) => r.code === tmuxCode) ?? null : null))
   const handoffReady = useNexHostStore(tmuxHostId ? selectHandoffReady(tmuxHostId) : notReady)
   const t = useI18nStore((s) => s.t)
   const [handoff, setHandoff] = useState<{ tabId: string; paneId: string; content: TmuxSessionContent } | null>(null)
   useEffect(() => {
     if (tmuxHostId) void useNexHostStore.getState().ensure(tmuxHostId)
   }, [tmuxHostId])
-  const handoffCandidate = tmux ? isHandoffCandidate(tmux, { agentType, session: sessionRow, handoffReady }) : false
+  const handoffCandidate = tmux ? isHandoffCandidate(tmux, { agentType, handoffReady }) : false
 
   if (layout.type === 'leaf') {
     const resolution = resolvePaneRenderer(

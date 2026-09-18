@@ -59,10 +59,10 @@ describe('SessionPickerList', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_A]: [
-          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'cld001', name: 'claude-session', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'cld001', name: 'claude-session', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -107,7 +107,7 @@ describe('SessionPickerList', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_A]: [
-          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '12345:67890' },
+          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal', tmux_instance: '12345:67890' },
         ],
       },
     })
@@ -140,7 +140,7 @@ describe('SessionPickerList', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_A]: [
-          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -170,10 +170,10 @@ describe('SessionPickerList', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_A]: [
-          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'cld001', name: 'cloud-session', cwd: '/tmp', mode: 'stream', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'cld001', name: 'cloud-session', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })

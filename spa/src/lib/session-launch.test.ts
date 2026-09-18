@@ -11,7 +11,7 @@ const PROJECT: HostProject = { id: 'p1', name: 'Purdex', slug: 'purdex', path: '
 const COMMAND: HostCommand = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
 
 function session(over: Partial<Session> = {}): Session {
-  return { code: 'abc', name: 'purdex-1', cwd: '~/w/purdex', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '111:1000', ...over }
+  return { code: 'abc', name: 'purdex-1', cwd: '~/w/purdex', mode: 'terminal', tmux_instance: '111:1000', ...over }
 }
 
 function fakePin() {

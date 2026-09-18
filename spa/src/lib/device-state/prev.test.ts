@@ -140,7 +140,7 @@ describe('writeDeviceStatePrev', () => {
 
     vi.mocked(listSessions).mockResolvedValue([]) // no live sessions anywhere
     vi.mocked(createSession).mockResolvedValue({
-      code: 'zz', name: 'work', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false,
+      code: 'zz', name: 'work', cwd: '/tmp', mode: 'terminal',
     })
 
     const report = await undoLastRestore({ now: 2, buildSnapshotFn: async () => world() })

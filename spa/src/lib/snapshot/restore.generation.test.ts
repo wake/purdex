@@ -20,9 +20,6 @@ function session(overrides: Partial<Session> & { code: string }): Session {
     name: overrides.name ?? overrides.code,
     cwd: overrides.cwd ?? '/tmp',
     mode: overrides.mode ?? 'terminal',
-    cc_session_id: '',
-    cc_model: '',
-    has_relay: false,
     ...overrides,
   }
 }

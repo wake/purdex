@@ -25,7 +25,7 @@ import type { Session } from './host-api'
 vi.mock('../lib/nex/nex-api', () => ({ releaseLease: vi.fn() }))
 
 function makeSession(code: string, name: string = code): Session {
-  return { code, name, mode: 'terminal', cwd: '~', cc_session_id: '', cc_model: '', has_relay: false }
+  return { code, name, mode: 'terminal', cwd: '~' }
 }
 
 const HOST_A = 'host-a'
@@ -795,7 +795,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
     useAgentStore.setState((s) => ({
       statuses: { ...s.statuses, [`${hA}:dev001`]: 'running' as const },
     }))
-    useSessionStore.getState().replaceHost(hA, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~', cc_session_id: '', cc_model: '', has_relay: false }])
+    useSessionStore.getState().replaceHost(hA, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~' }])
     // Seed a tab in a workspace so the tab-restore gate (category 5) can be asserted
     const ws6 = useWorkspaceStore.getState().addWorkspace('WS for gate test')
     const tab6 = makeSessionTab(hA, 'dev001')

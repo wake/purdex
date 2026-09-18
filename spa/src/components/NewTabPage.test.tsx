@@ -328,9 +328,6 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
       name,
       cwd: '/',
       mode: 'terminal',
-      cc_session_id: '',
-      cc_model: '',
-      has_relay: false,
     })
     useSessionStore.setState({
       sessions: {

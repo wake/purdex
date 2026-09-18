@@ -51,7 +51,7 @@ const mockedRunBatch = vi.mocked(batchModule.runBatchRebuild)
 const mockedRebuildPane = vi.mocked(engineModule.rebuildPane)
 
 function session(over: Partial<Session> & Pick<Session, 'code' | 'name'>): Session {
-  return { cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, ...over }
+  return { cwd: '/tmp', mode: 'terminal', ...over }
 }
 
 function recordTab(tabId: string, paneId: string, over: Partial<TmuxSessionContent> = {}): Tab {

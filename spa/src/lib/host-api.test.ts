@@ -15,7 +15,6 @@ const TOKEN = 'purdex_test_token'
 
 const mockSession: Session = {
   code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal',
-  cc_session_id: '', cc_model: '', has_relay: false,
 }
 
 beforeEach(() => {

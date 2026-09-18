@@ -105,7 +105,7 @@ describe('SessionSection', () => {
       hostOrder: [HOST_ID, HOST_B], activeHostId: HOST_ID,
       runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } },
     })
-    useSessionStore.setState({ sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] } })
+    useSessionStore.setState({ sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' }] } })
     render(<Blocks />)
     fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
     expect(screen.getByTestId(`host-header-${HOST_ID}`)).toHaveAttribute('aria-expanded', 'true') // unchanged
@@ -116,7 +116,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -128,7 +128,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', pane_title: 'Reading memory' },
         ],
       },
     })
@@ -144,7 +144,7 @@ describe('SessionSection', () => {
     // With a title: name is truncatable AND capped so the title keeps room.
     useSessionStore.setState({
       sessions: { [HOST_ID]: [
-        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', pane_title: 'Reading memory' },
       ] },
     })
     const withTitle = render(<Blocks />)
@@ -157,7 +157,7 @@ describe('SessionSection', () => {
     // full remaining width instead of being stranded at half a row.
     useSessionStore.setState({
       sessions: { [HOST_ID]: [
-        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+        { code: 'abc001', name: LONG, cwd: '/tmp', mode: 'terminal' },
       ] },
     })
     render(<Blocks />)
@@ -170,7 +170,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, pane_title: 'Reading memory' },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', pane_title: 'Reading memory' },
         ],
       },
     })
@@ -187,7 +187,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -201,7 +201,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -221,7 +221,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '222:2000' },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', tmux_instance: '222:2000' },
         ],
       },
     })
@@ -234,7 +234,7 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -292,8 +292,8 @@ describe('SessionSection', () => {
     })
     useSessionStore.setState({
       sessions: {
-        [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }],
-        [HOST_B]: [{ code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }],
+        [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' }],
+        [HOST_B]: [{ code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' }],
       },
     })
     render(<Blocks />)
@@ -315,10 +315,10 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -343,10 +343,10 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -369,10 +369,10 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -397,10 +397,10 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -424,10 +424,10 @@ describe('SessionSection', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+          { code: 'xyz001', name: 'air-dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -445,7 +445,7 @@ describe('SessionSection', () => {
     const ck = compositeKey(HOST_ID, 'abc001')
     useAgentStore.setState({ statuses: { [ck]: 'running' }, agentTypes: { [ck]: 'cc' }, subagents: {}, unread: {} })
     useSessionStore.setState({
-      sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false }] },
+      sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' }] },
     })
     render(<Blocks />)
     // TabStatusIndicator renders a data-testid — assert the running indicator exists.
@@ -454,7 +454,7 @@ describe('SessionSection', () => {
 
   const LIVE = { status: 'connected', tmuxState: 'ok' } as const
   const made = (over: Partial<{ code: string; name: string }> = {}) =>
-    ({ code: 'new001', name: 'built', cwd: '~', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, ...over })
+    ({ code: 'new001', name: 'built', cwd: '~', mode: 'terminal', ...over })
 
   it('+ opens the launcher for that host and toggles it closed', () => {
     useSessionStore.setState({ sessions: { [HOST_ID]: [] } })

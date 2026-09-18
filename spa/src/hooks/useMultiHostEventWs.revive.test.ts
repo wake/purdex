@@ -59,7 +59,7 @@ let sockets: FakeSocket[] = []
 // --- fixtures (shapes copied from batch.test.ts / engine.test.ts) ---------
 
 function session(over: Partial<Session>): Session {
-  return { code: 'c', name: 'n', cwd: '', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, ...over }
+  return { code: 'c', name: 'n', cwd: '', mode: 'terminal', ...over }
 }
 
 const plan = { createSession: true, applyCwd: true, runResume: true }

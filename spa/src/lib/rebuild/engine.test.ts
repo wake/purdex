@@ -30,7 +30,7 @@ const plan = { createSession: true, applyCwd: true, runResume: true }
 function session(over: Partial<Session>): Session {
   return {
     code: 'c', name: 'n', cwd: '', mode: 'terminal',
-    cc_session_id: '', cc_model: '', has_relay: false, ...over,
+    ...over,
   }
 }
 

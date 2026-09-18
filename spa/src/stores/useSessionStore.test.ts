@@ -6,8 +6,8 @@ import { useHostStore } from './useHostStore'
 import { STORAGE_KEYS } from '../lib/storage'
 
 const MOCK_SESSIONS = [
-  { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal' as const, cc_session_id: '', cc_model: '', has_relay: false },
-  { code: 'def456', name: 'dev', cwd: '/home', mode: 'stream' as const, cc_session_id: '', cc_model: '', has_relay: false },
+  { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal' as const },
+  { code: 'def456', name: 'dev', cwd: '/home', mode: 'terminal' as const },
 ]
 
 vi.mock('../lib/host-api', async (importOriginal) => {
@@ -15,7 +15,7 @@ vi.mock('../lib/host-api', async (importOriginal) => {
   return {
     ...actual,
     listSessions: vi.fn().mockResolvedValue([
-      { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+      { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal' },
     ]),
   }
 })

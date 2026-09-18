@@ -20,7 +20,7 @@ function answer(cwd: string, tmuxInstance = '6901:1789205013'): SessionCwd {
 function session(over: Partial<Session> = {}): Session {
   return {
     code: CODE, name: 'ai-chat4', cwd: '/start/dir', mode: 'terminal',
-    cc_session_id: '', cc_model: '', has_relay: false, ...over,
+    ...over,
   }
 }
 
