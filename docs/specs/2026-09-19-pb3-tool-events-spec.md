@@ -91,9 +91,10 @@ one turn, delegated for this purpose; events saved as the P-B3.1 fixture).
   `assistant(914), tool_use(915), …, user(917), tool_result(918)`; the
   derived event's `created_at` **equals** its raw frame's `created_at`
   (915 = 914 = 1789759067165; 918 = 917 = 1789759067191).
-- F3 `tool_result.duration_ms` (26 / 24 / 752) equals the raw
-  `user.created_at − assistant.created_at` for the history path. The P-B2
-  timing and the N2 timing agree on history; on the live path P-B2 stamps
+- F3 `tool_result.duration_ms` (26 / 24 / 752) agrees with the raw
+  `user.created_at − assistant.created_at` (26 / 24 / **753**) to within
+  1 ms on the history path (the pump measures arrival, the row stamps
+  commit). The P-B2 timing and the N2 timing agree on history; on the live path P-B2 stamps
   client arrival time (A4) while `duration_ms` is the daemon's observation,
   so N2 is the better number there.
 - F4 Payload shapes match the contract verbatim (rules 7 / 11): Read carries

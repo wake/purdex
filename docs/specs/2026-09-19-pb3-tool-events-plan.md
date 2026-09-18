@@ -174,8 +174,9 @@ Files: `lib/nex/__fixtures__/n2-tool-events-06GBBX07.json` (add to git),
      no `diff`; Edit `diff: {added: 1, removed: 1, hunks: [one hunk with
      4 lines], truncated: false}`; Bash `durationMs: 752`, no `file`, no
      `diff`, `output: {totalLines: 1, totalBytes: 18, truncated: false,
-     hasNonText: false}`; `messages` length = 24 − 6 lifecycle/N2
-     (count the raw kinds in the fixture and assert the exact number);
+     hasNonText: false}`; `messages` length = **16** (15 provider
+     passthrough frames + the synthetic user bubble from
+     `execution.delegated.brief`; hard-coded literal);
      `turnLive false`, `pendingSend false` after `execution.terminal`.
    - Equivalence: replay with the `tool_use` / `tool_result` items
      filtered out → same three ids, same `status`, same `startedAt` /
