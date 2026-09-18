@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.398] - 2026-09-18
+
+### Feature: Peers 頁面可以 Pair／Unpair／Rotate（Peer Pairing D4，#1184 #1185 #1191）— Phase D 完結
+
+D2（alpha.384）的 Peers 頁只會看、驗證與採用 alias；現在配對的三個寫入動作都能從頁面做，daemon 端是 D1／D3 已在 alpha.391 上的 route，daemon 不動。spec `docs/specs/2026-09-18-peer-pairing-ui-spec.md` §7、§8.4、§9 D4；plan `docs/plans/2026-09-18-peer-pairing-d4-spa-plan.md`。
+
+#### lib 層（#1184 D4a-1、#1185 D4a-2）
+
+- `host-api.ts`：`PeerHostRow` 加 `rotation_pending`／`last_inbound_auth`（<391 的 daemon 沒這兩個 key，wrapper 正規化成 `false`／`''`）；五個 wrapper `addPeerHost`／`deletePeerHost`／`rotatePeerHost`／`commitRotation`／`cancelRotation`。**commit／cancel 不帶 body**（daemon 把空 body 讀成 `force:false`），所以頁面永遠送不出 `force`（D-7）。
+- `peer-pairing.ts`：`rotationOffer(row)` — §7.3 規則的純函數：`pending+current → commit`、`pending+prev → cancel`、`pending+'' → none`、不 pending → `null`。
+- `peer-pairing-load.ts`：`snapshot.candidates`（可配對的 App host，含對方是否已持有我方 entry 的 repair 判定與 `listError`）；**step 5 post-dial re-read**——原本 list 在 dial 之前，所有 `last_inbound_auth` 都是 dial 前的讀數；現在每個有 pending 的 host 在 `Promise.all(dials)` 之後再 list 一次，`gateStale: {entry, returnEntry}` 分方向記錄讀數是否 post-dial。
+- `peer-pairing-actions.ts`（新）：`pairHosts`（§7.1 三步＋repair path）、`rotateDirection`（mint → push，**不 commit**）、`unpairHosts`（兩側同時刪）。Repair path 依 §7.1「then commit on Y」收尾，但走 §7.3 協定：X 再撥一次、重讀 Y 的 row、只在 `current` 才 commit；commit 回傳的 row 若不是 `current`（並發 cancel 讓 commit 變 no-op）不報 `paired`。Step 2 失敗的 undo 先 re-list Y 比對 url／host_id 才刪。token 值只活在流程的區域變數。
+
+#### 頁面（#1191 D4b）
+
+- **Pair with…**：列候選 host；409 變 inline alias 輸入；step 2 失敗會清掉 Y 上半成品；step 3 失敗留 `one-way`＋「Retry return path」。Y 的 entry 已有 pending rotation 時 Pair 停用、候選列直接給 Commit／Cancel（as of the peer's last dial）；Y 讀不到時 Pair 停用。
+- **Unpair**：`ConfirmDialog` 點名兩側；404 當已完成；非 App 對端不刪並在對話框說明。
+- **Rotate**（每個方向線）：mint → push → 頁面 refresh → 由 post-dial 的 fresh row 決定**只給一顆** Commit／Cancel／都不給，永遠不從「push 成功」的記憶決定；`gateStale` 時不給按鈕。Inbound 線在回程驗證失敗時變「Retry return path」、對方沒 entry 時變「Create return entry」。
+- 頁面級單一寫入流程：Rotate／Pair／Unpair／Commit／Cancel／Rename 全走同一個 runner，一個在跑時其他寫入控制項與 Refresh 全部停用；流程由世代擁有，切 host 後舊流程遲到的 report 不會鎖住或畫到新頁（codex 抓的）。
+- i18n `peers.*` +44 key（en／zh-TW）。
+
+#### 驗證
+
+- 測試 6870 → 6980；mutation record `docs/plans/2026-09-18-peer-pairing-d4-mutations.md`（15 條，含 §8.4 指名的「dial 前就讀 row」，fixture 在 dial **settle** 才翻旗以釘住並行讀）。
+- 真機 §9 D4（記在 #1191）：從頁面 unpair mlab↔air26 → 兩台 `host list` 空 → Pair → 兩邊 entry 與兩把 token 都在、`pdx peers --all` 雙向綠 → 兩個方向各 rotate 一次、Commit → 雙向仍綠、`pdx msg send air26/…` 送達。
+- codex：plan review 7 條全採納；D4a R1／攻擊／critic（repair commit、undo TOCTOU、unpair 並行）＋增量 P1（commit no-op）；D4b R1／攻擊（切 host 鎖頁、gate 未進鎖）修完 critic approve。
+- follow-up：#1188（daemon 條件式 DELETE、peer-host 請求 timeout）；`allow_bypass`／`deliver` 切換仍是 spec §10。
+
 ## [1.0.0-alpha.397] - 2026-09-18
 
 ### Fix: 浮動面板壓到 Electron 標題列時拖不動、關不掉（#1193）
