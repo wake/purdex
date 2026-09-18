@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.392] - 2026-09-18
+
+### Fix: codex hooks 事件表對齊 codex-cli 0.153.4（#1159 PR 1/2，#1172）
+
+daemon 的 codex hook 整合一直釘在 0.124.0；裝的是 0.153.4 之後每次啟動印兩行警告（`[features].codex_hooks` deprecated、`clamping SessionEnd hook timeout to 3s`），而且 installer 寫的 `Notification`／`StopFailure` 兩個 key **codex 從來沒發過**（三天 mlab log：codex 0 筆 vs cc 512 筆），真正會發的 `PostToolUse` 反而被標成 unsupported 不裝。結果：permission 放行後燈只能靠 screen-change probe 才從 waiting 回 running；Ctrl-C 之後燈要等 probe 才會從 running 回 idle。
+
+#### 事件表（`internal/agent/codex/events.go`）
+
+12 個 upstream 事件全部宣告，10 個可安裝：`SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, SessionEnd, PreToolUse, PostToolUse, Interrupt`。`PostToolUse` → running（permission 放行後的第一個 hook）；`Interrupt`（使用者 Ctrl-C）走 Stop lifecycle → idle，broker proxy ref 照 `turn_id` detach，跟 `PdxStop` 一樣。`PreCompact`／`PostCompact` 宣告為 ignored。`Notification`／`StopFailure` 退役成明確 ignored，但**保留 EmitsStatus 與 DeriveStatus case**（spec §2.1／§2.5：in-flight payload 仍解析、`SupportedStatuses` 不變）。upstream 名單釘死雙向比對（catalog − retired ＝ 文件 12 個）。
+
+#### installer（`hooks.go`）
+
+- install／remove 都會把 retired key 下 pdx 自己的 entry 拔掉、空了就刪 key；第三方 entry 與非陣列值原樣保留。
+- per-event timeout 表：`SessionEnd` 與 `Interrupt` 都是 3 秒（**Interrupt 是實測啟動訊息才發現的**，spec 原本只寫 SessionEnd），其餘 5。
+- 寫 `[features] hooks = true`、刪掉 deprecated `codex_hooks`。`CheckHooks` 語意（review 時定案並回寫 spec）：canonical `hooks` 存在就它說了算，非 bool（`"true"`、`1`）視為 disabled 不 fallback；canonical 缺席才看 legacy；兩者皆無 ＝ enabled（upstream 預設）。
+- 寫入順序改成 config.toml 先、hooks.json 後：config 寫失敗時 hooks.json 一個 byte 都不動（fault-injection 測試）。
+- `[hooks.state."<path>:<event>:n:m"] trusted_hash` round-trip 測試補上（原本零覆蓋），重裝不會讓 codex 重問一次 `/hooks` 核准。
+- `codexHooksSupportedVersion` → `0.153.4`。
+
+#### module 側（`frame_ops.go`）— review 抓到的
+
+攻擊方抓到一條 high：codex broker（cc 內用 codex-companion 派出去的）沒有自己的 frame，只是 cc parent 上的 proxy ref；`PostToolUse` 是 broker 每次工具呼叫都會發的第一個 LifecycleNone 事件，原本會走通用路徑替 broker **建一個獨立的 running frame**（SessionEnd／sweep 後遲到的 PostToolUse 也會把死 session 復活）。修法：sender 沒有 frame 的 codex PostToolUse 改走 PreToolUse 已在用的 turn-aware proxy 路徑 —— 有 parent 就照 `turn_id` upsert ref、沒 parent 就 skip（`post_tool_without_proxy_parent`）；增量 re-review 再補一條：parent 在 OCC 寫入前消失也 skip（`post_tool_parent_vanished`），不再沿用 UserPromptSubmit 的 recovery fallthrough。catalog lifecycle 維持 None，handler 的 error guard 不受影響。
+
+#### 未做／後續
+
+- PR 2（#1159 收尾）：凍結 0.153.4 fixtures（7 份取自 `agent_trace_chains.root_payload_json`、3 份現場擷取——`PermissionRequest` 在 DB 裡 0 筆，因為近期全跑 `bypassPermissions`）＋ `CheckHooks` 版本測試。
+- `ProbeIntentKindScreenChange` 的退役、SPA 不動。
+- 已知既有 flake：`TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown` 在整包高負載下偶爾 2 秒超時（#799 起就有），單獨跑 5/5 過。
+
 ## [1.0.0-alpha.391] - 2026-09-18
 
 ### Feature: inbound-token rotation，commit／cancel 以「對端最近一次撥入用哪把 token」為閘門（Peer Pairing D3，#1175）
