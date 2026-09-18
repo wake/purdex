@@ -35,6 +35,37 @@ function TwoPanelHarness({ onCloseFirst, onCloseSecond }: { onCloseFirst: () => 
   )
 }
 
+function TwoPanelToggleHarness({
+  open1 = true,
+  open2 = true,
+  onCloseFirst,
+  onCloseSecond,
+}: {
+  open1?: boolean
+  open2?: boolean
+  onCloseFirst: () => void
+  onCloseSecond: () => void
+}) {
+  const anchor1 = useRef<HTMLButtonElement>(null)
+  const anchor2 = useRef<HTMLButtonElement>(null)
+  return (
+    <div>
+      <button ref={anchor1} data-testid="anchor-1">a1</button>
+      <button ref={anchor2} data-testid="anchor-2">a2</button>
+      {open1 && (
+        <FloatingPanel title="First" anchorRef={anchor1} onClose={onCloseFirst}>
+          <input data-testid="inside-1" />
+        </FloatingPanel>
+      )}
+      {open2 && (
+        <FloatingPanel title="Second" anchorRef={anchor2} onClose={onCloseSecond}>
+          <input data-testid="inside-2" />
+        </FloatingPanel>
+      )}
+    </div>
+  )
+}
+
 function NoFocusableHarness({ onClose }: { onClose: () => void }) {
   const anchor = useRef<HTMLButtonElement>(null)
   return (
@@ -210,5 +241,16 @@ describe('FloatingPanel', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onCloseFirst).not.toHaveBeenCalled()
     expect(onCloseSecond).toHaveBeenCalledTimes(1)
+  })
+
+  it('unmounting one panel does not steal focus from another still-open panel', () => {
+    const { rerender } = render(
+      <TwoPanelToggleHarness onCloseFirst={() => {}} onCloseSecond={() => {}} />,
+    )
+    // Mount order runs First's focus effect before Second's, so focus ends up in Second.
+    const inside2 = screen.getByTestId('inside-2')
+    expect(document.activeElement).toBe(inside2)
+    rerender(<TwoPanelToggleHarness open1={false} onCloseFirst={() => {}} onCloseSecond={() => {}} />)
+    expect(document.activeElement).toBe(inside2)
   })
 })

@@ -73,6 +73,15 @@ describe('HostIconField', () => {
     expect(screen.getByRole('dialog', { name: 'Change host icon' })).toBeInTheDocument()
   })
 
+  it('a composing Escape leaves the panel open; a plain Escape closes it', () => {
+    render(<HostIconField hostId={HOST_ID} />)
+    openPicker()
+    fireEvent.keyDown(document, { key: 'Escape', isComposing: true })
+    expect(screen.getByRole('dialog', { name: 'Change host icon' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Change host icon' })).toBeNull()
+  })
+
   it('does not render the picker dialog header (inline mode)', () => {
     render(<HostIconField hostId={HOST_ID} />)
     openPicker()

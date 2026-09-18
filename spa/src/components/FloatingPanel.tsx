@@ -119,7 +119,13 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
       ;(target ?? panel).focus()
     }
     return () => {
-      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus()
+      // Only restore if this panel still owns focus at unmount time — otherwise
+      // some other element (e.g. another still-open FloatingPanel) already holds
+      // it deliberately, and reclaiming it out from under that would be a bug,
+      // not a courtesy.
+      const active = document.activeElement
+      const stillOwnsFocus = active === null || active === document.body || (panel?.contains(active) ?? false)
+      if (previouslyFocused && document.contains(previouslyFocused) && stillOwnsFocus) previouslyFocused.focus()
     }
   }, [])
 
