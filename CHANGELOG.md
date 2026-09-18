@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.397] - 2026-09-18
+
+### Fix: 浮動面板壓到 Electron 標題列時拖不動、關不掉（#1193）
+
+alpha.394 的浮動面板在 .app 裡開色盤，面板比視窗高，定位退到最上面、壓在 `TitleBar`（36px、`-webkit-app-region: drag`）上——那個區域的 pointer 事件被 OS 視窗拖曳吃掉，標題列拖不動、× 也點不到（使用者截圖）。
+
+修三件：面板根元素標 `no-drag`；高度上限＝視窗高扣掉頂部保留與 padding、內容可捲（resize 時重算）；定位與拖曳的 clamp 讓 `top` 永遠在標題列下方。codex R1 抓到兩條對的：maxHeight 原本沒扣頂部 36px 會超出底邊 28px；36px 保留只該在 Electron（Web 版沒 TitleBar）——現在依 `isElectron` 決定 inset。6980 tests 全綠，純 SPA。
+
 ## [1.0.0-alpha.396] - 2026-09-18
 
 ### Refactor: P-D.2 拆除 Stream 模組、relay 與 bridge（#1190）— P-D 第 2／3 段
