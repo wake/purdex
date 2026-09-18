@@ -16,6 +16,7 @@ import { DashboardPage } from '../../components/DashboardPage'
 import { HistoryPage } from '../../components/HistoryPage'
 import { SettingsPage } from '../../components/SettingsPage'
 import { createHostSessionProviderSource } from '../session-new-tab-providers'
+import { createHeadlessProviderSource } from '../headless-new-tab-providers'
 import { BrowserPane } from '../../components/BrowserPane'
 import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
@@ -348,6 +349,10 @@ export function registerBuiltinModules(): void {
   // New-tab providers
   // One sessions block per host (`sessions:<hostId>`), derived live from the host store.
   registerNewTabProviderSource(createHostSessionProviderSource())
+  // One Headless launcher block per host (`headless:<hostId>`), owned by the
+  // execution module: `unregisterNewTabProvidersByModule('execution')` tears
+  // it down (spec §4.2). Same-id re-registration replaces, so HMR is idempotent.
+  registerNewTabProviderSource(createHeadlessProviderSource())
 
   registerEditorNewTabProviders()
 
