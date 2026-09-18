@@ -137,6 +137,21 @@ export interface PeerHostRow {
   has_token: boolean          // outbound token present (what we present to them)
   has_inbound_token: boolean  // what they must present to us
   allow_bypass: boolean
+  rotation_pending: boolean                   // inbound_token_prev is set (spec §6.1)
+  last_inbound_auth: '' | 'current' | 'prev'  // which token the peer LAST presented, derived at read time (§6.2)
+}
+
+/**
+ * `POST /api/peers/hosts` 201 body: the first of the two responses that carry
+ * a live token value (`inbound_token`, the one the peer must present to us).
+ * Spec D-8: it lives in the flow that consumes it and nowhere else.
+ */
+export interface PeerHostAdded {
+  alias: string
+  url: string
+  host_id: string
+  inbound_token: string
+  verified: boolean
 }
 
 /**
@@ -339,7 +354,76 @@ async function peerHostJson<T>(res: Response): Promise<T> {
 
 export async function listPeerHosts(hostId: string): Promise<PeerHostRow[]> {
   const body = await peerHostJson<{ hosts: PeerHostRow[] | null }>(await hostFetch(hostId, '/api/peers/hosts'))
-  return body.hosts ?? []
+  // A daemon older than alpha.391 (pre-D3) omits `rotation_pending` and
+  // `last_inbound_auth`. Absent means the same fact as false / '': no rotation
+  // pending, no evidence of which token the peer last presented.
+  return (body.hosts ?? []).map((r) => ({
+    ...r,
+    rotation_pending: r.rotation_pending === true,
+    last_inbound_auth: r.last_inbound_auth === 'current' || r.last_inbound_auth === 'prev' ? r.last_inbound_auth : '',
+  }))
+}
+
+/**
+ * `POST /api/peers/hosts` (D0): `{alias?, url, token?}` — only the keys given
+ * are sent, so the daemon's own defaults apply (alias from the peer's
+ * published self alias; no outbound token = unverified entry). 201 carries
+ * `inbound_token` (spec D-8). 400 invalid input / self-pair, 409 alias taken
+ * or changed concurrently, 502 verify failed (the dial runs before the alias
+ * check, `hosts.go:64–82`).
+ */
+export function addPeerHost(
+  hostId: string,
+  body: { alias?: string; url: string; token?: string },
+): Promise<PeerHostAdded> {
+  return hostFetch(hostId, '/api/peers/hosts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(peerHostJson<PeerHostAdded>)
+}
+
+/**
+ * `DELETE /api/peers/hosts/{alias}` → 204. A 404 (`unknown alias`) is thrown
+ * as a HostApiError, not swallowed: whether "already gone" counts as done is
+ * the caller's decision (the unpair flow treats it so; nothing else should).
+ */
+export async function deletePeerHost(hostId: string, alias: string): Promise<void> {
+  const res = await hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}`, { method: 'DELETE' })
+  if (!res.ok) throw await peerHostError(res)
+}
+
+/**
+ * `POST /api/peers/hosts/{alias}/rotate` (D3): mints a new inbound token,
+ * keeps the old one as `inbound_token_prev` until commit/cancel. The 200 body
+ * is the second response carrying a live token value (spec D-8). 409
+ * `rotation already pending`, 404 unknown alias. No body.
+ */
+export function rotatePeerHost(hostId: string, alias: string): Promise<{ alias: string; inbound_token: string }> {
+  return hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}/rotate`, { method: 'POST' })
+    .then(peerHostJson<{ alias: string; inbound_token: string }>)
+}
+
+/**
+ * `POST …/{alias}/rotate/commit`: drops the previous token. Sent with NO body
+ * on purpose — an empty body is `force=false` on the daemon
+ * (`hosts_rotate.go:60`), and the page never sends `force` (spec D-7). 409
+ * `rotation unconfirmed` unless the peer's last dial used the new token;
+ * a 200 no-op when nothing is pending.
+ */
+export function commitRotation(hostId: string, alias: string): Promise<PeerHostRow> {
+  return hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}/rotate/commit`, { method: 'POST' })
+    .then(peerHostJson<PeerHostRow>)
+}
+
+/**
+ * `POST …/{alias}/rotate/cancel`: restores the previous token. NO body, same
+ * reason as `commitRotation` (spec D-7). 409 `no rotation pending` /
+ * `rotation unconfirmed` unless the peer's last dial used the old token.
+ */
+export function cancelRotation(hostId: string, alias: string): Promise<PeerHostRow> {
+  return hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}/rotate/cancel`, { method: 'POST' })
+    .then(peerHostJson<PeerHostRow>)
 }
 
 /** Live dial, ≤ 3 s on the daemon side; never cached (spec D-6, §5.2 step 4). */
@@ -351,8 +435,9 @@ export function verifyPeerHost(hostId: string, alias: string): Promise<PeerHostV
 /**
  * `PUT /api/peers/hosts/{alias}`: any subset of `{alias, token, allow_bypass}`.
  * D2 passes only `alias` (adopt the peer's self alias = plain rename, spec D-5).
- * `token` is here for D4; a token value must never be held longer than the
- * call that consumes it (spec D-8).
+ * D4 passes `token` for the push step (the daemon verifies with it before
+ * storing); a token value must never be held longer than the call that
+ * consumes it (spec D-8).
  */
 export function updatePeerHost(
   hostId: string, alias: string,
