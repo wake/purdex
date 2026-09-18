@@ -15,6 +15,7 @@ import { useHostConfigStore, emptyHostConfigEntry } from '../../stores/useHostCo
 import { useSessionStore } from '../../stores/useSessionStore'
 import type { HostProject } from '../host-config-api'
 import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal } from './handoff-api'
+import { checkHostPath } from '../host-config-api'
 import {
   handToNex,
   takeBack,
@@ -27,6 +28,10 @@ import {
 import en from '../../locales/en.json'
 import zhTW from '../../locales/zh-TW.json'
 
+vi.mock('../host-config-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../host-config-api')>()),
+  checkHostPath: vi.fn(),
+}))
 vi.mock('./handoff-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./handoff-api')>()),
   nexHandoff: vi.fn(),
@@ -433,6 +438,29 @@ describe('takeToTerminal (exec-to-terminal spec §4.2)', () => {
     await takeToTerminal(args())
     expect(ensureLoaded).toHaveBeenCalledWith(H)
     expect(mockedToTerminal.mock.calls[0][2]).toEqual({ session_name: 'pdx-1', resume_command: 'cld-yolo --resume {id}' })
+  })
+
+  it('resolves the host home once through check-path when a project is stored as ~/… (codex attacker F5)', async () => {
+    seedHostFor([project('p1', 'pdx', '~/w/purdex')], [])
+    vi.mocked(checkHostPath).mockResolvedValueOnce({ status: 'dir', resolved: '/Users/x' })
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    await takeToTerminal(args({ cwd: '/Users/x/w/purdex/.claude/worktrees/t' }))
+    expect(checkHostPath).toHaveBeenCalledWith(H, '~')
+    expect(mockedToTerminal.mock.calls[0][2]).toEqual({ session_name: 'pdx-1', resume_command: 'claude --resume {id}' })
+  })
+
+  it('does not ask for the home when no project needs it, and falls back (not guesses) when the lookup fails', async () => {
+    vi.mocked(checkHostPath).mockClear()
+    seedHostFor([project('p1', 'pdx', '/w/purdex')], [])
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    await takeToTerminal(args({ cwd: '/w/purdex' }))
+    expect(checkHostPath).not.toHaveBeenCalled()
+
+    seedHostFor([project('p1', 'pdx', '~/w/purdex')], [])
+    vi.mocked(checkHostPath).mockRejectedValueOnce(new Error('offline'))
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    await takeToTerminal(args({ cwd: '/Users/x/w/purdex' }))
+    expect(mockedToTerminal.mock.calls[1][2]).toEqual({ session_name: 'purdex-1', resume_command: 'claude --resume {id}' })
   })
 
   it('falls back to the cleaned cwd basename when no project matches; omits lease_id without a lease', async () => {
