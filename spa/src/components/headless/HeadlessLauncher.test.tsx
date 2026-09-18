@@ -267,7 +267,7 @@ describe('HeadlessLauncher ready form', () => {
     expect(profile().value).toBe('standard')
   })
 
-  it('refuses to submit when the host is not live and says so', async () => {
+  it('refuses to submit when the daemon is not connected and says so', async () => {
     renderLauncher()
     typeBrief('go')
     seedHost({ status: 'disconnected' })
@@ -275,6 +275,16 @@ describe('HeadlessLauncher ready form', () => {
     await waitFor(() => expect(screen.getByTestId('headless-error')).toHaveTextContent('offline'))
     expect(delegate).not.toHaveBeenCalled()
     expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('submits when the daemon is connected even though tmux is unavailable (headless needs no tmux)', async () => {
+    renderLauncher()
+    typeBrief('go')
+    seedHost({ status: 'connected', tmuxState: 'unavailable' })
+    fireEvent.click(submit())
+    await waitFor(() => expect(delegate).toHaveBeenCalledTimes(1))
+    expect(screen.queryByTestId('headless-error')).toBeNull()
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1))
   })
 
   it('ignores a second click while a delegate is in flight', async () => {

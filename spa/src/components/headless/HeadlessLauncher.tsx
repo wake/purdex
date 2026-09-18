@@ -9,7 +9,7 @@ import { useLocation } from 'wouter'
 import { delegateExecution } from '../../lib/nex/nex-api'
 import { NexApiError, type NexCapabilities } from '../../lib/nex/types'
 import { joinCwd, utf8ByteLength, validateSubPath } from '../../lib/nex/cwd-input'
-import { isHostLive } from '../../lib/host-live'
+import { isHostDaemonLive } from '../../lib/host-live'
 import { encodeHostRouteId } from '../../lib/host-routes'
 import type { PaneContent } from '../../types/tab'
 import { useNexHostStore } from '../../stores/useNexHostStore'
@@ -100,7 +100,8 @@ function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilitie
 
   const run = async () => {
     if (busyRef.current || !canSubmit || !subVerdict.ok) return
-    if (!isHostLive(hostId)) { setError(t('newtab.headless.offline')); return }
+    // Daemon-only gate: a delegation runs inside Nexen, not in a tmux pane.
+    if (!isHostDaemonLive(hostId)) { setError(t('newtab.headless.offline')); return }
     busyRef.current = true
     setBusy(true)
     setError('')
