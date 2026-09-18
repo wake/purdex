@@ -369,6 +369,42 @@ describe('useTabStore', () => {
       expect(useTabStore.getState()).toBe(before)
       expect(getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content.kind).toBe('tmux-session')
     })
+
+    describe('compare-and-swap on the current content', () => {
+      it('writes and returns true when `expect` accepts the current content', () => {
+        const tab = makeSessionTab('dev001')
+        useTabStore.getState().addTab(tab)
+        const paneId = getPrimaryPane(tab.layout).id
+        const expectFn = (c: PaneContent) => c.kind === 'tmux-session' && c.sessionCode === 'dev001'
+        const ok = useTabStore.getState().trySetPaneContent(tab.id, paneId, { kind: 'dashboard' }, expectFn)
+        expect(ok).toBe(true)
+        expect(getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content).toEqual({ kind: 'dashboard' })
+      })
+
+      it('returns false and leaves state untouched when `expect` rejects the current content', () => {
+        const tab = makeSessionTab('dev001')
+        useTabStore.getState().addTab(tab)
+        const paneId = getPrimaryPane(tab.layout).id
+        // The pane moved on to another session while the caller was busy.
+        useTabStore.getState().setPaneContent(tab.id, paneId, { kind: 'tmux-session', hostId: 'h', sessionCode: 'other1', mode: 'terminal', cachedName: 'o', tmuxInstance: 'i2' })
+        const before = useTabStore.getState()
+        const seen: PaneContent[] = []
+        const ok = useTabStore.getState().trySetPaneContent(tab.id, paneId, { kind: 'dashboard' }, (c) => { seen.push(c); return c.kind === 'tmux-session' && c.sessionCode === 'dev001' })
+        expect(ok).toBe(false)
+        expect(useTabStore.getState()).toBe(before)
+        expect(seen).toHaveLength(1)
+        expect(seen[0]).toMatchObject({ kind: 'tmux-session', sessionCode: 'other1' })
+      })
+
+      it('`expect` is not consulted when the pane is missing', () => {
+        const tab = makeSessionTab('dev001')
+        useTabStore.getState().addTab(tab)
+        let calls = 0
+        const ok = useTabStore.getState().trySetPaneContent(tab.id, 'nonexistent-pane', { kind: 'dashboard' }, () => { calls++; return true })
+        expect(ok).toBe(false)
+        expect(calls).toBe(0)
+      })
+    })
   })
 
   describe('remountPane', () => {

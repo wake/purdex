@@ -161,6 +161,31 @@ describe('handToNex', () => {
     expect(await p).toEqual({ result: handoffOk, swapped: false })
   })
 
+  it('returns swapped:false when the pane now shows another session (compare-and-swap; the other session is left alone)', async () => {
+    const d = deferred<typeof handoffOk>()
+    mockedHandoff.mockReturnValueOnce(d.promise)
+    const a = args()
+    const p = handToNex(a)
+    await vi.waitFor(() => expect(mockedHandoff).toHaveBeenCalled())
+    const other: PaneContent = { kind: 'tmux-session', hostId: H, sessionCode: 'other1', mode: 'terminal', cachedName: 'other', tmuxInstance: 'inst-2' }
+    useTabStore.getState().setPaneContent(a.tabId, a.paneId, other)
+    d.resolve(handoffOk)
+    expect(await p).toEqual({ result: handoffOk, swapped: false })
+    expect(paneContent(a.tabId)).toEqual(other)
+  })
+
+  it('returns swapped:false when the same session was reopened under a new tmux instance', async () => {
+    const d = deferred<typeof handoffOk>()
+    mockedHandoff.mockReturnValueOnce(d.promise)
+    const a = args()
+    const p = handToNex(a)
+    await vi.waitFor(() => expect(mockedHandoff).toHaveBeenCalled())
+    useTabStore.getState().setPaneContent(a.tabId, a.paneId, { kind: 'tmux-session', hostId: H, sessionCode: from.sessionCode, mode: 'terminal', cachedName: from.cachedName, tmuxInstance: 'inst-replaced' })
+    d.resolve(handoffOk)
+    expect(await p).toMatchObject({ swapped: false })
+    expect(paneContent(a.tabId)).toMatchObject({ kind: 'tmux-session', tmuxInstance: 'inst-replaced' })
+  })
+
   it('propagates the daemon error untouched and leaves the pane alone', async () => {
     mockedHandoff.mockRejectedValueOnce(new HandoffApiError(409, 'no_cc', { error: 'no cc', code: 'no_cc' }))
     const a = args()
@@ -284,6 +309,20 @@ describe('takeBack', () => {
     useTabStore.getState().closeTab(a.tabId)
     d.resolve(takebackOk)
     expect(await p).toEqual({ result: takebackOk, swapped: false })
+    expect(a.forgetLease).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns swapped:false when the pane now shows a different execution (compare-and-swap); the lease is still forgotten', async () => {
+    const d = deferred<typeof takebackOk>()
+    mockedTakeback.mockReturnValueOnce(d.promise)
+    const a = args()
+    const p = takeBack(a)
+    await vi.waitFor(() => expect(mockedTakeback).toHaveBeenCalled())
+    const other: PaneContent = { kind: 'execution', executionId: 'exc_other', host: H }
+    useTabStore.getState().setPaneContent(a.tabId, a.paneId, other)
+    d.resolve(takebackOk)
+    expect(await p).toEqual({ result: takebackOk, swapped: false })
+    expect(paneContent(a.tabId)).toEqual(other)
     expect(a.forgetLease).toHaveBeenCalledTimes(1)
   })
 
