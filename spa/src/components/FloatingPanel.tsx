@@ -26,6 +26,10 @@ const MIN_VISIBLE = 40
  * its × clicked. In the browser there's no such region, so the inset is just
  * the ordinary viewport padding. */
 const TITLE_BAR_HEIGHT = 36
+/** Floor on the panel's usable height when auto-placed below an anchor near the
+ * bottom of the viewport — it slides up only as much as needed to keep at least
+ * this much room, rather than opening with almost nothing to show. */
+const MIN_PANEL_HEIGHT = 160
 const FOCUSABLE_SELECTOR = 'input, button, [tabindex]:not([tabindex="-1"]), select, textarea'
 /** IME composition sends a synthetic Escape to close the IME's own suggestion
  * popup; `keyCode === 229` is the legacy fallback for engines that don't set
@@ -83,17 +87,20 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
 
   // Always below the anchor — never the "above" fallback, so the panel stays next
   // to the field that opened it instead of jumping to wherever it happens to fit.
-  // The only clamp is the minimum: never above `topInset` (the Electron title
-  // bar's drag region, or ordinary padding in the browser). `maxHeight` then fits
-  // the panel from there to the bottom edge, with the body scrolling for the rest.
-  // Used for the initial placement and to re-anchor on scroll/resize while the
-  // panel hasn't been dragged.
+  // Clamped on both ends: never above `topInset` (the Electron title bar's drag
+  // region, or ordinary padding in the browser), and never so low that less than
+  // `MIN_PANEL_HEIGHT` of the viewport remains below it — past that point the
+  // panel slides up just enough to keep that floor, rather than opening with
+  // almost nothing to show. `maxHeight` then fits the panel from there to the
+  // bottom edge, with the body scrolling for the rest. Used for the initial
+  // placement and to re-anchor on scroll/resize while the panel hasn't been
+  // dragged.
   const place = () => {
     const a = anchorRef.current?.getBoundingClientRect()
     let left = a ? a.left : PADDING
     let top = a ? a.bottom + PADDING : PADDING
     left = Math.max(PADDING, Math.min(left, window.innerWidth - width - PADDING))
-    top = Math.max(topInset, top)
+    top = Math.max(topInset, Math.min(top, window.innerHeight - PADDING - MIN_PANEL_HEIGHT))
     applyPos(left, top)
     applyMaxHeight(top)
   }

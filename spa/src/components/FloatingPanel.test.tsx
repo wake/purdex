@@ -141,13 +141,31 @@ describe('FloatingPanel', () => {
     expect(parseInt(panel.style.top)).toBe(70 + 4)
   })
 
-  it('always opens below the anchor, even when the anchor sits near the bottom of the viewport', () => {
+  it('opens below the anchor when there is plenty of room', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 100 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(parseInt(panel.style.top)).toBe(104)
+    expect(panel.style.maxHeight).toBe('692px')
+  })
+
+  it('slides up just enough to keep MIN_PANEL_HEIGHT of room when the anchor is near the bottom', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 790 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(parseInt(panel.style.top)).toBe(636)
+    expect(panel.style.maxHeight).toBe('160px')
+  })
+
+  it('applies the same floor even when placing below the anchor would still leave less than MIN_PANEL_HEIGHT', () => {
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
     rect(screen.getByTestId('anchor'), { bottom: 700 })
     rerender(<Harness onClose={() => {}} open />)
     const panel = screen.getByTestId('floating-panel')
-    expect(parseInt(panel.style.top)).toBe(704)
-    expect(panel.style.maxHeight).toBe('92px')
+    expect(parseInt(panel.style.top)).toBe(636)
+    expect(panel.style.maxHeight).toBe('160px')
   })
 
   it('closes on mousedown outside, not on mousedown inside or on the anchor', () => {
@@ -248,14 +266,14 @@ describe('FloatingPanel', () => {
     expect(panel.style.maxHeight).toBe('242px')
   })
 
-  it('still opens below the anchor under Electron even when that pushes past a short viewport, never above the title bar', () => {
+  it('still opens below the anchor under Electron, but the MIN_PANEL_HEIGHT floor never pushes it above the title bar', () => {
     mockElectron(true)
     Object.defineProperty(window, 'innerHeight', { value: 40, configurable: true })
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
     rect(screen.getByTestId('anchor'), { top: 38, bottom: 40, left: 10, right: 50 })
     rerender(<Harness onClose={() => {}} open />)
     const panel = screen.getByTestId('floating-panel')
-    expect(parseInt(panel.style.top)).toBe(40 + 4)
+    expect(parseInt(panel.style.top)).toBe(36)
     expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(36)
   })
 
