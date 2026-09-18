@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -423,6 +425,9 @@ func TestPeerAuth_EndToEnd_PendingRotation_CommitGate(t *testing.T) {
 	if rr := do(http.MethodGet, "/api/peers", rotTokPrev, ""); rr.Code != http.StatusOK {
 		t.Fatalf("old token GET /api/peers = %d", rr.Code)
 	}
+	if got := listRow(t, m, "air").LastInboundAuth; got != "prev" {
+		t.Fatalf("old-token dial through real PeerAuth = %q, want \"prev\"", got)
+	}
 	if rr := do(http.MethodPost, "/api/peers/hosts/air/rotate/commit", "admin-secret", "{}"); rr.Code != http.StatusConflict {
 		t.Fatalf("commit after old-token dial = %d; want 409", rr.Code)
 	}
@@ -480,5 +485,40 @@ func TestRotateCommit_DialAfterGateCheckIsNotLost(t *testing.T) {
 	row := listRow(t, m, "air")
 	if row.RotationPending || row.LastInboundAuth != "prev" {
 		t.Fatalf("late evidence lost: row = %+v; want not pending, last_inbound_auth prev", row)
+	}
+}
+
+// A failed persist must not let cancel's record rewrite (prev → current)
+// happen anyway: that would pass the NEXT un-forced commit's gate while the
+// peer is still on the OLD token — the very lock-out the gate exists to
+// prevent.
+func TestRotateCancel_FailedWriteLeavesRecordAndGateIntact(t *testing.T) {
+	c, _ := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, prevPrincipal("air")) // peer is on the OLD token
+
+	// Break persistence: a regular file as CfgPath's parent makes
+	// config.WriteFile fail with ENOTDIR (same trick as
+	// TestPutConfigRollsBackOnWriteFailure in internal/core).
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	c.CfgPath = filepath.Join(blocker, "config.toml")
+
+	if rr := gate(t, m, "air", "cancel", false); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("cancel with failed write = %d; want 500; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := m.lastInboundAuth("air"); got != "prev" {
+		t.Fatalf("record rewritten despite failed write: last_inbound_auth = %q, want \"prev\"", got)
+	}
+	c.CfgMu.RLock()
+	pending := c.Cfg.Peers.Hosts[0].InboundTokenPrev != ""
+	c.CfgMu.RUnlock()
+	if !pending {
+		t.Fatal("in-memory config no longer pending despite failed write")
+	}
+	if rr := gate(t, m, "air", "commit", false); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
+		t.Fatalf("commit after failed cancel = %d %q; want 409 rotation unconfirmed (peer still on old token)", rr.Code, errorOf(t, rr))
 	}
 }
