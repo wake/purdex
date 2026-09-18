@@ -16,6 +16,7 @@
 //   `trySetPaneContent` reports it, and the caller offers "open execution".
 import { useTabStore } from '../../stores/useTabStore'
 import { useNexHostStore, selectHandoffReady } from '../../stores/useNexHostStore'
+import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { resumeLookupFor, resumeTemplateFor } from '../resume-templates'
 import type { TFunction } from '../pane-labels'
 import type { ExecutionFrom, PaneContent } from '../../types/tab'
@@ -62,6 +63,9 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
     if (!selectHandoffReady(hostId)(useNexHostStore.getState())) {
       throw new HandoffApiError(0, 'handoff_unsupported', {})
     }
+    // `resumeLookupFor` answers from defaults until the host config is in
+    // the store; a load failure leaves it that way (defaults, as before).
+    await useHostConfigStore.getState().ensureLoaded(hostId)
     const result = await nexHandoff(hostId, sessionCode, {
       expected_tmux_instance: tmuxInstance,
       // `{id}` left for the daemon: it read the session id itself.
@@ -97,6 +101,8 @@ export interface TakeBackOutcome {
 export async function takeBack(args: TakeBackArgs): Promise<TakeBackOutcome> {
   const { hostId, executionId, from, leaseId, tabId, paneId, forgetLease } = args
   return singleFlight(`takeback:${hostId}:${executionId}`, async () => {
+    // Same as handToNex: the host's override is only visible once loaded.
+    await useHostConfigStore.getState().ensureLoaded(hostId)
     const resume_command = resumeTemplateFor(resumeLookupFor(hostId), 'cc')
     if (!resume_command) throw new HandoffApiError(0, 'missing_resume_command', {})
     const result = await nexTakeback(hostId, from.sessionCode, {

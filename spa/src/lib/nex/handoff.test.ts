@@ -11,6 +11,7 @@ import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../pane-tree'
 import { useTabStore } from '../../stores/useTabStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
+import { useHostConfigStore, emptyHostConfigEntry } from '../../stores/useHostConfigStore'
 import { HandoffApiError, nexHandoff, nexTakeback } from './handoff-api'
 import {
   handToNex,
@@ -89,12 +90,29 @@ const handoffOk = { execution_id: 'exc_1', state: 'running', effective_profile: 
 const takebackOk = { session_id: 'sid-1', archived: true }
 
 let ensure: ReturnType<typeof vi.fn>
+let ensureLoaded: ReturnType<typeof vi.fn>
+
+/**
+ * A host config `ensureLoaded` that lands the host's resume overrides only
+ * when awaited — the store is empty until then, so a lookup that runs before
+ * the await sees the defaults.
+ */
+function configLoadsLater(hostId: string, cc: { exact: string; fallback: string }) {
+  ensureLoaded.mockImplementation(async (id: string) => {
+    if (id !== hostId) return
+    useHostConfigStore.setState((s) => ({
+      byHost: { ...s.byHost, [hostId]: { ...emptyHostConfigEntry('ready'), resumeTemplates: { cc } } },
+    }))
+  })
+}
 
 beforeEach(() => {
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   seedNexHost()
   ensure = vi.fn().mockResolvedValue(undefined)
   useNexHostStore.setState({ ensure } as never)
+  ensureLoaded = vi.fn().mockResolvedValue(undefined)
+  useHostConfigStore.setState({ byHost: {}, ensureLoaded } as never)
   mockedHandoff.mockReset()
   mockedTakeback.mockReset()
 })
@@ -112,6 +130,14 @@ describe('handToNex', () => {
     expect(mockedHandoff).toHaveBeenCalledWith(H, from.sessionCode, { expected_tmux_instance: from.tmuxInstance, rollback_command: 'claude --resume {id}' })
     expect(out).toEqual({ result: handoffOk, swapped: true })
     expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from })
+  })
+
+  it('loads the host config before reading the resume template, so a not-yet-loaded override is the rollback command (R1-2)', async () => {
+    configLoadsLater(H, { exact: 'cld-yolo --resume {id}', fallback: 'cld-yolo -c' })
+    mockedHandoff.mockResolvedValueOnce(handoffOk)
+    await handToNex(args())
+    expect(ensureLoaded).toHaveBeenCalledWith(H)
+    expect(mockedHandoff).toHaveBeenCalledWith(H, from.sessionCode, { expected_tmux_instance: from.tmuxInstance, rollback_command: 'cld-yolo --resume {id}' })
   })
 
   it('rejects with handoff_unsupported and sends nothing when the host is not handoff-ready', async () => {
@@ -223,6 +249,14 @@ describe('takeBack', () => {
     expect(paneContent(a.tabId)).toEqual({
       kind: 'tmux-session', hostId: H, sessionCode: from.sessionCode, mode: 'terminal', cachedName: from.cachedName, tmuxInstance: from.tmuxInstance,
     })
+  })
+
+  it('loads the host config before reading the resume template, so a not-yet-loaded override is the resume command (R1-2)', async () => {
+    configLoadsLater(H, { exact: 'cld-yolo --resume {id}', fallback: 'cld-yolo -c' })
+    mockedTakeback.mockResolvedValueOnce(takebackOk)
+    await takeBack(args())
+    expect(ensureLoaded).toHaveBeenCalledWith(H)
+    expect(mockedTakeback.mock.calls[0][2].resume_command).toBe('cld-yolo --resume {id}')
   })
 
   it('omits lease_id when the tab holds no lease', async () => {
