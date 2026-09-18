@@ -618,7 +618,7 @@ describe('handoffErrorMessage', () => {
     ['cwd_missing', {}, null],
     ['provider_unsupported', {}, null],
     ['takeback_in_progress', {}, null],
-    ['execution_archived', {}, null],
+    ['execution_archived', { session_id: 'abc-123' }, { session_id: 'abc-123' }],
     ['archive_failed', {}, null],
     // client-side
     ['network', {}, null],

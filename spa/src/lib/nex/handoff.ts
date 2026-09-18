@@ -311,6 +311,10 @@ function paramsFor(t: TFunction, err: HandoffApiError): Record<string, string | 
     case 'session_exists':
     case 'session_create_failed':
       return { session_name: str(b, 'session_name') }
+    case 'execution_archived':
+      // Recovery contract (spec §4.5): name the session so the user can
+      // Unarchive under Host › Nex or resume by hand.
+      return { session_id: str(b, 'session_id') }
     default:
       return undefined
   }
