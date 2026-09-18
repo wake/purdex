@@ -20,9 +20,10 @@ type codexFrozenManifest struct {
 	SchemaStage       string `json:"schemaStage"`
 	PayloadFixtureDir string `json:"payloadFixtureDir"`
 	CatalogSummary    struct {
-		Installable int `json:"installable"`
-		Ignored     int `json:"ignored"`
-		Unsupported int `json:"unsupported"`
+		UpstreamEvents int `json:"upstreamEvents"`
+		Installable    int `json:"installable"`
+		Ignored        int `json:"ignored"`
+		Unsupported    int `json:"unsupported"`
 	} `json:"catalogSummary"`
 }
 
@@ -124,6 +125,15 @@ func TestCodexEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 	}
 	if m.CatalogSummary.Unsupported != 0 {
 		t.Errorf("manifest unsupported=%d, want 0", m.CatalogSummary.Unsupported)
+	}
+	// upstreamEvents = every events.json entry codex 0.153.4 actually fires,
+	// i.e. everything except the retired keys.
+	upstream := len(frozen.Events) - counts["retired"]
+	if m.CatalogSummary.UpstreamEvents != upstream {
+		t.Errorf("manifest upstreamEvents=%d, events.json non-retired=%d", m.CatalogSummary.UpstreamEvents, upstream)
+	}
+	if m.CatalogSummary.UpstreamEvents != len(expectedCodexCurrentUpstreamEventNames) {
+		t.Errorf("manifest upstreamEvents=%d, pinned docs list=%d", m.CatalogSummary.UpstreamEvents, len(expectedCodexCurrentUpstreamEventNames))
 	}
 	if m.PayloadFixtureDir != "internal/agent/codex/testdata/codex-"+codexFrozenVersion+"-payloads/" {
 		t.Errorf("manifest payloadFixtureDir = %q", m.PayloadFixtureDir)
