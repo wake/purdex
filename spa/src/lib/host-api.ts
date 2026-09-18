@@ -172,7 +172,7 @@ export interface PeerHostVerify {
  * `GET`/`PUT /api/peers/settings`: this daemon's deliver toggle and its own
  * effective alias. `alias_source` says where the alias comes from (self alias
  * spec S-3): `'config'` = `[peers] alias` is set, `'host_id'` = derived from
- * `host_id`. It is absent on a daemon older than alpha.399 — and that absence
+ * `host_id`. It is absent on a daemon older than alpha.401 — and that absence
  * is how a PUT that was silently ignored is told apart from one that was
  * applied (S-5): the wrapper passes the body through and never invents it.
  */

@@ -1038,7 +1038,7 @@ describe('PeersSection — Rotate (spec §7.3, §6.4, §8.4)', () => {
 })
 
 describe('PeersSection — self alias (#1196, spec §4.3)', () => {
-  const TOO_OLD = 'older than alpha.399'
+  const TOO_OLD = 'older than alpha.401'
 
   /** A settings fake whose answer follows what the page wrote — the refresh after Save/Clear must show it. */
   function seedSettings(alias: string, source: 'config' | 'host_id') {
@@ -1211,7 +1211,7 @@ describe('PeersSection — self alias (#1196, spec §4.3)', () => {
     }
   })
 
-  it('a GET without alias_source (daemon < alpha.399): no Edit, no Clear, the too-old text on the line (codex F7)', async () => {
+  it('a GET without alias_source (daemon < alpha.401): no Edit, no Clear, the too-old text on the line (codex F7)', async () => {
     vi.mocked(api.fetchPeerSettings).mockImplementation(async (h) => ({ deliver: true, alias: h === M ? 'mini-lab' : 'air26' }))
     render(<PeersSection hostId={M} />)
     await settled('bidirectional')

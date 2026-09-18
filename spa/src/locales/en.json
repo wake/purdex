@@ -1298,7 +1298,7 @@
   "peers.self_alias_clear": "Use host_id default",
   "peers.self_alias_from_host_id": "(from host_id)",
   "peers.self_alias_note": "Peers keep the entry name they have and will show this as drift until they rename it; addresses become {{alias}}/<name>. Refs do not change.",
-  "peers.self_alias_too_old": "This daemon ignored the alias (no alias_source in its answer) — it is older than alpha.399.",
+  "peers.self_alias_too_old": "This daemon ignored the alias (no alias_source in its answer) — it is older than alpha.401.",
   "peers.self_alias_not_applied": "The daemon answered with “{{alias}}” ({{source}}) instead of what was sent — not applied.",
   "peers.self_alias_default_hint": "(default would be “{{alias}}”)",
   "hosts.commands": "Commands",

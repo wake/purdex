@@ -417,7 +417,7 @@ type LogResponse struct {
 // Alias is the effective self alias (config.Config.PeerAlias) and
 // AliasSource says where it comes from (self-alias spec S-3, #1196):
 // "config" when [peers] alias is set, "host_id" when it is derived from
-// host_id. A daemon older than alpha.399 omits AliasSource — clients use
+// host_id. A daemon older than alpha.401 omits AliasSource — clients use
 // its absence to detect that a PUT {alias} was ignored (S-5).
 type SettingsResponse struct {
 	Deliver     bool   `json:"deliver"`
