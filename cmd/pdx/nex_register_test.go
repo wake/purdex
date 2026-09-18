@@ -13,6 +13,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/nex"
 )
 
 // TestRegisterServeModules_NexDisabled is the I1 end-to-end case: with
@@ -71,4 +72,11 @@ func TestRegisterServeModules_NexEnabled(t *testing.T) {
 
 	require.NoError(t, registerServeModules(c, nil, nil))
 	assert.True(t, c.Mounted("nex"))
+
+	// nex is added last and depends on session + agent (P-C.3a); topoSort
+	// reorders by Dependencies(), so registration order is irrelevant, but
+	// every dependency must name a module this wiring actually mounts.
+	for _, dep := range nex.New().Dependencies() {
+		assert.True(t, c.Mounted(dep), "nex dependency %q is not a mounted module", dep)
+	}
 }

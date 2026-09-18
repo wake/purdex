@@ -12,18 +12,26 @@ import (
 
 	"lab.protype.tw/wake/nexen"
 
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/agent/probe"
 	pdxconfig "github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/tmux"
 )
 
-// engine is the private seam over *nexen.System: the three things the
-// module needs from an assembled Nexen (serve, drain, release). Tests in
-// this package substitute a fake engine through assembleFn; production
-// goes through realAssemble.
+// engine is the private seam over *nexen.System: what the module needs
+// from an assembled Nexen — serve, drain, release, and (since P-C.3a) the
+// embedded Service and Store the handoff endpoints call directly (spec
+// §4.4). Tests in this package substitute a fake engine through
+// assembleFn; production goes through realAssemble.
 type engine struct {
 	handler  http.Handler
 	shutdown func(context.Context) error
 	close    func() error
+	service  nexService // nil on a fake engine that never delegates
+	store    nexStore   // nil on a fake engine that never reads rows
 }
 
 // assembleFn builds an engine from the Options buildOptions produced. The
@@ -43,7 +51,20 @@ func realAssemble(ctx context.Context, opts nexen.Options) (engine, error) {
 		handler:  sys.Handler,
 		shutdown: sys.Shutdown,
 		close:    sys.Close,
+		service:  sys.Service,
+		store:    sys.Store,
 	}, nil
+}
+
+// proberKey is where the agent module registers its *probe.Prober; the
+// agent package exports no constant for it.
+const proberKey = "agent.prober"
+
+// livenessProber is the slice of *probe.Prober the handoff needs (the same
+// narrow view the stream module takes).
+type livenessProber interface {
+	IsAliveFor(agentType, target string) bool
+	CheckReadiness(agentType, target string) (probe.ReadinessResult, bool)
 }
 
 // Module embeds the Nexen execution engine as a pdx daemon module and
@@ -65,6 +86,16 @@ type Module struct {
 	// daemon whose engine never assembled keeps its original environment.
 	origPath    string
 	pathChanged bool
+
+	// Hand-to-nex / take-back (spec §4.4) orchestrate a tmux pane's Claude
+	// Code around the embedded engine, so the module needs the session and
+	// agent modules' services. Init resolves them from the registry.
+	sessions session.SessionProvider
+	owners   agent.OwnerResolver
+	prober   livenessProber
+	ccOps    agentcc.CCOperator
+	tmux     tmux.Executor
+	locks    *session.HandoffLocks // per-session-code; same type the stream relay uses
 
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
@@ -88,7 +119,9 @@ func statIsDir(p string) bool {
 
 func (m *Module) Name() string { return "nex" }
 
-func (m *Module) Dependencies() []string { return nil }
+// Dependencies orders nex after session and agent: Init reads their
+// registry entries, and the core inits modules in dependency order.
+func (m *Module) Dependencies() []string { return []string{"session", "agent"} }
 
 // Init prepares and assembles the engine, in this order:
 //  1. re-validate and expand the [nex] config against the user's home, so
@@ -109,15 +142,24 @@ func (m *Module) Dependencies() []string { return nil }
 // initialises without HOME. Validate is cheap and re-run here so Init is
 // self-contained rather than trusting that the config went through Load.
 //
-// Every failure is wrapped with the "nex: init:" prefix. Only the initial
-// Validate error is fatal (a static config shape error — config.Load
-// should already have rejected it). Every later failure (buildOptions,
-// creating data_dir, assembling the engine) is a soft-fail (spec §4.4.1,
-// I8): Init still returns nil, m.initErr records why, and RegisterRoutes /
-// Status surface it — a broken [nex] must not take the terminal daemon
-// down.
+// Every failure is wrapped with the "nex: init:" prefix. Only a missing
+// session/agent service and the initial Validate error are fatal (module
+// wiring and static config shape errors — config.Load should already have
+// rejected the latter). Every later failure (buildOptions, creating
+// data_dir, assembling the engine) is a soft-fail (spec §4.4.1, I8): Init
+// still returns nil, m.initErr records why, and RegisterRoutes / Status
+// surface it — a broken [nex] must not take the terminal daemon down.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+
+	// Providers first, before anything with a side effect (the PATH policy,
+	// data_dir, the engine): a missing one is a hard error and must never
+	// leave a half-assembled engine or a policed PATH behind.
+	if err := m.resolveProviders(c); err != nil {
+		return fmt.Errorf("nex: init: %w", err)
+	}
+	m.tmux = c.Tmux
+	m.locks = session.NewHandoffLocks()
 
 	home, _ := os.UserHomeDir() // "" when unset; Validate decides whether that matters
 	if err := c.Cfg.Nex.Validate(home); err != nil {
@@ -157,6 +199,51 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.sys = sys
 	return nil
+}
+
+// resolveProviders looks up the session and agent services the handoff
+// endpoints need. Hard, not soft: a broken [nex] soft-fails so the
+// terminal daemon stays up, but an absent provider means the daemon's
+// module wiring is wrong — the engine's own /api/nex would still serve
+// while every handoff silently could not, so refuse to start instead.
+func (m *Module) resolveProviders(c *core.Core) error {
+	svc, ok := c.Registry.Get(session.RegistryKey)
+	if !ok {
+		return fmt.Errorf("service %q not registered", session.RegistryKey)
+	}
+	if m.sessions, ok = svc.(session.SessionProvider); !ok {
+		return fmt.Errorf("service %q does not implement session.SessionProvider (%T)", session.RegistryKey, svc)
+	}
+
+	if svc, ok = c.Registry.Get(agent.OwnerResolverKey); !ok {
+		return fmt.Errorf("service %q not registered", agent.OwnerResolverKey)
+	}
+	if m.owners, ok = svc.(agent.OwnerResolver); !ok {
+		return fmt.Errorf("service %q does not implement agent.OwnerResolver (%T)", agent.OwnerResolverKey, svc)
+	}
+
+	if svc, ok = c.Registry.Get(proberKey); !ok {
+		return fmt.Errorf("service %q not registered", proberKey)
+	}
+	if m.prober, ok = svc.(livenessProber); !ok {
+		return fmt.Errorf("service %q does not implement livenessProber (%T)", proberKey, svc)
+	}
+
+	if svc, ok = c.Registry.Get(agentcc.OperatorKey); !ok {
+		return fmt.Errorf("service %q not registered", agentcc.OperatorKey)
+	}
+	if m.ccOps, ok = svc.(agentcc.CCOperator); !ok {
+		return fmt.Errorf("service %q does not implement cc.CCOperator (%T)", agentcc.OperatorKey, svc)
+	}
+	return nil
+}
+
+// principal names the caller the way the engine's own API would
+// (principalAuth in build_config.go): the handoff endpoints must act as
+// the principal /api/nex would derive for the same request, or the lease
+// they take is not the one the SPA later holds.
+func (m *Module) principal(r *http.Request) (string, error) {
+	return m.opts.Auth.Authenticate(r)
 }
 
 // softFail records why the engine is unavailable and reports success to the

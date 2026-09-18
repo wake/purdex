@@ -11,11 +11,12 @@ import (
 
 // TestImportBoundary enforces spec invariant I6: package nex is allowed to
 // import the Nexen module's root assembly package
-// (lab.protype.tw/wake/nexen) and its /api, /config and /sandbox
-// subpackages — the embedding seam Nexen publishes — and nothing else
-// under lab.protype.tw/wake/nexen/. Reaching into any other Nexen
-// subpackage would mean this module bypasses Assemble and starts coupling
-// to Nexen's internals directly.
+// (lab.protype.tw/wake/nexen), its /api, /config and /sandbox subpackages
+// — the embedding seam Nexen publishes — plus /execution and /store for
+// the request/result types of the embedded Service the handoff endpoints
+// call (spec §4.4), and nothing else under lab.protype.tw/wake/nexen/.
+// Reaching into any other Nexen subpackage would mean this module bypasses
+// Assemble and starts coupling to Nexen's internals directly.
 //
 // It parses every non-test .go file in this package with go/parser in
 // ImportsOnly mode (cheap: it does not need a full parse or type-check)
@@ -28,6 +29,9 @@ func TestImportBoundary(t *testing.T) {
 		modulePath + "/api":     true,
 		modulePath + "/config":  true,
 		modulePath + "/sandbox": true,
+		// handoff calls the embedded Service directly (spec §4.4)
+		modulePath + "/execution": true,
+		modulePath + "/store":     true,
 	}
 
 	entries, err := os.ReadDir(".")
@@ -58,7 +62,7 @@ func TestImportBoundary(t *testing.T) {
 				continue
 			}
 			if !allowed[path] {
-				t.Errorf("%s imports %q: only %s and its /api, /config, /sandbox subpackages may be imported", name, path, modulePath)
+				t.Errorf("%s imports %q: only %s and its /api, /config, /sandbox, /execution, /store subpackages may be imported", name, path, modulePath)
 			}
 		}
 	}
