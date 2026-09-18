@@ -1,5 +1,5 @@
 // spa/src/lib/host-api.ts — Host-aware API layer (unified)
-import { useHostStore } from '../stores/useHostStore'
+import { useHostStore, type HostInfo } from '../stores/useHostStore'
 import type { StreamMessage } from './stream-ws'
 
 /* ─── Shared types ─── */
@@ -126,6 +126,40 @@ export interface PeersEnvelope {
   titles_unavailable: boolean
 }
 
+/* ─── Peer-host wire types (internal/module/peers/hosts.go hostRow, hosts_verify.go, settings.go) ─── */
+
+/** One `[[peers.hosts]]` entry as `GET /api/peers/hosts` renders it: never a token value. */
+export interface PeerHostRow {
+  alias: string
+  url: string
+  host_id: string             // '' when the entry was added without a token and never verified
+  verified: boolean
+  has_token: boolean          // outbound token present (what we present to them)
+  has_inbound_token: boolean  // what they must present to us
+  allow_bypass: boolean
+}
+
+/**
+ * `POST /api/peers/hosts/{alias}/verify` (Phase D spec §4.1). Exactly one
+ * `scope=all` fan-out row minus its peer rows, so this and `pdx peers --all`
+ * can never disagree. `ok:false` always carries a non-empty `error`.
+ * `self_alias` is the peer's own word for itself — display value, unvalidated.
+ */
+export interface PeerHostVerify {
+  alias: string
+  host_id: string
+  ok: boolean
+  error?: string
+  self_alias: string
+  daemon_version: string
+}
+
+/** `GET /api/peers/settings`: this daemon's deliver toggle and its own alias. */
+export interface PeerSettings {
+  deliver: boolean
+  alias: string
+}
+
 export interface ConfigData {
   bind: string
   port: number
@@ -218,10 +252,17 @@ export function renameSession(hostId: string, code: string, name: string) {
  */
 export class HostApiError extends Error {
   status: number
-  constructor(status: number, statusText: string) {
+  /**
+   * The daemon's `{error}` text when the body carried one, else `statusText`
+   * when non-empty, else `HTTP <status>` — under HTTP/2 `statusText` is
+   * always `''`, so that case must not fall through to an empty string.
+   */
+  detail: string
+  constructor(status: number, statusText: string, detail?: string) {
     super(`${status} ${statusText}`)
     this.name = 'HostApiError'
     this.status = status
+    this.detail = detail ?? (statusText || `HTTP ${status}`)
   }
 }
 
@@ -273,6 +314,64 @@ export async function fetchPeers(hostId: string, signal?: AbortSignal): Promise<
   const res = await hostFetch(hostId, '/api/peers', { signal })
   if (!res.ok) throw new Error(`fetchPeers failed: ${res.status}`)
   return res.json()
+}
+
+/* ─── Peer-host API (Phase D) ─── */
+
+/**
+ * Reads the daemon's `{error}` body into a HostApiError. Every peer-host route
+ * answers errors as `{"error": "<msg>"}` (`writeJSONError`); anything else
+ * (a proxy page, an empty body) falls back to the status text.
+ */
+async function peerHostError(res: Response): Promise<HostApiError> {
+  let detail: string | undefined
+  try {
+    const body = await res.json()
+    if (body && typeof body.error === 'string' && body.error) detail = body.error
+  } catch { /* not JSON */ }
+  return new HostApiError(res.status, res.statusText, detail)
+}
+
+async function peerHostJson<T>(res: Response): Promise<T> {
+  if (!res.ok) throw await peerHostError(res)
+  return res.json() as Promise<T>
+}
+
+export async function listPeerHosts(hostId: string): Promise<PeerHostRow[]> {
+  const body = await peerHostJson<{ hosts: PeerHostRow[] | null }>(await hostFetch(hostId, '/api/peers/hosts'))
+  return body.hosts ?? []
+}
+
+/** Live dial, ≤ 3 s on the daemon side; never cached (spec D-6, §5.2 step 4). */
+export function verifyPeerHost(hostId: string, alias: string): Promise<PeerHostVerify> {
+  return hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}/verify`, { method: 'POST' })
+    .then(peerHostJson<PeerHostVerify>)
+}
+
+/**
+ * `PUT /api/peers/hosts/{alias}`: any subset of `{alias, token, allow_bypass}`.
+ * D2 passes only `alias` (adopt the peer's self alias = plain rename, spec D-5).
+ * `token` is here for D4; a token value must never be held longer than the
+ * call that consumes it (spec D-8).
+ */
+export function updatePeerHost(
+  hostId: string, alias: string,
+  patch: { alias?: string; token?: string; allow_bypass?: boolean },
+): Promise<PeerHostRow> {
+  return hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  }).then(peerHostJson<PeerHostRow>)
+}
+
+export function fetchPeerSettings(hostId: string): Promise<PeerSettings> {
+  return hostFetch(hostId, '/api/peers/settings').then(peerHostJson<PeerSettings>)
+}
+
+/** Typed `/api/info` (the untyped `fetchInfo` above stays for its existing callers). */
+export function fetchHostInfo(hostId: string): Promise<HostInfo> {
+  return fetchInfo(hostId).then(peerHostJson<HostInfo>)
 }
 
 /* ─── Handoff API ─── */
