@@ -32,6 +32,13 @@ type PasteCall struct {
 	Text   string
 }
 
+// KillIfInstanceCall is one KillSessionIfInstance call as the fake saw it,
+// recorded whether it killed, refused or failed.
+type KillIfInstanceCall struct {
+	SessionID string
+	Expected  string
+}
+
 type FakeExecutor struct {
 	mu                   sync.Mutex
 	sessions             map[string]TmuxSession // keyed by name for O(1) lookup
@@ -78,6 +85,8 @@ type FakeExecutor struct {
 	HooksOutput           string   // returned by ShowHooksGlobal
 	FailSendKeys          bool     // if true, SendKeysRaw returns an error
 	FailPasteText         bool     // if true, PasteText returns an error
+	FailKillIfInstance    bool     // if true, KillSessionIfInstance returns an error (nothing killed)
+	killIfInstanceCalls   []KillIfInstanceCall
 	// ForceNewSessionCwd, when non-empty, is the cwd NewSession records for the
 	// new session instead of the one it was asked for — test-only. It models
 	// the one thing real tmux does that no error surfaces: `new-session -c
@@ -253,6 +262,38 @@ func (f *FakeExecutor) KillSession(name string) error {
 		}
 	}
 	return nil
+}
+
+// KillSessionIfInstance models the real contract: the generation is compared
+// by the same "server" that would perform the kill, so a refusal touches
+// nothing; a match kills the session with that ID. Every call is recorded.
+func (f *FakeExecutor) KillSessionIfInstance(sessionID, expectedInstance string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.killIfInstanceCalls = append(f.killIfInstanceCalls, KillIfInstanceCall{SessionID: sessionID, Expected: expectedInstance})
+	if f.FailKillIfInstance {
+		return false, fmt.Errorf("kill-session: simulated failure")
+	}
+	if expectedInstance == "" || expectedInstance != f.instance {
+		return false, nil
+	}
+	for i, name := range f.sessionOrder {
+		s, ok := f.sessions[name]
+		if !ok || s.ID != sessionID {
+			continue
+		}
+		delete(f.sessions, name)
+		f.sessionOrder = append(f.sessionOrder[:i], f.sessionOrder[i+1:]...)
+		return true, nil
+	}
+	return false, fmt.Errorf("kill-session %s: %w", sessionID, ErrNoSession)
+}
+
+// KillIfInstanceCalls returns every KillSessionIfInstance call so far.
+func (f *FakeExecutor) KillIfInstanceCalls() []KillIfInstanceCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]KillIfInstanceCall(nil), f.killIfInstanceCalls...)
 }
 
 func (f *FakeExecutor) RenameSession(oldName, newName string) error {
