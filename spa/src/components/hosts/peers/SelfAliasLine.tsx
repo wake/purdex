@@ -13,7 +13,7 @@
 // rule leaves `selfKey` to this line, so the text is painted once.
 //
 // Capability is known before the first click (codex F7): a GET that lacked
-// `alias_source` is a daemon older than alpha.399, which would decode a PUT
+// `alias_source` is a daemon older than alpha.401, which would decode a PUT
 // without the `alias` key and answer 200 as if nothing happened. That line
 // gets the too-old sentence and no editor at all.
 import { useState, type KeyboardEvent } from 'react'

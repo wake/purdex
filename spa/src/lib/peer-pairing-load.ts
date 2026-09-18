@@ -61,7 +61,7 @@ export interface PairingRow {
 }
 
 export interface PairingSnapshot {
-  /** X's own identity. `self_alias_source` is absent on a daemon < alpha.399 (self alias spec S-5): the page then offers no editor. */
+  /** X's own identity. `self_alias_source` is absent on a daemon < alpha.401 (self alias spec S-5): the page then offers no editor. */
   self: { host_id: string; self_alias: string; self_alias_source?: PeerSettings['alias_source'] } | null
   /** Page-level failure of one of X's three precondition calls (spec §5.2 step 0). */
   error: { call: 'info' | 'settings' | 'list'; message: string } | null
