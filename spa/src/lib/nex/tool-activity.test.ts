@@ -1,7 +1,7 @@
 // spa/src/lib/nex/tool-activity.test.ts — spec §4.2 A1–A4 through applyDurableEvent.
 import { describe, it, expect } from 'vitest'
 import { applyDurableEvent, defaultExecutionState, type ExecutionState } from './event-reducer'
-import { recordN2ToolResult, recordN2ToolUse, toToolCallActivity, type ToolActivity } from './tool-activity'
+import { DIFF_LINES_SANITY_CAP, recordN2ToolResult, recordN2ToolUse, toToolCallActivity, type ToolActivity } from './tool-activity'
 import type { NexEvent } from './types'
 
 describe('applyDurableEvent: tool activity', () => {
@@ -87,6 +87,33 @@ describe('applyDurableEvent: tool activity', () => {
     expect(ended.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 0, endedAt: 0, status: 'done' })
   })
 
+  describe('codex R2 A1: tool ids that collide with Object.prototype keys are own-key lookups', () => {
+    for (const id of ['constructor', '__proto__', 'toString']) {
+      it(`raw A1/A2 with id "${id}" → a complete entry, created and then ended`, () => {
+        const started = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([toolUse(id, 'Bash')])))
+        expect(Object.hasOwn(started.tools, id)).toBe(true)
+        expect(Object.getPrototypeOf(started.tools)).toBe(Object.prototype)
+        expect(started.tools[id]).toEqual({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
+        const ended = applyDurableEvent(started, at(2, 'user', toolResult(id, true)))
+        expect(ended.tools[id]).toEqual({ name: 'Bash', startedAt: 100, endedAt: 200, status: 'error' })
+        expect(Object.getPrototypeOf(ended.tools)).toBe(Object.prototype)
+      })
+
+      it(`A3 with a running id "${id}" → aborted as an own key, prototype untouched`, () => {
+        const started = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([toolUse(id, 'Bash')])))
+        const s = applyDurableEvent(started, at(9, 'execution.turn_orphaned', { turn_id: 't' }))
+        expect(Object.keys(s.tools)).toEqual([id])
+        expect(Object.getPrototypeOf(s.tools)).toBe(Object.prototype)
+        expect(s.tools[id]).toEqual({ name: 'Bash', startedAt: 100, endedAt: 900, status: 'aborted' })
+      })
+
+      it(`raw A2 with id "${id}" on an empty state changes nothing (no phantom entry)`, () => {
+        const s = applyDurableEvent(defaultExecutionState(), at(2, 'user', toolResult(id)))
+        expect(Object.hasOwn(s.tools, id)).toBe(false)
+        expect(Object.keys(s.tools)).toEqual([])
+      })
+    }
+  })
 })
 
 describe('toToolCallActivity: durable ToolActivity → ToolCallBlock activity prop', () => {
@@ -339,6 +366,83 @@ describe('recordN2ToolUse / recordN2ToolResult (P-B3 N1/N2/N6/N7)', () => {
       expect(next.tools.toolu_other).toBe(other)
       expect(next.messages).toBe(s.messages)
       expect(next.lastSeq).toBe(s.lastSeq)
+    })
+  })
+
+  describe('codex R2 A1: tool_use_id colliding with Object.prototype keys', () => {
+    for (const id of ['constructor', '__proto__', 'toString']) {
+      it(`N1 with id "${id}" on an empty state → a complete running entry (own key, prototype untouched)`, () => {
+        const s = recordN2ToolUse(base(), useP({ tool_use_id: id }), 500)
+        expect(Object.hasOwn(s.tools, id)).toBe(true)
+        expect(Object.getPrototypeOf(s.tools)).toBe(Object.prototype)
+        expect(s.tools[id]).toEqual({ name: 'Read', startedAt: 500, endedAt: null, status: 'running', primaryArg: { key: 'file_path', value: PATH }, known: true })
+      })
+
+      it(`N2 with id "${id}" on an empty state → a complete done entry (startedAt 0, endedAt at)`, () => {
+        const s = recordN2ToolResult(base(), resultP({ tool_use_id: id }), 700)
+        expect(Object.hasOwn(s.tools, id)).toBe(true)
+        expect(Object.getPrototypeOf(s.tools)).toBe(Object.prototype)
+        expect(s.tools[id]).toEqual({ name: 'Read', startedAt: 0, endedAt: 700, status: 'done', ...expectedFacts })
+      })
+
+      it(`N1 then N2 with id "${id}" → the same entry is overlaid, still one own key`, () => {
+        const s = recordN2ToolResult(recordN2ToolUse(base(), useP({ tool_use_id: id }), 500), resultP({ tool_use_id: id }), 700)
+        expect(Object.keys(s.tools)).toEqual([id])
+        expect(s.tools[id]).toEqual({ name: 'Read', startedAt: 500, endedAt: 700, status: 'done', primaryArg: { key: 'file_path', value: PATH }, known: true, ...expectedFacts })
+      })
+    }
+  })
+
+  describe('codex R2 A2: numeric bounds and the diff sanity cap', () => {
+    const facts = (over: Record<string, unknown>) => recordN2ToolResult(base({ [ID]: running() }), resultP(over), 700).tools[ID]
+
+    it('duration_ms: 0 → 0; negative / NaN / Infinity → durationMs absent; null still → null', () => {
+      expect(facts({ duration_ms: 0 }).durationMs).toBe(0)
+      expect(facts({ duration_ms: 1.5 }).durationMs).toBe(1.5)
+      for (const duration_ms of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        expect('durationMs' in facts({ duration_ms }), String(duration_ms)).toBe(false)
+      }
+      expect(facts({ duration_ms: null }).durationMs).toBeNull()
+    })
+
+    it('output: total_lines / total_bytes must be non-negative integers', () => {
+      for (const v of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect('output' in facts({ output: { ...OUTPUT, total_lines: v } }), `total_lines ${v}`).toBe(false)
+        expect('output' in facts({ output: { ...OUTPUT, total_bytes: v } }), `total_bytes ${v}`).toBe(false)
+      }
+      expect(facts({ output: { ...OUTPUT, total_lines: 0, total_bytes: 0 } }).output).toEqual({ totalLines: 0, totalBytes: 0, truncated: false, hasNonText: false })
+    })
+
+    it('file.lines must be a non-negative integer', () => {
+      for (const lines of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect('file' in facts({ file: { path: PATH, lines } }), `lines ${lines}`).toBe(false)
+      }
+      expect(facts({ file: { path: PATH, lines: 0 } }).file).toEqual({ path: PATH, lines: 0 })
+    })
+
+    it('diff.added / removed and every hunk number must be non-negative integers → otherwise whole diff dropped', () => {
+      for (const v of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect('diff' in facts({ diff: { ...DIFF, added: v } }), `added ${v}`).toBe(false)
+        expect('diff' in facts({ diff: { ...DIFF, removed: v } }), `removed ${v}`).toBe(false)
+        for (const k of ['old_start', 'old_lines', 'new_start', 'new_lines']) {
+          const t = facts({ diff: { ...DIFF, hunks: [HUNK, { ...HUNK, [k]: v }] } })
+          expect('diff' in t, `${k} ${v}`).toBe(false)
+          expect(t.durationMs).toBe(26)
+        }
+      }
+      expect(facts({ diff: { ...DIFF, added: 0, removed: 0, hunks: [{ ...HUNK, old_start: 0, old_lines: 0, new_start: 0, new_lines: 0 }] } }).diff)
+        .toEqual({ path: PATH, added: 0, removed: 0, truncated: false, hunks: [{ oldStart: 0, oldLines: 0, newStart: 0, newLines: 0, lines: [' hello', '-world', '+nexen'] }] })
+    })
+
+    it(`hunks totalling more than DIFF_LINES_SANITY_CAP (${DIFF_LINES_SANITY_CAP}) lines → no diff; exactly the cap → kept`, () => {
+      expect(DIFF_LINES_SANITY_CAP).toBe(10_000)
+      const hunkOf = (n: number) => ({ old_start: 1, old_lines: n, new_start: 1, new_lines: n, lines: Array.from({ length: n }, () => ' x') })
+      const over = facts({ diff: { ...DIFF, hunks: [hunkOf(6_000), hunkOf(4_001)] } })
+      expect('diff' in over).toBe(false)
+      expect(over.durationMs).toBe(26)
+      expect(over.file).toEqual({ path: PATH, lines: 4 })
+      const atCap = facts({ diff: { ...DIFF, hunks: [hunkOf(6_000), hunkOf(4_000)] } })
+      expect(atCap.diff?.hunks.map((h) => h.lines.length)).toEqual([6_000, 4_000])
     })
   })
 })
