@@ -3,7 +3,7 @@ import {
   pairHosts, rotateDirection, unpairHosts,
   type ActionApi, type FlowStep, type PairOutcome, type Report, type RotateOutcome, type UnpairOutcome,
 } from './peer-pairing-actions'
-import { HostApiError, type PeerHostAdded, type PeerHostRow } from './host-api'
+import { HostApiError, type PeerHostAdded, type PeerHostRow, type PeerHostVerify } from './host-api'
 
 // Tokens are `pdxp_` + 32 hex (internal/config/config.go:94) so a leak is greppable.
 const TOK_A = 'pdxp_' + 'a1'.repeat(16)   // minted by A (add / rotate on A)
@@ -23,19 +23,25 @@ const added = (alias: string, url: string, host_id: string, inbound_token: strin
 
 const err = (status: number, detail: string) => new HostApiError(status, '', detail)
 
+/** `list` may be a function of the call log so far — the §8.4 stateful fixture (a row reads differently before and after a dial). */
+type ListAnswer = PeerHostRow[] | Error | ((calls: string[]) => PeerHostRow[] | Error)
+
 interface FakeSpec {
   add?: Record<string, PeerHostAdded | Error>                                  // by hostId
   update?: Record<string, PeerHostRow | Error>                                 // by `${hostId}/${alias}`
   delete?: Record<string, true | Error>                                        // by `${hostId}/${alias}`
   rotate?: Record<string, { alias: string; inbound_token: string } | Error>    // by `${hostId}/${alias}`
+  list?: Record<string, ListAnswer>                                            // by hostId
+  verify?: Record<string, PeerHostVerify | Error>                              // by `${hostId}/${alias}`
+  commit?: Record<string, PeerHostRow | Error>                                 // by `${hostId}/${alias}`
 }
 
 /**
  * An `ActionApi` of vi.fns plus a `calls` log. The log records WHETHER a token
  * was passed and whether it equals one the fake minted (`token=same:<minter>`),
  * `token=yes` for an unknown value, `token=no` for no key — never the value.
- * The fake deliberately has no `commit`/`cancel`/`verify`/`list` member: the
- * `ActionApi` type is what keeps a flow from committing (codex F1, spec §7.3).
+ * There is no `cancel` member: no flow cancels. `commit` exists for the §7.1
+ * repair finish only, and the tests pin that nothing else ever calls it.
  */
 function fake(spec: FakeSpec) {
   const calls: string[] = []
@@ -70,9 +76,28 @@ function fake(spec: FakeSpec) {
       calls.push(`rotate:${h}:${alias}`)
       return pick(spec.rotate, `${h}/${alias}`).then((r) => { minted.set(r.inbound_token, h); return r })
     }),
+    list: vi.fn((h: string) => {
+      const before = [...calls]
+      calls.push(`list:${h}`)
+      const a = spec.list?.[h]
+      const v = typeof a === 'function' ? a(before) : a
+      if (v === undefined) return Promise.reject(new Error(`unexpected list:${h}`))
+      return v instanceof Error ? Promise.reject(v) : Promise.resolve(v)
+    }),
+    verify: vi.fn((h: string, alias: string) => {
+      calls.push(`verify:${h}:${alias}`)
+      return pick(spec.verify, `${h}/${alias}`)
+    }),
+    commit: vi.fn((h: string, alias: string) => {
+      calls.push(`commit:${h}:${alias}`)
+      return pick(spec.commit, `${h}/${alias}`)
+    }),
   }
   return { api, calls, steps, report }
 }
+
+const verifyOk = (alias: string): PeerHostVerify =>
+  ({ alias, host_id: 'wakes-air-2026:oa6drb', ok: true, self_alias: 'air26', daemon_version: '1.0.0-alpha.391' })
 
 /** Spec D-8: no token value in any outcome, step or call log — asserted after EVERY test. */
 const noLeak = (outcome: RotateOutcome | PairOutcome | UnpairOutcome, steps: FlowStep[], calls: string[]) =>
@@ -93,11 +118,11 @@ describe('rotateDirection — mint → push, the refresh decides (spec §6.4 ste
     expect(outcome).toEqual({ kind: 'pushed' })
     expect(f.steps).toEqual(['mint', 'push'])
     expect(f.calls).toEqual(['rotate:X:air', 'update:A:mini-lab:token=same:X'])
-    // The type forbids a flow from committing: the fake has no such member and the flow compiles.
-    expect('commit' in f.api).toBe(false)
+    // A rotation from the page never commits, verifies or reads: the refresh does that and the operator clicks (§7.3).
+    expect(f.api.commit).not.toHaveBeenCalled()
+    expect(f.api.verify).not.toHaveBeenCalled()
+    expect(f.api.list).not.toHaveBeenCalled()
     expect('cancel' in f.api).toBe(false)
-    expect('verify' in f.api).toBe(false)
-    expect('list' in f.api).toBe(false)
     noLeak(outcome, f.steps, f.calls)
   })
 
@@ -217,15 +242,17 @@ describe('pairHosts — non-repair path (spec §7.1 steps 1–3)', () => {
     const f = fake({
       add: { A: added('mini-lab', X_URL, 'mini-lab:278cbm', TOK_A), X: err(502, 'verify failed: 401 Unauthorized') },
       delete: { 'A/mini-lab': true },
+      list: { A: [row({})] },
     })
     const outcome = await pairHosts(X, A, {}, f.api, f.report)
     expect(outcome).toEqual({ kind: 'step-failed', step: 'create-on-x', error: 'verify failed: 401 Unauthorized', undoError: '' })
     expect(f.calls).toEqual([
       `add:A:alias=mini-lab:url=${X_URL}:token=no`,
       `add:X:alias=none:url=${A_URL}:token=same:A`,
+      'list:A',
       'delete:A:mini-lab',
     ])
-    expect(f.steps).toEqual(['create-on-y', 'create-on-x', 'undo-on-y'])
+    expect(f.steps).toEqual(['create-on-y', 'create-on-x', 'check-undo', 'undo-on-y'])
     expect(f.api.update).not.toHaveBeenCalled()
     noLeak(outcome, f.steps, f.calls)
   })
@@ -234,11 +261,12 @@ describe('pairHosts — non-repair path (spec §7.1 steps 1–3)', () => {
     const f = fake({
       add: { A: added('mini-lab', X_URL, 'mini-lab:278cbm', TOK_A), X: err(409, 'alias "air26" is already used by another host; pass alias') },
       delete: { 'A/mini-lab': true },
+      list: { A: [row({})] },
     })
     const outcome = await pairHosts(X, A, {}, f.api, f.report)
     expect(outcome).toEqual({ kind: 'alias-conflict', side: 'x', error: 'alias "air26" is already used by another host; pass alias' })
-    expect(f.calls.slice(2)).toEqual(['delete:A:mini-lab'])
-    expect(f.steps).toEqual(['create-on-y', 'create-on-x', 'undo-on-y'])
+    expect(f.calls.slice(2)).toEqual(['list:A', 'delete:A:mini-lab'])
+    expect(f.steps).toEqual(['create-on-y', 'create-on-x', 'check-undo', 'undo-on-y'])
     noLeak(outcome, f.steps, f.calls)
   })
 
@@ -246,6 +274,7 @@ describe('pairHosts — non-repair path (spec §7.1 steps 1–3)', () => {
     const f = fake({
       add: { A: added('mini-lab', X_URL, 'mini-lab:278cbm', TOK_A), X: err(502, 'verify failed') },
       delete: { 'A/mini-lab': err(404, 'unknown alias') },
+      list: { A: [row({})] },
     })
     const outcome = await pairHosts(X, A, {}, f.api, f.report)
     expect(outcome).toEqual({ kind: 'step-failed', step: 'create-on-x', error: 'verify failed', undoError: '' })
@@ -256,6 +285,7 @@ describe('pairHosts — non-repair path (spec §7.1 steps 1–3)', () => {
     const f = fake({
       add: { A: added('mini-lab', X_URL, 'mini-lab:278cbm', TOK_A), X: err(502, 'verify failed') },
       delete: { 'A/mini-lab': err(500, 'write config: disk full') },
+      list: { A: [row({})] },
     })
     const outcome = await pairHosts(X, A, {}, f.api, f.report)
     expect(outcome).toEqual({ kind: 'step-failed', step: 'create-on-x', error: 'verify failed', undoError: 'write config: disk full' })
@@ -266,12 +296,66 @@ describe('pairHosts — non-repair path (spec §7.1 steps 1–3)', () => {
     const f = fake({
       add: { A: added('mini-lab', X_URL, 'mini-lab:278cbm', TOK_A), X: err(409, 'alias "air26" is already used by another host') },
       delete: { 'A/mini-lab': err(500, 'write config: disk full') },
+      list: { A: [row({})] },
     })
     const outcome = await pairHosts(X, A, {}, f.api, f.report)
     expect(outcome).toEqual({
       kind: 'step-failed', step: 'create-on-x',
       error: 'alias "air26" is already used by another host', undoError: 'write config: disk full',
     })
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('undo is not blind (codex A-1): the alias now carries a DIFFERENT entry → not deleted, undoError says so', async () => {
+    const f = fake({
+      add: { A: added('mini-lab', X_URL, '', TOK_A), X: err(502, 'verify failed') },
+      delete: { 'A/mini-lab': true },
+      // Another admin deleted and re-created `mini-lab` pointing at a different daemon in the window.
+      list: { A: [row({ url: 'http://100.64.0.9:7860', host_id: 'other:zzzzzz' })] },
+    })
+    const outcome = await pairHosts(X, A, {}, f.api, f.report)
+    expect(outcome).toEqual({
+      kind: 'step-failed', step: 'create-on-x', error: 'verify failed',
+      undoError: 'entry "mini-lab" on the peer changed since it was created; left in place',
+    })
+    expect(f.api.delete).not.toHaveBeenCalled()
+    expect(f.steps).toEqual(['create-on-y', 'create-on-x', 'check-undo'])
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('undo: the alias is already gone on re-list → nothing to delete, undoError empty', async () => {
+    const f = fake({
+      add: { A: added('mini-lab', X_URL, '', TOK_A), X: err(502, 'verify failed') },
+      list: { A: [] },
+    })
+    const outcome = await pairHosts(X, A, {}, f.api, f.report)
+    expect(outcome).toEqual({ kind: 'step-failed', step: 'create-on-x', error: 'verify failed', undoError: '' })
+    expect(f.api.delete).not.toHaveBeenCalled()
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('undo: re-list fails → nothing is deleted blind; undoError names the entry left in place', async () => {
+    const f = fake({
+      add: { A: added('mini-lab', X_URL, '', TOK_A), X: err(502, 'verify failed') },
+      delete: { 'A/mini-lab': true },
+      list: { A: err(503, 'unavailable') },
+    })
+    const outcome = await pairHosts(X, A, {}, f.api, f.report)
+    expect(outcome.kind).toBe('step-failed')
+    expect((outcome as { undoError: string }).undoError).toBe('could not re-read the peer before undoing; entry "mini-lab" left in place: unavailable')
+    expect(f.api.delete).not.toHaveBeenCalled()
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('undo: the 201 reported no host_id (added without a token) and the re-list agrees → deleted', async () => {
+    const f = fake({
+      add: { A: added('mini-lab', X_URL, '', TOK_A), X: err(502, 'verify failed') },
+      delete: { 'A/mini-lab': true },
+      list: { A: [row({ host_id: '', verified: false })] },
+    })
+    const outcome = await pairHosts(X, A, {}, f.api, f.report)
+    expect(outcome).toEqual({ kind: 'step-failed', step: 'create-on-x', error: 'verify failed', undoError: '' })
+    expect(f.api.delete).toHaveBeenCalledWith('A', 'mini-lab')
     noLeak(outcome, f.steps, f.calls)
   })
 
@@ -292,23 +376,99 @@ describe('pairHosts — non-repair path (spec §7.1 steps 1–3)', () => {
 })
 
 describe('pairHosts — repair path (Y already holds an entry for X, spec §7.1 last paragraph)', () => {
-  it('rotate on Y\'s entry instead of add; add on X with that token; PUT Y; paired', async () => {
-    const f = fake({
-      rotate: { 'A/mini-lab': { alias: 'mini-lab', inbound_token: TOK_A } },
-      add: { X: added('air26', A_URL, 'wakes-air-2026:oa6drb', TOK_X) },
-      update: { 'A/mini-lab': row({ rotation_pending: true }) },
-    })
+  /**
+   * The §8.4 stateful fixture for the repair finish: Y's row for X says
+   * `current` ONLY after X has dialled Y (the `verify:X:air26` call). A flow
+   * that reads the row before that dial — or commits from its memory that
+   * step 2 succeeded — sees '' here and must not commit.
+   */
+  const repairHappy = (afterDial: PeerHostRow, verify: PeerHostVerify | Error = verifyOk('air26')) => fake({
+    rotate: { 'A/mini-lab': { alias: 'mini-lab', inbound_token: TOK_A } },
+    add: { X: added('air26', A_URL, 'wakes-air-2026:oa6drb', TOK_X) },
+    update: { 'A/mini-lab': row({ rotation_pending: true }) },
+    verify: { 'X/air26': verify },
+    list: { A: (calls) => [calls.includes('verify:X:air26') ? afterDial : row({ rotation_pending: true, last_inbound_auth: '' })] },
+    commit: { 'A/mini-lab': row({}) },
+  })
+
+  it('rotate on Y\'s entry instead of add; add on X with that token; PUT Y; then dial → read → commit (§7.1 "then commit on Y"); paired', async () => {
+    const f = repairHappy(row({ rotation_pending: true, last_inbound_auth: 'current' }))
     const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
     expect(outcome).toEqual({ kind: 'paired', aliasOnX: 'air26', aliasOnY: 'mini-lab' })
     expect(f.calls).toEqual([
       'rotate:A:mini-lab',
       `add:X:alias=none:url=${A_URL}:token=same:A`,
       'update:A:mini-lab:token=same:X',
+      'verify:X:air26',
+      'list:A',
+      'commit:A:mini-lab',
     ])
-    expect(f.steps).toEqual(['rotate-on-y', 'create-on-x', 'push-to-y'])
+    expect(f.steps).toEqual(['rotate-on-y', 'create-on-x', 'push-to-y', 'verify', 'read', 'commit'])
     expect(f.api.delete).not.toHaveBeenCalled()
-    // No flow commits: Y's rotation stays pending; the refresh offers Commit by the row rule.
-    expect('commit' in f.api).toBe(false)
+    expect(f.api.commit).toHaveBeenCalledWith('A', 'mini-lab')   // two args: never a force body
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('repair finish: the fresh row says "" (peer not seen on either token) → repair-pending / none, NO commit', async () => {
+    const f = repairHappy(row({ rotation_pending: true, last_inbound_auth: '' }))
+    const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
+    expect(outcome).toEqual({ kind: 'repair-pending', aliasOnX: 'air26', aliasOnY: 'mini-lab', offer: 'none', commitError: '' })
+    expect(f.api.commit).not.toHaveBeenCalled()
+    expect(f.steps).toEqual(['rotate-on-y', 'create-on-x', 'push-to-y', 'verify', 'read'])
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('repair finish: the fresh row says "prev" → repair-pending / cancel, NO commit (the flow never cancels either)', async () => {
+    const f = repairHappy(row({ rotation_pending: true, last_inbound_auth: 'prev' }))
+    const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
+    expect(outcome).toEqual({ kind: 'repair-pending', aliasOnX: 'air26', aliasOnY: 'mini-lab', offer: 'cancel', commitError: '' })
+    expect(f.api.commit).not.toHaveBeenCalled()
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('repair finish: someone else already committed (row not pending) → repair-pending / none, no commit', async () => {
+    const f = repairHappy(row({ rotation_pending: false, last_inbound_auth: 'current' }))
+    const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
+    expect(outcome).toMatchObject({ kind: 'repair-pending', offer: 'none' })
+    expect(f.api.commit).not.toHaveBeenCalled()
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('repair finish: commit refused 409 (a dial with the other token raced the read) → repair-pending / commit with commitError', async () => {
+    const f = repairHappy(row({ rotation_pending: true, last_inbound_auth: 'current' }))
+    ;(f.api.commit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err(409, 'rotation unconfirmed'))
+    const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
+    expect(outcome).toEqual({ kind: 'repair-pending', aliasOnX: 'air26', aliasOnY: 'mini-lab', offer: 'commit', commitError: 'rotation unconfirmed' })
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('repair finish: the fresh read fails → repair-pending / none with the read error; no commit', async () => {
+    const f = repairHappy(row({}))
+    ;(f.api.list as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err(503, 'unavailable'))
+    const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
+    expect(outcome).toEqual({ kind: 'repair-pending', aliasOnX: 'air26', aliasOnY: 'mini-lab', offer: 'none', commitError: 'unavailable' })
+    expect(f.api.commit).not.toHaveBeenCalled()
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('repair finish: a failed evidence dial is not an error — the row is still read and decides', async () => {
+    // The daemon answered the verify with an error, but the dial happened (the fake saw it), so the row reads current.
+    const f = repairHappy(row({ rotation_pending: true, last_inbound_auth: 'current' }), err(502, 'dial tcp: connection refused'))
+    const outcome = await pairHosts(X, A_REPAIR, {}, f.api, f.report)
+    expect(outcome.kind).toBe('paired')
+    noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('the non-repair path never dials, reads or commits', async () => {
+    const f = fake({
+      add: { A: added('mini-lab', X_URL, '', TOK_A), X: added('air26', A_URL, 'wakes-air-2026:oa6drb', TOK_X) },
+      update: { 'A/mini-lab': row({}) },
+    })
+    const outcome = await pairHosts(X, A, {}, f.api, f.report)
+    expect(outcome.kind).toBe('paired')
+    expect(f.api.verify).not.toHaveBeenCalled()
+    expect(f.api.list).not.toHaveBeenCalled()
+    expect(f.api.commit).not.toHaveBeenCalled()
     noLeak(outcome, f.steps, f.calls)
   })
 
@@ -390,5 +550,18 @@ describe('unpairHosts — both deletes attempted regardless (spec §7.2)', () =>
     const outcome = await unpairHosts(x, y, f.api, f.report)
     expect(outcome).toEqual({ xError: 'Failed to fetch', yError: '' })
     noLeak(outcome, f.steps, f.calls)
+  })
+
+  it('X\'s DELETE never settles → Y\'s DELETE is still sent (both are started together, codex A-2)', async () => {
+    const f = fake({ delete: { 'A/mini-lab': true } })
+    ;(f.api.delete as ReturnType<typeof vi.fn>).mockImplementation((h: string, alias: string) => {
+      f.calls.push(`delete:${h}:${alias}`)
+      return h === 'X' ? new Promise<void>(() => {}) : Promise.resolve()
+    })
+    const pending = unpairHosts(x, y, f.api, f.report)
+    await Promise.resolve()   // one microtask: both deletes must already be on the wire
+    expect(f.calls).toEqual(['delete:X:air', 'delete:A:mini-lab'])
+    expect(f.steps).toEqual(['delete-x', 'delete-y'])
+    void pending   // never resolves in this fixture; the point is that Y was attempted
   })
 })
