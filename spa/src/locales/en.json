@@ -803,6 +803,7 @@
   "execution.tool.lines": "{{n}} lines",
   "execution.tool.truncated": "truncated",
   "execution.tool.non_text": "non-text",
+  "execution.tool.diff_truncated": "diff truncated by the daemon",
   "execution.tool.unknown": "tool",
   "handoff.menu": "Hand to nex",
   "handoff.confirm_title": "Hand this session to nex?",

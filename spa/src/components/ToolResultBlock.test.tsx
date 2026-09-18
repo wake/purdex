@@ -185,3 +185,58 @@ describe('facts prop (P-B3.2 R3 / R4)', () => {
     expect(statusIconPath(container as HTMLElement)).toBe(XCIRCLE_PATH)
   })
 })
+
+// P-B3.3 Task 10 — ToolDiffView mounted in the expanded body (spec §4.4 R5).
+describe('diff view in the expanded body (P-B3.3 R5)', () => {
+  const hunk = { oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' hello', '-world', '+nexen', ' three'] }
+  const withHunks = { path: '/x', added: 1, removed: 1, hunks: [hunk], truncated: false }
+
+  it('expanded + facts.diff with hunks → tool-diff inside tool-result-content, before the raw content', () => {
+    render(<ToolResultBlock content="raw output" isError={false} facts={{ diff: withHunks }} />)
+    expect(screen.queryByTestId('tool-diff')).toBeNull()
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    const body = screen.getByTestId('tool-result-content')
+    const diff = screen.getByTestId('tool-diff')
+    expect(body.contains(diff)).toBe(true)
+    // the diff wrapper is the first child; the raw content stays a bare trailing text node
+    expect(body.firstElementChild!.contains(diff)).toBe(true)
+    expect(body.lastChild!.nodeType).toBe(Node.TEXT_NODE)
+    expect(body.lastChild!.textContent).toBe('raw output')
+    expect(body.textContent!.indexOf('nexen')).toBeLessThan(body.textContent!.indexOf('raw output'))
+  })
+
+  it('collapsed → no tool-diff', () => {
+    render(<ToolResultBlock content="raw output" isError={false} facts={{ diff: withHunks }} />)
+    expect(screen.queryByTestId('tool-diff')).toBeNull()
+  })
+
+  it('facts.diff.hunks: [] expanded → no tool-diff; body DOM identical to the no-facts render', () => {
+    const a = render(<ToolResultBlock content="raw output" isError={false} />)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    const plain = screen.getByTestId('tool-result-content').innerHTML
+    a.unmount()
+    render(<ToolResultBlock content="raw output" isError={false}
+      facts={{ diff: { path: '/x', added: 0, removed: 0, hunks: [], truncated: false } }} />)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    expect(screen.queryByTestId('tool-diff')).toBeNull()
+    expect(screen.getByTestId('tool-result-content').innerHTML).toBe(plain)
+  })
+
+  it('codex R2 A1: facts.diff.hunks: [] + truncated: true expanded → tool-diff with the diff-truncated row', () => {
+    render(<ToolResultBlock content="raw output" isError={false}
+      facts={{ diff: { path: '/x', added: 0, removed: 0, hunks: [], truncated: true } }} />)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    const body = screen.getByTestId('tool-result-content')
+    const diff = screen.getByTestId('tool-diff')
+    expect(body.firstElementChild!.contains(diff)).toBe(true)
+    expect(diff.contains(screen.getByTestId('diff-truncated'))).toBe(true)
+    expect(screen.queryByTestId('diff-hunk')).toBeNull()
+    expect(body.lastChild!.textContent).toBe('raw output')
+  })
+
+  it('facts without diff expanded → no tool-diff', () => {
+    render(<ToolResultBlock content="raw output" isError={false} facts={{ file: { path: '/x', lines: 1 } }} />)
+    fireEvent.click(screen.getByTestId('tool-result-header'))
+    expect(screen.queryByTestId('tool-diff')).toBeNull()
+  })
+})

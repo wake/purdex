@@ -434,6 +434,18 @@ describe('recordN2ToolUse / recordN2ToolResult (P-B3 N1/N2/N6/N7)', () => {
         .toEqual({ path: PATH, added: 0, removed: 0, truncated: false, hunks: [{ oldStart: 0, oldLines: 0, newStart: 0, newLines: 0, lines: [' hello', '-world', '+nexen'] }] })
     })
 
+    it('codex R2 A3: counts must be safe integers — 2**53 drops the diff / output / file, 2**53 - 1 is kept', () => {
+      const unsafe = 2 ** 53
+      const max = Number.MAX_SAFE_INTEGER
+      expect(Number.isInteger(unsafe)).toBe(true) // the pre-fix guard would have let it through
+      const dropped = facts({ diff: { ...DIFF, hunks: [{ ...HUNK, old_start: unsafe }] } })
+      expect('diff' in dropped).toBe(false)
+      expect(dropped.durationMs).toBe(26)
+      expect(facts({ diff: { ...DIFF, hunks: [{ ...HUNK, old_start: max }] } }).diff?.hunks[0].oldStart).toBe(max)
+      expect('output' in facts({ output: { ...OUTPUT, total_lines: unsafe } })).toBe(false)
+      expect('file' in facts({ file: { path: PATH, lines: unsafe } })).toBe(false)
+    })
+
     it(`hunks totalling more than DIFF_LINES_SANITY_CAP (${DIFF_LINES_SANITY_CAP}) lines → no diff; exactly the cap → kept`, () => {
       expect(DIFF_LINES_SANITY_CAP).toBe(10_000)
       const hunkOf = (n: number) => ({ old_start: 1, old_lines: n, new_start: 1, new_lines: n, lines: Array.from({ length: n }, () => ' x') })

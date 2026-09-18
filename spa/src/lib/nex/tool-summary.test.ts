@@ -118,15 +118,21 @@ describe('previewValue (bounded R10 serialisation)', () => {
 
   it('a 100 000-element array stops at the limit and appends an ellipsis', () => {
     const big = Array.from({ length: 100_000 }, (_, i) => i)
-    const t0 = performance.now()
-    const out = previewValue(big, 80)
-    const elapsed = performance.now() - t0
+    // Count element reads instead of wall-clock time (a timing bound is
+    // flaky under a loaded full-suite run): a bounded walk touches a few
+    // dozen indices, an O(n) walk touches all 100 000.
+    let reads = 0
+    const probe = new Proxy(big, {
+      get(target, prop, receiver) {
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) reads += 1
+        return Reflect.get(target, prop, receiver)
+      },
+    })
+    const out = previewValue(probe, 80)
     expect(out.endsWith('…')).toBe(true)
     expect(out).toHaveLength(80 + 1) // exactly limit + ellipsis: the last token is cut to fit
     expect(out.startsWith('[0,1,2,3')).toBe(true)
-    // Bounded walk: a full JSON.stringify of 100k elements would be ~590 KB;
-    // the loose bound only guards against an accidental O(n) regression.
-    expect(elapsed).toBeLessThan(50)
+    expect(reads).toBeLessThan(200)
   })
 
   it('a huge string inside an object is sliced before being escaped', () => {
@@ -179,11 +185,20 @@ describe('previewValue: wide objects (codex re-review P2)', () => {
   it('an object with 200 000 keys stops after the budget without enumerating every key', () => {
     const wide: Record<string, number> = {}
     for (let i = 0; i < 200_000; i++) wide[`k${i}`] = i
-    const t0 = performance.now()
-    const out = previewValue(wide, 80)
+    // for…in asks for one property descriptor per visited key, lazily; an
+    // Object.keys() walk would materialise all 200 000 up front. Count the
+    // descriptor lookups instead of wall-clock time (deterministic).
+    let visited = 0
+    const probe = new Proxy(wide, {
+      getOwnPropertyDescriptor(target, prop) {
+        visited += 1
+        return Reflect.getOwnPropertyDescriptor(target, prop)
+      },
+    })
+    const out = previewValue(probe, 80)
     expect(out.length).toBeLessThanOrEqual(81)
     expect(out.startsWith('{"k0":0,"k1":1')).toBe(true)
-    expect(performance.now() - t0).toBeLessThan(50)
+    expect(visited).toBeLessThan(200)
   })
 
   it('inherited enumerable keys are skipped', () => {
