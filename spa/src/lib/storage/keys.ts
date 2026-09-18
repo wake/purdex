@@ -26,4 +26,5 @@ export const STORAGE_KEYS = {
   RECENT_FILES: 'purdex-recent-files',
   PLACEHOLDER_FILES: 'purdex-placeholder-files',
   DEVICE_STATE: 'purdex-device-state',
+  HEADLESS_LAUNCHER: 'purdex-headless-launcher',
 } as const
