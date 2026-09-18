@@ -1,6 +1,6 @@
 # Spec — P-D: tear down Stream mode, relay, bridge and M0
 
-- Status: v1.0 (2026-09-18) — draft for plan review (plan + spec reviewed together)
+- Status: v1.1 (2026-09-18) — codex plan+spec review `task-mu6xgcjb-7b7n51` applied (11 findings: commit ordering, persist v3, snapshot/notification legacy paths, usage string, composed-mux 404 tests)
 - Predecessors: P-C (`2026-09-18-pc-launch-ui-spec.md` v1.6) — its §6 passed on
   mlab (alpha.390); its "Successor" clause is the gate for this spec. Nexen
   integration decisions #3/#4 (kickoff `kickoff_nexen_into_purdex`): Stream
@@ -104,15 +104,20 @@ Remove:
   event (the nex module's `handoffProfile = "handoff"` constant is an
   unrelated Nexen profile name and stays).
 - `cmd/pdx/main.go`: `case "relay"` and `runRelay` (flag set + `relay.Relay`
-  construction), `c.AddModule(stream.New())`, imports.
+  construction), `c.AddModule(stream.New())`, imports, **and the hand-written
+  usage string at `main.go:44`** that lists `relay`.
 - `internal/config/config.go`: `StreamConfig`, `Preset`, the `Stream` field,
   its default preset and `Clone` line; `config_test.go` / `peers_test.go`
   cases that build one. `[stream]` tables in existing TOML keep loading.
 - `internal/module/session`:
   - `POST /api/sessions/{code}/mode` route + `handleSwitchMode` +
     `switchModeRequest`.
-  - `handleCreate`: `mode` is accepted only as `""` or `"terminal"`;
-    `"stream"` is now `400 invalid mode: must be terminal`.
+  - `handleCreate`: `mode` accepts `""`, `"terminal"` **and the legacy
+    `"stream"`**, and always stores `terminal`; any other value is
+    `400 invalid mode: must be terminal`. Coercion (not rejection) keeps
+    old workspace snapshots and device-state backups restorable — their
+    `SessionMeta.mode` may still say `stream` and `snapshot/restore.ts:80`
+    forwards it verbatim until P-D.3 normalises it.
   - `SessionInfo`: drop `CCSessionID`, `CCModel`, `HasRelay` (`has_relay` is
     never set to true anywhere today — bridge is its only producer and no
     caller wires it). `MetaUpdate`: drop `CCSessionID`, `CCModel`.
@@ -136,13 +141,22 @@ SPA compatibility during the P-D.2 → P-D.3 window (same day, mlab only):
 `config.stream?.presets` is read with optional chaining;
 `session.cc_session_id` is only read by `handoff-gate.ts` as the third
 fallback (`!!undefined` → false, and the first two sources are the live
-ones); `has_relay` has no reader; `mode` keeps arriving as `terminal`. The
-only broken interaction is choosing "Stream" in the view-mode dropdown
-(`POST …/mode` → 404, `/ws/cli-bridge` → 404), which P-D.3 deletes.
+ones); `has_relay` has no reader; `mode` keeps arriving as `terminal`;
+snapshot / device-state restore keeps working because `handleCreate`
+coerces `stream`. What *is* degraded in the window — all of it fixed by
+P-D.3, none of it crashing: (a) choosing "Stream" in the view-mode dropdown
+(`POST …/mode` → 404); (b) a notification click with `reopenTabOnClick`
+creates a `mode: 'stream'` pane (`useNotificationDispatcher.ts:355`
+hard-codes it); (c) any persisted `mode: 'stream'` pane renders
+`ConversationView` (`SessionPaneContent.tsx:103`) whose `/ws/cli-bridge`
+connect fails. P-D.2 acceptance opens one such pane and checks the
+failure is a visible error state, not a white screen.
 
 ### P-D.3 — SPA Stream family
 
-Order inside the PR matters; each bullet is its own commit.
+Order inside the PR matters; each bullet is its own commit and **every
+commit must pass `tsc --noEmit`** — so consumers are unwired *before* the
+files they import are deleted.
 
 1. **Type move** (pure move, no codex): `StreamMessage`, `ContentBlock`,
    `AssistantMessage` and whatever else `lib/nex/event-reducer.ts`,
@@ -150,13 +164,7 @@ Order inside the PR matters; each bullet is its own commit.
    import from `lib/stream-ws.ts` move to `lib/nex/message-types.ts`. Proof:
    per-declaration byte comparison between the old and new file; imports
    are the only other edits.
-2. Delete `lib/stream-ws.ts` (remaining WS client code),
-   `stores/useStreamStore.ts`, `hooks/useRelayWsManager.ts`,
-   `components/ConversationView.tsx` (+ `ConversationView.snapshot.test.tsx`),
-   `components/HandoffButton.tsx`, and their tests. Keep
-   `MessageBubble` / `ThinkingBlock` / `ToolCallBlock` and their default-prop
-   snapshots — they are exec-pane components.
-3. Unwire: `App.tsx` (`useRelayWsManager()`, `handleViewModeChange`),
+2. Unwire: `App.tsx` (`useRelayWsManager()`, `handleViewModeChange`),
    `SessionPaneContent.tsx` (`handleHandoff`, `handleHandoffToTerm`, stream
    branch, `config.stream` read), `StatusBar.tsx` view-mode dropdown,
    `TabContextMenu.tsx` / `features/workspace/hooks.ts` `viewMode-*` items,
@@ -165,12 +173,27 @@ Order inside the PR matters; each bullet is its own commit.
    (`switchMode`, `fetchHistory`, `stream.presets` on the config type),
    `hosts/OverviewSection.tsx` presets field, `useNotificationDispatcher.ts`
    stream cases, `SessionPicker.tsx` / `SessionPanel.tsx` /
-   `hosts/SessionsSection.tsx` stream icons, `snapshot/{types,capture}.ts`.
+   `hosts/SessionsSection.tsx` stream icons, `snapshot/{types,capture}.ts`
+   (`SessionMeta.mode` narrows to `'terminal'`; `restore.ts` and the
+   device-state restore path pass `'terminal'` regardless of what an old
+   snapshot says), `lib/route-utils.ts` (`stream` leaves the route union;
+   `validateMode('/stream')` — an old deep link — resolves to terminal, with
+   a test), `useNotificationDispatcher.ts:355` (`mode: 'terminal'`).
+3. Delete `lib/stream-ws.ts` (remaining WS client code),
+   `stores/useStreamStore.ts`, `hooks/useRelayWsManager.ts`,
+   `components/ConversationView.tsx` (+ `ConversationView.snapshot.test.tsx`),
+   `components/HandoffButton.tsx`, and their tests. Keep
+   `MessageBubble` / `ThinkingBlock` / `ToolCallBlock` and their default-prop
+   snapshots — they are exec-pane components.
 4. `types/tab.ts`: `PaneContent` tmux-session `mode` narrows to the literal
    `'terminal'`. Persisted state carrying `mode: 'stream'` is normalised to
-   `'terminal'` on rehydrate (the tab still opens as a terminal on the same
-   session) — a test feeds an old-shape blob through the persist merge and
-   asserts no throw and `mode === 'terminal'`. `PaneLayoutRenderer` /
+   `'terminal'` by **bumping the tab-store persist `version` from 2 to 3**
+   and extending `migrateTabStore` (`useTabStore.ts:32`, today only
+   `version < 2`) with a `< 3` step that walks every tab layout and rewrites
+   tmux-session panes — a plain `merge`/rehydrate hook would not run for
+   existing v2 blobs. Test: a v2 blob with one stream pane through
+   `migrateTabStore(blob, 2)` → no throw, `mode === 'terminal'`, other
+   panes untouched; plus the real-localStorage reload in §6. `PaneLayoutRenderer` /
    `SessionPaneContent` `key={pane.id}-${mode}` stays syntactically valid
    with the single value; remount behaviour is checked, not assumed.
 5. `Session` type in `host-api.ts`: drop `cc_session_id`, `cc_model`,
@@ -183,9 +206,13 @@ Order inside the PR matters; each bullet is its own commit.
 Daemon routes removed: `POST /api/sessions/{code}/handoff`,
 `POST /api/sessions/{code}/mode`, `GET /api/sessions/{code}/history`,
 `/ws/cli-bridge/{code}`, `/ws/cli-bridge-sub/{code}`, and every route the
-execution / dispatch modules registered. `pdx` subcommands after P-D.2:
-`serve hook setup token start stop status statusline-proxy peers msg`
-(`relay` gone).
+execution / dispatch modules registered. Each removed route has a
+composed-mux regression test in `cmd/pdx` (404 through the real
+`registerServeModules` chain, not just the module's own mux). `pdx`
+subcommands after P-D.2 (measured at `main.go:47-75`):
+`serve hook setup token start stop status statusline-proxy peers msg nex
+path peer-proxy version` (`relay` gone; usage string at `main.go:44`
+matches).
 
 `Session` JSON after P-D.2:
 
@@ -230,21 +257,25 @@ WS event `handoff` is never emitted. `agent.*` events unchanged.
 4. The removed routes return 404 with a Bearer token; `GET /api/sessions`
    still lists live sessions with the shape in §4 (P-D.2 checks the three
    fields are absent).
-5. Existing `~/.config/pdx/config.toml` loads without error (daemon log
+5. Every commit on the branch builds (per-commit `go build ./...` check
+   before opening the PR).
+6. Existing `~/.config/pdx/config.toml` loads without error (daemon log
    shows no config warning; `GET /api/config` — or whatever the config
    route is — no longer returns `stream` / `dispatch`).
-6. P-D.2 only: a scratch daemon opened against a copy of the live
+7. P-D.2 only: a scratch daemon opened against a copy of the live
    `meta.db` (old schema, extra columns) lists sessions and accepts
    `POST /api/sessions` — the test in §3 covers the store layer, this
    covers the wiring.
-7. Real-machine: exec pane `Hand to nex` → typewriter → `Take back` once
+8. P-D.2 only: with the P-D.2 daemon and the pre-P-D.3 SPA, open one
+   persisted `mode: 'stream'` pane — visible error state, no crash.
+9. Real-machine: exec pane `Hand to nex` → typewriter → `Take back` once
    (P-C spec §6 steps 3–4, shortened), proving the nex path never depended
    on stream.
 
 ### SPA phase (P-D.3)
 
 1. `cd spa && npx vitest run && pnpm run lint && pnpm run build` green;
-   `npx tsc --noEmit` green.
+   `npx tsc --noEmit` green on every commit of the branch.
 2. Grep guard (I4) on `spa/src`.
 3. Main checkout `git pull --ff-only` + `pnpm install`; :5174 HMR picks it
    up.
@@ -252,7 +283,9 @@ WS event `handoff` is never emitted. `agent.*` events unchanged.
    (b) a tab persisted before the change with `mode: 'stream'` (seed one in
    localStorage under the persist key before reloading) opens as a terminal;
    (c) right-click on a session pane shows `Hand to nex` and no
-   view-mode / Stream items; (d) `Hand to nex` → typewriter → `Take back`
+   view-mode / Stream items; (c') an old `/…/stream` deep link opens a
+   terminal pane; (c'') a workspace snapshot captured before the change
+   with a `mode: 'stream'` session restores as a terminal; (d) `Hand to nex` → typewriter → `Take back`
    once; (e) Host → Overview no longer shows "stream presets".
 
 ## 7. Review protocol
