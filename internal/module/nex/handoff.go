@@ -91,11 +91,20 @@ func (m *Module) applyHandoffDefaults() {
 
 // handoffRequest is the body of POST /api/sessions/{code}/nex-handoff.
 // RollbackCommand is the host's cc resume template with the session id left
-// as `{id}`; the daemon substitutes the id it read.
+// as `{id}`; the daemon substitutes the id it read. KeepSession (exec-to-
+// terminal spec §4.3) says whether the tmux session stays once the
+// execution is running; absent means true, so an old SPA keeps today's
+// behaviour.
 type handoffRequest struct {
 	ExpectedTmuxInstance string `json:"expected_tmux_instance"`
 	Profile              string `json:"profile,omitempty"`
 	RollbackCommand      string `json:"rollback_command,omitempty"`
+	KeepSession          *bool  `json:"keep_session,omitempty"`
+}
+
+// keepSession is the request's KeepSession with the default applied.
+func (r handoffRequest) keepSession() bool {
+	return r.KeepSession == nil || *r.KeepSession
 }
 
 // writeJSON writes v as the response body with the given status.
@@ -246,12 +255,40 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m.logf("nex: handoff %s → execution %s (%s, profile=%s)", code, result.ID, result.State, result.EffectiveProfile)
+	// keep_session:false (spec §4.3): once the engine has confirmed the
+	// execution running, the tmux session has nothing left in it — CC
+	// exited before the delegate, the shell is idle — so it is killed and
+	// the SPA records no origin session (the execution is later taken to a
+	// NEW terminal). A delegate that answered anything but running (queued:
+	// somebody else is launching the first turn; failed) keeps the session
+	// — "confirmed running" is the condition, and the SPA's `from` stays
+	// as today. The kill is by session id under the generation this
+	// request verified (KillSessionIfInstance, codex F4): a server that
+	// restarted during the delegate declines it, since the session this
+	// request checked died with the old server and whatever answers to its
+	// id or name now is somebody else's. A refusal and a failure are both
+	// logged and reported as kept: as far as this request knows a session
+	// is still there, so the SPA keeps its `from`.
+	kept := true
+	if !body.keepSession() && result.State == store.StateRunning {
+		killed, err := m.tmux.KillSessionIfInstance(sess.TmuxID, expected)
+		switch {
+		case err != nil:
+			m.logf("nex: handoff %s: kill-session %s (%s, keep_session=false): %v", code, sess.Name, sess.TmuxID, err)
+		case !killed:
+			m.logf("nex: handoff %s: tmux generation moved during the delegate; not killing %s (%s, keep_session=false)", code, sess.Name, sess.TmuxID)
+		default:
+			kept = false
+		}
+	}
+
+	m.logf("nex: handoff %s → execution %s (%s, profile=%s, session_kept=%v)", code, result.ID, result.State, result.EffectiveProfile, kept)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"execution_id":      result.ID,
 		"state":             string(result.State),
 		"effective_profile": result.EffectiveProfile,
 		"session_id":        owner.SessionID,
 		"cwd":               owner.Cwd,
+		"session_kept":      kept,
 	})
 }

@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,6 +55,13 @@ type handoffSessions struct {
 	mu       sync.Mutex
 	sessions map[string]*session.SessionInfo
 	tmux     *tmux.FakeExecutor
+
+	// take-to-terminal seams (take_to_terminal_test.go)
+	cwdErr      error                // ValidateCwd's answer
+	cwdChecks   []string             // ValidateCwd arguments
+	createErr   *session.CreateError // CreateSession's scripted failure
+	afterCreate func()               // runs after a successful create, before the info is returned (models a tmux restart in the window)
+	creates     []createCall         // CreateSession arguments
 }
 
 func (f *handoffSessions) ListSessions() ([]session.SessionInfo, error) { return nil, nil }
@@ -69,6 +77,73 @@ func (f *handoffSessions) GetSession(code string) (*session.SessionInfo, error) 
 func (f *handoffSessions) UpdateMeta(string, session.MetaUpdate) error                 { return nil }
 func (f *handoffSessions) HandleTerminalWS(http.ResponseWriter, *http.Request, string) {}
 func (f *handoffSessions) TmuxInstance() string                                        { return f.tmux.Instance() }
+
+// SessionExists reads the fake tmux server, as the real provider does.
+func (f *handoffSessions) SessionExists(name string) bool { return f.tmux.HasSession(name) }
+
+// ValidateCwd answers cwdErr (nil = every cwd is fine) and records the call.
+func (f *handoffSessions) ValidateCwd(cwd string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cwdChecks = append(f.cwdChecks, cwd)
+	return f.cwdErr
+}
+
+// CreateSession models the real one over the fake tmux: HasSession →
+// NewSession → look the session up → register it under a fresh code. A
+// scripted createErr is returned instead (after NewSession when its
+// SessionAlive() says so, so the tmux side matches the error's claim).
+func (f *handoffSessions) CreateSession(name, cwd string) (*session.SessionInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.creates = append(f.creates, createCall{name, cwd})
+	if f.tmux.HasSession(name) {
+		return nil, &session.CreateError{Stage: session.CreateStageExists, Name: name, Err: session.ErrSessionExists}
+	}
+	if f.createErr != nil && !f.createErr.SessionAlive() {
+		return nil, f.createErr
+	}
+	if err := f.tmux.NewSession(name, cwd); err != nil {
+		return nil, &session.CreateError{Stage: session.CreateStageNewSession, Name: name, Err: err}
+	}
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	list, _ := f.tmux.ListSessions()
+	for _, s := range list {
+		if s.Name != name {
+			continue
+		}
+		code, err := session.EncodeSessionID(s.ID)
+		if err != nil {
+			return nil, &session.CreateError{Stage: session.CreateStageEncode, Name: name, Err: err}
+		}
+		info := &session.SessionInfo{Code: code, TmuxID: s.ID, Name: s.Name, Exists: true, Mode: "terminal", Cwd: s.Cwd, TmuxInstance: f.tmux.Instance()}
+		f.sessions[code] = info
+		cp := *info
+		if f.afterCreate != nil {
+			f.afterCreate()
+		}
+		return &cp, nil
+	}
+	return nil, &session.CreateError{Stage: session.CreateStageList, Name: name, Err: errors.New("session created but not found")}
+}
+
+// Creates returns every CreateSession call so far.
+func (f *handoffSessions) Creates() []createCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]createCall(nil), f.creates...)
+}
+
+// CwdChecks returns every ValidateCwd argument so far.
+func (f *handoffSessions) CwdChecks() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.cwdChecks...)
+}
+
+type createCall struct{ Name, Cwd string }
 
 // stubOwnerResolver answers ResolveSessionOwner with a fixed verdict; onResolve
 // (when set) runs before the answer, with the fake tmux available to mutate —
@@ -235,6 +310,7 @@ type fakeNexService struct {
 	archiveReqs    []execution.ArchiveRequest
 	archiveCtxErrs []error // ctx.Err() as seen on entry to each Archive
 	archiveErr     error
+	unarchiveErr   error // answer to an Archive with Archived:false (archiveErr answers both when set)
 }
 
 type releaseCall struct{ ExecutionID, LeaseID, PrincipalID string }
@@ -243,6 +319,22 @@ func (f *fakeNexService) record(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, name)
+}
+
+// record calls "archive" for every Archive; ArchiveCalls tells the two
+// directions apart: "archive" for Archived:true, "unarchive" for false.
+func (f *fakeNexService) ArchiveCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, r := range f.archiveReqs {
+		if r.Archived {
+			out = append(out, "archive")
+		} else {
+			out = append(out, "unarchive")
+		}
+	}
+	return out
 }
 
 func (f *fakeNexService) Calls() []string {
@@ -311,7 +403,13 @@ func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveReque
 	defer f.mu.Unlock()
 	f.archiveReqs = append(f.archiveReqs, req)
 	f.archiveCtxErrs = append(f.archiveCtxErrs, ctx.Err())
-	return f.archiveErr
+	if f.archiveErr != nil {
+		return f.archiveErr
+	}
+	if !req.Archived {
+		return f.unarchiveErr
+	}
+	return nil
 }
 
 var _ nexService = (*fakeNexService)(nil)

@@ -15,6 +15,7 @@ import (
 	"lab.protype.tw/wake/nexen/execution"
 	"lab.protype.tw/wake/nexen/store"
 
+	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -151,64 +152,30 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if exec.State == store.StateRunning {
-		leaseID := body.LeaseID
-		if leaseID == "" {
-			lease, err := m.acquireLease(parent, execID, principal)
-			if err != nil {
-				if errors.Is(err, store.ErrLeaseHeld) {
-					writeHandoffError(w, http.StatusConflict, "held_by", "execution lease is held by "+exec.LeasePrincipalID,
-						map[string]any{"principal": exec.LeasePrincipalID})
-					return
-				}
-				writeHandoffError(w, http.StatusInternalServerError, "lease_error", "acquiring lease: "+err.Error(), nil)
-				return
-			}
-			leaseID = lease.ID
-			// Released on every path out of here — unconfirmed, failed,
-			// store error, success — so the daemon never sits on a lease
-			// the SPA would then have to wait out. A caller-provided lease
-			// stays the caller's. Fresh context: the interrupt's may have
-			// expired, and that must not stop the release.
-			defer func() {
-				if err := m.releaseLease(parent, execID, leaseID, principal); err != nil {
-					m.logf("nex: takeback %s: releasing lease %s on %s: %v", code, leaseID, execID, err)
-				}
-			}()
-		}
-
-		_, err = m.interruptExecution(parent, execution.InterruptRequest{ExecutionID: execID, LeaseID: leaseID, PrincipalID: principal})
-		switch {
-		case err == nil, errors.Is(err, execution.ErrNoLiveTurn):
-			// Idle by the time the signal went out: nothing to stop.
-		case errors.Is(err, execution.ErrInterruptUnconfirmed):
-			writeHandoffError(w, http.StatusGatewayTimeout, "interrupt_unconfirmed", "interrupt not confirmed: "+err.Error(), nil)
-			return
-		default:
-			writeHandoffError(w, http.StatusInternalServerError, "interrupt_failed", "interrupting execution: "+err.Error(), nil)
-			return
-		}
-
-		if exec, err = m.getExecution(parent, execID); err != nil {
-			writeHandoffError(w, http.StatusInternalServerError, "store_error", "re-reading execution: "+err.Error(), nil)
-			return
-		}
-	}
-
-	if !settled(exec.State) {
-		writeHandoffError(w, http.StatusConflict, "execution_not_settled", "execution is "+string(exec.State)+", not settled",
-			map[string]any{"state": string(exec.State)})
+	// Step 1c: the execution lock (codex F1). Take-to-terminal names an
+	// execution by path and holds only this key; the session lock above
+	// does not exclude it. Both handlers settle → resume → archive the
+	// same row, so without this a bound execution could be interrupted
+	// and resumed twice — into this pane and into a fresh session — at
+	// once. Order is fixed: session lock, then execution lock (the other
+	// handler takes only the latter), so the two cannot deadlock.
+	execLock := takeToTerminalLockKey(execID)
+	if !m.locks.TryLock(execLock) {
+		writeHandoffError(w, http.StatusConflict, "takeback_in_progress", "a take-back is already in progress for this execution",
+			map[string]any{"execution_id": execID})
 		return
 	}
+	defer m.locks.Unlock(execLock)
 
-	sid := exec.SessionID
-	if sid == "" {
-		sid = exec.ResumeSessionID
-	}
-	if sid == "" {
-		writeHandoffError(w, http.StatusConflict, "no_session_id", "execution has no Claude Code session id to resume", nil)
+	exec, sid, release, herr := m.settleForResume(parent, exec, body.LeaseID, principal)
+	if herr != nil {
+		herr.write(w)
 		return
 	}
+	// Released on the way out — after the archive, as the sequence has
+	// always done. A caller-provided lease stays the caller's (release is
+	// then a no-op).
+	defer release()
 
 	// Last look before a key goes out, lock still held: the store read and
 	// the interrupt above are a window in which the user can resume by
@@ -221,21 +188,8 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys := strings.ReplaceAll(body.ResumeCommand, "{id}", sid) + "\n"
-	sent, err := m.tmux.SendKeysIfInstanceTarget(sess.TmuxID, paneWindow, expected, keys)
-	if err != nil {
-		writeHandoffError(w, http.StatusInternalServerError, "send_failed", "sending resume command: "+err.Error(),
-			map[string]any{"session_id": sid})
-		return
-	}
-	if !sent {
-		writeHandoffError(w, http.StatusConflict, "tmux_instance_mismatch", "tmux server restarted before the resume command was sent",
-			map[string]any{"session_id": sid})
-		return
-	}
-	if !m.waitForCC(target) {
-		writeHandoffError(w, http.StatusGatewayTimeout, "cc_start_timeout", "Claude Code did not start in the pane",
-			map[string]any{"session_id": sid})
+	if herr := m.resumeInWindow(sess, expected, body.ResumeCommand, sid); herr != nil {
+		herr.write(w)
 		return
 	}
 
@@ -249,6 +203,123 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 
 	m.logf("nex: takeback %s ← execution %s (session %s, archived=%v)", code, execID, sid, archived)
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": sid, "archived": archived})
+}
+
+// handoffError is a step's structured failure — status, code, message and
+// the extra fields the step contributes — for the handler to write with
+// the shape writeHandoffError has always produced.
+type handoffError struct {
+	status int
+	code   string
+	msg    string
+	detail map[string]any
+}
+
+func (e *handoffError) write(w http.ResponseWriter) {
+	writeHandoffError(w, e.status, e.code, e.msg, e.detail)
+}
+
+// settleForResume brings an already-read execution to a state a terminal
+// may resume from (exec-to-terminal spec §4.4): a running one is
+// interrupted under a lease — the caller's, or one acquired here as
+// principal — and re-read; the result must be settled and carry a session
+// id (SessionID, else ResumeSessionID). Shared by the session-bound
+// take-back and take-to-terminal, which each run their own preflights
+// before calling it.
+//
+// Lease contract: a lease acquired here is released — under a fresh
+// detached context, so an expired interrupt budget cannot take the release
+// down with it — before any error return, and on success handed back as
+// release for the caller to defer (so it runs after the archive, as the
+// sequence always did). A caller-provided lease is never released; release
+// is then a no-op. On error, release is nil and sid empty.
+func (m *Module) settleForResume(parent context.Context, exec store.Execution, leaseID, principal string) (store.Execution, string, func(), *handoffError) {
+	execID := exec.ID
+	release := func() {}
+
+	if exec.State == store.StateRunning {
+		if leaseID == "" {
+			lease, err := m.acquireLease(parent, execID, principal)
+			if err != nil {
+				if errors.Is(err, store.ErrLeaseHeld) {
+					return exec, "", nil, &handoffError{http.StatusConflict, "held_by", "execution lease is held by " + exec.LeasePrincipalID,
+						map[string]any{"principal": exec.LeasePrincipalID}}
+				}
+				return exec, "", nil, &handoffError{http.StatusInternalServerError, "lease_error", "acquiring lease: " + err.Error(), nil}
+			}
+			leaseID = lease.ID
+			// Released on every path out of here — unconfirmed, failed,
+			// store error, success — so the daemon never sits on a lease
+			// the SPA would then have to wait out.
+			release = func() {
+				if err := m.releaseLease(parent, execID, leaseID, principal); err != nil {
+					m.logf("nex: settle %s: releasing lease %s: %v", execID, leaseID, err)
+				}
+			}
+		}
+		fail := func(h *handoffError) (store.Execution, string, func(), *handoffError) {
+			release()
+			return exec, "", nil, h
+		}
+
+		_, err := m.interruptExecution(parent, execution.InterruptRequest{ExecutionID: execID, LeaseID: leaseID, PrincipalID: principal})
+		switch {
+		case err == nil, errors.Is(err, execution.ErrNoLiveTurn):
+			// Idle by the time the signal went out: nothing to stop.
+		case errors.Is(err, execution.ErrInterruptUnconfirmed):
+			return fail(&handoffError{http.StatusGatewayTimeout, "interrupt_unconfirmed", "interrupt not confirmed: " + err.Error(), nil})
+		default:
+			return fail(&handoffError{http.StatusInternalServerError, "interrupt_failed", "interrupting execution: " + err.Error(), nil})
+		}
+
+		if exec, err = m.getExecution(parent, execID); err != nil {
+			return fail(&handoffError{http.StatusInternalServerError, "store_error", "re-reading execution: " + err.Error(), nil})
+		}
+	}
+	fail := func(h *handoffError) (store.Execution, string, func(), *handoffError) {
+		release()
+		return exec, "", nil, h
+	}
+
+	if !settled(exec.State) {
+		return fail(&handoffError{http.StatusConflict, "execution_not_settled", "execution is " + string(exec.State) + ", not settled",
+			map[string]any{"state": string(exec.State)}})
+	}
+
+	sid := exec.SessionID
+	if sid == "" {
+		sid = exec.ResumeSessionID
+	}
+	if sid == "" {
+		return fail(&handoffError{http.StatusConflict, "no_session_id", "execution has no Claude Code session id to resume", nil})
+	}
+
+	return exec, sid, release, nil
+}
+
+// resumeInWindow types the rendered resume command into the session's
+// window 0 — by session id, guarded by the generation the caller expects —
+// and waits for Claude Code to come up there (waitForCC). The three
+// failures are the take-back's: send_failed, tmux_instance_mismatch (the
+// server moved between the caller's sample and the send; nothing was
+// delivered), cc_start_timeout (keys went out, CC never appeared). Each
+// carries the session id so the caller can offer a manual resume.
+func (m *Module) resumeInWindow(sess *session.SessionInfo, expected, resumeCommand, sid string) *handoffError {
+	keys := strings.ReplaceAll(resumeCommand, "{id}", sid) + "\n"
+	sent, err := m.tmux.SendKeysIfInstanceTarget(sess.TmuxID, paneWindow, expected, keys)
+	if err != nil {
+		return &handoffError{http.StatusInternalServerError, "send_failed", "sending resume command: " + err.Error(),
+			map[string]any{"session_id": sid}}
+	}
+	if !sent {
+		return &handoffError{http.StatusConflict, "tmux_instance_mismatch", "tmux server restarted before the resume command was sent",
+			map[string]any{"session_id": sid}}
+	}
+	if !m.waitForCC(paneTarget(sess)) {
+		return &handoffError{http.StatusGatewayTimeout, "cc_start_timeout", "Claude Code did not start in the pane",
+			map[string]any{"session_id": sid}}
+	}
+	return nil
 }
 
 // The engine calls of the take-back, each under its own detached, bounded

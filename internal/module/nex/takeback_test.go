@@ -641,3 +641,122 @@ func TestTakebackArchiveFailureStill200(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, map[string]any{"session_id": tbSessionID, "archived": false}, body)
 }
+
+// --- execution-level exclusion (codex F1) ---
+
+// The session-bound take-back and take-to-terminal can name the same
+// execution: the former by body, the latter by path. The session lock
+// alone does not exclude them (take-to-terminal holds none), so the
+// take-back also takes the execution lock — after the row is read and
+// checked, before any lease or interrupt, always in the order session →
+// execution so the two handlers cannot deadlock.
+
+// A take-back for an execution whose lock is held answers 409
+// takeback_in_progress without a lease, an interrupt or a key.
+func TestTakeback409ExecutionLockHeld(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	require.True(t, env.m.locks.TryLock("exec:"+tbExecID), "held as a take-to-terminal would hold it")
+	defer env.m.locks.Unlock("exec:" + tbExecID)
+
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "takeback_in_progress", body["code"])
+	assert.Empty(t, env.svc.Calls(), "no lease, no interrupt")
+	assert.Empty(t, env.tmux.RawKeysSent(), "no keys")
+	env.assertNoArchive(t)
+
+	// The session lock was released on the way out.
+	assert.True(t, env.m.locks.TryLock(hoCode))
+	env.m.locks.Unlock(hoCode)
+}
+
+// ttExecBound is a row that both handlers accept: bound to hoCode (the
+// take-back's check) and a claude execution with a cwd (take-to-terminal's).
+func ttExecBound(state store.State) store.Execution {
+	e := boundExec(state)
+	e.Provider = "claude"
+	e.Cwd = ttCwd
+	e.SessionID = tbSessionID
+	return e
+}
+
+// Take-to-terminal is parked in the interrupt of execution X; a take-back
+// naming X arrives. It is refused by the execution lock: one interrupt in
+// total, one set of keys in total, and the parked call completes normally
+// once released.
+func TestTakebackRefusedWhileTakeToTerminalHoldsTheExecution(t *testing.T) {
+	env := &ttEnv{newTakebackEnv(t)}
+	running := ttExecBound(store.StateRunning)
+	running.LeaseID = "lease-other"
+	env.store.results = []getResult{{exec: running}, {exec: ttExecBound(store.StateIdle)}}
+	reviveCCAfterKeysAt(env.handoffEnv, ttTarget)
+	env.svc.interruptGate = make(chan struct{})
+
+	type result struct {
+		status int
+		body   map[string]any
+	}
+	first := make(chan result, 1)
+	go func() {
+		s, b := env.post(t, tbExecID, ttBody())
+		first <- result{s, b}
+	}()
+	require.Eventually(t, func() bool { c := env.svc.Calls(); return len(c) >= 2 && c[1] == "interrupt" },
+		3*time.Second, 5*time.Millisecond, "first request never reached the interrupt")
+
+	status, body := env.takebackEnv.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "takeback_in_progress", body["code"])
+	assert.Equal(t, []string{"acquire", "interrupt"}, env.svc.Calls(), "the second request called nothing on the service")
+	assert.Empty(t, env.tmux.RawKeysSent(), "nothing sent yet by anyone")
+
+	close(env.svc.interruptGate)
+	r := <-first
+	require.Equal(t, http.StatusOK, r.status, "%v", r.body)
+	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls())
+	assert.Len(t, env.tmux.RawKeysSent(), 1, "one resume in total")
+
+	// Both locks released.
+	assert.True(t, env.m.locks.TryLock("exec:"+tbExecID))
+	assert.True(t, env.m.locks.TryLock(hoCode))
+}
+
+// The mirror: the take-back is parked in the interrupt of X; a
+// take-to-terminal for X is refused by the same lock.
+func TestTakeToTerminalRefusedWhileTakebackHoldsTheExecution(t *testing.T) {
+	env := &ttEnv{newTakebackEnv(t)}
+	running := ttExecBound(store.StateRunning)
+	running.LeaseID = "lease-other"
+	env.store.results = []getResult{{exec: running}, {exec: ttExecBound(store.StateIdle)}}
+	env.svc.interruptGate = make(chan struct{})
+
+	type result struct {
+		status int
+		body   map[string]any
+	}
+	first := make(chan result, 1)
+	go func() {
+		s, b := env.takebackEnv.post(t, hoCode, takebackBody())
+		first <- result{s, b}
+	}()
+	require.Eventually(t, func() bool { c := env.svc.Calls(); return len(c) >= 2 && c[1] == "interrupt" },
+		3*time.Second, 5*time.Millisecond, "first request never reached the interrupt")
+
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "takeback_in_progress", body["code"])
+	assert.Equal(t, []string{"acquire", "interrupt"}, env.svc.Calls())
+	assert.Empty(t, env.sessions.Creates(), "no session created")
+	assert.Empty(t, env.tmux.RawKeysSent())
+
+	close(env.svc.interruptGate)
+	r := <-first
+	require.Equal(t, http.StatusOK, r.status, "%v", r.body)
+	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls())
+	assert.Len(t, env.tmux.RawKeysSent(), 1, "one resume in total, into the bound session's pane")
+	assert.Equal(t, hoTmuxID+":0", env.tmux.RawKeysSent()[0].Target)
+
+	assert.True(t, env.m.locks.TryLock("exec:"+tbExecID))
+	assert.True(t, env.m.locks.TryLock(hoCode))
+}

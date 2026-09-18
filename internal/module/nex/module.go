@@ -306,6 +306,9 @@ func (m *Module) softFail(err error) error {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{code}/nex-handoff", m.handleNexHandoff)
 	mux.HandleFunc("POST /api/sessions/{code}/nex-takeback", m.handleNexTakeback)
+	// Under RoutePrefix but purdex orchestration, not an engine route: a
+	// more specific pattern than RoutePrefix+"/", so it wins either way.
+	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/take-to-terminal", m.handleTakeToTerminal)
 	if m.initErr != nil {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
