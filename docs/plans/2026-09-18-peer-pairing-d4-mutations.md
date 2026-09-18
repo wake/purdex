@@ -89,3 +89,13 @@ Every mutation was applied as one edit (Edit tool or a literal `sed -i ''`),
 run against only the named test(s), and undone by the reverse edit; the tree
 was verified clean (`git status --short` → only `.playwright-cli/`) after each
 undo, and the five test files were run once more at the end: 193/193 green.
+
+## Addendum (HEAD after `72ce347d`): M-A1 closed
+
+The `statefulApi` fixture in `peer-pairing-load.test.ts` now logs two markers per dial: `verify:<h>:<a>` when the dial is **sent** (kept for the order assertions) and `dialled:<h>:<a>` only once it has **settled**, one macrotask later; the stateful `list` answers flip on `dialled:`, not `verify:`. Re-run of M-A1 (`await Promise.all(dials)` → `const MUT_dials = Promise.all(dials)` at line 191, `await MUT_dials` inserted before the final `return { ...snap }`):
+
+| # | Mutation | File | Command | Result | Failing assertion |
+|---|---|---|---|---|---|
+| M-A1′ | as M-A1 (re-read concurrent with the dials) | `spa/src/lib/peer-pairing-load.ts` | `npx vitest run src/lib/peer-pairing-load.test.ts -t 'after BOTH dials settle'` | **FAIL** | `AssertionError: expected 4 to be greater than 6` — `calls.lastIndexOf('list:hM')` is no longer after `calls.indexOf('dialled:hA:mini-lab')` |
+
+Reverted; 37/37 green; `git status --short` shows only the test file (this addendum's change) before commit.
