@@ -67,20 +67,54 @@ export function normalizeHostColor(v: string): string | null {
 }
 
 /**
- * Drops present-but-invalid identity keys (`color`, `icon`, `iconWeight`) from an
- * untrusted host config (sync payload, persisted state). Returns the same object
- * when every present key is valid.
+ * Returns a cleaned `colors` map, or `undefined` when nothing valid survives.
+ * `same` is true when the input can be kept by reference.
+ */
+function sanitizeHostColors(v: unknown): { value: HostConfig['colors']; same: boolean } {
+  if (!isPlainObject(v)) return { value: undefined, same: false }
+  let same = true
+  const out: Partial<Record<HostColorMode, HostColorSet>> = {}
+  for (const [mode, rawSet] of Object.entries(v)) {
+    if (!isHostColorMode(mode) || !isPlainObject(rawSet) || !isHostColorLayer(rawSet.main, { requireColor: true })) {
+      same = false
+      continue
+    }
+    const cleaned: HostColorSet = { main: rawSet.main as HostColorLayer & { color: string } }
+    let setSame = true
+    for (const layer of ['middle', 'light'] as const) {
+      if (!(layer in rawSet)) continue
+      if (isHostColorLayer(rawSet[layer])) cleaned[layer] = rawSet[layer]
+      else setSame = false
+    }
+    if (Object.keys(rawSet).some((k) => k !== 'main' && k !== 'middle' && k !== 'light')) setSame = false
+    out[mode] = setSame ? (rawSet as unknown as HostColorSet) : cleaned
+    if (!setSame) same = false
+  }
+  if (Object.keys(out).length === 0) return { value: undefined, same: false }
+  return { value: out, same }
+}
+
+/**
+ * Drops present-but-invalid identity keys (`color`, `colors`, `icon`, `iconWeight`)
+ * from an untrusted host config (sync payload, persisted state). Returns the same
+ * object when every present key is valid.
  */
 export function sanitizeHostConfig(host: HostConfig): HostConfig {
   const badColor = 'color' in host && !isValidHostColor(host.color)
   const badIcon = 'icon' in host && !isPhosphorIconName(host.icon)
   const badWeight = 'iconWeight' in host && !isIconWeight(host.iconWeight)
-  if (!badColor && !badIcon && !badWeight) return host
+  const colors = 'colors' in host ? sanitizeHostColors(host.colors) : null
+  const badColors = colors !== null && !colors.same
+  if (!badColor && !badIcon && !badWeight && !badColors) return host
 
   const cleaned = { ...host }
   if (badColor) delete cleaned.color
   if (badIcon) delete cleaned.icon
   if (badWeight) delete cleaned.iconWeight
+  if (badColors) {
+    if (colors.value === undefined) delete cleaned.colors
+    else cleaned.colors = colors.value
+  }
   return cleaned
 }
 
@@ -102,14 +136,6 @@ export function hasHostBadge<T extends { color: string | null; icon?: string | u
 /** hostId of the first tmux-session pane in pre-order, or null. */
 export function getTabHostId(tab: Tab): string | null {
   return collectTmuxSessionHostIds(tab.layout)[0] ?? null
-}
-
-/** Validated color of the tab's host, or null when unresolvable / invalid. */
-export function resolveTabHostColor(tab: Tab, hosts: Record<string, HostConfig>): string | null {
-  const hostId = getTabHostId(tab)
-  if (!hostId) return null
-  const color = hosts[hostId]?.color
-  return isValidHostColor(color) ? color : null
 }
 
 /* ─── Per-mode tri-color (spec 2026-09-18 host-color-modes §4.1) ─── */

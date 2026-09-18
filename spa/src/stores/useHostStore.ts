@@ -7,6 +7,7 @@ import { isIconWeight, isPhosphorIconName, isValidHostColor, sanitizeHostConfig 
 // import to avoid a require cycle.
 import type { NexInfo } from '../lib/host-api'
 import type { IconWeight } from '../types/tab'
+import type { HostColorMode, HostColorSet } from '../lib/host-color'
 
 /* ─── Interfaces ─── */
 
@@ -21,11 +22,17 @@ export interface HostConfig {
   token?: string | null
   order: number
   /**
-   * Per-host mark color, strict `#rrggbb` (see `isValidHostColor`). Absent means
-   * "no color" (the key is removed, never set to null). Synced with the host
-   * config; always re-validated with `isValidHostColor` before reaching CSS.
+   * @deprecated Legacy single color; read-only (spec D10). New code writes `colors`.
+   * Strict `#rrggbb` (see `isValidHostColor`). Absent means "no color" (the key is
+   * removed, never set to null). Synced with the host config; always re-validated
+   * with `isValidHostColor` before reaching CSS.
    */
   color?: string
+  /**
+   * Per-mode tri-color for the host badge (spec 2026-09-18 host-color-modes §4.1).
+   * Absent mode → inherits `console`; absent `console` → legacy `color`, then "no color".
+   */
+  colors?: Partial<Record<HostColorMode, HostColorSet>>
   /**
    * Phosphor icon name shown in the host badge, e.g. `'Laptop'`. Absent means
    * "use `DEFAULT_HOST_ICON`" (the key is removed, never set to null).

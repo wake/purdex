@@ -521,6 +521,60 @@ describe('hostsContributor.deserialize (hostile color payloads)', () => {
   })
 })
 
+describe('hostsContributor.deserialize (hostile colors payloads)', () => {
+  const VALID = { console: { main: { color: '#3b82f6', alpha: 100 } } }
+  const HOSTILE: unknown[] = ['x', 42, null, [], { shell: VALID.console }, { console: { main: { alpha: 100 } } }]
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: { a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, token: 'TOK', order: 0 } },
+      hostOrder: ['a'],
+      activeHostId: 'a',
+    })
+  })
+
+  function payload(colors: unknown): FullPayload {
+    return {
+      version: 1,
+      data: {
+        hosts: {
+          a: { id: 'a', name: 'a', ip: '10.0.0.1', port: 7860, order: 0, colors },
+          b: { id: 'b', name: 'b', ip: '10.0.0.2', port: 7860, order: 1, colors: VALID },
+        },
+        hostOrder: ['a', 'b'],
+        activeHostId: 'a',
+      },
+    }
+  }
+
+  it.each(HOSTILE)('full-replace strips hostile colors %j, keeps the valid map and token contract', (bad) => {
+    createHostsContributor().deserialize(payload(bad), { type: 'full-replace' })
+    const s = useHostStore.getState()
+    expect('colors' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.colors).toEqual(VALID)
+    expect(s.hosts.a.token).toBe('TOK')
+    expect(s.hosts.b.token).toBeNull()
+  })
+
+  it.each(HOSTILE)('field-merge strips hostile colors %j, keeps the valid map and token contract', (bad) => {
+    createHostsContributor().deserialize(payload(bad), {
+      type: 'field-merge',
+      resolved: { hosts: 'remote', hostOrder: 'remote', activeHostId: 'remote' },
+    })
+    const s = useHostStore.getState()
+    expect('colors' in s.hosts.a).toBe(false)
+    expect(s.hosts.b.colors).toEqual(VALID)
+  })
+
+  it('a partially bad set keeps its valid layers after full-replace', () => {
+    createHostsContributor().deserialize(
+      payload({ console: { main: { color: '#3b82f6', alpha: 100 }, middle: { alpha: 500 }, light: { alpha: 10 } } }),
+      { type: 'full-replace' },
+    )
+    expect(useHostStore.getState().hosts.a.colors).toEqual({ console: { main: { color: '#3b82f6', alpha: 100 }, light: { alpha: 10 } } })
+  })
+})
+
 describe('hostsContributor.deserialize (hostile icon payloads)', () => {
   beforeEach(() => {
     useHostStore.setState({
