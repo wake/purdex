@@ -127,16 +127,27 @@ describe('FloatingPanel', () => {
     expect(panel.style.position).toBe('fixed')
   })
 
-  it('positions below the anchor rect, clamped to the viewport', () => {
+  it('positions below the anchor rect, clamping only the left edge to the viewport', () => {
     const { unmount } = render(<Harness onClose={() => {}} />)
     unmount()
     // re-render with a stubbed anchor rect: stub before the panel mounts by rendering closed first
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
-    rect(screen.getByTestId('anchor'), { left: 990, top: 790, bottom: 800, right: 1000 })
+    // Near the right edge (exercises left clamping) but not near the bottom, so
+    // placement stays the plain "below the anchor" case, not the near-bottom one.
+    rect(screen.getByTestId('anchor'), { left: 990, top: 50, bottom: 70, right: 1000 })
     rerender(<Harness onClose={() => {}} open />)
     const panel = screen.getByTestId('floating-panel')
     expect(parseInt(panel.style.left)).toBeLessThanOrEqual(1000 - 320 - 4)
-    expect(parseInt(panel.style.top)).toBeLessThanOrEqual(800 - 4)
+    expect(parseInt(panel.style.top)).toBe(70 + 4)
+  })
+
+  it('always opens below the anchor, even when the anchor sits near the bottom of the viewport', () => {
+    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
+    rect(screen.getByTestId('anchor'), { bottom: 700 })
+    rerender(<Harness onClose={() => {}} open />)
+    const panel = screen.getByTestId('floating-panel')
+    expect(parseInt(panel.style.top)).toBe(704)
+    expect(panel.style.maxHeight).toBe('92px')
   })
 
   it('closes on mousedown outside, not on mousedown inside or on the anchor', () => {
@@ -237,14 +248,14 @@ describe('FloatingPanel', () => {
     expect(panel.style.maxHeight).toBe('242px')
   })
 
-  it('places the panel below the Electron title bar even when the anchor sits near the bottom of a short viewport', () => {
+  it('still opens below the anchor under Electron even when that pushes past a short viewport, never above the title bar', () => {
     mockElectron(true)
     Object.defineProperty(window, 'innerHeight', { value: 40, configurable: true })
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
     rect(screen.getByTestId('anchor'), { top: 38, bottom: 40, left: 10, right: 50 })
     rerender(<Harness onClose={() => {}} open />)
     const panel = screen.getByTestId('floating-panel')
-    expect(parseInt(panel.style.top)).toBe(36)
+    expect(parseInt(panel.style.top)).toBe(40 + 4)
     expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(36)
   })
 
@@ -310,6 +321,21 @@ describe('FloatingPanel', () => {
     fireEvent(window, new Event('resize'))
     expect(parseInt(panel.style.left)).toBeLessThanOrEqual(300 - 40)
     expect(parseInt(panel.style.top)).toBeLessThanOrEqual(200 - 40)
+  })
+
+  it('re-derives maxHeight from the dragged top on resize, not from the topInset', () => {
+    render(<Harness onClose={() => {}} />)
+    const panel = screen.getByTestId('floating-panel')
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    const top0 = parseInt(panel.style.top)
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: 300 - top0, pointerId: 1 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(300)
+    fireEvent(window, new Event('resize'))
+    expect(panel.style.maxHeight).toBe('496px')
   })
 
   it('does not re-anchor on scroll once the panel has been dragged', () => {
