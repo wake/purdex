@@ -61,8 +61,7 @@ func realAssemble(ctx context.Context, opts nexen.Options) (engine, error) {
 // agent package exports no constant for it.
 const proberKey = "agent.prober"
 
-// livenessProber is the slice of *probe.Prober the handoff needs (the same
-// narrow view the stream module takes).
+// livenessProber is the slice of *probe.Prober the handoff needs.
 type livenessProber interface {
 	IsAliveFor(agentType, target string) bool
 	CheckReadiness(agentType, target string) (probe.ReadinessResult, bool)
@@ -232,9 +231,9 @@ func (m *Module) resolveProviders(c *core.Core) error {
 		return fmt.Errorf("service %q does not implement session.SessionProvider (%T)", session.RegistryKey, svc)
 	}
 
-	// The daemon's one handoff lock instance (session module's), shared
-	// with the stream module's legacy /handoff: a private lock here would
-	// let the two run on the same session at once.
+	// The daemon's one handoff lock instance (session module's). It is
+	// registry-owned rather than private so a second handoff path (there
+	// was one until P-D.2) could never run on the same session at once.
 	if svc, ok = c.Registry.Get(session.HandoffLocksKey); !ok {
 		return fmt.Errorf("service %q not registered", session.HandoffLocksKey)
 	}

@@ -41,21 +41,14 @@ type SessionInfo struct {
 	TmuxInstance string `json:"tmux_instance"`
 
 	// Meta cache (stored in DB)
-	Mode        string `json:"mode"`
-	CCSessionID string `json:"cc_session_id,omitempty"`
-	CCModel     string `json:"cc_model,omitempty"`
-	Cwd         string `json:"cwd,omitempty"`
-
-	// Runtime state (not stored)
-	HasRelay bool `json:"has_relay"`
+	Mode string `json:"mode"`
+	Cwd  string `json:"cwd,omitempty"`
 }
 
 // MetaUpdate supports partial meta updates. Nil = no change.
 type MetaUpdate struct {
-	Mode        *string
-	CCSessionID *string
-	CCModel     *string
-	Cwd         *string
+	Mode *string
+	Cwd  *string
 }
 
 // RegistryKey is the service registry key for SessionProvider.

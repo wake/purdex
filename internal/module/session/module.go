@@ -72,9 +72,8 @@ func (m *SessionModule) Init(c *core.Core) error {
 	m.core = c
 	m.tmux = c.Tmux
 	c.Registry.Register(RegistryKey, SessionProvider(m))
-	// One handoff lock instance for the daemon (HandoffLocksKey): the
-	// stream and nex modules both depend on "session", so it exists before
-	// either Init reads it.
+	// One handoff lock instance for the daemon (HandoffLocksKey): the nex
+	// module depends on "session", so it exists before its Init reads it.
 	c.Registry.Register(HandoffLocksKey, NewHandoffLocks())
 	return nil
 }
@@ -87,7 +86,6 @@ func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions", m.handleCreate)
 	mux.HandleFunc("PATCH /api/sessions/{code}", m.handleRename)
 	mux.HandleFunc("DELETE /api/sessions/{code}", m.handleDelete)
-	mux.HandleFunc("POST /api/sessions/{code}/mode", m.handleSwitchMode)
 	mux.HandleFunc("POST /api/sessions/{code}/send-keys", m.handleSendKeys)
 	mux.HandleFunc("/ws/terminal/{code}", m.handleTerminalWS)
 	mux.HandleFunc("POST /api/shell/resolve-command", m.handleShellResolveCommand)

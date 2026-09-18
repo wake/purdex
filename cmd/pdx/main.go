@@ -28,9 +28,7 @@ import (
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/module/session"
-	"github.com/wake/purdex/internal/module/stream"
 	syncmod "github.com/wake/purdex/internal/module/sync"
-	"github.com/wake/purdex/internal/relay"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 	"github.com/wake/purdex/internal/tmuxenv"
@@ -39,15 +37,13 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, relay, hook, setup, token, peers, msg, nex, path, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, nex, path, version\n")
 		os.Exit(1)
 	}
 
 	switch os.Args[1] {
 	case "serve":
 		runServe(os.Args[2:])
-	case "relay":
-		runRelay(os.Args[2:])
 	case "hook":
 		runHook(os.Args[2:])
 	case "setup":
@@ -266,7 +262,6 @@ func runServe(args []string) {
 
 func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *store.AgentEventStore) error {
 	c.AddModule(session.NewSessionModule(meta))
-	c.AddModule(stream.New())
 	agentMod, err := agent.New(agentEvents)
 	if err != nil {
 		return err
@@ -301,42 +296,4 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	}
 
 	return nil
-}
-
-func runRelay(args []string) {
-	fs := flag.NewFlagSet("relay", flag.ExitOnError)
-	session := fs.String("session", "", "session code (required)")
-	daemon := fs.String("daemon", "ws://127.0.0.1:7860", "daemon WebSocket address")
-	tokenFile := fs.String("token-file", "", "path to file containing auth token (read and deleted)")
-	fs.Parse(args)
-
-	if *session == "" {
-		fmt.Fprintln(os.Stderr, "relay: --session is required")
-		os.Exit(1)
-	}
-
-	cmdArgs := fs.Args()
-	if len(cmdArgs) == 0 {
-		fmt.Fprintln(os.Stderr, "relay: no command specified after flags")
-		os.Exit(1)
-	}
-
-	token := os.Getenv("PDX_TOKEN")
-	wsURL := fmt.Sprintf("%s/ws/cli-bridge/%s", *daemon, *session)
-
-	r := &relay.Relay{
-		SessionCode: *session,
-		DaemonURL:   wsURL,
-		Token:       token,
-		TokenFile:   *tokenFile,
-		Command:     cmdArgs,
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	if err := r.Run(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
-		os.Exit(1)
-	}
 }

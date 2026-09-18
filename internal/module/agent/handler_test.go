@@ -3164,3 +3164,21 @@ func TestHandleEvent_CCPostToolUseFailureDetailOnly_NoMutationWhenFrameExists(t 
 		t.Fatal("no hook broadcast — detail-only PostToolUseFailure with existing frame must broadcast existing-frame projection")
 	}
 }
+
+// TestHistoryRouteGone: GET /api/sessions/{code}/history was removed in P-D.2.
+// Its only SPA caller was the stream `handoff` WS branch and its session-id
+// source (cc_session_id) has no writer once the stream module is gone, so
+// the agent module's own mux must no longer know the route.
+func TestHistoryRouteGone(t *testing.T) {
+	m := newTestModule(t)
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/abc123/history", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for removed history route, got %d: %s", w.Code, w.Body.String())
+	}
+}

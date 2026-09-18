@@ -71,7 +71,7 @@ func TestSessionModuleStartResetsStaleModes(t *testing.T) {
 	defer meta.Close()
 
 	// Pre-populate stale meta (includes legacy "term" and "jsonl" values for upgrade path)
-	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{Mode: "stream"}))
+	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{Mode: "legacy-stream"}))
 	require.NoError(t, meta.SetMeta("$1", store.SessionMeta{Mode: "term"}))
 	require.NoError(t, meta.SetMeta("$2", store.SessionMeta{Mode: "jsonl"}))
 
@@ -98,9 +98,9 @@ func TestSessionModuleStartResetsStaleModes(t *testing.T) {
 
 // TestSessionModuleRegistersHandoffLocks: the per-session handoff lock is
 // one instance for the whole daemon, owned by the session module and
-// published under HandoffLocksKey — stream and nex take it from the
-// registry rather than each building their own, so a legacy handoff and a
-// nex handoff/take-back on the same session exclude each other.
+// published under HandoffLocksKey — nex takes it from the registry rather
+// than building its own, so a nex handoff and a nex take-back on the same
+// session exclude each other.
 func TestSessionModuleRegistersHandoffLocks(t *testing.T) {
 	meta, err := store.OpenMeta(":memory:")
 	require.NoError(t, err)

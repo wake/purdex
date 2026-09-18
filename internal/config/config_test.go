@@ -59,10 +59,13 @@ func TestLoadAutoDefaultPath(t *testing.T) {
 	}
 }
 
-func TestLoadConfigWithPresets(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	os.WriteFile(path, []byte(`
+// TestLoadIgnoresUnknownStreamTable pins the P-D.2 compatibility guarantee:
+// a config.toml that still carries the removed `[[stream.presets]]` table
+// must keep loading (toml.Unmarshal ignores unknown tables) and known keys
+// must still parse.
+func TestLoadIgnoresUnknownStreamTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
 bind = "0.0.0.0"
 port = 8080
 
@@ -77,17 +80,16 @@ command = "claude -p --input-format stream-json --output-format stream-json --da
 [detect]
 cc_commands = ["claude", "cld"]
 poll_interval = 3
-`), 0644)
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg, err := config.Load(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Load with stale [[stream.presets]] table: %v", err)
 	}
-	if len(cfg.Stream.Presets) != 2 {
-		t.Fatalf("expected 2 stream presets, got %d", len(cfg.Stream.Presets))
-	}
-	if cfg.Stream.Presets[0].Name != "cc" {
-		t.Fatalf("expected first preset name 'cc', got %q", cfg.Stream.Presets[0].Name)
+	if cfg.Port != 8080 {
+		t.Errorf("port: want 8080, got %d", cfg.Port)
 	}
 	if len(cfg.Detect.CCCommands) != 2 {
 		t.Fatalf("expected 2 cc_commands, got %d", len(cfg.Detect.CCCommands))
@@ -100,9 +102,6 @@ poll_interval = 3
 func TestLoadConfigDefaults(t *testing.T) {
 	dir := t.TempDir()
 	cfg, _ := config.Load(filepath.Join(dir, "missing.toml"))
-	if len(cfg.Stream.Presets) != 1 {
-		t.Fatalf("expected 1 default stream preset, got %d", len(cfg.Stream.Presets))
-	}
 	if cfg.Detect.PollInterval != 2 {
 		t.Fatalf("expected default poll_interval 2, got %d", cfg.Detect.PollInterval)
 	}

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-**Purdex** — tmux session 的遠端管理工具，含 Go daemon + React SPA + Electron shell。支援 Terminal、Stream（Claude Code `-p` 串流）、JSONL 三種模式。（原名 tmux-box，2026-04 更名）
+**Purdex** — tmux session 的遠端管理工具，含 Go daemon + React SPA + Electron shell。支援 Terminal（tmux）與 exec（Nexen headless execution）兩種模式。（原名 tmux-box，2026-04 更名）
 
 - Repo: `git@github.com:wake/purdex.git`
 - 主分支: `main`（v0 備份在 `v0` 分支）

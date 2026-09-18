@@ -83,7 +83,6 @@ func (p *Provider) IsAlive(tmuxTarget string) bool {
 
 // RegisterServices registers this provider's services into the core service registry.
 func (p *Provider) RegisterServices(registry *core.ServiceRegistry) {
-	registry.Register(HistoryKey, CCHistoryProvider(p))
 	registry.Register(OperatorKey, CCOperator(p))
 }
 

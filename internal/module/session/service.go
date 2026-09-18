@@ -69,8 +69,6 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 		}
 		if meta != nil {
 			info.Mode = meta.Mode
-			info.CCSessionID = meta.CCSessionID
-			info.CCModel = meta.CCModel
 		}
 
 		result = append(result, info)
@@ -111,8 +109,6 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 			}
 			if meta != nil {
 				info.Mode = meta.Mode
-				info.CCSessionID = meta.CCSessionID
-				info.CCModel = meta.CCModel
 			}
 
 			return info, nil
@@ -142,10 +138,8 @@ func (m *SessionModule) UpdateMeta(code string, update MetaUpdate) error {
 	}
 
 	storeUpdate := store.MetaUpdate{
-		Mode:        update.Mode,
-		CCSessionID: update.CCSessionID,
-		CCModel:     update.CCModel,
-		Cwd:         update.Cwd,
+		Mode: update.Mode,
+		Cwd:  update.Cwd,
 	}
 
 	return m.meta.UpdateMeta(tmuxID, storeUpdate)

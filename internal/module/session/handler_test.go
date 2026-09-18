@@ -31,9 +31,8 @@ func TestListSessionsMergesMeta(t *testing.T) {
 
 	// Set meta for first session only
 	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{
-		TmuxID:  "$0",
-		Mode:    "stream",
-		CCModel: "opus",
+		TmuxID: "$0",
+		Mode:   "terminal",
 	}))
 
 	sessions, err := mod.ListSessions()
@@ -42,8 +41,7 @@ func TestListSessionsMergesMeta(t *testing.T) {
 
 	// First session should have merged meta
 	assert.Equal(t, "dev", sessions[0].Name)
-	assert.Equal(t, "stream", sessions[0].Mode)
-	assert.Equal(t, "opus", sessions[0].CCModel)
+	assert.Equal(t, "terminal", sessions[0].Mode)
 	assert.NotEmpty(t, sessions[0].Code)
 
 	// Second session should have default mode
@@ -121,7 +119,7 @@ func TestListSessionsCleansOrphans(t *testing.T) {
 	// Create orphan meta for a session that doesn't exist in tmux
 	require.NoError(t, meta.SetMeta("$99", store.SessionMeta{
 		TmuxID: "$99",
-		Mode:   "stream",
+		Mode:   "terminal",
 	}))
 
 	// ListSessions triggers orphan cleanup
@@ -177,16 +175,20 @@ func TestUpdateMeta(t *testing.T) {
 	require.NoError(t, err)
 	code := sessions[0].Code
 
-	// Update mode via provider
-	mode := "stream"
-	err = mod.UpdateMeta(code, MetaUpdate{Mode: &mode})
+	// Update meta via provider. Mode is always "terminal" since P-D.2, so
+	// Cwd carries the distinguishing value that proves the partial update
+	// actually reached the store.
+	mode := "terminal"
+	cwd := "/home/work/moved"
+	err = mod.UpdateMeta(code, MetaUpdate{Mode: &mode, Cwd: &cwd})
 	require.NoError(t, err)
 
 	// Verify persisted
 	stored, err := meta.GetMeta("$0")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, "stream", stored.Mode)
+	assert.Equal(t, "terminal", stored.Mode)
+	assert.Equal(t, "/home/work/moved", stored.Cwd)
 }
 
 // --- HTTP handler tests ---
@@ -202,7 +204,7 @@ func TestHandlerListSessions(t *testing.T) {
 	// Set meta on first
 	require.NoError(t, meta.SetMeta("$0", store.SessionMeta{
 		TmuxID: "$0",
-		Mode:   "stream",
+		Mode:   "terminal",
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
@@ -217,7 +219,7 @@ func TestHandlerListSessions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, sessions, 2)
 	assert.Equal(t, "alpha", sessions[0].Name)
-	assert.Equal(t, "stream", sessions[0].Mode)
+	assert.Equal(t, "terminal", sessions[0].Mode)
 }
 
 func TestHandlerListSessionsEmpty(t *testing.T) {
@@ -476,29 +478,49 @@ func TestSameDirectory(t *testing.T) {
 	assert.False(t, sameDirectory(realDir, filepath.Join(root, "gone")))
 }
 
-func TestHandlerCreateSessionWithMode(t *testing.T) {
+// TestCreate_CoercesLegacyStreamMode: P-D.2 narrowed `mode` to the single
+// value `terminal`, but old workspace snapshots and device-state backups may
+// still POST `mode: "stream"` (their SessionMeta.mode is forwarded verbatim
+// until P-D.3 normalises it). The legacy value is accepted and stored as
+// `terminal`, never rejected.
+func TestCreate_CoercesLegacyStreamMode(t *testing.T) {
 	mod, meta, _ := newTestModule(t)
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
 
-	body := `{"name": "stream-session", "cwd": "/tmp", "mode": "stream"}`
+	body := `{"name": "legacy-session", "cwd": "/tmp", "mode": "stream"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 
 	var info SessionInfo
 	err := json.NewDecoder(w.Body).Decode(&info)
 	require.NoError(t, err)
-	assert.Equal(t, "stream", info.Mode)
+	assert.Equal(t, "terminal", info.Mode)
 
-	// Verify meta persisted with correct mode
+	// Verify meta persisted with the coerced mode
 	stored, err := meta.GetMeta("$0")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, "stream", stored.Mode)
+	assert.Equal(t, "terminal", stored.Mode)
+}
+
+func TestCreate_RejectsUnknownMode(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	body := `{"name": "jsonl-session", "cwd": "/tmp", "mode": "jsonl"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid mode: must be terminal")
 }
 
 func TestHandlerCreateSessionInvalidMode(t *testing.T) {
@@ -784,33 +806,10 @@ func TestHandlerDeleteSessionNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestHandlerSwitchMode(t *testing.T) {
-	mod, meta, fake := newTestModule(t)
-	mux := http.NewServeMux()
-	mod.RegisterRoutes(mux)
-
-	fake.AddSession("mode-test", "/tmp")
-
-	sessions, err := mod.ListSessions()
-	require.NoError(t, err)
-	code := sessions[0].Code
-
-	body := `{"mode": "stream"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+code+"/mode", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNoContent, w.Code)
-
-	// Verify mode persisted
-	stored, err := meta.GetMeta("$0")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, "stream", stored.Mode)
-}
-
-func TestHandlerSwitchModeInvalid(t *testing.T) {
+// TestSwitchModeRouteGone: POST /api/sessions/{code}/mode was removed in
+// P-D.2 together with the stream module; the session module's own mux must
+// no longer know the route, even for a live session.
+func TestSwitchModeRouteGone(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
@@ -821,22 +820,8 @@ func TestHandlerSwitchModeInvalid(t *testing.T) {
 	require.NoError(t, err)
 	code := sessions[0].Code
 
-	body := `{"mode": "invalid"}`
+	body := `{"mode": "terminal"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+code+"/mode", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestHandlerSwitchModeNotFound(t *testing.T) {
-	mod, _, _ := newTestModule(t)
-	mux := http.NewServeMux()
-	mod.RegisterRoutes(mux)
-
-	body := `{"mode": "stream"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/zzzzzz/mode", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
