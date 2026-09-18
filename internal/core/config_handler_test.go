@@ -22,9 +22,6 @@ func newTestCore() *Core {
 		Bind:   "127.0.0.1",
 		Port:   7860,
 		Token:  "secret-token-123",
-		Stream: config.StreamConfig{
-			Presets: []config.Preset{{Name: "cc", Command: "claude -p"}},
-		},
 		Detect: config.DetectConfig{
 			CCCommands:   []string{"claude"},
 			PollInterval: 2,
@@ -135,7 +132,7 @@ func TestPutConfigRedactsPeerHostSecretsInResponse(t *testing.T) {
 	assert.True(t, h.AllowBypass)
 }
 
-func TestPutConfigUpdatesStreamAndPersists(t *testing.T) {
+func TestPutConfigUpdatesDetectAndPersists(t *testing.T) {
 	// Create temp config file
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.toml")
@@ -145,7 +142,7 @@ func TestPutConfigUpdatesStreamAndPersists(t *testing.T) {
 	c := newTestCore()
 	c.CfgPath = cfgPath
 
-	body := `{"stream":{"presets":[{"name":"new","command":"new-cmd"}]}}`
+	body := `{"detect":{"cc_commands":["new-cmd"],"poll_interval":7}}`
 	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	c.handlePutConfig(rec, req)
@@ -154,9 +151,8 @@ func TestPutConfigUpdatesStreamAndPersists(t *testing.T) {
 
 	// Verify in-memory config updated
 	c.CfgMu.RLock()
-	assert.Len(t, c.Cfg.Stream.Presets, 1)
-	assert.Equal(t, "new", c.Cfg.Stream.Presets[0].Name)
-	assert.Equal(t, "new-cmd", c.Cfg.Stream.Presets[0].Command)
+	assert.Equal(t, []string{"new-cmd"}, c.Cfg.Detect.CCCommands)
+	assert.Equal(t, 7, c.Cfg.Detect.PollInterval)
 	c.CfgMu.RUnlock()
 
 	// Verify response has redacted sensitive fields
@@ -165,12 +161,33 @@ func TestPutConfigUpdatesStreamAndPersists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.Token, "PUT response should redact token")
 	assert.Empty(t, got.HostID, "PUT response should redact host_id")
-	assert.Equal(t, "new", got.Stream.Presets[0].Name)
+	assert.Equal(t, []string{"new-cmd"}, got.Detect.CCCommands)
+	assert.Equal(t, 7, got.Detect.PollInterval)
 
 	// Verify file was written
 	data, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "new-cmd")
+}
+
+// TestPutConfigIgnoresRemovedStreamKey: the `stream` PATCH field was
+// removed in P-D.2. A client that still sends it (the pre-P-D.3 SPA) must
+// get 200 with the key silently ignored, and the response must not carry
+// a `stream` key.
+func TestPutConfigIgnoresRemovedStreamKey(t *testing.T) {
+	c := newTestCore()
+
+	body := `{"stream":{"presets":[{"name":"x","command":"y"}]},"detect":{"poll_interval":5}}`
+	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), `"stream"`)
+
+	c.CfgMu.RLock()
+	assert.Equal(t, 5, c.Cfg.Detect.PollInterval)
+	c.CfgMu.RUnlock()
 }
 
 func TestPutConfigInvalidSizingModeReturns400(t *testing.T) {
@@ -261,7 +278,7 @@ func TestPutConfigNoCfgPathSkipsPersistence(t *testing.T) {
 	c := newTestCore()
 	// CfgPath is empty — should not attempt to write
 
-	body := `{"stream":{"presets":[{"name":"x","command":"y"}]}}`
+	body := `{"detect":{"poll_interval":9}}`
 	req := httptest.NewRequest("PUT", "/api/config", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	c.handlePutConfig(rec, req)
@@ -270,7 +287,7 @@ func TestPutConfigNoCfgPathSkipsPersistence(t *testing.T) {
 
 	// Config should still be updated in memory
 	c.CfgMu.RLock()
-	assert.Equal(t, "x", c.Cfg.Stream.Presets[0].Name)
+	assert.Equal(t, 9, c.Cfg.Detect.PollInterval)
 	c.CfgMu.RUnlock()
 }
 
@@ -522,7 +539,6 @@ func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {
 	c.CfgPath = filepath.Join(blocker, "config.toml") // parent is a file → ENOTDIR
 
 	// Capture original state for rollback assertions.
-	originalPresets := append([]config.Preset(nil), c.Cfg.Stream.Presets...)
 	originalCCCommands := append([]string(nil), c.Cfg.Detect.CCCommands...)
 	originalPollInterval := c.Cfg.Detect.PollInterval
 	originalSizingMode := c.Cfg.Terminal.SizingMode
@@ -532,7 +548,6 @@ func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {
 	c.OnConfigChange(func() { callbackCalled++ })
 
 	body := `{
-		"stream":{"presets":[{"name":"new","command":"new-cmd"}]},
 		"detect":{"cc_commands":["aider"],"poll_interval":99},
 		"terminal":{"sizing_mode":"terminal-first"}
 	}`
@@ -549,7 +564,6 @@ func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {
 
 	// 2. In-memory state fully rolled back
 	c.CfgMu.RLock()
-	assert.Equal(t, originalPresets, c.Cfg.Stream.Presets, "Stream.Presets must be rolled back")
 	assert.Equal(t, originalCCCommands, c.Cfg.Detect.CCCommands, "Detect.CCCommands must be rolled back")
 	assert.Equal(t, originalPollInterval, c.Cfg.Detect.PollInterval, "Detect.PollInterval must be rolled back")
 	assert.Equal(t, originalSizingMode, c.Cfg.Terminal.SizingMode, "Terminal.SizingMode must be rolled back")

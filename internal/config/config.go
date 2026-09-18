@@ -15,15 +15,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-type Preset struct {
-	Name    string `toml:"name"    json:"name"`
-	Command string `toml:"command" json:"command"`
-}
-
-type StreamConfig struct {
-	Presets []Preset `toml:"presets" json:"presets"`
-}
-
 type DetectConfig struct {
 	CCCommands   []string `toml:"cc_commands"   json:"cc_commands"`
 	PollInterval int      `toml:"poll_interval" json:"poll_interval"`
@@ -207,8 +198,6 @@ func (c Config) Clone() Config {
 	out.Allow = slices.Clone(c.Allow)
 	out.AllowedPaths = slices.Clone(c.AllowedPaths)
 
-	out.Stream.Presets = slices.Clone(c.Stream.Presets)
-
 	out.Detect.CCCommands = slices.Clone(c.Detect.CCCommands)
 
 	out.Peers.Hosts = slices.Clone(c.Peers.Hosts)
@@ -230,7 +219,6 @@ type Config struct {
 	AllowedPaths []string       `toml:"allowed_paths"  json:"allowed_paths"`
 	UploadDir    string         `toml:"upload_dir"     json:"upload_dir"`
 	Terminal     TerminalConfig `toml:"terminal"       json:"terminal"`
-	Stream       StreamConfig   `toml:"stream"         json:"stream"`
 	Detect       DetectConfig   `toml:"detect"         json:"detect"`
 	Monitor      MonitorConfig  `toml:"monitor"        json:"monitor"`
 	Features     FeaturesConfig `toml:"features"       json:"features"`
@@ -246,12 +234,6 @@ func defaults() Config {
 		Port:      7860,
 		DataDir:   filepath.Join(home, ".config", "pdx"),
 		UploadDir: filepath.Join(home, "tmp", "purdex-upload"),
-		Stream: StreamConfig{
-			Presets: []Preset{{
-				Name:    "cc",
-				Command: "claude -p --verbose --input-format stream-json --output-format stream-json",
-			}},
-		},
 		Detect: DetectConfig{
 			CCCommands:   []string{"claude"},
 			PollInterval: 2,
