@@ -1114,6 +1114,9 @@ describe('PeersSection — self alias (#1196, spec §4.3)', () => {
     expect(self).not.toHaveTextContent('(from host_id)')
     expect(screen.queryByTestId('peers-self-input')).toBeNull()       // the editor closed on success
     expect(screen.getByTestId('peers-self-clear')).toBeEnabled()       // now there is something to clear
+    // Spec §4.3: Clear says what the alias WOULD become — host_id up to the first ':'.
+    expect(screen.getByTestId('peers-self-default-hint')).toHaveTextContent('mini-lab')
+    expect(screen.getByTestId('peers-self-default-hint')).not.toHaveTextContent('278cbm')
     expect(screen.queryByTestId('peers-self-error')).toBeNull()
   })
 

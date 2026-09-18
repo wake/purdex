@@ -33,6 +33,12 @@ export interface SelfAliasProps {
 
 const BTN = 'text-xs px-2 py-0.5 rounded cursor-pointer disabled:opacity-50 disabled:cursor-default font-sans'
 
+/** The daemon's fallback (`config.PeerAlias()`): host_id up to the first ':', or all of it. */
+const derivedAlias = (hostId: string): string => {
+  const i = hostId.indexOf(':')
+  return i > 0 ? hostId.slice(0, i) : hostId
+}
+
 export function SelfAliasLine({ hostId, hostName, self, busy, flow, runFlow }: SelfAliasProps) {
   const t = useI18nStore((s) => s.t)
   const [editing, setEditing] = useState(false)
@@ -94,8 +100,12 @@ export function SelfAliasLine({ hostId, hostName, self, busy, flow, runFlow }: S
             className={`${BTN} bg-surface-tertiary text-text-secondary hover:text-text-primary`}>{t('peers.self_alias_edit')}</button>
         )}
         {source === 'config' && (
-          <button type="button" data-testid="peers-self-clear" disabled={busy} onClick={() => write('')}
-            className={`${BTN} bg-surface-tertiary text-text-secondary hover:text-text-primary`}>{t('peers.self_alias_clear')}</button>
+          <>
+            <button type="button" data-testid="peers-self-clear" disabled={busy} onClick={() => write('')}
+              className={`${BTN} bg-surface-tertiary text-text-secondary hover:text-text-primary`}>{t('peers.self_alias_clear')}</button>
+            {/* Spec §4.3: say what the alias WOULD become — clearing changes every address prefix at once. */}
+            <span data-testid="peers-self-default-hint">{t('peers.self_alias_default_hint', { alias: derivedAlias(self.host_id) })}</span>
+          </>
         )}
       </p>
 

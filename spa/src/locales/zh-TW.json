@@ -1305,6 +1305,7 @@
   "peers.self_alias_note": "對方的項目名稱不會跟著改，在他們改名之前會顯示為「名稱不一致」；位址會變成 {{alias}}/<name>。Ref 不會改變。",
   "peers.self_alias_too_old": "這個 daemon 忽略了自稱（回應裡沒有 alias_source）— 它的版本早於 alpha.399。",
   "peers.self_alias_not_applied": "daemon 回覆的是「{{alias}}」（{{source}}），不是送出的值——未套用。",
+  "peers.self_alias_default_hint": "（預設會是「{{alias}}」）",
   "hosts.commands": "指令",
   "commands.tab.normal": "指令",
   "commands.tab.resume": "Resume",
