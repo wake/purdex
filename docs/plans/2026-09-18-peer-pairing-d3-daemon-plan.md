@@ -276,11 +276,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ```go
 // rotation.go
-func (m *Module) noteInboundAuth(p middleware.Principal)            // host principals only; "current"|"prev" by p.UsedPrevToken
-func (m *Module) lastInboundAuth(alias string) string               // "" | "current" | "prev"
+type inboundAuth struct { usedPrev bool; at time.Time }           // spec §6.2's record shape; `at` = m.now() at the note, never served
+func (m *Module) noteInboundAuth(p middleware.Principal)            // host principals only; records {p.UsedPrevToken, m.now()}
+func (m *Module) lastInboundAuth(alias string) string               // "" | "current" | "prev" (takes rotMu)
+func (m *Module) lastInboundAuthLocked(alias string) string         // same, caller holds rotMu (the gates)
 func (m *Module) resetInboundAuth(alias string)                     // rotate: new epoch
-func (m *Module) confirmCancelledRotation(alias string)             // cancel: "prev" → "current" (the old token is current again)
-func (m *Module) hostRowFor(h config.PeerHost) hostRow              // toHostRow + RotationPending + LastInboundAuth
+func (m *Module) renameInboundAuth(oldAlias, newAlias string)       // PUT rename: the record follows the entry
+func (m *Module) confirmCancelledRotation(alias string)             // cancel: "prev" → "current" (the old token is current again); caller holds rotMu
+func (m *Module) hostRowFor(h config.PeerHost) hostRow              // toHostRow + RotationPending + LastInboundAuth (takes rotMu)
+func (m *Module) hostRowLocked(h config.PeerHost, last string) hostRow // same, with the record value the caller already read under rotMu
 // hosts.go
 type hostRow struct { …; RotationPending bool `json:"rotation_pending"`; LastInboundAuth string `json:"last_inbound_auth"` }
 ```
@@ -397,9 +401,49 @@ func TestHandleDeliver_RefusedDeliveryStillRecords(t *testing.T) {
 		t.Fatalf("refused delivery did not record: last_inbound_auth = %q, want prev", got)
 	}
 }
+
+// Even a delivery refused because the daemon is stopping (503, the very
+// first refusal in handleDeliver) records the authentication.
+func TestHandleDeliver_StoppingStillRecords(t *testing.T) {
+	c, _ := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	m.stopCancel()
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/deliver", map[string]any{}, curPrincipal("air"))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("deliver while stopping = %d, want 503; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := listRow(t, m, "air").LastInboundAuth; got != "current" {
+		t.Fatalf("stopping refusal did not record: %q", got)
+	}
+}
+
+// The record is keyed by alias and must follow the entry: a rename moves
+// it, a delete clears it (so an entry re-created under the same alias does
+// not inherit a stranger's evidence).
+func TestInboundAuthRecord_FollowsRenameAndDelete(t *testing.T) {
+	c, _ := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+
+	if rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"alias": "air26"}, adminPrincipal()); rr.Code != http.StatusOK {
+		t.Fatalf("rename = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := listRow(t, m, "air26").LastInboundAuth; got != "current" {
+		t.Fatalf("record did not follow the rename: %q", got)
+	}
+	if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air26", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d", rr.Code)
+	}
+	if rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{"alias": "air26", "url": "https://b.example"}, adminPrincipal()); rr.Code != http.StatusCreated {
+		t.Fatalf("re-add = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := listRow(t, m, "air26").LastInboundAuth; got != "" {
+		t.Fatalf("re-created entry inherited a record: %q", got)
+	}
+}
 ```
 
-Add `"encoding/json"` and `"strings"` to the imports. (`handleDeliver` with a bare `newHostsTestModule` may refuse earlier than `host_unverified` — e.g. `stopCtx`; whatever the first refusal is, the test only needs `403` **and** the record set. If the module built by `newHostsTestModule` panics on a nil collaborator before reaching the principal switch, build the module with `newDeliverEnv(t, envOpts{hosts: []config.PeerHost{h}})` and use `e.m` / `e.post` instead — read `deliver_test.go:64–150` and pick whichever works; say which in the report.)
+Add `"encoding/json"` and `"strings"` to the imports. `m.stopCancel` exists on the module (`module_test.go:216`). (`handleDeliver` with a bare `newHostsTestModule` may refuse earlier than `host_unverified` — e.g. `stopCtx`; whatever the first refusal is, the test only needs `403` **and** the record set. If the module built by `newHostsTestModule` panics on a nil collaborator before reaching the principal switch, build the module with `newDeliverEnv(t, envOpts{hosts: []config.PeerHost{h}})` and use `e.m` / `e.post` instead — read `deliver_test.go:64–150` and pick whichever works; say which in the report.)
 
 - [ ] **Step 2: Run to verify they fail** — `go test -count=1 ./internal/module/peers/ -run 'RotationPending|RecordsLastInboundAuth|RefusedDeliveryStillRecords'` → compile error (`RotationPending`, `LastInboundAuth` unknown).
 
@@ -435,6 +479,22 @@ const (
 	inboundAuthPrev    = "prev"
 )
 
+// inboundAuth is one observation (spec §6.2): which token, and when. `at`
+// is m.now() at the note; it is kept for logs/debugging and never served —
+// "most recent" is the write order under rotMu, which is the order the
+// daemon observed the dials in.
+type inboundAuth struct {
+	usedPrev bool
+	at       time.Time
+}
+
+func (a inboundAuth) String() string {
+	if a.usedPrev {
+		return inboundAuthPrev
+	}
+	return inboundAuthCurrent
+}
+
 // noteInboundAuth records which token a host principal presented. Called at
 // the two places a host principal is served — handlePeers and handleDeliver
 // — BEFORE any policy or rate-limit refusal can return: the fact recorded is
@@ -444,24 +504,40 @@ func (m *Module) noteInboundAuth(p middleware.Principal) {
 	if p.Kind != middleware.PrincipalHost || p.Alias == "" {
 		return
 	}
-	v := inboundAuthCurrent
-	if p.UsedPrevToken {
-		v = inboundAuthPrev
-	}
 	m.rotMu.Lock()
 	if m.lastInbound == nil {
-		m.lastInbound = map[string]string{}
+		m.lastInbound = map[string]inboundAuth{}
 	}
-	m.lastInbound[p.Alias] = v
+	m.lastInbound[p.Alias] = inboundAuth{usedPrev: p.UsedPrevToken, at: m.now()}
 	m.rotMu.Unlock()
 }
 
-// lastInboundAuth is "" | "current" | "prev" for alias in the current
-// rotation epoch.
+// lastInboundAuthLocked is "" | "current" | "prev" for alias in the current
+// rotation epoch. The caller holds rotMu — the gates do, across their check
+// AND their write, so the record cannot change between the two.
+func (m *Module) lastInboundAuthLocked(alias string) string {
+	a, ok := m.lastInbound[alias]
+	if !ok {
+		return ""
+	}
+	return a.String()
+}
+
 func (m *Module) lastInboundAuth(alias string) string {
 	m.rotMu.Lock()
 	defer m.rotMu.Unlock()
-	return m.lastInbound[alias]
+	return m.lastInboundAuthLocked(alias)
+}
+
+// renameInboundAuth moves the record with the entry (PUT rename, spec §4.2):
+// the evidence is about the peer behind the entry, not about its name.
+func (m *Module) renameInboundAuth(oldAlias, newAlias string) {
+	m.rotMu.Lock()
+	if a, ok := m.lastInbound[oldAlias]; ok {
+		delete(m.lastInbound, oldAlias)
+		m.lastInbound[newAlias] = a
+	}
+	m.rotMu.Unlock()
 }
 
 // resetInboundAuth starts a new epoch: rotate calls it so a "current" seen
@@ -475,31 +551,43 @@ func (m *Module) resetInboundAuth(alias string) {
 // confirmCancelledRotation keeps the record truthful after a cancel: the
 // token the peer was last seen on (prev) is the current one again, so a
 // record of "prev" becomes "current". After a cancel there is no prev, so
-// the record can only read "" or "current" (spec §6.2).
+// the record can only read "" or "current" (spec §6.2). Caller holds rotMu.
 func (m *Module) confirmCancelledRotation(alias string) {
-	m.rotMu.Lock()
-	if m.lastInbound[alias] == inboundAuthPrev {
-		m.lastInbound[alias] = inboundAuthCurrent
+	if a, ok := m.lastInbound[alias]; ok && a.usedPrev {
+		a.usedPrev = false
+		m.lastInbound[alias] = a
 	}
-	m.rotMu.Unlock()
 }
 
-// hostRowFor is toHostRow plus the two rotation fields. Never a token value.
-func (m *Module) hostRowFor(h config.PeerHost) hostRow {
+// hostRowLocked is toHostRow plus the two rotation fields, with the record
+// value the caller already read under rotMu. Never a token value.
+func (m *Module) hostRowLocked(h config.PeerHost, last string) hostRow {
 	row := toHostRow(h)
 	row.RotationPending = h.InboundTokenPrev != ""
-	row.LastInboundAuth = m.lastInboundAuth(h.Alias)
+	row.LastInboundAuth = last
 	return row
+}
+
+// hostRowFor is hostRowLocked for callers that do not hold rotMu.
+func (m *Module) hostRowFor(h config.PeerHost) hostRow {
+	return m.hostRowLocked(h, m.lastInboundAuth(h.Alias))
 }
 ```
 
 In `module.go`'s `Module` struct add (near `titleMu`):
 
 ```go
-	// Rotation record (rotation.go): alias → "current" | "prev", in memory.
+	// Rotation record (rotation.go): alias → the peer's most recent inbound
+	// authentication, in memory.
 	rotMu       sync.Mutex
-	lastInbound map[string]string
+	lastInbound map[string]inboundAuth
+	// rotateAfterGate is a test seam: called by the commit/cancel handlers
+	// right after their gate check, still inside the UpdateConfig closure
+	// and still holding rotMu (nil in production).
+	rotateAfterGate func()
 ```
+
+`rotation.go` needs `"time"` in its imports (`m.now` is the module's clock, `module.go:138`).
 
 In `handlePeers`, immediately after `w.Header().Set(...)`:
 
@@ -532,7 +620,7 @@ In `hosts.go`: add to `hostRow`
 	LastInboundAuth string `json:"last_inbound_auth"`
 ```
 
-and change `rows[i] = toHostRow(h)` (list) and `row = toHostRow(*h)` (put) to `m.hostRowFor(...)`. `toHostRow` itself stays (POST's 201 body uses `addHostResponse`, not a row).
+and change `rows[i] = toHostRow(h)` (list) and `row = toHostRow(*h)` (put) to `m.hostRowFor(...)`. `toHostRow` itself stays (POST's 201 body uses `addHostResponse`, not a row). In `handlePutHost`'s closure, right after `h.Alias = req.Alias`, add `m.renameInboundAuth(alias, req.Alias)`; in `handleDeleteHost`'s closure, after the slice removal, add `m.resetInboundAuth(alias)` (both run under CfgMu and take rotMu — the allowed order).
 
 - [ ] **Step 4: Run** — `go test -race -count=1 ./internal/module/peers/ -run 'RotationPending|RecordsLastInboundAuth|RefusedDeliveryStillRecords|TestHandleListHosts|TestHandlePutHost'` → PASS; then the whole package `go test -race -count=1 ./internal/module/peers/` → PASS (existing hostRow-shape tests may compare full structs — update expected values to include the two new zero-valued fields where a test constructs a `hostRow{}` literal; do not weaken assertions).
 
@@ -855,6 +943,47 @@ func TestPeerAuth_EndToEnd_PendingRotation_CommitGate(t *testing.T) {
 }
 ```
 
+```go
+// ---- the gate is atomic against the record ----
+
+// A dial that authenticates while a commit is between its gate check and
+// its write is FUTURE evidence: the check and the write happen under one
+// hold of rotMu, so the dial's note lands only after the write. The commit
+// stands on the evidence it checked; the note is not lost — the row then
+// reads last_inbound_auth "prev" with no rotation pending, which is the
+// §6.4 last row (verify shows red, rotate again). The seam fires the dial
+// after the check; the lock, not timing, orders it.
+func TestRotateCommit_DialAfterGateCheckIsNotLost(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	fired := false
+	m.rotateAfterGate = func() {
+		if fired {
+			return
+		}
+		fired = true
+		go func() { done <- doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, prevPrincipal("air")) }()
+	}
+	rr := gate(t, m, "air", "commit", false)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("commit = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if dial := <-done; dial.Code != http.StatusOK {
+		t.Fatalf("late dial = %d", dial.Code)
+	}
+	if got := loadCfg(t, cfgPath).Peers.Hosts[0]; got.InboundTokenPrev != "" {
+		t.Fatalf("commit did not clear prev: %+v", got)
+	}
+	row := listRow(t, m, "air")
+	if row.RotationPending || row.LastInboundAuth != "prev" {
+		t.Fatalf("late evidence lost: row = %+v; want not pending, last_inbound_auth prev", row)
+	}
+}
+```
+
 Add imports `"context"`, `"net/http/httptest"`, `"sync"`, and `ipeers "github.com/wake/purdex/internal/peers"`.
 
 - [ ] **Step 2: Run to verify they fail** — `go test -count=1 ./internal/module/peers/ -run 'Rotate|PeerAuth_EndToEnd|Put_AfterRotate'` → 404s from the mux (routes missing).
@@ -878,9 +1007,12 @@ import (
 // Inbound-token rotation routes (spec §6.3). All three are admin-only by
 // construction (HostRoutePolicy) and by requireAdmin; all three mutate
 // inside one UpdateConfig closure, re-finding the entry by alias under the
-// lock, and the two gates read the in-memory record (rotation.go) inside
-// that closure. Neither gate is a proof about the future; each is a proof
-// that the operation is not ALREADY known to be a lock-out (D-7).
+// lock. The two gates read the in-memory record (rotation.go) inside that
+// closure and HOLD rotMu from the check through the write, so a dial that
+// authenticates concurrently is recorded only after the write: it is future
+// evidence, visible on the next read. Neither gate is a proof about the
+// future; each is a proof that the operation is not ALREADY known to be a
+// lock-out (D-7). Lock order CfgMu → rotMu (the closure runs under CfgMu).
 
 // rotateResponse is the second and last response that carries a live
 // inbound-token value (the first is POST 201).
@@ -967,15 +1099,21 @@ func (m *Module) handleRotateCommit(w http.ResponseWriter, r *http.Request) {
 			return &apiError{http.StatusNotFound, "unknown alias"}
 		}
 		h := &cfg.Peers.Hosts[i]
+		m.rotMu.Lock()
+		defer m.rotMu.Unlock()
+		last := m.lastInboundAuthLocked(h.Alias)
 		if h.InboundTokenPrev == "" {
-			row = m.hostRowFor(*h)
+			row = m.hostRowLocked(*h, last)
 			return nil
 		}
-		if !req.Force && m.lastInboundAuth(h.Alias) != inboundAuthCurrent {
+		if !req.Force && last != inboundAuthCurrent {
 			return &apiError{http.StatusConflict, "rotation unconfirmed"}
 		}
+		if m.rotateAfterGate != nil {
+			m.rotateAfterGate()
+		}
 		h.InboundTokenPrev = ""
-		row = m.hostRowFor(*h)
+		row = m.hostRowLocked(*h, last)
 		return nil
 	})
 	if err != nil {
@@ -1007,16 +1145,21 @@ func (m *Module) handleRotateCancel(w http.ResponseWriter, r *http.Request) {
 			return &apiError{http.StatusNotFound, "unknown alias"}
 		}
 		h := &cfg.Peers.Hosts[i]
+		m.rotMu.Lock()
+		defer m.rotMu.Unlock()
 		if h.InboundTokenPrev == "" {
 			return &apiError{http.StatusConflict, "no rotation pending"}
 		}
-		if !req.Force && m.lastInboundAuth(h.Alias) != inboundAuthPrev {
+		if !req.Force && m.lastInboundAuthLocked(h.Alias) != inboundAuthPrev {
 			return &apiError{http.StatusConflict, "rotation unconfirmed"}
+		}
+		if m.rotateAfterGate != nil {
+			m.rotateAfterGate()
 		}
 		h.InboundToken = h.InboundTokenPrev
 		h.InboundTokenPrev = ""
 		m.confirmCancelledRotation(h.Alias)
-		row = m.hostRowFor(*h)
+		row = m.hostRowLocked(*h, m.lastInboundAuthLocked(h.Alias))
 		return nil
 	})
 	if err != nil {
@@ -1027,7 +1170,7 @@ func (m *Module) handleRotateCancel(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-Check `apiError`'s field names at `hosts.go:95–104` and match them (the plan assumes positional `{status, msg}` as D1 used). In `module.go` `RegisterRoutes` add after the verify route:
+(`rotate` itself does not need rotMu across its write: `resetInboundAuth` takes it briefly, and a note landing right after the reset is genuinely this epoch's evidence.) `apiError` is `{status int; msg string}` (`hosts.go:95–104`). The closure's `defer m.rotMu.Unlock()` releases before `UpdateConfig` writes the file — the file write is under CfgMu, and every dial's matcher reads config under CfgMu.RLock, so a dial cannot authenticate against the new state before the write lands either. In `module.go` `RegisterRoutes` add after the verify route:
 
 ```go
 	mux.HandleFunc("POST /api/peers/hosts/{alias}/rotate", m.handleRotateHost)
@@ -1037,11 +1180,18 @@ Check `apiError`'s field names at `hosts.go:95–104` and match them (the plan a
 
 - [ ] **Step 4: Run** — `go test -race -count=1 ./internal/module/peers/` → PASS (whole package; §6.5's existing PUT tests must still pass unchanged).
 
+- [ ] **Step 4b: Spec corrections (two sentences, same commit)**
+
+In `docs/specs/2026-09-18-peer-pairing-ui-spec.md`:
+1. §6.2, in the sentence `` `rotate` resets the entry's record to `""`, so `last_inbound_auth` always describes the *current rotation epoch*; commit and cancel leave it (there is no `prev` afterwards, so it can only read `""` or `"current"`). ``, replace `commit and cancel leave it (` with `commit leaves it; cancel rewrites a `"prev"` record to `"current"` — the token the peer was last seen on is the current one again (`. Then append to that paragraph: `The record is keyed by alias and follows the entry: a rename (§4.2) moves it, a delete clears it.`
+2. §6.3, replace the sentence beginning `A dial landing between the check and the write can only flip the record` (through `(§6.4 last row).`) with: `The check and the write happen under one hold of the record's mutex, so a dial that authenticates concurrently is recorded only after the write — it is future evidence, and it is not lost: after such a commit the row reads `last_inbound_auth: "prev"` with no rotation pending, the next verify shows red, and the page repairs by rotating again (§6.4 last row).`
+Touch nothing else in the spec.
+
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/module/peers/hosts_rotate.go internal/module/peers/module.go internal/module/peers/hosts_rotate_test.go
-git commit --only internal/module/peers/hosts_rotate.go internal/module/peers/module.go internal/module/peers/hosts_rotate_test.go -m "feat(peers): rotate / rotate/commit / rotate/cancel, gated on the peer's most recent token (spec §6.3)
+git add internal/module/peers/hosts_rotate.go internal/module/peers/module.go internal/module/peers/hosts_rotate_test.go docs/specs/2026-09-18-peer-pairing-ui-spec.md
+git commit --only internal/module/peers/hosts_rotate.go internal/module/peers/module.go internal/module/peers/hosts_rotate_test.go docs/specs/2026-09-18-peer-pairing-ui-spec.md -m "feat(peers): rotate / rotate/commit / rotate/cancel, gated atomically on the peer's most recent token (spec §6.3)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1055,7 +1205,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Test: `internal/module/peers/module_test.go` (append) and `internal/module/peers/hosts_verify_test.go` (append)
 
 **Interfaces:**
-- Produces: `func redactSecret(s, secret string) string` — `s` with every occurrence of a non-empty `secret` replaced by `[redacted]`; unchanged when `secret == ""`.
+- Produces: `func redactSecret(s, secret string) string` — `s` with every occurrence of a non-empty `secret` replaced by `[redacted]`; unchanged when `secret == ""`. `func redactRecord(rec *ipeers.PeerRecord, secret string)` — applies it to **every string field** of `PeerRecord` and of its `Agent` (enumerate them from `internal/peers/record.go`, not from memory).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1073,7 +1223,11 @@ func TestHandlePeers_ScopeAll_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 		json.NewEncoder(w).Encode(ipeers.Envelope{
 			HostID: "host-a:111", OK: false, Error: "you sent " + tok + " to me",
 			Alias: "self-" + tok, DaemonVersion: "v-" + tok,
-			UnknownRegistryFiles: []string{"/tmp/" + tok}, Peers: []ipeers.PeerRecord{},
+			UnknownRegistryFiles: []string{"/tmp/" + tok},
+			Peers: []ipeers.PeerRecord{{
+				RowKind: "session", SessionCode: "s1", SessionName: "sess-" + tok, Title: "t-" + tok, Cwd: "/w/" + tok,
+				Agent: &ipeers.PeerAgent{Type: "cc", PeerName: "pn-" + tok, Version: "1"},
+			}},
 		})
 	}))
 	defer srv.Close()
@@ -1097,6 +1251,25 @@ func TestHandlePeers_ScopeAll_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 (Match this fixture's construction to the existing `TestHandlePeers_ScopeAll_RemoteErrorBounded` — copy its exact `newTestCoreWithHosts`/`newTestModule` call and request helper; the names above are what the D1 plan used.) Append to `hosts_verify_test.go`:
 
 ```go
+// The transport-error and host_id-mismatch branches carry remote text too.
+func TestHandleVerifyHost_ErrorBranchesRedactAndBound(t *testing.T) {
+	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: tok, InboundToken: "in-a"}}
+	long := strings.Repeat("x", 5000)
+	for name, fetch := range map[string]fetchFunc{
+		"transport": fixedEnvelopeFetch(ipeers.Envelope{}, errors.New("dial "+tok+" "+long)),
+		"mismatch":  fixedEnvelopeFetch(ipeers.Envelope{HostID: "other:" + tok + long, OK: true, Peers: []ipeers.PeerRecord{}}, nil),
+	} {
+		c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
+		m := newHostsTestModule(t, c, fetch)
+		rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts/air/verify", nil, adminPrincipal())
+		body := rr.Body.String()
+		if rr.Code != http.StatusOK || strings.Contains(body, tok) || len(body) > 2*maxRemoteTextBytes {
+			t.Fatalf("%s: status=%d len=%d leaked=%v", name, rr.Code, len(body), strings.Contains(body, tok))
+		}
+	}
+}
+
 func TestHandleVerifyHost_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: tok, InboundToken: "in-a"}}
@@ -1131,7 +1304,27 @@ func redactSecret(s, secret string) string {
 }
 ```
 
-In `fetchHostResult`, right after the `h.Token == ""` early return, define `bound := func(s string) string { return boundRemoteText(redactSecret(s, h.Token)) }` and use `bound(...)` instead of `boundRemoteText(...)` for `env.HostID` (mismatch message), `rowErr`, each `unknown[i]`, `env.DaemonVersion`, `env.Alias`; and `Error: redactSecret(err.Error(), h.Token)` in the fetch-error branch. `validHostID(env.HostID)` is unchanged (a host_id containing the token is simply invalid).
+Also add:
+
+```go
+// redactRecord scrubs secret from every string field a peer row carries —
+// Peers rows are the peer's own text as much as its Error is.
+func redactRecord(rec *ipeers.PeerRecord, secret string) {
+	if secret == "" {
+		return
+	}
+	rec.Host = redactSecret(rec.Host, secret)
+	// … one line per string field of PeerRecord (read internal/peers/record.go) …
+	if rec.Agent != nil {
+		a := *rec.Agent
+		a.Type = redactSecret(a.Type, secret)
+		// … one line per string field of PeerAgent …
+		rec.Agent = &a
+	}
+}
+```
+
+In `fetchHostResult`, right after the `h.Token == ""` early return, define `bound := func(s string) string { return boundRemoteText(redactSecret(s, h.Token)) }` and use `bound(...)` instead of `boundRemoteText(...)` for `env.HostID` (mismatch message), `rowErr`, each `unknown[i]`, `env.DaemonVersion`, `env.Alias`; **`Error: bound(err.Error())`** in the fetch-error branch (redacted AND bounded — a transport error can embed remote text); and after `peers := normalizeRemoteRows(...)`, `for i := range peers { redactRecord(&peers[i], h.Token) }`. `validHostID(env.HostID)` is unchanged (a host_id containing the token is simply invalid). Add `"errors"` to the verify test's imports.
 
 - [ ] **Step 4: Run** — `go test -race -count=1 ./internal/module/peers/` → PASS.
 
@@ -1466,13 +1659,19 @@ Each row: apply the one-edit mutation, run the named test(s) with `go test -coun
 | M20 | in `runPeersHostRotate`, always send `Force: true` | `cmd/pdx/peers.go` | `TestRunPeersHostRotate_Commit_UnconfirmedExplainsOnPeer` |
 | M21 | in `rotationCell`, return `"pending"` for confirmed too | `cmd/pdx/peers.go` | `TestFormatHostsTable_RotationColumn` |
 | M22 | in `confirmCancelledRotation`, do nothing | `rotation.go` | `TestRotateCancel_Gate` (row after cancel reads "prev") |
+| M23 | in `handlePutHost`, drop `m.renameInboundAuth(alias, req.Alias)` | `hosts.go` | `TestInboundAuthRecord_FollowsRenameAndDelete` (air26 reads "") |
+| M24 | in `handleDeleteHost`, drop `m.resetInboundAuth(alias)` | `hosts.go` | `TestInboundAuthRecord_FollowsRenameAndDelete` (re-created entry reads "current") |
+| M25 | in `fetchHostResult`, delete the `redactRecord` loop | `module.go` | `TestHandlePeers_ScopeAll_PeerEchoesOurTokenIsRedacted` (token in a row) |
+| M26 | in the fetch-error branch, `Error: redactSecret(err.Error(), h.Token)` (no bound) | `module.go` | `TestHandleVerifyHost_ErrorBranchesRedactAndBound` (transport body too long) |
+| M27 | in `handleDeliver`, move the note back below the `stopCtx` check | `deliver.go` | `TestHandleDeliver_StoppingStillRecords` |
+| — | the gates' `rotMu` hold across check→write cannot be turned red by end state (`TestRotateCommit_DialAfterGateCheckIsNotLost` sees the same final row either way); it is enforced by review, and the seam test documents the ordering. Likewise `at` is never served. Record both as "structural, not observable". | `hosts_rotate.go`, `rotation.go` | — |
 
 - [ ] **Step 1: Run every row, record, revert**
 - [ ] **Step 2: `git status --short` shows only the record; commit**
 
 ```bash
 git add docs/plans/2026-09-18-peer-pairing-d3-mutations.md
-git commit --only docs/plans/2026-09-18-peer-pairing-d3-mutations.md -m "docs(plan): D3 mutation-test record (M1–M22 all red)
+git commit --only docs/plans/2026-09-18-peer-pairing-d3-mutations.md -m "docs(plan): D3 mutation-test record (M1–M27 all red)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
