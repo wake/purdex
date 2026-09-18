@@ -1,6 +1,6 @@
 # Plan — P-C.3b: SPA "Hand to nex" / "Take back to terminal"
 
-- Spec: `2026-09-18-pc-launch-ui-spec.md` v1.4 §4.4 (SPA + UI parts), §6
+- Spec: `2026-09-18-pc-launch-ui-spec.md` v1.6 §4.4 (SPA + UI parts), §6
   items 3–6. Daemon endpoints shipped in alpha.386/387 (P-C.3a), verified
   live in §6.3.1.
 - Worktree `.claude/worktrees/pc-launch-ui`, branch `worktree-pc-launch-ui`

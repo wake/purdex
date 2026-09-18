@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1.5 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave (§9)
+- Status: v1.6 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave; P-C.3b fix wave (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -423,8 +423,11 @@ resume_command, lease_id?}`.
   beside `composer.ts:27 resolveResumeCommand(record, templates)` that takes
   agent type + id instead of a rebuild record; F14); `POST nex-handoff`; on
   200 → pane content ← `{kind: 'execution', executionId, host: hostId,
-  from: {sessionCode, tmuxInstance, cachedName}}`. If the swap throws (pane
-  gone) → toast with an "open execution" action (`openSingletonTab`). On 409
+  from: {sessionCode, tmuxInstance, cachedName}}` via
+  `useTabStore.trySetPaneContent`, a compare-and-swap on the content the
+  call started from (same host, session code and tmux instance). Pane gone
+  or content changed → `swapped: false` → toast with an "open execution"
+  action (`openSingletonTab`); the handoff itself still happened. On 409
   `delegate_rejected` → toast `handoff.error.rejected` with the reason and
   whether the terminal was restored.
 - `takeBack(hostId, executionId, from, leaseId?)`: compose
@@ -432,10 +435,19 @@ resume_command, lease_id?}`.
   `lease_id` when this tab holds one (the pane's lease hook exposes it; no
   hook is called from `lib/`); on 200 → pane content ← `{kind:
   'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName,
-  tmuxInstance}`. `404 session_missing` / `409 tmux_instance_mismatch` →
+  tmuxInstance}` (compare-and-swap: the pane must still show this
+  execution). `404 session_missing` / `409 tmux_instance_mismatch` →
   toast, **execution pane untouched, no interrupt happened** (daemon
   preflight guarantees it). `409 held_by` → toast with the principal.
 - Both send `expected_tmux_instance` from the pane content / `from`.
+- The wrappers (`handoff-api.ts`) refuse a host id the host store no longer
+  holds (`host_removed`, no request sent — `hostFetch` would otherwise fall
+  back to the active host's daemon), and both orchestrations `await
+  useHostConfigStore.ensureLoaded(hostId)` before reading the resume
+  template so a host override is honoured even when Host › Commands was
+  never visited (a failed load falls through to the defaults).
+- Execution writes (send / interrupt / terminate) are frozen while a
+  take-back is pending; they re-enable if it fails.
 
 #### UI
 
@@ -769,3 +781,5 @@ scratch dir removed; daemon not restarted. Token was read with a single
   the lease hook's `forget()` before the swap so the unmounting hook does
   not release a consumed lease; the manual-resume hint is suppressed when
   the daemon rolled back.
+- v1.6 — P-C.3b fix wave: host guard; config-loaded template; CAS pane
+  swap; writes frozen during take-back.
