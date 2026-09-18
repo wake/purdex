@@ -75,9 +75,13 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
     }
   }
 
+  // No `MIN_PANEL_HEIGHT` floor here — that belongs only to `place()`, which
+  // chooses `top` so 160px fits when the viewport allows it. Flooring the
+  // *height* here too would let a dragged-down or resized-small panel grow
+  // past the bottom of the viewport; the only floor a height needs is 0.
   const applyMaxHeight = (top: number) => {
     const el = panelRef.current
-    if (el) el.style.maxHeight = `${Math.max(MIN_PANEL_HEIGHT, window.innerHeight - top - PADDING)}px`
+    if (el) el.style.maxHeight = `${Math.max(0, window.innerHeight - top - PADDING)}px`
   }
 
   const clamp = (left: number, top: number) => ({
