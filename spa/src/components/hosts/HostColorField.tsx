@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -14,6 +14,7 @@ import { rgbaString } from '../../lib/color-space'
 import { SegmentControl } from '../settings/SegmentControl'
 import { Field } from './form-fields'
 import { HostColorLayerEditor } from './HostColorLayerEditor'
+import { FloatingPanel } from '../FloatingPanel'
 
 const LAYERS: readonly HostColorLayerName[] = ['main', 'middle', 'light']
 
@@ -41,6 +42,7 @@ export function HostColorField({
   const [innerMode, setInnerMode] = useState<HostColorMode>('console')
   const mode = controlledMode ?? innerMode
   const [open, setOpen] = useState<HostColorLayerName | null>(null)
+  const swatchRowRef = useRef<HTMLDivElement>(null)
 
   const ownSet = colors?.[mode]
   const resolved = resolveHostColorSet({ colors, color: legacy }, mode)
@@ -116,7 +118,7 @@ export function HostColorField({
           />
         </div>
 
-        <div className="flex flex-wrap items-start gap-2">
+        <div ref={swatchRowRef} className="flex flex-wrap items-start gap-2">
           {LAYERS.map((layer) => {
             const l = resolved?.[layer]
             const own = layer === 'main' || ownSet?.[layer]?.color !== undefined
@@ -162,7 +164,16 @@ export function HostColorField({
           </button>
         </div>
 
-        {editorProps && <HostColorLayerEditor key={`${mode}:${editorProps.layer}`} {...editorProps} />}
+        {editorProps && (
+          <FloatingPanel
+            title={t(`hosts.color.layer.${editorProps.layer}`)}
+            anchorRef={swatchRowRef}
+            onClose={() => setOpen(null)}
+            width={320}
+          >
+            <HostColorLayerEditor key={`${mode}:${editorProps.layer}`} {...editorProps} />
+          </FloatingPanel>
+        )}
       </div>
     </Field>
   )

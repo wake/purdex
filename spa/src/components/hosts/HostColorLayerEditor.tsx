@@ -146,7 +146,7 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
       data-testid="host-color-editor"
       role="group"
       aria-label={t(`hosts.color.layer.${layer}`)}
-      className="border border-border-default rounded-lg p-3 bg-surface-secondary space-y-3 max-w-sm"
+      className="space-y-3"
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs text-text-secondary">

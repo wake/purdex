@@ -103,14 +103,20 @@ export function WorkspaceIconPicker({ currentIcon, onSelect, onCancel, inline, c
     }
   }, [weight])
 
-  // Close on Escape key
+  // Close on Escape key — but only for the standalone modal path. Inline mode is
+  // always hosted inside a container that owns dismissal (e.g. `FloatingPanel`,
+  // which already applies its own IME/topmost-panel rules); registering a second,
+  // unconditional listener here would bypass those rules.
   useEffect(() => {
+    if (inline) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel()
+      if (e.key !== 'Escape') return
+      if (e.isComposing || e.keyCode === 229) return
+      onCancel()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [onCancel])
+  }, [inline, onCancel])
 
   // Reset scroll position when category or search changes
   useEffect(() => {

@@ -129,4 +129,18 @@ describe('WorkspaceIconPicker', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onCancel).toHaveBeenCalled()
   })
+
+  it('ignores an Escape sent by IME composition', () => {
+    const onCancel = vi.fn()
+    render(<WorkspaceIconPicker currentIcon={undefined} onSelect={vi.fn()} onCancel={onCancel} />)
+    fireEvent.keyDown(document, { key: 'Escape', isComposing: true })
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('inline mode does not register its own Escape listener — the host container owns dismissal', () => {
+    const onCancel = vi.fn()
+    render(<WorkspaceIconPicker inline currentIcon={undefined} onSelect={vi.fn()} onCancel={onCancel} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).not.toHaveBeenCalled()
+  })
 })
