@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.381] - 2026-09-18
+
+### Feature: Host Color Modes P1 — 每台 host 依 mode 的三色資料層 + 移除 ✳ 標題符號（#1144）
+
+alpha.362 的 host badge 用了一陣子之後的結論：一台 host 一個顏色、每列畫法一樣，作用中／非作用中／純 shell 分頁全長一個樣。這是三個 PR 的第一個，**只換資料層，badge 外觀這版不變**。
+
+#### 資料模型
+
+`HostConfig.colors` 依 mode（`console` = 主 pane 沒 agentType、`terminal` = 有 agentType、`execution` = 預留給 P-C 的 execution tab）各一組 `main` / `middle` / `light`，每層帶 alpha。繼承鏈是 `colors[mode] → colors.console → 舊的 color → 沒顏色`；`middle` / `light` 沒設顏色就沿用 `main` 的色相、只帶透明度（預設 100 / 60 / 22，22 就是現在的底色濃度）。舊的 `color` 欄位**只讀不寫**：兩台已設的顏色照舊顯示，任何新的寫入都會把它換成 `colors` 並刪掉舊欄位——alpha 階段照慣例不做 migration。
+
+`resolveHostColorSet` / `resolveHostColors` 是唯一的讀取入口（純函數，輸出 `rgba()`），`useTabHostBadge` 與 Host 設定頁的 Color 列都改走它；`setHostColor` 保留簽名、內部改寫 `colors.console.main`，所以現在的色塊 UI 不用動。sync 的 `sanitizeHostConfig` 同步學會清 `colors`：非物件整個丟、未知 mode 丟、`main` 壞掉整組丟、`middle`/`light` 壞掉只丟那層，全有效時保持引用不重建。
+
+#### ✳ 不見了
+
+Claude Code 把 `✳ <摘要>`（U+2733＋空白）寫進 tmux `pane_title`，Purdex 一直原樣拼進分頁標題。新增 `Strip agent title marker` 設定（預設開、有同步），pattern 表 `AGENT_TITLE_MARKERS` 按 agentType 查——codex 那條等使用者給樣本再補（實測 codex 0.153.4 的 pane_title 只有 cwd basename，沒有動畫字元；他看到的動畫多半是 Purdex 自己的圖示動畫，待確認）。
+
+#### review 抓到什麼
+
+codex plan review 七條全進 plan：store 驗證改嚴格（alpha 必須是有限數字、color 必須已是 `#rrggbb`、任何壞輸入 no-op 不 throw）、legacy 只在 **applied** write 才刪、resolver 對旁路進來的髒 `colors` 補了不 throw 的測試、sync contributor 補了 hostile `colors` payload 測試。PR R1 與攻擊方同指一條：移除本來就不存在的 `middle`/`light` 層仍算 applied write、順手把 legacy 刪了——已修成 no-op。critic 對「有 legacy＋terminal set、沒 console set 時按 No color」判定 spec 要先改字：現在明定那種 host 清 console 就是清 legacy，因為 resolver 讓使用者看到的 console 顏色就是 legacy。既有問題另開 #1143（sync payload 裡 host entry 是 null 會 throw）。
+
+6295 tests 全綠。純 SPA，daemon 免動。下一步 P2：badge 三態渲染（active/hover 用 main、inactive 用 middle）＋設定頁拿掉兩個濃度欄位並補標籤；P3：色盤 popover。
+
 ## [1.0.0-alpha.380] - 2026-09-18
 
 ### Feature: New Tab「Headless」區塊 + 共用的 nex host store（P-C.1，#1141）
