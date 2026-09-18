@@ -131,3 +131,28 @@ export function toOutcome(v: PeerHostVerify): VerifyOutcome {
   if (v.ok) return { ok: true, self_alias: v.self_alias, daemon_version: v.daemon_version, host_id: v.host_id }
   return { ok: false, error: v.error || 'peer reported ok=false' }
 }
+
+export type RotationOffer = 'commit' | 'cancel' | 'none'
+
+/**
+ * Spec §7.3: which single rotation control the page may offer for a row,
+ * read from the ROW ALONE — never from the page's memory of its own push.
+ * The caller guarantees the row is fresh (read after the evidence dial);
+ * this function only applies the table:
+ *
+ *   rotation_pending=false            → null      (no rotation; a `last_inbound_auth`
+ *                                                  note with nothing pending — e.g. after
+ *                                                  a commit — is not a rotation)
+ *   pending, last_inbound_auth='current' → 'commit' (the peer is on the new token)
+ *   pending, last_inbound_auth='prev'    → 'cancel' (the peer still presents the old one)
+ *   pending, last_inbound_auth=''        → 'none'   (the peer has not dialled since;
+ *                                                  the daemon would 409 both, §6.3)
+ */
+export function rotationOffer(
+  row: { rotation_pending: boolean; last_inbound_auth: '' | 'current' | 'prev' },
+): RotationOffer | null {
+  if (!row.rotation_pending) return null
+  if (row.last_inbound_auth === 'current') return 'commit'
+  if (row.last_inbound_auth === 'prev') return 'cancel'
+  return 'none'
+}

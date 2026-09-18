@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  aliasDrift, matchCounterpart, matchReturnEntry, normalizePeerUrl, pairStatus, toOutcome,
-  type InboundState, type PairStatus, type Side, type VerifyOutcome,
+  aliasDrift, matchCounterpart, matchReturnEntry, normalizePeerUrl, pairStatus, rotationOffer, toOutcome,
+  type InboundState, type PairStatus, type RotationOffer, type Side, type VerifyOutcome,
 } from './peer-pairing'
 import type { PeerHostRow } from './host-api'
 
@@ -147,5 +147,37 @@ describe('toOutcome', () => {
   it('an ok:false with no error text still names a cause (belt and braces over the daemon guarantee)', () => {
     expect(toOutcome({ alias: 'a', host_id: '', ok: false, self_alias: '', daemon_version: '' }))
       .toEqual({ ok: false, error: 'peer reported ok=false' })
+  })
+})
+
+describe('rotationOffer — spec §7.3, a function of the row alone', () => {
+  type Row = Parameters<typeof rotationOffer>[0]
+  const cases: Array<[string, Row, RotationOffer | null]> = [
+    ['nothing pending, never dialled', { rotation_pending: false, last_inbound_auth: '' }, null],
+    ['nothing pending, current token noted (after a commit) is not a rotation', { rotation_pending: false, last_inbound_auth: 'current' }, null],
+    ['nothing pending, prev noted is still not a rotation', { rotation_pending: false, last_inbound_auth: 'prev' }, null],
+    ['pending, peer is on the new token → Commit', { rotation_pending: true, last_inbound_auth: 'current' }, 'commit'],
+    ['pending, peer still presents the old token → Cancel', { rotation_pending: true, last_inbound_auth: 'prev' }, 'cancel'],
+    ['pending, peer has not dialled since → neither (Refresh only)', { rotation_pending: true, last_inbound_auth: '' }, 'none'],
+  ]
+  it.each(cases)('%s', (_name, row, want) => {
+    expect(rotationOffer(row)).toBe(want)
+  })
+  it('exactly one offer per row: commit and cancel are never both offered', () => {
+    const auths: Row['last_inbound_auth'][] = ['', 'current', 'prev']
+    for (const pending of [true, false]) {
+      for (const last_inbound_auth of auths) {
+        const offer = rotationOffer({ rotation_pending: pending, last_inbound_auth })
+        expect([null, 'commit', 'cancel', 'none']).toContain(offer)
+        if (!pending) expect(offer).toBeNull()
+      }
+    }
+  })
+  it('ignores every other field on the row — the offer is read from these two alone', () => {
+    const row = {
+      alias: 'air', url: 'http://100.64.0.4:7860', host_id: 'a:1', verified: false, has_token: false,
+      has_inbound_token: false, allow_bypass: false, rotation_pending: true, last_inbound_auth: 'current' as const,
+    }
+    expect(rotationOffer(row)).toBe('commit')
   })
 })
