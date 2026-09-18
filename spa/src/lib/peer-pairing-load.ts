@@ -107,7 +107,7 @@ export async function loadPairings(
     }
     const theirs = await listOf(y.hostId)
     if (theirs instanceof Error) {
-      return { entry, counterpart, counterpartCause: `list: ${theirs.message}`, returnEntry: null, outbound: 'pending', inbound: 'counterpart-unavailable' }
+      return { entry, counterpart, counterpartCause: `list: ${msg(theirs)}`, returnEntry: null, outbound: 'pending', inbound: 'counterpart-unavailable' }
     }
     // The same join rule with the roles swapped: which of THEIR entries is us?
     const returnEntry = matchReturnEntry({ host_id: self.host_id, url: x.url }, theirs)

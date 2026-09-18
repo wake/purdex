@@ -196,6 +196,14 @@ describe('loadPairings — the return side (§5.1 inbound states)', () => {
     expect(final.rows[0].inbound).toBe('counterpart-unavailable')
   })
 
+  it('a failing list(Y) that is a HostApiError keeps the daemon detail, not the status line (codex F3)', async () => {
+    const a = fakeApi({ ...base, list: { hM: [row({})], hA: new HostApiError(403, 'Forbidden', 'admin required') },
+      verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb') } })
+    const final = await loadPairings(X, [AIR], a, () => {})
+    expect(final.rows[0].counterpartCause).toBe('list: admin required')
+    expect(final.rows[0].inbound).toBe('counterpart-unavailable')
+  })
+
   it('two entries pointing at the same daemon share ONE list(Y) call', async () => {
     const a = fakeApi({ ...base,
       list: { hM: [row({}), row({ alias: 'air-again', url: 'http://air.local:7860' })],
