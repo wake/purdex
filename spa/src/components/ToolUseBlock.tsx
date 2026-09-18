@@ -17,7 +17,8 @@ interface Props {
 
 export default function ToolUseBlock({ block, tools, now }: Props) {
   const t = useI18nStore((s) => s.t)
-  const entry = block.id ? tools?.[block.id] : undefined
+  // Own-key lookup: block ids are untrusted strings (`constructor` would hit Object.prototype).
+  const entry = tools && block.id && Object.hasOwn(tools, block.id) ? tools[block.id] : undefined
   const activity = entry ? toToolCallActivity(entry, now) : undefined
   // `summaryEntry` (P-B3 R1): the entry's N2 primary_arg / known overlay; undefined → client summary.
   return <ToolCallBlock tool={block.name ?? t('execution.tool.unknown')} input={block.input ?? {}} activity={activity} summaryEntry={entry} />

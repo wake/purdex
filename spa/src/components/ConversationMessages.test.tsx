@@ -189,6 +189,55 @@ describe('ConversationMessages', () => {
     })
   })
 
+  // ---- P-B3.2 spec §4.4 R4: raw user tool_result → ToolResultBlock.facts by tool_use_id ----
+  describe('tool result facts (P-B3 R4)', () => {
+    const resultFrame = (toolUseId: string): StreamMessage => ({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'edited', is_error: false }], stop_reason: null },
+    } as StreamMessage)
+    const editDone: ToolActivity = {
+      name: 'Edit', startedAt: 1, endedAt: 2, status: 'done',
+      diff: { path: '/x', added: 1, removed: 1, hunks: [], truncated: false },
+    }
+
+    it('a tools entry for the tool_use_id with a diff → facts span "+1 −1"', () => {
+      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        tools={{ tu1: editDone }} />)
+      expect(screen.getByTestId('tool-result-facts')).toHaveTextContent('+1 −1')
+    })
+
+    it('no entry for this tool_use_id → no facts span', () => {
+      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        tools={{ other: editDone }} />)
+      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
+      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+    })
+
+    it('tools undefined (Stream mode) → no facts span', () => {
+      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
+      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+    })
+
+    it('own-key lookup: tool_use_id "constructor" with an empty tools map → no facts, no crash', () => {
+      render(<ConversationMessages messages={[resultFrame('constructor')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        tools={{}} />)
+      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
+      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('tool-result-denied')).not.toBeInTheDocument()
+    })
+
+    it('own-key lookup: an entry reachable only through the prototype chain is ignored', () => {
+      // `tools.tu1` resolves via the prototype but is not an own key — a
+      // `tools?.[id]` lookup would pick it up; Object.hasOwn must not.
+      const inherited = Object.create({ tu1: editDone }) as Record<string, ToolActivity>
+      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        tools={inherited} />)
+      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
+      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+    })
+  })
+
   describe('auto-scroll (R4)', () => {
     const scrollTo = vi.fn()
     afterEach(() => {

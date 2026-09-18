@@ -1,6 +1,7 @@
 // spa/src/components/ToolResultBlock.test.tsx
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { Prohibit } from '@phosphor-icons/react'
 import ToolResultBlock from './ToolResultBlock'
 
 beforeEach(() => { cleanup() })
@@ -73,5 +74,85 @@ describe('baseline snapshots (P-B3.2 guard)', () => {
     const { container } = render(<ToolResultBlock content={content} isError={true} />)
     fireEvent.click(screen.getByTestId('tool-result-header'))
     expect(container.firstChild).toMatchSnapshot()
+  })
+})
+
+// P-B3.2 Task 8 — `facts` prop: R4 facts span + R3 denied override of isError.
+describe('facts prop (P-B3.2 R3 / R4)', () => {
+  // Phosphor renders no testid on these icons; identify them by the path data
+  // (the same strings the baseline snapshots above pin down).
+  const XCIRCLE_PATH = 'M165.66,101.66,139.31,128l26.35,26.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z'
+  const CHECKCIRCLE_PATH = 'M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z'
+  const statusIconPath = (container: HTMLElement) =>
+    container.querySelectorAll('[data-testid="tool-result-header"] > svg')[1]?.querySelector('path')?.getAttribute('d')
+  const prohibitPath = () => {
+    const { container, unmount } = render(<Prohibit size={14} />)
+    const d = container.querySelector('path')?.getAttribute('d')
+    unmount()
+    return d
+  }
+
+  it('R4: file.lines → "4 lines" in the facts span after the summary', () => {
+    render(<ToolResultBlock content="a\nb\nc\nd" isError={false} facts={{ file: { path: '/x', lines: 4 } }} />)
+    const facts = screen.getByTestId('tool-result-facts')
+    expect(facts).toHaveTextContent('4 lines')
+    expect(facts.className).toContain('tabular-nums')
+    // order: summary span, then facts span
+    const spans = screen.getByTestId('tool-result-header').querySelectorAll('span')
+    expect(spans[0].className).toContain('truncate')
+    expect(spans[1]).toBe(facts)
+  })
+
+  it('R4: diff → "+1 −1"', () => {
+    render(<ToolResultBlock content="ok" isError={false}
+      facts={{ diff: { path: '/x', added: 1, removed: 1, hunks: [], truncated: false } }} />)
+    expect(screen.getByTestId('tool-result-facts')).toHaveTextContent('+1 −1')
+  })
+
+  it('R3: denied + isError → neutral colours, Prohibit icon, denied badge, raw content still shown', () => {
+    const { container } = render(<ToolResultBlock content="Permission denied" isError={true} facts={{ status: 'denied' }} />)
+    const block = container.querySelector('[data-testid="tool-result-block"]')!
+    expect(block.className).toContain('border-[#2a302a]')
+    expect(block.className).not.toContain('border-[#302a2a]')
+    const header = screen.getByTestId('tool-result-header')
+    expect(header.className).toContain('text-[#8bc]')
+    expect(header.className).not.toContain('text-[#c77]')
+    const badge = screen.getByTestId('tool-result-denied')
+    expect(badge).toHaveTextContent('denied')
+    expect(badge.className).toContain('text-status-warning')
+    // icon: Prohibit, not XCircle / CheckCircle; still exactly two svgs (caret + status)
+    expect(container.querySelectorAll('[data-testid="tool-result-header"] > svg')).toHaveLength(2)
+    const d = statusIconPath(container as HTMLElement)
+    expect(d).not.toBe(XCIRCLE_PATH)
+    expect(d).not.toBe(CHECKCIRCLE_PATH)
+    expect(d).toBe(prohibitPath())
+    fireEvent.click(header)
+    const content = screen.getByTestId('tool-result-content')
+    expect(content).toHaveTextContent('Permission denied')
+    expect(content.className).toContain('text-[#9b9]')
+  })
+
+  it('R3: denied without isError also renders the Prohibit icon and the badge', () => {
+    const { container } = render(<ToolResultBlock content="x" isError={false} facts={{ status: 'denied' }} />)
+    expect(screen.getByTestId('tool-result-denied')).toBeInTheDocument()
+    expect(statusIconPath(container as HTMLElement)).toBe(prohibitPath())
+  })
+
+  it('facts with no renderable segments → no facts node; DOM identical to the no-facts render', () => {
+    const a = render(<ToolResultBlock content="ok" isError={false} />)
+    const plain = a.container.innerHTML
+    a.unmount()
+    const b = render(<ToolResultBlock content="ok" isError={false} facts={{ status: 'done' }} />)
+    expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-result-denied')).not.toBeInTheDocument()
+    expect(b.container.innerHTML).toBe(plain)
+  })
+
+  it('error + facts (not denied) keeps the error colours and the XCircle icon', () => {
+    const { container } = render(<ToolResultBlock content="boom" isError={true}
+      facts={{ status: 'error', output: { totalLines: 3, totalBytes: 9, truncated: false, hasNonText: false } }} />)
+    expect(container.querySelector('[data-testid="tool-result-block"]')!.className).toContain('border-[#302a2a]')
+    expect(statusIconPath(container as HTMLElement)).toBe(XCIRCLE_PATH)
+    expect(screen.getByTestId('tool-result-facts')).toHaveTextContent('3 lines')
   })
 })

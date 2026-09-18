@@ -100,7 +100,12 @@ export default function ConversationMessages({
                 // Tool result
                 if (block.type === 'tool_result') {
                   const content = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
-                  return <ToolResultBlock key={j} content={content} isError={block.is_error ?? false} />
+                  // P-B3 R4: the N2 entry for this result's tool_use_id → header facts / denied
+                  // override. Own-key lookup: ids are untrusted strings (`constructor` …).
+                  const facts = tools && block.tool_use_id && Object.hasOwn(tools, block.tool_use_id)
+                    ? tools[block.tool_use_id]
+                    : undefined
+                  return <ToolResultBlock key={j} content={content} isError={block.is_error ?? false} facts={facts} />
                 }
 
                 // Text blocks

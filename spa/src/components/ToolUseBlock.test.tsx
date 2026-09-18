@@ -33,6 +33,22 @@ describe('ToolUseBlock', () => {
     expect(screen.queryByTestId('tool-icon-spinner')).not.toBeInTheDocument()
   })
 
+  it('own-key lookup: block.id "constructor" with an empty tools map → plain DOM, no crash', () => {
+    render(<ToolUseBlock block={{ ...block, id: 'constructor' }} tools={{}} now={13_400} />)
+    expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-elapsed')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-duration')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-denied')).not.toBeInTheDocument()
+  })
+
+  it('own-key lookup: an entry reachable only through the prototype chain is ignored', () => {
+    const inherited = Object.create({ tu1: running }) as Record<string, ToolActivity>
+    render(<ToolUseBlock block={block} tools={inherited} now={13_400} />)
+    expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-icon-spinner')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-elapsed')).not.toBeInTheDocument()
+  })
+
   it('a block without an id never looks up tools', () => {
     render(<ToolUseBlock block={{ type: 'tool_use', name: 'Bash', input: {} }} tools={{ undefined: running } as Record<string, ToolActivity>} now={13_400} />)
     expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
