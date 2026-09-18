@@ -363,7 +363,7 @@ only expensive ones and equal one `pdx peers --all` on each side of each pair.
 ### 5.3 What one row shows
 
 ```
-air  (App host "Air 2026")                                    [Verify]  [Rename to air26]
+air  (App host "Air 2026")                                    [Rename to air26]
   http://100.64.0.4:7860 · wakes-air-2026:oa6drb
   mlab → air     ✓ reachable, daemon 1.0.0-alpha.376        calls itself "air26" (drift)
   air  → mlab    ✓ reachable  (air's entry: mini-lab)
