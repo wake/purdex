@@ -8,74 +8,81 @@ import (
 	"github.com/wake/purdex/internal/agent/codex"
 )
 
-// expectedCodexInstallableEventNames lists the hook events Purdex currently
-// installs for Codex, keyed on PurdexName (Pdx-prefixed) post P3-T4. Used for
-// runtime catalog assertions. L2 (alpha.282) added PdxPreToolUse to the
-// installable set as the codex non-prompt turn attach trigger.
+// expectedCodexInstallableEventNames lists the hook events Purdex installs
+// for Codex 0.153.x (issue #1159), keyed on PurdexName.
 var expectedCodexInstallableEventNames = []string{
 	"PdxSessionStart",
 	"PdxUserPromptSubmit",
 	"PdxSubagentStart",
 	"PdxSubagentStop",
 	"PdxStop",
-	"PdxStopFailure",
-	"PdxNotification",
 	"PdxPermissionRequest",
 	"PdxSessionEnd",
 	"PdxPreToolUse",
+	"PdxPostToolUse",
+	"PdxInterrupt",
 }
 
-// expectedCodexEventNames lists the upstream event-name keys Codex's
-// installer writes into ~/.codex/hooks.json. codex has 1:1 PurdexName ↔
-// upstream-key mapping, so this is the strings.TrimPrefix view of
-// expectedCodexInstallableEventNames. Used by mergeCodexHooks tests that
-// index hooks.json by upstream key.
+// expectedCodexEventNames is the upstream-key view of the installable set.
 var expectedCodexEventNames = []string{
 	"SessionStart",
 	"UserPromptSubmit",
 	"SubagentStart",
 	"SubagentStop",
 	"Stop",
-	"StopFailure",
-	"Notification",
 	"PermissionRequest",
 	"SessionEnd",
 	"PreToolUse",
+	"PostToolUse",
+	"Interrupt",
 }
 
-// expectedCodexCurrentUpstreamEventNames is pinned to Codex hooks docs,
-// fetched 2026-04-26 from https://developers.openai.com/codex/hooks. These are
-// the upstream event names (NOT PurdexName) used to assert the catalog covers
-// the upstream surface; PurdexName lookup goes through expectedCodexCatalogHandling.
+// expectedCodexCurrentUpstreamEventNames is pinned to the codex hooks docs
+// (https://developers.openai.com/codex/hooks), fetched 2026-09-18 for
+// codex-cli 0.153.4. Exactly the 12 upstream hook events.
 var expectedCodexCurrentUpstreamEventNames = []string{
 	"SessionStart",
+	"SessionEnd",
+	"SubagentStart",
+	"SubagentStop",
 	"PreToolUse",
 	"PermissionRequest",
 	"PostToolUse",
+	"PreCompact",
+	"PostCompact",
 	"UserPromptSubmit",
 	"Stop",
+	"Interrupt",
 }
 
-// expectedCodexCatalogHandling covers the current upstream Codex hook surface
-// plus Purdex compatibility entries that were already installable before the
-// catalog migration. Keys are PurdexName (Pdx-prefixed) post P3-T4.
+// expectedCodexRetiredUpstreamEventNames are keys the pre-0.153 installer
+// wrote that codex never fired. They stay in the catalog as ignored so
+// in-flight payloads still resolve, but are not upstream events.
+var expectedCodexRetiredUpstreamEventNames = []string{
+	"Notification",
+	"StopFailure",
+}
+
 var expectedCodexCatalogHandling = map[string]agent.HookHandling{
 	"PdxSessionStart":      agent.HookHandlingStatus,
 	"PdxUserPromptSubmit":  agent.HookHandlingStatus,
 	"PdxSubagentStart":     agent.HookHandlingDetail,
 	"PdxSubagentStop":      agent.HookHandlingDetail,
 	"PdxStop":              agent.HookHandlingStatus,
-	"PdxStopFailure":       agent.HookHandlingStatus,
-	"PdxNotification":      agent.HookHandlingStatus,
+	"PdxStopFailure":       agent.HookHandlingIgnored,
+	"PdxNotification":      agent.HookHandlingIgnored,
 	"PdxPermissionRequest": agent.HookHandlingStatus,
 	"PdxSessionEnd":        agent.HookHandlingStatus,
 	"PdxPreToolUse":        agent.HookHandlingDetail,
-	"PdxPostToolUse":       agent.HookHandlingUnsupported,
+	"PdxPostToolUse":       agent.HookHandlingStatus,
+	"PdxInterrupt":         agent.HookHandlingStatus,
+	"PdxPreCompact":        agent.HookHandlingIgnored,
+	"PdxPostCompact":       agent.HookHandlingIgnored,
 }
 
 // TestCodexEvents_ExpandedToCatalog asserts Events() exposes the classified
 // upstream catalog while the installer still derives its installable subset.
-func TestCodexEvents_ExpandedTo9(t *testing.T) {
+func TestCodexEvents_MatchesCatalogHandling(t *testing.T) {
 	p := codex.NewProvider()
 	events := p.Events()
 	if len(events) != len(expectedCodexCatalogHandling) {
@@ -116,7 +123,9 @@ func TestCodexEventsClassifyCurrentDocs(t *testing.T) {
 			t.Errorf("codex %s handling = %q, want %q", e.PurdexName, got, want)
 		}
 		if !agent.IsInstallableHookSpec(e) && len(e.EmitsStatus) != 0 {
-			t.Errorf("codex non-installable %s EmitsStatus = %v, want empty", e.PurdexName, e.EmitsStatus)
+			if _, retired := expectedCodexRetiredEmitsStatus[e.PurdexName]; !retired {
+				t.Errorf("codex non-installable %s EmitsStatus = %v, want empty", e.PurdexName, e.EmitsStatus)
+			}
 		}
 	}
 }
@@ -165,32 +174,80 @@ func TestCodexEvents_InstallableSetStaysStable(t *testing.T) {
 	}
 }
 
-// TestCodexEvents_EmitsStatusForNotification asserts codex Notification is
-// declared to emit {Waiting, Idle} matching cc.
-func TestCodexEvents_EmitsStatusForNotification(t *testing.T) {
+// expectedCodexRetiredEmitsStatus pins the parser-retained EmitsStatus of
+// the retired entries: they are not installable (explicit Ignored) but
+// DeriveStatus still handles them (spec §2.1), so SupportedStatuses keeps
+// error/waiting/idle from them (spec §2.5).
+var expectedCodexRetiredEmitsStatus = map[string][]agent.Status{
+	"PdxNotification": {agent.StatusWaiting, agent.StatusIdle},
+	"PdxStopFailure":  {agent.StatusError},
+}
+
+// TestCodexEvents_RetiredEntriesIgnored asserts Notification / StopFailure
+// remain resolvable, are explicitly ignored (never installed), and keep
+// their parser-retained EmitsStatus.
+func TestCodexEvents_RetiredEntriesIgnored(t *testing.T) {
 	p := codex.NewProvider()
-	var spec *agent.HookEventSpec
+	for _, key := range expectedCodexRetiredUpstreamEventNames {
+		spec, ok := agent.LookupByUpstreamKey(p.Events(), key)
+		if !ok {
+			t.Fatalf("codex catalog missing retired upstream key %q", key)
+		}
+		if spec.PurdexName != "Pdx"+key {
+			t.Errorf("retired %q PurdexName = %q, want %q", key, spec.PurdexName, "Pdx"+key)
+		}
+		if spec.Handling != agent.HookHandlingIgnored {
+			t.Errorf("retired %q Handling = %q, want explicit ignored", key, spec.Handling)
+		}
+		if agent.IsInstallableHookSpec(spec) {
+			t.Errorf("retired %q is installable", key)
+		}
+		want := expectedCodexRetiredEmitsStatus[spec.PurdexName]
+		if len(spec.EmitsStatus) != len(want) {
+			t.Errorf("retired %q EmitsStatus = %v, want %v", key, spec.EmitsStatus, want)
+		}
+	}
+}
+
+// TestCodexEvents_UpstreamPinBidirectional asserts catalog upstream keys
+// minus the retired set equal the pinned 0.153.4 docs list exactly, and
+// that no retired key is claimed as current upstream.
+func TestCodexEvents_UpstreamPinBidirectional(t *testing.T) {
+	p := codex.NewProvider()
+	retired := map[string]bool{}
+	for _, k := range expectedCodexRetiredUpstreamEventNames {
+		retired[k] = true
+	}
+	pinned := map[string]bool{}
+	for _, k := range expectedCodexCurrentUpstreamEventNames {
+		if retired[k] {
+			t.Fatalf("pinned upstream list contains retired key %q", k)
+		}
+		pinned[k] = true
+	}
+	catalog := map[string]bool{}
 	for _, e := range p.Events() {
-		if e.PurdexName == "PdxNotification" {
-			ec := e
-			spec = &ec
-			break
+		for _, k := range e.UpstreamKeys {
+			if catalog[k] {
+				t.Errorf("duplicate upstream key %q in codex catalog", k)
+			}
+			catalog[k] = true
 		}
 	}
-	if spec == nil {
-		t.Fatal("codex Events missing PdxNotification entry")
-	}
-	got := make(map[agent.Status]bool, len(spec.EmitsStatus))
-	for _, s := range spec.EmitsStatus {
-		got[s] = true
-	}
-	for _, want := range []agent.Status{agent.StatusWaiting, agent.StatusIdle} {
-		if !got[want] {
-			t.Errorf("codex PdxNotification EmitsStatus missing %q (got %v)", want, spec.EmitsStatus)
+	for k := range pinned {
+		if !catalog[k] {
+			t.Errorf("codex catalog missing pinned upstream event %q", k)
 		}
 	}
-	if len(got) != 2 {
-		t.Errorf("codex PdxNotification EmitsStatus = %v, want exactly {Waiting, Idle}", spec.EmitsStatus)
+	for k := range catalog {
+		if !pinned[k] && !retired[k] {
+			t.Errorf("codex catalog upstream key %q is neither pinned nor retired", k)
+		}
+	}
+	for k := range retired {
+		if !catalog[k] {
+			t.Errorf("codex catalog missing retired key %q", k)
+		}
 	}
 }
 
@@ -221,12 +278,15 @@ func TestCodexEventsFutureOnlyFlags(t *testing.T) {
 		"PdxStop":              false,
 		"PdxSubagentStart":     true,
 		"PdxSubagentStop":      true,
-		"PdxStopFailure":       true,
-		"PdxNotification":      true,
+		"PdxStopFailure":       false,
+		"PdxNotification":      false,
 		"PdxPermissionRequest": false,
 		"PdxSessionEnd":        true,
 		"PdxPreToolUse":        true,
 		"PdxPostToolUse":       false,
+		"PdxInterrupt":         false,
+		"PdxPreCompact":        false,
+		"PdxPostCompact":       false,
 	}
 	p := codex.NewProvider()
 	events := p.Events()
@@ -318,6 +378,7 @@ var expectedCodexLifecycle = map[string]agent.LifecycleEventKind{
 	// applyFrameEvent case attaches the codex broker proxy ref for
 	// non-prompt turns (spec §3.3.C strategy a).
 	"PdxPreToolUse": agent.LifecycleUserPromptSubmit,
+	"PdxInterrupt":  agent.LifecycleStop,
 }
 
 // codexLegacyMetadata locks EmitsStatus / Description / FutureOnly / Handling
@@ -336,12 +397,15 @@ var expectedCodexPreservedMetadata = map[string]codexLegacyMetadata{
 	"PdxSubagentStart":     {[]agent.Status{}, "Nested sub-agent task dispatched", true, ""},
 	"PdxSubagentStop":      {[]agent.Status{}, "Nested sub-agent task completed", true, ""},
 	"PdxStop":              {[]agent.Status{agent.StatusIdle}, "Agent finished responding and is idle", false, ""},
-	"PdxStopFailure":       {[]agent.Status{agent.StatusError}, "Agent stopped due to an error", true, ""},
-	"PdxNotification":      {[]agent.Status{agent.StatusWaiting, agent.StatusIdle}, "Permission/elicitation/idle prompt notifications", true, ""},
+	"PdxStopFailure":       {[]agent.Status{agent.StatusError}, "Retired: not a codex hook event since 0.153", false, agent.HookHandlingIgnored},
+	"PdxNotification":      {[]agent.Status{agent.StatusWaiting, agent.StatusIdle}, "Retired: not a codex hook event since 0.153", false, agent.HookHandlingIgnored},
 	"PdxPermissionRequest": {[]agent.Status{agent.StatusWaiting}, "Tool permission request awaiting user approval", false, ""},
 	"PdxSessionEnd":        {[]agent.Status{agent.StatusClear}, "Codex session ended", true, ""},
 	"PdxPreToolUse":        {[]agent.Status{}, "Tool call about to execute", true, ""},
-	"PdxPostToolUse":       {[]agent.Status{}, "Tool call completed", false, agent.HookHandlingUnsupported},
+	"PdxPostToolUse":       {[]agent.Status{agent.StatusRunning}, "Tool call completed (signals running after permission grant)", false, ""},
+	"PdxInterrupt":         {[]agent.Status{agent.StatusIdle}, "Turn interrupted by the user", false, ""},
+	"PdxPreCompact":        {[]agent.Status{}, "Context compaction about to start", false, agent.HookHandlingIgnored},
+	"PdxPostCompact":       {[]agent.Status{}, "Context compaction completed", false, agent.HookHandlingIgnored},
 }
 
 // TestCodexEventSpecs_PurdexNamePdxPrefix verifies invariant 1: every codex
