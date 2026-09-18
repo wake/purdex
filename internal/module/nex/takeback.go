@@ -180,6 +180,17 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Last look before a key goes out, lock still held: the store read and
+	// the interrupt above are a window in which the user can resume by
+	// hand, and a resume command typed into a pane that already runs CC
+	// lands in CC's prompt as text. The execution is left as it is (settled,
+	// unarchived); the SPA learns which session is already up.
+	if m.prober.IsAliveFor("cc", target) {
+		writeHandoffError(w, http.StatusConflict, "cc_already_running", "Claude Code is already running in the pane",
+			map[string]any{"session_id": sid})
+		return
+	}
+
 	keys := strings.ReplaceAll(body.ResumeCommand, "{id}", sid) + "\n"
 	sent, err := m.tmux.SendKeysIfInstanceTarget(sess.TmuxID, paneWindow, expected, keys)
 	if err != nil {

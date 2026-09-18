@@ -403,6 +403,26 @@ func TestTakebackKeysSubstitutedWithNewlineBySessionID(t *testing.T) {
 	assert.Equal(t, []string{"cld-yolo --resume " + tbSessionID + " --verbose\n"}, rawKeysText(env.tmux))
 }
 
+// TestTakebackCCAppearsAfterPreflight409NoSendNoArchive: the user resumes
+// by hand between the preflight liveness check and the send (the store
+// read / interrupt window). The handler re-checks the pane right before
+// the conditional send, with the lock still held, and refuses: a second
+// resume typed into a pane that already runs CC would land in CC's prompt
+// as text (review R1-2). No keys, no archive — the execution is left as it
+// is, and the session id is reported so the SPA can say what is already
+// running.
+func TestTakebackCCAppearsAfterPreflight409NoSendNoArchive(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.onGet = func(int) { setPaneCCIdle(env.tmux, hoTarget) }
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "cc_already_running", body["code"])
+	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.Equal(t, 1, env.store.Calls(), "the row was read; the re-check came after")
+	assert.Empty(t, env.tmux.RawKeysSent(), "no resume keys")
+	env.assertNoArchive(t)
+}
+
 func TestTakeback500SendFailedNoArchive(t *testing.T) {
 	env := newTakebackEnv(t)
 	env.tmux.FailSendKeys = true
