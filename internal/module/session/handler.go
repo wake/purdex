@@ -89,15 +89,14 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Cwd = cwd
 
-	// Default and validate mode
-	if req.Mode == "" {
-		req.Mode = "terminal"
-	}
+	// Validate and normalise mode. Since P-D.2 the only mode is `terminal`;
+	// the legacy `stream` value is still accepted (old workspace snapshots
+	// and device-state backups may carry it) and coerced, never rejected.
 	switch req.Mode {
-	case "terminal", "stream":
-		// valid
+	case "", "terminal", "stream":
+		req.Mode = "terminal"
 	default:
-		http.Error(w, "invalid mode: must be terminal or stream", http.StatusBadRequest)
+		http.Error(w, "invalid mode: must be terminal", http.StatusBadRequest)
 		return
 	}
 
@@ -296,58 +295,6 @@ func (m *SessionModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 	_ = m.meta.DeleteMeta(info.TmuxID)
 
 	m.invalidateNameCache()
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-type switchModeRequest struct {
-	Mode string `json:"mode"`
-}
-
-func (m *SessionModule) handleSwitchMode(w http.ResponseWriter, r *http.Request) {
-	code := r.PathValue("code")
-
-	var req switchModeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Validate mode
-	switch req.Mode {
-	case "terminal", "stream":
-		// valid
-	default:
-		http.Error(w, "invalid mode: must be terminal or stream", http.StatusBadRequest)
-		return
-	}
-
-	// Verify session exists
-	info, err := m.GetSession(code)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if info == nil {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-
-	// Ensure meta record exists before updating
-	if err := m.meta.SetMeta(info.TmuxID, store.SessionMeta{
-		TmuxID: info.TmuxID,
-		Mode:   info.Mode,
-		Cwd:    info.Cwd,
-	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	mode := req.Mode
-	if err := m.UpdateMeta(code, MetaUpdate{Mode: &mode}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
