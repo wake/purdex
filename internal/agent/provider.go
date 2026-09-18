@@ -251,20 +251,6 @@ type SessionIdentifier interface {
 	IdentifyEvent(purdexName string, rawEvent json.RawMessage) (sessionID, cwd string)
 }
 
-// HistoryProvider can retrieve conversation history for a session.
-type HistoryProvider interface {
-	GetHistory(cwd string, sessionID string) ([]map[string]any, error)
-}
-
-// StreamCapable marks a provider that supports stream mode handoff.
-// Reserved for future implementation.
-type StreamCapable interface {
-	ExtractState(tmuxTarget string) (SessionState, error)
-	ExitInteractive(tmuxTarget string) error
-	RelayArgs(state SessionState) []string
-	ResumeCommand(state SessionState) string
-}
-
 // StatusSupporter is an optional capability for providers to declare which
 // Status values they can emit. Providers that do not implement this interface
 // are treated as "not declared" by the Coverage helper. Returning an empty
@@ -281,12 +267,6 @@ type StreamCapable interface {
 // catalog is a separate concern tracked by per-agent installer phases.
 type StatusSupporter interface {
 	SupportedStatuses() []Status
-}
-
-// SessionState holds agent session state for stream handoff.
-type SessionState struct {
-	SessionID string
-	Cwd       string
 }
 
 // ProbeIntentProvider declares probe-driven status transitions for an agent.

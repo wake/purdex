@@ -10,13 +10,6 @@ type CCOperator interface {
 	GetStatus(ctx context.Context, tmuxTarget string) (*StatusInfo, error)
 }
 
-// CCHistoryProvider interface for use by agent module.
-type CCHistoryProvider interface {
-	GetHistory(cwd string, ccSessionID string) ([]map[string]any, error)
-}
-
-// Registry keys for core.Registry (same keys as before).
-const (
-	HistoryKey  = "cc.history"
-	OperatorKey = "cc.operator"
-)
+// OperatorKey is the core.Registry key under which the CC provider publishes
+// its CCOperator (same key as before).
+const OperatorKey = "cc.operator"
