@@ -29,10 +29,12 @@
 - `POST /api/peers/hosts/{alias}/verify` → `{alias, host_id, ok, error?, self_alias, daemon_version}`; 404 `{error:"unknown alias"}` (`hosts_verify.go:22–80`). `ok:false` always carries non-empty `error`.
 - `PUT /api/peers/hosts/{alias}` body `{token?, allow_bypass?, alias?}` → 200 `hostRow`; 400/404/409 `{error: string}` (`hosts.go:84`, `writeJSONError` at `:90`).
 - `GET /api/peers/settings` → `{deliver: bool, alias: string}` (`settings.go:25`).
-- `GET /api/info` → `{host_id, tmux_instance, purdex_version, …}` (`internal/core/info_handler.go:67`); SPA type `HostInfo` in `stores/useHostStore.ts:52`.
+- `GET /api/info` → `{host_id, tmux_instance, purdex_version, …}` (`internal/core/info_handler.go:67`); SPA type `HostInfo` in `stores/useHostStore.ts:53`.
 - Daemon `normalizeHostURL` = `url.Parse` + `TrimRight("/")` (`hosts.go:130–151`); SPA `getDaemonBase(id)` = `` `http://${ip}:${port}` `` (`useHostStore.ts:242`). The existing SPA `normalizeUrl` (`lib/url-utils.ts`) returns `URL.href`, which *adds* a trailing slash — do not reuse it for the join.
-- `hostFetch(hostId, path, init)` attaches the admin token (`host-api.ts:140`). `HostApiError(status, statusText)` exists at `host-api.ts:221`.
-- Host sub-pages are registered in `spa/src/lib/register-modules/index.tsx:417–428` (ten entries, orders 0–9). Three tests pin that count/list: `lib/host-builtin-sections.test.tsx:101,105–111,127–150`, `lib/register-modules.test.ts:77–84,156–162`.
+- `hostFetch(hostId, path, init)` attaches the admin token (`host-api.ts:140`). `HostApiError(status, statusText)` exists at `host-api.ts:219`.
+- Host sub-pages are registered in `spa/src/lib/register-modules/index.tsx:417–428` (ten entries, orders 0–9). Four places pin that count/list: `lib/host-builtin-sections.test.tsx:101` (`toHaveLength(10)`), `:105–111` (ordered list), `:127–150` (wrap map), **`:180–188` (HMR-safe count, `toBe(10)` twice)**; `lib/register-modules.test.ts:77–84,156–162`.
+- `lib/host-routes.ts:11` `HOST_SUB_PAGES` is a six-entry legacy constant that is **not** consulted by `isHostSubPage` (it queries the contribution registry) — leave it alone; say so in the PR description so a reviewer does not read it as a missed registration.
+- `spa/src/main.tsx:56` wraps the app in `<StrictMode>`: in dev every effect runs mount → cleanup → mount, so the page's load runs twice on first paint. The generation counter in Task 4 makes the first run's emits inert; Task 4's tests render under `StrictMode` once to prove it.
 - `HostRuntime.status ∈ 'connected' | 'disconnected' | 'reconnecting' | 'auth-error'` (`useHostStore.ts:39`).
 - i18n: flat keys in `spa/src/locales/en.json` + `zh-TW.json`; `t(key, params?)` interpolates `{{name}}`; `locale-completeness.test.ts` fails the build on any key missing from one side. Existing `peer.*` namespace is the tab panel; this page uses `peers.*` (`'peers.x'.startsWith('peer.')` is false, so the tab-panel namespace test is unaffected).
 - Colour tokens: `text-status-success`, `text-status-warning`, `text-status-error`, `text-text-muted` (`spa/src/styles/themes.css:23–25`).
@@ -182,6 +184,11 @@ describe('peer-host wrappers', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('http://100.64.0.2:7860/api/peers/settings')
     expect(fetchMock.mock.calls[1][0]).toBe('http://100.64.0.2:7860/api/info')
   })
+
+  it('fetchHostInfo rejects with HostApiError on a non-2xx (the untyped fetchInfo would have resolved)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: 'boom' }))
+    await expect(fetchHostInfo(H)).rejects.toMatchObject({ name: 'HostApiError', status: 500, detail: 'boom' })
+  })
 })
 ```
 
@@ -315,7 +322,7 @@ Add `HostInfo` to the existing import: `import { useHostStore, type HostInfo } f
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd spa && npx vitest run src/lib/host-api.peers.test.ts`
-Expected: PASS (8 tests). Also run `cd spa && npx vitest run src/lib/host-api` to confirm existing `host-api` tests still pass (the `HostApiError` change is additive).
+Expected: PASS (9 tests). Also run `cd spa && npx vitest run src/lib/host-api` to confirm existing `host-api` tests still pass (the `HostApiError` change is additive).
 
 - [ ] **Step 5: Commit**
 
@@ -350,12 +357,18 @@ export type PairStatus = 'bidirectional' | 'one-way' | 'outbound-only' | 'return
 export interface CounterpartCandidate { hostId: string; host_id: string; url: string }  // host_id '' = unknown (unavailable host)
 export function normalizePeerUrl(raw: string): string
 export function matchCounterpart(entry: { host_id: string; url: string }, hosts: CounterpartCandidate[]): CounterpartCandidate | null
+export function matchReturnEntry(self: { host_id: string; url: string }, rows: PeerHostRow[]): PeerHostRow | null
 export function pairStatus(outbound: Side, inbound: InboundState): PairStatus
 export function aliasDrift(alias: string, selfAlias: string): string
 export function toOutcome(v: PeerHostVerify): VerifyOutcome
 ```
 
-**One reading of the spec, stated so review can weigh it.** D-3 says URL is the fallback "only for an entry with `host_id: ''`". §5.2 step 2 (folded in from codex review, §12) says an *unavailable* App host — whose `host_id` the page could not learn — "still participates in the join by whatever the App knows locally — its URL", so that an entry pointing at it becomes `counterpart-unavailable` rather than `not-app-host`. Both hold together only if the URL fallback applies **when either side lacks a host_id**: the entry's is `''`, *or* the candidate's is `''` because the host was unavailable. An *available* host whose learned `host_id` differs from the entry's must **not** match by URL — that is a different daemon at the same address (a reinstall, a moved port), and joining it would verify the wrong machine. `matchCounterpart` below implements exactly that and the test pins the "same URL, different known host_id → null" case.
+**The join rule, stated precisely (D-3 read together with §5.2 step 2).** D-3: identity (`host_id`) first; URL "only for an entry with `host_id: ''`". §5.2 step 2 (folded in from review, §12): an *unavailable* App host — whose `host_id` the page could not learn — "still participates in the join by whatever the App knows locally — its URL", so an entry pointing at it is `counterpart-unavailable`, not `not-app-host`. Put together, exactly two URL fallbacks exist and nothing else:
+
+1. `entry.host_id === ''` → the entry may join **any** candidate by URL (D-3 verbatim).
+2. `entry.host_id !== ''` and no candidate carries that host_id → the entry may join by URL **only a candidate whose host_id is unknown** (an unavailable App host). It never joins an *available* candidate whose known host_id differs — that is a different daemon at the same address (a reinstall, a moved port), and joining it would verify the wrong machine.
+
+This does not loosen D-3's identity rule: whenever both sides have a host_id, only the host_id decides. `matchCounterpart` implements the two cases and the tests pin both, plus "same URL, different *known* host_id → null". `matchReturnEntry` is the same rule with the roles swapped (which of *their* rows is *us*), returning the row itself so no caller has to smuggle an alias through a `hostId` field.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -364,9 +377,10 @@ Create `spa/src/lib/peer-pairing.test.ts`:
 ```ts
 import { describe, it, expect } from 'vitest'
 import {
-  aliasDrift, matchCounterpart, normalizePeerUrl, pairStatus, toOutcome,
+  aliasDrift, matchCounterpart, matchReturnEntry, normalizePeerUrl, pairStatus, toOutcome,
   type InboundState, type PairStatus, type Side, type VerifyOutcome,
 } from './peer-pairing'
+import type { PeerHostRow } from './host-api'
 
 const OK: VerifyOutcome = { ok: true, self_alias: 'air26', daemon_version: '1.0.0-alpha.378', host_id: 'wakes-air-2026:oa6drb' }
 const FAIL: VerifyOutcome = { ok: false, error: 'dial tcp: host is down' }
@@ -412,6 +426,25 @@ describe('matchCounterpart (spec D-3, §5.2 step 2)', () => {
     const entry = { host_id: '', url: 'http://9.9.9.9:1' }
     expect(matchCounterpart(entry, [unknown])).toBeNull()
   })
+})
+
+describe('matchReturnEntry — the same rule with the roles swapped', () => {
+  const row = (p: Partial<PeerHostRow>): PeerHostRow => ({
+    alias: 'mini-lab', url: 'http://100.64.0.2:7860', host_id: 'mini-lab:278cbm',
+    verified: true, has_token: true, has_inbound_token: true, allow_bypass: true, ...p,
+  })
+  const self = { host_id: 'mini-lab:278cbm', url: 'http://100.64.0.2:7860' }
+
+  it('returns the row whose host_id is ours, whatever it is named', () => {
+    const r = row({ alias: 'mlab' })
+    expect(matchReturnEntry(self, [row({ alias: 'x', host_id: 'other:1' }), r])).toBe(r)
+  })
+  it('falls back to URL only for a row with no host_id', () => {
+    const r = row({ alias: 'by-url', host_id: '', url: 'http://100.64.0.2:7860/' })
+    expect(matchReturnEntry(self, [r])).toBe(r)
+    expect(matchReturnEntry(self, [row({ host_id: 'stranger:1' })])).toBeNull()
+  })
+  it('returns null on an empty list', () => expect(matchReturnEntry(self, [])).toBeNull())
 })
 
 describe('pairStatus — every row of the §5.1 table', () => {
@@ -474,7 +507,7 @@ Create `spa/src/lib/peer-pairing.ts`:
 ```ts
 // spa/src/lib/peer-pairing.ts — the pure rules of the Peers page (Phase D spec §5.1).
 // No React, no store, no fetch: everything here is a function of its arguments.
-import type { PeerHostVerify } from './host-api'
+import type { PeerHostRow, PeerHostVerify } from './host-api'
 
 /** One direction's live verify, or not yet answered. */
 export type VerifyOutcome =
@@ -521,13 +554,14 @@ export function normalizePeerUrl(raw: string): string {
 }
 
 /**
- * Spec D-3 + §5.2 step 2. Identity (`host_id`) wins. URL is the fallback
- * only when one side has no host_id to compare: the entry never learned one
- * (added without a token), or the candidate is an App host the page could
- * not ask (so its host_id is unknown) — that second case is what makes such
- * an entry `counterpart-unavailable` instead of `not-app-host`. A candidate
- * whose KNOWN host_id differs is never joined by URL: that is a different
- * daemon at the same address.
+ * Spec D-3 read with §5.2 step 2. Identity (`host_id`) decides whenever
+ * both sides have one. Exactly two URL fallbacks exist:
+ *  1. the entry has no host_id (added without a token) → any candidate by URL;
+ *  2. the entry has one that no candidate carries → only a candidate whose
+ *     host_id is UNKNOWN (an App host the page could not ask), which is what
+ *     makes such an entry `counterpart-unavailable` instead of `not-app-host`.
+ * A candidate whose KNOWN host_id differs is never joined by URL: that is a
+ * different daemon at the same address.
  */
 export function matchCounterpart(
   entry: { host_id: string; url: string },
@@ -542,6 +576,19 @@ export function matchCounterpart(
   return hosts.find((h) =>
     (entry.host_id === '' || h.host_id === '') && normalizePeerUrl(h.url) === url,
   ) ?? null
+}
+
+/**
+ * Which of THEIR entries is US: `matchCounterpart` with the roles swapped,
+ * over the counterpart's `GET /api/peers/hosts` rows. Returns the row so
+ * callers never have to carry an alias through a `hostId` field.
+ */
+export function matchReturnEntry(
+  self: { host_id: string; url: string },
+  rows: PeerHostRow[],
+): PeerHostRow | null {
+  const hit = matchCounterpart(self, rows.map((r) => ({ hostId: r.alias, host_id: r.host_id, url: r.url })))
+  return hit ? rows.find((r) => r.alias === hit.hostId) ?? null : null
 }
 
 /** The §5.1 status table, row for row. */
@@ -600,7 +647,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Test: `spa/src/lib/peer-pairing-load.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 types; Task 2 `matchCounterpart`, `toOutcome`, `Side`, `InboundState`.
+- Consumes: Task 1 types; Task 2 `matchCounterpart`, `matchReturnEntry`, `toOutcome`, `Side`, `InboundState`.
 - Produces (used by Task 4):
 
 ```ts
@@ -632,7 +679,7 @@ Behaviour (spec §5.2, numbered as there):
 
 0. `info(X)`, `settings(X)`, `list(X)` run in parallel. If any rejects → emit + return `{ self: null, error: { call: 'info'|'settings'|'list', message }, rows: [] }`. No rows, no other calls.
 2. For every other host with `status === 'connected'`: `info(H)` + `settings(H)` in parallel; a rejection makes H unavailable with cause `` `${call}: ${message}` ``. A host not connected is unavailable with cause = its status (`'disconnected'`, `'reconnecting'`, `'auth-error'`) or `'unknown'` when undefined.
-3. Join each entry with `matchCounterpart(entry, candidates)` where a candidate's `host_id` is `''` for unavailable hosts. For each *distinct* available counterpart Y that at least one entry joined to: `list(Y)` **once** (memoised in a `Map<hostId, Promise>`); a rejection makes every entry joined to Y `counterpart-unavailable` with cause `` `list: ${message}` ``. The return entry E' is the row of `list(Y)` whose `host_id === self.host_id`, else (only when that row's `host_id === ''`) whose `normalizePeerUrl(url) === normalizePeerUrl(x.url)` — the same rule as `matchCounterpart`, applied with the roles swapped, so the plan reuses it: `matchCounterpart({host_id: self.host_id, url: x.url}, rowsOfY.map(r => ({hostId: r.alias, host_id: r.host_id, url: r.url})))`.
+3. Join each entry with `matchCounterpart(entry, candidates)` where a candidate's `host_id` is `''` for unavailable hosts. For each *distinct* available counterpart Y that at least one entry joined to: `list(Y)` **once** (memoised in a `Map<hostId, Promise>`); a rejection makes every entry joined to Y `counterpart-unavailable` with cause `` `list: ${message}` ``. The return entry E' is `matchReturnEntry({host_id: self.host_id, url: x.url}, rowsOfY)` (Task 2) — the same join rule with the roles swapped.
 4. Emit the snapshot with every verifiable side `'pending'`, then start all verifies in parallel: `verify(X, entry.alias)` for every entry; `verify(Y, E'.alias)` for every entry with a return entry. As each settles, patch that row's side (`toOutcome` on success; on rejection `{ ok: false, error: message }` — a thrown 404 means the entry vanished between list and verify, which is a failure of that direction, not a page error) and emit the whole snapshot again. Resolve with the final snapshot after all settle.
 
 The emit-after-each-settle contract is what lets the page paint `checking` rows immediately and fill them in as the ≤ 3 s dials return, without the loader knowing anything about React.
@@ -858,7 +905,7 @@ Create `spa/src/lib/peer-pairing-load.ts`:
 // runs (spec D-6: a stale green is the thing this page exists to remove).
 import type { PeerHostRow, PeerHostVerify, PeerSettings } from './host-api'
 import type { HostRuntime } from '../stores/useHostStore'
-import { matchCounterpart, toOutcome, type CounterpartCandidate, type InboundState, type Side } from './peer-pairing'
+import { matchCounterpart, matchReturnEntry, toOutcome, type CounterpartCandidate, type InboundState, type Side } from './peer-pairing'
 
 export interface PairingApi {
   info: (hostId: string) => Promise<{ host_id: string }>
@@ -959,11 +1006,7 @@ export async function loadPairings(
       return { entry, counterpart, counterpartCause: `list: ${theirs.message}`, returnEntry: null, outbound: 'pending', inbound: 'counterpart-unavailable' }
     }
     // The same join rule with the roles swapped: which of THEIR entries is us?
-    const hit = matchCounterpart(
-      { host_id: self.host_id, url: x.url },
-      theirs.map((r) => ({ hostId: r.alias, host_id: r.host_id, url: r.url })),
-    )
-    const returnEntry = hit ? theirs.find((r) => r.alias === hit.hostId) ?? null : null
+    const returnEntry = matchReturnEntry({ host_id: self.host_id, url: x.url }, theirs)
     return { entry, counterpart, counterpartCause: '', returnEntry, outbound: 'pending', inbound: returnEntry ? 'pending' : 'no-entry' }
   }))
 
@@ -1055,6 +1098,7 @@ Create `spa/src/components/hosts/PeersSection.test.tsx`:
 
 ```tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { StrictMode } from 'react'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { PeersSection } from './PeersSection'
 import { useHostStore } from '../../stores/useHostStore'
@@ -1080,11 +1124,15 @@ const MLAB_ROW: PeerHostRow = { alias: 'mini-lab', url: 'http://100.64.0.2:7860'
 const ok = (alias: string, self_alias: string, host_id: string): PeerHostVerify =>
   ({ alias, host_id, ok: true, self_alias, daemon_version: '1.0.0-alpha.378' })
 
+// High-entropy so a leak into the DOM cannot be mistaken for ordinary text (spec D-8).
+const SECRET_M = 'pdx_admin_secret_M_9f3k2q8w'
+const SECRET_A = 'pdx_admin_secret_A_7t5r1z0x'
+
 function seedHosts(airStatus: 'connected' | 'disconnected' = 'connected') {
   useHostStore.setState({
     hosts: {
-      [M]: { id: M, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0, token: 't' },
-      [A]: { id: A, name: 'Air 2026', ip: '100.64.0.4', port: 7860, order: 1, token: 't' },
+      [M]: { id: M, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0, token: SECRET_M },
+      [A]: { id: A, name: 'Air 2026', ip: '100.64.0.4', port: 7860, order: 1, token: SECRET_A },
     },
     hostOrder: [M, A],
     runtime: { [M]: { status: 'connected' }, [A]: { status: airStatus } },
@@ -1119,6 +1167,11 @@ describe('PeersSection — the §2.1 fixture', () => {
     render(<PeersSection hostId={M} />)
     const row = await screen.findByTestId('peer-row-air')
     await waitFor(() => expect(within(row).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
+    // The selected host's own self alias, labelled (the third of the §2.1 names).
+    const self = screen.getByTestId('peers-self')
+    expect(self).toHaveTextContent('self alias')
+    expect(self).toHaveTextContent('mini-lab')
+    expect(self).toHaveTextContent('mini-lab:278cbm')
     expect(within(row).getByTestId('peer-alias')).toHaveTextContent('air')
     expect(within(row).getByTestId('peer-app-host')).toHaveTextContent('Air 2026')
     expect(within(row).getByTestId('peer-url')).toHaveTextContent('http://100.64.0.4:7860')
@@ -1260,11 +1313,21 @@ describe('PeersSection — page states', () => {
     expect(screen.queryByTestId('peer-row-air')).toBeNull()
   })
 
-  it('never renders a token value: the page has no text matching the has_token fields beyond booleans', async () => {
+  it('never renders a token value (spec D-8): neither host admin token reaches the DOM, even in attributes', async () => {
     render(<PeersSection hostId={M} />)
-    await screen.findByTestId('peer-row-air')
+    const row = await screen.findByTestId('peer-row-air')
+    await waitFor(() => expect(within(row).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
     expect(api.updatePeerHost).not.toHaveBeenCalled()
-    expect(document.body.textContent).not.toMatch(/inbound_token|"token"/)
+    expect(document.body.innerHTML).not.toContain(SECRET_M)
+    expect(document.body.innerHTML).not.toContain(SECRET_A)
+  })
+
+  it('under StrictMode (dev double-mount) the page still ends bidirectional and does not paint the discarded first run', async () => {
+    render(<StrictMode><PeersSection hostId={M} /></StrictMode>)
+    const row = await screen.findByTestId('peer-row-air')
+    await waitFor(() => expect(within(row).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
+    expect(screen.getAllByTestId('peer-row-air')).toHaveLength(1)
+    await waitFor(() => expect(screen.getByTestId('peers-refresh')).toBeEnabled())
   })
 })
 ```
@@ -1356,7 +1419,14 @@ export function PeersSection({ hostId }: Props) {
           <ArrowsClockwise size={14} className={busy ? 'animate-spin' : ''} />{busy ? t('peers.checking') : t('peers.refresh')}
         </button>
       </div>
-      <p className="text-xs text-text-muted mb-4">{t('peers.desc')}</p>
+      <p className="text-xs text-text-muted mb-1">{t('peers.desc')}</p>
+      {/* The selected host's own identity, labelled: the third of the three names (spec §2.1).
+          It is what the return direction's entry on the counterpart must point at. */}
+      {snap?.self && (
+        <p data-testid="peers-self" className="text-xs text-text-muted mb-4 font-mono">
+          {host.name} · {t('peers.self_alias_label')}: <span className="text-text-secondary">{snap.self.self_alias}</span> · {snap.self.host_id}
+        </p>
+      )}
 
       {snap?.error && (
         <div data-testid="peers-banner" className="flex items-start justify-between gap-3 px-3 py-2.5 rounded-md mb-4 bg-red-500/10 border border-red-500/20">
@@ -1552,6 +1622,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - line 101: `expect(builtinContribs).toHaveLength(11)`
 - the `orders built-in contributions as: …` test: append `'peers'` to the title and to the expected array: `'projects', 'commands', 'snapshots', 'peers',`
 - the `wraps all ten sections` test: rename to `wraps all eleven sections to their original components`, add `import { PeersSection } from '../components/hosts/PeersSection'` next to the `SnapshotsSection` import (line 74), and add `{ localId: 'peers', component: PeersSection },` after the snapshots line.
+- the `is HMR-safe: re-running registerBuiltinModules after clearAll keeps built-in count stable` test (lines 180–188): `expect(first).toBe(11)` and `expect(second).toBe(11)`.
 - header comment line 6: `ten` → `eleven`.
 
 `spa/src/lib/register-modules.test.ts`:
@@ -1598,7 +1669,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Mutation record (§8.2 deliverable)
+### Task 6: Mutation record (§8.2 deliverable) — M1–M23
 
 **Files:**
 - Create: `docs/plans/2026-09-18-peer-pairing-d2-mutations.md`
@@ -1610,7 +1681,7 @@ Each row: apply the one-edit mutation, run the named test with `npx vitest run <
 | M1 | in `pairStatus`, `if (inbound === 'not-app-host') return 'outbound-only'` → `return 'bidirectional'` | `peer-pairing.ts` | `peer-pairing.test.ts` "ok / not-app-host → outbound-only" **and** `PeersSection.test.tsx` "a peer that is not an App host renders outbound-only…" (spec §8.2's named mutation) |
 | M2 | `if (inbound === 'counterpart-unavailable') return 'return-unknown'` → `return 'outbound-only'` | `peer-pairing.ts` | "ok / counterpart-unavailable → return-unknown" and "outbound-only and return-unknown are never the same word" |
 | M3 | in `pairStatus`, delete the leading `if (outbound === 'pending' \|\| inbound === 'pending') return 'checking'` (and make the rest type-check with `as`) | `peer-pairing.ts` | every `pending` row |
-| M4 | in `matchCounterpart`, drop the `entry.host_id !== ''` guard so the by-id search runs with `''` | `peer-pairing.ts` | "both host_id-less match only by URL, never by "" === """ |
+| M4 | in `matchCounterpart`, replace the guarded by-id search with an unconditional `hosts.find((h) => h.host_id === entry.host_id)` (both `!== ''` guards gone, so `''` matches `''`) | `peer-pairing.ts` | "both host_id-less match only by URL, never by "" === """ |
 | M5 | in `matchCounterpart`, change the URL fallback condition to `true` (ignore known host_id) | `peer-pairing.ts` | "same URL but a different KNOWN host_id is not a match" |
 | M6 | in `matchCounterpart`, change the URL fallback condition to `entry.host_id === ''` only | `peer-pairing.ts` | "URL also joins an entry to a host whose host_id is unknown" **and** `peer-pairing-load.test.ts` "a disconnected App host still joins by URL…" |
 | M7 | in `normalizePeerUrl`, remove `.replace(/\/+$/, '')` | `peer-pairing.ts` | "trailing slash trimmed" and "URL is the fallback when the entry has no host_id (…trailing slash ignored)" |
@@ -1625,12 +1696,17 @@ Each row: apply the one-edit mutation, run the named test with `npx vitest run <
 | M16 | in `DirectionLine.rename`, catch → `setError(null)` | `PeersSection.tsx` | "a 409 on Rename shows the daemon message inline" |
 | M17 | in `PeerRow`, pass `renameTarget={{ hostId, alias: returnEntry.alias }}` on the return line (wrong host) | `PeersSection.tsx` | "Rename on the return line acts on the counterpart host" |
 | M18 | in `peerHostError`, never read the body (`detail` always `undefined`) | `host-api.ts` | "updatePeerHost surfaces a 409 with the daemon text in detail" |
+| M19 | in `HostApiError`'s constructor, `this.detail = detail ?? ''` (drop the statusText fallback) | `host-api.ts` | "a non-JSON error body falls back to statusText in detail" |
+| M20 | in `fetchHostInfo`, return `fetchInfo(hostId).then((r) => r.json())` (skip `peerHostJson`) | `host-api.ts` | "fetchHostInfo rejects with HostApiError on a non-2xx" |
+| M21 | in `PeersSection`, render `<span>{host.token}</span>` inside the `peers-self` line (a deliberate D-8 leak) | `PeersSection.tsx` | "never renders a token value (spec D-8)" |
+| M22 | in `PeersSection`, delete the `peers-self` paragraph | `PeersSection.tsx` | "renders the §5.3 row: three names labelled…" (`peers-self` missing) |
+| M23 | in `matchReturnEntry`, return `rows[0] ?? null` | `peer-pairing.ts` | "returns the row whose host_id is ours" (first row is the stranger) and "falls back to URL only for a row with no host_id" (the `stranger:1` row would be returned) |
 
 - [ ] **Step 1: Run every row, record, revert**
 - [ ] **Step 2: `git status --short` shows only the record; commit**
 
 ```bash
-git commit --only docs/plans/2026-09-18-peer-pairing-d2-mutations.md -m "docs(plan): D2 mutation-test record (M1–M18 all red)
+git commit --only docs/plans/2026-09-18-peer-pairing-d2-mutations.md -m "docs(plan): D2 mutation-test record (M1–M23 all red)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1639,7 +1715,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## After the tasks (main session, not a subagent)
 
-1. `git push -u origin worktree-peer-pairing-d2`; PR titled `feat(spa): Peer Pairing D2 — Hosts › Peers page (verify both directions, adopt drifted alias)` with the spec/plan links and the mutation record.
+1. `git push -u origin worktree-peer-pairing-d2`; PR titled `feat(spa): Peer Pairing D2 — Hosts › Peers page (verify both directions, adopt drifted alias)` with the spec/plan links, the mutation record, and a note that `HOST_SUB_PAGES` (`lib/host-routes.ts`) is a legacy constant not consulted for routing and is deliberately untouched.
 2. Two review rounds (codex `--model gpt-5.5`): R1 standard; R2 attacker / defender (spec-drift: D-3 + §5.2 join rule, D-4 vs `return-unknown`, D-8 no token in state) / file-health (`PeersSection.tsx` size — if it passes ~250 lines, split `DirectionLine` into its own file).
 3. Real-machine acceptance (spec §9 D2) on the mlab dev server (`100.64.0.2:5174`): open `/hosts/<mlab>/peers` → one row `air`, joined to the App's air host, both lines green, `bidirectional`, drift `air26`, Rename → header reads `air26`; `bin/pdx peers --all` prints `air26/…` and no drift line; `pdx msg send air26/<name> "…"` from a Claude Code session on mlab delivers. Record the result in the PR.
 4. Merge, bump (`git fetch` and read `VERSION` first — 379 at plan time), update the memory file.
