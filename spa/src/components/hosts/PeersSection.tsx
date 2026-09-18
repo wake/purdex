@@ -35,6 +35,20 @@ export function PeersSection({ hostId }: Props) {
   // Generation counter: a snapshot from a run started for a previous hostId
   // (or a previous Refresh) must never paint over the current one.
   const gen = useRef(0)
+  // A row's onRenamed closes over the render-time hostId. If updatePeerHost
+  // resolves after hostId changed (or the section unmounted), calling run()
+  // from that stale closure would start a NEW generation for the OLD hostId
+  // and repaint it over the current page — gen ordering alone does not catch
+  // this because the stale run becomes the newest generation. liveHost /
+  // alive let each onRenamed check "is my hostId still current, and is this
+  // component still mounted" before restarting the page.
+  const liveHost = useRef(hostId)
+  liveHost.current = hostId
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   const run = useCallback(async () => {
     const my = ++gen.current
@@ -97,7 +111,8 @@ export function PeersSection({ hostId }: Props) {
         <div className="space-y-3">
           {snap.rows.map((row) => (
             <PeerRow key={row.entry.alias} hostId={hostId} hostName={host.name} self={snap.self!} row={row}
-              busy={busy} onRenamed={() => void run()} />
+              busy={busy}
+              onRenamed={() => { if (alive.current && liveHost.current === hostId) void run() }} />
           ))}
         </div>
       )}

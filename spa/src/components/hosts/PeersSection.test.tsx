@@ -237,6 +237,30 @@ describe('PeersSection — page states', () => {
     expect(screen.getByTestId('peer-row-mini-lab')).toBeInTheDocument()
   })
 
+  it('a Rename that lands after the host changed does not restart the page (stale closure bug)', async () => {
+    // updatePeerHost is held so its resolution lands strictly after the rerender below.
+    let releasePut!: (v: PeerHostRow) => void
+    vi.mocked(api.updatePeerHost).mockImplementation(() => new Promise<PeerHostRow>((r) => { releasePut = r }))
+    const { rerender } = render(<PeersSection hostId={M} />)
+    const row = await screen.findByTestId('peer-row-air')
+    await waitFor(() => expect(within(row).getByTestId('peer-status')).toHaveAttribute('data-status', 'bidirectional'))
+    fireEvent.click(within(row).getByTestId('peer-outbound-rename'))
+    await waitFor(() => expect(api.updatePeerHost).toHaveBeenCalledWith(M, 'air', { alias: 'air26' }))
+
+    rerender(<PeersSection hostId={A} />)
+    await screen.findByTestId('peer-row-mini-lab')     // A's page: its own entry for mlab
+
+    // A's own run legitimately dials verify(M, 'air') for the return direction —
+    // only an EXTRA call after the stale rename resolves would indicate the bug.
+    const callsToMAirBefore = vi.mocked(api.verifyPeerHost).mock.calls.filter(([h, a]) => h === M && a === 'air').length
+    releasePut({ ...AIR_ROW, alias: 'air26' })
+    await new Promise((r) => setTimeout(r, 0))
+    const callsToMAirAfter = vi.mocked(api.verifyPeerHost).mock.calls.filter(([h, a]) => h === M && a === 'air').length
+    expect(callsToMAirAfter).toBe(callsToMAirBefore)
+    expect(screen.queryByTestId('peer-row-air')).toBeNull()
+    expect(screen.getByTestId('peer-row-mini-lab')).toBeInTheDocument()
+  })
+
   it('never renders a token value (spec D-8): neither host admin token reaches the DOM, even in attributes', async () => {
     render(<PeersSection hostId={M} />)
     const row = await screen.findByTestId('peer-row-air')
