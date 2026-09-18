@@ -414,15 +414,25 @@ type LogResponse struct {
 }
 
 // SettingsResponse is the body of both GET and PUT /api/peers/settings.
+// Alias is the effective self alias (config.Config.PeerAlias) and
+// AliasSource says where it comes from (self-alias spec S-3, #1196):
+// "config" when [peers] alias is set, "host_id" when it is derived from
+// host_id. A daemon older than alpha.399 omits AliasSource — clients use
+// its absence to detect that a PUT {alias} was ignored (S-5).
 type SettingsResponse struct {
-	Deliver bool   `json:"deliver"`
-	Alias   string `json:"alias"`
+	Deliver     bool   `json:"deliver"`
+	Alias       string `json:"alias"`
+	AliasSource string `json:"alias_source"`
 }
 
-// PutSettingsRequest is PUT /api/peers/settings' body. Deliver is a
-// pointer: absent (nil) means "leave unchanged", present sets the value.
+// PutSettingsRequest is PUT /api/peers/settings' body. Both fields are
+// pointers: absent (nil) means "leave unchanged", present sets the value.
+// Alias "" clears [peers] alias back to the host_id default; anything
+// else is validated by config.ValidateSelfAlias and stored verbatim
+// (self-alias spec S-2, #1196).
 type PutSettingsRequest struct {
-	Deliver *bool `json:"deliver"`
+	Deliver *bool   `json:"deliver"`
+	Alias   *string `json:"alias"`
 }
 
 // OriginKey is the helper key, the proxies.json origin and the audit

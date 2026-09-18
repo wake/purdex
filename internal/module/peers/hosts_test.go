@@ -1899,3 +1899,53 @@ func TestHandlePutHost_EmptyAliasIsUnchanged(t *testing.T) {
 		t.Errorf("persisted = %+v, want alias kept and allow_bypass set", reloaded.Peers.Hosts)
 	}
 }
+
+// TestHandleAddHost_SelfAliasChangedDuringVerify_409 pins codex F2 on the
+// self-alias spec (#1196): handleAddHost validates the alias against a
+// pre-lock snapshot of the local alias, then dials the peer to verify,
+// then commits. A self-alias change landing in that window (here: the
+// fake peer's verify handler renames this host to the very alias being
+// added, exactly what a concurrent PUT /api/peers/settings {alias} does)
+// must be caught by the commit closure: 409, no entry written. Without the
+// under-lock re-check the entry would go in and <alias>/<name> would be
+// ambiguous on this host.
+func TestHandleAddHost_SelfAliasChangedDuringVerify_409(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The add path is between its pre-lock snapshot and its commit;
+		// no config lock is held while it waits on us.
+		if err := c.UpdateConfig(func(cfg *config.Config) error {
+			cfg.Peers.Alias = "air"
+			return nil
+		}); err != nil {
+			t.Errorf("concurrent self-alias change: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"host_id":"air:1","ok":true,"partial":false,"peers":[]}`))
+	}))
+	defer srv.Close()
+
+	m := newHostsTestModule(t, c, nil) // production fetchRemote against the real server
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air",
+		"url":   srv.URL,
+		"token": "secret-tok",
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "local alias") {
+		t.Errorf("body = %s, want the local-alias collision text", rr.Body.String())
+	}
+
+	reloaded := loadCfg(t, cfgPath)
+	if len(reloaded.Peers.Hosts) != 0 {
+		t.Fatalf("nothing should be persisted: %+v", reloaded.Peers.Hosts)
+	}
+	if reloaded.Peers.Alias != "air" {
+		t.Errorf("on-disk Peers.Alias = %q, want air (the concurrent change itself stands)", reloaded.Peers.Alias)
+	}
+}

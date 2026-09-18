@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,17 +68,65 @@ type PeersConfig struct {
 // dots, underscores or hyphens.
 var aliasPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// ValidateAlias checks that alias is safe to use as a one-segment URL path
-// component and distinct from localAlias (case-insensitive).
-func ValidateAlias(alias, localAlias string) error {
+// ErrSelfAliasCollision is the sentinel ValidateSelfAlias's collision error
+// matches under errors.Is (spec S-6, #1196): the settings handler maps it
+// to 409 rather than the 400 a shape error gets. It is never returned
+// directly — the returned error carries the alias-specific text and this
+// sentinel only identifies its kind.
+var ErrSelfAliasCollision = errors.New("self alias collides with a peer host alias")
+
+// selfAliasCollisionError is ValidateSelfAlias's collision error: its text
+// is exactly `alias %q is already used by a peer host` (the wording the
+// entry side uses for the mirror case, spec S-6) and it answers errors.Is
+// for ErrSelfAliasCollision without appending the sentinel's text.
+type selfAliasCollisionError struct{ alias string }
+
+func (e *selfAliasCollisionError) Error() string {
+	return fmt.Sprintf("alias %q is already used by a peer host", e.alias)
+}
+
+func (e *selfAliasCollisionError) Is(target error) bool { return target == ErrSelfAliasCollision }
+
+// validateAliasShape is the shape rule both kinds of alias share (spec
+// S-1): not "." or "..", and one URL path segment per aliasPattern.
+func validateAliasShape(alias string) error {
 	if alias == "." || alias == ".." {
 		return fmt.Errorf("alias %q is reserved", alias)
 	}
 	if !aliasPattern.MatchString(alias) {
 		return fmt.Errorf("alias %q must match %s", alias, aliasPattern.String())
 	}
+	return nil
+}
+
+// ValidateAlias checks that alias is safe to use as a one-segment URL path
+// component and distinct from localAlias (case-insensitive).
+func ValidateAlias(alias, localAlias string) error {
+	if err := validateAliasShape(alias); err != nil {
+		return err
+	}
 	if strings.EqualFold(alias, localAlias) {
 		return fmt.Errorf("alias %q collides with the local alias", alias)
+	}
+	return nil
+}
+
+// ValidateSelfAlias checks that alias is safe as this host's own alias
+// (spec S-1, #1196): the same shape rule as ValidateAlias, and not
+// (case-insensitively) the alias of any configured peer host — the local
+// alias and the peer aliases share the <alias>/<name> address namespace on
+// this host, so this is the mirror image of ValidateAlias's "not the local
+// alias" clause. A collision matches ErrSelfAliasCollision under errors.Is.
+// Empty is not valid input here; callers clear Peers.Alias without
+// validating (S-2).
+func ValidateSelfAlias(alias string, hosts []PeerHost) error {
+	if err := validateAliasShape(alias); err != nil {
+		return err
+	}
+	for _, h := range hosts {
+		if strings.EqualFold(alias, h.Alias) {
+			return &selfAliasCollisionError{alias: alias}
+		}
 	}
 	return nil
 }

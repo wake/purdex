@@ -382,6 +382,15 @@ func (m *Module) handleAddHost(w http.ResponseWriter, r *http.Request) {
 		if cfg.Peers.FindPeerHostByAlias(alias) != -1 {
 			return &apiError{http.StatusConflict, "alias changed concurrently"}
 		}
+		// Re-checked against the LIVE local alias, not the pre-lock
+		// snapshot: PUT /api/peers/settings {alias} can land while the
+		// verify above is on the wire (self-alias spec S-1, codex F2), and
+		// the rename closure in handlePutHost already re-validates the same
+		// way. Shape errors were refused before the dial, so the only thing
+		// this can catch is the local-alias collision — a conflict.
+		if err := config.ValidateAlias(alias, cfg.PeerAlias()); err != nil {
+			return &apiError{http.StatusConflict, err.Error()}
+		}
 		if verified && learnedHostID == cfg.HostID {
 			return &apiError{http.StatusBadRequest, "cannot pair a host with itself"}
 		}
