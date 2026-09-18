@@ -508,3 +508,36 @@ func TestHandlePutSettings_Alias_ClearCollidesWithHost_Conflict(t *testing.T) {
 		t.Errorf("in-memory Peers.Alias = %q, want mlab (nothing written)", inMem)
 	}
 }
+
+// TestHandlePutSettings_BodyMustBeExactlyOneJSONValue pins codex attack A1:
+// a second JSON value or trailing bytes after the first one is invalid JSON
+// (spec S-6), not "the first value wins" — otherwise a concatenated or
+// truncated body would persist a change the sender did not mean. Same rule
+// as the rotate gates' decodeGateRequest.
+func TestHandlePutSettings_BodyMustBeExactlyOneJSONValue(t *testing.T) {
+	for _, body := range []string{
+		`{"alias":"mlab"}{"alias":"air26"}`,
+		`{"alias":"mlab"}garbage`,
+		`{"alias":"mlab"} {}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			c, cfgPath := newHostsTestCore(t, "mini-lab:abc123", "", "admin-tok", nil)
+			m := newHostsTestModule(t, c, nil)
+			mux := http.NewServeMux()
+			m.RegisterRoutes(mux)
+			req := httptest.NewRequest(http.MethodPut, "/api/peers/settings", strings.NewReader(body))
+			req = req.WithContext(middleware.WithPrincipal(context.Background(), *adminPrincipal()))
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "invalid json") {
+				t.Errorf("body = %s, want invalid json", rr.Body.String())
+			}
+			if onDisk := loadCfg(t, cfgPath); onDisk.Peers.Alias != "" {
+				t.Errorf("on-disk Peers.Alias = %q, want unchanged (empty)", onDisk.Peers.Alias)
+			}
+		})
+	}
+}

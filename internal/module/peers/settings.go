@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/wake/purdex/internal/config"
@@ -104,8 +105,19 @@ func (m *Module) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The body must be EXACTLY one JSON value (codex A1, same rule as the
+	// rotate gates' decodeGateRequest): a second value or trailing bytes
+	// after the first is invalid JSON (spec S-6), not "first value wins" —
+	// a concatenated or truncated body must not persist a setting the
+	// sender did not mean.
 	var req ipeers.PutSettingsRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSettingsBodyBytes)).Decode(&req); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSettingsBodyBytes))
+	if err := dec.Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		writeJSONError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
