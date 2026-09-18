@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.380] - 2026-09-18
+
+### Feature: New Tab「Headless」區塊 + 共用的 nex host store（P-C.1，#1141）
+
+exec 模式的第一個「啟動」入口。New Tab 現在每台 host 多一個「Headless — <host>」區塊：brief（UTF-8 位元組計數，上限來自 capabilities）、目錄（root 下拉＋相對子路徑）、sandbox profile（選項與預設都來自 capabilities，不寫死），送出後那個 pane 直接變成 execution pane。上次用的 root／profile 每台 host 各自記住。
+
+#### 一個 nex truth
+
+之前 SPA 有三處各自問「這台 host 的 nex 能不能用」：`useNexHostData` 打 `/api/info`、`NexEngineStatus` 自抓 capabilities、`lease-ttl.ts` 又抓一次 capabilities 自己 cache 一輩子。New Tab 與之後的 sidebar／session pane 再各加一份就是六份。這版收成 `useNexHostStore`（`nex-host-reducer.ts` 純函數 + `nex-host-effects.ts` 抓取編排 + zustand 殼）：每 host 一份 info + capabilities，TTL 60 秒，in-flight 去重，reconnect 自動 invalidate，host 移除時跟著清。Host → Nex 頁與 lease TTL 全部改讀它，頁面 phase 語意不變（有量：舊 hook 在 refresh 失敗時本來就保留 info，這次用測試釘住而不是改掉）。
+
+#### codex 三份同時抓到同一個信任邊界洞
+
+攻擊方、防守方、體質方各自獨立指出：host 改 ip／port／token 之後，60 秒 TTL 內 cache 照用——UI 會拿舊 daemon 的 roots／profiles 去打新 daemon。原設計 fingerprint 只在 in-flight commit 時比對、沒存在 entry 上、也不含 token。修法：entry 帶 `ip:port:token` fingerprint，`isFresh` 要 TTL **且** fingerprint 相符，watcher 看到身分變更直接清 entry；三個 named test（TTL 內改址要重抓、in-flight 中換 token 丟棄結果、換 token 後 TTL 不重用）。另外 R1 抓到 headless 啟動被 tmux 狀態擋住（headless 只需要 daemon）→ 新 `isHostDaemonLive`。
+
+#### 表單的邊界
+
+子路徑只收相對路徑：拒 `/`、`~`、`..`、`.`、`\`、空段、前後空白；`$HOME` 不展開；不設長度上限。client 只做提示，server 的 `rejected` 才是權威——真機驗收看到的措辭是 `mount "/Users/wake/Workspace/does-not-exist-…" is not under any allowlisted root`（Nexen 用 EvalSymlinks 正規化，不存在的目錄配不到 root）。400 才丟錯誤，`rejected` 是資料，Executions 表會多一列 rejected。
+
+New Tab registry 順帶補了 source 級 teardown（`moduleId` on `NewTabProviderSource`）——sessions source 從來沒被 unregister 過。
+
+#### 測試與驗收
+
+6249 → 6357。spec §6.1 六項在 mlab 全過（worktree :5175 + playwright）。純 SPA，daemon 免動。
+
 ## [1.0.0-alpha.379] - 2026-09-18
 
 ### Feature: exec pane 打字機 + 工具執行中狀態（P-B2.2，#1132）
