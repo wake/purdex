@@ -152,6 +152,21 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step 1c: the execution lock (codex F1). Take-to-terminal names an
+	// execution by path and holds only this key; the session lock above
+	// does not exclude it. Both handlers settle → resume → archive the
+	// same row, so without this a bound execution could be interrupted
+	// and resumed twice — into this pane and into a fresh session — at
+	// once. Order is fixed: session lock, then execution lock (the other
+	// handler takes only the latter), so the two cannot deadlock.
+	execLock := takeToTerminalLockKey(execID)
+	if !m.locks.TryLock(execLock) {
+		writeHandoffError(w, http.StatusConflict, "takeback_in_progress", "a take-back is already in progress for this execution",
+			map[string]any{"execution_id": execID})
+		return
+	}
+	defer m.locks.Unlock(execLock)
+
 	exec, sid, release, herr := m.settleForResume(parent, exec, body.LeaseID, principal)
 	if herr != nil {
 		herr.write(w)
