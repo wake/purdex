@@ -466,6 +466,40 @@ func TestTakeToTerminal504CCStartTimeoutKillsSession(t *testing.T) {
 	env.assertNoArchive(t)
 }
 
+// TestTakeToTerminal409MismatchDoesNotKillByName (codex R1 P1): the tmux
+// server restarts between create and send. The generation check declines
+// the send, but `name` no longer identifies the session this call created
+// — a same-named session in the new generation belongs to someone else —
+// so nothing is killed and the detail says so.
+func TestTakeToTerminal409MismatchDoesNotKillByName(t *testing.T) {
+	env := newTTEnv(t)
+	env.sessions.afterCreate = func() {
+		env.tmux.SetInstance("999:999") // restart: the created session is gone with the old server…
+		_ = env.tmux.NewSession(ttName, "/somewhere/else") // …and a stranger reused the name
+	}
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "tmux_instance_mismatch", body["code"])
+	assert.Equal(t, false, body["session_killed"])
+	assert.True(t, env.tmux.HasSession(ttName), "the stranger's session is left alone")
+	env.assertNoArchive(t)
+}
+
+// TestTakeToTerminal409Archived (codex R1 P1): an archived execution is not
+// resumed again — a retry of a 200, or a second click from a pane whose
+// swap failed, must not put a second writer on the transcript.
+func TestTakeToTerminal409Archived(t *testing.T) {
+	env := newTTEnv(t)
+	e := ttExec(store.StateIdle)
+	e.ArchivedAt = 1700000000
+	env.store.results = []getResult{{exec: e}}
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "execution_archived", body["code"])
+	assert.Empty(t, env.svc.Calls(), "no lease, no interrupt")
+	env.assertNoSession(t)
+}
+
 // killFailingExecutor: KillSession fails (and is recorded); everything
 // else is the fake.
 type killFailingExecutor struct {
