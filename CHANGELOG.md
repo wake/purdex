@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.403] - 2026-09-19
+
+### Feature: 任何 execution 都能接進終端機 — daemon 端（#1215，#1210 1／2）
+
+P-C.3 的「Take back to terminal」只對從 tmux session 用 Hand to nex 交出去的 execution 有效；從 NewTab Headless、`pdx nex delegate` 起的那些沒地方可回。使用者定案「應該要可以」，所以 daemon 多一條 `POST /api/nex/executions/{id}/take-to-terminal`：settle（跑到一半就 lease→interrupt）→ 在 execution 的 cwd **新建一個 tmux session**（名字由 SPA 依 launcher 規則算好送來）→ **先 archive** → 送 `claude --resume <sid>` → 等 CC 起來。可行性量過：Nexen 起 `claude -p` 時 HOME 原樣繼承、只注入 OAuth token 與 keychain scope，transcript 跟互動式落在同一個 `~/.claude/projects/<slug(cwd)>/<sid>.jsonl`。
+
+四輪 codex（plan 10 條、R1 2 條 P1、攻擊方 5 條、critic）幾乎全在同一件事上打轉：**同一份 transcript 絕不能有兩個 writer**。因此：兩條 take-back 路徑共用 execution 級鎖（`exec:<id>`，session-bound 在 session 鎖之後再拿）；archive 在 resume **之前**（archive 失敗就砍剛建的 session 回 `archive_failed`；resume 失敗砍 session＋unarchive）；archived 的 execution 一律 409 `execution_archived`；所有 kill 改走新的 `tmux.KillSessionIfInstance`（跟 send-keys 同一招 `if-shell -F` 條件式，按 `$N` 在建立當下的 generation 下砍，tmux 重啟後絕不按名字砍到別人的）；`CreateSession` 建立前後各取一次 generation，變了就拒絕。archive 之後、resume 之前 daemon crash 會留下「已 archived＋空 tmux session」——這是刻意選的失敗方向（可見、可用 Host › Nex 的 Unarchive 或手動 `claude --resume` 恢復），反過來的順序 crash 會靜默毀 transcript，spec §4.1.1 正式接受。
+
+同一支順便做了使用者要的第二件事：**每次 Hand to nex 都問要不要保留 tmux session**（daemon 端 `nex-handoff` 收 `keep_session`、回 `session_kept`；不保留就在 execution 確認 running 後按 id 砍掉，pane 之後沒有來源 session、Take to terminal 會走新建那條路）。`takeback.go` 抽成 `settleForResume`／`resumeInWindow` 兩個 helper，原本 34 個 take-back 測試逐位元不變。
+
+真機（mlab，兩輪）：headless → Take to terminal、running 中 interrupt＋resume、cwd 消失回 `cwd_missing` 且不 interrupt、名字碰撞 `-N+1`、兩個 client 並發打同一顆 → 一個 200 一個 409 且只 resume 一次、`keep_session:false` session 消失。SPA 端在 alpha.404（#1216）。順帶抓到的既有問題：#1214（Hand to nex 右鍵項目偶爾不出現，gate 缺可觀測性）、#1213（拆檔）。
+
 ## [1.0.0-alpha.402] - 2026-09-18
 
 ### Refactor: P-D.3b `Session` 拿掉 legacy relay 欄位、fixture 清掃（#1207）— P-D 完結
