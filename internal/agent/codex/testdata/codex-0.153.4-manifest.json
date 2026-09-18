@@ -1,0 +1,17 @@
+{
+  "tag": "rust-v0.153.4",
+  "commitSha": "n/a",
+  "commitShaNote": "codex-cli is consumed as the npm @openai/codex binary; the hook surface is pinned to the published docs + live capture, not to a source commit",
+  "version": "0.153.4",
+  "normalizedVersion": "0.153.4",
+  "auditedAt": "2026-09-18",
+  "sourceDocs": "https://developers.openai.com/codex/hooks",
+  "schemaStage": "full",
+  "payloadFixtureDir": "internal/agent/codex/testdata/codex-0.153.4-payloads/",
+  "catalogSummary": {
+    "upstreamEvents": 12,
+    "installable": 10,
+    "ignored": 4,
+    "unsupported": 0
+  }
+}
