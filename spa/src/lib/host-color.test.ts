@@ -10,6 +10,12 @@ import {
   getTabHostId,
   resolveTabHostColor,
   sanitizeHostConfig,
+  HOST_COLOR_MODES,
+  HOST_COLOR_ALPHA_DEFAULTS,
+  isHostColorMode,
+  clampHostAlpha,
+  isHostColorLayer,
+  isHostColorSet,
 } from './host-color'
 import type { PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
@@ -300,5 +306,57 @@ describe('sanitizeHostConfig', () => {
       iconWeight: 'evil' as never,
     })
     expect(out).toEqual(base)
+  })
+})
+
+describe('host color modes — guards', () => {
+  it('HOST_COLOR_MODES is exactly console/terminal/execution', () => {
+    expect(HOST_COLOR_MODES).toEqual(['console', 'terminal', 'execution'])
+  })
+
+  it.each(['console', 'terminal', 'execution'])('isHostColorMode accepts %s', (m) => {
+    expect(isHostColorMode(m)).toBe(true)
+  })
+  it.each(['shell', '', 'Console', 1, null, undefined])('isHostColorMode rejects %j', (m) => {
+    expect(isHostColorMode(m)).toBe(false)
+  })
+
+  it('HOST_COLOR_ALPHA_DEFAULTS is main 100 / middle 60 / light 22', () => {
+    expect(HOST_COLOR_ALPHA_DEFAULTS).toEqual({ main: 100, middle: 60, light: 22 })
+  })
+
+  it.each([
+    [50, 50], [-5, 0], [150, 100], [33.4, 33], [33.5, 34], [NaN, 0], [Infinity, 100],
+  ])('clampHostAlpha(%j) = %j', (input, expected) => {
+    expect(clampHostAlpha(input)).toBe(expected)
+  })
+
+  it('isHostColorLayer accepts alpha-only and color+alpha layers', () => {
+    expect(isHostColorLayer({ alpha: 60 })).toBe(true)
+    expect(isHostColorLayer({ color: '#3b82f6', alpha: 100 })).toBe(true)
+  })
+  it.each([
+    { alpha: 101 }, { alpha: -1 }, { alpha: 1.5 }, { alpha: '60' }, {}, { color: '#3b82f6' },
+    { color: 'red', alpha: 50 }, { color: '#ABC', alpha: 50 }, null, 'x', [],
+  ])('isHostColorLayer rejects %j', (bad) => {
+    expect(isHostColorLayer(bad)).toBe(false)
+  })
+  it('isHostColorLayer with requireColor rejects an alpha-only layer', () => {
+    expect(isHostColorLayer({ alpha: 100 }, { requireColor: true })).toBe(false)
+    expect(isHostColorLayer({ color: '#3b82f6', alpha: 100 }, { requireColor: true })).toBe(true)
+  })
+
+  it('isHostColorSet requires main with a color; middle/light optional', () => {
+    expect(isHostColorSet({ main: { color: '#3b82f6', alpha: 100 } })).toBe(true)
+    expect(isHostColorSet({ main: { color: '#3b82f6', alpha: 100 }, middle: { alpha: 60 }, light: { color: '#000000', alpha: 10 } })).toBe(true)
+  })
+  it.each([
+    { main: { alpha: 100 } },
+    { middle: { alpha: 60 } },
+    { main: { color: '#3b82f6', alpha: 100 }, middle: { alpha: 200 } },
+    { main: { color: '#3b82f6', alpha: 100 }, light: 'x' },
+    null, {}, [],
+  ])('isHostColorSet rejects %j', (bad) => {
+    expect(isHostColorSet(bad)).toBe(false)
   })
 })

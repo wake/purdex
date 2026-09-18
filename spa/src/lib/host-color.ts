@@ -111,3 +111,65 @@ export function resolveTabHostColor(tab: Tab, hosts: Record<string, HostConfig>)
   const color = hosts[hostId]?.color
   return isValidHostColor(color) ? color : null
 }
+
+/* ─── Per-mode tri-color (spec 2026-09-18 host-color-modes §4.1) ─── */
+
+export type HostColorMode = 'console' | 'terminal' | 'execution'
+export const HOST_COLOR_MODES: readonly HostColorMode[] = ['console', 'terminal', 'execution']
+
+export type HostColorLayerName = 'main' | 'middle' | 'light'
+
+export interface HostColorLayer {
+  /** `#rrggbb`. Absent on middle/light = inherit the mode's main color. Required on main. */
+  color?: string
+  /** Integer 0–100. */
+  alpha: number
+}
+
+export interface HostColorSet {
+  main: HostColorLayer & { color: string }
+  middle?: HostColorLayer
+  light?: HostColorLayer
+}
+
+/** Alpha used when a layer is absent (light 22 = the alpha.362 background default). */
+export const HOST_COLOR_ALPHA_DEFAULTS: Readonly<Record<HostColorLayerName, number>> = {
+  main: 100,
+  middle: 60,
+  light: 22,
+}
+
+export function isHostColorMode(v: unknown): v is HostColorMode {
+  return typeof v === 'string' && (HOST_COLOR_MODES as readonly string[]).includes(v)
+}
+
+/** Rounds and bounds to an integer 0–100. NaN → 0. */
+export function clampHostAlpha(n: number): number {
+  if (Number.isNaN(n)) return 0
+  return Math.min(100, Math.max(0, Math.round(n)))
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * Structural guard for a stored layer: `alpha` must already be an integer 0–100
+ * (sanitize drops, it does not clamp); `color`, when present, must be `#rrggbb`.
+ */
+export function isHostColorLayer(v: unknown, opts?: { requireColor?: boolean }): v is HostColorLayer {
+  if (!isPlainObject(v)) return false
+  const { alpha, color } = v
+  if (typeof alpha !== 'number' || !Number.isInteger(alpha) || alpha < 0 || alpha > 100) return false
+  if ('color' in v && !isValidHostColor(color)) return false
+  if (opts?.requireColor && !('color' in v)) return false
+  return true
+}
+
+export function isHostColorSet(v: unknown): v is HostColorSet {
+  if (!isPlainObject(v)) return false
+  if (!isHostColorLayer(v.main, { requireColor: true })) return false
+  if ('middle' in v && !isHostColorLayer(v.middle)) return false
+  if ('light' in v && !isHostColorLayer(v.light)) return false
+  return true
+}
