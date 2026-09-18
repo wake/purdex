@@ -262,13 +262,22 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 	// NEW terminal). A delegate that answered anything but running (queued:
 	// somebody else is launching the first turn; failed) keeps the session
 	// — "confirmed running" is the condition, and the SPA's `from` stays
-	// as today. A kill failure is logged and reported as kept: the session
+	// as today. The kill is by session id under the generation this
+	// request verified (KillSessionIfInstance, codex F4): a server that
+	// restarted during the delegate declines it, since the session this
+	// request checked died with the old server and whatever answers to its
+	// id or name now is somebody else's. A refusal and a failure are both
+	// logged and reported as kept: as far as this request knows a session
 	// is still there, so the SPA keeps its `from`.
 	kept := true
 	if !body.keepSession() && result.State == store.StateRunning {
-		if err := m.tmux.KillSession(sess.Name); err != nil {
-			m.logf("nex: handoff %s: kill-session %s (keep_session=false): %v", code, sess.Name, err)
-		} else {
+		killed, err := m.tmux.KillSessionIfInstance(sess.TmuxID, expected)
+		switch {
+		case err != nil:
+			m.logf("nex: handoff %s: kill-session %s (%s, keep_session=false): %v", code, sess.Name, sess.TmuxID, err)
+		case !killed:
+			m.logf("nex: handoff %s: tmux generation moved during the delegate; not killing %s (%s, keep_session=false)", code, sess.Name, sess.TmuxID)
+		default:
 			kept = false
 		}
 	}

@@ -22,6 +22,7 @@ import (
 	"lab.protype.tw/wake/nexen/store"
 
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // --- preconditions ---
@@ -591,4 +592,47 @@ func TestHandoffKeepSessionFalseRejectedNoKill(t *testing.T) {
 	assert.True(t, env.tmux.HasSession(hoName), "rejected: the session is rolled back into, never killed")
 	_, has := body["session_kept"]
 	assert.False(t, has, "the error shape is unchanged")
+}
+
+// --- keep_session:false kills by id under the request's generation (codex F4) ---
+
+// The kill goes through KillSessionIfInstance: the session id the caller
+// verified, guarded by the generation the request was checked against.
+func TestHandoffKeepSessionFalseKillsByIDUnderExpectedGeneration(t *testing.T) {
+	env := newHandoffEnv(t)
+	withSessionInTmux(env)
+	env.svc.result.State = store.StateRunning
+	b := goodBody()
+	b["keep_session"] = false
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, false, body["session_kept"])
+	assert.False(t, env.tmux.HasSession(hoName), "killed")
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: hoTmuxID, Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
+}
+
+// The tmux server restarts while the delegate is in flight. The session
+// this request verified died with the old server; whatever now answers to
+// its id or name is somebody else's. The guarded kill declines, nothing is
+// killed, and the response says the session was kept.
+func TestHandoffKeepSessionFalseGenerationMovedDuringDelegateKeeps(t *testing.T) {
+	env := newHandoffEnv(t)
+	withSessionInTmux(env)
+	env.svc.result.State = store.StateRunning
+	env.svc.onDelegate = func() {
+		env.tmux.SetInstance("999:999")                       // restart…
+		env.tmux.AddSessionWithID(hoTmuxID, hoName, "/other") // …and a stranger holds the same id and name now
+	}
+	var logged []string
+	env.m.logf = func(f string, a ...any) { logged = append(logged, f) }
+	b := goodBody()
+	b["keep_session"] = false
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, "exec-1", body["execution_id"])
+	assert.Equal(t, true, body["session_kept"], "nothing of ours to kill; the stranger is reported as kept")
+	assert.True(t, env.tmux.HasSession(hoName), "the stranger's session is left alone")
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: hoTmuxID, Expected: hoInstance}}, env.tmux.KillIfInstanceCalls(),
+		"the kill was asked of the generation the request verified, and declined")
+	assert.Contains(t, strings.Join(logged, "\n"), "generation", "the refusal is logged")
 }
