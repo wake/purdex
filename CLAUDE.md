@@ -79,28 +79,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **每個 task 獨立 commit**
 
 1. 依照需求 / 請求提出建議方案，並且 enter worktree，以下都在 tree 中進行
-2. 依據討論完成方案撰寫 spec，必須按照合適 review 大小切分 phase
-3. 委派 codex 審閱 spec
+2. 依據討論完成方案撰寫 spec，按 phase 切分；**切分尺度：一個 phase ＝ 一個 PR ≤ 800 行 diff 或 ≤ 20 檔**，超過再拆
+3. spec **預設不單獨派 codex review**；只有 phase 切分或介面契約有爭議時才單獨審一輪
 4. 依據定稿的 spec 撰寫 plan
-5. 委派 codex 審閱 plan
+5. 委派 codex 審閱 plan，**prompt 附上 spec 路徑一起審**（spec 與 plan 合併為一輪）
 6. 依據 plan 使用自己的 subagent 進行開發
-7.  PR & 委派 codex 兩輪深度 review
+7. PR & 委派 codex 兩輪 review（見下節）；修完 review 問題後**只 re-review 增量**，不重跑整支 branch
 8. 確認完成後進行 PR merge，完成後清理 worktree 並關閉
-9. 獨立一個 bump PR 以更新 `VERSION` + `CHANGELOG.md` 並 merge
+9. 獨立一個 bump PR 以更新 `VERSION` + `CHANGELOG.md` 並 merge；**bump PR 與純搬移 PR 不派 codex**（純搬移用逐宣告位元組比對證明）
 10. 更新 main branch 對齊 origin/main
 
 ### PR Review 兩輪制 (委派 Codex 進行)
 
-**第一輪：標準 code review（跨模型差異化檢查）**
+模型一律 `--model gpt-5.6-sol`、effort 維持 config 的 `low`（不要拉高，Pro 週配額燒很快）。
 
-**第二輪：3 個 parallel**
-- 攻擊方：找 bug / 安全漏洞 / race / 邊界條件
-- 防守方：驗證設計合理性 / 架構一致性 / API 邊界
-- 檔案體質：過大檔案 / SRP 違反 / 職責不清
+**第一輪 R1：標準 code review**（`/codex:review --base <ref>`，內建 reviewer，跨模型差異化檢查）
 
-輪詢 `/codex:status` → `/codex:result <job-id>` 讀回 4 份輸出。
+**第二輪 R2：「攻擊 → critic 反駁」串行兩次**（不再三平行；依據 ICML 2026 Adversarial Review：agent 數不是變因，「必須引用證據才能反對」才是）
+1. **攻擊方** `/codex:adversarial-review`：找 bug / 安全漏洞 / race / 邊界條件；focus 末段附一句「另外列出過大檔案 / SRP 違反（低優先，獨立一節）」，原本的「檔案體質」視角併進來
+2. **critic 反駁方** `/codex:adversarial-review`：focus 內嵌 R1 ＋ 攻擊方的 findings 清單與 spec 路徑，要求**逐條**判定「同意／有證據反對（必引 file:line）／疑慮」，**禁止新增沒有證據的 finding**。critic 同時是 spec drift 防線（原「防守方」的職責）
+3. 攻擊方與 critic 對**同一個 critical** 互不同意時，才用 `--model gpt-6-astra` 派一次仲裁；其他情況不用 astra
 
-Focus text 越具體越好（指定檔案 / 具體風險點 / 設計疑問）。全域 CLAUDE.md 載明 Skill 設計意圖與 companion script 啟動路徑。
+兩段 focus 模板在 `~/.claude/skills/codex-dispatch/SKILL.md`。輪詢 `/codex:status` → `/codex:result <job-id>` 讀回 3 份輸出。Focus text 越具體越好（指定檔案 / 具體風險點 / 設計疑問）。
+
+**增量 re-review**：修完問題後，修正未 commit → `--scope working-tree`；已 commit → `--base <上一輪審過的 sha>`。re-review 只回 Important 以上，不回 nit。
+
+**停止條件**：R1 無 critical / P1，且 critic 對剩餘 findings 沒有「有證據的反對」→ 直接 ship。第三輪只在第二輪**新出現** critical 時才跑。
 
 ### Review 問題彙整
 
@@ -118,6 +122,8 @@ Focus text 越具體越好（指定檔案 / 具體風險點 / 設計疑問）。
 - **低複雜**：修復成本低、可快速解決的項目
 
 只有低關聯 + 中高複雜可以延後，其他統一優先處理。需要討論的項目先討論完再修。當下不修的問題建立 `gh issue` 追蹤。
+
+**confidence 門檻**：codex 回傳的 `confidence`（adversarial 0–1 / 內建 reviewer `confidence_score`）**< 0.6 不進主表**，另列「待驗證」區；主 Claude 先用測試或重現驗證，證實才升進主表，證偽就丟。沒有 confidence 欄位的輸出視為 0.6 照常進表。
 
 ### Issue 管理
 
