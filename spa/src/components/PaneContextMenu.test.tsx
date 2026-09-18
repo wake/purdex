@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import { PaneContextMenu } from './PaneContextMenu'
+import { PaneContextMenu, type MenuItem } from './PaneContextMenu'
 
-function renderMenu(overrides?: { canDetach?: boolean }) {
+function renderMenu(overrides?: { canDetach?: boolean; extraItems?: MenuItem[] }) {
   const props = {
     position: { x: 100, y: 100 },
     canDetach: overrides?.canDetach ?? true,
+    extraItems: overrides?.extraItems,
     onClose: vi.fn(),
     onAction: vi.fn(),
   }
@@ -55,6 +56,49 @@ describe('PaneContextMenu', () => {
     const p3 = renderMenu({ canDetach: true })
     fireEvent.click(screen.getByText('Detach to tab'))
     expect(p3.onAction).toHaveBeenCalledWith('detach')
+  })
+
+  describe('extraItems', () => {
+    it('renders nothing extra by default (no trailing separator)', () => {
+      const { container } = render(
+        <PaneContextMenu position={{ x: 0, y: 0 }} canDetach={false} onClose={vi.fn()} onAction={vi.fn()} />,
+      )
+      expect(container.querySelectorAll('.border-t').length).toBe(0)
+      expect(screen.queryByText('Hand to nex')).not.toBeInTheDocument()
+    })
+
+    it('renders extra items after a separator, below the built-in items', () => {
+      const { container } = render(
+        <PaneContextMenu
+          position={{ x: 0, y: 0 }}
+          canDetach={false}
+          extraItems={[{ label: 'Hand to nex', action: 'hand-to-nex' }]}
+          onClose={vi.fn()}
+          onAction={vi.fn()}
+        />,
+      )
+      const menu = container.firstChild as HTMLElement
+      const children = Array.from(menu.children)
+      const sepIdx = children.findIndex((el) => el.className.includes('border-t'))
+      const extraIdx = children.findIndex((el) => el.textContent === 'Hand to nex')
+      const splitIdx = children.findIndex((el) => el.textContent === 'Split Vertical')
+      expect(sepIdx).toBeGreaterThan(splitIdx)
+      expect(extraIdx).toBe(sepIdx + 1)
+    })
+
+    it('dispatches the extra item action and closes', () => {
+      const props = renderMenu({ canDetach: true, extraItems: [{ label: 'Hand to nex', action: 'hand-to-nex' }] })
+      fireEvent.click(screen.getByText('Hand to nex'))
+      expect(props.onAction).toHaveBeenCalledWith('hand-to-nex')
+      expect(props.onClose).toHaveBeenCalled()
+    })
+
+    it('an empty extraItems array renders no separator', () => {
+      const { container } = render(
+        <PaneContextMenu position={{ x: 0, y: 0 }} canDetach={false} extraItems={[]} onClose={vi.fn()} onAction={vi.fn()} />,
+      )
+      expect(container.querySelectorAll('.border-t').length).toBe(0)
+    })
   })
 
   it('calls onClose on Escape', () => {
