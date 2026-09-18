@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1.3 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave (§9)
+- Status: v1.4 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave; P-C.3a fix wave (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -385,6 +385,14 @@ resume_command, lease_id?}`.
    the session provider (else 404 `session_missing`); generation matches
    (else 409 `tmux_instance_mismatch`); `!IsAliveFor("cc", target)` (else 409
    `cc_already_running` — the user already resumed by hand).
+   1b. **Binding, after `Store.Get` and before any lease / interrupt / send
+   / archive** (v1.4): the execution must be the one a handoff of *this*
+   session created — `labels.handoff_session == code` **and** `origin ==
+   purdex://host/<hostId>/session/<code>` (both as step 5 of the handoff
+   wrote them; labels are the store's canonical JSON text, decoded here).
+   Else 409 `execution_not_bound` `{execution_id, session_code}`; a
+   running unbound execution is **not** interrupted — the caller cannot
+   resume it in this pane, so stopping it would only strand it.
 2. Execution: `Service.Get(execution_id)`; `state == running` → needs a
    control lease: if `lease_id` given and valid, `Service.Interrupt` with it;
    otherwise acquire one (`AttachControl`) → interrupt → release. `lease_held`
@@ -393,7 +401,10 @@ resume_command, lease_id?}`.
    require `state ∈ {idle, failed, terminated}`.
 3. `sid = summary.session_id ?? summary.resume_session_id` (F3); none → 409
    `no_session_id`.
-4. `SendKeys(target, render(resume_command, sid))`, wait `IsAliveFor("cc")`
+4. Re-check `!IsAliveFor("cc", target)` immediately before the send, lock
+   still held (v1.4; else 409 `cc_already_running` `{session_id}`, nothing
+   sent, nothing archived — the user resumed by hand during step 2). Then
+   `SendKeys(target, render(resume_command, sid))`, wait `IsAliveFor("cc")`
    ≤ 15 s (else 504 `cc_start_timeout`; the execution is already idle — the
    response says which step failed so the SPA can offer "retry resume").
 5. `Service.Archive(execution_id)` (no lease needed, idle) — **archive on
@@ -647,3 +658,11 @@ from the region again (`primary-sidebar.views` back to
   precondition pinned by a capabilities test; delegate infra error shares
   the `delegate_rejected` rollback path; acquired lease released on every
   exit path; `store.ErrNotFound` vs other store errors distinguished.
+- v1.4 — P-C.3a fix wave: shared lock instance via registry
+  (`session.HandoffLocksKey`, one `*HandoffLocks` for stream and nex);
+  window-0 send target (`SendKeysIfInstanceTarget`, the pane liveness and
+  the operator read); pre-send liveness re-check (take-back step 4);
+  bounded detached contexts for every engine call (delegate 30 s, engine
+  op 10 s, interrupt 20 s > Nexen's 15 s, lease cleanup 5 s); take-back
+  requires the execution to be bound to the session (`handoff_session`
+  label + origin, step 1b).

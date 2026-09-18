@@ -36,6 +36,19 @@ func settled(s store.State) bool {
 	return s == store.StateIdle || s == store.StateFailed || s == store.StateTerminated
 }
 
+// boundToSession reports whether exec is the execution a handoff of
+// session code on this host created: its handoff_session label names the
+// code and its origin is handoffOrigin(hostID, code). Labels are the
+// canonical JSON text the store keeps; a value that does not decode to an
+// object is not bound (never "bound by default").
+func boundToSession(exec store.Execution, hostID, code string) bool {
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(exec.Labels), &labels); err != nil {
+		return false
+	}
+	return labels[handoffSessionLabel] == code && exec.Origin == handoffOrigin(hostID, code)
+}
+
 // handleNexTakeback resumes an execution's Claude Code session in its tmux
 // pane and archives the execution. Every check that needs no execution
 // access runs first — session, generation, "is CC already back?" — so a
@@ -123,6 +136,18 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeHandoffError(w, http.StatusInternalServerError, "store_error", "reading execution: "+err.Error(), nil)
+		return
+	}
+
+	// Step 1b: the execution must be the one a handoff of THIS session
+	// created — label and origin both, as the handoff wrote them. Another
+	// session's execution, one launched from the Headless section, or a row
+	// from another host is refused before any lease, interrupt, send or
+	// archive: the caller cannot resume it in this pane, so stopping it
+	// would only strand it.
+	if !boundToSession(exec, m.opts.Config.HostID, code) {
+		writeHandoffError(w, http.StatusConflict, "execution_not_bound", "execution is not bound to this session",
+			map[string]any{"execution_id": execID, "session_code": code})
 		return
 	}
 

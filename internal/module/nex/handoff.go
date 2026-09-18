@@ -46,6 +46,19 @@ func detachedContext(parent context.Context, d time.Duration) (context.Context, 
 // body names another one; it must be usable under the host policy.
 const handoffProfile = "handoff"
 
+// handoffSessionLabel is the execution label that binds a handed-off
+// execution to its session code (spec §4.4 step 5). Together with the
+// origin (handoffOrigin) it is what a take-back checks before it touches
+// the execution (§4.4 take-back step 1b).
+const handoffSessionLabel = "handoff_session"
+
+// handoffOrigin is the execution origin a handoff writes: this daemon and
+// the session the execution came from. One definition, so the take-back
+// check cannot drift from what the handoff wrote.
+func handoffOrigin(hostID, code string) string {
+	return "purdex://host/" + hostID + "/session/" + code
+}
+
 func (m *Module) applyHandoffDefaults() {
 	if m.handoffResolveTimeout == 0 {
 		m.handoffResolveTimeout = defaultHandoffResolveTimeout
@@ -208,8 +221,8 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		Brief:           "(handed off from tmux session " + sess.Name + ")",
 		SandboxProfile:  profile,
 		Mounts:          []execution.Mount{{Path: owner.Cwd, Role: "cwd", Writable: true}},
-		Origin:          "purdex://host/" + m.opts.Config.HostID + "/session/" + code,
-		Labels:          map[string]string{"source": "purdex", "handoff_session": code},
+		Origin:          handoffOrigin(m.opts.Config.HostID, code),
+		Labels:          map[string]string{"source": "purdex", handoffSessionLabel: code},
 		ResumeSessionID: owner.SessionID,
 	}
 	// Detached from r.Context(): CC is already gone, and a client that

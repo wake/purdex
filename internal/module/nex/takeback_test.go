@@ -50,13 +50,39 @@ func newTakebackEnv(t *testing.T) *takebackEnv {
 	return &takebackEnv{handoffEnv: env, store: st}
 }
 
+// tbOrigin / tbLabels are what the handoff wrote on the execution (spec
+// §4.4 step 5): the row is bound to session hoCode on host host1. Labels
+// is the canonical JSON text as store.Execution carries it.
+const (
+	tbOrigin = "purdex://host/host1/session/" + hoCode
+	tbLabels = `{"handoff_session":"` + hoCode + `","source":"purdex"}`
+)
+
+// boundExec is a row bound to hoCode in the given state.
+func boundExec(state store.State) store.Execution {
+	return store.Execution{ID: tbExecID, State: state, Origin: tbOrigin, Labels: tbLabels}
+}
+
+func withSessionID(e store.Execution, sid string) store.Execution {
+	e.SessionID = sid
+	return e
+}
+
+func withResume(e store.Execution, sid string) store.Execution {
+	e.ResumeSessionID = sid
+	return e
+}
+
 func idleExec() store.Execution {
-	return store.Execution{ID: tbExecID, State: store.StateIdle, SessionID: tbSessionID}
+	return withSessionID(boundExec(store.StateIdle), tbSessionID)
 }
 
 func runningExec() store.Execution {
-	return store.Execution{ID: tbExecID, State: store.StateRunning, SessionID: tbSessionID,
-		LeaseID: "lease-other", LeasePrincipalID: "pdx:host1/tab-3"}
+	e := boundExec(store.StateRunning)
+	e.SessionID = tbSessionID
+	e.LeaseID = "lease-other"
+	e.LeasePrincipalID = "pdx:host1/tab-3"
+	return e
 }
 
 // scriptRunningThenIdle: the first Get says running, the re-Get after the
@@ -240,6 +266,84 @@ func TestTakeback500StoreError(t *testing.T) {
 	assert.Empty(t, env.tmux.RawKeysSent())
 }
 
+// --- execution ↔ session binding (spec §4.4 take-back step 1b) ---
+
+// TestTakebackBoundExecutionPasses: the row the handoff wrote — label
+// handoff_session = code and origin purdex://host/<hostID>/session/<code>
+// — is accepted. (The all-good fixture is bound; this pins that the
+// fields the check reads are the ones the handoff writes.)
+func TestTakebackBoundExecutionPasses(t *testing.T) {
+	env := newTakebackEnv(t)
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, tbOrigin, "purdex://host/"+env.m.opts.Config.HostID+"/session/"+hoCode)
+}
+
+// TestTakeback409ExecutionNotBound: an execution that is not bound to this
+// session — another session's handoff, an execution launched from the
+// Headless section, a row from another host, a label set that cannot be
+// read — is refused before any lease, interrupt, send or archive (review
+// A5). A running one is not even interrupted: the caller cannot resume it
+// here, so stopping it would only strand it.
+func TestTakeback409ExecutionNotBound(t *testing.T) {
+	cases := map[string]func(store.Execution) store.Execution{
+		"label names another session": func(e store.Execution) store.Execution {
+			e.Labels = `{"handoff_session":"zzz","source":"purdex"}`
+			return e
+		},
+		"no handoff_session label": func(e store.Execution) store.Execution {
+			e.Labels = `{"source":"purdex"}`
+			return e
+		},
+		"empty labels": func(e store.Execution) store.Execution {
+			e.Labels = "{}"
+			return e
+		},
+		"labels not an object": func(e store.Execution) store.Execution {
+			e.Labels = `["handoff_session"]`
+			return e
+		},
+		"right label, origin names another session": func(e store.Execution) store.Execution {
+			e.Origin = "purdex://host/host1/session/zzz"
+			return e
+		},
+		"right label, origin names another host": func(e store.Execution) store.Execution {
+			e.Origin = "purdex://host/host2/session/" + hoCode
+			return e
+		},
+		"right label, no origin": func(e store.Execution) store.Execution {
+			e.Origin = ""
+			return e
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Run("idle", func(t *testing.T) {
+				env := newTakebackEnv(t)
+				env.store.results = []getResult{{exec: mutate(idleExec())}}
+				status, body := env.post(t, hoCode, takebackBody())
+				assert.Equal(t, http.StatusConflict, status)
+				assert.Equal(t, "execution_not_bound", body["code"])
+				assert.Equal(t, tbExecID, body["execution_id"])
+				assert.Equal(t, hoCode, body["session_code"], "the session the caller named (\"code\" is the error code)")
+				assert.Empty(t, env.svc.Calls(), "nothing on the service: no lease, no interrupt, no archive")
+				assert.Equal(t, 1, env.store.Calls(), "one Get, nothing more")
+				assert.Empty(t, env.tmux.RawKeysSent())
+			})
+			t.Run("running", func(t *testing.T) {
+				env := newTakebackEnv(t)
+				env.store.results = []getResult{{exec: mutate(runningExec())}, {exec: idleExec()}}
+				status, body := env.post(t, hoCode, takebackBody())
+				assert.Equal(t, http.StatusConflict, status)
+				assert.Equal(t, "execution_not_bound", body["code"])
+				assert.Empty(t, env.svc.Calls(), "a running unbound execution is not interrupted")
+				assert.Equal(t, 1, env.store.Calls())
+				assert.Empty(t, env.tmux.RawKeysSent())
+			})
+		})
+	}
+}
+
 // TestTakebackGetTimeout500ReleasesLock: the store read runs under a
 // detached, bounded context (review A3/A4). A store that never answers
 // ends in 500 store_error at the deadline, and the handler returns — so
@@ -397,7 +501,7 @@ func TestTakeback500ReGetErrorReleasesLease(t *testing.T) {
 func TestTakeback409ExecutionNotSettled(t *testing.T) {
 	t.Run("queued, never interrupted", func(t *testing.T) {
 		env := newTakebackEnv(t)
-		env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateQueued, SessionID: tbSessionID}}}
+		env.store.results = []getResult{{exec: withSessionID(boundExec(store.StateQueued), tbSessionID)}}
 		status, body := env.post(t, hoCode, takebackBody())
 		assert.Equal(t, http.StatusConflict, status)
 		assert.Equal(t, "execution_not_settled", body["code"])
@@ -422,7 +526,7 @@ func TestTakeback409ExecutionNotSettled(t *testing.T) {
 func TestTakebackSessionIDPreferredOverResume(t *testing.T) {
 	t.Run("both set → session_id", func(t *testing.T) {
 		env := newTakebackEnv(t)
-		env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateIdle, SessionID: tbSessionID, ResumeSessionID: "sid-resume"}}}
+		env.store.results = []getResult{{exec: withResume(withSessionID(boundExec(store.StateIdle), tbSessionID), "sid-resume")}}
 		status, body := env.post(t, hoCode, takebackBody())
 		require.Equal(t, http.StatusOK, status, "%v", body)
 		assert.Equal(t, tbSessionID, body["session_id"])
@@ -430,7 +534,7 @@ func TestTakebackSessionIDPreferredOverResume(t *testing.T) {
 	})
 	t.Run("only resume_session_id", func(t *testing.T) {
 		env := newTakebackEnv(t)
-		env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateFailed, ResumeSessionID: "sid-resume"}}}
+		env.store.results = []getResult{{exec: withResume(boundExec(store.StateFailed), "sid-resume")}}
 		status, body := env.post(t, hoCode, takebackBody())
 		require.Equal(t, http.StatusOK, status, "%v", body)
 		assert.Equal(t, "sid-resume", body["session_id"])
@@ -440,7 +544,7 @@ func TestTakebackSessionIDPreferredOverResume(t *testing.T) {
 
 func TestTakeback409NoSessionID(t *testing.T) {
 	env := newTakebackEnv(t)
-	env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateTerminated}}}
+	env.store.results = []getResult{{exec: boundExec(store.StateTerminated)}}
 	status, body := env.post(t, hoCode, takebackBody())
 	assert.Equal(t, http.StatusConflict, status)
 	assert.Equal(t, "no_session_id", body["code"])
