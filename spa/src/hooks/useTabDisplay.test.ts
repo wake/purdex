@@ -13,13 +13,13 @@ import { compositeKey } from '../lib/composite-key'
 import { useTabDisplay } from './useTabDisplay'
 
 function makeTab(
-  overrides: Partial<{ hostId: string; sessionCode: string; terminated: boolean; cachedName: string; mode: 'terminal' | 'stream' }> = {},
+  overrides: Partial<{ hostId: string; sessionCode: string; terminated: boolean; cachedName: string }> = {},
 ): Tab {
   const tab = createTab({
     kind: 'tmux-session',
     hostId: overrides.hostId ?? 'h1',
     sessionCode: overrides.sessionCode ?? 'sc1',
-    mode: overrides.mode ?? 'terminal',
+    mode: 'terminal',
     cachedName: overrides.cachedName ?? '',
     tmuxInstance: '',
     terminated: overrides.terminated ? 'session-closed' : undefined,

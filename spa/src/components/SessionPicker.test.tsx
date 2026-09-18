@@ -6,6 +6,8 @@ import type { Session } from '../lib/host-api'
 
 const mockSessions: Session[] = [
   { code: 'abc001', name: 'dev-server', mode: 'terminal', cwd: '/home' },
+  // Legacy input: a pre-P-D.2 daemon still reports 'stream'; the P-D.3 test
+  // below checks the row renders it as a plain terminal session.
   { code: 'def002', name: 'claude-code', mode: 'stream', cwd: '/home' },
 ]
 

@@ -105,6 +105,7 @@ describe('decideRevive', () => {
 
   it('S6: revives when a pre-P-D.2 daemon still reports the live session as stream (codex F1)', () => {
     const cand = candidate()
+    // Legacy input: a pre-P-D.2 daemon still reports 'stream'.
     const live = session({ code: 'abc123', name: 'dev', tmux_instance: '222:2000', mode: 'stream' })
     expect(decideRevive('h1', [live], [cand])).toHaveLength(1)
   })

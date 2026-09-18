@@ -330,7 +330,7 @@ describe('handleNotificationClick workspace switching', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: SESSION_CODE, name: 'dev', cwd: '/tmp', mode: 'stream', tmux_instance: '222:2000' },
+          { code: SESSION_CODE, name: 'dev', cwd: '/tmp', mode: 'terminal', tmux_instance: '222:2000' },
         ],
       },
     })
@@ -347,6 +347,7 @@ describe('handleNotificationClick workspace switching', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
+          // Legacy input: a pre-P-D.2 daemon still reports 'stream'.
           { code: SESSION_CODE, name: 'dev', cwd: '/tmp', mode: 'stream', tmux_instance: '222:2000' },
         ],
       },

@@ -7,7 +7,7 @@ import { STORAGE_KEYS } from '../lib/storage'
 
 const MOCK_SESSIONS = [
   { code: 'abc123', name: 'test', cwd: '/tmp', mode: 'terminal' as const },
-  { code: 'def456', name: 'dev', cwd: '/home', mode: 'stream' as const },
+  { code: 'def456', name: 'dev', cwd: '/home', mode: 'terminal' as const },
 ]
 
 vi.mock('../lib/host-api', async (importOriginal) => {

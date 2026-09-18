@@ -37,7 +37,7 @@ describe('SessionPanel', () => {
       sessions: {
         [HOST_ID]: [
           { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
-          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream' },
+          { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,
@@ -85,6 +85,7 @@ describe('SessionPanel', () => {
       sessions: {
         [HOST_ID]: [
           { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
+          // Legacy input: a pre-P-D.2 daemon still reports 'stream'.
           { code: 'abc002', name: 'prod', cwd: '/tmp', mode: 'stream' },
         ],
       },
@@ -124,7 +125,7 @@ describe('SessionPanel', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'stream' },
+          { code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' },
         ],
       },
       activeHostId: HOST_ID,

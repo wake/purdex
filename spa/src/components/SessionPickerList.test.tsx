@@ -62,7 +62,7 @@ describe('SessionPickerList', () => {
           { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'cld001', name: 'claude-session', cwd: '/tmp', mode: 'stream' },
+          { code: 'cld001', name: 'claude-session', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })
@@ -173,7 +173,7 @@ describe('SessionPickerList', () => {
           { code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal' },
         ],
         [HOST_B]: [
-          { code: 'cld001', name: 'cloud-session', cwd: '/tmp', mode: 'stream' },
+          { code: 'cld001', name: 'cloud-session', cwd: '/tmp', mode: 'terminal' },
         ],
       },
     })

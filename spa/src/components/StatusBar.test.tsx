@@ -130,7 +130,6 @@ describe('StatusBar', () => {
     render(<StatusBar activeTab={tab} />)
     expect(screen.queryByTestId('status-view-mode')).toBeNull()
     expect(screen.queryByTitle('Toggle view mode')).toBeNull()
-    expect(screen.queryByText('stream')).toBeNull()
   })
 
   it('shows simplified status for non-session tabs', () => {
