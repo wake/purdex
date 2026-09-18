@@ -1,6 +1,6 @@
 # Spec — P-B3: exec pane consumes Nexen N2 `tool_use` / `tool_result`
 
-- Status: v1.2 (2026-09-19) — codex plan+spec review `task-mu7ckdhj-wo5ha7` and PR #1221 R1/R2 applied (§9)
+- Status: v1.3 (2026-09-19) — codex plan review, PR #1221 and PR #1223 R1/R2 applied (§9)
 - Predecessors: `2026-09-15-pb-execution-pane-spec.md` (P-B, §4.2.3
   transport / §4.2.4 reducer rules stay binding) and
   `2026-09-18-pb2-exec-live-stream-spec.md` (P-B2, §4.1 partial assembly
@@ -484,3 +484,15 @@ now (F7 proves they exist).
   2000 lines; NaN/Infinity are not valid JSON), **no spec drift** against
   §4.2 / N0–N7 / §5. Both fixed (own-key lookup everywhere, finite
   non-negative ints, `DIFF_LINES_SANITY_CAP`), rule N6 extended above.
+- 2026-09-19 PR #1223 (P-B3.2): R1 — no findings; attacker — A1 result
+  tone ignores N2 `status: error` when raw `is_error` is false (high),
+  A2 denied badge drops `durationMs` (medium, the only spec drift vs
+  R2), A3 R10 fallback serialises whole values before slicing (medium);
+  critic — A2 agreed, A1 evidenced objection (nexen
+  `execution/toolevents.go:252-261` derives `error` from `is_error`, so
+  the two never disagree on the wire), A3 concern, no other drift,
+  baseline snapshot commit verified to precede the component change. All
+  three fixed anyway (tone from `facts.status` when present — cheaper
+  than reasoning about the invariant; denied badge + duration; bounded
+  `previewValue` with depth 4 / `[Circular]` / `[unserializable]`); R4
+  and R3 text below unchanged in intent.
