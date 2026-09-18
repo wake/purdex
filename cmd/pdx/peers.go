@@ -72,6 +72,7 @@ const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
 	"       pdx peers host set-token <alias> <token> [--allow-bypass=true|false] [--config <path>]\n" +
 	"       pdx peers host verify <alias> [--json] [--config <path>]\n" +
 	"       pdx peers host rename <alias> <new-alias> [--config <path>]\n" +
+	"       pdx peers host rotate <alias> [--commit|--cancel] [--force] [--config <path>]\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
 	"       pdx peers host list [--config <path>]"
 
@@ -118,6 +119,14 @@ type peersInvocation struct {
 	token       string
 	hasToken    bool
 	allowBypass *bool
+
+	// rotateCommit/rotateCancel/rotateForce carry `host rotate`'s three
+	// boolean flags (spec §6.6) — meaningful only when verb == "rotate";
+	// parsePeersInvocation rejects them for every other verb and for the
+	// query form.
+	rotateCommit bool
+	rotateCancel bool
+	rotateForce  bool
 }
 
 // peersHostVerbArity is every known `pdx peers host` verb's accepted
@@ -129,6 +138,7 @@ var peersHostVerbArity = map[string][]int{
 	"set-token": {2},
 	"verify":    {1},
 	"rename":    {2},
+	"rotate":    {1},
 	"remove":    {1},
 	"list":      {0},
 }
@@ -174,6 +184,12 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 			inv.jsonOutput = true
 		case a == "--all":
 			inv.all = true
+		case a == "--commit":
+			inv.rotateCommit = true
+		case a == "--cancel":
+			inv.rotateCancel = true
+		case a == "--force":
+			inv.rotateForce = true
 		case a == "--token":
 			if i+1 >= len(args) {
 				return peersInvocation{}, "", false
@@ -197,8 +213,10 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 
 	if len(positionals) == 0 || positionals[0] != "host" {
 		// Top-level query form: no positionals at all, and none of the
-		// host-only flags (--token, --allow-bypass).
-		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil {
+		// host-only flags (--token, --allow-bypass, --commit/--cancel/
+		// --force — the last three are rotate-only).
+		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil ||
+			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
 		return inv, "", true
@@ -228,7 +246,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 
 	switch inv.verb {
 	case "add":
-		if inv.allowBypass != nil {
+		if inv.allowBypass != nil || inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
 		// The alias is what "add" may omit, so a lone positional has to
@@ -241,11 +259,21 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 			return peersInvocation{}, "", false
 		}
 	case "set-token":
-		if inv.hasToken {
+		if inv.hasToken || inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
+			return peersInvocation{}, "", false
+		}
+	case "rotate":
+		if inv.hasToken || inv.allowBypass != nil || inv.jsonOutput {
+			return peersInvocation{}, "", false
+		}
+		if inv.rotateCommit && inv.rotateCancel {
+			return peersInvocation{}, "", false
+		}
+		if inv.rotateForce && !inv.rotateCommit && !inv.rotateCancel {
 			return peersInvocation{}, "", false
 		}
 	default: // verify, rename, remove, list
-		if inv.hasToken || inv.allowBypass != nil {
+		if inv.hasToken || inv.allowBypass != nil || inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
 	}
@@ -666,6 +694,21 @@ type cliHostRow struct {
 	HasToken        bool   `json:"has_token"`
 	HasInboundToken bool   `json:"has_inbound_token"`
 	AllowBypass     bool   `json:"allow_bypass"`
+	RotationPending bool   `json:"rotation_pending"`
+	LastInboundAuth string `json:"last_inbound_auth"`
+}
+
+// cliRotateResponse mirrors internal/module/peers.rotateResponse — with
+// POST 201, the only responses that carry a live inbound-token value.
+type cliRotateResponse struct {
+	Alias        string `json:"alias"`
+	InboundToken string `json:"inbound_token"`
+}
+
+// cliRotateGateRequest mirrors the body POST .../rotate/commit and
+// .../rotate/cancel accept.
+type cliRotateGateRequest struct {
+	Force bool `json:"force,omitempty"`
 }
 
 // cliHostsListResponse mirrors GET /api/peers/hosts' body.
@@ -782,6 +825,8 @@ func runPeersHostCmd(inv peersInvocation, stdout, stderr io.Writer) int {
 		return runPeersHostVerify(cfg, base, inv, stdout, stderr)
 	case "rename":
 		return runPeersHostRename(cfg, base, inv, stdout, stderr)
+	case "rotate":
+		return runPeersHostRotate(cfg, base, inv, stdout, stderr)
 	case "remove":
 		return runPeersHostRemove(cfg, base, inv, stdout, stderr)
 	default:
@@ -906,6 +951,72 @@ func runPeersHostRename(cfg config.Config, base string, inv peersInvocation, std
 	return 0
 }
 
+// runPeersHostRotate implements the three forms of `pdx peers host rotate`
+// (spec §6.6). The plain form prints the new token the way add does — this
+// is the value the PEER must be given (`pdx peers host set-token <us> <tok>`
+// over there). --commit and --cancel hit the daemon's gates; a 409
+// "rotation unconfirmed" is explained in terms of what to do next, because
+// a CLI on this host cannot make the peer dial us (spec §6.4).
+func runPeersHostRotate(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
+	alias := inv.positionals[0]
+	target := base + "/" + url.PathEscape(alias) + "/rotate"
+
+	if !inv.rotateCommit && !inv.rotateCancel {
+		result, err := doPeersRequest(http.MethodPost, target, nil, cfg.Token, peersRequestTimeout)
+		if err != nil {
+			return reportPeersTransportErr(err, stderr)
+		}
+		if result.status != http.StatusOK {
+			return reportPeersAPIError(result, stderr)
+		}
+		var resp cliRotateResponse
+		if err := json.Unmarshal(result.body, &resp); err != nil || resp.InboundToken == "" {
+			fmt.Fprintln(stderr, "pdx peers: invalid response")
+			return 1
+		}
+		fmt.Fprintf(stdout, "rotated %s: both the old and the new inbound token are accepted until you --commit\n", sanitizeCell(resp.Alias))
+		fmt.Fprintf(stdout, "new inbound token for %s to use (pdx peers host set-token <this host> <token> over there):\n", sanitizeCell(resp.Alias))
+		fmt.Fprintf(stdout, "  %s\n", resp.InboundToken)
+		return 0
+	}
+
+	verb := "commit"
+	if inv.rotateCancel {
+		verb = "cancel"
+	}
+	reqBody, err := json.Marshal(cliRotateGateRequest{Force: inv.rotateForce})
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+		return 1
+	}
+	result, err := doPeersRequest(http.MethodPost, target+"/"+verb, reqBody, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return reportPeersTransportErr(err, stderr)
+	}
+	if result.status == http.StatusConflict && extractPeersErrorMessage(result.body) == "rotation unconfirmed" {
+		if verb == "commit" {
+			fmt.Fprintf(stderr, "pdx peers: rotation unconfirmed — the peer has not presented the NEW token yet. Give it the token (set-token over there), run `pdx peers host verify <this host's alias>` on the peer, then retry; or --force if the peer is gone for good.\n")
+		} else {
+			fmt.Fprintf(stderr, "pdx peers: rotation unconfirmed — the peer was not last seen on the OLD token (it may already hold the new one). Run `pdx peers host verify <this host's alias>` on the peer, then retry; or --force if you are sure.\n")
+		}
+		return 1
+	}
+	if result.status != http.StatusOK {
+		return reportPeersAPIError(result, stderr)
+	}
+	var row cliHostRow
+	if err := json.Unmarshal(result.body, &row); err != nil {
+		fmt.Fprintln(stderr, "pdx peers: invalid response")
+		return 1
+	}
+	if verb == "commit" {
+		fmt.Fprintf(stdout, "committed %s: the old inbound token is revoked\n", sanitizeCell(row.Alias))
+	} else {
+		fmt.Fprintf(stdout, "cancelled rotation for %s: the old inbound token is the only one again\n", sanitizeCell(row.Alias))
+	}
+	return 0
+}
+
 func runPeersHostRemove(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
 	alias := inv.positionals[0]
 
@@ -922,14 +1033,14 @@ func runPeersHostRemove(cfg config.Config, base string, inv peersInvocation, std
 }
 
 // formatHostsTable renders hosts as a text/tabwriter table with columns
-// ALIAS URL HOST_ID VERIFIED TOKEN INBOUND ALLOW_BYPASS (the last four
-// rendered as yes/no).
+// ALIAS URL HOST_ID VERIFIED TOKEN INBOUND ALLOW_BYPASS (rendered as
+// yes/no) ROTATION (rotationCell: "-" | "pending" | "pending, confirmed").
 func formatHostsTable(hosts []cliHostRow) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ALIAS\tURL\tHOST_ID\tVERIFIED\tTOKEN\tINBOUND\tALLOW_BYPASS")
+	fmt.Fprintln(w, "ALIAS\tURL\tHOST_ID\tVERIFIED\tTOKEN\tINBOUND\tALLOW_BYPASS\tROTATION")
 	for _, h := range hosts {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			sanitizeCell(h.Alias),
 			sanitizeCell(h.URL),
 			sanitizeCell(h.HostID),
@@ -937,10 +1048,25 @@ func formatHostsTable(hosts []cliHostRow) string {
 			yesNo(h.HasToken),
 			yesNo(h.HasInboundToken),
 			yesNo(h.AllowBypass),
+			rotationCell(h),
 		)
 	}
 	w.Flush()
 	return buf.String()
+}
+
+// rotationCell renders host list's ROTATION column: "-" when no rotation is
+// pending, "pending, confirmed" once the peer has been seen presenting the
+// new inbound token (LastInboundAuth == "current"), "pending" otherwise.
+func rotationCell(h cliHostRow) string {
+	switch {
+	case !h.RotationPending:
+		return "-"
+	case h.LastInboundAuth == "current":
+		return "pending, confirmed"
+	default:
+		return "pending"
+	}
 }
 
 func yesNo(b bool) string {
