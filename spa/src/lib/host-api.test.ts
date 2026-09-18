@@ -2,8 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import {
-  listSessions, createSession, deleteSession, switchMode,
-  handoff, fetchHistory, fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
+  listSessions, createSession, deleteSession,
+  fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
   fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers,
   type MonitorSnapshot, type Session,
 } from './host-api'
@@ -78,84 +78,9 @@ describe('deleteSession', () => {
   })
 })
 
-describe('switchMode', () => {
-  it('sends POST with auth and returns session', async () => {
-    const updated = { ...mockSession, mode: 'stream' }
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify(updated), { status: 200 }),
-    )
-    const result = await switchMode(HOST_ID, 'abc123', 'stream')
-    expect(result.mode).toBe('stream')
-    expectAuthFetch(`${BASE}/api/sessions/abc123/mode`, { method: 'POST' })
-  })
-
-  it('throws on error status', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('error', { status: 400, statusText: 'Bad Request' }),
-    )
-    await expect(switchMode(HOST_ID, 'abc123', 'invalid')).rejects.toThrow('400')
-  })
-})
-
-describe('handoff', () => {
-  it('sends POST with mode and preset', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ handoff_id: 'abc123' }), { status: 202 }),
-    )
-    const result = await handoff(HOST_ID, 'abc123', 'stream', 'cc')
-    expect(result.handoff_id).toBe('abc123')
-    expectAuthFetch(`${BASE}/api/sessions/abc123/handoff`, { method: 'POST' })
-  })
-
-  it('omits preset when not provided', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ handoff_id: 'def456' }), { status: 202 }),
-    )
-    await handoff(HOST_ID, 'abc123', 'terminal')
-    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(JSON.parse(call[1].body)).toEqual({ mode: 'terminal' })
-  })
-
-  it('throws with status and response text on error', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('preset not found', { status: 400 }),
-    )
-    await expect(handoff(HOST_ID, 'abc123', 'stream', 'bad'))
-      .rejects.toThrow('handoff failed: 400 preset not found')
-  })
-
-  it('throws gracefully when error response body is unreadable', async () => {
-    const badResponse = new Response(null, { status: 500 })
-    vi.spyOn(badResponse, 'text').mockRejectedValue(new Error('body consumed'))
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(badResponse)
-    await expect(handoff(HOST_ID, 'abc123', 'stream'))
-      .rejects.toThrow('handoff failed: 500')
-  })
-})
-
-describe('fetchHistory', () => {
-  it('fetches history with auth', async () => {
-    const msgs = [{ type: 'text', content: 'hello' }]
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify(msgs), { status: 200 }),
-    )
-    const result = await fetchHistory(HOST_ID, 'abc123')
-    expect(result).toEqual(msgs)
-    expectAuthFetch(`${BASE}/api/sessions/abc123/history`)
-  })
-
-  it('returns empty array on error', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('error', { status: 500 }),
-    )
-    const result = await fetchHistory(HOST_ID, 'abc123')
-    expect(result).toEqual([])
-  })
-})
-
 describe('getConfig', () => {
   it('fetches config with auth', async () => {
-    const config = { bind: '0.0.0.0', port: 7860, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 5 } }
+    const config = { bind: '0.0.0.0', port: 7860, detect: { cc_commands: [], poll_interval: 5 } }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(config), { status: 200 }),
     )
@@ -174,7 +99,7 @@ describe('getConfig', () => {
 
 describe('updateConfig', () => {
   it('sends PUT with auth', async () => {
-    const config = { bind: '0.0.0.0', port: 7860, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 5 } }
+    const config = { bind: '0.0.0.0', port: 7860, detect: { cc_commands: [], poll_interval: 5 } }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(config), { status: 200 }),
     )

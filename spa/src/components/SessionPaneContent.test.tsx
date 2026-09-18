@@ -40,7 +40,6 @@ const makePane = (overrides?: Partial<Pane>): Pane => ({
 const defaultConfig: ConfigData = {
   bind: '0.0.0.0',
   port: 7860,
-  stream: { presets: [] },
   detect: { cc_commands: [], poll_interval: 5 },
 }
 

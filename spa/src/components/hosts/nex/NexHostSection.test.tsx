@@ -70,7 +70,7 @@ function infoResponse(nex: NexInfo | null): Response {
 }
 
 function configResponse(nex: NexConfig | undefined): Response {
-  const body: ConfigData = { bind: '', port: 0, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 0 }, nex }
+  const body: ConfigData = { bind: '', port: 0, detect: { cc_commands: [], poll_interval: 0 }, nex }
   return { ok: true, json: () => Promise.resolve(body) } as Response
 }
 
@@ -361,7 +361,7 @@ describe('NexHostSection', () => {
     mockHostFetch.mockImplementation((_hostId, path) => {
       if (path !== '/api/config') return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
       const nex = { enabled: false, repo_roots: null, service_roots: null, path_prepend: null, claude_bin: '', timeouts: { lease_ttl: '', interrupt: '', turn: '' } }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ bind: '', port: 0, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 0 }, nex }) } as Response)
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ bind: '', port: 0, detect: { cc_commands: [], poll_interval: 0 }, nex }) } as Response)
     })
     render(<NexHostSection hostId={HOST_ID} />)
     await screen.findByRole('button', { name: /^save$/i })
@@ -371,7 +371,7 @@ describe('NexHostSection', () => {
   it('renders an empty form when /api/config has no nex key at all', async () => {
     mockHostFetch.mockImplementation((_hostId, path) => {
       if (path !== '/api/config') return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ bind: '', port: 0, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 0 } }) } as Response)
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ bind: '', port: 0, detect: { cc_commands: [], poll_interval: 0 } }) } as Response)
     })
     render(<NexHostSection hostId={HOST_ID} />)
     await screen.findByRole('button', { name: /^save$/i })

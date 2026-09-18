@@ -124,7 +124,7 @@ describe('useNexHostData', () => {
     const before = configCalls()
 
     act(() => result.current.onConfigSaved({
-      bind: '', port: 0, stream: { presets: [] }, detect: { cc_commands: [], poll_interval: 0 },
+      bind: '', port: 0, detect: { cc_commands: [], poll_interval: 0 },
       nex: { enabled: false, repo_roots: ['/x'], service_roots: [], claude_bin: '', path_prepend: [], sandbox: { max_profile: '', default_profile: '' }, timeouts: { lease_ttl: '', interrupt: '', turn: '' } },
     }))
 

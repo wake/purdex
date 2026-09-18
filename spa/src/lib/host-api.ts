@@ -1,6 +1,5 @@
 // spa/src/lib/host-api.ts — Host-aware API layer (unified)
 import { useHostStore, type HostInfo } from '../stores/useHostStore'
-import type { StreamMessage } from './stream-ws'
 
 /* ─── Shared types ─── */
 
@@ -180,7 +179,6 @@ export interface ConfigData {
   port: number
   upload_dir?: string
   terminal?: { sizing_mode: string }
-  stream: { presets: Array<{ name: string; command: string }> }
   detect: { cc_commands: string[]; poll_interval: number }
   nex?: NexConfig
 }
@@ -304,16 +302,6 @@ export async function createSession(
 export async function deleteSession(hostId: string, code: string): Promise<void> {
   const res = await hostFetch(hostId, `/api/sessions/${code}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-}
-
-export async function switchMode(hostId: string, code: string, mode: string): Promise<Session> {
-  const res = await hostFetch(hostId, `/api/sessions/${code}/mode`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode }),
-  })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-  return res.json()
 }
 
 /* ─── Peers API ─── */
@@ -457,36 +445,6 @@ export function fetchPeerSettings(hostId: string): Promise<PeerSettings> {
 /** Typed `/api/info` (the untyped `fetchInfo` above stays for its existing callers). */
 export function fetchHostInfo(hostId: string): Promise<HostInfo> {
   return fetchInfo(hostId).then(peerHostJson<HostInfo>)
-}
-
-/* ─── Handoff API ─── */
-
-export async function handoff(
-  hostId: string,
-  code: string,
-  mode: string,
-  preset?: string,
-): Promise<{ handoff_id: string }> {
-  const body: Record<string, string> = { mode }
-  if (preset) body.preset = preset
-  const res = await hostFetch(hostId, `/api/sessions/${code}/handoff`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`handoff failed: ${res.status} ${text}`.trim())
-  }
-  return res.json()
-}
-
-/* ─── History API ─── */
-
-export async function fetchHistory(hostId: string, sessionCode: string): Promise<StreamMessage[]> {
-  const res = await hostFetch(hostId, `/api/sessions/${sessionCode}/history`)
-  if (!res.ok) return []
-  return res.json()
 }
 
 /**
