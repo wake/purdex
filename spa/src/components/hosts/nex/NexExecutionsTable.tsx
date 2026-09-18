@@ -109,7 +109,9 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
 
   const showArchived = includeArchived && archived?.hostId === hostId
   const items = showArchived ? archived.items : shared.items
-  const loadError = showArchived ? archived.error : shared.error
+  // In archived mode the shared refresh is still what drives every re-query
+  // (its revision), so its failure is the one worth showing first.
+  const loadError = showArchived ? (shared.error ?? archived.error) : shared.error
 
   const handleOpen = (row: ExecutionSummary) => {
     // Spec §4.4.3: go through the same helper the deeplink resolver uses

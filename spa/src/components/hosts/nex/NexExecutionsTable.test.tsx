@@ -293,6 +293,26 @@ describe('NexExecutionsTable', () => {
     expect(api.listExecutions).toHaveBeenLastCalledWith('h', { includeArchived: true, limit: 100 })
   })
 
+  it('archived mode: a failed shared refresh still re-runs the archived query and its error is shown', async () => {
+    render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByLabelText(/show archived/i))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(archivedCalls()).toBe(1)
+    expect(screen.queryByText(/nex_unavailable/)).not.toBeInTheDocument()
+
+    // The shared (non-archived) refresh fails; the archived query succeeds.
+    vi.mocked(api.listExecutions).mockImplementation((_hostId, opts) =>
+      opts?.includeArchived
+        ? Promise.resolve({ items: [row()], next_cursor: '' })
+        : Promise.reject(new NexApiError(503, 'nex_unavailable', 'down')))
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(archivedCalls()).toBe(2)
+    expect(screen.getByText(/nex_unavailable/)).toBeInTheDocument()
+    expect(screen.getByText('exc_01234567')).toBeInTheDocument()
+  })
+
   it('archived toggle off: no second query', async () => {
     vi.mocked(api.listExecutions).mockReset().mockImplementation((_hostId, opts) =>
       Promise.resolve({

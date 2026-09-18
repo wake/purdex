@@ -12,7 +12,7 @@ export interface HostExecutions {
   phase: HostListPhase
   error: string | null
   refetch: () => void
-  /** Bumped by the store on every committed refresh; key follow-up queries on it. */
+  /** Bumped by the store on every completed refresh attempt (success or failure); key follow-up queries on it. */
   refreshRevision: number
 }
 

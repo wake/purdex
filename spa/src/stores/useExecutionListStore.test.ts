@@ -524,6 +524,19 @@ describe('useExecutionListStore', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped'), expect.objectContaining({ hostId: A, dropped: 1 }))
   })
 
+  it('refreshRevision also increments when a refresh attempt fails', async () => {
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(cache(A).refreshRevision).toBe(1)
+    const failing = deferList()
+    useExecutionListStore.getState().refetch(A)
+    failing.reject(new NexApiError(503, 'nex_unavailable', 'down'))
+    await flush()
+    expect(cache(A).phase).toBe('error')
+    expect(cache(A).refreshRevision).toBe(2)
+    expect(cache(A).items).toHaveLength(1)
+  })
+
   it('refetch with no subscribers opens nothing', () => {
     useExecutionListStore.getState().refetch(A)
     expect(sse.openNexSse).not.toHaveBeenCalled()

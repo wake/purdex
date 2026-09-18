@@ -24,7 +24,7 @@ export interface HostListCache {
   error: string | null
   /** Last durable seq seen on the site stream; replayed as Last-Event-ID. */
   lastSeq: number | null
-  /** Bumped on every committed refresh; consumers key their own follow-up queries on it. */
+  /** Bumped on every completed refresh attempt (success or failure); consumers key their own follow-up queries on it. */
   refreshRevision: number
 }
 
@@ -118,7 +118,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       })
       .catch((err: unknown) => {
         if (!stillCurrent()) return
-        patchCache(hostId, (c) => ({ ...c, phase: 'error', error: errorText(err) }))
+        patchCache(hostId, (c) => ({ ...c, phase: 'error', error: errorText(err), refreshRevision: c.refreshRevision + 1 }))
       })
   }
 
