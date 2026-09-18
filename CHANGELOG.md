@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.388] - 2026-09-18
+
+### Feature: Host 設定頁的 badge 即時預覽（#1165）
+
+alpha.385 的色盤上線後使用者第一個要求：Icon 列右邊給一塊預覽，調色時不用切去看分頁列。
+
+Icon 列右側現在有兩個仿側欄分頁的假列——**一般**與 **Hover · 作用中**——裡面放的是**真的 `HostBadge`**（吃側欄的大小／內縮／圓角／host 色或中性灰設定）、TerminalWindow 圖示與 host 名稱。假列帶跟 `InlineTab` 一樣的 `group` + `data-active`，所以 `index.css` 那條 hover/active 規則在這裡也生效：作用中那列直接顯示 main，一般那列滑鼠移上去也會切成 main。Color 列選的 mode（Console／Terminal／Execution）抬升到 `OverviewSection` 跟 Icon 列共用，切 mode 預覽跟著換；拖任一條滑軌預覽同步動。沒設顏色也沒設圖示時只畫假列不畫色塊，並註明「尚未設定顏色或圖示」。
+
+codex 攻擊方抓到假列的 class 是自己寫的（一般列固定 secondary 底色，沒有 hover 樣式）跟真實 InlineTab 對不上，會讓人依錯誤對比調色——把 `InlineTab` 的 active／inactive class 抽成 `inline-tab-row-classes.ts` 兩邊共用，不會再漂。另把 icon 測試改成 spy `getIconPath` 的實際參數（`Laptop`/`duotone`；非法 icon 回退 `Desktop`）。6707 tests 全綠，純 SPA。
+
 ## [1.0.0-alpha.387] - 2026-09-18
 
 ### Fix: CC readiness 比對提示符前先去掉 ANSI（#1166）
