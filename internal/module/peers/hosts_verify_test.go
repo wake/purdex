@@ -267,3 +267,33 @@ func TestHandleVerifyHost_UsesConfiguredURLAndToken(t *testing.T) {
 		t.Errorf("fetch(url=%q, bearer=%q), want the entry's url and outbound token", gotURL, gotBearer)
 	}
 }
+
+// The transport-error and host_id-mismatch branches carry remote text too.
+func TestHandleVerifyHost_ErrorBranchesRedactAndBound(t *testing.T) {
+	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: tok, InboundToken: "in-a"}}
+	long := strings.Repeat("x", 5000)
+	for name, fetch := range map[string]fetchFunc{
+		"transport": fixedEnvelopeFetch(ipeers.Envelope{}, errors.New("dial "+tok+" "+long)),
+		"mismatch":  fixedEnvelopeFetch(ipeers.Envelope{HostID: "other:" + tok + long, OK: true, Peers: []ipeers.PeerRecord{}}, nil),
+	} {
+		c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
+		m := newHostsTestModule(t, c, fetch)
+		rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts/air/verify", nil, adminPrincipal())
+		body := rr.Body.String()
+		if rr.Code != http.StatusOK || strings.Contains(body, tok) || len(body) > 2*maxRemoteTextBytes {
+			t.Fatalf("%s: status=%d len=%d leaked=%v", name, rr.Code, len(body), strings.Contains(body, tok))
+		}
+	}
+}
+
+func TestHandleVerifyHost_PeerEchoesOurTokenIsRedacted(t *testing.T) {
+	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: tok, InboundToken: "in-a"}}
+	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: false, Error: "echo " + tok, Alias: tok}, nil))
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts/air/verify", nil, adminPrincipal())
+	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), tok) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
