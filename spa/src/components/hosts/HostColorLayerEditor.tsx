@@ -79,7 +79,7 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
   }
 
   const areaRef = useRef<HTMLDivElement>(null)
-  const dragging = useRef(false)
+  const activePointer = useRef<number | null>(null)
   const pick = (e: { clientX: number; clientY: number }) => {
     const el = areaRef.current
     if (!el) return
@@ -103,6 +103,7 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
     write(next)
   }
   const hueHex = hsvToHex({ h: hsv.h, s: 100, v: 100 })
+  const areaValueText = t('hosts.color.area_value', { s: hsv.s, v: hsv.v })
 
   return (
     <div
@@ -158,30 +159,40 @@ export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange,
           <div
             ref={areaRef}
             data-testid="host-color-area"
-            role="img"
+            role="slider"
             aria-label={t('hosts.color.area')}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={hsv.s}
+            aria-valuetext={areaValueText}
             tabIndex={0}
             onKeyDown={nudge}
             onPointerDown={(e: ReactPointerEvent<HTMLDivElement>) => {
               if (e.button !== 0) return
+              if (activePointer.current !== null) return
               e.preventDefault()
-              dragging.current = true
+              activePointer.current = e.pointerId
               if (typeof e.currentTarget.setPointerCapture === 'function') {
                 e.currentTarget.setPointerCapture(e.pointerId)
               }
               pick(e)
             }}
             onPointerMove={(e: ReactPointerEvent<HTMLDivElement>) => {
-              if (dragging.current) pick(e)
+              if (e.pointerId === activePointer.current) pick(e)
             }}
             onPointerUp={(e: ReactPointerEvent<HTMLDivElement>) => {
-              dragging.current = false
+              if (e.pointerId !== activePointer.current) return
+              activePointer.current = null
               if (typeof e.currentTarget.releasePointerCapture === 'function') {
                 e.currentTarget.releasePointerCapture(e.pointerId)
               }
             }}
-            onPointerCancel={() => {
-              dragging.current = false
+            onPointerCancel={(e: ReactPointerEvent<HTMLDivElement>) => {
+              if (e.pointerId !== activePointer.current) return
+              activePointer.current = null
+              if (typeof e.currentTarget.releasePointerCapture === 'function') {
+                e.currentTarget.releasePointerCapture(e.pointerId)
+              }
             }}
             className="relative w-full h-40 rounded cursor-crosshair touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-border-active"
             style={{ background: `linear-gradient(to top, #000000, transparent), linear-gradient(to right, #ffffff, ${hueHex})` }}

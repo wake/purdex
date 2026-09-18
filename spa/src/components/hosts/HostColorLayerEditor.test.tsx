@@ -9,10 +9,10 @@ const base = { layer: 'main' as const, color: '#3b82f6', alpha: 100, inherited: 
 function areaRect(el: HTMLElement) {
   el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200, right: 200, bottom: 200, x: 0, y: 0, toJSON() {} }) as DOMRect
 }
-function pointAt(el: HTMLElement, x: number, y: number) {
+function pointAt(el: HTMLElement, x: number, y: number, pointerId = 1) {
   el.setPointerCapture = () => {}
   el.releasePointerCapture = () => {}
-  fireEvent.pointerDown(el, { clientX: x, clientY: y, pointerId: 1, button: 0 })
+  fireEvent.pointerDown(el, { clientX: x, clientY: y, pointerId, button: 0 })
 }
 
 describe('HostColorLayerEditor — main', () => {
@@ -66,8 +66,10 @@ describe('HostColorLayerEditor — main', () => {
     areaRect(area)
     pointAt(area, 0, 0) // s=0, v=100 → white
     expect(onChange).toHaveBeenLastCalledWith({ color: '#ffffff', alpha: 80 })
+    fireEvent.pointerUp(area, { pointerId: 1 })
     pointAt(area, 200, 200) // s=100, v=0 → black
     expect(onChange).toHaveBeenLastCalledWith({ color: '#000000', alpha: 80 })
+    fireEvent.pointerUp(area, { pointerId: 1 })
     pointAt(area, 200, 0) // s=100, v=100 → pure hue
     expect(onChange).toHaveBeenLastCalledWith({ color: '#ff0000', alpha: 80 })
   })
@@ -84,6 +86,22 @@ describe('HostColorLayerEditor — main', () => {
     const calls = onChange.mock.calls.length
     fireEvent.pointerMove(area, { clientX: 10, clientY: 10, pointerId: 1 })
     expect(onChange.mock.calls.length).toBe(calls)
+  })
+
+  it('tracks only the pointer that started the drag; other pointer ids are ignored', () => {
+    const onChange = vi.fn()
+    render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
+    const area = screen.getByTestId('host-color-area')
+    areaRect(area)
+    pointAt(area, 100, 100, 1)
+    const afterDown = onChange.mock.calls.length
+    // A different pointer id moving must not write.
+    fireEvent.pointerMove(area, { clientX: 0, clientY: 0, pointerId: 2 })
+    expect(onChange.mock.calls.length).toBe(afterDown)
+    // A different pointer id "up" must not end the drag — pointer 1 still writes after.
+    fireEvent.pointerUp(area, { pointerId: 2 })
+    fireEvent.pointerMove(area, { clientX: 200, clientY: 200, pointerId: 1 })
+    expect(onChange).toHaveBeenLastCalledWith({ color: '#000000', alpha: 100 })
   })
 
   it('hue strip changes hue only; the area repaints with the new hue', () => {
@@ -116,6 +134,18 @@ describe('HostColorLayerEditor — main', () => {
     expect(onChange).toHaveBeenLastCalledWith({ color: hsvToHex({ h: 0, s: 99, v: 100 }), alpha: 100 })
     fireEvent.keyDown(area, { key: 'ArrowDown', shiftKey: true })
     expect(onChange).toHaveBeenLastCalledWith({ color: hsvToHex({ h: 0, s: 99, v: 90 }), alpha: 100 })
+  })
+
+  it('exposes slider semantics with a live value text', () => {
+    const onChange = vi.fn()
+    render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
+    const area = screen.getByRole('slider', { name: /Saturation and brightness/ })
+    expect(area).toHaveAttribute('aria-valuemin', '0')
+    expect(area).toHaveAttribute('aria-valuemax', '100')
+    expect(area).toHaveAttribute('aria-valuenow', '100')
+    expect(area.getAttribute('aria-valuetext')).toContain('100%')
+    fireEvent.keyDown(area, { key: 'ArrowLeft' })
+    expect(area.getAttribute('aria-valuetext')).toContain('99%')
   })
 
   it('re-derives HSV when the parent hands in a different color', () => {
