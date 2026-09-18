@@ -269,7 +269,7 @@ export const HANDOFF_ERROR_CODES: readonly string[] = [
   'interrupt_failed', 'send_failed', 'interrupt_unconfirmed', 'cc_start_timeout',
   // take-to-terminal (codes not already above)
   'session_exists', 'missing_session_name', 'invalid_session_name', 'session_create_failed',
-  'cwd_missing', 'provider_unsupported', 'takeback_in_progress', 'execution_archived',
+  'cwd_missing', 'provider_unsupported', 'takeback_in_progress', 'execution_archived', 'archive_failed',
   // client
   'network', 'host_removed',
 ]

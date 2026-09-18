@@ -495,7 +495,7 @@ describe('ExecutionView — take back to terminal', () => {
     expect(paneContent(ids.tabId)).toEqual({
       kind: 'tmux-session', hostId: H, sessionCode: from.sessionCode, mode: 'terminal', cachedName: from.cachedName, tmuxInstance: from.tmuxInstance,
     })
-    expect(toast()?.message).toBe('Back in the terminal; the execution is archived.')
+    expect(toast()?.message).toBe('In the terminal now; the execution is archived.')
     expect(toast()?.action).toBeUndefined()
   })
 
@@ -743,7 +743,7 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     expect(mockedToTerminal).toHaveBeenCalledWith(H, E, { session_name: 'repo-1', resume_command: 'claude --resume {id}', lease_id: 'ls_1' })
     expect(forget).toHaveBeenCalledTimes(1)
     expect(paneContent(ids.tabId)).toEqual({ kind: 'tmux-session', hostId: H, sessionCode: 'nw1234', mode: 'terminal', cachedName: 'repo-1', tmuxInstance: 'inst-9' })
-    expect(toast()?.message).toBe('Back in the terminal; the execution is archived.')
+    expect(toast()?.message).toBe('In the terminal now; the execution is archived.')
     expect(fetchHost).toHaveBeenCalledWith(H)
   })
 
