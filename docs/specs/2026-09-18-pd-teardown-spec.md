@@ -1,6 +1,7 @@
 # Spec — P-D: tear down Stream mode, relay, bridge and M0
 
-- Status: v1.1 (2026-09-18) — codex plan+spec review `task-mu6xgcjb-7b7n51` applied (11 findings: commit ordering, persist v3, snapshot/notification legacy paths, usage string, composed-mux 404 tests)
+- Status: v1.2 (2026-09-18) — P-D.1 shipped (alpha.395); P-D.2 implementation notes folded in (orphaned `internal/history` deleted, `agent.SessionState` deleted with `StreamCapable`, `peer-proxy` is a hidden subcommand)
+- v1.1: codex plan+spec review `task-mu6xgcjb-7b7n51` applied (11 findings: commit ordering, persist v3, snapshot/notification legacy paths, usage string, composed-mux 404 tests)
 - Predecessors: P-C (`2026-09-18-pc-launch-ui-spec.md` v1.6) — its §6 passed on
   mlab (alpha.390); its "Successor" clause is the gate for this spec. Nexen
   integration decisions #3/#4 (kickoff `kickoff_nexen_into_purdex`): Stream
@@ -130,7 +131,10 @@ Remove:
   covered by a test that opens a DB created with the old schema.
 - `internal/module/agent`: `GET /api/sessions/{code}/history` route +
   `handleHistory`; `agent.HistoryProvider` interface; `cc/history.go`,
-  `CCHistoryProvider`, `HistoryKey` and its `registry.Register`. Rationale:
+  `CCHistoryProvider`, `HistoryKey` and its `registry.Register`;
+  `agent.StreamCapable` and its only referent `agent.SessionState`;
+  `internal/history/` (`CCProjectPath`, `ParseJSONL` — `cc/history.go` was
+  its only reader). Rationale:
   the endpoint's only SPA caller is the `handoff` WS branch that P-D.2
   silences, and its session-id source (`cc_session_id`) has no writer once
   stream is gone. Rebuilding it on provenance is out of scope (no consumer).
@@ -211,8 +215,8 @@ composed-mux regression test in `cmd/pdx` (404 through the real
 `registerServeModules` chain, not just the module's own mux). `pdx`
 subcommands after P-D.2 (measured at `main.go:47-75`):
 `serve hook setup token start stop status statusline-proxy peers msg nex
-path peer-proxy version` (`relay` gone; usage string at `main.go:44`
-matches).
+path version` plus the hidden `peer-proxy` (`relay` gone; the usage string
+at `main.go:44` lists the non-hidden set).
 
 `Session` JSON after P-D.2:
 
