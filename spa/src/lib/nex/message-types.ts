@@ -1,9 +1,9 @@
 // spa/src/lib/nex/message-types.ts — Claude Code `stream-json` message shapes
 // (assistant / user / result / system / control_request / stream_event) as
 // consumed by the exec pane: event-reducer, ConversationMessages,
-// ToolUseBlock, useExecutionStore. Moved verbatim from `lib/stream-ws.ts`
-// in P-D.3 when the Stream-mode WS client was torn down; the declarations
-// below are byte-identical to the originals.
+// ToolUseBlock, useExecutionStore. Moved verbatim in P-D.3 from the
+// Stream-mode WS client module that the same phase deleted; the
+// declarations below are byte-identical to the originals.
 
 export interface ContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
