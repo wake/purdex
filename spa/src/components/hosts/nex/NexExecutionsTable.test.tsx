@@ -313,6 +313,82 @@ describe('NexExecutionsTable', () => {
     expect(screen.getByText('exc_01234567')).toBeInTheDocument()
   })
 
+  it('a slow archived response from host A is not committed after switching to host B with enabled=false', async () => {
+    let resolveArchived: (p: { items: ReturnType<typeof row>[]; next_cursor: string }) => void = () => {}
+    vi.mocked(api.listExecutions).mockReset().mockImplementation((_hostId, opts) =>
+      opts?.includeArchived
+        ? new Promise((resolve) => { resolveArchived = resolve })
+        : Promise.resolve({ items: [row()], next_cursor: '' }))
+    const { rerender } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByLabelText(/show archived/i))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(archivedCalls()).toBe(1)
+
+    rerender(<NexExecutionsTable hostId="h2" enabled={false} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => {
+      resolveArchived({ items: [row({ id: 'exc_stalearchivedstalearchived', archived: true })], next_cursor: '' })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.queryByText('exc_stalear')).not.toBeInTheDocument()
+    expect(archivedCalls()).toBe(1)
+  })
+
+  it('a slow archived response is not committed once the same host is disabled', async () => {
+    let resolveArchived: (p: { items: ReturnType<typeof row>[]; next_cursor: string }) => void = () => {}
+    vi.mocked(api.listExecutions).mockReset().mockImplementation((_hostId, opts) =>
+      opts?.includeArchived
+        ? new Promise((resolve) => { resolveArchived = resolve })
+        : Promise.resolve({ items: [row()], next_cursor: '' }))
+    const { rerender } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByLabelText(/show archived/i))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(archivedCalls()).toBe(1)
+
+    rerender(<NexExecutionsTable hostId="h" enabled={false} />)
+    await act(async () => {
+      resolveArchived({ items: [row({ id: 'exc_stalearchivedstalearchived', archived: true })], next_cursor: '' })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    // The shared (cached) rows stay on screen; the late archived page is dropped.
+    expect(screen.queryByText('exc_stalear')).not.toBeInTheDocument()
+    expect(screen.getByText('exc_01234567')).toBeInTheDocument()
+  })
+
+  it('off→on quick toggle: the first request\'s late response is ignored, only the new request\'s result renders', async () => {
+    const pending: Array<(p: { items: ReturnType<typeof row>[]; next_cursor: string }) => void> = []
+    vi.mocked(api.listExecutions).mockReset().mockImplementation((_hostId, opts) =>
+      opts?.includeArchived
+        ? new Promise((resolve) => { pending.push(resolve) })
+        : Promise.resolve({ items: [row()], next_cursor: '' }))
+    render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+    fireEvent.click(screen.getByLabelText(/show archived/i)) // on: request 1
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByLabelText(/show archived/i)) // off
+    // Request 1 lands while the toggle is off.
+    await act(async () => {
+      pending[0]({ items: [row({ id: 'exc_firstfirstfirstfirstfirst', archived: true })], next_cursor: '' })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    fireEvent.click(screen.getByLabelText(/show archived/i)) // on: request 2
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(pending).toHaveLength(2)
+    // Nothing from request 1 shows while request 2 is in flight.
+    expect(screen.queryByText('exc_firstfir')).not.toBeInTheDocument()
+    expect(screen.getByText('exc_01234567')).toBeInTheDocument()
+
+    await act(async () => {
+      pending[1]({ items: [row({ id: 'exc_secondsecondsecondsecond', archived: true })], next_cursor: '' })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByText('exc_secondse')).toBeInTheDocument()
+    expect(screen.queryByText('exc_firstfir')).not.toBeInTheDocument()
+  })
+
   it('archived toggle off: no second query', async () => {
     vi.mocked(api.listExecutions).mockReset().mockImplementation((_hostId, opts) =>
       Promise.resolve({

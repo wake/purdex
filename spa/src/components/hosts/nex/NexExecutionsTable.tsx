@@ -68,10 +68,18 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
     return () => { mountedRef.current = false }
   }, [])
 
-  // Guards a stale archived answer (previous host, or superseded by a newer
-  // request) from landing after the request it belongs to is no longer the
-  // latest one in flight.
+  // Guards a stale archived answer (previous host, superseded by a newer
+  // request, or issued before the host was disabled / the toggle went off)
+  // from landing after the request it belongs to is no longer the latest
+  // one in flight. Bumped synchronously on every change of the three inputs
+  // — in the query effect's cleanup and again at toggle-off — and the commit
+  // guard also re-reads the live inputs, so an answer that arrives between
+  // the click and React's cleanup is dropped too.
   const archivedTokenRef = useRef(0)
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
+  const includeArchivedRef = useRef(includeArchived)
+  includeArchivedRef.current = includeArchived
 
   // Host-scoped UI reset: a host switch must not leave the previous host's
   // action error / confirm / pending state on screen. The rows themselves
@@ -89,22 +97,32 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   useEffect(() => {
     if (!enabled || !includeArchived) return
     const token = ++archivedTokenRef.current
+    const stillWanted = () =>
+      mountedRef.current
+      && token === archivedTokenRef.current
+      && hostId === hostIdRef.current
+      && enabledRef.current
+      && includeArchivedRef.current
     listExecutions(hostId, { includeArchived: true, limit: 100 })
       .then((page) => {
-        if (!mountedRef.current || token !== archivedTokenRef.current || hostId !== hostIdRef.current) return
+        if (!stillWanted()) return
         const { items, dropped } = sanitizeExecutionsPage(page)
         if (dropped > 0) console.warn('nex: archived executions page dropped malformed row(s)', { hostId, dropped })
         setArchived({ hostId, items, error: null })
       })
       .catch((err: unknown) => {
-        if (!mountedRef.current || token !== archivedTokenRef.current || hostId !== hostIdRef.current) return
+        if (!stillWanted()) return
         setArchived((prev) => ({ hostId, items: prev?.hostId === hostId ? prev.items : [], error: errorCode(err) }))
       })
+    return () => { archivedTokenRef.current += 1 }
   }, [hostId, enabled, includeArchived, refreshRevision])
 
   const handleIncludeArchived = (checked: boolean) => {
     setIncludeArchived(checked)
-    if (!checked) setArchived(null)
+    if (!checked) {
+      archivedTokenRef.current += 1
+      setArchived(null)
+    }
   }
 
   const showArchived = includeArchived && archived?.hostId === hostId
