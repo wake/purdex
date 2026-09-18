@@ -10,6 +10,7 @@ import type { ConfigData } from '../../lib/host-api'
 import { Section, Field, EditableField, TokenField } from './form-fields'
 import { HostColorField } from './HostColorField'
 import { HostIconField } from './HostIconField'
+import type { HostColorMode } from '../../lib/host-color'
 
 interface Props {
   hostId: string
@@ -30,6 +31,7 @@ export function OverviewSection({ hostId }: Props) {
   const [testing, setTesting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [closeTabs, setCloseTabs] = useState(true)
+  const [colorMode, setColorMode] = useState<HostColorMode>('console')
 
   const prevStatusRef = useRef(runtime?.status)
   useEffect(() => {
@@ -127,8 +129,8 @@ export function OverviewSection({ hostId }: Props) {
           value={host.name}
           onSave={(v) => updateHost(hostId, { name: v })}
         />
-        <HostColorField hostId={hostId} />
-        <HostIconField hostId={hostId} />
+        <HostColorField hostId={hostId} mode={colorMode} onModeChange={setColorMode} />
+        <HostIconField hostId={hostId} mode={colorMode} />
         <EditableField
           label={t('hosts.ip')}
           value={host.ip}
