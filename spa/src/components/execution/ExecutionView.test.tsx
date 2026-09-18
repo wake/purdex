@@ -633,3 +633,28 @@ describe('ExecutionView — take back with the real lease hook', () => {
     expect(api.releaseLease).toHaveBeenCalledWith(H, E, 'ls_1')
   })
 })
+
+describe('ExecutionView — take-back is refused while another write is in flight (re-review)', () => {
+  beforeEach(() => { mockedTakeback.mockReset() })
+
+  it('a pending send disables the take-back control', () => {
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(false)
+    act(() => { patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: null } as Exec['pendingLocal'] }) })
+    expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(takeBackBtn())
+    expect(mockedTakeback).not.toHaveBeenCalled()
+  })
+
+  it('an in-flight interrupt disables the take-back control until it settles', async () => {
+    let resolveInterrupt!: (v: { turn_id: string; state: string }) => void
+    vi.mocked(api.interruptExecution).mockReturnValueOnce(new Promise((res) => { resolveInterrupt = res }))
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    fireEvent.click(screen.getByRole('button', { name: /interrupt/i }))
+    await waitFor(() => expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(true))
+    await act(async () => { resolveInterrupt({ turn_id: 't1', state: 'idle' }) })
+    await waitFor(() => expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(false))
+  })
+})

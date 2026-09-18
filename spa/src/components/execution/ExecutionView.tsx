@@ -46,7 +46,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
   const lease = useExecutionLease(hostId, executionId)
-  const { draft, handleSend, handleInterrupt, handleTerminate } = useExecutionActions(hostId, executionId, lease)
+  const { draft, actionPending, handleSend, handleInterrupt, handleTerminate } = useExecutionActions(hostId, executionId, lease)
 
   // Take-back: `takeBack` is single-flight per execution, but the busy flag
   // is what the header shows; the ref keeps a same-tick second click from
@@ -81,11 +81,15 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       setTakeBackBusy(false)
     }
   }, [from, hostId, executionId, key, tabId, paneId, lease.forget, t])
+  // A write already on its way to the daemon (send, interrupt, terminate)
+  // could land after the daemon's settled check and before its archive;
+  // the daemon re-verifies (#1171), and the SPA refuses to start the race.
+  const writeInFlight = st.pendingSend || actionPending
   const onTakeBack = useCallback(() => {
-    if (takeBackInFlight.current) return
+    if (takeBackInFlight.current || writeInFlight) return
     if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
     else void runTakeBack()
-  }, [key, runTakeBack])
+  }, [key, runTakeBack, writeInFlight])
 
   const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
   const costUsd = useMemo(() => st.messages.reduce((sum, m) => sum + ((m as { total_cost_usd?: number }).total_cost_usd ?? 0), 0), [st.messages])
@@ -129,7 +133,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     <div className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} costUsd={costUsd} sse={st.sse} isMine={isMine}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
-        onTakeBack={from ? onTakeBack : undefined} takeBackBusy={takeBackBusy} />
+        onTakeBack={from ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight} />
       {confirmTakeBack && (
         <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}
           confirmLabel={t('takeback.button')} onCancel={() => setConfirmTakeBack(false)}

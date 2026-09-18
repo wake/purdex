@@ -11,6 +11,8 @@ import type { ExecutionLeaseApi } from './useExecutionLease'
 export interface ExecutionActions {
   /** Text restored into the input after a failed send; null otherwise. */
   draft: string | null
+  /** An interrupt or terminate request is in flight (sends are tracked by the store's `pendingSend`). */
+  actionPending: boolean
   handleSend(text: string): Promise<void>
   handleInterrupt(): Promise<void>
   handleTerminate(): Promise<void>
@@ -24,6 +26,7 @@ export function useExecutionActions(
   const { ensureLease, touch, forget } = lease
   const key = executionKey(hostId, executionId)
   const [draft, setDraft] = useState<string | null>(null) // restored text after a failed send
+  const [actionPending, setActionPending] = useState(false)
   // Monotonic send attempt counter. A send whose POST outlives its turn
   // (turn_stalled cleared the lock, the user sent again) must not touch the
   // newer send's bubble, lock, lastTurn, error or draft when it settles.
@@ -88,13 +91,15 @@ export function useExecutionActions(
 
   const handleInterrupt = useCallback(async () => {
     touch()
-    try { await interruptExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) }
+    setActionPending(true)
+    try { await interruptExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) } finally { setActionPending(false) }
   }, [hostId, executionId, ensureLease, touch, fail])
 
   const handleTerminate = useCallback(async () => {
     touch()
-    try { await terminateExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) }
+    setActionPending(true)
+    try { await terminateExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) } finally { setActionPending(false) }
   }, [hostId, executionId, ensureLease, touch, fail])
 
-  return { draft, handleSend, handleInterrupt, handleTerminate }
+  return { draft, actionPending, handleSend, handleInterrupt, handleTerminate }
 }
