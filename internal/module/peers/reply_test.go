@@ -701,6 +701,51 @@ func TestReply_RemoteOtherErrorKeepsHelper(t *testing.T) {
 	})
 }
 
+// TestReply_PeerEchoesOurTokenIsRedacted (#1152), mirrored from send: the
+// origin host receives our outbound token as its Bearer and can echo it in
+// a refusal's error/detail or in text that becomes a transport-level
+// error. Neither the reply's audit row nor the log may carry it.
+func TestReply_PeerEchoesOurTokenIsRedacted(t *testing.T) {
+	const tok = "outbound-air" // airHost's token in newDeliverEnv's default hosts
+	const echo = "echo " + tok + " back"
+	cases := []struct {
+		name    string
+		prepare func(r *replyEnv)
+	}{
+		{name: "refused", prepare: func(r *replyEnv) {
+			r.rem = &ipeers.RemoteError{Status: http.StatusConflict, Error: echo, Detail: "detail " + tok}
+		}},
+		{name: "transport", prepare: func(r *replyEnv) { r.err = errors.New(echo) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newReplyEnv(t, envOpts{})
+			if got := r.postCalls(); len(got) != 0 {
+				t.Fatalf("posts before reply = %d", len(got))
+			}
+			r.set(c.prepare)
+			r.reply(r.wrapped(ipeers.ModePrompting, "", "PONG"))
+			post := r.awaitPost()
+			r.join()
+			if post.bearer != tok {
+				t.Fatalf("post bearer = %q, want the entry's token %q (the test's premise)", post.bearer, tok)
+			}
+			row := r.onlyReplyRow()
+			if strings.Contains(row.Result, tok) || strings.Contains(row.Error, tok) {
+				t.Errorf("audit row echoes our outbound token: result=%q error=%q", row.Result, row.Error)
+			}
+			if !strings.Contains(row.Result+row.Error, "[redacted]") {
+				t.Errorf("audit row does not show the redaction marker: result=%q error=%q", row.Result, row.Error)
+			}
+			for _, line := range r.f.logs.all() {
+				if strings.Contains(line, tok) {
+					t.Errorf("log line echoes our outbound token: %s", line)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Workers: the semaphore, back-pressure and Stop
 // ---------------------------------------------------------------------------

@@ -73,8 +73,8 @@ func newDeliverClient() *http.Client {
 // the answer. 200 ⇒ (resp, nil, nil). Any other status (every 3xx
 // included, since redirects are never followed) ⇒ (zero, &RemoteError{
 // Status, Error, Detail}, nil), the code and detail taken from an APIError
-// body when one decodes and bounded (boundRemoteText) since they are the
-// remote's text, else Error "http_<code>". A transport failure (including
+// body when one decodes, scrubbed of bearer and bounded (boundRemote) since
+// they are the remote's text, else Error "http_<code>". A transport failure (including
 // the client timeout), an oversized body or an undecodable 200 body ⇒
 // (zero, nil, err). A 200 body decodes only when it is a DeliverResponse
 // this daemon would itself produce: Result ∈ {delivered,
@@ -111,8 +111,10 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 		remote := &ipeers.RemoteError{Status: resp.StatusCode, Error: fmt.Sprintf("http_%d", resp.StatusCode)}
 		var ae ipeers.APIError
 		if json.Unmarshal(raw, &ae) == nil && ae.Error != "" {
-			remote.Error = boundRemoteText(ae.Error)
-			remote.Detail = boundRemoteText(ae.Detail)
+			// The receiver holds bearer (it is its inbound token) and can
+			// echo it in either field (#1152).
+			remote.Error = boundRemote(ae.Error, bearer)
+			remote.Detail = boundRemote(ae.Detail, bearer)
 		}
 		return ipeers.DeliverResponse{}, remote, nil
 	}
@@ -122,10 +124,10 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: %w", err)
 	}
 	if out.Result != ipeers.ResultDelivered && out.Result != ipeers.ResultDeliveryUncertain {
-		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: unexpected result %q", boundRemoteText(out.Result))
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: unexpected result %q", boundRemote(out.Result, bearer))
 	}
 	if _, err := ipeers.ValidateMode(out.EffectiveMode); err != nil || out.EffectiveMode == "" {
-		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: unexpected effective_mode %q", boundRemoteText(out.EffectiveMode))
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("decode response: unexpected effective_mode %q", boundRemote(out.EffectiveMode, bearer))
 	}
 	return out, nil, nil
 }
@@ -332,21 +334,32 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		cancelFetch()
 		if err != nil {
 			// The error may carry the remote's own text (an HTTP status line
-			// is fine; a body-derived decode error is not): bounded everywhere.
-			text := boundRemoteText(err.Error())
+			// is fine; a body-derived decode error is not): redacted of the
+			// entry's token and bounded everywhere (#1152).
+			text := boundRemote(err.Error(), entry.Token)
 			m.logf("peers: send to %q: fetch inventory: %s", targetAlias, text)
 			remoteRefused(text)
 			return
 		}
 		if env.HostID != targetHostID {
-			m.logf("peers: send to %q: host_id mismatch: got %s", targetAlias, boundRemoteText(env.HostID))
-			remoteRefused("host_id mismatch: got " + boundRemoteText(env.HostID))
+			got := boundRemote(env.HostID, entry.Token)
+			m.logf("peers: send to %q: host_id mismatch: got %s", targetAlias, got)
+			remoteRefused("host_id mismatch: got " + got)
 			return
 		}
 		if !env.OK {
-			m.logf("peers: send to %q: peer inventory not ok: %s", targetAlias, boundRemoteText(env.Error))
-			remoteRefused("peer: " + boundRemoteText(env.Error))
+			text := boundRemote(env.Error, entry.Token)
+			m.logf("peers: send to %q: peer inventory not ok: %s", targetAlias, text)
+			remoteRefused("peer: " + text)
 			return
+		}
+		// Every string field of a remote row is the peer's text, and the
+		// resolve arm echoes some of them back — an ambiguous refusal's
+		// candidates (address, cwd, agent name) and the name-mismatch
+		// detail (the ref's current name). Scrub the entry's token from
+		// them before anything reads them, as fetchHostResult does (#1152).
+		for i := range env.Peers {
+			redactRecord(&env.Peers[i], entry.Token)
 		}
 		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID)
 		rsnap = ipeers.ResolveSnapshot{
@@ -415,7 +428,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	if !target.Deliverable || target.Agent == nil || target.Agent.Type != "cc" {
 		// Reason is the remote's text: bounded before it is echoed or logged.
-		reason := boundRemoteText(target.Reason)
+		reason := boundRemote(target.Reason, entry.Token)
 		if reason == "" {
 			reason = "not a deliverable Claude Code session"
 		}
@@ -471,7 +484,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	// receiver), recorded before anything leaves this host.
 	dreq := ipeers.DeliverRequest{MsgID: m.newMsgID(), From: from, To: to, Text: req.Text}
 	if err := dreq.Validate(); err != nil {
-		refuseUnaudited(http.StatusBadRequest, ipeers.ValidationCode(err), "outbound request invalid: "+boundRemoteText(err.Error()))
+		refuseUnaudited(http.StatusBadRequest, ipeers.ValidationCode(err), "outbound request invalid: "+boundRemote(err.Error(), entry.Token))
 		return
 	}
 	msgID := dreq.MsgID
@@ -523,7 +536,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	resp, remote, err := m.post(postCtx, m.deliverClient, entry.URL, entry.Token, dreq)
 	switch {
 	case err != nil:
-		text := boundRemoteText(err.Error())
+		text := boundRemote(err.Error(), entry.Token)
 		m.setResult(id, "", "", text)
 		m.logf("peers: send %s to %q: deliver call failed: %s", msgID, targetAlias, text)
 		writeWireError(w, http.StatusBadGateway, ipeers.APIError{
@@ -533,6 +546,10 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	case remote != nil:
+		// postDeliver already scrubbed the entry's token; m.post is a seam,
+		// so the fields are scrubbed again here rather than trusted.
+		remote.Error = boundRemote(remote.Error, entry.Token)
+		remote.Detail = boundRemote(remote.Detail, entry.Token)
 		m.setResult(id, "", remote.Error, remote.Detail)
 		m.logf("peers: send %s to %q refused by peer: %d %s: %s", msgID, targetAlias, remote.Status, remote.Error, remote.Detail)
 		writeWireError(w, http.StatusBadGateway, ipeers.APIError{

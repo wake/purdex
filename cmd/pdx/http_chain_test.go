@@ -552,3 +552,48 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 		}
 	})
 }
+
+// TestNewOuterHandler_PeerChainObservesHostMatchUnderCfgRLock: the peer
+// chain's matcher is peersmod.HostMatcher, so a host bearer's match is
+// handed to c.HostAuthObserver (alias + token fingerprint) INSIDE the
+// matcher's CfgMu.RLock hold — TryLock on CfgMu fails from inside the
+// observer — and admin/unmatched bearers never reach it (codex F2).
+func TestNewOuterHandler_PeerChainObservesHostMatchUnderCfgRLock(t *testing.T) {
+	cfg := &config.Config{
+		Token: "admin-token",
+		Peers: config.PeersConfig{
+			Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}},
+		},
+	}
+	c := newTestCore(cfg)
+	type obs struct {
+		alias, fp     string
+		writeLockFree bool
+	}
+	var seen []obs
+	c.HostAuthObserver = func(alias, fp string) {
+		free := c.CfgMu.TryLock()
+		if free {
+			c.CfgMu.Unlock()
+		}
+		seen = append(seen, obs{alias, fp, free})
+	}
+	rec := &muxRecorder{}
+	outer := newOuterHandler(c, rec.handler(), nil)
+
+	if res := doRequest(t, outer, "GET", "/api/peers", "host-a-token"); res.Code != 200 {
+		t.Fatalf("host bearer: want 200, got %d", res.Code)
+	}
+	if len(seen) != 1 || seen[0].alias != "host-a" || seen[0].fp != config.TokenFingerprint("host-a-token") {
+		t.Fatalf("observer calls = %+v; want exactly one for host-a with the bearer's fingerprint", seen)
+	}
+	if seen[0].writeLockFree {
+		t.Fatal("observer ran with CfgMu free for writing: the match and its observation are not one critical section")
+	}
+	doRequest(t, outer, "GET", "/api/peers", "admin-token")
+	doRequest(t, outer, "GET", "/api/peers", "nope")
+	doRequest(t, outer, "GET", "/api/sessions", "host-a-token") // general chain, not PeerAuth
+	if len(seen) != 1 {
+		t.Fatalf("observer called for a non-host-match: %+v", seen)
+	}
+}

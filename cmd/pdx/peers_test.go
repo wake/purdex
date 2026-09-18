@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -373,6 +374,17 @@ func splitHostPort(rawURLOrAddr string) (string, string, error) {
 		return net.SplitHostPort(u.Host)
 	}
 	return net.SplitHostPort(rawURLOrAddr)
+}
+
+// fakePeersDaemon starts an httptest.Server running handler and returns it
+// alongside a config file whose bind/port/token point at it (writeTestConfig,
+// token "admin-tok") — the same wiring TestRunPeersCmd_HostRename and its
+// siblings each build inline, factored out for the rotate tests below.
+func fakePeersDaemon(t *testing.T, handler http.HandlerFunc) (*httptest.Server, string) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	return srv, cfgPath
 }
 
 const testPeersBody = `{"host_id":"mini:abc123","ok":true,"error":"","partial":false,"peers":[]}`
@@ -1040,9 +1052,9 @@ func hostsTableFixture() []cliHostRow {
 	}
 }
 
-const wantHostsTable = "ALIAS  URL                      HOST_ID     VERIFIED  TOKEN  INBOUND  ALLOW_BYPASS\n" +
-	"air    https://air.mlab.host    air:def456  yes       yes    yes      no\n" +
-	"phone  https://phone.mlab.host              no        no     yes      yes\n"
+const wantHostsTable = "ALIAS  URL                      HOST_ID     VERIFIED  TOKEN  INBOUND  ALLOW_BYPASS  ROTATION\n" +
+	"air    https://air.mlab.host    air:def456  yes       yes    yes      no            -\n" +
+	"phone  https://phone.mlab.host              no        no     yes      yes           -\n"
 
 func TestFormatHostsTable(t *testing.T) {
 	got := formatHostsTable(hostsTableFixture())
@@ -2009,5 +2021,129 @@ func TestParsePeersInvocation_HostRenameGrammar(t *testing.T) {
 	inv, _, ok := parsePeersInvocation([]string{"host", "rename", "a", "b"})
 	if !ok || inv.verb != "rename" || len(inv.positionals) != 2 {
 		t.Errorf("rename a b: inv=%+v ok=%v", inv, ok)
+	}
+}
+
+// --- host rotate (spec §6.6) ------------------------------------------------
+
+func TestParsePeersInvocation_Rotate(t *testing.T) {
+	cases := []struct {
+		args   []string
+		ok     bool
+		commit bool
+		cancel bool
+		force  bool
+	}{
+		{[]string{"host", "rotate", "air"}, true, false, false, false},
+		{[]string{"host", "rotate", "air", "--commit"}, true, true, false, false},
+		{[]string{"host", "rotate", "air", "--cancel", "--force"}, true, false, true, true},
+		{[]string{"host", "rotate", "air", "--commit", "--cancel"}, false, false, false, false},
+		{[]string{"host", "rotate", "air", "--force"}, false, false, false, false},
+		{[]string{"host", "rotate"}, false, false, false, false},
+		{[]string{"host", "rotate", "a/b"}, false, false, false, false},
+		{[]string{"host", "verify", "air", "--commit"}, false, false, false, false},
+		{[]string{"host", "rotate", "air", "--json"}, false, false, false, false},
+	}
+	for _, tc := range cases {
+		inv, _, ok := parsePeersInvocation(tc.args)
+		if ok != tc.ok {
+			t.Errorf("%v: ok=%v want %v", tc.args, ok, tc.ok)
+			continue
+		}
+		if ok && (inv.rotateCommit != tc.commit || inv.rotateCancel != tc.cancel || inv.rotateForce != tc.force) {
+			t.Errorf("%v: parsed %+v", tc.args, inv)
+		}
+	}
+}
+
+func TestRunPeersHostRotate_PrintsNewToken(t *testing.T) {
+	var gotPath string
+	srv, cfgPath := fakePeersDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.Method + " " + r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"alias":"air","inbound_token":"pdxp_11111111111111111111111111111111"}`)
+	})
+	defer srv.Close()
+	var out, errb bytes.Buffer
+	code := runPeersCmd([]string{"host", "rotate", "air", "--config", cfgPath}, &out, &errb)
+	if code != 0 || gotPath != "POST /api/peers/hosts/air/rotate" {
+		t.Fatalf("code=%d path=%q err=%s", code, gotPath, errb.String())
+	}
+	if !strings.Contains(out.String(), "pdxp_11111111111111111111111111111111") || !strings.Contains(out.String(), "rotated air") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestRunPeersHostRotate_Commit_UnconfirmedExplainsOnPeer(t *testing.T) {
+	var gotBody string
+	srv, cfgPath := fakePeersDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"error":"rotation unconfirmed"}`)
+	})
+	defer srv.Close()
+	var out, errb bytes.Buffer
+	code := runPeersCmd([]string{"host", "rotate", "air", "--commit", "--config", cfgPath}, &out, &errb)
+	if code != 1 {
+		t.Fatalf("code=%d", code)
+	}
+	if !strings.Contains(errb.String(), "rotation unconfirmed") || !strings.Contains(errb.String(), "pdx peers host verify") || !strings.Contains(errb.String(), "--force") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+	if strings.Contains(gotBody, `"force":true`) {
+		t.Fatalf("commit sent force without --force: %s", gotBody)
+	}
+}
+
+func TestRunPeersHostRotate_CommitForce_SendsForce(t *testing.T) {
+	var gotPath, gotBody string
+	srv, cfgPath := fakePeersDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotPath, gotBody = r.URL.Path, string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"alias":"air","url":"http://x","host_id":"air:1","verified":true,"has_token":true,"has_inbound_token":true,"allow_bypass":false,"rotation_pending":false,"last_inbound_auth":"current"}`)
+	})
+	defer srv.Close()
+	var out, errb bytes.Buffer
+	code := runPeersCmd([]string{"host", "rotate", "air", "--commit", "--force", "--config", cfgPath}, &out, &errb)
+	if code != 0 || gotPath != "/api/peers/hosts/air/rotate/commit" || !strings.Contains(gotBody, `"force":true`) {
+		t.Fatalf("code=%d path=%q body=%q err=%s", code, gotPath, gotBody, errb.String())
+	}
+	if !strings.Contains(out.String(), "committed air") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestRunPeersHostRotate_Cancel(t *testing.T) {
+	var gotPath string
+	srv, cfgPath := fakePeersDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"alias":"air","url":"http://x","host_id":"air:1","verified":true,"has_token":true,"has_inbound_token":true,"allow_bypass":false,"rotation_pending":false,"last_inbound_auth":"current"}`)
+	})
+	defer srv.Close()
+	var out, errb bytes.Buffer
+	if code := runPeersCmd([]string{"host", "rotate", "air", "--cancel", "--config", cfgPath}, &out, &errb); code != 0 || gotPath != "/api/peers/hosts/air/rotate/cancel" {
+		t.Fatalf("code=%d path=%q err=%s", code, gotPath, errb.String())
+	}
+	if !strings.Contains(out.String(), "cancelled rotation for air") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestFormatHostsTable_RotationColumn(t *testing.T) {
+	out := formatHostsTable([]cliHostRow{
+		{Alias: "a", URL: "http://a", HostID: "a:1"},
+		{Alias: "b", URL: "http://b", HostID: "b:1", RotationPending: true},
+		{Alias: "c", URL: "http://c", HostID: "c:1", RotationPending: true, LastInboundAuth: "current"},
+	})
+	if !strings.Contains(out, "ROTATION") {
+		t.Fatalf("no ROTATION header: %s", out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 4 || !strings.HasSuffix(strings.TrimSpace(lines[1]), "-") || !strings.HasSuffix(strings.TrimSpace(lines[2]), "pending") || !strings.HasSuffix(strings.TrimSpace(lines[3]), "pending, confirmed") {
+		t.Fatalf("table:\n%s", out)
 	}
 }

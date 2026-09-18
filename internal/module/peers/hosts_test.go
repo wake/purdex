@@ -516,6 +516,36 @@ func TestHandleAddHost_RemoteInvalidHostIDAnsiEscape_502NothingPersisted(t *test
 	}
 }
 
+// TestHandleAddHost_LearnedHostIDCarriesOurToken_502NothingPersisted pins
+// the fix round 1 regression (#1152): a learned host_id that equals (or
+// embeds) our own outbound token — the very Bearer this request sent —
+// passes validHostID's shape check (length/printable/no-whitespace only)
+// but must still be refused. Persisting it would serve our token back out
+// of every hostRow.host_id forever.
+func TestHandleAddHost_LearnedHostIDCarriesOurToken_502NothingPersisted(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
+	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: tok, OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts", map[string]string{
+		"alias": "air", "url": "https://a.example", "token": tok,
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid host_id") {
+		t.Errorf("body = %s, want mention of invalid host_id", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), tok) {
+		t.Fatalf("body leaks the token: %s", rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	if reloaded.Peers.FindPeerHostByAlias("air") != -1 {
+		t.Fatalf("alias should not be persisted")
+	}
+}
+
 func TestHandleAddHost_RemoteHostIDEqualsLocal_400(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", nil)
 	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "local:1", OK: true}, nil))
@@ -1111,6 +1141,37 @@ func TestHandlePutHost_RemoteInvalidHostID_502OldValuesKept(t *testing.T) {
 	}
 }
 
+// TestHandlePutHost_LearnedHostIDCarriesOurToken_502OldValuesKept mirrors
+// the add-host regression (#1152 fix round 1) for PUT: an entry with no
+// host_id yet must not learn one that equals (or embeds) the token this
+// very request sent as its Bearer, even though it passes validHostID's
+// shape check.
+func TestHandlePutHost_LearnedHostIDCarriesOurToken_502OldValuesKept(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "", InboundToken: "inbound-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	const tok = "pdxp_deadbeefdeadbeefdeadbeefdeadbeef"
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: tok, OK: true}, nil))
+
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{
+		"token": tok,
+	}, adminPrincipal())
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), tok) {
+		t.Fatalf("body leaks the token: %s", rr.Body.String())
+	}
+	reloaded := loadCfg(t, cfgPath)
+	idx := reloaded.Peers.FindPeerHostByAlias("air")
+	if idx == -1 {
+		t.Fatalf("host disappeared")
+	}
+	if reloaded.Peers.Hosts[idx].HostID != "" {
+		t.Errorf("persisted host_id = %q, want unchanged empty", reloaded.Peers.Hosts[idx].HostID)
+	}
+}
+
 func TestHandlePutHost_TokenEqualsAdminToken_400(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
 	c, _ := newHostsTestCore(t, "local:1", "local", "admin-secret", hosts)
@@ -1409,25 +1470,30 @@ func TestAliasWithDot_SurvivesAddSetTokenRemove(t *testing.T) {
 
 // ---- integration: two real modules pairing both ways ----
 
+func adminTokenFn(c *core.Core) func() string {
+	return func() string {
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		return c.Cfg.Token
+	}
+}
+
+// peerAuthChain is the real PeerAuth over m's core, wired the way
+// production is (cmd/pdx/http_chain.go + Init): Init installs
+// m.noteInboundFP as the core's HostAuthObserver, and the production
+// HostMatcher calls it under CfgMu.RLock.
+func peerAuthChain(c *core.Core, m *Module, next http.Handler) http.Handler {
+	c.HostAuthObserver = m.noteInboundFP
+	return middleware.PeerAuth(adminTokenFn(c), HostMatcher(c), HostRoutePolicy)(next)
+}
+
 // buildOuterHandler mirrors cmd/pdx/http_chain.go's newOuterHandler at a
 // scope sufficient for these tests: PeerAuth on /api/peers (+ subtree),
 // TokenAuth on everything else. CORS/IPWhitelist/PairingGuard are omitted
 // since none of these tests exercise them.
 func buildOuterHandler(c *core.Core, mux http.Handler) http.Handler {
-	tokenFn := func() string {
-		c.CfgMu.RLock()
-		defer c.CfgMu.RUnlock()
-		return c.Cfg.Token
-	}
-	peersFn := func() config.PeersConfig {
-		c.CfgMu.RLock()
-		defer c.CfgMu.RUnlock()
-		p := c.Cfg.Peers
-		p.Hosts = append([]config.PeerHost(nil), p.Hosts...)
-		return p
-	}
-
-	peerChain := middleware.PeerAuth(tokenFn, peersFn, HostRoutePolicy)(mux)
+	tokenFn := adminTokenFn(c)
+	peerChain := middleware.PeerAuth(tokenFn, HostMatcher(c), HostRoutePolicy)(mux)
 	general := middleware.TokenAuth(tokenFn, nil)(mux)
 
 	outer := http.NewServeMux()

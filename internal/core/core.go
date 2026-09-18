@@ -41,21 +41,31 @@ type CoreDeps struct {
 
 // Core holds shared infrastructure and manages module lifecycle.
 type Core struct {
-	Cfg            *config.Config
-	CfgMu          sync.RWMutex // protects Cfg
-	CfgPath        string       // path to config.toml for persistence
-	Tmux           tmux.Executor
-	Registry       *ServiceRegistry
-	Events         *EventsBroadcaster
-	Tickets        *TicketStore
-	Pairing        PairingState
-	SetupSecrets   *SetupSecretStore
-	PairingSecret  string      // hex(3 bytes), used for /api/pair/verify
-	failedVerify   int32       // atomic counter for brute-force protection
-	TmuxAliveFunc  func() bool // injected by session module; returns cached tmux reachability
-	modules        []Module
-	configChangeMu sync.Mutex // protects onConfigChange
-	onConfigChange []func()   // config change callbacks
+	Cfg           *config.Config
+	CfgMu         sync.RWMutex // protects Cfg
+	CfgPath       string       // path to config.toml for persistence
+	Tmux          tmux.Executor
+	Registry      *ServiceRegistry
+	Events        *EventsBroadcaster
+	Tickets       *TicketStore
+	Pairing       PairingState
+	SetupSecrets  *SetupSecretStore
+	PairingSecret string      // hex(3 bytes), used for /api/pair/verify
+	failedVerify  int32       // atomic counter for brute-force protection
+	TmuxAliveFunc func() bool // injected by session module; returns cached tmux reachability
+	// HostAuthObserver is injected by the peers module (Init) and called by
+	// the peer auth middleware's matcher (cmd/pdx/http_chain.go) for every
+	// successful host-token match, UNDER CfgMu.RLock, with the matched
+	// entry's alias and config.TokenFingerprint of the bearer — so a config
+	// writer (UpdateConfig holds CfgMu.Lock) cannot interleave between the
+	// match and its observation, and every authentication that completed
+	// before a rotation commit/cancel is visible to that gate. Nil-safe:
+	// the matcher skips it when unset. It must take only locks that are
+	// ordered AFTER CfgMu (the peers module takes its own rotMu, never CfgMu).
+	HostAuthObserver func(alias, tokenFingerprint string)
+	modules          []Module
+	configChangeMu   sync.Mutex // protects onConfigChange
+	onConfigChange   []func()   // config change callbacks
 
 	// bootNex is the [nex] section the daemon booted with, captured in New
 	// from the loaded config before any module init or PUT /api/config can

@@ -2013,6 +2013,97 @@ func TestSend_RemoteTextBounded(t *testing.T) {
 	}
 }
 
+// TestSend_PeerEchoesOurTokenIsRedacted (#1152): the peer receives our
+// outbound token as its Bearer and can echo it back in any text it
+// controls — a refusal's error/detail, a transport-level decode error, its
+// inventory's host_id or error. None of that text may carry the token into
+// the caller's wire response, the audit row or the log.
+func TestSend_PeerEchoesOurTokenIsRedacted(t *testing.T) {
+	const echo = "echo " + remoteToken + " back"
+	canonical := ipeers.RefID(remoteSessionID)
+	cases := []struct {
+		name    string
+		prepare func(s *sendEnv)
+		to      string // request address; "" = sendReq()'s default
+		status  int
+		rows    int // audit rows expected (pre-insert refusals are unaudited)
+	}{
+		{name: "deliver refused", prepare: func(s *sendEnv) {
+			s.postRem = &ipeers.RemoteError{Status: http.StatusConflict, Error: echo, Detail: "detail " + remoteToken}
+		}, status: http.StatusBadGateway, rows: 1},
+		{name: "deliver call error", prepare: func(s *sendEnv) { s.postErr = errors.New(echo) }, status: http.StatusBadGateway, rows: 1},
+		{name: "fetch error", prepare: func(s *sendEnv) { s.fetchErr = errors.New(echo) }, status: http.StatusBadGateway},
+		{name: "host_id mismatch", prepare: func(s *sendEnv) {
+			env := remoteEnvelope(remoteRow(remoteSession, "fooc"))
+			env.HostID = remoteToken
+			s.env = env
+		}, status: http.StatusBadGateway},
+		{name: "inventory not ok", prepare: func(s *sendEnv) {
+			s.env = ipeers.Envelope{HostID: remoteHostID, OK: false, Error: echo, Peers: []ipeers.PeerRecord{}}
+		}, status: http.StatusBadGateway},
+		{name: "not_deliverable reason", prepare: func(s *sendEnv) {
+			row := remoteRow(remoteSession, "fooc")
+			row.Deliverable, row.Reason = false, echo
+			s.env = remoteEnvelope(row)
+		}, status: http.StatusConflict},
+		{name: "validation error quoting proc_start", prepare: func(s *sendEnv) {
+			row := remoteRow(remoteSession, "fooc")
+			row.Agent.ProcStart = echo
+			s.env = remoteEnvelope(row)
+		}, status: http.StatusBadRequest},
+		// The resolve arm: rows reach Resolve straight from m.fetch, and an
+		// ambiguous refusal echoes their cwd/agent name as candidates.
+		{name: "ambiguous candidates", prepare: func(s *sendEnv) {
+			a, b := remoteRow("", ""), remoteRow("", "")
+			b.Agent.PID = 778
+			a.Ref, b.Ref = canonical, canonical
+			a.Agent.PeerName, b.Agent.PeerName = "pn-"+remoteToken+"-1", "pn-"+remoteToken+"-2"
+			a.Cwd, b.Cwd = "/w/"+remoteToken+"/one", "/w/"+remoteToken+"/two"
+			s.env = remoteEnvelope(a, b)
+		}, to: remoteAlias + "/" + canonical, status: http.StatusConflict},
+		// The name-mismatch detail names the name the ref answers to now.
+		{name: "name mismatch detail", prepare: func(s *sendEnv) {
+			row := remoteRow(remoteSession, "fooc")
+			row.Agent.PeerName = "pn-" + remoteToken
+			s.env = remoteEnvelope(row)
+		}, to: remoteAlias + "/decoy-name [" + strings.TrimPrefix(canonical, "_") + "]", status: http.StatusConflict},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSendEnv(t, envOpts{})
+			s.set(c.prepare)
+			req := s.sendReq()
+			if c.to != "" {
+				req.To = c.to
+			}
+			rr := s.send(adminCtx(), req)
+			if rr.Code != c.status {
+				t.Fatalf("status = %d, want %d; body=%s", rr.Code, c.status, rr.Body.String())
+			}
+			if body := rr.Body.String(); strings.Contains(body, remoteToken) {
+				t.Errorf("wire response echoes our outbound token: %s", body)
+			}
+			if !strings.Contains(rr.Body.String(), "[redacted]") {
+				t.Errorf("wire response does not show the redaction marker: %s", rr.Body.String())
+			}
+			rows := s.rows()
+			if len(rows) != c.rows {
+				t.Fatalf("audit rows = %d, want %d: %+v", len(rows), c.rows, rows)
+			}
+			for _, row := range rows {
+				if strings.Contains(row.Result, remoteToken) || strings.Contains(row.Error, remoteToken) {
+					t.Errorf("audit row echoes our outbound token: result=%q error=%q", row.Result, row.Error)
+				}
+			}
+			for _, line := range s.f.logs.all() {
+				if strings.Contains(line, remoteToken) {
+					t.Errorf("log line echoes our outbound token: %s", line)
+				}
+			}
+		})
+	}
+}
+
 // TestSend_NotReadyBeforeAudit: a daemon that starts stopping after the
 // remote resolve answers not_ready without an audit row or a post.
 func TestSend_NotReadyBeforeAudit(t *testing.T) {

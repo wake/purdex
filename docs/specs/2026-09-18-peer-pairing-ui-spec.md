@@ -409,14 +409,23 @@ entry's non-empty `InboundToken` **and** non-empty `InboundTokenPrev`, both with
 current token is not a state the API can produce; if a hand-edited config has one, `prev` alone
 still authenticates (the field is a token, not a flag).
 
-`middleware.Principal` gains `UsedPrevToken bool`, set by `PeerAuth` from `usedPrev`. The peers
-module keeps an **in-memory** `map[alias]lastInboundAuth{usedPrev bool, at time.Time}` and records
-into it at the two places a host principal is served — `handlePeers` (scope local) and
-`handleDeliver` — through one helper, `m.noteInboundAuth(principal)`, called before any policy or
-rate-limit refusal can return (the fact being recorded is "this bearer authenticated", which is
-true whether or not the request is then refused). `rotate` resets the entry's record to `""`, so
-`last_inbound_auth` always describes the *current rotation epoch*; commit and cancel leave it (there
-is no `prev` afterwards, so it can only read `""` or `"current"`).
+`middleware.Principal` gains `UsedPrevToken bool`, set by `PeerAuth` from `usedPrev`, and
+`TokenFingerprint string` = `config.TokenFingerprint(bearer)` (the first 16 hex characters of the
+bearer's SHA-256: not a secret, not reversible, `""` for `""`). The peers module keeps an
+**in-memory** `map[alias]lastInboundAuth{fp string, at time.Time}` and records into it at the two
+places a host principal is served — `handlePeers` (scope local) and `handleDeliver` — through one
+helper, `m.noteInboundAuth(principal)`, called before any policy or rate-limit refusal can return
+(the fact being recorded is "this bearer authenticated", which is true whether or not the request
+is then refused). The record stores *which token* (by fingerprint) the peer most recently
+presented, and `last_inbound_auth` is **derived** against the entry's current tokens at read time:
+`fp == fingerprint(InboundToken)` → `"current"`; else `InboundTokenPrev != ""` and
+`fp == fingerprint(InboundTokenPrev)` → `"prev"`; else `""` (no note, or a note for a token the
+entry no longer has). So after a cancel the peer's token reads `"current"` (it *is* the current one
+again; nothing is rewritten), after a commit an old-token note reads `""`, and a dial that
+authenticated just before a rotate reads `"prev"` — its evidence is bound to the token, not to the
+moment it was recorded. `rotate` still clears the entry's record, so the row reads `""` right after
+a rotate. The record is keyed by the entry's stored alias and follows the entry: a rename (§4.2)
+moves it, a delete clears it.
 
 **In-memory on purpose, not an omission.** After a daemon restart the record reads `""`, so both
 commit and cancel are refused until the peer dials again — fail-closed, in the state (both tokens
@@ -434,12 +443,12 @@ request.
 | `POST /api/peers/hosts/{alias}/rotate/cancel` body `{force?: bool}` | `current := prev; prev := ""` | `200 hostRow`; `409 no rotation pending` when `prev == ""` (there is nothing safe to restore); **`409 rotation unconfirmed`** when `prev != ""` and `last_inbound_auth != "prev"` unless `force` (the peer has been seen on the new token — `"current"` — or not seen at all — `""` — so dropping the new one may lock it out); 404 |
 
 All three mutate inside one `UpdateConfig` closure, re-finding the entry by alias under the lock;
-both gates read the in-memory record under the module's own mutex inside that closure. A dial
-landing between the check and the write can only flip the record to the *other* observed value,
-and the daemon is safe under either write until the next request: after a commit the peer that
-just dialled with `prev` still has both tokens and has lost nothing yet; the next verify shows red
-and the page repairs (§6.4 last row). Neither gate is a proof about the future; each is a proof
-that the operation is not *already known* to be a lock-out.
+both gates read the in-memory record under the module's own mutex inside that closure. A
+host-token match and its observation happen together under the config read-lock, and both gates
+run under the config write-lock, so every authentication that completed before a commit or cancel
+is visible to its gate; a request that has not yet matched when the write lands authenticates
+against the new state. Neither gate is a proof about the future; each is a proof that the
+operation is not *already* known to be a lock-out.
 `rotate` mints with `mintInboundToken(adminToken)` (never the admin token; a 128-bit random
 collision with any other entry is not checked, as today at POST). `force` exists for the operator
 whose peer is gone for good; the page never sends it (§7.3), the CLI requires `--force` spelled out.
@@ -600,7 +609,7 @@ red; the implementer runs them and records the red in the PR.
 | **cancel gate**: after rotate with no dial, cancel → `409 rotation unconfirmed`; after a dial with the **old** token → 200; after a dial with the **new** token → 409; `{force:true}` → 200 regardless | drop the cancel gate → first cancel is 200 |
 | rotate 409 when pending; commit 200 no-op when not pending; cancel 409 when not pending | — |
 | **commit gate**: after rotate with no dial, commit → `409 rotation unconfirmed`; after a host-principal `GET /api/peers` with the **new** token (real `PeerAuth` + `handlePeers`), commit → 200; after one more with the **old** token, commit → 409 again (most recent wins); `{force:true}` → 200 regardless | drop the gate → first commit is 200; make the record sticky ("ever seen") → the third step is 200 |
-| `last_inbound_auth` is `""` right after rotate even if the old token was seen before; a `handleDeliver` request (refused by rate limit or `host_unverified`) still records | do not reset on rotate → stale `"current"` from the previous epoch passes the gate; record after the refusal → the refused-delivery test reads `""` |
+| `last_inbound_auth` is `""` right after rotate even if the old token was seen before; a `handleDeliver` request (refused by rate limit or `host_unverified`) still records | do not reset on rotate → `last_inbound_auth` reads the pre-rotate note instead of `""` right after rotate (under derivation it reads `prev`, and the commit gate still refuses); record after the refusal → the refused-delivery test reads `""` |
 | rotate response carries a fresh `pdxp_` token ≠ old, ≠ admin; `hostRow` never carries either value; `Redacted()` blanks `prev`; `rotation_pending` true/false | drop `prev` from `Redacted` → the config JSON test sees the value |
 | `PeerAuth` end-to-end through the real middleware with a pending rotation; `Principal.UsedPrevToken` set correctly | — |
 | §6.5 interleaving, forced: a PUT `{token}` whose fake fetch **blocks**; while it is blocked, `rotate` the same entry; release the fetch → the PUT's commit 409s `entry changed concurrently` and the rotated tokens are untouched. (A PUT *started* after the rotation snapshots the new token and must succeed — a second test says so, so the first cannot be satisfied by "always 409 while pending".) | — |

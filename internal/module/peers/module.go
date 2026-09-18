@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -101,6 +102,61 @@ func boundRemoteText(s string) string {
 	return s[:cut] + "…"
 }
 
+// redactSecret replaces every occurrence of secret in s with "[redacted]".
+// fetchHostResult applies it, with the entry's OWN outbound token, to every
+// remote-derived string: a malicious peer receives that token as our Bearer
+// and could otherwise echo it back into a row that the CLI prints, the
+// verify route returns and the Peers page renders (#1152). The peer
+// already holds the token, so this hides nothing from it; it keeps our own
+// admin surfaces from displaying a value the API never returns.
+func redactSecret(s, secret string) string {
+	if secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, secret, "[redacted]")
+}
+
+// boundRemote is redactSecret then boundRemoteText: the one shape every
+// peer-controlled string takes before it reaches a caller, an audit row or
+// the log, with the outbound token of the entry that was dialled (#1152).
+// Redaction runs first so a token straddling the truncation point cannot
+// survive as a prefix.
+func boundRemote(s, token string) string {
+	return boundRemoteText(redactSecret(s, token))
+}
+
+// redactRecord scrubs secret from every string field a peer row carries —
+// Peers rows are the peer's own text as much as its Error is.
+func redactRecord(rec *ipeers.PeerRecord, secret string) {
+	if secret == "" {
+		return
+	}
+	rec.Host = redactSecret(rec.Host, secret)
+	rec.HostID = redactSecret(rec.HostID, secret)
+	rec.Address = redactSecret(rec.Address, secret)
+	rec.RowKind = redactSecret(rec.RowKind, secret)
+	rec.Ref = redactSecret(rec.Ref, secret)
+	rec.Title = redactSecret(rec.Title, secret)
+	rec.TitleSource = redactSecret(rec.TitleSource, secret)
+	rec.SessionCode = redactSecret(rec.SessionCode, secret)
+	rec.SessionName = redactSecret(rec.SessionName, secret)
+	rec.TmuxInstance = redactSecret(rec.TmuxInstance, secret)
+	rec.TmuxName = redactSecret(rec.TmuxName, secret)
+	rec.Cwd = redactSecret(rec.Cwd, secret)
+	rec.Reason = redactSecret(rec.Reason, secret)
+	if rec.Agent != nil {
+		a := *rec.Agent
+		a.Type = redactSecret(a.Type, secret)
+		a.SessionID = redactSecret(a.SessionID, secret)
+		a.PeerName = redactSecret(a.PeerName, secret)
+		a.ProcStart = redactSecret(a.ProcStart, secret)
+		a.Inbox = redactSecret(a.Inbox, secret)
+		a.Status = redactSecret(a.Status, secret)
+		a.Version = redactSecret(a.Version, secret)
+		rec.Agent = &a
+	}
+}
+
 // writeWireError writes e as the JSON body of a 4xx/5xx answer on the
 // messaging routes (/send, /deliver): every such body is an ipeers.APIError.
 func writeWireError(w http.ResponseWriter, status int, e ipeers.APIError) {
@@ -149,6 +205,15 @@ type Module struct {
 	// concurrent claim/release can never interleave with it.
 	titles  TitleStore
 	titleMu sync.Mutex
+
+	// Rotation record (rotation.go): alias → the peer's most recent inbound
+	// authentication, in memory.
+	rotMu       sync.Mutex
+	lastInbound map[string]inboundAuth
+	// rotateAfterGate is a test seam: called by the commit/cancel handlers
+	// right after their gate check, still inside the UpdateConfig closure
+	// and still holding rotMu (nil in production).
+	rotateAfterGate func()
 
 	// Inbound delivery (deliver.go) and its collaborators.
 	audit            AuditStore     // nil ⇒ audit_unavailable on every deliver
@@ -233,6 +298,9 @@ func (m *Module) Dependencies() []string { return []string{"session", "agent"} }
 // since GET /api/peers has no meaningful behavior without either.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	// The rotation record's authoritative observer: the peer auth matcher
+	// calls it under CfgMu.RLock for every host-token match (rotation.go).
+	c.HostAuthObserver = m.noteInboundFP
 
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
@@ -293,6 +361,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/peers/hosts/{alias}", m.handlePutHost)
 	mux.HandleFunc("DELETE /api/peers/hosts/{alias}", m.handleDeleteHost)
 	mux.HandleFunc("POST /api/peers/hosts/{alias}/verify", m.handleVerifyHost)
+	mux.HandleFunc("POST /api/peers/hosts/{alias}/rotate", m.handleRotateHost)
+	mux.HandleFunc("POST /api/peers/hosts/{alias}/rotate/commit", m.handleRotateCommit)
+	mux.HandleFunc("POST /api/peers/hosts/{alias}/rotate/cancel", m.handleRotateCancel)
 	mux.HandleFunc("GET /api/peers/settings", m.handleGetSettings)
 	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
 	mux.HandleFunc("POST /api/peers/send", m.handleSend)
@@ -309,6 +380,13 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // HostRoutePolicy, enforced again here in depth); any other scope is 400.
 func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// Spec §6.2: a host principal that reached this handler authenticated
+	// with one of its entry's two inbound tokens; remember which, before
+	// any refusal below.
+	if p, ok := middleware.PrincipalFrom(r.Context()); ok {
+		m.noteInboundAuth(p)
+	}
 
 	scope := r.URL.Query().Get("scope")
 	switch scope {
@@ -668,6 +746,13 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		}
 	}
 
+	// bound redacts this entry's own outbound token from a remote-derived
+	// string before truncating it: every string the peer controls (an
+	// error message, a mismatched host_id, its self-reported alias/version,
+	// the unknown-registry-files list) flows through this before it can
+	// reach a row, a verify response or a returned error (#1152).
+	bound := func(s string) string { return boundRemote(s, h.Token) }
+
 	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
 	defer cancel()
 
@@ -677,7 +762,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 			Alias:                h.Alias,
 			HostID:               h.HostID,
 			OK:                   false,
-			Error:                err.Error(),
+			Error:                bound(err.Error()),
 			Peers:                []ipeers.PeerRecord{},
 			UnknownRegistryFiles: []string{},
 		}
@@ -688,7 +773,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 			Alias:                h.Alias,
 			HostID:               h.HostID,
 			OK:                   false,
-			Error:                fmt.Sprintf("host_id mismatch: got %s", boundRemoteText(env.HostID)),
+			Error:                fmt.Sprintf("host_id mismatch: got %s", bound(env.HostID)),
 			Peers:                []ipeers.PeerRecord{},
 			UnknownRegistryFiles: []string{},
 		}
@@ -715,6 +800,9 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	}
 
 	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID)
+	for i := range peers {
+		redactRecord(&peers[i], h.Token)
+	}
 
 	// A single misbehaving/malicious peer host must not be able to inflate
 	// the whole scope=all aggregate past the CLI's own 16 MiB response
@@ -738,7 +826,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	// an attacker-controlled remote cannot inflate or pollute this row.
 	rowErr := env.Error
 	if rowErr != "" {
-		rowErr = "peer: " + boundRemoteText(rowErr)
+		rowErr = "peer: " + bound(rowErr)
 	} else if !env.OK {
 		// A peer that says ok=false and nothing else still gets a named
 		// cause: this row is what the verify route (hosts_verify.go) and
@@ -758,7 +846,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	}
 	bounded := make([]string, len(unknown))
 	for i, u := range unknown {
-		bounded[i] = boundRemoteText(u)
+		bounded[i] = bound(u)
 	}
 
 	// env.DaemonVersion is the remote's own reported text, exactly as
@@ -777,13 +865,13 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	// routed on, so the bar it clears is the one env.Error clears.
 	return ipeers.HostResult{
 		Alias:                h.Alias,
-		SelfAlias:            boundRemoteText(env.Alias),
-		HostID:               resultHostID,
+		SelfAlias:            bound(env.Alias),
+		HostID:               bound(resultHostID),
 		OK:                   env.OK,
 		Error:                rowErr,
 		Partial:              env.Partial,
 		Peers:                peers,
-		DaemonVersion:        boundRemoteText(env.DaemonVersion),
+		DaemonVersion:        bound(env.DaemonVersion),
 		UnknownRegistryFiles: bounded,
 		TitlesUnavailable:    env.TitlesUnavailable,
 	}
