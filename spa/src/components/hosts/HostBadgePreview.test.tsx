@@ -31,14 +31,17 @@ beforeEach(() => {
 })
 
 describe('HostBadgePreview', () => {
-  it('renders a normal and an active mock row with the host name and the real badge', () => {
+  it('renders normal, hover and active mock rows with the host name and the real badge', () => {
     useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
     render(<HostBadgePreview hostId={HOST_ID} mode="console" />)
     const normal = screen.getByTestId('host-badge-preview-normal')
+    const hover = screen.getByTestId('host-badge-preview-hover')
     const active = screen.getByTestId('host-badge-preview-active')
     expect(normal).toHaveAttribute('data-active', 'false')
+    expect(hover).toHaveAttribute('data-active', 'true')
     expect(active).toHaveAttribute('data-active', 'true')
     expect(normal.className).toContain('group')
+    expect(hover.className).toContain('group')
     expect(active.className).toContain('group')
     expect(normal.textContent).toContain('mlab')
     const badge = screen.getByTestId('host-badge-preview-badge-normal')
@@ -46,6 +49,15 @@ describe('HostBadgePreview', () => {
     expect(badge.style.getPropertyValue('--hb-main')).toBe('rgba(59, 130, 246, 1)')
     expect(badge.style.getPropertyValue('--hb-middle')).toBe('rgba(59, 130, 246, 0.6)')
     expect(badge.style.background).toBe('rgba(59, 130, 246, 0.22)')
+  })
+
+  it('wraps the rows in a container over the same surface as the real sidebar', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
+    render(<HostBadgePreview hostId={HOST_ID} mode="console" />)
+    const normal = screen.getByTestId('host-badge-preview-normal')
+    const surface = normal.closest('[data-testid="host-badge-preview-surface"]')
+    expect(surface).not.toBeNull()
+    expect(surface?.className).toContain('bg-surface-tertiary')
   })
 
   it('follows the selected mode', () => {
@@ -92,9 +104,13 @@ describe('HostBadgePreview', () => {
     useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', BLUE)
     render(<HostBadgePreview hostId={HOST_ID} mode="console" />)
     const normal = screen.getByTestId('host-badge-preview-normal')
+    const hover = screen.getByTestId('host-badge-preview-hover')
     const active = screen.getByTestId('host-badge-preview-active')
     expect(normal.className).toContain('hover:bg-surface-hover')
     expect(normal.className).not.toContain('bg-surface-secondary')
+    expect(hover.className).toContain('bg-surface-hover')
+    expect(hover.className).toContain('text-text-primary')
+    expect(hover.className).not.toContain('hover:')
     expect(active.className).toContain('bg-surface-active')
   })
 })
