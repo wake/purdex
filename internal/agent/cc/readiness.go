@@ -18,10 +18,14 @@ func NewReadinessChecker(tmux tmux.Executor) probe.ReadinessChecker {
 }
 
 func (c *ccReadinessChecker) CheckReadiness(target string) probe.ReadinessResult {
-	content, err := c.tmux.CapturePaneContent(target, 5)
+	raw, err := c.tmux.CapturePaneContent(target, 5)
 	if err != nil {
 		return probe.ReadinessResult{Status: agent.StatusRunning}
 	}
+	// The capture keeps escape sequences (-e) for the activity prober's
+	// colour-only change detection; the prompt glyph is matched by prefix,
+	// so a leading colour reset (CC ≥ 2.1.276 renders "\x1b[39m❯ ") must go.
+	content := probe.StripANSI(raw)
 
 	if strings.Contains(content, "Allow") && strings.Contains(content, "Deny") {
 		return probe.ReadinessResult{Status: agent.StatusWaiting, Raw: content}
