@@ -499,4 +499,13 @@ describe('TokenField', () => {
       )
     })
   })
+
+  it('switching the Color row mode drives the badge preview next to the icon', () => {
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', { color: '#3b82f6', alpha: 100 })
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'terminal', 'main', { color: '#ef4444', alpha: 100 })
+    render(<OverviewSection hostId={HOST_ID} />)
+    expect(screen.getByTestId('host-badge-preview-badge-active').style.getPropertyValue('--hb-main')).toBe('rgba(59, 130, 246, 1)')
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
+    expect(screen.getByTestId('host-badge-preview-badge-active').style.getPropertyValue('--hb-main')).toBe('rgba(239, 68, 68, 1)')
+  })
 })

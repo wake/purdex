@@ -23,14 +23,23 @@ const LAYERS: readonly HostColorLayerName[] = ['main', 'middle', 'light']
  * resolved set for what to paint; every edit goes straight to the store so the
  * badge on every tab row follows.
  */
-export function HostColorField({ hostId }: { hostId: string }) {
+export function HostColorField({
+  hostId,
+  mode: controlledMode,
+  onModeChange,
+}: {
+  hostId: string
+  mode?: HostColorMode
+  onModeChange?: (mode: HostColorMode) => void
+}) {
   const t = useI18nStore((s) => s.t)
   const colors = useHostStore((s) => s.hosts[hostId]?.colors)
   const legacy = useHostStore((s) => s.hosts[hostId]?.color)
   const setHostColorLayer = useHostStore((s) => s.setHostColorLayer)
   const clearHostColorMode = useHostStore((s) => s.clearHostColorMode)
 
-  const [mode, setMode] = useState<HostColorMode>('console')
+  const [innerMode, setInnerMode] = useState<HostColorMode>('console')
+  const mode = controlledMode ?? innerMode
   const [open, setOpen] = useState<HostColorLayerName | null>(null)
 
   const ownSet = colors?.[mode]
@@ -100,7 +109,8 @@ export function HostColorField({ hostId }: { hostId: string }) {
             options={modeOptions}
             value={mode}
             onChange={(m) => {
-              setMode(m)
+              setInnerMode(m)
+              onModeChange?.(m)
               setOpen(null)
             }}
           />
