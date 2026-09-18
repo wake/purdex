@@ -170,6 +170,32 @@ describe('useHostStore', () => {
       useHostStore.getState().clearHostColorMode(id(), 'console')
       expect('colors' in host()).toBe(false)
     })
+
+    it('setHostColorLayer(null) on an already-absent middle/light layer is a no-op (F1)', () => {
+      useHostStore.setState((s) => ({
+        hosts: {
+          ...s.hosts,
+          [id()]: { ...s.hosts[id()], color: '#22c55e', colors: { console: { main: { color: '#3b82f6', alpha: 100 } } } },
+        },
+      }))
+      const before = host()
+      useHostStore.getState().setHostColorLayer(id(), 'console', 'middle', null)
+      expect(host()).toBe(before)
+      expect(host().color).toBe('#22c55e')
+      expect(host().colors).toEqual({ console: { main: { color: '#3b82f6', alpha: 100 } } })
+    })
+
+    it('clearHostColorMode(console) on a legacy host with only other mode sets removes the legacy color and keeps the other sets', () => {
+      useHostStore.setState((s) => ({
+        hosts: {
+          ...s.hosts,
+          [id()]: { ...s.hosts[id()], color: '#22c55e', colors: { terminal: { main: { color: '#ef4444', alpha: 100 } } } },
+        },
+      }))
+      useHostStore.getState().clearHostColorMode(id(), 'console')
+      expect('color' in host()).toBe(false)
+      expect(host().colors).toEqual({ terminal: { main: { color: '#ef4444', alpha: 100 } } })
+    })
   })
 
   it('setHostIcon stores an icon name', () => {

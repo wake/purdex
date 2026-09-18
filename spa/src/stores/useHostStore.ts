@@ -99,7 +99,10 @@ interface HostState {
    * must be a finite number (then clamped to an integer 0–100). Anything else, an
    * unknown host / mode / layer, is a no-op. Every *applied* write deletes the legacy
    * `color` key (spec D10); clearing a mode that has no set is a no-op, except
-   * `console`, which also clears a legacy-only color (that is the "No color" button).
+   * `console` on a host that has a legacy `color` and no console set (whether or not
+   * other mode sets exist): there it removes the legacy `color`, because the resolver
+   * shows the legacy color as the console color and "No color" must clear what the
+   * user sees. Removing a middle/light layer that is already absent is a no-op.
    */
   setHostColorLayer: (hostId: string, mode: HostColorMode, layer: HostColorLayerName, value: HostColorLayer | null) => void
   /** Remove the whole set for a mode; drops `colors` when it becomes empty. */
@@ -203,10 +206,11 @@ export const useHostStore = create<HostState>()(
           if (value === null) {
             if (layer === 'main') {
               // Clearing a mode that has no set is a no-op — unless it is `console` on a
-              // legacy-only host, where "clear" must drop the legacy color.
+              // host with a legacy color and no console set, where "clear" must drop
+              // the legacy color regardless of other mode sets.
               if (!existing && !(mode === 'console' && 'color' in host)) return state
               delete colors[mode]
-            } else if (existing) {
+            } else if (existing && layer in existing) {
               const { [layer]: _dropped, ...rest } = existing
               colors[mode] = rest as HostColorSet
             } else return state

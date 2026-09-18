@@ -82,9 +82,12 @@ clearHostColorMode(hostId, mode: HostColorMode): void   // removes the whole set
   normalizes user input first); `alpha` must be a finite number and is clamped to an integer
   0–100; any other shape is a no-op and never throws. `null` removes the layer (back to inherit +
   default alpha). Setting middle/light on a mode whose set does not exist is a no-op (the UI
-  creates the set first by writing `main`).
-- `clearHostColorMode` on a mode that has no set is a no-op, except `console` on a legacy-only
-  host, where it removes the legacy `color` (that is the "No color" button).
+  creates the set first by writing `main`). Removing a middle/light layer that is already absent
+  is a no-op (legacy color untouched).
+- `clearHostColorMode` on a mode that has no set is a no-op, except `console` on a host that has a
+  legacy `color` and no console set (whether or not other mode sets exist): there it removes the
+  legacy `color`, because the resolver shows the legacy color as the console color and "No color"
+  must clear what the user sees.
 - Any **applied** write to `colors` on a host that still has legacy `color` deletes `color` in
   the same update (D10); a rejected (no-op) write leaves it alone.
 - Unknown host / invalid input → no-op, like today.
