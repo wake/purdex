@@ -1,6 +1,6 @@
 # Spec — take any execution to a terminal (#1210)
 
-- Status: v1.0 (2026-09-19) — draft, plan reviewed together with this spec
+- Status: v1.1 (2026-09-19) — draft; v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
 - Predecessor: P-C.3 (`2026-09-18-pc-launch-ui-spec.md` §4.4 "Take back to
   terminal"), which only covers an execution that a `Hand to nex` created.
 - Nexen contract: v0.11.2 `docs/contract/capability-matrix.md` §1.8 (resume
@@ -58,6 +58,14 @@ the conversation cannot be continued interactively. The user's ruling
 - G3 The header shows one button, "Take to terminal", in both cases; the
   label string stays `takeback.button` (renamed copy, same key) so nothing
   else moves.
+- G4 **Every hand-off asks whether to keep the tmux session** — whether
+  the terminal was an ordinary tmux session or one that a take-to-terminal
+  created. "Keep" is today's behaviour (idle shell stays, `from` recorded,
+  the button later returns to that session). "Don't keep" kills the tmux
+  session once the execution is running; the pane has no `from`, so the
+  button later takes the execution to a **new** terminal (G1). The two
+  directions are therefore symmetric: terminal ⇄ headless, with the tmux
+  session as an optional anchor.
 
 ### Non-goals
 
@@ -132,7 +140,31 @@ Sequence (one function shared with `handleNexTakeback`, see 4.3):
   that exist).
 - Copy: `takeback.button` → "Take to terminal"; success toast unchanged.
 
-### 4.3 Shared engine sequence
+### 4.3 Hand-off: `keep_session`
+
+- `POST /api/sessions/{code}/nex-handoff` body gains `keep_session: bool`
+  (default `true` when absent — an old SPA keeps today's behaviour).
+- Daemon (`handoff.go`): unchanged through delegate + `connected`
+  broadcast. With `keep_session:false`, after the execution is confirmed
+  running the daemon `KillSession`s the tmux session (the shell is idle —
+  CC has already exited — so nothing is lost) and answers
+  `session_kept: false`. A kill failure is logged, `session_kept: true`
+  (the session is still there, the SPA keeps `from`). The execution's
+  `origin`/labels are written as today; `boundToSession` on a later
+  session-bound take-back simply fails with `session_missing` if anyone
+  tries — the SPA never does, because `from` is absent.
+- SPA: `HandoffConfirmDialog` gains a checkbox "Keep the tmux session"
+  (default checked; the last choice is remembered per client in
+  `localStorage` as a convenience, wrapped in try/catch). `handToNex` sends
+  `keep_session` and sets `from` only when the response says
+  `session_kept: true`. The tab's `cachedName` for the execution pane
+  stays the session name either way (it is the tab title).
+- Sidebar / session store: the killed session disappears through the
+  normal session-list refresh; panes of **other** tabs bound to it are
+  marked terminated by the existing path (the dialog body says so when the
+  session has other panes: "N other panes use this session").
+
+### 4.4 Shared engine sequence
 
 `takeback.go` splits into `settleForResume(ctx, execID, leaseID,
 principal) (exec, sid, release func, *takebackError)` (steps 3–4 of 4.1,
@@ -153,6 +185,8 @@ take-back tests passing unchanged.
   execution unarchived, and the response says which.
 - I4 `nex/imports_test.go` boundary holds; `Dependencies()` stays
   `{"session","agent"}`.
+- I5 With `keep_session` absent or `true` the hand-off request/response is
+  byte-identical to alpha.402 except the added `session_kept: true` field.
 
 ## 6. Acceptance (mlab, worktree dev server :5175, playwright `exec-to-terminal`)
 
@@ -170,6 +204,12 @@ take-back tests passing unchanged.
    still there; name collision → second attempt succeeds with `-N+1`.
 6. `pdx nex delegate` from the CLI → open it from the sidebar → Take to
    terminal works the same (no `from`).
+7. Hand to nex with **Keep** unchecked: tmux session gone (`tmux ls`),
+   pane is the execution, header shows Take to terminal → click → a new
+   `<slug>-N` session appears with the conversation. With Keep checked:
+   today's behaviour, and the choice is pre-filled next time.
+8. A session with two panes, hand-off from one with Keep unchecked: the
+   dialog warns; after confirm the other pane shows terminated.
 
 ## 7. Review
 
