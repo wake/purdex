@@ -2147,3 +2147,323 @@ func TestFormatHostsTable_RotationColumn(t *testing.T) {
 		t.Fatalf("table:\n%s", out)
 	}
 }
+
+// --- pdx peers alias [<name>|--clear] (self-alias spec §4.2, S-5) ----------
+
+// settingsCapture records what fakeSettingsDaemon saw in its last request.
+type settingsCapture struct {
+	calls  int
+	method string
+	path   string
+	auth   string
+	body   string
+}
+
+// fakeSettingsDaemon is a fakePeersDaemon that serves /api/peers/settings
+// only, recording the last request's method, bearer and RAW body (the body
+// is asserted as a string so no stray key — a `deliver` from the shared
+// wire type's pointer field, say — can sneak in unseen), and answering
+// with the given status and body.
+func fakeSettingsDaemon(t *testing.T, status int, body string) (*httptest.Server, string, *settingsCapture) {
+	t.Helper()
+	seen := &settingsCapture{}
+	srv, cfgPath := fakePeersDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		seen.calls++
+		seen.method, seen.path, seen.auth = r.Method, r.URL.Path, r.Header.Get("Authorization")
+		raw, _ := io.ReadAll(r.Body)
+		seen.body = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		fmt.Fprint(w, body)
+	})
+	return srv, cfgPath, seen
+}
+
+func TestRunPeersCmd_Alias_Query(t *testing.T) {
+	srv, cfgPath, seen := fakeSettingsDaemon(t, http.StatusOK, `{"deliver":true,"alias":"mini-lab","alias_source":"host_id"}`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"alias", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if seen.method != http.MethodGet || seen.path != "/api/peers/settings" {
+		t.Errorf("request = %s %s, want GET /api/peers/settings", seen.method, seen.path)
+	}
+	if seen.auth != "Bearer admin-tok" {
+		t.Errorf("Authorization = %q, want the admin bearer", seen.auth)
+	}
+	if seen.body != "" {
+		t.Errorf("GET carried a body: %q", seen.body)
+	}
+	if got, want := stdout.String(), "alias: mini-lab (host_id)\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+// The query form accepts either source: a configured alias prints as
+// "(config)".
+func TestRunPeersCmd_Alias_Query_ConfigSource(t *testing.T) {
+	srv, cfgPath, _ := fakeSettingsDaemon(t, http.StatusOK, `{"deliver":false,"alias":"mlab","alias_source":"config"}`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"alias", "--config", cfgPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if got, want := stdout.String(), "alias: mlab (config)\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRunPeersCmd_Alias_Set(t *testing.T) {
+	srv, cfgPath, seen := fakeSettingsDaemon(t, http.StatusOK, `{"deliver":true,"alias":"mlab","alias_source":"config"}`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"alias", "mlab", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if seen.method != http.MethodPut || seen.path != "/api/peers/settings" {
+		t.Errorf("request = %s %s, want PUT /api/peers/settings", seen.method, seen.path)
+	}
+	if seen.auth != "Bearer admin-tok" {
+		t.Errorf("Authorization = %q, want the admin bearer", seen.auth)
+	}
+	// Exact raw body: only the alias key. A `deliver` key — even null —
+	// would be a second field the daemon has to interpret.
+	if got, want := strings.TrimSpace(seen.body), `{"alias":"mlab"}`; got != want {
+		t.Errorf("PUT body = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), "alias: mlab (config)\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestRunPeersCmd_Alias_Clear(t *testing.T) {
+	srv, cfgPath, seen := fakeSettingsDaemon(t, http.StatusOK, `{"deliver":true,"alias":"mini-lab","alias_source":"host_id"}`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"alias", "--clear", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if seen.method != http.MethodPut || seen.path != "/api/peers/settings" {
+		t.Errorf("request = %s %s, want PUT /api/peers/settings", seen.method, seen.path)
+	}
+	if got, want := strings.TrimSpace(seen.body), `{"alias":""}`; got != want {
+		t.Errorf("PUT body = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), "alias: mini-lab (host_id)\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+// TestRunPeersCmd_Alias_NotApplied pins S-5 (tightened per codex F5): a
+// 200 is success only when the response carries a known alias_source, a
+// non-empty alias, and — for set/clear — the value and source the request
+// asked for. Every other 200 is "daemon did not apply the alias", exit 1,
+// with no success line.
+func TestRunPeersCmd_Alias_NotApplied(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		body string
+	}{
+		// An old daemon decodes the PUT without the alias key, ignores it
+		// and answers 200 with the previous alias and no alias_source.
+		{"set: old daemon, no alias_source", []string{"alias", "mlab"}, `{"deliver":true,"alias":"mini-lab"}`},
+		{"clear: old daemon, no alias_source", []string{"alias", "--clear"}, `{"deliver":true,"alias":"mini-lab"}`},
+		{"query: old daemon, no alias_source", []string{"alias"}, `{"deliver":true,"alias":"mini-lab"}`},
+		{"set: echoed a different alias", []string{"alias", "mlab"}, `{"deliver":true,"alias":"mini-lab","alias_source":"config"}`},
+		{"set: case-only difference is a difference", []string{"alias", "mlab"}, `{"deliver":true,"alias":"Mlab","alias_source":"config"}`},
+		{"set: right alias, wrong source", []string{"alias", "mlab"}, `{"deliver":true,"alias":"mlab","alias_source":"host_id"}`},
+		{"set: empty alias", []string{"alias", "mlab"}, `{"deliver":true,"alias":"","alias_source":"config"}`},
+		{"clear: still config", []string{"alias", "--clear"}, `{"deliver":true,"alias":"mlab","alias_source":"config"}`},
+		{"clear: empty alias", []string{"alias", "--clear"}, `{"deliver":true,"alias":"","alias_source":"host_id"}`},
+		{"query: unknown source", []string{"alias"}, `{"deliver":true,"alias":"mini-lab","alias_source":"weird"}`},
+		{"query: empty alias", []string{"alias"}, `{"deliver":true,"alias":"","alias_source":"host_id"}`},
+		{"set: unknown source", []string{"alias", "mlab"}, `{"deliver":true,"alias":"mlab","alias_source":"weird"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, cfgPath, _ := fakeSettingsDaemon(t, http.StatusOK, tc.body)
+			defer srv.Close()
+
+			var stdout, stderr bytes.Buffer
+			args := append(append([]string{}, tc.args...), "--config", cfgPath)
+			code := runPeersCmd(args, &stdout, &stderr)
+
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1; stderr=%q", code, stderr.String())
+			}
+			if stdout.String() != "" {
+				t.Errorf("stdout = %q, want no success line", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "did not apply the alias") || !strings.Contains(stderr.String(), "daemon too old") {
+				t.Errorf("stderr = %q, want the not-applied / too-old message", stderr.String())
+			}
+		})
+	}
+}
+
+// The daemon's 400/409 text passes through verbatim (spec §4.2, S-6).
+func TestRunPeersCmd_Alias_Conflict(t *testing.T) {
+	srv, cfgPath, _ := fakeSettingsDaemon(t, http.StatusConflict, `{"error":"alias \"air26\" is already used by a peer host"}`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := runPeersCmd([]string{"alias", "air26", "--config", cfgPath}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `alias "air26" is already used by a peer host`) {
+		t.Errorf("stderr = %q, want the daemon's error text", stderr.String())
+	}
+}
+
+func TestRunPeersCmd_Alias_BadRequest(t *testing.T) {
+	srv, cfgPath, _ := fakeSettingsDaemon(t, http.StatusBadRequest, `{"error":"alias must match ^[a-z0-9][a-z0-9-]*$"}`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"alias", "Bad_Name", "--config", cfgPath}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "alias must match") {
+		t.Errorf("stderr = %q, want the daemon's error text", stderr.String())
+	}
+}
+
+// The echoed alias is the daemon's text landing in a terminal: it goes
+// through sanitizeCell on both the success line and the not-applied line.
+func TestRunPeersCmd_Alias_EscapesEchoedAlias(t *testing.T) {
+	srv, cfgPath, _ := fakeSettingsDaemon(t, http.StatusOK, `{"deliver":true,"alias":"mini\u001b[31mlab","alias_source":"host_id"}`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"alias", "--config", cfgPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "\x1b") {
+		t.Errorf("stdout = %q, raw escape leaked", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `mini\x1b[31mlab`) {
+		t.Errorf("stdout = %q, want the escaped form", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runPeersCmd([]string{"alias", "mlab", "--config", cfgPath}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if strings.Contains(stderr.String(), "\x1b") {
+		t.Errorf("stderr = %q, raw escape leaked", stderr.String())
+	}
+}
+
+func TestRunPeersCmd_Alias_InvalidResponse(t *testing.T) {
+	srv, cfgPath, _ := fakeSettingsDaemon(t, http.StatusOK, `not json`)
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	if code := runPeersCmd([]string{"alias", "--config", cfgPath}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "invalid response") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+// Grammar: `alias` is a top-level verb, exclusive with host, --all, --json
+// and every host-only flag; at most one positional; not with --clear.
+// Every rejection is exit 2 with the usage text and no request.
+func TestRunPeersCmd_Alias_GrammarRejections(t *testing.T) {
+	srv, cfgPath, seen := fakeSettingsDaemon(t, http.StatusOK, `{}`)
+	defer srv.Close()
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"two positionals", []string{"alias", "a", "b"}},
+		{"name with --clear", []string{"alias", "a", "--clear"}},
+		{"--clear before name", []string{"alias", "--clear", "a"}},
+		{"--all with alias", []string{"--all", "alias"}},
+		{"alias with --all", []string{"alias", "--all"}},
+		{"--json with alias", []string{"alias", "--json"}},
+		{"--json with alias set", []string{"alias", "mlab", "--json"}},
+		{"host with alias", []string{"host", "alias"}},
+		{"alias then host", []string{"alias", "host", "list"}},
+		{"--token with alias", []string{"alias", "mlab", "--token", "x"}},
+		{"--allow-bypass with alias", []string{"alias", "--allow-bypass=true"}},
+		{"--commit with alias", []string{"alias", "--commit"}},
+		{"--force with alias", []string{"alias", "--force"}},
+		{"name with slash", []string{"alias", "a/b"}},
+		{"--clear at top level", []string{"--clear"}},
+		{"--clear with host", []string{"host", "list", "--clear"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := seen.calls
+			args := append(append([]string{}, tc.args...), "--config", cfgPath)
+			var stdout, stderr bytes.Buffer
+			code := runPeersCmd(args, &stdout, &stderr)
+
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2; stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "usage: pdx peers") {
+				t.Errorf("stderr = %q, want the usage text", stderr.String())
+			}
+			if stdout.String() != "" {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			if seen.calls != before {
+				t.Errorf("server saw %d request(s), want 0", seen.calls-before)
+			}
+		})
+	}
+}
+
+func TestParsePeersInvocation_AliasGrammar(t *testing.T) {
+	inv, _, ok := parsePeersInvocation([]string{"alias"})
+	if !ok || !inv.aliasMode || inv.aliasSet || inv.aliasClear || inv.hostMode {
+		t.Errorf("alias: inv=%+v ok=%v", inv, ok)
+	}
+	inv, _, ok = parsePeersInvocation([]string{"alias", "mlab"})
+	if !ok || !inv.aliasMode || !inv.aliasSet || inv.aliasValue != "mlab" || inv.aliasClear {
+		t.Errorf("alias mlab: inv=%+v ok=%v", inv, ok)
+	}
+	inv, _, ok = parsePeersInvocation([]string{"--clear", "alias"})
+	if !ok || !inv.aliasMode || inv.aliasSet || !inv.aliasClear {
+		t.Errorf("--clear alias: inv=%+v ok=%v", inv, ok)
+	}
+	inv, _, ok = parsePeersInvocation([]string{"alias", "mlab", "--config", "/x"})
+	if !ok || inv.aliasValue != "mlab" || inv.cfgPath != "/x" {
+		t.Errorf("alias mlab --config: inv=%+v ok=%v", inv, ok)
+	}
+}
+
+// peersUsage documents the three alias forms.
+func TestPeersUsage_ListsAliasForms(t *testing.T) {
+	for _, line := range []string{
+		"pdx peers alias [--config <path>]",
+		"pdx peers alias <name> [--config <path>]",
+		"pdx peers alias --clear [--config <path>]",
+	} {
+		if !strings.Contains(peersUsage, line) {
+			t.Errorf("peersUsage lacks %q:\n%s", line, peersUsage)
+		}
+	}
+}

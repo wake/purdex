@@ -74,7 +74,10 @@ const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
 	"       pdx peers host rename <alias> <new-alias> [--config <path>]\n" +
 	"       pdx peers host rotate <alias> [--commit|--cancel] [--force] [--config <path>]\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
-	"       pdx peers host list [--config <path>]"
+	"       pdx peers host list [--config <path>]\n" +
+	"       pdx peers alias [--config <path>]\n" +
+	"       pdx peers alias <name> [--config <path>]\n" +
+	"       pdx peers alias --clear [--config <path>]"
 
 // runPeers is the `pdx peers` switch target.
 func runPeers(args []string) {
@@ -82,11 +85,12 @@ func runPeers(args []string) {
 }
 
 // runPeersCmd implements the full `pdx peers` grammar — the top-level query
-// form (`pdx peers [--json] [--all] [--config <path>]`) and the `host`
-// subcommand form (`pdx peers host <add|set-token|remove|list> ...`). It
-// does all the work and returns the process exit code, so tests can drive
-// it without os.Exit. Every grammar rejection returns 2 having made no
-// config load or HTTP request.
+// form (`pdx peers [--json] [--all] [--config <path>]`), the `host`
+// subcommand form (`pdx peers host <add|set-token|remove|list> ...`) and
+// the `alias` form (`pdx peers alias [<name>|--clear]`). It does all the
+// work and returns the process exit code, so tests can drive it without
+// os.Exit. Every grammar rejection returns 2 having made no config load or
+// HTTP request.
 func runPeersCmd(args []string, stdout, stderr io.Writer) int {
 	inv, unknownFlag, ok := parsePeersInvocation(args)
 	if !ok {
@@ -101,13 +105,17 @@ func runPeersCmd(args []string, stdout, stderr io.Writer) int {
 	if inv.hostMode {
 		return runPeersHostCmd(inv, stdout, stderr)
 	}
+	if inv.aliasMode {
+		return runPeersAliasCmd(inv, stdout, stderr)
+	}
 	return runPeersQueryCmd(inv, stdout, stderr)
 }
 
 // peersInvocation is the parsed, validated result of parsePeersInvocation:
-// either the top-level query form (all/jsonOutput/cfgPath, hostMode false)
-// or the "host" subcommand form (hostMode true; verb/positionals/token/
-// allowBypass/cfgPath), never a mix of both.
+// the top-level query form (all/jsonOutput/cfgPath, hostMode and aliasMode
+// false), the "host" subcommand form (hostMode true; verb/positionals/
+// token/allowBypass/cfgPath), or the "alias" form (aliasMode true;
+// aliasSet/aliasValue/aliasClear/cfgPath) — never a mix.
 type peersInvocation struct {
 	cfgPath    string
 	jsonOutput bool
@@ -119,6 +127,15 @@ type peersInvocation struct {
 	token       string
 	hasToken    bool
 	allowBypass *bool
+
+	// aliasMode selects `pdx peers alias` (self-alias spec §4.2). Exactly
+	// one of its three forms applies: aliasSet with aliasValue (`alias
+	// <name>`), aliasClear (`alias --clear`), or neither (the query form).
+	// parsePeersInvocation rejects --clear for every other form.
+	aliasMode  bool
+	aliasSet   bool
+	aliasValue string
+	aliasClear bool
 
 	// rotateCommit/rotateCancel/rotateForce carry `host rotate`'s three
 	// boolean flags (spec §6.6) — meaningful only when verb == "rotate";
@@ -190,6 +207,8 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 			inv.rotateCancel = true
 		case a == "--force":
 			inv.rotateForce = true
+		case a == "--clear":
+			inv.aliasClear = true
 		case a == "--token":
 			if i+1 >= len(args) {
 				return peersInvocation{}, "", false
@@ -211,12 +230,45 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		}
 	}
 
-	if len(positionals) == 0 || positionals[0] != "host" {
+	// --clear belongs to `alias` alone; every other form rejects it.
+	if inv.aliasClear && (len(positionals) == 0 || positionals[0] != "alias") {
+		return peersInvocation{}, "", false
+	}
+
+	if len(positionals) == 0 || (positionals[0] != "host" && positionals[0] != "alias") {
 		// Top-level query form: no positionals at all, and none of the
 		// host-only flags (--token, --allow-bypass, --commit/--cancel/
 		// --force — the last three are rotate-only).
 		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil ||
 			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
+			return peersInvocation{}, "", false
+		}
+		return inv, "", true
+	}
+
+	if positionals[0] == "alias" {
+		// alias form (self-alias spec §4.2): `alias`, `alias <name>` or
+		// `alias --clear`. Exclusive with --all/--json (query-form output
+		// switches with nothing to switch here) and with every host-only
+		// flag; <name> together with --clear would be two instructions.
+		inv.aliasMode = true
+		if inv.all || inv.jsonOutput || inv.hasToken || inv.allowBypass != nil ||
+			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
+			return peersInvocation{}, "", false
+		}
+		switch len(positionals) {
+		case 1:
+		case 2:
+			if inv.aliasClear {
+				return peersInvocation{}, "", false
+			}
+			inv.aliasSet = true
+			inv.aliasValue = positionals[1]
+			// Same client-side "/" refusal as the host verbs' alias.
+			if strings.Contains(inv.aliasValue, "/") {
+				return peersInvocation{}, "", false
+			}
+		default:
 			return peersInvocation{}, "", false
 		}
 		return inv, "", true
@@ -1030,6 +1082,112 @@ func runPeersHostRemove(cfg config.Config, base string, inv peersInvocation, std
 
 	fmt.Fprintf(stdout, "removed %s\n", alias)
 	return 0
+}
+
+// --- pdx peers alias [<name>|--clear]: /api/peers/settings ----------------
+
+// cliPutSettingsRequest is the body `pdx peers alias` PUTs. It is the CLI's
+// own shape rather than peers.PutSettingsRequest because that shared type
+// serialises its nil Deliver pointer as `"deliver":null`, and the daemon
+// treats an explicit null as an instruction to interpret. The CLI has
+// exactly one thing to say — the alias — so the body is exactly
+// {"alias":"…"}: with omitempty, a nil pointer is left out while a pointer
+// to "" (the --clear form) is still written.
+type cliPutSettingsRequest struct {
+	Alias *string `json:"alias,omitempty"`
+}
+
+// runPeersAliasCmd implements the three forms of `pdx peers alias`
+// (self-alias spec §4.2): the query form GETs /api/peers/settings;
+// `<name>` PUTs {"alias":"<name>"}; --clear PUTs {"alias":""}. Every form
+// prints `alias: <alias> (<source>)` on success, and applies the S-5
+// acceptance rule (tightened per codex F5) before calling anything a
+// success — see acceptSettingsResponse.
+func runPeersAliasCmd(inv peersInvocation, stdout, stderr io.Writer) int {
+	cfg, err := config.Load(inv.cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+		return 1
+	}
+	settingsURL := fmt.Sprintf("http://%s:%d/api/peers/settings", cfg.Bind, cfg.Port)
+
+	method := http.MethodGet
+	var reqBody []byte
+	if inv.aliasSet || inv.aliasClear {
+		method = http.MethodPut
+		value := ""
+		if inv.aliasSet {
+			value = inv.aliasValue
+		}
+		reqBody, err = json.Marshal(cliPutSettingsRequest{Alias: &value})
+		if err != nil {
+			fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+			return 1
+		}
+	}
+
+	result, err := doPeersRequest(method, settingsURL, reqBody, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return reportPeersTransportErr(err, stderr)
+	}
+	if result.status != http.StatusOK {
+		return reportPeersAPIError(result, stderr)
+	}
+
+	var settings peers.SettingsResponse
+	if err := json.Unmarshal(result.body, &settings); err != nil {
+		fmt.Fprintln(stderr, "pdx peers: invalid response")
+		return 1
+	}
+
+	if problem := acceptSettingsResponse(inv, settings); problem != "" {
+		fmt.Fprintf(stderr, "pdx peers: daemon did not apply the alias (%s; daemon too old?)\n", problem)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "alias: %s (%s)\n", sanitizeCell(settings.Alias), settings.AliasSource)
+	return 0
+}
+
+// acceptSettingsResponse is the S-5 acceptance rule for a 200 from
+// /api/peers/settings, as tightened by codex F5. It returns "" when the
+// response proves the request took effect, otherwise a short phrase naming
+// what was wrong — the caller wraps it in the "did not apply" message.
+//
+// Every form requires alias_source to be one of the two values this
+// version's daemon emits AND a non-empty alias: an older daemon decodes the
+// PUT body without the alias key, ignores it, and answers 200 with the
+// previous alias and no alias_source at all, so the status alone proves
+// nothing. On top of that a set requires the echoed alias to equal the
+// requested one EXACTLY (the alias is stored verbatim per S-2, so a
+// case-only difference is a real difference) with source "config", and a
+// clear requires source "host_id" — the daemon's derived default. The
+// query form accepts either source.
+func acceptSettingsResponse(inv peersInvocation, s peers.SettingsResponse) string {
+	switch s.AliasSource {
+	case "config", "host_id":
+	case "":
+		return "response carries no alias_source"
+	default:
+		return fmt.Sprintf("unknown alias_source %q", sanitizeCell(s.AliasSource))
+	}
+	if s.Alias == "" {
+		return "response carries an empty alias"
+	}
+	switch {
+	case inv.aliasSet:
+		if s.Alias != inv.aliasValue {
+			return fmt.Sprintf("alias is %q, not %q", sanitizeCell(s.Alias), sanitizeCell(inv.aliasValue))
+		}
+		if s.AliasSource != "config" {
+			return fmt.Sprintf("alias_source is %q, not \"config\"", s.AliasSource)
+		}
+	case inv.aliasClear:
+		if s.AliasSource != "host_id" {
+			return fmt.Sprintf("alias_source is %q, not \"host_id\"", s.AliasSource)
+		}
+	}
+	return ""
 }
 
 // formatHostsTable renders hosts as a text/tabwriter table with columns
