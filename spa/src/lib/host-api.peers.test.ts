@@ -83,6 +83,13 @@ describe('peer-host wrappers', () => {
     await expect(fetchPeerSettings(H)).rejects.toMatchObject({ status: 502, detail: 'Bad Gateway' })
   })
 
+  it('a non-JSON error body with an empty statusText (HTTP/2) falls back to "HTTP <status>"', async () => {
+    // A pre-D1 daemon answering the verify route with Go's plain-text 404 —
+    // under HTTP/2 `Response.statusText` is always ''.
+    fetchMock.mockResolvedValueOnce(new Response('404 page not found', { status: 404, statusText: '' }))
+    await expect(verifyPeerHost(H, 'air')).rejects.toMatchObject({ status: 404, detail: 'HTTP 404' })
+  })
+
   it('fetchPeerSettings and fetchHostInfo return their bodies', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { deliver: true, alias: 'mini-lab' }))
     await expect(fetchPeerSettings(H)).resolves.toEqual({ deliver: true, alias: 'mini-lab' })

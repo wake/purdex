@@ -252,13 +252,17 @@ export function renameSession(hostId: string, code: string, name: string) {
  */
 export class HostApiError extends Error {
   status: number
-  /** The daemon's `{error}` text when the body carried one, else `statusText`. */
+  /**
+   * The daemon's `{error}` text when the body carried one, else `statusText`
+   * when non-empty, else `HTTP <status>` — under HTTP/2 `statusText` is
+   * always `''`, so that case must not fall through to an empty string.
+   */
   detail: string
   constructor(status: number, statusText: string, detail?: string) {
     super(`${status} ${statusText}`)
     this.name = 'HostApiError'
     this.status = status
-    this.detail = detail ?? statusText
+    this.detail = detail ?? (statusText || `HTTP ${status}`)
   }
 }
 
