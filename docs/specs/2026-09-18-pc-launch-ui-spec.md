@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1.1 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied (§9)
+- Status: v1.2 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied; P-C.2 fix wave (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -272,7 +272,11 @@ selectReady(hostId): boolean      // phase === 'ready'
   `NexExecutionsTable.tsx:94-152`'s list + site-wide-SSE-as-refetch-signal
   logic. **One** site-wide SSE per host, refcounted by subscribers
   (the table and the sidebar view share it); 500 ms debounce; refetch on
-  reconnect; gated by `useNexHostStore.selectReady`. `NexExecutionsTable`
+  reconnect; gated by info readiness (`isNexReady(byHost[hostId].info)`),
+  the same predicate the Host → Nex table used before P-C.2 — the list
+  needs the engine to be serving, not the capabilities document; gating on
+  `selectReady` would make the table appear later than it did before (codex
+  plan review `task-mu6lptei-rhye4d` §11). `NexExecutionsTable`
   switches to the hook in the same PR (pure behaviour move, its 256-line test
   file is the guard).
 - **Connection budget** (codex §9.7): the site-wide stream is a long-lived
@@ -539,6 +543,44 @@ archived afterwards; scratch dir removed.
    a fresh New Tab preselected `/Users/wake/Workspace` and `readonly`.
 6. **PASS** — console: 3 messages, 0 errors, 0 warnings.
 
+### 6.2 Acceptance run 2026-09-18 (P-C.2, at `2e9019ca`)
+
+mlab, worktree dev server `npx vite --host 100.64.0.2 --port 5175 --strictPort`,
+playwright cli session `pc-launch-ui`, host `pc2host` seeded into
+`purdex-hosts` (version 1, daemon token) then navigated with `goto` — note
+`open` recreates the context and the seed is lost; `goto` keeps it. Daemon
+alpha.378. All executions archived afterwards; the Executions view removed
+from the region again (`primary-sidebar.views` back to
+`["file-tree-workspace"]`); scratch dir removed.
+
+1. **PASS** — Headless section launch (`reply ok, no tools`, sub-path
+   `wake/nex-acceptance-scratch`) → `/execution/pc2host/06GB7156KB46T161926B1EREEG`,
+   reply `ok`.
+2. **PASS** — RegionManager lists "Executions" under 可加入; after Add it
+   renders: header `mlab` with the nex phase dot, group **Purdex**, one row
+   `idle · reply ok, no tools · just now`, no `↩` marker (NewTab origin).
+3. **PASS** — `pdx nex delegate` (no source label) → row appeared under
+   **Local** as `running` within 2 s without reload
+   (`06GB71CPGG1THZXZB9C3DH41GR`); `pdx nex archive` → gone within 2 s.
+4. **PASS** — clicking a row opens the execution tab; clicking again
+   focuses the same tab (single `tab "Execution"`, same ref).
+5. **PASS** — connection budget: three more executions
+   (`06GB71HQJ5…`, `06GB71HRQM…`, `06GB71HT1K…`), four execution tabs +
+   sidebar. Every tab reads `live` when viewed (activation claims a slot and
+   pauses the hidden LRU sibling), and the network log shows the cap in
+   action: after the four initial `events?execution_id=` streams
+   (#587–#614) each tab activation re-opened its stream (#622–#646) — with a
+   cap of 4 no pane would ever have been paused and re-opened. Site-wide
+   `/api/nex/v1/events` (no `execution_id`): exactly **one** `200` (#575;
+   #573 was aborted by the view remount when the manager was toggled), and
+   the count stayed at one with Hosts → Nex open alongside the sidebar.
+   Hosts → Nex table **Refresh** completed (`/v1/executions` 200) within the
+   2 s window with 3 pane streams + the site-wide stream open.
+6. **PASS** — second browser tab shows the same list; a CLI delegate
+   (`06GB724GGFR325RPV4VYDCVJFW`) appeared as `running` within 1.5 s and
+   vanished within 1.5 s of `pdx nex archive`.
+7. **PASS** — console: both tabs 0 errors, 0 warnings.
+
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
@@ -582,3 +624,6 @@ archived afterwards; scratch dir removed.
   templates)`, `pinHost().sendKeys`) → corrected in 4.3/4.4/F14; (9) P3 §4.5
   rewritten as blast radius; (10) P2 P-C.3 not shippable as written →
   redesigned per (1)–(4).
+- v1.2 — P-C.2 fix wave: list gate is info readiness (drift resolved in
+  favour of the plan); validation at the API boundary; refresh revision per
+  attempt.

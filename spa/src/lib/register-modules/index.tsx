@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState } from 'react'
-import { FolderOpen } from '@phosphor-icons/react'
+import { FolderOpen, Lightning } from '@phosphor-icons/react'
 import { getModules, registerModule } from '../module-registry'
 import { registerNewTabProvider, registerNewTabProviderSource } from '../new-tab-registry'
 import { registerSettingsSection } from '../settings-section-registry'
@@ -22,6 +22,7 @@ import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
 import ExecutionView from '../../components/execution/ExecutionView'
+import { ExecutionsView } from '../../components/executions/ExecutionsView'
 import { resolveExecutionHostId } from '../nex/resolve-host'
 import { AppearanceSection } from '../../components/settings/AppearanceSection'
 import { TerminalSection } from '../../components/settings/TerminalSection'
@@ -230,6 +231,15 @@ export function registerBuiltinModules(): void {
     id: 'execution',
     name: 'Execution',
     panes: [{ kind: 'execution', component: ExecutionPaneWrapper }],
+    views: [
+      {
+        id: 'executions',
+        label: 'Executions',
+        icon: Lightning,
+        scope: 'system',
+        component: ExecutionsView,
+      },
+    ],
   })
 
   // Editor module

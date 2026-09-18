@@ -4,6 +4,8 @@
 // this file grows more per-cell formatting.
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { getNexClientId } from '../../../lib/nex/client-id'
+import { STATE_DOT_CLASSES } from '../../../lib/nex/state-dot'
+import { firstLine, shortId } from '../../../lib/nex/format'
 import type { ExecutionSummary } from '../../../lib/nex/types'
 
 export interface NexExecutionRowProps {
@@ -14,26 +16,6 @@ export interface NexExecutionRowProps {
   onTerminateClick: () => void
   onTerminateConfirm: () => void
   onArchiveToggle: () => void
-}
-
-const STATE_DOT_CLASSES: Record<string, string> = {
-  queued: 'bg-text-muted',
-  running: 'bg-green-400',
-  idle: 'bg-amber-400',
-  rejected: 'bg-red-400',
-  failed: 'bg-red-400',
-  terminated: 'bg-text-muted',
-}
-
-/** First 12 chars of the 26-char ULID id; the full id lives in `title`. */
-function shortId(id: string): string {
-  return id.slice(0, 12)
-}
-
-/** First line of the (possibly multi-line, free-text) brief, capped at `max` chars. */
-function firstLine(text: string, max = 80): string {
-  const line = text.split('\n', 1)[0] ?? ''
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 
 function cwdBasename(cwd: string): string {

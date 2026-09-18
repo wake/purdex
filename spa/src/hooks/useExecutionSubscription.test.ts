@@ -545,6 +545,46 @@ describe('useExecutionSubscription', () => {
     expect(api.getExecution).toHaveBeenCalledTimes(1)
   })
 
+  it('a site-wide reservation evicts the pane LRU and a later inactive claim cannot exceed three', async () => {
+    const closes: Record<string, CloseMock> = {}
+    vi.mocked(sse.openNexSse).mockImplementation((o) => {
+      const id = new URL(o.url, 'http://x').searchParams.get('execution_id')!
+      closes[id] = closes[id] ?? vi.fn<() => void>()
+      return { close: closes[id] }
+    })
+    vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
+    vi.mocked(api.fetchExecutionEvents).mockResolvedValue({ items: [], next_cursor: 0 })
+    const ids = ['exc_a', 'exc_b', 'exc_c', 'exc_d']
+    const hooks = ids.map((id) => renderHook(({ active }) => useExecutionSubscription(H, id, active), { initialProps: { active: true } }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(Object.keys(closes)).toHaveLength(4)
+
+    // the list store takes its lane → exactly one pane (the LRU, exc_a) pauses
+    act(() => { subscriptionSlots.reserve(H, 'site-wide') })
+    expect(closes['exc_a']).toHaveBeenCalledTimes(1)
+    expect(useExecutionStore.getState().executions[`${H}:exc_a`].sse).toBe('paused')
+    expect(hooks[0].result.current.paused).toBe(true)
+    expect(ids.filter((id) => closes[id].mock.calls.length > 0)).toEqual(['exc_a'])
+    expect(ids.filter((id) => useExecutionStore.getState().executions[`${H}:${id}`].sse === 'paused')).toEqual(['exc_a'])
+
+    // a fifth pane mounted inactive cannot claim a fourth pane slot while the lane is held
+    const fifth = renderHook(({ active }) => useExecutionSubscription(H, 'exc_e', active), { initialProps: { active: false } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(fifth.result.current.paused).toBe(true)
+    expect(closes['exc_e']).toBeUndefined()
+    expect(useExecutionStore.getState().executions[`${H}:exc_e`].sse).toBe('paused')
+
+    // lane released → the next activation goes live without evicting anyone
+    act(() => { subscriptionSlots.unreserve(H, 'site-wide') })
+    fifth.rerender({ active: true })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(fifth.result.current.paused).toBe(false)
+    expect(closes['exc_e']).toBeDefined()
+    expect(ids.filter((id) => closes[id].mock.calls.length > 0)).toEqual(['exc_a'])
+
+    fifth.unmount(); hooks.forEach((h) => h.unmount())
+  })
+
   it('a terminal SSE close (with error) releases the slot so a later activation can reopen', async () => {
     const { rerender } = renderHook(({ active }) => useExecutionSubscription(H, E, active), { initialProps: { active: true } })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })

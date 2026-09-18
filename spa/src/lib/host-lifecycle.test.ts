@@ -8,6 +8,7 @@ import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useStreamStore } from '../stores/useStreamStore'
 import { useExecutionStore } from '../stores/useExecutionStore'
 import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
+import { useExecutionListStore, type HostListCache } from '../stores/useExecutionListStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useWorkspaceSettingsStore } from '../stores/useWorkspaceSettingsStore'
@@ -54,6 +55,7 @@ function resetAllStores() {
   useStreamStore.setState({ sessions: {}, relayStatus: {}, handoffProgress: {} })
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ byHost: {} })
+  useExecutionListStore.setState({ byHost: {} })
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   useHostSettingsStore.setState({ hosts: {} })
   useWorkspaceStore.getState().reset()
@@ -181,6 +183,16 @@ describe('host delete cascade', () => {
 
     expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
     expect(Object.keys(useNexHostStore.getState().byHost)).toEqual([HOST_B])
+  })
+
+  it('deleteHostCascade clears the execution-list host while preserving the other host', () => {
+    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2 }
+    useExecutionListStore.setState({ byHost: { [HOST_A]: listCache, [HOST_B]: listCache } })
+
+    deleteHostCascade(HOST_A, false)
+
+    expect(Object.keys(useExecutionListStore.getState().byHost)).toEqual([HOST_B])
+    expect(useExecutionListStore.getState().byHost[HOST_B]).toBe(listCache)
   })
 
   it('closeTabs releases held leases on the removed host before clearing execution state (I13)', () => {
