@@ -159,7 +159,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     }
 
     let prevStatus: NexSseStatus | null = null
-    rt.sse = openNexSse({
+    const handle = openNexSse({
       hostId,
       url: '/api/nex/v1/events',
       getLastEventId: () => sink.get()[hostId]?.lastSeq ?? null,
@@ -182,6 +182,18 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
         prevStatus = status
       },
     })
+    // openNexSse may report a terminal `closed` synchronously, before it
+    // returns (nex-sse.ts: a host missing from the host store is refused
+    // without awaiting). That ran `close()` above: the generation moved on,
+    // the lane is already released and the cache carries the error. Keeping
+    // the (already dead) handle would make `refetch` re-fetch instead of
+    // reopen and leave nothing to close on unsubscribe; fetching would
+    // commit rows for a stream that is not there.
+    if (rt.generation !== generation) {
+      handle.close()
+      return
+    }
+    rt.sse = handle
     fetch(hostId)
   }
 

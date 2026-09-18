@@ -351,6 +351,58 @@ describe('useExecutionListStore', () => {
     expect(capFor(A)).toBe(4)
   })
 
+  it('a synchronous terminal close from openNexSse leaves no handle, releases the lane and does not fetch', async () => {
+    // Mocked: the stream reports `closed` + error before openNexSse returns.
+    const closeMock = vi.fn<() => void>()
+    vi.mocked(sse.openNexSse).mockImplementationOnce((o) => {
+      o.onStatus('closed', new NexApiError(0, 'host_removed', 'host removed'))
+      return { close: closeMock }
+    })
+    useExecutionListStore.getState().subscribe(A)
+    expect(sse.openNexSse).toHaveBeenCalledTimes(1)
+    expect(api.listExecutions).not.toHaveBeenCalled()
+    expect(capFor(A)).toBe(4)
+    expect(subscriptionSlots.reserve).toHaveBeenCalledTimes(1)
+    expect(subscriptionSlots.unreserve).toHaveBeenCalledTimes(1)
+    expect(closeMock).toHaveBeenCalledTimes(1)
+    expect(cache(A).phase).toBe('error')
+    expect(cache(A).error).toBe('host_removed')
+
+    // No handle was kept: refetch re-opens (not just re-fetches) and re-reserves.
+    useExecutionListStore.getState().refetch(A)
+    expect(sse.openNexSse).toHaveBeenCalledTimes(2)
+    expect(subscriptionSlots.reserve).toHaveBeenCalledTimes(2)
+    expect(capFor(A)).toBe(3)
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).error).toBeNull()
+  })
+
+  it('the real openNexSse closing synchronously for a removed host leaves no handle, releases the lane and does not fetch', async () => {
+    const actual = await vi.importActual<typeof sse>('../lib/nex/nex-sse')
+    vi.mocked(sse.openNexSse).mockImplementationOnce(actual.openNexSse)
+    // Host gone from the host store (nex info still says ready — the window
+    // between removal and the nex-host watcher catching up).
+    useHostStore.setState((s) => {
+      const hosts = { ...s.hosts }
+      delete hosts[A]
+      return { hosts }
+    })
+    useExecutionListStore.getState().subscribe(A)
+    expect(sse.openNexSse).toHaveBeenCalledTimes(1)
+    expect(api.listExecutions).not.toHaveBeenCalled()
+    expect(capFor(A)).toBe(4)
+    expect(subscriptionSlots.unreserve).toHaveBeenCalledTimes(1)
+    expect(cache(A).phase).toBe('error')
+    expect(cache(A).error).toBe('host_removed')
+
+    useExecutionListStore.getState().refetch(A)
+    expect(sse.openNexSse).toHaveBeenCalledTimes(2)
+    expect(subscriptionSlots.reserve).toHaveBeenCalledTimes(2)
+    expect(capFor(A)).toBe(3)
+  })
+
   it('a non-error closed status (our own close) is not treated as terminal', async () => {
     const unsubscribe = useExecutionListStore.getState().subscribe(A)
     await flush()
