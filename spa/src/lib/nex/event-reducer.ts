@@ -67,6 +67,9 @@ export function defaultExecutionState(): ExecutionState {
 }
 
 /** Nexen's own (closed-set) kinds; everything else is provider passthrough. */
+/** Derived tool kinds (nexen v0.12.0, `capabilities.tool_events`); ignored until consumed. */
+const N2_TOOL_KINDS: ReadonlySet<string> = new Set(['tool_use', 'tool_result'])
+
 export function isLifecycleKind(kind: string): boolean {
   return kind.startsWith('execution.') || kind.startsWith('lease.')
 }
@@ -143,6 +146,13 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
 export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState {
   if (!Number.isFinite(ev.seq) || ev.seq <= s.lastSeq) return s
   const p = ev.payload ?? {}
+  // Nexen v0.12.0 (N2) derives a durable `tool_use` / `tool_result` event
+  // next to every raw frame that carries such a block. The exec pane still
+  // reads tool activity from the raw `assistant` / `user` frames (P-B2), so
+  // until a later phase consumes the derived kinds they only advance the
+  // seq — appending them as messages would leave invisible entries behind.
+  if (N2_TOOL_KINDS.has(ev.kind)) return { ...s, lastSeq: ev.seq }
+
   let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq }, ev, p)
 
   if (!isLifecycleKind(ev.kind)) {

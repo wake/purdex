@@ -8,7 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-shellwords v1.0.13
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
-	lab.protype.tw/wake/nexen v0.11.2
+	lab.protype.tw/wake/nexen v0.12.0
 	modernc.org/sqlite v1.54.0
 )
 
