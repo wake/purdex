@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.402] - 2026-09-18
+
+### Refactor: P-D.3b `Session` 拿掉 legacy relay 欄位、fixture 清掃（#1207）— P-D 完結
+
+P-D 最後一支。daemon 從 alpha.396 起就不送 `cc_session_id`／`cc_model`／`has_relay`，SPA 這邊把 `Session` 型別的三個欄位刪掉，31 個測試檔的 fixture 用一條三規則的 `sed -E` 掃完（單行中段／單行開頭／三行式），**零檔手修**，`tsc -p tsconfig.app.json` 一次過。`handoff-gate.ts` 第三順位的 `session.cc_session_id` fallback 是死碼（沒有 daemon 會設）一併拆掉，`PaneLayoutRenderer` 不再為了它訂閱 session row；測試裡最後幾個無理由餵 `'stream'` 的 fixture 改成 `terminal`，刻意餵舊 daemon 值的留著並加「Legacy input」註解。`src/locales` 的 `stream.*` i18n key 是 exec pane 的 `StreamInput` 在用，只是名字 legacy，不動。純機械 PR，不派 codex；vitest 6970、lint、build 綠，`grep cc_session_id|cc_model|has_relay` 在 `spa/src` 歸零（含註解）。
+
+P-D 全程（alpha.395／396／400／402）：Go −13.6K 行（execution、dispatch、stream、relay、bridge、history 六個套件）、SPA Stream 家族 13 檔；互動 CC ↔ headless 只剩 `nex-handoff`／`nex-takeback`。
+
 ## [1.0.0-alpha.401] - 2026-09-18
 
 ### Feature: 主機的 self alias 可以從 API／CLI／Peers 頁設定（#1196；#1200 #1201 #1202 #1205）
