@@ -1673,7 +1673,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Mutation record (§8.2 deliverable) — M1–M23
+### Task 6: Mutation record (§8.2 deliverable) — M1–M24
 
 **Files:**
 - Create: `docs/plans/2026-09-18-peer-pairing-d2-mutations.md`
@@ -1705,12 +1705,13 @@ Each row: apply the one-edit mutation, run the named test with `npx vitest run <
 | M21 | in `PeersSection`, render `<span>{host.token}</span>` inside the `peers-self` line (a deliberate D-8 leak) | `PeersSection.tsx` | "never renders a token value (spec D-8)" |
 | M22 | in `PeersSection`, delete the `peers-self` paragraph | `PeersSection.tsx` | "renders the §5.3 row: three names labelled…" (`peers-self` missing) |
 | M23 | in `matchReturnEntry`, return `rows[0] ?? null` | `peer-pairing.ts` | "returns the row whose host_id is ours" (first row is the stranger) and "falls back to URL only for a row with no host_id" (the `stranger:1` row would be returned) |
+| M24 | in `loadPairings`, change the first `emit({ ...snap })` back to `emit(snap)` (alias the object the settles reassign `rows` on) | `peer-pairing-load.ts` | fixture test "joins by host_id … ends bidirectional" (`snaps[0].rows[0].outbound` is no longer `'pending'`; `snaps[0]` is `snaps[1]`) |
 
 - [ ] **Step 1: Run every row, record, revert**
 - [ ] **Step 2: `git status --short` shows only the record; commit**
 
 ```bash
-git commit --only docs/plans/2026-09-18-peer-pairing-d2-mutations.md -m "docs(plan): D2 mutation-test record (M1–M23 all red)
+git commit --only docs/plans/2026-09-18-peer-pairing-d2-mutations.md -m "docs(plan): D2 mutation-test record (M1–M24 all red)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
