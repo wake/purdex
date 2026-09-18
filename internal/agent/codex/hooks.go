@@ -12,7 +12,13 @@ import (
 	"github.com/wake/purdex/internal/agent"
 )
 
-const codexHooksSupportedVersion = "0.124.0"
+const codexHooksSupportedVersion = "0.153.4"
+
+// codexRetiredUpstreamEvents are hooks.json keys the pre-0.153 installer
+// wrote that codex never fires (#1159). Install and remove strip pdx-owned
+// entries under them and drop the key when it empties; third-party entries
+// are left alone.
+var codexRetiredUpstreamEvents = []string{"Notification", "StopFailure"}
 
 func (p *Provider) InstallHooks(pdxPath string) error {
 	home, err := os.UserHomeDir()
@@ -282,6 +288,7 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 		hooksFile["hooks"] = hooks
 		return nil
 	}
+	stripRetiredPdxCodexEntries(hooks)
 	for _, spec := range codexEventSpecs {
 		installable := agent.IsInstallableHookSpec(spec)
 		if !installable {
@@ -308,6 +315,29 @@ func mergeCodexHooksFile(hooksFile map[string]any, pdxPath string, remove bool) 
 	hooksFile["hooks"] = hooks
 	return nil
 
+}
+
+// stripRetiredPdxCodexEntries removes pdx-owned entries under retired keys
+// and deletes the key when nothing else lives there. Non-array values are
+// not ours to interpret and are preserved as-is. The remove path does not
+// call this: its all-keys loop already strips them because
+// codexOwnedCleanupEventNames includes the retired names.
+func stripRetiredPdxCodexEntries(hooks map[string]any) {
+	for _, key := range codexRetiredUpstreamEvents {
+		existing, ok := hooks[key]
+		if !ok {
+			continue
+		}
+		if _, isArr := existing.([]any); !isArr {
+			continue
+		}
+		entries := filterOutPdxCodexKnownEvents(existing)
+		if len(entries) == 0 {
+			delete(hooks, key)
+		} else {
+			hooks[key] = entries
+		}
+	}
 }
 
 func readCodexHooksFile(path string) (map[string]any, error) {
@@ -709,7 +739,8 @@ func codexKnownEventNames() map[string]bool {
 }
 
 // codexOwnedCleanupEventNames is the two-set union per spec §6.1 invariant
-// 6 post-cleanup: installable specs' UpstreamKeys ∪ PurdexName. codex has
+// 6 post-cleanup: installable specs' UpstreamKeys ∪ PurdexName ∪ retired
+// upstream keys ∪ Pdx+retired (cleanup only; never installed). codex has
 // one-to-one upstream/Pdx mapping so pre-W2 command-tail tokens (e.g.
 // `Stop`) are still recognised via the UpstreamKey leg; the redundant
 // legacy Name set retired in PR-W2-cleanup-followup (plan §5.3 CLEANUP-T1)
@@ -724,6 +755,10 @@ func codexOwnedCleanupEventNames() map[string]bool {
 			owned[key] = true
 		}
 		owned[spec.PurdexName] = true
+	}
+	for _, key := range codexRetiredUpstreamEvents {
+		owned[key] = true
+		owned["Pdx"+key] = true
 	}
 	return owned
 }
