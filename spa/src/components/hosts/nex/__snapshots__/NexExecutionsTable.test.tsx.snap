@@ -1,0 +1,380 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`NexExecutionsTable > renders a fixed dataset identically (DOM snapshot) 1`] = `
+<div>
+  <div>
+    <div
+      class="flex items-center justify-between mb-3"
+    >
+      <h3
+        class="text-sm font-semibold text-text-primary"
+      >
+        Executions
+      </h3>
+      <div
+        class="flex items-center gap-3"
+      >
+        <label
+          class="inline-flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer"
+        >
+          <input
+            type="checkbox"
+          />
+          Show archived
+        </label>
+        <button
+          class="flex items-center gap-1 text-xs text-text-secondary hover:text-accent cursor-pointer"
+          type="button"
+        >
+          <svg
+            fill="currentColor"
+            height="12"
+            viewBox="0 0 256 256"
+            width="12"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-23.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z"
+            />
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+    <div
+      class="border border-border-subtle rounded-lg overflow-x-auto"
+    >
+      <table
+        class="w-full text-sm"
+      >
+        <thead>
+          <tr
+            class="bg-surface-tertiary text-text-secondary text-xs"
+          >
+            <th
+              class="text-left px-3 py-2"
+            >
+              State
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              ID
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              Provider
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              Directory
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              Brief
+            </th>
+            <th
+              class="text-right px-3 py-2"
+            >
+              Observers
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              Lease
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              Last turn
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              Updated
+            </th>
+            <th
+              class="text-right px-3 py-2"
+            />
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            class="border-t border-border-subtle hover:bg-surface-secondary/30"
+          >
+            <td
+              class="px-3 py-2 whitespace-nowrap"
+            >
+              <span
+                class="inline-block w-2 h-2 rounded-full bg-green-400"
+                title="running"
+              />
+              <span
+                class="ml-1.5 text-xs text-text-muted"
+              >
+                running
+              </span>
+            </td>
+            <td
+              class="px-3 py-2 font-mono text-xs text-text-primary"
+              title="exc_running0000000000000000"
+            >
+              exc_running0
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              claude
+               · standard
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted font-mono truncate max-w-[160px]"
+              title="/Users/w/repo"
+            >
+              repo
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-primary truncate max-w-[240px]"
+            >
+              running one
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right"
+            >
+              1
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted"
+              data-testid="nex-lease-exc_running0000000000000000"
+            >
+              <span
+                title="pdx:mlab/t-me"
+              >
+                pdx:mlab/t-me
+                 (you)
+              </span>
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              completed
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              5m ago
+            </td>
+            <td
+              class="px-3 py-2 text-right"
+            >
+              <div
+                class="flex items-center justify-end gap-1.5"
+              >
+                <button
+                  class="px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-surface-tertiary cursor-pointer"
+                  type="button"
+                >
+                  Open
+                </button>
+                <button
+                  class="px-2 py-1 rounded text-xs cursor-pointer disabled:opacity-50 text-text-secondary hover:text-red-400 hover:bg-surface-tertiary"
+                  type="button"
+                >
+                  Terminate
+                </button>
+                <button
+                  class="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-tertiary cursor-pointer disabled:opacity-50"
+                  type="button"
+                >
+                  Archive
+                </button>
+              </div>
+            </td>
+          </tr>
+          <tr
+            class="border-t border-border-subtle hover:bg-surface-secondary/30"
+          >
+            <td
+              class="px-3 py-2 whitespace-nowrap"
+            >
+              <span
+                class="inline-block w-2 h-2 rounded-full bg-amber-400"
+                title="idle"
+              />
+              <span
+                class="ml-1.5 text-xs text-text-muted"
+              >
+                idle
+              </span>
+            </td>
+            <td
+              class="px-3 py-2 font-mono text-xs text-text-primary"
+              title="exc_idle00000000000000000000"
+            >
+              exc_idle0000
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              claude
+               · standard
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted font-mono truncate max-w-[160px]"
+              title="/Users/w/repo"
+            >
+              repo
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-primary truncate max-w-[240px]"
+            >
+              idle one
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right"
+            >
+              1
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted"
+              data-testid="nex-lease-exc_idle00000000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              3h ago
+            </td>
+            <td
+              class="px-3 py-2 text-right"
+            >
+              <div
+                class="flex items-center justify-end gap-1.5"
+              >
+                <button
+                  class="px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-surface-tertiary cursor-pointer"
+                  type="button"
+                >
+                  Open
+                </button>
+                <button
+                  class="px-2 py-1 rounded text-xs cursor-pointer disabled:opacity-50 text-text-secondary hover:text-red-400 hover:bg-surface-tertiary"
+                  type="button"
+                >
+                  Terminate
+                </button>
+                <button
+                  class="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-tertiary cursor-pointer disabled:opacity-50"
+                  type="button"
+                >
+                  Archive
+                </button>
+              </div>
+            </td>
+          </tr>
+          <tr
+            class="border-t border-border-subtle hover:bg-surface-secondary/30"
+          >
+            <td
+              class="px-3 py-2 whitespace-nowrap"
+            >
+              <span
+                class="inline-block w-2 h-2 rounded-full bg-text-muted"
+                title="terminated"
+              />
+              <span
+                class="ml-1.5 text-xs text-text-muted"
+              >
+                terminated
+              </span>
+            </td>
+            <td
+              class="px-3 py-2 font-mono text-xs text-text-primary"
+              title="exc_archived0000000000000000"
+            >
+              exc_archived
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              claude
+               · standard
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted font-mono truncate max-w-[160px]"
+              title="/Users/w/repo"
+            >
+              repo
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-primary truncate max-w-[240px]"
+            >
+              archived one
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right"
+            >
+              1
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted"
+              data-testid="nex-lease-exc_archived0000000000000000"
+            >
+              <span
+                title="pdx:air/t-other"
+              >
+                pdx:air/t-other
+              </span>
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              completed
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted whitespace-nowrap"
+            >
+              2d ago
+            </td>
+            <td
+              class="px-3 py-2 text-right"
+            >
+              <div
+                class="flex items-center justify-end gap-1.5"
+              >
+                <button
+                  class="px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-surface-tertiary cursor-pointer"
+                  type="button"
+                >
+                  Open
+                </button>
+                <button
+                  class="px-2 py-1 rounded text-xs cursor-pointer disabled:opacity-50 text-text-secondary hover:text-red-400 hover:bg-surface-tertiary"
+                  type="button"
+                >
+                  Terminate
+                </button>
+                <button
+                  class="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-tertiary cursor-pointer disabled:opacity-50"
+                  type="button"
+                >
+                  Unarchive
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+`;

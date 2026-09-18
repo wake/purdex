@@ -240,6 +240,26 @@ describe('NexExecutionsTable', () => {
     expect(screen.getByTestId('nex-lease-exc_ffffffffffffffff')).toHaveTextContent('—')
   })
 
+  // DOM preservation across the shared-store migration (P-C.2 task 3): a
+  // fixed dataset — running / idle / archived (toggle off) — captured once,
+  // rows + toggle + action buttons must stay byte-identical afterwards.
+  it('renders a fixed dataset identically (DOM snapshot)', async () => {
+    const NOW = 1_800_000_000_000
+    vi.setSystemTime(NOW)
+    vi.mocked(api.listExecutions).mockResolvedValue({
+      items: [
+        row({ id: 'exc_running0000000000000000', state: 'running', brief: 'running one\nmore', updated_at: NOW - 5 * 60_000 }),
+        row({ id: 'exc_idle00000000000000000000', state: 'idle', brief: 'idle one', updated_at: NOW - 3 * 3_600_000, lease: undefined, last_turn_reason: null }),
+        row({ id: 'exc_archived0000000000000000', state: 'terminated', brief: 'archived one', updated_at: NOW - 2 * 86_400_000, archived: true, lease: { principal_id: 'pdx:air/t-other', expires_at: 1 } }),
+      ],
+      next_cursor: '',
+    })
+    const { container } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getAllByRole('row')).toHaveLength(4)
+    expect(container).toMatchSnapshot()
+  })
+
   it('renders rows and re-enables actions after an action, even under StrictMode (React 19 dev double-invokes effects)', async () => {
     render(
       <StrictMode>
