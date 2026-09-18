@@ -4,7 +4,7 @@
 // is the contract these tests pin.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
-import { HandoffApiError, nexHandoff, nexTakeback } from './handoff-api'
+import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal } from './handoff-api'
 import { NEX_CLIENT_ID_RE } from './client-id'
 
 const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
@@ -24,6 +24,8 @@ async function rejection(p: Promise<unknown>): Promise<HandoffApiError> {
 }
 
 const takebackBody = { expected_tmux_instance: 'i', execution_id: 'e', resume_command: 'r {id}' }
+const toTerminalBody = { session_name: 'purdex-3', resume_command: 'claude --resume {id}' }
+const toTerminalOk = { session: { code: 'ab12cd', name: 'purdex-3', cwd: '/w', mode: 'terminal', tmux_instance: '1:2' }, session_id: 'sid-1', archived: true }
 
 describe('handoff-api', () => {
   let hostId: string
@@ -181,6 +183,70 @@ describe('handoff-api', () => {
       testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
       err = await rejection(nexTakeback(hostId, 'c1', takebackBody))
       expect(err).toMatchObject({ status: 0, code: 'network', body: {} })
+    })
+  })
+
+  describe('nexTakeToTerminal (exec-to-terminal spec §4.1)', () => {
+    it('POSTs JSON to /api/nex/executions/{id}/take-to-terminal with Bearer + X-Pdx-Client', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(toTerminalOk))
+      await nexTakeToTerminal(hostId, 'exc_1', { ...toTerminalBody, lease_id: 'ls_1' })
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/nex/executions/exc_1/take-to-terminal')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(init.body)).toEqual({ session_name: 'purdex-3', resume_command: 'claude --resume {id}', lease_id: 'ls_1' })
+      const h = new Headers(init.headers)
+      expect(h.get('Content-Type')).toBe('application/json')
+      expect(h.get('Authorization')).toBe('Bearer tok-1')
+      expect(h.get('X-Pdx-Client')).toMatch(NEX_CLIENT_ID_RE)
+    })
+
+    it('encodes the execution id in the path and omits lease_id when not given', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(toTerminalOk))
+      await nexTakeToTerminal(hostId, 'a b/c', toTerminalBody)
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/nex/executions/a%20b%2Fc/take-to-terminal')
+      expect(JSON.parse(init.body)).toEqual(toTerminalBody)
+    })
+
+    it('200 is parsed into NexTakeToTerminalResult (session + session_id + archived)', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(toTerminalOk))
+      const r = await nexTakeToTerminal(hostId, 'exc_1', toTerminalBody)
+      expect(r).toEqual(toTerminalOk)
+    })
+
+    it('409 session_exists keeps session_name', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'exists', code: 'session_exists', session_name: 'purdex-3' }, 409))
+      const err = await rejection(nexTakeToTerminal(hostId, 'exc_1', toTerminalBody))
+      expect(err.status).toBe(409)
+      expect(err.code).toBe('session_exists')
+      expect(err.body.session_name).toBe('purdex-3')
+    })
+
+    it('500 session_create_failed keeps session_name / session_alive', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'list failed', code: 'session_create_failed', session_name: 'purdex-3', session_alive: true }, 500))
+      const err = await rejection(nexTakeToTerminal(hostId, 'exc_1', toTerminalBody))
+      expect(err.status).toBe(500)
+      expect(err.code).toBe('session_create_failed')
+      expect(err.body).toMatchObject({ session_name: 'purdex-3', session_alive: true })
+    })
+
+    it('504 cc_start_timeout keeps session_id; network → network', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'timeout', code: 'cc_start_timeout', session_id: 'sid-9' }, 504))
+      let err = await rejection(nexTakeToTerminal(hostId, 'exc_1', toTerminalBody))
+      expect(err).toMatchObject({ status: 504, code: 'cc_start_timeout' })
+      expect(err.body.session_id).toBe('sid-9')
+
+      testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      err = await rejection(nexTakeToTerminal(hostId, 'exc_1', toTerminalBody))
+      expect(err).toMatchObject({ status: 0, code: 'network', body: {} })
+    })
+
+    it('against a host id the store no longer holds → host_removed, no fetch', async () => {
+      useHostStore.getState().addHost({ id: 'host-other', name: 'other', ip: '100.64.0.4', port: 7860, token: 'tok-2' })
+      useHostStore.getState().removeHost(hostId)
+      const err = await rejection(nexTakeToTerminal(hostId, 'exc_1', toTerminalBody))
+      expect(err).toMatchObject({ status: 0, code: 'host_removed', body: {} })
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
     })
   })
 
