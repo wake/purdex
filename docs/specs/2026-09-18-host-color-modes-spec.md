@@ -24,7 +24,7 @@ v2 lab's "display mode B" (color on the tab icon itself) and equal-width spacer 
 | D5 | Hover = active: both use `main`. No separate hover color. |
 | D6 | The per-surface **icon opacity / background opacity** settings (`hostBadge*LineOpacity`, `hostBadge*BgOpacity`) are **removed** — opacity now lives in each host's color layers. Per-surface `Enabled` / `LineColor` (host | neutral) / `Box` / `Inset` / `Radius` stay. |
 | D7 | The remaining numeric fields in Settings get a **visible caption above each input** (the user could not tell what "100 % 22 % 16 px 2 px 4 px" meant). |
-| D8 | Host color picking = a **popover** per layer with hue / saturation / lightness / alpha sliders, hex input and live preview; edits write to the store immediately so tab rows update while dragging. No new dependency; `@floating-ui/react` (already a dep) positions the popover. |
+| D8 | Host color picking = an **inline editor panel** per layer (expands under the swatches, the same pattern as `HostIconField`'s icon picker — amended 2026-09-18 from "popover": nothing in the repo uses `@floating-ui/react`, and the user's requirement is the sliders + live preview, not the container) with hue / saturation / lightness / alpha sliders, hex input and live preview; edits write to the store immediately so tab rows update while dragging. No new dependency. |
 | D9 | `✳` strip is a **UI setting** (`stripAgentTitleMarker`, default on). Patterns are keyed by agentType in one table; Codex's marker is added to the same table later when the user supplies a sample (measured 2026-09-18: Codex 0.153.4 sets `pane_title` to the cwd basename only, no marker — so the "animation" the user sees on Codex tabs is probably Purdex's own icon animation, to be confirmed). |
 | D10 | No persist migration (alpha). The legacy `HostConfig.color` is honoured **at read time only** as `colors.console.main.color` with default alphas, so already-configured hosts keep their color. Writing through the new UI writes `colors` and deletes `color`. |
 
@@ -193,16 +193,20 @@ Layout inside the existing `Field label="Color"`:
 2. Row 2 — three **layer swatches** (`Main`, `Middle`, `Light`), each a 26×18 button showing the
    resolved rgba on a checkerboard, with the caption below (`Main · #22c55e 100%`,
    `Middle · inherit 60%`). For a non-console mode with no set, all three render dimmed with the
-   caption `Inherits Console`; clicking any of them first copies `console`'s resolved set into
-   that mode (`setHostColorLayer(main)` with console's main), then opens the popover.
+   caption `Inherits Console`; clicking any of them first copies `console`'s resolved main into
+   that mode (`setHostColorLayer(main)`), then opens the editor. On a host with **no color at
+   all**, clicking any swatch first writes `main` = the first preset at alpha 100 (the store
+   refuses `middle` / `light` writes without a set), then opens that layer.
    A trailing `Prohibit` button = `clearHostColorMode(mode)` (for `console` this is the old
    "No color").
-3. Popover (`components/hosts/HostColorPopover.tsx`, `@floating-ui/react`, closes on outside
-   click / Esc, `role="dialog"` with the layer name as label):
+3. Inline editor (`components/hosts/HostColorLayerEditor.tsx`, rendered under the swatches while a
+   layer is open; `role="group"` with the layer name as label; a Done button and clicking the open
+   swatch again close it; switching mode closes it):
    - `Main`: preset row (the 8 `HOST_COLOR_PRESETS`) → H / S / L sliders → Alpha slider → hex
      input (existing `normalizeHostColor` rules, invalid ⇒ inline error, no write).
    - `Middle` / `Light`: `Inherit main color` toggle (on when `layer.color` is absent). On ⇒ only
-     the Alpha slider. Off ⇒ same H / S / L / hex as Main, initialised from the inherited color.
+     the Alpha slider. Off ⇒ same H / S / L / hex as Main, initialised from the inherited color
+     (turning it off writes the inherited hex explicitly; turning it on drops the layer's color).
    - Every slider `onInput` writes to the store immediately (D8). Sliders are native
      `<input type="range">` styled with a gradient track computed from the current HSL so the
      hue / saturation / lightness axes show what they will produce.

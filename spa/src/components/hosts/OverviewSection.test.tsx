@@ -70,6 +70,7 @@ describe('OverviewSection', () => {
 
   it('renders the host icon field right below the host color field', async () => {
     render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByTestId('host-color-layer-main'))
     const color = screen.getByTestId('host-color-hex')
     const icon = screen.getByTestId('host-icon-preview')
     expect(color.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
