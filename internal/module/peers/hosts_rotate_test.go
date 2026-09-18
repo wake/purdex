@@ -372,22 +372,44 @@ func TestRotateCancel_ForceBypassesGate(t *testing.T) {
 	}
 }
 
+// The gate body is exactly one JSON value or nothing: truncated JSON,
+// trailing garbage after a valid object, and a second object are all 400
+// (codex F1 — a decoder that stops at the first value would silently
+// accept `{"force":true} garbage`). `{}` and an empty body still reach
+// the gate (409 here: the record is empty).
 func TestRotateGates_BadJSON400_Unknown404(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
-	for _, verb := range []string{"commit", "cancel"} {
-		req := httptest.NewRequest(http.MethodPost, "/api/peers/hosts/air/rotate/"+verb, strings.NewReader("{"))
+	raw := func(verb, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/peers/hosts/air/rotate/"+verb, strings.NewReader(body))
 		req = req.WithContext(middleware.WithPrincipal(context.Background(), *adminPrincipal()))
 		mux := http.NewServeMux()
 		m.RegisterRoutes(mux)
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, req)
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("%s bad json = %d", verb, rr.Code)
+		return rr
+	}
+	for _, verb := range []string{"commit", "cancel"} {
+		for _, body := range []string{"{", `{"force":true} garbage`, `{"force":true}{"force":true}`} {
+			if rr := raw(verb, body); rr.Code != http.StatusBadRequest || errorOf(t, rr) != "invalid json" {
+				t.Fatalf("%s body %q = %d %q; want 400 invalid json", verb, body, rr.Code, errorOf(t, rr))
+			}
+		}
+		for _, body := range []string{"{}", ""} {
+			if rr := raw(verb, body); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
+				t.Fatalf("%s body %q = %d %q; want 409 rotation unconfirmed (the body was accepted, the gate refused)", verb, body, rr.Code, errorOf(t, rr))
+			}
 		}
 		if rr := gate(t, m, "ghost", verb, false); rr.Code != http.StatusNotFound {
 			t.Fatalf("%s unknown = %d", verb, rr.Code)
 		}
+	}
+	// A pending entry whose record is intact still commits on a `{}` body
+	// and on an empty body — the strictness is about the body's shape,
+	// not about force.
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+	if rr := raw("commit", ""); rr.Code != http.StatusOK {
+		t.Fatalf("commit with empty body after a current dial = %d; body=%s", rr.Code, rr.Body.String())
 	}
 }
 

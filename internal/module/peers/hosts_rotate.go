@@ -52,12 +52,27 @@ type rotateGateRequest struct {
 	Force bool `json:"force"`
 }
 
-// decodeGateRequest reads an optional {force} body: empty body = no force,
-// invalid JSON = 400.
+// decodeGateRequest reads an optional {force} body: empty body = no force;
+// otherwise the body must be EXACTLY one JSON value — truncated JSON,
+// trailing bytes after the value (`{"force":true} garbage`) and a second
+// value (`{}{}`) are all errors (400). A decoder stops at the end of the
+// first value, so the second Decode must report io.EOF for the body to
+// have been a single value (codex F1).
 func decodeGateRequest(r *http.Request) (rotateGateRequest, error) {
 	var req rotateGateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&req); err != nil {
+		if errors.Is(err, io.EOF) {
+			return rotateGateRequest{}, nil // empty body
+		}
 		return req, err
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("trailing data after json value")
+		}
+		return rotateGateRequest{}, err
 	}
 	return req, nil
 }
