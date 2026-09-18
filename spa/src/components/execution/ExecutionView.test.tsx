@@ -6,8 +6,9 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { NexApiError } from '../../lib/nex/types'
-import { HandoffApiError, nexTakeback } from '../../lib/nex/handoff-api'
-import { takeBack } from '../../lib/nex/handoff'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { HandoffApiError, nexTakeback, nexTakeToTerminal } from '../../lib/nex/handoff-api'
+import { takeBack, takeToTerminal } from '../../lib/nex/handoff'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../../lib/pane-tree'
 import * as api from '../../lib/nex/nex-api'
@@ -24,10 +25,11 @@ vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }
 vi.mock('../../lib/nex/handoff-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/nex/handoff-api')>()),
   nexTakeback: vi.fn(),
+  nexTakeToTerminal: vi.fn(),
 }))
 vi.mock('../../lib/nex/handoff', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/nex/handoff')>()
-  return { ...actual, takeBack: vi.fn(actual.takeBack) }
+  return { ...actual, takeBack: vi.fn(actual.takeBack), takeToTerminal: vi.fn(actual.takeToTerminal) }
 })
 
 const H = 'h', E = 'exc_1', KEY = 'h:exc_1'
@@ -656,5 +658,155 @@ describe('ExecutionView — take-back is refused while another write is in fligh
     await waitFor(() => expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(true))
     await act(async () => { resolveInterrupt({ turn_id: 't1', state: 'idle' }) })
     await waitFor(() => expect((takeBackBtn() as HTMLButtonElement).disabled).toBe(false))
+  })
+})
+
+// ---- exec-to-terminal spec §4.2: "Take to terminal" on every claude execution ----
+
+const mockedToTerminal = vi.mocked(nexTakeToTerminal)
+const mockedTakeToTerminal = vi.mocked(takeToTerminal)
+const newSession = { code: 'nw1234', name: 'repo-1', cwd: '/Users/w/repo', mode: 'terminal', tmux_instance: 'inst-9' }
+const toTerminalOk = { session: newSession, session_id: 'sid-1', archived: true }
+
+/** An execution tab with NO `from` (headless / CLI-delegated). */
+function headlessTab(): { tabId: string; paneId: string } {
+  const tab = createTab({ kind: 'execution', executionId: E, host: H })
+  useTabStore.getState().addTab(tab)
+  return { tabId: tab.id, paneId: getPrimaryPane(tab.layout).id }
+}
+
+describe('ExecutionView — take to terminal (no `from`)', () => {
+  let fetchHost: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useUndoToast.setState({ toast: null })
+    mockedTakeback.mockReset()
+    mockedToTerminal.mockReset()
+    mockedTakeBack.mockClear()
+    mockedTakeToTerminal.mockClear()
+    fetchHost = vi.fn().mockResolvedValue(undefined)
+    useSessionStore.setState({ sessions: {}, fetchHost } as never)
+    useExecutionStore.getState().setLease(H, E, { leaseId: 'ls_1', expiresAt: Date.now() + 100_000 })
+  })
+
+  describe('visibility: provider claude, a session id, and a state the daemon can settle', () => {
+    const cases: Array<[string, Record<string, unknown>, boolean]> = [
+      ['running + session_id', { state: 'running', session_id: 'sid' }, true],
+      ['idle + resume_session_id only', { state: 'idle', resume_session_id: 'rsid' }, true],
+      ['failed + session_id', { state: 'failed', session_id: 'sid' }, true],
+      ['terminated + session_id', { state: 'terminated', session_id: 'sid' }, true],
+      ['queued + resume_session_id (daemon would answer execution_not_settled)', { state: 'queued', resume_session_id: 'rsid' }, false],
+      ['rejected + session_id', { state: 'rejected', session_id: 'sid' }, false],
+      ['idle without any session id', { state: 'idle' }, false],
+      ['idle + session_id but provider codex', { state: 'idle', session_id: 'sid', provider: 'codex' }, false],
+    ]
+    it.each(cases)('%s → %s', (_name, extra, shown) => {
+      useExecutionStore.getState().setSummary(H, E, summary(extra) as never)
+      render(<ExecutionView {...base} {...headlessTab()} isActive />)
+      expect(screen.queryByTestId('take-back') !== null).toBe(shown)
+    })
+
+    it('no summary yet → hidden', () => {
+      useExecutionStore.setState({ executions: {} })
+      useExecutionStore.getState().setHistoryLoaded(H, E, true)
+      render(<ExecutionView {...base} {...headlessTab()} isActive />)
+      expect(screen.queryByTestId('take-back')).toBeNull()
+    })
+
+    it('with `from` the control is there regardless (codex, queued): the session-bound path decides', () => {
+      useExecutionStore.getState().setSummary(H, E, summary({ state: 'queued', provider: 'codex' }) as never)
+      render(<ExecutionView {...base} {...executionTab()} from={from} isActive />)
+      expect(screen.getByTestId('take-back')).toBeInTheDocument()
+    })
+
+    it('the label is "Take to terminal" in both cases', () => {
+      useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+      const { unmount } = render(<ExecutionView {...base} {...headlessTab()} isActive />)
+      expect(takeBackBtn().textContent).toContain('Take to terminal')
+      unmount()
+      render(<ExecutionView {...base} {...executionTab()} from={from} isActive />)
+      expect(takeBackBtn().textContent).toContain('Take to terminal')
+    })
+  })
+
+  it('idle → no confirm; takeToTerminal (not takeBack) called with the summary cwd, the held lease id and the hook\'s forget; pane becomes the new session; success toast', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid', cwd: '/Users/w/repo' }) as never)
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    const ids = headlessTab()
+    render(<ExecutionView {...base} {...ids} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(screen.queryByTestId('takeback-dialog')).toBeNull()
+    expect(mockedTakeBack).not.toHaveBeenCalled()
+    expect(mockedTakeToTerminal).toHaveBeenCalledTimes(1)
+    expect(mockedTakeToTerminal).toHaveBeenCalledWith({ hostId: H, executionId: E, cwd: '/Users/w/repo', leaseId: 'ls_1', tabId: ids.tabId, paneId: ids.paneId, forgetLease: forget })
+    expect(mockedToTerminal).toHaveBeenCalledWith(H, E, { session_name: 'repo-1', resume_command: 'claude --resume {id}', lease_id: 'ls_1' })
+    expect(forget).toHaveBeenCalledTimes(1)
+    expect(paneContent(ids.tabId)).toEqual({ kind: 'tmux-session', hostId: H, sessionCode: 'nw1234', mode: 'terminal', cachedName: 'repo-1', tmuxInstance: 'inst-9' })
+    expect(toast()?.message).toBe('Back in the terminal; the execution is archived.')
+    expect(fetchHost).toHaveBeenCalledWith(H)
+  })
+
+  it('omits leaseId when this tab holds no lease', async () => {
+    useExecutionStore.getState().setLease(H, E, null)
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    render(<ExecutionView {...base} {...headlessTab()} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(mockedTakeToTerminal.mock.calls[0][0].leaseId).toBeUndefined()
+    expect(mockedToTerminal.mock.calls[0][2]).not.toHaveProperty('lease_id')
+  })
+
+  it('running → the shared confirm dialog first; Cancel sends nothing, Confirm calls takeToTerminal', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running', session_id: 'sid' }) as never)
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    render(<ExecutionView {...base} {...headlessTab()} isActive />)
+    fireEvent.click(takeBackBtn())
+    expect(screen.getByTestId('takeback-dialog')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('takeback-cancel'))
+    expect(mockedTakeToTerminal).not.toHaveBeenCalled()
+    fireEvent.click(takeBackBtn())
+    await act(async () => { fireEvent.click(screen.getByTestId('takeback-confirm')) })
+    expect(mockedTakeToTerminal).toHaveBeenCalledTimes(1)
+    expect(mockedTakeBack).not.toHaveBeenCalled()
+  })
+
+  it('the control is busy while the request is in flight; a failure re-enables it, leaves the pane and the lease alone and toasts the mapped message', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+    const d = deferred<typeof toTerminalOk>()
+    mockedToTerminal.mockReturnValueOnce(d.promise)
+    const ids = headlessTab()
+    render(<ExecutionView {...base} {...ids} isActive />)
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(takeBackBtn().disabled).toBe(true))
+    fireEvent.click(takeBackBtn())
+    expect(mockedToTerminal).toHaveBeenCalledTimes(1)
+    await act(async () => { d.resolve(toTerminalOk) })
+
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(409, 'cwd_missing', { code: 'cwd_missing' }))
+    const ids2 = headlessTab()
+    render(<ExecutionView {...base} {...ids2} isActive />)
+    await act(async () => { fireEvent.click(screen.getAllByTestId('take-back').at(-1)!) })
+    expect(toast()?.message).toBe("The execution's working directory no longer exists on the host.")
+    expect(paneContent(ids2.tabId).kind).toBe('execution')
+    await waitFor(() => expect((screen.getAllByTestId('take-back').at(-1) as HTMLButtonElement).disabled).toBe(false))
+  })
+
+  it('cc_start_timeout with session_id → manual-resume line (the daemon killed the session it created)', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+    mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(504, 'cc_start_timeout', { code: 'cc_start_timeout', session_id: 'sid-4' }))
+    render(<ExecutionView {...base} {...headlessTab()} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(toast()?.message).toBe('Claude Code did not start in the pane in time.\nResume by hand: claude --resume sid-4')
+    expect(forget).not.toHaveBeenCalled()
+  })
+
+  it('session_create_failed with session_alive → the session list is refreshed so the orphan shows up', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+    mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(500, 'session_create_failed', { code: 'session_create_failed', session_name: 'repo-1', session_alive: true }))
+    render(<ExecutionView {...base} {...headlessTab()} isActive />)
+    await act(async () => { fireEvent.click(takeBackBtn()) })
+    expect(toast()?.message).toBe('Could not create the tmux session repo-1; check the session list.')
+    expect(fetchHost).toHaveBeenCalledWith(H)
   })
 })
