@@ -101,9 +101,38 @@ measured on `4b7f4aee` (alpha.402). One PR (daemon + SPA, estimated
   session id, present with `from` regardless; click → `takeToTerminal`
   called with the summary cwd.
 
-## T6 acceptance + PR
+## T6 daemon hand-off: `keep_session` (TDD)
 
-Spec §6 on :5175 (worktree dev server) against mlab daemon rebuilt from
+- `handoff.go:95` `handoffRequest` gains `KeepSession *bool`
+  (`json:"keep_session,omitempty"`; nil → true). After the point where the
+  execution is confirmed running and `connected` is broadcast (find the
+  `writeJSON(w, 200 …)` and the step before it), when `!keep`:
+  `m.tmux.KillSession(sess.Name)`; success → response `session_kept:false`;
+  error → logged, `session_kept:true`. Response struct gains `SessionKept
+  bool json:"session_kept"`.
+- Tests in `handoff_test.go` (fakes already there; `FakeExecutor.KillSession`
+  exists at `internal/tmux/fake_executor.go:241`): absent field → no kill,
+  `session_kept:true`; `false` → kill called once with the session name
+  **after** delegate succeeded, `session_kept:false`; kill error → no
+  failure, `session_kept:true`; delegate rejected → no kill.
+
+## T7 SPA hand-off dialog + `from` (TDD)
+
+- `HandoffConfirmDialog.tsx`: checkbox `keep-session` (label
+  `handoff.keep_session`, default checked; remembered in
+  `localStorage['purdex-handoff-keep-session']` with try/catch); when the
+  session has other panes (count via `useTabStore` panes bound to the same
+  host+code, minus this one) the body appends `handoff.other_panes` with N.
+- `handoff-api.ts` request type `keep_session?: boolean`, result
+  `session_kept: boolean`; `handoff.ts` `handToNex` takes `keepSession`,
+  sends it, and builds `from` only when `result.session_kept`.
+- Tests: dialog default/remembered state, N-panes warning, `handToNex`
+  omits `from` on `session_kept:false`, includes it on `true`; ExecutionView
+  then shows Take to terminal routed to `takeToTerminal` for that pane.
+
+## T8 acceptance + PR
+
+Spec §6 (incl. 7–8) on :5175 (worktree dev server) against mlab daemon rebuilt from
 this branch (`make build` → new-inode copy → `stop`/`start`). Fork does
 steps 2–6 with playwright `exec-to-terminal`; token via the awk one-liner
 only. PR → R1 → attacker → critic → bump.
