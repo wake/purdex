@@ -253,4 +253,21 @@ describe('FloatingPanel', () => {
     rerender(<TwoPanelToggleHarness open1={false} onCloseFirst={() => {}} onCloseSecond={() => {}} />)
     expect(document.activeElement).toBe(inside2)
   })
+
+  it('falls back to its own anchor when the previously focused element is gone', () => {
+    const { rerender } = render(
+      <TwoPanelToggleHarness open1 open2={false} onCloseFirst={() => {}} onCloseSecond={() => {}} />,
+    )
+    // Focus starts in the first panel.
+    expect(document.activeElement).toBe(screen.getByTestId('inside-1'))
+    // Opening the second panel moves focus into it; Second remembers inside-1 as "previously focused".
+    rerender(<TwoPanelToggleHarness open1 open2 onCloseFirst={() => {}} onCloseSecond={() => {}} />)
+    expect(document.activeElement).toBe(screen.getByTestId('inside-2'))
+    // Unmounting the first while the second is open must not touch focus (Second still owns it).
+    rerender(<TwoPanelToggleHarness open1={false} open2 onCloseFirst={() => {}} onCloseSecond={() => {}} />)
+    expect(document.activeElement).toBe(screen.getByTestId('inside-2'))
+    // Unmounting the second: its remembered element (inside-1) is gone, so it falls back to its own anchor.
+    rerender(<TwoPanelToggleHarness open1={false} open2={false} onCloseFirst={() => {}} onCloseSecond={() => {}} />)
+    expect(document.activeElement).toBe(screen.getByTestId('anchor-2'))
+  })
 })

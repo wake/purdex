@@ -113,6 +113,7 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null
     const panel = panelRef.current
+    const anchor = anchorRef.current
     if (panel) {
       const candidates = panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
       const target = Array.from(candidates).find((el) => el.dataset.testid !== 'floating-panel-close')
@@ -125,8 +126,13 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
       // not a courtesy.
       const active = document.activeElement
       const stillOwnsFocus = active === null || active === document.body || (panel?.contains(active) ?? false)
-      if (previouslyFocused && document.contains(previouslyFocused) && stillOwnsFocus) previouslyFocused.focus()
+      if (!stillOwnsFocus) return
+      // The remembered element may itself be gone by the time we unmount (e.g. it
+      // belonged to another panel that closed first) — fall back to our own anchor.
+      const restoreTarget = previouslyFocused?.isConnected ? previouslyFocused : anchor?.isConnected ? anchor : null
+      restoreTarget?.focus()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Track the open-panel stack so Escape (below) only acts on the topmost one.
