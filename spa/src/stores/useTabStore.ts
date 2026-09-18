@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern, PaneRebuildRecord, RebuildPatch, TmuxSessionContent } from '../types/tab'
 import type { FileSource } from '../types/fs'
 import { createTab } from '../types/tab'
-import { getPrimaryPane, findPane, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern, remountLeaf } from '../lib/pane-tree'
+import { getPrimaryPane, findPane, collectLeaves, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern, remountLeaf } from '../lib/pane-tree'
 import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/binding'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
@@ -512,14 +512,39 @@ export const useTabStore = create<TabState>()(
 
       openSingletonTab: (content, opts) => {
         const state = get()
-        // Scan all tabs' primary pane for matching content
-        for (const id of state.tabOrder) {
-          const tab = state.tabs[id]
-          if (!tab) continue
-          const primary = getPrimaryPane(tab.layout)
-          if (contentMatches(primary.content, content)) {
-            get().setActiveTab(id)
-            return id
+        if (content.kind === 'execution') {
+          // Execution panes may live in any leaf (a handoff swaps the pane
+          // in place, which can be a secondary leaf of a split), so scan
+          // every leaf of every tab. Among matches prefer the pane that
+          // carries `from` — it is the one "Take back" can act on — over a
+          // from-less observer pane opened from a deeplink (P-C.3b).
+          let fallback: string | null = null
+          for (const id of state.tabOrder) {
+            const tab = state.tabs[id]
+            if (!tab) continue
+            for (const leaf of collectLeaves(tab.layout)) {
+              if (!contentMatches(leaf.content, content)) continue
+              if (leaf.content.kind === 'execution' && leaf.content.from) {
+                get().setActiveTab(id)
+                return id
+              }
+              fallback ??= id
+            }
+          }
+          if (fallback) {
+            get().setActiveTab(fallback)
+            return fallback
+          }
+        } else {
+          // Scan all tabs' primary pane for matching content
+          for (const id of state.tabOrder) {
+            const tab = state.tabs[id]
+            if (!tab) continue
+            const primary = getPrimaryPane(tab.layout)
+            if (contentMatches(primary.content, content)) {
+              get().setActiveTab(id)
+              return id
+            }
           }
         }
         // Not found — create + insert at caller-supplied position

@@ -268,4 +268,9 @@ describe('parseRoute execution', () => {
     expect(parseRoute(withHost)).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
     expect(tabToUrl('abc123', { kind: 'execution', executionId: 'exc_1' })).toBe('/execution/exc_1')
   })
+  it('ignores `from` — the handed-off session is pane state, not route state', () => {
+    const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+    expect(tabToUrl('abc123', { kind: 'execution', executionId: 'exc_1', host: 'h1', from })).toBe('/execution/h1/exc_1')
+    expect(tabToUrl('abc123', { kind: 'execution', executionId: 'exc_1', from })).toBe('/execution/exc_1')
+  })
 })

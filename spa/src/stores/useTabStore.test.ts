@@ -154,6 +154,69 @@ describe('useTabStore', () => {
     expect(useTabStore.getState().activeTabId).toBe(tab.id)
   })
 
+  describe('openSingletonTab for execution content (P-C.3b)', () => {
+    const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+    const exec = (): PaneContent => ({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
+    const execFrom = (): PaneContent => ({ kind: 'execution', executionId: 'exc_1', host: 'h1', from })
+
+    it('prefers the pane whose content has `from` over a from-less primary match', () => {
+      const plain = createTab(exec())
+      useTabStore.getState().addTab(plain)
+      const session = makeSessionTab('dev001')
+      useTabStore.getState().addTab(session)
+      const primaryId = getPrimaryPane(session.layout).id
+      useTabStore.getState().splitPane(session.id, primaryId, 'h', execFrom())
+      useTabStore.getState().setActiveTab(plain.id)
+
+      const id = useTabStore.getState().openSingletonTab(exec())
+      expect(id).toBe(session.id)
+      expect(useTabStore.getState().activeTabId).toBe(session.id)
+      expect(useTabStore.getState().tabOrder).toHaveLength(2)
+    })
+
+    it('finds a `from` pane sitting in a secondary leaf (no duplicate tab)', () => {
+      const session = makeSessionTab('dev001')
+      useTabStore.getState().addTab(session)
+      const primaryId = getPrimaryPane(session.layout).id
+      useTabStore.getState().splitPane(session.id, primaryId, 'v', execFrom())
+      const other = createTab({ kind: 'dashboard' })
+      useTabStore.getState().addTab(other)
+      useTabStore.getState().setActiveTab(other.id)
+
+      const id = useTabStore.getState().openSingletonTab(execFrom())
+      expect(id).toBe(session.id)
+      expect(useTabStore.getState().activeTabId).toBe(session.id)
+      expect(useTabStore.getState().tabOrder).toHaveLength(2)
+    })
+
+    it('falls back to a from-less match in any leaf when no pane carries `from`', () => {
+      const session = makeSessionTab('dev001')
+      useTabStore.getState().addTab(session)
+      useTabStore.getState().splitPane(session.id, getPrimaryPane(session.layout).id, 'h', exec())
+      const id = useTabStore.getState().openSingletonTab(exec())
+      expect(id).toBe(session.id)
+      expect(useTabStore.getState().tabOrder).toHaveLength(1)
+    })
+
+    it('creates a new tab when nothing matches', () => {
+      const session = makeSessionTab('dev001')
+      useTabStore.getState().addTab(session)
+      const id = useTabStore.getState().openSingletonTab(execFrom())
+      expect(id).not.toBe(session.id)
+      expect(useTabStore.getState().tabOrder).toHaveLength(2)
+      expect(getPrimaryPane(useTabStore.getState().tabs[id].layout).content).toEqual(execFrom())
+    })
+
+    it('non-execution content still scans primary panes only', () => {
+      const session = makeSessionTab('dev001')
+      useTabStore.getState().addTab(session)
+      useTabStore.getState().splitPane(session.id, getPrimaryPane(session.layout).id, 'h', { kind: 'dashboard' })
+      const id = useTabStore.getState().openSingletonTab({ kind: 'dashboard' })
+      expect(id).not.toBe(session.id)
+      expect(useTabStore.getState().tabOrder).toHaveLength(2)
+    })
+  })
+
   describe('openSingletonTab with opts.afterTabId', () => {
     beforeEach(() => {
       useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })

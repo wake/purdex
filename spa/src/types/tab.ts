@@ -97,7 +97,22 @@ export type PaneContent =
   // Execution detail page (M0 dispatch, Task P.12). Observe-only landing when a
   // deeplink cannot focus a live session tab; `host` is the optional daemon hint
   // carried by the deeplink. Never attaches a stdin write path.
-  | { kind: 'execution'; executionId: string; host?: string }
+  //
+  // `from` (P-C.3b): set when the pane was swapped from a tmux session by
+  // "Hand to nex" — the session CC exited in, so "Take back" can resume it
+  // there. Pane-local provenance only: it takes no part in `contentMatches`
+  // or the route, but `openSingletonTab` prefers a pane that carries it.
+  | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom }
+
+/** The tmux session an execution pane was handed off from (spec §4.4). */
+export interface ExecutionFrom {
+  sessionCode: string
+  tmuxInstance: string
+  cachedName: string
+}
+
+/** The `execution` arm of `PaneContent`. */
+export type ExecutionContent = Extract<PaneContent, { kind: 'execution' }>
 
 /** The `tmux-session` arm of `PaneContent`, named so writers can talk about it. */
 export type TmuxSessionContent = Extract<PaneContent, { kind: 'tmux-session' }>
