@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { CaretRight, CaretDown, CircleNotch, Wrench } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { formatDuration } from '../lib/nex/format-duration'
+import { getSummary } from '../lib/nex/tool-summary'
 import type { ToolCallActivity } from '../lib/nex/tool-activity'
 
 export type { ToolCallActivity }
@@ -19,26 +20,6 @@ interface Props {
 }
 
 const SUMMARY_MAX = 80
-
-function getSummary(tool: string, input: Record<string, unknown>): string {
-  switch (tool) {
-    case 'Bash':
-      return (input.command as string) ?? ''
-    case 'Read':
-    case 'Write':
-    case 'Edit':
-      return (input.file_path as string) ?? ''
-    case 'WebFetch':
-      return (input.url as string) ?? ''
-    case 'Grep':
-    case 'Glob':
-      return (input.pattern as string) ?? ''
-    case 'Agent':
-      return (input.description as string) ?? ''
-    default:
-      return JSON.stringify(input).slice(0, 80)
-  }
-}
 
 function TimingBadge({ activity, t }: { activity: ToolCallActivity; t: (key: string) => string }) {
   switch (activity.status) {
