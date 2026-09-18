@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { loadPairings, type PairingApi, type PairingAppHost, type PairingSnapshot } from './peer-pairing-load'
-import type { PeerHostRow, PeerHostVerify } from './host-api'
+import { HostApiError, type PeerHostRow, type PeerHostVerify } from './host-api'
 import { pairStatus } from './peer-pairing'
 
 const X: PairingAppHost = { hostId: 'hM', name: 'mlab', url: 'http://100.64.0.2:7860', status: 'connected' }
@@ -109,6 +109,12 @@ describe('loadPairings — page-level preconditions (§5.2 step 0)', () => {
     expect(final.rows).toEqual([])
     expect(a.verify).not.toHaveBeenCalled()
   })
+  it('a HostApiError on list(X) surfaces the daemon detail, not the status line', async () => {
+    const a = fakeApi({ info: { hM: 'm:1' }, settings: { hM: 'm' },
+      list: { hM: new HostApiError(403, 'Forbidden', 'admin required') } })
+    const final = await loadPairings(X, [], a, () => {})
+    expect(final.error).toEqual({ call: 'list', message: 'admin required' })
+  })
 })
 
 describe('loadPairings — the return side (§5.1 inbound states)', () => {
@@ -171,6 +177,14 @@ describe('loadPairings — the return side (§5.1 inbound states)', () => {
       list: { hM: [row({})] }, verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb') } })
     const final = await loadPairings(X, [AIR], a, () => {})
     expect(final.rows[0].counterpartCause).toBe('info: HTTP 502')
+    expect(final.rows[0].inbound).toBe('counterpart-unavailable')
+  })
+
+  it('a connected host whose info() rejects with a HostApiError is unavailable with "info: <detail>"', async () => {
+    const a = fakeApi({ info: { hM: 'mini-lab:278cbm', hA: new HostApiError(502, 'Bad Gateway', 'upstream down') },
+      settings: { hM: 'mini-lab', hA: 'air26' }, list: { hM: [row({})] }, verify: { 'hM/air': ok('air', 'air26', 'wakes-air-2026:oa6drb') } })
+    const final = await loadPairings(X, [AIR], a, () => {})
+    expect(final.rows[0].counterpartCause).toBe('info: upstream down')
     expect(final.rows[0].inbound).toBe('counterpart-unavailable')
   })
 

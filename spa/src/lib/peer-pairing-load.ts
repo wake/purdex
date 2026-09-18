@@ -6,7 +6,7 @@
 // ≤ 2 per other connected host, 1 list per host that is somebody's
 // counterpart, and ≤ 2n verifies — all in parallel; nothing cached across
 // runs (spec D-6: a stale green is the thing this page exists to remove).
-import type { PeerHostRow, PeerHostVerify, PeerSettings } from './host-api'
+import { HostApiError, type PeerHostRow, type PeerHostVerify, type PeerSettings } from './host-api'
 import type { HostRuntime } from '../stores/useHostStore'
 import { matchCounterpart, matchReturnEntry, toOutcome, type CounterpartCandidate, type InboundState, type Side } from './peer-pairing'
 
@@ -43,7 +43,8 @@ export interface PairingSnapshot {
   rows: PairingRow[]
 }
 
-const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
+// Page-level and per-host causes carry the daemon's own `{error}` text when there is one.
+const msg = (e: unknown) => (e instanceof HostApiError ? e.detail : e instanceof Error ? e.message : String(e))
 
 type Meta =
   | { hostId: string; name: string; url: string; available: true; host_id: string; self_alias: string }
