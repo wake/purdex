@@ -98,7 +98,7 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusConflict, "tmux_instance_mismatch", "session belongs to another tmux generation", nil)
 		return
 	}
-	target := sess.Name + ":0"
+	target := paneTarget(sess)
 	if m.prober.IsAliveFor("cc", target) {
 		writeHandoffError(w, http.StatusConflict, "cc_already_running", "Claude Code is already running in the pane", nil)
 		return
@@ -181,7 +181,7 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keys := strings.ReplaceAll(body.ResumeCommand, "{id}", sid) + "\n"
-	sent, err := m.tmux.SendKeysIfInstance(sess.TmuxID, expected, keys)
+	sent, err := m.tmux.SendKeysIfInstanceTarget(sess.TmuxID, paneWindow, expected, keys)
 	if err != nil {
 		writeHandoffError(w, http.StatusInternalServerError, "send_failed", "sending resume command: "+err.Error(),
 			map[string]any{"session_id": sid})

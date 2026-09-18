@@ -347,6 +347,12 @@ func (f *FakeExecutor) SendKeysRaw(target string, keys ...string) error {
 // at all. An empty expectation matches nothing — unknown authorises no
 // keystroke (spec §4.6.2).
 func (f *FakeExecutor) SendKeysIfInstance(sessionID, expectedInstance string, keys ...string) (bool, error) {
+	return f.SendKeysIfInstanceTarget(sessionID, "", expectedInstance, keys...)
+}
+
+// SendKeysIfInstanceTarget records the windowed target (`$N:<window>`) so a
+// test can assert the send named the pane its liveness checks read.
+func (f *FakeExecutor) SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.FailSendKeys {
@@ -355,7 +361,7 @@ func (f *FakeExecutor) SendKeysIfInstance(sessionID, expectedInstance string, ke
 	if expectedInstance == "" || expectedInstance != f.instance {
 		return false, nil
 	}
-	f.rawKeysCalls = append(f.rawKeysCalls, RawKeysCall{Target: sessionID + ":", Keys: keys})
+	f.rawKeysCalls = append(f.rawKeysCalls, RawKeysCall{Target: sessionID + ":" + window, Keys: keys})
 	return true, nil
 }
 

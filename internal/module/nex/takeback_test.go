@@ -398,7 +398,8 @@ func TestTakebackKeysSubstitutedWithNewlineBySessionID(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	keys := env.tmux.RawKeysSent()
 	require.Len(t, keys, 1)
-	assert.Equal(t, hoTmuxID+":", keys[0].Target, "sent by tmux session id, not name")
+	assert.Equal(t, hoTmuxID+":0", keys[0].Target,
+		"sent by tmux session id to window 0 — the same pane IsAliveFor and waitForCC read (name:0), not the session's active window")
 	assert.Equal(t, []string{"cld-yolo --resume " + tbSessionID + " --verbose\n"}, rawKeysText(env.tmux))
 }
 

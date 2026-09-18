@@ -13,6 +13,20 @@ import (
 	"github.com/wake/purdex/internal/module/session"
 )
 
+// paneWindow is the window every handoff-shaped operation acts on: the
+// session's window 0. Purdex sessions are one window, and the prober and
+// the CC operator address its pane as `<name>:0`.
+const paneWindow = "0"
+
+// paneTarget is the tmux target (`<name>:0`) for every liveness and
+// operator call on the session's pane — one definition, so a send guarded
+// by the generation (SendKeysIfInstanceTarget with paneWindow, by session
+// id) reaches the same pane these checks read rather than whichever
+// window the session has active.
+func paneTarget(sess *session.SessionInfo) string {
+	return sess.Name + ":" + paneWindow
+}
+
 // resolveHandoffOwner asks the agent module who owns the pane, and accepts
 // only a found Claude Code owner with a session id. A lookup error is
 // reported the same way as no owner: either way the identity could not be
@@ -58,17 +72,18 @@ func (m *Module) stopCC(target string) (step string, err error) {
 }
 
 // rollbackHandoff resumes Claude Code in the pane after a rejected
-// delegate: the rendered rollback command is sent by session id, guarded by
-// the same generation the caller expected (so a restart between the
-// post-exit sample and the send delivers nothing), and CC is polled back to
-// life within rollbackWait. Returns whether CC is running again; with no
-// rollback command the shell is left idle and false says so.
+// delegate: the rendered rollback command is sent by session id to window
+// 0 (the pane the liveness checks read), guarded by the same generation
+// the caller expected (so a restart between the post-exit sample and the
+// send delivers nothing), and CC is polled back to life within
+// rollbackWait. Returns whether CC is running again; with no rollback
+// command the shell is left idle and false says so.
 func (m *Module) rollbackHandoff(sess *session.SessionInfo, expected, command, sessionID, target string) bool {
 	if command == "" {
 		return false
 	}
 	keys := strings.ReplaceAll(command, "{id}", sessionID) + "\n"
-	sent, err := m.tmux.SendKeysIfInstance(sess.TmuxID, expected, keys)
+	sent, err := m.tmux.SendKeysIfInstanceTarget(sess.TmuxID, paneWindow, expected, keys)
 	if err != nil {
 		m.logf("nex: handoff %s rollback: send-keys: %v", sess.Code, err)
 		return false

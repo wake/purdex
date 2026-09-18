@@ -804,7 +804,7 @@ func TestHandoffRejectedWithRollbackKeysAndAlive(t *testing.T) {
 
 	keys := env.tmux.RawKeysSent()
 	require.Len(t, keys, 1)
-	assert.Equal(t, hoTmuxID+":", keys[0].Target, "sent by session id, not name")
+	assert.Equal(t, hoTmuxID+":0", keys[0].Target, "sent by session id to window 0 — the pane liveness was read from")
 	assert.Equal(t, []string{"claude --resume " + hoSessionID + "\n"}, rawKeysText(env.tmux))
 }
 

@@ -142,7 +142,7 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusConflict, "no_identity", "no Claude Code session identity for this pane", nil)
 		return
 	}
-	target := sess.Name + ":0"
+	target := paneTarget(sess)
 	if !m.prober.IsAliveFor("cc", target) {
 		writeHandoffError(w, http.StatusConflict, "no_cc", "no Claude Code running in the pane", nil)
 		return

@@ -50,13 +50,20 @@ func ValidInstance(s string) bool {
 // between the caller's decision and the send.
 var sessionIDPattern = regexp.MustCompile(`^\$[0-9]+$`)
 
+// A window, when one is named, is an index. The value is interpolated into
+// the nested send-keys command string, so a name (re-pointable, and free to
+// carry quotes) is not accepted there.
+var windowIndexPattern = regexp.MustCompile(`^[0-9]+$`)
+
 // generationRefusedSentinel is what the else branch prints. It travels back on
 // stdout of the same invocation, which is the only channel that can report the
 // verdict of a condition evaluated inside the server: `if-shell` exits 0
 // whichever branch it took.
 const generationRefusedSentinel = "pdx-generation-refused"
 
-// conditionalSendArgs builds the single tmux invocation.
+// conditionalSendArgs builds the single tmux invocation. The target is
+// `$N:` (the session's active pane) with window == "", or `$N:<window>`
+// (that window's active pane) otherwise.
 //
 // Keys are sent as `-H` hex bytes rather than as a literal string for two
 // reasons. The send is nested inside a tmux COMMAND STRING, which tmux parses
@@ -64,9 +71,12 @@ const generationRefusedSentinel = "pdx-generation-refused"
 // and hex digits are inert under every quoting rule. It also stops tmux's
 // key-name lookup from turning a payload that happens to spell a key name into
 // that key.
-func conditionalSendArgs(sessionID, expectedInstance string, keys ...string) ([]string, error) {
+func conditionalSendArgs(sessionID, window, expectedInstance string, keys ...string) ([]string, error) {
 	if !sessionIDPattern.MatchString(sessionID) {
 		return nil, fmt.Errorf("tmux send-keys: %q is not a session id", sessionID)
+	}
+	if window != "" && !windowIndexPattern.MatchString(window) {
+		return nil, fmt.Errorf("tmux send-keys: %q is not a window index", window)
 	}
 	if !instancePattern.MatchString(expectedInstance) {
 		return nil, fmt.Errorf("%w: %q", ErrUnsafeInstance, expectedInstance)
@@ -75,7 +85,7 @@ func conditionalSendArgs(sessionID, expectedInstance string, keys ...string) ([]
 	var send strings.Builder
 	// Single quotes: tmux expands `$name` inside double quotes, and a session
 	// id starts with `$`. Session ids contain no quote to escape.
-	fmt.Fprintf(&send, "send-keys -t '%s:' -H", sessionID)
+	fmt.Fprintf(&send, "send-keys -t '%s:%s' -H", sessionID, window)
 	for _, k := range keys {
 		for i := 0; i < len(k); i++ {
 			fmt.Fprintf(&send, " %02x", k[i])
@@ -99,7 +109,17 @@ func conditionalSendArgs(sessionID, expectedInstance string, keys ...string) ([]
 // could not be completed — the caller must treat the last as "unknown, nothing
 // sent" rather than as a refusal.
 func (r *RealExecutor) SendKeysIfInstance(sessionID, expectedInstance string, keys ...string) (bool, error) {
-	args, err := conditionalSendArgs(sessionID, expectedInstance, keys...)
+	return r.SendKeysIfInstanceTarget(sessionID, "", expectedInstance, keys...)
+}
+
+// SendKeysIfInstanceTarget is SendKeysIfInstance aimed at one window of the
+// session (`$N:<window>`, that window's active pane) instead of whichever
+// window the session currently has active. A caller whose liveness checks
+// read `<name>:0` sends here with window "0", so the check and the send name
+// the same pane. An empty window is the session's active pane, as
+// SendKeysIfInstance.
+func (r *RealExecutor) SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (bool, error) {
+	args, err := conditionalSendArgs(sessionID, window, expectedInstance, keys...)
 	if err != nil {
 		return false, err
 	}

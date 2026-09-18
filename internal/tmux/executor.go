@@ -56,6 +56,10 @@ type Executor interface {
 	// (true, nil) sent; (false, nil) the server declined; (false, err) the
 	// invocation could not be completed and nothing was sent.
 	SendKeysIfInstance(sessionID, expectedInstance string, keys ...string) (sent bool, err error)
+	// SendKeysIfInstanceTarget is SendKeysIfInstance aimed at `$N:<window>`
+	// — that window's active pane — so a caller whose liveness checks read
+	// `<name>:0` sends to the pane it checked. window must be an index.
+	SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (sent bool, err error)
 	PasteText(target, text string) error
 	PaneCurrentPath(target string) (string, error)
 	PaneSessionName(target string) (string, error)
