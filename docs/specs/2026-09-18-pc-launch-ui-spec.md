@@ -1,6 +1,6 @@
 # Spec — P-C: exec mode launch UI (Headless section, Executions view, handoff)
 
-- Status: v1 draft (2026-09-18)
+- Status: v1.1 (2026-09-18) — codex spec review `task-mu6iu5ek-1jb811` applied (§9)
 - Predecessors: P-A (`2026-09-15-pa-nex-module-spec.md`, nex module + `/api/nex`),
   P-B (`2026-09-15-pb-execution-pane-spec.md`, execution pane + Host → Nex
   page), P-B2 (`2026-09-18-pb2-exec-live-stream-spec.md`, typewriter + tool
@@ -48,8 +48,10 @@ pane.
 - G5 A shared per-host **nex readiness + capabilities** cache so NewTab,
   sidebar and session panes agree on "is nex usable here" without each
   probing `/api/info`.
-- G6 Pure additions. Nothing in the legacy handoff / relay / Stream mode
-  changes; nothing in Nexen changes.
+- G6 Legacy relay / Stream mode **semantics** unchanged (files touched only
+  for the shared lock type, see 4.5); nothing in Nexen changes. The existing
+  Host → Nex components migrate onto the shared stores (4.1, 4.3) so there
+  is one source of nex truth in the SPA, not four.
 
 ### Non-goals
 
@@ -162,13 +164,17 @@ Purdex today (this worktree, alpha.379):
   Liveness: `Prober.IsAliveFor("cc", target)` (`probe/liveness.go:148`).
   Legacy `runHandoff` locks per session (`stream/locks.go`, 409 on
   double-click).
-- F14 Sending a command into a pane from the SPA:
-  `POST /api/sessions/{code}/send-keys {keys, expected_tmux_instance}`
-  (`session/handler.go:373-432`, generation-guarded, 409 on mismatch), SPA
-  wrapper `lib/rebuild/transport.ts:130-145` (`sendKeys(code, command,
-  tmuxInstance)`). Resume command per host from
-  `lib/rebuild/composer.ts:27 resolveResumeCommand` + `lib/resume-templates.ts`
-  (default cc `claude --resume {id}`).
+- F14 Sending a command into a pane: `POST /api/sessions/{code}/send-keys
+  {keys, expected_tmux_instance}` (`session/handler.go:373-432`,
+  generation-guarded, 409 on mismatch); the SPA wrapper is
+  `pinHost(hostId).sendKeys(code, command, tmuxInstance)`
+  (`lib/rebuild/transport.ts:83, 130-145`) — not a top-level function. The
+  daemon's own `tmux.Executor.SendKeys(target, keys)` appends Enter
+  (`internal/tmux/executor.go:298`). Resume command per host:
+  `lib/rebuild/composer.ts:27 resolveResumeCommand(record: PaneRebuildRecord,
+  templates)` + `lib/resume-templates.ts` (default cc `claude --resume {id}`)
+  — P-C adds a sibling `resolveResumeCommandFor(templates, agentType, id)`
+  because take-back has no rebuild record.
 - F15 `SessionPaneContent.tsx:19-130` knows `hostId`, `sessionCode`, `mode`,
   `tmuxInstance`, `session` (`name`, `cwd`, `cc_session_id`); terminal mode
   has **no per-pane action toolbar**; `StatusBar.tsx:546-571` hosts the
@@ -199,8 +205,12 @@ selectReady(hostId): boolean      // phase === 'ready'
   `isNexReady(info)` (existing `nex-ready.ts`) **and** capabilities loaded.
 - `NexCapabilities` in `types.ts` gains typed `brief`, `origin`, `labels`,
   `delegate` per F1 (still `[key]: unknown` for the rest).
-- `useNexHostData` and `NexEngineStatus` are **not** rewritten in P-C
-  (avoid touching the Host page); they may read the store later (issue).
+- `NexEngineStatus` (`hosts/nex/NexEngineStatus.tsx:67-70`) reads
+  `capabilities` and readiness from this store in P-C.1 instead of its own
+  `Promise.all` (its tests move onto the store). `useNexHostData` keeps
+  owning `/api/config` (the editable form) but takes `info`/`phase` from the
+  store, and calls `invalidate(hostId)` in `onConfigSaved`. One truth for
+  "is nex ready here": this store. (codex §9.5)
 - Cleared by `clearHost` in the same cascade as `useExecutionStore.clearHost`.
 
 ### 4.2 P-C.1 — Headless section on NewTab (G1)
@@ -224,21 +234,31 @@ selectReady(hostId): boolean      // phase === 'ready'
     "Hosts → Nex"); `unavailable` → `newtab.headless.unavailable` with the
     error; `loading` → skeleton.
   - `ready` → `HeadlessLauncher` form:
-    - **Brief**: textarea, required, counter `bytes/ max_bytes` (UTF-8 byte
-      length, F1), error above limit.
-    - **Directory**: `<select>` of `roots` (path + kind badge) + a text
-      field "sub-path" (relative, no `..` segments, may be empty); the
-      submitted `cwd` is `root + '/' + sub`. Client-side check is a hint only;
-      the server's `rejected` is the authority (F2). `roots.length === 0` →
-      form disabled with `newtab.headless.no_roots`.
+    - **Brief**: textarea, required, counter `bytes / max_bytes` measured
+      with `new TextEncoder().encode(text).length` (F1 counts UTF-8 bytes),
+      submit blocked above the limit.
+    - **Directory**: `<select>` of `roots` (canonical path + kind badge) + a
+      text field "sub-path". Client rules (hint only; the server's
+      `rejected` is the authority, F2): relative only — rejects a leading
+      `/`, a leading `~`, any `..` segment, and empty segments (`a//b`); no
+      expansion of `~` or env vars; trailing `/` trimmed. Submitted `cwd` =
+      `root.path + '/' + sub` (or `root.path` when empty). Everything the
+      client cannot know — the directory does not exist, a symlink inside
+      the root escapes it — comes back as `state: 'rejected'` with
+      `reject_reason` and is shown inline, never as a 400. `roots.length ===
+      0` → form disabled with `newtab.headless.no_roots`.
     - **Profile**: `<select>` of `sandbox_profiles`, preselected
       `sandbox_default_profile`; a muted note shows `sandbox_max_profile`.
     - Submit: liveness gate (`isHostLive`), `busy` flag, `delegateExecution`
       with `labels: {source: 'purdex'}` and `origin:
       'purdex://host/<hostId>/newtab'`. `state === 'rejected'` → inline error
-      `newtab.headless.rejected` with `reject_reason`; 400 → mapped message;
-      otherwise `onSelect({kind: 'execution', executionId: id, host: hostId})`
-      (the pane becomes the execution, F7).
+      `newtab.headless.rejected` with `reject_reason` (the row exists; the
+      Executions view will show it as rejected); HTTP 400 (`invalid_brief`,
+      `invalid_labels`, `invalid_origin`, `malformed_body` — client bugs or
+      limit drift) → `newtab.headless.bad_request` with the code; 503
+      `nex_unavailable` / network → `newtab.headless.unavailable` and the
+      store is invalidated; otherwise `onSelect({kind: 'execution',
+      executionId: id, host: hostId})` (the pane becomes the execution, F7).
     - Last-used root/profile per host remembered in the launcher's local
       persisted store (like the session launcher's project memory), keyed by
       host.
@@ -255,6 +275,14 @@ selectReady(hostId): boolean      // phase === 'ready'
   reconnect; gated by `useNexHostStore.selectReady`. `NexExecutionsTable`
   switches to the hook in the same PR (pure behaviour move, its 256-line test
   file is the guard).
+- **Connection budget** (codex §9.7): the site-wide stream is a long-lived
+  connection to the same host:port as the execution panes' live SSEs, and
+  P-B capped those at `MAX_LIVE_SUBSCRIPTIONS_PER_HOST = 4` to leave REST
+  room under the browser's 6-per-origin limit. `lib/nex/subscription-slots.ts`
+  gains `reserve(hostId, 'site-wide')` / `unreserve`; while a reservation is
+  held the execution-pane cap for that host is **3** (the LRU eviction rule
+  runs immediately on reserve). The list store holds the reservation for as
+  long as its SSE is open.
 - `ViewDefinition {id: 'executions', label: 'Executions', icon:
   Phosphor `Lightning`, scope: 'system', component: ExecutionsView}`
   registered on the `execution` module (`register-modules/index.tsx:227-231`).
@@ -264,7 +292,9 @@ selectReady(hostId): boolean      // phase === 'ready'
   - list: non-archived, newest first, grouped by `labels.source ?? 'local'`
     (group header i18n: `executions.group.local`, `executions.group.purdex`,
     any other value shown raw — this is the Aigora hook, no Aigora code);
-    row = state dot (`STATE_DOT_CLASSES` from `NexExecutionRow.tsx`),
+    row = state dot (`STATE_DOT_CLASSES` is a file-local const in
+    `NexExecutionRow.tsx:19-26` today — P-C.2 moves it to
+    `lib/nex/state-dot.ts` and both consumers import it),
     brief (1 line, ellipsis), relative age of `updated_at`, and a
     `↩ from <session>` marker when `origin` starts with
     `purdex://host/<hostId>/session/`.
@@ -274,123 +304,184 @@ selectReady(hostId): boolean      // phase === 'ready'
 
 ### 4.4 P-C.3 — Hand to nex / take back (G3, G4)
 
-#### Daemon: one small endpoint, outside the stream module
+Both directions are **daemon-orchestrated under one per-session lock** (the
+legacy `runHandoff` shape, F13); the SPA only composes the resume command,
+asks, and swaps pane content. Rationale (codex spec review §10.1): a thin
+`cc-exit` endpoint releases the lock between "CC exited" and "execution
+delegated", leaving half states on double-click, second client, rejected
+delegate, or tmux restart. In the daemon the whole sequence is atomic per
+session and the embedded Nexen `Service` is a Go call, not an HTTP hop.
 
-`POST /api/sessions/{code}/cc-exit` (session module or a new
-`internal/module/nex/handoff.go` — the nex module already depends on the
-session provider; **not** in `internal/module/stream`, which P-D deletes).
-Body `{expected_tmux_instance}`. Behaviour:
+#### Daemon: `POST /api/sessions/{code}/nex-handoff`
 
-1. Per-session `TryLock` (reuse `stream/locks.go`'s type by moving it to
-   `internal/module/session/locks.go` — pure move — so both callers share
-   it; 409 `handoff_in_progress`).
-2. Generation check like `send-keys` (409 `tmux_instance_mismatch`).
+Lives in `internal/module/nex/handoff.go` (the nex module already depends on
+the session provider; **not** `internal/module/stream`, which P-D deletes).
+The per-session lock type moves from `internal/module/stream/locks.go` to
+`internal/module/session/locks.go` as a pure move (both callers share it;
+stream's imports/tests are updated — see §4.5).
+
+Body: `{expected_tmux_instance, profile?, rollback_command?}`.
+`rollback_command` is the host's resume template already rendered by the SPA
+with the session id placeholder left as `{id}` (e.g. `claude --resume {id}`,
+`cld-yolo --resume {id}`); the daemon substitutes the id it read. Steps,
+all inside `TryLock(code)` (409 `handoff_in_progress`):
+
+1. Generation: sample `TmuxInstance()`; mismatch with `expected_tmux_instance`
+   → 409 `tmux_instance_mismatch`. Re-sampled after step 3; any change →
+   abort with 409 (before exit: nothing changed; after exit: see step 6).
+2. Identity: the agent module's provenance resolver (exported as a provider
+   interface the nex module receives at `Init`, like `session` is today) →
+   `{found, agent_type, session_id, cwd}`. `!found || agent_type != "cc" ||
+   session_id == ""` → 409 `no_identity` (F12: must run **before** exit).
 3. `Prober.IsAliveFor("cc", name+":0")` → else 409 `no_cc`.
 4. `CCOperator.Interrupt` when readiness ≠ idle (10 s), then
-   `CCOperator.Exit` (10 s). Failure → 504 `cc_exit_timeout` with the pane's
-   last state.
-5. 200 `{exited: true}`. No mode change, no relay, no `cc_session_id` write.
+   `CCOperator.Exit` (10 s). Timeout → 504 `cc_exit_timeout`; CC may still be
+   running; nothing delegated; lock released.
+5. Delegate via the embedded `nexen.System.Service` (Go): `provider claude`,
+   `brief "(handed off from tmux session <name>)"`, mount `{cwd, role cwd,
+   writable}`, `sandbox_profile = profile ?? "handoff"`, `resume_session_id`,
+   `labels {source: purdex, handoff_session: <code>}`, `origin
+   purdex://host/<hostId>/session/<code>` (hostId = this daemon's id).
+   Principal = the request's principal (same as `/api/nex` would derive).
+6. Outcome:
+   - `state != rejected` → 200 `{execution_id, state, effective_profile,
+     session_id, cwd}`.
+   - `rejected` (F2: cwd outside roots, transcript missing, …) or delegate
+     error → **rollback**: if `rollback_command` was given, `SendKeys(target,
+     render(rollback_command, session_id))` and wait `IsAliveFor("cc")` ≤ 15 s;
+     respond 409 `delegate_rejected` `{reject_reason, rolled_back: bool}`.
+     Without a rollback command the shell is left idle and `rolled_back:
+     false` tells the SPA to say so.
+7. No `cc_session_id` write, no mode change, no WS `handoff` event.
 
-Everything else is SPA-orchestrated so the resume template, lease code and
-pane content stay where they already live.
+Precondition checks the daemon makes before step 1 (cheap, no lock):
+`m.sys` ready (else 503 `nex_unavailable`); capabilities
+`delegate.resume_session_id` true and `handoff` ∈ `sandbox_profiles` (else
+409 `handoff_unsupported`).
 
-#### SPA: `handToNex(hostId, sessionCode, tmuxInstance)` (`lib/nex/handoff.ts`)
+#### Daemon: `POST /api/sessions/{code}/nex-takeback`
 
-1. `useNexHostStore.ensure(hostId)`; require `phase === 'ready'` and
-   `capabilities.delegate.resume_session_id === true` and
-   `sandbox_profiles.includes('handoff')` → else throw `handoff_unsupported`
-   (button is hidden in that case, see UI).
-2. Identity: `GET /api/sessions/{code}/provenance`; require `found &&
-   agent_type === 'cc' && session_id` and `tmux_instance ===
-   expectedTmuxInstance`; `cwd` from the same response. Fallback when
-   `!found`: the pane's `rebuild.agent.sessionId` + `rebuild.cwd` if both
-   present; else throw `no_identity`. (F12 — must run **before** step 3.)
-3. `POST /api/sessions/{code}/cc-exit {expected_tmux_instance}`.
-4. `delegateExecution(hostId, {brief: '(handed off from tmux session
-   <name>)', cwd, profile: 'handoff', resume_session_id, labels: {source:
-   'purdex', handoff_session: code}, origin:
-   'purdex://host/<hostId>/session/<code>'})`. `state === 'rejected'` →
-   throw `rejected:<reason>` — the shell is idle in the pane and the user can
-   `claude --resume` by hand (the toast says so; no automatic rollback,
-   F4/F3 make a second delegate safe to retry).
-5. Pane content ← `{kind: 'execution', executionId, host: hostId, from:
-   {sessionCode, tmuxInstance, cachedName}}` (`types/tab.ts` gains the
-   optional `from`; `contentMatches` ignores it).
+Same file, same lock. Body: `{expected_tmux_instance, execution_id,
+resume_command, lease_id?}`.
 
-#### SPA: `takeBack(hostId, executionId, from)` (`lib/nex/handoff.ts`)
+1. **Preflight, before touching the execution**: session `code` exists in
+   the session provider (else 404 `session_missing`); generation matches
+   (else 409 `tmux_instance_mismatch`); `!IsAliveFor("cc", target)` (else 409
+   `cc_already_running` — the user already resumed by hand).
+2. Execution: `Service.Get(execution_id)`; `state == running` → needs a
+   control lease: if `lease_id` given and valid, `Service.Interrupt` with it;
+   otherwise acquire one (`AttachControl`) → interrupt → release. `lease_held`
+   by someone else → 409 `held_by` `{principal}`. Interrupt timeout → 504
+   `interrupt_unconfirmed`, nothing else done. After interrupt re-`Get`;
+   require `state ∈ {idle, failed, terminated}`.
+3. `sid = summary.session_id ?? summary.resume_session_id` (F3); none → 409
+   `no_session_id`.
+4. `SendKeys(target, render(resume_command, sid))`, wait `IsAliveFor("cc")`
+   ≤ 15 s (else 504 `cc_start_timeout`; the execution is already idle — the
+   response says which step failed so the SPA can offer "retry resume").
+5. `Service.Archive(execution_id)` (no lease needed, idle) — **archive on
+   success** (codex §10.3): the terminal is now the writer of that
+   transcript; a second handoff creates a new execution. Archive failure is
+   logged, not fatal (200 with `archived: false`).
+6. 200 `{session_id, archived}`.
 
-1. `getExecution` → if `state === 'running'`: `attachControl` → `interrupt`
-   → `release` (reuse `useExecutionLease`'s functions; `lease_held` → throw
-   `held_by:<principal>`). Then re-`getExecution`; require `state ∈ {idle,
-   failed, terminated}`.
-2. `sid = summary.session_id ?? summary.resume_session_id` (F3) — none →
-   throw `no_session_id`.
-3. Compose `resolveResumeCommand(hostId, 'cc', sid)` (F14) and `sendKeys(code,
-   command, from.tmuxInstance)` (generation-guarded; 409 → throw
-   `tmux_restarted`).
-4. Pane content ← `{kind: 'tmux-session', hostId, sessionCode, mode:
-   'terminal', cachedName, tmuxInstance}`. The execution is left `idle`
-   (not archived) so it can be handed off again; the Executions view shows
-   it under "purdex" with the `↩` marker.
+#### SPA (`lib/nex/handoff.ts`, imperative, no hooks)
+
+- `handToNex(hostId, sessionCode, tmuxInstance, cachedName)`:
+  `useNexHostStore.ensure(hostId)` (button is hidden unless ready +
+  `handoff` ∈ profiles + `delegate.resume_session_id`); compose
+  `rollback_command` from the host's cc resume template
+  (`resolveResumeCommandFor(templates, 'cc', '{id}')` — a new small helper
+  beside `composer.ts:27 resolveResumeCommand(record, templates)` that takes
+  agent type + id instead of a rebuild record; F14); `POST nex-handoff`; on
+  200 → pane content ← `{kind: 'execution', executionId, host: hostId,
+  from: {sessionCode, tmuxInstance, cachedName}}`. If the swap throws (pane
+  gone) → toast with an "open execution" action (`openSingletonTab`). On 409
+  `delegate_rejected` → toast `handoff.error.rejected` with the reason and
+  whether the terminal was restored.
+- `takeBack(hostId, executionId, from, leaseId?)`: compose
+  `resume_command` the same way; `POST nex-takeback` with the pane's current
+  `lease_id` when this tab holds one (the pane's lease hook exposes it; no
+  hook is called from `lib/`); on 200 → pane content ← `{kind:
+  'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName,
+  tmuxInstance}`. `404 session_missing` / `409 tmux_instance_mismatch` →
+  toast, **execution pane untouched, no interrupt happened** (daemon
+  preflight guarantees it). `409 held_by` → toast with the principal.
+- Both send `expected_tmux_instance` from the pane content / `from`.
 
 #### UI
 
-- Terminal session pane: a small action in the pane header (the same place
-  the split/close controls live — measure in plan) **"Hand to nex"**, shown
-  only when `useNexHostStore.selectReady(hostId)` and the readiness reasons
-  in step 1 hold and the pane's agent is `cc` (from `rebuild.agent.type` or
-  `session.cc_session_id`/provenance). Busy state + toast on error
-  (`handoff.error.<code>`).
+- Terminal session pane: **"Hand to nex"** in the pane header (plan
+  measures the header component; Q1), shown only when
+  `useNexHostStore.selectHandoffReady(hostId)` and the pane's agent is `cc`
+  (`rebuild.agent.type === 'cc'` or `session.cc_session_id`). Confirm dialog
+  text states "no permission prompts (handoff profile)". Busy spinner; toast
+  on error (`handoff.error.<code>`).
 - Execution pane header (`ExecutionHeader.tsx`): **"Take back to terminal"**
-  when `content.from` is set. Confirm dialog when a turn is running
-  ("interrupt the current turn?").
-- Progress is local to the pane (busy spinner on the button); no WS
-  `handoff` events (those belong to the relay path).
+  when `content.from` is set. When `summary.state === 'running'` the confirm
+  dialog says the turn will be interrupted. After success the execution is
+  archived; the Executions view drops it.
+- `contentMatches` (`pane-utils.ts:57-60`) ignores `from`; the route builder
+  ignores it; persistence keeps it (it is plain data on `PaneContent`).
 
-### 4.5 What does not change
+### 4.5 Blast radius (what changes, what stays)
 
-- `internal/module/stream`, `internal/relay`, the legacy `/handoff`
-  endpoint, `useStreamStore`, `ConversationView`, `HandoffButton`.
-- Nexen: pin stays v0.11.2.
-- `useExecutionStore`, the reducer, `nex-sse.ts` (the site-wide stream
-  reuses `openNexSse` as today).
+Legacy relay **semantics** are unchanged: `internal/module/stream`'s
+orchestrator, `/api/sessions/{code}/handoff`, `useStreamStore`,
+`ConversationView`, `HandoffButton` keep their behaviour. Files that are
+touched anyway: `internal/module/stream/{handler,orchestrator}.go` +
+tests (import the moved lock type), `spa/src/types/tab.ts` (`execution.from`),
+`pane-utils.ts` tests (matching ignores `from`), `ExecutionHeader.tsx`,
+`SessionPaneContent.tsx` (or the pane header component), `locales/*.json`,
+`NexEngineStatus.tsx` / `NexExecutionsTable.tsx` (migrated to the shared
+stores, 4.1/4.3), `lib/nex/subscription-slots.ts` (site-wide reservation,
+4.3), `lib/rebuild/composer.ts` (new helper). Nexen: pin stays v0.11.2.
+`useExecutionStore`, the reducer, `nex-sse.ts`: untouched.
 
 ## 5. Phases
 
 Three PRs, in order, each independently shippable.
 
-- **P-C.1** — `useNexHostStore` (4.1), `delegateExecution` + typed
-  capabilities (4.2), Headless NewTab section. Tests: store (phase matrix,
-  dedup, invalidate, clearHost), api (body mapping, fail-closed
+- **P-C.1** — `useNexHostStore` (4.1, including `NexEngineStatus` reading
+  readiness/capabilities from it), `delegateExecution` + typed capabilities
+  (4.2), Headless NewTab section. Tests: store (phase matrix, dedup,
+  invalidate, clearHost), api (body mapping, fail-closed
   `resume_session_id`, 400 mapping, `rejected` passthrough), provider source
-  (one per host, ready gating), launcher (byte counter, root select +
-  sub-path validation, rejected/400/network rendering, success calls
-  `onSelect` with the execution content, last-used memory).
-- **P-C.2** — `useHostExecutions` + store (refcounted SSE), `ExecutionsView`
-  + registration, `NexExecutionsTable` on the hook. Tests: hook (single
-  SSE per host with two subscribers, debounce, reconnect refetch, gating),
-  view (grouping, marker, click opens singleton tab, disabled/unavailable
-  hints), table tests unchanged.
-- **P-C.3** — daemon `cc-exit` (+ lock move), `handoff.ts` (`handToNex`,
-  `takeBack`), pane content `from`, header actions. Go tests: lock 409,
-  generation 409, `no_cc`, interrupt-then-exit ordering with a fake
-  operator, timeout → 504. SPA tests: step order (provenance **before**
-  cc-exit — a test that asserts the request sequence), fallback identity,
-  rejected → no pane change + toast, success → pane content swap; take back:
-  running → interrupt path with lease, `held_by`, `session_id` preference
-  over `resume_session_id`, 409 generation, pane swap.
+  (one per host, ready gating), launcher (byte counter via `TextEncoder`,
+  root select + sub-path rules, rejected/400/network rendering, success
+  calls `onSelect` with the execution content, last-used memory),
+  `NexEngineStatus` tests moved onto the store.
+- **P-C.2** — `useHostExecutions` + list store with refcounted site-wide SSE
+  and the reserved connection slot (4.3), `ExecutionsView` + registration,
+  `NexExecutionsTable` on the hook. Tests: hook (single SSE per host with
+  two subscribers, debounce, reconnect refetch, gating), slots (cap 3 while
+  reserved, back to 4 on release), view (grouping, marker, click opens
+  singleton tab, disabled/unavailable hints), table tests unchanged.
+- **P-C.3** — daemon `nex-handoff` + `nex-takeback` (+ lock move, provenance
+  provider interface), `handoff.ts`, `resolveResumeCommandFor`, pane content
+  `from`, header actions. Go tests with fake operator/prober/service:
+  lock 409; generation 409 before and after exit; `no_identity` before any
+  key is sent (assert operator never called); `no_cc`; interrupt-then-exit
+  ordering; exit timeout → 504 and no delegate; rejected → rollback keys
+  sent with the substituted id and `rolled_back: true`; take-back preflight
+  order (session missing → no interrupt call; generation mismatch → no
+  interrupt); `held_by`; `session_id` preferred over `resume_session_id`;
+  archive on success / archive failure non-fatal. SPA tests: request bodies,
+  pane swaps, toast per error code, swap-failure recovery action.
 
 ## 6. Acceptance (mlab, after each PR; playwright cli session `pc-launch-ui`)
 
 1. NewTab → Headless (mlab): roots list shows `~/Workspace` (canonical
    path); brief "reply with the word ok, no tools", default profile →
    execution pane opens, result arrives. Over-limit brief blocks submit.
-   Sub-path `../x` blocks submit; a sub-path outside the root submitted via
-   devtools returns `rejected` and the form shows the reason.
+   Sub-path `../x` blocks submit; a sub-path that does not exist on disk
+   submitted normally returns `rejected` and the form shows the reason.
 2. Sidebar → add "Executions": the execution from step 1 appears under
    "purdex", state dot flips idle; second tab shows the same list within
-   ~1 s (one SSE per host — check `pdx` logs / network tab shows one
-   `/v1/events` per host per tab).
+   ~1 s. Open 4 execution panes + the sidebar in one tab: a REST call
+   (`pdx nex ls` equivalent from the Nex page) still answers promptly
+   (connection budget, 4.3); network tab shows one `/v1/events` without
+   `execution_id` per host.
 3. tmux session with interactive CC (`claude` in `~/Workspace/wake/nex-acceptance-scratch`),
    say one thing, then "Hand to nex": the pane becomes an execution whose
    history shows the earlier exchange (resumed), the tmux window shows an
@@ -399,33 +490,55 @@ Three PRs, in order, each independently shippable.
    visible in Purdex — F5).
 4. "Take back": the pane is a terminal again running `claude --resume`, the
    conversation continues with the follow-up from step 3 visible;
-   `pdx nex show` state `idle`.
-5. Hand to nex on a session without CC → toast `no_cc`; on a host with
-   `max_profile = "trusted"` → button hidden.
+   `pdx nex ls --all` shows the execution archived.
+5. Hand to nex on a session without CC → toast `no_cc`; hand to nex with the
+   scratch dir temporarily outside roots (edit config, restart daemon) →
+   `delegate_rejected`, terminal restored (`rolled_back: true`, CC prompt
+   back). On a host with `max_profile = "trusted"` → button hidden.
 6. Double-click "Hand to nex" → second call gets 409, one execution only.
+   Kill the tmux session, then "Take back" → 404 `session_missing`, execution
+   still running, pane untouched.
 
 ## 7. Risks
 
 - **Screen-scraped readiness/exit** (F13) is the same fragility the legacy
-  path has; P-C reuses the operator rather than rewriting it. If `Exit` times
-  out the pane is left with CC still running and nothing delegated — the
-  toast says "CC did not exit; nothing changed".
-- **Two writers on one transcript** if a user hands off and then runs
-  `claude --resume` by hand while the execution runs (F4: Nexen does not
-  lock). Mitigation: the pane is the execution now, and the Executions view
-  shows it; documented, not enforced.
+  path has; P-C reuses the operator rather than rewriting it. Exit timeout
+  leaves CC running and nothing delegated — reported as `cc_exit_timeout`.
+- **Rollback is best-effort**: if `SendKeys` of the resume command itself
+  fails after CC exited, the shell is idle and the response says
+  `rolled_back: false`; the user resumes by hand. The session id is in the
+  response for that purpose.
 - **Handoff profile = bypassPermissions with inherited settings** (F5): a
   handed-off turn can do anything the interactive session could, without
-  prompts. This is the user's explicit choice per handoff; the button label
-  says "no permission prompts".
+  prompts. Per-handoff explicit choice; the confirm dialog says so.
 - **`session_id` drift** (F3): covered by reading the summary in take-back.
-- **Site-wide SSE fan-in**: one per host per client, refcounted; the 4-per-host
-  live cap from P-B applies to execution panes, not to this stream.
+- **Two writers**: closed by archive-on-takeback; the only remaining window
+  is a user running `claude --resume` by hand while an execution is live,
+  which no layer can detect (F4) — documented.
+- **Connection budget**: the site-wide SSE takes a reserved slot per host;
+  the execution live cap drops to 3 while it is held (4.3).
 
 ## 8. Open questions
 
 - Q1 Where exactly does the "Hand to nex" control sit on a terminal pane
   (pane header vs StatusBar view-mode dropdown)? Plan measures the header
   component and picks; default = pane header next to the split control.
-- Q2 Should take-back `archive` the execution? Default no (re-handoff is
-  cheaper than re-delegate; F4 makes archive refuse while running anyway).
+- Q2 (resolved v1.1) Take-back archives the execution; re-handoff creates a
+  new one.
+
+## 9. Review log
+
+- v1 → v1.1, codex `task-mu6iu5ek-1jb811` (gpt-5.5), 10 findings, all
+  applied: (1) P1 thin `cc-exit` cut → daemon-orchestrated `nex-handoff`
+  under one lock with rollback; (2) P1 take-back interrupts before checking
+  the tmux session → preflight first, daemon-side; (3) P1 idle execution =
+  two writers → archive on successful take-back; (4) P1 hook called from
+  `lib/` → daemon owns the lease dance, SPA passes `lease_id` only; (5) P2
+  fourth nex truth source → `NexEngineStatus` migrates in P-C.1, table in
+  P-C.2; (6) P2 cwd rules (relative only, no `~`, `TextEncoder` bytes,
+  rejected vs 400); (7) P2 site-wide SSE counted in the per-host connection
+  budget (reserved slot, cap 4→3); (8) P2 wrong wiring facts
+  (`STATE_DOT_CLASSES` not exported, `resolveResumeCommand(record,
+  templates)`, `pinHost().sendKeys`) → corrected in 4.3/4.4/F14; (9) P3 §4.5
+  rewritten as blast radius; (10) P2 P-C.3 not shippable as written →
+  redesigned per (1)–(4).
