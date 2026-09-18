@@ -12,9 +12,9 @@
 
 ## Global Constraints
 
-- Two PRs: **PR 1** = Tasks 1–5 (catalog, derive, installer, module tests); **PR 2** = Tasks 6–9 (frozen fixtures + version test). PR 1 ≤ 800 lines diff; if exceeded, split feature-flag/timeout (Task 3 steps 9–12) into its own PR first.
+- Two PRs, sequential: **PR 1** = Tasks 1–6 on `worktree-codex-hooks-catalog`; **PR 2** = Tasks 7–10 on a new branch cut from `origin/main` **after PR 1 merges** (Task 7 Step 0). Task 11 is the on-machine acceptance after the bump/deploy. PR 1 ≤ 800 lines diff under `internal/`; Task 6 Step 1 has the executable split if it is not.
 - Installable set after PR 1 is exactly 10: `SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, SessionEnd, PreToolUse, PostToolUse, Interrupt`.
-- Retired upstream keys: `Notification`, `StopFailure`. They stay in the catalog as `HookHandlingIgnored` with **empty** `EmitsStatus` (existing `TestCodexEventsClassifyCurrentDocs` asserts non-installable ⇒ empty EmitsStatus, matching the opencode convention). `deriveCodexStatus` keeps its cases for them so in-flight / hand-installed payloads still parse.
+- Retired upstream keys: `Notification`, `StopFailure`. They stay in the catalog with explicit `Handling: HookHandlingIgnored` (so `IsInstallableHookSpec` is false) but **keep their `EmitsStatus`** (`{waiting, idle}` / `{error}`), and `deriveCodexStatus` keeps their cases. This is what makes spec §2.1 ("DeriveStatus keeps working") and §2.5 ("SupportedStatuses unchanged") both hold: `SupportedStatuses` unions `EmitsStatus` over every catalog entry, and the three-way drift test keeps its Notification/StopFailure fixtures. The codex-only assertion "non-installable ⇒ empty EmitsStatus" is narrowed to exempt exactly the retired list (opencode's own HC5c test is untouched).
 - `codexHooksSupportedVersion = "0.153.4"`.
 - `SessionEnd` hook timeout is 3 s; every other event stays 5 s.
 - `features.hooks = true` is written; `features.codex_hooks` is deleted on install. `CheckHooks` treats absent-both as enabled; an explicit `false` on the canonical `hooks` key blocks; if `hooks` is absent, an explicit `false` on legacy `codex_hooks` blocks.
@@ -22,10 +22,11 @@
 - Every task ends with `gofmt -l internal/ | grep -v '^$'` printing nothing and `go test ./internal/agent/... ./internal/module/agent/` green, then one commit. Commit messages end with `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
 - Run every command from the worktree root `/Users/wake/Workspace/wake/purdex/.claude/worktrees/codex-hooks-catalog` (prefix each Bash with `cd <root> && `).
 
-### Deviation from spec (recorded for the reviewer)
+### Deviations from spec (recorded for the reviewer)
 
-1. Spec §2.5 says `SupportedStatuses` is unchanged. With `PdxStopFailure` ignored + empty `EmitsStatus`, `error` drops out of the codex `SupportedStatuses` union (`running, waiting, idle, clear` remain). `SupportedStatuses` only feeds `agent.Coverage` (test-only matrix; no runtime consumer — verified by grep). Probe-driven `error` (`onProcessDead`) does not go through `SupportedStatuses`. Task 2 pins the new set explicitly.
-2. Spec §PR 2 says the 8 DB-sourced payloads come from `agent_trace_steps.payload_json`. Measured on mlab 2026-09-18: `agent_trace_steps.payload_json` is empty for codex triggers; the raw hook payload is in `agent_trace_chains.root_payload_json` → `.raw_event`. Also codex `PdxPermissionRequest` has **0** rows there (all recent sessions ran `bypassPermissions`), so `PermissionRequest` joins `PostToolUse` and `Interrupt` in the live-capture group (Task 6).
+1. Spec §2.2 says Interrupt should "reuse the `turn_id` extraction `parseCodexTurnID` already used for Stop". That helper is unexported in `internal/module/agent/raw_codex_event.go:26` and cannot be called from `internal/agent/codex`. The reuse happens where it already exists: `PdxInterrupt` carries `LifecycleStop`, so `frame_ops.go`'s Stop case calls `parseCodexTurnID(req.RawEvent)` for it unchanged (Task 4 proves the detach). `status.go` only surfaces `turn_id` as Inspector detail via `agent.DetailStrings`, the same primitive `PdxSessionStart` uses.
+2. Spec §PR 2 says the 8 DB-sourced payloads come from `agent_trace_steps.payload_json`. Measured on mlab 2026-09-18: `agent_trace_steps.payload_json` is empty for codex triggers; the raw hook payload is in `agent_trace_chains.root_payload_json` → `.raw_event`. Also codex `PdxPermissionRequest` has **0** rows there (all recent sessions ran `bypassPermissions`), so `PermissionRequest` joins `PostToolUse` and `Interrupt` in the live-capture group (Task 7).
+3. codex-cli 0.153.4 `--ask-for-approval` accepts only `on-request` / `never` (no `untrusted`); live capture uses `-a on-request -s read-only` and a write outside the sandbox to force a `PermissionRequest`.
 
 ---
 
@@ -37,12 +38,12 @@
 | `internal/agent/codex/events_test.go` | catalog pins (installable set, upstream pin, handling, lifecycle, metadata) | 1 |
 | `internal/agent/codex/status.go` | `deriveCodexStatus` cases | 1 |
 | `internal/agent/codex/status_test.go` | derive tests | 1 |
-| `internal/agent/codex/provider_test.go` | `SupportedStatuses` pin | 1 |
-| `internal/agent/drift_test.go` | codex fixtures for three-way drift | 1 |
-| `internal/agent/codex/hooks.go` | installer / checker / feature flag / timeout table / retired strip | 1 |
-| `internal/agent/codex/hooks_test.go` | installer tests | 1 |
+| `internal/agent/codex/provider_test.go` | `SupportedStatuses` explicit pin (unchanged set) | 1 |
+| `internal/agent/drift_test.go` | codex fixtures for three-way drift (+PostToolUse, +Interrupt) | 1 |
+| `internal/agent/codex/hooks.go` | Task 3: retired strip + cleanup names + version pin; Task 5: timeout table + feature flag | 1 |
+| `internal/agent/codex/hooks_test.go` | installer tests (Tasks 3, 5) | 1 |
 | `internal/module/agent/fakes_test.go` | `fakeDefaultEvents` gets PostToolUse + Interrupt | 1 |
-| `internal/module/agent/frame_ops_l2_test.go` | two new `applyFrameEvent` cases | 1 |
+| `internal/module/agent/frame_ops_l2_test.go` | three new `applyFrameEvent` cases | 1 |
 | `internal/agent/codex/testdata/codex-0.153.4-*` | frozen fixtures | 2 |
 | `internal/agent/codex/fixtures_test.go` (new) | frozen manifest + payload contract tests | 2 |
 | `internal/agent/codex/hooks_test.go` | fake `codex --version` tests | 2 |
@@ -139,8 +140,18 @@ var expectedCodexCatalogHandling = map[string]agent.HookHandling{
 Replace `TestCodexEvents_EmitsStatusForNotification` with:
 
 ```go
+// expectedCodexRetiredEmitsStatus pins the parser-retained EmitsStatus of
+// the retired entries: they are not installable (explicit Ignored) but
+// DeriveStatus still handles them (spec §2.1), so SupportedStatuses keeps
+// error/waiting/idle from them (spec §2.5).
+var expectedCodexRetiredEmitsStatus = map[string][]agent.Status{
+	"PdxNotification": {agent.StatusWaiting, agent.StatusIdle},
+	"PdxStopFailure":  {agent.StatusError},
+}
+
 // TestCodexEvents_RetiredEntriesIgnored asserts Notification / StopFailure
-// remain resolvable by PurdexName but are ignored with empty EmitsStatus.
+// remain resolvable, are explicitly ignored (never installed), and keep
+// their parser-retained EmitsStatus.
 func TestCodexEvents_RetiredEntriesIgnored(t *testing.T) {
 	p := codex.NewProvider()
 	for _, key := range expectedCodexRetiredUpstreamEventNames {
@@ -151,11 +162,15 @@ func TestCodexEvents_RetiredEntriesIgnored(t *testing.T) {
 		if spec.PurdexName != "Pdx"+key {
 			t.Errorf("retired %q PurdexName = %q, want %q", key, spec.PurdexName, "Pdx"+key)
 		}
-		if got := agent.EffectiveHookHandling(spec); got != agent.HookHandlingIgnored {
-			t.Errorf("retired %q handling = %q, want ignored", key, got)
+		if spec.Handling != agent.HookHandlingIgnored {
+			t.Errorf("retired %q Handling = %q, want explicit ignored", key, spec.Handling)
 		}
-		if len(spec.EmitsStatus) != 0 {
-			t.Errorf("retired %q EmitsStatus = %v, want empty", key, spec.EmitsStatus)
+		if agent.IsInstallableHookSpec(spec) {
+			t.Errorf("retired %q is installable", key)
+		}
+		want := expectedCodexRetiredEmitsStatus[spec.PurdexName]
+		if len(spec.EmitsStatus) != len(want) {
+			t.Errorf("retired %q EmitsStatus = %v, want %v", key, spec.EmitsStatus, want)
 		}
 	}
 }
@@ -239,8 +254,8 @@ var expectedCodexPreservedMetadata = map[string]codexLegacyMetadata{
 	"PdxSubagentStart":     {[]agent.Status{}, "Nested sub-agent task dispatched", true, ""},
 	"PdxSubagentStop":      {[]agent.Status{}, "Nested sub-agent task completed", true, ""},
 	"PdxStop":              {[]agent.Status{agent.StatusIdle}, "Agent finished responding and is idle", false, ""},
-	"PdxStopFailure":       {[]agent.Status{}, "Retired: not a codex hook event since 0.153", false, agent.HookHandlingIgnored},
-	"PdxNotification":      {[]agent.Status{}, "Retired: not a codex hook event since 0.153", false, agent.HookHandlingIgnored},
+	"PdxStopFailure":       {[]agent.Status{agent.StatusError}, "Retired: not a codex hook event since 0.153", false, agent.HookHandlingIgnored},
+	"PdxNotification":      {[]agent.Status{agent.StatusWaiting, agent.StatusIdle}, "Retired: not a codex hook event since 0.153", false, agent.HookHandlingIgnored},
 	"PdxPermissionRequest": {[]agent.Status{agent.StatusWaiting}, "Tool permission request awaiting user approval", false, ""},
 	"PdxSessionEnd":        {[]agent.Status{agent.StatusClear}, "Codex session ended", true, ""},
 	"PdxPreToolUse":        {[]agent.Status{}, "Tool call about to execute", true, ""},
@@ -252,6 +267,16 @@ var expectedCodexPreservedMetadata = map[string]codexLegacyMetadata{
 ```
 
 Rename `TestCodexEvents_ExpandedTo9` → `TestCodexEvents_MatchesCatalogHandling` (body unchanged).
+
+Narrow the empty-EmitsStatus assertion in `TestCodexEventsClassifyCurrentDocs` so it exempts exactly the retired entries (they are the only ignored entries with a DeriveStatus case):
+
+```go
+		if !agent.IsInstallableHookSpec(e) && len(e.EmitsStatus) != 0 {
+			if _, retired := expectedCodexRetiredEmitsStatus[e.PurdexName]; !retired {
+				t.Errorf("codex non-installable %s EmitsStatus = %v, want empty", e.PurdexName, e.EmitsStatus)
+			}
+		}
+```
 
 - [ ] **Step 2: Run the catalog tests to verify they fail**
 
@@ -268,9 +293,10 @@ Replace the `PdxStopFailure`, `PdxNotification`, `PdxPostToolUse` entries and ap
 // docs/specs/2026-09-18-codex-hooks-catalog-spec.md). The 12 upstream hook
 // events are all declared; 10 are installable, PreCompact/PostCompact are
 // ignored. Notification and StopFailure were written by the pre-0.153
-// installer but codex never fired them; they stay as ignored entries so
-// LookupByPurdexName / DeriveStatus keep resolving in-flight payloads and
-// the installer can strip the stale keys.
+// installer but codex never fired them; they stay as explicitly ignored
+// entries (never installed, stripped on install/remove) that keep their
+// EmitsStatus and DeriveStatus cases so in-flight payloads still resolve
+// and SupportedStatuses is unchanged (spec §2.1 / §2.5).
 var codexEventSpecs = []agent.HookEventSpec{
 ```
 
@@ -278,18 +304,23 @@ Entries (keep the others exactly as they are):
 
 ```go
 	{
+		// Retired (#1159): codex never fires StopFailure. Handling is
+		// explicit so the installer skips it; EmitsStatus + the
+		// DeriveStatus case are retained (spec §2.1 / §2.5).
 		PurdexName:   "PdxStopFailure",
 		UpstreamKeys: []string{"StopFailure"},
 		Lifecycle:    agent.LifecycleStopFailure,
-		EmitsStatus:  []agent.Status{},
+		EmitsStatus:  []agent.Status{agent.StatusError},
 		Description:  "Retired: not a codex hook event since 0.153",
 		Handling:     agent.HookHandlingIgnored,
 	},
 	{
+		// Retired (#1159): codex never fires Notification. Same policy
+		// as PdxStopFailure above.
 		PurdexName:   "PdxNotification",
 		UpstreamKeys: []string{"Notification"},
 		Lifecycle:    agent.LifecycleNone,
-		EmitsStatus:  []agent.Status{},
+		EmitsStatus:  []agent.Status{agent.StatusWaiting, agent.StatusIdle},
 		Description:  "Retired: not a codex hook event since 0.153",
 		Handling:     agent.HookHandlingIgnored,
 	},
@@ -447,52 +478,27 @@ Expected: FAIL (`Valid=false`).
 Run: `go test ./internal/agent/codex/ -run 'TestCodexDeriveStatus' 2>&1 | tail -5`
 Expected: PASS.
 
-- [ ] **Step 5: Update drift fixtures** — in `internal/agent/drift_test.go` replace the `"codex"` block:
+- [ ] **Step 5: Add drift fixtures** — in `internal/agent/drift_test.go` `"codex"` block, insert after the `PdxPermissionRequest` line and after the `PdxStop` line respectively (keep every existing codex fixture, including the four `PdxNotification` and the `PdxStopFailure` rows — retired entries keep their EmitsStatus so the three-way sets stay equal):
 
 ```go
-	"codex": {
-		{"PdxSessionStart", `{}`, agent.StatusIdle, true},
-		{"PdxUserPromptSubmit", `{}`, agent.StatusRunning, true},
-		{"PdxPermissionRequest", `{"tool_name":"Bash"}`, agent.StatusWaiting, true},
 		{"PdxPostToolUse", `{"tool_name":"Bash"}`, agent.StatusRunning, true},
-		{"PdxStop", `{}`, agent.StatusIdle, true},
-		{"PdxInterrupt", `{"turn_id":"t"}`, agent.StatusIdle, true},
-		{"PdxSessionEnd", `{}`, agent.StatusClear, true},
-		{"PdxSubagentStart", `{"agent_id":"a"}`, "", true},
-		{"PdxSubagentStop", `{"agent_id":"a"}`, "", true},
-		// L2: PdxPreToolUse is detail-only (Valid=true, Status="") so the
-		// new applyFrameEvent LifecycleUserPromptSubmit case can attach the
-		// codex broker proxy ref for non-prompt turns (spec §3.3.C).
-		{"PdxPreToolUse", `{}`, "", true},
-		// PdxNotification / PdxStopFailure are retired (ignored, empty
-		// EmitsStatus) since 0.153 (#1159); their parse paths are covered
-		// in codex/status_test.go, not here, because the three-way drift
-		// test would otherwise see error as emitted-but-undeclared.
-	},
 ```
 
-- [ ] **Step 6: Pin the new `SupportedStatuses` set** — in `provider_test.go` `TestCodexSupportedStatuses`, change `want` and the comment:
+```go
+		{"PdxInterrupt", `{"turn_id":"t"}`, agent.StatusIdle, true},
+```
+
+- [ ] **Step 6: Assert `SupportedStatuses` is unchanged** — spec §2.5. `TestCodexSupportedStatuses` in `provider_test.go` already pins `{running, waiting, idle, error, clear}`; add this comment above `want` so the intent survives the retirement:
 
 ```go
-// TestCodexSupportedStatuses asserts codex.Provider implements
-// StatusSupporter and, post-#1159, declares exactly {running, waiting,
-// idle, clear}: error left the union when StopFailure was retired to an
-// ignored entry (codex never fired it). Probe-driven error (onProcessDead)
-// is not a hook status and is unaffected.
-func TestCodexSupportedStatuses(t *testing.T) {
-	...
-	want := map[agent.Status]bool{
-		agent.StatusRunning: true,
-		agent.StatusWaiting: true,
-		agent.StatusIdle:    true,
-		agent.StatusClear:   true,
-	}
+	// #1159: retired Notification/StopFailure keep their EmitsStatus, so
+	// this set is unchanged by the 0.153 catalog refresh (spec §2.5).
 ```
 
 - [ ] **Step 7: Run the agent packages**
 
 Run: `go test ./internal/agent/ ./internal/agent/codex/ 2>&1 | tail -20`
-Expected: `internal/agent` PASS (drift green). `internal/agent/codex` still fails only in `hooks_test.go` (installer set) — Task 3 fixes those. Confirm the failing test names all start with `TestCodex.*Hooks|TestCheckHooks|TestMergeCodexHooks|TestCodexOwnedCleanup|TestCodexInstallHooks`.
+Expected: `internal/agent` PASS (three-way + per-event drift green; `TestDriftFixtureCoversAllEvents` green because PostToolUse/Interrupt now have fixtures). `internal/agent/codex` still fails only in `hooks_test.go` (installer set) — Task 3 fixes those. Confirm the failing test names all match `TestCodex.*Hooks|TestCheckHooks|TestMergeCodexHooks|TestCodexOwnedCleanup|TestCodexInstallHooks`.
 
 - [ ] **Step 8: Commit**
 
@@ -505,7 +511,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 3: Installer — retired keys, timeout table, feature flag, version pin
+### Task 3: Installer A — retired keys, cleanup set, version pin
 
 **Files:**
 - Modify: `internal/agent/codex/hooks.go`
@@ -514,11 +520,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Produces (package-private):
   - `var codexRetiredUpstreamEvents = []string{"Notification", "StopFailure"}`
-  - `func codexHookTimeoutSeconds(upstreamKey string) int` — `"SessionEnd"` → 3, else 5
   - `func stripRetiredPdxCodexEntries(hooks map[string]any)` — for each retired key whose value is `[]any`, drop pdx-owned entries; delete the key when nothing remains; leave non-`[]any` values untouched
   - `codexOwnedCleanupEventNames()` additionally contains each retired key and `"Pdx"+key`
-  - `setCodexHooksFeature` writes `features.hooks = true`, deletes `features.codex_hooks`
-  - `codexHooksFeatureEnabled(path)` semantics per Global Constraints
   - `const codexHooksSupportedVersion = "0.153.4"`
 
 - [ ] **Step 1: Update the shared expectations and rename the 9-event tests** in `hooks_test.go`:
@@ -557,47 +560,7 @@ Also assert in the same test that retired keys are absent:
 
 Rename `TestCodexCheckHooks_ReportsAll9Events` → `TestCodexCheckHooks_ReportsAll10Events` (body unchanged — it derives from `expectedCodexInstallerNames`).
 
-- [ ] **Step 2: Add the timeout-table test**:
-
-```go
-func TestCodexHookTimeoutSeconds_SessionEndClampedTo3(t *testing.T) {
-	if got := codexHookTimeoutSeconds("SessionEnd"); got != 3 {
-		t.Fatalf("SessionEnd timeout = %d, want 3 (codex clamps SessionEnd to 3s)", got)
-	}
-	for _, key := range []string{"SessionStart", "Stop", "PostToolUse", "Interrupt", "Unknown"} {
-		if got := codexHookTimeoutSeconds(key); got != 5 {
-			t.Errorf("%s timeout = %d, want 5", key, got)
-		}
-	}
-}
-
-func TestCodexInstallHooks_WritesPerEventTimeout(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "hooks.json")
-	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
-		t.Fatalf("mergeCodexHooks: %v", err)
-	}
-	hooks := hooksSection(t, readHooksFile(t, path))
-	timeoutOf := func(key string) float64 {
-		groups := codexMatcherGroups(hooks[key])
-		if len(groups) != 1 {
-			t.Fatalf("%s: %d matcher groups, want 1", key, len(groups))
-		}
-		inner := toCodexEntrySlice(groups[0].(map[string]any)["hooks"])
-		m, _ := inner[0].(map[string]any)
-		v, _ := m["timeout"].(float64)
-		return v
-	}
-	if got := timeoutOf("SessionEnd"); got != 3 {
-		t.Errorf("SessionEnd timeout = %v, want 3", got)
-	}
-	if got := timeoutOf("Stop"); got != 5 {
-		t.Errorf("Stop timeout = %v, want 5", got)
-	}
-}
-```
-
-- [ ] **Step 3: Add retired-key strip tests**:
+- [ ] **Step 2: Add retired-key strip tests**:
 
 ```go
 // Install strips pdx-owned entries under retired keys and drops the key
@@ -700,7 +663,7 @@ func TestCodexInstallHooks_RetiredKeyNonArrayValuePreserved(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Update `TestCodexOwnedCleanupEventNames_TwoSetUnion`** so `want` also includes retired keys:
+- [ ] **Step 3: Update `TestCodexOwnedCleanupEventNames_TwoSetUnion`** so `want` also includes retired keys — insert right after the existing `for _, spec := range codexEventSpecs` loop that builds `want`, and update the doc comment to say "installable UpstreamKeys ∪ PurdexName ∪ retired keys ∪ Pdx+retired":
 
 ```go
 	for _, key := range codexRetiredUpstreamEvents {
@@ -709,9 +672,275 @@ func TestCodexInstallHooks_RetiredKeyNonArrayValuePreserved(t *testing.T) {
 	}
 ```
 
-(Insert right after the existing `for _, spec := range codexEventSpecs` loop that builds `want`; update the doc comment to say "installable UpstreamKeys ∪ PurdexName ∪ retired keys ∪ Pdx+retired".)
+- [ ] **Step 4: Version pin test**:
 
-- [ ] **Step 5: Feature-flag tests** — replace `writeCodexFeatureFlag` and `TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks`, and update `TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig`:
+```go
+func TestCodexHooksSupportedVersion_Pinned(t *testing.T) {
+	if codexHooksSupportedVersion != "0.153.4" {
+		t.Fatalf("codexHooksSupportedVersion = %q, want 0.153.4", codexHooksSupportedVersion)
+	}
+}
+```
+
+- [ ] **Step 5: Run to verify failures**
+
+Run: `go test ./internal/agent/codex/ 2>&1 | grep -E '^(--- FAIL|FAIL|ok)' | head -30`
+Expected: FAIL — compile error for `codexRetiredUpstreamEvents`; after that the new tests fail.
+
+- [ ] **Step 6: Implement in `hooks.go`** — constants near the top:
+
+```go
+const codexHooksSupportedVersion = "0.153.4"
+
+// codexRetiredUpstreamEvents are hooks.json keys the pre-0.153 installer
+// wrote that codex never fires (#1159). Install and remove strip pdx-owned
+// entries under them and drop the key when it empties; third-party entries
+// are left alone.
+var codexRetiredUpstreamEvents = []string{"Notification", "StopFailure"}
+```
+
+In `mergeCodexHooksFile`, the install branch: call `stripRetiredPdxCodexEntries(hooks)` right before the `for _, spec := range codexEventSpecs` loop. New helper (place after `mergeCodexHooksFile`):
+
+```go
+// stripRetiredPdxCodexEntries removes pdx-owned entries under retired keys
+// and deletes the key when nothing else lives there. Non-array values are
+// not ours to interpret and are preserved as-is. The remove path does not
+// call this: its all-keys loop already strips them because
+// codexOwnedCleanupEventNames includes the retired names.
+func stripRetiredPdxCodexEntries(hooks map[string]any) {
+	for _, key := range codexRetiredUpstreamEvents {
+		existing, ok := hooks[key]
+		if !ok {
+			continue
+		}
+		if _, isArr := existing.([]any); !isArr {
+			continue
+		}
+		entries := filterOutPdxCodexKnownEvents(existing)
+		if len(entries) == 0 {
+			delete(hooks, key)
+		} else {
+			hooks[key] = entries
+		}
+	}
+}
+```
+
+Extend `codexOwnedCleanupEventNames` (after its loop, before `return owned`) and update its doc comment to "…∪ retired upstream keys ∪ Pdx+retired (cleanup only; never installed)":
+
+```go
+	for _, key := range codexRetiredUpstreamEvents {
+		owned[key] = true
+		owned["Pdx"+key] = true
+	}
+```
+
+- [ ] **Step 7: Run the codex package**
+
+Run: `go test ./internal/agent/codex/ 2>&1 | tail -15`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add internal/agent/codex/hooks.go internal/agent/codex/hooks_test.go
+git commit -m "feat(codex): installer strips retired Notification/StopFailure, pins 0.153.4 (#1159)
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 4: Module-side regression cases (no production change expected)
+
+**Files:**
+- Modify: `internal/module/agent/fakes_test.go` (`fakeDefaultEvents`)
+- Test: `internal/module/agent/frame_ops_l2_test.go`
+
+**Interfaces:**
+- Consumes: `applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64)`, helpers `newProxyTestModule`, `seedFrame`, `seedProxyRef`, `turnAwareEnvAlive`, `rawTurn` (all exist in the test package).
+
+- [ ] **Step 1: Add the two events to `fakeDefaultEvents`** (after the `PdxStop` line):
+
+```go
+	// #1159: codex 0.153 catalog. PostToolUse is a plain status event;
+	// Interrupt shares LifecycleStop so the codex turn-aware detach runs.
+	{PurdexName: "PdxPostToolUse", UpstreamKeys: []string{"PostToolUse"}, Lifecycle: agentpkg.LifecycleNone},
+	{PurdexName: "PdxInterrupt", UpstreamKeys: []string{"Interrupt"}, Lifecycle: agentpkg.LifecycleStop},
+```
+
+- [ ] **Step 2: Write the three cases** — append to `frame_ops_l2_test.go`:
+
+```go
+// #1159 (a): PostToolUse on a codex frame parked at waiting (after a
+// PermissionRequest) moves it to running via the generic narrow update.
+func TestApplyFrameEvent_CodexPostToolUse_WaitingToRunning(t *testing.T) {
+	m := newProxyTestModule(t)
+	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
+	frame.Status = agentpkg.StatusWaiting
+	if _, err := m.frames.Upsert(frame); err != nil {
+		t.Fatalf("park frame at waiting: %v", err)
+	}
+	turnAwareEnvAlive(t, 1, "t-init")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxPostToolUse",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: json.RawMessage(`{"tool_name":"Bash","turn_id":"t_a"}`),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"tool_name": "Bash"}}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	final, err := m.frames.GetByIdentity("%5", 42, "t1")
+	if err != nil || final == nil {
+		t.Fatalf("reload: %v / %v", err, final)
+	}
+	if final.Status != agentpkg.StatusRunning {
+		t.Fatalf("status = %q, want running", final.Status)
+	}
+}
+
+// #1159 (b): Interrupt from a codex broker detaches its proxy ref by
+// turn_id exactly like Stop (LifecycleStop path).
+func TestApplyFrameEvent_CodexInterrupt_DetachesProxyByTurn(t *testing.T) {
+	m := newProxyTestModule(t)
+	seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
+		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
+		SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
+	}})
+	turnAwareEnvAlive(t, 100, "t100")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxInterrupt",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Reason != "proxy_subagent_detached_on_stop_turn" {
+		t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop_turn; meta=%+v", meta.Reason, meta)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if final == nil || len(final.Subagents) != 0 {
+		t.Fatalf("Subagents = %+v, want empty after Interrupt detach", final.Subagents)
+	}
+}
+
+// #1159 (b'): Interrupt on a standalone codex frame moves running → idle.
+func TestApplyFrameEvent_CodexInterrupt_StandaloneRunningToIdle(t *testing.T) {
+	m := newProxyTestModule(t)
+	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
+	frame.Status = agentpkg.StatusRunning
+	if _, err := m.frames.Upsert(frame); err != nil {
+		t.Fatalf("set running: %v", err)
+	}
+	turnAwareEnvAlive(t, 1, "t-init")
+
+	req := EventRequest{
+		TmuxSession: "work", TmuxPaneID: "%5",
+		PurdexName: "PdxInterrupt",
+		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
+		RawEvent: rawTurn("t_a"),
+	}
+	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
+	if err != nil {
+		t.Fatalf("applyFrameEvent: %v", err)
+	}
+	if meta.Decision != "updated_frame" {
+		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
+	}
+	final, _ := m.frames.GetByIdentity("%5", 42, "t1")
+	if final == nil || final.Status != agentpkg.StatusIdle {
+		t.Fatalf("frame = %+v, want idle", final)
+	}
+}
+```
+
+`encoding/json` is already imported in `frame_ops_l2_test.go` (`rawTurn` uses `json.RawMessage`).
+
+- [ ] **Step 3: Run**
+
+Run: `go test ./internal/module/agent/ -run 'TestApplyFrameEvent_Codex(PostToolUse|Interrupt)' -v 2>&1 | tail -15`
+Expected: PASS on first run (the paths already exist). If (a) returns `created_frame` or the status stays waiting, the seeded frame identity does not match the request — check `seedFrame` args (`pid`, `startTime`) equal `SenderPID`/`SenderStartTime`. Do not modify `frame_ops.go`; if a production change seems required, stop and report (spec §2.4 says none is expected).
+
+- [ ] **Step 4: Full module package + commit**
+
+Run: `go test ./internal/module/agent/ 2>&1 | tail -3`
+Expected: `ok`.
+
+```bash
+git add internal/module/agent/fakes_test.go internal/module/agent/frame_ops_l2_test.go
+git commit -m "test(module/agent): cover codex PostToolUse waiting→running and Interrupt detach (#1159)
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 5: Installer B — SessionEnd timeout, feature flag, hooks.state round-trip
+
+This task is last in PR 1 on purpose: it is the one Task 6 Step 1 peels off into its own PR if the size guard trips. It must compile and pass on its own on top of Task 4.
+
+**Files:**
+- Modify: `internal/agent/codex/hooks.go`
+- Test: `internal/agent/codex/hooks_test.go`
+
+**Interfaces:**
+- Produces (package-private):
+  - `func codexHookTimeoutSeconds(upstreamKey string) int` — `"SessionEnd"` → 3, else 5
+  - `setCodexHooksFeature` writes `features.hooks = true`, deletes `features.codex_hooks`
+  - `codexHooksFeatureEnabled(path)` — canonical `hooks` wins; else legacy `codex_hooks`; else true
+  - test helper `writeCodexConfigText(t, home, text string)`
+
+- [ ] **Step 1: Timeout tests**:
+
+```go
+func TestCodexHookTimeoutSeconds_SessionEndClampedTo3(t *testing.T) {
+	if got := codexHookTimeoutSeconds("SessionEnd"); got != 3 {
+		t.Fatalf("SessionEnd timeout = %d, want 3 (codex clamps SessionEnd to 3s)", got)
+	}
+	for _, key := range []string{"SessionStart", "Stop", "PostToolUse", "Interrupt", "Unknown"} {
+		if got := codexHookTimeoutSeconds(key); got != 5 {
+			t.Errorf("%s timeout = %d, want 5", key, got)
+		}
+	}
+}
+
+func TestCodexInstallHooks_WritesPerEventTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	if err := mergeCodexHooks(path, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatalf("mergeCodexHooks: %v", err)
+	}
+	hooks := hooksSection(t, readHooksFile(t, path))
+	timeoutOf := func(key string) float64 {
+		groups := codexMatcherGroups(hooks[key])
+		if len(groups) != 1 {
+			t.Fatalf("%s: %d matcher groups, want 1", key, len(groups))
+		}
+		inner := toCodexEntrySlice(groups[0].(map[string]any)["hooks"])
+		m, _ := inner[0].(map[string]any)
+		v, _ := m["timeout"].(float64)
+		return v
+	}
+	if got := timeoutOf("SessionEnd"); got != 3 {
+		t.Errorf("SessionEnd timeout = %v, want 3", got)
+	}
+	if got := timeoutOf("Stop"); got != 5 {
+		t.Errorf("Stop timeout = %v, want 5", got)
+	}
+}
+```
+
+- [ ] **Step 2: Feature-flag tests** — replace `writeCodexFeatureFlag` and `TestCodexCheckHooks_FeatureFlagMissingOrFalseBlocks`, and update `TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig`:
 
 ```go
 // writeCodexFeatureFlag writes the canonical [features] hooks key.
@@ -789,7 +1018,7 @@ In `TestCodexInstallHooks_EnablesFeatureFlagAndPreservesConfig` change the wante
 	}
 ```
 
-- [ ] **Step 6: hooks.state round-trip test**:
+- [ ] **Step 3: hooks.state round-trip test**:
 
 ```go
 // The codex approval cache lives under [hooks.state."<path>:<event>:<n>:<m>"]
@@ -817,32 +1046,14 @@ func TestCodexInstallHooks_PreservesHooksStateTrustedHash(t *testing.T) {
 }
 ```
 
-- [ ] **Step 7: Version pin test** (PR 2 adds the fake-binary tests; here only the constant):
-
-```go
-func TestCodexHooksSupportedVersion_Pinned(t *testing.T) {
-	if codexHooksSupportedVersion != "0.153.4" {
-		t.Fatalf("codexHooksSupportedVersion = %q, want 0.153.4", codexHooksSupportedVersion)
-	}
-}
-```
-
-- [ ] **Step 8: Run to verify failures**
+- [ ] **Step 4: Run to verify failures**
 
 Run: `go test ./internal/agent/codex/ 2>&1 | grep -E '^(--- FAIL|FAIL|ok)' | head -30`
-Expected: FAIL — compile errors for `codexRetiredUpstreamEvents`, `codexHookTimeoutSeconds`, `writeCodexConfigText`; then the new tests fail.
+Expected: FAIL — compile errors for `codexHookTimeoutSeconds`, `writeCodexConfigText`; then the new tests fail.
 
-- [ ] **Step 9: Implement in `hooks.go`** — constants and table near the top:
+- [ ] **Step 5: Implement in `hooks.go`** — timeout table near the top:
 
 ```go
-const codexHooksSupportedVersion = "0.153.4"
-
-// codexRetiredUpstreamEvents are hooks.json keys the pre-0.153 installer
-// wrote that codex never fires (#1159). Install and remove strip pdx-owned
-// entries under them and drop the key when it empties; third-party entries
-// are left alone.
-var codexRetiredUpstreamEvents = []string{"Notification", "StopFailure"}
-
 // codexHookTimeouts is the per-event hook timeout in seconds. codex clamps
 // SessionEnd to 3 s and warns at every start if the file says more.
 var codexHookTimeouts = map[string]int{
@@ -859,61 +1070,7 @@ func codexHookTimeoutSeconds(upstreamKey string) int {
 }
 ```
 
-In `mergeCodexHooksFile`, the install branch: call `stripRetiredPdxCodexEntries(hooks)` right before the `for _, spec := range codexEventSpecs` loop, and use the table for the timeout:
-
-```go
-	stripRetiredPdxCodexEntries(hooks)
-	for _, spec := range codexEventSpecs {
-		...
-		entries = append(entries, map[string]any{
-			"hooks": []any{
-				map[string]any{
-					"type":    "command",
-					"command": fmt.Sprintf(`"%s" hook --agent codex %s`, pdxPath, spec.PurdexName),
-					"timeout": codexHookTimeoutSeconds(key),
-				},
-			},
-		})
-```
-
-New helper (place after `mergeCodexHooksFile`):
-
-```go
-// stripRetiredPdxCodexEntries removes pdx-owned entries under retired keys
-// and deletes the key when nothing else lives there. Non-array values are
-// not ours to interpret and are preserved as-is. The remove path does not
-// call this: its all-keys loop already strips them because
-// codexOwnedCleanupEventNames includes the retired names.
-func stripRetiredPdxCodexEntries(hooks map[string]any) {
-	for _, key := range codexRetiredUpstreamEvents {
-		existing, ok := hooks[key]
-		if !ok {
-			continue
-		}
-		if _, isArr := existing.([]any); !isArr {
-			continue
-		}
-		entries := filterOutPdxCodexKnownEvents(existing)
-		if len(entries) == 0 {
-			delete(hooks, key)
-		} else {
-			hooks[key] = entries
-		}
-	}
-}
-```
-
-Extend `codexOwnedCleanupEventNames` (after the loop):
-
-```go
-	for _, key := range codexRetiredUpstreamEvents {
-		owned[key] = true
-		owned["Pdx"+key] = true
-	}
-	return owned
-```
-
-and update its doc comment: "…∪ retired upstream keys ∪ Pdx+retired (cleanup only; never installed)".
+In `mergeCodexHooksFile`'s install loop replace `"timeout": 5,` with `"timeout": codexHookTimeoutSeconds(key),`.
 
 Feature flag:
 
@@ -956,201 +1113,70 @@ func codexHooksFeatureEnabled(path string) (bool, error) {
 
 In `CheckHooks` change the issue text to `"codex hooks feature flag disabled; run install to enable features.hooks"`.
 
-- [ ] **Step 10: Run the codex package**
+- [ ] **Step 6: Run the codex package**
 
 Run: `go test ./internal/agent/codex/ 2>&1 | tail -15`
 Expected: PASS. If `TestCodexInstallHooks_PreservesHooksStateTrustedHash` fails on the key lookup, print `config` — BurntSushi decodes dotted-quoted table names into nested maps only along unquoted dots; the quoted key `"<path>:stop:0:0"` must appear as a single map key under `state`. Do not change the writer; fix only the test's lookup if the decoded shape differs, and record the actual shape in the test comment.
 
-- [ ] **Step 11: Whole-tree check**
+- [ ] **Step 7: Whole-tree check**
 
 Run: `gofmt -l internal/ ; go vet ./internal/agent/... && go test ./internal/agent/... ./internal/module/agent/ 2>&1 | tail -10`
 Expected: gofmt prints nothing; all `ok`.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add internal/agent/codex/hooks.go internal/agent/codex/hooks_test.go
-git commit -m "feat(codex): installer strips retired hooks, clamps SessionEnd, writes features.hooks (#1159)
-
-- retire Notification/StopFailure keys on install and remove
-- SessionEnd timeout 3s via per-event table
-- write features.hooks=true, drop deprecated codex_hooks; absent = enabled
-- pin codexHooksSupportedVersion to 0.153.4
-- prove [hooks.state] trusted_hash survives install
+git commit -m "feat(codex): SessionEnd hook timeout 3s, write features.hooks and drop codex_hooks (#1159)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 4: Module-side regression cases (no production change expected)
-
-**Files:**
-- Modify: `internal/module/agent/fakes_test.go` (`fakeDefaultEvents`)
-- Test: `internal/module/agent/frame_ops_l2_test.go`
-
-**Interfaces:**
-- Consumes: `applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64)`, helpers `newProxyTestModule`, `seedFrame`, `seedProxyRef`, `turnAwareEnvAlive`, `rawTurn` (all exist in the test package).
-
-- [ ] **Step 1: Add the two events to `fakeDefaultEvents`** (after the `PdxStop` line):
-
-```go
-	// #1159: codex 0.153 catalog. PostToolUse is a plain status event;
-	// Interrupt shares LifecycleStop so the codex turn-aware detach runs.
-	{PurdexName: "PdxPostToolUse", UpstreamKeys: []string{"PostToolUse"}, Lifecycle: agentpkg.LifecycleNone},
-	{PurdexName: "PdxInterrupt", UpstreamKeys: []string{"Interrupt"}, Lifecycle: agentpkg.LifecycleStop},
-```
-
-- [ ] **Step 2: Write the two cases** — append to `frame_ops_l2_test.go`:
-
-```go
-// #1159 (a): PostToolUse on a codex frame parked at waiting (after a
-// PermissionRequest) moves it to running via the generic narrow update.
-func TestApplyFrameEvent_CodexPostToolUse_WaitingToRunning(t *testing.T) {
-	m := newProxyTestModule(t)
-	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
-	frame.Status = agentpkg.StatusWaiting
-	if _, err := m.frames.Upsert(frame); err != nil {
-		t.Fatalf("park frame at waiting: %v", err)
-	}
-	turnAwareEnvAlive(t, 1, "t-init")
-
-	req := EventRequest{
-		TmuxSession: "work", TmuxPaneID: "%5",
-		PurdexName: "PdxPostToolUse",
-		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
-		RawEvent: json.RawMessage(`{"tool_name":"Bash","turn_id":"t_a"}`),
-	}
-	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"tool_name": "Bash"}}, 200)
-	if err != nil {
-		t.Fatalf("applyFrameEvent: %v", err)
-	}
-	if meta.Decision != "updated_frame" {
-		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
-	}
-	final, err := m.frames.GetByIdentity("%5", 42, "t1")
-	if err != nil || final == nil {
-		t.Fatalf("reload: %v / %v", err, final)
-	}
-	if final.Status != agentpkg.StatusRunning {
-		t.Fatalf("status = %q, want running", final.Status)
-	}
-}
-
-// #1159 (b): Interrupt from a codex broker detaches its proxy ref by
-// turn_id exactly like Stop (LifecycleStop path), and on a standalone
-// codex frame moves running → idle.
-func TestApplyFrameEvent_CodexInterrupt_DetachesProxyByTurn(t *testing.T) {
-	m := newProxyTestModule(t)
-	seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
-		ID: "proxy:codex:42:t1", Type: "codex", StartedAt: 50,
-		SourcePID: 42, SourceStartTime: "t1", IsProxy: true, SourceTurnID: "t_a",
-	}})
-	turnAwareEnvAlive(t, 100, "t100")
-
-	req := EventRequest{
-		TmuxSession: "work", TmuxPaneID: "%5",
-		PurdexName: "PdxInterrupt",
-		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
-		RawEvent: rawTurn("t_a"),
-	}
-	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
-	if err != nil {
-		t.Fatalf("applyFrameEvent: %v", err)
-	}
-	if meta.Reason != "proxy_subagent_detached_on_stop_turn" {
-		t.Fatalf("reason = %q, want proxy_subagent_detached_on_stop_turn; meta=%+v", meta.Reason, meta)
-	}
-	final, _ := m.frames.GetByIdentity("%5", 100, "t100")
-	if final == nil || len(final.Subagents) != 0 {
-		t.Fatalf("Subagents = %+v, want empty after Interrupt detach", final.Subagents)
-	}
-}
-
-func TestApplyFrameEvent_CodexInterrupt_StandaloneRunningToIdle(t *testing.T) {
-	m := newProxyTestModule(t)
-	frame := seedFrame(t, m, "%5", "codex", 42, "t1", 50)
-	frame.Status = agentpkg.StatusRunning
-	if _, err := m.frames.Upsert(frame); err != nil {
-		t.Fatalf("set running: %v", err)
-	}
-	turnAwareEnvAlive(t, 1, "t-init")
-
-	req := EventRequest{
-		TmuxSession: "work", TmuxPaneID: "%5",
-		PurdexName: "PdxInterrupt",
-		AgentType:  "codex", SenderPID: 42, SenderStartTime: "t1",
-		RawEvent: rawTurn("t_a"),
-	}
-	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}, 200)
-	if err != nil {
-		t.Fatalf("applyFrameEvent: %v", err)
-	}
-	if meta.Decision != "updated_frame" {
-		t.Fatalf("decision = %q, want updated_frame (meta=%+v)", meta.Decision, meta)
-	}
-	final, _ := m.frames.GetByIdentity("%5", 42, "t1")
-	if final == nil || final.Status != agentpkg.StatusIdle {
-		t.Fatalf("frame = %+v, want idle", final)
-	}
-}
-```
-
-Ensure `encoding/json` is imported in `frame_ops_l2_test.go` (it already is — `rawTurn` uses `json.RawMessage`).
-
-- [ ] **Step 3: Run**
-
-Run: `go test ./internal/module/agent/ -run 'TestApplyFrameEvent_Codex(PostToolUse|Interrupt)' -v 2>&1 | tail -15`
-Expected: PASS on first run (the paths already exist). If (a) returns `created_frame` or the status stays waiting, the seeded frame identity does not match the request — check `seedFrame` args (`pid`, `startTime`) equal `SenderPID`/`SenderStartTime`. Do not modify `frame_ops.go`; if a production change seems required, stop and report (spec §2.4 says none is expected).
-
-- [ ] **Step 4: Full module package + commit**
-
-Run: `go test ./internal/module/agent/ 2>&1 | tail -3`
-Expected: `ok`.
-
-```bash
-git add internal/module/agent/fakes_test.go internal/module/agent/frame_ops_l2_test.go
-git commit -m "test(module/agent): cover codex PostToolUse waiting→running and Interrupt detach (#1159)
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
-```
-
----
-
-### Task 5: PR 1 wrap-up
+### Task 6: PR 1 wrap-up (main session)
 
 - [ ] **Step 1: Size guard**
 
 Run: `git diff --stat a171cd7a..HEAD -- internal/ | tail -1`
-Expected: ≤ 800 lines, ≤ 20 files. If over, split Task 3 steps 9–12 (feature flag + timeout) into a separate PR first.
+Expected: ≤ 800 lines, ≤ 20 files. If over, peel Task 5 (the last commit) into its own PR — every earlier commit compiles and passes on its own:
+
+```bash
+git branch worktree-codex-hooks-flag HEAD          # keeps the Task 5 commit
+git reset --hard HEAD~1                             # PR 1 = Tasks 1–4
+go test ./internal/agent/... ./internal/module/agent/ 2>&1 | tail -6   # must be all ok
+# open PR 1 (Step 3). After it merges: git checkout worktree-codex-hooks-flag && git rebase origin/main && push → PR 1b, R1 only.
+```
 
 - [ ] **Step 2: Full Go suite**
 
 Run: `go build ./... && go test ./... 2>&1 | grep -v '^ok' | head -20`
 Expected: nothing but `no test files` lines.
 
-- [ ] **Step 3: Push + PR** (main session does this; subagents stop after Step 2)
+- [ ] **Step 3: Push + PR**
 
 ```bash
 git push -u origin worktree-codex-hooks-catalog
 gh pr create --title "feat(codex): hooks catalog refresh for codex-cli 0.153.4 (#1159, PR 1/2)" --body-file - <<'EOF'
 Spec: docs/specs/2026-09-18-codex-hooks-catalog-spec.md
-Plan: docs/plans/2026-09-18-codex-hooks-catalog-plan.md (Tasks 1–5)
+Plan: docs/plans/2026-09-18-codex-hooks-catalog-plan.md (Tasks 1–6)
 
-- Catalog: retire Notification/StopFailure (ignored), install PostToolUse + Interrupt, declare PreCompact/PostCompact (ignored); pin 12 upstream names bidirectionally
+- Catalog: retire Notification/StopFailure (explicit ignored, EmitsStatus + parser retained), install PostToolUse + Interrupt, declare PreCompact/PostCompact (ignored); pin 12 upstream names bidirectionally
 - DeriveStatus: PostToolUse → running, Interrupt → idle (+turn_id)
 - Installer: strip retired keys on install/remove; SessionEnd timeout 3s; features.hooks=true and drop codex_hooks; absent flag = enabled; version pin 0.153.4; hooks.state trusted_hash round-trip test
-- Module: two regression cases, no production change
+- Module: three regression cases, no production change
 
-Deviation from spec: codex SupportedStatuses drops `error` (test-only consumer). See plan "Deviation from spec".
+Deviations from spec: see plan "Deviations from spec" (parseCodexTurnID reuse happens at the module layer).
 
-Closes nothing yet — #1159 closes with PR 2.
+#1159 closes with PR 2.
 EOF
 ```
 
+- [ ] **Step 4: Reviews** — R1 → R2 attack → R2 critic per project CLAUDE.md; fix; incremental re-review; merge; bump PR (`VERSION` + `CHANGELOG.md`, no codex).
+
 ---
 
-### Task 6: Capture 0.153.4 payload fixtures (PR 2)
+### Task 7: Capture 0.153.4 payload fixtures (PR 2)
 
 **Files:**
 - Create: `internal/agent/codex/testdata/codex-0.153.4-payloads/<PurdexName>.json` (10 files)
@@ -1159,6 +1185,15 @@ EOF
 
 **Interfaces:**
 - Produces: one JSON object per installable PurdexName, being the raw codex hook stdin payload (what `raw_event` holds), scrubbed.
+
+- [ ] **Step 0: Branch for PR 2 (after PR 1 and its bump have merged)**
+
+```bash
+git fetch origin
+git status --short            # must be clean
+git checkout -b worktree-codex-hooks-fixtures origin/main
+git log --oneline -1          # must show the bump commit that followed PR 1
+```
 
 **Scrub rules** (apply to every fixture; keep every key, replace values):
 - `session_id` → `"01a00000-0000-7000-8000-000000000001"`, `turn_id` → `"01a00000-0000-7000-8000-000000000002"`, `agent_id` → `"01a00000-0000-7000-8000-000000000003"`
@@ -1169,11 +1204,12 @@ EOF
 - [ ] **Step 1: Pull the 7 DB-available payloads (read-only)**
 
 ```bash
-mkdir -p /private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad/codex-fixtures
+S=/private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad
+mkdir -p "$S/codex-fixtures"
 for ev in PdxSessionStart PdxUserPromptSubmit PdxPreToolUse PdxStop PdxSessionEnd PdxSubagentStart PdxSubagentStop; do
   sqlite3 "file:/Users/wake/.config/pdx/agent_events.db?mode=ro" \
     "select json_extract(root_payload_json,'$.raw_event') from agent_trace_chains where root_agent_type='codex' and root_event_name='$ev' order by started_at desc limit 1" \
-    > "/private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad/codex-fixtures/$ev.raw.json"
+    > "$S/codex-fixtures/$ev.raw.json"
 done
 ```
 
@@ -1182,35 +1218,35 @@ Then, for each raw file, print only its key list (`jq 'keys'`) — never `cat` t
 - [ ] **Step 2: Live-capture `PermissionRequest`, `PostToolUse`, `Interrupt`**
 
 ```bash
-S=/private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad/codex-capture
-mkdir -p "$S/.codex" && cd "$S" && git init -q .
-cat > "$S/.codex/hooks.json" <<'EOF'
+C=/private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad/codex-capture
+mkdir -p "$C/.codex" && cd "$C" && git init -q . && printf 'scratch\n' > README.md && git add -A && git commit -qm init
+cat > "$C/.codex/hooks.json" <<EOF
 {
   "hooks": {
-    "PermissionRequest": [{"hooks": [{"type": "command", "command": "cat >> /private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad/codex-capture/PermissionRequest.log", "timeout": 5}]}],
-    "PostToolUse":       [{"hooks": [{"type": "command", "command": "cat >> /private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad/codex-capture/PostToolUse.log", "timeout": 5}]}],
-    "Interrupt":         [{"hooks": [{"type": "command", "command": "cat >> /private/tmp/claude-501/-Users-wake-Workspace-wake-purdex/c3081413-b2f9-417d-9556-bfba81435e92/scratchpad/codex-capture/Interrupt.log", "timeout": 5}]}]
+    "PermissionRequest": [{"hooks": [{"type": "command", "command": "cat >> $C/PermissionRequest.log", "timeout": 5}]}],
+    "PostToolUse":       [{"hooks": [{"type": "command", "command": "cat >> $C/PostToolUse.log", "timeout": 5}]}],
+    "Interrupt":         [{"hooks": [{"type": "command", "command": "cat >> $C/Interrupt.log", "timeout": 5}]}]
   }
 }
 EOF
 ```
 
-Run codex interactively in a tmux window from `$S` (main session drives this; the user's `~/.codex` is untouched because project-level hooks live in `$S/.codex/hooks.json`):
+Run codex interactively in a tmux window from `$C` (main session drives it; the user's `~/.codex` is untouched because these are project-level hooks). 0.153.4 has only `-a on-request|never`, so force a prompt with a read-only sandbox plus a command that must write:
 
 ```bash
-tmux new-window -d -n codex-capture -c "$S" "codex --ask-for-approval untrusted 'run: ls -la'"
-# approve at /hooks when prompted (first run of project hooks needs approval), approve the shell command
-# → PermissionRequest.log + PostToolUse.log
-# then send a long prompt ("count to 200 slowly, one per line") and press Ctrl-C mid-turn → Interrupt.log
+tmux new-window -d -n codex-capture -c "$C" "codex -a on-request -s read-only"
+# 1. /hooks → approve the three project hooks (first run of project-level hooks)
+# 2. prompt: "Run exactly this shell command and nothing else: echo hi > /tmp/codex-capture-probe.txt"
+#    → codex asks for approval (sandbox is read-only) → PermissionRequest.log; approve → PostToolUse.log
+# 3. prompt: "count from 1 to 500, one number per line" and press Ctrl-C while it streams → Interrupt.log
+# 4. /quit
 ```
 
-Each log holds one JSON object per line. Take the first line of each into `<PurdexName>.raw.json` in the fixtures scratch dir.
-
-If `--ask-for-approval untrusted` does not exist in 0.153.4, use `codex --help` to find the flag that forces prompting (`-a`/`--ask-for-approval` with `untrusted` or `on-request`).
+Each log holds one JSON object per line. Copy the first line of each into `$S/codex-fixtures/<PurdexName>.raw.json` (`PdxPermissionRequest`, `PdxPostToolUse`, `PdxInterrupt`). If a log is empty, run `codex --help | grep -A6 ask-for-approval` and adjust; do not edit `~/.codex/*`.
 
 - [ ] **Step 3: Scrub and write fixtures**
 
-Write a jq scrub filter to `$scratch/scrub.jq`:
+Write `$S/scrub.jq`:
 
 ```jq
 def scrub:
@@ -1230,12 +1266,13 @@ scrub
 
 ```bash
 OUT=internal/agent/codex/testdata/codex-0.153.4-payloads; mkdir -p "$OUT"
-for f in <scratch>/codex-fixtures/*.raw.json; do n=$(basename "$f" .raw.json); jq -S -f <scratch>/scrub.jq "$f" > "$OUT/$n.json"; done
+for f in "$S"/codex-fixtures/*.raw.json; do n=$(basename "$f" .raw.json); jq -S -f "$S/scrub.jq" "$f" > "$OUT/$n.json"; done
 printf '0.153.4\n' > internal/agent/codex/testdata/codex-0.153.4-version.txt
 grep -rl '/Users/wake' "$OUT" && echo "LEAK" || echo "clean"
+ls "$OUT" | wc -l
 ```
 
-Expected: `clean`; 10 files.
+Expected: `clean`; `10`.
 
 - [ ] **Step 4: Write `codex-0.153.4-source.md`** — record: codex-cli version (`codex --version` → `codex-cli 0.153.4`), docs URL + fetch date, the DB query (Step 1) with the note that payloads live in `agent_trace_chains.root_payload_json.raw_event`, the live-capture procedure (Step 2, including that `~/.codex` was never modified), the scrub rules table, and a fixture-by-fixture table with columns `Fixture | Class (runtime-trace) | Source (db / live) | Keys DeriveStatus reads`.
 
@@ -1250,14 +1287,14 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Frozen manifest + events.json + classification test
+### Task 8: Frozen manifest + events.json + classification test
 
 **Files:**
 - Create: `internal/agent/codex/testdata/codex-0.153.4-manifest.json`, `codex-0.153.4-events.json`
 - Create: `internal/agent/codex/fixtures_test.go`
 
 **Interfaces:**
-- Produces: `loadCodexFrozenEvents(t) codexFrozenEvents`, `loadCodexFrozenManifest(t) codexFrozenManifest` (test helpers used by Task 8).
+- Produces: `loadCodexFrozenEvents(t) codexFrozenEvents`, `loadCodexFrozenManifest(t) codexFrozenManifest` (test helpers used by Task 9).
 
 - [ ] **Step 1: Write the test first** — `fixtures_test.go`:
 
@@ -1403,7 +1440,7 @@ func TestCodexEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 Run: `go test ./internal/agent/codex/ -run TestCodexEvents_ClassifyAgainstFrozenManifest 2>&1 | tail -5`
 Expected: FAIL — `load events.json: no such file`.
 
-- [ ] **Step 3: Write `codex-0.153.4-events.json`** (14 entries):
+- [ ] **Step 3: Write `codex-0.153.4-events.json`** (14 entries; `status` values are the `agent.Status` strings `running|waiting|idle|clear`):
 
 ```json
 {
@@ -1430,9 +1467,7 @@ Expected: FAIL — `load events.json: no such file`.
 }
 ```
 
-(Status values are the `agent.Status` strings: check `internal/agent/status.go` constants — `running`, `waiting`, `idle`, `clear` — and use exactly those.)
-
-- [ ] **Step 4: Write `codex-0.153.4-manifest.json`**:
+- [ ] **Step 4: Write `codex-0.153.4-manifest.json`** (`ignored` = 2 ignored + 2 retired):
 
 ```json
 {
@@ -1454,8 +1489,6 @@ Expected: FAIL — `load events.json: no such file`.
 }
 ```
 
-(`ignored` = 2 ignored + 2 retired.)
-
 - [ ] **Step 5: Run**
 
 Run: `go test ./internal/agent/codex/ -run TestCodexEvents_ClassifyAgainstFrozenManifest 2>&1 | tail -5`
@@ -1472,15 +1505,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 8: Payload contract test
+### Task 9: Payload contract test
 
 **Files:**
 - Modify: `internal/agent/codex/fixtures_test.go`
 
 **Interfaces:**
-- Consumes: fixtures from Task 6, `events.json` `status` field from Task 7.
+- Consumes: fixtures from Task 7, `events.json` `status` field from Task 8.
 
-- [ ] **Step 1: Append the test**
+- [ ] **Step 1: Append the test** (add `"strings"` to the imports):
 
 ```go
 // TestCodexPayloadFixtures_DeriveStatusContract runs every installable
@@ -1501,7 +1534,7 @@ func TestCodexPayloadFixtures_DeriveStatusContract(t *testing.T) {
 			if err != nil {
 				t.Fatalf("missing payload fixture: %v", err)
 			}
-			if bytesContain(raw, "/Users/wake") {
+			if strings.Contains(string(raw), "/Users/wake") {
 				t.Fatalf("fixture leaks a real home path")
 			}
 			var probe map[string]any
@@ -1521,13 +1554,7 @@ func TestCodexPayloadFixtures_DeriveStatusContract(t *testing.T) {
 		})
 	}
 }
-
-func bytesContain(b []byte, s string) bool {
-	return len(s) > 0 && len(b) >= len(s) && strings.Contains(string(b), s)
-}
 ```
-
-Add `"strings"` to the imports.
 
 - [ ] **Step 2: Run**
 
@@ -1545,7 +1572,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 9: CheckHooks version test with a fake `codex` on PATH
+### Task 10: CheckHooks version test with a fake `codex` on PATH
 
 **Files:**
 - Modify: `internal/agent/codex/hooks_test.go`
@@ -1553,7 +1580,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: `agent.ResetHookAgentVersionCache()`, `agent.DetectHookAgentVersion("codex", "--version")` (already used by `CheckHooks`).
 
-- [ ] **Step 1: Write the test** (mirror `fakeOpenCodeVersion`):
+- [ ] **Step 1: Write the test** (mirror `fakeOpenCodeVersion`; `hooks_test.go` is `package codex` and already imports `agent`):
 
 ```go
 func fakeCodexVersion(t *testing.T, output string) {
@@ -1600,8 +1627,6 @@ func TestCodexCheckHooks_ExceedsSupportAgainstPin(t *testing.T) {
 }
 ```
 
-`hooks_test.go` is `package codex` (internal) — confirm the file's package clause and that `agent` is imported; add the import if missing.
-
 - [ ] **Step 2: Run**
 
 Run: `go test ./internal/agent/codex/ -run TestCodexCheckHooks_ExceedsSupportAgainstPin -v 2>&1 | tail -10`
@@ -1622,13 +1647,66 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 4: PR 2** (main session)
 
 ```bash
-gh pr create --title "test(codex): freeze codex-cli 0.153.4 hook fixtures and version pin (#1159, PR 2/2)" --body "Spec: docs/specs/2026-09-18-codex-hooks-catalog-spec.md §PR 2. Plan Tasks 6–9. Fixtures: 7 from agent_trace_chains.root_payload_json (scrubbed), 3 live-captured (PermissionRequest, PostToolUse, Interrupt) via a scratch project .codex/hooks.json — ~/.codex untouched. Closes #1159."
+git push -u origin worktree-codex-hooks-fixtures
+gh pr create --title "test(codex): freeze codex-cli 0.153.4 hook fixtures and version pin (#1159, PR 2/2)" --body "Spec: docs/specs/2026-09-18-codex-hooks-catalog-spec.md §PR 2. Plan Tasks 7–10. Fixtures: 7 from agent_trace_chains.root_payload_json (scrubbed), 3 live-captured (PermissionRequest, PostToolUse, Interrupt) via a scratch project .codex/hooks.json — ~/.codex untouched. Closes #1159."
 ```
+
+Then R1 review only (test-only PR, no R2 unless R1 raises a critical), merge, bump PR.
+
+---
+
+### Task 11: Deploy + spec §3 acceptance on mlab (main session, after the PR 1 bump is on origin/main)
+
+Do this once after PR 1's bump (the SPA/daemon behaviour is all in PR 1); PR 2 needs no acceptance beyond its tests.
+
+- [ ] **Step 1: Deploy daemon**
+
+```bash
+git -C /Users/wake/Workspace/wake/purdex pull --ff-only origin main   # main checkout
+cd /Users/wake/Workspace/wake/purdex && go build -o bin/pdx ./cmd/pdx && pdx stop; pdx start
+sleep 3 && curl -s http://100.64.0.2:7860/api/version ; pdx status | head -5
+```
+
+Expected: daemon reports the bumped version.
+
+- [ ] **Step 2: §3.1 — Host › Hooks › codex shows `Hook Support Through 0.153.4`, no version warning.** Open the SPA (`http://100.64.0.2:5174`) → Host › Hooks → codex. Also: `curl -s http://100.64.0.2:7860/api/hooks/codex/status | jq '{supportedVersion, agentVersion, exceedsSupport, installed, issues}'` → `supportedVersion:"0.153.4"`, `exceedsSupport:false`.
+
+- [ ] **Step 3: §3.2 — Install.** Press Install (or `curl -s -X POST http://100.64.0.2:7860/api/hooks/codex/setup`), then:
+
+```bash
+jq -r '.hooks | keys[]' ~/.codex/hooks.json | sort | tr '\n' ' '; echo
+# → Interrupt PermissionRequest PostToolUse PreToolUse SessionEnd SessionStart Stop SubagentStart SubagentStop UserPromptSubmit
+jq '.hooks.SessionEnd[0].hooks[0].timeout, .hooks.Stop[0].hooks[0].timeout' ~/.codex/hooks.json      # 3, 5
+jq '.hooks | has("Notification"), has("StopFailure")' ~/.codex/hooks.json                             # false false
+grep -nE '^\[features\]|^hooks = |codex_hooks' ~/.codex/config.toml                                    # hooks = true, no codex_hooks
+grep -c 'trusted_hash' ~/.codex/config.toml                                                            # ≥ 8 (unchanged events keep their state)
+```
+
+- [ ] **Step 4: §3.3 — Start codex in a tmux pane.** `tmux new-window -n codex-accept codex`; the first lines must contain no `deprecated:` and no `warning: clamping`. `/hooks` asks approval only for `PostToolUse` and `Interrupt`; approve.
+
+- [ ] **Step 5: §3.4 — Runtime.** Ask codex to run a tool (`ls`), then Ctrl-C mid-turn on a long answer:
+
+```bash
+grep -E 'purdex_name=Pdx(PostToolUse|Interrupt)' ~/.config/pdx/logs/pdx.log | tail -4
+```
+
+Expected: a `PdxPostToolUse` line with `status=running` after the tool call; a `PdxInterrupt` line with `status=idle` right after Ctrl-C, and the tab light goes idle without waiting for a probe (watch the SPA tab).
+
+- [ ] **Step 6: §3.5 — Remove.** `pdx setup --agent codex --remove` (or the SPA Remove button) →
+
+```bash
+jq '.hooks | length' ~/.codex/hooks.json          # 0 (or only third-party keys)
+grep -n '^hooks = ' ~/.codex/config.toml          # still "hooks = true" — features untouched
+```
+
+Then reinstall (Step 3) so the user's daily setup is back.
+
+- [ ] **Step 7: Report** to `mini-lab/_mrdx8h` via `pdx msg send`: PR numbers, bump versions, and the §3.1–§3.5 results.
 
 ---
 
 ## Self-review
 
-- **Spec coverage:** §2.1 catalog → Task 1; §2.2 derive → Task 2; §2.3 installer (retired strip, timeout, feature flag, version, hooks.state test) → Task 3; §2.4 module cases → Task 4; §2.5 test list → Tasks 1–3 (each named test is renamed/updated where listed; `drift_test` in Task 2; `provider_test` in Task 2 with the recorded deviation); PR 2 fixtures/manifest/tests → Tasks 6–9; §3 acceptance is a main-session step after deploy (not a plan task); §5 size guard → Task 5.
-- **Placeholders:** none — every step carries code or an exact command. Task 6 Step 2 depends on the live codex flag name; the fallback instruction is explicit.
-- **Type consistency:** `codexRetiredUpstreamEvents` (slice) used in Tasks 3 and 7 consistently; `codexHookTimeoutSeconds(string) int`; `writeCodexConfigText(t, home, text)`; frozen structs `codexFrozenEvents`/`codexFrozenManifest` defined in Task 7 and consumed in Task 8; `fakeCodexVersion` defined in Task 9 only.
+- **Spec coverage:** §2.1 catalog → Task 1; §2.2 derive → Task 2; §2.3 installer: retired strip + cleanup + version → Task 3, timeout + feature flag + hooks.state → Task 5; §2.4 module cases → Task 4; §2.5 test list → Tasks 1–3, 5 (`drift_test` + `provider_test` in Task 2, SupportedStatuses unchanged); PR 2 fixtures/manifest/tests → Tasks 7–10 with the branch cut in Task 7 Step 0; §3 acceptance → Task 11; §5 size guard → Task 6 Step 1 (executable: Task 5 is the last commit and stands alone).
+- **Placeholders:** none — every step carries code or an exact command; Task 7 Step 2's fallback is explicit.
+- **Type consistency:** `codexRetiredUpstreamEvents` (slice) defined in Task 3 and used in Tasks 3/5/8; `codexHookTimeoutSeconds(string) int` in Task 5; `writeCodexConfigText(t, home, text)` defined in Task 5 and used only there; frozen structs `codexFrozenEvents`/`codexFrozenManifest` defined in Task 8 and consumed in Task 9; `fakeCodexVersion` defined in Task 10 only.
