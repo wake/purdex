@@ -14,8 +14,6 @@ import {
 import { aliasDrift, pairStatus, type PairStatus, type Side } from '../../lib/peer-pairing'
 import { loadPairings, type PairingApi, type PairingAppHost, type PairingRow, type PairingSnapshot } from '../../lib/peer-pairing-load'
 
-const api: PairingApi = { info: fetchHostInfo, settings: fetchPeerSettings, list: listPeerHosts, verify: verifyPeerHost }
-
 const STATUS_CLASS: Record<PairStatus, string> = {
   bidirectional: 'text-status-success',
   'one-way': 'text-status-warning',
@@ -45,6 +43,10 @@ export function PeersSection({ hostId }: Props) {
     const toApp = (id: string): PairingAppHost => ({ hostId: id, name: hs[id]?.name ?? id, url: getDaemonBase(id), status: rt[id]?.status })
     const others = order.filter((id) => id !== hostId).map(toApp)
     const emit = (s: PairingSnapshot) => { if (gen.current === my) setSnap(s) }
+    // Built per run, not at module load: tests that fully mock host-api
+    // (without importOriginal) and load the module registry must not blow
+    // up just from this file being imported.
+    const api: PairingApi = { info: fetchHostInfo, settings: fetchPeerSettings, list: listPeerHosts, verify: verifyPeerHost }
     try {
       await loadPairings(toApp(hostId), others, api, emit)
     } finally {
