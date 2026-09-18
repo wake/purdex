@@ -61,16 +61,22 @@ describe('slugForCwd', () => {
     expect(slugForCwd('/Users/w/Workspace/wake/purdex', [])).toBe('purdex')
   })
 
-  it('matches a project stored as ~/… against an absolute cwd (host config keeps the path as typed)', () => {
-    const tilde = [project('t', 'plm', '~/Workspace/wake/ploom'), project('u', 'ws', '~/Workspace')]
-    expect(slugForCwd('/Users/w/Workspace/wake/ploom', tilde)).toBe('plm')
-    expect(slugForCwd('/Users/w/Workspace/wake/ploom/sub', tilde)).toBe('plm')
-    expect(slugForCwd('/Users/w/Workspace/other', tilde)).toBe('ws')
-    // The suffix must start at a segment boundary: `/AltWorkspace` ≠ `/Workspace`,
-    // so nothing matches and the basename fallback answers.
-    expect(slugForCwd('/Users/w/AltWorkspace/wake/ploom', tilde)).toBe('ploom')
-    // A partial hit earlier in the path does not hide a real one later.
-    expect(slugForCwd('/Users/w/Workspace/wake/ploomX/Workspace/wake/ploom', tilde)).toBe('plm')
+  it('expands a ~/… project with the host home and matches segment-wise (codex attacker F5)', () => {
+    const tilde = [project('t', 'plm', '~/Workspace/wake/ploom'), project('u', 'ws', '~/w')]
+    const home = '/Users/x'
+    expect(slugForCwd('/Users/x/Workspace/wake/ploom', tilde, home)).toBe('plm')
+    expect(slugForCwd('/Users/x/Workspace/wake/ploom/sub', tilde, home)).toBe('plm')
+    expect(slugForCwd('/Users/x/w/repo', tilde, home)).toBe('ws')
+    // `~/w` is `/Users/x/w`, not any `/w` segment somewhere below home.
+    expect(slugForCwd('/Users/x/other/w/repo', tilde, home)).toBe('repo')
+    // Another user's home is not this home.
+    expect(slugForCwd('/Users/y/w/repo', tilde, home)).toBe('repo')
+  })
+
+  it('ignores ~/… projects when the host home is unknown (never guesses)', () => {
+    const tilde = [project('t', 'plm', '~/Workspace/wake/ploom')]
+    expect(slugForCwd('/Users/x/Workspace/wake/ploom', tilde)).toBe('ploom')
+    expect(slugForCwd('/Users/x/Workspace/wake/ploom', tilde, '')).toBe('ploom')
   })
 
   it('falls back when the matching project has an empty slug', () => {

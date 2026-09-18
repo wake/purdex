@@ -21,6 +21,7 @@
 import { useTabStore } from '../../stores/useTabStore'
 import { useNexHostStore, selectHandoffReady } from '../../stores/useNexHostStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
+import { checkHostPath, type HostProject } from '../host-config-api'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { resumeLookupFor, resumeTemplateFor } from '../resume-templates'
 import { nextProjectSessionName } from '../launch-session-name'
@@ -102,6 +103,23 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
     )
     return { result, swapped }
   })
+}
+
+/**
+ * The host's home, resolved by the daemon (`check-path` expands `~`), only
+ * when a project is stored as `~/…` — the slug lookup needs it to compare
+ * against an absolute execution cwd. Best effort: on any failure the
+ * `~/…` projects are skipped (never guessed), so the name falls back to the
+ * cwd basename.
+ */
+async function hostHomeFor(hostId: string, projects: readonly HostProject[]): Promise<string | undefined> {
+  if (!projects.some((p) => p.path === '~' || p.path.startsWith('~/'))) return undefined
+  try {
+    const check = await checkHostPath(hostId, '~')
+    return check.status === 'dir' ? check.resolved : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export interface TakeBackArgs {
@@ -191,7 +209,8 @@ export async function takeToTerminal(args: TakeToTerminalArgs): Promise<TakeToTe
     await useHostConfigStore.getState().ensureLoaded(hostId)
     const resume_command = resumeTemplateFor(resumeLookupFor(hostId), 'cc')
     if (!resume_command) throw new HandoffApiError(0, 'missing_resume_command', {})
-    const slug = slugForCwd(cwd, useHostConfigStore.getState().byHost[hostId]?.projects ?? [])
+    const projects = useHostConfigStore.getState().byHost[hostId]?.projects ?? []
+    const slug = slugForCwd(cwd, projects, await hostHomeFor(hostId, projects))
     const liveNames = (useSessionStore.getState().sessions[hostId] ?? []).map((s) => s.name)
     const refused: string[] = []
     const request = async (): Promise<NexTakeToTerminalResult> => {

@@ -30,16 +30,26 @@ export function fallbackSlugFor(cwd: string): string {
  * The slug of the project whose path equals `cwd` or is its nearest ancestor
  * (segment-wise: `/a/b` is not an ancestor of `/a/bc`); a project with an
  * empty slug does not count. Otherwise `fallbackSlugFor(cwd)`.
+ *
+ * A project path is stored as the user typed it, so `~/…` is common (the
+ * daemon expands it only when it checks the path, `hostconfig/checkpath.go`),
+ * while an execution cwd is always absolute. `home` is the host's home as the
+ * daemon resolves it (`checkHostPath(hostId, '~').resolved`); a `~/…` project
+ * is expanded with it and compared like any other. Without a home, `~/…`
+ * projects are skipped — a suffix guess matched `~/w` to `/x/other/w` (codex
+ * attacker F5), so this never guesses.
  */
-export function slugForCwd(cwd: string, projects: readonly HostProject[]): string {
+export function slugForCwd(cwd: string, projects: readonly HostProject[], home?: string): string {
   const target = stripTrailingSlashes(cwd)
+  const hm = home ? stripTrailingSlashes(home) : ''
   let best: HostProject | undefined
   let bestLen = -1
   for (const p of projects) {
     if (!p.slug) continue
-    const path = stripTrailingSlashes(p.path)
+    const path = expandHome(stripTrailingSlashes(p.path), hm)
     if (path === '') continue
-    if (ancestorOf(path, target) && path.length > bestLen) {
+    const ancestor = target === path || target.startsWith(`${path}/`)
+    if (ancestor && path.length > bestLen) {
       best = p
       bestLen = path.length
     }
@@ -47,23 +57,9 @@ export function slugForCwd(cwd: string, projects: readonly HostProject[]): strin
   return best ? best.slug : fallbackSlugFor(cwd)
 }
 
-/**
- * Is `path` the cwd itself or a segment-wise ancestor of it? A project path
- * is stored as the user typed it, so `~/…` is common (the daemon expands it
- * only when it checks the path, `hostconfig/checkpath.go`), while an
- * execution cwd is always absolute. The SPA does not know the host's home,
- * so a `~/rest` project matches when `/rest` is a segment-aligned suffix of
- * some prefix of the cwd — i.e. the cwd is `<home>/rest` or below it.
- */
-function ancestorOf(path: string, target: string): boolean {
-  if (path === '~' ) return false
-  if (path.startsWith('~/')) {
-    const rest = path.slice(1) // "/Workspace/wake/ploom" — leads with "/", so every hit is segment-aligned
-    for (let at = target.indexOf(rest, 1); at > 0; at = target.indexOf(rest, at + 1)) {
-      const after = target.slice(at + rest.length)
-      if (after === '' || after.startsWith('/')) return true
-    }
-    return false
-  }
-  return target === path || target.startsWith(`${path}/`)
+/** `~` / `~/rest` → `<home>` / `<home>/rest`; `''` when there is no home to expand with. */
+function expandHome(path: string, home: string): string {
+  if (path === '~') return home
+  if (path.startsWith('~/')) return home ? `${home}${path.slice(1)}` : ''
+  return path
 }
