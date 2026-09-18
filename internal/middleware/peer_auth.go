@@ -60,7 +60,17 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 // ?ticket= is never consulted. An empty admin token disables (1) only.
 // hostAllowed decides whether a host principal may reach this request at
 // all (admin may reach everything); a refused host gets 403.
-func PeerAuth(adminToken func() string, peers func() config.PeersConfig, hostAllowed func(r *http.Request) bool) func(http.Handler) http.Handler {
+//
+// matchHost is config.PeersConfig.MatchInboundToken over the LIVE config,
+// supplied by the caller (cmd/pdx/http_chain.go) so that the match and its
+// observation — "this bearer authenticated as this host", which the peers
+// module's rotation gates depend on — happen in ONE critical section under
+// the config read-lock: a config writer (UpdateConfig takes the write-lock)
+// then cannot land between the match and the note. PeerAuth itself reads
+// no config and makes no note; it only turns the match into a Principal.
+// The match is observed before hostAllowed is consulted: a 403 is a policy
+// refusal of a bearer that did authenticate.
+func PeerAuth(adminToken func() string, matchHost func(bearer string) (config.PeerHost, bool, bool), hostAllowed func(r *http.Request) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			bearer, ok := bearerToken(r)
@@ -74,7 +84,7 @@ func PeerAuth(adminToken func() string, peers func() config.PeersConfig, hostAll
 				return
 			}
 
-			if host, usedPrev, matched := peers().MatchInboundToken(bearer); matched {
+			if host, usedPrev, matched := matchHost(bearer); matched {
 				if !hostAllowed(r) {
 					http.Error(w, "forbidden", http.StatusForbidden)
 					return

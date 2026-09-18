@@ -12,7 +12,10 @@ import (
 	"testing"
 
 	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
+	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
 )
 
@@ -448,11 +451,7 @@ func TestPeerAuth_EndToEnd_PendingRotation_CommitGate(t *testing.T) {
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
-	handler := middleware.PeerAuth(
-		func() string { c.CfgMu.RLock(); defer c.CfgMu.RUnlock(); return c.Cfg.Token },
-		func() config.PeersConfig { c.CfgMu.RLock(); defer c.CfgMu.RUnlock(); return c.Cfg.Peers },
-		HostRoutePolicy,
-	)(mux)
+	handler := peerAuthChain(c, m, mux)
 	do := func(method, target, bearer string, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, target, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+bearer)
@@ -576,41 +575,23 @@ func TestRotateCancel_FailedWriteLeavesRecordAndGateIntact(t *testing.T) {
 // ---- the record is bound to the token, not to the moment (final review C1) ----
 
 // A dial that passed PeerAuth with tX BEFORE an admin rotate (prev := tX,
-// current := tX', record reset) but whose note lands AFTER the reset must
-// read "prev", not "current": the peer only holds tX, and a commit on that
-// evidence would lock it out. PeerAuth's match and the handler's note are
-// two separate critical sections; the record therefore stores WHICH token
-// (by fingerprint) and derives the state against the entry at read time.
-// pause holds the request between the two, and the rotate lands in between.
+// current := tX', record reset) but whose HANDLER note lands AFTER the
+// reset must read "prev", not "current": the peer only holds tX, and a
+// commit on that evidence would lock it out. The matcher's observation
+// (under CfgMu.RLock) precedes the rotate's reset and the handler's second
+// note follows it; the record stores WHICH token (by fingerprint) and
+// derives the state against the entry at read time, so either note reads
+// "prev". pause holds the request between PeerAuth and the handler, and
+// the rotate lands in between.
 func TestRotate_DialAuthenticatedBeforeRotateNotesAfterReset_ReadsPrev(t *testing.T) {
 	const tX = rotTokPrev
 	h := config.PeerHost{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: "out-a", InboundToken: tX}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "admin-secret", []config.PeerHost{h})
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
-	mux := http.NewServeMux()
-	m.RegisterRoutes(mux)
 
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	pause := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		once.Do(func() { close(entered); <-release }) // first request only: PeerAuth has matched, the note has not landed
-		mux.ServeHTTP(w, r)
-	})
-	handler := middleware.PeerAuth(
-		func() string { c.CfgMu.RLock(); defer c.CfgMu.RUnlock(); return c.Cfg.Token },
-		func() config.PeersConfig { c.CfgMu.RLock(); defer c.CfgMu.RUnlock(); return c.Cfg.Peers },
-		HostRoutePolicy,
-	)(pause)
-
+	handler, entered, release := pausedPeerAuthChain(c, m)
 	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
-		req.Header.Set("Authorization", "Bearer "+tX)
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		done <- rr
-	}()
+	go func() { done <- dialThrough(handler, tX) }()
 	<-entered
 	rr, b := rotate(t, m, "air")
 	if rr.Code != http.StatusOK {
@@ -629,5 +610,118 @@ func TestRotate_DialAuthenticatedBeforeRotateNotesAfterReset_ReadsPrev(t *testin
 	}
 	if rr := gate(t, m, "air", "commit", false); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
 		t.Fatalf("commit on a pre-rotate dial = %d %q; want 409 rotation unconfirmed (the peer only holds tX)", rr.Code, errorOf(t, rr))
+	}
+}
+
+// pausedPeerAuthChain is the real PeerAuth chain (peerAuthChain) with a
+// pause handler between PeerAuth and the routes: the FIRST request through
+// it closes entered once PeerAuth has matched (and, in production shape,
+// observed) its bearer, then blocks until release is closed. Every later
+// request passes straight through. Channels, not sleeps, order the race.
+func pausedPeerAuthChain(c *core.Core, m *Module) (handler http.Handler, entered <-chan struct{}, release chan<- struct{}) {
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	in := make(chan struct{})
+	out := make(chan struct{})
+	var once sync.Once
+	pause := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(in); <-out })
+		mux.ServeHTTP(w, r)
+	})
+	return peerAuthChain(c, m, pause), in, out
+}
+
+func dialThrough(handler http.Handler, bearer string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	return rr
+}
+
+// ---- the observation is atomic with the match (codex F2) ----
+
+// The record says "current" (the peer dialled with the new token). Then a
+// request with the OLD token passes PeerAuth — that bearer has
+// authenticated — and pauses before its handler. A commit landing now must
+// be 409: the peer has just proven it still presents the old token, and
+// dropping it would lock the peer out. Before F2 the match and the note
+// were two critical sections: the gate saw only the stale "current", the
+// commit went through (200), and the paused request then noted a token the
+// entry no longer had. The matcher now observes the match INSIDE its
+// CfgMu.RLock hold, which the commit's UpdateConfig (CfgMu.Lock) must wait
+// for — so the observation is visible to the gate.
+func TestRotateCommit_RequestMatchedOnOldTokenBeforeHandler_Is409(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "admin-secret", []config.PeerHost{pendingHost()})
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air")) // record: "current"
+	handler, entered, release := pausedPeerAuthChain(c, m)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- dialThrough(handler, rotTokPrev) }() // matches the OLD token, then pauses
+	<-entered
+
+	if rr := gate(t, m, "air", "commit", false); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
+		t.Fatalf("commit while an old-token request has authenticated but not reached its handler = %d %q; want 409 rotation unconfirmed", rr.Code, errorOf(t, rr))
+	}
+	close(release)
+	if dial := <-done; dial.Code != http.StatusOK {
+		t.Fatalf("old-token dial = %d; body=%s", dial.Code, dial.Body.String())
+	}
+	if got := loadCfg(t, cfgPath).Peers.Hosts[0]; got.InboundToken != rotTokCur || got.InboundTokenPrev != rotTokPrev {
+		t.Fatalf("rotation state changed: cur %q prev %q", got.InboundToken, got.InboundTokenPrev)
+	}
+	row := listRow(t, m, "air")
+	if !row.RotationPending || row.LastInboundAuth != "prev" {
+		t.Fatalf("row = %+v; want pending with last_inbound_auth \"prev\"", row)
+	}
+}
+
+// Symmetric for cancel: the record says "prev", a NEW-token request passes
+// PeerAuth and pauses, and a cancel landing now must be 409 — the peer has
+// just presented the new token, and restoring the old one would drop it.
+func TestRotateCancel_RequestMatchedOnNewTokenBeforeHandler_Is409(t *testing.T) {
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "admin-secret", []config.PeerHost{pendingHost()})
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, prevPrincipal("air")) // record: "prev"
+	handler, entered, release := pausedPeerAuthChain(c, m)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- dialThrough(handler, rotTokCur) }() // matches the NEW token, then pauses
+	<-entered
+
+	if rr := gate(t, m, "air", "cancel", false); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
+		t.Fatalf("cancel while a new-token request has authenticated but not reached its handler = %d %q; want 409 rotation unconfirmed", rr.Code, errorOf(t, rr))
+	}
+	close(release)
+	if dial := <-done; dial.Code != http.StatusOK {
+		t.Fatalf("new-token dial = %d; body=%s", dial.Code, dial.Body.String())
+	}
+	if got := loadCfg(t, cfgPath).Peers.Hosts[0]; got.InboundToken != rotTokCur || got.InboundTokenPrev != rotTokPrev {
+		t.Fatalf("rotation state changed: cur %q prev %q", got.InboundToken, got.InboundTokenPrev)
+	}
+	row := listRow(t, m, "air")
+	if !row.RotationPending || row.LastInboundAuth != "current" {
+		t.Fatalf("row = %+v; want pending with last_inbound_auth \"current\"", row)
+	}
+}
+
+// Init installs the observer on the core (the way the session module
+// installs TmuxAliveFunc), and what it installs is the record's writer.
+func TestInit_InstallsHostAuthObserver(t *testing.T) {
+	cfg := &config.Config{DataDir: t.TempDir(), Peers: config.PeersConfig{Hosts: []config.PeerHost{pendingHost()}}}
+	c := core.New(core.CoreDeps{Config: cfg, Registry: core.NewServiceRegistry()})
+	c.Registry.Register(session.RegistryKey, &fakeSessions{})
+	c.Registry.Register(agent.OwnerResolverKey, &fakeOwners{})
+	m := New(nil, nil)
+	if err := m.Init(c); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if c.HostAuthObserver == nil {
+		t.Fatal("Init did not install core.HostAuthObserver")
+	}
+	c.HostAuthObserver("air", config.TokenFingerprint(rotTokCur))
+	if got := m.lastInboundAuth(pendingHost()); got != "current" {
+		t.Fatalf("observer note derives %q, want \"current\"", got)
 	}
 }

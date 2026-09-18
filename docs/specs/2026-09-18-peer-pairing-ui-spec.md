@@ -443,13 +443,12 @@ request.
 | `POST /api/peers/hosts/{alias}/rotate/cancel` body `{force?: bool}` | `current := prev; prev := ""` | `200 hostRow`; `409 no rotation pending` when `prev == ""` (there is nothing safe to restore); **`409 rotation unconfirmed`** when `prev != ""` and `last_inbound_auth != "prev"` unless `force` (the peer has been seen on the new token — `"current"` — or not seen at all — `""` — so dropping the new one may lock it out); 404 |
 
 All three mutate inside one `UpdateConfig` closure, re-finding the entry by alias under the lock;
-both gates read the in-memory record under the module's own mutex inside that closure. The check
-and the write happen under one hold of the record's mutex, so a dial that authenticates
-concurrently is recorded only after the gate check — it is future evidence, and it is not lost: it
-reads whatever its token derives to (§6.2); after such a commit an old-token note derives `""` with
-no rotation pending, the next verify shows red, and the page repairs by rotating again (§6.4 last
-row). Neither gate is a proof about
-the future; each is a proof that the operation is not *already known* to be a lock-out.
+both gates read the in-memory record under the module's own mutex inside that closure. A
+host-token match and its observation happen together under the config read-lock, and both gates
+run under the config write-lock, so every authentication that completed before a commit or cancel
+is visible to its gate; a request that has not yet matched when the write lands authenticates
+against the new state. Neither gate is a proof about the future; each is a proof that the
+operation is not *already* known to be a lock-out.
 `rotate` mints with `mintInboundToken(adminToken)` (never the admin token; a 128-bit random
 collision with any other entry is not checked, as today at POST). `force` exists for the operator
 whose peer is gone for good; the page never sends it (§7.3), the CLI requires `--force` spelled out.

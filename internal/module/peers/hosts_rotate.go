@@ -14,10 +14,14 @@ import (
 // inside one UpdateConfig closure, re-finding the entry by alias under the
 // lock. The two gates derive the state from the in-memory record
 // (rotation.go) inside that closure and HOLD rotMu from the check through
-// the write, so a dial that authenticates concurrently is noted only after
-// the gate check: it is future evidence, judged on the next read by the
-// token it carries. Neither gate is a proof about the future; each is a
-// proof that the operation is not ALREADY known to be a lock-out (D-7).
+// the write. A host-token match and its observation happen together under
+// CfgMu.RLock (the matcher in cmd/pdx/http_chain.go calls noteInboundFP
+// there), and the closure runs under CfgMu.Lock, so every authentication
+// that completed before the gate is visible to it; one that has not yet
+// matched when the write lands authenticates against the new state and is
+// future evidence, judged on the next read by the token it carries.
+// Neither gate is a proof about the future; each is a proof that the
+// operation is not ALREADY known to be a lock-out (D-7).
 // Lock order CfgMu → rotMu (the closure runs under CfgMu).
 //
 // The record stores WHICH token the peer presented (by fingerprint) and

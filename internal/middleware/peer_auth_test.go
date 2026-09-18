@@ -29,20 +29,34 @@ func nextRecordingPrincipal() (http.Handler, *bool, *middleware.Principal) {
 func allowAll(*http.Request) bool { return true }
 func denyAll(*http.Request) bool  { return false }
 
-func twoHosts() config.PeersConfig {
-	return config.PeersConfig{
+// matcherFor is the matcher PeerAuth takes, over a fixed PeersConfig: the
+// production one (cmd/pdx/http_chain.go) reads the live config under
+// CfgMu.RLock and notes the match there; here there is nothing to lock or
+// note.
+func matcherFor(p config.PeersConfig) func(string) (config.PeerHost, bool, bool) {
+	return func(bearer string) (config.PeerHost, bool, bool) {
+		return p.MatchInboundToken(bearer)
+	}
+}
+
+func noHosts() func(string) (config.PeerHost, bool, bool) {
+	return matcherFor(config.PeersConfig{})
+}
+
+func twoHosts() func(string) (config.PeerHost, bool, bool) {
+	return matcherFor(config.PeersConfig{
 		Hosts: []config.PeerHost{
 			{Alias: "alpha", HostID: "host-alpha", InboundToken: "tok-alpha"},
 			{Alias: "beta", HostID: "host-beta", InboundToken: "tok-beta"},
 			{Alias: "no-token", HostID: "host-none", InboundToken: ""},
 		},
-	}
+	})
 }
 
 func TestPeerAuthAdminBearerCallsNextWithAdminPrincipal(t *testing.T) {
 	next, called, seen := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := func() config.PeersConfig { return config.PeersConfig{} }
+	peersFn := noHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -64,7 +78,7 @@ func TestPeerAuthAdminBearerCallsNextWithAdminPrincipal(t *testing.T) {
 func TestPeerAuthEmptyAdminTokenDisablesAdminAuth(t *testing.T) {
 	next, called, _ := nextRecordingPrincipal()
 	adminFn := func() string { return "" }
-	peersFn := func() config.PeersConfig { return config.PeersConfig{} }
+	peersFn := noHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -85,7 +99,7 @@ func TestPeerAuthEmptyAdminTokenAndAdminBearerStill401(t *testing.T) {
 	// is also empty must not be treated as a match.
 	next, called, _ := nextRecordingPrincipal()
 	adminFn := func() string { return "" }
-	peersFn := func() config.PeersConfig { return config.PeersConfig{} }
+	peersFn := noHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -104,7 +118,7 @@ func TestPeerAuthEmptyAdminTokenAndAdminBearerStill401(t *testing.T) {
 func TestPeerAuthHostBearerCallsNextWithHostPrincipal(t *testing.T) {
 	next, called, seen := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := twoHosts
+	peersFn := twoHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -126,7 +140,7 @@ func TestPeerAuthHostBearerCallsNextWithHostPrincipal(t *testing.T) {
 func TestPeerAuthTwoHostsRightOneMatched(t *testing.T) {
 	next, called, seen := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := twoHosts
+	peersFn := twoHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -148,7 +162,7 @@ func TestPeerAuthTwoHostsRightOneMatched(t *testing.T) {
 func TestPeerAuthHostBearerOnDisallowedRequest403(t *testing.T) {
 	next, called, _ := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := twoHosts
+	peersFn := twoHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, denyAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers/hosts", nil)
@@ -167,7 +181,7 @@ func TestPeerAuthHostBearerOnDisallowedRequest403(t *testing.T) {
 func TestPeerAuthWrongBearer401(t *testing.T) {
 	next, called, _ := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := twoHosts
+	peersFn := twoHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -186,7 +200,7 @@ func TestPeerAuthWrongBearer401(t *testing.T) {
 func TestPeerAuthMissingBearer401(t *testing.T) {
 	next, called, _ := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := twoHosts
+	peersFn := twoHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -204,7 +218,7 @@ func TestPeerAuthMissingBearer401(t *testing.T) {
 func TestPeerAuthTicketNeverConsulted401(t *testing.T) {
 	next, called, _ := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := twoHosts
+	peersFn := twoHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers?ticket=x", nil)
@@ -222,7 +236,7 @@ func TestPeerAuthTicketNeverConsulted401(t *testing.T) {
 func TestPeerAuthBearerCaseInsensitivePrefix(t *testing.T) {
 	next, called, seen := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := func() config.PeersConfig { return config.PeersConfig{} }
+	peersFn := noHosts()
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -244,7 +258,7 @@ func TestPeerAuthBearerCaseInsensitivePrefix(t *testing.T) {
 func TestPeerAuthHostWithEmptyInboundTokenNeverMatchesEmptyBearer(t *testing.T) {
 	next, called, _ := nextRecordingPrincipal()
 	adminFn := func() string { return "admin-secret" }
-	peersFn := twoHosts // includes a host with InboundToken == ""
+	peersFn := twoHosts() // includes a host with InboundToken == ""
 	h := middleware.PeerAuth(adminFn, peersFn, allowAll)(next)
 
 	req := httptest.NewRequest("GET", "/api/peers", nil)
@@ -263,11 +277,9 @@ func TestPeerAuthHostWithEmptyInboundTokenNeverMatchesEmptyBearer(t *testing.T) 
 // TestPeerAuthPrevTokenSetsUsedPrevToken: during a rotation the old token
 // still authenticates as the same host, and the principal says so.
 func TestPeerAuthPrevTokenSetsUsedPrevToken(t *testing.T) {
-	peersFn := func() config.PeersConfig {
-		return config.PeersConfig{Hosts: []config.PeerHost{
-			{Alias: "beta", HostID: "host-beta", InboundToken: "tok-new", InboundTokenPrev: "tok-old"},
-		}}
-	}
+	peersFn := matcherFor(config.PeersConfig{Hosts: []config.PeerHost{
+		{Alias: "beta", HostID: "host-beta", InboundToken: "tok-new", InboundTokenPrev: "tok-old"},
+	}})
 	for _, tc := range []struct {
 		bearer   string
 		wantPrev bool
@@ -300,5 +312,69 @@ func TestPeerAuthPrevTokenSetsUsedPrevToken(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 || !*called || seen.Kind != middleware.PrincipalAdmin || seen.TokenFingerprint != "" {
 		t.Fatalf("admin: code=%d called=%v principal=%+v; want admin with empty TokenFingerprint", rec.Code, *called, *seen)
+	}
+}
+
+// TestPeerAuthMatcherObservesEverySuccessfulHostMatch: PeerAuth delegates
+// the match to the matcher it is given and touches no config itself, so
+// whatever the matcher records inside its own critical section
+// (production: the peers module's rotation note, under CfgMu.RLock) is
+// recorded exactly once per successful host match — including a match the
+// route policy then refuses with 403 (the bearer DID authenticate; the
+// refusal is policy, not authentication) — and never for an admin bearer
+// or for a bearer that matches nothing (401).
+func TestPeerAuthMatcherObservesEverySuccessfulHostMatch(t *testing.T) {
+	type obs struct{ alias, fp string }
+	var seen []obs
+	inner := twoHosts()
+	matcher := func(bearer string) (config.PeerHost, bool, bool) {
+		h, usedPrev, ok := inner(bearer)
+		if ok {
+			seen = append(seen, obs{h.Alias, config.TokenFingerprint(bearer)})
+		}
+		return h, usedPrev, ok
+	}
+	adminFn := func() string { return "admin-secret" }
+
+	serve := func(bearer string, allowed func(*http.Request) bool) int {
+		next, _, _ := nextRecordingPrincipal()
+		h := middleware.PeerAuth(adminFn, matcher, allowed)(next)
+		req := httptest.NewRequest("GET", "/api/peers", nil)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := serve("tok-alpha", allowAll); code != 200 {
+		t.Fatalf("host alpha: want 200, got %d", code)
+	}
+	if len(seen) != 1 || seen[0] != (obs{"alpha", config.TokenFingerprint("tok-alpha")}) {
+		t.Fatalf("after one host match: observations = %+v, want exactly [{alpha fp(tok-alpha)}]", seen)
+	}
+	if code := serve("admin-secret", allowAll); code != 200 {
+		t.Fatalf("admin: want 200, got %d", code)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("admin bearer was observed as a host match: %+v", seen)
+	}
+	if code := serve("nope", allowAll); code != 401 {
+		t.Fatalf("wrong bearer: want 401, got %d", code)
+	}
+	if code := serve("", allowAll); code != 401 {
+		t.Fatalf("missing bearer: want 401, got %d", code)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("a 401 was observed: %+v", seen)
+	}
+	// 403: the match happened, so it is observed; the policy refusal comes
+	// after authentication.
+	if code := serve("tok-beta", denyAll); code != 403 {
+		t.Fatalf("host beta on refused route: want 403, got %d", code)
+	}
+	if len(seen) != 2 || seen[1] != (obs{"beta", config.TokenFingerprint("tok-beta")}) {
+		t.Fatalf("after a 403 host match: observations = %+v, want [{alpha …} {beta fp(tok-beta)}]", seen)
 	}
 }

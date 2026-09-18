@@ -298,6 +298,9 @@ func (m *Module) Dependencies() []string { return []string{"session", "agent"} }
 // since GET /api/peers has no meaningful behavior without either.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	// The rotation record's authoritative observer: the peer auth matcher
+	// calls it under CfgMu.RLock for every host-token match (rotation.go).
+	c.HostAuthObserver = m.noteInboundFP
 
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {

@@ -4,7 +4,6 @@ package main
 import (
 	"net/http"
 
-	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
 	peersmod "github.com/wake/purdex/internal/module/peers"
@@ -19,17 +18,13 @@ func newOuterHandler(c *core.Core, mux http.Handler, allow []string) http.Handle
 		defer c.CfgMu.RUnlock()
 		return c.Cfg.Token
 	}
-	peersFn := func() config.PeersConfig {
-		c.CfgMu.RLock()
-		defer c.CfgMu.RUnlock()
-		p := c.Cfg.Peers
-		p.Hosts = append([]config.PeerHost(nil), p.Hosts...)
-		return p
-	}
 	isPairing := func() bool { return c.Pairing.Get() == core.StatePairing }
 
+	// peersmod.HostMatcher: the host-token match and its observation (the
+	// peers module's rotation note) are one critical section under
+	// CfgMu.RLock, so a config writer cannot interleave between them.
 	peerChain := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
-		middleware.PeerAuth(tokenFn, peersFn, peersmod.HostRoutePolicy)(mux))))
+		middleware.PeerAuth(tokenFn, peersmod.HostMatcher(c), peersmod.HostRoutePolicy)(mux))))
 	general := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
 		middleware.TokenAuth(tokenFn, c.Tickets)(mux))))
 

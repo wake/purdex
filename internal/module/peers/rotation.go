@@ -16,13 +16,25 @@ import (
 // the rotation epoch by construction, not by when the note landed:
 //
 //   - a note for a dial that authenticated just BEFORE a rotate but landed
-//     after it (PeerAuth's match and the handler's note are two separate
-//     critical sections) reads "prev" — that token is now the entry's prev,
+//     after it (the handler's note, below, is a separate critical section
+//     from the match) reads "prev" — that token is now the entry's prev,
 //     and a commit on it would lock the peer out;
 //   - after a cancel, a note for the old token reads "current" by itself —
 //     no rewrite step, nothing to order against the persist;
 //   - after a commit (or cancel), a note for the token that was dropped
 //     reads "" — it names a token the entry no longer has.
+//
+// WHO NOTES. The authoritative observation is the middleware one: Init
+// installs noteInboundFP as core.HostAuthObserver, and the peer auth
+// matcher (cmd/pdx/http_chain.go) calls it for every successful host-token
+// match INSIDE the same CfgMu.RLock hold as the match. The gates run under
+// CfgMu.Lock (UpdateConfig), so every authentication that completed before
+// a commit/cancel is visible to its gate — a request that has already
+// matched the old token but not yet reached its handler can no longer be
+// invisible to a commit that then drops that token (codex F2). The handlers'
+// noteInboundAuth(principal) is an idempotent second note of the same fact
+// (kept so handler tests that inject principals without the middleware
+// still exercise the record).
 //
 // It is in memory on purpose: after a daemon restart it reads "" and both
 // commit and cancel are refused until the peer dials again — fail-closed,
@@ -32,8 +44,9 @@ import (
 // request.
 //
 // Lock order: core.CfgMu → rotMu. The gates read the record inside an
-// UpdateConfig closure (CfgMu held) and take rotMu there; noteInboundAuth
-// takes rotMu only and never CfgMu, so the two can never deadlock.
+// UpdateConfig closure (CfgMu held) and take rotMu there; noteInboundFP
+// takes rotMu only and never CfgMu (it is called with CfgMu.RLock already
+// held by the matcher), so the two can never deadlock.
 
 const (
 	inboundAuthCurrent = "current"
@@ -49,22 +62,34 @@ type inboundAuth struct {
 	at time.Time
 }
 
-// noteInboundAuth records which token a host principal presented. Called at
-// the two places a host principal is served — handlePeers and handleDeliver
-// — BEFORE any policy or rate-limit refusal can return: the fact recorded is
-// "this bearer authenticated", which is true whether or not the request is
-// then refused. Admin principals are not peer dials and are ignored, as is
-// a host principal that carries no fingerprint (there is nothing to bind).
-func (m *Module) noteInboundAuth(p middleware.Principal) {
-	if p.Kind != middleware.PrincipalHost || p.Alias == "" || p.TokenFingerprint == "" {
+// noteInboundFP records that the host entry alias was authenticated by the
+// token with fingerprint fp. It is the core.HostAuthObserver (installed by
+// Init) and takes rotMu only — never CfgMu, which the caller already holds
+// for reading. Empty inputs mean there is nothing to bind and are ignored.
+func (m *Module) noteInboundFP(alias, fp string) {
+	if alias == "" || fp == "" {
 		return
 	}
 	m.rotMu.Lock()
 	if m.lastInbound == nil {
 		m.lastInbound = map[string]inboundAuth{}
 	}
-	m.lastInbound[p.Alias] = inboundAuth{fp: p.TokenFingerprint, at: m.now()}
+	m.lastInbound[alias] = inboundAuth{fp: fp, at: m.now()}
 	m.rotMu.Unlock()
+}
+
+// noteInboundAuth is the handlers' second, idempotent note of the fact the
+// matcher already observed (see the header). Called at the two places a
+// host principal is served — handlePeers and handleDeliver — BEFORE any
+// policy or rate-limit refusal can return: the fact recorded is "this
+// bearer authenticated", which is true whether or not the request is then
+// refused. Admin principals are not peer dials and are ignored, as is a
+// host principal that carries no fingerprint (there is nothing to bind).
+func (m *Module) noteInboundAuth(p middleware.Principal) {
+	if p.Kind != middleware.PrincipalHost {
+		return
+	}
+	m.noteInboundFP(p.Alias, p.TokenFingerprint)
 }
 
 // lastInboundAuthLocked derives "" | "current" | "prev" for the entry h

@@ -1,7 +1,32 @@
 // internal/module/peers/policy.go
 package peers
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/core"
+)
+
+// HostMatcher is the matcher cmd/pdx/http_chain.go hands to
+// middleware.PeerAuth: the host-token match over the LIVE config and its
+// observation (c.HostAuthObserver, installed by Init as noteInboundFP) in
+// ONE critical section under CfgMu.RLock. UpdateConfig's CfgMu.Lock() —
+// the rotation gates run inside it — therefore waits for every in-flight
+// authentication and sees its note (codex F2). The observer must be called
+// before RUnlock; moving it after reopens the window in which a commit
+// drops the token a peer has just authenticated with.
+func HostMatcher(c *core.Core) func(bearer string) (config.PeerHost, bool, bool) {
+	return func(bearer string) (config.PeerHost, bool, bool) {
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		h, usedPrev, ok := c.Cfg.Peers.MatchInboundToken(bearer)
+		if ok && c.HostAuthObserver != nil {
+			c.HostAuthObserver(h.Alias, config.TokenFingerprint(bearer))
+		}
+		return h, usedPrev, ok
+	}
+}
 
 // HostRoutePolicy says which requests a host principal may make: GET
 // /api/peers (exact path) with no scope query parameter, or scope=local;

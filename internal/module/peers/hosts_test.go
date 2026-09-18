@@ -1470,25 +1470,30 @@ func TestAliasWithDot_SurvivesAddSetTokenRemove(t *testing.T) {
 
 // ---- integration: two real modules pairing both ways ----
 
+func adminTokenFn(c *core.Core) func() string {
+	return func() string {
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		return c.Cfg.Token
+	}
+}
+
+// peerAuthChain is the real PeerAuth over m's core, wired the way
+// production is (cmd/pdx/http_chain.go + Init): Init installs
+// m.noteInboundFP as the core's HostAuthObserver, and the production
+// HostMatcher calls it under CfgMu.RLock.
+func peerAuthChain(c *core.Core, m *Module, next http.Handler) http.Handler {
+	c.HostAuthObserver = m.noteInboundFP
+	return middleware.PeerAuth(adminTokenFn(c), HostMatcher(c), HostRoutePolicy)(next)
+}
+
 // buildOuterHandler mirrors cmd/pdx/http_chain.go's newOuterHandler at a
 // scope sufficient for these tests: PeerAuth on /api/peers (+ subtree),
 // TokenAuth on everything else. CORS/IPWhitelist/PairingGuard are omitted
 // since none of these tests exercise them.
 func buildOuterHandler(c *core.Core, mux http.Handler) http.Handler {
-	tokenFn := func() string {
-		c.CfgMu.RLock()
-		defer c.CfgMu.RUnlock()
-		return c.Cfg.Token
-	}
-	peersFn := func() config.PeersConfig {
-		c.CfgMu.RLock()
-		defer c.CfgMu.RUnlock()
-		p := c.Cfg.Peers
-		p.Hosts = append([]config.PeerHost(nil), p.Hosts...)
-		return p
-	}
-
-	peerChain := middleware.PeerAuth(tokenFn, peersFn, HostRoutePolicy)(mux)
+	tokenFn := adminTokenFn(c)
+	peerChain := middleware.PeerAuth(tokenFn, HostMatcher(c), HostRoutePolicy)(mux)
 	general := middleware.TokenAuth(tokenFn, nil)(mux)
 
 	outer := http.NewServeMux()
