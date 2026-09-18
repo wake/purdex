@@ -25,13 +25,23 @@ func pendingHost() config.PeerHost {
 	return config.PeerHost{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: "out-a", InboundToken: rotTokCur, InboundTokenPrev: rotTokPrev}
 }
 
+// prevPrincipal / curPrincipal are what PeerAuth would build for a dial
+// with rotTokPrev / rotTokCur: the fingerprint is what the record binds
+// to; UsedPrevToken is kept because PeerAuth still sets it.
 func prevPrincipal(alias string) *middleware.Principal {
-	p := middleware.Principal{Kind: middleware.PrincipalHost, Alias: alias, HostID: "air:1", UsedPrevToken: true}
+	p := middleware.Principal{Kind: middleware.PrincipalHost, Alias: alias, HostID: "air:1", UsedPrevToken: true, TokenFingerprint: config.TokenFingerprint(rotTokPrev)}
 	return &p
 }
 
 func curPrincipal(alias string) *middleware.Principal {
-	p := middleware.Principal{Kind: middleware.PrincipalHost, Alias: alias, HostID: "air:1"}
+	p := middleware.Principal{Kind: middleware.PrincipalHost, Alias: alias, HostID: "air:1", TokenFingerprint: config.TokenFingerprint(rotTokCur)}
+	return &p
+}
+
+// principalFor is a host principal that presented tok — for tests whose
+// entry does not use the pendingHost() token layout.
+func principalFor(alias, tok string) *middleware.Principal {
+	p := middleware.Principal{Kind: middleware.PrincipalHost, Alias: alias, HostID: "air:1", TokenFingerprint: config.TokenFingerprint(tok)}
 	return &p
 }
 
@@ -104,7 +114,7 @@ func TestHandleDeliver_RefusedDeliveryStillRecords(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{h})
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 
-	p := middleware.Principal{Kind: middleware.PrincipalHost, Alias: "air", UsedPrevToken: true}
+	p := middleware.Principal{Kind: middleware.PrincipalHost, Alias: "air", UsedPrevToken: true, TokenFingerprint: config.TokenFingerprint(rotTokPrev)}
 	rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/deliver", map[string]any{}, &p)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("deliver status = %d, want 403 (host_unverified); body=%s", rr.Code, rr.Body.String())
@@ -193,8 +203,10 @@ func TestRotate_MintsFreshToken_PrevIsOld_RecordReset(t *testing.T) {
 	h := config.PeerHost{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: "out-a", InboundToken: rotTokPrev}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "admin-secret", []config.PeerHost{h})
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
-	// A "current" seen BEFORE the rotation must not survive into the new epoch.
-	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, curPrincipal("air"))
+	// A dial on the entry's token seen BEFORE the rotation ("current" then;
+	// it would derive "prev" after) must not survive into the new epoch:
+	// the row reads "" right after a rotate (spec §6.2).
+	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, principalFor("air", rotTokPrev))
 
 	rr, b := rotate(t, m, "air")
 	if rr.Code != http.StatusOK {
@@ -231,6 +243,12 @@ func TestRotate_409WhenPending_404Unknown_403Host(t *testing.T) {
 	}
 	if rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts/air/rotate", nil, hostPrincipal("air")); rr.Code != http.StatusForbidden {
 		t.Fatalf("rotate as host principal = %d, want 403", rr.Code)
+	}
+	// requireAdmin guards the two gates too (defence in depth under HostRoutePolicy).
+	for _, verb := range []string{"commit", "cancel"} {
+		if rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts/air/rotate/"+verb, nil, hostPrincipal("air")); rr.Code != http.StatusForbidden {
+			t.Fatalf("%s as host principal = %d, want 403", verb, rr.Code)
+		}
 	}
 }
 
@@ -454,10 +472,12 @@ func TestPeerAuth_EndToEnd_PendingRotation_CommitGate(t *testing.T) {
 // A dial that authenticates while a commit is between its gate check and
 // its write is FUTURE evidence: the check and the write happen under one
 // hold of rotMu, so the dial's note lands only after the write. The commit
-// stands on the evidence it checked; the note is not lost — the row then
-// reads last_inbound_auth "prev" with no rotation pending, which is the
-// §6.4 last row (verify shows red, rotate again). The seam fires the dial
-// after the check; the lock, not timing, orders it.
+// stands on the evidence it checked; the note is not lost — it is stored,
+// but it names the token the commit just dropped, so the row derives
+// last_inbound_auth "" with no rotation pending: the peer has not been seen
+// on any token the entry still has, which is the §6.4 last row (verify
+// shows red, rotate again). The seam fires the dial after the check; the
+// lock, not timing, orders it.
 func TestRotateCommit_DialAfterGateCheckIsNotLost(t *testing.T) {
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", []config.PeerHost{pendingHost()})
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
@@ -483,8 +503,16 @@ func TestRotateCommit_DialAfterGateCheckIsNotLost(t *testing.T) {
 		t.Fatalf("commit did not clear prev: %+v", got)
 	}
 	row := listRow(t, m, "air")
-	if row.RotationPending || row.LastInboundAuth != "prev" {
-		t.Fatalf("late evidence lost: row = %+v; want not pending, last_inbound_auth prev", row)
+	if row.RotationPending || row.LastInboundAuth != "" {
+		t.Fatalf("late note misjudged: row = %+v; want not pending, last_inbound_auth \"\" (its token was just dropped)", row)
+	}
+	// The note itself was stored — it is the DERIVATION that reads "": the
+	// dropped token fingerprints to nothing the entry still has.
+	m.rotMu.Lock()
+	stored, ok := m.lastInbound["air"]
+	m.rotMu.Unlock()
+	if !ok || stored.fp != config.TokenFingerprint(rotTokPrev) {
+		t.Fatalf("late note not stored: %+v ok=%v", stored, ok)
 	}
 }
 
@@ -509,16 +537,75 @@ func TestRotateCancel_FailedWriteLeavesRecordAndGateIntact(t *testing.T) {
 	if rr := gate(t, m, "air", "cancel", false); rr.Code != http.StatusInternalServerError {
 		t.Fatalf("cancel with failed write = %d; want 500; body=%s", rr.Code, rr.Body.String())
 	}
-	if got := m.lastInboundAuth("air"); got != "prev" {
-		t.Fatalf("record rewritten despite failed write: last_inbound_auth = %q, want \"prev\"", got)
-	}
 	c.CfgMu.RLock()
-	pending := c.Cfg.Peers.Hosts[0].InboundTokenPrev != ""
+	entry := c.Cfg.Peers.Hosts[0]
 	c.CfgMu.RUnlock()
-	if !pending {
+	if entry.InboundTokenPrev == "" {
 		t.Fatal("in-memory config no longer pending despite failed write")
+	}
+	if got := m.lastInboundAuth(entry); got != "prev" {
+		t.Fatalf("record no longer says the peer is on the OLD token despite failed write: last_inbound_auth = %q, want \"prev\"", got)
 	}
 	if rr := gate(t, m, "air", "commit", false); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
 		t.Fatalf("commit after failed cancel = %d %q; want 409 rotation unconfirmed (peer still on old token)", rr.Code, errorOf(t, rr))
+	}
+}
+
+// ---- the record is bound to the token, not to the moment (final review C1) ----
+
+// A dial that passed PeerAuth with tX BEFORE an admin rotate (prev := tX,
+// current := tX', record reset) but whose note lands AFTER the reset must
+// read "prev", not "current": the peer only holds tX, and a commit on that
+// evidence would lock it out. PeerAuth's match and the handler's note are
+// two separate critical sections; the record therefore stores WHICH token
+// (by fingerprint) and derives the state against the entry at read time.
+// pause holds the request between the two, and the rotate lands in between.
+func TestRotate_DialAuthenticatedBeforeRotateNotesAfterReset_ReadsPrev(t *testing.T) {
+	const tX = rotTokPrev
+	h := config.PeerHost{Alias: "air", URL: "https://a.example", HostID: "air:1", Token: "out-a", InboundToken: tX}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "admin-secret", []config.PeerHost{h})
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	pause := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(entered); <-release }) // first request only: PeerAuth has matched, the note has not landed
+		mux.ServeHTTP(w, r)
+	})
+	handler := middleware.PeerAuth(
+		func() string { c.CfgMu.RLock(); defer c.CfgMu.RUnlock(); return c.Cfg.Token },
+		func() config.PeersConfig { c.CfgMu.RLock(); defer c.CfgMu.RUnlock(); return c.Cfg.Peers },
+		HostRoutePolicy,
+	)(pause)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/api/peers", nil)
+		req.Header.Set("Authorization", "Bearer "+tX)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		done <- rr
+	}()
+	<-entered
+	rr, b := rotate(t, m, "air")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("rotate = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	close(release)
+	if dial := <-done; dial.Code != http.StatusOK {
+		t.Fatalf("pre-rotate dial = %d; body=%s", dial.Code, dial.Body.String())
+	}
+	if got := loadCfg(t, cfgPath).Peers.Hosts[0]; got.InboundToken != b.InboundToken || got.InboundTokenPrev != tX {
+		t.Fatalf("rotated entry = cur %q prev %q", got.InboundToken, got.InboundTokenPrev)
+	}
+
+	if got := listRow(t, m, "air").LastInboundAuth; got != "prev" {
+		t.Fatalf("note for tX landing after the rotate reads %q, want \"prev\" (tX is now the entry's prev)", got)
+	}
+	if rr := gate(t, m, "air", "commit", false); rr.Code != http.StatusConflict || errorOf(t, rr) != "rotation unconfirmed" {
+		t.Fatalf("commit on a pre-rotate dial = %d %q; want 409 rotation unconfirmed (the peer only holds tX)", rr.Code, errorOf(t, rr))
 	}
 }

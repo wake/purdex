@@ -156,7 +156,7 @@ func TestPeerAliasUnsetWithColonInHostID(t *testing.T) {
 func TestPeerAliasSetAlias(t *testing.T) {
 	cfg := config.Config{
 		HostID: "mini-lab:278cbm",
-		Peers: config.PeersConfig{Alias: "my-peer"},
+		Peers:  config.PeersConfig{Alias: "my-peer"},
 	}
 	got := cfg.PeerAlias()
 	want := "my-peer"

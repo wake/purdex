@@ -284,5 +284,21 @@ func TestPeerAuthPrevTokenSetsUsedPrevToken(t *testing.T) {
 		if seen.Kind != middleware.PrincipalHost || seen.Alias != "beta" || seen.UsedPrevToken != tc.wantPrev {
 			t.Fatalf("%s: principal = %+v, want host beta UsedPrevToken=%v", tc.bearer, *seen, tc.wantPrev)
 		}
+		// The principal also carries WHICH token, by non-reversible
+		// fingerprint, so the peers module can bind its rotation record
+		// to the token rather than to the moment it was noted.
+		if want := config.TokenFingerprint(tc.bearer); seen.TokenFingerprint != want {
+			t.Fatalf("%s: TokenFingerprint = %q, want %q", tc.bearer, seen.TokenFingerprint, want)
+		}
+	}
+	// An admin principal is not a peer dial and carries no fingerprint.
+	next, called, seen := nextRecordingPrincipal()
+	h := middleware.PeerAuth(func() string { return "admin-secret" }, peersFn, allowAll)(next)
+	req := httptest.NewRequest("GET", "/api/peers", nil)
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !*called || seen.Kind != middleware.PrincipalAdmin || seen.TokenFingerprint != "" {
+		t.Fatalf("admin: code=%d called=%v principal=%+v; want admin with empty TokenFingerprint", rec.Code, *called, *seen)
 	}
 }

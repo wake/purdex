@@ -12,29 +12,30 @@ import (
 // Inbound-token rotation routes (spec §6.3). All three are admin-only by
 // construction (HostRoutePolicy) and by requireAdmin; all three mutate
 // inside one UpdateConfig closure, re-finding the entry by alias under the
-// lock. The two gates read the in-memory record (rotation.go) inside that
-// closure and HOLD rotMu from the check through the write, so a dial that
-// authenticates concurrently is recorded only after the write: it is future
-// evidence, visible on the next read. Neither gate is a proof about the
-// future; each is a proof that the operation is not ALREADY known to be a
-// lock-out (D-7). Lock order CfgMu → rotMu (the closure runs under CfgMu).
+// lock. The two gates derive the state from the in-memory record
+// (rotation.go) inside that closure and HOLD rotMu from the check through
+// the write, so a dial that authenticates concurrently is noted only after
+// the gate check: it is future evidence, judged on the next read by the
+// token it carries. Neither gate is a proof about the future; each is a
+// proof that the operation is not ALREADY known to be a lock-out (D-7).
+// Lock order CfgMu → rotMu (the closure runs under CfgMu).
 //
-// Cancel's record rewrite (confirmCancelledRotation: a "prev" note becomes
-// "current" because that token IS current again) happens only AFTER
-// UpdateConfig has returned nil, i.e. only after config.WriteFile has
-// persisted the swap. Doing it inside the closure would make the record
-// describe a write that might still fail (config.WriteFile, core.go): if
-// the write errors, UpdateConfig leaves the config untouched (still
-// pending, current = new token) but a rewrite done before the write would
-// have already turned the record "current" — passing the very commit gate
-// that exists to stop the peer, still on the OLD token, from being locked
-// out. A "prev" note landing between the persisted write and the
-// after-the-fact rewrite is still correctly rewritten to "current" (that
-// token really is current by then); a "current" note cannot land in that
-// window because the new token no longer authenticates once the write has
-// landed. (`rotate`'s `resetInboundAuth` runs before its write too, but
-// that ordering fails CLOSED — a failed rotate just leaves the reset
-// record wanting a fresh dial — so it is left as-is.)
+// The record stores WHICH token the peer presented (by fingerprint) and
+// "current"/"prev" is derived against the entry's tokens at read time, so
+// the state is bound to the epoch by construction and no handler ever
+// rewrites it:
+//   - a note that raced a rotate (matched by PeerAuth before the rotate,
+//     landed after its reset) reads "prev" — that token IS now the prev,
+//     and the commit gate refuses on it;
+//   - after a cancel the peer's token IS current, so a "prev" note reads
+//     "current" by itself — there is no post-persist rewrite, and hence no
+//     window in which a failed write or a racing rotate could see a record
+//     that describes a swap that did not happen;
+//   - after a commit or cancel, a note for the token that was dropped
+//     reads "" — it names a token the entry no longer has.
+// `rotate`'s `resetInboundAuth` runs before its write, but that ordering
+// fails CLOSED — a failed rotate just leaves the reset record wanting a
+// fresh dial — so it is left as-is.
 
 // rotateResponse is the second and last response that carries a live
 // inbound-token value (the first is POST 201).
@@ -123,19 +124,18 @@ func (m *Module) handleRotateCommit(w http.ResponseWriter, r *http.Request) {
 		h := &cfg.Peers.Hosts[i]
 		m.rotMu.Lock()
 		defer m.rotMu.Unlock()
-		last := m.lastInboundAuthLocked(h.Alias)
 		if h.InboundTokenPrev == "" {
-			row = m.hostRowLocked(*h, last)
+			row = m.hostRowLocked(*h)
 			return nil
 		}
-		if !req.Force && last != inboundAuthCurrent {
+		if !req.Force && m.lastInboundAuthLocked(*h) != inboundAuthCurrent {
 			return &apiError{http.StatusConflict, "rotation unconfirmed"}
 		}
 		if m.rotateAfterGate != nil {
 			m.rotateAfterGate()
 		}
 		h.InboundTokenPrev = ""
-		row = m.hostRowLocked(*h, last)
+		row = m.hostRowLocked(*h)
 		return nil
 	})
 	if err != nil {
@@ -160,7 +160,7 @@ func (m *Module) handleRotateCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var committed config.PeerHost
+	var row hostRow
 	err = m.core.UpdateConfig(func(cfg *config.Config) error {
 		i := cfg.Peers.FindPeerHostByAlias(alias)
 		if i == -1 {
@@ -172,7 +172,7 @@ func (m *Module) handleRotateCancel(w http.ResponseWriter, r *http.Request) {
 		if h.InboundTokenPrev == "" {
 			return &apiError{http.StatusConflict, "no rotation pending"}
 		}
-		if !req.Force && m.lastInboundAuthLocked(h.Alias) != inboundAuthPrev {
+		if !req.Force && m.lastInboundAuthLocked(*h) != inboundAuthPrev {
 			return &apiError{http.StatusConflict, "rotation unconfirmed"}
 		}
 		if m.rotateAfterGate != nil {
@@ -180,21 +180,16 @@ func (m *Module) handleRotateCancel(w http.ResponseWriter, r *http.Request) {
 		}
 		h.InboundToken = h.InboundTokenPrev
 		h.InboundTokenPrev = ""
-		committed = *h
+		// The record is untouched: the peer's token is now the entry's
+		// current one, so its note derives "current" from here on. If the
+		// write fails, UpdateConfig restores the pending entry and the
+		// same note derives "prev" again — nothing to undo.
+		row = m.hostRowLocked(*h)
 		return nil
 	})
 	if err != nil {
 		writeAPIError(w, err)
 		return
 	}
-
-	// The swap is now persisted (UpdateConfig returned nil). Only now is it
-	// true that the peer's old token IS the current one, so only now does a
-	// "prev" record become "current".
-	m.rotMu.Lock()
-	m.confirmCancelledRotation(committed.Alias)
-	last := m.lastInboundAuthLocked(committed.Alias)
-	m.rotMu.Unlock()
-	row := m.hostRowLocked(committed, last)
 	_ = json.NewEncoder(w).Encode(row)
 }

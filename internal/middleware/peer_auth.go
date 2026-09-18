@@ -28,6 +28,13 @@ type Principal struct {
 	// entry's InboundTokenPrev (a rotation is pending and the peer is still
 	// on the old token). The peers module records it per alias (spec §6.2).
 	UsedPrevToken bool
+	// TokenFingerprint is config.TokenFingerprint of the bearer a host
+	// principal presented — WHICH token, not merely whether it was the
+	// prev one. The peers module's rotation record stores this and derives
+	// "current"/"prev" against the entry's tokens at read time, so a note
+	// that raced a rotate is judged by the token it carries, not by the
+	// moment it landed (spec §6.2). Empty for admin principals.
+	TokenFingerprint string
 }
 
 type principalCtxKey struct{}
@@ -72,7 +79,13 @@ func PeerAuth(adminToken func() string, peers func() config.PeersConfig, hostAll
 					http.Error(w, "forbidden", http.StatusForbidden)
 					return
 				}
-				p := Principal{Kind: PrincipalHost, Alias: host.Alias, HostID: host.HostID, UsedPrevToken: usedPrev}
+				p := Principal{
+					Kind:             PrincipalHost,
+					Alias:            host.Alias,
+					HostID:           host.HostID,
+					UsedPrevToken:    usedPrev,
+					TokenFingerprint: config.TokenFingerprint(bearer),
+				}
 				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
 				return
 			}

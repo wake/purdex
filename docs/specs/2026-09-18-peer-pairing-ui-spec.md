@@ -409,16 +409,23 @@ entry's non-empty `InboundToken` **and** non-empty `InboundTokenPrev`, both with
 current token is not a state the API can produce; if a hand-edited config has one, `prev` alone
 still authenticates (the field is a token, not a flag).
 
-`middleware.Principal` gains `UsedPrevToken bool`, set by `PeerAuth` from `usedPrev`. The peers
-module keeps an **in-memory** `map[alias]lastInboundAuth{usedPrev bool, at time.Time}` and records
-into it at the two places a host principal is served — `handlePeers` (scope local) and
-`handleDeliver` — through one helper, `m.noteInboundAuth(principal)`, called before any policy or
-rate-limit refusal can return (the fact being recorded is "this bearer authenticated", which is
-true whether or not the request is then refused). `rotate` resets the entry's record to `""`, so
-`last_inbound_auth` always describes the *current rotation epoch*; commit leaves it; cancel rewrites a
-`"prev"` record to `"current"` — the token the peer was last seen on is the current one again (there
-is no `prev` afterwards, so it can only read `""` or `"current"`). The record is keyed by alias and
-follows the entry: a rename (§4.2) moves it, a delete clears it.
+`middleware.Principal` gains `UsedPrevToken bool`, set by `PeerAuth` from `usedPrev`, and
+`TokenFingerprint string` = `config.TokenFingerprint(bearer)` (the first 16 hex characters of the
+bearer's SHA-256: not a secret, not reversible, `""` for `""`). The peers module keeps an
+**in-memory** `map[alias]lastInboundAuth{fp string, at time.Time}` and records into it at the two
+places a host principal is served — `handlePeers` (scope local) and `handleDeliver` — through one
+helper, `m.noteInboundAuth(principal)`, called before any policy or rate-limit refusal can return
+(the fact being recorded is "this bearer authenticated", which is true whether or not the request
+is then refused). The record stores *which token* (by fingerprint) the peer most recently
+presented, and `last_inbound_auth` is **derived** against the entry's current tokens at read time:
+`fp == fingerprint(InboundToken)` → `"current"`; else `InboundTokenPrev != ""` and
+`fp == fingerprint(InboundTokenPrev)` → `"prev"`; else `""` (no note, or a note for a token the
+entry no longer has). So after a cancel the peer's token reads `"current"` (it *is* the current one
+again; nothing is rewritten), after a commit an old-token note reads `""`, and a dial that
+authenticated just before a rotate reads `"prev"` — its evidence is bound to the token, not to the
+moment it was recorded. `rotate` still clears the entry's record, so the row reads `""` right after
+a rotate. The record is keyed by the entry's stored alias and follows the entry: a rename (§4.2)
+moves it, a delete clears it.
 
 **In-memory on purpose, not an omission.** After a daemon restart the record reads `""`, so both
 commit and cancel are refused until the peer dials again — fail-closed, in the state (both tokens
@@ -438,9 +445,10 @@ request.
 All three mutate inside one `UpdateConfig` closure, re-finding the entry by alias under the lock;
 both gates read the in-memory record under the module's own mutex inside that closure. The check
 and the write happen under one hold of the record's mutex, so a dial that authenticates
-concurrently is recorded only after the write — it is future evidence, and it is not lost: after
-such a commit the row reads `last_inbound_auth: "prev"` with no rotation pending, the next verify
-shows red, and the page repairs by rotating again (§6.4 last row). Neither gate is a proof about
+concurrently is recorded only after the gate check — it is future evidence, and it is not lost: it
+reads whatever its token derives to (§6.2); after such a commit an old-token note derives `""` with
+no rotation pending, the next verify shows red, and the page repairs by rotating again (§6.4 last
+row). Neither gate is a proof about
 the future; each is a proof that the operation is not *already known* to be a lock-out.
 `rotate` mints with `mintInboundToken(adminToken)` (never the admin token; a 128-bit random
 collision with any other entry is not checked, as today at POST). `force` exists for the operator

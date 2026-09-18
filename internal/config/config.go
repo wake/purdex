@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
@@ -98,6 +99,19 @@ func NewPeerToken() (string, error) {
 		return "", fmt.Errorf("generate peer token: %w", err)
 	}
 	return "pdxp_" + hex.EncodeToString(buf), nil
+}
+
+// TokenFingerprint is a short, non-reversible identity for a bearer token:
+// the first 16 hex characters of its SHA-256. It is not a secret and it is
+// not the token — it lets a record say WHICH of an entry's tokens a peer
+// presented (the peers module's rotation record, spec §6.2) without holding
+// the value. "" fingerprints to "" so an unset token never matches anything.
+func TokenFingerprint(tok string) string {
+	if tok == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // FindPeerHostByAlias returns the index of the host whose Alias

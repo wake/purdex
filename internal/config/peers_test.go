@@ -416,3 +416,25 @@ func TestFindPeerHostByAliasCaseInsensitive(t *testing.T) {
 		t.Errorf("FindPeerHostByAlias(nope): want -1, got %d", idx)
 	}
 }
+
+// TokenFingerprint is the non-reversible identity the peers module keys its
+// rotation record on: deterministic, short, never the token, and "" for "".
+func TestTokenFingerprint(t *testing.T) {
+	const tok = "pdxp_00000000000000000000000000000000"
+	fp := config.TokenFingerprint(tok)
+	if fp != config.TokenFingerprint(tok) {
+		t.Fatalf("not deterministic: %q vs %q", fp, config.TokenFingerprint(tok))
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(fp) {
+		t.Fatalf("fingerprint %q is not 16 lowercase hex chars", fp)
+	}
+	if strings.Contains(tok, fp) || strings.Contains(fp, "pdxp") {
+		t.Fatalf("fingerprint %q is a substring of the token, or carries its prefix", fp)
+	}
+	if got := config.TokenFingerprint(""); got != "" {
+		t.Fatalf("TokenFingerprint(\"\") = %q, want \"\"", got)
+	}
+	if other := config.TokenFingerprint("pdxp_00000000000000000000000000000001"); other == fp {
+		t.Fatalf("two different tokens share fingerprint %q", fp)
+	}
+}
