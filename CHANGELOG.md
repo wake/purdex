@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.394] - 2026-09-18
+
+### Feature: 色盤與圖示選擇器改成可拖曳的浮動視窗（#1179）
+
+Host 設定頁的色盤（alpha.389）與圖示選擇器原本是原地展開，使用者要的是「可拖曳的浮動視窗，點其他地方就關」。
+
+新的共用元件 `FloatingPanel`：portal 到 `document.body`、`position: fixed`，開在觸發按鈕下方並夾在視窗內；標題列是拖曳把手（pointer capture、位移、永遠留一角在畫面上、記住拖過的位置）；Esc、× 或在外面 mousedown 都關。關鍵細節：**觸發按鈕那排不算「外面」**——outside-click 走 mousedown、按鈕切換走 click，不排除的話會先關再開、永遠關不掉。色盤面板標題是層名（Main／Middle／Light），圖示面板標題是「Change host icon」；編輯器本身不再畫邊框底色，chrome 由面板供應。
+
+四輪 review 補了一串邊角：鍵盤開啟後焦點要移進面板、關閉時還回去（portal 會打斷 Tab 順序）；捲動設定頁或縮小視窗時面板要跟著 anchor（沒拖過）或至少夾回可操作範圍（拖過）；IME 組字中的 Esc 不關；兩個面板同時開時只有最上層吃 Esc、底層卸載時不搶焦點、原焦點元素已消失時退回 anchor；圖示選擇器在 inline 模式不再自己聽 Esc（交給容器）。`FloatingPanel` 一個元件同時管定位／拖曳／dismiss／焦點，攻擊方點名 SRP，先記著。
+
+6893 tests 全綠，純 SPA。
+
 ## [1.0.0-alpha.393] - 2026-09-18
 
 ### Test: 凍結 codex-cli 0.153.4 hook fixtures 與版本測試（#1159 PR 2/2，#1180）— #1159 完成
