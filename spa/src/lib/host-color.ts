@@ -1,6 +1,5 @@
-import type { IconWeight, Tab } from '../types/tab'
+import type { IconWeight, PaneContent, PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
-import { collectTmuxSessionHostIds } from './infer-workspace-host-id'
 import { rgbaString } from './color-space'
 // Static import on purpose: `CommandIconPicker` already pulls icon-meta into the
 // main chunk, so the catalog costs nothing extra here.
@@ -134,9 +133,33 @@ export function hasHostBadge<T extends { colors: ResolvedHostColors | null; icon
   return badge !== null && (badge.colors !== null || badge.icon !== undefined)
 }
 
+function findFirstTmuxPane(layout: PaneLayout): Extract<PaneContent, { kind: 'tmux-session' }> | null {
+  if (layout.type === 'leaf') {
+    return layout.pane.content.kind === 'tmux-session' ? layout.pane.content : null
+  }
+  for (const child of layout.children) {
+    const found = findFirstTmuxPane(child)
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * Content of the first tmux-session pane in pre-order (the pane the host badge
+ * represents), or null.
+ *
+ * `getTabHostId` derives from this so host and mode are always read from the same
+ * pane — resolving them independently (e.g. host from pre-order, mode from
+ * `getPrimaryPane`) let a split tab whose first leaf isn't a tmux pane pick one
+ * host's colors under a different pane's mode (P2 Task 1 review finding, PR #1153).
+ */
+export function getTabBadgePane(tab: Tab): Extract<PaneContent, { kind: 'tmux-session' }> | null {
+  return findFirstTmuxPane(tab.layout)
+}
+
 /** hostId of the first tmux-session pane in pre-order, or null. */
 export function getTabHostId(tab: Tab): string | null {
-  return collectTmuxSessionHostIds(tab.layout)[0] ?? null
+  return getTabBadgePane(tab)?.hostId ?? null
 }
 
 /* ─── Per-mode tri-color (spec 2026-09-18 host-color-modes §4.1) ─── */

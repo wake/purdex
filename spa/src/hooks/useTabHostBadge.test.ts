@@ -23,6 +23,40 @@ function tmuxTab(hostId: string): Tab {
   return { id: 't1', pinned: false, locked: false, createdAt: 0, layout }
 }
 
+/**
+ * Split tab whose FIRST leaf is not a tmux pane (`new-tab`) and whose SECOND leaf
+ * is a tmux-session pane of `hostId` — the P2 Task 1 attacker-finding regression
+ * shape: `getTabHostId`'s pre-order host must agree with the pane the mode is read
+ * from, or a split tab like this resolves host-a's colors under the wrong mode.
+ */
+function splitTab(hostId: string, opts: { terminated?: string } = {}): Tab {
+  const layout: PaneLayout = {
+    type: 'split',
+    id: 'split1',
+    direction: 'h',
+    sizes: [50, 50],
+    children: [
+      { type: 'leaf', pane: { id: 'p-new', content: { kind: 'new-tab' } } },
+      {
+        type: 'leaf',
+        pane: {
+          id: `pane-${hostId}`,
+          content: {
+            kind: 'tmux-session',
+            hostId,
+            sessionCode: 'sess',
+            mode: 'terminal',
+            cachedName: 'x',
+            tmuxInstance: 'default',
+            ...(opts.terminated ? { terminated: opts.terminated as never } : {}),
+          },
+        },
+      },
+    ],
+  }
+  return { id: 't-split', pinned: false, locked: false, createdAt: 0, layout }
+}
+
 function plainTab(): Tab {
   return {
     id: 't2',
@@ -214,6 +248,22 @@ describe('useTabHostBadge', () => {
       const first = result.current?.colors
       rerender()
       expect(result.current?.colors).toBe(first)
+    })
+
+    it('on a split tab, reads mode from the SAME pane getTabHostId resolved (not the primary pane)', () => {
+      seedHosts({ ...hostA, colors: { console: BLUE, terminal: RED } })
+      useAgentStore.setState({ agentTypes: { 'host-a:sess': 'cc' } })
+      const { result } = renderHook(() => useTabHostBadge(splitTab('host-a')))
+      expect(result.current?.colors?.main).toBe('rgba(239, 68, 68, 1)')
+    })
+
+    it('on a split tab, treats the badge pane terminated as console even with a live agentType', () => {
+      seedHosts({ ...hostA, colors: { console: BLUE, terminal: RED } })
+      useAgentStore.setState({ agentTypes: { 'host-a:sess': 'cc' } })
+      const { result } = renderHook(() =>
+        useTabHostBadge(splitTab('host-a', { terminated: 'session-closed' })),
+      )
+      expect(result.current?.colors?.main).toBe('rgba(59, 130, 246, 1)')
     })
   })
 })

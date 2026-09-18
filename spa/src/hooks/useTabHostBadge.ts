@@ -3,9 +3,8 @@ import type { IconWeight, Tab } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
-import { getPrimaryPane } from '../lib/pane-tree'
 import {
-  getTabHostId,
+  getTabBadgePane,
   isIconWeight,
   isPhosphorIconName,
   resolveHostColors,
@@ -21,19 +20,25 @@ export interface TabHostBadge {
 }
 
 /**
- * Badge identity of the tab's host (first tmux pane), or `null` when the tab has
- * no tmux pane. Mode (spec D1): `terminal` when the primary pane has a live
- * agentType, otherwise `console`; `execution` is not wired yet.
+ * Badge identity of the tab's host (first tmux pane in pre-order), or `null` when
+ * the tab has no tmux pane. Mode (spec D1): `terminal` when THAT SAME pane has a
+ * live agentType, otherwise `console`; `execution` is not wired yet.
+ *
+ * Host and mode must come from the same pane — reading host from
+ * `getTabBadgePane` (pre-order) but mode from `getPrimaryPane` let a split tab
+ * whose first leaf isn't a tmux pane (e.g. `new-tab` before a live agent tmux
+ * pane) pick that pane's host under the wrong mode (P2 Task 1 review finding,
+ * PR #1153).
  *
  * Primitive selectors plus the `colors` object (identity changes only on a write),
  * resolved under `useMemo` so tab rows do not re-render on unrelated store writes.
  */
 export function useTabHostBadge(tab: Tab): TabHostBadge | null {
-  const hostId = getTabHostId(tab)
-  const primary = getPrimaryPane(tab.layout).content
+  const badgePane = getTabBadgePane(tab)
+  const hostId = badgePane?.hostId ?? null
   const ck =
-    primary.kind === 'tmux-session' && primary.hostId && primary.sessionCode && !primary.terminated
-      ? compositeKey(primary.hostId, primary.sessionCode)
+    badgePane && badgePane.sessionCode && !badgePane.terminated
+      ? compositeKey(badgePane.hostId, badgePane.sessionCode)
       : undefined
   // Hooks run unconditionally (Rules of Hooks); the `hostId` bail-out happens after.
   const colors = useHostStore((s) => (hostId ? s.hosts[hostId]?.colors : undefined))
