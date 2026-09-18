@@ -845,6 +845,7 @@
   "handoff.error.session_create_failed": "無法建立 tmux session {{session_name}}；請檢查 session 列表。",
   "handoff.error.cwd_missing": "這個執行的工作目錄在主機上已不存在。",
   "handoff.error.provider_unsupported": "只有 Claude 的執行可以接到終端機。",
+  "handoff.error.execution_archived": "這個執行已封存；它的 session 已在別處接回。",
   "handoff.error.takeback_in_progress": "這個執行已經在接到終端機的過程中。",
   "takeback.button": "接回終端機",
   "takeback.confirm_running": "有一個回合正在執行，接回會中斷它。要繼續嗎？",

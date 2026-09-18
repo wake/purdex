@@ -590,6 +590,7 @@ describe('handoffErrorMessage', () => {
     ['cwd_missing', {}, null],
     ['provider_unsupported', {}, null],
     ['takeback_in_progress', {}, null],
+    ['execution_archived', {}, null],
     // client-side
     ['network', {}, null],
     ['host_removed', {}, null],

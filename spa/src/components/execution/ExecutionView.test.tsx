@@ -699,6 +699,7 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
       ['rejected + session_id', { state: 'rejected', session_id: 'sid' }, false],
       ['idle without any session id', { state: 'idle' }, false],
       ['idle + session_id but provider codex', { state: 'idle', session_id: 'sid', provider: 'codex' }, false],
+      ['idle + session_id but archived (daemon answers execution_archived; codex R1 P1)', { state: 'idle', session_id: 'sid', archived: true }, false],
     ]
     it.each(cases)('%s → %s', (_name, extra, shown) => {
       useExecutionStore.getState().setSummary(H, E, summary(extra) as never)
