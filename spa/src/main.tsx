@@ -10,6 +10,7 @@ import { startDeviceStateUploader } from './lib/device-state/uploader'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
+import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -34,6 +35,8 @@ startHostConfigLoader()
 startPeerCacheInvalidation()
 // Nex readiness cache: refetch a host's /api/info + capabilities when its daemon reconnects.
 startNexHostInvalidation()
+// Execution lists: open/close a host's site-wide stream on nex readiness, drop its rows on identity change.
+startExecutionListInvalidation()
 
 useLayoutStore.getState().reconcileViews()
 
