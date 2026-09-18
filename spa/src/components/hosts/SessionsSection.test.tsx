@@ -68,7 +68,7 @@ vi.mock('../session-launcher/SessionLauncher', async (importOriginal) => {
 const HOST_ID = 'test-host'
 const PROJECT: HostProject = { id: 'p1', name: 'Purdex', slug: 'purdex', path: '~/w/purdex' }
 const SESSIONS = [
-  { code: 'abc', name: 'dev', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false },
+  { code: 'abc', name: 'dev', cwd: '/tmp', mode: 'terminal' },
 ]
 
 beforeEach(() => {

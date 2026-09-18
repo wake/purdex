@@ -8,9 +8,6 @@ export interface Session {
   name: string
   cwd: string
   mode: string
-  cc_session_id: string
-  cc_model: string
-  has_relay: boolean
   current_command?: string
   pane_title?: string
   window_name?: string

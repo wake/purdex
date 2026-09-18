@@ -246,7 +246,7 @@ describe('TerminatedPane rebuild operation scope', () => {
     resumeCommand: 'claude --resume S1',
     createdSession: {
       code: 'new001', name: 'my-session-2', cwd: '/w/p', mode: 'terminal',
-      cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '222:2000',
+      tmux_instance: '222:2000',
     },
     status: 'done' as const,
     report: {

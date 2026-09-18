@@ -14,7 +14,7 @@ import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../../types/tab
 function session(over: Partial<Session>): Session {
   return {
     code: 'c', name: 'n', cwd: '', mode: 'terminal',
-    cc_session_id: '', cc_model: '', has_relay: false, ...over,
+    ...over,
   }
 }
 

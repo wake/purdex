@@ -282,7 +282,7 @@ describe('RenamePopover peer section', () => {
     useSessionStore.setState({
       sessions: {
         ...useSessionStore.getState().sessions,
-        [hostId]: [{ code, name: 'dev', cwd: '/start/dir', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance }],
+        [hostId]: [{ code, name: 'dev', cwd: '/start/dir', mode: 'terminal', tmux_instance }],
       },
     })
   }

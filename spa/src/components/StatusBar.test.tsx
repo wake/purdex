@@ -37,7 +37,7 @@ function setupStores() {
   useSessionStore.setState({
     sessions: {
       [HOST_ID]: [
-        { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN },
+        { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', tmux_instance: GEN },
       ],
     },
     activeHostId: HOST_ID,
@@ -315,7 +315,7 @@ describe('StatusBar agent pane title', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN, pane_title: 'plan review' },
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', tmux_instance: GEN, pane_title: 'plan review' },
         ],
       },
       activeHostId: HOST_ID,
@@ -337,7 +337,7 @@ describe('StatusBar agent pane title', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN, pane_title: 'plan review' },
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', tmux_instance: GEN, pane_title: 'plan review' },
         ],
       },
       activeHostId: HOST_ID,
@@ -681,7 +681,7 @@ describe('StatusBar peer segments', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: GEN, pane_title: 'plan review' },
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', tmux_instance: GEN, pane_title: 'plan review' },
         ],
       },
       activeHostId: HOST_ID,
@@ -763,7 +763,7 @@ describe('StatusBar peer generation', () => {
     useSessionStore.setState({
       sessions: {
         [HOST_ID]: [
-          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance },
+          { code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', tmux_instance },
         ],
       },
       activeHostId: HOST_ID,

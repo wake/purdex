@@ -102,7 +102,7 @@ describe('RebuildActionSet — the displayed command is pinned only while action
           resumeCommand: 'claude --resume PINNED',
           createdSession: {
             code: 'new1', name: 'dev', cwd: '/w/p', mode: 'terminal',
-            cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '222:2000',
+            tmux_instance: '222:2000',
           },
           status: 'done',
           report: {
@@ -331,7 +331,7 @@ describe('RebuildActionSet', () => {
           resumeCommand: 'claude --resume S1',
           createdSession: {
             code: 'new1', name: 'dev', cwd: '/w/p', mode: 'terminal',
-            cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '222:2000',
+            tmux_instance: '222:2000',
           },
           status: 'done',
           report: {

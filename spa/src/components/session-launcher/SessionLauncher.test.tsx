@@ -24,7 +24,7 @@ const P1: HostProject = { id: 'p1', name: 'Purdex', slug: 'purdex', path: '~/w/p
 const P2: HostProject = { id: 'p2', name: 'Ploom', slug: 'ploom', path: '/srv/ploom' }
 const C1: HostCommand = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
 const C2: HostCommand = { id: 'c2', name: 'Codex', command: 'codex', icon: { kind: 'agent', value: 'codex' } }
-const made: Session = { code: 'new1', name: 'x', cwd: '~', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, tmux_instance: '1:1' }
+const made: Session = { code: 'new1', name: 'x', cwd: '~', mode: 'terminal', tmux_instance: '1:1' }
 
 const onLaunched = vi.fn()
 const onCancel = vi.fn()

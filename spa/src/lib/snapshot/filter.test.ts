@@ -73,7 +73,7 @@ describe('rebuildAllSessions over filterSnapshotByHost', () => {
   it('creates sessions on h1 only, never on h2', async () => {
     vi.mocked(listSessions).mockResolvedValue([])
     vi.mocked(createSession).mockImplementation(async (_h, name): Promise<Session> => ({
-      code: `new-${name}`, name, cwd: '/tmp', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false,
+      code: `new-${name}`, name, cwd: '/tmp', mode: 'terminal',
     }))
 
     const report = await rebuildAllSessions(filterSnapshotByHost(snap, 'h1'))

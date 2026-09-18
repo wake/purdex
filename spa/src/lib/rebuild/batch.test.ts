@@ -148,7 +148,7 @@ describe('planBatch — per-host templates', () => {
 // ---------------------------------------------------------------------------
 
 function session(over: Partial<Session>): Session {
-  return { code: 'c', name: 'n', cwd: '', mode: 'terminal', cc_session_id: '', cc_model: '', has_relay: false, ...over }
+  return { code: 'c', name: 'n', cwd: '', mode: 'terminal', ...over }
 }
 
 function seedHost(hostId: string) {

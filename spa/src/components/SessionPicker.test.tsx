@@ -5,8 +5,8 @@ import { SessionPicker } from './SessionPicker'
 import type { Session } from '../lib/host-api'
 
 const mockSessions: Session[] = [
-  { code: 'abc001', name: 'dev-server', mode: 'terminal', cwd: '/home', cc_session_id: '', cc_model: '', has_relay: false },
-  { code: 'def002', name: 'claude-code', mode: 'stream', cwd: '/home', cc_session_id: '', cc_model: '', has_relay: true },
+  { code: 'abc001', name: 'dev-server', mode: 'terminal', cwd: '/home' },
+  { code: 'def002', name: 'claude-code', mode: 'stream', cwd: '/home' },
 ]
 
 beforeEach(() => cleanup())
