@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.386] - 2026-09-18
+
+### Feature: daemon 端「交給 nex」／「接回 terminal」端點（P-C.3a，#1161）
+
+**daemon 變更，mlab 要 `make build` + 重啟。** 這是 relay 之外第一條「互動 CC ↔ headless execution」的正式往返路徑，SPA 按鈕在下一個 PR（P-C.3b）。
+
+#### `POST /api/sessions/{code}/nex-handoff`
+
+一把 per-session 鎖內把整串做完：generation → 從 agent module 的 `OwnerResolver` 讀 CC 的 session id + cwd（**必須在 `/exit` 之前**，因為 `PdxSessionEnd` 會把 frame 刪掉）→ CC 存活 → 再取一次 generation → 忙就 interrupt、再 `/exit`（沿用既有 CC operator）→ 第三次 generation → 直接呼叫內嵌 Nexen `Service.Delegate`（`resume_session_id`、`handoff` profile、`labels {source: purdex, handoff_session}`、`origin purdex://host/<id>/session/<code>`）。rejected／infra error／逾時 → 用 SPA 傳進來的 resume 範本（`{id}` 佔位）回滾到 window 0。`/exit` 之後 generation 變了**不回滾**——那是另一個 tmux server，往它送鍵不是我們退出的那個 pane——回 `after_exit` 帶 session id 讓人手動 resume。
+
+#### `POST /api/sessions/{code}/nex-takeback`
+
+preflight（session 存在、generation、pane 沒有 CC）**先於任何 execution 操作** → `Store.Get` → **execution 必須綁在這個 session 上**（`handoff_session` label + origin 都對）→ running 就拿 lease（caller 給的或自取，自取的用 `defer` 在每條路徑釋放）→ `Interrupt` → 確認 settled → **送鍵前再查一次 pane 沒有 CC** → 條件送鍵到 window 0 → 等 CC 起來 → archive。成功才 archive；每條失敗路徑都帶 `session_id`。
+
+#### codex 抓到的
+
+R1 兩條 P1：stream 與 nex 各自 `NewHandoffLocks()`——同型別不等於同一把鎖，legacy `/handoff` 與 `/nex-handoff` 對同一 code 可同時進場（改由 session module 在 registry 註冊唯一實例）；take-back 在 lease/interrupt 期間使用者可能已手動起 CC，仍會把 shell 指令灌進 Claude 的輸入框（送鍵前重查）。攻擊方另抓到：`SendKeysIfInstance` 用 `$N:` 是送到 session 的 **active pane**，而 liveness 看的是 `name:0`——active window 不是 0 就注入錯 pane（executor 加 `SendKeysIfInstanceTarget` 帶 window，三處統一）；`context.Background()` 無 deadline，engine 卡住時鎖與 lease 永久佔用（全改 detached + bounded，Delegate 逾時走 rollback）；take-back 沒核對 execution 屬於這個 session——拿 A 的 code 配 B 的 execution 會在 A 的 pane 跑 `claude --resume <B>` 再 archive B（spec 缺口，v1.4 補綁定）。critic 對「provenance 的 cwd 可能過期」有證據反對：spec 明寫 cwd 來自 provenance，不算本 PR 偏離。體質題 → #1163。
+
+#### 其他
+
+nex module 現在依賴 `session` + `agent`（缺 provider 是硬錯誤，engine soft-fail 不變）、engine seam 帶 `Service`/`Store`、import boundary 放行 `nexen/execution` + `nexen/store`；一個 capabilities pin test 用真 handler 釘住 `delegate.resume_session_id` 與 `handoff` profile——之後升 pin 若拿掉，測試會先紅。`go test ./...` 39 packages 綠，nex 套件 +72 測試。
+
 ## [1.0.0-alpha.385] - 2026-09-18
 
 ### Feature: Host Color Modes P3 — Host 設定頁的三 mode × 三色層色盤（#1160）
