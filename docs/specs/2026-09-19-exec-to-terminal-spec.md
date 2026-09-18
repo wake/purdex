@@ -1,6 +1,6 @@
 # Spec — take any execution to a terminal (#1210)
 
-- Status: v1.4 (2026-09-19) — codex attacker on PR #1212 (5 findings): execution lock shared by both take-back paths, archive **before** resume, `KillSessionIfInstance` (by id, under generation) everywhere, `CreateSession` generation check, host-home-based slug; v1.3: codex R1 on PR #1212: `execution_archived`, no kill-by-name on tmux restart; v1.2: codex plan+spec review `task-mu75q9tz-hn36pf` applied (10 findings: helper boundary, lease cleanup contract, name preflight before settle, post-create partial failure, kill-on-failure instead of double writer, project slug, visibility by state); v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
+- Status: v1.5 (2026-09-19) — codex critic on PR #1212: the archive-first crash window is an accepted, documented trade-off with a recovery contract (§4.5); §4.4 signature and I1 wording fixed; v1.4: codex attacker on PR #1212 (5 findings): execution lock shared by both take-back paths, archive **before** resume, `KillSessionIfInstance` (by id, under generation) everywhere, `CreateSession` generation check, host-home-based slug; v1.3: codex R1 on PR #1212: `execution_archived`, no kill-by-name on tmux restart; v1.2: codex plan+spec review `task-mu75q9tz-hn36pf` applied (10 findings: helper boundary, lease cleanup contract, name preflight before settle, post-create partial failure, kill-on-failure instead of double writer, project slug, visibility by state); v1.1 adds G4 (ask whether to keep the tmux session on every hand-off, user request 2026-09-19); plan reviewed together with this spec
 - Predecessor: P-C.3 (`2026-09-18-pc-launch-ui-spec.md` §4.4 "Take back to
   terminal"), which only covers an execution that a `Hand to nex` created.
 - Nexen contract: v0.11.2 `docs/contract/capability-matrix.md` §1.8 (resume
@@ -155,6 +155,25 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
 9. Response `200 { "session": <SessionInfo>, "session_id": sid,
    "archived": true }` — `archived:false` no longer exists.
 
+### 4.1.1 Crash window (accepted trade-off, codex critic)
+
+If the daemon dies between step 7 and step 8 the execution stays archived
+and the created tmux session is left with an idle shell and no `claude`.
+This is deliberate: the alternative order (resume, then archive) fails the
+other way — a crash between the two leaves a live terminal writer next to
+an unarchived execution, and the next headless turn silently corrupts
+the transcript. Archived-with-no-terminal is visible and recoverable;
+two writers is neither. No durable "pending take-to-terminal" marker is
+kept (a daemon restart already interrupts every running turn, see the
+Nexen kickoff's known costs; adding a reconcile pass for this one path
+is not worth its own state machine at alpha).
+
+**Recovery contract** (§4.5): the `execution_archived` error copy names
+the recovery — Host › Nex › executions "Unarchive", after which the
+button is back; or `claude --resume <session_id>` by hand in any shell
+in the execution's cwd (the id is in the error detail and on the
+execution row). The orphan tmux session can be closed like any other.
+
 ### 4.2 SPA
 
 - `lib/nex/handoff-api.ts`: `nexTakeToTerminal(hostId, executionId, body)`.
@@ -219,6 +238,13 @@ Sequence (engine steps shared with `handleNexTakeback`, see 4.4):
   marked terminated by the existing path (the dialog body says so when the
   session has other panes: "N other panes use this session").
 
+### 4.5 Recovery copy
+
+`handoff.error.execution_archived`: "This execution is archived. Unarchive
+it under Host › Nex to take it to a terminal again, or run
+`claude --resume {{session_id}}` in its working directory." (zh-TW
+equivalent). The detail always carries `session_id`.
+
 ### 4.4 Shared engine sequence
 
 `takeback.go` splits into two helpers; both handlers read the execution
@@ -236,9 +262,10 @@ calling:
   caller to `defer` (so it runs after archive, as today); a caller-provided
   lease is never released (`release` is a no-op). Helper-level tests pin
   every error exit.
-- `resumeInWindow(tmuxID, window, expected, resumeCommand, sid)
-  (herr *handoffError)` — send keys + `waitForCC`, the same two error
-  codes as today.
+- `resumeInWindow(sess *session.SessionInfo, expected, resumeCommand,
+  sid) *handoffError` — send keys to window 0 of `sess` + `waitForCC`
+  (`waitForCC` needs the `<name>:0` target, so the helper takes the whole
+  row); `send_failed`, `tmux_instance_mismatch`, `cc_start_timeout`.
 
 `handleNexTakeback` keeps its order and `takeback_test.go` passes
 unchanged — the pure-move proof. The new handler adds kill-on-failure
@@ -246,9 +273,11 @@ around `resumeInWindow` (4.1 step 7).
 
 ## 5. Invariants
 
-- I1 Session-bound take-back: same request, same response, same error
-  codes, same tests (`takeback_test.go` untouched except imports if the
-  helper moves).
+- I1 Session-bound take-back: same request, same response and the same
+  error codes **plus** `takeback_in_progress` when the execution lock is
+  held (§4.1 step 1, codex attacker F1). The 34 pre-existing
+  `takeback_test.go` cases pass unchanged; new cases are added for the
+  lock.
 - I2 The new endpoint never touches a session it did not create.
 - I3 A failure before session creation leaves the execution as it was
   (settled, unarchived) and costs no interrupt unless the failure came
