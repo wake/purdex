@@ -39,6 +39,11 @@ type hostRow struct {
 	HasToken        bool   `json:"has_token"`
 	HasInboundToken bool   `json:"has_inbound_token"`
 	AllowBypass     bool   `json:"allow_bypass"`
+	// Rotation state (spec §6.1): pending = inbound_token_prev is set;
+	// last_inbound_auth = "" | "current" | "prev" — which token the peer
+	// most recently presented in this epoch (in memory, rotation.go).
+	RotationPending bool   `json:"rotation_pending"`
+	LastInboundAuth string `json:"last_inbound_auth"`
 }
 
 func toHostRow(h config.PeerHost) hostRow {
@@ -248,7 +253,7 @@ func (m *Module) handleListHosts(w http.ResponseWriter, r *http.Request) {
 
 	rows := make([]hostRow, len(hosts))
 	for i, h := range hosts {
-		rows[i] = toHostRow(h)
+		rows[i] = m.hostRowFor(h)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"hosts": rows})
 }
@@ -524,12 +529,13 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		}
 		if renaming {
 			h.Alias = req.Alias
+			m.renameInboundAuth(alias, req.Alias)
 		}
 		// Captured here, inside the mutate closure, so the response
 		// always reflects exactly what THIS request committed — never a
 		// value a concurrent request wrote in between commit and a
 		// separate post-commit read.
-		row = toHostRow(*h)
+		row = m.hostRowFor(*h)
 		return nil
 	})
 	if err != nil {
@@ -554,6 +560,7 @@ func (m *Module) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 			return &apiError{http.StatusNotFound, "unknown alias"}
 		}
 		cfg.Peers.Hosts = append(cfg.Peers.Hosts[:i], cfg.Peers.Hosts[i+1:]...)
+		m.resetInboundAuth(alias)
 		return nil
 	})
 	if err != nil {

@@ -124,13 +124,17 @@ func (m *Module) setResult(id int64, effectiveMode, result, errText string) {
 func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	// 1. The caller must be a verified peer host.
+	principal, ok := middleware.PrincipalFrom(r.Context())
+	if ok {
+		m.noteInboundAuth(principal) // before every refusal, including "daemon is stopping" (spec §6.2)
+	}
+
 	if m.stopCtx.Err() != nil {
 		writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: "daemon is stopping"})
 		return
 	}
 
-	// 1. The caller must be a verified peer host.
-	principal, ok := middleware.PrincipalFrom(r.Context())
 	refuseUnaudited := func(status int, code, detail string) {
 		m.logf("peers: deliver refused (%s) for host %q: %s", code, principal.Alias, detail)
 		writeWireError(w, status, ipeers.APIError{Error: code, Detail: detail})

@@ -150,6 +150,15 @@ type Module struct {
 	titles  TitleStore
 	titleMu sync.Mutex
 
+	// Rotation record (rotation.go): alias → the peer's most recent inbound
+	// authentication, in memory.
+	rotMu       sync.Mutex
+	lastInbound map[string]inboundAuth
+	// rotateAfterGate is a test seam: called by the commit/cancel handlers
+	// right after their gate check, still inside the UpdateConfig closure
+	// and still holding rotMu (nil in production).
+	rotateAfterGate func()
+
 	// Inbound delivery (deliver.go) and its collaborators.
 	audit            AuditStore     // nil ⇒ audit_unavailable on every deliver
 	helpers          *helperManager // built in Init (production) or by the test fixture
@@ -309,6 +318,13 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // HostRoutePolicy, enforced again here in depth); any other scope is 400.
 func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// Spec §6.2: a host principal that reached this handler authenticated
+	// with one of its entry's two inbound tokens; remember which, before
+	// any refusal below.
+	if p, ok := middleware.PrincipalFrom(r.Context()); ok {
+		m.noteInboundAuth(p)
+	}
 
 	scope := r.URL.Query().Get("scope")
 	switch scope {
