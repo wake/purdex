@@ -193,8 +193,10 @@ Layout inside the existing `Field label="Color"`:
 2. Row 2 — three **layer swatches** (`Main`, `Middle`, `Light`), each a 26×18 button showing the
    resolved rgba on a checkerboard, with the caption below (`Main · #22c55e 100%`,
    `Middle · inherit 60%`). For a non-console mode with no set, all three render dimmed with the
-   caption `Inherits Console`; clicking any of them first copies `console`'s resolved set into
-   that mode (`setHostColorLayer(main)` with console's main), then opens the popover.
+   caption `Inherits Console`; clicking any of them first copies `console`'s resolved main into
+   that mode (`setHostColorLayer(main)`), then opens the editor. On a host with **no color at
+   all**, clicking any swatch first writes `main` = the first preset at alpha 100 (the store
+   refuses `middle` / `light` writes without a set), then opens that layer.
    A trailing `Prohibit` button = `clearHostColorMode(mode)` (for `console` this is the old
    "No color").
 3. Inline editor (`components/hosts/HostColorLayerEditor.tsx`, rendered under the swatches while a

@@ -240,6 +240,37 @@ describe('HostColorLayerEditor — main', () => {
     expect(onChange).toHaveBeenLastCalledWith({ color: '#00ff00', alpha: 100 })
   })
 
+  it('keeps hue while the color is grey: hue drag then saturation drag yields that hue', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<HostColorLayerEditor {...base} color="#808080" onChange={onChange} />)
+    fireEvent.input(screen.getByTestId('host-color-range-h'), { target: { value: '120' } })
+    // Grey has no hue in hex form: the write is a no-op color-wise, the parent re-renders with the same hex…
+    rerender(<HostColorLayerEditor {...base} color="#808080" onChange={onChange} />)
+    // …but the editor must remember h=120 so the next saturation drag is green, not red.
+    fireEvent.input(screen.getByTestId('host-color-range-s'), { target: { value: '100' } })
+    const last = onChange.mock.calls.at(-1)![0] as { color: string }
+    expect(last.color).toBe('#00ff00')
+  })
+
+  it('keeps saturation and hue while the color is black or white', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<HostColorLayerEditor {...base} color="#000000" onChange={onChange} />)
+    fireEvent.input(screen.getByTestId('host-color-range-h'), { target: { value: '240' } })
+    rerender(<HostColorLayerEditor {...base} color="#000000" onChange={onChange} />)
+    fireEvent.input(screen.getByTestId('host-color-range-s'), { target: { value: '100' } })
+    rerender(<HostColorLayerEditor {...base} color="#000000" onChange={onChange} />)
+    fireEvent.input(screen.getByTestId('host-color-range-l'), { target: { value: '50' } })
+    const last = onChange.mock.calls.at(-1)![0] as { color: string }
+    expect(last.color).toBe('#0000ff')
+  })
+
+  it('re-derives HSL when the parent hands in a different color (preset click elsewhere)', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<HostColorLayerEditor {...base} color="#ff0000" onChange={onChange} />)
+    rerender(<HostColorLayerEditor {...base} color="#0000ff" onChange={onChange} />)
+    expect((screen.getByTestId('host-color-range-h') as HTMLInputElement).value).toBe('240')
+  })
+
   it('dragging alpha writes only alpha', () => {
     const onChange = vi.fn()
     render(<HostColorLayerEditor {...base} onChange={onChange} />)
@@ -335,23 +366,32 @@ function track(stops: string[]): string {
 /**
  * Inline editor for one color layer (spec §6.3, D8 as amended: inline panel, not a
  * popover). Every slider writes through `onChange` on `input`, so the badge on
- * every tab row follows the drag. The HSL floats come from the *prop* color on
- * each render — no local color state — so store round-trips cannot drift.
+ * every tab row follows the drag.
+ *
+ * HSL lives in local state: a hex cannot carry hue at s=0 or hue+saturation at
+ * l=0/100, so re-deriving from the prop on every render would snap the sliders
+ * back (grey → hue drag → still grey → hue lost). The local HSL is replaced only
+ * when the prop color no longer matches what the local HSL renders to — i.e. the
+ * parent changed the color some other way (preset click, store sync).
  */
 export function HostColorLayerEditor({ layer, color, alpha, inherited, onChange, onClose }: HostColorLayerEditorProps) {
   const t = useI18nStore((s) => s.t)
-  const hsl: Hsl = hexToHsl(color) ?? { h: 0, s: 0, l: 50 }
+  const [hsl, setHsl] = useState<Hsl>(() => hexToHsl(color) ?? { h: 0, s: 0, l: 50 })
   const [draft, setDraft] = useState(color)
   const [invalid, setInvalid] = useState(false)
   const [synced, setSynced] = useState(color)
   if (synced !== color) {
+    // Render-phase adjust (no effect): external color change.
     setSynced(color)
     setDraft(color)
     setInvalid(false)
+    if (hslToHex(hsl) !== color) setHsl(hexToHsl(color) ?? { h: 0, s: 0, l: 50 })
   }
 
   const write = (next: Partial<Hsl>, nextAlpha = alpha) => {
-    onChange({ color: hslToHex({ ...hsl, ...next }), alpha: nextAlpha })
+    const merged = { ...hsl, ...next }
+    setHsl(merged)
+    onChange({ color: hslToHex(merged), alpha: nextAlpha })
   }
   const writeAlpha = (nextAlpha: number) => {
     if (inherited) onChange({ alpha: nextAlpha })
@@ -523,7 +563,8 @@ git commit --only spa/src/components/hosts/HostColorLayerEditor.tsx spa/src/comp
 - Modify (rewrite): `spa/src/components/hosts/HostColorField.tsx`
 - Modify (rewrite): `spa/src/components/hosts/HostColorField.test.tsx`
 - Modify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json`
-- Test: `spa/src/components/hosts/OverviewSection.test.tsx` (only if it queries the old preset row directly — check with `rg -n 'host-color|aria-pressed' spa/src/components/hosts/OverviewSection.test.tsx`)
+- Modify: `spa/src/components/hosts/OverviewSection.test.tsx` — it queries `host-color-hex` directly (line ~71), which no longer exists until a layer is open: in that test click `screen.getByTestId('host-color-layer-main')` first (this materialises `colors.console.main` = first preset for an uncolored host — adjust its store assertions to `colors?.console?.main.color`), then query the hex input.
+- Create: `spa/src/components/hosts/HostColorField.integration.test.tsx` (picker → store → `useTabHostBadge` → tab row)
 
 **Interfaces:**
 - Consumes: Task 2 editor; store `setHostColorLayer` / `clearHostColorMode`; `resolveHostColorSet`; `HOST_COLOR_MODES`, `HOST_COLOR_ALPHA_DEFAULTS`.
@@ -574,12 +615,20 @@ describe('HostColorField — layout', () => {
     expect(screen.queryByTestId('host-color-editor')).toBeNull()
   })
 
-  it('uncolored host: swatches read "No color" and clicking Main opens the editor with the first preset pre-filled but nothing written', () => {
+  it('uncolored host: swatches read "No color"; clicking any layer first materialises main = first preset, then opens that layer', () => {
     render(<HostColorField hostId={HOST_ID} />)
     expect(layerBtn('main').textContent).toContain('No color')
+    fireEvent.click(layerBtn('light'))
+    expect(host().colors?.console).toEqual({ main: { color: HOST_COLOR_PRESETS[0], alpha: 100 } })
+    expect(screen.getByTestId('host-color-editor')).toHaveAttribute('aria-label', 'Light')
+    // Editing light now writes for real (the set exists).
+    fireEvent.input(screen.getByTestId('host-color-range-a'), { target: { value: '30' } })
+    expect(host().colors?.console?.light).toEqual({ alpha: 30 })
+  })
+
+  it('uncolored host: opening Main and clicking a preset replaces the materialised default', () => {
+    render(<HostColorField hostId={HOST_ID} />)
     fireEvent.click(layerBtn('main'))
-    expect(screen.getByTestId('host-color-editor')).toBeInTheDocument()
-    expect(host().colors).toBeUndefined()
     fireEvent.click(screen.getByRole('button', { name: HOST_COLOR_PRESETS[3] }))
     expect(host().colors?.console?.main).toEqual({ color: HOST_COLOR_PRESETS[3], alpha: 100 })
   })
@@ -643,8 +692,8 @@ describe('HostColorField — modes', () => {
     fireEvent.click(modeBtn('Terminal'))
     for (const l of ['main', 'middle', 'light'] as const) {
       expect(layerBtn(l)).toHaveAttribute('data-inherits-console', 'true')
+      expect(layerBtn(l).textContent).toContain('Inherits Console')
     }
-    expect(screen.getByText('Inherits Console')).toBeInTheDocument()
   })
 
   it('clicking a swatch on an inheriting mode copies console main into that mode and opens the editor', () => {
@@ -682,9 +731,49 @@ describe('HostColorField — modes', () => {
 })
 ```
 
+`spa/src/components/hosts/HostColorField.integration.test.tsx` — wires the picker to a real sidebar row. Copy the store seeding and `renderInline`-style helper from `spa/src/features/workspace/components/InlineTab.test.tsx` (read it first: it seeds `useHostStore.hosts.h1`, `useUISettingsStore` badge fields and renders `<InlineTab>` for a tmux tab on host `h1` with `sessionCode` — reuse the same session code below, written here as `'sess'`):
+
+```tsx
+import { describe, it, expect, beforeEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import { HostColorField } from './HostColorField'
+import { useHostStore } from '../../stores/useHostStore'
+import { useAgentStore } from '../../stores/useAgentStore'
+// + the InlineTab imports / helpers copied from InlineTab.test.tsx
+
+const HOST_ID = 'h1'
+const badge = () => screen.getByTestId('host-badge')
+
+describe('HostColorField → tab badge (spec §8.2 / §8.3)', () => {
+  beforeEach(() => {
+    // seed host h1 (uncolored), sidebar badge settings, agentTypes: {}  — as InlineTab.test.tsx does
+    useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', { color: '#3b82f6', alpha: 100 })
+  })
+
+  it('dragging Middle alpha updates the inactive row badge immediately', () => {
+    render(<><HostColorField hostId={HOST_ID} /><InlineTabForH1 isActive={false} /></>)
+    fireEvent.click(screen.getByTestId('host-color-layer-middle'))
+    fireEvent.input(screen.getByTestId('host-color-range-a'), { target: { value: '45' } })
+    expect(badge().style.getPropertyValue('--hb-middle')).toBe('rgba(59, 130, 246, 0.45)')
+  })
+
+  it('a Terminal main color applies to the agent tab and drops back to Console when the agentType clears', () => {
+    render(<><HostColorField hostId={HOST_ID} /><InlineTabForH1 isActive /></>)
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
+    fireEvent.click(screen.getByTestId('host-color-layer-main'))
+    fireEvent.click(screen.getByRole('button', { name: '#ef4444' }))
+    act(() => useAgentStore.setState({ agentTypes: { 'h1:sess': 'cc' } }))
+    expect(badge().style.getPropertyValue('--hb-main')).toBe('rgba(239, 68, 68, 1)')
+    act(() => useAgentStore.setState({ agentTypes: {} }))
+    expect(badge().style.getPropertyValue('--hb-main')).toBe('rgba(59, 130, 246, 1)')
+  })
+})
+```
+(`InlineTabForH1` = a tiny wrapper around the copied render helper; `#ef4444` is `HOST_COLOR_PRESETS[0]`. If `useAgentStore.setState` needs sibling fields for its harness, copy the `beforeEach` from `hooks/useTabDisplay.test.ts`.)
+
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd spa && npx vitest run src/components/hosts/HostColorField.test.tsx`
+Run: `cd spa && npx vitest run src/components/hosts/HostColorField.test.tsx src/components/hosts/HostColorField.integration.test.tsx`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement**
@@ -744,6 +833,10 @@ export function HostColorField({ hostId }: { hostId: string }) {
     if (inheritsConsole && resolved) {
       // Materialise the mode from console's resolved main so edits stay per-mode.
       setHostColorLayer(hostId, mode, 'main', { color: resolved.main.color, alpha: resolved.main.alpha })
+    } else if (!resolved) {
+      // No color at all: the store refuses middle/light writes without a set (spec §4.1),
+      // so give the mode a main first. The user's click *is* the act of picking a color.
+      setHostColorLayer(hostId, mode, 'main', { color: HOST_COLOR_PRESETS[0], alpha: HOST_COLOR_ALPHA_DEFAULTS.main })
     }
     setOpen(layer)
   }
@@ -754,13 +847,10 @@ export function HostColorField({ hostId }: { hostId: string }) {
   }
 
   const editorProps = (() => {
-    if (!open) return null
-    // No color yet: the editor previews the first preset; nothing is written until the user acts.
-    const set = resolved ?? {
-      main: { color: HOST_COLOR_PRESETS[0], alpha: HOST_COLOR_ALPHA_DEFAULTS.main },
-      middle: { color: HOST_COLOR_PRESETS[0], alpha: HOST_COLOR_ALPHA_DEFAULTS.middle },
-      light: { color: HOST_COLOR_PRESETS[0], alpha: HOST_COLOR_ALPHA_DEFAULTS.light },
-    }
+    // `openLayer` always materialises a set before opening, so `resolved` is non-null here;
+    // the guard covers a concurrent clear from another client.
+    if (!open || !resolved) return null
+    const set = resolved
     const inherited = open !== 'main' && ownSet?.[open]?.color === undefined
     return {
       layer: open,
@@ -792,7 +882,9 @@ export function HostColorField({ hostId }: { hostId: string }) {
             const own = layer === 'main' || ownSet?.[layer]?.color !== undefined
             const caption = !hasColor
               ? t('hosts.color.none')
-              : `${own && !inheritsConsole ? l!.color : t('hosts.color.inherit_short')} ${l!.alpha}%`
+              : inheritsConsole
+                ? t('hosts.color.inherits_console')
+                : `${own ? l!.color : t('hosts.color.inherit_short')} ${l!.alpha}%`
             return (
               <button
                 key={layer}
@@ -828,7 +920,6 @@ export function HostColorField({ hostId }: { hostId: string }) {
           >
             <Prohibit size={12} />
           </button>
-          {inheritsConsole && <span className="text-[11px] text-text-muted self-center">{t('hosts.color.inherits_console')}</span>}
         </div>
 
         {editorProps && <HostColorLayerEditor {...editorProps} />}
@@ -842,7 +933,7 @@ Notes for the implementer:
 - `clear` on `console` for a legacy-only host goes through `clearHostColorMode(hostId, 'console')`, which P1 defined to drop the legacy color — keep the old test intent ("clear button removes the color key") in the new suite if you like; `setHostColor` is no longer called from this file.
 - Remove `setHostColor` from the store **only if** nothing else uses it (`rg -n 'setHostColor\\b' spa/src` — tests in `useHostStore.test.ts` still do; leave the action in place, it is cheap).
 - If `SegmentControl`'s buttons have no `type="button"` and live inside a form somewhere, add `type="button"` there (one line, include in the commit).
-- `OverviewSection.test.tsx`: run it; if it asserted on the old preset row, update to open Main first.
+- `OverviewSection.test.tsx`: see **Files** — open Main first, then the old hex flow works unchanged.
 
 - [ ] **Step 4: Run to verify pass + full suite**
 
@@ -852,9 +943,9 @@ Expected: all green.
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only spa/src/components/hosts/HostColorField.tsx spa/src/components/hosts/HostColorField.test.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json -m "feat(spa): per-mode tri-color picker on the host settings page"
+git commit --only spa/src/components/hosts/HostColorField.tsx spa/src/components/hosts/HostColorField.test.tsx spa/src/components/hosts/HostColorField.integration.test.tsx spa/src/components/hosts/OverviewSection.test.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json -m "feat(spa): per-mode tri-color picker on the host settings page"
 ```
-(add `OverviewSection.test.tsx` / `SegmentControl.tsx` to `--only` if touched.)
+(add `SegmentControl.tsx` to `--only` if touched.)
 
 ---
 
