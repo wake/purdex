@@ -1,6 +1,7 @@
 import type { IconWeight, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
 import { collectTmuxSessionHostIds } from './infer-workspace-host-id'
+import { rgbaString } from './color-space'
 // Static import on purpose: `CommandIconPicker` already pulls icon-meta into the
 // main chunk, so the catalog costs nothing extra here.
 import iconMetaData from '../features/workspace/generated/icon-meta.json'
@@ -198,4 +199,54 @@ export function isHostColorSet(v: unknown): v is HostColorSet {
   if ('middle' in v && !isHostColorLayer(v.middle)) return false
   if ('light' in v && !isHostColorLayer(v.light)) return false
   return true
+}
+
+/* ─── Resolver (spec §4.3) ─── */
+
+export type HostColorSource = Pick<HostConfig, 'colors' | 'color'>
+
+export interface ResolvedHostColorLayer { color: string; alpha: number }
+export interface ResolvedHostColorSet {
+  main: ResolvedHostColorLayer
+  middle: ResolvedHostColorLayer
+  light: ResolvedHostColorLayer
+}
+
+/**
+ * Hex-level resolution with every inheritance applied:
+ * `colors[mode]` → `colors.console` → legacy `color` → null.
+ * Within the chosen set, middle/light take main's color when their own is absent
+ * and the §4.1 default alpha when the layer is absent.
+ */
+export function resolveHostColorSet(host: HostColorSource | undefined, mode: HostColorMode): ResolvedHostColorSet | null {
+  if (!host) return null
+  const set = host.colors?.[mode] ?? host.colors?.console
+  if (set) {
+    if (!isHostColorSet(set)) return null
+    const main = set.main.color
+    return {
+      main: { color: main, alpha: set.main.alpha },
+      middle: { color: set.middle?.color ?? main, alpha: set.middle?.alpha ?? HOST_COLOR_ALPHA_DEFAULTS.middle },
+      light: { color: set.light?.color ?? main, alpha: set.light?.alpha ?? HOST_COLOR_ALPHA_DEFAULTS.light },
+    }
+  }
+  if (!isValidHostColor(host.color)) return null
+  return {
+    main: { color: host.color, alpha: HOST_COLOR_ALPHA_DEFAULTS.main },
+    middle: { color: host.color, alpha: HOST_COLOR_ALPHA_DEFAULTS.middle },
+    light: { color: host.color, alpha: HOST_COLOR_ALPHA_DEFAULTS.light },
+  }
+}
+
+export interface ResolvedHostColors { main: string; middle: string; light: string }
+
+/** `resolveHostColorSet` rendered to `rgba()` strings, ready for inline CSS. */
+export function resolveHostColors(host: HostColorSource | undefined, mode: HostColorMode): ResolvedHostColors | null {
+  const set = resolveHostColorSet(host, mode)
+  if (!set) return null
+  const main = rgbaString(set.main.color, set.main.alpha)
+  const middle = rgbaString(set.middle.color, set.middle.alpha)
+  const light = rgbaString(set.light.color, set.light.alpha)
+  if (!main || !middle || !light) return null
+  return { main, middle, light }
 }

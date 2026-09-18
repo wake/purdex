@@ -15,6 +15,8 @@ import {
   clampHostAlpha,
   isHostColorLayer,
   isHostColorSet,
+  resolveHostColorSet,
+  resolveHostColors,
 } from './host-color'
 import type { PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
@@ -383,5 +385,82 @@ describe('host color modes — guards', () => {
     null, {}, [],
   ])('isHostColorSet rejects %j', (bad) => {
     expect(isHostColorSet(bad)).toBe(false)
+  })
+})
+
+describe('resolveHostColorSet / resolveHostColors', () => {
+  const console_ = { main: { color: '#3b82f6', alpha: 100 } }
+
+  it('returns null for undefined host / no colors / no legacy color', () => {
+    expect(resolveHostColorSet(undefined, 'console')).toBeNull()
+    expect(resolveHostColorSet({}, 'terminal')).toBeNull()
+    expect(resolveHostColors({}, 'console')).toBeNull()
+  })
+
+  it('fills middle/light from main with default alphas', () => {
+    expect(resolveHostColorSet({ colors: { console: console_ } }, 'console')).toEqual({
+      main: { color: '#3b82f6', alpha: 100 },
+      middle: { color: '#3b82f6', alpha: 60 },
+      light: { color: '#3b82f6', alpha: 22 },
+    })
+  })
+
+  it('keeps explicit middle/light colors and alphas', () => {
+    const set = { ...console_, middle: { alpha: 40 }, light: { color: '#000000', alpha: 10 } }
+    expect(resolveHostColorSet({ colors: { console: set } }, 'console')).toEqual({
+      main: { color: '#3b82f6', alpha: 100 },
+      middle: { color: '#3b82f6', alpha: 40 },
+      light: { color: '#000000', alpha: 10 },
+    })
+  })
+
+  it('terminal / execution fall back to console when unset', () => {
+    const host = { colors: { console: console_ } }
+    expect(resolveHostColorSet(host, 'terminal')?.main.color).toBe('#3b82f6')
+    expect(resolveHostColorSet(host, 'execution')?.main.color).toBe('#3b82f6')
+  })
+
+  it('a mode with its own set does not inherit console layers', () => {
+    const host = { colors: { console: { ...console_, middle: { alpha: 10 } }, terminal: { main: { color: '#ef4444', alpha: 90 } } } }
+    expect(resolveHostColorSet(host, 'terminal')).toEqual({
+      main: { color: '#ef4444', alpha: 90 },
+      middle: { color: '#ef4444', alpha: 60 },
+      light: { color: '#ef4444', alpha: 22 },
+    })
+  })
+
+  it('legacy color acts as console main with default alphas, for every mode', () => {
+    expect(resolveHostColorSet({ color: '#22c55e' }, 'terminal')).toEqual({
+      main: { color: '#22c55e', alpha: 100 },
+      middle: { color: '#22c55e', alpha: 60 },
+      light: { color: '#22c55e', alpha: 22 },
+    })
+  })
+
+  it('colors wins over legacy color', () => {
+    expect(resolveHostColorSet({ color: '#22c55e', colors: { console: console_ } }, 'console')?.main.color).toBe('#3b82f6')
+  })
+
+  it('an invalid legacy color yields null instead of throwing', () => {
+    expect(resolveHostColorSet({ color: 'red' }, 'console')).toBeNull()
+  })
+
+  it('malformed colors that bypassed sanitize resolve to null (or legacy) without throwing', () => {
+    expect(resolveHostColorSet({ colors: 'x' as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: 42 as never }, 'terminal')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { main: { alpha: 100 } } } as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { main: { color: 'red', alpha: 100 } } } as never }, 'console')).toBeNull()
+    expect(resolveHostColorSet({ colors: { console: { ...console_, middle: { alpha: 900 } } } as never }, 'console')).toBeNull()
+    // A null set for the mode is "absent": legacy color still applies.
+    expect(resolveHostColorSet({ colors: { console: null } as never, color: '#22c55e' }, 'console')?.main.color).toBe('#22c55e')
+    expect(resolveHostColors({ colors: [] as never }, 'console')).toBeNull()
+  })
+
+  it('resolveHostColors emits rgba strings', () => {
+    expect(resolveHostColors({ colors: { console: console_ } }, 'console')).toEqual({
+      main: 'rgba(59, 130, 246, 1)',
+      middle: 'rgba(59, 130, 246, 0.6)',
+      light: 'rgba(59, 130, 246, 0.22)',
+    })
   })
 })
