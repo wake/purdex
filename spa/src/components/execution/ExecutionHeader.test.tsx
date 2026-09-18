@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import ExecutionHeader from './ExecutionHeader'
 import type { ExecutionSummary } from '../../lib/nex/types'
 
@@ -66,5 +66,35 @@ describe('ExecutionHeader', () => {
 
     rerender(<ExecutionHeader {...baseProps} summary={summary()} sse="paused" />)
     expect(screen.getByTestId('execution-sse')).toHaveTextContent(/paused/i)
+  })
+
+  // P-C.3b task 4: "Take back to terminal" only exists for executions that
+  // came from a session — the view decides that by passing `onTakeBack`.
+  it('renders no take-back control without onTakeBack', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    expect(screen.queryByTestId('take-back')).toBeNull()
+  })
+
+  it('renders the take-back control with onTakeBack, labelled and clickable', () => {
+    const onTakeBack = vi.fn()
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} />)
+    const btn = screen.getByTestId('take-back') as HTMLButtonElement
+    expect(btn).toHaveTextContent(/take back to terminal/i)
+    expect(btn.disabled).toBe(false)
+    fireEvent.click(btn)
+    expect(onTakeBack).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables the take-back control while takeBackBusy, independent of `busy`', () => {
+    const onTakeBack = vi.fn()
+    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} takeBackBusy />)
+    const btn = screen.getByTestId('take-back') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+    expect(onTakeBack).not.toHaveBeenCalled()
+    // `busy` (terminal execution) gates interrupt/terminate, not take-back:
+    // an ended execution can still go back to its terminal.
+    rerender(<ExecutionHeader {...baseProps} summary={summary({ state: 'failed' })} busy onTakeBack={onTakeBack} />)
+    expect((screen.getByTestId('take-back') as HTMLButtonElement).disabled).toBe(false)
   })
 })

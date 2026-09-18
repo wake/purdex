@@ -1,12 +1,18 @@
 // spa/src/components/execution/ExecutionView.tsx — the {kind:'execution'}
 // pane (spec §4.3.3). Composes the observe subscription, the lazy control
 // lease, the pane's actions (useExecutionActions: send/interrupt/terminate,
-// the only writes), the shared message renderer and StreamInput.
-import { useCallback, useMemo } from 'react'
+// the only writes), the shared message renderer and StreamInput. For an
+// execution that came from a tmux session (`from`, P-C.3 spec §4.4) it also
+// owns "Take back to terminal": confirm when a turn is running, then
+// `lib/nex/handoff.ts` `takeBack` does the request, the lease forget and the
+// pane swap (which unmounts this view).
+import { useCallback, useMemo, useRef, useState } from 'react'
 import ConversationMessages from '../ConversationMessages'
 import StreamInput from '../StreamInput'
 import ExecutionHeader from './ExecutionHeader'
+import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions } from '../../hooks/useExecutionActions'
@@ -15,20 +21,68 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { partialHasVisibleContent } from '../../lib/nex/partial'
+import { HandoffApiError } from '../../lib/nex/handoff-api'
+import { takeBack, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
+import type { ExecutionFrom } from '../../types/tab'
 
-export interface ExecutionViewProps { hostId: string; executionId: string; isActive: boolean }
+export interface ExecutionViewProps {
+  hostId: string
+  executionId: string
+  isActive: boolean
+  /** The pane this view lives in — the take-back swaps its content. */
+  tabId: string
+  paneId: string
+  /** Set when the execution was handed off from a tmux session; enables "Take back to terminal". */
+  from?: ExecutionFrom
+}
 
 const EMPTY = defaultExecutionState()
 const TERMINAL_STATES = new Set(['rejected', 'failed', 'terminated'])
 const KNOWN_ERROR_KEYS = new Set(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])
 
-export default function ExecutionView({ hostId, executionId, isActive }: ExecutionViewProps) {
+export default function ExecutionView({ hostId, executionId, isActive, tabId, paneId, from }: ExecutionViewProps) {
   const t = useI18nStore((s) => s.t)
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
   const lease = useExecutionLease(hostId, executionId)
   const { draft, handleSend, handleInterrupt, handleTerminate } = useExecutionActions(hostId, executionId, lease)
+
+  // Take-back: `takeBack` is single-flight per execution, but the busy flag
+  // is what the header shows; the ref keeps a same-tick second click from
+  // reaching it before React commits the state.
+  const [takeBackBusy, setTakeBackBusy] = useState(false)
+  const takeBackInFlight = useRef(false)
+  const [confirmTakeBack, setConfirmTakeBack] = useState(false)
+  const runTakeBack = useCallback(async () => {
+    if (!from || takeBackInFlight.current) return
+    takeBackInFlight.current = true
+    setTakeBackBusy(true)
+    const toast = useUndoToast.getState()
+    try {
+      const leaseId = useExecutionStore.getState().executions[key]?.lease?.leaseId
+      const { swapped } = await takeBack({ hostId, executionId, from, leaseId, tabId, paneId, forgetLease: lease.forget })
+      // On `swapped` this view is already unmounted (the pane is a terminal
+      // again); the toast is global, so it still lands.
+      toast.show(swapped ? t('takeback.success') : t('takeback.archived_no_pane'))
+    } catch (err) {
+      if (err instanceof HandoffApiError) {
+        const id = manualResumeHint(err)
+        const message = handoffErrorMessage(t, err)
+        toast.show(id ? `${message}\n${t('takeback.manual_resume', { id })}` : message)
+      } else {
+        toast.show(t('handoff.error.generic', { code: 'unknown' }))
+      }
+    } finally {
+      takeBackInFlight.current = false
+      setTakeBackBusy(false)
+    }
+  }, [from, hostId, executionId, key, tabId, paneId, lease.forget, t])
+  const onTakeBack = useCallback(() => {
+    if (takeBackInFlight.current) return
+    if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
+    else void runTakeBack()
+  }, [key, runTakeBack])
 
   const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
   const costUsd = useMemo(() => st.messages.reduce((sum, m) => sum + ((m as { total_cost_usd?: number }).total_cost_usd ?? 0), 0), [st.messages])
@@ -71,7 +125,13 @@ export default function ExecutionView({ hostId, executionId, isActive }: Executi
   return (
     <div className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} costUsd={costUsd} sse={st.sse} isMine={isMine}
-        onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal} />
+        onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal}
+        onTakeBack={from ? onTakeBack : undefined} takeBackBusy={takeBackBusy} />
+      {confirmTakeBack && (
+        <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}
+          confirmLabel={t('takeback.button')} onCancel={() => setConfirmTakeBack(false)}
+          onConfirm={() => { setConfirmTakeBack(false); void runTakeBack() }} />
+      )}
       {!st.historyLoaded ? (
         <div data-testid="execution-loading" className="flex-1 flex flex-col items-center justify-center gap-1 text-sm text-text-muted">
           <span>{t('execution.loading')}</span>

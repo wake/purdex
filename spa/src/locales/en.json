@@ -842,6 +842,8 @@
   "takeback.button": "Take back to terminal",
   "takeback.confirm_running": "A turn is running; taking it back interrupts it. Continue?",
   "takeback.success": "Back in the terminal; the execution is archived.",
+  "takeback.confirm_title": "Take back to terminal?",
+  "takeback.archived_no_pane": "Back in the terminal; the execution is archived, but its pane was already closed — open the session from the host.",
   "takeback.manual_resume": "Resume by hand: claude --resume {{id}}",
 
   "error.json.invalid": "Invalid JSON syntax",

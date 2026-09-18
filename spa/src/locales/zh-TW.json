@@ -842,6 +842,8 @@
   "takeback.button": "接回終端機",
   "takeback.confirm_running": "有一個回合正在執行，接回會中斷它。要繼續嗎？",
   "takeback.success": "已回到終端機；執行已封存。",
+  "takeback.confirm_title": "要接回終端機嗎？",
+  "takeback.archived_no_pane": "已回到終端機；執行已封存，但它的分頁已先被關閉——請從主機開啟該 session。",
   "takeback.manual_resume": "請手動接續：claude --resume {{id}}",
 
   "error.json.invalid": "JSON 語法無效",
