@@ -206,17 +206,45 @@ func (f *recordingCCOperator) GetStatus(context.Context, string) (*agentcc.Statu
 	return nil, nil
 }
 
-// fakeNexService records every Delegate request and answers with a
-// configurable Result/error. onDelegate (when set) runs before the answer.
+// fakeNexService records every call in order ("delegate" | "acquire" |
+// "interrupt" | "release" | "archive") with its arguments, and answers each
+// with a configurable result/error. onDelegate (when set) runs before the
+// Delegate answer.
 type fakeNexService struct {
 	mu         sync.Mutex
+	calls      []string
 	requests   []execution.Request
 	result     execution.Result
 	err        error
 	onDelegate func()
+
+	lease         store.Lease // answer to AcquireLease
+	acquireErr    error
+	acquires      []string // principal per AcquireLease call
+	interruptReqs []execution.InterruptRequest
+	interruptErr  error
+	releases      []releaseCall
+	releaseErr    error
+	archiveReqs   []execution.ArchiveRequest
+	archiveErr    error
+}
+
+type releaseCall struct{ ExecutionID, LeaseID, PrincipalID string }
+
+func (f *fakeNexService) record(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, name)
+}
+
+func (f *fakeNexService) Calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
 }
 
 func (f *fakeNexService) Delegate(_ context.Context, req execution.Request) (execution.Result, error) {
+	f.record("delegate")
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
 	f.mu.Unlock()
@@ -232,16 +260,89 @@ func (f *fakeNexService) Requests() []execution.Request {
 	return append([]execution.Request(nil), f.requests...)
 }
 
-func (f *fakeNexService) AcquireLease(context.Context, string, string) (store.Lease, error) {
-	return store.Lease{}, nil
+func (f *fakeNexService) AcquireLease(_ context.Context, _, principalID string) (store.Lease, error) {
+	f.record("acquire")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.acquires = append(f.acquires, principalID)
+	if f.acquireErr != nil {
+		return store.Lease{}, f.acquireErr
+	}
+	return f.lease, nil
 }
-func (f *fakeNexService) ReleaseLease(context.Context, string, string, string) error { return nil }
-func (f *fakeNexService) Interrupt(context.Context, execution.InterruptRequest) (execution.InterruptResult, error) {
-	return execution.InterruptResult{}, nil
+
+func (f *fakeNexService) ReleaseLease(_ context.Context, executionID, leaseID, principalID string) error {
+	f.record("release")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases = append(f.releases, releaseCall{executionID, leaseID, principalID})
+	return f.releaseErr
 }
-func (f *fakeNexService) Archive(context.Context, execution.ArchiveRequest) error { return nil }
+
+func (f *fakeNexService) Interrupt(_ context.Context, req execution.InterruptRequest) (execution.InterruptResult, error) {
+	f.record("interrupt")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.interruptReqs = append(f.interruptReqs, req)
+	if f.interruptErr != nil {
+		return execution.InterruptResult{}, f.interruptErr
+	}
+	return execution.InterruptResult{State: store.StateIdle}, nil
+}
+
+func (f *fakeNexService) Archive(_ context.Context, req execution.ArchiveRequest) error {
+	f.record("archive")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.archiveReqs = append(f.archiveReqs, req)
+	return f.archiveErr
+}
 
 var _ nexService = (*fakeNexService)(nil)
+
+// fakeNexStore answers Get with one scripted result per call, in order; the
+// last one repeats once the script is exhausted (so "first Get says running,
+// re-Get says idle" is a two-entry script). onGet (when set) runs before
+// each answer with the call index, the seam for "the tmux server restarted
+// while the execution was being read".
+type fakeNexStore struct {
+	mu      sync.Mutex
+	results []getResult
+	calls   int
+	onGet   func(call int)
+}
+
+type getResult struct {
+	exec store.Execution
+	err  error
+}
+
+func (f *fakeNexStore) Get(context.Context, string) (store.Execution, error) {
+	f.mu.Lock()
+	call := f.calls
+	f.calls++
+	var res getResult
+	if n := len(f.results); n > 0 {
+		if call < n {
+			res = f.results[call]
+		} else {
+			res = f.results[n-1]
+		}
+	}
+	f.mu.Unlock()
+	if f.onGet != nil {
+		f.onGet(call)
+	}
+	return res.exec, res.err
+}
+
+func (f *fakeNexStore) Calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+var _ nexStore = (*fakeNexStore)(nil)
 
 // handoffEnv is one wired module behind an httptest server, in the
 // all-good starting state: session known, generation matches, CC idle in

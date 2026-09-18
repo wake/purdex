@@ -1,7 +1,8 @@
 package nex
 
 // The individual steps of handleNexHandoff (handoff.go): identity, stopping
-// Claude Code, and the rollback after a rejected delegate.
+// Claude Code, and the rollback after a rejected delegate. waitForCC is
+// shared with handleNexTakeback (takeback.go).
 
 import (
 	"context"
@@ -76,6 +77,13 @@ func (m *Module) rollbackHandoff(sess *session.SessionInfo, expected, command, s
 		m.logf("nex: handoff %s rollback: tmux generation moved, nothing sent", sess.Code)
 		return false
 	}
+	return m.waitForCC(target)
+}
+
+// waitForCC polls the pane for a live Claude Code within rollbackWait —
+// the budget both a rollback resume and a take-back resume run under
+// (spec §4.4: ≤ 15 s). Returns whether CC came up in time.
+func (m *Module) waitForCC(target string) bool {
 	deadline := time.Now().Add(m.rollbackWait)
 	for {
 		if m.prober.IsAliveFor("cc", target) {

@@ -281,13 +281,14 @@ func (m *Module) softFail(err error) error {
 // Init soft-failed, every path under RoutePrefix instead answers 503
 // nex_unavailable (spec §4.4.1, I8).
 //
-// The handoff endpoint lives under /api/sessions, not RoutePrefix (it
-// orchestrates a tmux pane, the engine is only its last step), and is
-// mounted whether or not the engine assembled: the handler itself answers
-// 503 nex_unavailable, so a client sees the structured error rather than
-// a 404 it would read as "old daemon".
+// The handoff and take-back endpoints live under /api/sessions, not
+// RoutePrefix (they orchestrate a tmux pane, the engine is only one step),
+// and are mounted whether or not the engine assembled: the handlers
+// themselves answer 503 nex_unavailable, so a client sees the structured
+// error rather than a 404 it would read as "old daemon".
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{code}/nex-handoff", m.handleNexHandoff)
+	mux.HandleFunc("POST /api/sessions/{code}/nex-takeback", m.handleNexTakeback)
 	if m.initErr != nil {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return

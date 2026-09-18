@@ -1,0 +1,458 @@
+package nex
+
+// P-C.3a task 4: POST /api/sessions/{code}/nex-takeback (spec §4.4
+// "Daemon: nex-takeback"). Reuses the handoff fixtures (handoff_test.go);
+// the starting state here is the mirror image of a handoff: the pane is an
+// idle shell, the execution is settled and carries a session id.
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"lab.protype.tw/wake/nexen/execution"
+	"lab.protype.tw/wake/nexen/store"
+)
+
+const (
+	tbExecID    = "exec-9"
+	tbSessionID = "sid-exec-1"
+	tbLeaseID   = "lease-acquired"
+	tbPrincipal = "pdx:host1"
+)
+
+type takebackEnv struct {
+	*handoffEnv
+	store *fakeNexStore
+}
+
+// newTakebackEnv: session known, generation matches, pane is a shell,
+// execution idle with a session id, service accepts everything, and CC
+// comes back to life as soon as a resume key string lands in the pane.
+func newTakebackEnv(t *testing.T) *takebackEnv {
+	t.Helper()
+	env := newHandoffEnv(t)
+	setPaneShell(env.tmux, hoTarget)
+	st := &fakeNexStore{results: []getResult{{exec: idleExec()}}}
+	env.m.sys.store = st
+	env.svc.lease = store.Lease{ID: tbLeaseID, PrincipalID: tbPrincipal}
+	reviveCCAfterKeys(env)
+	return &takebackEnv{handoffEnv: env, store: st}
+}
+
+func idleExec() store.Execution {
+	return store.Execution{ID: tbExecID, State: store.StateIdle, SessionID: tbSessionID}
+}
+
+func runningExec() store.Execution {
+	return store.Execution{ID: tbExecID, State: store.StateRunning, SessionID: tbSessionID,
+		LeaseID: "lease-other", LeasePrincipalID: "pdx:host1/tab-3"}
+}
+
+// scriptRunningThenIdle: the first Get says running, the re-Get after the
+// interrupt says idle.
+func (e *takebackEnv) scriptRunningThenIdle() {
+	e.store.results = []getResult{{exec: runningExec()}, {exec: idleExec()}}
+}
+
+func (e *takebackEnv) post(t *testing.T, code string, body any) (int, map[string]any) {
+	t.Helper()
+	var raw []byte
+	switch b := body.(type) {
+	case string:
+		raw = []byte(b)
+	default:
+		var err error
+		raw, err = json.Marshal(b)
+		require.NoError(t, err)
+	}
+	resp, err := http.Post(e.srv.URL+"/api/sessions/"+code+"/nex-takeback", "application/json", bytes.NewReader(raw))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var out map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out), "response is JSON")
+	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+	return resp.StatusCode, out
+}
+
+func takebackBody() map[string]any {
+	return map[string]any{
+		"expected_tmux_instance": hoInstance,
+		"execution_id":           tbExecID,
+		"resume_command":         "claude --resume {id}",
+	}
+}
+
+// assertUntouched: neither the service nor the store was reached, and no
+// key was sent.
+func (e *takebackEnv) assertUntouched(t *testing.T) {
+	t.Helper()
+	assert.Empty(t, e.svc.Calls(), "service never called")
+	assert.Equal(t, 0, e.store.Calls(), "store never read")
+	assert.Empty(t, e.tmux.RawKeysSent(), "no keys sent")
+}
+
+func (e *takebackEnv) assertNoArchive(t *testing.T) {
+	t.Helper()
+	assert.NotContains(t, e.svc.Calls(), "archive")
+}
+
+// --- preconditions ---
+
+func TestTakeback503WhenServiceNil(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.m.sys.service = nil
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusServiceUnavailable, status)
+	assert.Equal(t, "nex_unavailable", body["code"])
+	env.assertUntouched(t)
+}
+
+func TestTakebackRouteRegisteredWhenEngineSoftFailed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", launchdPath)
+	cfg := baseConfig(t)
+	m := New()
+	m.assemble = newFakeAssemble(&fakeAssembleRecord{}, engine{}, errors.New("boom"))
+	m.logf = discardLogf
+	require.NoError(t, m.Init(newTestCore(&cfg)))
+	require.Error(t, m.initErr)
+
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/sessions/abc/nex-takeback", strings.NewReader(`{}`)))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "nex_unavailable", body["code"])
+	assert.Contains(t, body["error"], "boom")
+}
+
+func TestTakeback400MalformedBody(t *testing.T) {
+	env := newTakebackEnv(t)
+	status, body := env.post(t, hoCode, "{not json")
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "malformed_body", body["code"])
+	env.assertUntouched(t)
+}
+
+func TestTakeback400InvalidInstance(t *testing.T) {
+	env := newTakebackEnv(t)
+	for _, bad := range []string{"", "1,2", "a#b"} {
+		b := takebackBody()
+		b["expected_tmux_instance"] = bad
+		status, body := env.post(t, hoCode, b)
+		assert.Equal(t, http.StatusBadRequest, status, "instance %q", bad)
+		assert.Equal(t, "invalid_instance", body["code"], "instance %q", bad)
+	}
+	env.assertUntouched(t)
+}
+
+func TestTakeback400MissingExecutionIDOrResumeCommand(t *testing.T) {
+	cases := map[string]struct{ field, code string }{
+		"execution_id":   {"execution_id", "missing_execution_id"},
+		"resume_command": {"resume_command", "missing_resume_command"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := newTakebackEnv(t)
+			b := takebackBody()
+			delete(b, c.field)
+			status, body := env.post(t, hoCode, b)
+			assert.Equal(t, http.StatusBadRequest, status)
+			assert.Equal(t, c.code, body["code"])
+			env.assertUntouched(t)
+		})
+	}
+}
+
+// --- lock ---
+
+func TestTakeback409HandoffInProgress(t *testing.T) {
+	env := newTakebackEnv(t)
+	require.True(t, env.m.locks.TryLock(hoCode))
+	defer env.m.locks.Unlock(hoCode)
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "handoff_in_progress", body["code"])
+	env.assertUntouched(t)
+}
+
+// --- preflight, before the execution is touched ---
+
+func TestTakeback404SessionMissingServiceNeverCalled(t *testing.T) {
+	env := newTakebackEnv(t)
+	status, body := env.post(t, "nope", takebackBody())
+	assert.Equal(t, http.StatusNotFound, status)
+	assert.Equal(t, "session_missing", body["code"])
+	env.assertUntouched(t)
+}
+
+func TestTakebackGenerationMismatchServiceNeverCalled(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.tmux.SetInstance("999:999")
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "tmux_instance_mismatch", body["code"])
+	env.assertUntouched(t)
+}
+
+func TestTakebackCCAlreadyRunningServiceNeverCalled(t *testing.T) {
+	env := newTakebackEnv(t)
+	setPaneCCIdle(env.tmux, hoTarget)
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "cc_already_running", body["code"])
+	env.assertUntouched(t)
+}
+
+// --- execution lookup ---
+
+func TestTakeback404ExecutionNotFound(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.results = []getResult{{err: store.ErrNotFound}}
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusNotFound, status)
+	assert.Equal(t, "execution_not_found", body["code"])
+	assert.Empty(t, env.svc.Calls())
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+func TestTakeback500StoreError(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.results = []getResult{{err: errors.New("disk on fire")}}
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "store_error", body["code"])
+	assert.Contains(t, body["error"], "disk on fire")
+	assert.Empty(t, env.svc.Calls())
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+// --- running: lease + interrupt ---
+
+// TestTakebackRunningAcquiresInterruptsReleases: with no caller lease the
+// daemon takes one as the request's principal, interrupts with it, and the
+// deferred release runs last — after the archive, on the way out.
+func TestTakebackRunningAcquiresInterruptsReleases(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls())
+	assert.Equal(t, []string{tbPrincipal}, env.svc.acquires)
+	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: tbLeaseID, PrincipalID: tbPrincipal}}, env.svc.interruptReqs)
+	assert.Equal(t, []releaseCall{{tbExecID, tbLeaseID, tbPrincipal}}, env.svc.releases)
+	assert.Equal(t, 2, env.store.Calls(), "Get, then re-Get after the interrupt")
+}
+
+func TestTakebackCallerLeaseNoAcquireNoRelease(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	b := takebackBody()
+	b["lease_id"] = "lease-caller"
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"interrupt", "archive"}, env.svc.Calls())
+	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: "lease-caller", PrincipalID: tbPrincipal}}, env.svc.interruptReqs)
+	assert.Empty(t, env.svc.releases, "a caller-provided lease is never released")
+}
+
+func TestTakeback409HeldBy(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	env.svc.acquireErr = store.ErrLeaseHeld
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "held_by", body["code"])
+	assert.Equal(t, "pdx:host1/tab-3", body["principal"])
+	assert.Equal(t, []string{"acquire"}, env.svc.Calls(), "no interrupt, no release of a lease we never got")
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+func TestTakeback500LeaseError(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	env.svc.acquireErr = errors.New("db locked")
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "lease_error", body["code"])
+	assert.Equal(t, []string{"acquire"}, env.svc.Calls())
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+func TestTakebackNoLiveTurnTolerated(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	env.svc.interruptErr = fmt.Errorf("turn t1: %w", execution.ErrNoLiveTurn) // wrapped, as Nexen returns it
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls())
+}
+
+func TestTakeback504InterruptUnconfirmedReleasesLease(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	env.svc.interruptErr = execution.ErrInterruptUnconfirmed
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusGatewayTimeout, status)
+	assert.Equal(t, "interrupt_unconfirmed", body["code"])
+	assert.Equal(t, []string{"acquire", "interrupt", "release"}, env.svc.Calls())
+	assert.Equal(t, 1, env.store.Calls(), "no re-Get: nothing else done")
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+func TestTakeback500InterruptFailedReleasesLease(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.scriptRunningThenIdle()
+	env.svc.interruptErr = execution.ErrExecutionOrphaned
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "interrupt_failed", body["code"])
+	assert.Contains(t, body["error"], execution.ErrExecutionOrphaned.Error())
+	assert.Equal(t, []string{"acquire", "interrupt", "release"}, env.svc.Calls())
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+func TestTakeback500ReGetErrorReleasesLease(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.results = []getResult{{exec: runningExec()}, {err: errors.New("row vanished")}}
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "store_error", body["code"])
+	assert.Equal(t, []string{"acquire", "interrupt", "release"}, env.svc.Calls())
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+func TestTakeback409ExecutionNotSettled(t *testing.T) {
+	t.Run("queued, never interrupted", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateQueued, SessionID: tbSessionID}}}
+		status, body := env.post(t, hoCode, takebackBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "execution_not_settled", body["code"])
+		assert.Equal(t, "queued", body["state"])
+		assert.Empty(t, env.svc.Calls())
+		assert.Empty(t, env.tmux.RawKeysSent())
+	})
+	t.Run("still running after interrupt", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: runningExec()}}
+		status, body := env.post(t, hoCode, takebackBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "execution_not_settled", body["code"])
+		assert.Equal(t, "running", body["state"])
+		assert.Equal(t, []string{"acquire", "interrupt", "release"}, env.svc.Calls())
+		assert.Empty(t, env.tmux.RawKeysSent())
+	})
+}
+
+// --- session id ---
+
+func TestTakebackSessionIDPreferredOverResume(t *testing.T) {
+	t.Run("both set → session_id", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateIdle, SessionID: tbSessionID, ResumeSessionID: "sid-resume"}}}
+		status, body := env.post(t, hoCode, takebackBody())
+		require.Equal(t, http.StatusOK, status, "%v", body)
+		assert.Equal(t, tbSessionID, body["session_id"])
+		assert.Equal(t, []string{"claude --resume " + tbSessionID + "\n"}, rawKeysText(env.tmux))
+	})
+	t.Run("only resume_session_id", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateFailed, ResumeSessionID: "sid-resume"}}}
+		status, body := env.post(t, hoCode, takebackBody())
+		require.Equal(t, http.StatusOK, status, "%v", body)
+		assert.Equal(t, "sid-resume", body["session_id"])
+		assert.Equal(t, []string{"claude --resume sid-resume\n"}, rawKeysText(env.tmux))
+	})
+}
+
+func TestTakeback409NoSessionID(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.results = []getResult{{exec: store.Execution{ID: tbExecID, State: store.StateTerminated}}}
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "no_session_id", body["code"])
+	assert.Empty(t, env.svc.Calls())
+	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+// --- resume keys and liveness ---
+
+func TestTakebackKeysSubstitutedWithNewlineBySessionID(t *testing.T) {
+	env := newTakebackEnv(t)
+	b := takebackBody()
+	b["resume_command"] = "cld-yolo --resume {id} --verbose"
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	keys := env.tmux.RawKeysSent()
+	require.Len(t, keys, 1)
+	assert.Equal(t, hoTmuxID+":", keys[0].Target, "sent by tmux session id, not name")
+	assert.Equal(t, []string{"cld-yolo --resume " + tbSessionID + " --verbose\n"}, rawKeysText(env.tmux))
+}
+
+func TestTakeback500SendFailedNoArchive(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.tmux.FailSendKeys = true
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "send_failed", body["code"])
+	env.assertNoArchive(t)
+}
+
+// TestTakebackNotSent409NoArchive: the generation moves between the
+// preflight sample and the send; SendKeysIfInstance declines and nothing
+// is archived — the execution is untouched for a retry.
+func TestTakebackNotSent409NoArchive(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.onGet = func(int) { env.tmux.SetInstance("999:999") }
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "tmux_instance_mismatch", body["code"])
+	assert.Empty(t, env.tmux.RawKeysSent())
+	env.assertNoArchive(t)
+}
+
+func TestTakeback504CCStartTimeoutNoArchive(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.m.rollbackWait = 50 * time.Millisecond
+	// Sink the revival: keys land in $1, but liveness is read off other:0,
+	// where nothing ever runs claude.
+	env.sessions.sessions[hoCode].Name = "other"
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusGatewayTimeout, status)
+	assert.Equal(t, "cc_start_timeout", body["code"])
+	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.Len(t, env.tmux.RawKeysSent(), 1, "keys were sent; CC just never came up")
+	env.assertNoArchive(t)
+}
+
+// --- archive and response ---
+
+func TestTakebackSuccessArchives(t *testing.T) {
+	env := newTakebackEnv(t)
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, map[string]any{"session_id": tbSessionID, "archived": true}, body)
+	assert.Equal(t, []string{"archive"}, env.svc.Calls(), "idle execution: no lease, no interrupt")
+	assert.Equal(t, []execution.ArchiveRequest{{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true}}, env.svc.archiveReqs)
+}
+
+func TestTakebackArchiveFailureStill200(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.svc.archiveErr = errors.New("archive exploded")
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, map[string]any{"session_id": tbSessionID, "archived": false}, body)
+}
