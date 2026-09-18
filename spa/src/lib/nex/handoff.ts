@@ -52,6 +52,8 @@ export interface HandToNexArgs {
   cachedName: string
   tabId: string
   paneId: string
+  /** G4: keep the idle tmux session as the anchor to come back to (default `true`). */
+  keepSession?: boolean
 }
 
 export interface HandToNexOutcome {
@@ -60,13 +62,25 @@ export interface HandToNexOutcome {
   swapped: boolean
 }
 
-/** The execution content a successful handoff writes into the pane (also what the recovery toast opens). */
-export function executionContentFor(hostId: string, executionId: string, from: ExecutionFrom): PaneContent {
-  return { kind: 'execution', executionId, host: hostId, from }
+/**
+ * The execution content a successful handoff writes into the pane (also what
+ * the recovery toast opens). `from` is omitted when the session was not kept:
+ * the pane then has nothing to return to, and "Take to terminal" creates a
+ * new session instead.
+ */
+export function executionContentFor(hostId: string, executionId: string, from?: ExecutionFrom): PaneContent {
+  return from ? { kind: 'execution', executionId, host: hostId, from } : { kind: 'execution', executionId, host: hostId }
+}
+
+/** `from` for the execution pane, or undefined when the daemon says the session is gone. */
+export function handoffFromFor(args: Pick<HandToNexArgs, 'sessionCode' | 'tmuxInstance' | 'cachedName'>, result: Pick<NexHandoffResult, 'session_kept'>): ExecutionFrom | undefined {
+  // An old daemon omits the field: it never kills, so the session is there.
+  if (result.session_kept === false) return undefined
+  return { sessionCode: args.sessionCode, tmuxInstance: args.tmuxInstance, cachedName: args.cachedName }
 }
 
 export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> {
-  const { hostId, sessionCode, tmuxInstance, cachedName, tabId, paneId } = args
+  const { hostId, sessionCode, tmuxInstance, keepSession = true, tabId, paneId } = args
   return singleFlight(`handoff:${hostId}:${sessionCode}`, async () => {
     const nexHosts = useNexHostStore.getState()
     await nexHosts.ensure(hostId)
@@ -80,10 +94,10 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
       expected_tmux_instance: tmuxInstance,
       // `{id}` left for the daemon: it read the session id itself.
       rollback_command: resumeTemplateFor(resumeLookupFor(hostId), 'cc'),
+      keep_session: keepSession,
     })
-    const from: ExecutionFrom = { sessionCode, tmuxInstance, cachedName }
     const swapped = useTabStore.getState().trySetPaneContent(
-      tabId, paneId, executionContentFor(hostId, result.execution_id, from),
+      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result)),
       (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
     )
     return { result, swapped }

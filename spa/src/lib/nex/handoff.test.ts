@@ -91,7 +91,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-const handoffOk = { execution_id: 'exc_1', state: 'running', effective_profile: 'handoff', session_id: 'sid-1', cwd: '/w' }
+const handoffOk = { execution_id: 'exc_1', state: 'running', effective_profile: 'handoff', session_id: 'sid-1', cwd: '/w', session_kept: true }
 const takebackOk = { session_id: 'sid-1', archived: true }
 const newSession = { code: 'nw1234', name: 'purdex-3', cwd: '/w/purdex/.claude/worktrees/x', mode: 'terminal', tmux_instance: 'inst-9' }
 const toTerminalOk = { session: newSession, session_id: 'sid-1', archived: true }
@@ -151,9 +151,38 @@ describe('handToNex', () => {
     const out = await handToNex(a)
     expect(ensure).toHaveBeenCalledWith(H)
     expect(mockedHandoff).toHaveBeenCalledTimes(1)
-    expect(mockedHandoff).toHaveBeenCalledWith(H, from.sessionCode, { expected_tmux_instance: from.tmuxInstance, rollback_command: 'claude --resume {id}' })
+    expect(mockedHandoff).toHaveBeenCalledWith(H, from.sessionCode, { expected_tmux_instance: from.tmuxInstance, rollback_command: 'claude --resume {id}', keep_session: true })
     expect(out).toEqual({ result: handoffOk, swapped: true })
     expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from })
+  })
+
+  describe('keep_session (exec-to-terminal spec §4.3 / G4)', () => {
+    it('keepSession:false is sent as keep_session:false; session_kept:false → the pane has no `from` (the button later takes it to a NEW terminal)', async () => {
+      mockedHandoff.mockResolvedValueOnce({ ...handoffOk, session_kept: false })
+      const a = { ...args(), keepSession: false }
+      const out = await handToNex(a)
+      expect(mockedHandoff.mock.calls[0][2]).toMatchObject({ keep_session: false })
+      expect(out.swapped).toBe(true)
+      expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H })
+      expect(paneContent(a.tabId)).not.toHaveProperty('from')
+    })
+
+    it('keepSession:false but the daemon could not kill (session_kept:true) → `from` is kept', async () => {
+      mockedHandoff.mockResolvedValueOnce({ ...handoffOk, session_kept: true })
+      const a = { ...args(), keepSession: false }
+      await handToNex(a)
+      expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from })
+    })
+
+    it('an old daemon that omits session_kept counts as kept (keepSession absent → keep_session:true)', async () => {
+      const { session_kept: _omit, ...old } = handoffOk
+      void _omit
+      mockedHandoff.mockResolvedValueOnce(old as typeof handoffOk)
+      const a = args()
+      await handToNex(a)
+      expect(mockedHandoff.mock.calls[0][2]).toMatchObject({ keep_session: true })
+      expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from })
+    })
   })
 
   it('loads the host config before reading the resume template, so a not-yet-loaded override is the rollback command (R1-2)', async () => {
@@ -161,7 +190,7 @@ describe('handToNex', () => {
     mockedHandoff.mockResolvedValueOnce(handoffOk)
     await handToNex(args())
     expect(ensureLoaded).toHaveBeenCalledWith(H)
-    expect(mockedHandoff).toHaveBeenCalledWith(H, from.sessionCode, { expected_tmux_instance: from.tmuxInstance, rollback_command: 'cld-yolo --resume {id}' })
+    expect(mockedHandoff).toHaveBeenCalledWith(H, from.sessionCode, { expected_tmux_instance: from.tmuxInstance, rollback_command: 'cld-yolo --resume {id}', keep_session: true })
   })
 
   it('rejects with handoff_unsupported and sends nothing when the host is not handoff-ready', async () => {
@@ -601,12 +630,13 @@ describe('handoffErrorMessage', () => {
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))
     }
-    for (const key of ['handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body', 'handoff.success', 'handoff.open_execution', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
+    for (const key of ['handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body', 'handoff.success', 'handoff.open_execution', 'handoff.keep_session', 'handoff.other_panes', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
       expect(enMap[key], key).toBeTruthy()
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))
     }
     expect(enMap['takeback.manual_resume']).toContain('{{id}}')
+    expect(enMap['handoff.other_panes']).toContain('{{count}}')
   })
 })
 

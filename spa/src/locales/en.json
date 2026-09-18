@@ -805,6 +805,8 @@
   "handoff.confirm_body": "Claude Code exits in this pane and continues headless under nex with the handoff profile — no permission prompts. You can take it back to the terminal later.",
   "handoff.success": "Handed to nex.",
   "handoff.open_execution": "Open execution",
+  "handoff.keep_session": "Keep the tmux session",
+  "handoff.other_panes": "{{count}} other panes use this session; if it is not kept they will show it as terminated.",
   "handoff.rolled_back": "the terminal was restored",
   "handoff.not_rolled_back": "the terminal was not restored",
   "handoff.error.generic": "Handoff failed ({{code}}).",
