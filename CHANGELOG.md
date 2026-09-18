@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.408] - 2026-09-19
+
+### Feature: Edit／Write 結果的行號 diff view（#1225，P-B3.3）＋ P-B3 真機驗收
+
+P-B3 最後一支。`lib/nex/diff-lines.ts` 的 `diffRows(hunk)` 從 `old_start`／`new_start` 起算走 unified hunk：` ` 兩邊推進、`-` 只推舊、`+` 只推新、`\ No newline…` 是 meta 列不推進，未知首字元當 context（fail-safe）。`ToolDiffView` 照 console R11：每個 hunk 一行 `@@ -a,b +c,d @@`、兩欄右對齊 `tabular-nums` 行號、符號欄、文字欄；增刪整列鋪底色、meta 列淡化斜體；`diff.truncated` 尾端加一列提示——**即使 daemon 把 hunk 丟到 0 個也要顯示**（攻擊方抓到 `hunks: []` ＋ `truncated` 時提示被吞；daemon 以整個 hunk 為單位從尾端丟，第一個 hunk 就超過 2000 行時就會這樣）。掛在 result block 展開區、raw content 之前；沒有 diff 時 DOM 與 alpha.407 逐字相同（Task 5a 的 baseline snapshot 一路不帶 `-u`）。hunk 的四個數字與所有計數改要求 `Number.isSafeInteger`（超過 2^53 的整數 `++` 後會重複行號）。critic 判「一次同步渲染 2000 行 ≈ 10k DOM」為 follow-up 而非阻斷（預設收合、點了才渲染、尚未量測）→ #1227。
+
+真機驗收（spec §6.1，worktree :5175 ＋ playwright，daemon alpha.405）五步全過：N2 execution 的 history 顯示 `primary_arg` 摘要、`4 lines`／`+1 −1`、行號 diff；pre-N2 的七個 Bash 呼叫與 alpha.405 一模一樣（client 摘要、`created_at` 差的徽章、沒有 facts）；對它送新 turn 變成 mixed execution，舊的不動、新的吃 N2、總數無重複；live turn 的 spinner → `1.0s` → `4.0s` → `6.9s`（＝ daemon `duration_ms` 6862）；還意外拿到一個真實 denied——sandbox 拒絕讀 cwd 外的檔案，新呼叫劃刪除線＋ `denied`、result 中性色，而兩格上方舊的 raw-only 拒絕仍是紅的，R3 兩條路並排。26／24 ms 顯示成 `0.0s` 不夠有用 → #1229。
+
+Follow-up：#1226（seq guard 對 nexen #83 亂序永久丟事件，既有缺口）、#1227（diff view 顯示預算）、#1228（subagent 工具追蹤）、#1229（毫秒級時長）。成本 hover（console R13）是 raw `result` 幀的 turn 級事實，不屬 N2，另開 phase。vitest 7211、lint、tsc、build 綠。
+
 ## [1.0.0-alpha.407] - 2026-09-19
 
 ### Feature: exec pane 顯示 N2 事實——摘要、狀態、時長、result facts（#1223，P-B3.2）
