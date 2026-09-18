@@ -174,3 +174,22 @@ describe('previewValue (bounded R10 serialisation)', () => {
     expect(out.length).toBeLessThan(3 * SUMMARY_LIMIT)
   })
 })
+
+describe('previewValue: wide objects (codex re-review P2)', () => {
+  it('an object with 200 000 keys stops after the budget without enumerating every key', () => {
+    const wide: Record<string, number> = {}
+    for (let i = 0; i < 200_000; i++) wide[`k${i}`] = i
+    const t0 = performance.now()
+    const out = previewValue(wide, 80)
+    expect(out.length).toBeLessThanOrEqual(81)
+    expect(out.startsWith('{"k0":0,"k1":1')).toBe(true)
+    expect(performance.now() - t0).toBeLessThan(50)
+  })
+
+  it('inherited enumerable keys are skipped', () => {
+    const proto = { inherited: 1 }
+    const child = Object.create(proto) as Record<string, unknown>
+    child.own = 2
+    expect(previewValue(child, 80)).toBe('{"own":2}')
+  })
+})

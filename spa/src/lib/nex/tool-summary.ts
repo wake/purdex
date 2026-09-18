@@ -88,11 +88,17 @@ class PreviewWriter {
           this.write(']')
         } else {
           this.write('{')
-          const keys = Object.keys(v)
-          for (let i = 0; i < keys.length; i++) {
-            if (i > 0) this.write(',')
-            this.write(JSON.stringify(keys[i]) + ':')
-            this.value((v as Record<string, unknown>)[keys[i]], depth + 1)
+          // for…in instead of Object.keys: the latter materialises every
+          // key up front (O(n) before the first write), while for…in lets
+          // the budget stop the walk after a handful of properties. Own
+          // keys only, so a prototype-chain entry never leaks in.
+          let first = true
+          for (const k in v) {
+            if (!Object.hasOwn(v, k)) continue
+            if (!first) this.write(',')
+            first = false
+            this.write(JSON.stringify(k) + ':')
+            this.value((v as Record<string, unknown>)[k], depth + 1)
           }
           this.write('}')
         }
