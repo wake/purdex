@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.400] - 2026-09-18
+
+### Refactor: P-D.3a 拆除 SPA Stream 家族，pane mode 收成 terminal（#1198）— P-D 第 3／3 段主體
+
+daemon 兩段（alpha.395／396）拆完後，SPA 這邊把 Stream 那一代也下線：`lib/stream-ws.ts`（WS client）、`useStreamStore`、`useRelayWsManager`、`ConversationView`（＋snapshot）、`HandoffButton` 13 個檔案刪掉；StatusBar 的 terminal／stream 下拉、tab 右鍵的切換項、`useTabStore.setViewMode`、event WS 的 `handoff`／`relay` 分支、`host-api` 的 `switchMode`／`fetchHistory`／`handoff`／`ConfigData.stream`、Host › Overview 的 stream presets 欄、Sessions 表的 Mode 欄、通知點擊硬寫的 `mode:'stream'` 全部走。exec pane 還在用的 `stream-json` 訊息型別（`ContentBlock`／`AssistantMessage`／`StreamMessage` 等 8 個宣告）先原文搬到 `lib/nex/message-types.ts`——commit message 內附 8/8 `cmp` identical——再動其他東西，每個 commit 都過 `tsc -p tsconfig.app.json`。
+
+`PaneContent.mode` 從 `'terminal' | 'stream'` 收成 `'terminal'`，tab store persist **v2→v3**：`migrateTabStore` 新的 `<3` 步驟走遍每個 split layout 的 leaf，把 tmux-session pane 的非 terminal mode 改掉——codex plan review 抓的：只加 merge hook 對既有 v2 blob 根本不會跑。舊資料一律當 terminal：v1 workspace snapshot 的 `mode:'stream'` restore 現在送 `mode:"terminal"`（真機看到 request body）、device-state 的 stream meta 可以 reattach、`/t/<id>/stream` 舊 deep link 照開並正規化成 `/terminal`。攻擊方抓到一條真的不一致：`reattach`／`revive` 還在拒絕**尚未升級到 P-D.2 的 peer daemon** 回的 live `mode:'stream'`，而 snapshot restore 與直接開啟都接受——同一個遠端 session 依入口不同被判存活或遺失；改成四條路徑同一政策（mode 不參與 binding，code＋tmux_instance 才是）。16 處 always-true 的 `mode === 'terminal'` guard 拿掉、邏輯保留。
+
+一個坑寫進 spec：`spa/tsconfig.json` 是 solution-style（`files: []`），裸的 `npx tsc --noEmit` 是 no-op、永遠 exit 0，要用 `-p tsconfig.app.json` 或 `tsc -b`。真機（worktree 自己起 :5175 對 mlab daemon）：v2 blob reload 成兩個 terminal pane 且 blob 變 v3、右鍵只剩 Split ＋ Hand to nex、舊 deep link、舊 snapshot rebuild、Hand to nex → MANGO → Take back 全過；順帶抓到既有的 `useRouteSync` 整頁載入無限迴圈（main 同樣重現）→ #1203。vitest 6907、lint、build 綠。P-D.3b（`Session` 的 `cc_session_id`／`cc_model`／`has_relay` 與 ~60 個 fixture 檔）另開 PR。
+
 ## [1.0.0-alpha.399] - 2026-09-18
 
 ### Fix: badge 預覽三態＋跟側欄同底；浮動面板一律開在欄位下方（#1197）
