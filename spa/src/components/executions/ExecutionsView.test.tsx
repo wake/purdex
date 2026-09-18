@@ -240,6 +240,31 @@ describe('ExecutionsView', () => {
     expect(screen.queryByTestId('executions-empty')).toBeNull()
   })
 
+  it('renders a garbage page seeded straight into the store without throwing (belt and braces below the validator)', () => {
+    seedList([
+      row({ id: 'exc_objsource', labels: { source: { nested: true } } as unknown as Record<string, string>, updated_at: NOW - 1 }),
+      { ...row({ id: 'exc_numbrief' }), brief: 42, labels: null, origin: 7, updated_at: NOW - 2 } as unknown as ExecutionSummary,
+    ])
+    render(<ExecutionsView hostId={H} isActive />)
+    const rows = screen.getAllByTestId('executions-row')
+    expect(rows).toHaveLength(2)
+    expect(screen.getByTestId('executions-group-local')).toBeInTheDocument()
+    expect(within(rows[1]).getByTestId('executions-brief').textContent).toBe('')
+    expect(within(rows[1]).queryByTestId('executions-marker')).toBeNull()
+  })
+
+  it('a malformed row from the API is dropped at the boundary; the rest still render', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockResolvedValueOnce({
+      items: [row({ id: 'exc_fine', brief: 'fine' }), { state: 'idle', brief: 'no id' }],
+      next_cursor: '',
+    } as never)
+    render(<ExecutionsView hostId={H} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
+    expect(screen.getByText('fine')).toBeInTheDocument()
+  })
+
   it('table and sidebar mounted together open one site-wide SSE per host', async () => {
     render(
       <>

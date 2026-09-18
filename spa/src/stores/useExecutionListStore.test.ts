@@ -498,6 +498,32 @@ describe('useExecutionListStore', () => {
     expect(cache(A).refreshRevision).toBe(4)
   })
 
+  it('a page whose items is not a list commits an empty ready list and warns about the dropped page', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: {} } as unknown as ExecutionsPage)
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(cache(A).items).toEqual([])
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).error).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]).toEqual([expect.stringContaining('dropped'), expect.objectContaining({ hostId: A, dropped: 1 })])
+  })
+
+  it('a row with labels: null is kept with {} and a row without an id is dropped', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockResolvedValueOnce({
+      items: [{ ...row('exc_ok'), labels: null }, { ...row('exc_noid'), id: undefined }],
+      next_cursor: '',
+    } as unknown as ExecutionsPage)
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).items.map((r) => r.id)).toEqual(['exc_ok'])
+    expect(cache(A).items[0].labels).toEqual({})
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropped'), expect.objectContaining({ hostId: A, dropped: 1 }))
+  })
+
   it('refetch with no subscribers opens nothing', () => {
     useExecutionListStore.getState().refetch(A)
     expect(sse.openNexSse).not.toHaveBeenCalled()

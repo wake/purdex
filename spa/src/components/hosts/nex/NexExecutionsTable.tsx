@@ -13,6 +13,7 @@ import { useHostExecutions } from '../../../hooks/useHostExecutions'
 import { openExecutionDetailTab } from '../../../lib/deeplink/deeplinkResolver'
 import { archiveExecution, attachControl, listExecutions, releaseLease, terminateExecution } from '../../../lib/nex/nex-api'
 import { NexApiError, type ExecutionSummary } from '../../../lib/nex/types'
+import { sanitizeExecutionsPage } from '../../../lib/nex/validate-executions'
 import NexExecutionRow from './NexExecutionRow'
 
 export interface NexExecutionsTableProps {
@@ -91,7 +92,9 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
     listExecutions(hostId, { includeArchived: true, limit: 100 })
       .then((page) => {
         if (!mountedRef.current || token !== archivedTokenRef.current || hostId !== hostIdRef.current) return
-        setArchived({ hostId, items: page.items, error: null })
+        const { items, dropped } = sanitizeExecutionsPage(page)
+        if (dropped > 0) console.warn('nex: archived executions page dropped malformed row(s)', { hostId, dropped })
+        setArchived({ hostId, items, error: null })
       })
       .catch((err: unknown) => {
         if (!mountedRef.current || token !== archivedTokenRef.current || hostId !== hostIdRef.current) return

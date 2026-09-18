@@ -8,6 +8,7 @@ import { listExecutions } from './nex-api'
 import { openNexSse, type NexSseHandle, type NexSseStatus } from './nex-sse'
 import { fingerprintOf } from './nex-host-effects'
 import { subscriptionSlots } from './subscription-slots'
+import { sanitizeExecutionsPage } from './validate-executions'
 import { NexApiError, type ExecutionSummary } from './types'
 import { isNexReady } from '../../components/hosts/nex/nex-ready'
 import { useNexHostStore } from '../../stores/useNexHostStore'
@@ -111,7 +112,9 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     listExecutions(hostId, { includeArchived: false, limit: 100 })
       .then((page) => {
         if (!stillCurrent()) return
-        patchCache(hostId, (c) => ({ ...c, items: page.items, phase: 'ready', error: null, refreshRevision: c.refreshRevision + 1 }))
+        const { items, dropped } = sanitizeExecutionsPage(page)
+        if (dropped > 0) console.warn('nex: executions page dropped malformed row(s)', { hostId, dropped })
+        patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, refreshRevision: c.refreshRevision + 1 }))
       })
       .catch((err: unknown) => {
         if (!stillCurrent()) return

@@ -35,7 +35,7 @@ export function ExecutionRowCompact({ row, hostId, now, onOpen }: Props) {
         title={row.state}
       />
       <span data-testid="executions-brief" className="flex-1 min-w-0 truncate text-xs text-text-primary">
-        {firstLine(row.brief)}
+        {firstLine(typeof row.brief === 'string' ? row.brief : '')}
       </span>
       {sessionCode !== null && (
         <span

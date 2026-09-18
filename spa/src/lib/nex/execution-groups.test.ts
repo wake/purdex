@@ -27,6 +27,14 @@ describe('groupBySource', () => {
     expect(groups[0].rows.map((r) => r.id)).toEqual(['new-local', 'old-local'])
   })
 
+  it('a non-string labels.source (or no labels object at all) is bucketed under local', () => {
+    const bad = { ...row('obj', 3), labels: { source: { nested: true } } } as unknown as ExecutionSummary
+    const none = { ...row('none', 2), labels: null } as unknown as ExecutionSummary
+    const groups = groupBySource([bad, none, row('num', 1, 'purdex')])
+    expect(groups.map((g) => g.source)).toEqual(['local', 'purdex'])
+    expect(groups[0].rows.map((r) => r.id)).toEqual(['obj', 'none'])
+  })
+
   it('does not mutate the input order', () => {
     const items = [row('a', 1), row('b', 2)]
     groupBySource(items)
