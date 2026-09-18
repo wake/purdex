@@ -60,6 +60,16 @@ type Executor interface {
 	// — that window's active pane — so a caller whose liveness checks read
 	// `<name>:0` sends to the pane it checked. window must be an index.
 	SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (sent bool, err error)
+	// KillSessionIfInstance kills the session id only when the tmux server's
+	// generation equals expectedInstance, evaluated by the SAME server
+	// connection that performs the kill — so a session created under one
+	// generation is never "killed" by name on the server that replaced it.
+	// See kill_session_conditional.go.
+	//
+	// (true, nil) killed; (false, nil) the server declined; (false, err) the
+	// invocation could not be completed and nothing was killed (err wraps
+	// ErrNoSession when the id is gone on the matching server).
+	KillSessionIfInstance(sessionID, expectedInstance string) (killed bool, err error)
 	PasteText(target, text string) error
 	PaneCurrentPath(target string) (string, error)
 	PaneSessionName(target string) (string, error)
