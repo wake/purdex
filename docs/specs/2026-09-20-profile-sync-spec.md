@@ -386,6 +386,14 @@ the client, next to its payload:
 | either | `rev < baseRev` | **`locked:schema`-style stop**: a revision cannot go backwards, so the SOT profile was deleted and recreated. The panel says so and offers push or pull as a fresh start |
 | either | section absent on SOT | §4.6.3 |
 
+*Restated in P2a (§9.4), without changing any row's meaning:* each side is a pair `{rev, hash}` and
+**"absent" is `hash === null`** — on the SOT that covers both "never created" and a tombstone, which
+the client cannot and need not tell apart. "The SOT moved" is then `sot.hash ≠ base.hash ∨ sot.rev >
+base.rev`, which is what lets a client that has just deleted a section (base `{6, null}`) read an
+index that no longer lists it as *agreement* rather than as a deletion to pull. Creating over an
+absent SOT always sends `baseRev 0`, because that is the only create the daemon accepts, over nothing
+or over a tombstone.
+
 The CAS of §4.6 is the enforcement of this table across the race window; the table is what stops a
 client from ever *starting* a write it knows is stale.
 
@@ -406,9 +414,21 @@ that nothing is overwritten silently:
    the push resolves (200 or 409) the section re-runs §4.6.1. Applying it eagerly would overwrite
    the very payload the impending 409 is about to ask the user to choose between.
 
+3. **Knowledge of the SOT never goes backwards by accident.** Every change to a section's base,
+   SOT view or flight bumps an *epoch*; an index response carries the epoch it was requested at and
+   is discarded (and re-requested) if the section has moved on since. Only an epoch-matching index
+   may lower the known revision — which is exactly the "profile was recreated" signal.
+4. **A decision is only as good as the state it was made in.** A push carries a token
+   `{hash, baseRev, epoch}`; the state machine refuses to open a flight for a stale token, and the
+   transport sends only a flight that was opened. A decision overtaken by an event dies at that
+   boundary instead of reaching the wire.
+
 When a push returns 409, the client keeps **the payload it sent** as the "local" side of the
 conflict. The live stores may have moved on since; the user is choosing between two known
-snapshots, not between the SOT and a moving target.
+snapshots, not between the SOT and a moving target. The state machine holds hashes only; it names
+the payloads that must be retained (the one in flight, both sides of an open conflict) and the
+transport keeps exactly those. A locked section still *learns* of newer SOT revisions — it refuses
+to apply them, not to know about them — so `Keep local` is written against the newest one.
 
 #### 4.6.3 Sections are created and deleted
 
@@ -699,3 +719,22 @@ projection lists fields per store because three stores have no `partialize` and 
 fields are not preferences; the applier cannot reuse `replaceTabSnapshot` (whole-world commit);
 `structuralKey`/`hashPayload` are copied generically rather than moved; `useNewTabLayoutStore` is
 308 lines, not 417.
+
+### 9.4 P2a plan review — codex `task-mu8xn90i-xcdz0h` (gpt-5.6-sol), 2026-09-20
+
+Seventeen findings (six critical), all accepted; the measured baseline was spot-checked and held.
+The critical ones were all in the section state machine, before a line of it existed:
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1, 2, 10 | `sot: null` meant both "never existed" and "tombstone"; a delete event has no hash; after a successful delete the next index read as "deleted elsewhere, pull" and 404'd forever | both sides are `{rev, hash \| null}`; "moved" compares hash and rev; create-over-absent sends `baseRev 0` (§4.6.1) |
+| 3 | a late index response rewound the known SOT rev → a push the client knew was stale | epochs (§4.6.2 rule 3) |
+| 4 | race between deciding a push and starting it | flight tokens (§4.6.2 rule 4) |
+| 5 | a conflict kept hashes only — the sent snapshot was unrecoverable | `retainedHashes`; the transport stashes by hash |
+| 6 | `Take SOT` was inexpressible; `Keep local` targeted the rev at lock time and would 409 again | `forcePull`; a locked section keeps learning; keep-local rebases on the newest known rev and restores the sent snapshot |
+| 7–9 | delete had no in-flight type; terminal events clearing the flight were untested; `push-converged` could set the base to a hash never sent | typed; one shared invariant test; base = the *sent* hash |
+| 11 | store state types are not exported | structural types in the lib, pinned from the test files |
+| 12 | standalone tabs dropped, against §4.3 | pure `adoptStandaloneTabs` |
+| 13 | weak well-formedness guard broke the round trip | `order` must equal the record's key set |
+| 14 | 3 ∥ 4 ∥ 5 was not independent | `1 → 2 → (3 ∥ 4) → (5 ∥ 6)` |
+| 15, 16 | `..` depth-zero ambiguity; round trip must be stated on hashes | specified and tested |

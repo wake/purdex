@@ -17,8 +17,8 @@
 - Verify per task: `npx vitest run src/lib/profile`. Before the PR:
   `npx vitest run && pnpm run lint && npx tsc -p tsconfig.app.json --noEmit && pnpm run build`
   (bare `tsc --noEmit` is a no-op here — the root tsconfig is references-only).
-- PR size: 11 source/test files + this plan + spec edits = 13 files (rule: ≤ 800 lines **or** ≤ 20
-  files).
+- PR size: `types.ts` + 6 modules + 6 test files + this plan + the spec = 15 files (rule: ≤ 800
+  lines **or** ≤ 20 files).
 
 ## Measured baseline (2026-09-20, alpha.411) — and where the spec was wrong
 
@@ -77,6 +77,10 @@ and the three non-preference fields; §4.2 the `hosts` and per-store `settings` 
 exclusion entry; §4.7 that the applier is per-section pure functions and what is reused; the
 `healLayoutInvariant` note. Logged in §9.3.
 
+**Task 0b** (after the plan review): spec §4.6.1's table restated with "absent" as `hash === null`
+on either side, the wire-`baseRev`-0 rule for creating over an absent SOT, and the epoch / flight
+token / retained-payload rules of §4.6.2. Logged in §9.4.
+
 ## Task 1 — `hash.ts`: canonical form and hash
 
 ```ts
@@ -125,7 +129,10 @@ settings:   [ /* '<storeKey>.<field>' for every listed field, see below */ ],
 ```
 
 - Path grammar: dot-separated keys; `*` = every key of a record. A leading `!` with `..name` is an
-  **exclusion of that key at any depth** under the prefix. `project()` implements includes and
+  **exclusion of that key at any depth under the prefix — depth zero included** (a tab whose
+  `layout` *is* a split has `layout.sizes`, and it goes), descending through **objects and arrays**
+  (`children[]`). Exclusions are applied after all includes, so the order of entries in the list
+  never changes the result. `project()` implements includes and
   exclusions; nothing else. A path that matches nothing contributes nothing (optional fields).
 - `settings` paths, per store (value fields only, measured from each store's persisted shape):
   - `purdex-ui-settings.*` for the 25 preference fields — **every persisted field except
@@ -148,7 +155,8 @@ settings:   [ /* '<storeKey>.<field>' for every listed field, see below */ ],
   that alphabet rather than producing a key the daemon will 400. (Workspace ids come from
   `generateId()`; the test pins that its alphabet is inside the daemon's.)
 
-Tests: `project` — includes, `*`, missing optional path, exclusion at depth 1 and depth 3, the
+Tests: `project` — includes, `*`, missing optional path, exclusion at **depth 0 (root split)**, depth
+1, and depth 3 **through `children[]`**, the same result with the exclusion listed first or last, the
 exclusion does not remove a same-named key outside its prefix, input never mutated. `sectionKind`
 for the four kinds + garbage. **The guard test** (spec §4.5): 
 
@@ -162,12 +170,16 @@ projection list leaves the fingerprint unchanged; adding/removing a path changes
 
 ## Task 3 — `sections.ts`: builders (store state in → section payloads out)
 
-Pure functions over **plain data** shaped like the stores' state — typed with `Pick<…>` of the
-real state types via `import type`, so a store refactor breaks the build here, but no store module
-is imported at runtime.
+Pure functions over **plain data** shaped like the stores' state. `HostState` and `WorkspaceState`
+are **not exported** by their stores (plan review #11), and this PR does not touch store files, so
+the lib declares its own structural input types in `types.ts` (`HostsSource`, `WorkspacesSource`,
+`TabsSource`, `SettingsSources`) built from the types that *are* exported (`HostConfig`,
+`Workspace`, `Tab`, `PaneLayout`, `TabPosition`). Compatibility is pinned where importing a store
+is allowed — **in the test file**: `const _h: HostsSource = useHostStore.getState()` (and one per
+store), so a store refactor fails `tsc -p tsconfig.app.json`, which includes tests.
 
 ```ts
-export function buildHostsSection(s: Pick<HostState, 'hosts' | 'hostOrder'>): HostsPayload
+export function buildHostsSection(s: HostsSource): HostsPayload
 export function buildWorkspacesSection(workspaces: readonly Workspace[]): WorkspacesPayload
 export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>): TabsPayload
 export function buildSettingsSection(stores: SettingsSources): SettingsPayload
@@ -182,16 +194,28 @@ export function stripSizes(layout: PaneLayout): PaneLayout
   with no `Tab` is dropped (not invented). Layout goes through `stripSizes` — split **structure**
   in, **ratios** out (decision 8). `Workspace.activeTabId` is not in the payload.
 - `buildProfileDocument`: `hosts`, `settings`, `workspaces`, and one `tabs.<id>` per workspace.
-  **Tabs that belong to no workspace are not collected** — §4.3 removes standalone tabs in P3; until
-  then they are simply device-local. The function reports them
-  (`{document, standaloneTabIds}`) so P2b/P3 can surface it.
+  Every tab belongs to exactly one workspace (spec §4.3), so the document has no place for a
+  standalone tab. The pure half of §4.3 lives here (plan review #12):
+
+  ```ts
+  export function adoptStandaloneTabs(world: { workspaces: readonly Workspace[]; tabs: Record<string, Tab>; tabOrder: readonly string[] },
+    opts: { unsortedName: string; newWorkspaceId: string }): { workspaces: Workspace[]; adopted: string[]; createdWorkspaceId: string | null }
+  ```
+
+  Standalone tabs (in `tabOrder` order) are appended to an existing workspace **named**
+  `unsortedName`, else to a new one with `newWorkspaceId` — created only if there is something to
+  adopt. `buildProfileDocument` still returns `standaloneTabIds` so a caller that skipped the
+  adoption finds out; it never silently drops them into a section. When the wizard calls it and how
+  the user is told is P2b/P3.
 - Device-local fields must be **provably absent**: a test feeds a fully-populated input with
   sentinel values in every device-local field (`activeWorkspaceId`, `activeTabId`, `activeHostId`,
   `devHostId`, `runtime`, `visitHistory`, `terminalSettingsVersion`, `activeEditingProfile`,
   `knownIds`, `regions`, `activityBarWidth`, `sizes`, …) and asserts the sentinel string appears
   nowhere in `structuralKey(document)`.
 
-Tests, additionally: resizing a split changes no hash; splitting a tab does; reordering workspaces
+Tests, additionally: `adoptStandaloneTabs` — none to adopt → input returned, no workspace created;
+adopts into an existing `Unsorted`; creates one; preserves `tabOrder` order; never mutates.
+Resizing a split changes no hash; splitting a tab does; reordering workspaces
 changes `workspaces` only; moving a tab between two workspaces changes exactly those two `tabs.*`
 sections; a host colour change changes `hosts` only; `PaneRebuildRecord` on a pane content is
 preserved verbatim (decision 13); inputs are never mutated (deep-freeze the input).
@@ -199,83 +223,139 @@ preserved verbatim (decision 13); inputs are never mutated (deep-freeze the inpu
 ## Task 4 — `sync-state.ts`: the per-section state machine (§4.4, §4.6.1, §4.6.2)
 
 A reducer, in the style of `lib/nex/event-reducer.ts`. No `enum` (`erasableSyntaxOnly`) — string
-unions.
+unions. **Rewritten after the plan review (spec §9.4)**: the first draft could not represent a
+tombstone, let a late index response move the SOT backwards, and had no way to tell a stale
+decision from a current one across the effect boundary.
 
 ```ts
+/** What one side holds. hash === null ⇔ the section does not exist there
+ *  (never created, or a P1 tombstone — the client cannot and need not tell them apart). */
+export interface Held { rev: number; hash: string | null }
+
 export interface SectionSyncState {
-  baseRev: number            // 0 = never agreed
-  baseHash: string | null
-  currentHash: string | null // hash of the live payload; null = section does not exist locally
-  status: 'synced' | 'pending' | 'locked:conflict'
-  inFlight: { hash: string; baseRev: number; kind: 'put' | 'delete' } | null
+  base: Held                 // what this client last agreed with the SOT on. {0,null} = nothing yet
+  currentHash: string | null // hash of the live local payload; null = does not exist locally
+  sot: Held                  // newest SOT state this client has observed. rev never decreases
+  epoch: number              // bumped whenever base, sot, inFlight or lock changes
+  status: 'synced' | 'pending' | 'locked:conflict' | 'locked:reset'
+  inFlight: FlightToken | null
   sotMovedWhileInFlight: boolean
-  sot: SotIndexEntry | null  // last known SOT index row; null = absent on the SOT
-  conflict: { localHash: string; sotRev: number; sotHash: string | null } | null
+  conflict: { localHash: string | null; sot: Held } | null
+  forcePull: boolean         // set by resolved keep:'sot'
+  restoreLocal: string | null// set by resolved keep:'local' — hash of the sent snapshot to put back
+  indexStale: boolean        // an index response was discarded; ask again
 }
+export interface FlightToken { kind: 'put' | 'delete'; hash: string | null; baseRev: number; epoch: number }
+
+export function initialSectionState(currentHash: string | null): SectionSyncState
 
 export type SectionEvent =
   | { type: 'local-changed'; hash: string | null }
-  | { type: 'sot-index'; entry: SotIndexEntry | null }         // reconcile-on-connect, or a fetched row
-  | { type: 'remote-event'; rev: number; hash: string; deleted: boolean; own: boolean }
-  | { type: 'push-started'; hash: string | null }
-  | { type: 'push-applied'; rev: number }                      // 200 applied:true
-  | { type: 'push-converged'; rev: number }                    // 200 applied:false
-  | { type: 'push-conflict'; rev: number; hash: string | null }// 409 conflict (rev 0 = deleted under us)
-  | { type: 'push-failed' }                                    // network / 5xx / 503 contended
-  | { type: 'pull-applied'; rev: number; hash: string | null }
+  | { type: 'sot-index'; epoch: number; entry: { rev: number; hash: string } | null } // null = not listed
+  | { type: 'remote-event'; rev: number; hash: string | null; own: boolean }          // hash null = deleted
+  | { type: 'push-started'; token: FlightToken }
+  | { type: 'push-applied'; rev: number }                       // 200 applied:true / DELETE 200
+  | { type: 'push-converged'; rev: number }                     // 200 applied:false
+  | { type: 'push-conflict'; rev: number; hash: string | null } // 409 conflict; rev 0 + null = absent
+  | { type: 'push-failed' }                                     // network, 5xx, 503, timeout, malformed
+  | { type: 'pull-applied'; rev: number; hash: string | null }  // null = applied a deletion
+  | { type: 'local-restored'; hash: string | null }             // the driver put the snapshot back
   | { type: 'resolved'; keep: 'local' | 'sot' }
 
 export type SectionAction =
-  | { do: 'nothing' } | { do: 'pull' } | { do: 'push'; baseRev: number } | { do: 'delete'; baseRev: number }
-  | { do: 'lock-conflict' } | { do: 'lock-reset' }             // rev < baseRev: the profile was recreated
+  | { do: 'nothing' } | { do: 'reindex' } | { do: 'pull' }
+  | { do: 'push'; token: FlightToken } | { do: 'delete'; token: FlightToken }
+  | { do: 'restore-local'; hash: string | null }
+  | { do: 'lock-conflict' } | { do: 'lock-reset' }
 
 export function reduceSection(s: SectionSyncState, e: SectionEvent): SectionSyncState
 export function decideSection(s: SectionSyncState, ctx: { reachable: boolean; autoSync: boolean }): SectionAction
-export function isDirty(s: SectionSyncState): boolean          // currentHash !== baseHash
+export function isDirty(s: SectionSyncState): boolean           // currentHash !== base.hash
+export function sotMoved(s: SectionSyncState): boolean          // sot.hash !== base.hash || sot.rev > base.rev
+export function retainedHashes(s: SectionSyncState): (string)[] // payloads the driver must keep
 ```
 
-`decideSection` **is** the table of §4.6.1, row for row, and the tests are one per row:
+**Wire `baseRev`.** P1 accepts a create — over nothing *or* over a tombstone — only with
+`baseRev 0` (`sections.go`, decision step 1). So the token's `baseRev` is
+`s.sot.hash === null ? 0 : s.base.rev`, never `base.rev` blindly. A `delete` is only ever decided
+when the SOT side is live.
 
-| dirty | SOT vs base | Action |
+`decideSection`, evaluated top to bottom; first match wins. One test per row.
+
+| # | Condition | Action |
 |---|---|---|
-| no | `rev == baseRev` | nothing |
-| no | `rev > baseRev` | pull |
-| yes | `rev == baseRev` | push (or `delete` when `currentHash === null`) |
-| yes | `rev > baseRev` | lock-conflict |
-| — | `rev < baseRev` | lock-reset |
-| — | absent on SOT, `baseRev == 0`, exists locally | push with `baseRev 0` (create) |
-| — | absent on SOT, `baseRev > 0`, clean | pull-as-delete (the section was deleted elsewhere) |
-| — | absent on SOT, `baseRev > 0`, dirty | lock-conflict |
+| 0a | `status` is `locked:*` | nothing |
+| 0b | `inFlight !== null` | nothing |
+| 0c | `indexStale` | reindex (if reachable) |
+| 0d | `restoreLocal !== null && currentHash !== restoreLocal` | restore-local |
+| 0e | `forcePull` | pull (if reachable) |
+| 1 | `sot.rev < base.rev` | lock-reset |
+| 2 | clean, SOT not moved | nothing |
+| 3 | clean, SOT moved | pull (a pull of an absent SOT applies a deletion) |
+| 4 | dirty, SOT not moved, `currentHash !== null` | push |
+| 5 | dirty, SOT not moved, `currentHash === null`, `sot.hash !== null` | delete |
+| 6 | dirty, SOT not moved, both null | — unreachable: both-null is clean (row 2); test asserts it |
+| 7 | dirty, SOT moved, `sot.hash === currentHash` | nothing here — the *reducer* already folded this into `synced` (converged, below) |
+| 8 | dirty, SOT moved, otherwise | lock-conflict |
 
-Plus the three rules that are not rows:
+`!reachable || !autoSync` turns rows 0c/0e/3/4/5 into `nothing`, and a dirty section then reads
+`pending`. "Sync now" is the caller passing `autoSync: true` once — not another code path.
+This table **is** spec §4.6.1 with "absent" folded into `hash === null`: its six rows map to
+2, 3, 4/5, 8, 1, and (absent) 3/4/8 respectively; the spec's table is updated to match in Task 0b.
 
-- **Converged is not a conflict**: dirty + `rev > baseRev` but `sot.hash === currentHash` → no lock;
-  reduce to `synced` at the SOT's rev (the client-side mirror of the daemon's `applied:false`).
-- `status === 'locked:conflict'` → always `nothing` until `resolved` (§4.4: stops writing *and*
-  refuses inbound). `inFlight !== null` → always `nothing`.
-- `!reachable || !autoSync` → a push/delete/pull decision becomes `nothing` and a dirty section
-  reads `pending`. A manual "Sync now" is the caller passing `autoSync: true` once — not a separate
-  code path.
+`reduceSection` — every transition that carries a promise is a named test:
 
-`reduceSection`, the parts that carry the §4.6.2 promises (each is a named test):
+1. **Convergence is folded in the reducer**: after any event, if `isDirty && sotMoved &&
+   sot.hash === currentHash` → `base = sot`, status `synced`. (The client-side mirror of the
+   daemon's `applied:false`; it is how two machines making the same edit never see a lock.)
+2. `remote-event`, `own: true` → ignored entirely. `own: false` → `sot = {rev, hash}` **only if
+   `rev > sot.rev`**; on a dirty section nothing is applied, so the next decision is row 8
+   (§4.6.2 rule 1). While `inFlight`, it additionally sets `sotMovedWhileInFlight` (rule 2). While
+   `locked:conflict`, it still advances `sot` **and `conflict.sot`** — the lock refuses to *apply*,
+   not to *know* — so a later keep-local targets the newest revision (review #6).
+3. `sot-index` with `epoch !== s.epoch` → discarded, `indexStale = true` (review #3: a response
+   that was in the air while we pushed or heard an event must not rewind what we know). With a
+   matching epoch it is authoritative: `entry` → `sot = entry` **even if `entry.rev < sot.rev`**
+   (that is the only way `lock-reset` is ever detected); `null` → `sot = {rev: max(sot.rev,
+   base.rev), hash: null}`. Clears `indexStale`.
+4. `push-started` → accepted only if `token.epoch === s.epoch` **and** no flight is open; then
+   `inFlight = token` and the epoch bumps. Otherwise the state is returned unchanged.
+   **Driver contract (P2b), stated here because the reducer is what makes it safe:** dispatch
+   `push-started`, then send the request *only if* the resulting `inFlight === token`. A decision
+   made before an event arrived thereby dies at the boundary instead of reaching the wire
+   (review #4).
+5. **Terminal events** — `push-applied`, `push-converged`, `push-conflict`, `push-failed` — each
+   clear `inFlight` and `sotMovedWhileInFlight` and bump the epoch; arriving with no flight open
+   they are ignored. One shared table-driven test asserts this for all four from every reachable
+   pre-state (review #8: a section that keeps a flight open never syncs again).
+   - `push-applied` → `base = {rev, inFlight.hash}`, `sot = base` if `rev > sot.rev`. If
+     `currentHash` moved during the flight the section is simply dirty against the new base.
+   - `push-converged` → **`base = {rev, inFlight.hash}`** — the hash that was *sent*, never
+     `currentHash` (review #9: the SOT holds what we sent, not what we have typed since).
+   - `push-conflict` → `sot = {rev, hash}` (rev 0 → `{max(sot.rev, base.rev), null}`), then rule 1
+     may converge it; otherwise `status = 'locked:conflict'`,
+     `conflict = {localHash: inFlight.hash, sot}` — **the sent snapshot**, not the live stores.
+   - `push-failed` → back to dirty/pending; nothing else changes. The driver maps timeouts and
+     malformed responses to it, so there is no path that leaves a flight open.
+6. `pull-applied` → `base = sot = {rev, hash}` (if `rev >= sot.rev`), `currentHash = hash`,
+   `forcePull = false`.
+7. `resolved keep:'sot'` → unlock, `forcePull = true` (row 0e pulls even though the section is
+   dirty — the user said so). `keep:'local'` → unlock, **`base = conflict.sot`** (the newest known,
+   rule 2), `restoreLocal = conflict.localHash`. Row 0d then has the driver put the sent snapshot
+   back; its `local-restored` sets `currentHash` and clears `restoreLocal`; the section is dirty
+   against the SOT's current rev and row 4/5 pushes. If the SOT moves yet again before that push
+   lands, the CAS answers 409 and the section locks again with the new pair — correct, and each
+   round needs a human, so it cannot spin.
+8. `retainedHashes` = `inFlight.hash`, `conflict.localHash`, `conflict.sot.hash`, `restoreLocal`
+   (non-null ones). The core stores **no payloads**; this is how it tells the driver which ones
+   must survive until the user has chosen (review #5). P2b's payload stash is keyed by hash and
+   pruned to this set.
 
-1. `remote-event` with `own: true` → ignored. With `own: false` on a **dirty** section → not
-   applied; `sot` advances, so the next `decideSection` yields `lock-conflict` (rule 1).
-2. `remote-event` while `inFlight` → only sets `sotMovedWhileInFlight` and records `sot`; the
-   push's own outcome then re-runs the table (rule 2).
-3. `push-conflict` → `conflict.localHash` is **`inFlight.hash`, the payload that was sent**, not
-   `currentHash` — the live stores may have moved on; the user chooses between two known
-   snapshots.
-4. `push-applied` → `baseRev = rev`, `baseHash = inFlight.hash`. If `currentHash` moved during the
-   flight the section is simply dirty again against the new base — no lost edit.
-5. `resolved keep:'local'` → `baseRev = conflict.sotRev`, `baseHash = conflict.sotHash`, unlock; the
-   section is dirty against the SOT's rev, so the next decision is a plain `push` that the CAS will
-   accept. `keep:'sot'` → unlock and `pull`.
-6. Out-of-order / duplicate events never move `sot.rev` backwards (guard as in
-   `event-reducer.ts:167`), except `sot-index`, which is authoritative and is how `lock-reset` is
-   detected.
-
-Reducer purity test: every `reduceSection` call on a deep-frozen state returns without throwing.
+Property tests (table-driven over generated event sequences, seeded, no library needed):
+`sot.rev` never decreases except through an epoch-matching `sot-index`; `inFlight` is never set in
+a `locked:*` state; after any terminal event `inFlight === null`; `decideSection` never returns
+`push`/`delete` when `sotMoved`; reducer never mutates (deep-frozen inputs).
+Review sequences #1, #3, #4, #6 and #9 from spec §9.4 are each a regression test, verbatim.
 
 ## Task 5 — `profile-state.ts`: profile level — schema lock and section lifecycle
 
@@ -336,14 +416,19 @@ export function isWellFormedSection(kind: SectionKind, payload: unknown): boolea
   tab ids in their `previous` relative order — so `tabOrder` stops being a second source of truth
   without dropping a tab the UI can still reach.
 - `isWellFormedSection`: structural guard run before any apply (the device-state pipeline's
-  well-formedness step, per section): right top-level keys, `order` ⊆ keys of the record, every
+  well-formedness step, per section): right top-level keys, **`order` has no duplicates and is exactly the key set of the record**
+  (plan review #13 — a record entry missing from `order` would be applied and then dropped by the
+  next build, so `build(apply(p))` would not hash to `p` and the section could never converge), every
   `Tab` has a layout whose leaves have `pane.id` and `content.kind`. A payload that fails is **not
   applied** and the caller locks the section — never a partial apply.
 
 Tests, the ones that matter most:
-- **Round trip**: for a populated world, `apply*(empty, build*(world))` reproduces the synced part
-  of `world` exactly, and `build*(apply*(local, payload))` has the same hash as `payload` — for all
-  four kinds. This is the property that makes "converged" reachable at all.
+- **Round trip, stated on hashes** (plan review #16 — `restoreSizes` puts `sizes` back, so the
+  applied tree is never deep-equal to a stripped payload):
+  `hash(build*(apply*(local, p))) === hash(p)` for every well-formed `p` and **any** `local`, for
+  all four kinds; and `hash(build*(apply*(empty, build*(world)))) === hash(build*(world))`. This is
+  the property that makes "converged" reachable at all. Device-local survival is asserted
+  separately (below), not by deep equality.
 - `restoreSizes`: same id + same arity → local ratios; same id, different arity → even; new id →
   even; nested splits; local `undefined`.
 - focus is not mirrored: `activeWorkspaceId`, `activeTabId`, `activeHostId`, `devHostId` survive
@@ -353,10 +438,13 @@ Tests, the ones that matter most:
 
 ## Task order
 
-`0` (main session) → `1` → `2` → then **`3`, `4`, `5` in parallel** (3 needs `project`; 4 and 5 need
-only the types from 2) → `6` (needs 2 and 3, for the round-trip tests). A shared `types.ts` is
-created in Task 2 and only **appended to** afterwards; parallel tasks add their types in their own
-file instead, to keep `git commit --only` clean.
+`0`/`0b` (main session) → `1` → `2` → **`3` ∥ `4`** → **`5` ∥ `6`** (plan review #14: 5 takes
+`SectionSyncState` from 4; 6 needs 3 for the round trip). `types.ts` is created in Task 2 with every
+shared type this plan names — payloads, sources, slices — so no later task edits it; a task that
+needs another type declares it in its own module. Parallel tasks share one worktree, so each
+**runs only its own test file** (`npx vitest run src/lib/profile/<name>`) and commits with
+`git commit --only`; the main session runs the whole suite, lint and `tsc -p tsconfig.app.json`
+between waves.
 
 ## PR
 
