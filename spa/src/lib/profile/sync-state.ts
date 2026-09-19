@@ -65,6 +65,15 @@
 //     (404) the deletion is applied and reported with `rev = state.sot.rev`.
 //   - sot-index: tag the response with the `epoch` read when the request was
 //     *sent*.
+//   - restore-local: a pending restore is CANCELLED by any `local-changed` that
+//     really changes the live hash — what the user typed after choosing
+//     keep-local beats the snapshot that choice was about. So, before writing
+//     the snapshot into the stores, check `canRestoreLocal(state, hash)` on the
+//     *current* state (i.e. `restoreLocal?.hash` still is the hash about to be
+//     restored); then dispatch `local-restored`. If that event is ignored (same
+//     state reference back) the restore had been cancelled in between: the
+//     driver must NOT write the snapshot. `local-restored` is accepted only
+//     for the pending hash; anything else never touches `currentHash`.
 
 /** What one side holds. `hash === null` ⇔ the section does not exist there
  *  (never created, or a P1 tombstone — the client cannot and need not tell them apart). */
@@ -109,7 +118,8 @@ export interface SectionSyncState {
   forcePull: boolean
   /** Set by `resolved keep:'local'`: the sent snapshot the driver must put back.
    *  `null` = nothing to restore; `{ hash: null }` = restore to "does not exist"
-   *  (the 409 was on a delete). */
+   *  (the 409 was on a delete). Cleared by the restore itself and by any
+   *  `local-changed` that changes the live hash (a later edit wins). */
   restoreLocal: { hash: string | null } | null
   /** The index must be (re)fetched before anything else: never seen yet, a
    *  response was discarded, or the connection was (re)established. */
@@ -194,6 +204,14 @@ function isLocked(s: SectionSyncState): boolean {
  *  clean section — unless the user said "take the SOT" (`forcePull`). */
 export function canApplyPull(s: SectionSyncState): boolean {
   return !isLocked(s) && s.inFlight === null && (s.forcePull || !isDirty(s))
+}
+
+/** May the driver put the snapshot `hash` back into the stores right now? True
+ *  only while that very snapshot is the pending restore — an edit made after
+ *  the user resolved cancels it. Check this BEFORE writing the stores;
+ *  `local-restored` is accepted under exactly the same condition. */
+export function canRestoreLocal(s: SectionSyncState, hash: string | null): boolean {
+  return s.restoreLocal !== null && s.restoreLocal.hash === hash
 }
 
 /** Payloads the driver must keep, by hash: deduplicated, never null. */
@@ -303,7 +321,10 @@ function closeFlight(s: SectionSyncState): SectionSyncState {
 function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
   switch (e.type) {
     case 'local-changed':
-      return e.hash === s.currentHash ? s : { ...s, currentHash: e.hash }
+      if (e.hash === s.currentHash) return s
+      // An edit made AFTER the user chose keep-local wins over the snapshot that
+      // choice was about: the pending restore is cancelled, not merely delayed.
+      return { ...s, currentHash: e.hash, restoreLocal: null }
 
     case 'reconnected':
       return s.indexStale ? s : { ...s, indexStale: true }
@@ -364,7 +385,9 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
     }
 
     case 'local-restored':
-      if (s.restoreLocal === null) return s
+      // Only the snapshot that is pending right now. A late restore — cancelled
+      // by an edit, or for another hash — must not touch `currentHash`.
+      if (!canRestoreLocal(s, e.hash)) return s
       return { ...s, currentHash: e.hash, restoreLocal: null }
 
     case 'locked': {

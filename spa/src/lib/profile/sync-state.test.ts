@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   canApplyPull,
+  canRestoreLocal,
   decideSection,
   initialSectionState,
   isDirty,
@@ -22,6 +23,7 @@ const ON = { reachable: true, autoSync: true }
 const H0 = 'h0'
 const H1 = 'h1'
 const H2 = 'h2'
+const H3 = 'h3'
 const H8 = 'h8'
 
 /** Build a state directly (for decision-table rows that the reducer would never leave behind).
@@ -746,6 +748,76 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
     expect(r.restoreLocal).toBeNull()
     expect(reduceSection(r, { type: 'local-restored', hash: H2 })).toBe(r)
   })
+  describe('a keep-local restore is cancelled by an edit made after the user resolved (attack finding)', () => {
+    /** base = sot = {5,H0} → H1 sent → H2 edited in flight → 409 {6,H8} → keep-local: restoreLocal = H1, live = H2. */
+    function awaitingRestore(): SectionSyncState {
+      const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
+      const locked = run(f, { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 })
+      expect(locked.status).toBe('locked:conflict')
+      expect(locked.conflict?.localHash).toBe(H1)
+      const s = reduceSection(locked, { type: 'resolved', keep: 'local' })
+      expect(s.restoreLocal).toEqual({ hash: H1 })
+      expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H1 })
+      return s
+    }
+
+    it('H1 → H2 → 409 → keep-local → H3: the restore is dropped, H3 is what gets pushed, against the newest rev', () => {
+      const s = reduceSection(deepFreeze(awaitingRestore()), { type: 'local-changed', hash: H3 })
+      expect(s.restoreLocal).toBeNull()
+      expect(s.currentHash).toBe(H3)
+      expect(decideSection(s, ON).do).not.toBe('restore-local')
+      expect(retainedHashes(s)).not.toContain(H1)
+      const token = tokenOf(decideSection(s, ON))
+      expect(token).toMatchObject({ kind: 'put', hash: H3, baseRev: 6 })
+      expect(token.baseRev).toBe(s.sot.rev)
+      // the restore the driver had already started lands late: ignored, H3 survives
+      const late = reduceSection(s, { type: 'local-restored', hash: H1 })
+      expect(late).toBe(s)
+      expect(late.currentHash).toBe(H3)
+      const [f] = startFlight(late)
+      const done = reduceSection(f, { type: 'push-applied', rev: 7 })
+      expect(done.base).toEqual({ rev: 7, hash: H3 })
+      expect(done.status).toBe('synced')
+    })
+
+    it('local-restored with a hash that is not the pending one is ignored', () => {
+      const s = awaitingRestore()
+      for (const hash of [H2, H3, H8, null]) expect(reduceSection(s, { type: 'local-restored', hash })).toBe(s)
+      const r = reduceSection(s, { type: 'local-restored', hash: H1 })
+      expect(r.currentHash).toBe(H1)
+      expect(r.restoreLocal).toBeNull()
+    })
+
+    it('a local-changed that changes nothing (same hash) does not cancel the restore', () => {
+      const s = awaitingRestore()
+      const same = reduceSection(s, { type: 'local-changed', hash: H2 })
+      expect(same).toBe(s)
+      expect(decideSection(same, ON)).toEqual({ do: 'restore-local', hash: H1 })
+    })
+
+    it('a pending restore to "absent" is cancelled the same way', () => {
+      let [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: null }))
+      s = run(s, { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 }, { type: 'resolved', keep: 'local' })
+      expect(s.restoreLocal).toEqual({ hash: null })
+      s = reduceSection(s, { type: 'local-changed', hash: H3 })
+      expect(s.restoreLocal).toBeNull()
+      expect(reduceSection(s, { type: 'local-restored', hash: null })).toBe(s)
+      expect(tokenOf(decideSection(s, ON))).toMatchObject({ kind: 'put', hash: H3, baseRev: 6 })
+    })
+
+    it('canRestoreLocal: true only for the hash that is pending, so the driver can check BEFORE it writes the stores', () => {
+      const s = awaitingRestore()
+      expect(canRestoreLocal(s, H1)).toBe(true)
+      expect(canRestoreLocal(s, H2)).toBe(false)
+      expect(canRestoreLocal(s, null)).toBe(false)
+      const cancelled = reduceSection(s, { type: 'local-changed', hash: H3 })
+      expect(canRestoreLocal(cancelled, H1)).toBe(false)
+      expect(canRestoreLocal(synced(5, H0), H0)).toBe(false)
+      expect(canRestoreLocal(synced(5, null), null)).toBe(false) // no pending restore: null does not match "nothing"
+      expect(canRestoreLocal(mk({ ...synced(5, H0), currentHash: H1, restoreLocal: { hash: null } }), null)).toBe(true)
+    })
+  })
+
   it('locked:reset keeps learning; keep:local rebases on the newest sot and pushes', () => {
     const s0 = run(synced(5, H0), { type: 'local-changed', hash: H1 })
     const l = run(
@@ -968,6 +1040,8 @@ describe('property tests (seeded)', () => {
     let staleDecisions = 0
     let absentRestores = 0
     let staleRestores = 0
+    let cancelledRestores = 0
+    let acceptedRestores = 0
 
     for (let n = 0; n < SEQUENCES; n++) {
       const seed = BASE_SEED + n
@@ -978,6 +1052,7 @@ describe('property tests (seeded)', () => {
       let s = deepFreeze(initialSectionState(pick(HASHES)))
       let staleToken: FlightToken | null = null
       let indexSeen = false
+      let editedSinceRestoreSet = false
       if (!s.indexStale || decideSection(s, ON).do !== 'reindex') throw new Error(`seed=${seed}: a fresh state must reindex first`)
 
       const gen = (): SectionEvent => {
@@ -1022,7 +1097,8 @@ describe('property tests (seeded)', () => {
         if (rnd() < 0.5) {
           if (d0.do === 'lock-conflict') e = { type: 'locked', reason: 'conflict' }
           else if (d0.do === 'lock-reset') e = { type: 'locked', reason: 'reset' }
-          else if (d0.do === 'restore-local') e = { type: 'local-restored', hash: d0.hash }
+          // resolve → (edit) → restore: the user sometimes edits before the driver got to put the snapshot back
+          else if (d0.do === 'restore-local') e = rnd() < 0.3 ? { type: 'local-changed', hash: pick(HASHES) } : { type: 'local-restored', hash: d0.hash }
           else if (d0.do === 'pull') e = { type: 'pull-applied', rev: s.sot.rev, hash: s.sot.hash }
           else if (d0.do === 'reindex') e = { type: 'sot-index', epoch: s.epoch, entry: s.sot.hash === null ? null : { rev: s.sot.rev, hash: s.sot.hash } }
           else if (d0.do === 'push' || d0.do === 'delete') e = { type: 'push-started', token: d0.token }
@@ -1043,6 +1119,20 @@ describe('property tests (seeded)', () => {
         if (prev.inFlight === null && next.inFlight !== null) flightsOpened++
         if (!prev.status.startsWith('locked') && next.status.startsWith('locked')) locks++
         if (next.restoreLocal !== null && next.restoreLocal.hash === null) absentRestores++
+
+        // shadow state: has the live payload been edited since the pending restore was set?
+        if (prev.restoreLocal === null && next.restoreLocal !== null) editedSinceRestoreSet = false
+        if (e.type === 'local-changed' && next.currentHash !== prev.currentHash) {
+          editedSinceRestoreSet = true
+          if (prev.restoreLocal !== null) cancelledRestores++
+        }
+        if (next.restoreLocal !== null && editedSinceRestoreSet) fail('a restore is still pending although the user edited after resolving')
+        // a restore is accepted only for the very snapshot that is pending
+        if (e.type === 'local-restored' && next !== prev) {
+          if (prev.restoreLocal === null || prev.restoreLocal.hash !== e.hash) fail('local-restored accepted for a hash that was not pending')
+          acceptedRestores++
+        }
+        if (e.type === 'local-restored' && canRestoreLocal(prev, e.hash) !== (next !== prev)) fail('canRestoreLocal disagrees with the reducer')
 
         // unchanged ⇒ same reference; changed ⇒ epoch + 1
         if (next !== prev && next.epoch !== prev.epoch + 1) fail('a changed state must bump the epoch by exactly one')
@@ -1124,6 +1214,8 @@ describe('property tests (seeded)', () => {
     expect(staleDecisions).toBeGreaterThan(SEQUENCES)
     expect(absentRestores).toBeGreaterThan(0)
     expect(staleRestores).toBeGreaterThan(0)
+    expect(cancelledRestores).toBeGreaterThan(10)
+    expect(acceptedRestores).toBeGreaterThan(10)
     for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked', 'reconnected']) {
       expect(seen.has(`${t}:applied`), `${t} was never applied`).toBe(true)
       expect(seen.has(`${t}:ignored`), `${t} was never ignored`).toBe(true)
