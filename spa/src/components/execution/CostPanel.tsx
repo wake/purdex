@@ -27,6 +27,14 @@ export interface CostPanelProps {
 const CELL = 'px-1.5 py-0.5'
 const NUM = `${CELL} text-right tabular-nums`
 
+const PANEL_WIDTH = 440
+const PANEL_MIN_WIDTH = 240
+/** Full width on a normal window; on a narrow one, leave an 8px gutter each side (never under 240). */
+function panelWidth(): number {
+  if (typeof window === 'undefined') return PANEL_WIDTH
+  return Math.min(PANEL_WIDTH, Math.max(PANEL_MIN_WIDTH, window.innerWidth - 16))
+}
+
 function TurnRow({ turn, t }: { turn: TurnCost; t: (key: string) => string }) {
   const tok = turn.tokens
   return (
@@ -59,9 +67,13 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostP
   // panel is about cost, the quota is a courtesy. `cancelled` only ignores a
   // response that lands after unmount / host switch; it is not an abort
   // (`fetchNexHost` takes no signal), so the request itself still completes.
+  // On a host switch the previous card is dropped up front, so the row can
+  // never show host A's quota while host B's fetch is pending or has failed.
   const [host, setHost] = useState<NexHostInfo | null>(null)
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset before async fetch (same as FileTreeView)
+    setHost(null)
     fetchNexHost(hostId)
       .then((h) => {
         if (!cancelled) setHost(h)
@@ -90,8 +102,15 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostP
     { key: 'cache_write', value: tokens.cacheWrite },
   ]
 
+  // Percentages are shown as the API reports them (no rounding — 0.4% is not
+  // 0%, 99.6% is not 100%); a non-finite value hides the row rather than
+  // printing NaN.
+  const quota = host?.quota && Number.isFinite(host.quota.five_hour_pct) && Number.isFinite(host.quota.seven_day_pct)
+    ? host.quota
+    : null
+
   return (
-    <FloatingPanel title={t('execution.cost.title')} anchorRef={anchorRef} onClose={onClose} width={440} testId="cost-panel">
+    <FloatingPanel title={t('execution.cost.title')} anchorRef={anchorRef} onClose={onClose} width={panelWidth()} testId="cost-panel">
       <div className="flex flex-col gap-2 text-xs text-text-primary">
         <div data-testid="cost-totals" className="tabular-nums">
           {formatUsd(summary.totalUsd)} · {turns.length} {t('execution.cost.turns')} · {summary.rounds} {t('execution.cost.rounds')} · {formatDuration(summary.apiMs)} API / {formatDuration(summary.durationMs)} wall
@@ -144,12 +163,12 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostP
           </table>
         </div>
 
-        {host?.quota && (
+        {host && quota && (
           <div data-testid="cost-quota" className="flex items-baseline gap-2 tabular-nums">
             <span className="text-text-muted truncate">{t('execution.cost.quota', { account: host.active_account })}</span>
             <span className="flex-1" />
             <span className="whitespace-nowrap">
-              5h {Math.round(host.quota.five_hour_pct)}% · 7d {Math.round(host.quota.seven_day_pct)}% · {host.quota.source}
+              5h {quota.five_hour_pct}% · 7d {quota.seven_day_pct}% · {quota.source}
             </span>
           </div>
         )}

@@ -65,6 +65,23 @@ describe('CostPanel', () => {
     renderPanel(fixtureSummary)
     const panel = screen.getByTestId('cost-panel')
     expect(panel.getAttribute('aria-label')).toBe('Cost')
+    expect(panel.style.width).toBe('440px')
+  })
+
+  it('width is bounded by the viewport: innerWidth 320 → 304px (innerWidth − 16), never below 240', () => {
+    const desc = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 })
+    try {
+      renderPanel(fixtureSummary)
+      expect(screen.getByTestId('cost-panel').style.width).toBe('304px')
+      cleanup()
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 100 })
+      renderPanel(fixtureSummary)
+      expect(screen.getByTestId('cost-panel').style.width).toBe('240px')
+    } finally {
+      if (desc) Object.defineProperty(window, 'innerWidth', desc)
+      else delete (window as unknown as Record<string, unknown>).innerWidth
+    }
   })
 
   // P1
@@ -223,13 +240,28 @@ describe('CostPanel', () => {
       expect(screen.queryByTestId('cost-quota')).toBeNull()
     })
 
-    it('renders the host account label and 5h / 7d / source with rounded percentages', async () => {
+    it('renders the host account label and 5h / 7d / source with the raw API percentages (no rounding)', async () => {
       mockFetchNexHost.mockResolvedValue(withQuota)
       renderPanel(fixtureSummary)
       const row = await screen.findByTestId('cost-quota')
       expect(row.textContent).toContain('Host quota — wake@x')
-      expect(row.textContent).toContain('5h 34% · 7d 12% · usage_api')
+      expect(row.textContent).toContain('5h 34.4% · 7d 12% · usage_api')
       expect(mockFetchNexHost).toHaveBeenCalledWith('h1')
+    })
+
+    it('percentages are not rounded: 0.4 stays 0.4%, 99.6 stays 99.6%', async () => {
+      mockFetchNexHost.mockResolvedValue({ ...withQuota, quota: { ...withQuota.quota!, five_hour_pct: 0.4, seven_day_pct: 99.6 } })
+      renderPanel(fixtureSummary)
+      const row = await screen.findByTestId('cost-quota')
+      expect(row.textContent).toContain('5h 0.4% · 7d 99.6% · usage_api')
+    })
+
+    it('a non-finite percentage hides the quota row', async () => {
+      mockFetchNexHost.mockResolvedValue({ ...withQuota, quota: { ...withQuota.quota!, five_hour_pct: Number.NaN } })
+      renderPanel(fixtureSummary)
+      await waitFor(() => expect(mockFetchNexHost).toHaveBeenCalledTimes(1))
+      await act(async () => { await Promise.resolve() })
+      expect(screen.queryByTestId('cost-quota')).toBeNull()
     })
 
     it('fetch rejection → no row, nothing logged', async () => {
@@ -284,6 +316,34 @@ describe('CostPanel', () => {
       await act(async () => { await Promise.resolve() })
       // h1's answer lands after h2 already settled (quota: null → no row).
       await act(async () => { resolveH1(withQuota); await Promise.resolve() })
+      expect(screen.queryByTestId('cost-quota')).toBeNull()
+    })
+
+    it('switching hostId clears the previous host quota immediately; h2 rejecting leaves it cleared', async () => {
+      let rejectH2!: (e: Error) => void
+      mockFetchNexHost.mockImplementation((hostId: string) => hostId === 'h1'
+        ? Promise.resolve(withQuota)
+        : new Promise<NexHostInfo>((_r, rej) => { rejectH2 = rej }))
+      const { rerender, anchor } = renderPanel(fixtureSummary)
+      await screen.findByTestId('cost-quota')
+      rerender(<CostPanel summary={fixtureSummary} hostId="h2" anchorRef={{ current: anchor }} onClose={() => {}} />)
+      // Synchronous: h2 is still pending, yet h1's row must already be gone.
+      expect(screen.queryByTestId('cost-quota')).toBeNull()
+      expect(mockFetchNexHost).toHaveBeenLastCalledWith('h2')
+      await act(async () => { rejectH2(new Error('503')); await Promise.resolve() })
+      expect(screen.queryByTestId('cost-quota')).toBeNull()
+    })
+
+    it('switching hostId to a host with quota: null leaves no row', async () => {
+      mockFetchNexHost.mockImplementation((hostId: string) => Promise.resolve(hostId === 'h1'
+        ? withQuota
+        : { active_account: 'other@x', quota: null }))
+      const { rerender, anchor } = renderPanel(fixtureSummary)
+      await screen.findByTestId('cost-quota')
+      rerender(<CostPanel summary={fixtureSummary} hostId="h2" anchorRef={{ current: anchor }} onClose={() => {}} />)
+      expect(screen.queryByTestId('cost-quota')).toBeNull()
+      await waitFor(() => expect(mockFetchNexHost).toHaveBeenLastCalledWith('h2'))
+      await act(async () => { await Promise.resolve() })
       expect(screen.queryByTestId('cost-quota')).toBeNull()
     })
 
