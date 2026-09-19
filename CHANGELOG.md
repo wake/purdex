@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.411] - 2026-09-20
+
+### Feature: Profile Sync P1——daemon `profiles` 模組，per-section compare-and-set 的 SOT（#1237）
+
+Profile Sync（spec `docs/specs/2026-09-20-profile-sync-spec.md`：一個 profile ＝整份 Purdex 狀態，經 dev host 同步；取代 device-state／workspace snapshot／Sync 模組）的第一支，**daemon-only**：沒有任何 SPA 變更、UI 碰不到，十條路由目前只能用 `curl` 打。`internal/module/profiles`（`profiles.db`，0600——裡面有 host token，`Init` 先以 0600 預建檔再讓 sqlite 開，連 `-wal`／`-shm` 一起 chmod）：profile 是一組各自編 revision 的 section（`hosts`／`settings`／`workspaces`／`tabs.<wsId>`），唯一的寫入動詞是 `PUT …/sections/{section}` 的 compare-and-set——`rev == baseRev` 套用並廣播；rev 不同但 hash 相同回 `applied:false`、**完全不寫也不廣播**（「驗算，沒改變就不寫回」）；rev 不同 hash 也不同回 409 `conflict` 帶 SOT 那一側；shape 不合回 409 `schema`。daemon 刻意是笨的：比對、儲存、廣播，永不合併。
+
+每個 CAS 都是單一條件式 SQL 讀 `RowsAffected()`、不開 transaction（profile 存在性也併進語句：`INSERT … SELECT … WHERE EXISTS`）；分類用的 re-read 可能晚一個 revision，無害，client 下次事件會重跑 §4.6.1。schema 檢查先於 revision 且 fail closed，stored ordinal 永不下降（`MAX(ordinal, ?)`）。`PutSection` 是有上限（4 次）的重試迴圈，耗盡回 503 `Retry-After: 1`。broadcast 是注入的（`"profile"` 事件，key `profileId／section／rev／hash／writerClientId／deleted` 是與 P2b 的 wire contract，測試斷言精確 key 集合）。
+
+Codex：**plan review 八條全套**，其中一條 critical——section DELETE 若真的刪列，rev 會從 1 重來：A 刪 rev 1 → B 重建又拿到 rev 1 → A 因回應遺失重試 `DELETE baseRev=1` 就刪掉 B 的新內容（ABA）。改成 **tombstone**（`deleted=1, rev+1`），一個 `(profile, section)` 的 rev 在 profile 存活期間嚴格遞增，這也是 §4.6.1「`rev < baseRev` ⇒ profile 被重建過」成立的前提。其餘：同 fingerprint 時舊 client 能把 ordinal 降級、`DeleteProfile ∥ PutAttachment` 非原子、attachment DELETE 的 `clientId` 沒有來源（改 query 且須與路徑的 profile 相符）、`:memory:` 單連線測不到競態（加檔案型 WAL 並行測試）、5 MiB 是 payload 上限不是 body 上限、路由是十條不是九條。PR R1 ＋攻擊方各一條、同一根因：`DeleteProfile` 刪 profile 列與掃 sections 是兩句——中間 crash 會讓含 token 的孤兒 sections 永久殘留（重試只得 404），空窗內並行的 section UPDATE 還會被確認並廣播後才被掃掉；改成單一 transaction（第一句就是條件式 DELETE，直接取寫鎖，WAL 下沒有 snapshot 升級），以故障注入測試把關。攻擊方**找不到**讓兩個 writer 同時 applied、rev 倒退或繞過 schema gate 的時序。critic 同意兩條並確認已關閉，另抓一條有證據的 spec drift：tombstone 之上重建會覆寫 ordinal（7 → 1）——我修 plan 時寫的「tombstone 沒有 shape 可保護」是錯的；tombstone 保留 fingerprint／ordinal 並過同一道 schema gate（先於 `baseRev`）。每個修正都有 mutation 佐證（拿掉 `AND rev = ?`、`MAX` 改回賦值、tombstone 改回真 DELETE、`DO NOTHING` 改 `DO UPDATE`、tx 拆回兩句……各自讓指名的測試轉紅）。15 檔（≤ 20 檔合格；5,057 行裡 docs 989、測試約 2.5K）。`go build／vet／test ./...` 綠、`-race` 綠。下一支 P2a：`lib/profile/` 純核心。
+
 ## [1.0.0-alpha.410] - 2026-09-19
 
 ### Feature: exec pane 成本 panel——每 turn 表、token 拆解、模型、host 額度（#1233，P-B4.2）＋ P-B4 真機驗收
