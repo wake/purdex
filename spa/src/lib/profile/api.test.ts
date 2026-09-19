@@ -17,6 +17,7 @@ import {
   putSection,
   renameProfile,
 } from './api'
+import { useHostStore } from '../../stores/useHostStore'
 
 const HOST = 'host-1'
 const PID = 'p_0123456789ab'
@@ -88,12 +89,69 @@ function contentType(init: RequestInit | undefined): string | null {
   return new Headers(init?.headers).get('Content-Type')
 }
 
+const hostConfig = (id: string) => ({ id, name: id, ip: '100.64.0.9', port: 7860, order: 0 })
+
 beforeEach(() => {
   hostFetch.mockReset()
+  // The real host store: api.ts refuses to send to a host that is not in it.
+  useHostStore.setState({ hosts: { [HOST]: hostConfig(HOST) }, hostOrder: [HOST], activeHostId: HOST })
 })
 
 afterEach(() => {
   vi.useRealTimers()
+  useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
+})
+
+/* ─── an unknown host is never sent to ─── */
+
+describe('unknown host', () => {
+  const GONE = 'host-gone'
+  const calls: Array<[string, (hostId: string) => Promise<unknown>]> = [
+    ['listProfiles', (h) => listProfiles(h)],
+    ['createProfile', (h) => createProfile(h, 'Work')],
+    ['renameProfile', (h) => renameProfile(h, PID, 'Home')],
+    ['deleteProfile', (h) => deleteProfile(h, PID)],
+    ['getProfileSections', (h) => getProfileSections(h, PID)],
+    ['getSection', (h) => getSection(h, PID, 'settings')],
+    ['putSection', (h) => putSection(h, PID, 'settings', putBody)],
+    ['deleteSection', (h) => deleteSection(h, PID, 'settings', { baseRev: 3, clientId: CID })],
+    ['putAttachment', (h) => putAttachment(h, PID, { clientId: CID, deviceName: 'mlab' })],
+    ['deleteAttachment', (h) => deleteAttachment(h, PID, CID)],
+  ]
+
+  it.each(calls)('%s: failed/unknown-host, nothing sent (empty store)', async (_name, call) => {
+    useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
+    hostFetch.mockResolvedValue(jsonResponse({}))
+    const out = await call(GONE)
+    expect(out).toMatchObject({ kind: 'failed', reason: 'unknown-host', status: 0 })
+    expect((out as { message: string }).message).toContain(GONE)
+    expect(hostFetch).not.toHaveBeenCalled()
+  })
+
+  // The case getDaemonBase's fallback would misroute: another host exists and is active.
+  it.each(calls)('%s: nothing sent when another host is the active one', async (_name, call) => {
+    expect(useHostStore.getState().activeHostId).toBe(HOST)
+    expect(useHostStore.getState().getDaemonBase(GONE)).toBe('http://100.64.0.9:7860')
+    hostFetch.mockResolvedValue(jsonResponse({}))
+    const out = await call(GONE)
+    expect(out).toMatchObject({ kind: 'failed', reason: 'unknown-host', status: 0 })
+    expect(hostFetch).not.toHaveBeenCalled()
+  })
+
+  it('a host removed between two calls stops being sent to', async () => {
+    // removeHost keeps the last host, so a second one has to exist.
+    useHostStore.setState({
+      hosts: { [HOST]: hostConfig(HOST), other: hostConfig('other') },
+      hostOrder: [HOST, 'other'],
+    })
+    hostFetch.mockResolvedValue(jsonResponse({ profiles: [] }))
+    expect(await listProfiles(HOST)).toEqual({ kind: 'ok', value: [] })
+    useHostStore.getState().removeHost(HOST)
+    expect(useHostStore.getState().activeHostId).toBe('other')
+    hostFetch.mockClear()
+    expect(await listProfiles(HOST)).toMatchObject({ kind: 'failed', reason: 'unknown-host' })
+    expect(hostFetch).not.toHaveBeenCalled()
+  })
 })
 
 /* ─── the request each function sends ─── */

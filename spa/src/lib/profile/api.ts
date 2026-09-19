@@ -68,7 +68,21 @@
 // by which cause fired first, not by what the rejected fetch looks like, and
 // the call is raced against that cause so a transport that ignores its signal
 // still ends on time.
+//
+// AN UNKNOWN HOST IS NEVER SENT TO. `hostFetch` resolves its address through
+// `useHostStore.getDaemonBase` (stores/useHostStore.ts:318-325), which does not
+// throw for a hostId that is not in the store: it falls back to
+// `activeHostId ?? hostOrder[0]`, and failing that to 'http://127.0.0.1:7860'.
+// For Profile Sync that is a data-safety hole — if the master host leaves the
+// store (the user deleted it, or an applied `hosts` section removed it), a
+// compare-and-set PUT / DELETE would land on ANOTHER daemon, writing this
+// profile's section into the wrong source of truth, with that host's token.
+// So `request`, the one entry every function here goes through, checks
+// `hosts[hostId]` before anything is sent and answers `unknown-host` instead.
+// That check is this file's only use of the store (it is the transport layer,
+// not the P2a pure core).
 
+import { useHostStore } from '../../stores/useHostStore'
 import { hostFetch } from '../host-api'
 
 /* ─── wire types ─── */
@@ -145,11 +159,12 @@ export type FailureReason =
   | 'unauthorized' // 401 / 403
   | 'server' //       any other 5xx
   | 'malformed' //    the answer is not what the protocol says it is
+  | 'unknown-host' // the hostId is not in the host store; nothing was sent
 
 export interface Failure {
   kind: 'failed'
   reason: FailureReason
-  /** The HTTP status; 0 when no response was received. */
+  /** The HTTP status; 0 when no response was received (or no request sent). */
   status: number
   message: string
   /** Only with `reason: 'contended'`. */
@@ -304,8 +319,15 @@ function statusFailure(res: Response, text: string): Failure {
 
 type Interpret<T> = (answer: Answer) => T | Failure
 
+/** Null when the host is in the store; see the file header for why this gate exists. */
+function unknownHost(hostId: string): Failure | null {
+  if (useHostStore.getState().hosts[hostId]) return null
+  return failure('unknown-host', 0, `unknown host: ${hostId}`)
+}
+
 /**
- * Sends one request and interprets the answer. `on200` and `on409` see the
+ * Sends one request and interprets the answer — the single entry point of every
+ * exported function, and therefore where the unknown-host gate lives. `on200` and `on409` see the
  * parsed body; any other status becomes a Failure — except those in `others`,
  * which a route may claim (getSection's 404).
  */
@@ -335,6 +357,8 @@ async function request<T>(
   let timer: ReturnType<typeof setTimeout> | undefined
 
   try {
+    const gone = unknownHost(hostId)
+    if (gone) return gone
     if (external?.aborted) return failure('aborted', 0, 'request aborted')
     external?.addEventListener('abort', onExternalAbort, { once: true })
     timer = setTimeout(() => stop('timeout'), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
