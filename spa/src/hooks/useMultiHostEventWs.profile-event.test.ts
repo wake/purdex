@@ -5,7 +5,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
-import { setProfileEventListener, type ProfileRemoteEvent } from '../lib/profile/profile-ws-dispatch'
+import {
+  __resetProfileEventsForTest,
+  subscribeProfileEvents,
+  type ProfileRemoteEvent,
+} from '../lib/profile/profile-ws-dispatch'
 
 vi.mock('../lib/host-connection', () => ({
   checkHealth: vi.fn(async () => ({ daemon: 'connected', latency: 3, ticket: 'tk' })),
@@ -48,7 +52,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  setProfileEventListener(null)
+  __resetProfileEventsForTest()
   vi.unstubAllGlobals()
   useHostStore.getState().reset()
 })
@@ -56,7 +60,7 @@ afterEach(() => {
 describe('useMultiHostEventWs profile events', () => {
   it('forwards a profile event to the dispatch seam with the socket’s hostId', async () => {
     const received: ProfileRemoteEvent[] = []
-    setProfileEventListener((e) => { received.push(e) })
+    subscribeProfileEvents((e) => { received.push(e) })
 
     const view = renderHook(() => useMultiHostEventWs())
     await waitFor(() => expect(sockets).toHaveLength(2))

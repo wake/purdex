@@ -3,7 +3,7 @@ import type { HostEvent } from '../host-events'
 import {
   __resetProfileEventsForTest,
   dispatchProfileWsEvent,
-  setProfileEventListener,
+  subscribeProfileEvents,
   type ProfileRemoteEvent,
 } from './profile-ws-dispatch'
 
@@ -34,12 +34,13 @@ function without(key: string): Record<string, unknown> {
 
 let received: ProfileRemoteEvent[]
 let listener: ReturnType<typeof vi.fn<(e: ProfileRemoteEvent) => void>>
+let unsubscribe: () => void
 
 beforeEach(() => {
   __resetProfileEventsForTest()
   received = []
   listener = vi.fn((e: ProfileRemoteEvent) => { received.push(e) })
-  setProfileEventListener(listener)
+  unsubscribe = subscribeProfileEvents(listener)
 })
 
 afterEach(() => {
@@ -114,7 +115,7 @@ describe('dispatchProfileWsEvent', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       dispatchProfileWsEvent('h1', profileEvent(put({ deleted: true })))
       __resetProfileEventsForTest()
-      setProfileEventListener(listener)
+      subscribeProfileEvents(listener)
       dispatchProfileWsEvent('h1', profileEvent(put({ deleted: true })))
       expect(warn).toHaveBeenCalledTimes(2)
     })
@@ -179,32 +180,58 @@ describe('dispatchProfileWsEvent', () => {
 
   describe('listener slot', () => {
     it('no listener → dropped without throwing', () => {
-      setProfileEventListener(null)
+      unsubscribe()
       expect(() => dispatchProfileWsEvent('h1', profileEvent(put()))).not.toThrow()
       expect(listener).not.toHaveBeenCalled()
     })
 
     it('a throwing listener does not escape onto the WS path', () => {
       const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-      setProfileEventListener(() => { throw new Error('boom') })
+      subscribeProfileEvents(() => { throw new Error('boom') })
       expect(() => dispatchProfileWsEvent('h1', profileEvent(put()))).not.toThrow()
       expect(err).toHaveBeenCalledTimes(1)
     })
 
-    it('setProfileEventListener(null) stops delivery', () => {
+    it('unsubscribe stops delivery', () => {
       dispatchProfileWsEvent('h1', profileEvent(put()))
-      setProfileEventListener(null)
+      unsubscribe()
       dispatchProfileWsEvent('h1', profileEvent(put({ rev: 8 })))
       expect(listener).toHaveBeenCalledTimes(1)
     })
 
     it('a later listener replaces the earlier one', () => {
       const second = vi.fn()
-      setProfileEventListener(second)
+      subscribeProfileEvents(second)
       dispatchProfileWsEvent('h2', profileEvent(put()))
       expect(listener).not.toHaveBeenCalled()
       expect(second).toHaveBeenCalledTimes(1)
       expect(second.mock.calls[0][0]).toMatchObject({ hostId: 'h2', rev: 7 })
+    })
+
+    // Driver A registers; the master switches and driver B takes the slot; A's
+    // cleanup runs late. It must not take B's subscription with it.
+    it("a replaced listener's unsubscribe does not remove its successor", () => {
+      const b = vi.fn()
+      const unsubscribeB = subscribeProfileEvents(b)
+      unsubscribe() // A's, late
+      dispatchProfileWsEvent('h1', profileEvent(put()))
+      expect(b).toHaveBeenCalledTimes(1)
+      expect(listener).not.toHaveBeenCalled()
+
+      unsubscribeB()
+      dispatchProfileWsEvent('h1', profileEvent(put({ rev: 8 })))
+      expect(b).toHaveBeenCalledTimes(1)
+      expect(listener).not.toHaveBeenCalled()
+    })
+
+    it('unsubscribing twice is a no-op — also once a successor holds the slot', () => {
+      unsubscribe()
+      expect(() => unsubscribe()).not.toThrow()
+      const b = vi.fn()
+      subscribeProfileEvents(b)
+      expect(() => unsubscribe()).not.toThrow()
+      dispatchProfileWsEvent('h1', profileEvent(put()))
+      expect(b).toHaveBeenCalledTimes(1)
     })
   })
 })

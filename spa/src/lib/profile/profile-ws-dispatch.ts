@@ -38,9 +38,21 @@ const LIVE_HASH = /^[0-9a-f]{64}$/
 
 let listener: ProfileEventListener | null = null
 
-/** One slot: a later listener replaces the earlier one; `null` clears it. */
-export function setProfileEventListener(fn: ProfileEventListener | null): void {
+/**
+ * Takes the slot; the returned unsubscribe gives it back ONLY if `fn` still
+ * holds it, and is safe to call again. So a replaced driver's late cleanup
+ * (A registers → the master switches, B registers → A's effect cleanup runs)
+ * cannot take its successor's subscription with it.
+ *
+ * One slot on purpose, not a listener set: there is only ever one sync driver.
+ * With a set, "the old driver was not torn down" would show up as every event
+ * being handled twice; with a slot the newcomer simply replaces it.
+ */
+export function subscribeProfileEvents(fn: ProfileEventListener): () => void {
   listener = fn
+  return () => {
+    if (listener === fn) listener = null
+  }
 }
 
 let warnedContradictory = false
