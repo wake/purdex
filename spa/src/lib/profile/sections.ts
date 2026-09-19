@@ -1,0 +1,173 @@
+// spa/src/lib/profile/sections.ts — the collector's pure half: store state in,
+// section payloads out (Profile Sync spec §4.2, §4.3; P2a plan Task 3).
+//
+// Every builder does two things and nothing else: it SHAPES its input into the
+// section's layout (array → `{order, record}`, `Workspace.tabs` → `{order, tabs}`)
+// and then hands that to `project(shaped, PROJECTIONS[kind])`. The projection is
+// the only allowlist — no builder decides what is synced, so a device-local field
+// cannot leak by being carried along on a source object. The shaping step only
+// decides WHICH records a section holds and in what order.
+//
+// No fetching, no clocks, no stores, no id generation — every input is a
+// parameter (the new workspace's id included), and no input is ever mutated.
+import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import { PROJECTIONS, project, tabsSectionKey } from './projections'
+import type {
+  HostsPayload,
+  HostsSource,
+  ProfileSectionKey,
+  SectionPayload,
+  SettingsPayload,
+  SettingsStorageKey,
+  StrippedLayout,
+  TabsPayload,
+  TabsSource,
+  WorkspacesPayload,
+  WorkspacesSource,
+} from './types'
+
+// === Inputs ===
+
+/**
+ * The settings stores' states, by storage key. `object`, not
+ * `Record<string, unknown>`: a store's state is an interface, and an interface
+ * has no index signature — so `useUISettingsStore.getState()` is assignable to
+ * this without a cast (pinned in sections.test.ts). A store may be absent.
+ */
+export type SettingsBuildInput = Partial<Record<SettingsStorageKey, object>>
+
+/** Everything a profile document is built from: the four store states, structurally. */
+export interface CollectInput {
+  hosts: HostsSource
+  workspaces: WorkspacesSource
+  tabs: TabsSource
+  settings: SettingsBuildInput
+}
+
+/** A profile document, plus the tabs that belong to no workspace and therefore to no section (§4.3). */
+export interface ProfileDocumentResult {
+  document: Record<ProfileSectionKey, SectionPayload>
+  standaloneTabIds: string[]
+}
+
+// A record key that cannot travel: `project` never copies it, and assigning it
+// on a plain object would rewrite the prototype instead of adding a key.
+const FORBIDDEN_KEY = '__proto__'
+
+/** `ids` without duplicates (first occurrence wins), restricted to ids `has` accepts. */
+function uniqueKnown(ids: readonly string[], has: (id: string) => boolean): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const id of ids) {
+    if (id === FORBIDDEN_KEY || seen.has(id) || !has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+// === Layout ===
+
+/**
+ * The same tree without any split's `sizes`: structure travels, ratios stay
+ * device-local (decision 8). Split nodes are new objects; leaves' panes are
+ * shared with the input, which is never mutated.
+ */
+export function stripSizes(layout: PaneLayout): StrippedLayout {
+  if (layout.type === 'leaf') return { type: 'leaf', pane: layout.pane }
+  return { type: 'split', id: layout.id, direction: layout.direction, children: layout.children.map(stripSizes) }
+}
+
+// === Section builders ===
+
+/** `hosts`: each host's projected fields (`token: null` survives — it means "cleared"), and the order. */
+export function buildHostsSection(s: HostsSource): HostsPayload {
+  const shaped = { hosts: s.hosts, hostOrder: s.hostOrder }
+  // An empty record matches no `hosts.*` path; the key must exist all the same.
+  return { hosts: {}, ...(project(shaped, PROJECTIONS.hosts) as object) } as HostsPayload
+}
+
+/** `workspaces`: `Workspace[]` → order + record. A repeated id is kept once, first occurrence. */
+export function buildWorkspacesSection(workspaces: readonly Workspace[]): WorkspacesPayload {
+  const byId = new Map<string, Workspace>()
+  for (const ws of workspaces) {
+    if (!byId.has(ws.id)) byId.set(ws.id, ws)
+  }
+  const order = uniqueKnown([...byId.keys()], () => true)
+  const record: Record<string, Workspace> = {}
+  for (const id of order) record[id] = byId.get(id) as Workspace
+  // `{order: []}` alone would project to `{order: []}`; the record key must exist even when empty.
+  return { workspaces: {}, ...(project({ order, workspaces: record }, PROJECTIONS.workspaces) as object) } as WorkspacesPayload
+}
+
+/**
+ * `tabs.<ws.id>`: `order` is `ws.tabs` restricted to tabs that exist (an id with
+ * no `Tab` is dropped, never invented; a repeat is kept once), and the record
+ * holds exactly those — so `order` has no duplicates and equals the record's key
+ * set, which is what the applier's well-formedness guard demands.
+ */
+export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>): TabsPayload {
+  const order = uniqueKnown(ws.tabs, (id) => Object.hasOwn(tabs, id))
+  const record: Record<string, unknown> = {}
+  for (const id of order) record[id] = { ...tabs[id], layout: stripSizes(tabs[id].layout) }
+  return { tabs: {}, ...(project({ order, tabs: record }, PROJECTIONS.tabs) as object) } as TabsPayload
+}
+
+/** `settings`: `{<storageKey>: {<listed fields>}}`. A store that is absent, or contributes no listed field, has no key. */
+export function buildSettingsSection(stores: SettingsBuildInput): SettingsPayload {
+  return project(stores, PROJECTIONS.settings) as SettingsPayload
+}
+
+// === Document ===
+
+/** Tab ids that are in no workspace: `tabOrder` order first, then any tab `tabOrder` does not mention. */
+function standaloneIds(workspaces: readonly Workspace[], tabs: Record<string, Tab>, tabOrder: readonly string[]): string[] {
+  const owned = new Set(workspaces.flatMap((ws) => ws.tabs))
+  return uniqueKnown([...tabOrder, ...Object.keys(tabs)], (id) => Object.hasOwn(tabs, id) && !owned.has(id))
+}
+
+/**
+ * The whole document: `hosts`, `settings`, `workspaces`, and one `tabs.<id>` for
+ * EVERY workspace in the `workspaces` section — an empty workspace still gets
+ * `{order: [], tabs: {}}`, because `workspaces` is the authority on which
+ * `tabs.*` exist (§4.6.3). Throws (via `tabsSectionKey`) on a workspace id the
+ * daemon would reject. Standalone tabs enter no section; they are reported.
+ */
+export function buildProfileDocument(input: CollectInput): ProfileDocumentResult {
+  const { workspaces } = input.workspaces
+  const workspacesPayload = buildWorkspacesSection(workspaces)
+  const document: Record<ProfileSectionKey, SectionPayload> = {
+    hosts: buildHostsSection(input.hosts),
+    settings: buildSettingsSection(input.settings),
+    workspaces: workspacesPayload,
+  }
+  for (const id of workspacesPayload.order) {
+    const ws = workspaces.find((w) => w.id === id) as Workspace
+    document[tabsSectionKey(id)] = buildTabsSection(ws, input.tabs.tabs)
+  }
+  return { document, standaloneTabIds: standaloneIds(workspaces, input.tabs.tabs, input.tabs.tabOrder) }
+}
+
+// === Standalone tabs (§4.3) ===
+
+/**
+ * Moves every standalone tab into the first workspace NAMED `unsortedName`, or
+ * into a new one with id `newWorkspaceId` (shaped like `createWorkspace`'s
+ * result) — created only when there is something to adopt. `activeTabId` is
+ * left alone: focus is the device's business.
+ */
+export function adoptStandaloneTabs(
+  world: { workspaces: readonly Workspace[]; tabs: Record<string, Tab>; tabOrder: readonly string[] },
+  opts: { unsortedName: string; newWorkspaceId: string },
+): { workspaces: Workspace[]; adopted: string[]; createdWorkspaceId: string | null } {
+  const adopted = standaloneIds(world.workspaces, world.tabs, world.tabOrder)
+  if (adopted.length === 0) return { workspaces: [...world.workspaces], adopted, createdWorkspaceId: null }
+
+  const target = world.workspaces.findIndex((ws) => ws.name === opts.unsortedName)
+  if (target === -1) {
+    const created: Workspace = { id: opts.newWorkspaceId, name: opts.unsortedName, tabs: adopted, activeTabId: null, moduleConfig: {} }
+    return { workspaces: [...world.workspaces, created], adopted: [...adopted], createdWorkspaceId: created.id }
+  }
+  const workspaces = world.workspaces.map((ws, i) => (i === target ? { ...ws, tabs: [...ws.tabs, ...adopted] } : ws))
+  return { workspaces, adopted, createdWorkspaceId: null }
+}
