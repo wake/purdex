@@ -34,7 +34,14 @@
 //   - Nothing is decided on an index this client has not seen. A fresh or
 //     restored state starts `indexStale`, and `reconnected` sets it again, so the
 //     first action of every connection is `reindex` (spec §4.6, reconcile on
-//     connect). Row 0c shadows every row below it, 0d (`restore-local`) included.
+//     connect). Row 0d (`reindex`) shadows every row below it.
+//   - Decision order, first match wins: 0a locked → 0b in flight → 0c
+//     `restore-local` → 0d `reindex` → 0e `forcePull` → rows 1–8. The restore
+//     sits ABOVE the reindex because putting the sent snapshot back is a purely
+//     local action: it must not queue behind a step that needs the network
+//     (`indexStale` is the normal state offline and after every `reconnected`),
+//     or edits made while waiting would be overwritten by the late restore. It
+//     touches no rev and sends nothing, so it is epoch-safe on a stale index.
 //
 // Driver contract (P2b), stated here because this reducer is what makes it safe:
 //   - connect / reconnect to the dev host: dispatch `reconnected` to EVERY
@@ -204,12 +211,17 @@ function wireBaseRev(s: SectionSyncState): number {
   return s.sot.hash === null ? 0 : s.base.rev
 }
 
+/** The decision table; first match wins. Order: 0a locked → 0b in flight →
+ *  0c restore-local → 0d reindex → 0e forcePull → rows 1–8. `restore-local` is
+ *  a local action (not gated by `reachable` / `autoSync`), so it must not wait
+ *  behind `reindex`, which needs the network: offline the index stays stale
+ *  indefinitely, and a restore that lands late overwrites the edits made since. */
 export function decideSection(s: SectionSyncState, ctx: SectionContext): SectionAction {
   const online = ctx.reachable && ctx.autoSync
   /* 0a */ if (isLocked(s)) return NOTHING
   /* 0b */ if (s.inFlight !== null) return NOTHING
-  /* 0c */ if (s.indexStale) return online ? { do: 'reindex' } : NOTHING
-  /* 0d */ if (s.restoreLocal !== null && s.currentHash !== s.restoreLocal.hash) return { do: 'restore-local', hash: s.restoreLocal.hash }
+  /* 0c */ if (s.restoreLocal !== null && s.currentHash !== s.restoreLocal.hash) return { do: 'restore-local', hash: s.restoreLocal.hash }
+  /* 0d */ if (s.indexStale) return online ? { do: 'reindex' } : NOTHING
   /* 0e */ if (s.forcePull) return online ? { do: 'pull' } : NOTHING
   /* 1  */ if (s.sot.rev < s.base.rev) return { do: 'lock-reset' }
   const dirty = isDirty(s)

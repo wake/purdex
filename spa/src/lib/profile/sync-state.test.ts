@@ -147,16 +147,30 @@ describe('decideSection — one test per row', () => {
     const s = mk({ ...dirtyPushable, inFlight: { kind: 'put', hash: H1, baseRev: 5, epoch: 0 } })
     expect(decideSection(s, ON)).toEqual({ do: 'nothing' })
   })
-  it('0c: indexStale → reindex, ahead of every sync row', () => {
-    expect(decideSection(mk({ ...dirtyPushable, indexStale: true }), ON)).toEqual({ do: 'reindex' })
-  })
-  it('0d: restoreLocal differs from currentHash → restore-local', () => {
+  it('0c: restoreLocal differs from currentHash → restore-local', () => {
     const s = mk({ ...dirtyPushable, restoreLocal: { hash: H2 } })
     expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H2 })
   })
-  it('0d is a local action: not gated by reachable/autoSync', () => {
+  it('0c is a local action: not gated by reachable/autoSync', () => {
     const s = mk({ ...dirtyPushable, restoreLocal: { hash: H2 } })
     expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'restore-local', hash: H2 })
+  })
+  it('0c precedes 0d: a pending restore is not held back by a stale index, online or off', () => {
+    const s = mk({ ...dirtyPushable, restoreLocal: { hash: H2 }, indexStale: true })
+    expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'restore-local', hash: H2 })
+    expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H2 })
+    const restored = reduceSection(s, { type: 'local-restored', hash: H2 })
+    expect(restored.indexStale).toBe(true)
+    expect(decideSection(restored, { reachable: false, autoSync: false })).toEqual({ do: 'nothing' })
+    expect(decideSection(restored, ON)).toEqual({ do: 'reindex' })
+  })
+  it('0a / 0b still precede 0c: no restore while locked or in flight', () => {
+    const stale = { ...dirtyPushable, restoreLocal: { hash: H2 }, indexStale: true }
+    expect(decideSection(mk({ ...stale, status: 'locked:reset' }), ON)).toEqual({ do: 'nothing' })
+    expect(decideSection(mk({ ...stale, inFlight: { kind: 'put', hash: H1, baseRev: 5, epoch: 0 } }), ON)).toEqual({ do: 'nothing' })
+  })
+  it('0d: indexStale → reindex, ahead of every sync row', () => {
+    expect(decideSection(mk({ ...dirtyPushable, indexStale: true }), ON)).toEqual({ do: 'reindex' })
   })
   it('0e: forcePull → pull even though dirty', () => {
     expect(decideSection(mk({ ...dirtyPushable, forcePull: true }), ON)).toEqual({ do: 'pull' })
@@ -201,9 +215,9 @@ describe('decideSection — one test per row', () => {
     expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'lock-conflict' })
   })
 
-  describe('!reachable || !autoSync turns 0c / 0e / 3 / 4 / 5 into nothing', () => {
+  describe('!reachable || !autoSync turns 0d / 0e / 3 / 4 / 5 into nothing', () => {
     const rows: [string, SectionSyncState][] = [
-      ['0c', mk({ ...dirtyPushable, indexStale: true })],
+      ['0d', mk({ ...dirtyPushable, indexStale: true })],
       ['0e', mk({ ...dirtyPushable, forcePull: true })],
       ['3', mk({ base: { rev: 5, hash: H0 }, sot: { rev: 6, hash: H1 }, currentHash: H0 })],
       ['4', dirtyPushable],
@@ -222,7 +236,7 @@ describe('decideSection — one test per row', () => {
       expect(decideSection(s, { reachable: false, autoSync: true })).toEqual({ do: 'nothing' })
       expect(s.status).toBe('pending')
     })
-    it('0c first-match-wins: a stale index that cannot be refreshed does not fall through to push', () => {
+    it('0d first-match-wins: a stale index that cannot be refreshed does not fall through to push', () => {
       const s = mk({ ...dirtyPushable, indexStale: true })
       expect(decideSection(s, { reachable: false, autoSync: true })).toEqual({ do: 'nothing' })
     })
@@ -847,6 +861,32 @@ describe('regression sequences — spec §9.4, verbatim', () => {
     expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H1, baseRev: 7 })
   })
 
+  it('#6c: keep-local while offline — the restore happens at once, the network steps wait', () => {
+    const OFF = { reachable: false, autoSync: false }
+    let [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
+    s = reduceSection(s, { type: 'push-conflict', rev: 6, hash: 'h6' })
+    expect(s.status).toBe('locked:conflict')
+    s = reduceSection(s, { type: 'remote-event', rev: 7, hash: 'h7', own: false })
+    s = reduceSection(s, { type: 'local-changed', hash: H2 }) // the live stores move on
+    s = reduceSection(s, { type: 'reconnected' }) // the connection dropped and came back: stale again
+    expect(s.indexStale).toBe(true)
+    s = reduceSection(s, { type: 'resolved', keep: 'local' })
+    expect(s.indexStale).toBe(true)
+    expect(s.restoreLocal).toEqual({ hash: H1 })
+    expect(decideSection(s, OFF)).toEqual({ do: 'restore-local', hash: H1 })
+    expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H1 })
+    s = reduceSection(s, { type: 'local-restored', hash: H1 })
+    expect(s.currentHash).toBe(H1)
+    expect(decideSection(s, OFF)).toEqual({ do: 'nothing' })
+    expect(decideSection(s, ON)).toEqual({ do: 'reindex' })
+    s = reduceSection(s, { type: 'sot-index', epoch: s.epoch, entry: { rev: 7, hash: 'h7' } })
+    expect(s.indexStale).toBe(false)
+    const d = decideSection(s, ON)
+    expect(d.do).toBe('push')
+    expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H1, baseRev: 7 })
+    expect(tokenOf(d).baseRev).toBe(s.sot.rev)
+  })
+
   it('#6b: take-SOT pulls even though the section is dirty', () => {
     let [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
     s = reduceSection(s, { type: 'push-conflict', rev: 6, hash: 'h6' })
@@ -927,6 +967,7 @@ describe('property tests (seeded)', () => {
     let steps = 0
     let staleDecisions = 0
     let absentRestores = 0
+    let staleRestores = 0
 
     for (let n = 0; n < SEQUENCES; n++) {
       const seed = BASE_SEED + n
@@ -1043,15 +1084,21 @@ describe('property tests (seeded)', () => {
         const d = decideSection(next, ON)
         if (next.inFlight !== null && d.do !== 'nothing') fail('decided something while in flight')
         if (locked && d.do !== 'nothing') fail('decided something while locked')
-        // nothing but a reindex happens on a stale index: rows 0a/0b → nothing, row 0c → reindex,
-        // and 0c shadows 0d (restore-local) and every row below it
+        // on a stale index: rows 0a/0b → nothing; else a pending restore (row 0c, local, ungated) goes
+        // first; else row 0d → reindex, which shadows every row below it
         // until the first epoch-matching index has landed, the index stays stale (so: no flight, no pull, no lock)
         if (e.type === 'sot-index' && e.epoch === prev.epoch) indexSeen = true
         if (!indexSeen && (!next.indexStale || next.inFlight !== null || locked)) fail('acted before the index was ever seen')
         if (next.indexStale) {
-          const want = locked || next.inFlight !== null ? 'nothing' : 'reindex'
+          const restorePending = next.restoreLocal !== null && next.restoreLocal.hash !== next.currentHash
+          const blocked = locked || next.inFlight !== null
+          const want = blocked ? 'nothing' : restorePending ? 'restore-local' : 'reindex'
           if (d.do !== want) fail(`stale index: decided "${d.do}", expected "${want}"`)
+          const offline = decideSection(next, { reachable: false, autoSync: false })
+          const wantOffline = !blocked && restorePending ? 'restore-local' : 'nothing'
+          if (offline.do !== wantOffline) fail(`stale index, offline: decided "${offline.do}", expected "${wantOffline}"`)
           staleDecisions++
+          if (want === 'restore-local') staleRestores++
         }
         if (d.do === 'push' || d.do === 'delete') {
           if (sotMoved(next)) fail('push/delete decided although the SOT moved')
@@ -1076,6 +1123,7 @@ describe('property tests (seeded)', () => {
     expect(locks).toBeGreaterThan(SEQUENCES / 4)
     expect(staleDecisions).toBeGreaterThan(SEQUENCES)
     expect(absentRestores).toBeGreaterThan(0)
+    expect(staleRestores).toBeGreaterThan(0)
     for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked', 'reconnected']) {
       expect(seen.has(`${t}:applied`), `${t} was never applied`).toBe(true)
       expect(seen.has(`${t}:ignored`), `${t} was never ignored`).toBe(true)
