@@ -1,6 +1,6 @@
 # Spec — P-B4: exec pane cost hover / panel (client-side)
 
-- Status: v1.3 (2026-09-19) — codex plan review + PR #1231 / #1233 R1/R2 applied (§9)
+- Status: v1.4 (2026-09-19) — shipped alpha.409 / 410; acceptance §6.1 passed; review log §9
 - Predecessors: P-B (`2026-09-15-pb-execution-pane-spec.md`, header §4.3.3),
   P-B2 / P-B3 (tool activity, N2 facts). This is the last of the user's
   decision #5 (tool summaries, line-numbered diffs, **cost hover**,
@@ -345,6 +345,18 @@ files), TDD by subagent, codex R1 + R2 per PR.
    unit test if not reproducible interactively.
 5. Archive the executions created for acceptance; remove
    `/Users/wake/Workspace/tmp-pb4-fixture`.
+
+### 6.1 Acceptance run 2026-09-19 (mlab, origin/main `3fc5a7c0` = post-#1233, worktree dev server :5175 + playwright cli session `pb4-cost-hover`, daemon alpha.405)
+
+Host seeded via `localstorage-set purdex-hosts`; pane opened by deeplink; DOM probed by `eval` (`execution-cost`, the tooltip by `aria-describedby`, `cost-panel` sections, `cost-turn` rows, `cost-quota`) and screenshots.
+
+1. **PASS** — `06GB2ZFDHNCW2ZWQ33EG9D1ZXM` (archived, 12 turns): header `$0.26`, enabled, `aria-describedby` → tooltip `12 turns · $0.2577 · 4.5k out · 1m 05s API / 1m 33s wall`; click → panel `440px`: totals `$0.2577 · 12 turns · 22 API rounds · 1m 05s API / 1m 33s wall`, tokens `output 4.5k · input 949 · cache read 377.4k · cache write 34.1k`, models `claude-sonnet-5 $0.2567 4.5k out` then `claude-haiku-4-5 $0.0010 12 out`, no note, 12 rows with rows 6 and 10 marked `error`, row 8 `$0.0000`, table scrolled to `#12`; quota row `Host quota — wake@protype.tw · 5h 20% · 7d 64% · usage_api`. Console 0 errors.
+2. **PASS** — `06GBGXTWQBYTSZG1T71JV6784G` (subagent run): header `$0.09`, panel one row `#1 $0.0882 143 46.5k 6.3s / 6.7s 2` — the subagent's frames are in the conversation, the cost is counted once (F6).
+3. **PASS** — live: with the panel open, sent `Reply with the single word: ok` from the pane input; the panel stayed open, row `#2` appended (`$0.1307`), header `$0.09` → `$0.22`, totals `2 turns · 3 API rounds`. Console 0 errors.
+4. **Not exercised interactively** — the `$…` loading state (history loads too fast on the tailnet); covered by the ExecutionView integration test (a).
+5. Executions archived (`06GB2ZFD…`, `06GBGXTW…`, `06GBGXQT…`), scratch dir removed, playwright session closed.
+
+Observation (not a defect of this phase): turn `#2` in step 3 reports `duration_api_ms` 8.0 s > `duration_ms` 2.1 s — the daemon / CC numbers are shown as facts; if it recurs it is a nexen / CC question.
 
 ## 7. Risks
 

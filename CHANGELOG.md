@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.410] - 2026-09-19
+
+### Feature: exec pane 成本 panel——每 turn 表、token 拆解、模型、host 額度（#1233，P-B4.2）＋ P-B4 真機驗收
+
+alpha.409 的 `$0.26` 現在點得開：`FloatingPanel`（拖得動、Escape／點外面關）由上而下是總計一行（`$0.2577 · 12 turns · 22 API rounds · 1m 05s API / 1m 33s wall`）、四格 token（output／input／cache read／cache write，來源是 `modelUsage` 加總）、分模型拆帳（沒有 `modelUsage` 的舊幀有成本時加一行「n 輪沒有分模型拆帳」，Σ models ≠ total 才有解釋）、每 turn 一列的表（`#`、成本 4 位小數、輸出、快取讀、API／牆鐘、回合、`error` 格帶原始 `subtype` 當 title；開啟時自動捲到最新一輪；panel 開著時新 turn 落地就多一列）、最後一行 host 額度——`fetchNexHost` 每次掛載只抓一次、daemon 回 `quota` 才顯示，標題寫「**主機額度 — <帳號>**」因為那是 host 登入帳號的視窗，未必是這顆 execution 計費的帳號（契約 §1.7）。寬度 `min(440, viewport − 16)` 且跟著 resize 走。
+
+Codex：R1 抓固定 440px 在窄視窗裁切（修：viewport 上限＋resize 監聽，re-review 再抓我加的 240 下限與 render-time 讀值，一起拿掉）；攻擊方兩條——host 切換殘留舊帳號／額度（critic 有證據反對：exec pane 以 `hostId:executionId` 為 key 會整個重掛，產品路徑不可達；仍照修，effect 開頭 `setHost(null)`）、額度百分比被四捨五入（`99.6` → `100%` 會誤判額度耗盡；改顯示原值）。critic 另核對 subagent 自行決定的三件事（models 空但有 unsplit 仍顯示 note、表頭 sticky、「API / wall」「$」「out」不進 i18n）皆與 spec 相容。
+
+真機驗收（spec §6.1，worktree :5175 ＋ playwright）：12-turn 的 execution 全部段落數字與 fixture 一致、2 個 error 列、自動捲到 `#12`、額度列 `wake@protype.tw 5h 20% · 7d 64%`；subagent 那顆一列 `$0.0882` 不重複；panel 開著從輸入框送一輪 → `#2` 追加、header `$0.09` → `$0.22`、console 0 錯。P-B4 至此完成——使用者定案第 5 條（tool 摘要／行號 diff／成本 hover／打字機）全部落地。follow-up：#1234（HoverTooltip 共用 a11y）、#1235（每幀重算 O(N)，先量 5000 則再決定）。vitest 7312、lint、tsc、build 綠。
+
 ## [1.0.0-alpha.409] - 2026-09-19
 
 ### Feature: exec pane 成本摘要——rollup ＋ header hover（#1231，P-B4.1）
