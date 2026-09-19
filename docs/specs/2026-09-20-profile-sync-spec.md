@@ -285,7 +285,7 @@ are deleted in P3.
 
 Consequence taken deliberately: `useTabStore.tabOrder` stops being authoritative and is rebuilt
 from the workspaces' orders on apply, retiring the dual-ordering hazard noted at
-`useTabStore.ts:440-449`.
+`useTabStore.ts:441-450`.
 
 ### 4.4 Section state, and the pre-SOT state machine
 
