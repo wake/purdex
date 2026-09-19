@@ -13,8 +13,11 @@
   Verify per task: `npx vitest run <changed test files>`; before each PR:
   `npx vitest run && pnpm run lint && npx tsc -p tsconfig.app.json --noEmit && pnpm run build`,
   then `git diff --stat origin/main...HEAD -- ':!docs' ':!spa/src/lib/nex/__fixtures__'`
-  must report ≤ 800 changed lines (spec §5); if not, the PR is split
-  before it is opened.
+  must satisfy the project rule (CLAUDE.md: **≤ 800 changed lines or
+  ≤ 20 files**); if neither holds, the PR is split before it is opened.
+  (v1.1 wrote "≤ 800 lines" alone — tighter than the project rule; P-B4.1
+  landed at 12 files / 831 lines, 305 of them tests, and passes on the
+  file count.)
 - Tasks are sequential within a PR. No daemon, Nexen or hook change.
 
 ## Measured baseline (2026-09-19, worktree at alpha.408)

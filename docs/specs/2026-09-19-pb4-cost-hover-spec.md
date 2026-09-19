@@ -1,6 +1,6 @@
 # Spec — P-B4: exec pane cost hover / panel (client-side)
 
-- Status: v1.1 (2026-09-19) — codex plan+spec review applied (§9)
+- Status: v1.2 (2026-09-19) — codex plan review + PR #1231 R1/R2 applied (§9)
 - Predecessors: P-B (`2026-09-15-pb-execution-pane-spec.md`, header §4.3.3),
   P-B2 / P-B3 (tool activity, N2 facts). This is the last of the user's
   decision #5 (tool summaries, line-numbered diffs, **cost hover**,
@@ -294,7 +294,8 @@ other fields and both lease-backed actions, `formatDuration`,
 
 ## 5. Phases
 
-Two PRs, each ≤ 800 lines, TDD by subagent, codex R1 + R2 per PR.
+Two PRs, each within the project size rule (≤ 800 lines **or** ≤ 20
+files), TDD by subagent, codex R1 + R2 per PR.
 
 ### P-B4.1 — summary + header hover (no panel)
 
@@ -372,3 +373,19 @@ None blocking.
   per-entry validity; (8) outside-click test → plan Task 4; (9) PR size
   is checked with `git diff --stat` before opening each PR → plan
   checklist.
+- 2026-09-19 PR #1231 (P-B4.1): R1 — no findings; attacker — A1 sums can
+  overflow to Infinity and header (`toFixed`) / tooltip (`formatUsd`)
+  then disagree (high), A2 usage fallback zeroes present-but-invalid
+  fields (medium), A3 O(N) recompute per durable frame (medium), A4
+  tooltip not associated with the button for AT (medium); critic — A1 /
+  A2 agreed, A3 evidenced objection (same order as the existing message
+  map; follow-up), A4 evidenced objection (shared `HoverTooltip` gap,
+  `SortableTab` identical; follow-up), plus the 831-line gate → plan
+  wording aligned to the project rule (≤ 800 lines **or** ≤ 20 files).
+  Fixed: `addFinite` on every sum (an overflowing contribution is
+  dropped, totals stay finite), header uses `formatUsd(total, 2)`, strict
+  usage fallback (present-but-invalid → `null`), and — a deliberate
+  one-line exception to §4.7 — `HoverTooltip` gains an optional `id`
+  prop (DOM unchanged without it) so the cost button can carry
+  `aria-describedby`; the visible-state / hidden-tree part of A4 stays a
+  shared-component follow-up.
