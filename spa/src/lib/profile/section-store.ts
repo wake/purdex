@@ -53,6 +53,12 @@
 // that to every section, and lose every retained conflict snapshot, because of
 // one bad entry. Only a document that is unreadable at the top level is empty.
 //
+// A STORED CONFLICT HAS ITS PAYLOADS. A conflict is only ever written by
+// `saveConflict`, in the SAME `setItem` as the payloads it refers to, and
+// `saveSection` refuses a section that carries one. Written separately, a quota
+// error between the two would leave a lock the user cannot resolve: a restart
+// restores `locked:conflict`, the user picks a side, and there is no payload.
+//
 // WRITES NEVER THROW. Each returns a `WriteResult`. A refused `setItem` (quota,
 // blocked site data) leaves the PREVIOUS value in place — `localStorage.setItem`
 // is atomic, there is no half-written document — so the caller loses this one
@@ -93,9 +99,18 @@ interface StoredDocument {
 }
 
 /** A single stashed payload may not serialise to more than this many UTF-8
- *  bytes. The daemon refuses a larger section anyway, so such a payload could
- *  never be pushed — and it would eat the whole localStorage quota. */
-export const MAX_STASH_PAYLOAD_BYTES = 5 * 1024 * 1024
+ *  bytes. Measured section payloads are KB-sized, and the stash is only needed
+ *  while a conflict is open, so 1 MiB is generous — while the 5 MiB this used to
+ *  be was the ENTIRE localStorage quota of most browsers, before the envelope,
+ *  the other payloads and every other key of this origin: a payload near it was
+ *  all but guaranteed a `QuotaExceededError`. The limit is per payload, not a
+ *  budget for the document; the quota is still what finally decides, and
+ *  `'failed'` is how it says so.
+ *    A conflict whose payload is over the limit cannot be persisted. The caller
+ *  (the executor) then keeps that conflict in memory only; after a restart the
+ *  reindex judges the section again from the state of that moment. Degraded, but
+ *  safe: what is never restored is a lock with a missing payload. */
+export const MAX_STASH_PAYLOAD_BYTES = 1024 * 1024
 
 const PROFILE_ID_PATTERN = /^p_[0-9a-f]{12}$/
 const SHA256_HEX = /^[0-9a-f]{64}$/
@@ -153,6 +168,26 @@ function parseSection(v: unknown): PersistedSection | null {
     out.conflict = { localHash: v.conflict.localHash, sot }
   }
   return out
+}
+
+/** A plain object that serialises to at most `MAX_STASH_PAYLOAD_BYTES`. */
+function isStashable(payload: unknown): boolean {
+  if (!isPlainObject(payload)) return false
+  let serialised: string
+  try {
+    serialised = JSON.stringify(payload)
+  } catch {
+    return false // a cycle, a BigInt
+  }
+  // Every code unit is at least one byte, so the cheap check spares encoding the obvious cases.
+  if (serialised.length > MAX_STASH_PAYLOAD_BYTES) return false
+  return new TextEncoder().encode(serialised).length <= MAX_STASH_PAYLOAD_BYTES
+}
+
+/** The hashes whose payloads a conflict cannot be resolved without. `null` is
+ *  "does not exist" (a delete was sent / the SOT holds a tombstone): no payload. */
+function neededHashes(conflict: SectionConflict): string[] {
+  return [conflict.localHash, conflict.sot.hash].filter((h): h is string => h !== null)
 }
 
 function emptyData(profileId: string): SectionStoreData {
@@ -218,11 +253,12 @@ function writeDocument(data: StoredDocument): boolean {
 }
 
 /** The one gate every write goes through: read, check the fence, change, write.
- *  `change` returns the new document, or `null` for "nothing to change". */
+ *  `change` returns the new document, `null` for "nothing to change", or
+ *  `'failed'` when what is stored does not allow the change. */
 function fencedWrite(
   profileId: string,
   generation: number,
-  change: (doc: StoredDocument) => StoredDocument | null,
+  change: (doc: StoredDocument) => StoredDocument | null | 'failed',
 ): WriteResult {
   // 0 is what an unclaimed or pre-fencing document reads as; nobody holds it.
   if (!isProfileId(profileId) || !isGeneration(generation) || generation === 0) return 'failed'
@@ -231,6 +267,7 @@ function fencedWrite(
   if (doc.generation !== generation || doc.profileId !== profileId) return 'fenced'
   const next = change(doc)
   if (next === null) return 'ok'
+  if (next === 'failed') return 'failed'
   return writeDocument(next) ? 'ok' : 'failed'
 }
 
@@ -257,14 +294,43 @@ export function claimSectionStore(profileId: string): number | null {
   return writeDocument({ profileId, generation, sections: kept.sections, stash: kept.stash }) ? generation : null
 }
 
+/** A section WITHOUT a conflict. One that has a conflict is `'failed'`: it goes
+ *  through `saveConflict`, which is what keeps "a stored conflict has its
+ *  payloads" true. Saving over a locked section is how the lock is lifted. */
 export function saveSection(profileId: string, generation: number, key: string, s: PersistedSection): WriteResult {
   if (typeof key !== 'string' || key === '') return 'failed'
   const section = parseSection(s)
-  if (section === null) return 'failed'
+  if (section === null || section.conflict !== undefined) return 'failed'
   return fencedWrite(profileId, generation, (doc) => ({
     ...doc,
     sections: recordOf([...Object.entries(doc.sections).filter(([k]) => k !== key), [key, section]]),
   }))
+}
+
+/** A locked section together with the payloads its conflict refers to, in ONE
+ *  `setItem`: either all of it is stored or none of it is. `payloads` is by
+ *  hash; every non-null hash of `section.conflict` must be in it or already in
+ *  the stash, else `'failed'` and nothing is written. */
+export function saveConflict(
+  profileId: string,
+  generation: number,
+  key: string,
+  s: PersistedSection & { conflict: SectionConflict },
+  payloads: Record<string, unknown>,
+): WriteResult {
+  if (typeof key !== 'string' || key === '' || !isPlainObject(payloads)) return 'failed'
+  const section = parseSection(s)
+  const conflict = section?.conflict
+  if (section === null || conflict === undefined) return 'failed'
+  const added = Object.entries(payloads)
+  if (!added.every(([hash, payload]) => isHash(hash) && isStashable(payload))) return 'failed'
+
+  const addedHashes = new Set(added.map(([hash]) => hash))
+  return fencedWrite(profileId, generation, (doc) => {
+    const stash = recordOf([...Object.entries(doc.stash).filter(([h]) => !addedHashes.has(h)), ...added])
+    if (neededHashes(conflict).some((h) => !Object.prototype.hasOwnProperty.call(stash, h))) return 'failed'
+    return { ...doc, sections: recordOf([...Object.entries(doc.sections).filter(([k]) => k !== key), [key, section]]), stash }
+  })
 }
 
 /** `'ok'` = the section is not stored (any more). */
@@ -278,16 +344,7 @@ export function dropSection(profileId: string, generation: number, key: string):
 /** `'failed'` also covers: bad hash, not a plain object, not serialisable, over
  *  `MAX_STASH_PAYLOAD_BYTES`. */
 export function putStash(profileId: string, generation: number, hash: string, payload: unknown): WriteResult {
-  if (!isHash(hash) || !isPlainObject(payload)) return 'failed'
-  let serialised: string
-  try {
-    serialised = JSON.stringify(payload)
-  } catch {
-    return 'failed' // a cycle, a BigInt
-  }
-  // Every code unit is at least one byte, so the cheap check spares encoding the obvious cases.
-  if (serialised.length > MAX_STASH_PAYLOAD_BYTES) return 'failed'
-  if (new TextEncoder().encode(serialised).length > MAX_STASH_PAYLOAD_BYTES) return 'failed'
+  if (!isHash(hash) || !isStashable(payload)) return 'failed'
   return fencedWrite(profileId, generation, (doc) => ({
     ...doc,
     stash: recordOf([...Object.entries(doc.stash).filter(([h]) => h !== hash), [hash, payload]]),

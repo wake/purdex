@@ -10,6 +10,7 @@ import {
   loadSectionStore,
   pruneStash,
   putStash,
+  saveConflict,
   saveSection,
   type PersistedSection,
 } from './section-store'
@@ -21,6 +22,21 @@ const H = (c: string): string => c.repeat(64)
 
 const SETTINGS: PersistedSection = { base: { rev: 3, hash: H('a') }, currentHash: H('b') }
 const HOSTS: PersistedSection = { base: { rev: 0, hash: null }, currentHash: null }
+/** Locked on a put: needs the snapshot that was sent (b) and the SOT's payload (d). */
+const LOCKED = {
+  base: { rev: 3, hash: H('a') },
+  currentHash: H('c'),
+  conflict: { localHash: H('b'), sot: { rev: 5, hash: H('d') } },
+} satisfies PersistedSection
+/** Locked on a delete over a tombstone: needs no payload at all. */
+const DELETE_LOCKED = {
+  base: { rev: 3, hash: H('a') },
+  currentHash: null,
+  conflict: { localHash: null, sot: { rev: 6, hash: null } },
+} satisfies PersistedSection
+const LOCKED_PAYLOADS = { [H('b')]: { mine: 1 }, [H('d')]: { theirs: 1 } }
+/** The largest `{ s: 'xxx…' }` a stash accepts, and the one byte more. */
+const payloadOfBytes = (bytes: number): { s: string } => ({ s: 'x'.repeat(bytes - JSON.stringify({ s: '' }).length) })
 
 const raw = (): string | null => localStorage.getItem(KEY)
 const writeRaw = (value: unknown): void =>
@@ -73,26 +89,18 @@ describe('section-store', () => {
   })
 
   it('round-trips a conflict — the lock survives a restart with the snapshot that was sent', () => {
-    const locked: PersistedSection = {
-      base: { rev: 3, hash: H('a') },
-      currentHash: H('c'),
-      conflict: { localHash: H('b'), sot: { rev: 5, hash: H('d') } },
-    }
-    const deleteLocked: PersistedSection = {
-      base: { rev: 3, hash: H('a') },
-      currentHash: null,
-      conflict: { localHash: null, sot: { rev: 6, hash: null } },
-    }
-    saveSection(P1, g, 'settings', locked)
-    saveSection(P1, g, 'tabs.ws1', deleteLocked)
+    expect(saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)).toBe('ok')
+    expect(saveConflict(P1, g, 'tabs.ws1', DELETE_LOCKED, {})).toBe('ok')
 
-    const loaded = loadSectionStore(P1).sections
-    expect(loaded.settings).toEqual(locked)
-    expect(loaded['tabs.ws1']).toEqual(deleteLocked)
+    const loaded = loadSectionStore(P1)
+    expect(loaded.sections.settings).toEqual(LOCKED)
+    expect(loaded.sections['tabs.ws1']).toEqual(DELETE_LOCKED)
+    expect(getStash(P1, H('b'))).toEqual({ mine: 1 })
+    expect(getStash(P1, H('d'))).toEqual({ theirs: 1 })
   })
 
   it('a section saved without a conflict comes back without the key', () => {
-    saveSection(P1, g, 'settings', { ...SETTINGS, conflict: { localHash: null, sot: { rev: 4, hash: null } } })
+    saveConflict(P1, g, 'settings', DELETE_LOCKED, {})
     saveSection(P1, g, 'settings', SETTINGS)
     expect('conflict' in loadSectionStore(P1).sections.settings).toBe(false)
   })
@@ -232,7 +240,18 @@ describe('section-store', () => {
 
     it.each([
       ['a bad section', () => saveSection(P1, g, 'settings', { base: { rev: -1, hash: null }, currentHash: null })],
-      ['a bad conflict', () => saveSection(P1, g, 'settings', { ...SETTINGS, conflict: { localHash: 'x', sot: { rev: 1, hash: null } } })],
+      ['a section with a conflict through saveSection — that is saveConflict\'s job', () => saveSection(P1, g, 'settings', DELETE_LOCKED)],
+      ['a bad conflict', () => saveConflict(P1, g, 'settings', { ...SETTINGS, conflict: { localHash: 'x', sot: { rev: 1, hash: null } } }, {})],
+      ['a conflict-less section through saveConflict', () => saveConflict(P1, g, 'settings', SETTINGS as never, {})],
+      ['a conflict with an empty section key', () => saveConflict(P1, g, '', DELETE_LOCKED, {})],
+      ['a conflict whose payloads is not an object', () => saveConflict(P1, g, 'settings', DELETE_LOCKED, [] as never)],
+      ['a conflict payload under a key that is not a hash', () => saveConflict(P1, g, 'settings', LOCKED, { ...LOCKED_PAYLOADS, short: { x: 1 } })],
+      ['a conflict payload that is an array', () => saveConflict(P1, g, 'settings', LOCKED, { ...LOCKED_PAYLOADS, [H('d')]: [1] })],
+      ['a conflict payload that cannot be serialised', () => { const o: Record<string, unknown> = {}; o.self = o; return saveConflict(P1, g, 'settings', LOCKED, { ...LOCKED_PAYLOADS, [H('b')]: o }) }],
+      ['a conflict payload over the size limit', () => saveConflict(P1, g, 'settings', LOCKED, { ...LOCKED_PAYLOADS, [H('b')]: payloadOfBytes(MAX_STASH_PAYLOAD_BYTES + 1) })],
+      ['a conflict without its localHash payload', () => saveConflict(P1, g, 'settings', LOCKED, { [H('d')]: { theirs: 1 } })],
+      ['a conflict without its sot payload', () => saveConflict(P1, g, 'settings', LOCKED, { [H('b')]: { mine: 1 } })],
+      ['a conflict with no payloads at all', () => saveConflict(P1, g, 'settings', LOCKED, {})],
       ['an empty section key', () => saveSection(P1, g, '', SETTINGS)],
       ['a malformed profile id', () => saveSection('nope', g, 'settings', SETTINGS)],
       ['generation 0 — nobody ever holds it', () => saveSection(P1, 0, 'settings', SETTINGS)],
@@ -273,21 +292,28 @@ describe('section-store', () => {
       expect(loadSectionStore(P1).sections).toEqual({ settings: SETTINGS })
     })
 
-    it('a payload over 5 MiB is not stored; one at the limit is', () => {
-      expect(MAX_STASH_PAYLOAD_BYTES).toBe(5 * 1024 * 1024)
+    it('a payload over 1 MiB is not stored; one at the limit is — really written, and read back', () => {
+      expect(MAX_STASH_PAYLOAD_BYTES).toBe(1024 * 1024)
       putStash(P1, g, H('a'), { a: 1 })
       const before = raw()
-      const wrapper = JSON.stringify({ s: '' }).length
-      // jsdom's localStorage has its own quota; the size rule is ours, so keep
-      // the real backend out of it.
-      const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {})
+      const setItem = vi.spyOn(Storage.prototype, 'setItem') // a spy only: the real backend does the write
 
-      expect(putStash(P1, g, H('b'), { s: 'x'.repeat(MAX_STASH_PAYLOAD_BYTES - wrapper + 1) })).toBe('failed')
+      expect(putStash(P1, g, H('b'), payloadOfBytes(MAX_STASH_PAYLOAD_BYTES + 1))).toBe('failed')
       expect(setItem).not.toHaveBeenCalled()
       expect(raw()).toBe(before)
 
-      expect(putStash(P1, g, H('b'), { s: 'x'.repeat(MAX_STASH_PAYLOAD_BYTES - wrapper) })).toBe('ok')
-      expect(setItem).toHaveBeenCalledTimes(1)
+      const atLimit = payloadOfBytes(MAX_STASH_PAYLOAD_BYTES)
+      expect(new TextEncoder().encode(JSON.stringify(atLimit)).length).toBe(MAX_STASH_PAYLOAD_BYTES)
+      expect(putStash(P1, g, H('b'), atLimit)).toBe('ok')
+      expect(getStash(P1, H('b'))).toEqual(atLimit)
+      expect(getStash(P1, H('a'))).toEqual({ a: 1 })
+    })
+
+    it('the limit counts UTF-8 bytes, not UTF-16 code units', () => {
+      const setItem = vi.spyOn(Storage.prototype, 'setItem')
+      // 400 k CJK characters: 400 k code units (under the limit), 1.2 M bytes (over it).
+      expect(putStash(P1, g, H('a'), { s: '繁'.repeat(400_000) })).toBe('failed')
+      expect(setItem).not.toHaveBeenCalled()
     })
 
     it('dropSection / pruneStash with nothing to remove report ok without writing', () => {
@@ -302,6 +328,97 @@ describe('section-store', () => {
       // 2 M CJK characters: 2 M code units, 6 M bytes.
       expect(putStash(P1, g, H('a'), { s: '繁'.repeat(2_000_000) })).toBe('failed')
       expect(setItem).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('saveConflict — a conflict and the payloads it needs land together or not at all', () => {
+    it('one setItem carries the section and every payload', () => {
+      saveSection(P1, g, 'hosts', HOSTS)
+      const setItem = vi.spyOn(Storage.prototype, 'setItem')
+
+      expect(saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)).toBe('ok')
+
+      expect(setItem).toHaveBeenCalledTimes(1)
+      expect(loadSectionStore(P1)).toEqual({ profileId: P1, sections: { hosts: HOSTS, settings: LOCKED }, stash: LOCKED_PAYLOADS })
+    })
+
+    it('a second setItem that would fail is never needed', () => {
+      // Were the section and the stash written separately, this is the state that
+      // would survive a quota error on the second write: a lock without its payload.
+      const real = Storage.prototype.setItem
+      let calls = 0
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+        calls += 1
+        if (calls > 1) throw new DOMException('exceeded', 'QuotaExceededError')
+        real.call(this, k, v)
+      })
+
+      expect(saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)).toBe('ok')
+
+      vi.restoreAllMocks()
+      expect(loadSectionStore(P1).sections.settings).toEqual(LOCKED)
+      expect(getStash(P1, H('b'))).toEqual({ mine: 1 })
+      expect(getStash(P1, H('d'))).toEqual({ theirs: 1 })
+    })
+
+    it('a payload the stash already holds need not be passed again', () => {
+      putStash(P1, g, H('b'), { mine: 1 })
+      expect(saveConflict(P1, g, 'settings', LOCKED, { [H('d')]: { theirs: 1 } })).toBe('ok')
+      expect(loadSectionStore(P1).stash).toEqual(LOCKED_PAYLOADS)
+    })
+
+    it('the SOT moving on while locked: the new payload joins, the section is replaced', () => {
+      saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)
+      const moved = { ...LOCKED, conflict: { localHash: H('b'), sot: { rev: 7, hash: H('e') } } }
+
+      expect(saveConflict(P1, g, 'settings', moved, { [H('e')]: { theirs: 2 } })).toBe('ok')
+
+      expect(loadSectionStore(P1).sections.settings).toEqual(moved)
+      expect(getStash(P1, H('e'))).toEqual({ theirs: 2 })
+    })
+
+    it('a missing payload: failed, and NOTHING is written — not the section, not the payloads that were there', () => {
+      saveSection(P1, g, 'settings', SETTINGS)
+      const before = raw()
+
+      expect(saveConflict(P1, g, 'settings', LOCKED, { [H('b')]: { mine: 1 } })).toBe('failed')
+
+      expect(raw()).toBe(before)
+    })
+
+    it('storage refuses the write (quota): failed, and the old document is whole', () => {
+      saveSection(P1, g, 'settings', SETTINGS)
+      putStash(P1, g, H('a'), { a: 1 })
+      const before = raw()
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation((k: string) => {
+        if (k === KEY) throw new DOMException('exceeded', 'QuotaExceededError')
+      })
+
+      expect(saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)).toBe('failed')
+
+      expect(raw()).toBe(before)
+      expect(loadSectionStore(P1)).toEqual({ profileId: P1, sections: { settings: SETTINGS }, stash: { [H('a')]: { a: 1 } } })
+    })
+
+    it('really writes two payloads at the size limit and reads them back (no mock)', () => {
+      const mine = payloadOfBytes(MAX_STASH_PAYLOAD_BYTES)
+      const theirs = { s: 'y'.repeat(mine.s.length) }
+
+      expect(saveConflict(P1, g, 'settings', LOCKED, { [H('b')]: mine, [H('d')]: theirs })).toBe('ok')
+
+      expect(raw()!.length).toBeGreaterThan(2 * MAX_STASH_PAYLOAD_BYTES)
+      expect(loadSectionStore(P1).sections.settings).toEqual(LOCKED)
+      expect(getStash(P1, H('b'))).toEqual(mine)
+      expect(getStash(P1, H('d'))).toEqual(theirs)
+    })
+
+    it('is fenced like every other write', () => {
+      const old = g
+      claim()
+      const before = raw()
+      expect(saveConflict(P1, old, 'settings', LOCKED, LOCKED_PAYLOADS)).toBe('fenced')
+      expect(saveConflict(P2, old + 1, 'settings', LOCKED, LOCKED_PAYLOADS)).toBe('fenced')
+      expect(raw()).toBe(before)
     })
   })
 
