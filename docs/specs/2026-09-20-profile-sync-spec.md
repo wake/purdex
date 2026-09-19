@@ -295,9 +295,11 @@ Per profile: `idle` (no master) | `locked:schema` | worst-of-its-sections.
 ```
 
 - **`pending`** is the normal offline state (decision 1: the app does not go read-only). Local edits
-  keep landing in pre-SOT; the collector keeps hashing. When the dev host returns, each changed
-  section flushes. A section whose hash equals the SOT's is **not written** (decision 4, middle
-  branch) — this is the "驗算，沒改變就不寫回" the user asked for.
+  keep landing in pre-SOT; the collector keeps hashing. When the dev host returns, each dirty
+  section takes the decision of §4.6.1. A section whose hash equals the SOT's is **not written**
+  (decision 4, middle branch) — this is the "驗算，沒改變就不寫回" the user asked for.
+- **`synced` means clean, not "recently talked to the daemon"**: `currentHash == baseHash`. The
+  distinction is what §4.6.1 rests on.
 - **`locked:conflict` is per section** and means exactly what the user said: that section stops
   writing out *and* refuses to apply inbound. Other sections keep syncing.
 - **`locked:schema` is the whole profile** — an old client must not write anything once any shape
@@ -354,8 +356,70 @@ is not its own, and it fetches the section rather than trusting a payload off th
 
 **Reconcile on connect, because events can be dropped** (§3.5, 64-deep buffer): on every
 (re)connection to the dev host, the client `GET`s the profile's section index
-(`{section, rev, hash, fingerprint, ordinal}[]`) and, for each section, compares with its own. This
-is also what closes the offline window; the event stream is an optimisation on top of it.
+(`{section, rev, hash, fingerprint, ordinal}[]`) and runs the decision of §4.6.1 for each section.
+This is also what closes the offline window; the event stream is an optimisation on top of it.
+
+#### 4.6.1 The base, and what "stale" means
+
+A client cannot tell "I am merely behind" from "we both moved" by comparing the current hash with
+the SOT's — it needs to remember **what it last agreed with**. Each section therefore persists, on
+the client, next to its payload:
+
+- **`baseRev`** — the SOT revision this client last agreed with (last successful push, or last pull)
+- **`baseHash`** — the section's hash at that revision
+
+`dirty` ⟺ `currentHash != baseHash`. The decision is then fast-forward logic:
+
+| local | SOT | Action |
+|---|---|---|
+| clean | `rev == baseRev` | nothing |
+| clean | `rev > baseRev` | **pull** — fetch and apply; set base to the new rev/hash. No user involved |
+| dirty | `rev == baseRev` | **push** — CAS with `baseRev`; on 200 set base to the returned rev and the pushed hash |
+| dirty | `rev > baseRev` | **conflict** — do not push, do not apply; enter `locked:conflict` |
+| either | `rev < baseRev` | **`locked:schema`-style stop**: a revision cannot go backwards, so the SOT profile was deleted and recreated. The panel says so and offers push or pull as a fresh start |
+| either | section absent on SOT | §4.6.3 |
+
+The CAS of §4.6 is the enforcement of this table across the race window; the table is what stops a
+client from ever *starting* a write it knows is stale.
+
+*Consequence for `pending`:* a `pending` section is simply a dirty one that has not been pushed yet
+because the host is unreachable or auto-sync is off. Nothing about the decision changes when it
+becomes reachable again — a dirty section whose SOT did not move flushes; one whose SOT moved
+conflicts.
+
+#### 4.6.2 Apply and flush are mutually exclusive
+
+Per section, one lock covers both directions. Two rules follow, and both exist to keep the promise
+that nothing is overwritten silently:
+
+1. **An inbound event is applied only to a clean section.** If the section is dirty, the event is
+   not applied; it is recorded as "the SOT moved" and the section takes the dirty rows of §4.6.1 —
+   push if its rev still matches (it will not), otherwise conflict.
+2. **An event arriving while a push is in flight is deferred**, not applied. It sets a flag; when
+   the push resolves (200 or 409) the section re-runs §4.6.1. Applying it eagerly would overwrite
+   the very payload the impending 409 is about to ask the user to choose between.
+
+When a push returns 409, the client keeps **the payload it sent** as the "local" side of the
+conflict. The live stores may have moved on since; the user is choosing between two known
+snapshots, not between the SOT and a moving target.
+
+#### 4.6.3 Sections are created and deleted
+
+`tabs.<wsId>` sections come and go with workspaces, so the section set is itself state.
+
+- `DELETE /api/profiles/{id}/sections/{section}` — CAS on `baseRev`, same conflict semantics.
+- **`workspaces` is the authority on which `tabs.*` sections should exist.** A client that has
+  applied `workspaces` deletes the `tabs.*` sections for workspaces that are gone, and creates them
+  for workspaces it gained.
+- **Cross-section writes are not atomic and must not pretend to be.** Creating a workspace is two
+  writes (`workspaces`, then `tabs.<new>`); a reader may observe either alone. Both partial states
+  are defined and harmless:
+  - a workspace with no `tabs` section yet → renders as an empty workspace;
+  - a `tabs.<wsId>` section whose workspace is not in `workspaces` → **kept, not deleted**, and not
+    rendered. It is either an arrival that overtook its workspace, or a workspace deleted elsewhere;
+    the next `workspaces` apply resolves which.
+- A client never deletes a section merely because it does not recognise it (forward compatibility
+  with a newer client's section kinds; unknown kinds are carried, never rewritten).
 
 **Latency budget** for goal 3: collector debounce 500 ms trailing (down from the uploader's 5 s,
 which was tuned for a whole-state upload) + one `PUT` + one broadcast + one `GET` of the changed
@@ -427,6 +491,7 @@ Routes (all through the module's `RegisterRoutes`):
 | `GET /api/profiles/{id}` | every section's payload (used by pull) |
 | `GET /api/profiles/{id}/sections/{section}` | one section |
 | `PUT /api/profiles/{id}/sections/{section}` | the CAS of §4.6 |
+| `DELETE /api/profiles/{id}/sections/{section}` | CAS-guarded section removal (§4.6.3) |
 | `PUT /api/profiles/{id}/attachment` | `{clientId, deviceName}` — this client's master is now this profile |
 | `DELETE /api/profiles/{id}/attachment` | detach (stop sync / switch master) |
 
@@ -502,6 +567,17 @@ On mlab (worktree dev server :5175) and air-2026, with mlab as dev host:
    Resolve with `Keep local` on one side and confirm both converge.
 6. **Offline is not read-only.** With the daemon down, open tabs, change settings, switch workspaces
    on both machines; nothing blocks; state shows `pending`; on restart everything flushes.
+6a. **Being merely behind is not a conflict** (§4.6.1, clean + SOT ahead). Close a19 entirely; make
+    ten edits on a26; reopen a19. Every section fast-forwards with no prompt, and no section enters
+    `locked:conflict`.
+6b. **A dirty section refuses an inbound apply** (§4.6.2 rule 1). With auto-sync off on a19, edit
+    workspace A's tabs there; edit the same workspace on a26 and let it push. a19 must not silently
+    adopt a26's version: the section stays dirty and, on `Sync now`, goes to `locked:conflict` with
+    a19's own edit offered as the local side.
+6c. **Section lifecycle** (§4.6.3). Create a workspace on a26 → a19 gains the workspace and its
+    tabs section. Delete it on a19 → a26 loses both, and the daemon has no orphaned `tabs.<wsId>`
+    row. During the create, verify that observing `workspaces` before `tabs.<new>` renders an empty
+    workspace rather than an error.
 7. **Schema lock.** Run a client with a lowered `SECTION_SCHEMA_ORDINAL.settings` against a SOT
    written by the current one; assert the whole profile goes `locked:schema`, writes stop, and the
    panel names the section.
