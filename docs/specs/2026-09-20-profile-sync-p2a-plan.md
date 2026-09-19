@@ -508,7 +508,11 @@ contradiction a subagent reported instead of resolving silently. Spec §9.5 has 
   (the flight-token guard) is unchanged and still moves on every change.
 - A `local-changed` cancels a pending `restoreLocal`; `local-restored` is accepted only for the
   pending hash; `canRestoreLocal(s, hash)` is exported for the driver.
-- A `409 {rev: 0}` does not overwrite a live SOT learnt during the flight.
+- A `409 {rev: 0}` that arrives after a live SOT was learnt mid-flight is **ambiguous** (events and
+  responses have no causal order) and is not resolved by guessing: close the flight, leave `sot`,
+  do not lock, mark the index stale; the authoritative index decides. While the index is stale the
+  convergence fold does not run. `sotMoved` is `sot.hash !== base.hash || (sot.hash !== null &&
+  sot.rev > base.rev)` — an absent side has no revision.
 - `isWellFormedSection('settings', …)`: only the ten known stores, only listed fields, at least one
   per store. `applySettings` returns `{patches, rejected}`; `rejected` non-empty ⇒ `patches` is `{}`.
 - **For P2b**: the collector always passes all ten stores to `buildSettingsSection` — a store

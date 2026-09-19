@@ -388,8 +388,9 @@ the client, next to its payload:
 
 *Restated in P2a (§9.4), without changing any row's meaning:* each side is a pair `{rev, hash}` and
 **"absent" is `hash === null`** — on the SOT that covers both "never created" and a tombstone, which
-the client cannot and need not tell apart. "The SOT moved" is then `sot.hash ≠ base.hash ∨ sot.rev >
-base.rev`, which is what lets a client that has just deleted a section (base `{6, null}`) read an
+the client cannot and need not tell apart. "The SOT moved" is then `sot.hash ≠ base.hash ∨ (sot.hash
+≠ null ∧ sot.rev > base.rev)` — **an absent side has no revision to compare** (§9.6 C-1: a section
+created and deleted again elsewhere is just as absent as before, whatever revisions went by), which is what lets a client that has just deleted a section (base `{6, null}`) read an
 index that no longer lists it as *agreement* rather than as a deletion to pull. Creating over an
 absent SOT always sends `baseRev 0`, because that is the only create the daemon accepts, over nothing
 or over a tombstone.
@@ -789,4 +790,12 @@ counter-example: a reconnect **must** invalidate index requests in flight (event
 disconnected, so a pre-disconnect answer is stale by definition). `reconnected` always bumps the
 index epoch.
 
-_(critic verdicts to follow.)_
+**R2 critic** (incremental, `--base 52e641a8`): agrees with all five and confirms R1-1/A-1, A-2 and
+A-3 closed — no new stale-push path after splitting the index epoch from the flight epoch; the
+shape check cannot refuse a legitimate value (it opened the ten stores: no listed field is nullable
+or spans shapes); refusing unknown settings stores does not contradict §4.6.3, which is about
+section *kinds*. No spec drift of Important or above. One evidenced objection, to the *fix* of R1-2:
+
+| # | Sev. | Finding | Resolution |
+|---|---|---|---|
+| C-1 | high | "a live SOT was learnt during the flight" does not prove it is newer than the 409 — events and HTTP responses travel on different channels with no causal order. Create (rev 5, event seen) → delete (rev 6, event lost) → my PUT meets the tombstone: the `409 {rev: 0}` is the *authoritative* one, and keeping `{5, H8}` presents deleted content as the SOT and makes `Keep local` push `baseRev 5` into a daemon that only accepts 0 | R1 and the critic describe the two directions of one ambiguity the client cannot resolve, so it does not guess: the flight closes, `sot` is left alone, **nothing locks**, the index is marked stale, and the authoritative index decides — absent → push `baseRev 0`; live and different → conflict; live and equal → synced. Two consequences adopted with it: **no convergence fold while the index is stale** (stale means "what I know of the SOT is not to be trusted", and declaring `synced` on it is wrong; the fold happens one step later, when the index lands), and **an absent side has no revision** in `sotMoved` (§4.6.1) |
