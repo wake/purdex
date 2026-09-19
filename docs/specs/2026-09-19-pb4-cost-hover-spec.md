@@ -1,6 +1,6 @@
 # Spec — P-B4: exec pane cost hover / panel (client-side)
 
-- Status: v1.2 (2026-09-19) — codex plan review + PR #1231 R1/R2 applied (§9)
+- Status: v1.3 (2026-09-19) — codex plan review + PR #1231 / #1233 R1/R2 applied (§9)
 - Predecessors: P-B (`2026-09-15-pb-execution-pane-spec.md`, header §4.3.3),
   P-B2 / P-B3 (tool activity, N2 facts). This is the last of the user's
   decision #5 (tool summaries, line-numbered diffs, **cost hover**,
@@ -223,8 +223,9 @@ Rules:
 
 ### 4.3 `components/execution/CostPanel.tsx`
 
-`FloatingPanel title={t('execution.cost.title')} width={440}
-anchorRef={costButtonRef} testId="cost-panel"`; content, top to bottom:
+`FloatingPanel title={t('execution.cost.title')} width={min(440,
+innerWidth − 16)} anchorRef={costButtonRef} testId="cost-panel"`; content,
+top to bottom:
 
 - P1 **Totals** line: `$total` (4 dp) · `{n} turns` · `{rounds} API rounds`
   · `{api} API / {wall} wall`.
@@ -389,3 +390,15 @@ None blocking.
   prop (DOM unchanged without it) so the cost button can carry
   `aria-describedby`; the visible-state / hidden-tree part of A4 stays a
   shared-component follow-up.
+- 2026-09-19 PR #1233 (P-B4.2): R1 — fixed `width={440}` clips in viewports
+  narrower than 448 px (P2); attacker — A1 quota state survives a host
+  switch while the new fetch is pending / failed (high), A2 percentages
+  rounded (`99.6` → `100%`) against P5 (medium); critic — R1 / A2 agreed
+  (the 440 came from this spec, so the defect was in the spec too), A1
+  evidenced objection (the exec pane is keyed `${hostId}:${executionId}`
+  in `register-modules/index.tsx:117`, so the panel remounts; unreachable
+  in the product path), everything else — note-only models section,
+  sticky table head, unlocalised "API / wall" / "$" / "out" — compatible
+  with §4.3 / §4.6. Fixed all three anyway (viewport-bounded width
+  `min(440, innerWidth − 16)`, `setHost(null)` on host change, raw
+  percentages). P4 / P5 text below amended accordingly.

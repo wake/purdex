@@ -154,7 +154,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
 
   return (
     <div className="flex flex-col h-full">
-      <ExecutionHeader summary={st.summary} cost={cost} sse={st.sse} isMine={isMine}
+      <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId} sse={st.sse} isMine={isMine}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
         onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight} />
       {confirmTakeBack && (

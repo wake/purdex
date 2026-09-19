@@ -34,6 +34,7 @@ const summary = (extra: Partial<ExecutionSummary> = {}): ExecutionSummary => ({
 
 const baseProps = {
   cost: costSummary([]),
+  hostId: 'h1',
   sse: 'open' as const,
   isMine: () => false,
   onInterrupt: vi.fn(),
@@ -130,7 +131,8 @@ describe('ExecutionHeader', () => {
       const btn = costBtn()
       expect(btn.disabled).toBe(false)
       expect(btn.textContent).toBe('$0.26')
-      expect(btn.getAttribute('aria-expanded')).toBeNull()
+      // H3: an enabled anchor is a toggle; closed by default.
+      expect(btn.getAttribute('aria-expanded')).toBe('false')
     })
 
     it('hover 800 ms → one-line summary tooltip', () => {
@@ -179,6 +181,59 @@ describe('ExecutionHeader', () => {
       fireEvent.mouseLeave(costBtn())
       act(() => vi.advanceTimersByTime(800))
       expect(tip.className).toMatch(/\bopacity-0\b/)
+    })
+  })
+
+  // P-B4 spec §4.2 H3: click toggles the CostPanel; FloatingPanel's outside-click
+  // and Escape rules are wired through the anchor ref.
+  describe('cost panel toggle (P-B4 H3)', () => {
+    const costBtn = () => screen.getByTestId('execution-cost') as HTMLButtonElement
+
+    it('click opens the panel and sets aria-expanded; Escape closes it', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+      expect(costBtn().getAttribute('aria-expanded')).toBe('false')
+      expect(screen.queryByTestId('cost-panel')).toBeNull()
+      fireEvent.click(costBtn())
+      expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+      expect(costBtn().getAttribute('aria-expanded')).toBe('true')
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(screen.queryByTestId('cost-panel')).toBeNull()
+      expect(costBtn().getAttribute('aria-expanded')).toBe('false')
+    })
+
+    it('click twice → open then closed (the anchor\'s own mousedown does not close it first)', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+      fireEvent.mouseDown(costBtn())
+      fireEvent.click(costBtn())
+      expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+      fireEvent.mouseDown(costBtn())
+      expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+      fireEvent.click(costBtn())
+      expect(screen.queryByTestId('cost-panel')).toBeNull()
+      expect(costBtn().getAttribute('aria-expanded')).toBe('false')
+    })
+
+    it('mousedown on another header element (interrupt) closes the panel', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+      fireEvent.click(costBtn())
+      expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+      fireEvent.mouseDown(screen.getByText(/^interrupt$/i))
+      expect(screen.queryByTestId('cost-panel')).toBeNull()
+      expect(costBtn().getAttribute('aria-expanded')).toBe('false')
+    })
+
+    it('the panel receives the header\'s summary and hostId', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+      fireEvent.click(costBtn())
+      expect(screen.getByTestId('cost-totals').textContent).toContain('$0.2577')
+    })
+
+    it('cost=null → no aria-expanded and click does nothing', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary()} cost={null} />)
+      expect(costBtn().hasAttribute('aria-expanded')).toBe(false)
+      fireEvent.click(costBtn())
+      expect(screen.queryByTestId('cost-panel')).toBeNull()
+      expect(costBtn().hasAttribute('aria-expanded')).toBe(false)
     })
   })
 })
