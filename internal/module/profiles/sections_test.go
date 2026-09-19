@@ -1,0 +1,975 @@
+package profiles
+
+import (
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const (
+	clientA = "c_00000000000a"
+	clientB = "c_00000000000b"
+)
+
+// sec builds a PutSection input. Fingerprint "fp1" / ordinal 1 is the default
+// shape; tests that exercise §4.5 override those two fields on the result.
+func sec(name, hash, payload, writer string) Section {
+	return Section{
+		Section:     name,
+		Hash:        hash,
+		Fingerprint: "fp1",
+		Ordinal:     1,
+		Payload:     json.RawMessage(payload),
+		Writer:      writer,
+	}
+}
+
+func newProfile(t *testing.T, s *Store) string {
+	t.Helper()
+	p, err := s.CreateProfile("P")
+	require.NoError(t, err)
+	return p.ID
+}
+
+// mustPut asserts the put was applied and returns the new rev.
+func mustPut(t *testing.T, s *Store, profileID string, in Section, baseRev int64) int64 {
+	t.Helper()
+	res, err := s.PutSection(profileID, in, baseRev)
+	require.NoError(t, err)
+	require.Equal(t, PutApplied, res.Outcome)
+	return res.Rev
+}
+
+func mustGet(t *testing.T, s *Store, profileID, section string) Section {
+	t.Helper()
+	got, found, err := s.GetSection(profileID, section)
+	require.NoError(t, err)
+	require.True(t, found, "section %q should be live", section)
+	return got
+}
+
+// rawSection reads the stored row, tombstones included.
+type rawRow struct {
+	Rev       int64
+	Hash      string
+	Payload   string
+	Writer    string
+	UpdatedAt int64
+	Ordinal   int
+	Deleted   int
+}
+
+func readRaw(t *testing.T, s *Store, profileID, section string) rawRow {
+	t.Helper()
+	var r rawRow
+	require.NoError(t, s.db.QueryRow(`
+		SELECT rev, hash, payload, writer, updated_at, ordinal, deleted
+		FROM profile_sections WHERE profile_id = ? AND section = ?`, profileID, section,
+	).Scan(&r.Rev, &r.Hash, &r.Payload, &r.Writer, &r.UpdatedAt, &r.Ordinal, &r.Deleted))
+	return r
+}
+
+// ── §4.6 table ─────────────────────────────────────────────────────────────
+
+func TestPutSectionAbsentBaseZeroAppliesAtRevOne(t *testing.T) {
+	s, clock := openTestStore(t)
+	pid := newProfile(t, s)
+
+	*clock = 2000
+	in := sec("hosts", "h1", `{"a":1}`, clientA)
+	in.Rev = 99       // caller-supplied rev is ignored
+	in.UpdatedAt = 77 // so is the timestamp; the store clock is authoritative
+	res, err := s.PutSection(pid, in, 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 1, Changed: true}, res)
+
+	assert.Equal(t, Section{
+		Section: "hosts", Rev: 1, Hash: "h1", Fingerprint: "fp1", Ordinal: 1,
+		Payload: json.RawMessage(`{"a":1}`), Writer: clientA, UpdatedAt: 2000,
+	}, mustGet(t, s, pid, "hosts"))
+}
+
+func TestPutSectionAbsentNonZeroBaseConflictsAtRevZero(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	res, err := s.PutSection(pid, sec("hosts", "h1", `{}`, clientA), 3)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutConflict, Rev: 0}, res)
+	assert.Nil(t, res.Current)
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "1 = 1"))
+}
+
+func TestPutSectionMatchingBaseRevApplies(t *testing.T) {
+	s, clock := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{"v":1}`, clientA), 0)
+
+	*clock = 3000
+	res, err := s.PutSection(pid, sec("hosts", "h2", `{"v":2}`, clientB), 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, res)
+
+	got := mustGet(t, s, pid, "hosts")
+	assert.Equal(t, int64(2), got.Rev)
+	assert.Equal(t, "h2", got.Hash)
+	assert.JSONEq(t, `{"v":2}`, string(got.Payload))
+	assert.Equal(t, clientB, got.Writer)
+	assert.Equal(t, int64(3000), got.UpdatedAt)
+}
+
+func TestPutSectionStaleBaseDifferentHashConflicts(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{"v":1}`, clientA), 0)
+	mustPut(t, s, pid, sec("hosts", "h2", `{"v":2}`, clientA), 1)
+
+	res, err := s.PutSection(pid, sec("hosts", "h3", `{"v":3}`, clientB), 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutConflict, res.Outcome)
+	assert.Equal(t, int64(2), res.Rev)
+	require.NotNil(t, res.Current, "a conflict carries the SOT side")
+	assert.Equal(t, "h2", res.Current.Hash)
+	assert.Equal(t, int64(2), res.Current.Rev)
+	assert.JSONEq(t, `{"v":2}`, string(res.Current.Payload))
+
+	assert.Equal(t, "h2", mustGet(t, s, pid, "hosts").Hash, "a conflict writes nothing")
+}
+
+func TestPutSectionStaleBaseSameHashConvergesWithoutWriting(t *testing.T) {
+	s, clock := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{"v":1}`, clientA), 0)
+	mustPut(t, s, pid, sec("hosts", "h2", `{"v":2}`, clientA), 1)
+	before := readRaw(t, s, pid, "hosts")
+
+	*clock = 9000
+	res, err := s.PutSection(pid, sec("hosts", "h2", `{"v":2}`, clientB), 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutConverged, Rev: 2}, res)
+
+	// 驗算，沒改變就不寫回: not rev, not updated_at, not even the writer.
+	assert.Equal(t, before, readRaw(t, s, pid, "hosts"))
+}
+
+// ── §4.5 schema ────────────────────────────────────────────────────────────
+
+func TestPutSectionNewerOrdinalDifferentFingerprintApplies(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+
+	in := sec("hosts", "h2", `{"n":1}`, clientB)
+	in.Fingerprint, in.Ordinal = "fp2", 2
+	res, err := s.PutSection(pid, in, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, res)
+
+	got := mustGet(t, s, pid, "hosts")
+	assert.Equal(t, "fp2", got.Fingerprint, "the newer writer's shape replaces the stored one")
+	assert.Equal(t, 2, got.Ordinal)
+}
+
+func TestPutSectionNewerOrdinalStillNeedsMatchingBaseRev(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+	mustPut(t, s, pid, sec("hosts", "h2", `{}`, clientA), 1)
+
+	// Being newer lets the write past the schema gate, not past the CAS.
+	in := sec("hosts", "h3", `{}`, clientB)
+	in.Fingerprint, in.Ordinal = "fp2", 2
+	res, err := s.PutSection(pid, in, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutConflict, res.Outcome)
+	assert.Equal(t, "fp1", mustGet(t, s, pid, "hosts").Fingerprint)
+}
+
+func TestPutSectionOlderOrdinalDifferentFingerprintIsSchema(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	first := sec("hosts", "h1", `{}`, clientA)
+	first.Fingerprint, first.Ordinal = "fp2", 2
+	mustPut(t, s, pid, first, 0)
+
+	old := sec("hosts", "h2", `{}`, clientB) // fp1 / ordinal 1
+	res, err := s.PutSection(pid, old, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutSchema, res.Outcome)
+	assert.Equal(t, "fp2", res.CurrentFingerprint)
+	assert.Equal(t, 2, res.CurrentOrdinal)
+	assert.Nil(t, res.Current)
+
+	got := mustGet(t, s, pid, "hosts")
+	assert.Equal(t, int64(1), got.Rev, "a schema refusal writes nothing")
+	assert.Equal(t, "h1", got.Hash)
+}
+
+func TestPutSectionEqualOrdinalDifferentFingerprintIsSchema(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+
+	in := sec("hosts", "h2", `{}`, clientB)
+	in.Fingerprint = "fp2" // ordinal stays 1: a shape change without a bump
+	res, err := s.PutSection(pid, in, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutSchema, res.Outcome)
+	assert.Equal(t, "fp1", res.CurrentFingerprint)
+	assert.Equal(t, 1, res.CurrentOrdinal)
+	assert.Equal(t, int64(1), mustGet(t, s, pid, "hosts").Rev)
+}
+
+// Schema is decided before revision: a shape mismatch must not be reported as
+// "converged" (same hash) or "conflict" (stale base) — both would send the
+// client down a path that ends in it writing, or adopting, the wrong shape.
+func TestPutSectionSchemaIsCheckedBeforeRevision(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+	mustPut(t, s, pid, sec("hosts", "h2", `{}`, clientA), 1)
+
+	sameHash := sec("hosts", "h2", `{}`, clientB)
+	sameHash.Fingerprint = "fp2"
+	res, err := s.PutSection(pid, sameHash, 1) // stale base + same hash would be "converged"
+	require.NoError(t, err)
+	assert.Equal(t, PutSchema, res.Outcome)
+
+	otherHash := sec("hosts", "h9", `{}`, clientB)
+	otherHash.Fingerprint = "fp2"
+	res, err = s.PutSection(pid, otherHash, 1) // stale base + other hash would be "conflict"
+	require.NoError(t, err)
+	assert.Equal(t, PutSchema, res.Outcome)
+}
+
+func TestPutSectionSameFingerprintLowerOrdinalKeepsStoredOrdinal(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	first := sec("hosts", "h1", `{}`, clientA)
+	first.Ordinal = 5
+	mustPut(t, s, pid, first, 0)
+
+	older := sec("hosts", "h2", `{}`, clientB)
+	older.Ordinal = 3 // same fingerprint: an older client may write (§4.5 row 1)…
+	assert.Equal(t, int64(2), mustPut(t, s, pid, older, 1))
+
+	got := mustGet(t, s, pid, "hosts")
+	assert.Equal(t, "h2", got.Hash)
+	assert.Equal(t, 5, got.Ordinal, "…but the stored ordinal never goes down")
+}
+
+func TestPutSectionSameFingerprintHigherOrdinalRaisesStoredOrdinal(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	first := sec("hosts", "h1", `{}`, clientA)
+	first.Ordinal = 5
+	mustPut(t, s, pid, first, 0)
+
+	newer := sec("hosts", "h2", `{}`, clientB)
+	newer.Ordinal = 7
+	mustPut(t, s, pid, newer, 1)
+
+	assert.Equal(t, 7, mustGet(t, s, pid, "hosts").Ordinal)
+}
+
+// ── delete / tombstones ────────────────────────────────────────────────────
+
+func TestDeleteSectionMatchingRevLeavesATombstone(t *testing.T) {
+	s, clock := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("tabs.w1", "h1", `{"big":"payload"}`, clientA), 0)
+
+	*clock = 4000
+	res, err := s.DeleteSection(pid, "tabs.w1", clientB, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, res)
+
+	_, found, err := s.GetSection(pid, "tabs.w1")
+	require.NoError(t, err)
+	assert.False(t, found, "gone as far as any reader can tell")
+
+	raw := readRaw(t, s, pid, "tabs.w1")
+	assert.Equal(t, rawRow{
+		Rev: 2, Hash: "", Payload: "{}", Writer: clientB, UpdatedAt: 4000, Ordinal: 1, Deleted: 1,
+	}, raw, "the row stays, as a tombstone that keeps the revision counter")
+}
+
+func TestDeleteSectionTwiceIsAppliedBothTimes(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("tabs.w1", "h1", `{}`, clientA), 0)
+
+	first, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, first)
+
+	// Two clients removing the same workspace must not deadlock each other.
+	second, err := s.DeleteSection(pid, "tabs.w1", clientB, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2}, second)
+	assert.Equal(t, clientA, readRaw(t, s, pid, "tabs.w1").Writer, "the repeat wrote nothing")
+}
+
+func TestDeleteSectionNeverExistedIsApplied(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	res, err := s.DeleteSection(pid, "tabs.nope", clientA, 4)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 0}, res)
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "1 = 1"), "no tombstone for a section that never was")
+}
+
+func TestDeleteSectionStaleRevConflicts(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("tabs.w1", "h1", `{"v":1}`, clientA), 0)
+	mustPut(t, s, pid, sec("tabs.w1", "h2", `{"v":2}`, clientA), 1)
+
+	res, err := s.DeleteSection(pid, "tabs.w1", clientB, 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutConflict, res.Outcome)
+	assert.Equal(t, int64(2), res.Rev)
+	require.NotNil(t, res.Current)
+	assert.JSONEq(t, `{"v":2}`, string(res.Current.Payload))
+
+	assert.Equal(t, "h2", mustGet(t, s, pid, "tabs.w1").Hash)
+}
+
+func TestDeleteSectionUnknownProfile(t *testing.T) {
+	s, _ := openTestStore(t)
+
+	_, err := s.DeleteSection("p_ffffffffffff", "hosts", clientA, 1)
+	assert.ErrorIs(t, err, ErrProfileNotFound)
+}
+
+func TestTombstoneIsInvisibleAndRejectsNonZeroBase(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h0", `{}`, clientA), 0)
+	mustPut(t, s, pid, sec("tabs.w1", "h1", `{}`, clientA), 0)
+	_, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
+	require.NoError(t, err)
+
+	_, found, err := s.GetSection(pid, "tabs.w1")
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	list, err := s.ListSections(pid)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, "hosts", list[0].Section)
+
+	// The section was deleted under this client (§4.6.3): whatever base it
+	// holds — even the tombstone's own rev — it gets "conflict, rev 0".
+	for _, base := range []int64{1, 2, 7} {
+		res, err := s.PutSection(pid, sec("tabs.w1", "h2", `{}`, clientB), base)
+		require.NoError(t, err)
+		assert.Equal(t, PutResult{Outcome: PutConflict, Rev: 0}, res, "baseRev %d", base)
+	}
+	assert.Equal(t, 1, readRaw(t, s, pid, "tabs.w1").Deleted)
+}
+
+// ── §4.5 over a tombstone ──────────────────────────────────────────────────
+//
+// Deleting a section does not move the profile's schema backwards: the
+// tombstone keeps the fingerprint/ordinal of the row it replaced, and a
+// recreate passes the same gate a live row would — before any look at baseRev.
+
+// readShape reads the stored shape columns, tombstones included.
+func readShape(t *testing.T, s *Store, profileID, section string) (string, int) {
+	t.Helper()
+	var fp string
+	var ordinal int
+	require.NoError(t, s.db.QueryRow(`
+		SELECT fingerprint, ordinal FROM profile_sections
+		WHERE profile_id = ? AND section = ?`, profileID, section,
+	).Scan(&fp, &ordinal))
+	return fp, ordinal
+}
+
+// tombstoneAt stores tabs.w1 with the given shape and deletes it, leaving a
+// tombstone at rev 2.
+func tombstoneAt(t *testing.T, s *Store, fingerprint string, ordinal int) string {
+	t.Helper()
+	pid := newProfile(t, s)
+	first := sec("tabs.w1", "h1", `{}`, clientA)
+	first.Fingerprint, first.Ordinal = fingerprint, ordinal
+	mustPut(t, s, pid, first, 0)
+	del, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
+	require.NoError(t, err)
+	require.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, del)
+	return pid
+}
+
+func TestDeleteSectionKeepsTheShapeOnTheTombstone(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp9", 9)
+
+	fp, ordinal := readShape(t, s, pid, "tabs.w1")
+	assert.Equal(t, "fp9", fp)
+	assert.Equal(t, 9, ordinal)
+}
+
+func TestPutSectionOverTombstoneOlderSchemaIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ordinal int
+		baseRev int64
+	}{
+		{"lower ordinal, baseRev 0", 1, 0},
+		{"equal ordinal fails closed", 9, 0},
+		{"schema before revision: non-zero baseRev", 1, 2},
+		{"schema before revision: equal ordinal, non-zero baseRev", 9, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clock := openTestStore(t)
+			pid := tombstoneAt(t, s, "fp9", 9)
+			before := readRaw(t, s, pid, "tabs.w1")
+
+			*clock += 1000
+			in := sec("tabs.w1", "h2", `{"v":2}`, clientB) // fp1
+			in.Ordinal = tc.ordinal
+			res, err := s.PutSection(pid, in, tc.baseRev)
+			require.NoError(t, err)
+			assert.Equal(t, PutResult{
+				Outcome: PutSchema, Rev: 2, CurrentFingerprint: "fp9", CurrentOrdinal: 9,
+			}, res, "Rev is the tombstone's, as for a live row; Changed stays false")
+
+			assert.Equal(t, before, readRaw(t, s, pid, "tabs.w1"), "the tombstone is untouched")
+			fp, ordinal := readShape(t, s, pid, "tabs.w1")
+			assert.Equal(t, "fp9", fp)
+			assert.Equal(t, 9, ordinal)
+		})
+	}
+}
+
+func TestPutSectionOverTombstoneSameFingerprintKeepsTheHigherOrdinal(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp1", 9)
+
+	// Equal fingerprints: an older client may write (§4.5 row 1) — but the
+	// stored ordinal never decreases.
+	res, err := s.PutSection(pid, sec("tabs.w1", "h2", `{"v":2}`, clientB), 0) // fp1 / ordinal 1
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: true}, res)
+
+	got := mustGet(t, s, pid, "tabs.w1")
+	assert.Equal(t, "fp1", got.Fingerprint)
+	assert.Equal(t, 9, got.Ordinal, "MAX(stored, incoming)")
+	assert.JSONEq(t, `{"v":2}`, string(got.Payload))
+}
+
+func TestPutSectionOverTombstoneNewerSchemaApplies(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp9", 9)
+
+	in := sec("tabs.w1", "h2", `{"v":2}`, clientB)
+	in.Fingerprint, in.Ordinal = "fp10", 10
+	res, err := s.PutSection(pid, in, 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: true}, res, "tombstone.rev + 1")
+
+	got := mustGet(t, s, pid, "tabs.w1")
+	assert.Equal(t, "fp10", got.Fingerprint)
+	assert.Equal(t, 10, got.Ordinal)
+	assert.JSONEq(t, `{"v":2}`, string(got.Payload))
+}
+
+// A newer schema still answers to the revision: over a tombstone only
+// baseRev 0 is accepted.
+func TestPutSectionOverTombstoneNewerSchemaNonZeroBaseConflicts(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp9", 9)
+
+	in := sec("tabs.w1", "h2", `{}`, clientB)
+	in.Fingerprint, in.Ordinal = "fp10", 10
+	res, err := s.PutSection(pid, in, 2)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutConflict, Rev: 0}, res)
+	assert.Equal(t, 1, readRaw(t, s, pid, "tabs.w1").Deleted)
+}
+
+// TestTombstoneCannotLaunderAnOrdinalDowngrade is PR review (critic): with the
+// tombstone's shape ignored, an ordinal-1 client recreated a deleted ordinal-7
+// section, dragging the stored ordinal to 1 — after which ordinals 2–6 with a
+// different fingerprint read as "newer" and walked through the gate.
+func TestTombstoneCannotLaunderAnOrdinalDowngrade(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp7", 7)
+
+	old := sec("tabs.w1", "h2", `{"by":"v1"}`, clientB) // fp1 / ordinal 1
+	res, err := s.PutSection(pid, old, 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutSchema, res.Outcome, "the ordinal-1 client cannot recreate")
+
+	mid := sec("tabs.w1", "h3", `{"by":"v3"}`, clientB)
+	mid.Fingerprint, mid.Ordinal = "fp3", 3
+	for _, base := range []int64{0, 2, 3} {
+		res, err = s.PutSection(pid, mid, base)
+		require.NoError(t, err)
+		assert.Equal(t, PutResult{
+			Outcome: PutSchema, Rev: 2, CurrentFingerprint: "fp7", CurrentOrdinal: 7,
+		}, res, "ordinal 3 is still older than 7 (baseRev %d)", base)
+	}
+
+	fp, ordinal := readShape(t, s, pid, "tabs.w1")
+	assert.Equal(t, "fp7", fp)
+	assert.Equal(t, 7, ordinal, "the stored ordinal never decreases")
+	raw := readRaw(t, s, pid, "tabs.w1")
+	assert.Equal(t, 1, raw.Deleted)
+	assert.Equal(t, int64(2), raw.Rev)
+}
+
+// TestSectionABA is plan review #1. With a real DELETE the recreated section
+// restarts at rev 1, and A's retried "delete baseRev=1" (its first response
+// was lost) matches it and destroys B's content.
+func TestSectionABA(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	require.Equal(t, int64(1), mustPut(t, s, pid, sec("tabs.w1", "hA", `{"by":"A"}`, clientA), 0))
+
+	del, err := s.DeleteSection(pid, "tabs.w1", clientA, 1) // A deletes; the response is lost
+	require.NoError(t, err)
+	require.Equal(t, PutApplied, del.Outcome)
+
+	recreated := mustPut(t, s, pid, sec("tabs.w1", "hB", `{"by":"B"}`, clientB), 0)
+	assert.Equal(t, int64(3), recreated, "the counter continues past the tombstone; it does not restart at 1")
+
+	retry, err := s.DeleteSection(pid, "tabs.w1", clientA, 1) // A retries its stale delete
+	require.NoError(t, err)
+	assert.Equal(t, PutConflict, retry.Outcome)
+	require.NotNil(t, retry.Current)
+	assert.Equal(t, int64(3), retry.Current.Rev)
+
+	got := mustGet(t, s, pid, "tabs.w1")
+	assert.Equal(t, "hB", got.Hash, "B's content survives A's retry")
+	assert.JSONEq(t, `{"by":"B"}`, string(got.Payload))
+}
+
+// ── reads ──────────────────────────────────────────────────────────────────
+
+func TestListSectionsNeverNilAndOmitsPayload(t *testing.T) {
+	s, clock := openTestStore(t)
+	pid := newProfile(t, s)
+
+	empty, err := s.ListSections(pid)
+	require.NoError(t, err)
+	assert.NotNil(t, empty)
+	assert.Empty(t, empty)
+
+	unknown, err := s.ListSections("p_ffffffffffff")
+	require.NoError(t, err)
+	assert.NotNil(t, unknown)
+
+	*clock = 2000
+	mustPut(t, s, pid, sec("workspaces", "hw", `{"secret":"payload"}`, clientA), 0)
+	mustPut(t, s, pid, sec("hosts", "hh", `{"secret":"payload"}`, clientB), 0)
+
+	list, err := s.ListSections(pid)
+	require.NoError(t, err)
+	assert.Equal(t, []SectionMeta{
+		{Section: "hosts", Rev: 1, Hash: "hh", Fingerprint: "fp1", Ordinal: 1, Writer: clientB, UpdatedAt: 2000},
+		{Section: "workspaces", Rev: 1, Hash: "hw", Fingerprint: "fp1", Ordinal: 1, Writer: clientA, UpdatedAt: 2000},
+	}, list)
+
+	// SectionMeta has no payload field at all; make sure none sneaks into the wire form.
+	wire, err := json.Marshal(list)
+	require.NoError(t, err)
+	assert.NotContains(t, string(wire), "payload")
+	assert.NotContains(t, string(wire), "secret")
+}
+
+func TestGetSectionIsScopedToItsProfile(t *testing.T) {
+	s, _ := openTestStore(t)
+	a := newProfile(t, s)
+	b := newProfile(t, s)
+	mustPut(t, s, a, sec("hosts", "hA", `{}`, clientA), 0)
+
+	_, found, err := s.GetSection(b, "hosts")
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	// …and the same section name in another profile has its own counter.
+	assert.Equal(t, int64(1), mustPut(t, s, b, sec("hosts", "hB", `{}`, clientA), 0))
+}
+
+// ── profile lifetime ───────────────────────────────────────────────────────
+
+func TestDeleteProfileRemovesSectionsAndTombstones(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	other := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+	mustPut(t, s, pid, sec("tabs.w1", "h2", `{}`, clientA), 0)
+	_, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
+	require.NoError(t, err)
+	mustPut(t, s, other, sec("hosts", "h3", `{}`, clientA), 0)
+
+	require.NoError(t, s.DeleteProfile(pid))
+
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "profile_id = ?", pid), "live rows and tombstones both go")
+	assert.Equal(t, 1, countRows(t, s, "profile_sections", "profile_id = ?", other))
+}
+
+func TestPutSectionUnknownProfile(t *testing.T) {
+	s, _ := openTestStore(t)
+
+	for _, base := range []int64{0, 2} {
+		_, err := s.PutSection("p_ffffffffffff", sec("hosts", "h1", `{}`, clientA), base)
+		assert.ErrorIs(t, err, ErrProfileNotFound, "baseRev %d", base)
+	}
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "1 = 1"))
+}
+
+func TestPutSectionJustDeletedProfile(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+	require.NoError(t, s.DeleteProfile(pid))
+
+	// Neither a fresh insert nor the client's next ordinary push may resurrect a row.
+	for _, base := range []int64{0, 1} {
+		_, err := s.PutSection(pid, sec("hosts", "h2", `{}`, clientA), base)
+		assert.ErrorIs(t, err, ErrProfileNotFound, "baseRev %d", base)
+	}
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "1 = 1"))
+}
+
+// ── lost races, made deterministic ─────────────────────────────────────────
+//
+// afterSectionRead runs between PutSection's read and its conditional write,
+// which is exactly the window a racing writer has to hit.
+
+func TestPutSectionLostInsertRaceIsReclassified(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	s.afterSectionRead = func() {
+		s.afterSectionRead = nil
+		mustPut(t, s, pid, sec("hosts", "hX", `{"by":"X"}`, clientB), 0)
+	}
+	res, err := s.PutSection(pid, sec("hosts", "hA", `{"by":"A"}`, clientA), 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutConflict, res.Outcome)
+	assert.Equal(t, int64(1), res.Rev)
+	require.NotNil(t, res.Current)
+	assert.Equal(t, "hX", res.Current.Hash)
+	assert.Equal(t, "hX", mustGet(t, s, pid, "hosts").Hash)
+}
+
+func TestPutSectionLostInsertRaceWithSameContentConverges(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	s.afterSectionRead = func() {
+		s.afterSectionRead = nil
+		mustPut(t, s, pid, sec("hosts", "same", `{}`, clientB), 0)
+	}
+	res, err := s.PutSection(pid, sec("hosts", "same", `{}`, clientA), 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutConverged, Rev: 1}, res)
+	assert.Equal(t, clientB, mustGet(t, s, pid, "hosts").Writer)
+}
+
+func TestPutSectionLostUpdateRaceConflicts(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+
+	s.afterSectionRead = func() {
+		s.afterSectionRead = nil
+		mustPut(t, s, pid, sec("hosts", "hX", `{"by":"X"}`, clientB), 1)
+	}
+	res, err := s.PutSection(pid, sec("hosts", "hA", `{"by":"A"}`, clientA), 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutConflict, res.Outcome)
+	assert.Equal(t, int64(2), res.Rev)
+
+	got := mustGet(t, s, pid, "hosts")
+	assert.Equal(t, int64(2), got.Rev, "exactly one of the two writers advanced the rev")
+	assert.Equal(t, "hX", got.Hash, "the loser did not overwrite the winner")
+}
+
+func TestPutSectionLostRecreateRaceConflicts(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("tabs.w1", "h1", `{}`, clientA), 0)
+	_, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
+	require.NoError(t, err)
+
+	s.afterSectionRead = func() {
+		s.afterSectionRead = nil
+		mustPut(t, s, pid, sec("tabs.w1", "hX", `{}`, clientB), 0) // rev 3
+	}
+	res, err := s.PutSection(pid, sec("tabs.w1", "hA", `{}`, clientA), 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutConflict, res.Outcome)
+	assert.Equal(t, int64(3), res.Rev)
+	assert.Equal(t, "hX", mustGet(t, s, pid, "tabs.w1").Hash)
+}
+
+func TestPutSectionDeletedUnderTheWriterConflictsAtRevZero(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	mustPut(t, s, pid, sec("tabs.w1", "h1", `{}`, clientA), 0)
+
+	s.afterSectionRead = func() {
+		s.afterSectionRead = nil
+		_, err := s.DeleteSection(pid, "tabs.w1", clientB, 1)
+		require.NoError(t, err)
+	}
+	res, err := s.PutSection(pid, sec("tabs.w1", "h2", `{}`, clientA), 1)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutConflict, Rev: 0}, res)
+	assert.Equal(t, 1, readRaw(t, s, pid, "tabs.w1").Deleted, "the tombstone was not overwritten")
+}
+
+func TestPutSectionGivesUpUnderEndlessContention(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	// Every time PutSection looks, somebody has recreated-and-deleted the
+	// section again, so its recreate-CAS keeps missing a tombstone that is
+	// still a tombstone. It must stop rather than spin.
+	hook := func() {
+		saved := s.afterSectionRead
+		s.afterSectionRead = nil
+		rev := mustPut(t, s, pid, sec("tabs.w1", "hX", `{}`, clientB), 0)
+		_, err := s.DeleteSection(pid, "tabs.w1", clientB, rev)
+		require.NoError(t, err)
+		s.afterSectionRead = saved
+	}
+	s.afterSectionRead = hook
+
+	_, err := s.PutSection(pid, sec("tabs.w1", "hA", `{}`, clientA), 0)
+	assert.ErrorIs(t, err, ErrSectionContended)
+	assert.Equal(t, 1, readRaw(t, s, pid, "tabs.w1").Deleted)
+}
+
+// ── real concurrency ───────────────────────────────────────────────────────
+//
+// File-backed WAL database: ":memory:" is pinned to one connection, which
+// serialises every call inside database/sql and cannot race.
+
+func openFileStore(t *testing.T) *Store {
+	t.Helper()
+	s, err := OpenStore(filepath.Join(t.TempDir(), "profiles.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+// racePut fires n PutSection calls at once, each with its own hash, and
+// returns the results. Any error — SQLITE_BUSY included — fails the test.
+func racePut(t *testing.T, s *Store, profileID, section string, baseRev int64, n int, tag string) []PutResult {
+	t.Helper()
+	results := make([]PutResult, n)
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			in := sec(section, fmt.Sprintf("%s-h%d", tag, i), fmt.Sprintf(`{"writer":%d}`, i),
+				fmt.Sprintf("c_%012x", i))
+			<-start
+			results[i], errs[i] = s.PutSection(profileID, in, baseRev)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		require.NoError(t, err, "%s: writer %d", tag, i)
+	}
+	return results
+}
+
+// requireOneWinner asserts exactly one PutApplied at wantRev, every other
+// result a PutConflict against the winner, and the stored row is the winner's.
+func requireOneWinner(t *testing.T, s *Store, profileID, section string, results []PutResult, wantRev int64, tag string) {
+	t.Helper()
+	winner := -1
+	for i, r := range results {
+		switch r.Outcome {
+		case PutApplied:
+			require.Equal(t, -1, winner, "%s: writers %d and %d both applied", tag, winner, i)
+			require.Equal(t, wantRev, r.Rev, "%s", tag)
+			winner = i
+		case PutConflict:
+			require.Equal(t, wantRev, r.Rev, "%s: writer %d", tag, i)
+			require.NotNil(t, r.Current, "%s: writer %d", tag, i)
+		default:
+			t.Fatalf("%s: writer %d got outcome %v", tag, i, r.Outcome)
+		}
+	}
+	require.NotEqual(t, -1, winner, "%s: nobody applied", tag)
+
+	got := mustGet(t, s, profileID, section)
+	require.Equal(t, wantRev, got.Rev, "%s: final rev", tag)
+	require.Equal(t, fmt.Sprintf("%s-h%d", tag, winner), got.Hash, "%s: stored hash is the winner's", tag)
+	require.JSONEq(t, fmt.Sprintf(`{"writer":%d}`, winner), string(got.Payload), "%s", tag)
+}
+
+func TestConcurrentPutSectionSameBaseRevHasOneWinner(t *testing.T) {
+	s := openFileStore(t)
+	pid := newProfile(t, s)
+
+	const writers, rounds = 12, 40
+	base := mustPut(t, s, pid, sec("hosts", "seed", `{}`, clientA), 0)
+	for round := 0; round < rounds; round++ {
+		tag := fmt.Sprintf("r%d", round)
+		results := racePut(t, s, pid, "hosts", base, writers, tag)
+		requireOneWinner(t, s, pid, "hosts", results, base+1, tag)
+		base++
+	}
+}
+
+func TestConcurrentFirstInsertHasOneWinner(t *testing.T) {
+	s := openFileStore(t)
+	pid := newProfile(t, s)
+
+	const writers, rounds = 12, 40
+	for round := 0; round < rounds; round++ {
+		section := fmt.Sprintf("tabs.w%d", round)
+		tag := fmt.Sprintf("r%d", round)
+		results := racePut(t, s, pid, section, 0, writers, tag)
+		requireOneWinner(t, s, pid, section, results, 1, tag)
+	}
+}
+
+// ── PutResult.Changed ──────────────────────────────────────────────────────
+//
+// Outcome alone cannot tell a delete that wrote a tombstone from the idempotent
+// no-op: both are PutApplied, and a no-op against a tombstone at rev N+1 even
+// reports the same Rev a real delete at baseRev N would. The handler broadcasts
+// on Changed, so it has to be exact.
+
+func TestPutResultChangedIsTrueOnlyWhenARowWasWritten(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	created, err := s.PutSection(pid, sec("tabs.w1", "h1", `{}`, clientA), 0)
+	require.NoError(t, err)
+	assert.True(t, created.Changed, "insert")
+
+	updated, err := s.PutSection(pid, sec("tabs.w1", "h2", `{}`, clientA), 1)
+	require.NoError(t, err)
+	assert.True(t, updated.Changed, "update")
+
+	converged, err := s.PutSection(pid, sec("tabs.w1", "h2", `{}`, clientB), 1)
+	require.NoError(t, err)
+	require.Equal(t, PutConverged, converged.Outcome)
+	assert.False(t, converged.Changed, "converged")
+
+	conflict, err := s.PutSection(pid, sec("tabs.w1", "h3", `{}`, clientB), 1)
+	require.NoError(t, err)
+	require.Equal(t, PutConflict, conflict.Outcome)
+	assert.False(t, conflict.Changed, "conflict")
+
+	other := sec("tabs.w1", "h4", `{}`, clientB)
+	other.Fingerprint = "fp2"
+	schema, err := s.PutSection(pid, other, 2)
+	require.NoError(t, err)
+	require.Equal(t, PutSchema, schema.Outcome)
+	assert.False(t, schema.Changed, "schema")
+
+	deleted, err := s.DeleteSection(pid, "tabs.w1", clientA, 2)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: true}, deleted)
+
+	// The same request again: same Outcome, same Rev — only Changed differs.
+	again, err := s.DeleteSection(pid, "tabs.w1", clientA, 2)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: false}, again)
+
+	never, err := s.DeleteSection(pid, "tabs.never", clientA, 0)
+	require.NoError(t, err)
+	assert.False(t, never.Changed, "never existed")
+
+	staleDelete, err := s.DeleteSection(pid, "tabs.w1", clientA, 9)
+	require.NoError(t, err)
+	assert.False(t, staleDelete.Changed, "tombstone, any baseRev")
+
+	recreated, err := s.PutSection(pid, sec("tabs.w1", "h5", `{}`, clientA), 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 4, Changed: true}, recreated)
+}
+
+// ── writes against a deleted profile ───────────────────────────────────────
+
+// After DeleteProfile the sections are gone with the profile, so every
+// conditional write that used to hit one of its rows now hits nothing and must
+// be classified as "no such profile" — never applied, never a conflict.
+func TestSectionWritesAfterDeleteProfileAreProfileNotFound(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	hostsRev := mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+	liveRev := mustPut(t, s, pid, sec("tabs.w1", "h2", `{}`, clientA), 0)
+	mustPut(t, s, pid, sec("tabs.w2", "h3", `{}`, clientA), 0)
+	_, err := s.DeleteSection(pid, "tabs.w2", clientA, 1) // tombstone
+	require.NoError(t, err)
+
+	require.NoError(t, s.DeleteProfile(pid))
+
+	// Step 3: update of a section that was live, with the right baseRev.
+	res, err := s.PutSection(pid, sec("hosts", "h9", `{}`, clientA), hostsRev)
+	assert.ErrorIs(t, err, ErrProfileNotFound, "update")
+	assert.Equal(t, PutResult{}, res, "update")
+
+	// Step 1: recreate over what was a tombstone.
+	res, err = s.PutSection(pid, sec("tabs.w2", "h9", `{}`, clientA), 0)
+	assert.ErrorIs(t, err, ErrProfileNotFound, "recreate over tombstone")
+	assert.Equal(t, PutResult{}, res, "recreate over tombstone")
+
+	// Tombstone write on a section that was live.
+	res, err = s.DeleteSection(pid, "tabs.w1", clientA, liveRev)
+	assert.ErrorIs(t, err, ErrProfileNotFound, "delete section")
+	assert.Equal(t, PutResult{}, res, "delete section")
+
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "profile_id = ?", pid))
+}
+
+// The profile is deleted inside each write path's read→write window: the
+// conditional statement then hits zero rows, and the re-read must report the
+// missing profile rather than a conflict against a row that no longer exists.
+func TestPutSectionProfileDeletedInsideTheWindowIsProfileNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, s *Store, pid string) int64 // returns baseRev
+	}{
+		{"insert", func(t *testing.T, s *Store, pid string) int64 { return 0 }},
+		{"update", func(t *testing.T, s *Store, pid string) int64 {
+			return mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+		}},
+		{"recreate", func(t *testing.T, s *Store, pid string) int64 {
+			mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+			_, err := s.DeleteSection(pid, "hosts", clientA, 1)
+			require.NoError(t, err)
+			return 0
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTestStore(t)
+			pid := newProfile(t, s)
+			baseRev := tc.prepare(t, s, pid)
+			s.afterSectionRead = func() {
+				s.afterSectionRead = nil
+				require.NoError(t, s.DeleteProfile(pid))
+			}
+
+			res, err := s.PutSection(pid, sec("hosts", "h2", `{}`, clientB), baseRev)
+
+			assert.ErrorIs(t, err, ErrProfileNotFound)
+			assert.False(t, res.Changed)
+			assert.Equal(t, 0, countRows(t, s, "profile_sections", "profile_id = ?", pid))
+		})
+	}
+}
