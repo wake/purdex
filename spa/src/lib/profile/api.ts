@@ -6,6 +6,13 @@
 // the executor must turn one flight into exactly one terminal event, and "the
 // list request failed" must be unrepresentable as "the list is empty".
 //
+// That covers BUILDING the request too. `encodeURIComponent` throws URIError on
+// a lone surrogate and `JSON.stringify` throws TypeError on a BigInt or a cycle
+// — values that corrupted persisted state can hand us. So no exported function
+// encodes a path or serializes a body itself: each passes `request` a builder,
+// which runs it inside its guard and answers `rejected` (status 0, nothing
+// sent) when it throws. A throw there would leave a section `inFlight` forever.
+//
 // Status → body, per route, as written by internal/module/profiles/handler.go
 // and handler_sections.go (every 200 and every 409 is JSON via writeJSONStatus;
 // every other status is `http.Error` text/plain, the message plus "\n"):
@@ -325,16 +332,24 @@ function unknownHost(hostId: string): Failure | null {
   return failure('unknown-host', 0, `unknown host: ${hostId}`)
 }
 
+/** The path and init of one request. Built lazily — see `request`. */
+interface Built {
+  path: string
+  init: RequestInit
+}
+
 /**
  * Sends one request and interprets the answer — the single entry point of every
  * exported function, and therefore where the unknown-host gate lives. `on200` and `on409` see the
  * parsed body; any other status becomes a Failure — except those in `others`,
  * which a route may claim (getSection's 404).
+ *
+ * `build` is called HERE, inside the guard, never by the caller: encoding a
+ * path and serializing a body can both throw (file header).
  */
 async function request<T>(
   hostId: string,
-  path: string,
-  init: RequestInit,
+  build: () => Built,
   opts: RequestOptions | undefined,
   on200: Interpret<T>,
   on409?: Interpret<T>,
@@ -360,6 +375,14 @@ async function request<T>(
     const gone = unknownHost(hostId)
     if (gone) return gone
     if (external?.aborted) return failure('aborted', 0, 'request aborted')
+    let built: Built
+    try {
+      built = build()
+    } catch (err) {
+      // Ours to blame, not the network's: this request cannot be expressed.
+      return failure('rejected', 0, `cannot build request: ${errorMessage(err)}`)
+    }
+    const { path, init } = built
     external?.addEventListener('abort', onExternalAbort, { once: true })
     timer = setTimeout(() => stop('timeout'), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
@@ -429,7 +452,7 @@ function query(params: Record<string, string | number>): string {
 /* ─── profiles ─── */
 
 export function listProfiles(hostId: string, opts?: RequestOptions): Promise<Result<ProfileIndexEntry[]>> {
-  return request(hostId, BASE, { method: 'GET' }, opts, ({ status, json }) => {
+  return request(hostId, () => ({ path: BASE, init: { method: 'GET' } }), opts, ({ status, json }) => {
     if (!isPlainObject(json)) return malformed(status, 'profile list')
     // One bad row fails the list: a shorter list would read as "that profile is gone".
     const profiles = parseArray(json.profiles, parseIndexEntry)
@@ -438,7 +461,7 @@ export function listProfiles(hostId: string, opts?: RequestOptions): Promise<Res
 }
 
 export function createProfile(hostId: string, name: string, opts?: RequestOptions): Promise<Result<Profile>> {
-  return request(hostId, BASE, jsonInit('POST', { name }), opts, ({ status, json }) => {
+  return request(hostId, () => ({ path: BASE, init: jsonInit('POST', { name }) }), opts, ({ status, json }) => {
     const profile = parseProfile(json)
     return profile ? ok(profile) : malformed(status, 'profile')
   })
@@ -450,7 +473,8 @@ export function renameProfile(
   name: string,
   opts?: RequestOptions,
 ): Promise<Result<{ id: string; name: string }>> {
-  return request(hostId, profilePath(profileId), jsonInit('PATCH', { name }), opts, ({ status, json }) => {
+  const build = (): Built => ({ path: profilePath(profileId), init: jsonInit('PATCH', { name }) })
+  return request(hostId, build, opts, ({ status, json }) => {
     if (!isPlainObject(json) || !isText(json.id) || !isText(json.name)) return malformed(status, 'rename')
     return ok({ id: json.id, name: json.name })
   })
@@ -463,8 +487,7 @@ export function deleteProfile(
 ): Promise<DeleteProfileOutcome> {
   return request<DeleteProfileOutcome>(
     hostId,
-    profilePath(profileId),
-    { method: 'DELETE' },
+    () => ({ path: profilePath(profileId), init: { method: 'DELETE' } }),
     opts,
     ({ status, json }) =>
       isPlainObject(json) && json.deleted === true ? { kind: 'deleted' } : malformed(status, 'delete'),
@@ -482,7 +505,8 @@ export function getProfileSections(
   profileId: string,
   opts?: RequestOptions,
 ): Promise<Result<Record<string, Section>>> {
-  return request(hostId, profilePath(profileId), { method: 'GET' }, opts, ({ status, json }) => {
+  const build = (): Built => ({ path: profilePath(profileId), init: { method: 'GET' } })
+  return request(hostId, build, opts, ({ status, json }) => {
     if (!isPlainObject(json) || !isPlainObject(json.sections)) return malformed(status, 'sections')
     const out: Record<string, Section> = {}
     for (const [name, raw] of Object.entries(json.sections)) {
@@ -509,8 +533,7 @@ export function getSection(
 ): Promise<Result<Section | null>> {
   return request<Result<Section | null>>(
     hostId,
-    sectionPath(profileId, section),
-    { method: 'GET' },
+    () => ({ path: sectionPath(profileId, section), init: { method: 'GET' } }),
     opts,
     ({ status, json }) => {
       const parsed = parseSection(json)
@@ -549,11 +572,15 @@ export function putSection(
   body: PutSectionBody,
   opts?: RequestOptions,
 ): Promise<PutOutcome> {
-  const { clientId, baseRev, hash, fingerprint, ordinal, payload } = body
   return request<PutOutcome>(
     hostId,
-    sectionPath(profileId, section),
-    jsonInit('PUT', { clientId, baseRev, hash, fingerprint, ordinal, payload }),
+    () => {
+      const { clientId, baseRev, hash, fingerprint, ordinal, payload } = body
+      return {
+        path: sectionPath(profileId, section),
+        init: jsonInit('PUT', { clientId, baseRev, hash, fingerprint, ordinal, payload }),
+      }
+    },
     opts,
     ({ status, json }) => {
       if (!isPlainObject(json) || !isRev(json.rev)) return malformed(status, 'rev')
@@ -574,8 +601,10 @@ export async function deleteSection(
 ): Promise<DeleteOutcome> {
   const out = await request<PutOutcome>(
     hostId,
-    `${sectionPath(profileId, section)}?${query({ baseRev: params.baseRev, clientId: params.clientId })}`,
-    { method: 'DELETE' },
+    () => ({
+      path: `${sectionPath(profileId, section)}?${query({ baseRev: params.baseRev, clientId: params.clientId })}`,
+      init: { method: 'DELETE' },
+    }),
     opts,
     ({ status, json }) =>
       isPlainObject(json) && isRev(json.rev) ? { kind: 'applied', rev: json.rev } : malformed(status, 'rev'),
@@ -595,11 +624,12 @@ export function putAttachment(
   body: PutAttachmentBody,
   opts?: RequestOptions,
 ): Promise<Result<{ attached: true }>> {
-  const { clientId, deviceName } = body
   return request<Result<{ attached: true }>>(
     hostId,
-    `${profilePath(profileId)}/attachment`,
-    jsonInit('PUT', { clientId, deviceName }),
+    () => {
+      const { clientId, deviceName } = body
+      return { path: `${profilePath(profileId)}/attachment`, init: jsonInit('PUT', { clientId, deviceName }) }
+    },
     opts,
     ({ status, json }) =>
       isPlainObject(json) && json.attached === true ? ok({ attached: true }) : malformed(status, 'attached'),
@@ -615,8 +645,7 @@ export function deleteAttachment(
 ): Promise<Result<{ detached: boolean }>> {
   return request(
     hostId,
-    `${profilePath(profileId)}/attachment?${query({ clientId })}`,
-    { method: 'DELETE' },
+    () => ({ path: `${profilePath(profileId)}/attachment?${query({ clientId })}`, init: { method: 'DELETE' } }),
     opts,
     ({ status, json }) =>
       isPlainObject(json) && typeof json.detached === 'boolean'

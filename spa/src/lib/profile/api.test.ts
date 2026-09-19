@@ -154,6 +154,63 @@ describe('unknown host', () => {
   })
 })
 
+/* ─── a request that cannot be built is a Failure, not a throw ─── */
+
+describe('unbuildable request', () => {
+  // A lone surrogate makes encodeURIComponent throw URIError; a BigInt or a
+  // cycle makes JSON.stringify throw TypeError. Such values can come out of
+  // corrupted persisted state.
+  const LONE = 'bad\uD800'
+  const BIG = 1n as unknown as string
+  const cyclic: Record<string, unknown> = { a: 1 }
+  cyclic.self = cyclic
+
+  const calls: Array<[string, () => Promise<unknown>]> = [
+    ['createProfile: BigInt name', () => createProfile(HOST, BIG)],
+    ['renameProfile: lone-surrogate profileId', () => renameProfile(HOST, LONE, 'Home')],
+    ['renameProfile: BigInt name', () => renameProfile(HOST, PID, BIG)],
+    ['deleteProfile: lone-surrogate profileId', () => deleteProfile(HOST, LONE)],
+    ['getProfileSections: lone-surrogate profileId', () => getProfileSections(HOST, LONE)],
+    ['getSection: lone-surrogate profileId', () => getSection(HOST, LONE, 'settings')],
+    ['getSection: lone-surrogate section', () => getSection(HOST, PID, LONE)],
+    ['putSection: lone-surrogate profileId', () => putSection(HOST, LONE, 'settings', putBody)],
+    ['putSection: lone-surrogate section', () => putSection(HOST, PID, LONE, putBody)],
+    ['putSection: cyclic payload', () => putSection(HOST, PID, 'settings', { ...putBody, payload: cyclic })],
+    ['putSection: BigInt in payload', () => putSection(HOST, PID, 'settings', { ...putBody, payload: { n: 1n } })],
+    ['putSection: null body', () => putSection(HOST, PID, 'settings', null as never)],
+    ['deleteSection: lone-surrogate profileId', () => deleteSection(HOST, LONE, 'settings', { baseRev: 3, clientId: CID })],
+    ['deleteSection: lone-surrogate section', () => deleteSection(HOST, PID, LONE, { baseRev: 3, clientId: CID })],
+    ['deleteSection: lone-surrogate clientId', () => deleteSection(HOST, PID, 'settings', { baseRev: 3, clientId: LONE })],
+    ['putAttachment: lone-surrogate profileId', () => putAttachment(HOST, LONE, { clientId: CID, deviceName: 'mlab' })],
+    ['putAttachment: BigInt deviceName', () => putAttachment(HOST, PID, { clientId: CID, deviceName: BIG })],
+    ['deleteAttachment: lone-surrogate profileId', () => deleteAttachment(HOST, LONE, CID)],
+    ['deleteAttachment: lone-surrogate clientId', () => deleteAttachment(HOST, PID, LONE)],
+  ]
+
+  it.each(calls)('%s → resolves failed/rejected, nothing sent', async (_name, call) => {
+    hostFetch.mockResolvedValue(jsonResponse({}))
+    let pending: Promise<unknown> | undefined
+    // Not even a synchronous throw: the executor awaits the promise, nothing else.
+    expect(() => { pending = call() }).not.toThrow()
+    const out = await pending
+    expect(out).toMatchObject({ kind: 'failed', reason: 'rejected', status: 0 })
+    expect((out as { message: string }).message).not.toBe('')
+    expect(hostFetch).not.toHaveBeenCalled()
+  })
+
+  it('carries the original error message', async () => {
+    const out = await deleteProfile(HOST, LONE)
+    let expected = ''
+    try { encodeURIComponent(LONE) } catch (err) { expected = (err as Error).message }
+    expect(expected).not.toBe('')
+    expect((out as { message: string }).message).toContain(expected)
+  })
+
+  it('an unknown host still wins over an unbuildable request', async () => {
+    expect(await deleteProfile('host-gone', LONE)).toMatchObject({ kind: 'failed', reason: 'unknown-host' })
+  })
+})
+
 /* ─── the request each function sends ─── */
 
 describe('requests', () => {
