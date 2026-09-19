@@ -138,8 +138,12 @@ Decision order inside `PutSection` — **schema is checked before revision, and 
 1. Read the current row. If **absent or a tombstone** (`deleted = 1`, see below): accept only
    `baseRev == 0` → `PutApplied`, at `rev = 1` for a never-seen section and at
    `rev = tombstone.rev + 1` over a tombstone. A non-zero `baseRev` is `PutConflict` with `Rev: 0`
-   and no `Current` (the section was deleted under the client; §4.6.3). Fingerprint/ordinal of a
-   tombstone are ignored — there is no stored shape left to protect.
+   and no `Current` (the section was deleted under the client; §4.6.3). **A tombstone keeps its
+   fingerprint and ordinal and is subject to step 2's schema gate, before the `baseRev` check**
+   (PR review C-1, spec §9.2): deleting a section does not move the profile's schema backwards, so
+   an older client must not be able to recreate it and lower the stored ordinal. The recreate
+   writes `ordinal = MAX(ordinal, ?)` like any other update. (An earlier revision of this plan said
+   a tombstone has "no stored shape left to protect" — that was wrong.)
 2. If present and `row.Fingerprint != in.Fingerprint`:
    - `in.Ordinal > row.Ordinal` → the writer is newer, continue to step 3 (its write replaces the
      stored shape);

@@ -412,7 +412,9 @@ snapshots, not between the SOT and a moving target.
   rather than removing the row, so a section's revisions are strictly increasing for the life of
   the profile: a recreated section continues from the tombstone's rev instead of restarting at 1,
   which is what stops a retried stale `DELETE` from destroying the recreated content (ABA).
-  Tombstones read as "absent" on every GET.
+  Tombstones read as "absent" on every GET. A tombstone **keeps its fingerprint and ordinal**, and a
+  recreate passes the same §4.5 gate as any write — deleting a section never lowers the stored
+  ordinal or lets an older shape back in.
 - **`workspaces` is the authority on which `tabs.*` sections should exist.** A client that has
   applied `workspaces` deletes the `tabs.*` sections for workspaces that are gone, and creates them
   for workspaces it gained.
@@ -663,4 +665,13 @@ Failure rolls both back and is retryable; after commit every section write path 
 The attacker reported **no** interleaving giving two `PutApplied`, a non-increasing rev, or a
 bypassed schema gate.
 
-_(critic verdicts to follow.)_
+**R2 critic** (incremental, `--base bc6ea04b`): agrees with R1-1 and A-1 and confirms `0b7354d0`
+closes both (only `tx.Exec` inside the transaction; the classifying re-read runs after the rollback;
+the first statement is a write). One evidenced spec drift:
+
+| # | Sev. | Finding | Resolution |
+|---|---|---|---|
+| C-1 | medium | recreating over a tombstone overwrote the stored ordinal (7 → 1 by an old client), against §4.5 "never decreases" | tombstones keep their shape and pass the schema gate, before `baseRev`; recreate uses `MAX(ordinal, ?)` (§4.6.3) |
+
+Stop condition met: R1 has no critical/P1, and the critic raised no evidenced objection to a
+finding — its one addition is fixed.
