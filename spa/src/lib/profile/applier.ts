@@ -62,7 +62,10 @@ export interface ApplyTabsResult {
 export type SettingsPatches = Partial<Record<SettingsStorageKey, Record<string, unknown>>>
 
 export interface ApplySettingsResult {
+  /** Empty whenever `rejected` is not: a settings payload is applied whole or not at all. */
   patches: SettingsPatches
+  /** `'<storageKey>.<field>'` of every incoming value whose shape differs from the local one; sorted, no duplicates. Non-empty → the caller locks the section. */
+  rejected: string[]
 }
 
 // === Helpers ===
@@ -243,9 +246,18 @@ function sameValue(a: unknown, b: unknown): boolean {
   }
 }
 
+/** The coarse shape of a value. `null` and arrays are classes of their own; anything that is not JSON data is `'other'`. */
+function shapeOf(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  const t = typeof value
+  return t === 'object' || t === 'string' || t === 'number' || t === 'boolean' ? t : 'other'
+}
+
 /**
  * Per store, the listed fields whose incoming value differs from the local one.
- * Unlisted fields and unknown stores are left alone.
+ * Unlisted fields and unknown stores are left alone (the guard refuses both;
+ * ignoring them here as well is defence in depth).
  *
  * Absence means two different things. A STORE the payload lacks was simply not
  * sent (it contributed no listed field over there, or the sender does not know
@@ -259,10 +271,22 @@ function sameValue(a: unknown, b: unknown): boolean {
  * would differ, this side would look dirty and push the old value back —
  * resurrecting what the other side cleared.
  *
+ * Value shapes. The pure core has no schema of what each store field may hold,
+ * so the check is fail-safe rather than exact: a field about to be patched whose
+ * local value is not `undefined` must arrive in the same shape class (`shapeOf`)
+ * — `{"purdex-layout":{"tabPosition":{}}}` must not land in a store that expects
+ * a string union. `null` is a class of its own: none of the listed fields of the
+ * ten stores is nullable today (checked against the store types), so a `null`
+ * where a value lives is a mismatch. Only the TOP-LEVEL value of a field is
+ * compared. Not compared: a local `undefined` (nothing to compare with) and an
+ * incoming `undefined` (a clear — see above). ONE mismatch rejects the payload:
+ * `patches` comes back empty, never partial, and `rejected` names the fields.
+ *
  * Does not heal layout invariants — that is the store's business (P2b).
  */
 export function applySettings(local: SettingsBuildInput, incoming: SettingsPayload): ApplySettingsResult {
   const patches: SettingsPatches = {}
+  const rejected = new Set<string>()
   for (const [key, fields] of listedSettingsFields()) {
     const storageKey = key as SettingsStorageKey
     if (!Object.hasOwn(incoming, storageKey)) continue
@@ -274,11 +298,14 @@ export function applySettings(local: SettingsBuildInput, incoming: SettingsPaylo
       // An absent field and an `undefined` one are the same thing: cleared on the sending side.
       const next = Object.hasOwn(theirs, field) ? theirs[field] : undefined
       const current = mine !== undefined && Object.hasOwn(mine, field) ? mine[field] : undefined
-      if (!sameValue(current, next)) patch[field] = next
+      if (sameValue(current, next)) continue
+      if (current !== undefined && next !== undefined && shapeOf(current) !== shapeOf(next)) rejected.add(`${storageKey}.${field}`)
+      patch[field] = next
     }
     if (Object.keys(patch).length > 0) patches[storageKey] = patch
   }
-  return { patches }
+  if (rejected.size > 0) return { patches: {}, rejected: [...rejected].sort() }
+  return { patches, rejected: [] }
 }
 
 // === Well-formedness ===
@@ -456,8 +483,15 @@ function isHostsPayload(p: Rec): boolean {
 }
 
 /**
- * A KNOWN store (one `PROJECTIONS.settings` covers) may carry only the fields
- * listed for it, and at least one of them:
+ * Every top-level key must be one of the storage keys `PROJECTIONS.settings`
+ * covers, and its store may carry only the fields listed for it, and at least
+ * one of them:
+ *   - an UNKNOWN storage key stays in the payload's hash, but applySettings
+ *     ignores it and no builder here can rebuild it, so
+ *     `hash(build(apply(p))) !== hash(p)` — the section could never converge.
+ *     This is not where forward compatibility lives: a newer client with one
+ *     more store has a different `PROJECTIONS.settings`, hence another
+ *     fingerprint, and the schema lock (profile-state.ts) stops it long before;
  *   - an unlisted field (`terminalSettingsVersion`, …) is never projected by the
  *     builder, so the payload could not hash back to itself — and applySettings,
  *     seeing the store present, would read every listed field it lacks as
@@ -465,17 +499,15 @@ function isHostsPayload(p: Rec): boolean {
  *   - an empty store is something the builder never emits (it omits a store that
  *     contributes no listed field), and it would clear ALL of that store's fields.
  * The allowlist is `listedSettingsFields()` — read off PROJECTIONS, no second copy.
- * An unknown storage key is a newer client's store: passed whole, and ignored by
- * applySettings.
+ * Value SHAPES are not checked here (there is no local value to compare with):
+ * applySettings reports them as `rejected`.
  */
 function isSettingsPayload(p: Rec): boolean {
   const listed = listedSettingsFields()
   return definedKeys(p).every((key) => {
     const store = p[key]
-    if (!isPlainObject(store)) return false
     const fields = listed.get(key)
-    if (fields === undefined) return true
-    return definedKeys(store).length > 0 && hasOnlyKeys(store, fields)
+    return fields !== undefined && isPlainObject(store) && definedKeys(store).length > 0 && hasOnlyKeys(store, fields)
   })
 }
 

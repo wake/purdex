@@ -443,7 +443,7 @@ describe('applySettings', () => {
 
   it('identical settings produce no patch at all', () => {
     const local = settingsLocal()
-    expect(applySettings(local, buildSettingsSection(local)).patches).toEqual({})
+    expect(applySettings(local, buildSettingsSection(local))).toEqual({ patches: {}, rejected: [] })
   })
 
   it('an unlisted field never reaches a patch, even when the payload carries it', () => {
@@ -525,7 +525,6 @@ describe('applySettings', () => {
     const handWritten = [
       { ...settingsIncoming(), 'purdex-ui-settings': { keepAliveCount: 9 } },
       { ...settingsIncoming(), 'purdex-ui-settings': { hostBadgeSidebarBox: { w: 1 } }, 'purdex-themes': { customThemes: {} } },
-      { ...settingsIncoming(), 'purdex-from-the-future': { terminalSettingsVersion: 1 } },
     ] as SettingsPayload[]
     // Every local holds the same stores as the payloads (a store the payload LACKS is "not sent", left alone by design).
     const locals: SettingsBuildInput[] = [
@@ -543,11 +542,10 @@ describe('applySettings', () => {
       expect(isWellFormedSection('settings', p)).toBe(true)
       const frozen = deepFreeze(copy(p))
       for (const local of locals) {
-        const merged = mergePatches(local, applySettings(deepFreeze(copy(local)), frozen).patches)
-        // an unknown store is not something this client builds: compare the known part
-        const { 'purdex-from-the-future': _future, ...knownPart } = frozen as Record<string, unknown>
-        void _future
-        expect(await hashSection(buildSettingsSection(merged))).toBe(await hashSection(knownPart as SettingsPayload))
+        const result = applySettings(deepFreeze(copy(local)), frozen)
+        expect(result.rejected).toEqual([])
+        const merged = mergePatches(local, result.patches)
+        expect(await hashSection(buildSettingsSection(merged))).toBe(await hashSection(frozen))
       }
     }
   })
@@ -558,6 +556,76 @@ describe('applySettings', () => {
     const local = settingsLocal()
     const merged = mergePatches(local, applySettings(local, bad).patches)
     expect(await hashSection(buildSettingsSection(merged))).not.toBe(await hashSection(bad))
+  })
+
+  describe('value shapes (R1 finding: {"purdex-layout":{"tabPosition":{}}})', () => {
+    it('a value of another shape than the local one is rejected, and then NOTHING is patched', () => {
+      const incoming = { 'purdex-layout': { tabPosition: {} } } as SettingsPayload
+      expect(isWellFormedSection('settings', incoming)).toBe(true) // the guard has no value schema; this is where it is caught
+      expect(applySettings(deepFreeze(settingsLocal()), deepFreeze(incoming))).toEqual({ patches: {}, rejected: ['purdex-layout.tabPosition'] })
+    })
+
+    it('a legitimate change in another store of the same payload is not applied either — never a partial apply', () => {
+      const incoming = { ...settingsIncoming(), 'purdex-layout': { tabPosition: {} } } as SettingsPayload
+      const result = applySettings(deepFreeze(settingsLocal()), deepFreeze(incoming))
+      expect(result.rejected).toEqual(['purdex-layout.tabPosition'])
+      expect(result.patches).toEqual({})
+    })
+
+    it('rejected is sorted and duplicate-free, one entry per field, across stores', () => {
+      const incoming = {
+        'purdex-ui-settings': { terminalRenderer: 7, keepAliveCount: '3' },
+        'purdex-themes': { activeThemeId: null, customThemes: [] },
+        'purdex-layout': { tabPosition: true },
+      } as SettingsPayload
+      const { patches, rejected } = applySettings(settingsLocal(), incoming)
+      expect(patches).toEqual({})
+      expect(rejected).toEqual([
+        'purdex-layout.tabPosition',
+        'purdex-themes.activeThemeId',
+        'purdex-themes.customThemes',
+        'purdex-ui-settings.keepAliveCount',
+        'purdex-ui-settings.terminalRenderer',
+      ])
+    })
+
+    it('every pair of different shape classes is a mismatch — null and array are classes of their own', () => {
+      const samples: Record<string, unknown> = { null: null, array: [1], object: { a: 1 }, string: 'x', number: 1, boolean: true }
+      for (const [mine, localValue] of Object.entries(samples)) {
+        for (const [theirs, incomingValue] of Object.entries(samples)) {
+          const local: SettingsBuildInput = { 'purdex-layout': { tabPosition: localValue } }
+          const { patches, rejected } = applySettings(local, { 'purdex-layout': { tabPosition: incomingValue } } as SettingsPayload)
+          if (mine === theirs) expect(rejected, `${mine} → ${theirs}`).toEqual([])
+          else expect({ patches, rejected }, `${mine} → ${theirs}`).toEqual({ patches: {}, rejected: ['purdex-layout.tabPosition'] })
+        }
+      }
+    })
+
+    it('same shape patches as before; an equal value is never looked at', () => {
+      const result = applySettings(deepFreeze(settingsLocal()), deepFreeze(settingsIncoming()))
+      expect(result.rejected).toEqual([])
+      expect(Object.keys(result.patches).sort()).toEqual(['purdex-layout', 'purdex-newtab-layout', 'purdex-ui-settings'])
+    })
+
+    it('no local value to compare with (undefined, absent field, absent store) → let through', () => {
+      const local: SettingsBuildInput = { 'purdex-ui-settings': { terminalRenderer: undefined }, 'purdex-layout': {} }
+      const incoming = { 'purdex-ui-settings': { terminalRenderer: {}, keepAliveCount: 'x' }, 'purdex-layout': { tabPosition: [] }, 'purdex-i18n': { activeLocaleId: 5 } } as SettingsPayload
+      expect(applySettings(local, incoming)).toEqual({
+        patches: { 'purdex-ui-settings': { terminalRenderer: {}, keepAliveCount: 'x' }, 'purdex-layout': { tabPosition: [] }, 'purdex-i18n': { activeLocaleId: 5 } },
+        rejected: [],
+      })
+    })
+
+    it('a field cleared over there (absent → undefined) has no shape to mismatch: still patched to undefined', () => {
+      const { patches, rejected } = applySettings(settingsLocal(), { 'purdex-ui-settings': { keepAliveCount: 3 } })
+      expect(rejected).toEqual([])
+      expect(Object.hasOwn(patches['purdex-ui-settings'] as object, 'terminalRenderer')).toBe(true)
+    })
+
+    it('a local value that is not JSON data (a function) mismatches whatever arrives', () => {
+      const local: SettingsBuildInput = { 'purdex-layout': { tabPosition: () => undefined } }
+      expect(applySettings(local, { 'purdex-layout': { tabPosition: 'left' } })).toEqual({ patches: {}, rejected: ['purdex-layout.tabPosition'] })
+    })
   })
 
   it('device-local fields of the local stores are still there after the merge', () => {
@@ -598,7 +666,6 @@ describe('isWellFormedSection', () => {
     for (const id of ['wsA', 'wsB', 'wsC']) expect(isWellFormedSection('tabs', buildBack(world, id))).toBe(true)
     expect(isWellFormedSection('settings', buildSettingsSection(settingsLocal()))).toBe(true)
     expect(isWellFormedSection('settings', {})).toBe(true)
-    expect(isWellFormedSection('settings', { 'purdex-from-the-future': { x: 1 } })).toBe(true)
   })
 
   it('accepts a payload that came through JSON', () => {
@@ -810,15 +877,22 @@ describe('isWellFormedSection', () => {
       expect(isWellFormedSection('settings', { 'purdex-themes': { activeThemeId: 'dark' }, 'purdex-layout': {} })).toBe(false)
     })
 
-    it('an unknown store passes whole, whatever it carries, and changes nothing applySettings does', () => {
+    it('an unknown storage key is refused: nothing here could rebuild it, so the payload could never hash back', () => {
+      // (A newer client with one more store has another PROJECTIONS fingerprint — the schema lock stops it first.)
+      expect(isWellFormedSection('settings', { 'purdex-from-the-future': { x: 1 } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-from-the-future': {} })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3 }, 'purdex-from-the-future': { x: 1 } })).toBe(false)
+      // a real storage key that is simply not a synced one
+      expect(isWellFormedSection('settings', { 'purdex-hosts': { hosts: {} } })).toBe(false)
+      // an `undefined` member is no member (the hash drops it too)
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3 }, 'purdex-from-the-future': undefined })).toBe(true)
+    })
+
+    it('applySettings still ignores an unknown store, should one ever get past the guard', () => {
       const known = { 'purdex-ui-settings': { terminalRenderer: 'dom', keepAliveCount: 3 } }
-      const future = { 'purdex-from-the-future': { terminalSettingsVersion: 1, keepAliveCount: 99, nested: { a: [1] } }, 'purdex-empty-future': {} }
-      const incoming = { ...known, ...future } as SettingsPayload
-      expect(isWellFormedSection('settings', incoming)).toBe(true)
-      expect(isWellFormedSection('settings', future)).toBe(true)
+      const incoming = { ...known, 'purdex-from-the-future': { terminalSettingsVersion: 1, keepAliveCount: 99 } } as SettingsPayload
       const local = deepFreeze(settingsLocal())
-      expect(applySettings(local, deepFreeze(incoming)).patches).toEqual(applySettings(local, known).patches)
-      expect(applySettings(local, deepFreeze(future as SettingsPayload)).patches).toEqual({})
+      expect(applySettings(local, deepFreeze(incoming))).toEqual(applySettings(local, known))
     })
   })
 })
