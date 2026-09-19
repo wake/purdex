@@ -245,9 +245,21 @@ function sameValue(a: unknown, b: unknown): boolean {
 
 /**
  * Per store, the listed fields whose incoming value differs from the local one.
- * Unlisted fields, unknown stores, a store the payload lacks and a listed field
- * the payload lacks (an older client) are all left alone. Does not heal layout
- * invariants — that is the store's business (P2b).
+ * Unlisted fields and unknown stores are left alone.
+ *
+ * Absence means two different things. A STORE the payload lacks was simply not
+ * sent (it contributed no listed field over there, or the sender does not know
+ * it) — nothing is cleared, the local store is left alone. A listed FIELD the
+ * payload lacks, inside a store it does carry, is `undefined` on the sending
+ * side: the builder and the hash both drop `undefined` members, so absence is
+ * the only way that value can travel. It is therefore patched as
+ * `{[field]: undefined}` (key present — zustand's `setState(patch)` then clears
+ * it) whenever the local value is not already `undefined`. Leaving it alone
+ * would make the local build carry one field more than the payload, the hashes
+ * would differ, this side would look dirty and push the old value back —
+ * resurrecting what the other side cleared.
+ *
+ * Does not heal layout invariants — that is the store's business (P2b).
  */
 export function applySettings(local: SettingsBuildInput, incoming: SettingsPayload): ApplySettingsResult {
   const patches: SettingsPatches = {}
@@ -259,9 +271,10 @@ export function applySettings(local: SettingsBuildInput, incoming: SettingsPaylo
     const mine = (Object.hasOwn(local, storageKey) ? local[storageKey] : undefined) as Rec | undefined
     const patch: Rec = {}
     for (const field of fields) {
-      if (!Object.hasOwn(theirs, field) || theirs[field] === undefined) continue
+      // An absent field and an `undefined` one are the same thing: cleared on the sending side.
+      const next = Object.hasOwn(theirs, field) ? theirs[field] : undefined
       const current = mine !== undefined && Object.hasOwn(mine, field) ? mine[field] : undefined
-      if (!sameValue(current, theirs[field])) patch[field] = theirs[field]
+      if (!sameValue(current, next)) patch[field] = next
     }
     if (Object.keys(patch).length > 0) patches[storageKey] = patch
   }

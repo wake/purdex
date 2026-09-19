@@ -448,7 +448,7 @@ describe('applySettings', () => {
   it('an unlisted field never reaches a patch, even when the payload carries it', () => {
     const incoming = {
       ...settingsIncoming(),
-      'purdex-ui-settings': { terminalRenderer: 'dom', terminalSettingsVersion: 'INJECTED', somethingNew: 'INJECTED' },
+      'purdex-ui-settings': { terminalRenderer: 'dom', keepAliveCount: 3, terminalSettingsVersion: 'INJECTED', somethingNew: 'INJECTED' },
       'purdex-newtab-layout': { profiles: { p: { cols: 3 } }, activeEditingProfile: 'INJECTED', knownIds: ['INJECTED'] },
       'purdex-layout': { tabPosition: 'left', regions: 'INJECTED', activityBarWidth: 'INJECTED' },
     } as SettingsPayload
@@ -459,9 +459,39 @@ describe('applySettings', () => {
     expect(Object.keys(patches['purdex-layout'] ?? {})).toEqual(['tabPosition'])
   })
 
-  it('ignores an unknown store, and a store or listed field the payload lacks', () => {
-    const incoming = { 'purdex-from-the-future': { x: 1 }, 'purdex-ui-settings': { keepAliveCount: 9 } } as SettingsPayload
-    expect(applySettings(settingsLocal(), incoming).patches).toEqual({ 'purdex-ui-settings': { keepAliveCount: 9 } })
+  it('ignores an unknown store, and a store the payload lacks altogether (not sent is not "cleared")', () => {
+    const incoming = { 'purdex-from-the-future': { x: 1 }, 'purdex-ui-settings': { terminalRenderer: 'webgl', keepAliveCount: 9 } } as SettingsPayload
+    const { patches } = applySettings(deepFreeze(settingsLocal()), deepFreeze(incoming))
+    expect(patches).toEqual({ 'purdex-ui-settings': { keepAliveCount: 9 } })
+    for (const absent of ['purdex-themes', 'purdex-newtab-layout', 'purdex-layout', 'purdex-from-the-future']) {
+      expect(Object.hasOwn(patches, absent)).toBe(false)
+    }
+  })
+
+  it('a listed field the payload lacks, in a store it carries, was cleared over there: patched to undefined', () => {
+    const incoming: SettingsPayload = { 'purdex-ui-settings': { keepAliveCount: 3 } }
+    const { patches } = applySettings(deepFreeze(settingsLocal()), deepFreeze(incoming))
+    const patch = patches['purdex-ui-settings'] as Record<string, unknown>
+    expect(Object.prototype.hasOwnProperty.call(patch, 'terminalRenderer')).toBe(true)
+    expect(patch.terminalRenderer).toBeUndefined()
+    // only the one listed field local really holds: no unlisted field, no listed field that is undefined on both sides
+    expect(Object.keys(patch)).toEqual(['terminalRenderer'])
+  })
+
+  it('a listed field absent on both sides (or locally undefined) is not patched', () => {
+    const local: SettingsBuildInput = { ...settingsLocal(), 'purdex-ui-settings': { terminalRenderer: undefined, keepAliveCount: 3, terminalSettingsVersion: S } }
+    expect(applySettings(local, { 'purdex-ui-settings': { keepAliveCount: 3 } }).patches).toEqual({})
+  })
+
+  it('round trip through a cleared field: the merged local builds back to the incoming hash', async () => {
+    const theirs: SettingsBuildInput = { ...settingsLocal(), 'purdex-ui-settings': { terminalRenderer: undefined, keepAliveCount: 3 } }
+    const p = deepFreeze(buildSettingsSection(theirs))
+    expect(Object.hasOwn(p['purdex-ui-settings'] as object, 'terminalRenderer')).toBe(false) // the builder drops undefined
+    const local = settingsLocal()
+    const merged = mergePatches(local, applySettings(deepFreeze(local), p).patches)
+    expect(await hashSection(buildSettingsSection(merged))).toBe(await hashSection(p))
+    // the device-local field next to it survived
+    expect((merged['purdex-ui-settings'] as Record<string, unknown>).terminalSettingsVersion).toBe(S)
   })
 
   it('patches a store the local side does not have yet', () => {
