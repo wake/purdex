@@ -649,4 +649,18 @@ Eight findings, all confidence ≥ 0.94, all accepted:
 
 Also found while applying these: the §4.6 `PUT` body had no source for `writer`; `clientId` added.
 
-_(PR review rounds to follow.)_
+### 9.2 PR #1237 review — R1 + R2 attacker (gpt-5.6-sol), 2026-09-20
+
+| # | Source | Sev. | Finding | Resolution |
+|---|---|---|---|---|
+| R1-1 | R1 | P2 | between `DeleteProfile`'s two statements a concurrent section UPDATE / recreate / tombstone still hit, so a write was acknowledged and broadcast, then swept (`sections.go`) | fixed `0b7354d0` |
+| A-1 | attacker | high | same two statements: a crash or a failed sweep left `hosts` sections (tokens) orphaned forever — the retry is a 404 | fixed `0b7354d0` |
+
+One root cause, one fix: `DeleteProfile` is a single transaction whose first statement is the
+conditional delete (a write first, so no WAL snapshot upgrade), followed by the section sweep.
+Failure rolls both back and is retryable; after commit every section write path returns
+`ErrProfileNotFound`. Guarded by a fault-injection test that is red against the two-statement form.
+The attacker reported **no** interleaving giving two `PutApplied`, a non-increasing rev, or a
+bypassed schema gate.
+
+_(critic verdicts to follow.)_

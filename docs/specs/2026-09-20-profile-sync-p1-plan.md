@@ -48,8 +48,8 @@ Tests first (`store_test.go`), all against `OpenStore(":memory:")` with an injec
 
 Schema exactly as spec §4.8 (three tables, `CREATE TABLE IF NOT EXISTS`, no version table).
 
-**No foreign keys.** `DeleteProfile` removes that profile's sections and attachments explicitly in
-the same call, so cascade buys nothing here. If a later phase wants them, note the trap already
+**No foreign keys.** `DeleteProfile` removes that profile's sections explicitly, **inside one
+transaction with the profile row** (PR review, spec §9.2), so cascade buys nothing here. If a later phase wants them, note the trap already
 documented at `internal/store/agent_event.go:35-52`: `PRAGMA foreign_keys` is **per connection**, so
 it has to be in the DSN (`?_pragma=foreign_keys(1)`) — a post-`Open` `db.Exec("PRAGMA …")` only
 affects whichever pooled connection served it and silently does nothing for the rest.
@@ -77,8 +77,11 @@ func (s *Store) ListAttachments(profileID string) ([]Attachment, error)
   leaving an attachment that points at nothing and defeating the 409):
   - `DeleteProfile`: `DELETE FROM profiles WHERE id = ? AND NOT EXISTS (SELECT 1 FROM
     profile_attachments WHERE profile_id = ?)`. `RowsAffected() == 0` → re-read to classify as
-    `ErrProfileAttached` vs not-found. **The profile row goes first, the sections after** — once the
-    row is gone no new section or attachment can be inserted (next bullet), so nothing is orphaned.
+    `ErrProfileAttached` vs not-found. **That statement and the section sweep are one transaction**
+    (revised in PR review, spec §9.2: as two independent statements, a crash between them stranded
+    `hosts` sections — host tokens — with no route left to delete them, and a concurrent section
+    UPDATE could be acknowledged and broadcast just before being swept). The single-statement rule
+    is for the CAS; this operation is inherently multi-statement and must be all-or-nothing.
   - `PutAttachment` and the section insert (Task 2) are `INSERT … SELECT … WHERE EXISTS (SELECT 1
     FROM profiles WHERE id = ?) ON CONFLICT … DO UPDATE/NOTHING`; zero rows affected with no
     existing row → `ErrProfileNotFound`.
