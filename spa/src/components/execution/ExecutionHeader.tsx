@@ -6,7 +6,9 @@
 // presentation; ExecutionView owns the network and decides when the control
 // is offered. The cost is an anchor button with a one-line hover summary
 // (P-B4 spec §4.2 H1–H2); `cost === null` means history is not loaded yet.
-import { useEffect, useState } from 'react'
+// The button is `aria-describedby` the tooltip, and both render the total
+// through the same `formatUsd` so they can never disagree on a value.
+import { useEffect, useId, useState } from 'react'
 import { ArrowUUpLeft, Prohibit, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HoverTooltip } from '../HoverTooltip'
@@ -41,6 +43,7 @@ export const TERMINATE_CONFIRM_MS = 4000
 export default function ExecutionHeader({ summary, cost, sse, isMine, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState(false)
+  const costTipId = useId()
   useEffect(() => {
     if (!confirming) return
     const id = setTimeout(() => setConfirming(false), TERMINATE_CONFIRM_MS)
@@ -72,9 +75,10 @@ export default function ExecutionHeader({ summary, cost, sse, isMine, onInterrup
         <span data-testid="execution-lease">{leaseText}</span>
         {summary?.turn_count != null && <span>{summary.turn_count} {t('execution.turns')}</span>}
         <button type="button" data-testid="execution-cost" disabled={!cost}
+          aria-describedby={cost ? costTipId : undefined}
           className="relative tabular-nums hover:underline disabled:no-underline disabled:cursor-default">
-          {cost ? `$${cost.totalUsd.toFixed(2)}` : t('execution.cost.loading')}
-          {cost && <HoverTooltip placement="top">{costLine}</HoverTooltip>}
+          {cost ? formatUsd(cost.totalUsd, 2) : t('execution.cost.loading')}
+          {cost && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
         </button>
         <div className="flex-1" />
         {onTakeBack && (

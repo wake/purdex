@@ -28,6 +28,12 @@
 // Shape tolerance (C6): every read is guarded by type; a hostile or partial
 // frame yields zeros / nulls, never NaN, never a throw. `modelUsage` is read
 // by own-key iteration only.
+//
+// Overflow (codex R2 A1): every running total goes through `addFinite`, so a
+// hostile frame carrying `Number.MAX_VALUE` can never push a sum to ±Infinity
+// (which `formatUsd` / `formatTokens` would render as '$—' / '—' and the
+// header would render as '$Infinity'). The contribution that would overflow
+// is dropped and the total kept as it was — a saturating add, not a NaN.
 
 import { obj } from './content-blocks'
 import type { StreamMessage } from './message-types'
@@ -77,11 +83,22 @@ const str = (v: unknown): v is string => typeof v === 'string'
 
 const zeroTokens = (): TokenTotals => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 
+/**
+ * Saturating add: `a + b` when that is finite, else `a` unchanged. Inputs are
+ * always finite ≥ 0 (guarded by `nonNeg`), so the only way to leave the finite
+ * range is overflow to +Infinity — in which case the offending contribution is
+ * ignored rather than poisoning the total for every later frame.
+ */
+function addFinite(a: number, b: number): number {
+  const s = a + b
+  return Number.isFinite(s) ? s : a
+}
+
 function addTokens(into: TokenTotals, t: TokenTotals): void {
-  into.input += t.input
-  into.output += t.output
-  into.cacheRead += t.cacheRead
-  into.cacheWrite += t.cacheWrite
+  into.input = addFinite(into.input, t.input)
+  into.output = addFinite(into.output, t.output)
+  into.cacheRead = addFinite(into.cacheRead, t.cacheRead)
+  into.cacheWrite = addFinite(into.cacheWrite, t.cacheWrite)
 }
 
 interface ValidEntry { model: string; costUsd: number; tokens: TokenTotals }
@@ -113,14 +130,28 @@ function validEntries(modelUsage: unknown): ValidEntry[] {
   return out
 }
 
-/** C3 fallback: `usage` snake_case fields; missing ones are 0 when at least one is present, else null. */
+const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const
+
+/**
+ * C3 fallback: `usage` snake_case fields. A key that is ABSENT counts as 0
+ * (older CC omits the cache fields); a key that is PRESENT but not a finite
+ * number ≥ 0 makes the whole fallback `null` — a half-garbled frame must not
+ * be summed as if the garbled field were 0 (codex R2 A2). All four absent → null.
+ */
 function readUsage(usage: unknown): TokenTotals | null {
   const u = obj(usage)
   if (!u) return null
-  const fields = [u.input_tokens, u.output_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens]
-  if (!fields.some(nonNeg)) return null
-  const pick = (v: unknown): number => (nonNeg(v) ? v : 0)
-  return { input: pick(fields[0]), output: pick(fields[1]), cacheRead: pick(fields[2]), cacheWrite: pick(fields[3]) }
+  const vals: number[] = []
+  let present = 0
+  for (const k of USAGE_KEYS) {
+    if (!Object.hasOwn(u, k)) { vals.push(0); continue }
+    const v = u[k]
+    if (!nonNeg(v)) return null
+    vals.push(v)
+    present++
+  }
+  if (present === 0) return null
+  return { input: vals[0], output: vals[1], cacheRead: vals[2], cacheWrite: vals[3] }
 }
 
 const optNum = (v: unknown): number | null => (nonNeg(v) ? v : null)
@@ -142,7 +173,7 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
 
     // C2
     const costUsd = nonNeg(p.total_cost_usd) ? p.total_cost_usd : 0
-    totalUsd += costUsd
+    totalUsd = addFinite(totalUsd, costUsd)
 
     // C3 / C5
     const entries = validEntries(p.modelUsage)
@@ -153,7 +184,7 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
         addTokens(turnTokens, e.tokens)
         const agg = byModel.get(e.model)
         if (agg) {
-          agg.costUsd += e.costUsd
+          agg.costUsd = addFinite(agg.costUsd, e.costUsd)
           addTokens(agg.tokens, e.tokens)
         } else {
           byModel.set(e.model, { model: e.model, costUsd: e.costUsd, tokens: { ...e.tokens } })
@@ -173,9 +204,9 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
     const turnDuration = optNum(p.duration_ms)
     const turnApi = optNum(p.duration_api_ms)
     const turnRounds = optNum(p.num_turns)
-    durationMs += turnDuration ?? 0
-    apiMs += turnApi ?? 0
-    rounds += turnRounds ?? 0
+    durationMs = addFinite(durationMs, turnDuration ?? 0)
+    apiMs = addFinite(apiMs, turnApi ?? 0)
+    rounds = addFinite(rounds, turnRounds ?? 0)
 
     turns.push({
       index: turns.length + 1,

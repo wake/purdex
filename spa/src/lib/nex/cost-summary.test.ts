@@ -171,6 +171,29 @@ describe('costSummary — C3 usage fallback', () => {
     const [t] = costSummary([result({ usage: { output_tokens: 'x', input_tokens: -1 } })]).turns
     expect(t.tokens).toBeNull()
   })
+
+  // Codex R2 A2: an ABSENT key is 0, a PRESENT-but-invalid key poisons the whole fallback.
+  describe('mixed-shape usage (A2)', () => {
+    it('absent keys → 0 (only output_tokens present)', () => {
+      const [t] = costSummary([result({ usage: { output_tokens: 10 } })]).turns
+      expect(t.tokens).toEqual({ input: 0, output: 10, cacheRead: 0, cacheWrite: 0 })
+    })
+
+    it('present but non-numeric key alongside a valid one → null, not 0', () => {
+      const [t] = costSummary([result({ usage: { output_tokens: 10, input_tokens: '100' } })]).turns
+      expect(t.tokens).toBeNull()
+    })
+
+    it.each([[-1], [NaN], [Infinity], [null], ['5']])('sole key output_tokens=%s → null', (v) => {
+      const [t] = costSummary([result({ usage: { output_tokens: v } })]).turns
+      expect(t.tokens).toBeNull()
+    })
+
+    it('all four keys absent ({}) → null', () => {
+      const [t] = costSummary([result({ usage: {} })]).turns
+      expect(t.tokens).toBeNull()
+    })
+  })
 })
 
 describe('costSummary — C3 partially valid modelUsage', () => {
@@ -282,6 +305,56 @@ describe('costSummary — C6 hostile shapes', () => {
     expect(t.tokens).toBeNull()
     expect(t.subtype).toBe('')
     expect(t.isError).toBe(false)
+  })
+})
+
+// Codex R2 A1: sums must stay finite — a contribution that would overflow to
+// ±Infinity is dropped and the running total kept.
+describe('costSummary — overflow stays finite (A1)', () => {
+  const big = Number.MAX_VALUE
+
+  it('two MAX_VALUE total_cost_usd → totalUsd is MAX_VALUE, not Infinity', () => {
+    const s = costSummary([result({ total_cost_usd: big }), result({ total_cost_usd: big })])
+    expect(Number.isFinite(s.totalUsd)).toBe(true)
+    expect(s.totalUsd).toBe(big)
+  })
+
+  it('two modelUsage entries each with MAX_VALUE outputTokens → per-turn and total output finite', () => {
+    const s = costSummary([
+      result({
+        modelUsage: {
+          a: { ...validEntry, outputTokens: big, canonicalModel: 'a' },
+          b: { ...validEntry, outputTokens: big, canonicalModel: 'b' },
+        },
+      }),
+    ])
+    expect(Number.isFinite(s.turns[0].tokens?.output)).toBe(true)
+    expect(s.turns[0].tokens?.output).toBe(big)
+    expect(Number.isFinite(s.tokens.output)).toBe(true)
+    expect(s.tokens.output).toBe(big)
+  })
+
+  it('same canonical model across two turns with MAX_VALUE costUSD / tokens → models[] finite', () => {
+    const e = { ...validEntry, costUSD: big, inputTokens: big, canonicalModel: 'm' }
+    const s = costSummary([result({ modelUsage: { m: e } }), result({ modelUsage: { m: e } })])
+    expect(s.models).toHaveLength(1)
+    expect(s.models[0].costUsd).toBe(big)
+    expect(s.models[0].tokens.input).toBe(big)
+  })
+
+  it('usage fallback tokens across turns → total finite', () => {
+    const s = costSummary([result({ usage: { output_tokens: big } }), result({ usage: { output_tokens: big } })])
+    expect(s.tokens.output).toBe(big)
+  })
+
+  it('duration_ms / duration_api_ms / num_turns overflow → totals finite', () => {
+    const s = costSummary([
+      result({ duration_ms: big, duration_api_ms: big, num_turns: big }),
+      result({ duration_ms: big, duration_api_ms: big, num_turns: big }),
+    ])
+    expect(s.durationMs).toBe(big)
+    expect(s.apiMs).toBe(big)
+    expect(s.rounds).toBe(big)
   })
 })
 

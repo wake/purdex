@@ -146,6 +146,30 @@ describe('ExecutionHeader', () => {
       expect(tip.className).toMatch(/\bopacity-100\b/)
     })
 
+    // Codex R2 A1: header and tooltip share formatUsd — a MAX_VALUE cost never renders 'Infinity'.
+    it('two MAX_VALUE costs → header text starts with $ and never contains Infinity; tooltip agrees', () => {
+      const big = { type: 'result', total_cost_usd: Number.MAX_VALUE } as StreamMessage
+      const cost = costSummary([big, big])
+      render(<ExecutionHeader {...baseProps} summary={summary()} cost={cost} />)
+      const btn = costBtn()
+      expect(btn.textContent?.startsWith('$')).toBe(true)
+      expect(btn.textContent).not.toContain('Infinity')
+      expect(btn.textContent).not.toContain('NaN')
+      const tip = screen.getByRole('tooltip')
+      expect(tip.textContent).not.toContain('Infinity')
+      expect(tip.textContent).toContain('$')
+    })
+
+    // Codex R2 A4: the anchor is described by its tooltip.
+    it('with cost → button aria-describedby equals the tooltip id; cost=null → no aria-describedby', () => {
+      const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+      const tip = screen.getByRole('tooltip')
+      expect(tip.id).not.toBe('')
+      expect(costBtn().getAttribute('aria-describedby')).toBe(tip.id)
+      rerender(<ExecutionHeader {...baseProps} summary={summary()} cost={null} />)
+      expect(costBtn().hasAttribute('aria-describedby')).toBe(false)
+    })
+
     it('leaving before 800 ms → tooltip never shows', () => {
       vi.useFakeTimers()
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)

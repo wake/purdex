@@ -6,13 +6,15 @@ export type HoverTooltipPlacement = 'top' | 'right'
 interface Props {
   children: ReactNode
   placement?: HoverTooltipPlacement
+  /** Set when the anchor points at this tooltip via `aria-describedby`. Omitted → no `id` attribute at all. */
+  id?: string
   'data-testid'?: string
 }
 
 const HOVER_TOOLTIP_OFFSET = 8
 const HOVER_TOOLTIP_DELAY_MS = 800
 
-export function HoverTooltip({ children, placement = 'right', 'data-testid': testId }: Props) {
+export function HoverTooltip({ children, placement = 'right', id, 'data-testid': testId }: Props) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [visible, setVisible] = useState(false)
   const [style, setStyle] = useState<CSSProperties>({ top: 0, left: 0 })
@@ -91,6 +93,7 @@ export function HoverTooltip({ children, placement = 'right', 'data-testid': tes
       {createPortal(
         <span
           role="tooltip"
+          id={id}
           data-testid={testId}
           data-placement={placement}
           className={`pointer-events-none fixed whitespace-nowrap rounded bg-surface-secondary border border-border-default px-2 py-1 text-xs text-text-primary shadow-lg transition-opacity z-50 ${visible ? 'opacity-100' : 'opacity-0'}`}
