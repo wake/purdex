@@ -12,9 +12,29 @@
 //   - Inputs are never mutated (the tests feed deep-frozen states and events).
 //   - An event that changes nothing returns THE SAME state reference.
 //   - An event that changes anything — any field at all, `currentHash` and
-//     `indexStale` included — bumps `epoch` by exactly one. A FlightToken and
-//     an index request carry the epoch they were made at, so both die the
-//     moment the state they were made in is gone (§4.6.2 rules 3 and 4).
+//     `indexStale` included — bumps `epoch` by exactly one. A FlightToken
+//     carries the epoch it was made at, so it dies the moment the state it was
+//     made in is gone (§4.6.2 rule 4).
+//   - An index request carries `indexEpoch` instead (§4.6.2 rule 3). The index
+//     is knowledge about the SOT, so its freshness must not depend on what the
+//     user types: `indexEpoch` moves only when `base`, `sot` or `inFlight`
+//     (a flight opening or closing) change, and on an applied `reconnected`.
+//     `local-changed`, `locked`, `resolved`, `local-restored` and `indexStale`
+//     flips leave it alone. Were it tied to `epoch`, a user typing steadily
+//     (one `local-changed` per debounce) would invalidate every index response
+//     before it landed, and `indexStale` — which shadows push, pull and lock —
+//     would starve the section forever.
+//     Why `reconnected` DOES bump it: a request sent before the connection
+//     dropped describes the SOT at some time T. Whatever this client learnt
+//     after T (remote-event, push result) has already bumped `indexEpoch`. But
+//     the reason `reconnected` re-stales the index is the events this client
+//     did NOT learn — those lost while disconnected. A pre-drop response that
+//     lands after the reconnect may predate them; accepting it would clear
+//     `indexStale` with an old view and nothing would ask again. So the
+//     reconnect kills it. (A reconnect is not user-driven, so this cannot
+//     starve.) Known gap, as before this field existed: a `reconnected` that
+//     finds the index ALREADY stale is a no-op and kills nothing — the driver
+//     must drop an index request that was outstanding across a disconnect.
 //   - `status` is stored, but only its `locked:*` values are *decided* (by the
 //     `locked` event, by a 409, and by `resolved`). `synced` / `pending` are
 //     re-derived at the end of every event: `pending` iff the section is dirty
@@ -46,8 +66,8 @@
 // Driver contract (P2b), stated here because this reducer is what makes it safe:
 //   - connect / reconnect to the dev host: dispatch `reconnected` to EVERY
 //     section, GET the index, then dispatch one `sot-index` per section carrying
-//     the `epoch` that section had when the request was SENT (i.e. read after
-//     `reconnected`). `reconnected` does not close a flight: whatever was on the
+//     the `indexEpoch` that section had when the request was SENT (i.e. read
+//     after `reconnected`). `reconnected` does not close a flight: whatever was on the
 //     wire still owes its one terminal event (`push-failed` on timeout).
 //   - startup: sections with a persisted base are rebuilt with
 //     `restoreSectionState`, never-synced ones with `initialSectionState`. Only
@@ -63,8 +83,8 @@
 //   - pull: fetch, then check `canApplyPull` on the *current* state before
 //     touching the stores; then dispatch `pull-applied`. For an absent SOT
 //     (404) the deletion is applied and reported with `rev = state.sot.rev`.
-//   - sot-index: tag the response with the `epoch` read when the request was
-//     *sent*.
+//   - sot-index: tag the response with the `indexEpoch` the `reindex` action
+//     carried (i.e. read when the request was *sent*), unchanged.
 //   - restore-local: a pending restore is CANCELLED by any `local-changed` that
 //     really changes the live hash — what the user typed after choosing
 //     keep-local beats the snapshot that choice was about. So, before writing
@@ -106,10 +126,13 @@ export interface SectionSyncState {
   base: Held
   /** Hash of the live local payload; null = does not exist locally. */
   currentHash: string | null
-  /** Newest SOT state this client has observed. `rev` decreases only through an epoch-matching index. */
+  /** Newest SOT state this client has observed. `rev` decreases only through an index made at the current `indexEpoch`. */
   sot: Held
-  /** Bumped by every state change. */
+  /** Bumped by every state change. Guards flight tokens. */
   epoch: number
+  /** Bumped only when `base`, `sot` or `inFlight` change, and by an applied
+   *  `reconnected`. Guards index responses — local edits never move it. */
+  indexEpoch: number
   status: SectionStatus
   inFlight: FlightToken | null
   sotMovedWhileInFlight: boolean
@@ -129,7 +152,7 @@ export interface SectionSyncState {
 export type SectionEvent =
   | { type: 'local-changed'; hash: string | null }
   | { type: 'reconnected' } // the dev host became reachable (first connect included)
-  | { type: 'sot-index'; epoch: number; entry: { rev: number; hash: string } | null } // null = not listed
+  | { type: 'sot-index'; epoch: number; entry: { rev: number; hash: string } | null } // epoch = the reindex action's indexEpoch; entry null = not listed
   | { type: 'remote-event'; rev: number; hash: string | null; own: boolean } // hash null = deleted
   | { type: 'push-started'; token: FlightToken }
   | { type: 'push-applied'; rev: number } // 200 applied:true / DELETE 200
@@ -143,7 +166,7 @@ export type SectionEvent =
 
 export type SectionAction =
   | { do: 'nothing' }
-  | { do: 'reindex' }
+  | { do: 'reindex'; indexEpoch: number } // echo `indexEpoch` as the `epoch` of the resulting `sot-index`
   | { do: 'pull' }
   | { do: 'push'; token: FlightToken }
   | { do: 'delete'; token: FlightToken }
@@ -177,6 +200,7 @@ export function restoreSectionState(persisted: { base: Held; currentHash: string
     currentHash,
     sot: { rev: base.rev, hash: base.hash },
     epoch: 0,
+    indexEpoch: 0,
     status: currentHash === base.hash ? 'synced' : 'pending',
     inFlight: null,
     sotMovedWhileInFlight: false,
@@ -239,7 +263,7 @@ export function decideSection(s: SectionSyncState, ctx: SectionContext): Section
   /* 0a */ if (isLocked(s)) return NOTHING
   /* 0b */ if (s.inFlight !== null) return NOTHING
   /* 0c */ if (s.restoreLocal !== null && s.currentHash !== s.restoreLocal.hash) return { do: 'restore-local', hash: s.restoreLocal.hash }
-  /* 0d */ if (s.indexStale) return online ? { do: 'reindex' } : NOTHING
+  /* 0d */ if (s.indexStale) return online ? { do: 'reindex', indexEpoch: s.indexEpoch } : NOTHING
   /* 0e */ if (s.forcePull) return online ? { do: 'pull' } : NOTHING
   /* 1  */ if (s.sot.rev < s.base.rev) return { do: 'lock-reset' }
   const dirty = isDirty(s)
@@ -311,7 +335,10 @@ function finish(prev: SectionSyncState, draft: SectionSyncState): SectionSyncSta
     if (next.status !== status) next = { ...next, status }
   }
   if (unchanged(prev, next)) return prev
-  return { ...next, epoch: prev.epoch + 1 }
+  // `step` may already have moved indexEpoch (reconnected); otherwise it follows base / sot / the flight.
+  const sotKnowledgeMoved = !sameHeld(prev.base, next.base) || !sameHeld(prev.sot, next.sot) || prev.inFlight !== next.inFlight
+  const indexEpoch = next.indexEpoch === prev.indexEpoch && sotKnowledgeMoved ? prev.indexEpoch + 1 : next.indexEpoch
+  return { ...next, epoch: prev.epoch + 1, indexEpoch }
 }
 
 function closeFlight(s: SectionSyncState): SectionSyncState {
@@ -327,14 +354,15 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       return { ...s, currentHash: e.hash, restoreLocal: null }
 
     case 'reconnected':
-      return s.indexStale ? s : { ...s, indexStale: true }
+      // kills an index request sent before the drop — see the header for why
+      return s.indexStale ? s : { ...s, indexStale: true, indexEpoch: s.indexEpoch + 1 }
 
     case 'remote-event':
       if (e.own || e.rev <= s.sot.rev) return s
       return withSot(s, { rev: e.rev, hash: e.hash })
 
     case 'sot-index': {
-      if (e.epoch !== s.epoch) return s.indexStale ? s : { ...s, indexStale: true }
+      if (e.epoch !== s.indexEpoch) return s.indexStale ? s : { ...s, indexStale: true }
       const sot: Held = e.entry !== null ? { rev: e.entry.rev, hash: e.entry.hash } : { rev: Math.max(s.sot.rev, s.base.rev), hash: null }
       const next = withSot(s, sot)
       return next.indexStale ? { ...next, indexStale: false } : next
