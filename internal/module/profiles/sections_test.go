@@ -770,3 +770,74 @@ func TestPutResultChangedIsTrueOnlyWhenARowWasWritten(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 4, Changed: true}, recreated)
 }
+
+// ── writes against a deleted profile ───────────────────────────────────────
+
+// After DeleteProfile the sections are gone with the profile, so every
+// conditional write that used to hit one of its rows now hits nothing and must
+// be classified as "no such profile" — never applied, never a conflict.
+func TestSectionWritesAfterDeleteProfileAreProfileNotFound(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+	hostsRev := mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+	liveRev := mustPut(t, s, pid, sec("tabs.w1", "h2", `{}`, clientA), 0)
+	mustPut(t, s, pid, sec("tabs.w2", "h3", `{}`, clientA), 0)
+	_, err := s.DeleteSection(pid, "tabs.w2", clientA, 1) // tombstone
+	require.NoError(t, err)
+
+	require.NoError(t, s.DeleteProfile(pid))
+
+	// Step 3: update of a section that was live, with the right baseRev.
+	res, err := s.PutSection(pid, sec("hosts", "h9", `{}`, clientA), hostsRev)
+	assert.ErrorIs(t, err, ErrProfileNotFound, "update")
+	assert.Equal(t, PutResult{}, res, "update")
+
+	// Step 1: recreate over what was a tombstone.
+	res, err = s.PutSection(pid, sec("tabs.w2", "h9", `{}`, clientA), 0)
+	assert.ErrorIs(t, err, ErrProfileNotFound, "recreate over tombstone")
+	assert.Equal(t, PutResult{}, res, "recreate over tombstone")
+
+	// Tombstone write on a section that was live.
+	res, err = s.DeleteSection(pid, "tabs.w1", clientA, liveRev)
+	assert.ErrorIs(t, err, ErrProfileNotFound, "delete section")
+	assert.Equal(t, PutResult{}, res, "delete section")
+
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "profile_id = ?", pid))
+}
+
+// The profile is deleted inside each write path's read→write window: the
+// conditional statement then hits zero rows, and the re-read must report the
+// missing profile rather than a conflict against a row that no longer exists.
+func TestPutSectionProfileDeletedInsideTheWindowIsProfileNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, s *Store, pid string) int64 // returns baseRev
+	}{
+		{"insert", func(t *testing.T, s *Store, pid string) int64 { return 0 }},
+		{"update", func(t *testing.T, s *Store, pid string) int64 {
+			return mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+		}},
+		{"recreate", func(t *testing.T, s *Store, pid string) int64 {
+			mustPut(t, s, pid, sec("hosts", "h1", `{}`, clientA), 0)
+			_, err := s.DeleteSection(pid, "hosts", clientA, 1)
+			require.NoError(t, err)
+			return 0
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTestStore(t)
+			pid := newProfile(t, s)
+			baseRev := tc.prepare(t, s, pid)
+			s.afterSectionRead = func() {
+				s.afterSectionRead = nil
+				require.NoError(t, s.DeleteProfile(pid))
+			}
+
+			res, err := s.PutSection(pid, sec("hosts", "h2", `{}`, clientB), baseRev)
+
+			assert.ErrorIs(t, err, ErrProfileNotFound)
+			assert.False(t, res.Changed)
+			assert.Equal(t, 0, countRows(t, s, "profile_sections", "profile_id = ?", pid))
+		})
+	}
+}

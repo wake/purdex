@@ -168,7 +168,18 @@ func (s *Store) requireProfile(profileID string) error {
 // A BEGIN…COMMIT around read+write would add nothing to that and would cost
 // something: under database/sql a transaction that reads and then writes is a
 // read→write lock upgrade, which fails with SQLITE_BUSY_SNAPSHOT when another
-// writer got in between — an error busy_timeout does not retry.
+// writer got in between — an error busy_timeout does not retry. (DeleteProfile
+// does use a transaction: it is inherently multi-statement, and it starts with
+// a write, so it never upgrades. See its comment.)
+//
+// # A profile deleted under the write
+//
+// DeleteProfile removes the profile row and every section row in one
+// transaction, so no conditional write here can match a row of a profile that
+// is being deleted: it runs either before the transaction (and is swept with
+// the rest) or after the commit, where it hits zero rows. The re-read then
+// finds no row, and every arm that finds no row ends in requireProfile —
+// ErrProfileNotFound, with nothing written and Changed false.
 //
 // # Why a stale classification is harmless
 //
@@ -207,9 +218,10 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 				}
 				return PutResult{Outcome: PutConflict}, nil
 			}
-			// Profile existence is part of the statement (see DeleteProfile):
-			// once the profile row is gone this cannot insert, so a section can
-			// never be orphaned by a concurrent DeleteProfile.
+			// Profile existence is part of the statement. DeleteProfile is one
+			// transaction, so this insert is ordered wholly before it (and is
+			// swept with the profile) or wholly after it (and finds no profile):
+			// a section can never be orphaned by a concurrent DeleteProfile.
 			n, err := s.execRows("insert section", `
 				INSERT INTO profile_sections
 					(profile_id, section, rev, hash, fingerprint, ordinal, payload, writer, updated_at, deleted)
@@ -305,7 +317,10 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 //     clients removing the same workspace must not deadlock each other). Rev is
 //     the tombstone's, or 0 when there never was a row.
 //
-// It returns ErrProfileNotFound when there is no row and no such profile.
+// It returns ErrProfileNotFound when there is no row and no such profile —
+// which includes a profile deleted concurrently: DeleteProfile sweeps the rows
+// in the same transaction that removes the profile, so the tombstone UPDATE
+// cannot land on a row that is about to disappear.
 //
 // # Why a tombstone and not a real DELETE
 //

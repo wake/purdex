@@ -50,6 +50,14 @@ type Store struct {
 	// row and its conditional write — the window a racing writer has to hit.
 	// Tests use it to lose a race deterministically; it is nil in production.
 	afterSectionRead func()
+
+	// beforeSectionSweep, when set, runs inside DeleteProfile's transaction,
+	// after the profile row is deleted and before its sections are swept; a
+	// non-nil error stands in for that sweep failing. It must not touch s.db
+	// (the transaction holds the write lock, and on ":memory:" the only
+	// connection). Tests use it to prove the delete is all-or-nothing; it is
+	// nil in production.
+	beforeSectionSweep func() error
 }
 
 // OpenStore opens (or creates) a Store at path. Use ":memory:" for tests that
@@ -96,9 +104,9 @@ func randomProfileID() (string, error) {
 
 // migrate creates the three tables of spec §4.8. There is deliberately no
 // schema-version table (nothing else in the daemon has one) and no foreign
-// key: DeleteProfile removes dependent rows itself, and PRAGMA foreign_keys is
-// per connection, so it would have to live in the DSN to mean anything (see
-// internal/store/agent_event.go).
+// key: DeleteProfile removes dependent rows itself (in one transaction), and
+// PRAGMA foreign_keys is per connection, so it would have to live in the DSN
+// to mean anything (see internal/store/agent_event.go).
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS profiles (
@@ -206,33 +214,65 @@ func (s *Store) RenameProfile(id, name string) (bool, error) {
 	return n > 0, nil
 }
 
-// DeleteProfile removes the profile and its sections (tombstones included). It
-// returns ErrProfileAttached while any client is attached to it, and
-// ErrProfileNotFound when there is no such profile.
+// DeleteProfile removes the profile and its sections (tombstones included) as
+// one transaction. It returns ErrProfileAttached while any client is attached
+// to it, and ErrProfileNotFound when there is no such profile. On any other
+// error nothing was removed — profile and sections are both still there — and
+// the call can simply be repeated.
+//
+// # Why this is a transaction when the section CAS is not
+//
+// PutSection and DeleteSection get away without BEGIN…COMMIT because each of
+// them decides with a single conditional statement, and SQLite runs a single
+// statement atomically. Deleting a profile is inherently two statements — the
+// profile row and its section rows live in different tables — and what the
+// second one removes is not disposable: the `hosts` section carries host
+// tokens. Run as two independent statements, a crash or an error after the
+// first would leave those rows behind for good: the profile row is what makes
+// the id reachable, so the retry answers ErrProfileNotFound and nothing else
+// in the module ever deletes sections by profile id. It would also open a
+// window in which a section CAS (update, recreate over a tombstone, tombstone
+// write) still matches a row that is about to be swept, reports the write as
+// applied, broadcasts it — and the write then vanishes. So the pair has to be
+// all-or-nothing, and invisible to other writers until it is complete.
+//
+// # Why the transaction is safe here
+//
+// The objection to transactions in PutSection's comment is the read→write
+// upgrade: a deferred transaction that reads first holds a read snapshot, and
+// upgrading it fails with SQLITE_BUSY_SNAPSHOT (which busy_timeout does not
+// retry) if another writer committed in between. This transaction never
+// reads first. Its first statement is the DELETE, so it goes straight for the
+// write lock — waiting on busy_timeout like any single statement would — and
+// holds it until COMMIT. Nothing can commit in between, and there is no
+// snapshot to go stale.
+//
+// # The conditions stay inside the statements
 //
 // The "no attachments" condition is part of the DELETE itself rather than a
-// SELECT followed by a DELETE. With a check-then-write pair, a PutAttachment
-// could land between the two and leave an attachment pointing at a profile
-// that no longer exists — and the 409 the caller was promised would not have
-// fired. As one statement, SQLite's single-writer lock orders it strictly
-// before or after any competing PutAttachment.
+// SELECT followed by a DELETE, which both keeps the first statement a write
+// (see above) and lets RowsAffected be the verdict. Every statement that adds
+// a dependent row (PutAttachment here, the section insert in PutSection)
+// carries its own `WHERE EXISTS (SELECT 1 FROM profiles WHERE id = ?)`, and
+// SQLite's single-writer lock orders it strictly before or after this whole
+// transaction: before, and the attachment makes the DELETE refuse / the
+// section is swept with the rest; after, and it finds no profile and writes
+// nothing. Likewise a section CAS ordered after the commit matches zero rows
+// and its re-read reports ErrProfileNotFound.
 //
-// Order — the profile row first, its sections second, and no transaction
-// around the pair. Every statement that adds a dependent row (PutAttachment
-// here, the section insert in PutSection) carries its own
-// `WHERE EXISTS (SELECT 1 FROM profiles WHERE id = ?)`, so the moment the
-// profile row is gone nothing new can be attached to the id. The section
-// sweep therefore runs against a set that can only shrink, and needs no
-// isolation from concurrent writers. The opposite order would need a
-// transaction: a section inserted after the sweep but before the profile
-// delete would be orphaned. A transaction would also be the only
-// multi-statement write in the module and, under database/sql, would upgrade
-// read→write mid-flight (SQLITE_BUSY_SNAPSHOT, which busy_timeout does not
-// retry). The price of going without: a crash between the two statements
-// leaves section rows for an id that can never be reached again (ids are
-// random and never reused) — dead bytes, not wrong behaviour.
+// The re-read that tells ErrProfileAttached from ErrProfileNotFound happens
+// only after the rollback: with ":memory:" the pool is a single connection,
+// and querying s.db while the transaction holds it would deadlock.
 func (s *Store) DeleteProfile(id string) error {
-	res, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete profile: begin: %w", err)
+	}
+	// A no-op once Commit has succeeded; on every other path it puts both
+	// tables back and releases the write lock.
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`
 		DELETE FROM profiles
 		WHERE id = ?
 		  AND NOT EXISTS (SELECT 1 FROM profile_attachments WHERE profile_id = ?)`,
@@ -245,6 +285,9 @@ func (s *Store) DeleteProfile(id string) error {
 		return fmt.Errorf("delete profile rows affected: %w", err)
 	}
 	if n == 0 {
+		if err := tx.Rollback(); err != nil {
+			return fmt.Errorf("delete profile: rollback: %w", err)
+		}
 		// The conditional DELETE already decided not to act; this read only
 		// classifies why. A racing writer can change the answer between the
 		// two, but either classification is a refusal, and the profile is
@@ -258,8 +301,16 @@ func (s *Store) DeleteProfile(id string) error {
 		}
 		return ErrProfileAttached
 	}
-	if _, err := s.db.Exec(`DELETE FROM profile_sections WHERE profile_id = ?`, id); err != nil {
+	if s.beforeSectionSweep != nil {
+		if err := s.beforeSectionSweep(); err != nil {
+			return fmt.Errorf("delete profile sections: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM profile_sections WHERE profile_id = ?`, id); err != nil {
 		return fmt.Errorf("delete profile sections: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete profile: commit: %w", err)
 	}
 	return nil
 }

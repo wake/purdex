@@ -1,10 +1,12 @@
 package profiles
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -392,4 +394,162 @@ func TestStoreConcurrentDeleteProfileVsPutAttachment(t *testing.T) {
 		}
 	}
 	t.Logf("delete won %d, attach won %d of %d rounds", deleteWon, putWon, rounds)
+}
+
+// ── DeleteProfile is all-or-nothing ────────────────────────────────────────
+
+// A failure while sweeping the sections must leave the profile in place, so
+// that the delete can be retried. If the profile row went first and stayed
+// gone, the retry would answer ErrProfileNotFound and the sections — `hosts`
+// carries host tokens — would sit in profiles.db with no path left to remove
+// them.
+func TestStoreDeleteProfileSectionSweepFailureRollsBackAndIsRetryable(t *testing.T) {
+	s, _ := openTestStore(t)
+	p, err := s.CreateProfile("Work")
+	require.NoError(t, err)
+	insertRawSection(t, s, p.ID, "hosts", 0)
+	insertRawSection(t, s, p.ID, "tabs.w1", 1) // tombstone
+
+	boom := errors.New("injected sweep failure")
+	s.beforeSectionSweep = func() error { return boom }
+
+	err = s.DeleteProfile(p.ID)
+	require.ErrorIs(t, err, boom)
+	require.NotErrorIs(t, err, ErrProfileNotFound)
+
+	_, found, err := s.GetProfile(p.ID)
+	require.NoError(t, err)
+	assert.True(t, found, "a failed delete must not have removed the profile row")
+	assert.Equal(t, 2, countRows(t, s, "profile_sections", "profile_id = ?", p.ID),
+		"a failed delete must not have removed any section")
+
+	// The retry is what the two-statement version could not offer.
+	s.beforeSectionSweep = nil
+	require.NoError(t, s.DeleteProfile(p.ID))
+
+	_, found, err = s.GetProfile(p.ID)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Equal(t, 0, countRows(t, s, "profile_sections", "profile_id = ?", p.ID),
+		"live rows and tombstones both go")
+}
+
+// The same failure on a file-backed (WAL, pooled) database: the rollback must
+// release the write lock, or the retry — and every other writer — would hang
+// on busy_timeout.
+func TestStoreDeleteProfileSectionSweepFailureReleasesTheWriteLock(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "profiles.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close() })
+	p, err := s.CreateProfile("Work")
+	require.NoError(t, err)
+	insertRawSection(t, s, p.ID, "hosts", 0)
+
+	s.beforeSectionSweep = func() error { return errors.New("injected sweep failure") }
+	require.Error(t, s.DeleteProfile(p.ID))
+	s.beforeSectionSweep = nil
+
+	started := time.Now()
+	require.NoError(t, s.PutAttachment(att("c_000000000001", p.ID, "Mac")))
+	require.ErrorIs(t, s.DeleteProfile(p.ID), ErrProfileAttached)
+	assert.Less(t, time.Since(started), 2*time.Second, "a writer waited on a lock the failed delete kept")
+	assert.Equal(t, 1, countRows(t, s, "profile_sections", "profile_id = ?", p.ID))
+}
+
+// The refusals must not leave a transaction open: on ":memory:" the pool is a
+// single connection, so a leaked tx deadlocks the very next query.
+func TestStoreDeleteProfileRefusalsLeaveNoOpenTransaction(t *testing.T) {
+	s, _ := openTestStore(t)
+	p, err := s.CreateProfile("Work")
+	require.NoError(t, err)
+	require.NoError(t, s.PutAttachment(att("c_000000000001", p.ID, "Mac")))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		assert.ErrorIs(t, s.DeleteProfile(p.ID), ErrProfileAttached)
+		assert.ErrorIs(t, s.DeleteProfile("p_ffffffffffff"), ErrProfileNotFound)
+		_, _, err := s.GetProfile(p.ID)
+		assert.NoError(t, err)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("DeleteProfile refusal deadlocked the single-connection pool")
+	}
+}
+
+// DeleteProfile ∥ PutSection on a file-backed database. Both may succeed (the
+// put lands first, the delete sweeps it), but a put can never outlive the
+// profile: once the profile is gone there is no section row left for it, and
+// the put either applied before the delete or was told the profile is gone.
+func TestStoreConcurrentDeleteProfileVsPutSection(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "profiles.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close() })
+
+	const rounds = 200
+	var applied, refused int
+	for i := 0; i < rounds; i++ {
+		p, err := s.CreateProfile("race")
+		require.NoError(t, err)
+		rev := mustPut(t, s, p.ID, sec("hosts", "h1", `{"token":"t"}`, clientA), 0)
+
+		var (
+			delErr, putErr error
+			res            PutResult
+		)
+		// PutSection reads before it writes, so released together the delete
+		// always gets there first. On odd rounds the delete is released from
+		// inside the put's read→write window instead, which pits the put's
+		// UPDATE directly against the delete's transaction. The hook is set
+		// before either goroutine starts and only PutSection reads it.
+		start := make(chan struct{})
+		putStart, delStart := start, start
+		s.afterSectionRead = nil
+		if i%2 == 1 {
+			putStart, delStart = make(chan struct{}), make(chan struct{})
+			close(putStart)
+			var once sync.Once
+			s.afterSectionRead = func() { once.Do(func() { close(delStart) }) }
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-delStart
+			delErr = s.DeleteProfile(p.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-putStart
+			res, putErr = s.PutSection(p.ID, sec("hosts", "h2", `{"token":"u"}`, clientA), rev)
+		}()
+		if i%2 == 0 {
+			close(start)
+		}
+		wg.Wait()
+		s.afterSectionRead = nil
+
+		require.NoError(t, delErr, "round %d", i)
+		_, profileExists, err := s.GetProfile(p.ID)
+		require.NoError(t, err)
+		require.False(t, profileExists, "round %d", i)
+		require.Equal(t, 0, countRows(t, s, "profile_sections", "profile_id = ?", p.ID),
+			"round %d: section rows survived their profile", i)
+
+		if putErr != nil {
+			refused++
+			require.ErrorIs(t, putErr, ErrProfileNotFound, "round %d", i)
+			require.False(t, res.Changed, "round %d", i)
+			continue
+		}
+		applied++
+		require.Equal(t, PutApplied, res.Outcome, "round %d", i)
+		require.True(t, res.Changed, "round %d", i)
+	}
+	t.Logf("put applied before the delete %d, refused %d of %d rounds", applied, refused, rounds)
+	// The put wins only a few rounds in a hundred, so its count is logged, not
+	// asserted — a zero there is bad luck, not a bug.
+	assert.NotZero(t, refused, "the delete never won a round")
 }
