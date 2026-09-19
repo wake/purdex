@@ -1,6 +1,6 @@
 # Spec — P-B4: exec pane cost hover / panel (client-side)
 
-- Status: v1.0 draft (2026-09-19)
+- Status: v1.1 (2026-09-19) — codex plan+spec review applied (§9)
 - Predecessors: P-B (`2026-09-15-pb-execution-pane-spec.md`, header §4.3.3),
   P-B2 / P-B3 (tool activity, N2 facts). This is the last of the user's
   decision #5 (tool summaries, line-numbered diffs, **cost hover**,
@@ -46,9 +46,9 @@ the host's quota window is. Every one of those facts is already in the
 - Server-side rollups, cross-execution / per-host cost totals, price
   tables (the daemon's `costUSD` is the source of truth; the SPA never
   multiplies tokens by a rate).
-- Cache-miss explanations, `iterations[]`, `ttft_stream_ms`,
+- Cache-miss explanations, `iterations[]`, `ttft_ms`, `ttft_stream_ms`,
   `time_to_request_ms`, `first_content_frame_ms` — present in the frame
-  (F2) but not shown; the panel shows `ttft_ms` only.
+  (F1/F2) but not shown anywhere in this phase.
 - Persisting anything; the panel is derived on open.
 - Theming beyond the existing tokens; the panel uses `FloatingPanel`'s
   chrome as is.
@@ -86,17 +86,21 @@ kinds with payloads verbatim) and `cost-subagent-06GBGXTW.json`
   `80127`. `usage` reflects one model's messages, `modelUsage` all of
   them. ⇒ token breakdowns sum `modelUsage`; `usage` is the fallback for
   frames without `modelUsage` (older CC).
-- F6 **Subagents do not emit their own `result`**: the subagent run has
-  frames with `parent_tool_use_id = toolu_01DCjy…` (`user`, `assistant`)
-  but a single top-level `result` (`parent_tool_use_id: null`,
+- F6 **The parent's `result` already contains the subagent's spend**: the
+  subagent run has frames with `parent_tool_use_id = toolu_01DCjy…`
+  (`user`, `assistant`) and, in this sample, no `result` of its own — a
+  single top-level `result` (`parent_tool_use_id: null`,
   `subagent_stats.spawned: 1, completed: 1`) whose `total_cost_usd` 0.088
   (vs 0.027 for the identical brief without a subagent) and
   `modelUsage.cacheReadInputTokens 46503` include the subagent's usage.
   The subagent `assistant` frames carry `message.usage` of their own —
-  that is the same spend seen twice. ⇒ sum **only** `result` frames with
-  `parent_tool_use_id == null`; never add subagent `message.usage`. (The
-  reducer keeps subagent frames in `messages` — P-B2 F1 — so the filter
-  must be explicit.)
+  that is the same spend seen twice. Whether some CC version ever emits a
+  subagent-scoped `result` (P-B2 F1 defends against one) does not change
+  the rule: its spend is inside the parent's total, so ⇒ sum **only**
+  `result` frames with `parent_tool_use_id == null`; never add subagent
+  `message.usage`. (The reducer keeps subagent frames in `messages` —
+  P-B2 F1 — so the filter must be explicit.) One sample; the invariant
+  the rule rests on is CC's own accounting, not the absence of a frame.
 - F7 `subtype` values seen: `success` (10), `error_during_execution` (2:
   one with cost 0 / `num_turns 2` / `duration_api_ms 0`, one with cost
   0.0057). A `success` with `num_turns 0`, cost 0, `duration_ms 10`
@@ -113,10 +117,14 @@ kinds with payloads verbatim) and `cost-subagent-06GBGXTW.json`
   table (contract §3.5) names only `execution.delegated.brief`,
   `execution.message_accepted.text`, `tool_use.{input, primary_arg}`,
   `tool_result.{output, diff, file}` — `result` is never stripped.
-- F10 Quota: `GET /api/nex/v1/host` → `NexHostInfo.quota:
-  {five_hour_pct, seven_day_pct, resets_at, source} | null`; not in a
-  store — `NexEngineStatus.tsx:75` fetches it locally per render key.
-  Under the `trusted` profile on mlab, `quota.source` is `usage_api`.
+- F10 Quota: `GET /api/nex/v1/host` → `NexHostInfo.{active_account,
+  account_id?, quota: {five_hour_pct, seven_day_pct, resets_at, source} |
+  null}`; not in a store — `NexEngineStatus.tsx:75` fetches it locally
+  per render key. Under the `trusted` profile on mlab, `quota.source` is
+  `usage_api`. **It is the host login account's window** (contract §1.7 /
+  §2 #49): an execution delegated with a setup-token account, or a
+  handoff turn, may bill a different account, so the panel labels the row
+  with the host account and never implies "this execution's quota".
 - F11 Anchors available: `HoverTooltip` (portal, 800 ms delay,
   `placement: 'top' | 'right'`, content = children, anchor = parent
   element), `FloatingPanel` (portal, draggable, `anchorRef`, `width`,
@@ -136,13 +144,13 @@ export interface TokenTotals { input: number; output: number; cacheRead: number;
 export interface TurnCost {
   index: number                 // 1-based among top-level result frames, in seq order
   costUsd: number               // total_cost_usd (0 when absent)
-  tokens: TokenTotals | null    // Σ modelUsage, else usage, else null
+  tokens: TokenTotals | null    // Σ valid modelUsage entries, else usage, else null
   durationMs: number | null     // wall clock
   apiMs: number | null          // duration_api_ms
-  ttftMs: number | null
   rounds: number | null         // num_turns
   subtype: string               // 'success' | 'error_during_execution' | …; '' when absent
-  models: string[]              // canonicalModel (or key) list, order of appearance
+  isError: boolean              // is_error === true || (subtype present && subtype !== 'success')
+  models: string[]              // canonicalModel (or key) of the valid entries, order of appearance
 }
 export interface ModelCost { model: string; costUsd: number; tokens: TokenTotals }
 export interface CostSummary {
@@ -164,18 +172,28 @@ Rules:
   `totalUsd = Σ costUsd`. This is the number the header shows today; the
   header keeps computing it from the same function so hover and header
   cannot disagree.
-- C3 Tokens per turn: if `modelUsage` is an object with ≥ 1 entry whose
-  four token fields are finite numbers → sum them (F5); else if `usage`
-  has the four snake_case fields → use them; else `null`. Model list per
-  turn from `modelUsage` keys (`canonicalModel` when a string, else the
-  key).
-- C4 `durationMs` / `apiMs` / `ttftMs` / `rounds`: the field when a
-  finite number ≥ 0, else `null`. Totals treat `null` as 0.
-- C5 `models`: fold `modelUsage` across turns by canonical model:
-  `costUsd = Σ costUSD` (finite numbers only), tokens summed. Frames
-  without `modelUsage` contribute nothing here (their cost is still in
-  `totalUsd`; the panel says so with a "n turns without a model split"
-  note when `unsplitTurns > 0`).
+- C3 Tokens per turn: a `modelUsage` entry is **valid** when it is an
+  object whose four token fields (`inputTokens`, `outputTokens`,
+  `cacheReadInputTokens`, `cacheCreationInputTokens`) and `costUSD` are
+  all finite numbers ≥ 0; invalid entries are skipped individually. If
+  ≥ 1 entry is valid → `tokens` = Σ over the valid entries (F5) and
+  `models` = their canonical names; if none is valid (absent, `null`,
+  array, all entries malformed) → fall back to `usage` when its four
+  snake_case fields are finite numbers ≥ 0 (any missing → treated as 0
+  only if at least one is present; all missing → `null`), `models = []`.
+  A turn whose tokens came from the fallback or are `null` counts toward
+  `unsplitTurns` when `costUsd > 0`.
+- C3a `isError` = `is_error === true`, or `subtype` is a non-empty string
+  other than `'success'`. (`error_during_execution` frames in the
+  fixture have `is_error: true` as well; the rule covers frames that
+  carry only one of the two.)
+- C4 `durationMs` / `apiMs` / `rounds`: the field when a finite number
+  ≥ 0, else `null` (integers not required). Totals treat `null` as 0.
+- C5 `models`: fold the **valid** `modelUsage` entries (C3) across turns
+  by canonical model: `costUsd = Σ costUSD`, tokens summed (`ModelCost.tokens`
+  follows the same four fields). Turns with no valid entry contribute
+  nothing here (their cost is still in `totalUsd`; the panel says so with
+  a "n turns without a model split" note when `unsplitTurns > 0`).
 - C6 Shape tolerance: every read is by type check; a hostile / partial
   frame yields zeros and nulls, never NaN, never a throw. Keys are read
   with `Object.hasOwn`-style own-key iteration for `modelUsage`.
@@ -218,18 +236,21 @@ anchorRef={costButtonRef} testId="cost-panel"`; content, top to bottom:
 - P4 **Turns** table (`data-testid="cost-turns"`, `max-h-64 overflow-auto`,
   chronological, newest last, auto-scrolled to the bottom on open): `#`,
   `$cost` (4 dp), out, cache read, API / wall (`formatDuration`), rounds,
-  and a status cell: empty for `success`, `t('execution.cost.turn_error')`
-  in the error colour for `error_during_execution` / `is_error`, the raw
-  `subtype` (muted) otherwise. A turn with `tokens === null` shows `—` in
-  the token cells.
-- P5 **Quota** (F10): on open, `fetchNexHost(hostId)` once; while pending
-  nothing; on success with non-null `quota` → `t('execution.cost.quota')`
-  row: `5h {five_hour_pct}% · 7d {seven_day_pct}% · {source}` with the
-  plain text (`QuotaBar` is a private function inside
-  `NexEngineStatus.tsx:33`; lifting it is not this phase's job). `quota: null` or a fetch error → row absent;
-  errors are swallowed (the panel is about cost, quota is a courtesy).
-  The fetch is cancelled on close / unmount (`cancelled` flag as in
-  `NexEngineStatus`).
+  and a status cell: `t('execution.cost.turn_error')` in the error colour
+  when `isError` (with the raw `subtype` as the cell's `title`), empty
+  otherwise. A turn with `tokens === null` shows `—` in the token cells.
+- P5 **Quota** (F10): on mount, `fetchNexHost(hostId)` exactly once (not
+  again when `summary` changes); while pending nothing; on success with
+  non-null `quota` → a row labelled `t('execution.cost.quota', { account:
+  active_account })` ("Host quota — {{account}}") with plain text
+  `5h {five_hour_pct}% · 7d {seven_day_pct}% · {source}` (`QuotaBar` is
+  a private function inside `NexEngineStatus.tsx:33`; lifting it is not
+  this phase's job). `quota: null` or a fetch error → row absent; errors
+  are swallowed (the panel is about cost, quota is a courtesy). The
+  request is **not** aborted on close / unmount (`fetchNexHost` takes no
+  signal); a response arriving after unmount is **ignored** via a
+  `cancelled` flag, and that is what the test asserts (no state update,
+  no act warning) — not that the HTTP request was cancelled.
 - P6 The panel re-renders live: a `result` frame landing while it is open
   adds a row (the memo on `st.messages` changes); the quota is **not**
   refetched on every frame — only on open.
@@ -262,7 +283,8 @@ note on the file header is amended to say P-B4 added fields.
 `.cache_write`, `execution.cost.models` ("Models"), `execution.cost.models_note`
 ("{{n}} turns without a per-model split"), `execution.cost.turn` ("#"),
 `execution.cost.turn_error` ("error" / "錯誤"), `execution.cost.quota`
-("Quota" / "額度"), `execution.cost.loading` ("$…").
+("Host quota — {{account}}" / "主機額度 — {{account}}"),
+`execution.cost.loading` ("$…").
 
 ### 4.7 What does not change
 
@@ -334,9 +356,19 @@ Two PRs, each ≤ 800 lines, TDD by subagent, codex R1 + R2 per PR.
 
 ## 8. Open questions
 
-None blocking. `ttft_ms` is shown per turn only (P4) — promote to the
-tooltip if it proves useful.
+None blocking.
 
 ## 9. Review log
 
-- (pending) codex plan + spec review.
+- 2026-09-19 codex plan + spec review (gpt-5.6-sol), nine findings, all
+  applied: (1) `TurnCost.isError` was missing → C3a; (2) `ttft_ms`
+  contradictory → dropped from scope; (3) F6 over-generalised from one
+  sample → reworded, the rule rests on CC's accounting not on the absence
+  of a frame; (4) quota is the host login account's window → labelled
+  with the account, F10 / P5; (5) "cancelled" meant stale-response
+  ignore, not abort → P5 says so and the test asserts the observable;
+  (6) `ExecutionView` integration tests were under-specified → plan
+  Task 3; (7) partially valid `modelUsage` had no single behaviour → C3
+  per-entry validity; (8) outside-click test → plan Task 4; (9) PR size
+  is checked with `git diff --stat` before opening each PR → plan
+  checklist.

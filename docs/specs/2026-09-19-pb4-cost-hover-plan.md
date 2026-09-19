@@ -1,6 +1,6 @@
 # Plan — P-B4: exec pane cost hover / panel
 
-- Spec: `2026-09-19-pb4-cost-hover-spec.md` (v1.0). Rule ids (C1–C7,
+- Spec: `2026-09-19-pb4-cost-hover-spec.md` (v1.1). Rule ids (C1–C7, C3a,
   H1–H3, P1–P6, F1–F12) refer to it.
 - Worktree: `.claude/worktrees/pb4-cost-hover`, branch
   `worktree-pb4-cost-hover`, based on `origin/main` alpha.408 (`a9046291`).
@@ -11,7 +11,10 @@
   Every Bash call prefixed with
   `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/pb4-cost-hover/spa &&`.
   Verify per task: `npx vitest run <changed test files>`; before each PR:
-  `npx vitest run && pnpm run lint && npx tsc -p tsconfig.app.json --noEmit && pnpm run build`.
+  `npx vitest run && pnpm run lint && npx tsc -p tsconfig.app.json --noEmit && pnpm run build`,
+  then `git diff --stat origin/main...HEAD -- ':!docs' ':!spa/src/lib/nex/__fixtures__'`
+  must report ≤ 800 changed lines (spec §5); if not, the PR is split
+  before it is opened.
 - Tasks are sequential within a PR. No daemon, Nexen or hook change.
 
 ## Measured baseline (2026-09-19, worktree at alpha.408)
@@ -37,8 +40,8 @@
   `lib/nex/types.ts:122` `NexQuota`, `:150` `NexHostInfo.quota`.
 - Tests: `ExecutionHeader.test.tsx` 100 lines (`costUsd: 0` in the base
   props at 27), `ExecutionView.test.tsx` 813 lines (renders the header
-  through the real component — the `$0.00` text appears there; grep
-  `\$0` before editing), `HoverTooltip.test.tsx` 97 lines.
+  through the real component; it has **no** `$0` assertion today — the
+  integration cases in Task 3 are new), `HoverTooltip.test.tsx` 97 lines.
 - i18n: `execution.turns` at `locales/en.json:781`; `t(key, params)`
   interpolates `{{name}}`.
 - Fixtures (committed with the spec):
@@ -84,9 +87,11 @@ Files: `lib/nex/cost-summary.ts` (new), `lib/nex/cost-summary.test.ts` (new).
    - Turn 1 (seq 8): `tokens.output 376` (not 364), `tokens.input 911`,
      `models` `['claude-haiku-4-5', 'claude-sonnet-5']` (canonical names).
    - Turn 12 (seq 974): `tokens.cacheRead 80127`.
-   - Turn 6 (seq 64): `subtype 'error_during_execution'`, `costUsd 0`,
-     `apiMs 0`, `rounds 2`, `tokens` equal to the zero object (usage
-     present with zeros → not null).
+   - Turn 6 (seq 64): `subtype 'error_during_execution'`, `isError true`,
+     `costUsd 0`, `apiMs 0`, `rounds 2`, `tokens` equal to the zero object
+     (usage present with zeros → not null). Turn 1: `isError false`. A
+     synthetic `{type:'result', is_error: true}` (no subtype) → `isError
+     true`; `{subtype: 'success', is_error: false}` → false.
    - Turn 8 (seq 100): `costUsd 0`, `rounds 0`, `durationMs 10`.
    - `models`: two entries sorted by cost desc; haiku `costUsd`
      `toBeCloseTo(0.000969)`; Σ `models.costUsd` ≈ `totalUsd` (7 dp).
@@ -95,17 +100,19 @@ Files: `lib/nex/cost-summary.ts` (new), `lib/nex/cost-summary.test.ts` (new).
      'toolu_x', total_cost_usd: 1}` to the subagent payloads → `totalUsd`
      unchanged and `turns.length` still 1 (fails if C1's filter is
      dropped).
-   - Fallback: a result with `usage` only (no `modelUsage`) → tokens from
-     `usage`, `models` empty; a result with neither → `tokens null`; the
-     C5 note condition (`Σ models.costUsd` vs `totalUsd` differ > 0.0001)
-     is exposed as `summary.unsplitTurns: number` (count of costed turns
-     without `modelUsage`) — add that field to `CostSummary` (spec C5
-     amendment; document in the module header).
-   - Hostile: `total_cost_usd: 'x'`, `NaN`, `-1` → 0; `modelUsage: []`,
-     `modelUsage: null`, entries with string tokens → skipped (`tokens`
-     from `usage` fallback or null); `num_turns: 1.5` → kept only if
-     finite ≥ 0 (document: not required to be an integer); no throw on
-     `{type:'result'}` alone.
+   - Fallback (C3): a result with `usage` only (no `modelUsage`) → tokens
+     from `usage`, `models` empty, `unsplitTurns` +1 when its cost > 0; a
+     result with neither → `tokens null`; `usage` with only
+     `output_tokens` → the other three are 0; `unsplitTurns` on the
+     fixture is 0.
+   - Partially valid `modelUsage` (C3): one valid entry + one with
+     `outputTokens: 'x'` → tokens / models from the valid entry only, the
+     malformed one absent from `models`; all entries malformed +
+     `usage` present → `usage` fallback and `unsplitTurns` +1; `modelUsage:
+     []` / `null` → same as absent.
+   - Hostile: `total_cost_usd: 'x'`, `NaN`, `-1` → 0; `num_turns: 1.5` →
+     kept (finite ≥ 0; integers not required); no throw on
+     `{type:'result'}` alone or on `modelUsage: { __proto__: {...} }`.
    - Non-result messages (`assistant`, `user`) contribute nothing;
      `messages: []` → all zeros, `turns []`, `models []`.
 2. Code: pure module, `obj()` from `content-blocks.ts`, own-key iteration
@@ -124,11 +131,14 @@ Files: `components/execution/ExecutionHeader.tsx`,
    with fake timers 800 ms → `role="tooltip"` text
    `12 turns · $0.2577 · 4.5k out · 1m 05s API / 1m 33s wall`; leaving
    before 800 ms → no tooltip. Update the base props (`costUsd: 0` →
-   `cost: null` or a zero summary — pick the one that keeps existing
-   assertions meaningful; the `$0.00` assertion becomes `$0.00` with an
-   empty summary). Tests (ExecutionView): wherever `$0` is asserted,
-   confirm the text still renders once `historyLoaded` (grep first; the
-   memo now calls `costSummary`).
+   `cost: costSummary([])`, so the existing `$0.00` assertion still
+   holds). Tests (ExecutionView, new integration cases using the file's
+   existing store harness): (a) `historyLoaded: false` → `execution-cost`
+   text `$…` and disabled; (b) after `setHistoryLoaded(true)` with two
+   top-level `result` messages (0.01 + 0.02) → `$0.03` enabled; (c) a
+   third `result` applied through `applyEvents` while mounted → `$0.06`
+   (P6 live update); (d) a subagent `result` (parent non-null, cost 1)
+   applied → text unchanged (G3 through the real wiring).
 2. Code: `ExecutionHeader` prop `cost: CostSummary | null` replaces
    `costUsd`; button per H1 (`type="button"`, `data-testid="execution-cost"`,
    `disabled={!cost}`, `className` muted + `hover:underline`); `<HoverTooltip
@@ -158,15 +168,18 @@ Files: `components/execution/CostPanel.tsx` (new),
    `formatTokens` values; models list two rows (sonnet first), note
    absent when `unsplitTurns === 0` and present with `n` when > 0 (use a
    summary built from payloads where one `modelUsage` is deleted);
-   turns table 12 rows, row 6 and 10 have `data-testid="turn-error"`,
-   row 8 shows `$0.0000`, a row built from a `tokens: null` turn shows
-   `—` in the token cells; `max-h-64 overflow-auto` on the table wrapper
-   and `scrollTop` set to `scrollHeight` on mount (jsdom: assert the
-   assignment through a spied setter or accept `scrollIntoView` mock —
-   choose the testable variant and note it). Tests (ExecutionHeader):
-   click `execution-cost` → `cost-panel` visible and `aria-expanded="true"`;
-   Escape → closed; click again → closed (FloatingPanel ignores the
-   anchor's own mousedown).
+   turns table 12 rows, rows 6 and 10 have `data-testid="turn-error"`
+   with `title="error_during_execution"`, row 8 shows `$0.0000`, a row
+   built from a `tokens: null` turn shows `—` in the token cells;
+   `max-h-64 overflow-auto` on the table wrapper and `scrollTop` set to
+   `scrollHeight` on mount (jsdom: assert through
+   `Object.defineProperty(HTMLElement.prototype, 'scrollHeight', …)` +
+   a spy on the `scrollTop` setter — note the variant used). Tests
+   (ExecutionHeader): click `execution-cost` → `cost-panel` visible and
+   `aria-expanded="true"`; Escape → closed; click again → closed
+   (FloatingPanel ignores the anchor's own mousedown); **mousedown on
+   another header element (e.g. the interrupt button) → closed** (the
+   outside-click wiring through `anchorRef`).
 2. Code: `CostPanel({ summary, hostId, anchorRef, onClose })` using
    `FloatingPanel` (`width={440}`, `testId="cost-panel"`); rows as spec
    P1–P4; `ExecutionHeader` holds `open` state + `useRef<HTMLButtonElement>`
@@ -180,12 +193,16 @@ Files: `components/execution/CostPanel.tsx` (new),
 Files: `components/execution/CostPanel.tsx` (+ test), locales.
 
 1. Tests: mock `fetchNexHost` (`vi.mock('../../lib/nex/nex-api')`):
-   resolves `{quota: null}` → no `cost-quota` row; resolves
-   `{quota: {five_hour_pct: 34, seven_day_pct: 12, resets_at: 0, source:
-   'usage_api'}}` → row text `5h 34% · 7d 12% · usage_api`; rejects → no
-   row, no console error; unmount before resolve → no act warning (use
-   a deferred promise). Fetched exactly once per mount even if
-   `summary` changes.
+   resolves `{active_account: 'wake@x', quota: null}` → no `cost-quota`
+   row; resolves `{active_account: 'wake@x', quota: {five_hour_pct: 34,
+   seven_day_pct: 12, resets_at: 0, source: 'usage_api'}}` → row label
+   `Host quota — wake@x` and text `5h 34% · 7d 12% · usage_api`; rejects
+   → no row, no console error; **stale response**: unmount before a
+   deferred promise resolves, then resolve it → no state update (assert
+   via a `setState` spy or simply that no act warning / error is
+   emitted and the test completes) — this is the `cancelled`-flag
+   contract, not an HTTP abort; fetched exactly once per mount even when
+   `summary` is re-rendered with a new object.
 2. Code: `useEffect` on mount with a `cancelled` flag; `useState<NexQuota
    | null>`; i18n `execution.cost.quota`.
 3. Commit: `feat(spa): CostPanel shows the host quota window when the daemon reports one`.
