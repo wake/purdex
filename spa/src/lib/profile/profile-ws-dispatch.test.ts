@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { HostEvent } from '../host-events'
 import {
+  __resetProfileEventsForTest,
   dispatchProfileWsEvent,
   setProfileEventListener,
   type ProfileRemoteEvent,
@@ -35,13 +36,14 @@ let received: ProfileRemoteEvent[]
 let listener: ReturnType<typeof vi.fn<(e: ProfileRemoteEvent) => void>>
 
 beforeEach(() => {
+  __resetProfileEventsForTest()
   received = []
   listener = vi.fn((e: ProfileRemoteEvent) => { received.push(e) })
   setProfileEventListener(listener)
 })
 
 afterEach(() => {
-  setProfileEventListener(null)
+  __resetProfileEventsForTest()
   vi.restoreAllMocks()
 })
 
@@ -81,23 +83,56 @@ describe('dispatchProfileWsEvent', () => {
         writerClientId: 'c_0123456789ab',
       })
     })
+  })
 
-    it("hash '' without deleted", () => {
-      dispatchProfileWsEvent('h1', profileEvent(put({ hash: '' })))
-      expect(received).toHaveLength(1)
-      expect(received[0].hash).toBeNull()
+  // The daemon sends exactly two shapes. Anything in between is dropped, never
+  // read as a delete: a false tombstone would tell the state machine the SOT is
+  // gone. Dropping is safe — events are an optimization, reindex catches up.
+  describe('contradictory delete/hash → dropped', () => {
+    const contradictory: Array<[string, Record<string, unknown>]> = [
+      ["hash '' without deleted", put({ hash: '' })],
+      ["hash '' with deleted false", put({ hash: '', deleted: false })],
+      ['deleted true with a live hash', put({ deleted: true })],
+      ['deleted true with a non-empty invalid hash', put({ deleted: true, hash: 'junk' })],
+    ]
+
+    it.each(contradictory)('%s', (_label, value) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(() => dispatchProfileWsEvent('h1', profileEvent(value))).not.toThrow()
+      expect(listener).not.toHaveBeenCalled()
     })
 
-    it('deleted true with a non-empty hash — deleted wins', () => {
+    it('warns once, however many arrive', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      for (const [, value] of contradictory) dispatchProfileWsEvent('h1', profileEvent(value))
       dispatchProfileWsEvent('h1', profileEvent(put({ deleted: true })))
-      expect(received).toHaveLength(1)
-      expect(received[0].hash).toBeNull()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(listener).not.toHaveBeenCalled()
     })
 
-    it('deleted true with a non-empty INVALID hash — deleted still wins', () => {
-      dispatchProfileWsEvent('h1', profileEvent(put({ deleted: true, hash: 'junk' })))
-      expect(received).toHaveLength(1)
-      expect(received[0].hash).toBeNull()
+    it('the test reset re-arms the warning', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      dispatchProfileWsEvent('h1', profileEvent(put({ deleted: true })))
+      __resetProfileEventsForTest()
+      setProfileEventListener(listener)
+      dispatchProfileWsEvent('h1', profileEvent(put({ deleted: true })))
+      expect(warn).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not poison the slot: a consistent event after it still arrives', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      dispatchProfileWsEvent('h1', profileEvent(put({ deleted: true })))
+      dispatchProfileWsEvent('h1', profileEvent(put({ rev: 9 })))
+      expect(received.map((e) => e.rev)).toEqual([9])
+    })
+
+    it('bad JSON and consistent events stay silent', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      dispatchProfileWsEvent('h1', raw('not json'))
+      dispatchProfileWsEvent('h1', raw('[]'))
+      dispatchProfileWsEvent('h1', profileEvent(put()))
+      dispatchProfileWsEvent('h1', profileEvent(put({ hash: '', deleted: true })))
+      expect(warn).not.toHaveBeenCalled()
     })
   })
 

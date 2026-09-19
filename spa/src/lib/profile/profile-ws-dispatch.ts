@@ -6,7 +6,14 @@
  *
  * Wire shape (Go `profileEvent`, internal/module/profiles/handler_sections.go):
  * `{profileId, section, rev, hash, writerClientId, deleted?}`. `hash` has no
- * `omitempty`, so a delete arrives as `hash: ""` with `deleted: true`.
+ * `omitempty`, so a delete arrives as `hash: ""` with `deleted: true`. The
+ * daemon sends exactly two shapes and exactly those two are accepted:
+ *   delete — `deleted: true`  AND `hash: ""`
+ *   live   — `deleted` absent (or false) AND `hash` = 64 lowercase hex
+ * Everything in between is DROPPED, never read as a delete: a false tombstone
+ * tells the state machine "the SOT deleted this" → a needless reindex, a wrong
+ * delete/push decision, or a phantom conflict. Dropping is safe — events are
+ * only an optimization, reindex catches up.
  *
  * Deliberately NOT done here: filtering this client's own writes. The reducer
  * needs `own` as an input, and whether a write is "ours" also depends on which
@@ -36,6 +43,28 @@ export function setProfileEventListener(fn: ProfileEventListener | null): void {
   listener = fn
 }
 
+let warnedContradictory = false
+
+/** Test-only: empties the slot and re-arms the one-shot warning. */
+export function __resetProfileEventsForTest(): void {
+  listener = null
+  warnedContradictory = false
+}
+
+/**
+ * Well-formed JSON with well-typed fields that is still neither shape: that is
+ * a daemon (or proxy) bug worth one line — once, a broken peer would repeat it
+ * on every write. Bad JSON and mistyped fields stay silent, as before.
+ */
+function warnContradictory(deleted: boolean | undefined, hash: string): void {
+  if (warnedContradictory) return
+  warnedContradictory = true
+  console.warn(
+    `[profile-ws-dispatch] dropped a profile event that is neither a delete nor a live write ` +
+      `(deleted=${String(deleted)}, hash length ${hash.length}); further ones are dropped silently`,
+  )
+}
+
 function parse(hostId: string, value: string): ProfileRemoteEvent | null {
   let raw: unknown
   try {
@@ -53,11 +82,13 @@ function parse(hostId: string, value: string): ProfileRemoteEvent | null {
   if (typeof hash !== 'string') return null
   if (deleted !== undefined && typeof deleted !== 'boolean') return null
 
-  // `deleted` wins over whatever `hash` says; an empty hash alone also means
-  // "no live content". Anything else must be a real section hash — an invalid
-  // live hash must never reach the state machine.
-  const isDelete = deleted === true || hash === ''
-  if (!isDelete && !LIVE_HASH.test(hash)) return null
+  // The two shapes of the header, and nothing else.
+  const isDelete = deleted === true && hash === ''
+  const isLive = deleted !== true && LIVE_HASH.test(hash)
+  if (!isDelete && !isLive) {
+    warnContradictory(deleted, hash)
+    return null
+  }
 
   return { hostId, profileId, section, rev, hash: isDelete ? null : hash, writerClientId }
 }
