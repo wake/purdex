@@ -133,16 +133,22 @@ func (s *Store) requireProfile(profileID string) error {
 //
 // Decision order — schema is checked before revision, and fails closed:
 //
-//  1. No row, or a tombstone: only baseRev == 0 is accepted. A never-seen
+//  1. A stored row — live or tombstone — with a different fingerprint: a
+//     strictly higher incoming ordinal means the writer is newer and carries
+//     on; anything else — older, or equal ordinals, the developer error of
+//     §4.5 — is PutSchema, carrying the stored shape and the row's Rev. A
+//     tombstone keeps the fingerprint/ordinal of the row it replaced and is
+//     gated exactly like a live row: deleting a section does not move the
+//     profile's schema backwards, so a delete must not let an older client
+//     back in (and, through it, drag the stored ordinal down — §4.5: "the
+//     stored ordinal never decreases"). A section that never existed has no
+//     stored shape and no gate.
+//  2. No row, or a tombstone: only baseRev == 0 is accepted. A never-seen
 //     section starts at rev 1; one recreated over a tombstone continues at
 //     tombstone.rev + 1 (see DeleteSection for why). Any other baseRev is
 //     PutConflict with Rev 0 and no Current — the section was deleted under
-//     the client. A tombstone's fingerprint/ordinal are ignored: there is no
-//     stored shape left to protect.
-//  2. Live row with a different fingerprint: a strictly higher incoming
-//     ordinal means the writer is newer and carries on to 3; anything else —
-//     older, or equal ordinals, the developer error of §4.5 — is PutSchema.
-//  3. row.Rev == baseRev → store, rev+1, PutApplied.
+//     the client.
+//  3. Live row, row.Rev == baseRev → store, rev+1, PutApplied.
 //  4. row.Hash == in.Hash → PutConverged, and *nothing* is written.
 //  5. otherwise → PutConflict carrying the current row.
 //
@@ -159,11 +165,12 @@ func (s *Store) requireProfile(profileID string) error {
 // than failing. "Exactly one winner per revision" is therefore a property of
 // the statement, not of any read/write pairing around it.
 //
-// The schema gate of step 2 is evaluated on the row we read, not inside the
+// The schema gate of step 1 is evaluated on the row we read, not inside the
 // statement — and that is still sound, because every write to a row bumps its
 // rev (update, tombstone, recreate; PutConverged writes nothing). If the
 // UPDATE's `rev = ?` matches, the row is byte-for-byte the one the gate
-// looked at.
+// looked at. That holds for the recreate over a tombstone too: it is a CAS on
+// the tombstone's own rev.
 //
 // A BEGIN…COMMIT around read+write would add nothing to that and would cost
 // something: under database/sql a transaction that reads and then writes is a
@@ -209,7 +216,7 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 
 		switch {
 		case !found:
-			// Step 1, never-seen section.
+			// Step 2, never-seen section: no stored shape, so no schema gate.
 			if baseRev != 0 {
 				// "Deleted under the client" only makes sense inside a profile
 				// that exists; otherwise say what is actually wrong.
@@ -244,14 +251,23 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 			}
 
 		case row.deleted:
-			// Step 1, over a tombstone: CAS on the tombstone's own rev. The
-			// shape columns are overwritten outright, not MAX()ed.
+			// Step 1 — before any look at the revision, exactly as for a live
+			// row. The tombstone kept the deleted row's shape (DeleteSection
+			// clears only payload and hash), and that shape still binds:
+			// removing a section is not a schema rollback.
+			if res, rejected := schemaGate(row, in); rejected {
+				return res, nil
+			}
+			// Step 2, over a tombstone: CAS on the tombstone's own rev.
 			if baseRev != 0 {
 				return PutResult{Outcome: PutConflict}, nil
 			}
+			// ordinal = MAX(ordinal, ?) for the same reason as the live update
+			// below: with equal fingerprints an older client may recreate, but
+			// the stored ordinal never decreases.
 			n, err := s.execRows("recreate section", `
 				UPDATE profile_sections
-				SET deleted = 0, rev = rev + 1, hash = ?, fingerprint = ?, ordinal = ?,
+				SET deleted = 0, rev = rev + 1, hash = ?, fingerprint = ?, ordinal = MAX(ordinal, ?),
 				    payload = ?, writer = ?, updated_at = ?
 				WHERE profile_id = ? AND section = ? AND rev = ? AND deleted = 1`,
 				in.Hash, in.Fingerprint, in.Ordinal, payload, in.Writer, now,
@@ -264,14 +280,9 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 			}
 
 		default:
-			// Step 2 — before any look at the revision.
-			if row.Fingerprint != in.Fingerprint && in.Ordinal <= row.Ordinal {
-				return PutResult{
-					Outcome:            PutSchema,
-					Rev:                row.Rev,
-					CurrentFingerprint: row.Fingerprint,
-					CurrentOrdinal:     row.Ordinal,
-				}, nil
+			// Step 1 — before any look at the revision.
+			if res, rejected := schemaGate(row, in); rejected {
+				return res, nil
 			}
 			if row.Rev != baseRev {
 				if row.Hash == in.Hash {
@@ -285,7 +296,7 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 			// Step 3. ordinal = MAX(ordinal, ?): with equal fingerprints an
 			// older client may write (§4.5 row 1), but its lower ordinal must
 			// not replace the stored one, or the next value-domain bump loses
-			// its direction signal. With different fingerprints step 2 already
+			// its direction signal. With different fingerprints step 1 already
 			// guaranteed in.Ordinal > row.Ordinal, so MAX is the incoming value.
 			n, err := s.execRows("update section", `
 				UPDATE profile_sections
@@ -305,6 +316,22 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 		// between our read and our statement. Read again and classify.
 	}
 	return PutResult{}, ErrSectionContended
+}
+
+// schemaGate is the §4.5 check of PutSection step 1, shared by live rows and
+// tombstones. It fails closed: a different fingerprint is let through only on
+// a strictly higher ordinal. The rejection carries the stored shape and the
+// stored row's Rev — the tombstone's own rev when the row is one.
+func schemaGate(row sectionRow, in Section) (PutResult, bool) {
+	if row.Fingerprint == in.Fingerprint || in.Ordinal > row.Ordinal {
+		return PutResult{}, false
+	}
+	return PutResult{
+		Outcome:            PutSchema,
+		Rev:                row.Rev,
+		CurrentFingerprint: row.Fingerprint,
+		CurrentOrdinal:     row.Ordinal,
+	}, true
 }
 
 // DeleteSection is the compare-and-set delete of spec §4.6.3. writer is the
@@ -339,8 +366,10 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 // therefore strictly increasing for the life of the profile, which spec
 // §4.6.1's "rev < baseRev ⇒ the profile was recreated" relies on.
 //
-// The tombstone drops the payload and hash but keeps the row; it is invisible
-// to GetSection / ListSections and is removed with its profile.
+// The tombstone drops the payload and hash but keeps the row — including its
+// fingerprint and ordinal, which PutSection's schema gate still enforces on a
+// recreate. It is invisible to GetSection / ListSections and is removed with
+// its profile.
 func (s *Store) DeleteSection(profileID, section, writer string, baseRev int64) (PutResult, error) {
 	n, err := s.execRows("delete section", `
 		UPDATE profile_sections

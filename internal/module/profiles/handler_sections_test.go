@@ -177,6 +177,30 @@ func TestPutSectionSchemaMismatchIs409Schema(t *testing.T) {
 	assert.JSONEq(t, `{"reason":"schema","fingerprint":"`+otherFingerprint+`","ordinal":7}`, rr.Body.String())
 }
 
+// A tombstone keeps the shape of the row it replaced (§4.5): an older client
+// cannot recreate the section, whatever baseRev it sends, and nothing is
+// announced.
+func TestPutSectionOlderSchemaOverATombstoneIs409SchemaAndSilent(t *testing.T) {
+	m, rec := newTestModule(t)
+	pid := createProfile(t, m, "P")
+	newer := defaultSectionReq(clientA, 0, hashOf("1"), `{}`)
+	newer.Fingerprint, newer.Ordinal = otherFingerprint, 7
+	require.Equal(t, http.StatusOK, serve(m, http.MethodPut, sectionPath(pid, "tabs.w1"), mustJSON(t, newer)).Code)
+	require.Equal(t, http.StatusOK, serve(m, http.MethodDelete, deleteSectionPath(pid, "tabs.w1", 1, clientA), nil).Code)
+	rec.events = nil
+
+	for _, baseRev := range []int64{0, 2} {
+		rr := serve(m, http.MethodPut, sectionPath(pid, "tabs.w1"), sectionBody(t, clientB, baseRev, hashOf("2"), `{}`))
+		require.Equal(t, http.StatusConflict, rr.Code, "baseRev %d", baseRev)
+		assert.JSONEq(t, `{"reason":"schema","fingerprint":"`+otherFingerprint+`","ordinal":7}`, rr.Body.String())
+	}
+	assert.Empty(t, rec.events)
+
+	_, found, err := m.store.GetSection(pid, "tabs.w1")
+	require.NoError(t, err)
+	assert.False(t, found, "still a tombstone")
+}
+
 func TestPutSectionOverATombstoneContinuesTheRevision(t *testing.T) {
 	m, _ := newTestModule(t)
 	pid := createProfile(t, m, "P")
@@ -310,11 +334,14 @@ func TestPutSectionContendedIs503WithRetryAfter(t *testing.T) {
 	pid := createProfile(t, m, "P")
 	s := m.store
 	// Same neighbour as the store test: every look finds the section freshly
-	// recreated and deleted again.
+	// recreated and deleted again. It writes the request's own shape — a
+	// tombstone keeps its shape, and a different one would be a schema 409.
+	neighbour := sec("tabs.w1", "hX", `{}`, clientB)
+	neighbour.Fingerprint = testFingerprint
 	s.afterSectionRead = func() {
 		saved := s.afterSectionRead
 		s.afterSectionRead = nil
-		rev := mustPut(t, s, pid, sec("tabs.w1", "hX", `{}`, clientB), 0)
+		rev := mustPut(t, s, pid, neighbour, 0)
 		_, err := s.DeleteSection(pid, "tabs.w1", clientB, rev)
 		require.NoError(t, err)
 		s.afterSectionRead = saved

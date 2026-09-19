@@ -375,23 +375,155 @@ func TestTombstoneIsInvisibleAndRejectsNonZeroBase(t *testing.T) {
 	assert.Equal(t, 1, readRaw(t, s, pid, "tabs.w1").Deleted)
 }
 
-func TestPutSectionOverTombstoneIgnoresItsOldShape(t *testing.T) {
-	s, _ := openTestStore(t)
+// ── §4.5 over a tombstone ──────────────────────────────────────────────────
+//
+// Deleting a section does not move the profile's schema backwards: the
+// tombstone keeps the fingerprint/ordinal of the row it replaced, and a
+// recreate passes the same gate a live row would — before any look at baseRev.
+
+// readShape reads the stored shape columns, tombstones included.
+func readShape(t *testing.T, s *Store, profileID, section string) (string, int) {
+	t.Helper()
+	var fp string
+	var ordinal int
+	require.NoError(t, s.db.QueryRow(`
+		SELECT fingerprint, ordinal FROM profile_sections
+		WHERE profile_id = ? AND section = ?`, profileID, section,
+	).Scan(&fp, &ordinal))
+	return fp, ordinal
+}
+
+// tombstoneAt stores tabs.w1 with the given shape and deletes it, leaving a
+// tombstone at rev 2.
+func tombstoneAt(t *testing.T, s *Store, fingerprint string, ordinal int) string {
+	t.Helper()
 	pid := newProfile(t, s)
 	first := sec("tabs.w1", "h1", `{}`, clientA)
-	first.Fingerprint, first.Ordinal = "fp9", 9
+	first.Fingerprint, first.Ordinal = fingerprint, ordinal
 	mustPut(t, s, pid, first, 0)
-	_, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
+	del, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
 	require.NoError(t, err)
+	require.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, del)
+	return pid
+}
 
-	// fp1 / ordinal 1 against a live fp9 / 9 row would be PutSchema. Over a
-	// tombstone there is no stored shape left to protect.
-	assert.Equal(t, int64(3), mustPut(t, s, pid, sec("tabs.w1", "h2", `{"v":2}`, clientB), 0))
+func TestDeleteSectionKeepsTheShapeOnTheTombstone(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp9", 9)
+
+	fp, ordinal := readShape(t, s, pid, "tabs.w1")
+	assert.Equal(t, "fp9", fp)
+	assert.Equal(t, 9, ordinal)
+}
+
+func TestPutSectionOverTombstoneOlderSchemaIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ordinal int
+		baseRev int64
+	}{
+		{"lower ordinal, baseRev 0", 1, 0},
+		{"equal ordinal fails closed", 9, 0},
+		{"schema before revision: non-zero baseRev", 1, 2},
+		{"schema before revision: equal ordinal, non-zero baseRev", 9, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clock := openTestStore(t)
+			pid := tombstoneAt(t, s, "fp9", 9)
+			before := readRaw(t, s, pid, "tabs.w1")
+
+			*clock += 1000
+			in := sec("tabs.w1", "h2", `{"v":2}`, clientB) // fp1
+			in.Ordinal = tc.ordinal
+			res, err := s.PutSection(pid, in, tc.baseRev)
+			require.NoError(t, err)
+			assert.Equal(t, PutResult{
+				Outcome: PutSchema, Rev: 2, CurrentFingerprint: "fp9", CurrentOrdinal: 9,
+			}, res, "Rev is the tombstone's, as for a live row; Changed stays false")
+
+			assert.Equal(t, before, readRaw(t, s, pid, "tabs.w1"), "the tombstone is untouched")
+			fp, ordinal := readShape(t, s, pid, "tabs.w1")
+			assert.Equal(t, "fp9", fp)
+			assert.Equal(t, 9, ordinal)
+		})
+	}
+}
+
+func TestPutSectionOverTombstoneSameFingerprintKeepsTheHigherOrdinal(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp1", 9)
+
+	// Equal fingerprints: an older client may write (§4.5 row 1) — but the
+	// stored ordinal never decreases.
+	res, err := s.PutSection(pid, sec("tabs.w1", "h2", `{"v":2}`, clientB), 0) // fp1 / ordinal 1
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: true}, res)
 
 	got := mustGet(t, s, pid, "tabs.w1")
 	assert.Equal(t, "fp1", got.Fingerprint)
-	assert.Equal(t, 1, got.Ordinal)
+	assert.Equal(t, 9, got.Ordinal, "MAX(stored, incoming)")
 	assert.JSONEq(t, `{"v":2}`, string(got.Payload))
+}
+
+func TestPutSectionOverTombstoneNewerSchemaApplies(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp9", 9)
+
+	in := sec("tabs.w1", "h2", `{"v":2}`, clientB)
+	in.Fingerprint, in.Ordinal = "fp10", 10
+	res, err := s.PutSection(pid, in, 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: true}, res, "tombstone.rev + 1")
+
+	got := mustGet(t, s, pid, "tabs.w1")
+	assert.Equal(t, "fp10", got.Fingerprint)
+	assert.Equal(t, 10, got.Ordinal)
+	assert.JSONEq(t, `{"v":2}`, string(got.Payload))
+}
+
+// A newer schema still answers to the revision: over a tombstone only
+// baseRev 0 is accepted.
+func TestPutSectionOverTombstoneNewerSchemaNonZeroBaseConflicts(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp9", 9)
+
+	in := sec("tabs.w1", "h2", `{}`, clientB)
+	in.Fingerprint, in.Ordinal = "fp10", 10
+	res, err := s.PutSection(pid, in, 2)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutConflict, Rev: 0}, res)
+	assert.Equal(t, 1, readRaw(t, s, pid, "tabs.w1").Deleted)
+}
+
+// TestTombstoneCannotLaunderAnOrdinalDowngrade is PR review (critic): with the
+// tombstone's shape ignored, an ordinal-1 client recreated a deleted ordinal-7
+// section, dragging the stored ordinal to 1 — after which ordinals 2–6 with a
+// different fingerprint read as "newer" and walked through the gate.
+func TestTombstoneCannotLaunderAnOrdinalDowngrade(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := tombstoneAt(t, s, "fp7", 7)
+
+	old := sec("tabs.w1", "h2", `{"by":"v1"}`, clientB) // fp1 / ordinal 1
+	res, err := s.PutSection(pid, old, 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutSchema, res.Outcome, "the ordinal-1 client cannot recreate")
+
+	mid := sec("tabs.w1", "h3", `{"by":"v3"}`, clientB)
+	mid.Fingerprint, mid.Ordinal = "fp3", 3
+	for _, base := range []int64{0, 2, 3} {
+		res, err = s.PutSection(pid, mid, base)
+		require.NoError(t, err)
+		assert.Equal(t, PutResult{
+			Outcome: PutSchema, Rev: 2, CurrentFingerprint: "fp7", CurrentOrdinal: 7,
+		}, res, "ordinal 3 is still older than 7 (baseRev %d)", base)
+	}
+
+	fp, ordinal := readShape(t, s, pid, "tabs.w1")
+	assert.Equal(t, "fp7", fp)
+	assert.Equal(t, 7, ordinal, "the stored ordinal never decreases")
+	raw := readRaw(t, s, pid, "tabs.w1")
+	assert.Equal(t, 1, raw.Deleted)
+	assert.Equal(t, int64(2), raw.Rev)
 }
 
 // TestSectionABA is plan review #1. With a real DELETE the recreated section
