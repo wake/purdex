@@ -7,11 +7,14 @@
 // is offered. The cost is an anchor button with a one-line hover summary
 // (P-B4 spec §4.2 H1–H2); `cost === null` means history is not loaded yet.
 // The button is `aria-describedby` the tooltip, and both render the total
-// through the same `formatUsd` so they can never disagree on a value.
-import { useEffect, useId, useState } from 'react'
+// through the same `formatUsd` so they can never disagree on a value. Click
+// toggles the `CostPanel` (H3): the header owns the open flag and the anchor
+// ref, and `FloatingPanel` handles Escape / outside-click through that ref.
+import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowUUpLeft, Prohibit, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HoverTooltip } from '../HoverTooltip'
+import CostPanel from './CostPanel'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { ExecutionState } from '../../lib/nex/event-reducer'
 import type { CostSummary } from '../../lib/nex/cost-summary'
@@ -22,6 +25,8 @@ export interface ExecutionHeaderProps {
   summary: ExecutionSummary | null
   /** `costSummary(messages)` once history is loaded, else null (`$…`, disabled). */
   cost: CostSummary | null
+  /** Forwarded to `CostPanel` (its quota row, P-B4 P5). */
+  hostId: string
   sse: ExecutionState['sse']
   isMine: (principal: string | undefined) => boolean
   onInterrupt: () => void
@@ -40,9 +45,11 @@ const STATE_DOT: Record<string, string> = {
 
 export const TERMINATE_CONFIRM_MS = 4000
 
-export default function ExecutionHeader({ summary, cost, sse, isMine, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
+export default function ExecutionHeader({ summary, cost, hostId, sse, isMine, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState(false)
+  const [costOpen, setCostOpen] = useState(false)
+  const costRef = useRef<HTMLButtonElement>(null)
   const costTipId = useId()
   useEffect(() => {
     if (!confirming) return
@@ -74,12 +81,15 @@ export default function ExecutionHeader({ summary, cost, sse, isMine, onInterrup
         <span>{summary?.observers ?? 0} {t('execution.observers')}</span>
         <span data-testid="execution-lease">{leaseText}</span>
         {summary?.turn_count != null && <span>{summary.turn_count} {t('execution.turns')}</span>}
-        <button type="button" data-testid="execution-cost" disabled={!cost}
+        <button type="button" data-testid="execution-cost" disabled={!cost} ref={costRef}
           aria-describedby={cost ? costTipId : undefined}
+          aria-expanded={cost ? costOpen : undefined}
+          onClick={() => setCostOpen((v) => !v)}
           className="relative tabular-nums hover:underline disabled:no-underline disabled:cursor-default">
           {cost ? formatUsd(cost.totalUsd, 2) : t('execution.cost.loading')}
           {cost && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
         </button>
+        {cost && costOpen && <CostPanel summary={cost} hostId={hostId} anchorRef={costRef} onClose={() => setCostOpen(false)} />}
         <div className="flex-1" />
         {onTakeBack && (
           <button type="button" data-testid="take-back" disabled={takeBackBusy} onClick={onTakeBack}
