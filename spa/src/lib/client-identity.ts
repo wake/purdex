@@ -79,3 +79,21 @@ export function getClientId(): string {
   // Read back rather than trust `candidate`: whatever is stored is the answer.
   return readStored() ?? candidate
 }
+
+/**
+ * Whether the id `getClientId()` answers with is actually IN storage — i.e.
+ * will still be this client's id after a reload and in its other windows.
+ * False means the answer is the realm fallback (or a legacy id that could not
+ * be copied to its own key): writing THAT to a daemon leaves a row no later
+ * session can claim back. `getClientId()` itself cannot say which one it gave.
+ *
+ * It calls `getClientId()`, so asking also performs the first-use creation and
+ * `if (!isClientIdPersisted()) refuse` is the whole check. True iff the key
+ * holds a valid id right now and that id is what `getClientId()` returned; a
+ * window that rewrites the key between the two reads makes this answer false
+ * once, which errs on the safe side — ask again.
+ */
+export function isClientIdPersisted(): boolean {
+  const id = getClientId()
+  return readStored() === id
+}

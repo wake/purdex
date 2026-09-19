@@ -178,6 +178,84 @@ describe('getClientId', () => {
   })
 })
 
+describe('isClientIdPersisted', () => {
+  it('true once the id is in storage — and asking is enough to create it', async () => {
+    const { isClientIdPersisted, getClientId } = await openRealm()
+    expect(localStorage.getItem(KEY)).toBeNull()
+    expect(isClientIdPersisted()).toBe(true)
+    expect(localStorage.getItem(KEY)).toMatch(ID_PATTERN)
+    expect(getClientId()).toBe(localStorage.getItem(KEY))
+  })
+
+  it('true for an id that was already stored, without rewriting it', async () => {
+    localStorage.setItem(KEY, 'c_aaaaaaaaaaaa')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const { isClientIdPersisted } = await openRealm()
+    expect(isClientIdPersisted()).toBe(true)
+    expect(setItem).not.toHaveBeenCalled()
+  })
+
+  it('false when writes throw (quota): the id lives in this realm only', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    const { isClientIdPersisted, getClientId } = await openRealm()
+    expect(getClientId()).toMatch(ID_PATTERN)
+    expect(isClientIdPersisted()).toBe(false)
+  })
+
+  it('false when writes are silently dropped', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {})
+    const { isClientIdPersisted } = await openRealm()
+    expect(isClientIdPersisted()).toBe(false)
+  })
+
+  it('false when reads throw', async () => {
+    localStorage.setItem(KEY, 'c_aaaaaaaaaaaa')
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    const { isClientIdPersisted } = await openRealm()
+    expect(isClientIdPersisted()).toBe(false)
+  })
+
+  it('false for an adopted legacy id that could not be written to its own key', async () => {
+    localStorage.setItem(LEGACY_KEY, legacyEnvelope(LEGACY_ID))
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    const { isClientIdPersisted, getClientId } = await openRealm()
+    expect(getClientId()).toBe(LEGACY_ID)
+    expect(isClientIdPersisted()).toBe(false)
+  })
+
+  it('still true after the stored id changes under it — storage is the truth', async () => {
+    const { isClientIdPersisted, getClientId } = await openRealm()
+    expect(isClientIdPersisted()).toBe(true)
+    localStorage.setItem(KEY, 'c_bbbbbbbbbbbb')
+    expect(isClientIdPersisted()).toBe(true)
+    expect(getClientId()).toBe('c_bbbbbbbbbbbb')
+  })
+
+  it('re-creates the id after storage is cleared, and is true again', async () => {
+    const { isClientIdPersisted } = await openRealm()
+    expect(isClientIdPersisted()).toBe(true)
+    localStorage.clear()
+    expect(isClientIdPersisted()).toBe(true)
+    expect(localStorage.getItem(KEY)).toMatch(ID_PATTERN)
+  })
+
+  it('turns false when storage stops accepting writes after it was cleared', async () => {
+    const { isClientIdPersisted } = await openRealm()
+    expect(isClientIdPersisted()).toBe(true)
+    localStorage.clear()
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    expect(isClientIdPersisted()).toBe(false)
+  })
+})
+
 describe('useSyncStore.getClientId delegates', () => {
   it('returns the same id as getClientId() and populates the state field', async () => {
     vi.resetModules()
