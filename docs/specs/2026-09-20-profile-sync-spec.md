@@ -89,13 +89,17 @@ All measurements taken 2026-09-20 against `a4f3e957` and the three live daemons.
   stores, debounces 5 s trailing, hashes, and uploads only when the hash changed, targeting
   `selectDevHostId` and requiring a `connected` runtime status. This is the shape of the Profile
   collector; it gains sections, compare-and-set and an inbound direction.
-- **The hashing primitives exist.** `spa/src/lib/device-state/payload.ts:77 structuralKey()` is a
-  recursive key-sorted JSON serialisation with `capturedAt` stripped; `:88 hashPayload()` is
-  SHA-256 over it. Both move to `lib/profile/` unchanged in behaviour.
-- **The applier exists.** `spa/src/lib/device-state/restore.ts:102 runDeviceStateRestore()` already
+- **The hashing primitives exist.** `spa/src/lib/device-state/payload.ts:83 structuralKey()` is a
+  recursive key-sorted JSON serialisation with `capturedAt` stripped; `:89 hashPayload()` is
+  SHA-256 over it (async — `crypto.subtle`). Both are typed to `WorkspaceSnapshot`, so
+  `lib/profile/hash.ts` is a generic copy (no `capturedAt` rule — sections have none); the
+  originals are deleted with their module in P4b. *(corrected in P2a, §9.3)*
+- **The applier exists.** `spa/src/lib/device-state/restore.ts:101 runDeviceStateRestore()` already
   does the hard parts of writing a foreign document into the live stores: an operation lock, a
   well-formedness guard, `markMissingHosts`, `reattachByName`, per-tab `remapLayoutSessions`, a
-  `-prev` backup, `replaceTabSnapshot`, `syncSessionStore`. Profile apply reuses this pipeline.
+  `-prev` backup, `replaceTabSnapshot`, `syncSessionStore`. Profile apply reuses its **pure helpers and the
+  lock**; its commit step (`replaceTabSnapshot`) replaces the whole world and cannot take a single
+  `tabs.<ws>` section, so the applier is new per-section functions (§4.7). *(corrected in P2a)*
 - **`clientId` currently comes from the module being deleted.** `uploader.ts:117` reads
   `useSyncStore.getState().getClientId()`. Identity must move before Sync can go (§6, P4a).
 - **The SPA does not know its own version.** `__APP_VERSION__` is defined only in
@@ -109,11 +113,11 @@ Persisted stores, their keys, and where each field lands. `L` = device-local (ne
 
 | Store | key | Into section | Device-local part |
 |---|---|---|---|
-| `features/workspace/store.ts` | `purdex-workspaces` | `workspaces` (id, name, icon, iconWeight, moduleConfig) and, per workspace, its tab order | `activeWorkspaceId` |
-| `stores/useTabStore.ts` | `purdex-tabs` | `tabs.<wsId>` (the `Tab` objects) | `activeTabId`, `visitHistory` |
-| `stores/useHostStore.ts` | `purdex-hosts` | `hosts` (`hosts`, `hostOrder`, incl. `token`) | `activeHostId`, **`devHostId`** |
+| `features/workspace/store.ts` | `purdex-workspaces` | `workspaces` (id, name, icon, iconWeight, moduleConfig) and, per workspace, its tab order. **The store holds a `Workspace[]`; order is array order** — the `{order, Record}` of §4.2 is a conversion | `activeWorkspaceId`, each `Workspace.activeTabId` |
+| `stores/useTabStore.ts` | `purdex-tabs` (v3) | `tabs.<wsId>` (the `Tab` objects) | `activeTabId`; `visitHistory` (memory only, never persisted); `tabOrder` (derived, §4.3) |
+| `stores/useHostStore.ts` | `purdex-hosts` | `hosts` (`hosts`, `hostOrder`; every `HostConfig` field — `id name ip port token order color colors icon iconWeight`) | `activeHostId`, **`devHostId`**, `runtime` |
 | `stores/useLayoutStore.ts` | `purdex-layout` | `settings` — **only `tabPosition`** | regions (views, widths, mode, activeViewId), `activityBarWidth`, `activityBarWideSize`, `workspaceExpanded` |
-| `stores/useUISettingsStore.ts` | `purdex-ui-settings` (v4) | `settings` | — |
+| `stores/useUISettingsStore.ts` | `purdex-ui-settings` (v4) | `settings` | `terminalSettingsVersion` (a reconnect bump counter, not a preference) |
 | `stores/useEditorSettingsStore.ts` | `purdex-editor-settings` | `settings` | — |
 | `stores/useThemeStore.ts` | `purdex-themes` | `settings` | — |
 | `stores/useI18nStore.ts` | `purdex-i18n` | `settings` | — |
@@ -121,7 +125,7 @@ Persisted stores, their keys, and where each field lands. `L` = device-local (ne
 | `stores/useModuleEnabledStore.ts` | `purdex-module-enabled` | `settings` | — |
 | `stores/useWorkspaceSettingsStore.ts` | `purdex-workspace-settings` | `settings` | — |
 | `stores/useHostSettingsStore.ts` | `purdex-host-settings` | `settings` | — |
-| `stores/useNewTabLayoutStore.ts` | `purdex-newtab-layout` | `settings` | — (see §8, naming) |
+| `stores/useNewTabLayoutStore.ts` | `purdex-newtab-layout` | `settings` — `profiles` only | `activeEditingProfile` (editor UI state), `knownIds` (derived) (see §7, naming) |
 
 Not in a profile at all: `useSessionStore`, `useHistoryStore`, `useBrowserHistoryStore`,
 `useRecentFilesStore`, `usePlaceholderFilesStore`, `useHeadlessLauncherMemoryStore`,
@@ -144,7 +148,7 @@ rule costs nothing to honour.
   capturedAt}`. It is part of tab structure and therefore part of a profile — **this is what makes
   rebuild work identically for a master and a slave** (decision 13).
 - **Two orderings exist today.** `useTabStore.tabOrder` is a global order; `Workspace.tabs` is the
-  per-workspace order, and the comment at `useTabStore.ts:440-449` says the TabBar renders from
+  per-workspace order, and the comment at `useTabStore.ts:441-450` says the TabBar renders from
   `workspace.tabs` and that a mismatch "silently regresses the clustering UX". Sectioning by
   workspace makes `workspace.tabs` the only order that is stored; `tabOrder` becomes derived.
 
@@ -243,12 +247,15 @@ workspaces never touch the same section, so they never conflict.
 ```ts
 // lib/profile/projections.ts
 export const PROJECTIONS = {
-  hosts:      ['hosts.*.id', 'hosts.*.name', 'hosts.*.ip', 'hosts.*.port', 'hosts.*.token', 'hostOrder'],
+  hosts:      ['hosts.*.id', 'hosts.*.name', 'hosts.*.ip', 'hosts.*.port', 'hosts.*.token', 'hostOrder',
+               'hosts.*.order', 'hosts.*.color', 'hosts.*.colors', 'hosts.*.icon', 'hosts.*.iconWeight'],
   workspaces: ['order', 'workspaces.*.name', 'workspaces.*.icon', 'workspaces.*.iconWeight', 'workspaces.*.moduleConfig'],
-  tabs:       ['order', 'tabs.*.id', 'tabs.*.pinned', 'tabs.*.locked', 'tabs.*.createdAt', 'tabs.*.layout'],
-  settings:   ['purdex-ui-settings', 'purdex-editor-settings', 'purdex-themes', 'purdex-i18n',
-               'purdex-notification-settings', 'purdex-module-enabled', 'purdex-workspace-settings',
-               'purdex-host-settings', 'purdex-newtab-layout',
+  tabs:       ['order', 'tabs.*.id', 'tabs.*.pinned', 'tabs.*.locked', 'tabs.*.createdAt', 'tabs.*.layout',
+               '!tabs.*.layout..sizes'],       // exclusion: split ratios at any depth (decision 8)
+  settings:   [/* '<storeKey>.<field>' — every synced field listed one by one, per store; no
+                  whole-store entries. Three stores have no `partialize`, and three persisted
+                  fields are not preferences (`terminalSettingsVersion`, `activeEditingProfile`,
+                  `knownIds`); the full list is in the P2a plan and in projections.ts */
                'purdex-layout.tabPosition'],   // ← the only field taken from useLayoutStore
 } as const
 ```
@@ -278,7 +285,7 @@ are deleted in P3.
 
 Consequence taken deliberately: `useTabStore.tabOrder` stops being authoritative and is rebuilt
 from the workspaces' orders on apply, retiring the dual-ordering hazard noted at
-`useTabStore.ts:440-449`.
+`useTabStore.ts:441-450`.
 
 ### 4.4 Section state, and the pre-SOT state machine
 
@@ -379,6 +386,15 @@ the client, next to its payload:
 | either | `rev < baseRev` | **`locked:schema`-style stop**: a revision cannot go backwards, so the SOT profile was deleted and recreated. The panel says so and offers push or pull as a fresh start |
 | either | section absent on SOT | §4.6.3 |
 
+*Restated in P2a (§9.4), without changing any row's meaning:* each side is a pair `{rev, hash}` and
+**"absent" is `hash === null`** — on the SOT that covers both "never created" and a tombstone, which
+the client cannot and need not tell apart. "The SOT moved" is then `sot.hash ≠ base.hash ∨ (sot.hash
+≠ null ∧ sot.rev > base.rev)` — **an absent side has no revision to compare** (§9.6 C-1: a section
+created and deleted again elsewhere is just as absent as before, whatever revisions went by), which is what lets a client that has just deleted a section (base `{6, null}`) read an
+index that no longer lists it as *agreement* rather than as a deletion to pull. Creating over an
+absent SOT always sends `baseRev 0`, because that is the only create the daemon accepts, over nothing
+or over a tombstone.
+
 The CAS of §4.6 is the enforcement of this table across the race window; the table is what stops a
 client from ever *starting* a write it knows is stale.
 
@@ -399,9 +415,25 @@ that nothing is overwritten silently:
    the push resolves (200 or 409) the section re-runs §4.6.1. Applying it eagerly would overwrite
    the very payload the impending 409 is about to ask the user to choose between.
 
+3. **Knowledge of the SOT never goes backwards by accident.** Every change to a section's base,
+   SOT view or flight — and every reconnect — bumps an *index epoch*; an index response carries the
+   one it was requested at and is discarded (and re-requested) if the section has moved on since.
+   **A local edit does not bump it** (PR review, §9.6): freshness of the index is a fact about the
+   SOT, and a user who keeps typing must not be able to starve the section of an index forever. Only an epoch-matching index
+   may lower the known revision — which is exactly the "profile was recreated" signal.
+4. **A decision is only as good as the state it was made in.** A push carries a token
+   `{hash, baseRev, epoch}`; the state machine refuses to open a flight for a stale token, and the
+   transport sends only a flight that was opened. A decision overtaken by an event dies at that
+   boundary instead of reaching the wire.
+
 When a push returns 409, the client keeps **the payload it sent** as the "local" side of the
 conflict. The live stores may have moved on since; the user is choosing between two known
-snapshots, not between the SOT and a moving target.
+snapshots, not between the SOT and a moving target. The state machine holds hashes only; it names
+the payloads that must be retained (the one in flight, both sides of an open conflict) and the
+transport keeps exactly those. A locked section still *learns* of newer SOT revisions — it refuses
+to apply them, not to know about them — so `Keep local` is written against the newest one.
+**An edit made after the user chose `Keep local`, but before the sent snapshot has been put back,
+cancels the restore** (§9.6): what he typed after choosing wins over the snapshot he chose.
 
 #### 4.6.3 Sections are created and deleted
 
@@ -425,6 +457,15 @@ snapshots, not between the SOT and a moving target.
   - a `tabs.<wsId>` section whose workspace is not in `workspaces` → **kept, not deleted**, and not
     rendered. It is either an arrival that overtook its workspace, or a workspace deleted elsewhere;
     the next `workspaces` apply resolves which.
+- *Who does what (settled in P2a, §9.5).* The two rules above are reconciled by what the client
+  **knew**: a `tabs.<id>` whose workspace this client had and the `workspaces` apply just removed is
+  deleted locally; one whose workspace it never saw is kept unrendered. Everything else is ordinary
+  section sync, not a special path: deleting a workspace locally makes its `tabs.<id>` vanish from
+  the local document → the section's state machine sees `hash: null` and issues the CAS `DELETE`;
+  other clients then see an absent SOT over a clean local copy and pull the deletion — which is
+  also how a kept-unrendered section is eventually collected; a removal that meets a moved SOT is a
+  conflict like any other; and two clients creating the same empty `tabs.<id>` converge, because
+  both send the same `{order: [], tabs: {}}`.
 - A client never deletes a section merely because it does not recognise it (forward compatibility
   with a newer client's section kinds; unknown kinds are carried, never rewritten).
 
@@ -455,6 +496,17 @@ operation lock, validates well-formedness, then per section:
 
 Both directions are pure functions over `(local, incoming)` plus one commit step, so the whole of
 §4.7 is testable without a daemon.
+
+*Measured in P2a:* split node ids are `generateId()` and travel inside `layout`, so both sides share
+them after one apply — that is what makes the id match work; `sizes` are percentages summing to 100
+by convention, and a new split is distributed evenly. `useLayoutStore.healLayoutInvariant` widens
+the device-local `activityBarWidth` when `tabPosition` becomes `'left'`; that is a layout invariant
+of the store, not a sync leak, and is accepted. Applying `settings` yields per-store **patches** of
+the listed fields that differ, nothing else. Applying `tabs.<A>` removes an arriving tab from any
+other workspace still listing it (one workspace per tab, §4.3), so it can dirty `tabs.<B>`; that is
+correct and converges when B's own section lands. A payload is checked for well-formedness first —
+`order` must equal the record's key set, no unknown keys, no `sizes` anywhere — and a payload that
+fails is not applied at all: never a partial apply.
 
 ### 4.8 Daemon: `internal/module/profiles`
 
@@ -616,7 +668,7 @@ On mlab (worktree dev server :5175) and air-2026, with mlab as dev host:
   64-deep buffer fills (§3.5); reconcile-on-connect is what makes that survivable, and step 3 of §6
   measures the happy path rather than asserting it.
 - **`profile` is already a word in this codebase.** `useNewTabLayoutStore` persists `{profiles,
-  knownIds, activeEditingProfile}` for the new-tab layout editor (417 lines, and already on the
+  knownIds, activeEditingProfile}` for the new-tab layout editor (308 lines, and already on the
   inventory page's "decide" list). With PRODUCT.md §3 being a strict vocabulary, that concept must
   be renamed or removed; P3 renames it to *new-tab layout preset* if it still exists.
 - **Deleting ~9,000 lines of Sync** touches the module registry and the settings IA. P4a is a pure
@@ -675,3 +727,75 @@ the first statement is a write). One evidenced spec drift:
 
 Stop condition met: R1 has no critical/P1, and the critic raised no evidenced objection to a
 finding — its one addition is fixed.
+
+### 9.3 P2a — spec corrected against measurement, 2026-09-20
+
+Before the P2a plan was written the SPA side was measured file by file. Corrections applied above:
+line references in §3.2–§3.4; `workspaces` is an array; `visitHistory` is never persisted;
+**`HostConfig` has five persisted fields the `hosts` projection omitted** (`order` — required —
+`color`, `colors`, `icon`, `iconWeight`; decision 7 says the section travels whole); the `settings`
+projection lists fields per store because three stores have no `partialize` and three persisted
+fields are not preferences; the applier cannot reuse `replaceTabSnapshot` (whole-world commit);
+`structuralKey`/`hashPayload` are copied generically rather than moved; `useNewTabLayoutStore` is
+308 lines, not 417.
+
+### 9.4 P2a plan review — codex `task-mu8xn90i-xcdz0h` (gpt-5.6-sol), 2026-09-20
+
+Seventeen findings (six critical), all accepted; the measured baseline was spot-checked and held.
+The critical ones were all in the section state machine, before a line of it existed:
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1, 2, 10 | `sot: null` meant both "never existed" and "tombstone"; a delete event has no hash; after a successful delete the next index read as "deleted elsewhere, pull" and 404'd forever | both sides are `{rev, hash \| null}`; "moved" compares hash and rev; create-over-absent sends `baseRev 0` (§4.6.1) |
+| 3 | a late index response rewound the known SOT rev → a push the client knew was stale | epochs (§4.6.2 rule 3) |
+| 4 | race between deciding a push and starting it | flight tokens (§4.6.2 rule 4) |
+| 5 | a conflict kept hashes only — the sent snapshot was unrecoverable | `retainedHashes`; the transport stashes by hash |
+| 6 | `Take SOT` was inexpressible; `Keep local` targeted the rev at lock time and would 409 again | `forcePull`; a locked section keeps learning; keep-local rebases on the newest known rev and restores the sent snapshot |
+| 7–9 | delete had no in-flight type; terminal events clearing the flight were untested; `push-converged` could set the base to a hash never sent | typed; one shared invariant test; base = the *sent* hash |
+| 11 | store state types are not exported | structural types in the lib, pinned from the test files |
+| 12 | standalone tabs dropped, against §4.3 | pure `adoptStandaloneTabs` |
+| 13 | weak well-formedness guard broke the round trip | `order` must equal the record's key set |
+| 14 | 3 ∥ 4 ∥ 5 was not independent | `1 → 2 → (3 ∥ 4) → (5 ∥ 6)` |
+| 15, 16 | `..` depth-zero ambiguity; round trip must be stated on hashes | specified and tested |
+
+### 9.5 P2a as built, 2026-09-20
+
+Contradictions found while implementing, reported by the subagents rather than resolved silently,
+and ruled on by the main session (full list in the P2a plan, "As built"):
+
+- §4.6.1 decision order: **restore-local precedes reindex** — a fresh, restored or reconnected
+  section is index-stale by design (nothing is decided before an index is seen; `reconnected` is
+  reconcile-on-connect), so a local restore must not queue behind a network step or it lands late
+  and overwrites newer edits.
+- A 409 on a section that is clean by the time it arrives does not lock; a sent *delete* that met a
+  409 is restorable to "absent"; a 409 never lowers the known SOT revision.
+- §4.6.3's two rules about `tabs.*` of unknown workspaces were contradictory as written; reconciled
+  by what the client previously knew (text added to §4.6.3).
+- `settings` apply produces patches; a listed field absent from a present store means "cleared".
+- The canonical-JSON idiom inherited from device-state was wrong for integer-like keys and
+  `__proto__`; `lib/profile/hash.ts` does not share it.
+
+### 9.6 PR #1239 review — R1 + R2 attacker (gpt-5.6-sol), 2026-09-20
+
+| # | Source | Sev. | Finding | Resolution |
+|---|---|---|---|---|
+| A-1 / R1-1 | attacker, R1 | high / P1 | the `settings` guard admitted payloads no builder can produce — unlisted fields, unknown stores, wrong-typed values. With "a listed field absent from a present store means cleared", `{"purdex-ui-settings":{"terminalSettingsVersion":1}}` wiped every UI preference and could never converge | known stores may carry only `PROJECTIONS`-listed fields and at least one; unknown stores are refused (a new store changes the fingerprint, so the schema lock owns forward compatibility, not the guard); `applySettings` compares value shape against the local value and returns `{patches, rejected}` — any rejection means no patch at all |
+| A-2 | attacker | high | an edit made between `Keep local` and the restore was overwritten by the restored snapshot | a `local-changed` cancels a pending restore; `local-restored` is accepted only for the pending hash; `canRestoreLocal` lets the driver check before it writes (§4.6.2) |
+| A-3 | attacker | medium | continuous local edits invalidated every index response → the section never synced while the user typed | a separate index epoch that local edits do not move (§4.6.2 rule 3) |
+| R1-2 | R1 | P2 | a late `409 {rev: 0}` replaced a newer live SOT learnt during the flight with "absent" | the absent answer is ignored when a live SOT was recorded mid-flight |
+| A-4 | attacker | low | `applier.ts` mixes four appliers with their guards — the seam A-1 lived in | #1240 |
+
+Found while fixing A-3, by the subagent, against the main session's instruction and with a
+counter-example: a reconnect **must** invalidate index requests in flight (events were lost while
+disconnected, so a pre-disconnect answer is stale by definition). `reconnected` always bumps the
+index epoch.
+
+**R2 critic** (incremental, `--base 52e641a8`): agrees with all five and confirms R1-1/A-1, A-2 and
+A-3 closed — no new stale-push path after splitting the index epoch from the flight epoch; the
+shape check cannot refuse a legitimate value (it opened the ten stores: no listed field is nullable
+or spans shapes); refusing unknown settings stores does not contradict §4.6.3, which is about
+section *kinds*. No spec drift of Important or above. One evidenced objection, to the *fix* of R1-2:
+
+| # | Sev. | Finding | Resolution |
+|---|---|---|---|
+| C-1 | high | "a live SOT was learnt during the flight" does not prove it is newer than the 409 — events and HTTP responses travel on different channels with no causal order. Create (rev 5, event seen) → delete (rev 6, event lost) → my PUT meets the tombstone: the `409 {rev: 0}` is the *authoritative* one, and keeping `{5, H8}` presents deleted content as the SOT and makes `Keep local` push `baseRev 5` into a daemon that only accepts 0 | R1 and the critic describe the two directions of one ambiguity the client cannot resolve, so it does not guess: the flight closes, `sot` is left alone, **nothing locks**, the index is marked stale, and the authoritative index decides — absent → push `baseRev 0`; live and different → conflict; live and equal → synced. Two consequences adopted with it: **no convergence fold while the index is stale** (stale means "what I know of the SOT is not to be trusted", and declaring `synced` on it is wrong; the fold happens one step later, when the index lands), and **an absent side has no revision** in `sotMoved` (§4.6.1) |
