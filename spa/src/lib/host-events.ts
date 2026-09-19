@@ -11,6 +11,7 @@ export interface HostEvent {
     | 'agent.status.cleared'
     | 'agent.path_hint'
     | 'backup:done'
+    | 'profile'
   session: string
   value: string
 }

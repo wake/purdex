@@ -8,6 +8,7 @@ import { useRebuildStore } from '../stores/useRebuildStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
 import { dispatchAgentWsEvent, isAgentWsEvent } from '../lib/agent-ws'
 import { dispatchBackupWsEvent } from '../lib/storage-backup/backup-ws-dispatch'
+import { dispatchProfileWsEvent } from '../lib/profile/profile-ws-dispatch'
 import { usePathCacheStore } from '../stores/path-cache/usePathCacheStore'
 import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { scanPaneTree } from '../lib/pane-tree'
@@ -243,6 +244,12 @@ export function useMultiHostEventWs() {
             // Cross-device backup refresh (spec §4.6). The dispatch helper
             // ignores this device's own posts (already reflected by backupNow).
             dispatchBackupWsEvent(hostId, event)
+            return
+          }
+          if (event.type === 'profile') {
+            // Profile section change (spec §4.6). Own writes are NOT filtered
+            // here or in the helper — the sync driver decides what "own" means.
+            dispatchProfileWsEvent(hostId, event)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in
