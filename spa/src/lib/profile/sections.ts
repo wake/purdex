@@ -80,9 +80,17 @@ export function stripSizes(layout: PaneLayout): StrippedLayout {
 
 // === Section builders ===
 
-/** `hosts`: each host's projected fields (`token: null` survives — it means "cleared"), and the order. */
+/**
+ * `hosts`: each host's projected fields (`token: null` survives — it means
+ * "cleared"), and the order. `hostOrder` is restricted to hosts that exist (an id
+ * with no host is dropped — `reorderHosts` does not check ids — and a repeat is
+ * kept once), because the applier's well-formedness guard rejects a section whose
+ * order names an unknown host, and this client's hosts would then never sync. A
+ * host the order never mentions is NOT added: the guard allows that state, and
+ * the builder reflects the store rather than repairing it.
+ */
 export function buildHostsSection(s: HostsSource): HostsPayload {
-  const shaped = { hosts: s.hosts, hostOrder: s.hostOrder }
+  const shaped = { hosts: s.hosts, hostOrder: uniqueKnown(s.hostOrder, (id) => Object.hasOwn(s.hosts, id)) }
   // An empty record matches no `hosts.*` path; the key must exist all the same.
   return { hosts: {}, ...(project(shaped, PROJECTIONS.hosts) as object) } as HostsPayload
 }

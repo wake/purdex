@@ -13,6 +13,7 @@ import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneContent, PaneLayout, PaneRebuildRecord, Tab, Workspace } from '../../types/tab'
+import { isWellFormedSection } from './applier'
 import { hashSection, structuralKey } from './hash'
 import {
   adoptStandaloneTabs,
@@ -243,6 +244,28 @@ describe('buildHostsSection', () => {
   it('drops everything else the store state carries', () => {
     const state = { hosts: { h1: { ...host('h1'), extra: S } }, hostOrder: ['h1'], activeHostId: S, devHostId: S, runtime: { h1: { status: S } } }
     expect(structuralKey(buildHostsSection(state as unknown as HostsSource))).not.toContain(S)
+  })
+
+  it('drops a hostOrder id that has no host (reorderHosts does not check ids), so the receiver accepts the section', () => {
+    const source = deepFreeze({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['a', 'ghost', 'b'] })
+    const out = buildHostsSection(source)
+    expect(out.hostOrder).toEqual(['a', 'b'])
+    expect(Object.keys(out.hosts).sort()).toEqual(['a', 'b'])
+    expect(isWellFormedSection('hosts', out)).toBe(true)
+    expect(source.hostOrder).toEqual(['a', 'ghost', 'b']) // input untouched
+  })
+
+  it('keeps a repeated hostOrder id once, at its first occurrence', () => {
+    const out = buildHostsSection(deepFreeze({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['b', 'a', 'b', 'a'] }))
+    expect(out.hostOrder).toEqual(['b', 'a'])
+    expect(isWellFormedSection('hosts', out)).toBe(true)
+  })
+
+  it('does not add a host that hostOrder never mentions (the store state is reflected, not repaired)', () => {
+    const out = buildHostsSection({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['b'] })
+    expect(out.hostOrder).toEqual(['b'])
+    expect(Object.keys(out.hosts).sort()).toEqual(['a', 'b'])
+    expect(isWellFormedSection('hosts', out)).toBe(true)
   })
 })
 
