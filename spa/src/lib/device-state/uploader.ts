@@ -9,7 +9,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { selectDevHostId, useHostStore } from '../../stores/useHostStore'
 import { effectiveDeviceName, normalizeDeviceName, useDeviceStateStore } from '../../stores/useDeviceStateStore'
-import { useSyncStore } from '../sync/use-sync-store'
+import { getClientId } from '../client-identity'
 import { putDeviceState } from './api'
 import { resolveDefaultDeviceName } from './device-name'
 import { buildDeviceStatePayload, hashPayload } from './payload'
@@ -114,7 +114,7 @@ export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
         schedule()
         return
       }
-      const clientId = useSyncStore.getState().getClientId()
+      const clientId = getClientId()
       try {
         await putDeviceState(target, clientId, { deviceName, appVersion, capturedAt, payload })
       } catch (err) {

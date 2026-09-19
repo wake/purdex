@@ -5,7 +5,7 @@ import { useDeviceStateStore } from '../../../stores/useDeviceStateStore'
 import type { DeviceStateStatus } from '../../../stores/useDeviceStateStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useRebuildStore } from '../../../stores/useRebuildStore'
-import { useSyncStore } from '../../../lib/sync/use-sync-store'
+import { STORAGE_KEYS } from '../../../lib/storage'
 import * as apiModule from '../../../lib/device-state/api'
 import type { DeviceStateRecord, DeviceStateSummary } from '../../../lib/device-state/api'
 import * as restoreModule from '../../../lib/device-state/restore'
@@ -95,7 +95,8 @@ beforeEach(() => {
     devHostId: null,
   })
   useRebuildStore.setState({ lockedBy: null, lockGrant: null })
-  useSyncStore.setState({ clientId: OWN })
+  // The own id comes from lib/client-identity, whose truth is this storage key.
+  localStorage.setItem(STORAGE_KEYS.CLIENT_IDENTITY, OWN)
   mockedList.mockReset()
   mockedGet.mockReset()
   mockedDelete.mockReset()
@@ -181,12 +182,13 @@ describe('DeviceStateSection — list', () => {
     expect(screen.getByTestId(`device-state-delete-${OTHER}`)).not.toBeDisabled()
   })
 
-  it('resolves the own client id via getClientId when the sync store has none yet', async () => {
+  it('resolves the own client id via getClientId when none is stored yet', async () => {
     withTarget()
-    useSyncStore.setState({ clientId: null })
+    localStorage.removeItem(STORAGE_KEYS.CLIENT_IDENTITY)
+    localStorage.removeItem(STORAGE_KEYS.SYNC_STATE)
     let generated: string | null = null
     mockedList.mockImplementation(async () => {
-      generated = useSyncStore.getState().clientId
+      generated = localStorage.getItem(STORAGE_KEYS.CLIENT_IDENTITY)
       return [summary(OTHER), summary(generated ?? 'missing')]
     })
     render(<DeviceStateSection />)

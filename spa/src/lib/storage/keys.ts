@@ -27,4 +27,6 @@ export const STORAGE_KEYS = {
   PLACEHOLDER_FILES: 'purdex-placeholder-files',
   DEVICE_STATE: 'purdex-device-state',
   HEADLESS_LAUNCHER: 'purdex-headless-launcher',
+  /** 手動管理（非 Zustand store）：lib/client-identity.ts 經 browserStorage 直接讀寫，值是裸字串 id */
+  CLIENT_IDENTITY: 'purdex-client-identity',
 } as const
