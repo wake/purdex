@@ -40,8 +40,9 @@ func att(clientID, profileID, name string) Attachment {
 	return Attachment{ClientID: clientID, ProfileID: profileID, DeviceName: name}
 }
 
-// insertRawSection writes a profile_sections row directly. The section API is
-// Task 2; Task 1 only has to prove that DeleteProfile clears the table.
+// insertRawSection writes a profile_sections row directly, so the DeleteProfile
+// test depends on nothing but the schema. The same behaviour through the real
+// section API is TestDeleteProfileRemovesSectionsAndTombstones (sections_test.go).
 func insertRawSection(t *testing.T, s *Store, profileID, section string, deleted int) {
 	t.Helper()
 	_, err := s.db.Exec(`

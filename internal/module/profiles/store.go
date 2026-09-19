@@ -45,6 +45,11 @@ type Store struct {
 	db    *sql.DB
 	now   func() int64           // daemon clock in ms; injectable for tests
 	newID func() (string, error) // profile id source; injectable for tests
+
+	// afterSectionRead, when set, runs between PutSection's read of the current
+	// row and its conditional write — the window a racing writer has to hit.
+	// Tests use it to lose a race deterministically; it is nil in production.
+	afterSectionRead func()
 }
 
 // OpenStore opens (or creates) a Store at path. Use ":memory:" for tests that
