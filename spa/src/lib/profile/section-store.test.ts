@@ -422,6 +422,84 @@ describe('section-store', () => {
     })
   })
 
+  describe('referential integrity — a conflict is only restored with the payloads it needs', () => {
+    const UNLOCKED = { base: LOCKED.base, currentHash: LOCKED.currentHash }
+    const stored = (stash: Record<string, unknown>, settings: unknown = LOCKED): void =>
+      writeRaw({ profileId: P1, generation: g, sections: { settings, hosts: HOSTS }, stash })
+
+    it('both payloads present → the conflict is kept', () => {
+      stored(LOCKED_PAYLOADS)
+      expect(loadSectionStore(P1).sections.settings).toEqual(LOCKED)
+    })
+
+    it.each([
+      ['the localHash payload is missing', { [H('d')]: { theirs: 1 } }],
+      ['the sot payload is missing', { [H('b')]: { mine: 1 } }],
+      ['the localHash payload is damaged (filtered out)', { [H('b')]: 'not an object', [H('d')]: { theirs: 1 } }],
+      ['the sot payload is damaged (filtered out)', { [H('b')]: { mine: 1 }, [H('d')]: [1] }],
+      ['the stash is empty', {}],
+    ])('%s → the conflict is dropped, base and currentHash stay, the other sections too', (_label, stash) => {
+      stored(stash)
+
+      const loaded = loadSectionStore(P1).sections
+
+      expect(loaded.settings).toEqual(UNLOCKED)
+      expect('conflict' in loaded.settings).toBe(false)
+      expect(loaded.hosts).toEqual(HOSTS)
+    })
+
+    it('a null hash needs no payload: a delete over a tombstone is kept with an empty stash', () => {
+      stored({}, DELETE_LOCKED)
+      expect(loadSectionStore(P1).sections.settings).toEqual(DELETE_LOCKED)
+    })
+
+    it('only the non-null side is required', () => {
+      const sentDelete = { ...LOCKED, conflict: { localHash: null, sot: { rev: 5, hash: H('d') } } }
+      stored({ [H('d')]: { theirs: 1 } }, sentDelete)
+      expect(loadSectionStore(P1).sections.settings).toEqual(sentDelete)
+
+      stored({}, sentDelete)
+      expect(loadSectionStore(P1).sections.settings).toEqual(UNLOCKED)
+    })
+
+    it('the load does not write; the next write stores the section without its broken lock', () => {
+      stored({ [H('d')]: { theirs: 1 } })
+      const before = raw()
+      loadSectionStore(P1)
+      expect(raw()).toBe(before)
+
+      saveSection(P1, g, 'hosts', HOSTS)
+      expect(JSON.parse(raw()!).sections.settings).toEqual(UNLOCKED)
+    })
+
+    it('pruneStash never removes a payload a stored conflict still refers to, whatever `keep` says', () => {
+      saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)
+      putStash(P1, g, H('e'), { loose: 1 })
+      putStash(P1, g, H('f'), { kept: 1 })
+
+      expect(pruneStash(P1, g, new Set([H('f')]))).toBe('ok')
+
+      expect(loadSectionStore(P1).stash).toEqual({ ...LOCKED_PAYLOADS, [H('f')]: { kept: 1 } })
+      expect(loadSectionStore(P1).sections.settings).toEqual(LOCKED)
+    })
+
+    it('pruneStash lets them go once the lock is lifted', () => {
+      saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)
+      saveSection(P1, g, 'settings', SETTINGS)
+
+      pruneStash(P1, g, new Set())
+
+      expect(loadSectionStore(P1).stash).toEqual({})
+    })
+
+    it('pruneStash with only referenced payloads outside `keep` writes nothing', () => {
+      saveConflict(P1, g, 'settings', LOCKED, LOCKED_PAYLOADS)
+      const setItem = vi.spyOn(Storage.prototype, 'setItem')
+      expect(pruneStash(P1, g, new Set())).toBe('ok')
+      expect(setItem).not.toHaveBeenCalled()
+    })
+  })
+
   describe('a storage that refuses the write (quota)', () => {
     const quota = (): void => {
       vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {

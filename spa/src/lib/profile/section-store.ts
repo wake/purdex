@@ -59,6 +59,16 @@
 // error between the two would leave a lock the user cannot resolve: a restart
 // restores `locked:conflict`, the user picks a side, and there is no payload.
 //
+//   The same is enforced on the way IN, because storage can be damaged behind
+// this module's back: a conflict whose payload is missing, or was filtered out
+// as malformed, is dropped at load. Only the `conflict` goes — `base` and
+// `currentHash` stay and the section comes back unlocked. The base is still
+// what this client agreed with the SOT on; dropping the whole section would
+// restart it from `{0, null}` and buy nothing but a full re-judgement. Whether
+// it is (still) in conflict is for the driver's reindex to find out from the
+// state of that moment. And `pruneStash` will not remove a payload a stored
+// conflict refers to, whatever its caller's `keep` says.
+//
 // WRITES NEVER THROW. Each returns a `WriteResult`. A refused `setItem` (quota,
 // blocked site data) leaves the PREVIOUS value in place — `localStorage.setItem`
 // is atomic, there is no half-written document — so the caller loses this one
@@ -238,7 +248,14 @@ function readDocument(): StoredDocument | null {
   for (const [hash, payload] of Object.entries(parsed.stash)) {
     if (isHash(hash) && isPlainObject(payload)) stash.push([hash, payload])
   }
-  return { profileId: parsed.profileId, generation, sections: recordOf(sections), stash: recordOf(stash) }
+  // Referential integrity, AFTER both filters: a payload that was dropped as
+  // malformed is as missing as one that was never there.
+  const stashed = new Set(stash.map(([hash]) => hash))
+  const intact = sections.map(([key, section]): [string, PersistedSection] => {
+    if (section.conflict === undefined || neededHashes(section.conflict).every((h) => stashed.has(h))) return [key, section]
+    return [key, { base: section.base, currentHash: section.currentHash }]
+  })
+  return { profileId: parsed.profileId, generation, sections: recordOf(intact), stash: recordOf(stash) }
 }
 
 function writeDocument(data: StoredDocument): boolean {
@@ -358,11 +375,16 @@ export function getStash(profileId: string, hash: string): unknown | undefined {
   return doc.stash[hash]
 }
 
-/** Drop every stashed payload whose hash is not in `keep`. `'ok'` = storage now
- *  holds nothing outside `keep`. */
+/** Drop every stashed payload whose hash is not in `keep` — EXCEPT the ones a
+ *  stored conflict still refers to, which stay even if the caller forgot them:
+ *  removing one would turn a resolvable lock into one that is dropped at the
+ *  next load. (The alternative, dropping the conflict along with its payload,
+ *  would let a caller's slip silently unlock a section.) `'ok'` = storage now
+ *  holds nothing outside `keep` and those. */
 export function pruneStash(profileId: string, generation: number, keep: ReadonlySet<string>): WriteResult {
   return fencedWrite(profileId, generation, (doc) => {
-    const kept = Object.entries(doc.stash).filter(([h]) => keep.has(h))
+    const referenced = new Set(Object.values(doc.sections).flatMap((sec) => (sec.conflict === undefined ? [] : neededHashes(sec.conflict))))
+    const kept = Object.entries(doc.stash).filter(([h]) => keep.has(h) || referenced.has(h))
     if (kept.length === Object.keys(doc.stash).length) return null
     return { ...doc, stash: recordOf(kept) }
   })
