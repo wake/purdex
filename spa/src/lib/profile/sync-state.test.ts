@@ -135,6 +135,13 @@ describe('initialSectionState / predicates', () => {
     // a lower rev with the same hash is not "moved" — it is row 1 (reset)
     expect(sotMoved(mk({ base: { rev: 5, hash: H0 }, sot: { rev: 2, hash: H0 }, currentHash: H0 }))).toBe(false)
   })
+  it('sotMoved: absent has no rev — absent then and absent now is "not moved", whatever happened in between', () => {
+    expect(sotMoved(mk({ base: { rev: 4, hash: null }, sot: { rev: 6, hash: null }, currentHash: null }))).toBe(false)
+    // so a local create over it is a plain push (wire baseRev 0), not a conflict with nothing
+    const d = decideSection(mk({ base: { rev: 4, hash: null }, sot: { rev: 6, hash: null }, currentHash: H1 }), ON)
+    expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H1, baseRev: 0 })
+    expect(decideSection(mk({ base: { rev: 4, hash: null }, sot: { rev: 6, hash: null }, currentHash: null }), ON)).toEqual({ do: 'nothing' })
+  })
 })
 
 describe('decideSection — one test per row', () => {
@@ -312,6 +319,27 @@ describe('reduceSection — rule 1: convergence is folded in the reducer', () =>
     const s3 = reduceSection(s2, { type: 'push-failed' })
     expect(s3.base).toEqual({ rev: 6, hash: H1 })
     expect(s3.status).toBe('synced')
+  })
+  it('does not fold on a stale index — "synced" is not declared on a view of the SOT that is not trusted; the index landing folds', () => {
+    // restored (so: stale), dirty H2; an event says the SOT moved to H2 as well
+    const s = run(restoreSectionState({ base: { rev: 5, hash: H0 }, currentHash: H2 }), { type: 'remote-event', rev: 6, hash: H2, own: false })
+    expect(s.indexStale).toBe(true)
+    expect(s.sot).toEqual({ rev: 6, hash: H2 })
+    expect(s.base).toEqual({ rev: 5, hash: H0 })
+    expect(s.status).toBe('pending')
+    expect(decideSection(s, ON)).toEqual({ do: 'reindex', indexEpoch: s.indexEpoch })
+    const ok = indexed(s, { rev: 6, hash: H2 })
+    expect(ok.base).toEqual({ rev: 6, hash: H2 })
+    expect(ok.status).toBe('synced')
+    // had the event been overtaken (H2 replaced by H8 unseen), the fold would have been wrong
+    const not = indexed(s, { rev: 7, hash: H8 })
+    expect(not.base).toEqual({ rev: 5, hash: H0 })
+    expect(decideSection(not, ON)).toEqual({ do: 'lock-conflict' })
+  })
+  it('a reconnect in the middle of agreement: the fold waits for the index too', () => {
+    const s = run(synced(5, H0), { type: 'reconnected' }, { type: 'local-changed', hash: H2 }, { type: 'remote-event', rev: 6, hash: H2, own: false })
+    expect(s.base).toEqual({ rev: 5, hash: H0 })
+    expect(indexed(s, { rev: 6, hash: H2 }).status).toBe('synced')
   })
   it('does not fold while locked', () => {
     const [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
@@ -675,10 +703,12 @@ describe('reduceSection — rule 5: terminal events', () => {
     expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 9, hash: H8 } })
   })
 
-  describe('an old 409 {rev:0} does not erase a live SOT learnt during the flight (R1 finding)', () => {
-    /** absent at the SOT ({4,null}) and agreed so; we create `sent`; while in flight another machine creates it: {5,H8}. */
-    function creatingWhileTheyCreate(sent: string): SectionSyncState {
-      const s0 = run(mk({ base: { rev: 4, hash: null }, sot: { rev: 4, hash: null }, currentHash: null }), { type: 'local-changed', hash: sent })
+  describe('a 409 {rev:0} after a live SOT was learnt in flight is AMBIGUOUS: neither side is believed, the index is asked (R1 + critic findings)', () => {
+    const OFF = { reachable: false, autoSync: true }
+    /** absent on both sides and agreed so ({baseRev,null}); we create `sent`; while in flight an event says another machine created it: {5,H8}. */
+    function creatingWhileTheyCreate(sent: string, baseRev = 0): SectionSyncState {
+      const s0 = run(mk({ base: { rev: baseRev, hash: null }, sot: { rev: baseRev, hash: null }, currentHash: null }), { type: 'local-changed', hash: sent })
+      expect(s0.indexStale).toBe(false)
       const [f, token] = startFlight(s0)
       expect(token).toMatchObject({ kind: 'put', hash: sent, baseRev: 0 })
       const moved = reduceSection(f, { type: 'remote-event', rev: 5, hash: H8, own: false })
@@ -686,27 +716,66 @@ describe('reduceSection — rule 5: terminal events', () => {
       expect(moved.sotMovedWhileInFlight).toBe(true)
       return moved
     }
-
-    it('sot stays {5,H8}; dirty → locked:conflict against the LIVE sot; keep-local pushes with baseRev 5, not 0', () => {
-      let s = reduceSection(deepFreeze(creatingWhileTheyCreate(H1)), { type: 'push-conflict', rev: 0, hash: null })
-      expect(s.sot).toEqual({ rev: 5, hash: H8 })
+    /** …and then our PUT comes back 409 {rev:0}. Events and HTTP answers are not causally ordered: nobody can tell which is newer. */
+    function ambiguous(sent: string, baseRev = 0): SectionSyncState {
+      const before = deepFreeze(creatingWhileTheyCreate(sent, baseRev))
+      const s = reduceSection(before, { type: 'push-conflict', rev: 0, hash: null })
       expect(s.inFlight).toBeNull()
       expect(s.sotMovedWhileInFlight).toBe(false)
+      expect(s.sot).toEqual({ rev: 5, hash: H8 }) // untouched: neither erased nor trusted
+      expect(s.base).toEqual({ rev: baseRev, hash: null })
+      expect(s.status).toBe('pending')
+      expect(s.conflict).toBeNull()
+      expect(s.indexStale).toBe(true)
+      expect(s.indexEpoch).toBe(before.indexEpoch + 1) // the flight closed
+      expect(decideSection(s, ON)).toEqual({ do: 'reindex', indexEpoch: s.indexEpoch })
+      return s
+    }
+
+    for (const baseRev of [0, 4]) {
+      it(`direction B (critic): created {5,H8}, then deleted unseen — the 409 was authoritative. No lock on the deleted H8; the index says absent → push with baseRev 0 (base rev ${baseRev})`, () => {
+        const s = indexed(ambiguous(H1, baseRev), null)
+        expect(s.sot.hash).toBeNull()
+        expect(s.status).toBe('pending')
+        expect(s.conflict).toBeNull()
+        const d = decideSection(s, ON)
+        expect(d.do).toBe('push')
+        expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H1, baseRev: 0 })
+      })
+    }
+
+    it('direction A (R1): the 409 was old, the create is real. The index says {5,H8} → lock-conflict against the LIVE sot; keep-local pushes with baseRev 5, not 0', () => {
+      let s = indexed(ambiguous(H1), { rev: 5, hash: H8 })
+      expect(decideSection(s, ON)).toEqual({ do: 'lock-conflict' })
+      s = reduceSection(s, { type: 'locked', reason: 'conflict' })
       expect(s.status).toBe('locked:conflict')
       expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 5, hash: H8 } })
       s = reduceSection(s, { type: 'resolved', keep: 'local' })
       expect(s.base).toEqual({ rev: 5, hash: H8 })
-      const token = tokenOf(decideSection(s, ON))
-      expect(token).toMatchObject({ kind: 'put', hash: H1, baseRev: 5 })
+      expect(tokenOf(decideSection(s, ON))).toMatchObject({ kind: 'put', hash: H1, baseRev: 5 })
     })
 
-    it('what we sent is exactly what they created → converges, no lock', () => {
-      const s = reduceSection(creatingWhileTheyCreate(H8), { type: 'push-conflict', rev: 0, hash: null })
-      expect(s.sot).toEqual({ rev: 5, hash: H8 })
-      expect(s.status).toBe('synced')
-      expect(s.conflict).toBeNull()
-      expect(s.base).toEqual({ rev: 5, hash: H8 })
-      expect(decideSection(s, ON)).toEqual({ do: 'nothing' })
+    it('what we sent is exactly what the event said they created: NOT folded on the unverified sot; the index decides', () => {
+      const s = ambiguous(H8)
+      expect(isDirty(s)).toBe(true)
+      // live {5,H8} confirmed → now it folds
+      const live = indexed(s, { rev: 5, hash: H8 })
+      expect(live.status).toBe('synced')
+      expect(live.base).toEqual({ rev: 5, hash: H8 })
+      expect(decideSection(live, ON)).toEqual({ do: 'nothing' })
+      // absent → still ours to create
+      const gone = indexed(s, null)
+      expect(gone.status).toBe('pending')
+      expect(gone.base.hash).toBeNull()
+      expect(tokenOf(decideSection(gone, ON))).toMatchObject({ kind: 'put', hash: H8, baseRev: 0 })
+    })
+
+    it('offline: nothing to do but wait — pending, not locked, not synced', () => {
+      for (const sent of [H1, H8]) {
+        const s = ambiguous(sent)
+        expect(decideSection(s, OFF)).toEqual({ do: 'nothing' })
+        expect(s.status).toBe('pending')
+      }
     })
 
     it('a flight during which the SOT was seen DELETED still takes the rev 0 answer', () => {
@@ -1210,6 +1279,7 @@ describe('property tests (seeded)', () => {
     let cancelledRestores = 0
     let localOnlySteps = 0
     let keptLiveSot = 0
+    let staleFoldsHeld = 0
     let acceptedRestores = 0
 
     for (let n = 0; n < SEQUENCES; n++) {
@@ -1342,17 +1412,26 @@ describe('property tests (seeded)', () => {
           if (next.base.hash !== prev.inFlight.hash && !(next.base.hash === next.sot.hash && next.base.hash === next.currentHash)) fail('base is not the sent hash')
         }
         // convergence is never left unfolded
-        if (!locked && next.inFlight === null && isDirty(next) && sotMoved(next) && next.sot.hash === next.currentHash) fail('unfolded convergence')
+        const foldable = !locked && next.inFlight === null && isDirty(next) && sotMoved(next) && next.sot.hash === next.currentHash
+        if (foldable && !next.indexStale) fail('unfolded convergence')
+        if (foldable) staleFoldsHeld++
+        // … and never folded on a stale index: there the base moves only through events that SET it
+        const baseMoved = next.base.rev !== prev.base.rev || next.base.hash !== prev.base.hash
+        if (next.indexStale && baseMoved && !['push-applied', 'push-converged', 'pull-applied', 'resolved'].includes(e.type)) fail('folded on a stale index')
         if (next.restoreLocal !== null && next.restoreLocal.hash === next.currentHash) fail('restoreLocal lingers although already restored')
         if (e.type === 'reconnected' && !next.indexStale) fail('reconnected left the index fresh')
         // a 409 locks iff something unsynced is left: dirty, and not already what the SOT holds
         if (e.type === 'push-conflict' && prev.inFlight !== null) {
-          // an old "absent" answer never erases a live SOT learnt while the push was out
-          if (e.rev === 0 && prev.sotMovedWhileInFlight && prev.sot.hash !== null) {
-            if (next.sot.rev !== prev.sot.rev || next.sot.hash !== prev.sot.hash) fail('a rev 0 conflict erased a live SOT learnt during the flight')
+          // "absent" against a live SOT learnt while the push was out is ambiguous: sot untouched, no lock, ask the index
+          const ambiguous = e.rev === 0 && prev.sotMovedWhileInFlight && prev.sot.hash !== null
+          if (ambiguous) {
+            if (next.sot.rev !== prev.sot.rev || next.sot.hash !== prev.sot.hash) fail('an ambiguous rev 0 conflict touched the SOT')
+            if (next.status === 'locked:conflict' || next.conflict !== null) fail('an ambiguous rev 0 conflict locked')
+            if (!next.indexStale) fail('an ambiguous rev 0 conflict did not ask for the index')
+            if (next.base.rev !== prev.base.rev || next.base.hash !== prev.base.hash) fail('an ambiguous rev 0 conflict moved the base')
             keptLiveSot++
           }
-          const shouldLock = prev.currentHash !== prev.base.hash && next.sot.hash !== prev.currentHash
+          const shouldLock = !ambiguous && prev.currentHash !== prev.base.hash && next.sot.hash !== prev.currentHash
           if ((next.status === 'locked:conflict') !== shouldLock) fail('409 lock decision does not follow dirtiness')
           if (shouldLock && next.conflict?.localHash !== prev.inFlight.hash) fail('409 conflict does not hold the sent snapshot')
         }
@@ -1404,6 +1483,7 @@ describe('property tests (seeded)', () => {
     expect(cancelledRestores).toBeGreaterThan(10)
     expect(localOnlySteps).toBeGreaterThan(SEQUENCES)
     expect(keptLiveSot).toBeGreaterThan(0)
+    expect(staleFoldsHeld).toBeGreaterThan(0)
     expect(acceptedRestores).toBeGreaterThan(10)
     for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked', 'reconnected']) {
       expect(seen.has(`${t}:applied`), `${t} was never applied`).toBe(true)

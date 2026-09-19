@@ -45,8 +45,13 @@
 //     re-derived at the end of every event: `pending` iff the section is dirty
 //     or a flight is open, `synced` otherwise.
 //   - Convergence (rule 1) is folded at the end of every event, except while a
-//     flight is open (its terminal event folds) and while locked (the user
-//     decides; `resolved` re-runs the fold).
+//     flight is open (its terminal event folds), while locked (the user
+//     decides; `resolved` re-runs the fold) and while `indexStale`: stale means
+//     "what this client believes about the SOT is not to be trusted", and
+//     `synced` must not be declared on such a belief (the event that said "they
+//     hold our hash" may itself have been overtaken by one that was lost).
+//     Nothing is lost by waiting: row 0d reindexes, and the `sot-index` that
+//     clears `indexStale` folds in that very event.
 //   - Whatever moves `sot` while a conflict is open moves `conflict.sot` with
 //     it: a lock refuses to *apply*, not to *know* (plan-review finding #6).
 //
@@ -56,6 +61,32 @@
 //     already been abandoned, the section is clean, and row 3 pulls. Edited to a
 //     third value, it is still dirty → `locked:conflict`, the local side being
 //     the snapshot that was SENT.
+//   - One 409 decides nothing: `{rev:0}` ("absent / tombstone") on a flight
+//     during which a `remote-event` showed a LIVE SOT. Events (WebSocket) and
+//     HTTP answers travel on different channels and carry no causal order, so
+//     "the event arrived while the push was out" does not say which of the two
+//     is newer. Both orders are real:
+//       A. our PUT was judged first (absent → 409), THEN someone created
+//          {5,H8}; the event overtook the 409. The live {5,H8} is the truth.
+//          Believing the 409 would show "absent" as the other side and make
+//          keep-local push with wire baseRev 0 — into the next 409.
+//       B. someone created {5,H8} (event seen), then it was deleted (rev 6, a
+//          tombstone; event lost or late), and THEN our PUT hit the tombstone:
+//          the 409 is authoritative and "absent" is the truth. Believing the
+//          event would lock against a payload that no longer exists and make
+//          keep-local push with wire baseRev 5, which a tombstone refuses
+//          (it takes baseRev 0 only) — a conflict that re-opens forever.
+//     The client cannot tell A from B, and either guess loops in the other
+//     case. So it does not guess: the flight closes, `sot` is left exactly as
+//     it was, NO lock and NO conflict pair are made (even when dirty), and
+//     `indexStale` is set. The index is the authoritative source; once it lands
+//     the table decides as always — live and not ours → row 8 `lock-conflict`
+//     (decide-time, the local side being the live hash); absent → row 4 push
+//     with wire baseRev 0; live and ours → folded to `synced`. The fold is held
+//     back meanwhile by the `indexStale` rule above.
+//   - "Absent" has no rev (`sotMoved`): the client cannot tell "never created"
+//     from a tombstone, P1 accepts a create over either with baseRev 0 only, so
+//     base absent + SOT absent is "not moved" whatever revs the two carry.
 //   - Nothing is decided on an index this client has not seen. A fresh or
 //     restored state starts `indexStale`, and `reconnected` sets it again, so the
 //     first action of every connection is `reindex` (spec §4.6, reconcile on
@@ -220,8 +251,12 @@ export function isDirty(s: SectionSyncState): boolean {
   return s.currentHash !== s.base.hash
 }
 
+/** Did the SOT move away from what was agreed? A different hash — or, for a
+ *  LIVE section, a newer rev. Absent has no rev: absent then and absent now is
+ *  "not moved" even if a create and a delete went by in between, because a
+ *  create over it goes out with wire baseRev 0 either way. */
 export function sotMoved(s: SectionSyncState): boolean {
-  return s.sot.hash !== s.base.hash || s.sot.rev > s.base.rev
+  return s.sot.hash !== s.base.hash || (s.sot.hash !== null && s.sot.rev > s.base.rev)
 }
 
 function isLocked(s: SectionSyncState): boolean {
@@ -335,7 +370,8 @@ function finish(prev: SectionSyncState, draft: SectionSyncState): SectionSyncSta
   let next = draft
   if (next.restoreLocal !== null && next.restoreLocal.hash === next.currentHash) next = { ...next, restoreLocal: null }
   if (!isLocked(next)) {
-    if (next.inFlight === null && isDirty(next) && sotMoved(next) && next.sot.hash === next.currentHash) {
+    // not on a stale index: `sot` is a belief there, not knowledge (see the header)
+    if (next.inFlight === null && !next.indexStale && isDirty(next) && sotMoved(next) && next.sot.hash === next.currentHash) {
       next = { ...next, base: next.sot }
     }
     const status: SectionStatus = isDirty(next) || next.inFlight !== null ? 'pending' : 'synced'
@@ -401,15 +437,20 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       const sent = s.inFlight.hash
       let next = closeFlight(s)
       if (e.rev === 0) {
-        // "absent" is the server's view when it ANSWERED. If a live SOT was
-        // observed while the push was out, that observation is newer than this
-        // answer (a create raced ours and won): keep it. Erasing it would show
-        // "absent" as the other side of the conflict and make keep-local push
-        // with wire baseRev 0 again — straight into the next 409.
+        // The server says "absent", an event seen during the flight says "live".
+        // The two channels are not causally ordered: either the 409 is old and a
+        // create came after it (A), or the create was deleted again unseen and
+        // the 409 is the truth (B). Guessing A locks on a deleted payload and
+        // re-pushes with baseRev 5 against a tombstone; guessing B re-pushes
+        // with baseRev 0 against a live section — each loops in the other case.
+        // So: believe neither, touch nothing, lock nothing; ask the index. The
+        // table decides once it lands (finish() holds the fold back meanwhile).
         const learntLive = s.sotMovedWhileInFlight && s.sot.hash !== null
-        if (!learntLive) next = withSot(next, { rev: Math.max(s.sot.rev, s.base.rev), hash: null })
+        if (learntLive) return { ...next, indexStale: true }
+        next = withSot(next, { rev: Math.max(s.sot.rev, s.base.rev), hash: null })
       } else if (e.rev > s.sot.rev) next = withSot(next, { rev: e.rev, hash: e.hash })
       // the SOT already holds what we have *now* → rule 1 folds it in finish()
+      // (on a stale index — a reconnect during the flight — once the index lands)
       if (next.sot.hash === next.currentHash) return next
       // edited back to the base during the flight: nothing unsynced is left to
       // argue about — stay unlocked and let row 3 pull
