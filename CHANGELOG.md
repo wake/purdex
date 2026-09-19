@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.409] - 2026-09-19
+
+### Feature: exec pane 成本摘要——rollup ＋ header hover（#1231，P-B4.1）
+
+使用者定案第 5 條的最後一項（tool 摘要／行號 diff／成本 hover／打字機必做）開工，**走 client 端**：資料全在 `result` 幀裡，SPA 自己算自己畫，不做 Nexen rollup。先量再寫，三件事實推翻了「照記憶寫」會犯的錯：① `total_cost_usd` 恆等於 `Σ modelUsage[*].costUSD`（13 幀全對）；② **多模型 turn 的 `usage` 只涵蓋一個模型**——seq 8 haiku＋sonnet 那輪 `usage.output_tokens` 364 但 `modelUsage` 加起來 376、input 2 vs 911；seq 974 cache read 46 401 vs 80 127——所以 token 拆解要加總 `modelUsage`，`usage` 只當沒有 `modelUsage` 時的 fallback；③ **subagent 沒有自己的 `result` 幀**（用 `trusted` profile 真的派了一顆用 Agent 工具的 execution 才量到；`standard` profile 根本沒有 Agent 工具），花費已含在父 result（0.088 vs 同 brief 無 subagent 0.027），所以只加 `parent_tool_use_id == null` 的 result、絕不再加 subagent 幀的 `message.usage`。`num_turns` 是一個 Nexen turn 內的 API 回合數，不是 Nexen 的 turn。
+
+`lib/nex/cost-summary.ts` 的 `costSummary(messages)` 把頂層 result 摺成每 turn 一列（成本、四類 token、API vs 牆鐘、回合、`isError`、模型）＋總計＋跨 turn 的 per-model 拆帳；`modelUsage` 逐 entry 驗有效性、`usage` fallback 對「存在但畸形」的欄位整個作廢而非補 0、所有累加走 `addFinite`（溢位 clamp 在 `MAX_VALUE`，與訊息順序無關）。header 的 `$0.26` 變成 button：history 全載完前顯示 `$…` 且 disabled（history 本來就分頁載到底才開 SSE，所以永遠不會顯示部分加總）；hover 800 ms 出一行 `12 turns · $0.2577 · 4.5k out · 1m 05s API / 1m 33s wall`，button 以 `aria-describedby` 指向它（`HoverTooltip` 為此多一個 optional `id` prop，不傳時 DOM 一字不變）。點開 panel 是 P-B4.2。
+
+Codex：plan review 九條全套（`isError` 欄位、砍 `ttft`、F6 論述收斂、quota 要標 host 帳號、`modelUsage` 逐 entry 有效性、ExecutionView 整合測試、outside-click 測試、PR 行數 gate）；PR R1 無 finding；攻擊方四條——溢位（修）、usage 混合畸形（修）、每幀重算 O(N)（critic 有證據反對：與既有訊息 map 同量級，follow-up）、tooltip a11y（critic：共用元件既有缺口，本 PR 只補 described-by）；re-review 再抓「丟棄溢位 addend 會依順序不同」改 clamp。critic 另指 831 行超過 plan 寫的 800——plan 把 CLAUDE.md「≤ 800 行**或** ≤ 20 檔」寫嚴了，12 檔合格，措辭已對齊。vitest 7283、lint、tsc、build 綠。
+
 ## [1.0.0-alpha.408] - 2026-09-19
 
 ### Feature: Edit／Write 結果的行號 diff view（#1225，P-B3.3）＋ P-B3 真機驗收
