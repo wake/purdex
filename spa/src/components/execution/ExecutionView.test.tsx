@@ -811,3 +811,34 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     expect(fetchHost).toHaveBeenCalledWith(H)
   })
 })
+
+// ---- P-B4 spec §4.2: header cost anchor through the real store wiring ----
+
+describe('ExecutionView — header cost (P-B4 H1, P6, G3)', () => {
+  const resultFrame = (seq: number, total_cost_usd: number, parent_tool_use_id: string | null = null) => ({
+    seq, execution_id: E, kind: 'result', created_at: seq,
+    payload: { type: 'result', subtype: 'success', is_error: false, parent_tool_use_id, total_cost_usd, duration_ms: 1, duration_api_ms: 1, num_turns: 1 },
+  })
+  const costBtn = () => screen.getByTestId('execution-cost') as HTMLButtonElement
+
+  it('(a) historyLoaded=false → `$…`, disabled', () => {
+    useExecutionStore.getState().setHistoryLoaded(H, E, false)
+    render(<ExecutionView {...base} isActive />)
+    expect(costBtn().textContent).toBe('$…')
+    expect(costBtn().disabled).toBe(true)
+  })
+
+  it('(b)–(d) sums top-level results once loaded, updates live, ignores subagent results', () => {
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [resultFrame(1, 0.01), resultFrame(2, 0.02)]) })
+    useExecutionStore.getState().setHistoryLoaded(H, E, true)
+    render(<ExecutionView {...base} isActive />)
+    expect(costBtn().textContent).toBe('$0.03')
+    expect(costBtn().disabled).toBe(false)
+
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [resultFrame(3, 0.03)]) })
+    expect(costBtn().textContent).toBe('$0.06')
+
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [resultFrame(4, 1, 'toolu_x')]) })
+    expect(costBtn().textContent).toBe('$0.06')
+  })
+})

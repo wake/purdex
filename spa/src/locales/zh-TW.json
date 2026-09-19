@@ -779,6 +779,8 @@
   "execution.lease_none": "無 lease",
   "execution.lease_held": "由 {{principal}} 持有，等對方釋放後再試",
   "execution.turns": "回合",
+  "execution.cost.summary": "{{turns}} 輪 · {{usd}} · 輸出 {{out}} · API {{api}} / 牆鐘 {{wall}}",
+  "execution.cost.loading": "$…",
   "execution.interrupt": "中斷",
   "execution.terminate": "終止",
   "execution.terminate_confirm": "確認終止",

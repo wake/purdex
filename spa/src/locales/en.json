@@ -779,6 +779,8 @@
   "execution.lease_none": "no lease",
   "execution.lease_held": "Held by {{principal}} — try again when released",
   "execution.turns": "turns",
+  "execution.cost.summary": "{{turns}} turns · {{usd}} · {{out}} out · {{api}} API / {{wall}} wall",
+  "execution.cost.loading": "$…",
   "execution.interrupt": "Interrupt",
   "execution.terminate": "Terminate",
   "execution.terminate_confirm": "Confirm terminate",
