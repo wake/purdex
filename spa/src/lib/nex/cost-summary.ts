@@ -29,7 +29,8 @@
 // frame yields zeros / nulls, never NaN, never a throw. `modelUsage` is read
 // by own-key iteration only.
 //
-// Overflow (codex R2 A1): every running total goes through `addFinite`, so a
+// Overflow (codex R2 A1): every running total goes through `addFinite` (clamps
+// at Number.MAX_VALUE), so a
 // hostile frame carrying `Number.MAX_VALUE` can never push a sum to ±Infinity
 // (which `formatUsd` / `formatTokens` would render as '$—' / '—' and the
 // header would render as '$Infinity'). The contribution that would overflow
@@ -84,14 +85,15 @@ const str = (v: unknown): v is string => typeof v === 'string'
 const zeroTokens = (): TokenTotals => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 
 /**
- * Saturating add: `a + b` when that is finite, else `a` unchanged. Inputs are
- * always finite ≥ 0 (guarded by `nonNeg`), so the only way to leave the finite
- * range is overflow to +Infinity — in which case the offending contribution is
- * ignored rather than poisoning the total for every later frame.
+ * Saturating add: `a + b` when that is finite, else `Number.MAX_VALUE`. Inputs
+ * are always finite ≥ 0 (guarded by `nonNeg`), so the only way to leave the
+ * finite range is overflow to +Infinity — clamping to the largest finite value
+ * keeps the total finite, order-independent (codex re-review: dropping the
+ * addend made `[1e308, MAX]` and `[MAX, 1e308]` disagree) and monotonic.
  */
 function addFinite(a: number, b: number): number {
   const s = a + b
-  return Number.isFinite(s) ? s : a
+  return Number.isFinite(s) ? s : Number.MAX_VALUE
 }
 
 function addTokens(into: TokenTotals, t: TokenTotals): void {

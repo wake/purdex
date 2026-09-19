@@ -313,6 +313,13 @@ describe('costSummary — C6 hostile shapes', () => {
 describe('costSummary — overflow stays finite (A1)', () => {
   const big = Number.MAX_VALUE
 
+  it('overflow clamps at MAX_VALUE regardless of message order (codex re-review P2)', () => {
+    const a = result({ total_cost_usd: 1e308 })
+    const b = result({ total_cost_usd: Number.MAX_VALUE })
+    expect(costSummary([a, b]).totalUsd).toBe(Number.MAX_VALUE)
+    expect(costSummary([b, a]).totalUsd).toBe(Number.MAX_VALUE)
+  })
+
   it('two MAX_VALUE total_cost_usd → totalUsd is MAX_VALUE, not Infinity', () => {
     const s = costSummary([result({ total_cost_usd: big }), result({ total_cost_usd: big })])
     expect(Number.isFinite(s.totalUsd)).toBe(true)
