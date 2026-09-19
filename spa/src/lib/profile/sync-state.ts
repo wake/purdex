@@ -18,7 +18,7 @@
 //   - An index request carries `indexEpoch` instead (§4.6.2 rule 3). The index
 //     is knowledge about the SOT, so its freshness must not depend on what the
 //     user types: `indexEpoch` moves only when `base`, `sot` or `inFlight`
-//     (a flight opening or closing) change, and on an applied `reconnected`.
+//     (a flight opening or closing) change, and on EVERY `reconnected`.
 //     `local-changed`, `locked`, `resolved`, `local-restored` and `indexStale`
 //     flips leave it alone. Were it tied to `epoch`, a user typing steadily
 //     (one `local-changed` per debounce) would invalidate every index response
@@ -31,10 +31,15 @@
 //     did NOT learn — those lost while disconnected. A pre-drop response that
 //     lands after the reconnect may predate them; accepting it would clear
 //     `indexStale` with an old view and nothing would ask again. So the
-//     reconnect kills it. (A reconnect is not user-driven, so this cannot
-//     starve.) Known gap, as before this field existed: a `reconnected` that
-//     finds the index ALREADY stale is a no-op and kills nothing — the driver
-//     must drop an index request that was outstanding across a disconnect.
+//     reconnect kills it — unconditionally: `reconnected` bumps `indexEpoch`
+//     whether or not the index was already stale (it therefore always returns
+//     a new state). The already-stale case is the one that matters most: the
+//     first `reindex` of a section, or any one still unanswered, is out while
+//     `indexStale` is true; were `reconnected` a no-op there, that pre-drop
+//     response would still match and be adopted. Invalidating every index
+//     request outstanding across a reconnect is a guarantee of this reducer,
+//     not a duty of the driver. (A reconnect is not user-driven, so this
+//     cannot starve.)
 //   - `status` is stored, but only its `locked:*` values are *decided* (by the
 //     `locked` event, by a 409, and by `resolved`). `synced` / `pending` are
 //     re-derived at the end of every event: `pending` iff the section is dirty
@@ -130,7 +135,7 @@ export interface SectionSyncState {
   sot: Held
   /** Bumped by every state change. Guards flight tokens. */
   epoch: number
-  /** Bumped only when `base`, `sot` or `inFlight` change, and by an applied
+  /** Bumped only when `base`, `sot` or `inFlight` change, and by every
    *  `reconnected`. Guards index responses — local edits never move it. */
   indexEpoch: number
   status: SectionStatus
@@ -317,7 +322,9 @@ function unchanged(a: SectionSyncState, b: SectionSyncState): boolean {
       (a.conflict !== null && b.conflict !== null && a.conflict.localHash === b.conflict.localHash && sameHeld(a.conflict.sot, b.conflict.sot))) &&
     a.forcePull === b.forcePull &&
     (a.restoreLocal === b.restoreLocal || (a.restoreLocal !== null && b.restoreLocal !== null && a.restoreLocal.hash === b.restoreLocal.hash)) &&
-    a.indexStale === b.indexStale
+    a.indexStale === b.indexStale &&
+    // only `reconnected` moves it inside `step`; on an already-stale section it is the ONLY field that moved
+    a.indexEpoch === b.indexEpoch
   )
 }
 
@@ -354,8 +361,9 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       return { ...s, currentHash: e.hash, restoreLocal: null }
 
     case 'reconnected':
-      // kills an index request sent before the drop — see the header for why
-      return s.indexStale ? s : { ...s, indexStale: true, indexEpoch: s.indexEpoch + 1 }
+      // Always a new indexEpoch, already stale or not: every index request sent
+      // before the drop is dead — see the header for why. The flight is untouched.
+      return { ...s, indexStale: true, indexEpoch: s.indexEpoch + 1 }
 
     case 'remote-event':
       if (e.own || e.rev <= s.sot.rev) return s

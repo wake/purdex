@@ -413,7 +413,7 @@ describe('reduceSection — rule 3: sot-index', () => {
     it('many rounds of typing interleaved with index responses never discard one', () => {
       let s = mk({ ...synced(5, H0), indexStale: true })
       for (let round = 0; round < 5; round++) {
-        s = reduceSection(s, { type: 'reconnected' }) // stale again (a no-op in round 0)
+        s = reduceSection(s, { type: 'reconnected' }) // stale again; every reconnect opens a new indexEpoch, so `d` is read after it
         const d = decideSection(s, ON)
         if (d.do !== 'reindex') throw new Error('expected reindex')
         for (let k = 0; k <= round; k++) s = reduceSection(s, { type: 'local-changed', hash: `typed-${round}-${k}` })
@@ -498,11 +498,31 @@ describe('reduceSection — reconnected (reconcile on connect, spec §4.6)', () 
       expect(indexed(r, r.sot.hash === null ? null : { rev: r.sot.rev, hash: r.sot.hash })).toEqual({ ...s, epoch: s.epoch + 2, indexEpoch: s.indexEpoch + 1 })
     }
   })
-  it('already stale → same reference', () => {
+  it('already stale → still a new state: indexEpoch + 1, the index stays stale', () => {
     const s = reduceSection(synced(5, H0), { type: 'reconnected' })
-    expect(reduceSection(s, { type: 'reconnected' })).toBe(s)
+    expect(reduceSection(deepFreeze(s), { type: 'reconnected' })).toEqual({ ...s, epoch: s.epoch + 1, indexEpoch: s.indexEpoch + 1 })
     const fresh = initialSectionState(H1)
-    expect(reduceSection(fresh, { type: 'reconnected' })).toBe(fresh)
+    const r = reduceSection(deepFreeze(fresh), { type: 'reconnected' })
+    expect(r).not.toBe(fresh)
+    expect(r).toEqual({ ...fresh, epoch: fresh.epoch + 1, indexEpoch: fresh.indexEpoch + 1 })
+    expect(r.indexStale).toBe(true)
+  })
+  it('regression: the FIRST index request, outstanding across a disconnect, is dead too — the section was already stale', () => {
+    let s = initialSectionState(H1)
+    const before = s
+    const d0 = decideSection(s, ON)
+    if (d0.do !== 'reindex') throw new Error('expected reindex')
+    expect(d0.indexEpoch).toBe(s.indexEpoch)
+    s = reduceSection(s, { type: 'reconnected' }) // the connection dropped and came back while that request was out
+    s = reduceSection(s, { type: 'sot-index', epoch: d0.indexEpoch, entry: { rev: 9, hash: H8 } }) // the pre-drop answer, late
+    expect(s.indexStale).toBe(true)
+    expect(s.sot).toEqual(before.sot)
+    const d1 = decideSection(s, ON)
+    if (d1.do !== 'reindex') throw new Error('expected reindex')
+    expect(d1.indexEpoch).not.toBe(d0.indexEpoch)
+    s = reduceSection(s, { type: 'sot-index', epoch: d1.indexEpoch, entry: { rev: 9, hash: H8 } })
+    expect(s.indexStale).toBe(false)
+    expect(s.sot).toEqual({ rev: 9, hash: H8 })
   })
   it('does not touch an open flight — its terminal event still has to come from the driver', () => {
     const [f, token] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
@@ -1289,10 +1309,10 @@ describe('property tests (seeded)', () => {
         // sot.rev never decreases except through a sot-index made at the current indexEpoch
         if (next.sot.rev < prev.sot.rev && !(e.type === 'sot-index' && e.epoch === prev.indexEpoch)) fail('sot.rev decreased')
         // indexEpoch is about what is known of the SOT: it moves iff base / sot / the flight moved, or the
-        // connection was re-established — never because the user typed (a fold on local-changed moves the base)
+        // connection was re-established (EVERY `reconnected`, stale already or not) — never because the user typed (a fold on local-changed moves the base)
         const sotKnowledgeMoved =
           next.base.rev !== prev.base.rev || next.base.hash !== prev.base.hash || next.sot.rev !== prev.sot.rev || next.sot.hash !== prev.sot.hash || next.inFlight !== prev.inFlight
-        const wantIndexEpoch = prev.indexEpoch + (sotKnowledgeMoved || (e.type === 'reconnected' && next !== prev) ? 1 : 0)
+        const wantIndexEpoch = prev.indexEpoch + (sotKnowledgeMoved || e.type === 'reconnected' ? 1 : 0)
         if (next.indexEpoch !== wantIndexEpoch) fail(`indexEpoch ${next.indexEpoch}, expected ${wantIndexEpoch}`)
         if (e.type === 'local-changed' && !sotKnowledgeMoved) {
           if (next.indexEpoch !== prev.indexEpoch) fail('a local edit moved indexEpoch')
@@ -1387,7 +1407,8 @@ describe('property tests (seeded)', () => {
     expect(acceptedRestores).toBeGreaterThan(10)
     for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked', 'reconnected']) {
       expect(seen.has(`${t}:applied`), `${t} was never applied`).toBe(true)
-      expect(seen.has(`${t}:ignored`), `${t} was never ignored`).toBe(true)
+      // `reconnected` always opens a new indexEpoch, so it is never ignored
+      if (t !== 'reconnected') expect(seen.has(`${t}:ignored`), `${t} was never ignored`).toBe(true)
     }
   })
 })
