@@ -446,6 +446,61 @@ needs another type declares it in its own module. Parallel tasks share one workt
 `git commit --only`; the main session runs the whole suite, lint and `tsc -p tsconfig.app.json`
 between waves.
 
+## As built — where the implementation deliberately departs from the text above
+
+Recorded while the tasks ran; each was either an instruction from the main session or a
+contradiction a subagent reported instead of resolving silently. Spec §9.5 has the same list.
+
+- **`hash.ts`** builds the canonical string directly rather than `JSON.stringify` of a sorted copy:
+  the device-state `sortKeysDeep` idiom is wrong twice — JS engines re-order integer-like keys
+  (`"9"` before `"10"` whatever you insert), and writing `out['__proto__']` sets a prototype instead
+  of a key. Also rejects cycles, sparse arrays, `undefined` in arrays, and non-plain objects, naming
+  the path.
+- **Settings types.** A store-state `interface` has no index signature, so it is not assignable to
+  `Record<string, unknown>`. Builders and the applier take `SettingsBuildInput`
+  (`Partial<Record<SettingsStorageKey, object>>`, declared in `sections.ts`); `types.ts`'s
+  `SettingsSources` is unused by them. **`applySettings` returns `{patches}`** — per store, only
+  listed fields whose value differs — so P2b is a plain `store.setState(patch)` and unlisted fields
+  are untouched by construction. A listed field missing from a store that *is* present in the
+  payload is patched to `undefined` (that is how "cleared" travels; builder and hash both drop
+  `undefined`); a store missing altogether is ignored.
+- **Builders pad empty records** (`{order: [], tabs: {}}` …) because `project()` contributes nothing
+  for a `*` over an empty record; the applier produces the same shapes. `buildProfileDocument`
+  returns `{document, standaloneTabIds}` and emits a `tabs.<id>` for **every** workspace, empty ones
+  included. `hostOrder` and `Workspace.tabs` are filtered to ids that exist. An id equal to
+  `__proto__` is dropped everywhere.
+- **`sync-state.ts` decision order is 0a locked → 0b in flight → 0c restore-local → 0d reindex → 0e
+  forcePull → rows 1–8** (the table above lists reindex before restore-local; restoring is local
+  and must not wait for the network). Added to the state machine beyond the table:
+  - events `locked` (accepted only while `decideSection` still returns that lock), `reconnected`
+    (sets `indexStale`; this *is* reconcile-on-connect), and `restoreSectionState(persisted)`;
+    a fresh or restored section is `indexStale`, so **nothing is decided before an index is seen**;
+  - `restoreLocal` is `{hash: string | null} | null` — a sent *delete* that met a 409 must be
+    restorable to "absent";
+  - a 409 that arrives on a section that is **clean** (the user typed back to base mid-flight) does
+    not lock — there is nothing local to lose, row 3 pulls;
+  - `push-started` is validated against the token `decideSection` would produce *now*, which
+    subsumes the epoch check and also `token.hash === currentHash`; `local-changed` bumps the epoch;
+  - a 409 never lowers the known `sot.rev` (the Go side documents that its `Current` may be one
+    revision stale); `pull-applied` always sets base and `currentHash` (the payload *is* in the
+    stores) and only guards the `sot` update; `canApplyPull(s)` is what the driver asks first; a
+    pull of an absent SOT reports `rev: state.sot.rev`;
+  - the convergence fold wins over `lock-reset` (identical content leaves nothing to choose).
+- **`profile-state.ts`**: `profileStatus` takes `{hasMaster, sections, lock}` and ranks
+  `locked:reset` above `locked:conflict`. `reconcileSectionSet` takes **`previousWorkspaceIds`** and
+  returns **`unknown`**: spec §4.6.3 said both "a `tabs.<id>` whose workspace is unknown is kept" and
+  "after applying `workspaces`, delete the `tabs.*` of workspaces that are gone" — `remove` is only a
+  workspace this client *knew* and the apply just took away; never-seen ones are `keepUnrendered`.
+- **`applier.ts`**: every apply returns a result object (`next` plus what vanished / was added /
+  `unrendered`). `isWellFormedSection` is stricter than planned — unknown keys at the top and entry
+  level are rejected (they would not survive the next build, so the section could never converge),
+  with the allowlist derived from `PROJECTIONS`, not written twice; `sizes` is rejected at any depth
+  under `layout` (so no `PaneContent` may ever grow a field called `sizes`); `__proto__` /
+  `constructor` / `prototype` as data keys are rejected; layout depth ≤ 64; the guard never throws.
+  **Applying `tabs.<A>` can change `tabs.<B>`**: a tab that arrives in A while still listed in B is
+  removed from B (a tab has one workspace, §4.3), so B turns dirty. Correct — the tab did move — and
+  it converges once B's own section arrives; P2b must expect it.
+
 ## PR
 
 Title: `feat(spa): lib/profile — the pure core of Profile Sync (P2a)`

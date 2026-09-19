@@ -452,6 +452,15 @@ to apply them, not to know about them — so `Keep local` is written against the
   - a `tabs.<wsId>` section whose workspace is not in `workspaces` → **kept, not deleted**, and not
     rendered. It is either an arrival that overtook its workspace, or a workspace deleted elsewhere;
     the next `workspaces` apply resolves which.
+- *Who does what (settled in P2a, §9.5).* The two rules above are reconciled by what the client
+  **knew**: a `tabs.<id>` whose workspace this client had and the `workspaces` apply just removed is
+  deleted locally; one whose workspace it never saw is kept unrendered. Everything else is ordinary
+  section sync, not a special path: deleting a workspace locally makes its `tabs.<id>` vanish from
+  the local document → the section's state machine sees `hash: null` and issues the CAS `DELETE`;
+  other clients then see an absent SOT over a clean local copy and pull the deletion — which is
+  also how a kept-unrendered section is eventually collected; a removal that meets a moved SOT is a
+  conflict like any other; and two clients creating the same empty `tabs.<id>` converge, because
+  both send the same `{order: [], tabs: {}}`.
 - A client never deletes a section merely because it does not recognise it (forward compatibility
   with a newer client's section kinds; unknown kinds are carried, never rewritten).
 
@@ -487,7 +496,12 @@ Both directions are pure functions over `(local, incoming)` plus one commit step
 them after one apply — that is what makes the id match work; `sizes` are percentages summing to 100
 by convention, and a new split is distributed evenly. `useLayoutStore.healLayoutInvariant` widens
 the device-local `activityBarWidth` when `tabPosition` becomes `'left'`; that is a layout invariant
-of the store, not a sync leak, and is accepted.
+of the store, not a sync leak, and is accepted. Applying `settings` yields per-store **patches** of
+the listed fields that differ, nothing else. Applying `tabs.<A>` removes an arriving tab from any
+other workspace still listing it (one workspace per tab, §4.3), so it can dirty `tabs.<B>`; that is
+correct and converges when B's own section lands. A payload is checked for well-formedness first —
+`order` must equal the record's key set, no unknown keys, no `sizes` anywhere — and a payload that
+fails is not applied at all: never a partial apply.
 
 ### 4.8 Daemon: `internal/module/profiles`
 
@@ -738,3 +752,20 @@ The critical ones were all in the section state machine, before a line of it exi
 | 13 | weak well-formedness guard broke the round trip | `order` must equal the record's key set |
 | 14 | 3 ∥ 4 ∥ 5 was not independent | `1 → 2 → (3 ∥ 4) → (5 ∥ 6)` |
 | 15, 16 | `..` depth-zero ambiguity; round trip must be stated on hashes | specified and tested |
+
+### 9.5 P2a as built, 2026-09-20
+
+Contradictions found while implementing, reported by the subagents rather than resolved silently,
+and ruled on by the main session (full list in the P2a plan, "As built"):
+
+- §4.6.1 decision order: **restore-local precedes reindex** — a fresh, restored or reconnected
+  section is index-stale by design (nothing is decided before an index is seen; `reconnected` is
+  reconcile-on-connect), so a local restore must not queue behind a network step or it lands late
+  and overwrites newer edits.
+- A 409 on a section that is clean by the time it arrives does not lock; a sent *delete* that met a
+  409 is restorable to "absent"; a 409 never lowers the known SOT revision.
+- §4.6.3's two rules about `tabs.*` of unknown workspaces were contradictory as written; reconciled
+  by what the client previously knew (text added to §4.6.3).
+- `settings` apply produces patches; a listed field absent from a present store means "cleared".
+- The canonical-JSON idiom inherited from device-state was wrong for integer-like keys and
+  `__proto__`; `lib/profile/hash.ts` does not share it.
