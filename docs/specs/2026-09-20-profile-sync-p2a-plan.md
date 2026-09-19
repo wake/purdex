@@ -501,6 +501,21 @@ contradiction a subagent reported instead of resolving silently. Spec §9.5 has 
   removed from B (a tab has one workspace, §4.3), so B turns dirty. Correct — the tab did move — and
   it converges once B's own section arrives; P2b must expect it.
 
+### After the PR review (spec §9.6)
+
+- `SectionSyncState.indexEpoch` — bumped by base / sot / flight changes and by every `reconnected`,
+  never by a local edit; `reindex` carries it and `sot-index.epoch` is compared against it. `epoch`
+  (the flight-token guard) is unchanged and still moves on every change.
+- A `local-changed` cancels a pending `restoreLocal`; `local-restored` is accepted only for the
+  pending hash; `canRestoreLocal(s, hash)` is exported for the driver.
+- A `409 {rev: 0}` does not overwrite a live SOT learnt during the flight.
+- `isWellFormedSection('settings', …)`: only the ten known stores, only listed fields, at least one
+  per store. `applySettings` returns `{patches, rejected}`; `rejected` non-empty ⇒ `patches` is `{}`.
+- **For P2b**: the collector always passes all ten stores to `buildSettingsSection` — a store
+  missing from a payload is "not sent", not "cleared", so a sender that omitted one would leave the
+  receiver permanently dirty for it. Value *domains* (`tabPosition: 'garbage'`) are not the core's to
+  judge; the shape check is a fail-safe, each store's own sanitiser is the real gate.
+
 ## PR
 
 Title: `feat(spa): lib/profile — the pure core of Profile Sync (P2a)`

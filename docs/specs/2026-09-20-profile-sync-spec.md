@@ -415,8 +415,10 @@ that nothing is overwritten silently:
    the very payload the impending 409 is about to ask the user to choose between.
 
 3. **Knowledge of the SOT never goes backwards by accident.** Every change to a section's base,
-   SOT view or flight bumps an *epoch*; an index response carries the epoch it was requested at and
-   is discarded (and re-requested) if the section has moved on since. Only an epoch-matching index
+   SOT view or flight — and every reconnect — bumps an *index epoch*; an index response carries the
+   one it was requested at and is discarded (and re-requested) if the section has moved on since.
+   **A local edit does not bump it** (PR review, §9.6): freshness of the index is a fact about the
+   SOT, and a user who keeps typing must not be able to starve the section of an index forever. Only an epoch-matching index
    may lower the known revision — which is exactly the "profile was recreated" signal.
 4. **A decision is only as good as the state it was made in.** A push carries a token
    `{hash, baseRev, epoch}`; the state machine refuses to open a flight for a stale token, and the
@@ -429,6 +431,8 @@ snapshots, not between the SOT and a moving target. The state machine holds hash
 the payloads that must be retained (the one in flight, both sides of an open conflict) and the
 transport keeps exactly those. A locked section still *learns* of newer SOT revisions — it refuses
 to apply them, not to know about them — so `Keep local` is written against the newest one.
+**An edit made after the user chose `Keep local`, but before the sent snapshot has been put back,
+cancels the restore** (§9.6): what he typed after choosing wins over the snapshot he chose.
 
 #### 4.6.3 Sections are created and deleted
 
@@ -769,3 +773,20 @@ and ruled on by the main session (full list in the P2a plan, "As built"):
 - `settings` apply produces patches; a listed field absent from a present store means "cleared".
 - The canonical-JSON idiom inherited from device-state was wrong for integer-like keys and
   `__proto__`; `lib/profile/hash.ts` does not share it.
+
+### 9.6 PR #1239 review — R1 + R2 attacker (gpt-5.6-sol), 2026-09-20
+
+| # | Source | Sev. | Finding | Resolution |
+|---|---|---|---|---|
+| A-1 / R1-1 | attacker, R1 | high / P1 | the `settings` guard admitted payloads no builder can produce — unlisted fields, unknown stores, wrong-typed values. With "a listed field absent from a present store means cleared", `{"purdex-ui-settings":{"terminalSettingsVersion":1}}` wiped every UI preference and could never converge | known stores may carry only `PROJECTIONS`-listed fields and at least one; unknown stores are refused (a new store changes the fingerprint, so the schema lock owns forward compatibility, not the guard); `applySettings` compares value shape against the local value and returns `{patches, rejected}` — any rejection means no patch at all |
+| A-2 | attacker | high | an edit made between `Keep local` and the restore was overwritten by the restored snapshot | a `local-changed` cancels a pending restore; `local-restored` is accepted only for the pending hash; `canRestoreLocal` lets the driver check before it writes (§4.6.2) |
+| A-3 | attacker | medium | continuous local edits invalidated every index response → the section never synced while the user typed | a separate index epoch that local edits do not move (§4.6.2 rule 3) |
+| R1-2 | R1 | P2 | a late `409 {rev: 0}` replaced a newer live SOT learnt during the flight with "absent" | the absent answer is ignored when a live SOT was recorded mid-flight |
+| A-4 | attacker | low | `applier.ts` mixes four appliers with their guards — the seam A-1 lived in | #1240 |
+
+Found while fixing A-3, by the subagent, against the main session's instruction and with a
+counter-example: a reconnect **must** invalidate index requests in flight (events were lost while
+disconnected, so a pre-disconnect answer is stale by definition). `reconnected` always bumps the
+index epoch.
+
+_(critic verdicts to follow.)_
