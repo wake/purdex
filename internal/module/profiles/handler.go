@@ -13,16 +13,6 @@ import (
 // (putBodyCap, handler_sections.go).
 const smallBodyCap = 64 << 10
 
-// Module serves sync profiles over /api/profiles/*.
-type Module struct {
-	store *Store
-
-	// broadcast announces an applied section write to every connected client.
-	// It is injected so the handlers can be tested without a core; nil means
-	// "do not broadcast".
-	broadcast func(eventType, value string)
-}
-
 // RegisterRoutes wires up the ten /api/profiles endpoints of spec §4.8.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/profiles", m.handleList)

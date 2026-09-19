@@ -27,6 +27,7 @@ import (
 	"github.com/wake/purdex/internal/module/monitor"
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	profilesmod "github.com/wake/purdex/internal/module/profiles"
 	"github.com/wake/purdex/internal/module/session"
 	syncmod "github.com/wake/purdex/internal/module/sync"
 	"github.com/wake/purdex/internal/store"
@@ -281,6 +282,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(logs.New())
 	c.AddModule(syncmod.New())
 	c.AddModule(devicestatemod.New())
+	c.AddModule(profilesmod.New())
 	c.AddModule(hostconfigmod.New())
 	c.AddModule(backupmod.New())
 	c.AddModule(monitor.New())
