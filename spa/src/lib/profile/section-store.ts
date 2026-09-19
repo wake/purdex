@@ -17,8 +17,34 @@
 // TAGGED WITH ONE PROFILE. The document carries the `profileId` it belongs to.
 // Read as any other profile it is empty — a different master never sees these
 // bases, which describe agreement with somebody else's SOT. A read never
-// destroys it (the user may re-attach); the first WRITE for another profile
-// replaces it wholesale.
+// destroys it (the user may re-attach). Only `claimSectionStore` changes the
+// profile, and doing so replaces the document wholesale.
+//
+// FENCED. The leader is a localStorage lease, and a takeover can leave two
+// windows believing they lead for a moment. Every write here is read → change →
+// write of the WHOLE document, so without protection the old leader, writing
+// from the document it read earlier, reverts what the new leader just stored: a
+// reverted base means the next CAS goes out with a stale rev (a false
+// conflict); a reverted stash means an open conflict loses the payload it needs.
+// So the document carries a `generation`. A window that wins the lease calls
+// `claimSectionStore` once, which bumps it and returns the new value; every
+// write passes the generation its caller holds, and is refused as `'fenced'`
+// when the document says otherwise. `'fenced'` means "a newer leader has
+// claimed — stop the driver".
+//   The generation only ever grows for the lifetime of this origin's storage: a
+// change of profile continues the count, and `clearSectionStore` writes an
+// empty document that KEEPS it instead of removing the key. Starting over would
+// make the number an old leader still holds valid again.
+//   RESIDUAL RISK, stated plainly: localStorage has no cross-process
+// transaction. Between this module's read, its comparison and its write, another
+// process can still claim and write, and this write then lands on top of it.
+// Fencing shrinks the exposure from "the whole overlap of two leaders" to "a
+// cross-process interleaving inside one synchronous JS turn"; on top of that the
+// driver stops itself when it loses the lease. The SOT is never at risk either
+// way — the daemon's CAS protects it; what is at risk is this working state.
+//   Two more holes, both outside what storage lets us close: if the key is
+// removed from outside (the user clears site data) or the document becomes
+// unreadable, the count restarts from 0.
 //
 // VALIDATED, NOT CAST. A section that fails validation is dropped ALONE. The
 // trade-off: losing one section's base only makes that section start from
@@ -27,10 +53,10 @@
 // that to every section, and lose every retained conflict snapshot, because of
 // one bad entry. Only a document that is unreadable at the top level is empty.
 //
-// WRITES NEVER THROW. Each returns whether the value is now stored. A refused
-// `setItem` (quota, blocked site data) leaves the PREVIOUS value in place —
-// `localStorage.setItem` is atomic, there is no half-written document — so the
-// caller loses this one update and nothing else.
+// WRITES NEVER THROW. Each returns a `WriteResult`. A refused `setItem` (quota,
+// blocked site data) leaves the PREVIOUS value in place — `localStorage.setItem`
+// is atomic, there is no half-written document — so the caller loses this one
+// update and nothing else.
 import { browserStorage } from '../storage/browser-backend'
 import { STORAGE_KEYS } from '../storage/keys'
 import type { Held, SectionConflict } from './sync-state'
@@ -41,10 +67,28 @@ export interface PersistedSection {
   conflict?: SectionConflict
 }
 
+/** What a read returns. The generation is deliberately NOT part of it: the only
+ *  way to hold one is to claim it. */
 export interface SectionStoreData {
   profileId: string
   sections: Record<string, PersistedSection>
   /** Payloads by hash — only the ones `retainedHashes` asks the driver to keep. */
+  stash: Record<string, unknown>
+}
+
+/** `'ok'`     — storage now holds what was asked for.
+ *  `'fenced'` — the stored document is not this caller's: a newer leader has
+ *               claimed, or it belongs to another profile / nobody. Nothing was
+ *               written. The caller should stop its driver.
+ *  `'failed'` — malformed input, or storage refused the read or the write.
+ *               Nothing was written. */
+export type WriteResult = 'ok' | 'fenced' | 'failed'
+
+/** What storage holds. `profileId: null` = cleared: nobody's, but still counting. */
+interface StoredDocument {
+  profileId: string | null
+  generation: number
+  sections: Record<string, PersistedSection>
   stash: Record<string, unknown>
 }
 
@@ -79,6 +123,10 @@ function isHash(v: unknown): v is string {
 
 function isHashOrNull(v: unknown): v is string | null {
   return v === null || isHash(v)
+}
+
+function isGeneration(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 }
 
 function parseHeld(v: unknown): Held | null {
@@ -119,18 +167,32 @@ function recordOf<T>(entries: Array<[string, T]>): Record<string, T> {
 
 // --- storage ----------------------------------------------------------------
 
-/** The stored document, validated — whichever profile it belongs to. */
-function readDocument(): SectionStoreData | null {
-  let parsed: unknown
+/** Nothing stored and nothing readable look the same: nobody's, generation 0. */
+const NOTHING: StoredDocument = { profileId: null, generation: 0, sections: {}, stash: {} }
+
+/** The stored document, validated — whichever profile it belongs to. `NOTHING`
+ *  when there is none or it is unusable at the top level; `null` only when
+ *  storage itself refused the read, which a write must not mistake for "fenced". */
+function readDocument(): StoredDocument | null {
+  let raw: string | null
   try {
-    const raw = browserStorage.getItem(STORAGE_KEYS.PROFILE_SECTIONS)
-    if (typeof raw !== 'string') return null
-    parsed = JSON.parse(raw)
+    raw = browserStorage.getItem(STORAGE_KEYS.PROFILE_SECTIONS) as string | null
   } catch {
     return null
   }
-  if (!isRecord(parsed) || !isProfileId(parsed.profileId)) return null
-  if (!isRecord(parsed.sections) || !isRecord(parsed.stash)) return null
+  if (typeof raw !== 'string') return NOTHING
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return NOTHING
+  }
+  if (!isRecord(parsed) || !(parsed.profileId === null || isProfileId(parsed.profileId))) return NOTHING
+  if (!isRecord(parsed.sections) || !isRecord(parsed.stash)) return NOTHING
+  // A document from before fencing has no generation and reads as 0. One that
+  // HAS a generation we cannot trust is a bad document, not a generation-0 one.
+  const generation: unknown = parsed.generation === undefined ? 0 : parsed.generation
+  if (!isGeneration(generation)) return NOTHING
 
   const sections: Array<[string, PersistedSection]> = []
   for (const [key, value] of Object.entries(parsed.sections)) {
@@ -141,10 +203,10 @@ function readDocument(): SectionStoreData | null {
   for (const [hash, payload] of Object.entries(parsed.stash)) {
     if (isHash(hash) && isPlainObject(payload)) stash.push([hash, payload])
   }
-  return { profileId: parsed.profileId, sections: recordOf(sections), stash: recordOf(stash) }
+  return { profileId: parsed.profileId, generation, sections: recordOf(sections), stash: recordOf(stash) }
 }
 
-function writeDocument(data: SectionStoreData): boolean {
+function writeDocument(data: StoredDocument): boolean {
   try {
     browserStorage.setItem(STORAGE_KEYS.PROFILE_SECTIONS, JSON.stringify(data))
     return true
@@ -155,80 +217,112 @@ function writeDocument(data: SectionStoreData): boolean {
   }
 }
 
-/** For a write: this profile's document, or a fresh one if storage holds
- *  nothing usable or another profile's data (which the write then replaces). */
-function ownedOrFresh(profileId: string): SectionStoreData {
+/** The one gate every write goes through: read, check the fence, change, write.
+ *  `change` returns the new document, or `null` for "nothing to change". */
+function fencedWrite(
+  profileId: string,
+  generation: number,
+  change: (doc: StoredDocument) => StoredDocument | null,
+): WriteResult {
+  // 0 is what an unclaimed or pre-fencing document reads as; nobody holds it.
+  if (!isProfileId(profileId) || !isGeneration(generation) || generation === 0) return 'failed'
   const doc = readDocument()
-  return doc !== null && doc.profileId === profileId ? doc : emptyData(profileId)
-}
-
-/** For a change that only removes: null when there is nothing of this profile's to touch. */
-function ownedOrNull(profileId: string): SectionStoreData | null {
-  const doc = readDocument()
-  return doc !== null && doc.profileId === profileId ? doc : null
+  if (doc === null) return 'failed'
+  if (doc.generation !== generation || doc.profileId !== profileId) return 'fenced'
+  const next = change(doc)
+  if (next === null) return 'ok'
+  return writeDocument(next) ? 'ok' : 'failed'
 }
 
 // --- API --------------------------------------------------------------------
 
 /** Another profile's data, bad data and no data all read as empty. Never writes. */
 export function loadSectionStore(profileId: string): SectionStoreData {
-  return ownedOrNull(profileId) ?? emptyData(profileId)
+  const doc = readDocument()
+  if (doc === null || doc.profileId !== profileId) return emptyData(profileId)
+  return { profileId, sections: doc.sections, stash: doc.stash }
 }
 
-/** `false` = not stored (malformed input, or storage refused the write). */
-export function saveSection(profileId: string, key: string, s: PersistedSection): boolean {
-  if (!isProfileId(profileId) || typeof key !== 'string' || key === '') return false
+/** Call ONCE, on winning the lease. Bumps the generation and returns it — the
+ *  token every write must then present. This profile's sections and stash are
+ *  kept; another profile's (or nobody's) are discarded, and the count goes on.
+ *  `null` = the claim is not stored (storage refused); the previous generation
+ *  is still in force and the caller must not write. */
+export function claimSectionStore(profileId: string): number | null {
+  if (!isProfileId(profileId)) return null
+  const doc = readDocument()
+  if (doc === null || doc.generation >= Number.MAX_SAFE_INTEGER) return null
+  const generation = doc.generation + 1
+  const kept = doc.profileId === profileId ? doc : NOTHING
+  return writeDocument({ profileId, generation, sections: kept.sections, stash: kept.stash }) ? generation : null
+}
+
+export function saveSection(profileId: string, generation: number, key: string, s: PersistedSection): WriteResult {
+  if (typeof key !== 'string' || key === '') return 'failed'
   const section = parseSection(s)
-  if (section === null) return false
-  const doc = ownedOrFresh(profileId)
-  return writeDocument({ ...doc, sections: recordOf([...Object.entries(doc.sections).filter(([k]) => k !== key), [key, section]]) })
+  if (section === null) return 'failed'
+  return fencedWrite(profileId, generation, (doc) => ({
+    ...doc,
+    sections: recordOf([...Object.entries(doc.sections).filter(([k]) => k !== key), [key, section]]),
+  }))
 }
 
-/** `true` = the section is not stored (any more). Another profile's data is left alone. */
-export function dropSection(profileId: string, key: string): boolean {
-  const doc = ownedOrNull(profileId)
-  if (doc === null || !Object.prototype.hasOwnProperty.call(doc.sections, key)) return true
-  return writeDocument({ ...doc, sections: recordOf(Object.entries(doc.sections).filter(([k]) => k !== key)) })
+/** `'ok'` = the section is not stored (any more). */
+export function dropSection(profileId: string, generation: number, key: string): WriteResult {
+  return fencedWrite(profileId, generation, (doc) => {
+    if (!Object.prototype.hasOwnProperty.call(doc.sections, key)) return null
+    return { ...doc, sections: recordOf(Object.entries(doc.sections).filter(([k]) => k !== key)) }
+  })
 }
 
-/** `false` = not stashed: bad hash, not a plain object, not serialisable, over
- *  `MAX_STASH_PAYLOAD_BYTES`, or storage refused the write. */
-export function putStash(profileId: string, hash: string, payload: unknown): boolean {
-  if (!isProfileId(profileId) || !isHash(hash) || !isPlainObject(payload)) return false
+/** `'failed'` also covers: bad hash, not a plain object, not serialisable, over
+ *  `MAX_STASH_PAYLOAD_BYTES`. */
+export function putStash(profileId: string, generation: number, hash: string, payload: unknown): WriteResult {
+  if (!isHash(hash) || !isPlainObject(payload)) return 'failed'
   let serialised: string
   try {
     serialised = JSON.stringify(payload)
   } catch {
-    return false // a cycle, a BigInt
+    return 'failed' // a cycle, a BigInt
   }
   // Every code unit is at least one byte, so the cheap check spares encoding the obvious cases.
-  if (serialised.length > MAX_STASH_PAYLOAD_BYTES) return false
-  if (new TextEncoder().encode(serialised).length > MAX_STASH_PAYLOAD_BYTES) return false
-  const doc = ownedOrFresh(profileId)
-  return writeDocument({ ...doc, stash: recordOf([...Object.entries(doc.stash).filter(([h]) => h !== hash), [hash, payload]]) })
+  if (serialised.length > MAX_STASH_PAYLOAD_BYTES) return 'failed'
+  if (new TextEncoder().encode(serialised).length > MAX_STASH_PAYLOAD_BYTES) return 'failed'
+  return fencedWrite(profileId, generation, (doc) => ({
+    ...doc,
+    stash: recordOf([...Object.entries(doc.stash).filter(([h]) => h !== hash), [hash, payload]]),
+  }))
 }
 
 export function getStash(profileId: string, hash: string): unknown | undefined {
-  const doc = ownedOrNull(profileId)
-  if (doc === null || !Object.prototype.hasOwnProperty.call(doc.stash, hash)) return undefined
+  const doc = readDocument()
+  if (doc === null || doc.profileId !== profileId) return undefined
+  if (!Object.prototype.hasOwnProperty.call(doc.stash, hash)) return undefined
   return doc.stash[hash]
 }
 
-/** Drop every stashed payload whose hash is not in `keep`. `true` = storage now
- *  holds nothing outside `keep`. Another profile's data is left alone. */
-export function pruneStash(profileId: string, keep: ReadonlySet<string>): boolean {
-  const doc = ownedOrNull(profileId)
-  if (doc === null) return true
-  const kept = Object.entries(doc.stash).filter(([h]) => keep.has(h))
-  if (kept.length === Object.keys(doc.stash).length) return true
-  return writeDocument({ ...doc, stash: recordOf(kept) })
+/** Drop every stashed payload whose hash is not in `keep`. `'ok'` = storage now
+ *  holds nothing outside `keep`. */
+export function pruneStash(profileId: string, generation: number, keep: ReadonlySet<string>): WriteResult {
+  return fencedWrite(profileId, generation, (doc) => {
+    const kept = Object.entries(doc.stash).filter(([h]) => keep.has(h))
+    if (kept.length === Object.keys(doc.stash).length) return null
+    return { ...doc, stash: recordOf(kept) }
+  })
 }
 
-/** Detach / a change of master: everything goes, whichever profile it was. */
+/** Detach / a change of master: every section and payload goes, whichever
+ *  profile it was. Needs no generation — but KEEPS the stored one, in an empty
+ *  document that belongs to nobody, rather than removing the key: a removed key
+ *  would restart the count at 1, which is exactly the number an old leader may
+ *  still be holding. Whoever held the generation is fenced from here on
+ *  (`profileId` no longer matches), and the next claim gets a number nobody has
+ *  seen.
+ *    If storage refuses the write the old document stays. That is tolerable: it
+ *  is still tagged with its profile, so another master never reads it, and a
+ *  re-attach to the same one is protected by the daemon's CAS. */
 export function clearSectionStore(): void {
-  try {
-    browserStorage.removeItem(STORAGE_KEYS.PROFILE_SECTIONS)
-  } catch {
-    // Unwritable storage holds nothing worth clearing that a later write would not replace.
-  }
+  const doc = readDocument()
+  if (doc === null) return // unreadable storage: writing a 0 over it could only restart the count
+  writeDocument({ ...NOTHING, generation: doc.generation })
 }
