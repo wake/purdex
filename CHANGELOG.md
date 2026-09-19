@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.412] - 2026-09-20
+
+### Feature: Profile Sync P2a——`spa/src/lib/profile/`，同步的純核心（#1239）
+
+Profile Sync 第二支，**什麼都沒接線**：沒有 store 訂閱、沒有請求、沒有 UI，app 行為與 alpha.411 完全相同；傳輸與接線是 P2b。runtime import 只有 `sha256Hex` 與 lib 自己的模組，其餘全是 `import type`——沒有 store／`fetch`／timer／`Date.now`／`Math.random`／React，範本是 `lib/nex/nex-host-reducer.ts` ＋它的 effects 兄弟檔（那個兄弟檔就是 P2b）。六個模組：`hash.ts`（canonical form ＋ SHA-256）、`projections.ts`（**唯一的 allowlist**：path grammar 含 `*` 與「任意深度排除」用來剝掉 split 的 `sizes`；fingerprint ＋ ordinal；spec §4.5 的 guard test 是 `lib/` 第一個 inline snapshot）、`sections.ts`（store state → section payload；`adoptStandaloneTabs`）、`sync-state.ts`（每個 section 的狀態機：`reduceSection`／`decideSection` ＝ spec §4.6.1）、`profile-state.ts`（schema lock、profile 狀態、`tabs.*` 生滅）、`applier.ts`（per-section 的 `(local, incoming) → next`、`restoreSizes`、`isWellFormedSection`）。
+
+**先量再寫，spec 有幾處是錯的**：`HostConfig` 有五個持久化欄位沒被 `hosts` projection 列入（`order` 還是必填；照原 spec 實作，pull 之後所有 host 的顏色與圖示都會消失）；`workspaces` 是陣列不是 Record；三個 settings store 沒有 `partialize`，且有三個持久化欄位根本不是偏好（`terminalSettingsVersion` 是強制 terminal 重連的計數器、`activeEditingProfile` 是編輯器開在哪個分頁、`knownIds` 是衍生的）→ settings 改成逐 store 明列欄位；`replaceTabSnapshot` 是整個世界替換、吃不下單一 `tabs.<ws>`，applier 重寫成 per-section 純函式。沿用的 `sortKeysDeep` 慣用法也錯了兩次：JS 引擎會重排整數樣的 key（`"9"` 永遠在 `"10"` 前面，輸出其實沒排序），對複本寫 `out['__proto__']` 是設 prototype 不是設 key——`hash.ts` 改成直接組字串。
+
+Codex：**plan review 十七條（六條 critical）全收，全部落在還沒寫出來的狀態機上**——`sot: null` 同時代表「從未存在」與 tombstone，成功刪除後下一次 index 會被讀成「別處刪了、去 pull」然後永遠 404（→ 兩側都是 `{rev, hash|null}`，absent ＝ `hash === null`，對 absent 建立一律 wire `baseRev 0`）；遲到的 index 回應讓已知 rev 倒退 → 發出明知 stale 的 push（→ epoch）；decide 與 push-started 之間的競態（→ flight token）；conflict 只存 hash、拿不回送出去的那份（→ `retainedHashes`）；`Take SOT` 無法表達、`Keep local` 用鎖定當下的 rev 會再 409（→ `forcePull`；鎖住的 section 繼續「知道」較新的 rev，只是拒絕套用）。實作中 subagent 被要求「plan 自相矛盾就如實回報、不要默默選一種解讀」，於是又收斂了一輪：restore-local 排到 reindex 之前（還原是本地動作，不該等網路）、先看過 index 才准動作（`reconnected` 就是 reconcile-on-connect）、409 到達時已 clean 就不上鎖、送出的 delete 撞 409 要能還原成「不存在」、§4.6.3 兩句互相矛盾的話以「client 先前知不知道這個 workspace」調和。PR review：攻擊方三條＋ R1 兩條全修——settings guard 放行了 builder 永遠不會產生的 payload，搭配「缺席欄位＝對方清除」，一個 `{"purdex-ui-settings":{"terminalSettingsVersion":1}}` 就清空所有 UI 設定且永不收斂（→ 只准已知 store、只准列名欄位、`applySettings` 比對值形狀，任何 rejected 就整份不套用）；選了 Keep local 之後、還原之前的新編輯被舊 snapshot 蓋掉；持續打字讓每個 index 回應過期、section 完全停止同步（我在 focus 裡點名請它評估的活鎖，確認成立 → 獨立的 index epoch，本地編輯不動它）。critic 確認前三者關閉，對 R1-2 的修法提出有證據的反對：「飛行中學到 live SOT」不能證明它比 409 新——事件與 HTTP 回應走不同通道、沒有因果順序，R1 與 critic 各自說中歧義的一個方向 → **不猜**：不上鎖、標 index stale，由權威 index 決定；連帶「stale 期間不做 convergence fold」與「absent 的一側沒有 rev」。增量 re-review 無 finding。體質債 #1240（`applier.ts` 的 apply 與 guard 拆開）。
+
+`lib/profile` 396 測試（`sync-state` 有 seeded 30,000 步 property test、每步約 20 條不變式，plan review 的每個事件序列都是逐字的回歸測試），每個 task 與每個修正都回報 mutation 結果。15 檔。vitest 7708、lint、tsc、build 綠。下一支 P2b：CAS client、`'profile'` 事件、collector 訂閱、reconcile-on-connect、`useProfileStore`。
+
 ## [1.0.0-alpha.411] - 2026-09-20
 
 ### Feature: Profile Sync P1——daemon `profiles` 模組，per-section compare-and-set 的 SOT（#1237）
