@@ -11,8 +11,12 @@
     service starts, the app is unchanged.
   - **P2b-2 — driver** (branch `worktree-profile-sync-p2b2`, after P2b-1 merges): collector,
     executor, apply wiring, leader election, `startProfileSync()` in `main.tsx`.
-- **Invariant for both PRs: with no master set, the app is byte-for-byte today's app.** The driver
-  returns before it subscribes, hashes or fetches anything.
+- **Invariant for both PRs: with no master set, the app behaves as today.** The driver returns
+  before it subscribes, hashes or fetches anything. (P2b-1 does write one new `localStorage` key,
+  `purdex-client-identity`; nothing reads it but the four existing `clientId` callers.)
+- **Revised after the codex plan review** (`task-mu90jwwz-h2c507`, 17 findings, 5 critical, all
+  accepted; spec §9.7). The first draft's leader election (Web Locks) and its "followers reach the
+  leader through `syncManager`" premise were both wrong; see Tasks 5, 9 and 10.
 - Every task: subagent, TDD (failing test first), one commit per task, `git commit --only`, every
   Bash prefixed with `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/profile-sync/spa &&`.
   Parallel tasks run only their own test file. Every task prompt carries: *"if the plan contradicts
@@ -81,24 +85,40 @@
   ("a host with limited resources can turn off modules it doesn't want to run") — yet P2a listed
   `purdex-module-enabled.enabled` in the `settings` projection.
 
+## Task order (plan review #17)
+
+P2b-1: **1 → (2 ∥ 3) → 4 → 5** — 2 and 5 both add a `STORAGE_KEYS` entry, so they are not parallel;
+4 uses 2's `getClientId` only in its test. Main session runs the whole suite + lint + tsc after
+each wave. P2b-2: **6 → (7 ∥ 8) → 9 → 10 → 11**, same rule.
+
+**Test clock (plan review #16).** Every test with a debounce or a retry timer mocks `./hash` to the
+synchronous `structuralKey` (the `uploader.test.ts:23-27` precedent): a `crypto.subtle` digest
+resolves off the microtask queue and fake timers cannot flush it, so an un-mocked test can go green
+having verified only that the timer *fired*. `hashSection` itself stays covered by `hash.test.ts`.
+
 ## P2b-1 — transport
 
-### Task 1 — projection correction (docs + `projections.ts`)
+### Task 1 — projection correction (`projections.ts`, `types.ts`, docs)
 Remove `purdex-module-enabled` from `PROJECTIONS.settings`, `SettingsStorageKey` and everything
-keyed on it (nine stores, not ten); update the guard snapshot. **No ordinal bump**: nothing is wired
-and no SOT holds a `settings` section, so there is no older shape to be newer than — say so in the
-commit. Spec §3.3 and §4.2 updated; logged in §9.7 as a reversal of a P2a choice, flagged for the
-user (he can overrule it; the store's own comment is the evidence).
+keyed on it (nine stores). **Bump `SECTION_SCHEMA_ORDINAL.settings` to 2** and update the guard
+snapshot in the same commit — the protocol says a projection change bumps the ordinal, and P1's
+routes have been public since alpha.411, so "nothing can have written the old shape" is a belief,
+not a fact (plan review #13). Spec §3.3 / §4.2 updated; §9.7 records it as a reversal of a P2a
+choice, **flagged for the user**: the evidence is the store's own comment
+(`useModuleEnabledStore.ts:64-66`), and he may overrule it.
 
 ### Task 2 — `lib/client-identity.ts`
-`getClientId(): string` — the one source of this client's id. Own persisted key
-`purdex-client-identity` (`STORAGE_KEYS.CLIENT_IDENTITY`), **not** a zustand store: a plain
-`browserStorage` read/write with an in-memory cache, because identity must not be replaced by a
-cross-window rehydrate mid-request. First call: adopt the existing id from `purdex-sync-state`
-(`state.clientId`) if it matches `^c_[0-9a-f]{12}$`, else generate (6 random bytes → hex). Never
-changes afterwards. `useSyncStore.getClientId` delegates to it; the four production callers switch
-to it. Tests: adoption, generation, stability across calls, a malformed stored value is replaced,
-format; the backup dispatch tests keep passing.
+`getClientId(): string`. Own key `purdex-client-identity` via `browserStorage`, **not** a zustand
+store. **Storage is the truth; there is no permanent in-memory cache** (plan review #11): each call
+reads the key; if it holds a valid `^c_[0-9a-f]{12}$` it is returned. Otherwise: adopt
+`purdex-sync-state`'s `state.clientId` if valid, else generate (6 random bytes → hex); **write, then
+read back and return what is stored** — two windows racing the first call converge on the last
+writer on their next call instead of each caching its own forever. `useSyncStore.getClientId`
+delegates **and still `set({clientId})`** so the state field other Sync code reads
+(`register-sync.ts:58`, `use-sync-store.test.ts:114-116`) keeps its contract (#12). The four
+production callers switch over. Tests: adoption, generation, malformed value replaced, the
+two-realm race (`vi.resetModules()` + shared `localStorage`, the
+`usePlaceholderFilesStore.cross-window.test.ts` precedent), the Sync store field still populated.
 
 ### Task 3 — `lib/profile/api.ts`: the CAS client
 ```ts
@@ -106,137 +126,159 @@ export type PutOutcome =
   | { kind: 'applied'; rev: number } | { kind: 'converged'; rev: number }
   | { kind: 'conflict'; rev: number; hash: string | null; payload: unknown | null }
   | { kind: 'schema'; fingerprint: string; ordinal: number }
-  | { kind: 'failed'; reason: 'network' | 'timeout' | 'contended' | 'not-found' | 'too-large' | 'rejected' | 'malformed'; status: number; retryAfterMs?: number }
-export function listProfiles(hostId): Promise<ProfileIndexEntry[]>
-export function createProfile(hostId, name) / renameProfile / deleteProfile
-export function getProfileSections(hostId, profileId): Promise<Record<string, SectionRecord>>
-export function getSection(hostId, profileId, section): Promise<SectionRecord | null>   // 404 → null
-export function putSection(hostId, profileId, section, body): Promise<PutOutcome>
-export function deleteSection(hostId, profileId, section, baseRev, clientId): Promise<PutOutcome>
-export function putAttachment / deleteAttachment
+  | { kind: 'failed'; reason: 'network' | 'timeout' | 'aborted' | 'contended' | 'not-found' | 'too-large' | 'rejected' | 'unauthorized' | 'server' | 'malformed'; status: number; retryAfterMs?: number }
+export type ListOutcome = { ok: true; profiles: ProfileIndexEntry[] } | { ok: false; reason: …; status: number }
+listProfiles / createProfile / renameProfile / deleteProfile / getSection / putSection / deleteSection / putAttachment / deleteAttachment
 ```
-- **`putSection` / `deleteSection` never throw.** Every outcome — network error, timeout, non-JSON
-  409, a 200 without a finite `rev` — is a `PutOutcome`; this is what lets the executor guarantee
-  one terminal event per flight. `AbortSignal.timeout(15_000)` on every request (injectable).
-- Branch on `status === 409` before reading; `reason` decides conflict vs schema; an unparseable 409
-  is `failed/malformed`. DELETE's 200 is `{rev}` → `applied`. 503 → `failed/contended` with
-  `retryAfterMs` from the header. Response fields are **validated, not cast** (`rev` finite integer,
-  `hash` 64-hex or absent).
-- Read functions throw a `ProfileApiError(status, message)` (the `DeviceStateApiError` shape).
-Tests mock `hostFetch` with real `Response` objects, one test per row above, plus a hung request
-resolving to `failed/timeout` under fake timers.
+- **No function in this module throws**, including when `hostFetch` itself throws synchronously
+  (unknown host → `getDaemonBase`): the whole call is inside `try`. Reads return discriminated
+  results too (#7, #14) — "the list request failed" must be unrepresentable as "the list is empty".
+- Every request takes an `AbortSignal` (the executor's) combined with `AbortSignal.timeout(15 s)`.
+- Branch on `status === 409` before reading the body; `reason` picks conflict / schema; a 409 that
+  is not that JSON is `failed/malformed`. DELETE's 200 is `{rev}` → `applied`. 503 →
+  `failed/contended` + `retryAfterMs`. 401/403 → `unauthorized`. `getSection` 404 → `{ok: true,
+  section: null}`. **Every field is validated, not cast** (`rev` a non-negative safe integer, `hash`
+  64-hex or absent, `payload` an object).
+- Status → outcome table checked row by row against `handler_sections.go` in the tests, one test
+  per row, plus: a hung request → `timeout` under fake timers; an aborted one → `aborted`.
 
-### Task 4 — `'profile'` event: union + `lib/profile/profile-ws-dispatch.ts`
-Add `'profile'` to `HostEvent.type`; one branch in `useMultiHostEventWs.ts` next to `backup:done`.
-`dispatchProfileWsEvent(hostId, event)` parses and **validates** the value, maps
-`deleted: true` or `hash === ''` → `hash: null`, and hands `{hostId, profileId, section, rev, hash,
-writerClientId}` to a registered listener (`setProfileEventListener(fn | null)`) — the driver
-registers in P2b-2; with no listener the event is dropped. It does **not** filter own events: the
-reducer needs `own`, and "own" means `writerClientId === getClientId()` **and** this window is the
-leader (decided by the driver). Malformed → ignored, never throws on the WS path.
+### Task 4 — `'profile'` event
+`'profile'` into `HostEvent.type`; one branch in `useMultiHostEventWs.ts` beside `backup:done`.
+`lib/profile/profile-ws-dispatch.ts`: parse and **validate** the value; `deleted: true` or
+`hash === ''` → `hash: null`; hand `{hostId, profileId, section, rev, hash, writerClientId}` to a
+listener registered with `setProfileEventListener(fn | null)`. No listener → dropped. It does not
+filter own events (the reducer wants `own`). Malformed → ignored; never throws on the WS path.
 
-### Task 5 — `stores/useProfileStore.ts`
-Device-local, persisted under `purdex-profile` (`version: 1`), **not registered with
-`syncManager`** (a rehydrate is a full-state replace; section bases must not be swapped under a live
-driver — the leader is the only writer, followers read on demand in P3).
-```ts
-masterHostId: string | null      // the dev host the master lives on, pinned at attach time
-masterProfileId: string | null
-autoSync: boolean                // default true
-sections: Record<string, { base: Held; currentHash: string | null }>   // what restoreSectionState takes
-setMaster(hostId, profileId) / clearMaster()      // clearMaster wipes `sections`
-setAutoSync(v) / putSectionBase(key, persisted) / dropSection(key)
-```
-Only `base` and `currentHash` persist — flights, locks, conflicts and epochs are rebuilt by
-reconcile after a restart (P2a's `restoreSectionState` contract). `masterHostId` is stored rather
-than derived from `devHostId`, so that changing the dev host does not silently re-point a master at
-another daemon.
+### Task 5 — two stores, because one could not serve both needs (plan review #2)
+- **`stores/useProfileStore.ts` — the control plane.** `purdex-profile`, `version: 1`,
+  **registered with `syncManager`**: `masterHostId`, `masterProfileId`, `autoSync` (default `true`),
+  `setMaster / clearMaster / setAutoSync`. Every window must agree on these, or a follower's
+  `detach()` never reaches the leader and a window that was open before the attach never queues
+  for leadership.
+- **`lib/profile/section-store.ts` — the leader's working state.** Plain `browserStorage` under
+  `purdex-profile-sections`, keyed by `masterProfileId` (a different master never sees these
+  bases): per section `{base, currentHash, conflict?}` and a **payload stash for the hashes a
+  conflict retains**. Only the leader writes it; it is deliberately *not* a synced zustand store,
+  because a cross-window rehydrate is a full-state replace and would swap bases under a live
+  driver. `conflict` and its payloads persist so that a restart restores the lock with **the
+  snapshot that was sent**, not whatever the stores hold by then (#10; spec §4.6.2).
+  `clearMaster` / a change of `masterProfileId` wipes it.
 
 ## P2b-2 — driver
 
-### Task 6 — `lib/profile/apply-to-stores.ts`: commit an applied section
-One function per kind, each: read the slices → `isWellFormedSection` → P2a `apply*` → write →
-**`await store.persist.rehydrate()`** on every store written. Rehydrate is the proven cross-window
-path and runs each store's `merge` / `onRehydrateStorage` (sanitise, heal, DOM, `t`), so no
-per-store adapter is written. Specifics:
-- `settings`: `rejected` non-empty → return `{ok:false}` (caller locks the section). If the patch
-  for `purdex-ui-settings` contains `terminalRenderer`, call `bumpTerminalSettingsVersion()` after.
-- `hosts`: also delete `runtime` rows of removed hosts. **Never apply a payload that removes the
-  master's own host** (`masterHostId`) — that would cut the transport mid-apply; return
-  `{ok:false, reason:'would-remove-master-host'}` and lock. Zero hosts is refused the same way.
+### Task 6 — reducer additions (`sync-state.ts`)
+- **`locked:invalid`** (#8, #9): status + `{type:'locked', reason:'invalid', rev}`. The SOT holds
+  something this client refuses to apply (ill-formed, `rejected` settings, a `hosts` payload that
+  removes or re-points the master's own host). Recorded with the SOT rev it refers to; **a SOT
+  observation with a higher rev unlocks it** (someone fixed it), `resolved keep:'local'` rebases on
+  the SOT and pushes the local copy over it; `keep:'sot'` is refused. No timer ever re-fetches a
+  payload already judged unusable.
+- `restoreSectionState` accepts an optional persisted `conflict` and restores `locked:conflict`.
+- `profileStatus` ranks `locked:invalid` between `locked:conflict` and `pending`.
+Same TDD / mutation / property-test discipline as P2a; the property generator gains the new event.
+
+### Task 7 — `lib/profile/apply-to-stores.ts`
+Per kind: read slices → `isWellFormedSection` → P2a `apply*` → write → **`await
+store.persist.rehydrate()`** on each store written (the proven cross-window path: runs `merge` /
+`onRehydrateStorage` — sanitise, heal, DOM, the i18n `t`). The task **first proves, per store
+family, in a test**: (a) `persist` has flushed to `localStorage` synchronously by the time
+`rehydrate()` reads; (b) the store's hook really ran (i18n `t` switches language; theme DOM
+attribute moves; `healLayoutInvariant` fires; a `migrate` does not run on a same-version rehydrate);
+(c) **`useI18nStore`'s rehydrate does not override the applied `activeLocaleId` via
+`detectLocale`**. If any of these fails for a store, stop and report — that store then gets an
+explicit adapter instead. The write and the rehydrate are done without an intervening `await`
+wherever the store allows, and the function returns **the hash recomputed from the stores
+afterwards**, so a sanitiser's change shows up honestly as a dirty section.
+- `settings`: `rejected` non-empty → `{ok:false, invalid}`. `terminalRenderer` in the patch →
+  `bumpTerminalSettingsVersion()`.
+- `hosts`: refuse (`invalid`) a payload that removes `masterHostId`, **changes its `ip` / `port` /
+  `token`** (#9: the credentials in hand are the ones that just fetched this payload, so they are
+  the ones known to work), or leaves zero hosts. Drop `runtime` rows of removed hosts.
 - `workspaces` / `tabs.<id>`: inside `withOperationLock('profile-sync', …)`; refused → `{ok:false,
-  reason:'busy'}` (the executor retries on the next tick, no lock). After `applyTabs`: `tabOrder =
-  deriveTabOrder(…)`, `visitHistory` filtered to it, global `activeTabId` kept if it survives else
-  the active workspace's `activeTabId`, else `null`; both stores written in one try/rollback like
-  `replaceTabSnapshot`. Panes of removed hosts: mark `terminated: 'host-removed'` with a small pure
-  helper over one tab's layout (the snapshot-typed `markMissingHosts` cannot be reused).
-  tmux session codes are host-scoped and both clients talk to the same hosts, so **no reattach
-  step**: a synced `tmux-session` pane is already valid here.
-- Returns the hash **recomputed from the stores after the write** (`build*` + `hashSection`), which
-  is what `pull-applied` reports — if a sanitiser changed something, the section is honestly dirty
-  and pushes the sanitised form.
+  busy}` (retried, never locked). After `applyTabs`: `tabOrder = deriveTabOrder(…)`, `visitHistory`
+  filtered, global `activeTabId` kept if it survives, else the active workspace's, else `null`; both
+  stores in one try/rollback like `replaceTabSnapshot`. Panes of removed hosts → `terminated:
+  'host-removed'` via a small pure per-layout helper. Session codes are host-scoped and both clients
+  talk to the same hosts, so no reattach step.
 
-### Task 7 — `lib/profile/collector.ts`
-`startCollector({onSectionHash})`: subscribes to the nine settings stores, hosts, workspaces, tabs;
-hand-diffs only the projected slices; **per-section 500 ms trailing debounce**; on fire builds the
-affected sections (`buildProfileDocument` wrapped in try/catch — a workspace id the daemon would
-reject must not take every section down; that workspace's `tabs.*` is skipped and reported), hashes,
-and reports `(key, hash | null, payload)`. **Always passes all nine settings stores.** A section
-that disappeared reports `hash: null`. The payload goes to a stash keyed by hash, pruned to
-`retainedHashes` ∪ current. `primeAll()` computes every section once (on start and after attach).
+### Task 8 — `lib/profile/collector.ts`
+Subscribes to the nine settings stores, hosts, workspaces, tabs; hand-diffs projected slices only;
+**per-section 500 ms trailing debounce**; builds inside try/catch (a workspace id the daemon would
+reject skips that one `tabs.*`, reported, never the whole document); **always passes all nine
+settings stores**; reports `(key, hash | null, payload)`; a vanished section reports `null`.
+`primeAll()`. Also **`watchUnsyncedStores()`** (#3): while a master is set, *every* window listens
+to the native `storage` event and calls `persist.rehydrate()` for projected stores that are not
+`syncManager`-registered (`purdex-editor-settings` today — derived by checking the registry, not
+hard-coded), so a follower's edit reaches the leader's memory and a leader's apply reaches the
+follower's UI.
 
-### Task 8 — `lib/profile/executor.ts`
-Owns `Record<sectionKey, SectionSyncState>` in memory (seeded by `restoreSectionState` from
-`useProfileStore`), and one loop: `dispatch(key, event)` → `reduceSection` → persist `{base,
-currentHash}` if changed → `decideSection(state, {reachable, autoSync})` → run the action. One
-action in progress per section.
-- `reindex` → `listProfiles`, select the master; **profile missing from the list → every section
-  `locked:reset`** (a recreated profile has a new id, so "gone" is the reset signal); else
-  `profileLock(index, shapeTable())` — a schema lock stops all writes; else one
-  `sot-index{epoch: indexEpoch, entry}` per known section, `entry: null` when not listed; then
-  `reconcileSectionSet` for `tabs.*`.
-- `push` / `delete` → dispatch `push-started{token}`; **send only if the resulting
-  `inFlight === token`**; map `PutOutcome` → exactly one terminal event (`conflict` also stashes the
-  SOT payload by hash; `schema` → profile schema lock + `push-failed`; `failed/contended` → retry
-  after `retryAfterMs`; any other failure → `push-failed`).
-- `pull` → `canApplyPull` → `getSection` (404 → deletion, `rev: state.sot.rev`) → Task 6 →
-  `pull-applied` with the recomputed hash; `{ok:false, 'busy'}` → nothing, retried next tick;
-  any other `{ok:false}` → `locked{conflict}` is wrong here → a new **`locked:invalid`-style
-  outcome is not added**: report it through `onProblem` and leave the section clean-but-behind (it
-  will retry on the next event); P3 surfaces it.
-- `restore-local` → `canRestoreLocal` → apply the stashed payload via Task 6 → `local-restored`.
-- `lock-conflict` / `lock-reset` → dispatch `locked`.
-- Remote events: `own = writerClientId === getClientId()`; `profileId !== master` → ignored.
-- Retry: a failed push/pull is retried on the next collector tick, reconnect, or a 30 s timer —
-  never a hot loop.
+### Task 9 — `lib/profile/executor.ts`
+In-memory `Record<key, SectionSyncState>` seeded from the section store; `dispatch → reduceSection →
+persist → decideSection → act`.
+- **Lifecycle** (#6): an executor has a generation and an `AbortController`. `dispose()` aborts
+  every request and flips `disposed`; **every continuation checks it after every `await` and drops
+  its result** — a disposed executor's state machines are garbage, so "zero terminal events" is
+  correct for them and nothing of theirs is persisted. A new master gets a new executor.
+- **One network write at a time per profile** (#7): pushes and deletes go through a FIFO. A `schema`
+  outcome sets the profile schema lock **before the next write is dequeued**, so no write can start
+  after it — which is what makes "`locked:schema` is the whole profile" true rather than eventual.
+  Reads are not serialised.
+- **`reindex` is profile-level single-flight** (#14): many sections asking share one
+  `listProfiles`. `ok:false` → **no event at all**, sections stay stale, retry with backoff
+  (2 s → 30 s cap, reset on success). Only a well-formed `ok:true` list that lacks the master id
+  means the profile is gone → every section `locked:reset`. Otherwise `profileLock(index,
+  shapeTable())`, then one `sot-index{epoch: indexEpoch}` per known section, then
+  `reconcileSectionSet`.
+- `push`/`delete`: dispatch `push-started`; **send only if the resulting `inFlight === token` and
+  this window still holds the lease** (Task 10); each `PutOutcome` → exactly one terminal event
+  (`conflict` stashes the SOT payload; `contended` → `push-failed` + retry after `retryAfterMs`).
+- `pull`: `canApplyPull` → `getSection` → Task 7 → `pull-applied` (recomputed hash); `busy` →
+  retry; `invalid` → `locked{invalid, rev}`.
+- `restore-local`: `canRestoreLocal` → Task 7 with the stashed payload → `local-restored`.
+- Attachment (#5): `putAttachment` on attach and on every reconnect (idempotent; refreshes
+  `lastSeen`); `deleteAttachment` on detach. Without it the daemon's "409 while attached" protects
+  nothing and spec acceptance 12 cannot pass.
+- Remote events for another profile are ignored; `own = writerClientId === getClientId()`.
 
-### Task 9 — `lib/profile/leader.ts` + `lib/profile/start.ts` + `main.tsx`
-`acquireLeadership(): Promise<() => void>` — `navigator.locks.request('purdex-profile-sync',
-{mode:'exclusive'}, () => new Promise(release => …))`, held for the window's lifetime; a second
-window's promise stays pending until the first closes, then it takes over (and starts with every
-section `indexStale`, by `restoreSectionState`). No `navigator.locks` (old runtime, jsdom) → lead
-immediately. Followers run nothing: their edits reach the leader through the existing `syncManager`
-rehydrate of the app stores, and the leader's applies reach them the same way.
-`startProfileSync()`: no master → subscribe to `useProfileStore` only and wait; master set → lead →
-collector + executor + the WS listener + a `useHostStore` watcher that dispatches `reconnected` to
-every section when `runtime[masterHostId].status` becomes `connected` (and `reachable = false`
-otherwise). `clearMaster()` tears it all down. One line in `main.tsx`.
-In `import.meta.env.DEV` only, `window.__purdexProfileSync = {attach(hostId, profileId), detach(),
-state()}` — the hook the real-machine acceptance uses until P3's UI exists.
+### Task 10 — `lib/profile/leader.ts`: a lease, not a lock
+`navigator.locks` exists only in secure contexts, and the Electron dev window loads
+`http://100.64.0.2:5174` (#4) — and a `locks.request()` promise only resolves once the lock is
+*released*, so the first draft's `acquireLeadership(): Promise<release>` could never have returned
+(#1). Instead: `purdex-profile-leader = {windowId, expiresAt}` in `localStorage` (synchronous and
+shared by every same-origin window, secure or not). Acquire: if absent or expired, write own record,
+**wait a random 50–150 ms, read back**, lead only if it is still ours. Renew every 2 s with a 6 s
+TTL; release on `pagehide`; a `storage` event on the key wakes waiters. `onLead(cb)` / `onLose(cb)`;
+losing the lease disposes the executor. A brief double-leader on takeover is possible and tolerated:
+the CAS protects the SOT, and the executor re-checks the lease before every write. Clock injected.
 
-### Acceptance for P2b-2 (real machine, run not assumed)
-Worktree dev server `:5175` against the mlab daemon, two Playwright sessions = two clients with
-distinct `clientId`s (separate browser contexts). Create a profile by `curl`, attach both through
-the dev hook, then: (1) first client pushes — `GET /api/profiles` shows `hosts`, `settings`,
-`workspaces`, one `tabs.*` per workspace at rev 1; (2) second client, clean, pulls; (3) rename a
-workspace on A → B reflects it; **record the wall time**; (4) same edit on both → `applied:false`;
-(5) daemon stopped, edit the same workspace on both, restart → second flush 409 → that section
-`locked:conflict`, others keep syncing; (6) offline edits flush on return; (7) split ratios and
-focus do not move on the other side; (8) no master → `requests` shows zero `/api/profiles` calls.
+### Task 11 — `lib/profile/start.ts` + `main.tsx`
+`startProfileSync()`: subscribes to `useProfileStore` (synced, so every window sees attach/detach);
+no master → nothing else; master set → contend for the lease → on lead: section store, collector,
+executor, WS listener, and a `useHostStore` watcher that turns `runtime[masterHostId].status`
+becoming `connected` into `reconnected` for every section (and `reachable = false` otherwise).
+Followers run `watchUnsyncedStores()` only. `import.meta.env.DEV` only:
+`window.__purdexProfileSync = {attach(hostId, profileId), detach(), state()}` — attach/detach go
+through the same code path P3's wizard will call (attachment included).
+
+### Acceptance for P2b-2 (real machine — run, not assumed)
+Worktree dev server `:5175` against the mlab daemon; **two Playwright browser contexts = two clients
+with distinct `clientId`s**. Spec §6 items that belong to this phase, by their spec number:
+1 first push (every section at rev 1) · 2 second client pulls · 3 propagation, **wall time
+recorded** · 4 converged → `applied:false` · 5 conflict locks one section only · 6 offline edits
+flush · **6a** merely-behind is not a conflict · **6b** a dirty section refuses an inbound apply ·
+**6c** section lifecycle, no orphaned `tabs.*` row in the daemon · **7** lowered
+`SECTION_SCHEMA_ORDINAL.settings` → whole profile `locked:schema`, **zero further writes** in
+`requests` · 8/9 focus and split ratios are not mirrored · **12** `DELETE /api/profiles/{id}` is 409
+while attached, 200 after both detach · **13** the pulled client reaches every host without
+re-entering a token · plus: no master → zero `/api/profiles` requests; two windows of one context →
+exactly one of them issues writes.
+**Not covered here, stated plainly:** the cross-*machine* run on air-2026 that spec §6 asks for. The
+App on a26 loads the main checkout's `:5174`, which this isolated worktree session cannot `git pull`;
+that run is the user's acceptance after P3, and the report says so.
 
 ## Risks
-- **The rehydrate-after-write trick** depends on `persist` flushing synchronously to
-  `localStorage` before `rehydrate()` reads it. It does today (`browserStorage` is sync); Task 6
-  asserts it with a test per store family rather than assuming it.
-- **A follower window shows stale sync status** until P3 reads `useProfileStore` on demand.
-- The 30 s retry timer is the only clock in the driver; everything else is event-driven.
+- **Rehydrate-after-write** is an assumption until Task 7's per-store proofs pass; the fallback
+  (explicit adapters for the stores that fail) is sized at a few dozen lines each.
+- **A lease is not a lock.** Two leaders can overlap for up to one jitter window on takeover; the
+  design tolerates it rather than preventing it (Task 10).
+- **A follower window's sync status is stale** until P3 reads the section store on demand.

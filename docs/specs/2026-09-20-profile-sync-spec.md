@@ -799,3 +799,31 @@ section *kinds*. No spec drift of Important or above. One evidenced objection, t
 | # | Sev. | Finding | Resolution |
 |---|---|---|---|
 | C-1 | high | "a live SOT was learnt during the flight" does not prove it is newer than the 409 — events and HTTP responses travel on different channels with no causal order. Create (rev 5, event seen) → delete (rev 6, event lost) → my PUT meets the tombstone: the `409 {rev: 0}` is the *authoritative* one, and keeping `{5, H8}` presents deleted content as the SOT and makes `Keep local` push `baseRev 5` into a daemon that only accepts 0 | R1 and the critic describe the two directions of one ambiguity the client cannot resolve, so it does not guess: the flight closes, `sot` is left alone, **nothing locks**, the index is marked stale, and the authoritative index decides — absent → push `baseRev 0`; live and different → conflict; live and equal → synced. Two consequences adopted with it: **no convergence fold while the index is stale** (stale means "what I know of the SOT is not to be trusted", and declaring `synced` on it is wrong; the fold happens one step later, when the index lands), and **an absent side has no revision** in `sotMoved` (§4.6.1) |
+
+### 9.7 P2b plan — measured, then reviewed (codex `task-mu90jwwz-h2c507`), 2026-09-20
+
+**Measured before planning** (full list in the P2b plan): P1 has no per-profile index route — the
+index is `GET /api/profiles`; a delete event carries `hash: ""`; `hostFetch` has no timeout; a bare
+`setState(patch)` skips the invariants of eight of the ten settings stores (the i18n translator `t`
+is a *state field*), while `persist.rehydrate()` — the path cross-window sync already uses — runs
+them all; there is no leader election anywhere in the SPA; `clientId` has two callers that outlive
+the Sync module.
+
+**One P2a choice reversed, for the user to confirm:** `useModuleEnabledStore` says in its own source
+that module on/off is device-local by intent ("a host with limited resources can turn off modules it
+doesn't want to run"). It is removed from the `settings` projection (ordinal → 2). Putting it back
+is one projection line and one more ordinal bump.
+
+**Plan review: 17 findings, 5 critical, all accepted.** Web Locks cannot elect the leader (secure
+contexts only — the Electron dev window is plain HTTP — and the draft's acquire could never return)
+→ a `localStorage` lease with a heartbeat. A device-local, unsynced profile store splits the control
+plane across windows → two stores: a synced control plane, and a leader-only section store.
+`useEditorSettingsStore` is not `syncManager`-registered, so follower edits never reached the leader
+→ every window rehydrates unregistered projected stores on the native `storage` event. No task ever
+called the attachment routes, so nothing protected a profile from deletion → attach / reconnect /
+detach do. Also: executor generations and abort on teardown; **one network write at a time per
+profile**, so a `schema` answer stops all writes rather than eventually; `locked:invalid` for a SOT
+payload this client refuses to apply (never re-fetched on a timer; unlocked by a newer revision);
+a `hosts` payload may not remove or re-point the master's own host; conflicts and their payloads
+persist across restarts; the client id is read from storage every time; reindex is single-flight and
+a failed list is never an empty list.
