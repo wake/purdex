@@ -392,8 +392,15 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       if (s.inFlight === null) return s
       const sent = s.inFlight.hash
       let next = closeFlight(s)
-      if (e.rev === 0) next = withSot(next, { rev: Math.max(s.sot.rev, s.base.rev), hash: null })
-      else if (e.rev > s.sot.rev) next = withSot(next, { rev: e.rev, hash: e.hash })
+      if (e.rev === 0) {
+        // "absent" is the server's view when it ANSWERED. If a live SOT was
+        // observed while the push was out, that observation is newer than this
+        // answer (a create raced ours and won): keep it. Erasing it would show
+        // "absent" as the other side of the conflict and make keep-local push
+        // with wire baseRev 0 again — straight into the next 409.
+        const learntLive = s.sotMovedWhileInFlight && s.sot.hash !== null
+        if (!learntLive) next = withSot(next, { rev: Math.max(s.sot.rev, s.base.rev), hash: null })
+      } else if (e.rev > s.sot.rev) next = withSot(next, { rev: e.rev, hash: e.hash })
       // the SOT already holds what we have *now* → rule 1 folds it in finish()
       if (next.sot.hash === next.currentHash) return next
       // edited back to the base during the flight: nothing unsynced is left to

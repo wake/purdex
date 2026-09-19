@@ -649,6 +649,65 @@ describe('reduceSection — rule 5: terminal events', () => {
     expect(s.sot).toEqual({ rev: 9, hash: H8 })
     expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 9, hash: H8 } })
   })
+  it('push-conflict at exactly the known rev leaves sot alone; the conflict shows the sot we hold', () => {
+    const s = run(inFlightPut(), { type: 'remote-event', rev: 9, hash: H8, own: false }, { type: 'push-conflict', rev: 9, hash: H2 })
+    expect(s.sot).toEqual({ rev: 9, hash: H8 })
+    expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 9, hash: H8 } })
+  })
+
+  describe('an old 409 {rev:0} does not erase a live SOT learnt during the flight (R1 finding)', () => {
+    /** absent at the SOT ({4,null}) and agreed so; we create `sent`; while in flight another machine creates it: {5,H8}. */
+    function creatingWhileTheyCreate(sent: string): SectionSyncState {
+      const s0 = run(mk({ base: { rev: 4, hash: null }, sot: { rev: 4, hash: null }, currentHash: null }), { type: 'local-changed', hash: sent })
+      const [f, token] = startFlight(s0)
+      expect(token).toMatchObject({ kind: 'put', hash: sent, baseRev: 0 })
+      const moved = reduceSection(f, { type: 'remote-event', rev: 5, hash: H8, own: false })
+      expect(moved.sot).toEqual({ rev: 5, hash: H8 })
+      expect(moved.sotMovedWhileInFlight).toBe(true)
+      return moved
+    }
+
+    it('sot stays {5,H8}; dirty → locked:conflict against the LIVE sot; keep-local pushes with baseRev 5, not 0', () => {
+      let s = reduceSection(deepFreeze(creatingWhileTheyCreate(H1)), { type: 'push-conflict', rev: 0, hash: null })
+      expect(s.sot).toEqual({ rev: 5, hash: H8 })
+      expect(s.inFlight).toBeNull()
+      expect(s.sotMovedWhileInFlight).toBe(false)
+      expect(s.status).toBe('locked:conflict')
+      expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 5, hash: H8 } })
+      s = reduceSection(s, { type: 'resolved', keep: 'local' })
+      expect(s.base).toEqual({ rev: 5, hash: H8 })
+      const token = tokenOf(decideSection(s, ON))
+      expect(token).toMatchObject({ kind: 'put', hash: H1, baseRev: 5 })
+    })
+
+    it('what we sent is exactly what they created → converges, no lock', () => {
+      const s = reduceSection(creatingWhileTheyCreate(H8), { type: 'push-conflict', rev: 0, hash: null })
+      expect(s.sot).toEqual({ rev: 5, hash: H8 })
+      expect(s.status).toBe('synced')
+      expect(s.conflict).toBeNull()
+      expect(s.base).toEqual({ rev: 5, hash: H8 })
+      expect(decideSection(s, ON)).toEqual({ do: 'nothing' })
+    })
+
+    it('a flight during which the SOT was seen DELETED still takes the rev 0 answer', () => {
+      const moved = reduceSection(inFlightPut(), { type: 'remote-event', rev: 7, hash: null, own: false })
+      expect(moved.sotMovedWhileInFlight).toBe(true)
+      const s = reduceSection(moved, { type: 'push-conflict', rev: 0, hash: null })
+      expect(s.sot).toEqual({ rev: 7, hash: null })
+      expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 7, hash: null } })
+    })
+
+    it('an ordinary rev 0 conflict (nothing learnt during the flight) is unchanged: the SOT is absent', () => {
+      const before = inFlightPut()
+      expect(before.sotMovedWhileInFlight).toBe(false)
+      const s = reduceSection(before, { type: 'push-conflict', rev: 0, hash: null })
+      expect(s.sot).toEqual({ rev: 5, hash: null })
+      expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 5, hash: null } })
+      // keep-local then recreates over the tombstone with baseRev 0
+      expect(tokenOf(decideSection(reduceSection(s, { type: 'resolved', keep: 'local' }), ON))).toMatchObject({ kind: 'put', hash: H1, baseRev: 0 })
+    })
+  })
+
   it('push-failed → back to dirty/pending, nothing else changes', () => {
     const before = inFlightPut()
     const s = reduceSection(before, { type: 'push-failed' })
@@ -1130,6 +1189,7 @@ describe('property tests (seeded)', () => {
     let staleRestores = 0
     let cancelledRestores = 0
     let localOnlySteps = 0
+    let keptLiveSot = 0
     let acceptedRestores = 0
 
     for (let n = 0; n < SEQUENCES; n++) {
@@ -1267,6 +1327,11 @@ describe('property tests (seeded)', () => {
         if (e.type === 'reconnected' && !next.indexStale) fail('reconnected left the index fresh')
         // a 409 locks iff something unsynced is left: dirty, and not already what the SOT holds
         if (e.type === 'push-conflict' && prev.inFlight !== null) {
+          // an old "absent" answer never erases a live SOT learnt while the push was out
+          if (e.rev === 0 && prev.sotMovedWhileInFlight && prev.sot.hash !== null) {
+            if (next.sot.rev !== prev.sot.rev || next.sot.hash !== prev.sot.hash) fail('a rev 0 conflict erased a live SOT learnt during the flight')
+            keptLiveSot++
+          }
           const shouldLock = prev.currentHash !== prev.base.hash && next.sot.hash !== prev.currentHash
           if ((next.status === 'locked:conflict') !== shouldLock) fail('409 lock decision does not follow dirtiness')
           if (shouldLock && next.conflict?.localHash !== prev.inFlight.hash) fail('409 conflict does not hold the sent snapshot')
@@ -1318,6 +1383,7 @@ describe('property tests (seeded)', () => {
     expect(staleRestores).toBeGreaterThan(0)
     expect(cancelledRestores).toBeGreaterThan(10)
     expect(localOnlySteps).toBeGreaterThan(SEQUENCES)
+    expect(keptLiveSot).toBeGreaterThan(0)
     expect(acceptedRestores).toBeGreaterThan(10)
     for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked', 'reconnected']) {
       expect(seen.has(`${t}:applied`), `${t} was never applied`).toBe(true)
