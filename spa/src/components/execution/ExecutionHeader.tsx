@@ -4,16 +4,24 @@
 // actions, and "Take to terminal" (P-C.3 spec §4.4 for the session-bound
 // path, exec-to-terminal spec §4.2 for every other claude execution). Pure
 // presentation; ExecutionView owns the network and decides when the control
-// is offered.
-import { useEffect, useState } from 'react'
+// is offered. The cost is an anchor button with a one-line hover summary
+// (P-B4 spec §4.2 H1–H2); `cost === null` means history is not loaded yet.
+// The button is `aria-describedby` the tooltip, and both render the total
+// through the same `formatUsd` so they can never disagree on a value.
+import { useEffect, useId, useState } from 'react'
 import { ArrowUUpLeft, Prohibit, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { HoverTooltip } from '../HoverTooltip'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { ExecutionState } from '../../lib/nex/event-reducer'
+import type { CostSummary } from '../../lib/nex/cost-summary'
+import { formatTokens, formatUsd } from '../../lib/nex/format-cost'
+import { formatDuration } from '../../lib/nex/format-duration'
 
 export interface ExecutionHeaderProps {
   summary: ExecutionSummary | null
-  costUsd: number
+  /** `costSummary(messages)` once history is loaded, else null (`$…`, disabled). */
+  cost: CostSummary | null
   sse: ExecutionState['sse']
   isMine: (principal: string | undefined) => boolean
   onInterrupt: () => void
@@ -32,9 +40,10 @@ const STATE_DOT: Record<string, string> = {
 
 export const TERMINATE_CONFIRM_MS = 4000
 
-export default function ExecutionHeader({ summary, costUsd, sse, isMine, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
+export default function ExecutionHeader({ summary, cost, sse, isMine, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState(false)
+  const costTipId = useId()
   useEffect(() => {
     if (!confirming) return
     const id = setTimeout(() => setConfirming(false), TERMINATE_CONFIRM_MS)
@@ -45,6 +54,11 @@ export default function ExecutionHeader({ summary, costUsd, sse, isMine, onInter
   const cwdBase = summary?.cwd ? summary.cwd.split('/').filter(Boolean).pop() ?? summary.cwd : ''
   const lease = summary?.lease
   const leaseText = lease ? `${lease.principal_id}${isMine(lease.principal_id) ? ` ${t('execution.lease_you')}` : ''}` : t('execution.lease_none')
+  // H2: the tooltip counts what it summed (`turns.length`, not summary.turn_count).
+  const costLine = cost ? t('execution.cost.summary', {
+    turns: cost.turns.length, usd: formatUsd(cost.totalUsd), out: formatTokens(cost.tokens.output),
+    api: formatDuration(cost.apiMs), wall: formatDuration(cost.durationMs),
+  }) : ''
 
   return (
     <div className="flex flex-col gap-1 px-4 py-2 border-b border-border-default text-xs text-text-muted">
@@ -60,7 +74,12 @@ export default function ExecutionHeader({ summary, costUsd, sse, isMine, onInter
         <span>{summary?.observers ?? 0} {t('execution.observers')}</span>
         <span data-testid="execution-lease">{leaseText}</span>
         {summary?.turn_count != null && <span>{summary.turn_count} {t('execution.turns')}</span>}
-        <span>${costUsd.toFixed(2)}</span>
+        <button type="button" data-testid="execution-cost" disabled={!cost}
+          aria-describedby={cost ? costTipId : undefined}
+          className="relative tabular-nums hover:underline disabled:no-underline disabled:cursor-default">
+          {cost ? formatUsd(cost.totalUsd, 2) : t('execution.cost.loading')}
+          {cost && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
+        </button>
         <div className="flex-1" />
         {onTakeBack && (
           <button type="button" data-testid="take-back" disabled={takeBackBusy} onClick={onTakeBack}

@@ -76,6 +76,17 @@ describe('HoverTooltip', () => {
     expect(screen.getByText('a11y').getAttribute('role')).toBe('tooltip')
   })
 
+  it('puts `id` on the tooltip element when given, and no id attribute otherwise', () => {
+    render(
+      <div className="relative group">
+        <HoverTooltip id="tip-1">with id</HoverTooltip>
+        <HoverTooltip>without id</HoverTooltip>
+      </div>
+    )
+    expect(screen.getByText('with id').id).toBe('tip-1')
+    expect(screen.getByText('without id').hasAttribute('id')).toBe(false)
+  })
+
   it('renders through document.body so overflow ancestors cannot clip it', () => {
     const { container } = render(
       <div className="overflow-x-auto">

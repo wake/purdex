@@ -1,0 +1,1479 @@
+{
+  "items": [
+    {
+      "seq": 1,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.delegated",
+      "payload": {
+        "account_id": "HOST",
+        "brief": "Write a 200-word paragraph about tmux. Do not use any tools.",
+        "cwd": "/Users/wake/Workspace/wake/nex-acceptance-scratch",
+        "effective_profile": "standard",
+        "mount_kind": "dev",
+        "principal_id": "pdx:mini-lab:278cbm",
+        "provider": "claude",
+        "requested_profile": ""
+      },
+      "created_at": 1789684215181
+    },
+    {
+      "seq": 8,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 6791,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.0299658,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 5776,
+          "cache_read_input_tokens": 11244,
+          "output_tokens": 364,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 5776,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 364,
+              "cache_read_input_tokens": 11244,
+              "cache_creation_input_tokens": 5776,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 5776
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-haiku-4-5-20251001": {
+            "inputTokens": 909,
+            "outputTokens": 12,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+            "costUSD": 0.000969,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-haiku-4-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          },
+          "claude-sonnet-5": {
+            "inputTokens": 2,
+            "outputTokens": 364,
+            "cacheReadInputTokens": 11244,
+            "cacheCreationInputTokens": 5776,
+            "webSearchRequests": 0,
+            "costUSD": 0.0289968,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 1,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "tmux, or \"terminal multiplexer,\" is a tool that lets users create, manage, and navigate multiple terminal sessions within a single window. It solves a fundamental problem for developers and system administrators: the need to run several programs, monitor logs, and juggle SSH connections without opening dozens of separate terminal windows. At its core, tmux organizes work into sessions, which contain windows, which in turn can be split into panes—each pane running its own independent shell. This hierarchy makes it easy to organize complex workflows, such as editing code in one pane while running tests in another and monitoring server output in a third. One of tmux's most valued features is session persistence: a session keeps running on the server even after you disconnect, so you can reattach later—whether from the same machine or a different one—and pick up exactly where you left off. This makes it indispensable for remote work over SSH, where network interruptions would otherwise kill long-running processes. tmux is highly configurable, supporting custom key bindings, status bars, and scriptable automation, and it integrates well with tools like vim and shell scripts, making it a staple in many command-line-centric workflows.",
+        "ttft_ms": 6315,
+        "type": "result",
+        "duration_ms": 6376,
+        "uuid": "d19ba7ef-9e83-4803-8072-c0d2ba3918b0",
+        "ttft_stream_ms": 1557,
+        "time_to_request_ms": 229,
+        "first_content_frame_ms": 1557,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684222194
+    },
+    {
+      "seq": 9,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GB2ZFDHM875Z331FV0RA6KYR"
+      },
+      "created_at": 1789684222710
+    },
+    {
+      "seq": 11,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Write another 200-word paragraph, this time about SSH. Do not use any tools.",
+        "turn_id": "06GB2ZS4EP5DM31300JW27QE5R"
+      },
+      "created_at": 1789684294773
+    },
+    {
+      "seq": 17,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 6143,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.00952,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 433,
+          "cache_read_input_tokens": 17020,
+          "output_tokens": 438,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 433,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 438,
+              "cache_read_input_tokens": 17020,
+              "cache_creation_input_tokens": 433,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 433
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 2,
+            "outputTokens": 438,
+            "cacheReadInputTokens": 17020,
+            "cacheCreationInputTokens": 433,
+            "webSearchRequests": 0,
+            "costUSD": 0.00952,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 1,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "SSH, or \"Secure Shell,\" is a cryptographic network protocol that enables secure remote access to computers over an untrusted network. It was designed as a direct replacement for older, insecure protocols like Telnet and rsh, which transmitted data—including passwords—in plain text, making them vulnerable to eavesdropping. SSH addresses this by encrypting the entire communication session, ensuring confidentiality and integrity between the client and server. Beyond simple remote login, SSH supports a range of capabilities: executing commands on remote machines, securely transferring files via SCP or SFTP, and even tunneling other network traffic through encrypted port forwarding. Authentication can be handled through passwords, but the more secure and widely recommended approach uses public-key cryptography, where a private key stays on the client machine and a corresponding public key is placed on the server, eliminating the need to transmit secrets over the network. SSH also verifies server identity through host keys, protecting against man-in-the-middle attacks. Its ubiquity in modern computing is hard to overstate—it underpins remote server administration, git operations over SSH URLs, cloud infrastructure management, and automated deployment pipelines. Configuration files, agent forwarding, and multiplexed connections further extend its flexibility, making SSH an essential tool for anyone working with remote systems.",
+        "ttft_ms": 6402,
+        "type": "result",
+        "duration_ms": 6457,
+        "uuid": "2c74c13a-1b21-4986-8773-07f7b9dfb7f2",
+        "ttft_stream_ms": 1586,
+        "time_to_request_ms": 314,
+        "first_content_frame_ms": 1586,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684301476
+    },
+    {
+      "seq": 18,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GB2ZS4EP5DM31300JW27QE5R"
+      },
+      "created_at": 1789684301993
+    },
+    {
+      "seq": 19,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Run exactly this bash command: sleep 8 && echo ok — then reply with the single word done",
+        "turn_id": "06GB2ZXTBCRW5A8KPJW0J1ETRG"
+      },
+      "created_at": 1789684333148
+    },
+    {
+      "seq": 30,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 4066,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.0106372,
+        "usage": {
+          "input_tokens": 4,
+          "cache_creation_input_tokens": 649,
+          "cache_read_input_tokens": 35416,
+          "output_tokens": 95,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 649,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 3,
+              "cache_read_input_tokens": 17963,
+              "cache_creation_input_tokens": 139,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 139
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 4,
+            "outputTokens": 95,
+            "cacheReadInputTokens": 35416,
+            "cacheCreationInputTokens": 649,
+            "webSearchRequests": 0,
+            "costUSD": 0.0106372,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 2,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "done",
+        "ttft_ms": 2582,
+        "type": "result",
+        "duration_ms": 13229,
+        "uuid": "8f911496-c9a2-4de8-a460-6a96d5fab071",
+        "ttft_stream_ms": 1667,
+        "time_to_request_ms": 399,
+        "first_content_frame_ms": 1668,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684346634
+    },
+    {
+      "seq": 31,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GB2ZXTBCRW5A8KPJW0J1ETRG"
+      },
+      "created_at": 1789684347151
+    },
+    {
+      "seq": 33,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Run exactly this bash command: sleep 6 && echo ok2 — then reply done",
+        "turn_id": "06GB3073G1SVNB9YSD7XPDN46M"
+      },
+      "created_at": 1789684409216
+    },
+    {
+      "seq": 44,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 3804,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.0090934,
+        "usage": {
+          "input_tokens": 4,
+          "cache_creation_input_tokens": 215,
+          "cache_read_input_tokens": 36277,
+          "output_tokens": 97,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 215,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 3,
+              "cache_read_input_tokens": 18175,
+              "cache_creation_input_tokens": 142,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 142
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 4,
+            "outputTokens": 97,
+            "cacheReadInputTokens": 36277,
+            "cacheCreationInputTokens": 215,
+            "webSearchRequests": 0,
+            "costUSD": 0.0090934,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 2,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "done",
+        "ttft_ms": 2290,
+        "type": "result",
+        "duration_ms": 10424,
+        "uuid": "2ceb9d1e-e422-4dbc-8c94-1a021a1e2b3a",
+        "ttft_stream_ms": 1364,
+        "time_to_request_ms": 179,
+        "first_content_frame_ms": 1364,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684419898
+    },
+    {
+      "seq": 45,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GB3073G1SVNB9YSD7XPDN46M"
+      },
+      "created_at": 1789684420412
+    },
+    {
+      "seq": 46,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Write 300 words about tmux. Do not use any tools.",
+        "turn_id": "06GB30AT67ADEDMR3BJSNYFSHM"
+      },
+      "created_at": 1789684439601
+    },
+    {
+      "seq": 53,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 9437,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.010503399999999998,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 64,
+          "cache_read_input_tokens": 18317,
+          "output_tokens": 658,
+          "output_tokens_details": {
+            "thinking_tokens": 22
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 64,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 658,
+              "cache_read_input_tokens": 18317,
+              "cache_creation_input_tokens": 64,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 64
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 2,
+            "outputTokens": 658,
+            "cacheReadInputTokens": 18317,
+            "cacheCreationInputTokens": 64,
+            "webSearchRequests": 0,
+            "costUSD": 0.010503399999999998,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 22,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 1,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "tmux, short for \"terminal multiplexer,\" is a powerful command-line tool that allows users to run and manage multiple terminal sessions from a single window, dramatically improving productivity for developers, system administrators, and anyone who spends significant time in a shell environment. At its core, tmux introduces a hierarchical structure of sessions, windows, and panes: a session can contain multiple windows (similar to tabs), and each window can be split into several panes, each running an independent shell process. This structure allows users to organize complex workflows visually and logically—for instance, editing source code in one pane, running a build or test suite in another, and tailing application logs in a third, all visible simultaneously without switching between separate terminal applications.\n\nOne of tmux's most transformative features is session persistence. Unlike a standard terminal window, a tmux session continues running on the host machine even after the user disconnects, whether due to a closed SSH connection, network interruption, or simply closing a laptop lid. Users can detach from a session and later reattach to it—potentially from an entirely different machine—and find all their programs, processes, and pane arrangements exactly as they left them. This makes tmux especially valuable for remote server administration, long-running scripts, and any workflow where connection stability cannot be guaranteed.\n\ntmux is also highly customizable. Its default keybindings can be remapped, its status bar can display custom information like system load or git branch, and its behavior can be extended through configuration files and plugins. Many users integrate tmux tightly with editors like vim or neovim, using matching navigation keybindings to move seamlessly between editor splits and terminal panes. Additionally, tmux supports scripting and automation, allowing entire complex session layouts to be created programmatically at startup. Combined with its lightweight resource footprint and broad availability across Unix-like systems, tmux has become a foundational tool in many command-line-centric development and operations workflows, prized for the control and continuity it brings to terminal-based work.",
+        "ttft_ms": 2064,
+        "type": "result",
+        "duration_ms": 9679,
+        "uuid": "1dd8d664-a32f-4d63-802b-2053e4714fc8",
+        "ttft_stream_ms": 1732,
+        "time_to_request_ms": 244,
+        "first_content_frame_ms": 1732,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684449532
+    },
+    {
+      "seq": 54,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GB30AT67ADEDMR3BJSNYFSHM"
+      },
+      "created_at": 1789684450052
+    },
+    {
+      "seq": 55,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Write 300 words about tmux. Do not use any tools.",
+        "turn_id": "06GB30F5FH147QF9JKWMH2Y20W"
+      },
+      "created_at": 1789684475260
+    },
+    {
+      "seq": 64,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 0,
+        "stop_reason": null,
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0,
+        "usage": {
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 0,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "modelUsage": {},
+        "permission_denials": [],
+        "terminal_reason": "aborted_streaming",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": true,
+        "num_turns": 2,
+        "subtype": "error_during_execution",
+        "errors": [
+          "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"
+        ],
+        "type": "result",
+        "duration_ms": 6130,
+        "uuid": "9d8c7b5c-5e6f-4c15-93d3-06c076276980",
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684481644
+    },
+    {
+      "seq": 65,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "detail": "exit status 1",
+        "reason": "interrupted",
+        "state": "idle",
+        "turn_id": "06GB30F5FH147QF9JKWMH2Y20W"
+      },
+      "created_at": 1789684482160
+    },
+    {
+      "seq": 66,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.interrupted",
+      "payload": {
+        "source": "user",
+        "turn_id": "06GB30F5FH147QF9JKWMH2Y20W"
+      },
+      "created_at": 1789684482160
+    },
+    {
+      "seq": 67,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Run exactly this bash command: sleep 25 && echo ok3 — then reply done",
+        "turn_id": "06GB30KC9AJ7DAMXPDP1TFKRGG"
+      },
+      "created_at": 1789684509771
+    },
+    {
+      "seq": 91,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 11041,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.0294018,
+        "usage": {
+          "input_tokens": 6,
+          "cache_creation_input_tokens": 1842,
+          "cache_read_input_tokens": 59309,
+          "output_tokens": 1016,
+          "output_tokens_details": {
+            "thinking_tokens": 681
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 1842,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 20,
+              "cache_read_input_tokens": 20599,
+              "cache_creation_input_tokens": 342,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 342
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 6,
+            "outputTokens": 1016,
+            "cacheReadInputTokens": 59309,
+            "cacheCreationInputTokens": 1842,
+            "webSearchRequests": 0,
+            "costUSD": 0.0294018,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 681,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 3,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "I'll wait for it to finish in the background and let you know.",
+        "ttft_ms": 7225,
+        "type": "result",
+        "duration_ms": 11656,
+        "uuid": "402c90d6-16ca-4585-b74d-e8c145aae747",
+        "ttft_stream_ms": 928,
+        "time_to_request_ms": 212,
+        "first_content_frame_ms": 928,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684521685
+    },
+    {
+      "seq": 95,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GB30KC9AJ7DAMXPDP1TFKRGG"
+      },
+      "created_at": 1789684527225
+    },
+    {
+      "seq": 96,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Run exactly this bash command in the foreground and wait for it to finish: python3 -c 'import time; time.sleep(20); print(1)' — then reply done",
+        "turn_id": "06GB30SN5WECG5GHSEDY78GFH4"
+      },
+      "created_at": 1789684561199
+    },
+    {
+      "seq": 100,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "is_error": false,
+        "duration_api_ms": 0,
+        "num_turns": 0,
+        "stop_reason": null,
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0,
+        "usage": {
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 0,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "modelUsage": {},
+        "permission_denials": [],
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "origin": {
+          "kind": "task-notification"
+        },
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "subtype": "success",
+        "result": "",
+        "type": "result",
+        "duration_ms": 10,
+        "uuid": "1e5d3276-7996-4118-b488-c93d81665e47",
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684561467
+    },
+    {
+      "seq": 114,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 5307,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.0207592,
+        "usage": {
+          "input_tokens": 6,
+          "cache_creation_input_tokens": 971,
+          "cache_read_input_tokens": 64066,
+          "output_tokens": 405,
+          "output_tokens_details": {
+            "thinking_tokens": 46
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 971,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 27,
+              "cache_read_input_tokens": 21697,
+              "cache_creation_input_tokens": 215,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 215
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 6,
+            "outputTokens": 405,
+            "cacheReadInputTokens": 64066,
+            "cacheCreationInputTokens": 971,
+            "webSearchRequests": 0,
+            "costUSD": 0.0207592,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 46,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [
+          {
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_01GxhU7MjJ7c1Y7jL9pBa6hE",
+            "tool_input": {
+              "command": "python3 -c 'import time; time.sleep(20); print(1)'",
+              "description": "Run python sleep 20 seconds then print 1"
+            }
+          }
+        ],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 3,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "This command requires your approval to run — please approve it if you'd like me to proceed.",
+        "ttft_ms": 1784,
+        "type": "result",
+        "duration_ms": 6086,
+        "uuid": "7b17240b-9832-4c70-be2e-c03ec9ef6bd6",
+        "ttft_stream_ms": 1167,
+        "time_to_request_ms": 376,
+        "first_content_frame_ms": 1167,
+        "queued_turn_count": 0,
+        "result_index": 1
+      },
+      "created_at": 1789684567555
+    },
+    {
+      "seq": 115,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GB30SN5WECG5GHSEDY78GFH4"
+      },
+      "created_at": 1789684568070
+    },
+    {
+      "seq": 116,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-x1wljilc",
+        "text": "Run exactly this bash command in the foreground: sleep 14 && echo ok5 — then reply done",
+        "turn_id": "06GB30XXS2RRBXYTPKFVMQPC5C"
+      },
+      "created_at": 1789684596168
+    },
+    {
+      "seq": 130,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 1408,
+        "stop_reason": "tool_use",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.005734400000000001,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 102,
+          "cache_read_input_tokens": 21912,
+          "output_tokens": 94,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 102,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 94,
+              "cache_read_input_tokens": 21912,
+              "cache_creation_input_tokens": 102,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 102
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 2,
+            "outputTokens": 94,
+            "cacheReadInputTokens": 21912,
+            "cacheCreationInputTokens": 102,
+            "webSearchRequests": 0,
+            "costUSD": 0.005734400000000001,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "aborted_tools",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": true,
+        "num_turns": 3,
+        "subtype": "error_during_execution",
+        "errors": [
+          "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"
+        ],
+        "type": "result",
+        "duration_ms": 5654,
+        "uuid": "4c32f640-5ae6-47a8-93de-702eb8690402",
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789684602081
+    },
+    {
+      "seq": 131,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "detail": "exit status 1",
+        "reason": "interrupted",
+        "state": "idle",
+        "turn_id": "06GB30XXS2RRBXYTPKFVMQPC5C"
+      },
+      "created_at": 1789684602612
+    },
+    {
+      "seq": 132,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.interrupted",
+      "payload": {
+        "source": "daemon_shutdown",
+        "turn_id": "06GB30XXS2RRBXYTPKFVMQPC5C"
+      },
+      "created_at": 1789684602612
+    },
+    {
+      "seq": 939,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-frblvyv7",
+        "text": "Read /Users/wake/Workspace/tmp-pb3-fixture/hello.txt with the Read tool, then run `sleep 6 && echo ok` with Bash, then reply with the single word: done",
+        "turn_id": "06GBCM8EQNJCG829BZW4VNC9N0"
+      },
+      "created_at": 1789765160638
+    },
+    {
+      "seq": 958,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 7414,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.0603212,
+        "usage": {
+          "input_tokens": 4,
+          "cache_creation_input_tokens": 11897,
+          "cache_read_input_tokens": 33726,
+          "output_tokens": 598,
+          "output_tokens_details": {
+            "thinking_tokens": 433
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 11897,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 41,
+              "cache_read_input_tokens": 22482,
+              "cache_creation_input_tokens": 659,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 659
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 4,
+            "outputTokens": 598,
+            "cacheReadInputTokens": 33726,
+            "cacheCreationInputTokens": 11897,
+            "webSearchRequests": 0,
+            "costUSD": 0.0603212,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 433,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [
+          {
+            "tool_name": "Read",
+            "tool_use_id": "toolu_017zZTTryxx2KrhqVFYAUzb1",
+            "tool_input": {
+              "file_path": "/Users/wake/Workspace/tmp-pb3-fixture/hello.txt"
+            }
+          }
+        ],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 2,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "I don't have permission to read that file — please grant access if you'd like me to proceed, or let me know how you'd like to continue.",
+        "ttft_ms": 6050,
+        "type": "result",
+        "duration_ms": 7897,
+        "uuid": "67d874d0-7e81-4e8e-9f28-789a0c5403cf",
+        "ttft_stream_ms": 1528,
+        "time_to_request_ms": 479,
+        "first_content_frame_ms": 1529,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789765168826
+    },
+    {
+      "seq": 959,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GBCM8EQNJCG829BZW4VNC9N0"
+      },
+      "created_at": 1789765169356
+    },
+    {
+      "seq": 961,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.message_accepted",
+      "payload": {
+        "principal_id": "pdx:mini-lab:278cbm/t-frblvyv7",
+        "text": "Run exactly this bash command in the foreground: sleep 6 && echo ok-pb3 — then reply done",
+        "turn_id": "06GBCMKXX30S74JNNKAZ3RMKWG"
+      },
+      "created_at": 1789765254632
+    },
+    {
+      "seq": 974,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "result",
+      "payload": {
+        "duration_api_ms": 9621,
+        "stop_reason": "end_turn",
+        "session_id": "c191a5a0-da2a-4888-afac-d85f753b5090",
+        "total_cost_usd": 0.0717194,
+        "usage": {
+          "input_tokens": 4,
+          "cache_creation_input_tokens": 270,
+          "cache_read_input_tokens": 46401,
+          "output_tokens": 103,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 270,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 3,
+              "cache_read_input_tokens": 23260,
+              "cache_creation_input_tokens": 151,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 151
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 8,
+            "outputTokens": 701,
+            "thinkingTokens": 433,
+            "cacheReadInputTokens": 80127,
+            "cacheCreationInputTokens": 12167,
+            "webSearchRequests": 0,
+            "costUSD": 0.0717194,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 2,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "done",
+        "ttft_ms": 1831,
+        "type": "result",
+        "duration_ms": 9488,
+        "uuid": "2b74897e-e365-4e8d-83aa-46ce6bf10452",
+        "ttft_stream_ms": 1261,
+        "time_to_request_ms": 438,
+        "first_content_frame_ms": 1262,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "created_at": 1789765264399
+    },
+    {
+      "seq": 975,
+      "execution_id": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM",
+      "kind": "execution.terminal",
+      "payload": {
+        "reason": "final_response",
+        "state": "idle",
+        "turn_id": "06GBCMKXX30S74JNNKAZ3RMKWG"
+      },
+      "created_at": 1789765264915
+    }
+  ],
+  "next_cursor": 0,
+  "note": "06GB2ZFDHNCW2ZWQ33EG9D1ZXM history filtered to lifecycle + result kinds (payloads verbatim); 12 turns incl. two-model, error_during_execution and zero-cost results"
+}
