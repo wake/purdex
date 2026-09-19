@@ -89,13 +89,17 @@ All measurements taken 2026-09-20 against `a4f3e957` and the three live daemons.
   stores, debounces 5 s trailing, hashes, and uploads only when the hash changed, targeting
   `selectDevHostId` and requiring a `connected` runtime status. This is the shape of the Profile
   collector; it gains sections, compare-and-set and an inbound direction.
-- **The hashing primitives exist.** `spa/src/lib/device-state/payload.ts:77 structuralKey()` is a
-  recursive key-sorted JSON serialisation with `capturedAt` stripped; `:88 hashPayload()` is
-  SHA-256 over it. Both move to `lib/profile/` unchanged in behaviour.
-- **The applier exists.** `spa/src/lib/device-state/restore.ts:102 runDeviceStateRestore()` already
+- **The hashing primitives exist.** `spa/src/lib/device-state/payload.ts:83 structuralKey()` is a
+  recursive key-sorted JSON serialisation with `capturedAt` stripped; `:89 hashPayload()` is
+  SHA-256 over it (async — `crypto.subtle`). Both are typed to `WorkspaceSnapshot`, so
+  `lib/profile/hash.ts` is a generic copy (no `capturedAt` rule — sections have none); the
+  originals are deleted with their module in P4b. *(corrected in P2a, §9.3)*
+- **The applier exists.** `spa/src/lib/device-state/restore.ts:101 runDeviceStateRestore()` already
   does the hard parts of writing a foreign document into the live stores: an operation lock, a
   well-formedness guard, `markMissingHosts`, `reattachByName`, per-tab `remapLayoutSessions`, a
-  `-prev` backup, `replaceTabSnapshot`, `syncSessionStore`. Profile apply reuses this pipeline.
+  `-prev` backup, `replaceTabSnapshot`, `syncSessionStore`. Profile apply reuses its **pure helpers and the
+  lock**; its commit step (`replaceTabSnapshot`) replaces the whole world and cannot take a single
+  `tabs.<ws>` section, so the applier is new per-section functions (§4.7). *(corrected in P2a)*
 - **`clientId` currently comes from the module being deleted.** `uploader.ts:117` reads
   `useSyncStore.getState().getClientId()`. Identity must move before Sync can go (§6, P4a).
 - **The SPA does not know its own version.** `__APP_VERSION__` is defined only in
@@ -109,11 +113,11 @@ Persisted stores, their keys, and where each field lands. `L` = device-local (ne
 
 | Store | key | Into section | Device-local part |
 |---|---|---|---|
-| `features/workspace/store.ts` | `purdex-workspaces` | `workspaces` (id, name, icon, iconWeight, moduleConfig) and, per workspace, its tab order | `activeWorkspaceId` |
-| `stores/useTabStore.ts` | `purdex-tabs` | `tabs.<wsId>` (the `Tab` objects) | `activeTabId`, `visitHistory` |
-| `stores/useHostStore.ts` | `purdex-hosts` | `hosts` (`hosts`, `hostOrder`, incl. `token`) | `activeHostId`, **`devHostId`** |
+| `features/workspace/store.ts` | `purdex-workspaces` | `workspaces` (id, name, icon, iconWeight, moduleConfig) and, per workspace, its tab order. **The store holds a `Workspace[]`; order is array order** — the `{order, Record}` of §4.2 is a conversion | `activeWorkspaceId`, each `Workspace.activeTabId` |
+| `stores/useTabStore.ts` | `purdex-tabs` (v3) | `tabs.<wsId>` (the `Tab` objects) | `activeTabId`; `visitHistory` (memory only, never persisted); `tabOrder` (derived, §4.3) |
+| `stores/useHostStore.ts` | `purdex-hosts` | `hosts` (`hosts`, `hostOrder`; every `HostConfig` field — `id name ip port token order color colors icon iconWeight`) | `activeHostId`, **`devHostId`**, `runtime` |
 | `stores/useLayoutStore.ts` | `purdex-layout` | `settings` — **only `tabPosition`** | regions (views, widths, mode, activeViewId), `activityBarWidth`, `activityBarWideSize`, `workspaceExpanded` |
-| `stores/useUISettingsStore.ts` | `purdex-ui-settings` (v4) | `settings` | — |
+| `stores/useUISettingsStore.ts` | `purdex-ui-settings` (v4) | `settings` | `terminalSettingsVersion` (a reconnect bump counter, not a preference) |
 | `stores/useEditorSettingsStore.ts` | `purdex-editor-settings` | `settings` | — |
 | `stores/useThemeStore.ts` | `purdex-themes` | `settings` | — |
 | `stores/useI18nStore.ts` | `purdex-i18n` | `settings` | — |
@@ -121,7 +125,7 @@ Persisted stores, their keys, and where each field lands. `L` = device-local (ne
 | `stores/useModuleEnabledStore.ts` | `purdex-module-enabled` | `settings` | — |
 | `stores/useWorkspaceSettingsStore.ts` | `purdex-workspace-settings` | `settings` | — |
 | `stores/useHostSettingsStore.ts` | `purdex-host-settings` | `settings` | — |
-| `stores/useNewTabLayoutStore.ts` | `purdex-newtab-layout` | `settings` | — (see §8, naming) |
+| `stores/useNewTabLayoutStore.ts` | `purdex-newtab-layout` | `settings` — `profiles` only | `activeEditingProfile` (editor UI state), `knownIds` (derived) (see §7, naming) |
 
 Not in a profile at all: `useSessionStore`, `useHistoryStore`, `useBrowserHistoryStore`,
 `useRecentFilesStore`, `usePlaceholderFilesStore`, `useHeadlessLauncherMemoryStore`,
@@ -144,7 +148,7 @@ rule costs nothing to honour.
   capturedAt}`. It is part of tab structure and therefore part of a profile — **this is what makes
   rebuild work identically for a master and a slave** (decision 13).
 - **Two orderings exist today.** `useTabStore.tabOrder` is a global order; `Workspace.tabs` is the
-  per-workspace order, and the comment at `useTabStore.ts:440-449` says the TabBar renders from
+  per-workspace order, and the comment at `useTabStore.ts:441-450` says the TabBar renders from
   `workspace.tabs` and that a mismatch "silently regresses the clustering UX". Sectioning by
   workspace makes `workspace.tabs` the only order that is stored; `tabOrder` becomes derived.
 
@@ -243,12 +247,15 @@ workspaces never touch the same section, so they never conflict.
 ```ts
 // lib/profile/projections.ts
 export const PROJECTIONS = {
-  hosts:      ['hosts.*.id', 'hosts.*.name', 'hosts.*.ip', 'hosts.*.port', 'hosts.*.token', 'hostOrder'],
+  hosts:      ['hosts.*.id', 'hosts.*.name', 'hosts.*.ip', 'hosts.*.port', 'hosts.*.token', 'hostOrder',
+               'hosts.*.order', 'hosts.*.color', 'hosts.*.colors', 'hosts.*.icon', 'hosts.*.iconWeight'],
   workspaces: ['order', 'workspaces.*.name', 'workspaces.*.icon', 'workspaces.*.iconWeight', 'workspaces.*.moduleConfig'],
-  tabs:       ['order', 'tabs.*.id', 'tabs.*.pinned', 'tabs.*.locked', 'tabs.*.createdAt', 'tabs.*.layout'],
-  settings:   ['purdex-ui-settings', 'purdex-editor-settings', 'purdex-themes', 'purdex-i18n',
-               'purdex-notification-settings', 'purdex-module-enabled', 'purdex-workspace-settings',
-               'purdex-host-settings', 'purdex-newtab-layout',
+  tabs:       ['order', 'tabs.*.id', 'tabs.*.pinned', 'tabs.*.locked', 'tabs.*.createdAt', 'tabs.*.layout',
+               '!tabs.*.layout..sizes'],       // exclusion: split ratios at any depth (decision 8)
+  settings:   [/* '<storeKey>.<field>' — every synced field listed one by one, per store; no
+                  whole-store entries. Three stores have no `partialize`, and three persisted
+                  fields are not preferences (`terminalSettingsVersion`, `activeEditingProfile`,
+                  `knownIds`); the full list is in the P2a plan and in projections.ts */
                'purdex-layout.tabPosition'],   // ← the only field taken from useLayoutStore
 } as const
 ```
@@ -456,6 +463,12 @@ operation lock, validates well-formedness, then per section:
 Both directions are pure functions over `(local, incoming)` plus one commit step, so the whole of
 §4.7 is testable without a daemon.
 
+*Measured in P2a:* split node ids are `generateId()` and travel inside `layout`, so both sides share
+them after one apply — that is what makes the id match work; `sizes` are percentages summing to 100
+by convention, and a new split is distributed evenly. `useLayoutStore.healLayoutInvariant` widens
+the device-local `activityBarWidth` when `tabPosition` becomes `'left'`; that is a layout invariant
+of the store, not a sync leak, and is accepted.
+
 ### 4.8 Daemon: `internal/module/profiles`
 
 Modelled on `internal/module/hostconfig` (§3.6). `profiles.db`:
@@ -616,7 +629,7 @@ On mlab (worktree dev server :5175) and air-2026, with mlab as dev host:
   64-deep buffer fills (§3.5); reconcile-on-connect is what makes that survivable, and step 3 of §6
   measures the happy path rather than asserting it.
 - **`profile` is already a word in this codebase.** `useNewTabLayoutStore` persists `{profiles,
-  knownIds, activeEditingProfile}` for the new-tab layout editor (417 lines, and already on the
+  knownIds, activeEditingProfile}` for the new-tab layout editor (308 lines, and already on the
   inventory page's "decide" list). With PRODUCT.md §3 being a strict vocabulary, that concept must
   be renamed or removed; P3 renames it to *new-tab layout preset* if it still exists.
 - **Deleting ~9,000 lines of Sync** touches the module registry and the settings IA. P4a is a pure
@@ -675,3 +688,14 @@ the first statement is a write). One evidenced spec drift:
 
 Stop condition met: R1 has no critical/P1, and the critic raised no evidenced objection to a
 finding — its one addition is fixed.
+
+### 9.3 P2a — spec corrected against measurement, 2026-09-20
+
+Before the P2a plan was written the SPA side was measured file by file. Corrections applied above:
+line references in §3.2–§3.4; `workspaces` is an array; `visitHistory` is never persisted;
+**`HostConfig` has five persisted fields the `hosts` projection omitted** (`order` — required —
+`color`, `colors`, `icon`, `iconWeight`; decision 7 says the section travels whole); the `settings`
+projection lists fields per store because three stores have no `partialize` and three persisted
+fields are not preferences; the applier cannot reuse `replaceTabSnapshot` (whole-world commit);
+`structuralKey`/`hashPayload` are copied generically rather than moved; `useNewTabLayoutStore` is
+308 lines, not 417.
