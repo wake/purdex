@@ -455,9 +455,28 @@ function isHostsPayload(p: Rec): boolean {
   })
 }
 
+/**
+ * A KNOWN store (one `PROJECTIONS.settings` covers) may carry only the fields
+ * listed for it, and at least one of them:
+ *   - an unlisted field (`terminalSettingsVersion`, …) is never projected by the
+ *     builder, so the payload could not hash back to itself — and applySettings,
+ *     seeing the store present, would read every listed field it lacks as
+ *     "cleared over there" and wipe the user's settings;
+ *   - an empty store is something the builder never emits (it omits a store that
+ *     contributes no listed field), and it would clear ALL of that store's fields.
+ * The allowlist is `listedSettingsFields()` — read off PROJECTIONS, no second copy.
+ * An unknown storage key is a newer client's store: passed whole, and ignored by
+ * applySettings.
+ */
 function isSettingsPayload(p: Rec): boolean {
-  // An unknown storage key is a newer client's store: allowed, and ignored by applySettings.
-  return definedKeys(p).every((key) => isPlainObject(p[key]))
+  const listed = listedSettingsFields()
+  return definedKeys(p).every((key) => {
+    const store = p[key]
+    if (!isPlainObject(store)) return false
+    const fields = listed.get(key)
+    if (fields === undefined) return true
+    return definedKeys(store).length > 0 && hasOnlyKeys(store, fields)
+  })
 }
 
 /**

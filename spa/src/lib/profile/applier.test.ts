@@ -11,6 +11,7 @@ import {
   restoreSizes,
 } from './applier'
 import { hashSection } from './hash'
+import { PROJECTIONS } from './projections'
 import {
   buildHostsSection,
   buildSettingsSection,
@@ -515,6 +516,50 @@ describe('applySettings', () => {
     expect(await hashSection(buildSettingsSection(fromEmpty))).toBe(await hashSection(p))
   })
 
+  it('property: every settings payload the guard accepts converges — hash(build(merge(local, patches))) === hash(p)', async () => {
+    const built: SettingsPayload[] = [
+      buildSettingsSection(settingsLocal()),
+      buildSettingsSection({ ...settingsLocal(), 'purdex-ui-settings': { terminalRenderer: undefined, keepAliveCount: 0, linkDetectTilde: false } }),
+      buildSettingsSection({ ...settingsLocal(), 'purdex-themes': { activeThemeId: 'light' }, 'purdex-layout': { tabPosition: 'left', regions: 'theirs' } }),
+    ]
+    const handWritten = [
+      { ...settingsIncoming(), 'purdex-ui-settings': { keepAliveCount: 9 } },
+      { ...settingsIncoming(), 'purdex-ui-settings': { hostBadgeSidebarBox: { w: 1 } }, 'purdex-themes': { customThemes: {} } },
+      { ...settingsIncoming(), 'purdex-from-the-future': { terminalSettingsVersion: 1 } },
+    ] as SettingsPayload[]
+    // Every local holds the same stores as the payloads (a store the payload LACKS is "not sent", left alone by design).
+    const locals: SettingsBuildInput[] = [
+      settingsLocal(),
+      // values for listed fields the payloads do not carry: they must be cleared, not kept
+      {
+        ...settingsLocal(),
+        'purdex-ui-settings': { terminalRenderer: 'webgl', keepAliveCount: 3, keepAlivePinned: true, linkDetectTilde: true, hostBadgeSidebarInset: 4, terminalSettingsVersion: S },
+        'purdex-themes': { activeThemeId: 'solar', customThemes: { z: { name: 'Z' } } },
+      },
+      // stores present but holding no listed field at all
+      { 'purdex-ui-settings': { terminalSettingsVersion: S }, 'purdex-themes': {}, 'purdex-newtab-layout': { knownIds: [S] }, 'purdex-layout': { regions: S } },
+    ]
+    for (const p of [...built, ...handWritten]) {
+      expect(isWellFormedSection('settings', p)).toBe(true)
+      const frozen = deepFreeze(copy(p))
+      for (const local of locals) {
+        const merged = mergePatches(local, applySettings(deepFreeze(copy(local)), frozen).patches)
+        // an unknown store is not something this client builds: compare the known part
+        const { 'purdex-from-the-future': _future, ...knownPart } = frozen as Record<string, unknown>
+        void _future
+        expect(await hashSection(buildSettingsSection(merged))).toBe(await hashSection(knownPart as SettingsPayload))
+      }
+    }
+  })
+
+  it('the payload the guard now refuses is exactly one that could NOT converge', async () => {
+    const bad = { 'purdex-ui-settings': { terminalSettingsVersion: 1 } } as SettingsPayload
+    expect(isWellFormedSection('settings', bad)).toBe(false)
+    const local = settingsLocal()
+    const merged = mergePatches(local, applySettings(local, bad).patches)
+    expect(await hashSection(buildSettingsSection(merged))).not.toBe(await hashSection(bad))
+  })
+
   it('device-local fields of the local stores are still there after the merge', () => {
     const merged = mergePatches(settingsLocal(), applySettings(settingsLocal(), settingsIncoming()).patches) as Record<string, Record<string, unknown>>
     expect(merged['purdex-ui-settings'].terminalSettingsVersion).toBe(S)
@@ -727,6 +772,53 @@ describe('isWellFormedSection', () => {
       expect(isWellFormedSection('settings', { 'purdex-ui-settings': 'x' })).toBe(false)
       expect(isWellFormedSection('settings', JSON.parse('{"purdex-themes":{"customThemes":{"__proto__":{"x":1}}}}'))).toBe(false)
       expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: NaN } })).toBe(false)
+    })
+
+    it('a known store may carry only the fields PROJECTIONS lists for it (attack finding: terminalSettingsVersion)', () => {
+      // The reproduction: the guard used to accept this, applySettings then read every
+      // listed field as "cleared over there" and wiped the user's settings.
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': { terminalSettingsVersion: 1 } })).toBe(false)
+      expect(isWellFormedSection('settings', JSON.parse('{"purdex-ui-settings":{"terminalSettingsVersion":1}}'))).toBe(false)
+      // a listed field next to it does not redeem the payload
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3, terminalSettingsVersion: 1 } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-layout': { tabPosition: 'left', regions: {} } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-newtab-layout': { profiles: {}, knownIds: [] } })).toBe(false)
+      // a field listed for ANOTHER store is not listed for this one
+      expect(isWellFormedSection('settings', { 'purdex-layout': { keepAliveCount: 3 } })).toBe(false)
+      // one bad store refuses the whole payload
+      expect(isWellFormedSection('settings', { 'purdex-themes': { activeThemeId: 'dark' }, 'purdex-layout': { regions: {} } })).toBe(false)
+      // listed fields only: fine
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3 }, 'purdex-layout': { tabPosition: 'left' } })).toBe(true)
+    })
+
+    it('the allowlist is PROJECTIONS.settings itself: every listed field passes on its own, for every known store', () => {
+      const byStore = new Map<string, string[]>()
+      for (const path of PROJECTIONS.settings) {
+        const dot = path.indexOf('.')
+        byStore.set(path.slice(0, dot), [...(byStore.get(path.slice(0, dot)) ?? []), path.slice(dot + 1)])
+      }
+      expect(byStore.size).toBe(10)
+      for (const [store, fields] of byStore) {
+        for (const field of fields) expect(isWellFormedSection('settings', { [store]: { [field]: 1 } })).toBe(true)
+        expect(isWellFormedSection('settings', { [store]: { [`${fields[0]}X`]: 1 } })).toBe(false)
+      }
+    })
+
+    it('a known store that is empty is refused — the builder omits such a store, and it would clear every listed field', () => {
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': {} })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: undefined } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-themes': { activeThemeId: 'dark' }, 'purdex-layout': {} })).toBe(false)
+    })
+
+    it('an unknown store passes whole, whatever it carries, and changes nothing applySettings does', () => {
+      const known = { 'purdex-ui-settings': { terminalRenderer: 'dom', keepAliveCount: 3 } }
+      const future = { 'purdex-from-the-future': { terminalSettingsVersion: 1, keepAliveCount: 99, nested: { a: [1] } }, 'purdex-empty-future': {} }
+      const incoming = { ...known, ...future } as SettingsPayload
+      expect(isWellFormedSection('settings', incoming)).toBe(true)
+      expect(isWellFormedSection('settings', future)).toBe(true)
+      const local = deepFreeze(settingsLocal())
+      expect(applySettings(local, deepFreeze(incoming)).patches).toEqual(applySettings(local, known).patches)
+      expect(applySettings(local, deepFreeze(future as SettingsPayload)).patches).toEqual({})
     })
   })
 })
