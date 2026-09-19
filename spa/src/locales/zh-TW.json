@@ -791,6 +791,7 @@
   "execution.cost.models": "模型",
   "execution.cost.models_note": "{{n}} 輪沒有分模型拆帳",
   "execution.cost.turn": "#",
+  "execution.cost.quota": "主機額度 — {{account}}",
   "execution.cost.turn_error": "錯誤",
   "execution.interrupt": "中斷",
   "execution.terminate": "終止",

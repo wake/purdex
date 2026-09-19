@@ -5,18 +5,20 @@
 // `formatUsd` / `formatTokens` / `formatDuration` the header uses, so the
 // panel can never disagree with the anchor or its tooltip. The panel is
 // props-driven: a `result` frame landing while it is open re-renders it with
-// the new summary (P6) — nothing here is cached. The quota row (P5) is the
-// next task's; `hostId` is accepted now so the prop contract is final.
-import { useEffect, useRef, type RefObject } from 'react'
+// the new summary (P6) — nothing here is cached, except the host quota row
+// (P5), which is fetched once per `hostId` on open and never on a frame.
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { FloatingPanel } from '../FloatingPanel'
 import type { CostSummary, TurnCost } from '../../lib/nex/cost-summary'
+import { fetchNexHost } from '../../lib/nex/nex-api'
+import type { NexHostInfo } from '../../lib/nex/types'
 import { formatTokens, formatUsd } from '../../lib/nex/format-cost'
 import { formatDuration } from '../../lib/nex/format-duration'
 
 export interface CostPanelProps {
   summary: CostSummary
-  /** For the quota row (P5, Task 5) — unused until then. */
+  /** Which host's `/v1/host` card the quota row (P5) reads. */
   hostId: string
   anchorRef: RefObject<HTMLElement | null>
   onClose: () => void
@@ -45,10 +47,30 @@ function TurnRow({ turn, t }: { turn: TurnCost; t: (key: string) => string }) {
 }
 
 export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostPanelProps) {
-  // P5 (Task 5) fetches the host quota with this; nothing to do with it yet.
-  void hostId
   const t = useI18nStore((s) => s.t)
   const turnsRef = useRef<HTMLDivElement>(null)
+
+  // P5: the host card, fetched once per `hostId` — not again when `summary`
+  // changes (P6: frames keep landing while the panel is open). `quota` is the
+  // window of the account the HOST is logged in as (contract §1.7): an
+  // execution delegated with a setup-token account, or a handoff turn, may
+  // bill a different account, so the row is labelled with that account and
+  // never claims to be "this execution's quota". Errors are swallowed — the
+  // panel is about cost, the quota is a courtesy. `cancelled` only ignores a
+  // response that lands after unmount / host switch; it is not an abort
+  // (`fetchNexHost` takes no signal), so the request itself still completes.
+  const [host, setHost] = useState<NexHostInfo | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetchNexHost(hostId)
+      .then((h) => {
+        if (!cancelled) setHost(h)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [hostId])
 
   // P4: newest turn last — open scrolled to the bottom, once, on mount. Later
   // rows (P6) must not yank a user who scrolled up back down.
@@ -121,6 +143,16 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostP
             </tbody>
           </table>
         </div>
+
+        {host?.quota && (
+          <div data-testid="cost-quota" className="flex items-baseline gap-2 tabular-nums">
+            <span className="text-text-muted truncate">{t('execution.cost.quota', { account: host.active_account })}</span>
+            <span className="flex-1" />
+            <span className="whitespace-nowrap">
+              5h {Math.round(host.quota.five_hour_pct)}% · 7d {Math.round(host.quota.seven_day_pct)}% · {host.quota.source}
+            </span>
+          </div>
+        )}
       </div>
     </FloatingPanel>
   )

@@ -2,13 +2,24 @@
 // P-B4 spec §4.3 P1–P4 / P6, plan Task 4. Expected numbers are the ones
 // cost-summary.test pins on the 12-turn fixture, pushed through the
 // formatters (§4.4) — the panel must render exactly what the rollup says.
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, within, cleanup } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, within, cleanup, act, waitFor } from '@testing-library/react'
 import CostPanel from './CostPanel'
 import { costSummary, type CostSummary, type TurnCost } from '../../lib/nex/cost-summary'
 import { formatTokens } from '../../lib/nex/format-cost'
 import type { StreamMessage } from '../../lib/nex/message-types'
 import turnsFixture from '../../lib/nex/__fixtures__/cost-turns-06GB2ZFD.json'
+import type { NexHostInfo } from '../../lib/nex/types'
+
+// P5: the quota row fetches the host card; every other export stays real.
+vi.mock('../../lib/nex/nex-api', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>
+  return { ...actual, fetchNexHost: vi.fn() }
+})
+
+import * as nexApi from '../../lib/nex/nex-api'
+
+const mockFetchNexHost = vi.mocked(nexApi.fetchNexHost)
 
 interface FixtureItem { seq: number; kind: string; payload: unknown }
 /** What the reducer pushes: every non-lifecycle payload, in seq order (same as cost-summary.test). */
@@ -38,6 +49,11 @@ function renderPanel(summary: CostSummary, onClose = vi.fn()) {
   const utils = render(<CostPanel summary={summary} hostId="h1" anchorRef={anchorRef} onClose={onClose} />)
   return { ...utils, anchor, onClose }
 }
+
+beforeEach(() => {
+  mockFetchNexHost.mockReset()
+  mockFetchNexHost.mockResolvedValue({ active_account: '', quota: null })
+})
 
 afterEach(() => {
   cleanup()
@@ -190,5 +206,98 @@ describe('CostPanel', () => {
     const s: CostSummary = { ...fixtureSummary, turns: [...fixtureSummary.turns, extra] }
     rerender(<CostPanel summary={s} hostId="h1" anchorRef={{ current: anchor }} onClose={() => {}} />)
     expect(within(screen.getByTestId('cost-turns')).getAllByTestId('cost-turn')).toHaveLength(13)
+  })
+
+  // P5
+  describe('quota row', () => {
+    const withQuota: NexHostInfo = {
+      active_account: 'wake@x',
+      quota: { five_hour_pct: 34.4, seven_day_pct: 12, resets_at: 0, source: 'usage_api' },
+    }
+
+    it('quota: null → no cost-quota row after the fetch settles', async () => {
+      mockFetchNexHost.mockResolvedValue({ active_account: 'wake@x', quota: null })
+      renderPanel(fixtureSummary)
+      await waitFor(() => expect(mockFetchNexHost).toHaveBeenCalledTimes(1))
+      await act(async () => { await Promise.resolve() })
+      expect(screen.queryByTestId('cost-quota')).toBeNull()
+    })
+
+    it('renders the host account label and 5h / 7d / source with rounded percentages', async () => {
+      mockFetchNexHost.mockResolvedValue(withQuota)
+      renderPanel(fixtureSummary)
+      const row = await screen.findByTestId('cost-quota')
+      expect(row.textContent).toContain('Host quota — wake@x')
+      expect(row.textContent).toContain('5h 34% · 7d 12% · usage_api')
+      expect(mockFetchNexHost).toHaveBeenCalledWith('h1')
+    })
+
+    it('fetch rejection → no row, nothing logged', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        mockFetchNexHost.mockRejectedValue(new Error('503'))
+        renderPanel(fixtureSummary)
+        await waitFor(() => expect(mockFetchNexHost).toHaveBeenCalledTimes(1))
+        await act(async () => { await Promise.resolve() })
+        expect(screen.queryByTestId('cost-quota')).toBeNull()
+        expect(errSpy).not.toHaveBeenCalled()
+        expect(warnSpy).not.toHaveBeenCalled()
+      } finally {
+        errSpy.mockRestore()
+        warnSpy.mockRestore()
+      }
+    })
+
+    it('a response arriving after unmount is ignored (cancelled flag, not an abort)', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        let resolve!: (h: NexHostInfo) => void
+        mockFetchNexHost.mockReturnValue(new Promise<NexHostInfo>((r) => { resolve = r }))
+        const { unmount } = renderPanel(fixtureSummary)
+        expect(mockFetchNexHost).toHaveBeenCalledTimes(1)
+        unmount()
+        // Resolve outside `act` on purpose — the request was never aborted
+        // (no signal), only its result is dropped. React 19 no longer warns
+        // on a post-unmount setState, so this case only proves the late
+        // response neither throws nor logs; the host-switch case below is
+        // the one that observes the flag through the DOM.
+        resolve(withQuota)
+        await Promise.resolve()
+        await Promise.resolve()
+        expect(screen.queryByTestId('cost-quota')).toBeNull()
+        expect(errSpy).not.toHaveBeenCalled()
+      } finally {
+        errSpy.mockRestore()
+      }
+    })
+
+    it('a stale response from the previous hostId cannot overwrite the current host (cancelled flag)', async () => {
+      let resolveH1!: (h: NexHostInfo) => void
+      mockFetchNexHost.mockImplementation((hostId: string) => hostId === 'h1'
+        ? new Promise<NexHostInfo>((r) => { resolveH1 = r })
+        : Promise.resolve({ active_account: 'other@x', quota: null }))
+      const { rerender, anchor } = renderPanel(fixtureSummary)
+      expect(mockFetchNexHost).toHaveBeenLastCalledWith('h1')
+      rerender(<CostPanel summary={fixtureSummary} hostId="h2" anchorRef={{ current: anchor }} onClose={() => {}} />)
+      await waitFor(() => expect(mockFetchNexHost).toHaveBeenLastCalledWith('h2'))
+      await act(async () => { await Promise.resolve() })
+      // h1's answer lands after h2 already settled (quota: null → no row).
+      await act(async () => { resolveH1(withQuota); await Promise.resolve() })
+      expect(screen.queryByTestId('cost-quota')).toBeNull()
+    })
+
+    it('fetches once per hostId: new summary objects do not refetch, a new hostId does', async () => {
+      mockFetchNexHost.mockResolvedValue(withQuota)
+      const { rerender, anchor } = renderPanel(fixtureSummary)
+      await screen.findByTestId('cost-quota')
+      expect(mockFetchNexHost).toHaveBeenCalledTimes(1)
+      rerender(<CostPanel summary={{ ...fixtureSummary }} hostId="h1" anchorRef={{ current: anchor }} onClose={() => {}} />)
+      rerender(<CostPanel summary={{ ...fixtureSummary }} hostId="h1" anchorRef={{ current: anchor }} onClose={() => {}} />)
+      expect(mockFetchNexHost).toHaveBeenCalledTimes(1)
+      rerender(<CostPanel summary={fixtureSummary} hostId="h2" anchorRef={{ current: anchor }} onClose={() => {}} />)
+      await waitFor(() => expect(mockFetchNexHost).toHaveBeenCalledTimes(2))
+      expect(mockFetchNexHost).toHaveBeenLastCalledWith('h2')
+    })
   })
 })

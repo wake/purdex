@@ -791,6 +791,7 @@
   "execution.cost.models": "Models",
   "execution.cost.models_note": "{{n}} turns without a per-model split",
   "execution.cost.turn": "#",
+  "execution.cost.quota": "Host quota — {{account}}",
   "execution.cost.turn_error": "error",
   "execution.interrupt": "Interrupt",
   "execution.terminate": "Terminate",
