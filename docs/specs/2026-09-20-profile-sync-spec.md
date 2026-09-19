@@ -122,7 +122,7 @@ Persisted stores, their keys, and where each field lands. `L` = device-local (ne
 | `stores/useThemeStore.ts` | `purdex-themes` | `settings` | — |
 | `stores/useI18nStore.ts` | `purdex-i18n` | `settings` | — |
 | `stores/useNotificationSettingsStore.ts` | `purdex-notification-settings` | `settings` | — |
-| `stores/useModuleEnabledStore.ts` | `purdex-module-enabled` | `settings` | — |
+| `stores/useModuleEnabledStore.ts` | `purdex-module-enabled` | **not synced** *(P2b, §9.7 — pending the user's confirmation)* | the whole store: its own source says module on/off is a per-device preference ("a host with limited resources can turn off modules it doesn't want to run") and it is deliberately not `syncManager`-registered |
 | `stores/useWorkspaceSettingsStore.ts` | `purdex-workspace-settings` | `settings` | — |
 | `stores/useHostSettingsStore.ts` | `purdex-host-settings` | `settings` | — |
 | `stores/useNewTabLayoutStore.ts` | `purdex-newtab-layout` | `settings` — `profiles` only | `activeEditingProfile` (editor UI state), `knownIds` (derived) (see §7, naming) |
@@ -255,7 +255,8 @@ export const PROJECTIONS = {
   settings:   [/* '<storeKey>.<field>' — every synced field listed one by one, per store; no
                   whole-store entries. Three stores have no `partialize`, and three persisted
                   fields are not preferences (`terminalSettingsVersion`, `activeEditingProfile`,
-                  `knownIds`); the full list is in the P2a plan and in projections.ts */
+                  `knownIds`); `purdex-module-enabled` is not listed at all (§9.7); the full list is
+                  in the P2a plan and in projections.ts */
                'purdex-layout.tabPosition'],   // ← the only field taken from useLayoutStore
 } as const
 ```
