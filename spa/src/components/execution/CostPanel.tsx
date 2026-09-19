@@ -28,11 +28,21 @@ const CELL = 'px-1.5 py-0.5'
 const NUM = `${CELL} text-right tabular-nums`
 
 const PANEL_WIDTH = 440
-const PANEL_MIN_WIDTH = 240
-/** Full width on a normal window; on a narrow one, leave an 8px gutter each side (never under 240). */
+/** Full width on a normal window; on a narrow one, the viewport minus an 8px gutter each side (spec §4.3). */
 function panelWidth(): number {
   if (typeof window === 'undefined') return PANEL_WIDTH
-  return Math.min(PANEL_WIDTH, Math.max(PANEL_MIN_WIDTH, window.innerWidth - 16))
+  return Math.min(PANEL_WIDTH, Math.max(0, window.innerWidth - 16))
+}
+
+/** panelWidth() as state so a resize while the panel is open re-bounds it (codex re-review). */
+function usePanelWidth(): number {
+  const [width, setWidth] = useState(panelWidth)
+  useEffect(() => {
+    const onResize = () => setWidth(panelWidth())
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return width
 }
 
 function TurnRow({ turn, t }: { turn: TurnCost; t: (key: string) => string }) {
@@ -56,6 +66,7 @@ function TurnRow({ turn, t }: { turn: TurnCost; t: (key: string) => string }) {
 
 export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostPanelProps) {
   const t = useI18nStore((s) => s.t)
+  const width = usePanelWidth()
   const turnsRef = useRef<HTMLDivElement>(null)
 
   // P5: the host card, fetched once per `hostId` — not again when `summary`
@@ -110,7 +121,7 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostP
     : null
 
   return (
-    <FloatingPanel title={t('execution.cost.title')} anchorRef={anchorRef} onClose={onClose} width={panelWidth()} testId="cost-panel">
+    <FloatingPanel title={t('execution.cost.title')} anchorRef={anchorRef} onClose={onClose} width={width} testId="cost-panel">
       <div className="flex flex-col gap-2 text-xs text-text-primary">
         <div data-testid="cost-totals" className="tabular-nums">
           {formatUsd(summary.totalUsd)} · {turns.length} {t('execution.cost.turns')} · {summary.rounds} {t('execution.cost.rounds')} · {formatDuration(summary.apiMs)} API / {formatDuration(summary.durationMs)} wall

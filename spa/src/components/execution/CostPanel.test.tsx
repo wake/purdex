@@ -68,7 +68,7 @@ describe('CostPanel', () => {
     expect(panel.style.width).toBe('440px')
   })
 
-  it('width is bounded by the viewport: innerWidth 320 → 304px (innerWidth − 16), never below 240', () => {
+  it('width is bounded by the viewport: innerWidth 320 → 304px (innerWidth − 16), 100 → 84px, and follows resize while open', () => {
     const desc = Object.getOwnPropertyDescriptor(window, 'innerWidth')
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 })
     try {
@@ -77,7 +77,14 @@ describe('CostPanel', () => {
       cleanup()
       Object.defineProperty(window, 'innerWidth', { configurable: true, value: 100 })
       renderPanel(fixtureSummary)
-      expect(screen.getByTestId('cost-panel').style.width).toBe('240px')
+      expect(screen.getByTestId('cost-panel').style.width).toBe('84px')
+      // Resize while open: the width is state, not a render-time read.
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1200 })
+      act(() => { window.dispatchEvent(new Event('resize')) })
+      expect(screen.getByTestId('cost-panel').style.width).toBe('440px')
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 300 })
+      act(() => { window.dispatchEvent(new Event('resize')) })
+      expect(screen.getByTestId('cost-panel').style.width).toBe('284px')
     } finally {
       if (desc) Object.defineProperty(window, 'innerWidth', desc)
       else delete (window as unknown as Record<string, unknown>).innerWidth
