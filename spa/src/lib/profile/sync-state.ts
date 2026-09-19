@@ -25,7 +25,28 @@
 //   - Whatever moves `sot` while a conflict is open moves `conflict.sot` with
 //     it: a lock refuses to *apply*, not to *know* (plan-review finding #6).
 //
+//   - A 409 locks only if something unsynced is left. If the section was edited
+//     back to the base while the push was in flight (`currentHash === base.hash`
+//     when the 409 lands), no conflict is opened: the snapshot that was sent has
+//     already been abandoned, the section is clean, and row 3 pulls. Edited to a
+//     third value, it is still dirty → `locked:conflict`, the local side being
+//     the snapshot that was SENT.
+//   - Nothing is decided on an index this client has not seen. A fresh or
+//     restored state starts `indexStale`, and `reconnected` sets it again, so the
+//     first action of every connection is `reindex` (spec §4.6, reconcile on
+//     connect). Row 0c shadows every row below it, 0d (`restore-local`) included.
+//
 // Driver contract (P2b), stated here because this reducer is what makes it safe:
+//   - connect / reconnect to the dev host: dispatch `reconnected` to EVERY
+//     section, GET the index, then dispatch one `sot-index` per section carrying
+//     the `epoch` that section had when the request was SENT (i.e. read after
+//     `reconnected`). `reconnected` does not close a flight: whatever was on the
+//     wire still owes its one terminal event (`push-failed` on timeout).
+//   - startup: sections with a persisted base are rebuilt with
+//     `restoreSectionState`, never-synced ones with `initialSectionState`. Only
+//     `base` is persisted; flights, locks, conflicts, `forcePull` and
+//     `restoreLocal` are not — an unresolved conflict is re-derived by the
+//     decision table (row 8) after the first index.
 //   - push / delete: dispatch `push-started` with the token from
 //     `decideSection`, then send the request only if the resulting
 //     `inFlight === token` (same object). Every outcome — timeouts and
@@ -79,14 +100,18 @@ export interface SectionSyncState {
   conflict: SectionConflict | null
   /** Set by `resolved keep:'sot'`: pull even though the section is dirty. */
   forcePull: boolean
-  /** Set by `resolved keep:'local'`: hash of the sent snapshot the driver must put back. */
-  restoreLocal: string | null
-  /** An index response was discarded; ask again. */
+  /** Set by `resolved keep:'local'`: the sent snapshot the driver must put back.
+   *  `null` = nothing to restore; `{ hash: null }` = restore to "does not exist"
+   *  (the 409 was on a delete). */
+  restoreLocal: { hash: string | null } | null
+  /** The index must be (re)fetched before anything else: never seen yet, a
+   *  response was discarded, or the connection was (re)established. */
   indexStale: boolean
 }
 
 export type SectionEvent =
   | { type: 'local-changed'; hash: string | null }
+  | { type: 'reconnected' } // the dev host became reachable (first connect included)
   | { type: 'sot-index'; epoch: number; entry: { rev: number; hash: string } | null } // null = not listed
   | { type: 'remote-event'; rev: number; hash: string | null; own: boolean } // hash null = deleted
   | { type: 'push-started'; token: FlightToken }
@@ -116,19 +141,32 @@ export interface SectionContext {
 
 const NOTHING: SectionAction = { do: 'nothing' }
 
+/** A section this client has never synced. The index has not been seen, so the
+ *  first decision is `reindex` (offline: `nothing`, a dirty section reading `pending`). */
 export function initialSectionState(currentHash: string | null): SectionSyncState {
+  return restoreSectionState({ base: { rev: 0, hash: null }, currentHash })
+}
+
+/** Rebuild a section from what P2b persists device-locally: the agreed `base`
+ *  and the hash of the live payload. `sot` starts as a copy of `base` — a
+ *  placeholder that `indexStale` keeps anyone from acting on. Flight, lock,
+ *  conflict, `forcePull` and `restoreLocal` are deliberately NOT persisted:
+ *  after a restart every section reconciles from scratch, and an unresolved
+ *  conflict is re-derived by the decision table once the index is in. */
+export function restoreSectionState(persisted: { base: Held; currentHash: string | null }): SectionSyncState {
+  const { base, currentHash } = persisted
   return {
-    base: { rev: 0, hash: null },
+    base: { rev: base.rev, hash: base.hash },
     currentHash,
-    sot: { rev: 0, hash: null },
+    sot: { rev: base.rev, hash: base.hash },
     epoch: 0,
-    status: currentHash === null ? 'synced' : 'pending',
+    status: currentHash === base.hash ? 'synced' : 'pending',
     inFlight: null,
     sotMovedWhileInFlight: false,
     conflict: null,
     forcePull: false,
     restoreLocal: null,
-    indexStale: false,
+    indexStale: true,
   }
 }
 
@@ -154,7 +192,7 @@ export function canApplyPull(s: SectionSyncState): boolean {
 /** Payloads the driver must keep, by hash: deduplicated, never null. */
 export function retainedHashes(s: SectionSyncState): string[] {
   const out: string[] = []
-  for (const h of [s.inFlight?.hash, s.conflict?.localHash, s.conflict?.sot.hash, s.restoreLocal]) {
+  for (const h of [s.inFlight?.hash, s.conflict?.localHash, s.conflict?.sot.hash, s.restoreLocal?.hash]) {
     if (h !== null && h !== undefined && !out.includes(h)) out.push(h)
   }
   return out
@@ -171,7 +209,7 @@ export function decideSection(s: SectionSyncState, ctx: SectionContext): Section
   /* 0a */ if (isLocked(s)) return NOTHING
   /* 0b */ if (s.inFlight !== null) return NOTHING
   /* 0c */ if (s.indexStale) return online ? { do: 'reindex' } : NOTHING
-  /* 0d */ if (s.restoreLocal !== null && s.currentHash !== s.restoreLocal) return { do: 'restore-local', hash: s.restoreLocal }
+  /* 0d */ if (s.restoreLocal !== null && s.currentHash !== s.restoreLocal.hash) return { do: 'restore-local', hash: s.restoreLocal.hash }
   /* 0e */ if (s.forcePull) return online ? { do: 'pull' } : NOTHING
   /* 1  */ if (s.sot.rev < s.base.rev) return { do: 'lock-reset' }
   const dirty = isDirty(s)
@@ -224,7 +262,7 @@ function unchanged(a: SectionSyncState, b: SectionSyncState): boolean {
     (a.conflict === b.conflict ||
       (a.conflict !== null && b.conflict !== null && a.conflict.localHash === b.conflict.localHash && sameHeld(a.conflict.sot, b.conflict.sot))) &&
     a.forcePull === b.forcePull &&
-    a.restoreLocal === b.restoreLocal &&
+    (a.restoreLocal === b.restoreLocal || (a.restoreLocal !== null && b.restoreLocal !== null && a.restoreLocal.hash === b.restoreLocal.hash)) &&
     a.indexStale === b.indexStale
   )
 }
@@ -234,7 +272,7 @@ function unchanged(a: SectionSyncState, b: SectionSyncState): boolean {
 function finish(prev: SectionSyncState, draft: SectionSyncState): SectionSyncState {
   if (draft === prev) return prev
   let next = draft
-  if (next.restoreLocal !== null && next.restoreLocal === next.currentHash) next = { ...next, restoreLocal: null }
+  if (next.restoreLocal !== null && next.restoreLocal.hash === next.currentHash) next = { ...next, restoreLocal: null }
   if (!isLocked(next)) {
     if (next.inFlight === null && isDirty(next) && sotMoved(next) && next.sot.hash === next.currentHash) {
       next = { ...next, base: next.sot }
@@ -254,6 +292,9 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
   switch (e.type) {
     case 'local-changed':
       return e.hash === s.currentHash ? s : { ...s, currentHash: e.hash }
+
+    case 'reconnected':
+      return s.indexStale ? s : { ...s, indexStale: true }
 
     case 'remote-event':
       if (e.own || e.rev <= s.sot.rev) return s
@@ -294,6 +335,9 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       else if (e.rev > s.sot.rev) next = withSot(next, { rev: e.rev, hash: e.hash })
       // the SOT already holds what we have *now* → rule 1 folds it in finish()
       if (next.sot.hash === next.currentHash) return next
+      // edited back to the base during the flight: nothing unsynced is left to
+      // argue about — stay unlocked and let row 3 pull
+      if (!isDirty(next)) return next
       return { ...next, status: 'locked:conflict', conflict: { localHash: sent, sot: next.sot } }
     }
 
@@ -325,7 +369,7 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       if (e.keep === 'sot') return { ...unlocked, forcePull: true }
       // conflict.sot and sot move together; locked:reset has no pair and reads sot
       const target = s.conflict !== null ? s.conflict.sot : s.sot
-      return { ...unlocked, base: { rev: target.rev, hash: target.hash }, restoreLocal: s.conflict !== null ? s.conflict.localHash : null }
+      return { ...unlocked, base: { rev: target.rev, hash: target.hash }, restoreLocal: s.conflict !== null ? { hash: s.conflict.localHash } : null }
     }
   }
 }

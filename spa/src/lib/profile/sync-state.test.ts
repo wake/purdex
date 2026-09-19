@@ -9,6 +9,7 @@ import {
   initialSectionState,
   isDirty,
   reduceSection,
+  restoreSectionState,
   retainedHashes,
   sotMoved,
   type FlightToken,
@@ -23,9 +24,10 @@ const H1 = 'h1'
 const H2 = 'h2'
 const H8 = 'h8'
 
-/** Build a state directly (for decision-table rows that the reducer would never leave behind). */
+/** Build a state directly (for decision-table rows that the reducer would never leave behind).
+ *  Hand-built states stand for "the index has been seen" unless the row says otherwise. */
 function mk(p: Partial<SectionSyncState>): SectionSyncState {
-  const s = { ...initialSectionState(null), ...p }
+  const s = { ...initialSectionState(null), indexStale: false, ...p }
   if (p.status === undefined) s.status = isDirty(s) || s.inFlight !== null ? 'pending' : 'synced'
   return s
 }
@@ -34,6 +36,12 @@ function synced(rev: number, hash: string | null): SectionSyncState {
 }
 function run(s: SectionSyncState, ...events: SectionEvent[]): SectionSyncState {
   return events.reduce(reduceSection, s)
+}
+/** Feed the index response a driver would get for a request sent from this very state. */
+function indexed(s: SectionSyncState, entry: { rev: number; hash: string } | null): SectionSyncState {
+  const next = reduceSection(s, { type: 'sot-index', epoch: s.epoch, entry })
+  expect(next.indexStale).toBe(false)
+  return next
 }
 function tokenOf(a: SectionAction): FlightToken {
   if (a.do !== 'push' && a.do !== 'delete') throw new Error(`expected push/delete, got ${a.do}`)
@@ -67,8 +75,49 @@ describe('initialSectionState / predicates', () => {
       conflict: null,
       forcePull: false,
       restoreLocal: null,
-      indexStale: false,
+      indexStale: true,
     })
+  })
+  it('the first decision is reindex — nothing is written or read before the SOT has been asked', () => {
+    for (const h of [null, H1]) {
+      const s = initialSectionState(h)
+      expect(decideSection(s, ON)).toEqual({ do: 'reindex' })
+      expect(decideSection(s, { reachable: false, autoSync: true })).toEqual({ do: 'nothing' })
+      expect(decideSection(s, { reachable: true, autoSync: false })).toEqual({ do: 'nothing' })
+    }
+    expect(initialSectionState(H1).status).toBe('pending')
+  })
+  it('once indexed, a fresh dirty section creates with baseRev 0; a fresh clean one pulls what is there', () => {
+    expect(tokenOf(decideSection(indexed(initialSectionState(H1), null), ON))).toMatchObject({ kind: 'put', hash: H1, baseRev: 0 })
+    expect(decideSection(indexed(initialSectionState(null), { rev: 3, hash: H2 }), ON)).toEqual({ do: 'pull' })
+    expect(decideSection(indexed(initialSectionState(null), null), ON)).toEqual({ do: 'nothing' })
+  })
+  it('restoreSectionState: persisted base + live hash, sot assumed at base, everything else initial, index stale', () => {
+    const base = deepFreeze({ rev: 5, hash: H0 })
+    const s = restoreSectionState({ base, currentHash: H1 })
+    expect(s).toEqual({
+      base: { rev: 5, hash: H0 },
+      currentHash: H1,
+      sot: { rev: 5, hash: H0 },
+      epoch: 0,
+      status: 'pending',
+      inFlight: null,
+      sotMovedWhileInFlight: false,
+      conflict: null,
+      forcePull: false,
+      restoreLocal: null,
+      indexStale: true,
+    })
+    expect(s.base).not.toBe(base)
+    expect(s.sot).not.toBe(s.base)
+    expect(restoreSectionState({ base, currentHash: H0 }).status).toBe('synced')
+    expect(decideSection(s, ON)).toEqual({ do: 'reindex' })
+  })
+  it('restoreSectionState: an unresolved conflict is re-derived by the table after the reindex', () => {
+    const s = indexed(restoreSectionState({ base: { rev: 5, hash: H0 }, currentHash: H1 }), { rev: 6, hash: H2 })
+    expect(decideSection(s, ON)).toEqual({ do: 'lock-conflict' })
+    const t = indexed(restoreSectionState({ base: { rev: 5, hash: H0 }, currentHash: H1 }), { rev: 5, hash: H0 })
+    expect(tokenOf(decideSection(t, ON))).toMatchObject({ kind: 'put', hash: H1, baseRev: 5 })
   })
   it('a local payload with no base is dirty → pending', () => {
     const s = initialSectionState(H1)
@@ -102,11 +151,11 @@ describe('decideSection — one test per row', () => {
     expect(decideSection(mk({ ...dirtyPushable, indexStale: true }), ON)).toEqual({ do: 'reindex' })
   })
   it('0d: restoreLocal differs from currentHash → restore-local', () => {
-    const s = mk({ ...dirtyPushable, restoreLocal: H2 })
+    const s = mk({ ...dirtyPushable, restoreLocal: { hash: H2 } })
     expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H2 })
   })
   it('0d is a local action: not gated by reachable/autoSync', () => {
-    const s = mk({ ...dirtyPushable, restoreLocal: H2 })
+    const s = mk({ ...dirtyPushable, restoreLocal: { hash: H2 } })
     expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'restore-local', hash: H2 })
   })
   it('0e: forcePull → pull even though dirty', () => {
@@ -182,7 +231,8 @@ describe('decideSection — one test per row', () => {
 
 describe('wire baseRev', () => {
   it('create over nothing sends baseRev 0', () => {
-    expect(tokenOf(decideSection(initialSectionState(H1), ON))).toEqual({ kind: 'put', hash: H1, baseRev: 0, epoch: 0 })
+    const s = indexed(initialSectionState(H1), null)
+    expect(tokenOf(decideSection(s, ON))).toEqual({ kind: 'put', hash: H1, baseRev: 0, epoch: s.epoch })
   })
   it('create over a tombstone sends baseRev 0, not the tombstone rev', () => {
     const s = mk({ base: { rev: 6, hash: null }, sot: { rev: 6, hash: null }, currentHash: H1 })
@@ -329,6 +379,52 @@ describe('reduceSection — rule 3: sot-index', () => {
   })
 })
 
+describe('reduceSection — reconnected (reconcile on connect, spec §4.6)', () => {
+  it('marks the index stale, bumps the epoch; the next decision is reindex, whatever the table would say', () => {
+    const rows: SectionSyncState[] = [
+      synced(5, H0),
+      run(synced(5, H0), { type: 'local-changed', hash: H1 }), // would push
+      run(synced(5, H0), { type: 'remote-event', rev: 6, hash: H1, own: false }), // would pull
+      run(synced(5, H0), { type: 'local-changed', hash: H1 }, { type: 'remote-event', rev: 6, hash: H2, own: false }), // would lock
+    ]
+    for (const s of rows) {
+      const r = reduceSection(deepFreeze(s), { type: 'reconnected' })
+      expect(r).toEqual({ ...s, indexStale: true, epoch: s.epoch + 1 })
+      expect(decideSection(r, ON)).toEqual({ do: 'reindex' })
+      expect(indexed(r, r.sot.hash === null ? null : { rev: r.sot.rev, hash: r.sot.hash })).toEqual({ ...s, epoch: s.epoch + 2 })
+    }
+  })
+  it('already stale → same reference', () => {
+    const s = reduceSection(synced(5, H0), { type: 'reconnected' })
+    expect(reduceSection(s, { type: 'reconnected' })).toBe(s)
+    const fresh = initialSectionState(H1)
+    expect(reduceSection(fresh, { type: 'reconnected' })).toBe(fresh)
+  })
+  it('does not touch an open flight — its terminal event still has to come from the driver', () => {
+    const [f, token] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
+    const r = reduceSection(f, { type: 'reconnected' })
+    expect(r.inFlight).toBe(token)
+    expect(r.indexStale).toBe(true)
+    expect(decideSection(r, ON)).toEqual({ do: 'nothing' })
+    const done = reduceSection(r, { type: 'push-failed' })
+    expect(done.inFlight).toBeNull()
+    expect(decideSection(done, ON)).toEqual({ do: 'reindex' })
+  })
+  it('an index request sent before the reconnect is dead (its epoch is gone)', () => {
+    const s = synced(5, H0)
+    const r = run(s, { type: 'reconnected' }, { type: 'sot-index', epoch: s.epoch, entry: { rev: 9, hash: H8 } })
+    expect(r.sot).toEqual({ rev: 5, hash: H0 })
+    expect(r.indexStale).toBe(true)
+  })
+  it('while locked it is recorded, and the unlock reindexes before anything else', () => {
+    const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
+    const l = run(f, { type: 'push-conflict', rev: 6, hash: H2 }, { type: 'reconnected' })
+    expect(l.status).toBe('locked:conflict')
+    expect(decideSection(l, ON)).toEqual({ do: 'nothing' })
+    expect(decideSection(reduceSection(l, { type: 'resolved', keep: 'sot' }), ON)).toEqual({ do: 'reindex' })
+  })
+})
+
 describe('reduceSection — rule 4: push-started', () => {
   const dirty = () => run(synced(5, H0), { type: 'local-changed', hash: H1 })
   it('accepts the token decideSection just produced; stores that very object; bumps the epoch', () => {
@@ -396,6 +492,34 @@ describe('reduceSection — rule 5: terminal events', () => {
     expect(s.base).toEqual({ rev: 9, hash: H1 })
     expect(s.sot).toEqual({ rev: 9, hash: H1 })
     expect(s.status).toBe('synced')
+  })
+  it('push-conflict on a section edited back to the base during the flight → clean, so no lock: row 3 pulls', () => {
+    const s = run(inFlightPut(), { type: 'local-changed', hash: H0 }, { type: 'push-conflict', rev: 6, hash: H8 })
+    expect(isDirty(s)).toBe(false)
+    expect(s.status).toBe('synced')
+    expect(s.conflict).toBeNull()
+    expect(s.inFlight).toBeNull()
+    expect(s.sot).toEqual({ rev: 6, hash: H8 })
+    expect(s.base).toEqual({ rev: 5, hash: H0 })
+    expect(retainedHashes(s)).toEqual([])
+    expect(canApplyPull(s)).toBe(true)
+    expect(decideSection(s, ON)).toEqual({ do: 'pull' })
+  })
+  it('push-conflict on a delete undone during the flight → clean, no lock (rev 0 too)', () => {
+    const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: null }))
+    const s = run(f, { type: 'local-changed', hash: H0 }, { type: 'push-conflict', rev: 0, hash: null })
+    expect(s.status).toBe('synced')
+    expect(s.conflict).toBeNull()
+    expect(s.sot).toEqual({ rev: 5, hash: null })
+    expect(decideSection(s, ON)).toEqual({ do: 'pull' })
+  })
+  it('push-conflict on a section edited to a THIRD value during the flight → still dirty → locks, local side = the sent snapshot', () => {
+    const s = run(inFlightPut(), { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 })
+    expect(isDirty(s)).toBe(true)
+    expect(s.status).toBe('locked:conflict')
+    expect(s.conflict).toEqual({ localHash: H1, sot: { rev: 6, hash: H8 } })
+    expect([...retainedHashes(s)].sort()).toEqual([H1, H8])
+    expect(decideSection(s, ON)).toEqual({ do: 'nothing' })
   })
   it('push-conflict → locked:conflict with the SENT snapshot as the local side', () => {
     const s = run(inFlightPut(), { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 })
@@ -564,13 +688,41 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
     expect(s.status).toBe('pending')
     expect(s.conflict).toBeNull()
     expect(s.base).toEqual({ rev: 6, hash: H8 })
-    expect(s.restoreLocal).toBe(H1)
+    expect(s.restoreLocal).toEqual({ hash: H1 })
     expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'restore-local', hash: H1 })
   })
   it('restoreLocal is dropped as soon as the live hash already is the snapshot (nothing to put back)', () => {
     const s = run(conflicted(), { type: 'locked', reason: 'conflict' }, { type: 'resolved', keep: 'local' })
     expect(s.restoreLocal).toBeNull()
     expect(tokenOf(decideSection(s, ON))).toMatchObject({ hash: H1, baseRev: 6 })
+  })
+  it('a DELETE that hit a 409: keep-local restores "absent" and re-sends the delete against the newest rev', () => {
+    const [f, token] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: null }))
+    expect(token).toMatchObject({ kind: 'delete', hash: null, baseRev: 5 })
+    // they edited it while we were deleting it: the SOT is live
+    let s = reduceSection(f, { type: 'push-conflict', rev: 6, hash: H2 })
+    expect(s.status).toBe('locked:conflict')
+    expect(s.conflict).toEqual({ localHash: null, sot: { rev: 6, hash: H2 } })
+    // while locked the user re-creates it locally, and the SOT moves again
+    s = run(s, { type: 'local-changed', hash: H1 }, { type: 'remote-event', rev: 7, hash: H8, own: false })
+    s = reduceSection(s, { type: 'resolved', keep: 'local' })
+    expect(s.restoreLocal).toEqual({ hash: null })
+    expect(s.base).toEqual({ rev: 7, hash: H8 })
+    expect(retainedHashes(s)).toEqual([])
+    expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: null })
+    expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'restore-local', hash: null })
+    s = reduceSection(s, { type: 'local-restored', hash: null })
+    expect(s.currentHash).toBeNull()
+    expect(s.restoreLocal).toBeNull()
+    const d = decideSection(s, ON)
+    expect(d.do).toBe('delete')
+    expect(tokenOf(d)).toEqual({ kind: 'delete', hash: null, baseRev: 7, epoch: s.epoch })
+  })
+  it('restoreLocal {hash:null} is dropped at once when the section already is absent locally', () => {
+    const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: null }))
+    const s = run(f, { type: 'push-conflict', rev: 6, hash: H2 }, { type: 'resolved', keep: 'local' })
+    expect(s.restoreLocal).toBeNull()
+    expect(tokenOf(decideSection(s, ON))).toMatchObject({ kind: 'delete', hash: null, baseRev: 6 })
   })
   it('local-restored sets currentHash and clears restoreLocal; without a pending restore it is ignored', () => {
     const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
@@ -631,7 +783,7 @@ describe('retainedHashes — rule 8', () => {
     const s = mk({
       inFlight: { kind: 'delete', hash: null, baseRev: 5, epoch: 0 },
       conflict: { localHash: H1, sot: { rev: 6, hash: H1 } },
-      restoreLocal: H1,
+      restoreLocal: { hash: H1 },
       status: 'locked:conflict',
     })
     expect(retainedHashes(s)).toEqual([H1])
@@ -773,6 +925,8 @@ describe('property tests (seeded)', () => {
     let flightsOpened = 0
     let locks = 0
     let steps = 0
+    let staleDecisions = 0
+    let absentRestores = 0
 
     for (let n = 0; n < SEQUENCES; n++) {
       const seed = BASE_SEED + n
@@ -782,6 +936,8 @@ describe('property tests (seeded)', () => {
       const log: SectionEvent[] = []
       let s = deepFreeze(initialSectionState(pick(HASHES)))
       let staleToken: FlightToken | null = null
+      let indexSeen = false
+      if (!s.indexStale || decideSection(s, ON).do !== 'reindex') throw new Error(`seed=${seed}: a fresh state must reindex first`)
 
       const gen = (): SectionEvent => {
         const r = int(100)
@@ -809,7 +965,8 @@ describe('property tests (seeded)', () => {
         if (r < 84) return { type: 'push-failed' }
         if (r < 90) return { type: 'pull-applied', rev: int(10), hash: pick(HASHES) }
         if (r < 93) return { type: 'local-restored', hash: pick(HASHES) }
-        if (r < 97) return { type: 'resolved', keep: rnd() < 0.5 ? 'local' : 'sot' }
+        if (r < 96) return { type: 'resolved', keep: rnd() < 0.5 ? 'local' : 'sot' }
+        if (r < 98) return { type: 'reconnected' }
         return { type: 'locked', reason: rnd() < 0.6 ? 'conflict' : 'reset' }
       }
 
@@ -844,6 +1001,7 @@ describe('property tests (seeded)', () => {
         seen.add(`${e.type}:${next === prev ? 'ignored' : 'applied'}`)
         if (prev.inFlight === null && next.inFlight !== null) flightsOpened++
         if (!prev.status.startsWith('locked') && next.status.startsWith('locked')) locks++
+        if (next.restoreLocal !== null && next.restoreLocal.hash === null) absentRestores++
 
         // unchanged ⇒ same reference; changed ⇒ epoch + 1
         if (next !== prev && next.epoch !== prev.epoch + 1) fail('a changed state must bump the epoch by exactly one')
@@ -873,11 +1031,28 @@ describe('property tests (seeded)', () => {
         }
         // convergence is never left unfolded
         if (!locked && next.inFlight === null && isDirty(next) && sotMoved(next) && next.sot.hash === next.currentHash) fail('unfolded convergence')
-        if (next.restoreLocal !== null && next.restoreLocal === next.currentHash) fail('restoreLocal lingers although already restored')
+        if (next.restoreLocal !== null && next.restoreLocal.hash === next.currentHash) fail('restoreLocal lingers although already restored')
+        if (e.type === 'reconnected' && !next.indexStale) fail('reconnected left the index fresh')
+        // a 409 locks iff something unsynced is left: dirty, and not already what the SOT holds
+        if (e.type === 'push-conflict' && prev.inFlight !== null) {
+          const shouldLock = prev.currentHash !== prev.base.hash && next.sot.hash !== prev.currentHash
+          if ((next.status === 'locked:conflict') !== shouldLock) fail('409 lock decision does not follow dirtiness')
+          if (shouldLock && next.conflict?.localHash !== prev.inFlight.hash) fail('409 conflict does not hold the sent snapshot')
+        }
 
         const d = decideSection(next, ON)
         if (next.inFlight !== null && d.do !== 'nothing') fail('decided something while in flight')
         if (locked && d.do !== 'nothing') fail('decided something while locked')
+        // nothing but a reindex happens on a stale index: rows 0a/0b → nothing, row 0c → reindex,
+        // and 0c shadows 0d (restore-local) and every row below it
+        // until the first epoch-matching index has landed, the index stays stale (so: no flight, no pull, no lock)
+        if (e.type === 'sot-index' && e.epoch === prev.epoch) indexSeen = true
+        if (!indexSeen && (!next.indexStale || next.inFlight !== null || locked)) fail('acted before the index was ever seen')
+        if (next.indexStale) {
+          const want = locked || next.inFlight !== null ? 'nothing' : 'reindex'
+          if (d.do !== want) fail(`stale index: decided "${d.do}", expected "${want}"`)
+          staleDecisions++
+        }
         if (d.do === 'push' || d.do === 'delete') {
           if (sotMoved(next)) fail('push/delete decided although the SOT moved')
           if (d.token.epoch !== next.epoch || d.token.hash !== next.currentHash) fail('token does not describe the state')
@@ -899,7 +1074,9 @@ describe('property tests (seeded)', () => {
     expect(steps).toBe(SEQUENCES * EVENTS_PER_SEQUENCE)
     expect(flightsOpened).toBeGreaterThan(SEQUENCES)
     expect(locks).toBeGreaterThan(SEQUENCES / 4)
-    for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked']) {
+    expect(staleDecisions).toBeGreaterThan(SEQUENCES)
+    expect(absentRestores).toBeGreaterThan(0)
+    for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked', 'reconnected']) {
       expect(seen.has(`${t}:applied`), `${t} was never applied`).toBe(true)
       expect(seen.has(`${t}:ignored`), `${t} was never ignored`).toBe(true)
     }
