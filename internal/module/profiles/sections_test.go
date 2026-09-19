@@ -86,7 +86,7 @@ func TestPutSectionAbsentBaseZeroAppliesAtRevOne(t *testing.T) {
 	in.UpdatedAt = 77 // so is the timestamp; the store clock is authoritative
 	res, err := s.PutSection(pid, in, 0)
 	require.NoError(t, err)
-	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 1}, res)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 1, Changed: true}, res)
 
 	assert.Equal(t, Section{
 		Section: "hosts", Rev: 1, Hash: "h1", Fingerprint: "fp1", Ordinal: 1,
@@ -113,7 +113,7 @@ func TestPutSectionMatchingBaseRevApplies(t *testing.T) {
 	*clock = 3000
 	res, err := s.PutSection(pid, sec("hosts", "h2", `{"v":2}`, clientB), 1)
 	require.NoError(t, err)
-	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2}, res)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, res)
 
 	got := mustGet(t, s, pid, "hosts")
 	assert.Equal(t, int64(2), got.Rev)
@@ -168,7 +168,7 @@ func TestPutSectionNewerOrdinalDifferentFingerprintApplies(t *testing.T) {
 	in.Fingerprint, in.Ordinal = "fp2", 2
 	res, err := s.PutSection(pid, in, 1)
 	require.NoError(t, err)
-	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2}, res)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, res)
 
 	got := mustGet(t, s, pid, "hosts")
 	assert.Equal(t, "fp2", got.Fingerprint, "the newer writer's shape replaces the stored one")
@@ -287,7 +287,7 @@ func TestDeleteSectionMatchingRevLeavesATombstone(t *testing.T) {
 	*clock = 4000
 	res, err := s.DeleteSection(pid, "tabs.w1", clientB, 1)
 	require.NoError(t, err)
-	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2}, res)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, res)
 
 	_, found, err := s.GetSection(pid, "tabs.w1")
 	require.NoError(t, err)
@@ -306,7 +306,7 @@ func TestDeleteSectionTwiceIsAppliedBothTimes(t *testing.T) {
 
 	first, err := s.DeleteSection(pid, "tabs.w1", clientA, 1)
 	require.NoError(t, err)
-	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2}, first)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 2, Changed: true}, first)
 
 	// Two clients removing the same workspace must not deadlock each other.
 	second, err := s.DeleteSection(pid, "tabs.w1", clientB, 1)
@@ -711,4 +711,62 @@ func TestConcurrentFirstInsertHasOneWinner(t *testing.T) {
 		results := racePut(t, s, pid, section, 0, writers, tag)
 		requireOneWinner(t, s, pid, section, results, 1, tag)
 	}
+}
+
+// ── PutResult.Changed ──────────────────────────────────────────────────────
+//
+// Outcome alone cannot tell a delete that wrote a tombstone from the idempotent
+// no-op: both are PutApplied, and a no-op against a tombstone at rev N+1 even
+// reports the same Rev a real delete at baseRev N would. The handler broadcasts
+// on Changed, so it has to be exact.
+
+func TestPutResultChangedIsTrueOnlyWhenARowWasWritten(t *testing.T) {
+	s, _ := openTestStore(t)
+	pid := newProfile(t, s)
+
+	created, err := s.PutSection(pid, sec("tabs.w1", "h1", `{}`, clientA), 0)
+	require.NoError(t, err)
+	assert.True(t, created.Changed, "insert")
+
+	updated, err := s.PutSection(pid, sec("tabs.w1", "h2", `{}`, clientA), 1)
+	require.NoError(t, err)
+	assert.True(t, updated.Changed, "update")
+
+	converged, err := s.PutSection(pid, sec("tabs.w1", "h2", `{}`, clientB), 1)
+	require.NoError(t, err)
+	require.Equal(t, PutConverged, converged.Outcome)
+	assert.False(t, converged.Changed, "converged")
+
+	conflict, err := s.PutSection(pid, sec("tabs.w1", "h3", `{}`, clientB), 1)
+	require.NoError(t, err)
+	require.Equal(t, PutConflict, conflict.Outcome)
+	assert.False(t, conflict.Changed, "conflict")
+
+	other := sec("tabs.w1", "h4", `{}`, clientB)
+	other.Fingerprint = "fp2"
+	schema, err := s.PutSection(pid, other, 2)
+	require.NoError(t, err)
+	require.Equal(t, PutSchema, schema.Outcome)
+	assert.False(t, schema.Changed, "schema")
+
+	deleted, err := s.DeleteSection(pid, "tabs.w1", clientA, 2)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: true}, deleted)
+
+	// The same request again: same Outcome, same Rev — only Changed differs.
+	again, err := s.DeleteSection(pid, "tabs.w1", clientA, 2)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 3, Changed: false}, again)
+
+	never, err := s.DeleteSection(pid, "tabs.never", clientA, 0)
+	require.NoError(t, err)
+	assert.False(t, never.Changed, "never existed")
+
+	staleDelete, err := s.DeleteSection(pid, "tabs.w1", clientA, 9)
+	require.NoError(t, err)
+	assert.False(t, staleDelete.Changed, "tombstone, any baseRev")
+
+	recreated, err := s.PutSection(pid, sec("tabs.w1", "h5", `{}`, clientA), 0)
+	require.NoError(t, err)
+	assert.Equal(t, PutResult{Outcome: PutApplied, Rev: 4, Changed: true}, recreated)
 }

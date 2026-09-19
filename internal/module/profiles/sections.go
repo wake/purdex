@@ -59,9 +59,16 @@ const (
 )
 
 // PutResult is the outcome of PutSection or DeleteSection.
+//
+// Changed reports whether this call wrote a row. It is true exactly when a
+// conditional write hit, and it is what a caller must key notifications on:
+// Outcome cannot, because DeleteSection answers PutApplied both for the delete
+// that wrote the tombstone and for the idempotent repeat — and the repeat can
+// even carry the same Rev (tombstone at rev N+1, baseRev N).
 type PutResult struct {
 	Outcome            PutOutcome
 	Rev                int64
+	Changed            bool
 	Current            *Section // PutConflict against a live section
 	CurrentFingerprint string   // PutSchema
 	CurrentOrdinal     int      // PutSchema
@@ -215,7 +222,7 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 				return PutResult{}, err
 			}
 			if n == 1 {
-				return PutResult{Outcome: PutApplied, Rev: 1}, nil
+				return PutResult{Outcome: PutApplied, Rev: 1, Changed: true}, nil
 			}
 			// Zero rows has two causes: no such profile, or another writer
 			// inserted the section first. The first is an error; the second is
@@ -241,7 +248,7 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 				return PutResult{}, err
 			}
 			if n == 1 {
-				return PutResult{Outcome: PutApplied, Rev: row.Rev + 1}, nil
+				return PutResult{Outcome: PutApplied, Rev: row.Rev + 1, Changed: true}, nil
 			}
 
 		default:
@@ -279,7 +286,7 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 				return PutResult{}, err
 			}
 			if n == 1 {
-				return PutResult{Outcome: PutApplied, Rev: baseRev + 1}, nil
+				return PutResult{Outcome: PutApplied, Rev: baseRev + 1, Changed: true}, nil
 			}
 		}
 		// The conditional write missed: somebody else committed to this row
@@ -329,7 +336,7 @@ func (s *Store) DeleteSection(profileID, section, writer string, baseRev int64) 
 		return PutResult{}, err
 	}
 	if n == 1 {
-		return PutResult{Outcome: PutApplied, Rev: baseRev + 1}, nil
+		return PutResult{Outcome: PutApplied, Rev: baseRev + 1, Changed: true}, nil
 	}
 
 	// The statement already declined; this read only classifies why (see
