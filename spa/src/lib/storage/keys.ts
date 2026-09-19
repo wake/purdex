@@ -29,4 +29,8 @@ export const STORAGE_KEYS = {
   HEADLESS_LAUNCHER: 'purdex-headless-launcher',
   /** 手動管理（非 Zustand store）：lib/client-identity.ts 經 browserStorage 直接讀寫，值是裸字串 id */
   CLIENT_IDENTITY: 'purdex-client-identity',
+  /** Profile Sync control plane（useProfileStore）：master 與 autoSync，走 syncManager 讓每個視窗一致 */
+  PROFILE: 'purdex-profile',
+  /** 手動管理（非 Zustand store）：lib/profile/section-store.ts 經 browserStorage 直接讀寫；只有 leader 會寫，刻意不註冊 syncManager */
+  PROFILE_SECTIONS: 'purdex-profile-sections',
 } as const
