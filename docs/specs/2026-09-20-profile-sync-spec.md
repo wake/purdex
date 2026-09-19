@@ -323,7 +323,7 @@ On connect, per section, the client compares its `(fingerprint, ordinal)` with t
 
 | Comparison | Outcome |
 |---|---|
-| fingerprint equal | normal operation (ordinals may differ; the higher one is written on the next flush) |
+| fingerprint equal | normal operation (ordinals may differ; the higher one is written on the next flush, and **the stored ordinal never decreases** — the daemon keeps `max(stored, incoming)`) |
 | fingerprint differs, `mine.ordinal > sot.ordinal` | I am newer: I may write, and my write replaces the stored shape |
 | fingerprint differs, `mine.ordinal < sot.ordinal` | `locked:schema` — panel says the SOT was written by a newer Purdex, upgrade this client |
 | fingerprint differs, ordinals equal | `locked:schema` — a shape changed without an ordinal bump. Fail closed; this is a developer error and the panel says so |
@@ -338,7 +338,7 @@ One write verb, compare-and-set on a section:
 
 ```
 PUT /api/profiles/{profileId}/sections/{section}
-  { baseRev, hash, fingerprint, ordinal, payload }
+  { clientId, baseRev, hash, fingerprint, ordinal, payload }
 
   SOT.rev == baseRev                     → 200 {rev: SOT.rev+1, applied: true}   store, broadcast
   SOT.rev != baseRev && SOT.hash == hash → 200 {rev: SOT.rev,  applied: false}   converged, no write
@@ -407,7 +407,12 @@ snapshots, not between the SOT and a moving target.
 
 `tabs.<wsId>` sections come and go with workspaces, so the section set is itself state.
 
-- `DELETE /api/profiles/{id}/sections/{section}` — CAS on `baseRev`, same conflict semantics.
+- `DELETE /api/profiles/{id}/sections/{section}?baseRev=N&clientId=…` — CAS on `baseRev`, same
+  conflict semantics. **The daemon keeps a tombstone** (`deleted = 1`, `rev + 1`, payload dropped)
+  rather than removing the row, so a section's revisions are strictly increasing for the life of
+  the profile: a recreated section continues from the tombstone's rev instead of restarting at 1,
+  which is what stops a retried stale `DELETE` from destroying the recreated content (ABA).
+  Tombstones read as "absent" on every GET.
 - **`workspaces` is the authority on which `tabs.*` sections should exist.** A client that has
   applied `workspaces` deletes the `tabs.*` sections for workspaces that are gone, and creates them
   for workspaces it gained.
@@ -470,6 +475,7 @@ CREATE TABLE IF NOT EXISTS profile_sections (
   payload     TEXT NOT NULL,
   writer      TEXT NOT NULL,
   updated_at  INTEGER NOT NULL,
+  deleted     INTEGER NOT NULL DEFAULT 0,   -- tombstone, §4.6.3
   PRIMARY KEY (profile_id, section));
 
 CREATE TABLE IF NOT EXISTS profile_attachments (
@@ -493,7 +499,7 @@ Routes (all through the module's `RegisterRoutes`):
 | `PUT /api/profiles/{id}/sections/{section}` | the CAS of §4.6 |
 | `DELETE /api/profiles/{id}/sections/{section}` | CAS-guarded section removal (§4.6.3) |
 | `PUT /api/profiles/{id}/attachment` | `{clientId, deviceName}` — this client's master is now this profile |
-| `DELETE /api/profiles/{id}/attachment` | detach (stop sync / switch master) |
+| `DELETE /api/profiles/{id}/attachment?clientId=…` | detach (stop sync / switch master); only when the attachment belongs to `{id}` |
 
 Validation mirrors `devicestate/validate.go`: `clientId` `^c_[0-9a-f]{12}$`, name 1–64 runes,
 section key `^(hosts|settings|workspaces|tabs\.[A-Za-z0-9_-]{1,64})$`, payload ≤ 5 MB → 413,
@@ -626,4 +632,21 @@ None blocking. Two to revisit after the acceptance run:
 
 ## 9. Review log
 
-_(to be filled by the codex plan review and the two PR review rounds)_
+### 9.1 Plan review — codex `task-mu8vu5fo-t16rbh` (gpt-5.6-sol), 2026-09-20
+
+Eight findings, all confidence ≥ 0.94, all accepted:
+
+| # | Sev. | Finding | Resolution |
+|---|---|---|---|
+| 1 | critical | idempotent section DELETE + rev restart = ABA (delete → recreate at rev 1 → retried delete destroys it) | tombstones; revisions strictly increase (§4.6.3, §4.8) |
+| 2 | important | equal fingerprint let an older client lower the stored ordinal | `max(stored, incoming)` (§4.5) |
+| 3 | important | `DeleteProfile` ∥ `PutAttachment` not atomic → attachment to a deleted profile | profile existence folded into each write statement (plan Task 1) |
+| 4 | important | attachment DELETE had no defined `clientId` source | query parameter, must match `{id}` (§4.8) |
+| 5 | important | broadcast untested; wire key unspecified | injected broadcaster, tagged struct, per-outcome tests (plan Task 4) |
+| 6 | important | `:memory:` tests cannot race | file-backed WAL concurrency tests (plan Task 2) |
+| 7 | minor | 5 MiB applied to the body, spec says payload | payload cap + envelope allowance (plan Task 4) |
+| 8 | minor | "nine routes" — there are ten | corrected |
+
+Also found while applying these: the §4.6 `PUT` body had no source for `writer`; `clientId` added.
+
+_(PR review rounds to follow.)_

@@ -66,12 +66,24 @@ func (s *Store) GetProfile(id string) (Profile, bool, error)
 func (s *Store) RenameProfile(id, name string) (bool, error)
 func (s *Store) DeleteProfile(id string) error                // see ErrProfileAttached
 func (s *Store) PutAttachment(a Attachment) error             // upsert; attached_at only on insert
-func (s *Store) DeleteAttachment(clientID string) (bool, error)
+func (s *Store) DeleteAttachment(profileID, clientID string) (bool, error) // both must match
 func (s *Store) ListAttachments(profileID string) ([]Attachment, error)
 ```
 
 - `DeleteProfile` returns `ErrProfileAttached` when any `profile_attachments` row points at it
   (spec decision 16). Deleting a profile deletes its sections in the same call.
+- **Profile existence is part of every write statement, not a separate check** (plan review #3 — a
+  check-then-write pair lets `PutAttachment` land between the attachment check and the delete,
+  leaving an attachment that points at nothing and defeating the 409):
+  - `DeleteProfile`: `DELETE FROM profiles WHERE id = ? AND NOT EXISTS (SELECT 1 FROM
+    profile_attachments WHERE profile_id = ?)`. `RowsAffected() == 0` → re-read to classify as
+    `ErrProfileAttached` vs not-found. **The profile row goes first, the sections after** — once the
+    row is gone no new section or attachment can be inserted (next bullet), so nothing is orphaned.
+  - `PutAttachment` and the section insert (Task 2) are `INSERT … SELECT … WHERE EXISTS (SELECT 1
+    FROM profiles WHERE id = ?) ON CONFLICT … DO UPDATE/NOTHING`; zero rows affected with no
+    existing row → `ErrProfileNotFound`.
+- `DeleteAttachment` matches on **both** `client_id` and `profile_id`, so a detach aimed at the wrong
+  profile is a no-op (`false`), never somebody else's detach (plan review #4).
 - `PutAttachment` moves a client from one profile to another (a client has at most one master):
   `client_id` is the primary key, so the upsert replaces `profile_id`.
 - The store owns the id generation; tests inject a deterministic id source the same way they inject
@@ -79,7 +91,11 @@ func (s *Store) ListAttachments(profileID string) ([]Attachment, error)
 
 Test list: create→get→list round trip; rename unknown id → `false`; delete with an attachment →
 `ErrProfileAttached`; delete after detach → sections gone too; `PutAttachment` twice with different
-profiles leaves one row; `ListAttachments` never nil.
+profiles leaves one row; `ListAttachments` never nil; `PutAttachment` to an unknown profile →
+`ErrProfileNotFound` and no row; `DeleteAttachment` with the right client but the wrong profile →
+`false`, row intact; **concurrent** (file-backed DB, see Task 2) `DeleteProfile` ∥ `PutAttachment`
+repeated N times — every run ends in exactly one of {profile gone, no attachment} or {profile kept,
+attachment present}, never an attachment without a profile.
 
 ## Task 2 — `store.go`: section compare-and-set
 
@@ -116,9 +132,11 @@ func (s *Store) ListSections(profileID string) ([]SectionMeta, error)
 
 Decision order inside `PutSection` — **schema is checked before revision, and fails closed**:
 
-1. Read the current row. If **absent**: accept only `baseRev == 0` → insert at `rev = 1`,
-   `PutApplied`. A non-zero `baseRev` against an absent section is `PutConflict` with `Rev: 0`
-   (the section was deleted under the client; §4.6.3).
+1. Read the current row. If **absent or a tombstone** (`deleted = 1`, see below): accept only
+   `baseRev == 0` → `PutApplied`, at `rev = 1` for a never-seen section and at
+   `rev = tombstone.rev + 1` over a tombstone. A non-zero `baseRev` is `PutConflict` with `Rev: 0`
+   and no `Current` (the section was deleted under the client; §4.6.3). Fingerprint/ordinal of a
+   tombstone are ignored — there is no stored shape left to protect.
 2. If present and `row.Fingerprint != in.Fingerprint`:
    - `in.Ordinal > row.Ordinal` → the writer is newer, continue to step 3 (its write replaces the
      stored shape);
@@ -129,18 +147,28 @@ Decision order inside `PutSection` — **schema is checked before revision, and 
    "驗算，沒改變就不寫回").
 5. otherwise → `PutConflict` with the current row attached.
 
+**The stored ordinal never goes down** (plan review #2). With equal fingerprints an older client is
+allowed to write (spec §4.5 row 1), but its lower ordinal must not replace the stored one, or the
+next value-domain bump loses its direction signal. The UPDATE writes `ordinal = MAX(ordinal, ?)`.
+(When the fingerprints differ, step 2 already guarantees `in.Ordinal > row.Ordinal`, so `MAX` is the
+incoming value.)
+
 Atomicity: steps 3 and 1 are each expressed as **one statement**, following
 `devicestate/store.go:76`:
 
 ```sql
 -- step 3
-UPDATE profile_sections SET rev = rev + 1, hash = ?, fingerprint = ?, ordinal = ?,
+UPDATE profile_sections SET rev = rev + 1, hash = ?, fingerprint = ?, ordinal = MAX(ordinal, ?),
        payload = ?, writer = ?, updated_at = ?
- WHERE profile_id = ? AND section = ? AND rev = ?;      -- RowsAffected() == 1 ⇒ applied
+ WHERE profile_id = ? AND section = ? AND rev = ? AND deleted = 0;  -- RowsAffected()==1 ⇒ applied
 
--- step 1
-INSERT INTO profile_sections (…) VALUES (…)
+-- step 1, never-seen section (profile existence is in the statement, Task 1)
+INSERT INTO profile_sections (…) SELECT … WHERE EXISTS (SELECT 1 FROM profiles WHERE id = ?)
   ON CONFLICT(profile_id, section) DO NOTHING;          -- RowsAffected() == 1 ⇒ inserted
+
+-- step 1, over a tombstone: CAS on the tombstone's own rev
+UPDATE profile_sections SET deleted = 0, rev = rev + 1, hash = ?, … 
+ WHERE profile_id = ? AND section = ? AND rev = ? AND deleted = 1;
 ```
 
 The re-read in steps 2/4/5 is only there to *classify* an outcome that the conditional statement
@@ -148,9 +176,27 @@ already decided against; a racing writer can make the reported `Current` one rev
 is harmless because the client re-runs §4.6.1 on the next event anyway. **Write that reasoning as a
 comment** — it is the first thing a reviewer will challenge.
 
-`DeleteSection` is the same CAS on `rev` (`DELETE … WHERE rev = ?`), returning `PutApplied` on a hit,
-`PutConflict` with the current row on a miss, and `PutApplied` when the section is already absent
-(idempotent delete — two clients removing the same workspace must not deadlock each other).
+`DeleteSection` **writes a tombstone, it does not remove the row** (plan review #1, critical). A
+real `DELETE` lets the revision counter restart: A deletes at rev 1, B recreates the section and
+gets rev 1 again, A's retried `DELETE baseRev=1` (lost response) then destroys B's new content — an
+ABA hole straight through the CAS. So:
+
+```sql
+UPDATE profile_sections SET deleted = 1, rev = rev + 1, payload = '{}', hash = '', writer = ?,
+       updated_at = ?
+ WHERE profile_id = ? AND section = ? AND rev = ? AND deleted = 0;
+```
+
+- hit → `PutApplied` with the tombstone's rev;
+- miss, row live → `PutConflict` with the current row;
+- miss, row already a tombstone or never existed → `PutApplied` (idempotent — two clients removing
+  the same workspace must not deadlock each other). This is now safe: in the ABA interleaving the
+  recreated row is live at `tombstone.rev + 1`, which can never equal the retrier's old `baseRev`.
+- **Revisions of a `(profile, section)` pair are therefore strictly increasing for the life of the
+  profile**, which is also what spec §4.6.1's "`rev < baseRev` ⇒ the profile was recreated" relies on.
+- Tombstones are invisible to `GetSection` / `ListSections` / the profile GET (the section reads as
+  absent, so spec §4.6.3's client logic is unchanged) and are removed with their profile.
+  Schema: one added column, `deleted INTEGER NOT NULL DEFAULT 0`.
 
 Test list (one per row of the table, plus): absent + baseRev 0 → applied at rev 1; absent +
 baseRev 3 → conflict rev 0; stale baseRev + different hash → conflict carrying the current payload;
@@ -158,7 +204,22 @@ stale baseRev + identical hash → converged, `rev` unchanged, `updated_at` unch
 with a different fingerprint → applied and the stored fingerprint changes; older ordinal → schema;
 equal ordinals + different fingerprints → schema; delete with matching rev → gone; delete twice →
 applied both times; delete with stale rev → conflict; `ListSections` never nil and omits payloads;
-sections of a deleted profile are gone.
+sections of a deleted profile are gone (tombstones included).
+
+Added by the plan review:
+- **ABA**: put (rev 1) → delete baseRev 1 → put baseRev 0 (**rev 3, not 1**) → delete baseRev 1
+  again → `PutConflict`, content intact.
+- a tombstone is absent from `GetSection` and `ListSections`; put with non-zero baseRev onto a
+  tombstone → conflict rev 0.
+- same fingerprint + **lower** ordinal → applied, stored ordinal unchanged; same fingerprint +
+  higher ordinal → applied, stored ordinal raised.
+- `PutSection` into an unknown / just-deleted profile → `ErrProfileNotFound`, no row.
+- **Concurrency, on a file-backed WAL database** (`t.TempDir()`, not `":memory:"` — that mode is
+  pinned to one connection and cannot race): N goroutines `PutSection` with the same `baseRev` and
+  distinct hashes → exactly one `PutApplied`, the rest `PutConflict`, final `rev == base + 1`. Same
+  shape for N concurrent first-inserts (`baseRev 0`). The file DSN needs
+  `_pragma=busy_timeout(5000)` alongside WAL so a losing writer waits instead of failing with
+  `SQLITE_BUSY` — add it to `OpenStore`.
 
 ## Task 3 — `validate.go`
 
@@ -173,12 +234,12 @@ Tests first. Mirrors `devicestate/validate.go`'s shape (plain functions returnin
 | `hash`, `fingerprint` | `^[0-9a-f]{64}$` |
 | `ordinal` | `>= 1` |
 | `baseRev` | `>= 0` |
-| `payload` | parses, and is a JSON **object** (not an array or scalar) |
+| `payload` | parses, is a JSON **object** (not an array or scalar), and is ≤ 5 MiB **on its own** |
 
 `tabs.<id>` is validated structurally only — the daemon never learns what a workspace is (spec
 §4.6: "the daemon is deliberately dumb").
 
-## Task 4 — `handler.go`: the nine routes
+## Task 4 — `handler.go`: the ten routes
 
 Tests first (`handler_test.go`), driving a real `*Store` on `":memory:"` through
 `httptest.NewRecorder()`; no `core.Core` needed if the broadcast is nil-guarded (it is).
@@ -193,13 +254,45 @@ Tests first (`handler_test.go`), driving a real `*Store` on `":memory:"` through
 | `GET /api/profiles/{id}/sections/{section}` | `Section` | 400, 404 |
 | `PUT /api/profiles/{id}/sections/{section}` | 200 `{rev, applied}` | 409 conflict / 409 schema / 400 / 404 / **413 over 5 MB** |
 | `DELETE /api/profiles/{id}/sections/{section}` | 200 `{rev}` | 409, 400, 404 |
-| `PUT` / `DELETE /api/profiles/{id}/attachment` | 200 | 400, 404 |
+| `PUT /api/profiles/{id}/attachment` — body `{clientId, deviceName}` | 200 | 400, 404 |
+| `DELETE /api/profiles/{id}/attachment?clientId=c_…` | 200 `{detached: bool}` | 400, 404 |
+
+That is **ten** routes (the spec's table has ten; an earlier draft of this plan said nine). The
+route-registration test enumerates all ten. `DELETE …/attachment` takes `clientId` from the **query
+string** — DELETE bodies are unreliable through proxies — and only detaches when the attachment
+belongs to the `{id}` in the path (`detached:false` otherwise).
+
+The section `PUT` body is `{clientId, baseRev, hash, fingerprint, ordinal, payload}`; the section
+`DELETE` takes `?baseRev=N&clientId=c_…`. `clientId` is where `writer` comes from — the spec's §4.6
+sketch omitted it (fixed there in the same commit as this plan revision).
 
 409 bodies carry `reason` so the client can branch without guessing:
 `{"reason":"conflict","rev":N,"hash":"…","payload":{…}}` and
 `{"reason":"schema","fingerprint":"…","ordinal":N}`.
 
-Body cap: copy `putBodyCap = 5 << 20` and the read-cap+1 idiom verbatim; a 5 MB+1 body is a test.
+Size: the spec caps the **payload** at 5 MiB, not the body (plan review #7) — a legal 5 MiB payload
+plus its envelope must not be refused. `payloadCap = 5 << 20`; `putBodyCap = payloadCap + 64<<10`,
+read with the devicestate read-cap+1 idiom; then `len(payload) > payloadCap` → 413. Tests: payload of
+exactly 5 MiB → 200; payload of 5 MiB + 1 → 413; body over `putBodyCap` → 413.
+
+**Broadcast is injected, so it is testable here** (plan review #5): the handler holds
+`broadcast func(eventType, value string)`; Task 5 wires it to `core.Events`, tests pass a recorder.
+Wire shape, with explicit tags because the key names are a contract with P2b:
+
+```go
+type profileEvent struct {
+    ProfileID      string `json:"profileId"`
+    Section        string `json:"section"`
+    Rev            int64  `json:"rev"`
+    Hash           string `json:"hash"`
+    WriterClientID string `json:"writerClientId"`
+    Deleted        bool   `json:"deleted,omitempty"`
+}
+```
+
+Broadcast tests: applied PUT → exactly one event with the keys above; applied DELETE → one event
+with `deleted:true`; idempotent DELETE of an absent section, `PutConverged`, conflict, schema, 400,
+404, 413 → **zero** events.
 
 ## Task 5 — `module.go`, registration, broadcast
 
@@ -208,19 +301,18 @@ Tests first (`module_test.go`: routes registered, `Stop` closes, DB file created
 - `Init`: `OpenStore(filepath.Join(c.Cfg.DataDir, "profiles.db"))`, then **`os.Chmod(path, 0600)`**
   — the file now holds host tokens (spec §7); its siblings are created 0644 by sqlite and this is
   the one place that matters.
-- Broadcast on every applied `PUT` and `DELETE` of a section, after the store call succeeds:
+- Wire the handler's injected `broadcast` (Task 4) to the core, nil-guarded:
 
 ```go
-if m.core != nil && m.core.Events != nil {
-    payload, _ := json.Marshal(profileEvent{
-        ProfileID: id, Section: sec, Rev: res.Rev,
-        Hash: hash, Writer: writer, Deleted: deleted,
-    })
-    m.core.Events.Broadcast("", "profile", string(payload))
+broadcast := func(eventType, value string) {
+    if m.core != nil && m.core.Events != nil {
+        m.core.Events.Broadcast("", eventType, value)
+    }
 }
 ```
 
-  `session` is `""` (this is not a session event), matching `backup:done`.
+  `session` is `""` (this is not a session event), matching `backup:done`. The event type is
+  `"profile"`.
   **No broadcast for `PutConverged`** — nothing changed, and a spurious event would make every
   client re-fetch a section it already has.
 - Register in `cmd/pdx/main.go` next to `devicestatemod`.
