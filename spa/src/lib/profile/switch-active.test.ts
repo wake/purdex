@@ -100,7 +100,7 @@ function slaveOnScreen(): void {
   putOnScreen(slaveWorld(), SLAVE, 1)
 }
 
-const LOCAL_FIELDS = ['slaves', 'slaveOrder', 'activeProfileId', 'parkedMaster', 'worldEpoch'] as const
+const LOCAL_FIELDS = ['slaves', 'slaveOrder', 'activeProfileId', 'parkedMaster', 'worldEpoch', 'relabelCount'] as const
 const TAB_FIELDS = ['tabs', 'tabOrder', 'activeTabId', 'visitHistory', 'worldId', 'worldEpoch'] as const
 const WS_FIELDS = ['workspaces', 'activeWorkspaceId', 'worldId', 'worldEpoch'] as const
 

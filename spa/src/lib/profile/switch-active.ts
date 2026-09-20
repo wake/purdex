@@ -17,7 +17,7 @@
 // ALL OR NOTHING. `swapActive` refuses without writing. `commitTabWorld` puts its
 // own two stores (and the scoped settings) back when it throws — but by then the
 // pointer has moved, and nothing in master-world.ts knows of the parking lot; so
-// the block captures `useLocalProfilesStore`'s five fields first and puts them
+// the block captures `useLocalProfilesStore`'s six fields first and puts them
 // back itself. That also covers the parking lot's OWN write throwing: persist
 // sets the state in memory and only then writes storage.
 //
@@ -99,11 +99,11 @@ const writeFailed = (err: unknown): WriteFailed => ({ ok: false, reason: 'write-
 
 // === The parking lot, captured ===
 
-type LocalSnapshot = Pick<ReturnType<typeof useLocalProfilesStore.getState>, 'slaves' | 'slaveOrder' | 'activeProfileId' | 'parkedMaster' | 'worldEpoch'>
+type LocalSnapshot = Pick<ReturnType<typeof useLocalProfilesStore.getState>, 'slaves' | 'slaveOrder' | 'activeProfileId' | 'parkedMaster' | 'worldEpoch' | 'relabelCount'>
 
 function captureLocal(): LocalSnapshot {
   const s = useLocalProfilesStore.getState()
-  return { slaves: s.slaves, slaveOrder: s.slaveOrder, activeProfileId: s.activeProfileId, parkedMaster: s.parkedMaster, worldEpoch: s.worldEpoch }
+  return { slaves: s.slaves, slaveOrder: s.slaveOrder, activeProfileId: s.activeProfileId, parkedMaster: s.parkedMaster, worldEpoch: s.worldEpoch, relabelCount: s.relabelCount }
 }
 
 /** As master-world.ts's `restore`: memory is back before persist's storage write can throw. */

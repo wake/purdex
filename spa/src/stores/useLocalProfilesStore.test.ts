@@ -58,7 +58,7 @@ const get = (): LocalProfilesState => useLocalProfilesStore.getState()
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0 })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -393,6 +393,27 @@ describe('swapActive — the one atomic exchange', () => {
 })
 
 describe('promoteSlave — a move, never a copy', () => {
+  it('`relabelCount` goes up by one with every promote, and with nothing else — it says "the labels of the worlds have moved"', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    get().renameSlave(a, 'renamed')
+    get().reorderSlaves([b, a])
+    swap(a, world('M'))
+    swap('master', world('alpha'))
+    get().replaceParkedWorld(b, world('beta2'))
+    get().removeSlave(b)
+    expect(get().relabelCount).toBe(0)
+
+    expect(get().promoteSlave('nope', 'x', 99)).toMatchObject({ ok: false }) // refused: not counted
+    expect(get().relabelCount).toBe(0)
+    const first = get().promoteSlave(a, 'old', get().worldEpoch + 1)
+    if (!first.ok) throw new Error(first.reason)
+    expect(get().relabelCount).toBe(1)
+    expect(get().promoteSlave(first.demotedId, 'older', get().worldEpoch + 1)).toMatchObject({ ok: true })
+    expect(get().relabelCount).toBe(2)
+    expect(persistedEnvelope().state.relabelCount).toBe(2)
+  })
+
   it('master on screen, the slave parked: the screen is relabelled as the demoted slave', () => {
     const a = add('alpha')
     const b = add('beta')
@@ -559,18 +580,19 @@ describe('updateParkedWorlds', () => {
 })
 
 describe('persist', () => {
-  it('persists exactly the five data fields, at version 1', () => {
+  it('persists exactly the six data fields, at version 1', () => {
     const a = add('alpha')
     swap(a, world('M'))
     const env = persistedEnvelope()
     expect(env.version).toBe(1)
-    expect(Object.keys(env.state).sort()).toEqual(['activeProfileId', 'parkedMaster', 'slaveOrder', 'slaves', 'worldEpoch'])
+    expect(Object.keys(env.state).sort()).toEqual(['activeProfileId', 'parkedMaster', 'relabelCount', 'slaveOrder', 'slaves', 'worldEpoch'])
     expect(env.state).toEqual({
       slaves: { [a]: { ...get().slaves[a], world: null } },
       slaveOrder: [a],
       activeProfileId: a,
       parkedMaster: world('M'),
       worldEpoch: 1,
+      relabelCount: 0,
     })
   })
 
@@ -663,6 +685,20 @@ describe('rehydrate sanitises what storage holds', () => {
   it.each([['not an array', 'abc'], ['missing', undefined]])('slaveOrder %s → rebuilt from the slaves', async (_label, slaveOrder) => {
     await rehydrateFrom({ slaves: { a: slave('a', 'a', world('a')) }, slaveOrder, activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
     expect(get().slaveOrder).toEqual(['a'])
+  })
+
+  it.each([-1, 1.5, NaN, Infinity, '3', null, undefined, Number.MAX_SAFE_INTEGER + 1])('relabelCount %j → 0', async (relabelCount) => {
+    useLocalProfilesStore.setState({ relabelCount: 5 })
+    await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount })
+    expect(get().relabelCount).toBe(0)
+  })
+
+  it('a record from before `relabelCount` existed comes back with 0; a good one as it is', async () => {
+    useLocalProfilesStore.setState({ relabelCount: 5 })
+    await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+    expect(get().relabelCount).toBe(0)
+    await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 3 })
+    expect(get().relabelCount).toBe(3)
   })
 
   it.each([-1, 1.5, NaN, Infinity, '3', null, undefined, Number.MAX_SAFE_INTEGER + 1])('worldEpoch %j → 0', async (worldEpoch) => {

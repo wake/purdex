@@ -12,6 +12,7 @@ import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
+import { useUndoToast } from '../stores/useUndoToast'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
 import type { PaneContent, PaneLayout, Tab } from '../types/tab'
@@ -54,9 +55,15 @@ import type { PaneContent, PaneLayout, Tab } from '../types/tab'
 // the screen holds (lib/profile/master-world.ts), and then the entry is skipped
 // as well — an undo that loses a tab in a window of milliseconds, against one
 // that files it under the wrong profile.
-//   What this does NOT follow is a promote (`promoteToMaster`), which relabels
-// worlds: inside one undo window `'master'` would then name another world. A
-// promote is refused while a master is attached, so nothing of it reaches a SOT.
+//   A PROMOTE (`promoteToMaster`) RELABELS THE WORLDS: the old master becomes a
+// slave under a NEW id and `'master'` names what was a slave — an owner recorded
+// before it points at another world afterwards (and the old master's new id is
+// not something this file could look up: it is minted by the promote). The
+// parking lot counts promotes (`relabelCount`); the snapshot keeps the count, and
+// an undo that finds it moved restores THE HOST AND NOTHING OF ANY WORLD — no
+// closed tab, no workspace membership, no mark — and says so
+// (`{ worldSkipped: true }`; the caller tells the user). An undo that loses tabs,
+// against one that files them under the wrong profile.
 
 /** `'master'` or a slave id. */
 type WorldOwner = string
@@ -151,11 +158,17 @@ function unmarkInParkedWorlds(refs: readonly PaneRef[]): void {
   )
 }
 
+/** What an undo did NOT do: `worldSkipped` — the worlds were relabelled since the delete (a promote), so no tab,
+ *  workspace membership or mark was restored; the host and everything else was. */
+export interface HostDeleteUndoResult {
+  worldSkipped: boolean
+}
+
 /**
  * Execute cascade delete for a host: tabs -> sessions -> agent -> host.
  * Returns an undo function that restores all snapshot data.
  */
-export function deleteHostCascade(hostId: string, closeTabs: boolean): () => void {
+export function deleteHostCascade(hostId: string, closeTabs: boolean): () => HostDeleteUndoResult {
   const hostStore = useHostStore.getState()
   const tabStore = useTabStore.getState()
   const sessionStore = useSessionStore.getState()
@@ -170,7 +183,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
   // present host row as a recreation and skip every restore — permanent
   // data loss on the last host.
   if (!hostStore.hosts[hostId] || Object.keys(hostStore.hosts).length <= 1) {
-    return () => {}
+    return () => ({ worldSkipped: false })
   }
 
   const prefix = `${hostId}:`
@@ -194,6 +207,8 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     // Tab data for undo
     /** Whose world was on screen: the owner of `closedTabs` / `tabWorkspaces` and of every on-screen mark. */
     owner: WorldOwner
+    /** `useLocalProfilesStore.relabelCount` at delete time: moved by undo time ⇒ no owner names its world any more. */
+    relabelCount: number
     closedTabs: Tab[]
     tabWorkspaces: Record<string, string>  // tabId -> workspaceId
     terminatedTabPaneIds: PaneRef[]
@@ -208,6 +223,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     agentUnread: {},
     agentModels: {},
     owner: screenOwner(),
+    relabelCount: useLocalProfilesStore.getState().relabelCount,
     closedTabs: [],
     tabWorkspaces: {},
     terminatedTabPaneIds: [],
@@ -368,7 +384,9 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     // re-bind stale panes to it — gate tab restore on !hostWasRecreated too.
     // They go back into the world they were closed in (`snapshot.owner`), wherever
     // that is by now — never into whatever happens to be on screen.
-    const home = locateWorld(snapshot.owner)
+    // …unless the worlds were relabelled meanwhile (see A PROMOTE RELABELS THE WORLDS): then nothing of any world.
+    const relabelled = useLocalProfilesStore.getState().relabelCount !== snapshot.relabelCount
+    const home: ReturnType<typeof locateWorld> = relabelled ? { where: 'gone' } : locateWorld(snapshot.owner)
     if (closeTabs && !hostWasRecreated && snapshot.closedTabs.length > 0 && home.where === 'screen') {
       const ts = useTabStore.getState()
       for (const tab of snapshot.closedTabs) {
@@ -398,7 +416,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     // another pane. Same gate as the tabs above: a recreated host owns these panes
     // now, and what it made of them is not this undo's to touch.
     const marks = [...snapshot.terminatedTabPaneIds, ...parkedMarks]
-    if (!hostWasRecreated && marks.length > 0) {
+    if (!hostWasRecreated && !relabelled && marks.length > 0) {
       for (const { tabId, paneId, owner } of marks) {
         if (locateWorld(owner).where !== 'screen') continue
         const currentTab = useTabStore.getState().tabs[tabId]
@@ -412,7 +430,23 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
       }
       unmarkInParkedWorlds(marks)
     }
+
+    // Said only when something WAS left out: a relabelling with no tab closed and no pane marked cost the user nothing.
+    return { worldSkipped: relabelled && !hostWasRecreated && (snapshot.closedTabs.length > 0 || marks.length > 0) }
   }
+}
+
+/**
+ * `deleteHostCascade` behind the app's undo toast. The toast dismisses itself
+ * right after running its action (GlobalUndoToast), so an undo that had to leave
+ * the worlds alone says so a microtask later, in a toast of its own — without an
+ * action: there is nothing left to take back. The texts are the caller's (`t`).
+ */
+export function deleteHostWithUndoToast(hostId: string, closeTabs: boolean, messages: { deleted: string; worldSkipped: string }): void {
+  const undo = deleteHostCascade(hostId, closeTabs)
+  useUndoToast.getState().show(messages.deleted, () => {
+    if (undo().worldSkipped) queueMicrotask(() => useUndoToast.getState().show(messages.worldSkipped))
+  })
 }
 
 /** Endpoint identity of a host: what makes a cached answer still that host's. */

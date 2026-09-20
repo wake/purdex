@@ -11,11 +11,12 @@ import { useProfileStore } from '../stores/useProfileStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { useTabStore } from '../stores/useTabStore'
 import type { Tab, TerminatedReason } from '../types/tab'
-import { deleteHostCascade } from './host-lifecycle'
+import { deleteHostCascade, deleteHostWithUndoToast } from './host-lifecycle'
+import { useUndoToast } from '../stores/useUndoToast'
 import { getPrimaryPane } from './pane-tree'
 import { startCollector, type Collector, type SectionReport } from './profile/collector'
 import { __resetMasterWorldForTest, readMasterWorld } from './profile/master-world'
-import { deleteSlave, switchActiveProfile } from './profile/switch-active'
+import { deleteSlave, promoteToMaster, switchActiveProfile } from './profile/switch-active'
 
 vi.mock('./nex/nex-api', () => ({ releaseLease: vi.fn(async () => undefined) }))
 vi.mock('./profile/hash', async (importOriginal) => {
@@ -231,5 +232,100 @@ describe('R2 — two worlds hold the same tab and pane ids; a mark is cleared in
     expect(deleteSlave(S)).toEqual({ ok: true })
     expect(() => undo()).not.toThrow()
     expect(terminatedIn(useTabStore.getState().tabs, 't1')).toBe('host-removed')
+  })
+})
+
+describe('C2 — a PROMOTE inside the undo window relabels the worlds: `master` names another world now', () => {
+  /** Every world on this device, as bytes. */
+  const worlds = (): string => JSON.stringify([useTabStore.getState().tabs, useTabStore.getState().tabOrder, useWorkspaceStore.getState().workspaces, useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves])
+
+  it.each([true, false])('master on screen, delete (closeTabs=%s), the slave is promoted — the old master is a slave under a NEW id now: the undo restores the host and touches no world', (closeTabs) => {
+    masterOnScreen(world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]), world(SLAVE, [tab('st-a', HOST_A, SLAVE), tab('st-b', HOST_B, SLAVE)]))
+    const undo = deleteHostCascade(HOST_A, closeTabs)
+    expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    const before = worlds()
+
+    const result = undo()
+
+    expect(result).toEqual({ worldSkipped: true })
+    expect(worlds()).toBe(before)
+    expect(JSON.stringify(useLocalProfilesStore.getState().parkedMaster)).not.toContain(MASTER) // the new master holds nothing of the old one's
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useHostStore.getState().hostOrder).toEqual([HOST_B, HOST_A])
+  })
+
+  it.each([true, false])('the slave on screen, delete (closeTabs=%s), THAT slave is promoted — the screen is the master now: same', (closeTabs) => {
+    slaveOnScreen(world(SLAVE, [tab('st-a', HOST_A, SLAVE), tab('st-b', HOST_B, SLAVE)]), world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]))
+    const undo = deleteHostCascade(HOST_A, closeTabs)
+    expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    const before = worlds()
+
+    expect(undo()).toEqual({ worldSkipped: true })
+
+    expect(worlds()).toBe(before)
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+  })
+
+  it('the two worlds share their tab and pane ids (a demoted master and the master pulled after it): not one mark is taken back in either', () => {
+    masterOnScreen(world(MASTER, [tab('t1', HOST_A, MASTER), tab('t2', HOST_B, MASTER)]), world(SLAVE, [tab('t1', HOST_A, SLAVE), tab('t2', HOST_B, SLAVE)]))
+    const undo = deleteHostCascade(HOST_A, false)
+    expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    const before = worlds()
+    expect(undo()).toEqual({ worldSkipped: true })
+    expect(worlds()).toBe(before)
+    expect(terminatedIn(useTabStore.getState().tabs, 't1')).toBe('host-removed')
+    expect(terminatedIn(useLocalProfilesStore.getState().parkedMaster?.tabs ?? {}, 't1')).toBe('host-removed')
+  })
+
+  it('no promote: nothing is skipped, and the undo says so', () => {
+    masterOnScreen(world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]), world(SLAVE, [tab('st-b', HOST_B, SLAVE)]))
+    expect(deleteHostCascade(HOST_A, true)()).toEqual({ worldSkipped: false })
+    expect(useTabStore.getState().tabs['mt-a']).toBeDefined()
+  })
+
+  it('a switch is no relabelling: nothing is skipped', async () => {
+    masterOnScreen(world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]), world(SLAVE, [tab('st-b', HOST_B, SLAVE)]))
+    const undo = deleteHostCascade(HOST_A, true)
+    expect(await switchActiveProfile(S)).toEqual({ ok: true })
+    expect(undo()).toEqual({ worldSkipped: false })
+    expect(useLocalProfilesStore.getState().parkedMaster?.tabs['mt-a']).toBeDefined()
+  })
+
+  it('the veto (last host) has nothing to undo and skips nothing', () => {
+    useHostStore.setState({ hosts: { [HOST_A]: useHostStore.getState().hosts[HOST_A] }, hostOrder: [HOST_A] })
+    expect(deleteHostCascade(HOST_A, true)()).toEqual({ worldSkipped: false })
+  })
+
+  describe('the user is told (`deleteHostWithUndoToast`)', () => {
+    const MESSAGES = { deleted: 'A deleted', worldSkipped: 'A is back, its tabs are not' }
+    /** What GlobalUndoToast does on a click: run the action, then dismiss. */
+    async function clickUndo(): Promise<void> {
+      useUndoToast.getState().toast?.action?.()
+      useUndoToast.getState().dismiss()
+      await Promise.resolve()
+    }
+
+    beforeEach(() => useUndoToast.setState({ toast: null }))
+
+    it('a skipped world: a second toast says so — after the first has dismissed itself, and with nothing to press', async () => {
+      masterOnScreen(world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]), world(SLAVE, [tab('st-b', HOST_B, SLAVE)]))
+      deleteHostWithUndoToast(HOST_A, true, MESSAGES)
+      expect(useUndoToast.getState().toast).toMatchObject({ message: 'A deleted' })
+      expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
+      expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+
+      await clickUndo()
+
+      expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+      expect(useUndoToast.getState().toast).toEqual({ message: 'A is back, its tabs are not', action: undefined, actionLabel: undefined })
+    })
+
+    it('nothing skipped: no second toast', async () => {
+      masterOnScreen(world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]), world(SLAVE, [tab('st-b', HOST_B, SLAVE)]))
+      deleteHostWithUndoToast(HOST_A, true, MESSAGES)
+      await clickUndo()
+      expect(useTabStore.getState().tabs['mt-a']).toBeDefined()
+      expect(useUndoToast.getState().toast).toBeNull()
+    })
   })
 })

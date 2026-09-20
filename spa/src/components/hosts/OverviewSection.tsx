@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, Trash, Plugs, LockSimple } from '@phosphor-icons/react'
 import { useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useUndoToast } from '../../stores/useUndoToast'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
-import { deleteHostCascade } from '../../lib/host-lifecycle'
+import { deleteHostWithUndoToast } from '../../lib/host-lifecycle'
 import { connectionErrorMessage } from '../../lib/host-utils'
 import type { ConfigData } from '../../lib/host-api'
 import { Section, Field, EditableField, TokenField } from './form-fields'
@@ -84,9 +83,8 @@ export function OverviewSection({ hostId }: Props) {
 
   const handleDeleteHost = () => {
     const hostName = useHostStore.getState().hosts[hostId]?.name ?? hostId
-    const undo = deleteHostCascade(hostId, closeTabs)
     setConfirmDelete(false)
-    useUndoToast.getState().show(t('hosts.deleted_toast', { name: hostName }), undo)
+    deleteHostWithUndoToast(hostId, closeTabs, { deleted: t('hosts.deleted_toast', { name: hostName }), worldSkipped: t('hosts.undo_world_skipped', { name: hostName }) })
   }
 
   const statusLabel = (r?: HostRuntime) => {
