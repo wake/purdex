@@ -1041,6 +1041,156 @@ describe('executor — pull', () => {
   })
 })
 
+/* ─── the empty placeholder of a workspace that arrived from elsewhere ─── */
+
+describe('executor — an empty tabs placeholder is not an edit while the SOT has (or may have) content', () => {
+  const remote = (section: string, rev: number, hash: string | null) => ({ hostId: HOST, profileId: PROFILE, section, rev, hash, writerClientId: OTHER_CLIENT })
+  const EMPTY = { order: [], tabs: {} }
+  const localChanges = (): unknown[] => h.events.filter((e) => e.event.type === 'local-changed').map((e) => e.event.hash)
+
+  it('REGRESSION: workspaces applied, the tabs pull is slow, the collector reports the empty placeholder first → NO lock-conflict; synced once the pull lands', async () => {
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1' })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 2, 'W2'), meta('tabs.w9', 1, 'T1')]))
+    const tabsGet = deferred<Result<Section | null>>()
+    api.getSection.mockImplementation((_h, _p, section) =>
+      section === 'workspaces' ? Promise.resolve(sectionOf(meta('workspaces', 2, 'W2'), { order: ['w9'] })) : tabsGet.promise,
+    )
+    applySectionToStores.mockImplementation(async (key) => {
+      if (key === 'workspaces') useWorkspaceStore.setState({ workspaces: [ws('w9')] }) // an EMPTY workspace appears here
+      return { ok: true, hash: key === 'workspaces' ? 'W2' : 'T1' }
+    })
+    ex.onRemoteEvent(remote('tabs.w9', 1, 'T1'))
+    ex.onRemoteEvent(remote('workspaces', 2, 'W2'))
+    await flush()
+    expect(api.getSection.mock.calls.map((c) => c[2])).toEqual(['workspaces', 'tabs.w9']) // the tabs fetch is out, and slow
+    ex.onSection({ key: 'tabs.w9', hash: 'E', payload: EMPTY }) // 500 ms later the collector sees the empty workspace
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(localChanges()).toEqual([])
+    expect(eventsOf('locked')).toEqual([])
+    expect(ex.status().sections['tabs.w9']).toBe('synced')
+    tabsGet.resolve(sectionOf(meta('tabs.w9', 1, 'T1'), { order: ['t1'], tabs: { t1: {} } }))
+    await flush()
+    expect(applySectionToStores).toHaveBeenCalledWith('tabs.w9', { order: ['t1'], tabs: { t1: {} } }, { masterHostId: HOST })
+    expect(ex.status()).toMatchObject({ profile: 'synced', sections: { 'tabs.w9': 'synced' } })
+    expect(api.putSection).not.toHaveBeenCalled()
+  })
+
+  it('the suppressed report still gets the section pumped: a pull that was waiting for its workspace goes out', async () => {
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1' })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.w9', 1, 'T1')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('tabs.w9', 1, 'T1'), { order: ['t1'], tabs: { t1: {} } }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'T1' })
+    ex.onRemoteEvent(remote('tabs.w9', 1, 'T1'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(api.getSection).not.toHaveBeenCalled() // w9 is not here
+    useWorkspaceStore.setState({ workspaces: [ws('w9')] }) // it appears without any event reaching the executor…
+    ex.onSection({ key: 'tabs.w9', hash: 'E', payload: EMPTY }) // …except the collector's report of its emptiness
+    await flush()
+    expect(localChanges()).toEqual([])
+    expect(api.getSection).toHaveBeenCalledTimes(1)
+    expect(ex.status().sections['tabs.w9']).toBe('synced')
+  })
+
+  it('(i) an empty workspace created HERE (fresh index, not on the SOT) is a local creation: it is pushed with baseRev 0', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w5')] })
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1' })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1')]))
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 1 })
+    ex.onSection({ key: 'tabs.w5', hash: 'E', payload: EMPTY })
+    await flush()
+    expect(localChanges()).toEqual(['E'])
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(api.putSection.mock.calls[0].slice(2, 4)).toEqual(['tabs.w5', expect.objectContaining({ baseRev: 0, hash: 'E', payload: EMPTY })])
+    expect(ex.status().sections['tabs.w5']).toBe('synced')
+  })
+
+  it('(ii) reported BEFORE the index has landed: held (latest only); the SOT turns out to have content → dropped, pulled, no conflict', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w9')] })
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
+    const list = deferred<Result<ProfileIndexEntry[]>>()
+    api.listProfiles.mockReturnValue(list.promise)
+    api.getSection.mockResolvedValue(sectionOf(meta('tabs.w9', 3, 'T3'), { order: ['t1'], tabs: { t1: {} } }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'T3' })
+    const { ex } = make()
+    ex.onReconnected()
+    ex.onSection({ key: 'tabs.w9', hash: 'E', payload: EMPTY })
+    await flush()
+    expect(localChanges()).toEqual([]) // held, not dispatched
+    list.resolve(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.w9', 3, 'T3')]))
+    await flush()
+    expect(localChanges()).toEqual([])
+    expect(eventsOf('locked')).toEqual([])
+    expect(applySectionToStores).toHaveBeenCalledWith('tabs.w9', { order: ['t1'], tabs: { t1: {} } }, { masterHostId: HOST })
+    expect(ex.status()).toMatchObject({ profile: 'synced', sections: { 'tabs.w9': 'synced' } })
+    expect(api.putSection).not.toHaveBeenCalled()
+  })
+
+  it('(ii) reported before the index has landed, and the SOT has NOTHING → the held report is delivered and pushed', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w5')] })
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
+    const list = deferred<Result<ProfileIndexEntry[]>>()
+    api.listProfiles.mockReturnValueOnce(list.promise).mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1')]))
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 1 })
+    const { ex } = make()
+    ex.onReconnected()
+    ex.onSection({ key: 'tabs.w5', hash: 'E', payload: EMPTY })
+    await flush()
+    expect(localChanges()).toEqual([])
+    list.resolve(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1')]))
+    await flush()
+    expect(localChanges()).toEqual(['E'])
+    expect(api.putSection.mock.calls.map((c) => [c[2], c[3].baseRev, c[3].payload])).toEqual([['tabs.w5', 0, EMPTY]])
+  })
+
+  it('(ii) a held placeholder is superseded by a later real report of the same section', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w9')] })
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
+    const list = deferred<Result<ProfileIndexEntry[]>>()
+    api.listProfiles.mockReturnValue(list.promise)
+    const { ex } = make()
+    ex.onReconnected()
+    ex.onSection({ key: 'tabs.w9', hash: 'E', payload: EMPTY })
+    ex.onSection({ key: 'tabs.w9', hash: 'T-mine', payload: { order: ['x'], tabs: { x: {} } } })
+    list.resolve(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.w9', 3, 'T3')]))
+    await flush()
+    expect(localChanges()).toEqual(['T-mine']) // and never 'E' afterwards
+    expect(ex.status().sections['tabs.w9']).toBe('locked:conflict') // a real edit against a live SOT
+  })
+
+  it('(iii) a tab opened in that workspace before the pull is a REAL edit: dispatched, and it conflicts', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w9')] })
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1' })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.w9', 1, 'T1')]))
+    api.getSection.mockReturnValue(new Promise(() => {}))
+    ex.onRemoteEvent(remote('tabs.w9', 1, 'T1'))
+    await flush()
+    ex.onSection({ key: 'tabs.w9', hash: 'T-mine', payload: { order: ['x'], tabs: { x: {} } } })
+    expect(localChanges()).toEqual(['T-mine'])
+    // (its pull is still out; the lock is decided as soon as that action ends — here: never resolves, so check the state machine's view)
+    expect(ex.status().sections['tabs.w9']).toBe('pending')
+  })
+
+  it('(iv) once the section has a base, an empty report is an ordinary report (the echo of an applied empty section changes nothing)', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w1')] })
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
+    api.getSection.mockResolvedValue(sectionOf(meta('tabs.w1', 2, 'E'), EMPTY))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'E' })
+    ex.onRemoteEvent(remote('tabs.w1', 2, 'E'))
+    await flush()
+    h.events.length = 0
+    ex.onSection({ key: 'tabs.w1', hash: 'E', payload: EMPTY })
+    expect(h.events).toEqual([{ event: { type: 'local-changed', hash: 'E' }, changed: false }])
+    // …and emptying a synced workspace is an edit like any other
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+    ex.onRemoteEvent(remote('tabs.w1', 0, 'x')) // no-op
+    const { ex: ex2 } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
+    ex2.onSection({ key: 'tabs.w1', hash: 'E', payload: EMPTY })
+    await flush()
+    expect(api.putSection.mock.calls.at(-1)?.[3]).toMatchObject({ baseRev: 1, hash: 'E' })
+  })
+})
+
 /* ─── restore-local, resolve ─── */
 
 describe('executor — resolve and restore-local', () => {

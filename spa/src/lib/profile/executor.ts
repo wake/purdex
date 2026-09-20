@@ -36,6 +36,21 @@
 //     CALLER CONTRACT: a pane of a host not known yet would be branded
 //     `host-removed`, and that brand is synced back), nor while its workspace
 //     does not exist locally (the apply would be `unrendered`).
+//   - AN EMPTY `tabs.<id>` THAT WAS NEVER AGREED ON, WHILE THE SOT HAS CONTENT,
+//     IS NOT AN EDIT — IT HAS NOT ARRIVED YET. Applying `workspaces` from another
+//     client makes an empty workspace appear here; 500 ms later the collector
+//     reports `tabs.<id>` = the empty tabs. Fed to the reducer while the pull is
+//     still out, that is "dirty + SOT moved" → `lock-conflict`: the user, having
+//     done nothing, would be asked to choose between a blank and the real tabs.
+//     So `onSection` does NOT dispatch a report that is (a) a `tabs.*` section,
+//     (b) with `base.hash === null` (this client never agreed on it), (c) whose
+//     SOT has content, (d) and whose payload is the empty placeholder; it only
+//     pumps the section so the pull happens. While the index has not landed,
+//     (c) is unknown — `sot.hash` is a placeholder then — so such a report is
+//     HELD (the latest per key) and judged when the index lands: SOT has
+//     content → dropped; SOT has nothing → delivered (a workspace created HERE,
+//     which is pushed). A non-empty payload is a real edit and conflicts, as it
+//     should; once there is a base, an empty report is an ordinary one.
 //   - Every retry goes through one timer mechanism, all of it cancelled by
 //     `dispose()`. A failed network action is not retried before its backoff has
 //     passed, whatever else pumps the section meanwhile (2 s → 4 → 8 … 30 s cap;
@@ -137,6 +152,13 @@ function isPayload(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
+/** `{order: [], tabs: {}}` — what a workspace with no tab builds. */
+function isEmptyTabs(payload: unknown): boolean {
+  if (!isPayload(payload)) return false
+  const { order, tabs } = payload
+  return Array.isArray(order) && order.length === 0 && isPayload(tabs) && Object.keys(tabs).length === 0
+}
+
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -175,6 +197,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   const retryTimers = new Map<string, Timer>()
   /** `restore-local` whose payload is in neither stash, by the hash that is missing. */
   const parkedRestore = new Map<string, string>()
+
+  /** Empty `tabs.*` placeholders reported before the index landed: the latest per key (see the header). */
+  const heldPlaceholders = new Map<string, SectionReport>()
 
   /** Last signature a persist was ATTEMPTED with, so a refused write is not retried on every event. */
   const attempted = new Map<string, string>()
@@ -523,7 +548,54 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       dispatch(m.section, { type: 'sot-index', epoch: initialSectionState(null).indexEpoch, entry: { rev: m.rev, hash: m.hash } }, false)
     }
 
+    settleHeldPlaceholders()
     reportSectionSet(entry.sections.map((m) => m.section))
+  }
+
+  /* ─── collector reports ─── */
+
+  function deliver(r: SectionReport): void {
+    if (r.hash !== null) stash.set(r.hash, r.payload)
+    if (dispatch(r.key, { type: 'local-changed', hash: r.hash })) return
+    // Nothing changed — but a payload may just have arrived that a push was waiting for.
+    pruneMemoryStash()
+    pump(r.key)
+  }
+
+  /** `'edit'` — an ordinary report · `'not-arrived'` — drop it, the SOT's content
+   *  is on its way · `'unknown'` — the index has not landed, hold it. */
+  function judgePlaceholder(r: SectionReport): 'edit' | 'not-arrived' | 'unknown' {
+    if (sectionKind(r.key) !== 'tabs' || !isEmptyTabs(r.payload)) return 'edit'
+    const s = sections.get(r.key) // none = `initialSectionState`: no base, index never seen
+    if (s === undefined) return 'unknown'
+    if (s.base.hash !== null) return 'edit'
+    if (s.sot.hash !== null) return 'not-arrived'
+    return s.indexStale ? 'unknown' : 'edit'
+  }
+
+  function online(): boolean {
+    return deps.isReachable() && (manual || deps.autoSync())
+  }
+
+  function receive(r: SectionReport): void {
+    const verdict = judgePlaceholder(r)
+    heldPlaceholders.delete(r.key) // whatever was held, this report is newer
+    if (verdict === 'edit') return deliver(r)
+    if (verdict === 'not-arrived') return pump(r.key)
+    heldPlaceholders.set(r.key, r)
+    // A section with no state asks nobody for an index: ask on its behalf.
+    if (online()) requestReindex()
+  }
+
+  /** The index has landed: judge what was held. Still unknown (its answer was discarded) → keep holding. */
+  function settleHeldPlaceholders(): void {
+    for (const [key, r] of [...heldPlaceholders]) {
+      if (sections.get(key)?.indexStale === true) continue
+      heldPlaceholders.delete(key)
+      const s = sections.get(key)
+      // no state = the index does not list it = the SOT has nothing
+      if (s === undefined || judgePlaceholder(r) !== 'not-arrived') deliver(r)
+    }
   }
 
   /** `create` / `remove` need no action here (see the report of Task 9): the
@@ -809,11 +881,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   return {
     onSection(r) {
       if (disposed) return
-      if (r.hash !== null) stash.set(r.hash, r.payload)
-      if (dispatch(r.key, { type: 'local-changed', hash: r.hash })) return
-      // Nothing changed — but a payload may just have arrived that a push was waiting for.
-      pruneMemoryStash()
-      pump(r.key)
+      receive(r)
     },
     onRemoteEvent(e) {
       if (disposed || e.hostId !== hostId || e.profileId !== profileId) return
@@ -826,12 +894,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // EVERY section first, the index request after: its epochs are read post-`reconnected`.
       for (const key of [...sections.keys()]) dispatch(key, { type: 'reconnected' }, false)
       pumpAll()
+      if (heldPlaceholders.size > 0 && online()) requestReindex()
     },
     syncNow() {
       if (disposed) return
       resetRetries()
       manual = true
       pumpAll()
+      if (heldPlaceholders.size > 0 && online()) requestReindex()
       settleManual()
     },
     resolve(section, keep) {
