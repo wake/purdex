@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { STORAGE_KEYS } from '../keys'
 import { syncManager } from '../sync'
-import { fencedWorldStorage, raiseWorldEpochFence, readWorldEpochFence, registerFencedStore } from '../world-fence'
+import { fencedWorldStorage, nextWorldEpoch, raiseWorldEpochFence, readWorldEpochFence, registerFencedStore } from '../world-fence'
 
 const KEY = STORAGE_KEYS.WORKSPACES
 const FENCE = STORAGE_KEYS.WORLD_EPOCH
@@ -129,9 +129,16 @@ describe('behind a raised fence', () => {
   })
 })
 
+/** `raiseWorldEpochFence`, for a test that expects it to succeed. */
+function raised(epoch: number): () => void {
+  const lower = raiseWorldEpochFence(epoch)
+  if (lower === null) throw new Error(`the fence was not raised to ${epoch}`)
+  return lower
+}
+
 describe('raiseWorldEpochFence', () => {
   it('writes the epoch as a decimal string; lowering puts back what was there — nothing, when nothing was', () => {
-    const lower = raiseWorldEpochFence(1)
+    const lower = raised(1)
     expect(localStorage.getItem(FENCE)).toBe('1')
     lower()
     expect(localStorage.getItem(FENCE)).toBeNull()
@@ -139,7 +146,7 @@ describe('raiseWorldEpochFence', () => {
 
   it('lowering puts the previous value back, byte for byte, and only once', () => {
     localStorage.setItem(FENCE, '3')
-    const lower = raiseWorldEpochFence(4)
+    const lower = raised(4)
     expect(localStorage.getItem(FENCE)).toBe('4')
     lower()
     expect(localStorage.getItem(FENCE)).toBe('3')
@@ -148,15 +155,70 @@ describe('raiseWorldEpochFence', () => {
     expect(localStorage.getItem(FENCE)).toBe('9')
   })
 
-  it('never lowers a fence another window raised higher', () => {
-    localStorage.setItem(FENCE, '7')
-    raiseWorldEpochFence(4)
-    expect(localStorage.getItem(FENCE)).toBe('7')
+  it('lowering leaves a fence that ANOTHER window has moved since — higher, which is the only way it moves — alone', () => {
+    localStorage.setItem(FENCE, '3')
+    const lower = raised(4)
+    localStorage.setItem(FENCE, '6') // the other window's operation, begun after ours
+    lower()
+    expect(localStorage.getItem(FENCE)).toBe('6')
+  })
+
+  it.each([7, 8])('a fence that is already AT or ABOVE the target (fence 8, target %i) is a FAILURE, not a no-op: two operations never share an epoch', (target) => {
+    localStorage.setItem(FENCE, '8')
+    expect(raiseWorldEpochFence(target)).toBeNull()
+    expect(localStorage.getItem(FENCE)).toBe('8')
+  })
+
+  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2])('a target that is no positive safe integer (%s) fails too', (target) => {
+    expect(raiseWorldEpochFence(target)).toBeNull()
+    expect(localStorage.getItem(FENCE)).toBeNull()
   })
 
   it('does not announce: the side key is no store', () => {
     const notify = vi.spyOn(syncManager, 'notify')
-    raiseWorldEpochFence(2)()
+    raised(2)()
     expect(notify).not.toHaveBeenCalled()
+  })
+})
+
+describe('nextWorldEpoch — unique per operation, and above everything there is', () => {
+  const NOW = 1_800_000_000_000
+
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    vi.spyOn(Math, 'random').mockReturnValue(0.4567)
+  })
+
+  it('the clock in microseconds plus a random 0–999: two windows in the same millisecond differ 999 times in 1000', () => {
+    expect(nextWorldEpoch([0, 0, 0])).toBe(NOW * 1000 + 456)
+    vi.spyOn(Math, 'random').mockReturnValue(0.9999999)
+    expect(nextWorldEpoch([0, 0, 0])).toBe(NOW * 1000 + 999)
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    expect(nextWorldEpoch([0, 0, 0])).toBe(NOW * 1000)
+  })
+
+  it('is a safe integer for every date this app will see', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2200, 0, 1))
+    expect(Number.isSafeInteger(nextWorldEpoch([0]))).toBe(true)
+  })
+
+  it('strictly above the fence — a clock that went backwards does not bring an epoch back', () => {
+    localStorage.setItem(FENCE, String(NOW * 1000 + 5_000))
+    expect(nextWorldEpoch([0, 0, 0])).toBe(NOW * 1000 + 5_001)
+  })
+
+  it.each([0, 1, 2])('strictly above each of the epochs the stores hold in memory (store %i is ahead)', (ahead) => {
+    const epochs = [1, 2, 3]
+    epochs[ahead] = NOW * 1000 + 7_000
+    expect(nextWorldEpoch(epochs)).toBe(NOW * 1000 + 7_001)
+  })
+
+  it('an epoch that is no safe integer (storage junk) is not a bound', () => {
+    expect(nextWorldEpoch([Number.NaN, 'x' as unknown as number, Infinity])).toBe(NOW * 1000 + 456)
+  })
+
+  it('what it returns can be raised', () => {
+    localStorage.setItem(FENCE, String(NOW * 1000 + 5_000))
+    expect(raiseWorldEpochFence(nextWorldEpoch([0]))).not.toBeNull()
   })
 })

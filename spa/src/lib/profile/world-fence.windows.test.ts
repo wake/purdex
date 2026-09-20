@@ -109,6 +109,12 @@ function world(prefix: string, sentinel: string): ParkedWorld {
 const disk = (key: string): string => localStorage.getItem(key) ?? ''
 const diskState = (key: string): Record<string, unknown> => (JSON.parse(disk(key)) as { state: Record<string, unknown> }).state
 const fence = (): string | null => localStorage.getItem(STORAGE_KEYS.WORLD_EPOCH)
+/** The ONE epoch the three stores of `w` carry — and the fence with them. An epoch is an operation's own (clock-based): tests compare, they do not count. */
+function epochOf(w: Win): number {
+  const epoch = w.useLocalProfilesStore.getState().worldEpoch
+  expect([w.useTabStore.getState().worldEpoch, w.useWorkspaceStore.getState().worldEpoch]).toEqual([epoch, epoch])
+  return epoch
+}
 
 const screenOf = (w: Win): string => JSON.stringify([w.useTabStore.getState().tabs, w.useWorkspaceStore.getState().workspaces])
 
@@ -131,6 +137,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.resetModules()
 })
@@ -159,7 +166,8 @@ describe('a switch raises the fence first', () => {
     })
     expect(await w2.switchActiveProfile(slaveId)).toEqual({ ok: true })
     vi.restoreAllMocks()
-    expect(fence()).toBe('1')
+    expect(epochOf(w2)).toBeGreaterThan(0)
+    expect(fence()).toBe(String(epochOf(w2)))
     expect(order[0]).toBe(STORAGE_KEYS.WORLD_EPOCH)
     expect(order.slice(1)).toEqual([STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TABS, STORAGE_KEYS.WORKSPACES])
   })
@@ -167,7 +175,8 @@ describe('a switch raises the fence first', () => {
   it('a promote raises it too', async () => {
     const { w2, slaveId } = await seeded()
     expect(w2.promoteToMaster(slaveId, 'Old master')).toMatchObject({ ok: true })
-    expect(fence()).toBe('1')
+    expect(epochOf(w2)).toBeGreaterThan(0)
+    expect(fence()).toBe(String(epochOf(w2)))
     expect(w2.readMasterWorld().settled).toBe(true)
   })
 
@@ -185,7 +194,9 @@ describe('a switch raises the fence first', () => {
 
   it('a switch that fails half-way lowers the fence again BEFORE it puts the stores back — so the rollback reaches the disk', async () => {
     const { w2, slaveId } = await seeded()
-    expect(await w2.switchActiveProfile(slaveId)).toEqual({ ok: true }) // epoch 1, fence '1'
+    expect(await w2.switchActiveProfile(slaveId)).toEqual({ ok: true })
+    const first = epochOf(w2)
+    expect(fence()).toBe(String(first))
     const before = [disk(STORAGE_KEYS.LOCAL_PROFILES), disk(STORAGE_KEYS.TABS), disk(STORAGE_KEYS.WORKSPACES)]
     const real = Storage.prototype.setItem
     let thrown = 0
@@ -195,11 +206,11 @@ describe('a switch raises the fence first', () => {
     })
     expect(await w2.switchActiveProfile('master')).toEqual({ ok: false, reason: 'write-failed', detail: 'quota' })
     vi.restoreAllMocks()
-    expect(fence()).toBe('1')
+    expect(fence()).toBe(String(first))
     expect([disk(STORAGE_KEYS.LOCAL_PROFILES), disk(STORAGE_KEYS.TABS), disk(STORAGE_KEYS.WORKSPACES)]).toEqual(before)
     await flush()
     expect(w2.readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
-    expect(w2.useTabStore.getState().worldEpoch).toBe(1)
+    expect(epochOf(w2)).toBe(first)
   })
 
   it('a promote whose re-stamp fails lowers it again', async () => {
@@ -219,12 +230,12 @@ describe('a switch raises the fence first', () => {
 })
 
 describe('window 2 switches; window 1 still holds the old world', () => {
-  /** Both windows on the slave (epoch 1); then window 2 switches back to the master (epoch 2), undelivered. */
+  /** Both windows on the slave; then window 2 switches back to the master — a higher epoch — undelivered. */
   async function switchedUnderWindow1(): Promise<{ w1: Win; w2: Win; slaveId: string; after: Record<string, string> }> {
     const { w2, slaveId } = await seeded()
     expect(await w2.switchActiveProfile(slaveId)).toEqual({ ok: true })
     QueuedBroadcastChannel.queue = []
-    const w1 = await openWindow() // starts from storage: the slave on screen, epoch 1
+    const w1 = await openWindow() // starts from storage: the slave on screen
     expect(w1.readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
     expect(screenOf(w1)).toContain(SLAVE)
 
@@ -277,7 +288,7 @@ describe('window 2 switches; window 1 still holds the old world', () => {
     w1.useTabStore.getState().togglePin('st1')
     expect(disk(STORAGE_KEYS.TABS)).toBe(after[STORAGE_KEYS.TABS])
     await flush()
-    expect(w1.useTabStore.getState()).toMatchObject({ worldId: 'master', worldEpoch: 2 })
+    expect(w1.useTabStore.getState()).toMatchObject({ worldId: 'master', worldEpoch: epochOf(w2) })
     await deliverAll()
     expect(screenOf(w1)).toBe(screenOf(w2))
     for (const key of Object.keys(after)) expect(disk(key)).toBe(after[key])
@@ -288,7 +299,7 @@ describe('window 2 switches; window 1 still holds the old world', () => {
     w1.useWorkspaceStore.getState().renameWorkspace('sws', 'stale rename')
     expect(disk(STORAGE_KEYS.WORKSPACES)).toBe(after[STORAGE_KEYS.WORKSPACES])
     await flush()
-    expect(w1.useWorkspaceStore.getState()).toMatchObject({ worldId: 'master', worldEpoch: 2 })
+    expect(w1.useWorkspaceStore.getState()).toMatchObject({ worldId: 'master', worldEpoch: epochOf(w2) })
     await deliverAll()
     expect(screenOf(w1)).toBe(screenOf(w2))
     for (const key of Object.keys(after)) expect(disk(key)).toBe(after[key])
@@ -299,7 +310,7 @@ describe('window 2 switches; window 1 still holds the old world', () => {
     expect(w1.useLocalProfilesStore.getState().renameSlave(slaveId, 'stale rename')).toEqual({ ok: true })
     expect(disk(STORAGE_KEYS.LOCAL_PROFILES)).toBe(after[STORAGE_KEYS.LOCAL_PROFILES])
     await flush()
-    expect(w1.useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: 'master', worldEpoch: 2 })
+    expect(w1.useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: 'master', worldEpoch: epochOf(w2) })
     expect(w1.useLocalProfilesStore.getState().slaves[slaveId].name).toBe('Slave')
     await deliverAll()
     expect(screenOf(w1)).toBe(screenOf(w2))
@@ -317,7 +328,7 @@ describe('window 2 switches; window 1 still holds the old world', () => {
 
   it('THE ONE DOOR SAYS SO: three stores that agree on a world BEHIND the fence are unsettled — nothing of it is read, written or promoted', async () => {
     const { w1, w2, slaveId, after } = await switchedUnderWindow1()
-    // No broadcast has arrived: window 1's three stores agree with each other, on epoch 1. Without the fence this reads "settled".
+    // No broadcast has arrived: window 1's three stores agree with each other, on the previous epoch. Without the fence this reads "settled".
     expect(w1.readMasterWorld()).toEqual({ settled: false, reason: 'behind-fence' })
     expect(w1.masterWorkspaceIds()).toBeNull() // the collector builds nothing
     const parked = w1.useLocalProfilesStore.getState().parkedMaster
@@ -382,6 +393,226 @@ describe('belt and braces: a window that MISSED a broadcast recovers by itself',
     for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     expect(w2.useTabStore.getState().tabs).toBe(tabs) // same objects: no pane was rebuilt
     stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// C1 — two windows, the same epoch, two switches at the same time. A window's
+// block is synchronous, so two REAL blocks cannot interleave inside one test
+// process. What can be reproduced faithfully is every order of their DISK
+// operations: window B's switch is run for real first and the four strings it
+// left in storage are captured, then storage is taken back to before — B is past
+// its block, its writes "not visible yet" — and they are replayed INSIDE window
+// A's real block, at chosen points. The points are A's reads of the side key
+// after it raised its own fence: one before each of its three store writes (the
+// fenced storage asks), one for its final `superseded` check.
+// ---------------------------------------------------------------------------
+
+describe('C1 — two switches from the same epoch, at the same time', () => {
+  const NOW = 1_800_000_000_000
+  const FENCE = STORAGE_KEYS.WORLD_EPOCH
+  const ORDER = [FENCE, STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TABS, STORAGE_KEYS.WORKSPACES] as const
+  type Key = (typeof ORDER)[number]
+
+  const snapshot = (): Record<string, string | null> => Object.fromEntries(ORDER.map((k) => [k, localStorage.getItem(k)]))
+  const put = (key: string, value: string | null): void => (value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value))
+
+  /** Windows A and B, both with the master on screen at the same epoch, and two parked slaves. */
+  async function twoWindows(): Promise<{ a: Win; b: Win; s1: string; s2: string }> {
+    const { w2: b, slaveId: s1 } = await seeded()
+    const second = b.useLocalProfilesStore.getState().addSlave('Other', world('o', 'SENTINEL-OTHER'))
+    if (!second.ok) throw new Error(second.reason)
+    QueuedBroadcastChannel.queue = []
+    const a = await openWindow()
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    return { a, b, s1, s2: second.id }
+  }
+
+  /** B's switch, for real — then storage as it was before: B's writes are "not visible yet". Returns what they are. */
+  async function switchedButNotVisible(b: Win, target: string, random: number): Promise<Record<Key, string | null>> {
+    const before = snapshot()
+    vi.spyOn(Math, 'random').mockReturnValue(random)
+    expect(await b.switchActiveProfile(target)).toEqual({ ok: true })
+    const written = snapshot() as Record<Key, string | null>
+    for (const k of ORDER) put(k, before[k])
+    return written
+  }
+
+  /**
+   * A's switch, for real, with B's writes landing at `plan[n]` = just before A's n-th read of the side key after A
+   * raised its fence (1–3: before A's local-profiles / tabs / workspaces write; 4: before A's final check).
+   */
+  async function switchWithReplay(a: Win, target: string, random: number, written: Record<Key, string | null>, plan: Partial<Record<1 | 2 | 3 | 4, Key[]>>) {
+    vi.spyOn(Math, 'random').mockReturnValue(random)
+    const realGet = Storage.prototype.getItem
+    const realSet = Storage.prototype.setItem
+    let raised = false
+    let reads = 0
+    let replaying = false
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      realSet.call(this, key, value)
+      if (key === FENCE && !replaying) raised = true
+    })
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === FENCE && raised && !replaying) {
+        reads += 1
+        replaying = true
+        for (const k of plan[reads as 1 | 2 | 3 | 4] ?? []) put(k, written[k])
+        replaying = false
+      }
+      return realGet.call(this, key)
+    })
+    try {
+      return await a.switchActiveProfile(target)
+    } finally {
+      set.mockRestore()
+      get.mockRestore()
+    }
+  }
+
+  const stateOnDisk = (key: string): Record<string, unknown> => diskState(key)
+
+  /** Both windows hear everything; then: ONE world, in both memories and on disk, under one epoch. */
+  async function expectOneWorld(a: Win, b: Win, worldId: string, sentinel: string): Promise<void> {
+    await deliverAll()
+    await flush()
+    const epoch = stateOnDisk(STORAGE_KEYS.LOCAL_PROFILES).worldEpoch
+    expect(stateOnDisk(STORAGE_KEYS.LOCAL_PROFILES).activeProfileId).toBe(worldId)
+    expect(stateOnDisk(STORAGE_KEYS.TABS)).toMatchObject({ worldId, worldEpoch: epoch })
+    expect(stateOnDisk(STORAGE_KEYS.WORKSPACES)).toMatchObject({ worldId, worldEpoch: epoch })
+    expect(fence()).toBe(String(epoch))
+    expect(disk(STORAGE_KEYS.TABS)).toContain(sentinel)
+    expect(disk(STORAGE_KEYS.WORKSPACES)).toContain(sentinel)
+    for (const w of [a, b]) {
+      expect(w.readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
+      expect(w.useLocalProfilesStore.getState().activeProfileId).toBe(worldId)
+      expect(screenOf(w)).toContain(sentinel)
+    }
+    expect(screenOf(a)).toBe(screenOf(b))
+    expect(JSON.stringify(a.useLocalProfilesStore.getState().slaves)).toBe(JSON.stringify(b.useLocalProfilesStore.getState().slaves))
+  }
+
+  it.each([
+    ['B\'s fence lands between A\'s fence and A\'s first store write, B\'s stores right behind it', { 1: [...ORDER] }],
+    ['completely interleaved — fence, fence, store, store, …', { 1: [FENCE], 2: [STORAGE_KEYS.LOCAL_PROFILES], 3: [STORAGE_KEYS.TABS], 4: [STORAGE_KEYS.WORKSPACES] }],
+    ['A\'s pointer is already down when B\'s fence comes', { 2: [FENCE, STORAGE_KEYS.LOCAL_PROFILES], 3: [STORAGE_KEYS.TABS], 4: [STORAGE_KEYS.WORKSPACES] }],
+    ['A\'s pointer and tabs are down when B arrives', { 3: [...ORDER] }],
+    ['all of A is down, B arrives before A has looked back', { 4: [...ORDER] }],
+  ] as [string, Partial<Record<1 | 2 | 3 | 4, Key[]>>][])('%s: B (the higher epoch) wins whole, A says `superseded` and ends up in B\'s world', async (_name, plan) => {
+    const { a, b, s1, s2 } = await twoWindows()
+    const written = await switchedButNotVisible(b, s2, 0.9)
+    const result = await switchWithReplay(a, s1, 0.1, written, plan)
+    expect(result).toEqual({ ok: false, reason: 'superseded' })
+    expect(fence()).toBe(written[FENCE])
+    await expectOneWorld(a, b, s2, 'SENTINEL-OTHER')
+  })
+
+  it('B\'s writes land only after A is completely done and has looked back: A said ok, and then follows B like any later switch', async () => {
+    const { a, b, s1, s2 } = await twoWindows()
+    const written = await switchedButNotVisible(b, s2, 0.9)
+    expect(await switchWithReplay(a, s1, 0.1, written, {})).toEqual({ ok: true })
+    for (const k of ORDER) put(k, written[k])
+    // what the browser tells A of B's writes (B's broadcasts are in the queue already)
+    await expectOneWorld(a, b, s2, 'SENTINEL-OTHER')
+  })
+
+  it('one after the other, B not having heard of A yet: B is behind A\'s fence, refused, and catches up', async () => {
+    const { a, b, s1, s2 } = await twoWindows()
+    vi.spyOn(Math, 'random').mockReturnValue(0.1)
+    expect(await a.switchActiveProfile(s1)).toEqual({ ok: true })
+    expect(await b.switchActiveProfile(s2)).toEqual({ ok: false, reason: 'unsettled' })
+    await expectOneWorld(a, b, s1, SLAVE)
+  })
+
+  it('the three stores of a switch carry ONE epoch, above everything before it — and it is the operation\'s own, not `epoch + 1`', async () => {
+    const { a, s1 } = await twoWindows()
+    vi.spyOn(Math, 'random').mockReturnValue(0.123)
+    expect(await a.switchActiveProfile(s1)).toEqual({ ok: true })
+    const epoch = NOW * 1000 + 123
+    expect([a.useLocalProfilesStore.getState().worldEpoch, a.useTabStore.getState().worldEpoch, a.useWorkspaceStore.getState().worldEpoch]).toEqual([epoch, epoch, epoch])
+    expect(fence()).toBe(String(epoch))
+    // the clock stands still and the dice repeat: the next one is still strictly above
+    expect(await a.switchActiveProfile('master')).toEqual({ ok: true })
+    expect(a.useTabStore.getState().worldEpoch).toBe(epoch + 1)
+  })
+
+  it('A FAILS after B has raised its fence: A\'s rollback does not lower B\'s fence', async () => {
+    const { a, b, s1, s2 } = await twoWindows()
+    const written = await switchedButNotVisible(b, s2, 0.9)
+    vi.spyOn(Math, 'random').mockReturnValue(0.1)
+    vi.spyOn(a.useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+      for (const k of ORDER) put(k, written[k]) // B's whole switch becomes visible at this very moment
+      throw new Error('workspace write failed')
+    })
+    expect(await a.switchActiveProfile(s1)).toEqual({ ok: false, reason: 'write-failed', detail: 'workspace write failed' })
+    expect(fence()).toBe(written[FENCE])
+    await expectOneWorld(a, b, s2, 'SENTINEL-OTHER')
+  })
+
+  describe('the fence is raised by someone else between drawing the epoch and raising it', () => {
+    /** The side key as A reads it: real, except that the reads listed in `lost` see another window's higher fence.
+     *  Reads per attempt: the door (1), then `nextWorldEpoch` and `raise` — 2, 3 for the first draw, 4, 5 for the second. */
+    function losingTheRace(lost: number[]): { reads: () => number; restore: () => void } {
+      const realGet = Storage.prototype.getItem
+      let n = 0
+      const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+        const value = realGet.call(this, key)
+        if (key !== FENCE) return value
+        n += 1
+        return lost.includes(n) ? String(NOW * 1000 + 1_000 * n) : value
+      })
+      return { reads: () => n, restore: () => spy.mockRestore() }
+    }
+
+    it('once: a new epoch is drawn and the switch goes through', async () => {
+      const { a, s1 } = await twoWindows()
+      vi.spyOn(Math, 'random').mockReturnValue(0.1)
+      const race = losingTheRace([3])
+      const result = await a.switchActiveProfile(s1)
+      race.restore()
+      expect(result).toEqual({ ok: true })
+      expect(fence()).toBe(String(epochOf(a)))
+    })
+
+    it('twice: `busy` — nothing written, no side key', async () => {
+      const { a, s1 } = await twoWindows()
+      vi.spyOn(Math, 'random').mockReturnValue(0.1)
+      const before = [a.useLocalProfilesStore.getState(), a.useTabStore.getState(), a.useWorkspaceStore.getState()]
+      const race = losingTheRace([3, 5])
+      const result = await a.switchActiveProfile(s1)
+      race.restore()
+      expect(result).toEqual({ ok: false, reason: 'busy' })
+      expect(race.reads()).toBe(5)
+      expect(fence()).toBeNull()
+      expect([a.useLocalProfilesStore.getState(), a.useTabStore.getState(), a.useWorkspaceStore.getState()]).toEqual(before)
+      expect(a.useLocalProfilesStore.getState()).toBe(before[0])
+    })
+  })
+
+  it('a promote is superseded the same way', async () => {
+    const { a, b, s1, s2 } = await twoWindows()
+    const written = await switchedButNotVisible(b, s2, 0.9)
+    vi.spyOn(Math, 'random').mockReturnValue(0.1)
+    const realGet = Storage.prototype.getItem
+    const realSet = Storage.prototype.setItem
+    let raised = false
+    let done = false
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      realSet.call(this, key, value)
+      if (key === FENCE && !done) raised = true
+    })
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === FENCE && raised && !done) {
+        done = true
+        for (const k of ORDER) put(k, written[k])
+      }
+      return realGet.call(this, key)
+    })
+    const result = a.promoteToMaster(s1, 'Old master')
+    set.mockRestore()
+    get.mockRestore()
+    expect(result).toEqual({ ok: false, reason: 'superseded' })
+    await expectOneWorld(a, b, s2, 'SENTINEL-OTHER')
   })
 })
 

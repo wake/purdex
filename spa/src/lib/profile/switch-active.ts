@@ -41,6 +41,16 @@
 // device's current world. Every refusal for `unsettled` asks the stores to catch
 // up (`recoverUnsettledWorld`), so the next attempt works.
 //
+// THE EPOCH IS THE OPERATION'S OWN (`nextWorldEpoch`, world-fence.ts — not
+// `epoch + 1`), and raising the fence can FAIL: another window's operation got
+// there between the draw and the raise. One new draw, then `busy`. Two windows
+// can still both be inside their blocks — each passed the door before the other's
+// fence was visible. Then the higher epoch wins whole: every store write of the
+// other is below the fence and is dropped (and answered with a rehydrate). The
+// block therefore LOOKS BACK before it says ok: a fence that is no longer its own
+// means its world never reached storage — `superseded`; what it holds in memory
+// is about to be replaced by the winner's, and the stores are asked to hurry.
+//
 // THE OPERATION LOCK. A switch replaces the tab tree, so it takes the lock every
 // other tree-rewriter takes (rebuild, snapshot restore, a profile apply): none of
 // them is ever half-way through a world that is then swapped from under it, and
@@ -75,7 +85,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { generateId } from '../id'
-import { raiseWorldEpochFence } from '../storage/world-fence'
+import { nextWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
@@ -123,23 +133,42 @@ function worldIsCurrent(): boolean {
   return read.settled
 }
 
-export type SwitchResult = { ok: true } | Refused<'busy' | 'unsettled' | 'not-found' | 'already-on-screen' | 'bad-world' | 'bad-epoch'> | WriteFailed
+export type SwitchResult = { ok: true } | Refused<'busy' | 'unsettled' | 'superseded' | 'not-found' | 'already-on-screen' | 'bad-world' | 'bad-epoch'> | WriteFailed
+
+/** The operation's epoch, with the fence raised to it — or null: lost the race for the fence twice (see THE EPOCH IS THE OPERATION'S OWN). */
+function openEpoch(): { worldEpoch: number; lowerFence: () => void } | null {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const worldEpoch = nextWorldEpoch([useLocalProfilesStore.getState().worldEpoch, useTabStore.getState().worldEpoch, useWorkspaceStore.getState().worldEpoch])
+    const lowerFence = raiseWorldEpochFence(worldEpoch)
+    if (lowerFence !== null) return { worldEpoch, lowerFence }
+  }
+  return null
+}
+
+/** Did this operation's world reach storage? Not if the fence is another operation's by now — and then the stores are told to catch up with it. */
+function superseded(worldEpoch: number): boolean {
+  if (readWorldEpochFence() === worldEpoch) return false
+  recoverUnsettledWorld(readMasterWorld(), true)
+  return true
+}
 
 /** THE SYNCHRONOUS BLOCK. Not `async`, on purpose: an `await` cannot be written in here. */
 function exchange(targetId: string): SwitchResult {
   if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
   const old = captureLocal()
-  const worldEpoch = old.worldEpoch + 1
   let lowerFence = (): void => {}
   try {
-    lowerFence = raiseWorldEpochFence(worldEpoch)
+    const epoch = openEpoch()
+    if (epoch === null) return { ok: false, reason: 'busy' }
+    const { worldEpoch } = epoch
+    lowerFence = epoch.lowerFence
     const swapped = useLocalProfilesStore.getState().swapActive(targetId, readScreen(), worldEpoch)
     if (!swapped.ok) {
       lowerFence()
       return swapped
     }
     commitTabWorld(swapped.world, undefined, { worldId: targetId, worldEpoch, beforeRollback: lowerFence })
-    return { ok: true }
+    return superseded(worldEpoch) ? { ok: false, reason: 'superseded' } : { ok: true }
   } catch (err) {
     lowerFence()
     restoreLocal(old)
@@ -328,7 +357,7 @@ export function saveScreenAsSlave(name: string): CopyResult {
 
 // === The move ===
 
-export type PromoteResult = { ok: true; demotedId: string } | Refused<'master-attached' | 'busy' | 'unsettled' | 'not-found' | 'bad-name' | 'bad-epoch'> | WriteFailed
+export type PromoteResult = { ok: true; demotedId: string } | Refused<'master-attached' | 'busy' | 'unsettled' | 'superseded' | 'not-found' | 'bad-name' | 'bad-epoch'> | WriteFailed
 
 /**
  * A MOVE, never a copy (decision 10: there is no "copy as master"): the slave's
@@ -365,17 +394,19 @@ export function promoteToMaster(slaveId: string, demotedName: string): PromoteRe
     if (useProfileStore.getState().masterHostId !== null || masterAttachedInStorage()) return { ok: false, reason: 'master-attached' }
     if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
     const old = captureLocal()
-    const worldEpoch = old.worldEpoch + 1
     let lowerFence = (): void => {}
     try {
-      lowerFence = raiseWorldEpochFence(worldEpoch)
+      const epoch = openEpoch()
+      if (epoch === null) return { ok: false, reason: 'busy' }
+      const { worldEpoch } = epoch
+      lowerFence = epoch.lowerFence
       const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch)
       if (!promoted.ok) {
         lowerFence()
         return promoted
       }
       restampWorld({ worldId: promoted.activeProfileId, worldEpoch, beforeRollback: lowerFence })
-      return { ok: true, demotedId: promoted.demotedId }
+      return superseded(worldEpoch) ? { ok: false, reason: 'superseded' } : { ok: true, demotedId: promoted.demotedId }
     } catch (err) {
       lowerFence()
       restoreLocal(old)
