@@ -1164,3 +1164,16 @@ by its hosts' next `sessions` payload, like an app that was closed for a while. 
 push gate** waits for `workspaces` to be up to date, so a LOCKED `workspaces` holds back every
 settings push, not only the workspace-scoped field.
 
+
+**Critic round 3 — where the review was stopped.** C2' fixed; lock ordering, the undo of a user who
+has never used a slave, and the zero-new-keys rule all held. One finding remained (high): the Web
+Lock serialises the callbacks but does not make the next holder's *view of localStorage* fresh, so a
+window that takes the lock within milliseconds of another window's switch can still read a
+consistent, stale world and switch from it. It was **not** fixed, deliberately. Three rounds had found
+successively narrower variants of one class — same-epoch concurrency, a non-atomic read-check-write,
+a stale view after lock hand-over — all of them the same physical fact (localStorage has no
+cross-renderer consistency and no compare-and-set), and the next fix would have been a freshness
+protocol whose own reads go stale the same way. The case needs two switches in two windows a few
+milliseconds apart; the outcome is "the later switch wins" over a complete, self-consistent older
+state; nothing is relabelled as the master, and the barrier (settled + fence) still holds. #1256
+records it, with the only fix worth making: move the world stores' commit point off localStorage.
