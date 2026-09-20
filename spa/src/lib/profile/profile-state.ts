@@ -66,10 +66,12 @@ export function profileLock(index: readonly SotIndexEntry[], mine: Record<Sectio
 
 // === Profile status (§4.4) ===
 
-export type ProfileStatus = 'idle' | 'locked:schema' | 'locked:conflict' | 'locked:reset' | 'pending' | 'synced'
+export type ProfileStatus = 'idle' | 'locked:schema' | 'locked:conflict' | 'locked:reset' | 'locked:invalid' | 'pending' | 'synced'
 
-/** Worst last. `locked:reset` outranks `locked:conflict`: the SOT the section was based on is gone. */
-const SEVERITY: readonly SectionSyncState['status'][] = ['synced', 'pending', 'locked:conflict', 'locked:reset']
+/** Worst last. `locked:reset` outranks `locked:conflict`: the SOT the section was based on is gone.
+ *  `locked:invalid` sits under both — nothing of the user's is at stake, the section merely cannot
+ *  take what the SOT holds — but above `pending`, which resolves itself; this does not. */
+const SEVERITY: readonly SectionSyncState['status'][] = ['synced', 'pending', 'locked:invalid', 'locked:conflict', 'locked:reset']
 
 /** `idle` without a master, `locked:schema` under a lock, otherwise the worst of the sections (`synced` when there are none). */
 export function profileStatus(args: {

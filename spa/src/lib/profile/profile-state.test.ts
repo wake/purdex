@@ -155,7 +155,7 @@ describe('profileStatus (spec §4.4)', () => {
     expect(profileStatus({ hasMaster: true, sections: { hosts: section('synced'), settings: section('synced') }, lock: null })).toBe('synced')
   })
 
-  it('worst of sections: locked:reset > locked:conflict > pending > synced', () => {
+  it('worst of sections: locked:reset > locked:conflict > locked:invalid > pending > synced', () => {
     const status = (...statuses: SectionSyncState['status'][]) =>
       profileStatus({
         hasMaster: true,
@@ -168,6 +168,12 @@ describe('profileStatus (spec §4.4)', () => {
     expect(status('locked:conflict', 'pending')).toBe('locked:conflict')
     expect(status('locked:conflict', 'locked:reset', 'pending')).toBe('locked:reset')
     expect(status('locked:reset', 'locked:conflict')).toBe('locked:reset')
+    expect(status('synced', 'locked:invalid')).toBe('locked:invalid')
+    expect(status('locked:invalid', 'pending')).toBe('locked:invalid')
+    expect(status('pending', 'locked:invalid', 'synced')).toBe('locked:invalid')
+    expect(status('locked:invalid', 'locked:conflict')).toBe('locked:conflict')
+    expect(status('locked:conflict', 'locked:invalid', 'pending')).toBe('locked:conflict')
+    expect(status('locked:invalid', 'locked:reset')).toBe('locked:reset')
   })
 })
 
