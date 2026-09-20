@@ -5,9 +5,14 @@
 // THE IRON RULE
 //   A user who has set no master gets the app they had before this feature
 //   existed. `startProfileSync()` subscribes to `useProfileStore` and, while
-//   there is no master, does NOTHING else: no other subscription, no hash, no
-//   lease read or write, no request, no timer. Pinned by start.ironrule.test.ts
-//   with nothing mocked.
+//   there is no master, does nothing else: it subscribes to NO OTHER store,
+//   computes no hash, neither reads nor writes the lease, sends no request,
+//   schedules no timer, opens no BroadcastChannel. Pinned by
+//   start.ironrule.test.ts with nothing mocked.
+//   (`useProfileStore` itself is an ordinary persisted, `syncManager`-registered
+//   store, like the eighteen others on main: its storage key and its entry in
+//   the registry of syncManager's singleton channel exist for every user. That
+//   is what any store costs; it is not part of the "nothing" above.)
 //
 // LIFETIMES (each inside the previous one)
 //   started      `startProfileSync()` … its returned stop. One subscription to
@@ -16,7 +21,11 @@
 //   master mode  a master is set. EVERY window: `watchUnsyncedStores()` and a
 //                contender for the lease. A master that changes (host OR
 //                profile) ends this mode and starts a new one.
-//   leading      this window holds the lease. ONLY here: executor, WS
+//                It also watches the master host's endpoint: `ip` / `port`
+//                edited in place → BLOCKED, no driver in any window, until the
+//                old value is back, or `attachMaster` / `detachMaster`; a new
+//                `token` alone → the same daemon, the driver is rebuilt.
+//   leading      this window holds the lease (and the mode is not blocked). ONLY here: executor, WS
 //                subscription, collector, host watcher. Losing the lease
 //                disposes all four and the window is a follower again.
 //
@@ -33,7 +42,12 @@
 //     the status is read at that moment, so a connect that happened meanwhile is
 //     not lost and is not announced early.
 //   - the attachment: `putAttachment` on attach and on every (re)connect (it
-//     refreshes `lastSeen`), `deleteAttachment` on detach.
+//     refreshes `lastSeen`), `deleteAttachment` on detach. THE ATTACHMENT COMES
+//     FIRST: `onReconnected()` is called only after the daemon has confirmed it,
+//     and until then the executor is told the host is unreachable — an executor
+//     that was never announced still reindexes by itself as soon as the collector
+//     reports (that is how a section asks for its index), so "not announced" is
+//     not a gate; `isReachable()` is, because every request asks it first.
 //
 // `autoSync` off → on: the executor decides only when something pumps it, and
 // its only entries that pump every section are `onReconnected()` and
@@ -72,6 +86,7 @@ import { contendForLeadership } from './leader'
 import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { clearSectionStore } from './section-store'
+import { STORAGE_KEYS } from '../storage/keys'
 
 export interface Master {
   hostId: string
@@ -89,7 +104,12 @@ export interface ProfileSyncState {
   master: Master | null
   /** This window holds the lease right now. */
   leader: boolean
-  /** Null in a follower and without a master: only the leader knows. */
+  /** Nothing syncs, in any window (see `enterMasterMode`): the master host's ip / port is not the one the
+   *  profile was attached at · the attachment answered 404, i.e. the profile is not on the daemon any more ·
+   *  an `attachMaster` is in progress somewhere (transient: lifted by its outcome, or by its expiry). */
+  blocked: 'master-endpoint-changed' | 'profile-gone' | 'suspended' | null
+  /** Null in a follower and without a master: only the leader knows. With `blocked: 'profile-gone'` there is
+   *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections. */
   status: ExecutorStatus | null
   /** The latest `PROBLEM_BUFFER_SIZE`, oldest first. */
   problems: ProfileSyncProblem[]
@@ -113,6 +133,78 @@ declare global {
 }
 
 export const PROBLEM_BUFFER_SIZE = 50
+export const ATTACH_RETRY_BASE_MS = 2_000
+export const ATTACH_RETRY_CAP_MS = 30_000
+/**
+ * How long ONE stretch of an attach keeps every driver still. Each stretch covers exactly one request
+ * (15 s timeout) and is strictly longer than it: the attachment PUT, then — only when the master changes —
+ * the DELETE of the old attachment, which gets a fresh stretch before it starts (the first began at most
+ * 15 s earlier, so it cannot have run out). An attach waiting in this window's queue suspended in its call;
+ * the attach working in front of it refreshes that suspension at each of its own stretches, and the queued
+ * one refreshes it again when its turn comes — so no gap opens however many are queued. A detach in the
+ * queue clears the master, and with it everything there was to hold still.
+ */
+export const ATTACH_SUSPEND_MS = 30_000
+
+/** Epoch ms. `startProfileSync({ now })` replaces it. */
+let clock: () => number = () => Date.now()
+
+function isSuspended(): boolean {
+  const suspension = useProfileStore.getState().suspension
+  return suspension !== null && clock() < suspension.until
+}
+
+/**
+ * The suspension as `localStorage` holds it RIGHT NOW — not as this window's
+ * store remembers it. Another window's attach reaches this store through a
+ * BroadcastChannel message and a rehydrate, i.e. some turns later; the storage
+ * it persisted to is shared synchronously, like the lease. The leader's
+ * `isReachable()` asks this before every request (executor.ts, `request`), so an
+ * unexpired suspension set anywhere stops the next request here, and closes a
+ * flight that was already open.
+ *   WHAT IS LEFT, stated plainly: between two renderer processes `localStorage`
+ * is not instantaneous either (Chromium propagates it eventually — usually
+ * within milliseconds); "read: not suspended → send" is a read followed by an
+ * act, not an atomic step; and bytes that have been sent cannot be called back
+ * (disposing the executor aborts the request, the daemon may have applied it).
+ * The window is no longer a broadcast and a rehydrate, nor "whatever the old
+ * driver had decided on": it is one synchronous read, the same grade as the lease.
+ *   Unreadable or malformed = not suspended: what the record IS, is the store's
+ * sanitiser's business, and a broken record has no master to sync for anyway.
+ */
+function suspendedInStorage(): boolean {
+  const until = storedControl()?.suspension?.until
+  return typeof until === 'number' && Number.isFinite(until) && clock() < until
+}
+
+/** The control plane as `localStorage` holds it right now (the persist envelope's `state`), or null: absent, unreadable. */
+function storedControl(): { masterHostId?: unknown; masterProfileId?: unknown; attachGeneration?: unknown; suspension?: { until?: unknown } | null } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PROFILE)
+    if (raw === null) return null
+    const state = (JSON.parse(raw) as { state?: unknown }).state
+    return typeof state === 'object' && state !== null ? (state as ReturnType<typeof storedControl>) : null
+  } catch {
+    return null
+  }
+}
+
+/** `attachGeneration` as storage holds it; this window's memory only when storage cannot be read. */
+function storedGeneration(): number {
+  const g = storedControl()?.attachGeneration
+  return typeof g === 'number' && Number.isSafeInteger(g) ? g : useProfileStore.getState().attachGeneration
+}
+
+/** The owner of one attach's suspension (see `useProfileStore`, WHY `suspension`). */
+function newToken(): string {
+  const bytes = new Uint8Array(16)
+  try {
+    crypto.getRandomValues(bytes)
+  } catch {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
 
 // === Problems ===
 
@@ -145,18 +237,23 @@ interface Leader {
   dispose(): void
 }
 
-function lead(master: Master, leadership: Leadership): Leader {
+function lead(master: Master, leadership: Leadership, onProfileGone: (detail: string) => void): Leader {
   const { hostId, profileId } = master
   let disposed = false
   let lastStatus: ExecutorStatus | null = null
   let unwatchHost: (() => void) | null = null
+  /** The daemon has confirmed this client's attachment on the CURRENT connection. */
+  let attached = false
+  let attachFailures = 0
+  let round = 0
+  let retry: ReturnType<typeof setTimeout> | null = null
   const connected = (): boolean => useHostStore.getState().runtime[hostId]?.status === 'connected'
 
   const executor = createExecutor({
     hostId,
     profileId,
     isLeader: () => leadership.isLeader(),
-    isReachable: connected,
+    isReachable: () => attached && connected() && !suspendedInStorage(),
     autoSync: () => useProfileStore.getState().autoSync,
     // Only while the store's master is still THIS one: a direction belongs to the attach that gave it.
     initialDirection: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingDirection),
@@ -171,27 +268,68 @@ function lead(master: Master, leadership: Leadership): Leader {
   const unsubscribeWs = subscribeProfileEvents((e) => executor.onRemoteEvent(e))
   const collector = startCollector({ onSection: (r) => executor.onSection(r), onProblem: reportProblem })
 
-  /** The master host is connected: refresh the attachment, tell the executor. */
+  /**
+   * The master host is connected: FIRST the attachment, and only once the daemon
+   * has confirmed it, the executor. Until then `isReachable()` is false, which
+   * is the one thing every request of the executor asks first — so nothing is
+   * listed, pulled or pushed for a profile the daemon does not yet know this
+   * client is attached to (and would let another client delete meanwhile).
+   * A failure is retried, 2 s doubling to a 30 s cap; every new connection starts
+   * a new round, and the answer of an older round is dropped.
+   */
   const announce = (): void => {
-    if (isClientIdPersisted()) {
-      const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
-      putAttachment(hostId, profileId, body).then(
-        (r) => {
-          if (!disposed && r.kind === 'failed') {
-            reportProblem({ kind: 'attachment-refresh-failed', detail: `${r.reason}: ${r.message}` })
-          }
-        },
-        (e: unknown) => {
-          if (!disposed) reportProblem({ kind: 'attachment-refresh-failed', detail: message(e) })
-        },
-      )
-    } else {
-      reportProblem({
-        kind: 'client-id-not-persisted',
-        detail: 'attachment not refreshed: this client id would not survive a reload',
-      })
+    const mine = ++round
+    attached = false
+    attachFailures = 0
+    cancelRetry()
+    void attach(mine)
+  }
+
+  const cancelRetry = (): void => {
+    if (retry !== null) clearTimeout(retry)
+    retry = null
+  }
+
+  const attach = async (mine: number): Promise<void> => {
+    if (!isClientIdPersisted()) {
+      // Reload-proof or nothing: no attachment is written — and without one, nothing syncs.
+      reportProblem({ kind: 'client-id-not-persisted', detail: 'no attachment, no sync: this client id would not survive a reload' })
+      return
     }
-    executor.onReconnected()
+    let failure: string | null = null
+    let notFound = false
+    try {
+      const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
+      const r = await putAttachment(hostId, profileId, body)
+      if (r.kind === 'failed') {
+        failure = `${r.reason}: ${r.message}`
+        notFound = r.reason === 'not-found'
+      }
+    } catch (e) {
+      failure = message(e)
+    }
+    if (disposed || mine !== round || !connected()) return
+    if (notFound) {
+      // 404 on the attachment = the profile is not on this daemon. The executor
+      // would say `profileGone` — but it is never started without an attachment,
+      // so the start layer says it (the caller disposes this leader). No retry:
+      // a profile that is made again gets a new id.
+      onProfileGone(failure ?? 'not-found')
+      return
+    }
+    if (failure === null) {
+      attached = true
+      attachFailures = 0
+      executor.onReconnected()
+      return
+    }
+    const ms = Math.min(ATTACH_RETRY_BASE_MS * 2 ** attachFailures, ATTACH_RETRY_CAP_MS)
+    attachFailures += 1
+    reportProblem({ kind: 'attachment-failed', detail: `${failure}; nothing syncs until it succeeds, retry in ${ms} ms` })
+    retry = setTimeout(() => {
+      retry = null
+      if (!disposed && mine === round && connected()) void attach(mine)
+    }, ms)
   }
 
   void (async () => {
@@ -210,6 +348,12 @@ function lead(master: Master, leadership: Leadership): Leader {
       const is = next.runtime[hostId]?.status === 'connected'
       const was = prev.runtime[hostId]?.status === 'connected'
       if (is && !was) announce()
+      if (!is && was) {
+        // the attachment is confirmed per connection; whatever is out or pending belongs to the old one
+        round += 1
+        attached = false
+        cancelRetry()
+      }
     })
     if (connected()) announce()
   })()
@@ -220,6 +364,7 @@ function lead(master: Master, leadership: Leadership): Leader {
     dispose() {
       if (disposed) return
       disposed = true
+      cancelRetry()
       unwatchHost?.()
       unwatchHost = null
       unsubscribeWs()
@@ -236,14 +381,43 @@ interface MasterMode {
   /** `useProfileStore.attachGeneration` when this mode was entered. */
   generation: number
   isLeader(): boolean
+  /** No driver, whoever holds the lease: the master host was re-pointed in place, or the profile is gone. */
+  blocked(): ProfileSyncState['blocked']
+  /** `suspension` moved: take the driver down, or bring it back. */
+  reapply(): void
   leader(): Leader | null
   end(): void
+}
+
+/** Where the master's daemon is, and the credential for it. Null = the host is not in the store. */
+function endpointOf(hostId: string): { at: string; token: string } | null {
+  const host = useHostStore.getState().hosts[hostId]
+  return host === undefined ? null : { at: `${host.ip}:${host.port}`, token: host.token ?? '' }
 }
 
 function enterMasterMode(master: Master, generation: number): MasterMode {
   let ended = false
   let leader: Leader | null = null
+  // The bases (and the attachment, the schema lock, `profileGone`) belong to the
+  // daemon at `useProfileStore.masterEndpoint` — STORED at attach, so that a
+  // reload cannot mistake an edited address for the original. `api.ts` resolves
+  // the address from the host store on every request, so an edit of the master
+  // host IN PLACE would send the next request, with the old daemon's CAS bases,
+  // to whatever answers at the new address. (A master always has one: without it
+  // `selectMaster` says there is no master. Null here would still read as foreign.)
+  const foreign = (at: string): boolean => at !== useProfileStore.getState().masterEndpoint
+  const here = endpointOf(master.hostId)
+  let token = here?.token ?? null
+  let blocked = here !== null && foreign(here.at)
+  /** The attachment answered 404. Final for this mode: only `attachMaster` / `detachMaster` (a new mode) end it. */
+  let gone = false
   warned.clear()
+  const blockedProblem = (at: string): void =>
+    reportProblem({
+      kind: 'master-endpoint-changed',
+      detail: `host ${master.hostId} points at ${at}, the profile was attached at ${String(useProfileStore.getState().masterEndpoint)}; nothing syncs until it is attached again, detached, or the address is put back`,
+    })
+  if (blocked && here !== null) blockedProblem(here.at)
   const unwatchUnsynced = watchUnsyncedStores()
   const leadership = contendForLeadership()
 
@@ -253,22 +427,76 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   }
   const apply = (isLeader: boolean): void => {
     if (ended) return
-    if (!isLeader) follow()
-    else if (leader === null) leader = lead(master, leadership)
+    if (!isLeader || blocked || gone || isSuspended()) follow()
+    else if (leader === null) leader = lead(master, leadership, profileGone)
+  }
+  const profileGone = (detail: string): void => {
+    if (ended || gone) return
+    gone = true
+    follow()
+    // Not a detach and not a wipe: what to do with a master that is gone is the user's call (P3's wizard).
+    reportProblem({ kind: 'profile-gone', detail: `profile ${master.profileId} is not on host ${master.hostId} any more (${detail}); nothing was applied and nothing was dropped` })
   }
   const unsubscribe = leadership.onChange(apply)
+
+  // Only a LOCAL edit can do this: a `hosts` payload from the SOT that re-points
+  // the master's own host is refused by apply-to-stores.
+  const unwatchEndpoint = useHostStore.subscribe((next, prev) => {
+    if (ended || next.hosts[master.hostId] === prev.hosts[master.hostId]) return
+    const now = endpointOf(master.hostId)
+    if (now === null) return // removed: the leader reports it; coming back is judged like any edit
+    if (foreign(now.at)) {
+      // ip or port: nobody can tell whether this is the same daemon. Stop. Do not
+      // detach (the user's setting) and do not drop the bases (a typo may be
+      // corrected): the ways out are the old value, `attachMaster`, `detachMaster`.
+      if (blocked) return
+      blocked = true
+      follow()
+      blockedProblem(now.at)
+      return
+    }
+    const rotated = token !== null && now.token !== token
+    token = now.token
+    if (!blocked && !rotated) return
+    // Back where the bases belong, or the same daemon with a new token: a new
+    // driver on the bases there are — a reconnect, in effect.
+    blocked = false
+    follow()
+    apply(leadership.isLeader())
+  })
+
+  // SUSPENDED (`useProfileStore.suspension`): an attach is being made, in this
+  // window or another. No driver until it is lifted — or until it EXPIRES, which
+  // nobody announces: the window that set it may be gone, so the wake-up is a
+  // timer of this mode's own.
+  let wake: ReturnType<typeof setTimeout> | null = null
+  const reapply = (): void => {
+    if (wake !== null) clearTimeout(wake)
+    wake = null
+    if (ended) return
+    // Whoever owns it by now: the wake-up looks at the time only.
+    const suspension = useProfileStore.getState().suspension
+    if (suspension !== null && isSuspended()) wake = setTimeout(reapply, Math.max(1, suspension.until - clock()))
+    apply(leadership.isLeader())
+  }
+
   // `onChange` does not replay: ask once.
-  if (leadership.isLeader()) apply(true)
+  reapply()
 
   return {
     master,
     generation,
     isLeader: () => !ended && leadership.isLeader(),
+    blocked: () => (ended ? null : gone ? 'profile-gone' : blocked ? 'master-endpoint-changed' : isSuspended() ? 'suspended' : null),
+    reapply,
     leader: () => leader,
     end() {
       if (ended) return
       ended = true
       unsubscribe()
+      unwatchEndpoint()
+      if (wake !== null) clearTimeout(wake)
+      wake = null
       follow()
       leadership.stop()
       unwatchUnsynced()
@@ -286,10 +514,12 @@ function sameMaster(a: Master | null, b: Master | null): boolean {
 }
 
 export function profileSyncState(): ProfileSyncState {
+  const blocked = mode?.blocked() ?? null
   return {
     master: selectMaster(useProfileStore.getState()),
     leader: mode?.isLeader() ?? false,
-    status: mode?.leader()?.status() ?? null,
+    blocked,
+    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {} } : (mode?.leader()?.status() ?? null),
     problems: problems.map((p) => ({ ...p })),
   }
 }
@@ -298,8 +528,9 @@ export function profileSyncState(): ProfileSyncState {
  * App lifetime, called from main.tsx. Without a master this is one subscription
  * to `useProfileStore` and nothing else (THE IRON RULE above).
  */
-export function startProfileSync(): () => void {
+export function startProfileSync(opts: { now?: () => number } = {}): () => void {
   let stopped = false
+  clock = opts.now ?? (() => Date.now())
   const sync = (master: Master | null, generation: number): void => {
     const same = sameMaster(master, mode?.master ?? null)
     if (same && (mode === null || mode.generation === generation)) return
@@ -318,6 +549,7 @@ export function startProfileSync(): () => void {
   const unsubscribe = useProfileStore.subscribe((next, prev) => {
     if (stopped) return
     sync(selectMaster(next), next.attachGeneration)
+    if (next.suspension !== prev.suspension) mode?.reapply()
     // Nothing pumps the executor when a preference changes: do it here.
     if (next.autoSync && !prev.autoSync) mode?.leader()?.executor.syncNow()
   })
@@ -382,36 +614,178 @@ async function dropAttachment(master: Master): Promise<void> {
  * `attachMaster(…, 'pull')`. Nothing in here does it for the caller.
  */
 export function attachMaster(hostId: string, profileId: string, direction: SyncDirection): Promise<AttachResult> {
-  return serial(async (): Promise<AttachResult> => {
+  const refusal = (): AttachResult | null => {
     if (!isSyncDirection(direction)) return { ok: false, reason: 'invalid-direction' }
     if (!isClientIdPersisted()) return { ok: false, reason: 'client-id-not-persisted' }
     if (useHostStore.getState().hosts[hostId] === undefined) return { ok: false, reason: 'unknown-host' }
     if (!isMasterPair(hostId, profileId)) return { ok: false, reason: 'invalid-profile-id' }
-
-    const next: Master = { hostId, profileId }
-    let put: Awaited<ReturnType<typeof putAttachment>>
+    return null
+  }
+  const refused = refusal()
+  if (refused !== null) return Promise.resolve(refused)
+  // IN THE CALL, not in the queue below: `serial` is a `.then`, i.e. at least one
+  // microtask away, and a write the old driver had already decided on (it sits
+  // behind `await shapes()`, or next in its queue) is no further away than that —
+  // it was not on the wire when the user attached, and it would be by the time
+  // the queue got here. An earlier attach or detach still waiting in the queue is
+  // not disturbed by this: each looks after the master itself.
+  const hold = holdStill()
+  return serial(async (): Promise<AttachResult> => {
     try {
-      const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
-      put = await putAttachment(hostId, profileId, body)
-    } catch (e) {
-      return { ok: false, reason: message(e) }
+      // what was true in the call may not be by the time its turn comes
+      const late = refusal()
+      if (late !== null) {
+        hold.giveUp()
+        return late
+      }
+      hold.extend() // the wait in the queue is not part of the first request's budget
+      return await attachHeld({ hostId, profileId }, direction, hold)
+    } finally {
+      hold.stop()
     }
-    if (put.kind === 'failed') return { ok: false, reason: put.reason }
-
-    const previous = selectMaster(useProfileStore.getState())
-    if (previous !== null && !sameMaster(previous, next)) await dropAttachment(previous)
-    // EVERY attach starts from no bases, the same master included. With a base
-    // still held, a section that is dirty while the SOT has not moved is simply
-    // pushed — under `pull` too, the opposite of what was asked; without one it is
-    // a conflict, and the direction answers it. No `await` between this and
-    // `setMaster`: the old driver cannot write a base in between, and the new one
-    // (built by the subscription, on the new `attachGeneration`) is not seeded
-    // from the old ones.
-    clearSectionStore()
-    return useProfileStore.getState().setMaster(hostId, profileId, direction)
-      ? { ok: true }
-      : { ok: false, reason: 'invalid-profile-id' }
   })
+}
+
+/** One attach's grip on every driver of this client (see `useProfileStore`, WHY `suspension`). */
+interface Hold {
+  token: string
+  /** A fresh 30 s for the suspension in force, if it belongs to this window; never a change of owner. */
+  extend(): void
+  /** Stops watching. Does not lift anything. */
+  stop(): void
+  /** The attach failed: lift OUR suspension. A newer attach's stays, and the drivers with it; otherwise the old mode comes back. */
+  giveUp(): void
+  /**
+   * ANOTHER WINDOW's attach or detach overtook this attach: the generation in `localStorage` is not the one
+   * this attach was asked in (plus what this window's own queue did since). Windows have separate queues, so
+   * nothing else can tell an attach whose PUT is out that the user has meanwhile said "stop" elsewhere — and
+   * this window's store may not have heard yet, which is why STORAGE is read, synchronously, like the lease.
+   *   What is left: the check is "read, then commit" — not atomic; and `localStorage` is not instantaneous
+   * between two renderer processes. The window is one synchronous read and the synchronous commit that
+   * follows it, no longer the whole wait for the PUT (up to 15 s).
+   */
+  superseded(): boolean
+  /** This window's own queue moved the generation (a `setMaster` / `clearMaster` of ours): not an overtaking. */
+  expected: number
+}
+
+/**
+ * FROM THE CALL of an attach on (`attachMaster` holds before it queues): every driver of this client stands
+ * still — here at once (the store subscription is synchronous), in the other
+ * windows as soon as the store reaches them — and stays so WHILE ANY ATTACH IS IN
+ * PROGRESS, this one included: if a newer attach (another window's) replaced our
+ * suspension and then finished, lifting its own, nobody's is left and we are not
+ * done, so it is put back. (The start layer's subscription runs first and may
+ * begin a driver on the lifted suspension; it is disposed again in the same turn,
+ * before anything of it could reach the network.)
+ */
+/** The attaches of THIS window that are queued or running. */
+const liveHolds = new Set<string>()
+const liveAttaches = new Set<Hold>()
+
+/** This window has just moved the generation itself: the attaches waiting behind it expect that. */
+function ownGenerationMove(): void {
+  for (const hold of liveAttaches) hold.expected += 1
+}
+
+function holdStill(): Hold {
+  const token = newToken()
+  liveHolds.add(token)
+  const suspend = (): void => useProfileStore.getState().suspend(token, clock() + ATTACH_SUSPEND_MS)
+  suspend()
+  let unsubscribe = useProfileStore.subscribe((state) => {
+    if (state.suspension === null && selectMaster(state) !== null) suspend()
+  })
+  const stop = (): void => {
+    liveHolds.delete(token)
+    liveAttaches.delete(hold)
+    unsubscribe()
+    unsubscribe = () => undefined
+  }
+  const hold: Hold = {
+    token,
+    // read AFTER our own `suspend()` above, which persists the store but does not move the generation
+    expected: storedGeneration(),
+    superseded: () => storedGeneration() !== hold.expected,
+    // Ours — or that of an attach of this window waiting in the queue BEHIND us (it suspended in its call, so
+    // it is the newer owner, and its 30 s are running while we work): refreshed under ITS token, so that it
+    // cannot run out before its turn. Another window's is left alone.
+    extend: () => {
+      const current = useProfileStore.getState().suspension
+      if (current !== null && liveHolds.has(current.token)) useProfileStore.getState().suspend(current.token, clock() + ATTACH_SUSPEND_MS)
+    },
+    stop,
+    giveUp: () => {
+      stop()
+      useProfileStore.getState().resume(token)
+    },
+  }
+  liveAttaches.add(hold)
+  return hold
+}
+
+async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): Promise<AttachResult> {
+  const { hostId, profileId } = next
+  const previous = selectMaster(useProfileStore.getState())
+  const asYouWere = (reason: string): AttachResult => {
+    hold.giveUp() // bases and attachment of the previous master are as they were
+    return { ok: false, reason }
+  }
+
+  let put: Awaited<ReturnType<typeof putAttachment>>
+  try {
+    const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
+    put = await putAttachment(hostId, profileId, body)
+  } catch (e) {
+    return asYouWere(message(e))
+  }
+  if (put.kind === 'failed') return asYouWere(put.reason)
+  if (hold.superseded()) return standDown(next, hold)
+  if (endpointOf(hostId) === null) return asYouWere('unknown-host') // gone while the PUT was out: leave the previous master whole
+  if (previous !== null && !sameMaster(previous, next)) {
+    // A second request to wait for, so a fresh budget. Each stretch (`ATTACH_SUSPEND_MS`, 30 s) is strictly
+    // longer than the ONE request it covers (15 s timeout), and the first stretch cannot have run out before
+    // this one starts (it began at most 15 s ago).
+    hold.extend()
+    await dropAttachment(previous)
+    if (hold.superseded()) return standDown(next, hold)
+  }
+  // The address the attachment was written to: the home of every base from here
+  // on. Read after the last `await`, checked before anything is cleared (the host
+  // may have left the store meanwhile).
+  const at = endpointOf(hostId)
+  if (at === null) return asYouWere('unknown-host')
+  // EVERY attach starts from no bases, the same master included. With a base
+  // still held, a section that is dirty while the SOT has not moved is simply
+  // pushed — under `pull` too, the opposite of what was asked; without one it is
+  // a conflict, and the direction answers it. No `await` between this and
+  // `setMaster`: the old driver cannot write a base in between, and the new one
+  // (built by the subscription, on the new `attachGeneration`) is not seeded
+  // from the old ones.
+  // THE COMMIT. Last look at storage first: no `await` lies between it and `setMaster`.
+  if (hold.superseded()) return standDown(next, hold)
+  clearSectionStore()
+  hold.stop() // `setMaster` lifts our suspension on purpose
+  // One write: master, direction, endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
+  if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token)) return asYouWere('invalid-profile-id')
+  ownGenerationMove()
+  return { ok: true }
+}
+
+/**
+ * Overtaken by another window (`Hold.superseded`): this attach commits NOTHING — no bases cleared, no master
+ * set. This window's store is first brought up to what storage holds (its broadcast may still be on the way;
+ * a write made from the stale memory — even lifting our own suspension — would persist the OLD master over
+ * the other window's decision), then our suspension is lifted if it is still ours. The attachment this attach
+ * has just written is taken down again, best effort, unless it is exactly the one the winner wants: overtaken
+ * by a DETACH → nobody wants it; by an attach to the same (host, profile) → theirs now; to another → nobody's.
+ */
+async function standDown(next: Master, hold: Hold): Promise<AttachResult> {
+  await useProfileStore.persist.rehydrate() // synchronous storage: memory is storage before this yields
+  hold.giveUp()
+  const winner = selectMaster(useProfileStore.getState())
+  if (!sameMaster(winner, next)) await dropAttachment(next)
+  return { ok: false, reason: 'superseded' }
 }
 
 /**
@@ -428,6 +802,7 @@ export function detachMaster(): Promise<void> {
     const master = selectMaster(useProfileStore.getState())
     if (master === null) return
     useProfileStore.getState().clearMaster()
+    ownGenerationMove() // an attach of THIS window queued behind us is not "overtaken" by it: the user asked in that order
     clearSectionStore(master.profileId)
     await dropAttachment(master)
   })

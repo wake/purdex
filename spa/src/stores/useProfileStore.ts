@@ -40,11 +40,50 @@
 // `attachMaster`). But "the same master, again" changes neither id, so a driver
 // that is already running — in this window, or the leader in another — could
 // not tell. The counter is what it watches: it goes up by one with every
-// accepted `setMaster` and never down; its value means nothing, only that it
-// moved.
+// accepted `setMaster` — AND WITH EVERY `clearMaster` — and never down; its
+// value means nothing, only that it moved. It is, in effect, the generation of
+// this control plane. The detach counts because windows have separate attach
+// queues: an attach that window A began (its PUT is out) can be overtaken by a
+// detach in window B, and A must be able to see, when its PUT returns, that the
+// world it was asked in is gone — or it would re-attach a client the user has
+// just told to stop (`lib/profile/start.ts` compares the value it read at the
+// call with the one in `localStorage` before it commits).
+//
+// WHY `masterEndpoint` ("<ip>:<port>" of the master host AT ATTACH). The section
+// bases, the attachment, a schema lock — all of it belongs to ONE daemon, and the
+// api layer resolves a host's address from the host store on every request. If
+// the user re-points the master host in place, the next request would carry the
+// old daemon's CAS bases to whatever answers at the new address. The start layer
+// blocks the driver when the two differ; the home address is stored HERE, not
+// remembered by the driver, because a reload while blocked would otherwise take
+// the edited address for the original and unblock itself.
+//   A MASTER WITHOUT AN ENDPOINT IS NO MASTER (fail closed; `merge` and
+// `selectMaster` both). Such a record can only come from before this field
+// existed — dev builds, never a shipped one — and "adopt the address the host
+// has today" would legitimise bases of an unknown daemon against whatever the
+// user has since pointed the host at. There is nothing worth migrating: the user
+// attaches again, which clears the bases anyway.
+//
+// WHY `suspension` = { token, until }. `attachMaster` has to wait for the daemon
+// (the attachment PUT, up to 15 s) before it can clear the bases and start the
+// new reconciliation. A driver left running meanwhile — in this window, or the
+// leader in another — could push a dirty section in that gap, and a `pull` would
+// then find a SOT that this machine has just overwritten: the direction the user
+// asked for, reversed, for good. So the attach first tells EVERY window to stand
+// still: no driver, no request, master and bases untouched.
+//   `until` — a TIME and not a flag, because the window that set it may die
+// before it can lift it (closed or reloaded mid-attach), and a flag would leave
+// every window of this client suspended for ever; an expired one is simply none.
+//   `token` — an OWNER, because windows have separate attach queues and two
+// attaches can overlap: A suspends, B suspends, A's PUT fails (or succeeds) — and
+// A must not wake the drivers under B. A newer `suspend` replaces the older; only
+// the token that set the current one lifts it (`resume(token)`, a successful
+// `setMaster(…, token)`). So: WHILE ANY ATTACH IS STILL IN PROGRESS, THE DRIVERS
+// STAND STILL. Which master wins two overlapping attaches is last-writer-wins, as
+// everywhere in this store. `clearMaster` lifts everything: detach means stop.
 //
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
-// non-null; `pendingDirection` is null whenever there is no master. `setMaster`
+// non-null, and non-null only together with `masterEndpoint`; `pendingDirection` and `suspension` are null whenever there is no master. `setMaster`
 // is the only way in and validates all three; the persist `merge` re-establishes
 // both for whatever storage hands back.
 import { create } from 'zustand'
@@ -56,12 +95,21 @@ const PROFILE_ID_PATTERN = /^p_[0-9a-f]{12}$/
 
 export type SyncDirection = 'push' | 'pull'
 
+export interface Suspension {
+  token: string
+  until: number
+}
+
 interface ProfileControl {
   masterHostId: string | null
   masterProfileId: string | null
   /** Non-null from an attach until the first reconciliation has settled. */
   pendingDirection: SyncDirection | null
-  /** +1 with every accepted `setMaster`. A change with the same master = attach was called again. */
+  /** `"<ip>:<port>"` of the master host when it was attached; null exactly when there is no master. */
+  masterEndpoint: string | null
+  /** While `now < suspension.until` (epoch ms) no window runs a driver: an attach — `token`'s — is in progress. */
+  suspension: Suspension | null
+  /** +1 with every accepted `setMaster` and every `clearMaster`. A change with the same master = attach was called again. */
   attachGeneration: number
   /** Sync without being asked. Default on. */
   autoSync: boolean
@@ -69,10 +117,15 @@ interface ProfileControl {
 
 export interface ProfileState extends ProfileControl {
   /** Attach. Both ids must be non-empty strings, `profileId` a daemon profile
-   *  id and `direction` one of the two; otherwise nothing changes and the answer
+   *  id, `direction` one of the two and `endpoint` a non-empty string; otherwise nothing changes and the answer
    *  is `false`. Attaching again to the same master starts a new first
-   *  reconciliation in the direction given. */
-  setMaster: (hostId: string, profileId: string, direction: SyncDirection) => boolean
+   *  reconciliation in the direction given. `token`: the suspension this attach set is
+   *  lifted with it; one set by ANOTHER attach (a newer one, still in progress) stays. */
+  setMaster: (hostId: string, profileId: string, direction: SyncDirection, endpoint: string, token?: string) => boolean
+  /** Every driver stands still until `until` (epoch ms). Replaces any suspension there is. Ignored without a master. */
+  suspend: (token: string, until: number) => void
+  /** Lifts the suspension `token` set; any other token changes NOTHING (same state reference, no persist). */
+  resume: (token: string) => void
   /** Detach. `autoSync` is a preference and survives; the direction does not. */
   clearMaster: () => void
   /** The first reconciliation has settled: conflicts go to the user from now on. */
@@ -95,16 +148,32 @@ export function isSyncDirection(v: unknown): v is SyncDirection {
   return v === 'push' || v === 'pull'
 }
 
+function isEndpoint(v: unknown): v is string {
+  return typeof v === 'string' && v !== ''
+}
+
+function isSuspension(token: unknown, until: unknown): boolean {
+  return typeof token === 'string' && token !== '' && typeof until === 'number' && Number.isFinite(until)
+}
+
+function sanitiseSuspension(v: unknown): Suspension | null {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
+  const { token, until } = v as Record<string, unknown>
+  return isSuspension(token, until) ? { token: token as string, until: until as number } : null
+}
+
 /** Whatever storage held → a record that satisfies the invariant. Half a
  *  master, a wrong type or a malformed profile id all mean "detached": there is
  *  no safe way to guess the missing half, and a detached client does nothing. */
 function sanitiseControl(persisted: unknown): ProfileControl {
   const p = (typeof persisted === 'object' && persisted !== null ? persisted : {}) as Record<string, unknown>
-  const attached = isMasterPair(p.masterHostId, p.masterProfileId)
+  const attached = isMasterPair(p.masterHostId, p.masterProfileId) && isEndpoint(p.masterEndpoint)
   return {
     masterHostId: attached ? (p.masterHostId as string) : null,
     masterProfileId: attached ? (p.masterProfileId as string) : null,
     pendingDirection: attached && isSyncDirection(p.pendingDirection) ? p.pendingDirection : null,
+    masterEndpoint: attached ? (p.masterEndpoint as string) : null,
+    suspension: attached ? sanitiseSuspension(p.suspension) : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
   }
@@ -116,14 +185,19 @@ export const useProfileStore = create<ProfileState>()(
       masterHostId: null,
       masterProfileId: null,
       pendingDirection: null,
+      masterEndpoint: null,
+      suspension: null,
       attachGeneration: 0,
       autoSync: true,
-      setMaster: (hostId, profileId, direction) => {
-        if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction)) return false
-        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, attachGeneration: s.attachGeneration + 1 }))
+      setMaster: (hostId, profileId, direction, endpoint, token) => {
+        if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction) || !isEndpoint(endpoint)) return false
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1 }))
         return true
       },
-      clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null }),
+      suspend: (token, until) => set((s) => (selectMaster(s) === null || !isSuspension(token, until) ? s : { suspension: { token, until } })),
+      resume: (token) => set((s) => (s.suspension !== null && s.suspension.token === token ? { suspension: null } : s)),
+      clearMaster: () =>
+        set((s) => ({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null, suspension: null, attachGeneration: s.attachGeneration + 1 })),
       clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
     }),
@@ -135,10 +209,12 @@ export const useProfileStore = create<ProfileState>()(
         masterHostId: state.masterHostId,
         masterProfileId: state.masterProfileId,
         pendingDirection: state.pendingDirection,
+        masterEndpoint: state.masterEndpoint,
+        suspension: state.suspension,
         attachGeneration: state.attachGeneration,
         autoSync: state.autoSync,
       }),
-      // Only the five sanitised fields ever come out of storage: persisted
+      // Only the seven sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },
@@ -149,9 +225,9 @@ export const useProfileStore = create<ProfileState>()(
  *  has to re-check the invariant. Returns a fresh object: as a zustand selector
  *  it needs `useShallow`. */
 export function selectMaster(
-  s: Pick<ProfileState, 'masterHostId' | 'masterProfileId'>,
+  s: Pick<ProfileState, 'masterHostId' | 'masterProfileId' | 'masterEndpoint'>,
 ): { hostId: string; profileId: string } | null {
-  if (s.masterHostId === null || s.masterProfileId === null) return null
+  if (s.masterHostId === null || s.masterProfileId === null || s.masterEndpoint === null) return null
   return { hostId: s.masterHostId, profileId: s.masterProfileId }
 }
 

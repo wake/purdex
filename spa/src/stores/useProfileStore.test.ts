@@ -4,10 +4,11 @@ import { selectMaster, useProfileStore } from './useProfileStore'
 
 const PROFILE = 'p_0123456789ab'
 const OTHER_PROFILE = 'p_ba9876543210'
+const EP = '100.64.0.2:7860'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0 })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -41,7 +42,7 @@ describe('useProfileStore', () => {
 
   describe('setMaster', () => {
     it('sets both halves and reports true', () => {
-      expect(useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')).toBe(true)
+      expect(useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)).toBe(true)
       const s = useProfileStore.getState()
       expect(s.masterHostId).toBe('host-1')
       expect(s.masterProfileId).toBe(PROFILE)
@@ -58,9 +59,9 @@ describe('useProfileStore', () => {
       ['a non-string host id', 7 as unknown as string, PROFILE],
       ['a non-string profile id', 'host-1', null as unknown as string],
     ])('refuses %s and leaves the current master alone', (_label, hostId, profileId) => {
-      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull')
+      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull', EP)
 
-      expect(useProfileStore.getState().setMaster(hostId, profileId, 'pull')).toBe(false)
+      expect(useProfileStore.getState().setMaster(hostId, profileId, 'pull', EP)).toBe(false)
 
       const s = useProfileStore.getState()
       expect(s.masterHostId).toBe('host-0')
@@ -68,7 +69,7 @@ describe('useProfileStore', () => {
     })
 
     it('a refusal while detached stays detached (never half a master)', () => {
-      expect(useProfileStore.getState().setMaster('host-1', 'nope', 'pull')).toBe(false)
+      expect(useProfileStore.getState().setMaster('host-1', 'nope', 'pull', EP)).toBe(false)
       const s = useProfileStore.getState()
       expect(s.masterHostId).toBeNull()
       expect(s.masterProfileId).toBeNull()
@@ -76,7 +77,7 @@ describe('useProfileStore', () => {
   })
 
   it('clearMaster clears both halves and leaves autoSync alone', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
 
     useProfileStore.getState().clearMaster()
@@ -89,7 +90,7 @@ describe('useProfileStore', () => {
   })
 
   it('setAutoSync flips the flag and leaves the master alone', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
     expect(useProfileStore.getState().autoSync).toBe(false)
     expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: 'host-1', profileId: PROFILE })
@@ -103,18 +104,18 @@ describe('useProfileStore', () => {
     expect(selectMaster({ ...base, masterHostId: null, masterProfileId: PROFILE })).toBeNull()
   })
 
-  it('persists exactly the five fields', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+  it('persists exactly the seven fields', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1 })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, masterEndpoint: EP, suspension: null })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
     it('keeps a well-formed record as is', async () => {
-      await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false })
+      await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, autoSync: false })
       const s = useProfileStore.getState()
       expect(s.masterHostId).toBe('host-1')
       expect(s.masterProfileId).toBe(PROFILE)
@@ -131,7 +132,7 @@ describe('useProfileStore', () => {
       ['a malformed profile id', { masterHostId: 'host-1', masterProfileId: 'p_nothex000000', autoSync: true }],
     ])('%s → detached, both halves null', async (_label, state) => {
       // Start attached, so "null afterwards" cannot be the untouched default.
-      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull')
+      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull', EP)
 
       await rehydrateFrom(state)
 
@@ -149,7 +150,7 @@ describe('useProfileStore', () => {
     ])('autoSync that is %s → true, master kept', async (_label, autoSync) => {
       useProfileStore.getState().setAutoSync(false)
 
-      await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync })
+      await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, autoSync })
 
       const s = useProfileStore.getState()
       expect(s.autoSync).toBe(true)
@@ -162,7 +163,7 @@ describe('useProfileStore', () => {
       ['a string', 'garbage'],
       ['an array', [1, 2]],
     ])('a persisted state that is %s → defaults, actions intact', async (_label, state) => {
-      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull')
+      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull', EP)
 
       await rehydrateFrom(state)
 
@@ -174,7 +175,7 @@ describe('useProfileStore', () => {
     })
 
     it('never lets persisted junk replace an action', async () => {
-      await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: true, setMaster: 'junk', extra: 1 })
+      await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, autoSync: true, setMaster: 'junk', extra: 1 })
       const s = useProfileStore.getState()
       expect(typeof s.setMaster).toBe('function')
       expect('extra' in s).toBe(false)
@@ -226,26 +227,26 @@ describe('pendingDirection — which side wins the first reconciliation', () => 
   })
 
   it.each(['push', 'pull'] as const)('setMaster records %s', (direction) => {
-    expect(useProfileStore.getState().setMaster('host-1', PROFILE, direction)).toBe(true)
+    expect(useProfileStore.getState().setMaster('host-1', PROFILE, direction, EP)).toBe(true)
     expect(useProfileStore.getState().pendingDirection).toBe(direction)
   })
 
   it.each([undefined, null, '', 'both', 'PULL', 1])('setMaster refuses the direction %j and changes nothing', (direction) => {
-    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push')
-    expect(useProfileStore.getState().setMaster('host-1', PROFILE, direction as never)).toBe(false)
+    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push', EP)
+    expect(useProfileStore.getState().setMaster('host-1', PROFILE, direction as never, EP)).toBe(false)
     const s = useProfileStore.getState()
     expect(s.masterHostId).toBe('host-0')
     expect(s.pendingDirection).toBe('push')
   })
 
   it('a refused master does not touch the direction either', () => {
-    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push')
-    expect(useProfileStore.getState().setMaster('host-1', 'nope', 'pull')).toBe(false)
+    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push', EP)
+    expect(useProfileStore.getState().setMaster('host-1', 'nope', 'pull', EP)).toBe(false)
     expect(useProfileStore.getState().pendingDirection).toBe('push')
   })
 
   it('clearPendingDirection clears it and leaves the master alone', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().clearPendingDirection()
     const s = useProfileStore.getState()
     expect(s.pendingDirection).toBeNull()
@@ -254,22 +255,22 @@ describe('pendingDirection — which side wins the first reconciliation', () => 
   })
 
   it('clearMaster clears it too', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'push')
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'push', EP)
     useProfileStore.getState().clearMaster()
     expect(useProfileStore.getState().pendingDirection).toBeNull()
   })
 
   it('survives a reload', async () => {
-    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: true, pendingDirection: 'push' })
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, autoSync: true, pendingDirection: 'push' })
     expect(useProfileStore.getState().pendingDirection).toBe('push')
   })
 
   it.each([
     ['a direction without a master', { masterHostId: null, masterProfileId: null, pendingDirection: 'pull' }],
     ['a direction with half a master', { masterHostId: 'host-1', masterProfileId: null, pendingDirection: 'pull' }],
-    ['an unknown direction', { masterHostId: 'host-1', masterProfileId: PROFILE, pendingDirection: 'sideways' }],
-    ['a non-string direction', { masterHostId: 'host-1', masterProfileId: PROFILE, pendingDirection: 1 }],
-    ['a record from before the field existed', { masterHostId: 'host-1', masterProfileId: PROFILE }],
+    ['an unknown direction', { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, pendingDirection: 'sideways' }],
+    ['a non-string direction', { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, pendingDirection: 1 }],
+    ['a record from before the field existed', { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP }],
   ])('rehydrate: %s → null', async (_label, state) => {
     await rehydrateFrom(state)
     expect(useProfileStore.getState().pendingDirection).toBeNull()
@@ -279,26 +280,35 @@ describe('pendingDirection — which side wins the first reconciliation', () => 
 describe('attachGeneration — every attach is a new one, the same master included', () => {
   it('starts at 0 and goes up by one with every accepted setMaster', () => {
     expect(useProfileStore.getState().attachGeneration).toBe(0)
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     expect(useProfileStore.getState().attachGeneration).toBe(1)
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull') // the SAME master, the same direction
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP) // the SAME master, the same direction
     expect(useProfileStore.getState().attachGeneration).toBe(2)
-    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push')
+    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push', EP)
     expect(useProfileStore.getState().attachGeneration).toBe(3)
   })
 
-  it('a refused setMaster, clearMaster, clearPendingDirection and setAutoSync leave it alone (it never goes down)', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
-    useProfileStore.getState().setMaster('host-1', 'nope', 'pull')
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'sideways' as never)
+  it('a refused setMaster, clearPendingDirection, setAutoSync, suspend and resume leave it alone (it never goes down)', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().setMaster('host-1', 'nope', 'pull', EP)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'sideways' as never, EP)
     useProfileStore.getState().clearPendingDirection()
     useProfileStore.getState().setAutoSync(false)
-    useProfileStore.getState().clearMaster()
+    useProfileStore.getState().suspend('t', 5_000)
+    useProfileStore.getState().resume('t')
     expect(useProfileStore.getState().attachGeneration).toBe(1)
   })
 
+  it('clearMaster moves it too: it is the generation of the CONTROL PLANE — an attach still in flight elsewhere must be able to see that a detach overtook it', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().attachGeneration).toBe(2)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    expect(useProfileStore.getState().attachGeneration).toBe(3)
+  })
+
   it('survives a reload', async () => {
-    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: true, pendingDirection: null, attachGeneration: 7 })
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, autoSync: true, pendingDirection: null, attachGeneration: 7 })
     expect(useProfileStore.getState().attachGeneration).toBe(7)
   })
 
@@ -311,8 +321,174 @@ describe('attachGeneration — every attach is a new one, the same master includ
     ['beyond the safe integers', 2 ** 60],
     ['null', null],
   ])('rehydrate: %s → 0', async (_label, attachGeneration) => {
-    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, attachGeneration })
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, attachGeneration })
     expect(useProfileStore.getState().attachGeneration).toBe(0)
+  })
+})
+
+describe('masterEndpoint — where the daemon was when the bases were agreed', () => {
+  it('starts null; setMaster records it; a new attach replaces it', () => {
+    expect(useProfileStore.getState().masterEndpoint).toBeNull()
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', '10.0.0.1:7860')
+    expect(useProfileStore.getState().masterEndpoint).toBe('10.0.0.1:7860')
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', '10.0.0.2:7999')
+    expect(useProfileStore.getState().masterEndpoint).toBe('10.0.0.2:7999')
+  })
+
+  it.each([undefined, null, '', 7])('setMaster refuses the endpoint %j and changes nothing', (endpoint) => {
+    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push', EP)
+    const before = useProfileStore.getState().attachGeneration
+    expect(useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', endpoint as never)).toBe(false)
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'host-0', masterEndpoint: EP, attachGeneration: before })
+  })
+
+  it('clearMaster clears it; clearPendingDirection and setAutoSync do not', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().clearPendingDirection()
+    useProfileStore.getState().setAutoSync(false)
+    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().masterEndpoint).toBeNull()
+  })
+
+  it('survives a reload', async () => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP })
+    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
+  })
+
+  it.each([
+    ['an endpoint without a master', { masterHostId: null, masterProfileId: null, masterEndpoint: EP }],
+    ['an endpoint with half a master', { masterHostId: 'host-1', masterProfileId: null, masterEndpoint: EP }],
+  ])('rehydrate: %s → null', async (_label, state) => {
+    await rehydrateFrom(state)
+    expect(useProfileStore.getState().masterEndpoint).toBeNull()
+  })
+
+  // FAIL CLOSED. Bases whose daemon is unknown must not be used against whatever the host points at today,
+  // and there is nothing to migrate: the field is older than any shipped build.
+  it.each([
+    ['no endpoint (attached before the field existed)', {}],
+    ['a non-string', { masterEndpoint: 7860 }],
+    ['an empty string', { masterEndpoint: '' }],
+    ['null', { masterEndpoint: null }],
+  ])('rehydrate: a master with %s is NO master — and no direction; preferences survive', async (_label, over) => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, pendingDirection: 'pull', autoSync: false, attachGeneration: 4, ...over })
+    const s = useProfileStore.getState()
+    expect(selectMaster(s)).toBeNull()
+    expect(s).toMatchObject({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null, autoSync: false, attachGeneration: 4 })
+  })
+
+  it('selectMaster fails closed too: a master without an endpoint (only a hand-built state can hold one) is no master', () => {
+    expect(selectMaster({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: null })).toBeNull()
+    expect(selectMaster({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP })).toEqual({ hostId: 'host-1', profileId: PROFILE })
+  })
+})
+
+describe('suspension — every driver, in every window, stands still while an attach is being made; it has an OWNER', () => {
+  const attached = (): void => void useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+
+  it('starts null; suspend sets it; resume with the same token lifts it', () => {
+    expect(useProfileStore.getState().suspension).toBeNull()
+    attached()
+    useProfileStore.getState().suspend('tok-a', 5_000)
+    expect(useProfileStore.getState().suspension).toEqual({ token: 'tok-a', until: 5_000 })
+    useProfileStore.getState().resume('tok-a')
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it('a newer attach REPLACES the suspension; the older one can no longer lift it — a failed A must not wake the drivers under B', () => {
+    attached()
+    useProfileStore.getState().suspend('tok-a', 5_000)
+    useProfileStore.getState().suspend('tok-b', 6_000)
+    expect(useProfileStore.getState().suspension).toEqual({ token: 'tok-b', until: 6_000 })
+
+    const before = useProfileStore.getState()
+    const writes = vi.spyOn(Storage.prototype, 'setItem')
+    useProfileStore.getState().resume('tok-a')
+    expect(useProfileStore.getState()).toBe(before) // the same state reference: no notification, no persist
+    expect(writes).not.toHaveBeenCalled()
+    writes.mockRestore()
+
+    useProfileStore.getState().resume('tok-b')
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it('setMaster lifts ITS OWN suspension only: A succeeds while B is still attaching → the master is A\'s, the suspension is still B\'s', () => {
+    attached()
+    useProfileStore.getState().suspend('tok-a', 5_000)
+    useProfileStore.getState().suspend('tok-b', 6_000)
+    expect(useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push', EP, 'tok-a')).toBe(true)
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'host-0', masterProfileId: OTHER_PROFILE, suspension: { token: 'tok-b', until: 6_000 } })
+    expect(useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, 'tok-b')).toBe(true)
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it('setMaster without a token lifts nobody\'s', () => {
+    attached()
+    useProfileStore.getState().suspend('tok-a', 5_000)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'push', EP)
+    expect(useProfileStore.getState().suspension).toEqual({ token: 'tok-a', until: 5_000 })
+  })
+
+  it('clearMaster lifts everything: detach means stop', () => {
+    attached()
+    useProfileStore.getState().suspend('tok-a', 7_000)
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it('without a master there is nothing to suspend', () => {
+    useProfileStore.getState().suspend('tok-a', 5_000)
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it.each([
+    ['tok-a', Number.NaN],
+    ['tok-a', Number.POSITIVE_INFINITY],
+    ['tok-a', '5000'],
+    ['', 5_000],
+    [7, 5_000],
+    [undefined, 5_000],
+  ])('suspend(%j, %j) is ignored', (token, until) => {
+    attached()
+    useProfileStore.getState().suspend(token as never, until as never)
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it('a refused setMaster does not lift it', () => {
+    attached()
+    useProfileStore.getState().suspend('tok-a', 5_000)
+    useProfileStore.getState().setMaster('host-1', 'nope', 'pull', EP, 'tok-a')
+    expect(useProfileStore.getState().suspension).toEqual({ token: 'tok-a', until: 5_000 })
+  })
+
+  it('survives a reload (the attach may have died with the window: it carries its own expiry)', async () => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, suspension: { token: 'tok-a', until: 9_000 } })
+    expect(useProfileStore.getState().suspension).toEqual({ token: 'tok-a', until: 9_000 })
+  })
+
+  const M = { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP }
+  it.each([
+    ['without a master', { masterHostId: null, masterProfileId: null, suspension: { token: 't', until: 9_000 } }],
+    ['with a master that fails closed', { masterHostId: 'host-1', masterProfileId: PROFILE, suspension: { token: 't', until: 9_000 } }],
+    ['a bare number (the previous shape)', { ...M, suspension: 9_000 }],
+    ['the previous field', { ...M, suspendedUntil: 9_000 }],
+    ['no token', { ...M, suspension: { until: 9_000 } }],
+    ['an empty token', { ...M, suspension: { token: '', until: 9_000 } }],
+    ['a non-string token', { ...M, suspension: { token: 1, until: 9_000 } }],
+    ['no time', { ...M, suspension: { token: 't' } }],
+    ['NaN', { ...M, suspension: { token: 't', until: Number.NaN } }],
+    ['a string time', { ...M, suspension: { token: 't', until: '9000' } }],
+    ['an array', { ...M, suspension: ['t', 9_000] }],
+    ['missing', M],
+  ])('rehydrate: %s → null', async (_label, state) => {
+    await rehydrateFrom(state)
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it('extra keys of a stored suspension are dropped', async () => {
+    await rehydrateFrom({ ...M, suspension: { token: 't', until: 9_000, junk: true } })
+    expect(useProfileStore.getState().suspension).toEqual({ token: 't', until: 9_000 })
   })
 })
 
@@ -333,7 +509,7 @@ describe('every window agrees on the master', () => {
     const b = await openWindow()
     expect(a.useProfileStore).not.toBe(b.useProfileStore)
 
-    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     await flush()
 
     expect(b.selectMaster(b.useProfileStore.getState())).toEqual({ hostId: 'host-1', profileId: PROFILE })
@@ -342,19 +518,28 @@ describe('every window agrees on the master', () => {
   it('a RE-attach to the same master in window A reaches window B as a new generation', async () => {
     const a = await openWindow()
     const b = await openWindow()
-    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     await flush()
     const before = b.useProfileStore.getState().attachGeneration
-    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'push')
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'push', EP)
     await flush()
     expect(b.useProfileStore.getState().attachGeneration).toBe(before + 1)
     expect(b.useProfileStore.getState().pendingDirection).toBe('push')
   })
 
+  it('a suspension in window A reaches window B', async () => {
+    const a = await openWindow()
+    const b = await openWindow()
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    a.useProfileStore.getState().suspend('tok-a', 5_000)
+    await flush()
+    expect(b.useProfileStore.getState().suspension).toEqual({ token: 'tok-a', until: 5_000 })
+  })
+
   it('a detach in window B (a follower) reaches window A (the leader)', async () => {
     const a = await openWindow()
     const b = await openWindow()
-    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     await flush()
     expect(b.useProfileStore.getState().masterProfileId).toBe(PROFILE)
 

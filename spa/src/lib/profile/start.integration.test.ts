@@ -83,7 +83,7 @@ beforeEach(() => {
   api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
   api.putAttachment.mockResolvedValue({ kind: 'ok', value: { attached: true } })
   api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0 })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null })
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
@@ -155,3 +155,138 @@ describe('attachMaster, again, to the same master', () => {
     expect(useProfileStore.getState().pendingDirection).toBeNull()
   })
 })
+
+describe('the attachment comes first', () => {
+  it('not one profile request goes out while the attachment PUT is unanswered — a reload or a lease takeover included', async () => {
+    await attachedAndSettled()
+    stop() // the window goes away…
+    vi.clearAllMocks()
+    let release: () => void = () => {}
+    api.putAttachment.mockReturnValue(new Promise((r) => (release = () => r({ kind: 'ok', value: { attached: true } }))))
+    renameH2('edited-while-closed')
+
+    stop = startProfileSync() // …and comes back: master in the store, bases in the section store, a dirty section
+    await settle()
+    expect(api.putAttachment).toHaveBeenCalledTimes(1)
+    expect(api.listProfiles).not.toHaveBeenCalled()
+    expect(api.getSection).not.toHaveBeenCalled()
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(api.deleteSection).not.toHaveBeenCalled()
+
+    release()
+    await settle()
+    expect(api.listProfiles).toHaveBeenCalled()
+    expect((daemon.rows.get('hosts')!.payload as { hosts: Record<string, { name: string }> }).hosts[H2].name).toBe('edited-while-closed')
+  })
+})
+
+describe('the master host is re-pointed in place', () => {
+  it('not one request reaches the new address with the old daemon\'s bases', async () => {
+    await attachedAndSettled()
+    vi.clearAllMocks()
+    const { hosts } = useHostStore.getState()
+    useHostStore.setState({ hosts: { ...hosts, [M]: { ...hosts[M], ip: '10.9.9.9' } } }) // also an edit of the `hosts` section
+    renameH2('edited-after')
+    await settle()
+    await vi.advanceTimersByTimeAsync(120_000)
+    for (const fn of Object.values(api)) expect(fn).not.toHaveBeenCalled()
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+  })
+})
+
+describe('the old driver stands still while an attach is being made', () => {
+  /** Attached and settled; then an edit made offline — dirty, unsent, the SOT not moved. */
+  async function dirtyAndOffline(): Promise<{ onTheSot: string; writes: number; revs: Record<string, number> }> {
+    await attachedAndSettled()
+    const onTheSot = h2Name()
+    useHostStore.getState().setRuntime(M, { status: 'disconnected' })
+    renameH2('edited-offline')
+    await settle()
+    return { onTheSot, writes: daemon.writes.length, revs: daemon.revs() }
+  }
+
+  it('C-1 — `pull`, the attachment PUT takes its time, the host comes back meanwhile: the old driver pushes NOTHING; then the SOT wins', async () => {
+    const before = await dirtyAndOffline()
+    let release: () => void = () => {}
+    vi.clearAllMocks()
+    api.putAttachment.mockReturnValueOnce(new Promise((r) => (release = () => r({ kind: 'ok', value: { attached: true } }))))
+    const attaching = attachMaster(M, PROFILE, 'pull')
+    await settle()
+    useHostStore.getState().setRuntime(M, { status: 'connected' }) // the old driver's cue to flush its dirty section
+    await settle()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+    for (const fn of [api.listProfiles, api.getSection, api.putSection, api.deleteSection]) expect(fn).not.toHaveBeenCalled()
+
+    release()
+    expect(await attaching).toEqual({ ok: true })
+    await settle()
+    expect(h2Name()).toBe(before.onTheSot)
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+    expect(daemon.revs()).toEqual(before.revs)
+    expect(profileSyncState().status?.profile).toBe('synced')
+    expect(useProfileStore.getState().suspension).toBeNull()
+  })
+
+  it('the attach fails: the old mode is back and carries on with what it had — the edit goes out after all', async () => {
+    const before = await dirtyAndOffline()
+    api.putAttachment.mockResolvedValueOnce({ kind: 'failed', reason: 'server', status: 500, message: 'nope' })
+    expect(await attachMaster(M, PROFILE, 'pull')).toEqual({ ok: false, reason: 'server' })
+    expect(useProfileStore.getState().suspension).toBeNull()
+    useHostStore.getState().setRuntime(M, { status: 'connected' })
+    await settle()
+    expect(daemon.writes.slice(before.writes).map((w) => [w.key, w.outcome])).toEqual([['hosts', 'applied']])
+    expect(h2Name()).toBe('edited-offline')
+  })
+})
+
+describe('C-1a — the write that had not left yet', () => {
+  /** Attached and settled, then an edit kept home by `autoSync: false`: dirty, decided on, not sent. */
+  async function dirtyAndHeld(): Promise<{ onTheSot: string; writes: number; revs: Record<string, number> }> {
+    await attachedAndSettled()
+    const onTheSot = h2Name()
+    useProfileStore.getState().setAutoSync(false)
+    renameH2('edited-here')
+    await settle()
+    expect(profileSyncState().status?.sections.hosts).toBe('pending')
+    return { onTheSot, writes: daemon.writes.length, revs: daemon.revs() }
+  }
+
+  it('SAME TURN: the old driver\'s PUT is one microtask away when attachMaster(pull) is called — it never goes out, and the SOT wins', async () => {
+    const before = await dirtyAndHeld()
+    let release: () => void = () => {}
+    api.putAttachment.mockReturnValueOnce(new Promise((r) => (release = () => r({ kind: 'ok', value: { attached: true } }))))
+    api.putSection.mockClear()
+
+    useProfileStore.getState().setAutoSync(true) // → syncNow(): the push is decided and waits behind `await shapes()`
+    const attaching = attachMaster(M, PROFILE, 'pull') // same turn, not awaited
+    await settle()
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+
+    release()
+    expect(await attaching).toEqual({ ok: true })
+    await settle()
+    expect(h2Name()).toBe(before.onTheSot)
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+    expect(daemon.revs()).toEqual(before.revs)
+  })
+
+  it('ANOTHER WINDOW: its suspension is in localStorage, this window\'s store has not heard — the leader\'s next write is not sent, and no flight is left open', async () => {
+    await attachedAndSettled()
+    const writes = daemon.writes.length
+    const envelope = JSON.parse(localStorage.getItem('purdex-profile') ?? '{}') as { state: Record<string, unknown> }
+    localStorage.setItem('purdex-profile', JSON.stringify({ ...envelope, state: { ...envelope.state, suspension: { token: 'window-b', until: Date.now() + 30_000 } } }))
+    expect(useProfileStore.getState().suspension).toBeNull()
+
+    renameH2('edited-here') // the collector reports it, the executor decides to push…
+    await settle()
+    expect(daemon.writes.slice(writes)).toEqual([]) // …and the request is not made
+    expect(profileSyncState().status?.sections.hosts).toBe('pending')
+
+    await useProfileStore.persist.rehydrate() // the broadcast arrives
+    expect(profileSyncState().blocked).toBe('suspended')
+    expect(daemon.writes.slice(writes)).toEqual([])
+  })
+})
+

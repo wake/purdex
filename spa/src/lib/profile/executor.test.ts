@@ -2034,3 +2034,218 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     expect(settled).toHaveBeenCalledTimes(1)
   })
 })
+
+/* ─── a device-local workspace (an id that cannot form `tabs.<id>`) ─── */
+
+describe('executor — a workspace whose id cannot be synced is not the reconcile\'s business', () => {
+  it('the section set is still reconciled: unrendered and unknown sections are reported, nothing fails', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w1'), ws('not a valid id!')] })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('tabs.w7', 3, 'T7'), meta('gizmo.x', 2, 'G1')]))
+    const { ex, problems } = make()
+    ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+    ex.onReconnected()
+    await flush()
+    expect(problems.filter((p) => p.kind === 'reconcile-failed' || p.kind === 'executor-error')).toEqual([])
+    expect(problems.filter((p) => p.kind === 'sections-unrendered').map((p) => p.detail)).toEqual(['tabs.w7'])
+    expect(problems.filter((p) => p.kind === 'sections-unknown-kind').map((p) => p.detail)).toEqual(['gizmo.x'])
+  })
+
+  it('…also when the unsyncable one was there BEFORE a `workspaces` pull (the previous set)', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('not a valid id!')] })
+    h.stored = { workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
+    api.listProfiles.mockResolvedValue(index([meta('workspaces', 2, 'W2'), meta('tabs.w7', 3, 'T7')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('workspaces', 2, 'W2'), { theirs: true }))
+    applySectionToStores.mockImplementation(async () => {
+      useWorkspaceStore.setState({ workspaces: [ws('w1')] }) // the applier would keep the device-local one; irrelevant here
+      return { ok: true, hash: 'W2' }
+    })
+    const { ex, problems } = make()
+    ex.onSection({ key: 'workspaces', hash: 'W1', payload: { a: 1 } })
+    ex.onReconnected()
+    await flush()
+    api.listProfiles.mockResolvedValue(index([meta('workspaces', 2, 'W2'), meta('tabs.w7', 3, 'T7'), meta('gizmo.x', 2, 'G1')]))
+    ex.onReconnected()
+    await flush()
+    expect(problems.filter((p) => p.kind === 'reconcile-failed')).toEqual([])
+    expect(problems.some((p) => p.kind === 'sections-unknown-kind')).toBe(true)
+  })
+})
+
+/* ─── no request starts while the host is unreachable (critic C-2) ─── */
+
+describe('executor — `isReachable()` is asked again where the request is MADE, not only where it is decided', () => {
+  // The start layer keeps the executor "unreachable" until the daemon has confirmed the attachment, and makes
+  // it unreachable again when the connection drops — WITHOUT disposing it. Whatever was scheduled before
+  // (behind `await shapes()`, in the write queue, on a backoff timer) must not go out afterwards.
+  type ApiName = 'listProfiles' | 'getSection' | 'putSection' | 'deleteSection'
+
+  interface Watched extends Harness {
+    /** Every api call that STARTED, with what `isReachable()` said at that moment. */
+    started: Array<{ fn: string; reachable: boolean }>
+    /** The answers go through here, so that the recording wrapper is never replaced by a `mockResolvedValue`. */
+    answer(name: ApiName, value: unknown): void
+    answerOnce(name: ApiName, value: unknown): void
+  }
+
+  function watch(harness: Harness): Watched {
+    const started: Watched['started'] = []
+    const always: Partial<Record<ApiName, unknown>> = {}
+    const once: Partial<Record<ApiName, unknown[]>> = {}
+    for (const name of ['listProfiles', 'getSection', 'putSection', 'deleteSection'] as const) {
+      const mock = api[name] as unknown as ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>
+      mock.mockReset()
+      mock.mockImplementation(() => {
+        started.push({ fn: name, reachable: harness.env.reachable })
+        const queued = once[name]
+        const value = queued !== undefined && queued.length > 0 ? queued.shift() : name in always ? always[name] : failure('network')
+        return Promise.resolve(value)
+      })
+    }
+    return {
+      ...harness,
+      started,
+      answer: (name, value) => void (always[name] = value),
+      answerOnce: (name, value) => void (once[name] = [...(once[name] ?? []), value]),
+    }
+  }
+
+  const never = (w: Watched): void => expect(w.started.filter((c) => !c.reachable)).toEqual([])
+
+  it('(i) reindex — the link drops while the shapes are being computed: no list request; the next connect asks', async () => {
+    const w = watch(make())
+    w.answer('listProfiles', index([meta('hosts', 1, 'H1')]))
+    w.ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+    w.ex.onReconnected() // → reindex → `await shapes()`
+    w.env.reachable = false
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000) // and no busy retry either
+    expect(api.listProfiles).not.toHaveBeenCalled()
+    never(w)
+
+    w.env.reachable = true
+    w.ex.onReconnected()
+    await flush()
+    expect(api.listProfiles).toHaveBeenCalledTimes(1)
+    expect(w.ex.status().sections).toEqual({ hosts: 'synced' })
+  })
+
+  it('(i) pull — decided while reachable, the link drops before the GET: not sent, nothing dispatched; the next connect pulls', async () => {
+    const again = watch(await synced({ hosts: 'H1' }))
+    again.answer('getSection', sectionOf(meta('hosts', 2, 'H9'), { theirs: true }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H9' })
+    again.ex.onRemoteEvent({ hostId: HOST, profileId: PROFILE, section: 'hosts', rev: 2, hash: 'H9', writerClientId: OTHER_CLIENT })
+    again.env.reachable = false
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api.getSection).not.toHaveBeenCalled()
+    expect(eventsOf('pull-applied', 'locked')).toEqual([])
+    never(again)
+
+    again.env.reachable = true
+    again.answer('listProfiles', index([meta('hosts', 2, 'H9')]))
+    again.ex.onReconnected()
+    await flush()
+    expect(api.getSection).toHaveBeenCalledTimes(1)
+    expect(eventsOf('pull-applied')).toHaveLength(1)
+  })
+
+  it.each([
+    ['put', { key: 'hosts', hash: 'H2', payload: { mine: true } }, 'putSection'],
+    ['delete', { key: 'tabs.w1', hash: null, payload: null }, 'deleteSection'],
+  ] as const)('(i) %s — the link drops before the write goes out: not sent, and the flight that was opened is CLOSED', async (_kind, report, fn) => {
+    const again = watch(await synced({ hosts: 'H1', 'tabs.w1': 'T1' }))
+    again.answer(fn, { kind: 'applied', rev: 2 })
+    again.ex.onSection(report)
+    again.env.reachable = false
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api[fn]).not.toHaveBeenCalled()
+    never(again)
+    const opened = eventsOf('push-started').length
+    expect(h.events.filter((e) => TERMINAL.includes(e.event.type) && e.changed)).toHaveLength(opened) // none left hanging
+    expect(eventsOf('push-applied')).toEqual([])
+
+    again.env.reachable = true
+    again.answer('listProfiles', index([meta('hosts', 1, 'H1'), meta('tabs.w1', 1, 'T1')]))
+    again.ex.onReconnected()
+    await flush()
+    expect(api[fn]).toHaveBeenCalledTimes(1)
+  })
+
+  it('(ii) the write queue — the link drops while a write waits its turn: the one on the wire ends normally, the waiting one is not sent', async () => {
+    const again = watch(await synced({ hosts: 'H1', settings: 'S1' }))
+    const first = deferred<PutOutcome>()
+    again.answerOnce('putSection', first.promise)
+    again.answer('putSection', { kind: 'applied', rev: 2 })
+    again.ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 2 } })
+    again.ex.onSection({ key: 'settings', hash: 'S2', payload: { b: 2 } })
+    await flush()
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    again.env.reachable = false
+    first.resolve({ kind: 'applied', rev: 2 })
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    never(again)
+    expect(again.ex.status().sections).toEqual({ hosts: 'synced', settings: 'pending' })
+
+    again.env.reachable = true
+    again.answer('listProfiles', index([meta('hosts', 2, 'H2'), meta('settings', 1, 'S1')]))
+    again.ex.onReconnected()
+    await flush()
+    expect(api.putSection).toHaveBeenCalledTimes(2)
+    expect(again.ex.status().sections).toEqual({ hosts: 'synced', settings: 'synced' })
+  })
+
+  it('(ii) an orphan delete waiting in the queue is not sent either; the next index tries it again', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w1')] })
+    const settingsPut = deferred<PutOutcome>()
+    const w = watch(make({ initialDirection: () => 'push', onInitialSettled: () => {} }))
+    // hosts and workspaces already agree with the SOT (the gates are up to date at once); `settings` is new and
+    // its push holds the queue while the orphan waits behind it
+    w.answer('listProfiles', index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.w7', 3, 'T7')]))
+    w.answerOnce('putSection', settingsPut.promise)
+    w.answer('deleteSection', { kind: 'applied', rev: 4 })
+    w.ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+    w.ex.onSection({ key: 'workspaces', hash: 'W1', payload: { b: 1 } })
+    w.ex.onSection({ key: 'settings', hash: 'S1', payload: { c: 1 } })
+    w.ex.onReconnected()
+    await flush()
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(api.deleteSection).not.toHaveBeenCalled()
+
+    w.env.reachable = false
+    settingsPut.resolve({ kind: 'applied', rev: 1 })
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api.deleteSection).not.toHaveBeenCalled()
+    never(w)
+
+    w.env.reachable = true
+    w.answer('listProfiles', index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 1, 'S1'), meta('tabs.w7', 3, 'T7')]))
+    w.ex.onReconnected()
+    await flush()
+    expect(api.deleteSection).toHaveBeenCalledTimes(1)
+  })
+
+  it('(iii) a backoff timer that fires while unreachable sends nothing — section retry and index retry alike', async () => {
+    const again = watch(await synced({ hosts: 'H1' }))
+    again.ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 2 } })
+    await flush()
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    again.env.reachable = false
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    never(again)
+
+    // the index retry
+    again.env.reachable = true
+    again.ex.onReconnected()
+    await flush()
+    const lists = api.listProfiles.mock.calls.length
+    again.env.reachable = false
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(api.listProfiles).toHaveBeenCalledTimes(lists)
+    never(again)
+  })
+})

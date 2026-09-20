@@ -290,8 +290,20 @@ from the workspaces' orders on apply, retiring the dual-ordering hazard noted at
 
 ### 4.4 Section state, and the pre-SOT state machine
 
-Per section: `synced` | `pending` | `locked:conflict`.
-Per profile: `idle` (no master) | `locked:schema` | worst-of-its-sections.
+Per section: `synced` | `pending` | `locked:conflict` | `locked:reset` | `locked:invalid`.
+Per profile: `idle` (no master) | `locked:schema` | worst-of-its-sections
+(`locked:reset` > `locked:conflict` > `locked:invalid` > `pending` > `synced`).
+
+*(The last two section states were added while building P2a/P2b, §9.4 and §9.9; stated here so
+that this section is the contract rather than the review logs.)*
+- **`locked:reset`** — the SOT's revision went *backwards* relative to what this client agreed with:
+  the profile was recreated. Offered as push or pull, a fresh start. At profile level the same word
+  covers "the profile is no longer on the daemon at all": everything stops, nothing local is touched,
+  and the wizard is the way out.
+- **`locked:invalid`** — the SOT holds a payload this client refuses to apply: ill-formed, a
+  settings value of the wrong shape, or a `hosts` payload that would remove or re-point the master's
+  own host. Never re-fetched on a timer; unlocked by **any** observed SOT that differs from the one
+  that was judged; `Keep local` pushes the local copy over it, `Take SOT` is not offered.
 
 ```
         ┌── local change ──▶ pending ──── flush ok ───▶ synced
@@ -489,7 +501,11 @@ operation lock, validates well-formedness, then per section:
   for tabs pointing at it.
 - `settings` — replace each store's persisted slice; `tabPosition` only, out of `useLayoutStore`.
 - `workspaces` — replace the list and order; keep local `activeWorkspaceId`, falling back to the
-  first workspace if it vanished.
+  first workspace if it vanished. **One exception (P2b-2, §9.11):** a workspace whose id cannot form
+  a `tabs.<id>` section key (the daemon accepts `[A-Za-z0-9_-]{1,64}`; `importWorkspace` and old
+  merges can bring in others) is **device-local**: the collector leaves it out of the payload and
+  the applier leaves the local one in place, after the synced ones. Without this one client's odd
+  id became a payload every other client's guard refused — a lock that spread.
 - `tabs.<ws>` — replace that workspace's tabs and order, then **restore split ratios**: walk the
   incoming `layout` tree and, for each split node id present in the local tree, copy the local
   `sizes`; for a new split node, distribute evenly. Then `remapLayoutSessions` and `syncSessionStore`
@@ -978,3 +994,58 @@ the daemon** (`profiles: []`), the storage-state file that held the token remove
 tokens — both contexts were seeded with the same host), and the cross-machine run on air-2026. The
 App there loads the main checkout's `:5174`, which this isolated worktree session cannot `git pull`;
 that run is the user's acceptance.
+
+### 9.11 PR #1247 / P2b-2b review — R1 + two attackers (gpt-5.6-sol), 2026-09-20
+
+R1 reviewed the whole of P2b-2; each attacker was scoped by its focus to one half.
+
+| # | Source | Sev. | Finding | Resolution |
+|---|---|---|---|---|
+| R1-1 | R1 | P1 | `detachMaster` awaited the server-side cleanup first — up to a 15 s timeout during which the driver kept pulling and pushing after the user had said stop | `clearMaster()` first (the driver dies synchronously), then the best-effort `deleteAttachment` |
+| R1-2 / B-1 | R1, attacker B | P1 / high | re-attaching to the **same** master: with `pull`, the kept bases made a locally dirty section an ordinary push — the local edit overwrote the SOT, the opposite of what was asked; and `pendingDirection` could **stay set forever**, so an ordinary conflict hours later was answered silently by a stale direction | every attach is a fresh reconciliation (section store cleared, the whole master mode rebuilt, `attachGeneration` tells other windows); one reconciliation period per executor — once settled it answers no lock, reports `stale-direction` and asks to be cleared; the settle check runs after every round, including rounds with no action |
+| B-2 | attacker B | high | the master host's `ip` / `port` edited in place: the executor went on using the *old* daemon's bases against the new address | the attach-time endpoint is **persisted**; a different one blocks the driver (`master-endpoint-changed`) until the user re-attaches or puts it back. A token change alone rebuilds the driver and keeps the bases |
+| B-3 | attacker B | medium | on reload / leader hand-over, syncing began before the attachment PUT had succeeded — a window in which the profile could be deleted from under it | reachability is `attached && connected`; nothing is requested before the attachment is confirmed. (Measured first: an executor that never received `onReconnected` *does* issue requests once the collector reports, so withholding that call gated nothing.) An attachment **404 means the profile is gone**: no retry, `blocked: 'profile-gone'` |
+| B-4 | attacker B | medium | the control store's `syncManager.register` at module load creates a `BroadcastChannel`, so "no master, no effect" is false | **refuted with evidence**: `lib/storage/sync.ts:12` — the channel is a singleton, and 18 stores on `main` already register at load; this adds one entry to a Map. The wording of the rule was made exact instead |
+| A-4 | attacker A | high | a workspace whose id cannot form a `tabs.<id>` key was skipped for tabs but still pushed inside `workspaces`; every other client's guard then refused the payload and locked — self-propagating poison | such a workspace is **device-local**: the builder leaves it out, the applier keeps the local one in place, the collector reports it |
+| A-2, A-3 | attacker A | high | rollbacks covered less than the apply: removing a workspace also cleared a third store; a settings rollback restored fields but not the theme/locale registries, the DOM or the translator | the third store joins the snapshot; a settings rollback re-registers what was dropped and re-runs the rehydrate path; a rollback that itself fails says so (`rollback incomplete`) instead of being swallowed |
+| A-1 | attacker A | high | a failed hosts apply does not restore three cache stores | the claim "they are re-fetched" was **checked rather than repeated, and is only one third true**: the execution store recovers, `nex-host` and the execution list do not (nothing re-runs `ensure` for a host that reappears under the same id). The rollback now calls `ensure`; from the first staged write to the end of the rollback there is no `await`, so the connection layer never sees the intermediate host list and `runtime` is restored truthfully. The same gap in the app's own delete → Undo path is #1248 |
+| A-5 | attacker A | medium | the lease's release is read-then-remove; a window frozen in between for longer than the TTL deletes the next leader's lease | recorded in the header as a residual, with a test of what actually happens (one extra hand-over) |
+| A-6 / B-5 | both | low | `executor.ts` (~1,200 lines), `apply-to-stores.ts`, `collector.ts` do too much | #1240 |
+
+Three times in this phase a subagent was told *"verify this premise; if it does not hold, stop and say
+so"* and it did not hold as stated: the rehydrate path (held, with two side effects nobody had
+predicted), "the caches re-fetch" (one third), and "restore `runtime` as reconnecting" (wrong — the
+WebSocket had never been touched). Each would have shipped as a plausible comment otherwise.
+
+**R2 critic** (incremental, `--base fcee092d`): agrees with all eleven. Sound as handled: R1-1, B-1,
+A-2, A-3, A-4; A-5 acceptable as a recorded residual; **B-4's refutation upheld** (it read
+`sync.ts:11-25` itself: the channel is a singleton, `register` adds a registry entry). Two spec
+drifts, fixed in the text above: §4.4 did not name `locked:reset` / `locked:invalid`, §4.7 did not
+state the device-local workspace exception. Four evidenced objections to *fixes*:
+
+| # | Objection | Resolution |
+|---|---|---|
+| C-1 | `attachMaster` awaited the attachment PUT before tearing the old driver down — for up to 15 s the old writer could still push a locally dirty section, after which the "pull" would read a SOT already overwritten by the local content: the direction irreversibly reversed | every driver **stands still before the first request**: `useProfileStore.suspension = {token, until}`, synced, with an expiry (the window that set it may die mid-attach). A second review found two more races in that fix and both are closed: the suspend ran one microtask late (it sat inside the serial queue) → it is now synchronous at the call; and the BroadcastChannel delivery to another window's leader is asynchronous → **reachability reads the suspension straight from `localStorage`**, which is shared synchronously, the same level as the lease. The suspension has an **owner**: `resume` / `setMaster` only clear their own token, an attach still in progress puts its suspension back if a newer one finishes first, and queued attaches in one window refresh each other so no stretch outlives its 30 s. What remains is said plainly in the code: cross-process `localStorage` visibility is not instantaneous, read-then-send is not atomic, bytes already sent cannot be recalled |
+| C-2 | `isReachable` was consulted when *deciding*, not when *sending*: after the shape computation, a wait in the write queue or a back-off timer, a request could still go out unattached or disconnected | all five API call sites go through one `request(call)` that asks again; an open flight is closed with `push-failed`. One mutation per call site — the fifth was green at first because the test never actually queued the orphan delete, and was rewritten until it was red |
+| C-3 | a master with `masterEndpoint === null` adopted whatever address the host had *now*, legitimising bases of unknown origin; the "reload" test never rebuilt the stores from storage | fail closed: a master without an endpoint is no master. That state only ever existed in this acceptance's dev contexts, so it gets no migration path. The reload tests now re-import the store modules over a persisted `localStorage` |
+| C-4 | the hosts rollback ran in one synchronous block, so React never saw the host leave and no subscription re-ran — the execution store was simply gone. (The "no `await`" invariant the subagent had built to keep `runtime` truthful is exactly what falsified its own comment.) | the three stores' per-host state is snapshotted before the cascade and written back whole. Checked first whether `clearHost` does anything irreversible: only the execution-list store does (it closes the site-wide SSE), and an existing watcher reopens it. "Defer the destructive cascade" was considered and is impossible without changing `host-lifecycle.ts`: its own last step is the persisted `removeHost`. The remaining gap — a cascade that throws half-way returns no undo — is #1248 |
+
+A narrow re-review of C-2, C-3, C-4: no residue of Important or above.
+
+A last narrow re-review of the C-1 fixes: both races closed. It found one more of the same family —
+**a detach in another window could be undone by an attach that had started earlier and finished
+later** (A awaits its PUT; B detaches; A's PUT returns and A sets the master again) — against "detach
+means stop". `attachGeneration` now advances on every attach *and* detach; an attach notes it at the
+call and re-reads it **from `localStorage`**, not from memory, after each await and immediately
+before its commit; overtaken, it answers `superseded`, clears no base, sets no master, and removes
+the attachment it had just made unless the winner wants that same profile. One thing the fix needed
+that nobody had specified, found by the subagent's tests: the overtaken window must **rehydrate its
+store from storage before it writes anything** — its memory still holds the old master, and *any*
+write, even clearing its own suspension, would persist that old master back over the other window's
+detach.
+
+**Stop.** Five review passes on this phase (R1, two attackers, the critic, two narrow re-reviews);
+every pass found something real and each finding was narrower than the last — from "detach awaits in
+the wrong order" to "the suspend runs one microtask late". No pass found a critical. What is left is
+written in the code as residuals, not claimed as prevented: `localStorage` is not a transactional
+store, a read followed by an act is not atomic, and bytes already sent cannot be recalled.
