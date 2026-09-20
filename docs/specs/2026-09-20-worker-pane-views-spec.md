@@ -1,8 +1,10 @@
 # Spec — worker pane: room and chat views
 
-- Status: v0.3 (2026-09-20) — **design draft for the user, not yet a build plan.**
-  v0.3 answers Q1–Q3 (§10); v0.2 folded in a source-level audit at alpha.415 (§3.2).
-  Q4 (folding numbers) and Q5 (when to send the wire asks) still open; screenshots pending.
+- Status: v1.0 (2026-09-20) — **design settled; every question answered. A
+  plan can be written from this.**
+  v0.4 added the real screenshots and what they changed (§3.1, §4.2, §4.3, §4.5);
+  v0.3 answered Q1–Q3 (§10); v0.2 folded in the source audit (§3.2).
+  Q4 (folding numbers) and Q5 (when to send the wire asks) still open.
 - Scope: how one worker's pane presents itself. No daemon work, no Nexen work
   in the first phase; §9 collects what would need Nexen later.
 - Predecessors: P-B (`2026-09-15-pb-execution-pane-spec.md`) built the pane,
@@ -173,6 +175,50 @@ wire ask (§9 A1), not a rendering gap.
 | `i-input.png` | the Reply box and its relation to the content |
 | `j-sidebar.png` | the Executions view row |
 | `k-narrow.png` | the same pane at ~900px |
+| `live-typing.png` | mid-stream: a half-assembled tool input |
+
+Not captured: `d1/d2-thinking-*` — see §4.3, the thinking block never renders
+on this machine.
+
+### 3.1.1 What the screenshots changed in this design
+
+1. **The card frame is the problem, more than the alignment.** Every
+   operation is a bordered, rounded, full-width card, and one call is *two*
+   of them (invocation card + result card) with a faint green fill on the
+   successful one. So a five-tool turn is ten cards of equal weight, and the
+   agent's own prose is the only thing without a frame — it sits at a
+   *different* left edge (x≈107) from the card contents (x≈166).
+   Room drops the card: a status dot, the tool name, the argument, and the
+   result on an indent rail under it. No border, no fill; only special
+   blocks (diff) keep a container.
+2. **Success is louder than failure.** The successful result card has a green
+   tint; the failing one has red text on the normal dark fill, so a failure
+   is *less* visible when you scan (`c-tool-error.png`). Room inverts this:
+   errors and denials carry the fill, success carries nothing.
+3. **The right column is three different things stacked in one place**:
+   duration (`0.0s`), size (`30 lines`), diff stat (`+5 −0`)
+   (`a-pane-full.png`). Room gives size to the fold affordance
+   (`… +29 lines`), keeps the diff stat with the diff, and shows duration
+   only when it is worth reading (≥ 1 s until #1229 lands, then ms).
+4. **A subagent is indistinguishable from the user.** The prompt the agent
+   writes for its Task renders in the same right-aligned blue bubble as the
+   human's brief, and the subagent's own Bash call and result are top-level
+   cards — the transcript reads as if the user said it and the main agent did
+   it (`a-pane-full.png`, `f-subagent.png`). Filed as **#1263**; the nesting
+   design is §4.5.
+5. **The collapsed result preview flattens newlines**, gluing a file's line
+   numbers to its text (`1 # Pane Design Notes 2 3 - …`). Filed as **#1265**;
+   §4.2 specifies first-line-plus-count instead.
+6. **The content is cut off by the input box** with no separator, so the last
+   line always looks truncated (`i-input.png`, and at 900px a tool line is
+   sliced in half in `k-narrow.png`).
+7. **Mid-stream is noisy**: a tool call shows its half-assembled raw JSON
+   input (`{"file_path": "/Users/wake/…/pane-des`) until the block closes
+   (`live-typing.png`). Room shows the tool name and a stable placeholder
+   until the argument is complete.
+8. **The cost panel prints the account email** (`h2-cost-panel.png`) — filed
+   as **#1264**, and the tooltip stays open behind the panel repeating the
+   same line.
 
 ## 4. Room
 
@@ -180,7 +226,8 @@ wire ask (§9 A1), not a rendering gap.
 
 - Full width, no bubble column, no max-width clamp beyond a comfortable
   reading measure for prose (proposal: prose paragraphs wrap at ~90ch, but
-  code, output, diffs and tables use the full width).
+  code, output, diffs and tables use the full width). Today nothing in the
+  pane exceeds `max-w-[90%]`, so the width is never actually used (§3.2).
 - **One left edge.** Everything — the user's own turns, the agent's prose, tool
   calls, results, thinking, diffs — starts at the same x. Authorship is carried
   by a marker in the gutter, not by alignment:
@@ -226,6 +273,7 @@ N2 already gives (`output.total_lines`, `output.total_bytes`, `truncated`):
 | volume | default |
 |---|---|
 | ≤ 6 lines and ≤ 1 KB | shown whole, no affordance |
+| — | *the collapsed preview is the output's **first line**, never the lines joined together (#1265)* |
 | ≤ 40 lines | first 6 lines + `… +N lines [expand]` |
 | > 40 lines, or `truncated` | first 3 lines + `… +N lines [expand]`, and the expand state says whether the daemon itself cut it at 8 KB |
 | any `error` / `denied` | one step less folded than the table says |
@@ -235,12 +283,31 @@ N2 already gives (`output.total_lines`, `output.total_bytes`, `truncated`):
 Expansion is per block and remembered per pane while the pane lives; "expand
 all" / "collapse all" on the turn separator.
 
-### 4.3 Thinking
+### 4.3 Thinking — measured: the text is usually absent
 
-Collapsed by default to a single line (`Thought for 4s · 320 words`), expands
-in place on the same rail. Data is already there (`ContentBlock.type ===
-'thinking'`, rendered by `ThinkingBlock`). When the turn is live the thinking
-line is where the typewriter shows before the first visible block.
+**Correction to the earlier answer in this conversation.** The *block* is in
+the data (`ContentBlock.type === 'thinking'`), but its text very often is not:
+
+- headless `claude -p` runs on mlab returned thinking blocks with
+  `"thinking": ""` (signature only) in every sample the capture agent took,
+  across two turns including an explicit "think hard" prompt;
+- in interactive transcripts on the same machine, 17 of 179 blocks carried
+  text in one session and 0 of 30 in another.
+
+`ConversationMessages.tsx:76` renders only when `block.thinking` is truthy,
+so today **`ThinkingBlock` never appears in a worker** — it is dead code
+there, which is why the screenshots have no `d1`/`d2`.
+
+Design consequence: thinking is an *optional* element, not a pillar. Room
+shows a fold only when there is text (`Thought for 4s · 320 words`,
+expanding in place on the rail). When a thinking block arrives empty, room
+shows **nothing** — not an empty fold — and the fact that the agent thought
+is carried by the live typewriter, which already covers that moment. Chat
+hides thinking entirely either way (§5).
+
+Open (upstream, not blocking): whether the empty text is a provider setting,
+a model behaviour, or something Nexen strips. Worth one question to the
+Nexen side when the §9 batch goes out.
 
 ### 4.4 Diff
 
@@ -254,9 +321,20 @@ A `Task` call is a block whose result is *another agent's* run. Render it as a
 nested rail: the Task block folds to one line (`Task · 分析 notes.md · 8 tools
 · 12s`) and expands into the child's own blocks, one indent deeper.
 
-This needs data we do not have (§9): subagent tool calls are addressable
-(`parent_tool_use_id`) but are not currently collected (#1228), and a subagent
-has no result frame of its own, so its cost and end time are not separable
+Two things must be true before the nesting reads correctly, and neither is
+today (`f-subagent.png`):
+
+- **attribution** — a frame with `parent_tool_use_id != null` belongs to the
+  child, not to the user and not to the main agent. Today the child's prompt
+  renders as the human's bubble and its tool calls render as top level
+  (#1263, #1228). The rail is what fixes it visually; the gate on
+  `parent_tool_use_id` is what fixes it semantically.
+- **order** — the hand-back result currently appears *after* the child's own
+  summary, so the transcript reads backwards; and the hand-back prints raw
+  JSON instead of its text (#1263).
+
+Still missing from the wire (§9 A2): a subagent has no result frame of its
+own, so its cost and end time cannot be separated from the parent's
 (measured in P-B4).
 
 ### 4.6 Persistent things (常駐)
@@ -395,13 +473,11 @@ field at a time.
 - **Q2 — chat's default.** Deferred; room is always the default (§6).
 - **Q3 — the dock.** Inside the pane (§4.6).
 
-**Still open:**
-
-- **Q4 — folding numbers.** Take §4.2's table as the starting point and tune
-  after a session of use, or do you already know the thresholds you want?
-- **Q5 — the wire asks.** Send all four (§9) to Nexen now, so its work
-  overlaps with the SPA phase, or wait until the SPA is built and we know
-  exactly which we need?
+- **Q4 — folding numbers.** §4.2's table is the starting point; tune after a
+  session of real use.
+- **Q5 — the wire asks.** **Not in parallel.** §9 goes to Nexen *after* the
+  SPA phases, when we know which asks are still needed. R4 therefore sits at
+  the end of §11 and nothing in R1–R3 may depend on new wire data.
 
 ## 11. Phases (proposal, after §10 is answered)
 
@@ -410,5 +486,12 @@ field at a time.
    Pure SPA, no new data.
 2. **R2 — chat**: the second view, the `mode` field, the switch.
 3. **R3 — input**: search, quick replies.
-4. **R4 — after the Nexen batch (§9)**: dock with real running-shell data,
-   subagent nesting, sidebar rollups.
+4. **R4 — last, after the §9 batch has been sent and shipped** (Q5: not in
+   parallel): dock with real running-shell data, subagent cost/end time,
+   sidebar rollups. R1–R3 must stand on their own without it.
+
+Bugs found while capturing §3.1 that can be fixed independently of the phases,
+and should be: **#1263** (subagent attribution), **#1265** (collapsed preview
+flattens newlines — R1 needs the corrected behaviour anyway), **#1264**
+(account email in the cost panel). Existing: #1226, #1227, #1228, #1229,
+#1234, #1235.
