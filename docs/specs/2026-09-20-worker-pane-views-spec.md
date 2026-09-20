@@ -1,8 +1,8 @@
 # Spec — worker pane: room and chat views
 
-- Status: v0.2 (2026-09-20) — **design draft for the user, not yet a build plan.**
-  v0.2 folds in a source-level audit of the pane at alpha.415 (§3.2); screenshots pending.
-  Open questions in §10 need answers before a plan is written.
+- Status: v0.3 (2026-09-20) — **design draft for the user, not yet a build plan.**
+  v0.3 answers Q1–Q3 (§10); v0.2 folded in a source-level audit at alpha.415 (§3.2).
+  Q4 (folding numbers) and Q5 (when to send the wire asks) still open; screenshots pending.
 - Scope: how one worker's pane presents itself. No daemon work, no Nexen work
   in the first phase; §9 collects what would need Nexen later.
 - Predecessors: P-B (`2026-09-15-pb-execution-pane-spec.md`) built the pane,
@@ -189,9 +189,18 @@ wire ask (§9 A1), not a rendering gap.
   - tool call: a status dot (running / ok / error / denied), like the `⏺`
   - everything belonging to a call: an indent rail under it (the `⎿`)
 - Vertical rhythm by turn, not by message: one turn = the user's line, then
-  everything the agent did, then its closing prose. A turn separator that also
-  carries the per-turn facts (duration, cost) — the data is already there from
-  P-B4.
+  everything the agent did, then its closing prose.
+  **A turn is a container, not a decoration** (user, Q1): the grouping exists
+  in the DOM so a turn can be collapsed, scrolled to, searched and — later —
+  labelled, but **it draws no separator and shows no per-turn duration or
+  cost** in the first pass. The user's own line already marks where a turn
+  begins; a rule under it would be a second answer to a question that is
+  already answered. Per-turn facts stay available (P-B4 has them) and can be
+  switched on later without re-plumbing.
+  Turn boundaries are explicit in the data, not inferred: a turn opens on
+  `execution.message_accepted` (or the delegate brief for the first one),
+  every N2 tool event carries `turn_id`, and a `result` frame closes it — so
+  the container is exact even when a turn ends by interrupt.
 
 ### 4.2 The operation block (呼叫＋結果)
 
@@ -255,8 +264,10 @@ has no result frame of its own, so its cost and end time are not separable
 A worker accumulates things that outlive a turn: background shells, dev
 servers, watches, and — if we choose to show it — the lease and observers.
 These do not belong in the transcript, because the transcript is chronological
-and these are *current*. Proposal: a **dock** on the pane, collapsed to a
-single row by default:
+and these are *current*. **It lives inside the pane** (user, Q3), not on the
+tab bar or a global strip: it is this worker's state, so it travels with the
+worker's pane and two panes on different workers each show their own. Collapsed
+to a single row by default:
 
 ```
 ▸ 2 running   ● bash#3 pnpm dev (4m)   ● bash#7 tail -f log (2m)
@@ -320,8 +331,10 @@ first.
 
 ## 6. Switching
 
-`mode` on the pane content, default `room` for a worker the user started from
-the Headless launcher, `chat` for … (§10 Q2). Instant, local, no daemon call,
+`mode` on the pane content, **always defaulting to `room`** (user, Q2: chat is
+something you switch into; whether any context should pick it by itself — the
+phone, a narrow viewport — is deferred until chat exists and has been used).
+Instant, local, no daemon call,
 persisted with the pane (so it survives reload and travels in a workspace
 snapshot). Two panes on the same worker may differ.
 
@@ -372,18 +385,20 @@ field at a time.
 
 ## 10. Questions for the user
 
-- **Q1 — the turn separator.** Room groups by turn and shows duration/cost per
-  turn. Wanted, or is that noise for you?
-- **Q2 — chat's default.** Is chat ever the default, or is it always something
-  you switch into (and the phone picks it for itself)?
-- **Q3 — the dock.** Does it live in the pane (per worker) or on the pane
-  header row as a strip? And should lease/observers/SSE move into it, or do
-  they belong somewhere else entirely?
+**Answered 2026-09-20:**
+
+- **Q1 — the turn separator.** No separator, no per-turn duration or cost for
+  now ("我看看情況再調整"). The turn stays as a container (§4.1).
+- **Q2 — chat's default.** Deferred; room is always the default (§6).
+- **Q3 — the dock.** Inside the pane (§4.6).
+
+**Still open:**
+
 - **Q4 — folding numbers.** Take §4.2's table as the starting point and tune
   after a session of use, or do you already know the thresholds you want?
-- **Q5 — the wire asks.** Send all four to Nexen now (so its work overlaps
-  with the SPA phase), or wait until the SPA is built and we know exactly
-  which we need?
+- **Q5 — the wire asks.** Send all four (§9) to Nexen now, so its work
+  overlaps with the SPA phase, or wait until the SPA is built and we know
+  exactly which we need?
 
 ## 11. Phases (proposal, after §10 is answered)
 
