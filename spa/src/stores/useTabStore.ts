@@ -455,6 +455,19 @@ interface TabState {
   tabOrder: string[]
   activeTabId: string | null
   visitHistory: string[]
+  /**
+   * WHOSE tabs these are — `'master'` or a local profile's id — and the epoch of
+   * the switch that put them here (Profile Sync P3b; `lib/profile/master-world.ts`
+   * is the only reader). Persisted, because another window learns of a switch by
+   * rehydrating this store, the workspace store and the local-profiles store one
+   * by one, in no guaranteed order: until all three carry the same epoch and the
+   * same world, nobody can say where the master's tabs are, and nothing of them
+   * is reported to the SOT. Written only by `commitTabWorld`; every other write
+   * is a merge-mode `set` and leaves them alone. Device-local: never listed in
+   * `PROJECTIONS`.
+   */
+  worldId: string
+  worldEpoch: number
 
   addTab: (tab: Tab, afterTabId?: string) => void
   openSingletonTab: (content: PaneContent, opts?: OpenSingletonOpts) => string
@@ -505,6 +518,8 @@ export const useTabStore = create<TabState>()(
       tabOrder: [],
       activeTabId: null,
       visitHistory: [],
+      worldId: 'master',
+      worldEpoch: 0,
 
       addTab: (tab, afterTabId) =>
         set((state) => {
@@ -895,12 +910,19 @@ export const useTabStore = create<TabState>()(
     {
       name: STORAGE_KEYS.TABS,
       storage: purdexStorage,
+      // `worldId` / `worldEpoch` joined the persisted shape WITHOUT a version bump:
+      // persist's default merge is `{...current, ...persisted}`, so data written
+      // before them rehydrates with the initial `'master'` / 0 — which is what it
+      // is. A bump would buy nothing (`migrate` would have to add the same two
+      // defaults) and would make an older build read the newer version as foreign.
       version: 3,
       migrate: migrateTabStore,
       partialize: (state) => ({
         tabs: state.tabs,
         tabOrder: state.tabOrder,
         activeTabId: state.activeTabId,
+        worldId: state.worldId,
+        worldEpoch: state.worldEpoch,
       }),
     },
   ),
