@@ -48,6 +48,7 @@ const h = vi.hoisted(() => ({
   initialLeader: true,
   holdPrime: false,
   persisted: true,
+  lease: null as { windowId: string; expiresAt: number } | null,
 }))
 
 vi.mock('./executor', () => ({
@@ -60,7 +61,7 @@ vi.mock('./executor', () => ({
       onReconnected: vi.fn(() => h.order.push('onReconnected')),
       syncNow: vi.fn(),
       resolve: vi.fn(),
-      status: vi.fn(() => ({ profile: 'synced', schemaLock: null, sections: {} })),
+      status: vi.fn(() => ({ profile: 'synced', schemaLock: null, sections: {}, locks: {} })),
       dispose: vi.fn(),
     }
     h.executors.push(e)
@@ -112,6 +113,8 @@ vi.mock('./leader', () => ({
     h.leaderships.push(l)
     return l
   }),
+  leaderWindowId: () => 'w-test',
+  readLeaderLease: () => h.lease,
 }))
 
 vi.mock('./profile-ws-dispatch', () => ({
@@ -151,8 +154,12 @@ import {
   __resetProfileSyncForTest,
   attachMaster,
   detachMaster,
+  profileSyncSnapshot,
   profileSyncState,
+  requestResolve,
+  requestSyncNow,
   startProfileSync,
+  subscribeProfileSync,
 } from './start'
 
 const P1 = 'p_000000000001'
@@ -183,6 +190,7 @@ beforeEach(() => {
   h.initialLeader = true
   h.holdPrime = false
   h.persisted = true
+  h.lease = null
   vi.clearAllMocks()
   vi.mocked(putAttachment).mockReset().mockResolvedValue(okAttach)
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
@@ -465,7 +473,7 @@ describe('the attachment answers 404: the profile is not there any more', () => 
     expect(profileSyncState()).toMatchObject({
       master: { hostId: 'h1', profileId: P1 },
       blocked: 'profile-gone',
-      status: { profile: 'locked:reset', schemaLock: null, sections: {} },
+      status: { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} },
     })
     expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['profile-gone'])
 
@@ -499,7 +507,7 @@ describe('the attachment answers 404: the profile is not there any more', () => 
     expect(h.executors).toHaveLength(2)
     expect(h.executors[1].deps.profileId).toBe(P2)
     expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
-    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {} })
+    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {}, locks: {} })
   })
 
   it('detachMaster is the other', async () => {
@@ -1592,7 +1600,7 @@ describe('problems and status', () => {
     h.leaderships[0].set(true)
     await flush()
     expect(profileSyncState().leader).toBe(true)
-    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {} })
+    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {}, locks: {} })
     const pushed = { profile: 'pending', schemaLock: null, sections: { hosts: 'dirty' } }
     h.executors[0].deps.onStatus(pushed)
     expect(profileSyncState().status).toEqual(pushed)
@@ -1663,5 +1671,270 @@ describe('the dev hook', () => {
 
     stop()
     expect(window.__purdexProfileSync).toBeUndefined()
+  })
+})
+
+describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
+  const STATUS = STORAGE_KEYS.PROFILE_STATUS
+  const CMD = STORAGE_KEYS.PROFILE_COMMAND_PREFIX
+  const commandKeys = (): string[] => Object.keys(localStorage).filter((k) => k.startsWith(CMD))
+  const PAIR = { localHash: 'L1', sot: { rev: 5, hash: 'S5' } }
+  const lockOf = (pair: typeof PAIR) => ({ status: 'locked:conflict' as const, currentHash: pair.localHash, sot: pair.sot, conflict: pair })
+  const locked = (pair: typeof PAIR) => ({ profile: 'locked:conflict', schemaLock: null, sections: { hosts: 'locked:conflict' }, locks: { hosts: lockOf(pair) } })
+  /** The master this window is on, as sync-status.ts scopes everything: `hostId|profileId|attachGeneration`, from the store. */
+  const tag = (): string => {
+    const { masterHostId, masterProfileId, attachGeneration } = useProfileStore.getState()
+    return `${masterHostId}|${masterProfileId}|${attachGeneration}`
+  }
+  const cmd = (): string => `${CMD}${encodeURIComponent(tag())}:`
+
+  it('onStatus is re-emitted: subscribers hear it, the snapshot is replaced — and is the SAME object while nothing changes', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const heard = vi.fn()
+    const leave = subscribeProfileSync(heard)
+    const s0 = profileSyncSnapshot()
+    expect(s0).toMatchObject({ master: { hostId: 'h1', profileId: P1 }, leader: true, blocked: null, remote: false, stale: false })
+    expect(profileSyncSnapshot()).toBe(s0)
+    expect(profileSyncState()).not.toBe(profileSyncState()) // the old accessor is what it was: a fresh object per call
+
+    const pushed = { profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {} }
+    h.executors[0].deps.onStatus(pushed)
+    expect(heard).toHaveBeenCalledTimes(1)
+    const s1 = profileSyncSnapshot()
+    expect(s1).not.toBe(s0)
+    expect(s1.status).toEqual(pushed)
+    h.executors[0].deps.onStatus({ ...pushed })
+    expect(profileSyncSnapshot()).toBe(s1)
+    expect(heard).toHaveBeenCalledTimes(1)
+
+    h.leaderships[0].set(false) // leader
+    expect(profileSyncSnapshot()).toMatchObject({ leader: false, status: null })
+    h.leaderships[0].set(true)
+    h.collectors[1].opts.onProblem({ kind: 'apply-failed', detail: 'x' }) // problems
+    expect(profileSyncSnapshot().problems.map((p) => p.kind)).toEqual(['apply-failed'])
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: { ...host('h1'), port: 9999 } } }) // blocked
+    expect(profileSyncSnapshot()).toMatchObject({ blocked: 'master-endpoint-changed', status: null })
+    leave()
+  })
+
+  it('the leader publishes {at, leader: windowId, master: <tag>, status, blocked, problems}, throttled', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    expect(localStorage.getItem(STATUS)).toBeNull()
+    vi.advanceTimersByTime(250)
+    expect(JSON.parse(localStorage.getItem(STATUS) ?? 'null')).toEqual({
+      at: expect.any(Number), leader: 'w-test', master: `h1|${P1}|${useProfileStore.getState().attachGeneration}`, status: { profile: 'synced', schemaLock: null, sections: {}, locks: {} }, blocked: null, problems: [],
+    })
+  })
+
+  it('a follower shows what the leader published, and says when nobody is there to correct it', async () => {
+    h.initialLeader = false
+    h.lease = { windowId: 'other', expiresAt: Date.now() + 6_000 }
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    expect(profileSyncSnapshot()).toMatchObject({ leader: false, status: null, remote: false })
+
+    const record = { at: Date.now(), leader: 'other', master: tag(), status: locked(PAIR), blocked: null, problems: [{ kind: 'k', detail: 'd', at: 1 }] }
+    localStorage.setItem(STATUS, JSON.stringify(record))
+    window.dispatchEvent(new StorageEvent('storage', { key: STATUS, newValue: JSON.stringify(record) }))
+    expect(profileSyncSnapshot()).toEqual({
+      master: { hostId: 'h1', profileId: P1 }, leader: false, blocked: null, status: locked(PAIR), problems: record.problems, remote: true, stale: false,
+    })
+
+    h.lease = { windowId: 'other', expiresAt: Date.now() + 60_000 }
+    vi.advanceTimersByTime(20_001) // old, but the lease is live (read against the start layer's clock)
+    expect(profileSyncSnapshot().stale).toBe(false)
+    h.lease = { windowId: 'other', expiresAt: Date.now() - 1 } // an expired lease is no lease
+    vi.advanceTimersByTime(10_000)
+    expect(profileSyncSnapshot().stale).toBe(true)
+  })
+
+  it('requestSyncNow / requestResolve: executed here in the leader, written as ONE KEY EACH in a follower', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    requestSyncNow()
+    expect(h.executors[0].syncNow).toHaveBeenCalledTimes(1)
+    h.executors[0].status.mockReturnValue(locked(PAIR))
+    requestResolve('hosts', 'sot', lockOf({ ...PAIR }))
+    expect(h.executors[0].resolve.mock.calls).toEqual([['hosts', 'sot']])
+    expect(commandKeys()).toEqual([])
+
+    h.leaderships[0].set(false)
+    requestSyncNow()
+    requestResolve('hosts', 'local', lockOf(PAIR))
+    expect(commandKeys()).toHaveLength(2)
+    expect(commandKeys().every((k) => k.startsWith(cmd()))).toBe(true)
+    expect(h.executors[0].syncNow).toHaveBeenCalledTimes(1)
+
+    h.leaderships[0].set(true) // takes the lease back: scans what is there
+    await flush()
+    h.executors[1].status.mockReturnValue(locked(PAIR))
+    expect(h.executors[1].syncNow).toHaveBeenCalledTimes(1)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('a resolve is checked against what the EXECUTOR holds now, not against the last status it announced', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    h.executors[0].deps.onStatus(locked(PAIR)) // what the UI rendered
+    h.executors[0].status.mockReturnValue(locked({ ...PAIR, localHash: 'L2' })) // edited since
+    requestResolve('hosts', 'local', lockOf(PAIR))
+    expect(h.executors[0].resolve).not.toHaveBeenCalled()
+    requestResolve('hosts', 'local', lockOf({ ...PAIR, localHash: 'L2' }))
+    expect(h.executors[0].resolve).toHaveBeenCalledTimes(1)
+  })
+
+  it('a command from another window reaches this leader through the storage event', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const raw = JSON.stringify({ kind: 'syncNow', master: tag(), at: Date.now() })
+    localStorage.setItem(`${cmd()}abc`, raw)
+    window.dispatchEvent(new StorageEvent('storage', { key: `${cmd()}abc`, newValue: raw }))
+    expect(h.executors[0].syncNow).toHaveBeenCalledTimes(1)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('blocked: the lease holder still answers commands — by removing them', async () => {
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: '1.2.3.4:1' })
+    stop = startProfileSync()
+    await flush()
+    expect(profileSyncSnapshot()).toMatchObject({ leader: true, blocked: 'master-endpoint-changed' })
+    const raw = JSON.stringify({ kind: 'resolve', section: 'hosts', keep: 'sot', lock: lockOf(PAIR), master: tag(), at: Date.now() })
+    localStorage.setItem(`${cmd()}abc`, raw)
+    expect(() => window.dispatchEvent(new StorageEvent('storage', { key: `${cmd()}abc`, newValue: raw }))).not.toThrow()
+    expect(commandKeys()).toEqual([])
+    expect(h.executors).toHaveLength(0)
+  })
+
+  it('detach: no storage listener, no timer, no status, no command is left — and the snapshot says "no master"', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
+    stop = startProfileSync()
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    await flush()
+    vi.advanceTimersByTime(250)
+    expect(localStorage.getItem(STATUS)).not.toBeNull()
+    localStorage.setItem(`${cmd()}left`, JSON.stringify({ kind: 'syncNow', master: tag(), at: 0 }))
+    h.executors.at(-1)?.deps.onStatus({ profile: 'pending', schemaLock: null, sections: {}, locks: {} }) // a publish is pending
+    const added = add.mock.calls.filter(([type]) => type === 'storage').map(([, fn]) => fn)
+    expect(added.length).toBeGreaterThan(0)
+
+    await detachMaster()
+    vi.advanceTimersByTime(1) // jsdom's own 0 ms timers
+    expect(vi.getTimerCount()).toBe(0)
+    expect(remove.mock.calls.filter(([type]) => type === 'storage').map(([, fn]) => fn)).toEqual(added)
+    expect(Object.keys(localStorage).filter((k) => k === STATUS || k.startsWith(CMD))).toEqual([])
+    expect(profileSyncSnapshot()).toEqual({ master: null, leader: false, blocked: null, status: null, problems: [], remote: false, stale: false })
+    vi.advanceTimersByTime(60_000)
+    expect(localStorage.getItem(STATUS)).toBeNull()
+  })
+
+  it('a master replaced by another: the old master’s status and commands do not outlive it — the NEW master’s do', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    vi.advanceTimersByTime(250)
+    const oldTag = tag()
+    expect(JSON.parse(localStorage.getItem(STATUS) ?? 'null')).toMatchObject({ master: oldTag })
+    localStorage.setItem(`${cmd()}left`, JSON.stringify({ kind: 'resolve', section: 'hosts', keep: 'sot', lock: lockOf(PAIR), master: oldTag, at: Date.now() }))
+    // Another window has switched already and sent this to the new master — before THIS window heard of the switch.
+    const nextTag = `h2|${P2}|${useProfileStore.getState().attachGeneration + 1}`
+    const theirs = `${CMD}${encodeURIComponent(nextTag)}:theirs`
+    localStorage.setItem(theirs, JSON.stringify({ kind: 'syncNow', master: nextTag, at: Date.now() }))
+    h.leaderships[0].set(false) // so that nobody here executes it
+    h.initialLeader = false
+    useProfileStore.getState().setMaster('h2', P2, 'pull', EP)
+    await flush()
+    expect(tag()).toBe(nextTag) // the channel was reopened for the new (master, generation)
+    expect(localStorage.getItem(STATUS)).toBeNull()
+    expect(commandKeys()).toEqual([theirs])
+
+    h.leaderships.at(-1)?.set(true) // … and whoever leads the new master executes it
+    await flush()
+    expect(h.executors.at(-1)?.syncNow).toHaveBeenCalledTimes(1)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('attach again, SAME master: a new generation is a new tag — the old one’s command is not executed by the new driver', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const oldTag = tag()
+    const stale = `${cmd()}stale`
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    expect(tag()).not.toBe(oldTag)
+    localStorage.setItem(stale, JSON.stringify({ kind: 'syncNow', master: oldTag, at: Date.now() })) // a window that has not heard
+    window.dispatchEvent(new StorageEvent('storage', { key: stale, newValue: localStorage.getItem(stale) }))
+    expect(h.executors.at(-1)?.syncNow).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(250)
+    expect(JSON.parse(localStorage.getItem(STATUS) ?? 'null')).toMatchObject({ master: tag() })
+  })
+
+  it('attach again, SAME master: a syncNow this window had sent to the old generation is carried over and executed once — a resolve is not', async () => {
+    h.initialLeader = false
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    requestSyncNow() // a follower: written under generation N
+    requestResolve('hosts', 'local', lockOf(PAIR))
+    const oldPrefix = cmd()
+    expect(commandKeys().filter((k) => k.startsWith(oldPrefix))).toHaveLength(2)
+
+    h.initialLeader = true // … and this very window leads generation N+1: no storage event will tell it
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    h.executors.at(-1)?.status.mockReturnValue(locked(PAIR))
+    expect(cmd()).not.toBe(oldPrefix)
+    expect(h.executors.at(-1)?.syncNow).toHaveBeenCalledTimes(1)
+    expect(h.executors.at(-1)?.resolve).not.toHaveBeenCalled()
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('ANOTHER master: a syncNow sent to the old one is not carried over', async () => {
+    h.initialLeader = false
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    requestSyncNow()
+    h.initialLeader = true
+    useProfileStore.getState().setMaster('h2', P2, 'pull', EP)
+    await flush()
+    expect(h.executors.at(-1)?.syncNow).not.toHaveBeenCalled()
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('stop() with a master: this window lets go, the keys are the other windows’ business', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    vi.advanceTimersByTime(250)
+    stop()
+    expect(localStorage.getItem(STATUS)).not.toBeNull()
+    expect(remove.mock.calls.filter(([type]) => type === 'storage')).toHaveLength(add.mock.calls.filter(([type]) => type === 'storage').length)
+    expect(profileSyncSnapshot()).toMatchObject({ leader: false, status: null, remote: false })
+  })
+
+  it('no master: asking is a no-op that writes nothing, and a problem still reaches the snapshot', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    stop = startProfileSync()
+    const leave = subscribeProfileSync(() => {})
+    requestSyncNow()
+    requestResolve('hosts', 'sot', lockOf(PAIR))
+    vi.advanceTimersByTime(60_000)
+    expect(add).not.toHaveBeenCalled()
+    expect(setItem.mock.calls.filter(([k]) => String(k).startsWith('purdex-profile-'))).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+    leave()
   })
 })

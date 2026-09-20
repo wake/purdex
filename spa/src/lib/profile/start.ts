@@ -73,6 +73,17 @@
 //
 // `attachMaster` / `detachMaster` are THE way in and out — P3's wizard calls
 // them; the dev hook is a thin layer over them. They run one at a time.
+//
+// FOR A UI, IN ANY WINDOW (P3 plan Task 2; the machinery is sync-status.ts).
+// `subscribeProfileSync` + `profileSyncSnapshot()` — a cached object whose
+// identity changes only with its content, which is what `useSyncExternalStore`
+// asks for; `requestSyncNow()` / `requestResolve()` — executed here when this
+// window leads, handed to the leader through `localStorage` when it does not.
+// This file's part is `changed()`: called wherever something `profileSyncState()`
+// reads may have moved — a problem, the executor's `onStatus` (no longer
+// swallowed), the lease, a block, the master. The status channel lives exactly
+// as long as a master mode, one per window; without a master `changed()` copies
+// this window's own view into memory and touches nothing else (THE IRON RULE).
 import { getClientId, isClientIdPersisted } from '../client-identity'
 import { effectiveDeviceName } from '../device-name'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
@@ -82,12 +93,17 @@ import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
-import type { Executor, ExecutorStatus } from './executor'
-import { contendForLeadership } from './leader'
+import type { Executor, ExecutorStatus, SectionLock } from './executor'
+import { contendForLeadership, leaderWindowId, readLeaderLease } from './leader'
 import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { clearSectionStore } from './section-store'
+import { __resetSyncStatusForTest, masterTagOf, openStatusChannel, setLocalSnapshot } from './sync-status'
+import type { StatusChannel } from './sync-status'
 import { STORAGE_KEYS } from '../storage/keys'
+
+export { profileSyncSnapshot, subscribeProfileSync } from './sync-status'
+export type { ProfileSyncSnapshot } from './sync-status'
 
 export interface Master {
   hostId: string
@@ -216,6 +232,7 @@ const warned = new Set<string>()
 function reportProblem(p: { kind: string; section?: string; detail: string }): void {
   problems.push({ kind: p.kind, ...(p.section !== undefined ? { section: p.section } : {}), detail: p.detail, at: Date.now() })
   if (problems.length > PROBLEM_BUFFER_SIZE) problems.splice(0, problems.length - PROBLEM_BUFFER_SIZE)
+  changed()
   const id = `${p.kind}\u0000${p.section ?? ''}`
   if (warned.has(id)) return
   warned.add(id)
@@ -246,6 +263,8 @@ function isCurrentMaster(master: Master): boolean {
 interface Leader {
   executor: Executor
   status(): ExecutorStatus
+  /** The section's lock as the executor holds it NOW — asked of the executor, not of the last status it announced. Null = not locked. */
+  lock(section: string): SectionLock | null
   dispose(): void
 }
 
@@ -274,7 +293,9 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     },
     onProblem: reportProblem,
     onStatus: (s) => {
-      if (!disposed) lastStatus = s
+      if (disposed) return
+      lastStatus = s
+      changed()
     },
   })
   const unsubscribeWs = subscribeProfileEvents((e) => executor.onRemoteEvent(e))
@@ -374,6 +395,7 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
   return {
     executor,
     status: () => lastStatus ?? executor.status(),
+    lock: (section) => executor.status().locks[section] ?? null,
     dispose() {
       if (disposed) return
       disposed = true
@@ -442,6 +464,7 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     if (ended) return
     if (!isLeader || blocked || gone || isSuspended()) follow()
     else if (leader === null) leader = lead(master, leadership, profileGone)
+    changed() // the lease, a block or a suspension moved — or a driver now exists to be asked
   }
   const profileGone = (detail: string): void => {
     if (ended || gone) return
@@ -520,6 +543,33 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
 // === Start ===
 
 let mode: MasterMode | null = null
+/** Open exactly while `mode` is: see the header, FOR A UI. */
+let channel: StatusChannel | null = null
+
+/** Something `profileSyncState()` reads may have moved. Never more than memory without a master. */
+function changed(): void {
+  if (channel !== null) channel.refresh()
+  else setLocalSnapshot(profileSyncState())
+}
+
+function leaseLive(): boolean {
+  const lease = readLeaderLease()
+  return lease !== null && lease.expiresAt > clock()
+}
+
+/** "Sync now", from any window. Without a master: nothing. */
+export function requestSyncNow(): void {
+  channel?.requestSyncNow()
+}
+
+/**
+ * Answer a lock, from any window. `lock` is what the user was shown — `snapshot.status.locks[section]`: whoever
+ * leads THIS master executes it only if the section's lock is still that one, field by field (sync-status.ts).
+ * Without a master: nothing.
+ */
+export function requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): void {
+  channel?.requestResolve(section, keep, lock)
+}
 
 function sameMaster(a: Master | null, b: Master | null): boolean {
   if (a === null || b === null) return a === b
@@ -532,7 +582,7 @@ export function profileSyncState(): ProfileSyncState {
     master: selectMaster(useProfileStore.getState()),
     leader: mode?.isLeader() ?? false,
     blocked,
-    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {} } : (mode?.leader()?.status() ?? null),
+    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} } : (mode?.leader()?.status() ?? null),
     problems: problems.map((p) => ({ ...p })),
   }
 }
@@ -555,8 +605,30 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
     // A follower must not: by now the leader may have written the new ones.
     const wasLeader = same && mode !== null && mode.isLeader()
     mode?.end()
+    // The old master's status and whatever was asked of ITS leader go with it, in every window — and nothing of the
+    // next master's, which other windows may be on already (sync-status.ts, `close`).
+    // Same master, new generation: a "Sync now" this window's channel still holds for the old one is carried over
+    // (sync-status.ts, THE GENERATION HAND-OVER). `same` with a null master never gets here (returned above).
+    channel?.close(true, same && master !== null ? masterTagOf(master, generation) : undefined)
+    channel = null
     if (wasLeader && master !== null) clearSectionStore(master.profileId)
     mode = master === null ? null : enterMasterMode(master, generation)
+    if (master !== null) {
+      channel = openStatusChannel({
+        now: () => clock(),
+        windowId: leaderWindowId(),
+        // One channel per (master, generation) — this function's own condition for getting here — so the tag is the
+        // channel's for life, and a window that has not heard of a change yet is on another tag than one that has.
+        masterTag: masterTagOf(master, generation),
+        local: profileSyncState,
+        leaseLive,
+        syncNow: () => mode?.leader()?.executor.syncNow(),
+        resolve: (section, keep) => mode?.leader()?.executor.resolve(section, keep),
+        lockOf: (section) => mode?.leader()?.lock(section) ?? null,
+      })
+    }
+    // `enterMasterMode` has called `changed()` already — before `mode` pointed at it. This is the one that counts.
+    changed()
   }
 
   const unsubscribe = useProfileStore.subscribe((next, prev) => {
@@ -584,6 +656,9 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
     unsubscribe()
     mode?.end()
     mode = null
+    channel?.close(false) // this window lets go; the master is still set, and the keys are the other windows'
+    channel = null
+    changed()
     if (import.meta.env.DEV) delete window.__purdexProfileSync
   }
 }
@@ -824,4 +899,5 @@ export function __resetProfileSyncForTest(): void {
   problems.length = 0
   warned.clear()
   queue = Promise.resolve()
+  __resetSyncStatusForTest()
 }

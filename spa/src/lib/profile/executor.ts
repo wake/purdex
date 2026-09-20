@@ -177,7 +177,7 @@ import { sectionKind, shapeTable, workspaceIdOf } from './projections'
 import { isSyncableWorkspaceId } from './sections'
 import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
-import type { FlightToken, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
+import type { FlightToken, SectionConflict, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
 import type { ProfileSectionKey, SectionKind, Shape } from './types'
 
 export interface ExecutorDeps {
@@ -198,10 +198,30 @@ export interface ExecutorDeps {
   onInitialSettled?: () => void
 }
 
+/**
+ * What a LOCKED section looks like to whoever answers the lock — copies of the reducer's fields, nothing derived.
+ * A `resolve` from the UI is bound to ALL of it (sync-status.ts): every one of these can move while the status
+ * string stands still, and "keep local" then pushes content — or overwrites a SOT — that nobody confirmed.
+ */
+export interface SectionLock {
+  status: Extract<SectionStatus, `locked:${string}`>
+  /** The live local payload: what "keep local" would push. */
+  currentHash: string | null
+  /** The newest SOT known: what "keep local" rebases on. `locked:reset` and `locked:invalid` have no pair — this is their SOT side. */
+  sot: { rev: number; hash: string | null }
+  /** `locked:conflict` only. */
+  conflict: SectionConflict | null
+}
+
 export interface ExecutorStatus {
   profile: ProfileStatus
   schemaLock: SchemaLock | null
   sections: Record<string, SectionStatus>
+  /**
+   * Every locked section, and only those. Part of the status, and therefore of `onStatus`'s "changed": a follower
+   * window's UI sends back the lock it rendered (P3 plan Task 2), so it has to hear when one moves.
+   */
+  locks: Record<string, SectionLock>
 }
 
 export interface Executor {
@@ -358,12 +378,28 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     problem(kind, detail, section)
   }
 
+  function lockOf(s: SectionSyncState): SectionLock | null {
+    if (s.status !== 'locked:conflict' && s.status !== 'locked:reset' && s.status !== 'locked:invalid') return null
+    return {
+      status: s.status,
+      currentHash: s.currentHash,
+      sot: { rev: s.sot.rev, hash: s.sot.hash },
+      conflict: s.conflict === null ? null : { localHash: s.conflict.localHash, sot: { rev: s.conflict.sot.rev, hash: s.conflict.sot.hash } },
+    }
+  }
+
   function status(): ExecutorStatus {
     const states = Object.fromEntries(sections)
     return {
       profile: profileGone ? 'locked:reset' : profileStatus({ hasMaster: true, sections: states, lock: schemaLock }),
       schemaLock,
       sections: Object.fromEntries([...sections].map(([key, s]) => [key, s.status])),
+      locks: Object.fromEntries(
+        [...sections].flatMap(([key, s]) => {
+          const lock = lockOf(s)
+          return lock === null ? [] : [[key, lock]]
+        }),
+      ),
     }
   }
 

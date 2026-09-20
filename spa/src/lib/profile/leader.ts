@@ -148,6 +148,24 @@ function parseLease(raw: string | null): Lease | null {
   return { windowId, expiresAt }
 }
 
+/** The id this realm claims the lease with (unless a caller passed its own `windowId`): what the leader signs its published status with. */
+export function leaderWindowId(): string {
+  return getRealmWindowId()
+}
+
+/**
+ * The lease as storage holds it right now, whoever wrote it; null = absent, damaged, unreadable. Whether it is
+ * still LIVE is the caller's question (`expiresAt` against its own clock). For the status channel
+ * (sync-status.ts): a follower asks whether anybody at all is leading before it calls a published status stale.
+ */
+export function readLeaderLease(): { windowId: string; expiresAt: number } | null {
+  try {
+    return parseLease(localStorage.getItem(KEY))
+  } catch {
+    return null
+  }
+}
+
 export function contendForLeadership(opts: LeaderOptions = {}): Leadership {
   const now = opts.now ?? (() => Date.now())
   const random = opts.random ?? (() => Math.random())

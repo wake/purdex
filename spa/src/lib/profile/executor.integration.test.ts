@@ -105,7 +105,7 @@ async function attach(): Promise<void> {
   await collector.primeAll()
   executor.onReconnected()
   await flush()
-  expect(executor.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', settings: 'synced', workspaces: 'synced' } })
+  expect(executor.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', settings: 'synced', workspaces: 'synced' } , locks: {} })
   api.putSection.mockClear()
 }
 
