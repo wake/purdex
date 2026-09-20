@@ -7,7 +7,7 @@ const OTHER_PROFILE = 'p_ba9876543210'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0 })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -103,13 +103,13 @@ describe('useProfileStore', () => {
     expect(selectMaster({ ...base, masterHostId: null, masterProfileId: PROFILE })).toBeNull()
   })
 
-  it('persists exactly the four fields', () => {
+  it('persists exactly the five fields', () => {
     useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
     useProfileStore.getState().setAutoSync(false)
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull' })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1 })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
@@ -276,6 +276,46 @@ describe('pendingDirection — which side wins the first reconciliation', () => 
   })
 })
 
+describe('attachGeneration — every attach is a new one, the same master included', () => {
+  it('starts at 0 and goes up by one with every accepted setMaster', () => {
+    expect(useProfileStore.getState().attachGeneration).toBe(0)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    expect(useProfileStore.getState().attachGeneration).toBe(1)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull') // the SAME master, the same direction
+    expect(useProfileStore.getState().attachGeneration).toBe(2)
+    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push')
+    expect(useProfileStore.getState().attachGeneration).toBe(3)
+  })
+
+  it('a refused setMaster, clearMaster, clearPendingDirection and setAutoSync leave it alone (it never goes down)', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    useProfileStore.getState().setMaster('host-1', 'nope', 'pull')
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'sideways' as never)
+    useProfileStore.getState().clearPendingDirection()
+    useProfileStore.getState().setAutoSync(false)
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().attachGeneration).toBe(1)
+  })
+
+  it('survives a reload', async () => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: true, pendingDirection: null, attachGeneration: 7 })
+    expect(useProfileStore.getState().attachGeneration).toBe(7)
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['negative', -1],
+    ['a fraction', 1.5],
+    ['NaN', Number.NaN],
+    ['a string', '3'],
+    ['beyond the safe integers', 2 ** 60],
+    ['null', null],
+  ])('rehydrate: %s → 0', async (_label, attachGeneration) => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, attachGeneration })
+    expect(useProfileStore.getState().attachGeneration).toBe(0)
+  })
+})
+
 describe('every window agrees on the master', () => {
   beforeEach(() => {
     FakeBroadcastChannel.bus.clear()
@@ -297,6 +337,18 @@ describe('every window agrees on the master', () => {
     await flush()
 
     expect(b.selectMaster(b.useProfileStore.getState())).toEqual({ hostId: 'host-1', profileId: PROFILE })
+  })
+
+  it('a RE-attach to the same master in window A reaches window B as a new generation', async () => {
+    const a = await openWindow()
+    const b = await openWindow()
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    await flush()
+    const before = b.useProfileStore.getState().attachGeneration
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'push')
+    await flush()
+    expect(b.useProfileStore.getState().attachGeneration).toBe(before + 1)
+    expect(b.useProfileStore.getState().pendingDirection).toBe('push')
   })
 
   it('a detach in window B (a follower) reaches window A (the leader)', async () => {

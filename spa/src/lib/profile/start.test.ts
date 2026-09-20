@@ -184,7 +184,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0 })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceStateStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -478,7 +478,8 @@ describe('teardown', () => {
   it('an unrelated change of the profile store does not rebuild anything', async () => {
     stop = startProfileSync()
     useProfileStore.getState().setMaster('h1', P1, 'pull')
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setAutoSync(false)
+    useProfileStore.getState().clearPendingDirection()
     useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1 })
     await flush()
     expect(contendForLeadership).toHaveBeenCalledTimes(1)
@@ -600,7 +601,7 @@ describe('attachMaster', () => {
     expect(useProfileStore.getState().masterHostId).toBe('h1')
     expect(useProfileStore.getState().masterProfileId).toBe(P1)
     expect(deleteAttachment).not.toHaveBeenCalled()
-    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(clearSectionStore).toHaveBeenCalledTimes(1)
   })
 
   it('switching master: the old attachment is deleted (best effort) and the section store cleared BEFORE the new master is set', async () => {
@@ -618,12 +619,24 @@ describe('attachMaster', () => {
     expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['detach-failed'])
   })
 
-  it('re-attaching the same master keeps the section store', async () => {
+  it('EVERY attach is a new reconciliation — the same master too: the bases are cleared before the master is set, the attachment is not deleted', async () => {
     useProfileStore.getState().setMaster('h1', P1, 'pull')
-    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    const generation = useProfileStore.getState().attachGeneration
+    vi.mocked(clearSectionStore).mockImplementation(() => {
+      expect(useProfileStore.getState().attachGeneration).toBe(generation)
+      return 'ok'
+    })
+    expect(await attachMaster('h1', P1, 'push')).toEqual({ ok: true })
     expect(putAttachment).toHaveBeenCalledTimes(1)
     expect(deleteAttachment).not.toHaveBeenCalled()
-    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(clearSectionStore).toHaveBeenCalledTimes(1)
+    expect(useProfileStore.getState().attachGeneration).toBe(generation + 1)
+    expect(useProfileStore.getState().pendingDirection).toBe('push')
+  })
+
+  it('a first attach clears whatever bases an earlier attachment left behind', async () => {
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    expect(clearSectionStore).toHaveBeenCalledTimes(1)
   })
 
   it('attach → detach issued back to back run in order and leave nothing alive', async () => {
@@ -688,16 +701,71 @@ describe('the direction of an attach', () => {
     expect(useProfileStore.getState().pendingDirection).toBe('push')
   })
 
-  it('re-attaching the same master with a direction starts a new first reconciliation without rebuilding the driver', async () => {
+  it('re-attaching the SAME master rebuilds the driver: the old executor is disposed, a new one primes and announces, and it carries the new direction', async () => {
+    connect('h1')
     stop = startProfileSync()
     await attachMaster('h1', P1, 'pull')
     await flush()
     h.executors[0].deps.onInitialSettled()
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
+
     expect(await attachMaster('h1', P1, 'push')).toEqual({ ok: true })
     await flush()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.collectors[0].stop).toHaveBeenCalledTimes(1)
+    expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
+    expect(h.executors[0].syncNow).not.toHaveBeenCalled()
+    expect(h.collectors[1].primeAll).toHaveBeenCalledTimes(1)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+    expect(h.executors[1].deps.initialDirection()).toBe('push')
+    expect(h.executors[0].deps.initialDirection()).toBeNull() // the old one is out of it
+
+    h.executors[1].deps.onInitialSettled()
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
+  })
+
+  it('a re-attach made in ANOTHER window: this window\'s LEADER clears the bases it alone writes, then rebuilds', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    vi.mocked(clearSectionStore).mockClear()
+    const { attachGeneration } = useProfileStore.getState()
+    vi.mocked(clearSectionStore).mockImplementation(() => {
+      expect(h.executors[0].dispose).toHaveBeenCalledTimes(1) // the writer is down before its bases go
+      expect(h.executors).toHaveLength(1)
+      return 'ok'
+    })
+    useProfileStore.setState({ pendingDirection: 'push', attachGeneration: attachGeneration + 1 }) // the rehydrate
+    await flush()
+    expect(clearSectionStore).toHaveBeenCalledTimes(1)
+    expect(clearSectionStore).toHaveBeenCalledWith(P1)
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].deps.initialDirection()).toBe('push')
+  })
+
+  it('…while a FOLLOWER re-enters without touching the bases (the leader may already have written new ones)', async () => {
+    h.initialLeader = false
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    const { attachGeneration } = useProfileStore.getState()
+    useProfileStore.setState({ pendingDirection: 'push', attachGeneration: attachGeneration + 1 })
+    await flush()
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(h.leaderships).toHaveLength(2)
+    expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('a changed direction ALONE (no new generation) rebuilds nothing and pumps nothing: the executor calls it stale by itself', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    useProfileStore.setState({ pendingDirection: 'push' })
+    await flush()
     expect(h.executors).toHaveLength(1)
-    expect(h.executors[0].deps.initialDirection()).toBe('push')
-    expect(h.executors[0].syncNow).toHaveBeenCalled() // pumped: nothing else would make it look
+    expect(h.executors[0].dispose).not.toHaveBeenCalled()
   })
 })
 

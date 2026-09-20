@@ -34,6 +34,15 @@
 // (`clearPendingDirection`) once everything has settled. It is never cleared by
 // a timeout: see `lib/profile/executor.ts`, THE FIRST RECONCILIATION.
 //
+// WHY `attachGeneration`. Every attach is a NEW first reconciliation, an attach
+// to the master already set included (the user asked again, perhaps in the
+// other direction; the bases of the previous one are discarded by
+// `attachMaster`). But "the same master, again" changes neither id, so a driver
+// that is already running — in this window, or the leader in another — could
+// not tell. The counter is what it watches: it goes up by one with every
+// accepted `setMaster` and never down; its value means nothing, only that it
+// moved.
+//
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
 // non-null; `pendingDirection` is null whenever there is no master. `setMaster`
 // is the only way in and validates all three; the persist `merge` re-establishes
@@ -52,6 +61,8 @@ interface ProfileControl {
   masterProfileId: string | null
   /** Non-null from an attach until the first reconciliation has settled. */
   pendingDirection: SyncDirection | null
+  /** +1 with every accepted `setMaster`. A change with the same master = attach was called again. */
+  attachGeneration: number
   /** Sync without being asked. Default on. */
   autoSync: boolean
 }
@@ -94,6 +105,7 @@ function sanitiseControl(persisted: unknown): ProfileControl {
     masterHostId: attached ? (p.masterHostId as string) : null,
     masterProfileId: attached ? (p.masterProfileId as string) : null,
     pendingDirection: attached && isSyncDirection(p.pendingDirection) ? p.pendingDirection : null,
+    attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
   }
 }
@@ -104,10 +116,11 @@ export const useProfileStore = create<ProfileState>()(
       masterHostId: null,
       masterProfileId: null,
       pendingDirection: null,
+      attachGeneration: 0,
       autoSync: true,
       setMaster: (hostId, profileId, direction) => {
         if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction)) return false
-        set({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction })
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, attachGeneration: s.attachGeneration + 1 }))
         return true
       },
       clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null }),
@@ -122,9 +135,10 @@ export const useProfileStore = create<ProfileState>()(
         masterHostId: state.masterHostId,
         masterProfileId: state.masterProfileId,
         pendingDirection: state.pendingDirection,
+        attachGeneration: state.attachGeneration,
         autoSync: state.autoSync,
       }),
-      // Only the four sanitised fields ever come out of storage: persisted
+      // Only the five sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },

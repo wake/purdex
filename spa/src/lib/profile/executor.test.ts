@@ -1609,7 +1609,8 @@ describe('executor — the first reconciliation (initialDirection)', () => {
 
   function first(direction: Direction, over: Partial<ExecutorDeps> = {}): Harness & { settled: ReturnType<typeof vi.fn>; dir: { value: Direction } } {
     const dir = { value: direction }
-    const settled = vi.fn()
+    // what the start layer does in the callback: the direction is cleared
+    const settled = vi.fn(() => void (dir.value = null))
     return { ...make({ initialDirection: () => dir.value, onInitialSettled: settled, ...over }), settled, dir }
   }
 
@@ -1677,28 +1678,44 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     if (direction === 'push') expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H1' })
   })
 
+  /** `hosts` agreed at rev 1; `settings` is still being pushed, so the period is open. Returns the settings PUT. */
+  async function openPeriod(direction: 'push' | 'pull'): Promise<Harness & { settingsPut: Deferred<PutOutcome> }> {
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+    const settingsPut = deferred<PutOutcome>()
+    api.putSection.mockReturnValueOnce(settingsPut.promise)
+    const harness = first(direction)
+    harness.ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+    harness.ex.onSection({ key: 'settings', hash: 'S1', payload: { b: 1 } })
+    harness.ex.onReconnected()
+    await flush()
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    return { ...harness, settingsPut }
+  }
+
   it('a 409 during the first reconciliation is resolved too (pull)', async () => {
-    const dir: { value: Direction } = { value: 'pull' }
-    const { ex } = await synced({ hosts: 'H1' }, { initialDirection: () => dir.value })
+    const { ex, settingsPut } = await openPeriod('pull')
     api.putSection.mockResolvedValue({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
     api.getSection.mockResolvedValue(sectionOf(meta('hosts', 5, 'H9'), { theirs: true }))
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'H9' })
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    settingsPut.resolve({ kind: 'applied', rev: 1 })
     await flush()
-    expect(ex.status().sections).toEqual({ hosts: 'synced' })
+    expect(ex.status().sections).toEqual({ hosts: 'synced', settings: 'synced' })
     expect(eventsOf('resolved')).toEqual([{ type: 'resolved', keep: 'sot' }])
   })
 
   it('push: a 409 whose sent snapshot is no longer what the stores hold is left to the user (keep-local would undo the newer edit)', async () => {
-    const { ex } = await synced({ hosts: 'H1' }, { initialDirection: () => 'push' })
+    const { ex, settingsPut } = await openPeriod('push')
     const put = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(put.promise)
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    settingsPut.resolve({ kind: 'applied', rev: 1 })
     await flush()
     ex.onSection({ key: 'hosts', hash: 'H3', payload: { mine: 'later' } })
     put.resolve({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
     await flush()
-    expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' })
+    expect(ex.status().sections.hosts).toBe('locked:conflict')
     expect(eventsOf('resolved')).toEqual([])
   })
 
@@ -1751,7 +1768,7 @@ describe('executor — the first reconciliation (initialDirection)', () => {
       await flush()
       expect(settled).toHaveBeenCalledTimes(1)
 
-      // the start layer has not cleared the direction yet: still once
+      // more work afterwards is ordinary work: still once
       api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
       ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 2 } })
       await flush()
@@ -1813,22 +1830,72 @@ describe('executor — the first reconciliation (initialDirection)', () => {
       expect(settled).toHaveBeenCalledTimes(1)
     })
 
-    it('a new first reconciliation (the direction went null and came back) settles again', async () => {
+    it('ONE period per executor. A direction that shows up after it (attack B: same master attached again, everything already synced, NO network action) is stale: reported, handed back to be cleared — and answers no lock', async () => {
       api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
       h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
-      const { ex, settled, dir } = first('pull')
+      const { ex, settled, dir, problems } = first('pull')
       ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
       ex.onReconnected()
       await flush()
       expect(settled).toHaveBeenCalledTimes(1)
-      dir.value = null
+      expect(dir.value).toBeNull()
+
+      vi.clearAllMocks()
+      dir.value = 'push' // set again, on a driver that was not rebuilt
+      ex.syncNow() // all the start layer would do; every section is synced, so nothing goes out
+      await flush()
+      expect(api.listProfiles).not.toHaveBeenCalled()
+      expect(api.putSection).not.toHaveBeenCalled()
+      expect(settled).toHaveBeenCalledTimes(1) // counted from the clearAllMocks above: the second call in all
+      expect(dir.value).toBeNull()
+      expect(problems.filter((p) => p.kind === 'stale-direction')).toHaveLength(1)
+    })
+
+    it('a stale direction that is NOT cleared answers no lock, hours later or ever; it is reported once per appearance', async () => {
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+      h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+      const settled = vi.fn() // a start layer that fails to clear it
+      const { ex, problems } = first('pull', { onInitialSettled: settled })
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
       ex.onReconnected()
       await flush()
-      expect(settled).toHaveBeenCalledTimes(1)
-      dir.value = 'push'
-      ex.onReconnected()
+      expect(settled).toHaveBeenCalledTimes(2) // settled, then: still there → stale, handed back once more
+
+      api.putSection.mockResolvedValue({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
+      ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
       await flush()
+      await vi.advanceTimersByTimeAsync(3_600_000)
+      expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' }) // the user's
+      expect(eventsOf('resolved')).toEqual([])
+      expect(api.getSection).not.toHaveBeenCalled()
       expect(settled).toHaveBeenCalledTimes(2)
+      expect(problems.filter((p) => p.kind === 'stale-direction')).toHaveLength(1)
+    })
+
+    it('an executor born without a direction has no period: one that appears later is stale from the start', async () => {
+      bothSidesHaveHosts()
+      const { ex, settled, dir, problems } = first(null)
+      dir.value = 'pull'
+      ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+      ex.onReconnected()
+      await flush()
+      expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' })
+      expect(eventsOf('resolved')).toEqual([])
+      expect(settled).toHaveBeenCalledTimes(1)
+      expect(problems.filter((p) => p.kind === 'stale-direction')).toHaveLength(1)
+    })
+
+    it('works without an onInitialSettled listener: the period still ends', async () => {
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+      h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+      const { ex } = make({ initialDirection: () => 'pull' })
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onReconnected()
+      await flush()
+      api.putSection.mockResolvedValue({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
+      ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+      await flush()
+      expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' })
     })
 
     it('a schema lock settles nothing', async () => {
@@ -1910,6 +1977,23 @@ describe('executor — the first reconciliation (initialDirection)', () => {
       await vi.advanceTimersByTimeAsync(120_000)
       expect(api.deleteSection).toHaveBeenCalledTimes(1)
       expect(problems.filter((p) => p.kind === 'orphan-delete-conflict')).toHaveLength(1)
+      expect(settled).toHaveBeenCalledTimes(1)
+    })
+
+    it('a delete that got no answer keeps the period open, and is tried again with the next index', async () => {
+      mineAgrees([meta('tabs.w7', 3, 'T7')])
+      api.deleteSection.mockResolvedValueOnce(failure('network'))
+      const { ex, settled } = first('push')
+      reportMine(ex)
+      ex.onReconnected()
+      await flush()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(api.deleteSection).toHaveBeenCalledTimes(1) // no spinning between indexes
+      expect(settled).not.toHaveBeenCalled()
+      api.deleteSection.mockResolvedValue({ kind: 'applied', rev: 4 })
+      ex.onReconnected()
+      await flush()
+      expect(api.deleteSection).toHaveBeenCalledTimes(2)
       expect(settled).toHaveBeenCalledTimes(1)
     })
 
