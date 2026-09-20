@@ -320,6 +320,33 @@ describe('one window', () => {
   })
 })
 
+describe('what the status channel reads (P3 plan Task 2)', () => {
+  it('leaderWindowId() is the id this realm claims with; readLeaderLease() is the record, or null', async () => {
+    vi.resetModules()
+    const mod = await import('./leader')
+    expect(mod.readLeaderLease()).toBeNull()
+    const lead = mod.contendForLeadership({ random: () => 0.5 })
+    open.push(lead)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(lead.isLeader()).toBe(true)
+    expect(mod.leaderWindowId()).toBe(lease()?.windowId)
+    expect(mod.readLeaderLease()).toEqual(lease())
+  })
+
+  it('readLeaderLease() is null for a damaged record and when storage throws', async () => {
+    vi.resetModules()
+    const mod = await import('./leader')
+    localStorage.setItem(KEY, '{"windowId":"","expiresAt":1}')
+    expect(mod.readLeaderLease()).toBeNull()
+    localStorage.setItem(KEY, 'not json')
+    expect(mod.readLeaderLease()).toBeNull()
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    expect(mod.readLeaderLease()).toBeNull()
+  })
+})
+
 describe('two windows', () => {
   it('A leads first → B does not, for as long as A renews', async () => {
     const a = await openWindow()

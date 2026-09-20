@@ -177,7 +177,7 @@ import { sectionKind, shapeTable, workspaceIdOf } from './projections'
 import { isSyncableWorkspaceId } from './sections'
 import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
-import type { FlightToken, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
+import type { FlightToken, SectionConflict, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
 import type { ProfileSectionKey, SectionKind, Shape } from './types'
 
 export interface ExecutorDeps {
@@ -202,6 +202,13 @@ export interface ExecutorStatus {
   profile: ProfileStatus
   schemaLock: SchemaLock | null
   sections: Record<string, SectionStatus>
+  /**
+   * The open conflict pair of every section that has one (`locked:conflict` only), as the reducer holds it —
+   * copies, nothing derived. It is part of the status, and therefore of `onStatus`'s "changed", because a
+   * `resolve` from the UI is bound to the pair the user was looking at (P3 plan Task 2): `sot` keeps advancing
+   * while a section is locked, under a status string that does not move.
+   */
+  conflicts: Record<string, SectionConflict>
 }
 
 export interface Executor {
@@ -364,6 +371,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       profile: profileGone ? 'locked:reset' : profileStatus({ hasMaster: true, sections: states, lock: schemaLock }),
       schemaLock,
       sections: Object.fromEntries([...sections].map(([key, s]) => [key, s.status])),
+      conflicts: Object.fromEntries(
+        [...sections].flatMap(([key, s]) => (s.conflict === null ? [] : [[key, { localHash: s.conflict.localHash, sot: { rev: s.conflict.sot.rev, hash: s.conflict.sot.hash } }]])),
+      ),
     }
   }
 

@@ -8,13 +8,19 @@
 // `syncManager`-registered store like the eighteen others on main — its one
 // storage key and its entry in the (singleton) sync channel's registry exist for
 // everybody and are not part of "nothing".
+//   Since P3 (plan Task 2) a UI can subscribe to the sync status and ask for a
+// sync from any window. With no master that, too, is memory only: no `storage`
+// listener, no `purdex-profile-status`, no `purdex-profile-cmd:*` — and a user
+// who HAD a master and detached is back to exactly that.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { useProfileStore } from '../../stores/useProfileStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { STORAGE_KEYS } from '../storage/keys'
-import { startProfileSync } from './start'
+import { profileSyncSnapshot, requestResolve, requestSyncNow, startProfileSync, subscribeProfileSync } from './start'
+
+const statusKeys = (): string[] => Object.keys(localStorage).filter((k) => k === STORAGE_KEYS.PROFILE_STATUS || k.startsWith(STORAGE_KEYS.PROFILE_COMMAND_PREFIX))
 
 let stop: () => void = () => {}
 
@@ -66,9 +72,21 @@ describe('no master → the app is exactly what it was', () => {
     )
 
     stop = startProfileSync()
+    // a UI that renders the status and a user who presses its buttons — with nothing to sync
+    const heard = vi.fn()
+    const leave = subscribeProfileSync(heard)
+    const snapshot = profileSyncSnapshot()
+    requestSyncNow()
+    requestResolve('hosts', 'sot', null)
     useHostStore.getState().setRuntime('h1', { status: 'connected' })
     await vi.advanceTimersByTimeAsync(60_000)
+    leave()
 
+    expect(profileSyncSnapshot()).toBe(snapshot)
+    expect(snapshot).toEqual({ master: null, leader: false, blocked: null, status: null, problems: [], remote: false, stale: false })
+    expect(heard).not.toHaveBeenCalled()
+    expect(listen.mock.calls.filter(([type]) => type === 'storage')).toEqual([])
+    expect(statusKeys()).toEqual([])
     expect(profileSub).toHaveBeenCalledTimes(1)
     expect(hostSub).not.toHaveBeenCalled()
     expect(tabSub).not.toHaveBeenCalled()
@@ -80,6 +98,31 @@ describe('no master → the app is exactly what it was', () => {
     expect(getItem.mock.calls.filter(([k]) => k === STORAGE_KEYS.PROFILE_LEADER)).toEqual([])
     expect(channels).toBe(0)
     expect(localStorage.getItem(STORAGE_KEYS.PROFILE_LEADER)).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a master that was set and cleared again leaves nothing behind: no storage listener, no timer, no status, no command', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '100.64.0.9', port: 7860, token: null, order: 0 } }, hostOrder: ['h1'], runtime: {} })
+    stop = startProfileSync()
+
+    useProfileStore.getState().setMaster('h1', 'p_000000000001', 'pull', '100.64.0.9:7860')
+    await vi.advanceTimersByTimeAsync(1_000) // the lease is taken, the leader has published
+    expect(profileSyncSnapshot()).toMatchObject({ master: { hostId: 'h1' }, leader: true })
+    expect(localStorage.getItem(STORAGE_KEYS.PROFILE_STATUS)).not.toBeNull()
+    localStorage.setItem(`${STORAGE_KEYS.PROFILE_COMMAND_PREFIX}left`, JSON.stringify({ kind: 'syncNow', at: 0 }))
+    const listeners = (spy: typeof add) => spy.mock.calls.filter(([type]) => type === 'storage').map(([, fn]) => fn)
+    expect(listeners(add).length).toBeGreaterThanOrEqual(2) // the lease's and the status channel's
+
+    useProfileStore.getState().clearMaster()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(new Set(listeners(remove))).toEqual(new Set(listeners(add)))
+    expect(statusKeys()).toEqual([])
+    expect(localStorage.getItem(STORAGE_KEYS.PROFILE_LEADER)).toBeNull()
+    expect(profileSyncSnapshot()).toMatchObject({ master: null, leader: false, status: null, remote: false })
     expect(vi.getTimerCount()).toBe(0)
   })
 })

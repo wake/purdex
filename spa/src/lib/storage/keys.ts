@@ -37,4 +37,10 @@ export const STORAGE_KEYS = {
   /** 手動管理（非 Zustand store）：lib/profile/leader.ts 的租約 `{windowId, expiresAt}`，直接操作 localStorage，
    *  不走 browserStorage/syncManager（每 2 秒續約一次，不需要廣播；喚醒 follower 靠原生 `storage` 事件） */
   PROFILE_LEADER: 'purdex-profile-leader',
+  /** 手動管理（非 Zustand store）：lib/profile/sync-status.ts —— leader 發布的 `{at, leader, status, blocked, problems}`，
+   *  follower 靠原生 `storage` 事件讀；直接操作 localStorage（理由同 PROFILE_LEADER）。沒有 master 時這個 key 不存在 */
+  PROFILE_STATUS: 'purdex-profile-status',
+  /** 手動管理（非 Zustand store）：這是 key 的**前綴** —— lib/profile/sync-status.ts 組出 `<前綴><id>`，一個指令一個 key
+   *  （follower 寫、leader 執行後刪；陣列是 read-modify-write，必然掉指令）。沒有 master 時不存在任何這類 key */
+  PROFILE_COMMAND_PREFIX: 'purdex-profile-cmd:',
 } as const

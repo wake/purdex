@@ -190,12 +190,32 @@ describe('executor — state and persistence', () => {
     h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H1' }, settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S2' } }
     const { ex } = make()
     expect(store.loadSectionStore).toHaveBeenCalledWith(PROFILE)
-    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' } })
+    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' } , conflicts: {} })
   })
 
   it('restores a persisted conflict as locked:conflict', () => {
     h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
     expect(make().ex.status().sections).toEqual({ hosts: 'locked:conflict' })
+  })
+
+  it('status() carries the open conflict pairs — what a `resolve` is bound to (P3 plan Task 2)', () => {
+    h.stored = {
+      hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } },
+      settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' },
+    }
+    expect(make().ex.status().conflicts).toEqual({ hosts: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } })
+  })
+
+  it('onStatus fires when an open conflict moves under an unchanged status: the SOT advanced while locked', async () => {
+    const { ex, statuses } = await synced({ hosts: 'H1' })
+    api.putSection.mockResolvedValue({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    await flush()
+    expect(statuses.at(-1)).toMatchObject({ sections: { hosts: 'locked:conflict' }, conflicts: { hosts: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } })
+    const before = statuses.length
+    ex.onRemoteEvent({ hostId: HOST, profileId: PROFILE, section: 'hosts', rev: 6, hash: 'HA', writerClientId: OTHER_CLIENT })
+    expect(statuses).toHaveLength(before + 1)
+    expect(statuses.at(-1)).toMatchObject({ sections: { hosts: 'locked:conflict' }, conflicts: { hosts: { localHash: 'H2', sot: { rev: 6, hash: 'HA' } } } })
   })
 
   it('a collector report creates the section, persists it and asks for the index', async () => {
@@ -239,7 +259,7 @@ describe('executor — state and persistence', () => {
     api.putSection.mockReturnValue(deferred<PutOutcome>().promise)
     ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
     expect(statuses).toHaveLength(1)
-    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' } })
+    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' } , conflicts: {} })
     ex.onSection({ key: 'hosts', hash: 'H3', payload: {} }) // still pending: no second call
     expect(statuses).toHaveLength(1)
   })
@@ -830,7 +850,7 @@ describe('executor — pull', () => {
     ex.onSection({ key: 'tabs.w1', hash: null, payload: null })
     await vi.advanceTimersByTimeAsync(120_000)
 
-    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' } }) // forgotten
+    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' } , conflicts: {} }) // forgotten
     expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'tabs.w1')
     expect(applySectionToStores.mock.calls.map((c) => c[0])).toEqual(['workspaces']) // never the deletion
     expect(api.putSection).not.toHaveBeenCalled() // no orphan re-created
