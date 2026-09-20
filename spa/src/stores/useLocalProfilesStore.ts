@@ -182,6 +182,25 @@ function sanitiseSlave(key: string, v: unknown): LocalProfile | null {
   }
 }
 
+const sanitiseCount = (v: unknown): number => (Number.isSafeInteger(v) && (v as number) >= 0 ? (v as number) : 0)
+
+/**
+ * `relabelCount` as `localStorage` holds it RIGHT NOW, by the rule `merge` applies
+ * to it; null: absent, unreadable. Another window's promote reaches this window's
+ * store an event and a rehydrate later; the storage it persisted to does not wait
+ * (as `masterAttachedInStorage` in useProfileStore). For lib/host-lifecycle.ts.
+ */
+export function relabelCountInStorage(): number | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.LOCAL_PROFILES)
+    if (raw === null) return null
+    const state = (JSON.parse(raw) as { state?: unknown }).state
+    return isRecord(state) ? sanitiseCount(state.relabelCount) : null
+  } catch {
+    return null
+  }
+}
+
 /** Whatever storage held → a record that satisfies the invariant, WITHOUT dropping a world that can be kept:
  *  - A slave without a world that is not the one on screen holds nothing; it goes.
  *  - A consistent "slave S on screen" survives other damage (the tab stores hold S's world; moving the pointer
@@ -235,7 +254,7 @@ function sanitiseData(persisted: unknown): LocalProfilesData {
     activeProfileId,
     parkedMaster,
     worldEpoch: Number.isSafeInteger(p.worldEpoch) && (p.worldEpoch as number) >= 0 ? (p.worldEpoch as number) : 0,
-    relabelCount: Number.isSafeInteger(p.relabelCount) && (p.relabelCount as number) >= 0 ? (p.relabelCount as number) : 0,
+    relabelCount: sanitiseCount(p.relabelCount),
   }
 }
 
