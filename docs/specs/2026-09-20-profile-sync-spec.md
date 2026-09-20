@@ -937,4 +937,34 @@ fingerprint at the same ordinal and went `locked:schema` — which is, at least,
 closed on a real machine. Rule since: **no mutation testing in a worktree while a page served from it
 is open**; close the browser and the dev server first.
 
-_(Remaining items — 6, 6a, 6b, 6c, 7, 9, 13, two windows of one context — after the direction fix.)_
+**Second pass, after the direction fix** (fresh profile; A attached with `push`, B — which had a
+workspace of its own — with `pull`):
+
+| Spec §6 | Result |
+|---|---|
+| 2 second client pulls | **pass, unattended** — B ended with A's two workspaces and three tabs, its own workspace gone (that is what `pull` means), every section `synced`, `pendingDirection` cleared; **every section still at rev 1 with A as writer — B wrote nothing** |
+| 9 split ratios | **pass** — B got the split with its own `[50, 50]`; B dragging to `[20, 80]` left A at `[70, 30]` and wrote nothing |
+| 6a merely behind | **pass** — B paused, A renamed five times, B resumed: fast-forward to the last name, no lock |
+| 6 / 6b a dirty section refuses an inbound apply | **pass** — B's unsynced tab was not replaced by A's; `Keep local` converged both on B's version. One departure from the letter of 6b: B went `locked:conflict` *when A's event arrived*, not on `Sync now`. Locking is local bookkeeping and sends nothing; learning of the conflict earlier is more useful than later. §6 6b should read "is `locked:conflict` no later than `Sync now`" |
+| 6c section lifecycle | **pass** — A created a workspace, B gained it and its tabs; B deleted it, A lost both; **no `tabs.<id>` row left on the daemon** |
+| two windows, one context | **pass** — exactly one led; an edit made in the *follower* window reached the daemon through the leader, **exactly once**, and B saw it; closing the leader window, the follower took over within the lease TTL |
+| 7 schema lock | **FAIL → fixed** — see below |
+
+Offline was simulated with `autoSync: false` rather than by stopping the mlab daemon (the user's
+working environment): the state machine treats `!reachable` and `!autoSync` in the same branch.
+
+**Third real finding.** A `settings` write with another fingerprint and ordinal 99 (a "newer Purdex",
+by `curl`) was accepted and broadcast, as it should be. Both clients answered with that *section*
+`locked:invalid` — and a later edit on B **was written out**. §4.4 says the whole profile locks and
+an older client writes nothing. `profileLock` was evaluated only on reindex, while clients learn of
+a new revision through the event — which carries no fingerprint — and pull; the fetched section's
+`fingerprint` / `ordinal` went unread. The pull path now compares shape before applying.
+
+Also seen, self-healing but wrong in passing: when a `tabs.<id>` deletion overtook the `workspaces`
+change that caused it, the receiver emptied a workspace it still had and nearly recreated the
+section on the SOT. A deletion of `tabs.<id>` for a workspace that still exists locally now waits.
+
+**Not run here:** item 13 in its real form (a second *machine* reaching every host with the pulled
+tokens — both contexts were seeded with the same host), and the cross-machine run on air-2026. The
+App there loads the main checkout's `:5174`, which this isolated worktree session cannot `git pull`;
+that run is the user's acceptance.
