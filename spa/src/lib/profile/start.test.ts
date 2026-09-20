@@ -702,17 +702,48 @@ describe('the direction of an attach', () => {
 })
 
 describe('detachMaster', () => {
-  it('deletes the attachment, clears the master, then the section store', async () => {
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
-    vi.mocked(clearSectionStore).mockImplementation(() => {
-      expect(useProfileStore.getState().masterHostId).toBeNull()
-      return 'ok'
-    })
-    await detachMaster()
+  it('stops syncing FIRST: the master and its bases are gone before the daemon is told, however long that takes', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull')
+    await flush()
+    vi.mocked(putAttachment).mockClear()
+    let release: (v: typeof okDetach) => void = () => {}
+    vi.mocked(deleteAttachment).mockReturnValue(new Promise((r) => (release = r)))
+
+    const detaching = detachMaster()
+    await flush()
+    // the DELETE is still out — and everything is already down
     expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
     expect(useProfileStore.getState().masterHostId).toBeNull()
-    expect(clearSectionStore).toHaveBeenCalledTimes(1)
+    expect(clearSectionStore).toHaveBeenLastCalledWith(P1)
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.collectors[0].stop).toHaveBeenCalledTimes(1)
+    expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
+    disconnect('h1')
+    connect('h1')
+    await flush()
+    expect(putAttachment).not.toHaveBeenCalled()
+    expect(h.executors[0].onReconnected).toHaveBeenCalledTimes(1)
+
+    release(okDetach)
+    await detaching
     expect(useProfileStore.getState().autoSync).toBe(true)
+  })
+
+  it('a master another window set while the DELETE was out is not touched by the late continuation', async () => {
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    let release: (v: typeof okDetach) => void = () => {}
+    vi.mocked(deleteAttachment).mockReturnValue(new Promise((r) => (release = r)))
+    const detaching = detachMaster()
+    await flush()
+    useProfileStore.setState({ masterHostId: 'h2', masterProfileId: P2, pendingDirection: 'push' })
+    vi.mocked(clearSectionStore).mockClear()
+    release(okDetach)
+    await detaching
+    expect(useProfileStore.getState().masterHostId).toBe('h2')
+    expect(useProfileStore.getState().pendingDirection).toBe('push')
+    expect(clearSectionStore).not.toHaveBeenCalled()
   })
 
   it('detaches even when the daemon cannot be told — and says so', async () => {

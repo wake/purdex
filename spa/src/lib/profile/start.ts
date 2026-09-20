@@ -399,14 +399,22 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
   })
 }
 
-/** The user said stop, so it stops — even when the daemon cannot be told (that is a problem, recorded). */
+/**
+ * The user said stop, so it stops — NOW. The master is cleared first, which is
+ * synchronous: the subscription above takes the driver down before this function
+ * reaches its first `await`, so nothing is pulled or pushed while the daemon is
+ * being told (up to a 15 s timeout on a slow or absent host). The bases go with
+ * it. Telling the daemon is best effort and comes last: a failure is a problem,
+ * recorded, not a reason to stay attached. Nothing after the `await` touches the
+ * store — by then the master may be a new one, set by another window.
+ */
 export function detachMaster(): Promise<void> {
   return serial(async (): Promise<void> => {
     const master = selectMaster(useProfileStore.getState())
     if (master === null) return
-    await dropAttachment(master)
     useProfileStore.getState().clearMaster()
-    clearSectionStore()
+    clearSectionStore(master.profileId)
+    await dropAttachment(master)
   })
 }
 
