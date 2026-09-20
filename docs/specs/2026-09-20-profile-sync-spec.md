@@ -290,8 +290,20 @@ from the workspaces' orders on apply, retiring the dual-ordering hazard noted at
 
 ### 4.4 Section state, and the pre-SOT state machine
 
-Per section: `synced` | `pending` | `locked:conflict`.
-Per profile: `idle` (no master) | `locked:schema` | worst-of-its-sections.
+Per section: `synced` | `pending` | `locked:conflict` | `locked:reset` | `locked:invalid`.
+Per profile: `idle` (no master) | `locked:schema` | worst-of-its-sections
+(`locked:reset` > `locked:conflict` > `locked:invalid` > `pending` > `synced`).
+
+*(The last two section states were added while building P2a/P2b, §9.4 and §9.9; stated here so
+that this section is the contract rather than the review logs.)*
+- **`locked:reset`** — the SOT's revision went *backwards* relative to what this client agreed with:
+  the profile was recreated. Offered as push or pull, a fresh start. At profile level the same word
+  covers "the profile is no longer on the daemon at all": everything stops, nothing local is touched,
+  and the wizard is the way out.
+- **`locked:invalid`** — the SOT holds a payload this client refuses to apply: ill-formed, a
+  settings value of the wrong shape, or a `hosts` payload that would remove or re-point the master's
+  own host. Never re-fetched on a timer; unlocked by **any** observed SOT that differs from the one
+  that was judged; `Keep local` pushes the local copy over it, `Take SOT` is not offered.
 
 ```
         ┌── local change ──▶ pending ──── flush ok ───▶ synced
@@ -489,7 +501,11 @@ operation lock, validates well-formedness, then per section:
   for tabs pointing at it.
 - `settings` — replace each store's persisted slice; `tabPosition` only, out of `useLayoutStore`.
 - `workspaces` — replace the list and order; keep local `activeWorkspaceId`, falling back to the
-  first workspace if it vanished.
+  first workspace if it vanished. **One exception (P2b-2, §9.11):** a workspace whose id cannot form
+  a `tabs.<id>` section key (the daemon accepts `[A-Za-z0-9_-]{1,64}`; `importWorkspace` and old
+  merges can bring in others) is **device-local**: the collector leaves it out of the payload and
+  the applier leaves the local one in place, after the synced ones. Without this one client's odd
+  id became a payload every other client's guard refused — a lock that spread.
 - `tabs.<ws>` — replace that workspace's tabs and order, then **restore split ratios**: walk the
   incoming `layout` tree and, for each split node id present in the local tree, copy the local
   `sizes`; for a new split node, distribute evenly. Then `remapLayoutSessions` and `syncSessionStore`
