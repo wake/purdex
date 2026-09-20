@@ -5,9 +5,14 @@
 // THE IRON RULE
 //   A user who has set no master gets the app they had before this feature
 //   existed. `startProfileSync()` subscribes to `useProfileStore` and, while
-//   there is no master, does NOTHING else: no other subscription, no hash, no
-//   lease read or write, no request, no timer. Pinned by start.ironrule.test.ts
-//   with nothing mocked.
+//   there is no master, does nothing else: it subscribes to NO OTHER store,
+//   computes no hash, neither reads nor writes the lease, sends no request,
+//   schedules no timer, opens no BroadcastChannel. Pinned by
+//   start.ironrule.test.ts with nothing mocked.
+//   (`useProfileStore` itself is an ordinary persisted, `syncManager`-registered
+//   store, like the eighteen others on main: its storage key and its entry in
+//   the registry of syncManager's singleton channel exist for every user. That
+//   is what any store costs; it is not part of the "nothing" above.)
 //
 // LIFETIMES (each inside the previous one)
 //   started      `startProfileSync()` … its returned stop. One subscription to
