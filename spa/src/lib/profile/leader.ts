@@ -33,6 +33,20 @@
 //     — it reads storage on every call, and the executor calls it before every
 //     network write — but that too is a read followed by an act, not an atomic
 //     step: a write can still leave after the check and before the lease moved.
+//   - release has the same hole, the other way round. `release()` (stop, pagehide)
+//     is "read → the record is mine → removeItem": two steps, and localStorage has
+//     no compare-and-delete either. A window suspended between them for longer
+//     than its lease comes back after another window has taken over, and its
+//     `removeItem` DELETES THE NEW LEADER'S LIVE LEASE. For that moment nobody
+//     holds a lease: the new leader's `isLeader()` turns false at once (it reads
+//     storage), its next renewal finds nothing, steps down and claims again —
+//     and any waiting window woken by the `storage` event claims too, so the
+//     lease may go to a third window. Cost: one extra hand-over, which for the
+//     driver means one extra full reindex, and up to `renewMs` + jitter in which
+//     nothing is pushed. Not fixed on purpose: "never delete, let it expire"
+//     would leave every ordinary window close with no leader for `ttlMs` (6 s),
+//     and that happens all the time while this needs a process frozen across
+//     exactly those two lines. Pinned in leader.test.ts ("KNOWN RESIDUAL … release").
 // What carries the consequences is therefore not this file. The SOT is guarded
 // by the daemon's CAS, and the leader's local state by section-store's
 // one-key-per-thing layout; the worst a double leader costs is one false

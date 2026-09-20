@@ -51,6 +51,12 @@
 // settled (`onInitialSettled`), at which point it is cleared here and conflicts
 // are the user's again. Never cleared by a timeout — see executor.ts.
 //
+// EVERY ATTACH IS A NEW ONE — to the master already set as well. `attachMaster`
+// clears the bases and `setMaster` bumps `attachGeneration`; this file watches
+// that counter and rebuilds the whole master mode when it moves, in every
+// window. One executor therefore sees at most one first reconciliation, which is
+// what lets it refuse a direction that turns up later as stale (executor.ts).
+//
 // `attachMaster` / `detachMaster` are THE way in and out — P3's wizard calls
 // them; the dev hook is a thin layer over them. They run one at a time.
 import { getClientId, isClientIdPersisted } from '../client-identity'
@@ -227,12 +233,14 @@ function lead(master: Master, leadership: Leadership): Leader {
 
 interface MasterMode {
   master: Master
+  /** `useProfileStore.attachGeneration` when this mode was entered. */
+  generation: number
   isLeader(): boolean
   leader(): Leader | null
   end(): void
 }
 
-function enterMasterMode(master: Master): MasterMode {
+function enterMasterMode(master: Master, generation: number): MasterMode {
   let ended = false
   let leader: Leader | null = null
   warned.clear()
@@ -254,6 +262,7 @@ function enterMasterMode(master: Master): MasterMode {
 
   return {
     master,
+    generation,
     isLeader: () => !ended && leadership.isLeader(),
     leader: () => leader,
     end() {
@@ -291,25 +300,28 @@ export function profileSyncState(): ProfileSyncState {
  */
 export function startProfileSync(): () => void {
   let stopped = false
-  const sync = (master: Master | null): void => {
-    if (sameMaster(master, mode?.master ?? null)) return
+  const sync = (master: Master | null, generation: number): void => {
+    const same = sameMaster(master, mode?.master ?? null)
+    if (same && (mode === null || mode.generation === generation)) return
+    // Same master, new generation = `attachMaster` was called again, here or in
+    // another window: a new first reconciliation, from cleared bases, with a new
+    // driver. `attachMaster` cleared them where it ran; the window that WRITES
+    // them — the leader, possibly this one and not that one — clears them again
+    // once its writer is down, so that nothing it persisted in between survives.
+    // A follower must not: by now the leader may have written the new ones.
+    const wasLeader = same && mode !== null && mode.isLeader()
     mode?.end()
-    mode = master === null ? null : enterMasterMode(master)
+    if (wasLeader && master !== null) clearSectionStore(master.profileId)
+    mode = master === null ? null : enterMasterMode(master, generation)
   }
 
   const unsubscribe = useProfileStore.subscribe((next, prev) => {
     if (stopped) return
-    sync(selectMaster(next))
-    // Nothing pumps the executor when a preference changes, or when a new first
-    // reconciliation is asked of a driver that is already running: do it here.
-    // (A NEW master builds a new driver, which starts by itself once it has primed.)
-    const redirected =
-      next.pendingDirection !== null &&
-      next.pendingDirection !== prev.pendingDirection &&
-      sameMaster(selectMaster(prev), selectMaster(next))
-    if ((next.autoSync && !prev.autoSync) || redirected) mode?.leader()?.executor.syncNow()
+    sync(selectMaster(next), next.attachGeneration)
+    // Nothing pumps the executor when a preference changes: do it here.
+    if (next.autoSync && !prev.autoSync) mode?.leader()?.executor.syncNow()
   })
-  sync(selectMaster(useProfileStore.getState()))
+  sync(selectMaster(useProfileStore.getState()), useProfileStore.getState().attachGeneration)
 
   if (import.meta.env.DEV) {
     window.__purdexProfileSync = {
@@ -387,26 +399,37 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
     if (put.kind === 'failed') return { ok: false, reason: put.reason }
 
     const previous = selectMaster(useProfileStore.getState())
-    if (previous !== null && !sameMaster(previous, next)) {
-      await dropAttachment(previous)
-      // No `await` between this and `setMaster`: the old driver cannot write a
-      // base in between, and the new one must not be seeded from the old bases.
-      clearSectionStore()
-    }
+    if (previous !== null && !sameMaster(previous, next)) await dropAttachment(previous)
+    // EVERY attach starts from no bases, the same master included. With a base
+    // still held, a section that is dirty while the SOT has not moved is simply
+    // pushed — under `pull` too, the opposite of what was asked; without one it is
+    // a conflict, and the direction answers it. No `await` between this and
+    // `setMaster`: the old driver cannot write a base in between, and the new one
+    // (built by the subscription, on the new `attachGeneration`) is not seeded
+    // from the old ones.
+    clearSectionStore()
     return useProfileStore.getState().setMaster(hostId, profileId, direction)
       ? { ok: true }
       : { ok: false, reason: 'invalid-profile-id' }
   })
 }
 
-/** The user said stop, so it stops — even when the daemon cannot be told (that is a problem, recorded). */
+/**
+ * The user said stop, so it stops — NOW. The master is cleared first, which is
+ * synchronous: the subscription above takes the driver down before this function
+ * reaches its first `await`, so nothing is pulled or pushed while the daemon is
+ * being told (up to a 15 s timeout on a slow or absent host). The bases go with
+ * it. Telling the daemon is best effort and comes last: a failure is a problem,
+ * recorded, not a reason to stay attached. Nothing after the `await` touches the
+ * store — by then the master may be a new one, set by another window.
+ */
 export function detachMaster(): Promise<void> {
   return serial(async (): Promise<void> => {
     const master = selectMaster(useProfileStore.getState())
     if (master === null) return
-    await dropAttachment(master)
     useProfileStore.getState().clearMaster()
-    clearSectionStore()
+    clearSectionStore(master.profileId)
+    await dropAttachment(master)
   })
 }
 

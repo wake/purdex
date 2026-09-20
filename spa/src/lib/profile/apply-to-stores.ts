@@ -29,6 +29,7 @@ import type { HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
 import { withOperationLock } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -37,8 +38,10 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
-import { unregisterLocale } from '../locale-registry'
-import { unregisterTheme } from '../theme-registry'
+import { registerLocale, unregisterLocale } from '../locale-registry'
+import type { LocaleDef } from '../locale-registry'
+import { registerTheme, unregisterTheme } from '../theme-registry'
+import type { ThemeDefinition } from '../theme-registry'
 import { applyHosts, applySettings, applyTabs, applyWorkspaces, deriveTabOrder, isWellFormedSection } from './applier'
 import { hashSection } from './hash'
 import { sectionKind, workspaceIdOf } from './projections'
@@ -110,6 +113,8 @@ function restore(store: PersistedStore, old: Record<string, unknown>): void {
     // the in-memory state is restored before persist's storage write can throw
   }
 }
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 const invalid = (detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid', detail })
 
@@ -184,11 +189,43 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   if (refusal !== null) return invalid(refusal)
 
   const store = asPersisted(useHostStore)
+  // ROLLBACK, and what it is not. When a host-store write throws after the
+  // cascade ran (persist: quota / SecurityError), the catch runs the cascade's
+  // own undo handles and restores the host slice. That is not a transaction:
+  //   - sessions, agent state, host settings, the marked panes: restored by the
+  //     cascade's undo (what "Undo" does after a manual delete);
+  //   - execution store: NOT restored. Its data comes back by itself — a pane
+  //     that is still mounted re-runs summary → history → SSE when its host
+  //     reappears (`useExecutionSubscription` depends on `hostPresent`). A held
+  //     lease is gone locally and is re-acquired by the next send, exactly as
+  //     after a manual undo (`useExecutionLease` drops it the moment the host goes);
+  //   - nex-host and execution-list: NOT restored, and NOT re-fetched by
+  //     themselves when a host returns under the same id — every `ensure` effect
+  //     depends on `hostId` alone, and the reconnect watcher in useNexHostStore
+  //     requires `byHost[hostId]` to still exist, which `clearHost` removed. So
+  //     the rollback asks once, `ensure(id)`, for each restored host nex-host
+  //     knew before; the execution-list watcher opens on its own once nex is
+  //     ready. `ensure` must not add a new failure: a synchronous throw is
+  //     reported as "rollback incomplete" on the ORIGINAL error, a later
+  //     rejection is dropped (the nex-host entry records its own error);
+  //   - `runtime[H]` IS restored verbatim, `connected` included, and that is
+  //     true rather than stale ONLY because nothing is awaited between the
+  //     staging write and the end of the rollback: the connection layer
+  //     (`useMultiHostEventWs`) closes a host's WS from a React effect keyed on
+  //     the host list, no effect runs inside a synchronous block, and by the time
+  //     one can, the list is what it was — the WS never noticed. An `await` in
+  //     that stretch would let the effect tear the connection down, and the
+  //     restored `connected` would then be a lie until the layer reconnected.
+  //     Hence `persist.rehydrate()` is NOT awaited inside the try (it is
+  //     synchronous with this storage — premise (d) in the tests — and is awaited
+  //     after the last fallible step, for the day it is not).
   const write = async (): Promise<ApplyOutcome> => {
     const state = useHostStore.getState()
     const old = { hosts: state.hosts, hostOrder: state.hostOrder, activeHostId: state.activeHostId, devHostId: state.devHostId, runtime: state.runtime }
     const { next, removedHostIds } = applyHosts(old, incoming)
     const undos: Array<() => void> = []
+    const nexKnown = removedHostIds.filter((id) => Object.hasOwn(useNexHostStore.getState().byHost, id))
+    let hooks: void | Promise<void>
     try {
       if (removedHostIds.length > 0) {
         const leaving: Record<string, HostConfig> = {}
@@ -200,19 +237,31 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
       const now = useHostStore.getState()
       const survives = (id: string | null): string | null => (id !== null && Object.hasOwn(next.hosts, id) ? id : null)
       store.setState({ hosts: next.hosts, hostOrder: next.hostOrder, activeHostId: survives(now.activeHostId), devHostId: survives(now.devHostId) })
-      await rehydrate(store)
+      hooks = store.persist.rehydrate() // not awaited here — see ROLLBACK above
       publish(store)
     } catch (err) {
+      const unfinished: string[] = []
       for (const undo of undos.reverse()) {
         try {
           undo()
-        } catch {
-          // best effort: the host slice below is restored regardless
+        } catch (undoErr) {
+          unfinished.push(`undo: ${messageOf(undoErr)}`) // the host slice below is restored regardless
         }
       }
       restore(store, old)
-      throw err
+      if (undos.length > 0) {
+        for (const id of nexKnown) {
+          try {
+            void useNexHostStore.getState().ensure(id).catch(() => {})
+          } catch (ensureErr) {
+            unfinished.push(`nex-host ensure(${id}): ${messageOf(ensureErr)}`)
+          }
+        }
+      }
+      if (unfinished.length === 0) throw err
+      throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
+    await hooks
     return { ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) }
   }
 
@@ -224,16 +273,30 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
 
 // === settings ===
 
-/** Custom themes / locales the patch drops leave the registries too; rehydrate only ever registers. Runs BEFORE the rehydrate, so an `active*Id` naming a dropped entry falls back. */
-function unregisterDropped(key: SettingsStorageKey, before: Record<string, unknown>, patch: Record<string, unknown>): void {
+/** Puts a dropped custom theme / locale back in its registry. */
+type Reregister = () => void
+
+/**
+ * Custom themes / locales the patch drops leave the registries too; rehydrate only
+ * ever registers. Runs BEFORE the rehydrate, so an `active*Id` naming a dropped
+ * entry falls back. Returns how to undo each removal, for the rollback.
+ */
+function unregisterDropped(key: SettingsStorageKey, before: Record<string, unknown>, patch: Record<string, unknown>): Reregister[] {
   const field = key === 'purdex-themes' ? 'customThemes' : key === 'purdex-i18n' ? 'customLocales' : null
-  if (field === null || !Object.hasOwn(patch, field)) return
+  if (field === null || !Object.hasOwn(patch, field)) return []
   const kept = (patch[field] ?? {}) as Record<string, unknown>
-  for (const id of Object.keys((before[field] ?? {}) as Record<string, unknown>)) {
+  const undo: Reregister[] = []
+  for (const [id, def] of Object.entries((before[field] ?? {}) as Record<string, unknown>)) {
     if (Object.hasOwn(kept, id)) continue
-    if (key === 'purdex-themes') unregisterTheme(id)
-    else unregisterLocale(id)
+    if (key === 'purdex-themes') {
+      unregisterTheme(id)
+      undo.push(() => registerTheme(def as ThemeDefinition))
+    } else {
+      unregisterLocale(id)
+      undo.push(() => registerLocale(def as LocaleDef))
+    }
   }
+  return undo
 }
 
 async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
@@ -243,7 +306,8 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   if (rejected.length > 0) return invalid(`rejected: ${rejected.join(', ')}`)
 
   const rendererBefore = useUISettingsStore.getState().terminalRenderer
-  const written: Array<[PersistedStore, Record<string, unknown>]> = []
+  const written: Array<{ key: SettingsStorageKey; store: PersistedStore; old: Record<string, unknown> }> = []
+  const reregister: Reregister[] = []
   try {
     for (const key of Object.keys(patches) as SettingsStorageKey[]) {
       const patch = patches[key] as Record<string, unknown>
@@ -251,15 +315,34 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
       const before = store.getState() as Record<string, unknown>
       const old: Record<string, unknown> = {}
       for (const field of Object.keys(patch)) old[field] = before[field]
-      written.push([store, old])
+      written.push({ key, store, old })
       store.setState(patch)
-      unregisterDropped(key, before, patch)
+      reregister.push(...unregisterDropped(key, before, patch))
       await rehydrate(store)
       publish(store)
     }
   } catch (err) {
-    for (const [store, old] of written.reverse()) restore(store, old)
-    throw err
+    // A settings write is more than fields: registries, <html> theme / lang, the
+    // i18n `t`. So the way back is the way in — re-register what was dropped, then
+    // per store `setState(old)` → rehydrate → publish, so the store's own hooks put
+    // the DOM and the translator back. If `setState(old)` itself throws (persist:
+    // the storage is what is failing), memory IS restored (zustand sets before it
+    // persists) but the rehydrate is skipped — it would read the NEW value back
+    // from storage — and the hooks have not re-run. That is not swallowed: the
+    // error that leaves here says which stores the rollback could not finish.
+    const unfinished: string[] = []
+    for (const put of reregister) put()
+    for (const { key, store, old } of written.reverse()) {
+      try {
+        store.setState(old)
+        await rehydrate(store)
+        publish(store)
+      } catch (rollbackErr) {
+        unfinished.push(`${key}: ${messageOf(rollbackErr)}`)
+      }
+    }
+    if (unfinished.length === 0) throw err
+    throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
   }
   // Terminals read the renderer on (re)connect only; the bump is what makes them reconnect.
   if (useUISettingsStore.getState().terminalRenderer !== rendererBefore) useUISettingsStore.getState().bumpTerminalSettingsVersion()
@@ -280,7 +363,10 @@ interface TabWorld {
  * keeping `useTabStore`'s four fields consistent: `tabOrder` re-derived,
  * `visitHistory` restricted to surviving tabs, the global `activeTabId` kept
  * while its tab survives, else the active workspace's, else `null`.
- * `afterWrite` runs inside the same try: if it throws, both stores roll back.
+ * `afterWrite` runs inside the same try, and what it touches — the scoped
+ * workspace settings a removal clears — is part of the same snapshot: if anything
+ * throws, all THREE stores go back. (A clear that landed before a later one threw
+ * would otherwise be lost for good while its workspace came back.)
  *
  * No rehydrate here, on purpose. Neither store has a `merge` or an
  * `onRehydrateStorage` (the tab store's `migrate` does not run on a same-version
@@ -293,6 +379,7 @@ function commitTabWorld(world: TabWorld, afterWrite?: () => void): void {
   const wsState = useWorkspaceStore.getState()
   const oldTab = { tabs: tabState.tabs, tabOrder: tabState.tabOrder, activeTabId: tabState.activeTabId, visitHistory: tabState.visitHistory }
   const oldWs = { workspaces: wsState.workspaces, activeWorkspaceId: wsState.activeWorkspaceId }
+  const oldScoped = { workspaces: useWorkspaceSettingsStore.getState().workspaces }
 
   const exists = (id: string | null | undefined): id is string => typeof id === 'string' && Object.hasOwn(world.tabs, id)
   const activeWs = world.workspaces.find((w) => w.id === world.activeWorkspaceId)
@@ -313,6 +400,7 @@ function commitTabWorld(world: TabWorld, afterWrite?: () => void): void {
   } catch (err) {
     restore(tabStore, oldTab)
     restore(wsStore, oldWs)
+    if (useWorkspaceSettingsStore.getState().workspaces !== oldScoped.workspaces) restore(asPersisted(useWorkspaceSettingsStore), oldScoped)
     throw err
   }
 }

@@ -466,4 +466,35 @@ describe('two windows', () => {
     expect(lease()!.expiresAt).toBeGreaterThan(Date.now())
     expect(b.lead.isLeader()).toBe(true)
   })
+
+  it('KNOWN RESIDUAL, not a guarantee: a release that read its own lease BEFORE a takeover deletes the new leader’s live lease — one extra hand-over, exactly one leader again within renewMs + jitter', async () => {
+    // release() is "read, see my record, removeItem" — two steps, no
+    // compare-and-delete. A was suspended between them for longer than its lease:
+    // B took over in the meantime, and A's removeItem lands on B's record.
+    const a = await openWindow({ renewMs: 60_000 }) // never renews: a frozen process
+    vi.advanceTimersByTime(100)
+    const aRecord = localStorage.getItem(KEY)!
+    const b = await openWindow()
+    vi.advanceTimersByTime(TTL + 100) // t = 6200: A's lease ran out, B leads
+    expect(b.lead.isLeader()).toBe(true)
+    expect(b.changes).toEqual([true])
+    const bId = lease()!.windowId
+
+    vi.spyOn(Storage.prototype, 'getItem').mockReturnValueOnce(aRecord) // the read A made before it was suspended
+    a.lead.stop()
+
+    expect(lease()).toBeNull() // ← B's LIVE lease is gone: this is the defect
+    expect(b.lead.isLeader()).toBe(false) // the per-write check notices at once (nobody leads for a moment)…
+    expect(b.changes).toEqual([true]) // …while B's memory has not
+
+    // B's next renewal (at most renewMs away) finds no lease: it steps down and claims again through the jitter.
+    vi.advanceTimersByTime(RENEW + 100)
+    expect(b.changes).toEqual([true, false, true]) // one extra hand-over — for the driver, one extra full reindex
+    expect(lease()!.windowId).toBe(bId)
+    expect(b.lead.isLeader()).toBe(true)
+    expect(a.lead.isLeader()).toBe(false)
+
+    vi.advanceTimersByTime(TTL * 3) // and it stays that way
+    expect(b.changes).toEqual([true, false, true])
+  })
 })

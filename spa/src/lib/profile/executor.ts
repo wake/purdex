@@ -115,10 +115,21 @@
 //     would plant an orphan only to delete it again. (An
 //     empty SOT has nothing to take: `workspaces` is pushed by the ordinary
 //     rules, becomes up to date, and the tabs follow.)
+//   - ONE PERIOD PER EXECUTOR, and it never re-opens. An attach — to the same
+//     master too — gets a NEW executor from the start layer (and cleared bases,
+//     without which a direction means little: a section that is dirty against a
+//     base it still holds is simply pushed, `pull` or not). An executor born
+//     without a direction has no period at all. So a direction that is stored
+//     once the period is over — the callee did not clear it, or some path set
+//     it without rebuilding the driver — is STALE: it answers no lock (that
+//     would be a silent overwrite hours later, in a direction nobody confirmed
+//     for THAT conflict), it is reported (`stale-direction`) and handed back
+//     through `onInitialSettled()` once per appearance so that it gets cleared.
+//     The check runs at the end of every round, action or not.
 //   - It ends when, with an index SEEN by this executor, every section is up to
 //     date (clean, index fresh, SOT not moved, nothing in flight / forced /
 //     to restore / running), the write queue is empty, no placeholder is held
-//     and nothing is locked: `onInitialSettled()` — once per period; the start
+//     and nothing is locked: `onInitialSettled()`; the start
 //     layer clears the stored direction. A `tabs.*` section that cannot be
 //     rendered here (no such workspace, no local content) does not count: it is
 //     carried, and would otherwise hold the period open for ever.
@@ -298,10 +309,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /** The first reconciliation (see the header). */
   let indexSeen = false
-  let settledReported = false
+  /** This executor's ONE period is over (or never was: born without a direction). Never goes back. */
+  let periodOver = false
+  /** A direction seen after the period: reported and handed back once per appearance. */
+  let staleNotified = false
   /** Orphan deletes queued or out, and the ones already tried (never again by this executor). */
   const orphanPending = new Set<string>()
   const orphanTried = new Set<string>()
+  /** Not sent, or sent and failed without an answer: not again before the next index (a sweep runs every round). */
+  const orphanDeferred = new Set<string>()
 
   let shapesPromise: Promise<Shapes> | null = null
   let previousWorkspaceIds = localWorkspaceIds()
@@ -452,7 +468,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /* ─── the first reconciliation ─── */
 
+  /** The direction while THIS executor's period is open; null afterwards, whatever the store says (see the header). */
   function direction(): 'push' | 'pull' | null {
+    return periodOver ? null : storedDirection()
+  }
+
+  function storedDirection(): 'push' | 'pull' | null {
     if (deps.initialDirection === undefined) return null
     const d = deps.initialDirection()
     return d === 'push' || d === 'pull' ? d : null
@@ -500,10 +521,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   function sweepOrphans(): void {
     if (disposed || profileGone || schemaLock !== null || blocked || !indexSeen || direction() !== 'push') return
     if (!deps.isReachable() || !gatesUpToDate()) return
+    let queued = false
     for (const [key, s] of [...sections]) {
       if (s.indexStale || s.inFlight !== null || running.has(key) || !isUnrendered(key, s)) continue
-      if (orphanPending.has(key) || orphanTried.has(key)) continue
+      if (orphanPending.has(key) || orphanTried.has(key) || orphanDeferred.has(key)) continue
       orphanPending.add(key)
+      queued = true
       const rev = s.sot.rev
       queue.push({
         key,
@@ -515,11 +538,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         },
       })
     }
-    void drain()
+    if (queued) void drain()
   }
 
   async function sendOrphanDelete(key: string, rev: number): Promise<Finish> {
     const s = sections.get(key)
+    orphanDeferred.add(key) // until proven otherwise
     // Decided on the CURRENT state: still `push`, still the rev that was judged, still not here.
     if (schemaLock !== null || profileGone || blocked || direction() !== 'push') return WAIT
     if (s === undefined || s.sot.rev !== rev || !isUnrendered(key, s)) return WAIT
@@ -527,48 +551,61 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       problem('not-leader', 'the lease is not ours: the write was not sent', key)
       return WAIT
     }
-    orphanTried.add(key)
     const outcome = await deleteSection(hostId, profileId, key, { baseRev: rev, clientId: getClientId() }, requestOptions)
     if (disposed) return WAIT
     if (outcome.kind === 'applied') {
+      orphanDeferred.delete(key)
       // Our own delete: the WS echo is `own` and ignored, so observe it here.
       dispatch(key, { type: 'remote-event', rev: outcome.rev, hash: null, own: false }, false)
       return WAIT
     }
     if (outcome.kind === 'conflict') {
+      orphanTried.add(key)
       problem('orphan-delete-conflict', `someone wrote it meanwhile (now rev ${outcome.rev}); left to the ordinary rules`, key)
       return WAIT
     }
-    if (!blocks(outcome)) {
-      if (outcome.reason !== 'aborted') orphanTried.delete(key) // nothing was decided: the next index may try again
-      problem('orphan-delete-failed', `${outcome.reason} (${outcome.status}): ${outcome.message}`, key)
-    }
+    // nothing was decided: the next index may try again
+    if (!blocks(outcome)) problem('orphan-delete-failed', `${outcome.reason} (${outcome.status}): ${outcome.message}`, key)
     return WAIT
   }
 
-  /** The end of the first reconciliation (see the header). */
-  function checkSettled(): void {
-    if (disposed || deps.onInitialSettled === undefined) return
-    if (direction() === null) {
-      settledReported = false
-      return
-    }
-    if (settledReported || !indexSeen || profileGone || schemaLock !== null || blocked) return
-    if (reindexing || draining || queue.length > 0 || orphanPending.size > 0 || heldPlaceholders.size > 0) return
-    for (const [key, s] of sections) {
-      if (isUnrendered(key, s) && !s.indexStale) continue
-      if (!upToDate(key)) return
-    }
-    settledReported = true
+  function handBack(): void {
     try {
-      deps.onInitialSettled()
+      deps.onInitialSettled?.()
     } catch {
       // a listener's bug is not the driver's
     }
   }
 
+  /** The end of the first reconciliation (see the header). Runs at the end of EVERY round — one with no action too. */
+  function checkSettled(): void {
+    if (disposed) return
+    if (periodOver) {
+      // A direction that is (still, or again) stored belongs to no period of this
+      // executor. It answers nothing here; say so and hand it back to be cleared.
+      if (storedDirection() === null) staleNotified = false
+      else if (!staleNotified) {
+        staleNotified = true
+        problem('stale-direction', 'a direction is stored but the first reconciliation of this driver is over; conflicts go to the user')
+        handBack()
+      }
+      return
+    }
+    if (!indexSeen || profileGone || schemaLock !== null || blocked) return
+    sweepOrphans() // `push`: what it queues keeps the period open (`orphanPending`)
+    if (reindexing || draining || queue.length > 0 || orphanPending.size > 0 || orphanDeferred.size > 0 || heldPlaceholders.size > 0) return
+    for (const [key, s] of sections) {
+      if (isUnrendered(key, s) && !s.indexStale) continue
+      if (!upToDate(key)) return
+    }
+    periodOver = true
+    handBack()
+    checkSettled() // not cleared by the callee → stale, from this moment
+  }
+
   function pumpAll(): void {
     for (const key of [...sections.keys()]) pump(key)
+    checkSettled()
   }
 
   function pumpTabs(): void {
@@ -772,6 +809,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
 
     indexSeen = true
+    orphanDeferred.clear()
     settleHeldPlaceholders()
     reportSectionSet(entry.sections.map((m) => m.section))
   }
@@ -1141,6 +1179,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (persisted.conflict !== undefined) storedConflict.add(key)
   }
   lastStatus = JSON.stringify(status())
+  // Born without a direction = an ordinary run (a reload after the period): there is no period to open later.
+  periodOver = storedDirection() === null
 
   return {
     onSection(r) {

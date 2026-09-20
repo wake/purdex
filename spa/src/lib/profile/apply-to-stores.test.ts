@@ -30,7 +30,7 @@ import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { deleteHostCascade } from '../host-lifecycle'
 import { getTheme, unregisterTheme } from '../theme-registry'
 import { registerBuiltinThemes } from '../register-themes'
-import { unregisterLocale } from '../locale-registry'
+import { getLocale, unregisterLocale } from '../locale-registry'
 import { STORAGE_KEYS } from '../storage'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { hashSection } from './hash'
@@ -430,6 +430,92 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
     expect(useRebuildStore.getState().lockGrant).toBe(grant)
   })
 
+  describe('a store write fails AFTER the cascade ran', () => {
+    const realEnsure = useNexHostStore.getState().ensure
+    let ensure: ReturnType<typeof vi.fn<(hostId: string) => Promise<void>>>
+
+    beforeEach(() => {
+      ensure = vi.fn<(hostId: string) => Promise<void>>(() => Promise.resolve())
+      useNexHostStore.setState({ ensure })
+    })
+    afterEach(() => useNexHostStore.setState({ ensure: realEnsure }))
+
+    const hostSlice = () => {
+      const h = useHostStore.getState()
+      return JSON.parse(JSON.stringify({ hosts: h.hosts, hostOrder: h.hostOrder, activeHostId: h.activeHostId, devHostId: h.devHostId, runtime: h.runtime }))
+    }
+
+    /** The n-th `useHostStore.setState` made by the apply throws (1 = staging, 2 = the final write, 3 = publish). */
+    function failHostWrite(n: number, message = 'host write failed'): void {
+      const real = useHostStore.setState
+      let calls = 0
+      vi.spyOn(useHostStore, 'setState').mockImplementation((...args) => {
+        if (++calls === n) throw new Error(message)
+        real(...(args as Parameters<typeof real>))
+      })
+    }
+
+    it('the host slice is back, the removed host\'s runtime row included, and nex-host is asked again for it — and only for it', async () => {
+      seedHostWorld()
+      const before = hostSlice()
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(hostSlice()).toEqual(before)
+      expect(useHostStore.getState().runtime[H2]).toEqual({ status: 'connected' })
+      expect(useSessionStore.getState().sessions[H2]).toHaveLength(1) // the cascade's own undo
+      expect(ensure.mock.calls).toEqual([[H2]])
+      expect(useRebuildStore.getState().lockedBy).toBeNull()
+    })
+
+    it('a host nex-host knew nothing about is not fetched by the rollback', async () => {
+      seedHostWorld()
+      useNexHostStore.setState({ byHost: {} })
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('host write failed')
+      expect(ensure).not.toHaveBeenCalled()
+    })
+
+    // Why `runtime[H]` may be restored verbatim (`connected` included): the
+    // connection layer tears a host's WS down from a React effect, and no effect
+    // can run inside a synchronous block. From the staging write to the end of the
+    // rollback there must therefore be NO await — this pins it on the last
+    // fallible step (publish).
+    it('from the cascade to the end of the rollback nothing is awaited: the state is back before the promise is even looked at', () => {
+      seedHostWorld()
+      const before = hostSlice()
+      failHostWrite(3)
+      const pending = applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(hostSlice()).toEqual(before) // synchronously
+      expect(ensure.mock.calls).toEqual([[H2]])
+      return expect(pending).rejects.toThrow('host write failed')
+    })
+
+    it('ensure itself throws → the original error survives, and says the rollback is incomplete', async () => {
+      seedHostWorld()
+      const before = hostSlice()
+      ensure.mockImplementation(() => {
+        throw new Error('ensure blew up')
+      })
+      failHostWrite(2)
+      const failure = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx).then(() => null, (e: Error) => e)
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(failure?.message).toMatch(/^host write failed/)
+      expect(failure?.message).toMatch(/rollback incomplete/)
+      expect(failure?.message).toMatch(/ensure blew up/)
+      expect(hostSlice()).toEqual(before)
+    })
+
+    it('ensure rejects later → nothing unhandled, the original error is what is thrown', async () => {
+      seedHostWorld()
+      ensure.mockImplementation(() => Promise.reject(new Error('offline')))
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
+      await Promise.resolve()
+    })
+  })
+
   it('removes the last local hosts too when the master is new here (removeHost\'s one-host veto does not apply to a replace)', async () => {
     useHostStore.setState({ hosts: { [H2]: host(H2) }, hostOrder: [H2], activeHostId: H2, devHostId: null })
     useSessionStore.getState().replaceHost(H2, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~' }] as never)
@@ -527,6 +613,71 @@ describe('applySectionToStores — settings', () => {
   })
 })
 
+describe('applySectionToStores — settings: a failed apply rolls back registries, DOM and translator too', () => {
+  const customTheme = () => ({ id: 'custom-1', name: 'Mine', tokens: getTheme('dark')!.tokens, builtin: false })
+  const customLocale = { id: 'custom-loc', name: 'Dansk', translations: { 'common.cancel': 'Annuller' }, builtin: false }
+  const current = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources()))) as SettingsPayload
+
+  /** This device runs a custom theme and a custom locale; the payload drops both and moves the tab bar. */
+  async function seedCustom(): Promise<SettingsPayload> {
+    const seeded = current()
+    seeded['purdex-themes'] = { activeThemeId: 'custom-1', customThemes: { 'custom-1': customTheme() } }
+    seeded['purdex-i18n'] = { activeLocaleId: 'custom-loc', customLocales: { 'custom-loc': customLocale } }
+    expect(await applySectionToStores('settings', seeded, ctx)).toMatchObject({ ok: true })
+    expect(useI18nStore.getState().t('common.cancel')).toBe('Annuller')
+    expect(document.documentElement.dataset.theme).toBe('custom-1')
+    const incoming = current()
+    incoming['purdex-themes'] = { activeThemeId: 'nord', customThemes: {} }
+    incoming['purdex-i18n'] = { activeLocaleId: 'zh-TW', customLocales: {} }
+    incoming['purdex-layout'] = { tabPosition: 'left' }
+    return incoming
+  }
+
+  const observed = () => ({
+    settings: current(),
+    theme: getTheme('custom-1'),
+    locale: getLocale('custom-loc'),
+    domTheme: document.documentElement.dataset.theme,
+    domLang: document.documentElement.lang,
+    cancel: useI18nStore.getState().t('common.cancel'),
+  })
+
+  it('a later store throws → the eight stores, both registries, <html> theme/lang and `t` are all as before', async () => {
+    const incoming = await seedCustom()
+    const before = observed()
+    expect(before).toMatchObject({ domTheme: 'custom-1', domLang: 'custom-loc', cancel: 'Annuller' })
+    vi.spyOn(useLayoutStore, 'setState').mockImplementationOnce(() => {
+      // by now themes and i18n HAVE been applied — the rollback has real work to do
+      expect(getTheme('custom-1')).toBeUndefined()
+      expect(useI18nStore.getState().t('common.cancel')).toBe('取消')
+      throw new Error('layout write failed')
+    })
+    const failure = await applySectionToStores('settings', incoming, ctx).then(() => null, (e: Error) => e)
+    expect(failure?.message).toBe('layout write failed') // a complete rollback adds nothing to the error
+    expect(observed()).toEqual(before)
+  })
+
+  it('the rollback\'s own persist fails → memory and registries are still restored, and the error says the rollback is incomplete', async () => {
+    const incoming = await seedCustom()
+    const before = observed()
+    const realSetItem = Storage.prototype.setItem
+    let armed = false
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === STORAGE_KEYS.LAYOUT) armed = true
+      if (armed) throw new DOMException('quota', 'QuotaExceededError')
+      realSetItem.call(this, key, value)
+    })
+    const failure = await applySectionToStores('settings', incoming, ctx).then(() => null, (e: Error) => e)
+    expect(failure?.message).toMatch(/quota/)
+    expect(failure?.message).toMatch(/rollback incomplete/)
+    expect(failure?.message).toMatch(/purdex-themes/)
+    const after = observed()
+    expect(after.settings).toEqual(before.settings) // memory
+    expect(after.theme).toEqual(before.theme) // re-registered explicitly: no rehydrate ran for this store
+    expect(after.locale).toEqual(before.locale)
+  })
+})
+
 describe('applySectionToStores — workspaces', () => {
   it('renames / reorders / adds, keeping each workspace\'s tabs, activeTabId and the active workspace', async () => {
     seedTabWorld()
@@ -555,6 +706,27 @@ describe('applySectionToStores — workspaces', () => {
     expect(t.visitHistory).toEqual(['b1'])
     expect(t.activeTabId).toBe('b1') // 'a2' is gone → the active workspace's active tab
     expect(Object.keys(useWorkspaceSettingsStore.getState().workspaces)).toEqual(['wb'])
+  })
+
+  it('a workspace whose id cannot sync is device-local: an apply keeps it, its tabs, its history and its scoped settings', async () => {
+    seedTabWorld()
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, x1: tab('x1') }, tabOrder: [...useTabStore.getState().tabOrder, 'x1'], activeTabId: 'x1', visitHistory: ['x1', 'b1'] })
+    useWorkspaceStore.setState({ workspaces: [ws('bad id!', ['x1']), ...useWorkspaceStore.getState().workspaces], activeWorkspaceId: 'bad id!' })
+    useWorkspaceSettingsStore.setState({ workspaces: { 'bad id!': { files: { x: 1 } } } } as never)
+    const payload: WorkspacesPayload = { order: ['wb'], workspaces: { wb: { name: 'WB' } } } // what another client, which never saw 'bad id!', holds
+
+    const outcome = await applySectionToStores('workspaces', payload, ctx)
+
+    const w = useWorkspaceStore.getState()
+    expect(w.workspaces.map((x) => x.id)).toEqual(['wb', 'bad id!'])
+    expect(w.workspaces[1]).toMatchObject({ tabs: ['x1'], activeTabId: 'x1' })
+    expect(w.activeWorkspaceId).toBe('bad id!')
+    const t = useTabStore.getState()
+    expect(Object.keys(t.tabs).sort()).toEqual(['b1', 'solo', 'x1'])
+    expect(t.activeTabId).toBe('x1')
+    expect(t.visitHistory).toEqual(['x1', 'b1'])
+    expect(Object.keys(useWorkspaceSettingsStore.getState().workspaces)).toEqual(['bad id!'])
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) }) // converged: the builder leaves it out again
   })
 
   it('the global active tab becomes null when neither it nor the active workspace\'s tab survives', async () => {
@@ -596,6 +768,60 @@ describe('applySectionToStores — workspaces', () => {
     expect(useWorkspaceStore.getState().workspaces).toEqual(wsBefore.workspaces)
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('wb')
     expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+})
+
+describe('applySectionToStores — workspaces: the scoped-settings cleanup is part of the same rollback', () => {
+  const scoped = { wa: { files: { x: 1 } }, wb: { files: { x: 2 } }, keep: { files: { x: 3 } } }
+  const removeBoth: WorkspacesPayload = { order: ['keep'], workspaces: { keep: { name: 'Keep' } } }
+
+  function seed(): void {
+    seedTabWorld()
+    useWorkspaceStore.setState({ workspaces: [...useWorkspaceStore.getState().workspaces, ws('keep', [])] })
+    useWorkspaceSettingsStore.setState({ workspaces: scoped } as never)
+  }
+
+  function memory(): unknown {
+    const t = useTabStore.getState()
+    const w = useWorkspaceStore.getState()
+    return {
+      tab: { tabs: t.tabs, tabOrder: t.tabOrder, activeTabId: t.activeTabId, visitHistory: t.visitHistory },
+      ws: { workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId },
+      scoped: useWorkspaceSettingsStore.getState().workspaces,
+    }
+  }
+
+  it('first clear lands, second throws → all THREE stores are back where they were', async () => {
+    seed()
+    const before = memory()
+    const real = useWorkspaceSettingsStore.getState().clearWorkspace
+    let calls = 0
+    useWorkspaceSettingsStore.setState({
+      clearWorkspace: (id: string) => {
+        if (++calls === 2) throw new Error('second clear failed')
+        real(id)
+      },
+    })
+    try {
+      await expect(applySectionToStores('workspaces', removeBoth, ctx)).rejects.toThrow('second clear failed')
+    } finally {
+      useWorkspaceSettingsStore.setState({ clearWorkspace: real })
+    }
+    expect(calls).toBe(2)
+    expect(memory()).toEqual(before)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('the clear\'s own persist throws (state already changed in memory) → all three stores are back', async () => {
+    seed()
+    const before = memory()
+    const realSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === STORAGE_KEYS.WORKSPACE_SETTINGS) throw new DOMException('quota', 'QuotaExceededError')
+      realSetItem.call(this, key, value)
+    })
+    await expect(applySectionToStores('workspaces', removeBoth, ctx)).rejects.toThrow('quota')
+    expect(memory()).toEqual(before)
   })
 })
 
