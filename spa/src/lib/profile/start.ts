@@ -141,8 +141,19 @@ export const ATTACH_SUSPEND_MS = 30_000
 let clock: () => number = () => Date.now()
 
 function isSuspended(): boolean {
-  const until = useProfileStore.getState().suspendedUntil
-  return until !== null && clock() < until
+  const suspension = useProfileStore.getState().suspension
+  return suspension !== null && clock() < suspension.until
+}
+
+/** The owner of one attach's suspension (see `useProfileStore`, WHY `suspension`). */
+function newToken(): string {
+  const bytes = new Uint8Array(16)
+  try {
+    crypto.getRandomValues(bytes)
+  } catch {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 // === Problems ===
@@ -322,7 +333,7 @@ interface MasterMode {
   isLeader(): boolean
   /** No driver, whoever holds the lease: the master host was re-pointed in place, or the profile is gone. */
   blocked(): ProfileSyncState['blocked']
-  /** `suspendedUntil` moved: take the driver down, or bring it back. */
+  /** `suspension` moved: take the driver down, or bring it back. */
   reapply(): void
   leader(): Leader | null
   end(): void
@@ -404,7 +415,7 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     apply(leadership.isLeader())
   })
 
-  // SUSPENDED (`useProfileStore.suspendedUntil`): an attach is being made, in this
+  // SUSPENDED (`useProfileStore.suspension`): an attach is being made, in this
   // window or another. No driver until it is lifted — or until it EXPIRES, which
   // nobody announces: the window that set it may be gone, so the wake-up is a
   // timer of this mode's own.
@@ -413,8 +424,9 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     if (wake !== null) clearTimeout(wake)
     wake = null
     if (ended) return
-    const until = useProfileStore.getState().suspendedUntil
-    if (until !== null && isSuspended()) wake = setTimeout(reapply, Math.max(1, until - clock()))
+    // Whoever owns it by now: the wake-up looks at the time only.
+    const suspension = useProfileStore.getState().suspension
+    if (suspension !== null && isSuspended()) wake = setTimeout(reapply, Math.max(1, suspension.until - clock()))
     apply(leadership.isLeader())
   }
 
@@ -487,7 +499,7 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
   const unsubscribe = useProfileStore.subscribe((next, prev) => {
     if (stopped) return
     sync(selectMaster(next), next.attachGeneration)
-    if (next.suspendedUntil !== prev.suspendedUntil) mode?.reapply()
+    if (next.suspension !== prev.suspension) mode?.reapply()
     // Nothing pumps the executor when a preference changes: do it here.
     if (next.autoSync && !prev.autoSync) mode?.leader()?.executor.syncNow()
   })
@@ -557,51 +569,100 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
     if (!isClientIdPersisted()) return { ok: false, reason: 'client-id-not-persisted' }
     if (useHostStore.getState().hosts[hostId] === undefined) return { ok: false, reason: 'unknown-host' }
     if (!isMasterPair(hostId, profileId)) return { ok: false, reason: 'invalid-profile-id' }
-
-    const next: Master = { hostId, profileId }
-    const previous = selectMaster(useProfileStore.getState())
-    // BEFORE THE FIRST REQUEST: every driver of this client stands still — here at
-    // once (the subscription is synchronous), in the other windows as soon as the
-    // store reaches them. See `useProfileStore`, WHY `suspendedUntil`. What cannot
-    // be helped: a write that was already on the wire when this ran. Disposing the
-    // executor aborts it, but bytes that reached the daemon may have been applied;
-    // the window is that one request, not the 15 s of the PUT below.
-    const standStill = (): void => useProfileStore.getState().suspend(clock() + ATTACH_SUSPEND_MS)
-    const asYouWere = (reason: string): AttachResult => {
-      useProfileStore.getState().resume() // the old mode comes back, bases and attachment as they were
-      return { ok: false, reason }
-    }
-    standStill()
-
-    let put: Awaited<ReturnType<typeof putAttachment>>
+    const hold = holdStill()
     try {
-      const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
-      put = await putAttachment(hostId, profileId, body)
-    } catch (e) {
-      return asYouWere(message(e))
+      return await attachHeld({ hostId, profileId }, direction, hold)
+    } finally {
+      hold.stop()
     }
-    if (put.kind === 'failed') return asYouWere(put.reason)
-    if (endpointOf(hostId) === null) return asYouWere('unknown-host') // gone while the PUT was out: leave the previous master whole
-    if (previous !== null && !sameMaster(previous, next)) {
-      standStill() // a second request to wait for: a fresh budget
-      await dropAttachment(previous)
-    }
-    // The address the attachment was written to: the home of every base from here
-    // on. Read after the last `await`, checked before anything is cleared (the host
-    // may have left the store meanwhile).
-    const at = endpointOf(hostId)
-    if (at === null) return asYouWere('unknown-host')
-    // EVERY attach starts from no bases, the same master included. With a base
-    // still held, a section that is dirty while the SOT has not moved is simply
-    // pushed — under `pull` too, the opposite of what was asked; without one it is
-    // a conflict, and the direction answers it. No `await` between this and
-    // `setMaster`: the old driver cannot write a base in between, and the new one
-    // (built by the subscription, on the new `attachGeneration`) is not seeded
-    // from the old ones.
-    clearSectionStore()
-    // `setMaster` lifts the suspension, records direction and endpoint, and bumps the generation — in one write.
-    return useProfileStore.getState().setMaster(hostId, profileId, direction, at.at) ? { ok: true } : asYouWere('invalid-profile-id')
   })
+}
+
+/** One attach's grip on every driver of this client (see `useProfileStore`, WHY `suspension`). */
+interface Hold {
+  token: string
+  /** A fresh 30 s — only while the suspension is still this attach's: a NEWER attach's is never replaced by an older one's. */
+  extend(): void
+  /** Stops watching. Does not lift anything. */
+  stop(): void
+  /** The attach failed: lift OUR suspension. A newer attach's stays, and the drivers with it; otherwise the old mode comes back. */
+  giveUp(): void
+}
+
+/**
+ * BEFORE THE FIRST REQUEST of an attach: every driver of this client stands
+ * still — here at once (the store subscription is synchronous), in the other
+ * windows as soon as the store reaches them — and stays so WHILE ANY ATTACH IS IN
+ * PROGRESS, this one included: if a newer attach (another window's) replaced our
+ * suspension and then finished, lifting its own, nobody's is left and we are not
+ * done, so it is put back. (The start layer's subscription runs first and may
+ * begin a driver on the lifted suspension; it is disposed again in the same turn,
+ * before anything of it could reach the network.)
+ */
+function holdStill(): Hold {
+  const token = newToken()
+  const suspend = (): void => useProfileStore.getState().suspend(token, clock() + ATTACH_SUSPEND_MS)
+  suspend()
+  let unsubscribe = useProfileStore.subscribe((state) => {
+    if (state.suspension === null && selectMaster(state) !== null) suspend()
+  })
+  const stop = (): void => {
+    unsubscribe()
+    unsubscribe = () => undefined
+  }
+  return {
+    token,
+    extend: () => {
+      if (useProfileStore.getState().suspension?.token === token) suspend()
+    },
+    stop,
+    giveUp: () => {
+      stop()
+      useProfileStore.getState().resume(token)
+    },
+  }
+}
+
+async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): Promise<AttachResult> {
+  const { hostId, profileId } = next
+  const previous = selectMaster(useProfileStore.getState())
+  const asYouWere = (reason: string): AttachResult => {
+    hold.giveUp() // bases and attachment of the previous master are as they were
+    return { ok: false, reason }
+  }
+
+  let put: Awaited<ReturnType<typeof putAttachment>>
+  try {
+    const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
+    put = await putAttachment(hostId, profileId, body)
+  } catch (e) {
+    return asYouWere(message(e))
+  }
+  if (put.kind === 'failed') return asYouWere(put.reason)
+  if (endpointOf(hostId) === null) return asYouWere('unknown-host') // gone while the PUT was out: leave the previous master whole
+  if (previous !== null && !sameMaster(previous, next)) {
+    // A second request to wait for, so a fresh budget. Each stretch (`ATTACH_SUSPEND_MS`, 30 s) is strictly
+    // longer than the ONE request it covers (15 s timeout), and the first stretch cannot have run out before
+    // this one starts (it began at most 15 s ago).
+    hold.extend()
+    await dropAttachment(previous)
+  }
+  // The address the attachment was written to: the home of every base from here
+  // on. Read after the last `await`, checked before anything is cleared (the host
+  // may have left the store meanwhile).
+  const at = endpointOf(hostId)
+  if (at === null) return asYouWere('unknown-host')
+  // EVERY attach starts from no bases, the same master included. With a base
+  // still held, a section that is dirty while the SOT has not moved is simply
+  // pushed — under `pull` too, the opposite of what was asked; without one it is
+  // a conflict, and the direction answers it. No `await` between this and
+  // `setMaster`: the old driver cannot write a base in between, and the new one
+  // (built by the subscription, on the new `attachGeneration`) is not seeded
+  // from the old ones.
+  clearSectionStore()
+  hold.stop() // `setMaster` lifts our suspension on purpose
+  // One write: master, direction, endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
+  return useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token) ? { ok: true } : asYouWere('invalid-profile-id')
 }
 
 /**
