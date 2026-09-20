@@ -266,11 +266,19 @@ describe('startCollector — tabs and workspaces', () => {
     expect(keys()).toEqual(['workspaces'])
   })
 
-  it('a workspace id the daemon would reject skips that tabs.* only, reported once', async () => {
+  it('a workspace id the daemon would reject is device-local: not in `workspaces`, no tabs.*, reported once', async () => {
     const c = start()
+    await c.primeAll()
+    const before = reports.find((r) => r.key === 'workspaces')
+    reports = []
     setWorkspaces((l) => [...l, ws('bad id!', ['t2'])])
     await vi.advanceTimersByTimeAsync(500)
-    expect(keys()).toEqual(['workspaces'])
+    expect(keys()).toEqual([]) // the payload did not change: the workspace is not in it
+    expect(problems.filter((p) => p.kind === 'invalid-workspace-id')).toEqual([{ kind: 'invalid-workspace-id', detail: 'bad id!' }])
+    await c.primeAll()
+    const after = reports.find((r) => r.key === 'workspaces')
+    expect(after?.hash).toBe(before?.hash)
+    expect(JSON.stringify(after?.payload)).not.toContain('bad id!')
     await c.primeAll()
     await c.primeAll()
     expect([...new Set(keys())]).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B', 'workspaces'])

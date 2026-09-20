@@ -23,6 +23,7 @@ import {
   buildTabsSection,
   buildWorkspacesSection,
   stripSizes,
+  unsyncableWorkspaceIds,
   type CollectInput,
   type SettingsBuildInput,
 } from './sections'
@@ -176,6 +177,23 @@ describe('buildWorkspacesSection', () => {
       order: ['b', 'a'],
       workspaces: { b: { name: 'Beta', icon: 'Cube', iconWeight: 'fill', moduleConfig: { m: { k: 1 } } }, a: { name: 'Alpha' } },
     })
+  })
+
+  // A workspace whose id cannot name a `tabs.<id>` section (importWorkspace /
+  // device-state merge accept any id) can never sync its tabs — and the guard on
+  // the receiving side refuses a `workspaces` payload that lists it. It is
+  // device-local as a whole: the builder leaves it out.
+  it('leaves out a workspace whose id cannot form a tabs.<id> key — from order AND record', () => {
+    const long = 'x'.repeat(65)
+    const out = buildWorkspacesSection([ws('a', 'Alpha', []), ws('bad id!', 'Bad', ['t1']), ws('', 'Empty', []), ws(long, 'Long', []), ws('ok_Id-9', 'Ok', [])])
+    expect(out).toEqual({ order: ['a', 'ok_Id-9'], workspaces: { a: { name: 'Alpha' }, 'ok_Id-9': { name: 'Ok' } } })
+    expect(isWellFormedSection('workspaces', out)).toBe(true)
+    expect(isWellFormedSection('workspaces', buildWorkspacesSection([ws('bad id!', 'Bad', [])]))).toBe(true)
+  })
+
+  it('unsyncableWorkspaceIds names exactly those workspaces, each once, in list order', () => {
+    expect(unsyncableWorkspaceIds([ws('a', 'A', []), ws('bad id!', 'B', []), ws('b.c', 'C', []), ws('bad id!', 'dup', [])])).toEqual(['bad id!', 'b.c'])
+    expect(unsyncableWorkspaceIds([ws('a', 'A', [])])).toEqual([])
   })
 
   it('an empty list still yields a well-formed payload', () => {
@@ -341,10 +359,15 @@ describe('buildProfileDocument', () => {
     expect(buildProfileDocument(input).standaloneTabIds).toEqual(['loose', 'hidden'])
   })
 
-  it('throws on a workspace id the daemon would reject as a section key', () => {
+  it('a workspace id the daemon would reject is device-local: no entry, no tabs section, and its tabs are not standalone', () => {
     const input = baseInput()
-    input.workspaces = { workspaces: [ws('bad id!', 'Bad', [])] }
-    expect(() => buildProfileDocument(input)).toThrow(/cannot form a section key/)
+    input.workspaces = { workspaces: [...input.workspaces.workspaces, ws('bad id!', 'Bad', ['tBad'])] }
+    input.tabs = { tabs: { ...input.tabs.tabs, tBad: tab('tBad', leaf('pBad', { kind: 'hosts' })) }, tabOrder: [...input.tabs.tabOrder, 'tBad'] }
+    const { document, standaloneTabIds } = buildProfileDocument(input)
+    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(structuralKey(document)).not.toContain('bad id!')
+    expect(structuralKey(document)).not.toContain('tBad')
+    expect(standaloneTabIds).toEqual([])
   })
 
   it('every tabs section is well-formed: order has no duplicates and equals the record keys', () => {

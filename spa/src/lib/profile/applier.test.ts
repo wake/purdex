@@ -170,6 +170,48 @@ function workspacesLocals(): WorkspacesSlice[] {
 }
 
 describe('applyWorkspaces', () => {
+  // A workspace whose id cannot form `tabs.<id>` is device-local: no builder
+  // sends it, so no payload can mean "delete it".
+  describe('unsyncable (device-local) workspaces', () => {
+    const local = (): WorkspacesSlice => ({
+      workspaces: [ws('bad id!', 'Bad', ['tb'], { activeTabId: 'tb' }), ws('a', 'A', ['t1']), ws('b.c', 'Dotted', []), ws('gone', 'Gone', ['t9'])],
+      activeWorkspaceId: 'bad id!',
+    })
+    const p = (): WorkspacesPayload => ({ order: ['n', 'a'], workspaces: { n: { name: 'New' }, a: { name: 'Alpha' } } })
+
+    it('survive an apply, after the incoming order, in their own relative order — and are never reported removed', () => {
+      const bad = local().workspaces[0]
+      const frozen = deepFreeze(local())
+      const out = applyWorkspaces(frozen, deepFreeze(p()))
+      expect(out.next.workspaces.map((w) => w.id)).toEqual(['n', 'a', 'bad id!', 'b.c'])
+      expect(out.next.workspaces[2]).toEqual(bad)
+      expect(out.removedWorkspaceIds).toEqual(['gone'])
+      expect(out.addedWorkspaceIds).toEqual(['n'])
+      expect(out.next.activeWorkspaceId).toBe('bad id!') // focus stays on a workspace that is still here
+    })
+
+    it('round trip still holds: the builder filters them out again', async () => {
+      const out = applyWorkspaces(deepFreeze(local()), deepFreeze(p()))
+      expect(await hashSection(buildWorkspacesSection(out.next.workspaces))).toBe(await hashSection(p()))
+    })
+
+    it('two clients: the one holding a bad id builds a payload the other accepts; the answer does not delete it', async () => {
+      const one = local()
+      const sent = buildWorkspacesSection(one.workspaces)
+      expect(isWellFormedSection('workspaces', sent)).toBe(true)
+      const two = applyWorkspaces({ workspaces: [ws('z', 'Z', [])], activeWorkspaceId: 'z' }, sent)
+      expect(two.next.workspaces.map((w) => w.id)).toEqual(['a', 'gone'])
+      // client 2 renames and sends back
+      const reply = buildWorkspacesSection(two.next.workspaces.map((w) => (w.id === 'a' ? { ...w, name: 'Renamed' } : w)))
+      expect(isWellFormedSection('workspaces', reply)).toBe(true)
+      const back = applyWorkspaces(one, reply)
+      expect(back.next.workspaces.map((w) => w.id)).toEqual(['a', 'gone', 'bad id!', 'b.c'])
+      expect(back.next.workspaces[0].name).toBe('Renamed')
+      expect(back.removedWorkspaceIds).toEqual([])
+      expect(await hashSection(buildWorkspacesSection(back.next.workspaces))).toBe(await hashSection(reply))
+    })
+  })
+
   it('round trip: hash(build(apply(local, p))) === hash(p) for any local', async () => {
     const p = deepFreeze(workspacesPayload())
     for (const local of workspacesLocals()) {

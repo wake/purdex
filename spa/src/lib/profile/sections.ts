@@ -11,7 +11,7 @@
 // No fetching, no clocks, no stores, no id generation — every input is a
 // parameter (the new workspace's id included), and no input is ever mutated.
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
-import { PROJECTIONS, project, tabsSectionKey } from './projections'
+import { PROJECTIONS, project, tabsSectionKey, workspaceIdOf } from './projections'
 import type {
   HostsPayload,
   HostsSource,
@@ -95,13 +95,35 @@ export function buildHostsSection(s: HostsSource): HostsPayload {
   return { hosts: {}, ...(project(shaped, PROJECTIONS.hosts) as object) } as HostsPayload
 }
 
-/** `workspaces`: `Workspace[]` → order + record. A repeated id is kept once, first occurrence. */
+/**
+ * Can this workspace id name a `tabs.<id>` section? (The daemon's key charset;
+ * `tabsSectionKey` throws on the same ids — this asks without throwing.)
+ * `importWorkspace` and a device-state merge accept any id, so the answer can be no.
+ */
+export function isSyncableWorkspaceId(id: string): boolean {
+  return workspaceIdOf(`tabs.${id}`) !== null
+}
+
+/** The ids `buildWorkspacesSection` leaves out, each once, in list order — for the collector to report. */
+export function unsyncableWorkspaceIds(workspaces: readonly Workspace[]): string[] {
+  return [...new Set(workspaces.map((ws) => ws.id))].filter((id) => !isSyncableWorkspaceId(id))
+}
+
+/**
+ * `workspaces`: `Workspace[]` → order + record. A repeated id is kept once, first
+ * occurrence. A workspace whose id cannot form a `tabs.<id>` key is LEFT OUT —
+ * device-local as a whole, like its tabs, which can never have a section. Sending
+ * it would poison the profile: the daemon validates section keys, not payloads,
+ * so it would be stored, and every other client's well-formedness guard refuses
+ * a `workspaces` payload listing such an id (`locked:invalid`), for good.
+ * `applyWorkspaces` is the other half: it never deletes such a workspace.
+ */
 export function buildWorkspacesSection(workspaces: readonly Workspace[]): WorkspacesPayload {
   const byId = new Map<string, Workspace>()
   for (const ws of workspaces) {
     if (!byId.has(ws.id)) byId.set(ws.id, ws)
   }
-  const order = uniqueKnown([...byId.keys()], () => true)
+  const order = uniqueKnown([...byId.keys()], isSyncableWorkspaceId)
   const record: Record<string, Workspace> = {}
   for (const id of order) record[id] = byId.get(id) as Workspace
   // `{order: []}` alone would project to `{order: []}`; the record key must exist even when empty.
@@ -138,8 +160,9 @@ function standaloneIds(workspaces: readonly Workspace[], tabs: Record<string, Ta
  * The whole document: `hosts`, `settings`, `workspaces`, and one `tabs.<id>` for
  * EVERY workspace in the `workspaces` section — an empty workspace still gets
  * `{order: [], tabs: {}}`, because `workspaces` is the authority on which
- * `tabs.*` exist (§4.6.3). Throws (via `tabsSectionKey`) on a workspace id the
- * daemon would reject. Standalone tabs enter no section; they are reported.
+ * `tabs.*` exist (§4.6.3). A workspace whose id the daemon would reject is in
+ * neither (see `buildWorkspacesSection`); its tabs are owned, so not standalone.
+ * Standalone tabs enter no section; they are reported.
  */
 export function buildProfileDocument(input: CollectInput): ProfileDocumentResult {
   const { workspaces } = input.workspaces

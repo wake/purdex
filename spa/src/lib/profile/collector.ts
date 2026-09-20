@@ -27,6 +27,7 @@ import {
   buildSettingsSection,
   buildTabsSection,
   buildWorkspacesSection,
+  unsyncableWorkspaceIds,
   type SettingsBuildInput,
 } from './sections'
 import type { ProfileSectionKey, SettingsStorageKey } from './types'
@@ -142,7 +143,12 @@ export function startCollector(opts: CollectorOptions): Collector {
   function build(key: ProfileSectionKey): unknown | typeof ABSENT {
     if (key === 'hosts') return buildHostsSection(useHostStore.getState())
     if (key === 'settings') return buildSettingsSection(allSettings())
-    if (key === 'workspaces') return buildWorkspacesSection(useWorkspaceStore.getState().workspaces)
+    if (key === 'workspaces') {
+      const { workspaces } = useWorkspaceStore.getState()
+      // Left out of the payload by the builder (device-local); said once per id, like their `tabs.*`.
+      for (const id of unsyncableWorkspaceIds(workspaces)) problemOnce('invalid-workspace-id', id)
+      return buildWorkspacesSection(workspaces)
+    }
     const id = workspaceIdOf(key)
     const ws = id === null ? undefined : byId(useWorkspaceStore.getState().workspaces).get(id)
     return ws === undefined ? ABSENT : buildTabsSection(ws, useTabStore.getState().tabs)

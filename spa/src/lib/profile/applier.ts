@@ -19,6 +19,7 @@ import type { HostConfig } from '../../stores/useHostStore'
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
 import { PROJECTIONS, workspaceIdOf } from './projections'
+import { isSyncableWorkspaceId } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type {
   HostsPayload,
@@ -115,6 +116,12 @@ function workspaceFrom(id: string, entry: WorkspaceEntry, local: Workspace | und
  * workspace that already exists come from local (they belong to `tabs.<ws>` and
  * to the device); a new workspace arrives empty — the defined partial state of
  * §4.6.3.
+ *
+ * A local workspace whose id cannot form a `tabs.<id>` key is device-local
+ * (`buildWorkspacesSection` never sends it), so no payload can mean "delete it":
+ * those are kept, after the incoming order, in their own relative order, and are
+ * never reported as removed. The round trip holds because the builder filters
+ * them out again.
  */
 export function applyWorkspaces(local: WorkspacesSlice, incoming: WorkspacesPayload): ApplyWorkspacesResult {
   const localById = new Map<string, Workspace>()
@@ -122,9 +129,10 @@ export function applyWorkspaces(local: WorkspacesSlice, incoming: WorkspacesPayl
     if (!localById.has(w.id)) localById.set(w.id, w)
   }
   const order = unique(incoming.order).filter((id) => id !== PROTO_KEY && Object.hasOwn(incoming.workspaces, id))
-  const workspaces = order.map((id) => workspaceFrom(id, incoming.workspaces[id], localById.get(id)))
-  const kept = new Set(order)
-  const active = local.activeWorkspaceId !== null && kept.has(local.activeWorkspaceId) ? local.activeWorkspaceId : (order[0] ?? null)
+  const deviceLocal = [...localById.values()].filter((w) => !isSyncableWorkspaceId(w.id))
+  const workspaces = [...order.map((id) => workspaceFrom(id, incoming.workspaces[id], localById.get(id))), ...deviceLocal]
+  const kept = new Set(workspaces.map((w) => w.id))
+  const active = local.activeWorkspaceId !== null && kept.has(local.activeWorkspaceId) ? local.activeWorkspaceId : (workspaces[0]?.id ?? null)
   return {
     next: { workspaces, activeWorkspaceId: active },
     addedWorkspaceIds: order.filter((id) => !localById.has(id)),
