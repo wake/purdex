@@ -49,6 +49,7 @@ import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
 import { applyHosts, applySettings, applyTabs, applyWorkspaces, deriveTabOrder, isWellFormedSection } from './applier'
 import { hashSection } from './hash'
+import { masterWorkspaceIds } from './master-world'
 import { sectionKind, workspaceIdOf } from './projections'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
 import type { SettingsBuildInput } from './sections'
@@ -373,7 +374,7 @@ function unregisterDropped(key: SettingsStorageKey, before: Record<string, unkno
 async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   if (payload === null) return invalid('the settings section cannot be deleted')
   if (!isWellFormedSection('settings', payload)) return invalid('malformed settings payload')
-  const { patches, rejected } = applySettings(readSettingsSources(), payload as SettingsPayload)
+  const { patches, rejected } = applySettings(readSettingsSources(), payload as SettingsPayload, masterWorkspaceIds())
   if (rejected.length > 0) return invalid(`rejected: ${rejected.join(', ')}`)
 
   const rendererBefore = useUISettingsStore.getState().terminalRenderer
@@ -417,7 +418,7 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   }
   // Terminals read the renderer on (re)connect only; the bump is what makes them reconnect.
   if (useUISettingsStore.getState().terminalRenderer !== rendererBefore) useUISettingsStore.getState().bumpTerminalSettingsVersion()
-  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources())) }
+  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds())) }
 }
 
 // === workspaces / tabs.<id> ===
@@ -556,6 +557,13 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
  * while `hosts` is behind, it would brand the live pane of a host the other
  * device has just ADDED, on both devices. This layer does not defend against
  * that; the executor orders the pulls (no `tabs.*` before `hosts` is synced).
+ *
+ * Likewise, when `settings` is applied the `workspaces` section must already be
+ * synced. A workspace-scoped entry is written for a master workspace only
+ * (`masterWorkspaceIds()`); the entry of a workspace that has not arrived yet is
+ * NOT written, the returned hash says so, and the section — now dirty — is
+ * pushed back without it: the setting is deleted for every device. The executor
+ * orders that too (no `settings` pull, and no push, before `workspaces` is synced).
  */
 export async function applySectionToStores(key: ProfileSectionKey, payload: unknown | null, ctx: ApplyContext): Promise<ApplyOutcome> {
   switch (sectionKind(key)) {

@@ -387,18 +387,19 @@ describe('executor — reindex', () => {
   })
 
   it('a section the index lists and this client has never seen is created and pulled', async () => {
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('settings', 7, 'S7')]))
+    // `workspaces` is here and up to date: a `settings` pull waits for it (see the executor's header)
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 7, 'S7')]))
     const m = meta('settings', 7, 'S7')
     api.getSection.mockResolvedValue(sectionOf(m, { x: 1 }))
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'S7' })
-    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
     const { ex } = make()
     ex.onReconnected()
     await flush()
     expect(api.getSection).toHaveBeenCalledWith(HOST, PROFILE, 'settings', expect.anything())
     expect(applySectionToStores).toHaveBeenCalledWith('settings', { x: 1 }, { masterHostId: HOST })
     expect(store.saveSection).toHaveBeenCalledWith(PROFILE, 'settings', { base: { rev: 7, hash: 'S7' }, currentHash: 'S7' })
-    expect(ex.status().sections).toEqual({ hosts: 'synced', settings: 'synced' })
+    expect(ex.status().sections).toEqual({ hosts: 'synced', workspaces: 'synced', settings: 'synced' })
   })
 
   it('a section of an unknown kind is carried: no state, no pull, reported once', async () => {
@@ -621,7 +622,7 @@ describe('executor — push and delete', () => {
   })
 
   it('SERIALISED: the second section’s PUT is not sent before the first one resolved', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     const first = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ kind: 'applied', rev: 2 })
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 1 } })
@@ -659,7 +660,7 @@ describe('executor — push and delete', () => {
   })
 
   it('TOKEN: a write whose section moved on while it was queued is not sent; the fresh decision is', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     const first = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(first.promise).mockResolvedValue({ kind: 'applied', rev: 2 })
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 1 } })
@@ -674,7 +675,7 @@ describe('executor — push and delete', () => {
   })
 
   it('TOKEN: a section that locked while its write was queued sends nothing', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     const first = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(first.promise).mockResolvedValue({ kind: 'applied', rev: 9 })
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 1 } })
@@ -828,8 +829,8 @@ describe('executor — pull', () => {
   })
 
   it('a remote event for a section nobody knows creates it and pulls', async () => {
-    const { ex } = await synced({ hosts: 'H1' })
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('settings', 1, 'S1')]))
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1' })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 1, 'S1')]))
     api.getSection.mockResolvedValue(sectionOf(meta('settings', 1, 'S1'), { s: 1 }))
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'S1' })
     ex.onRemoteEvent(remote('settings', 1, 'S1'))
@@ -1162,7 +1163,7 @@ describe('executor — a pulled section carries its shape, and a newer one locks
   })
 
   it('while locked, a remote-event is recorded (the section KNOWS) and sends nothing', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', ['fp-newer', 99]), {}))
     ex.onRemoteEvent(remote('settings', 2, 'S2'))
     await flush()
@@ -1178,13 +1179,13 @@ describe('executor — a pulled section carries its shape, and a newer one locks
   })
 
   it('NO OSCILLATION: a lock set by a pull survives the next reindex (the index lists the same shape); it lifts only when the index no longer offends', async () => {
-    const { ex, problems } = await synced({ hosts: 'H1', settings: 'S1' })
+    const { ex, problems } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', ['fp-newer', 99]), {}))
     ex.onRemoteEvent(remote('settings', 2, 'S2'))
     await flush()
     expect(ex.status().profile).toBe('locked:schema')
 
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('settings', 2, 'S2', ['fp-newer', 99])]))
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 2, 'S2', ['fp-newer', 99])]))
     api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
     ex.onReconnected()
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { hosts: {} } })
@@ -1195,7 +1196,7 @@ describe('executor — a pulled section carries its shape, and a newer one locks
     expect(problems.filter((p) => p.kind === 'schema-lock')).toHaveLength(1) // the same lock is not announced twice
 
     // this build was upgraded / the SOT was rewritten in a shape it knows
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('settings', 2, 'S2')]))
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 2, 'S2')]))
     api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2'), { s: 2 }))
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
     ex.onReconnected()
@@ -1209,7 +1210,7 @@ describe('executor — a pulled section carries its shape, and a newer one locks
     ['ok (same fingerprint, the ordinal may differ)', ['fp-settings', 9] as [string, number]],
     ['i-am-newer (an OLDER shape: a pull only ever lands on a clean section — see the header)', ['fp-older', 2] as [string, number]],
   ])('%s → applied as usual, no lock', async (_name, shape) => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', shape), { s: 2 }))
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
     ex.onRemoteEvent(remote('settings', 2, 'S2'))
@@ -1219,7 +1220,7 @@ describe('executor — a pulled section carries its shape, and a newer one locks
   })
 
   it('a write queued behind the pull that locks is not sent', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     const get = deferred<Result<Section | null>>()
     api.getSection.mockReturnValue(get.promise)
     const put = deferred<PutOutcome>()
@@ -1718,10 +1719,10 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     if (direction === 'push') expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H1' })
   })
 
-  /** `hosts` agreed at rev 1; `settings` is still being pushed, so the period is open. Returns the settings PUT. */
+  /** `hosts` and `workspaces` agreed at rev 1 (a `settings` push waits for `workspaces`); `settings` is still being pushed, so the period is open. Returns the settings PUT. */
   async function openPeriod(direction: 'push' | 'pull'): Promise<Harness & { settingsPut: Deferred<PutOutcome> }> {
-    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1')]))
     const settingsPut = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(settingsPut.promise)
     const harness = first(direction)
@@ -1741,7 +1742,7 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
     settingsPut.resolve({ kind: 'applied', rev: 1 })
     await flush()
-    expect(ex.status().sections).toEqual({ hosts: 'synced', settings: 'synced' })
+    expect(ex.status().sections).toEqual({ hosts: 'synced', workspaces: 'synced', settings: 'synced' })
     expect(eventsOf('resolved')).toEqual([{ type: 'resolved', keep: 'sot' }])
   })
 
@@ -1788,7 +1789,9 @@ describe('executor — the first reconciliation (initialDirection)', () => {
 
   describe('onInitialSettled', () => {
     it('exactly once, and only when nothing is pending, in flight or queued', async () => {
-      api.listProfiles.mockResolvedValue(index([]))
+      // `workspaces` already agrees with the SOT: the `settings` push does not have to wait for it
+      h.stored = { workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
+      api.listProfiles.mockResolvedValue(index([meta('workspaces', 1, 'W1')]))
       const hostsPut = deferred<PutOutcome>()
       const settingsPut = deferred<PutOutcome>()
       api.putSection.mockReturnValueOnce(hostsPut.promise).mockReturnValueOnce(settingsPut.promise)
@@ -2213,7 +2216,7 @@ describe('executor — `isReachable()` is asked again where the request is MADE,
   })
 
   it('(ii) the write queue — the link drops while a write waits its turn: the one on the wire ends normally, the waiting one is not sent', async () => {
-    const again = watch(await synced({ hosts: 'H1', settings: 'S1' }))
+    const again = watch(await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' }))
     const first = deferred<PutOutcome>()
     again.answerOnce('putSection', first.promise)
     again.answer('putSection', { kind: 'applied', rev: 2 })
@@ -2227,14 +2230,14 @@ describe('executor — `isReachable()` is asked again where the request is MADE,
     await vi.advanceTimersByTimeAsync(120_000)
     expect(api.putSection).toHaveBeenCalledTimes(1)
     never(again)
-    expect(again.ex.status().sections).toEqual({ hosts: 'synced', settings: 'pending' })
+    expect(again.ex.status().sections).toEqual({ hosts: 'synced', settings: 'pending', workspaces: 'synced' })
 
     again.env.reachable = true
-    again.answer('listProfiles', index([meta('hosts', 2, 'H2'), meta('settings', 1, 'S1')]))
+    again.answer('listProfiles', index([meta('hosts', 2, 'H2'), meta('settings', 1, 'S1'), meta('workspaces', 1, 'W1')]))
     again.ex.onReconnected()
     await flush()
     expect(api.putSection).toHaveBeenCalledTimes(2)
-    expect(again.ex.status().sections).toEqual({ hosts: 'synced', settings: 'synced' })
+    expect(again.ex.status().sections).toEqual({ hosts: 'synced', settings: 'synced', workspaces: 'synced' })
   })
 
   it('(ii) an orphan delete waiting in the queue is not sent either; the next index tries it again', async () => {

@@ -347,6 +347,52 @@ describe('startCollector — settings', () => {
   })
 })
 
+describe('startCollector — workspace-scoped settings follow the master workspace set', () => {
+  const scoped = (r: SectionReport | undefined): unknown => (r?.payload as Record<string, Record<string, unknown>> | undefined)?.['purdex-workspace-settings']?.workspaces
+
+  it('carries the entries of the master workspaces only — not an orphan, not an unsyncable id', async () => {
+    setWorkspaces((l) => [...l, ws('bad id!', [])])
+    useWorkspaceSettingsStore.setState({ workspaces: { A: { files: { root: '/a' } }, orphan: { files: { root: '/o' } }, 'bad id!': { files: { root: '/b' } } } })
+    const c = start()
+    await c.primeAll()
+    expect(scoped(reports.find((r) => r.key === 'settings'))).toEqual({ A: { files: { root: '/a' } } })
+  })
+
+  it('a workspace that APPEARS re-evaluates `settings`: an entry already stored under its id now travels', async () => {
+    useWorkspaceSettingsStore.setState({ workspaces: { C: { files: { root: '/c' } } } })
+    const c = start()
+    await c.primeAll()
+    expect(scoped(reports.find((r) => r.key === 'settings'))).toEqual({})
+    reports = []
+    setWorkspaces((l) => [...l, ws('C', [])]) // the settings stores are not touched
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['settings', 'tabs.C', 'workspaces'])
+    expect(scoped(reports.find((r) => r.key === 'settings'))).toEqual({ C: { files: { root: '/c' } } })
+  })
+
+  it('a workspace that GOES re-evaluates `settings` even when nothing cleared its entry', async () => {
+    useWorkspaceSettingsStore.setState({ workspaces: { A: { files: { root: '/a' } }, B: { files: { root: '/b' } } } })
+    const c = start()
+    await c.primeAll()
+    reports = []
+    setWorkspaces((l) => l.filter((w) => w.id !== 'B')) // a raw write: no `clearWorkspace`
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['settings', 'tabs.B', 'workspaces'])
+    expect(scoped(reports.find((r) => r.key === 'settings'))).toEqual({ A: { files: { root: '/a' } } })
+    expect(useWorkspaceSettingsStore.getState().workspaces).toHaveProperty('B') // the orphan stays on the device, unsent
+  })
+
+  it('a reorder or a rename is not a change of the set: `settings` is not rebuilt', async () => {
+    const c = start()
+    await c.primeAll()
+    h.gate = (payload) => (Object.hasOwn(payload as object, 'purdex-ui-settings') ? Promise.reject(new Error('settings was rebuilt')) : undefined)
+    setWorkspaces((l) => [...l].reverse().map((w) => ({ ...w, name: `${w.name}!` })))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(problems).toEqual([])
+    expect(keys()).toContain('workspaces')
+  })
+})
+
 describe('startCollector — primeAll', () => {
   it('reports every section, changed or not, and cancels pending timers', async () => {
     const c = start()

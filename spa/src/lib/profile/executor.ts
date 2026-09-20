@@ -36,6 +36,25 @@
 //     CALLER CONTRACT: a pane of a host not known yet would be branded
 //     `host-removed`, and that brand is synced back), nor while its workspace
 //     does not exist locally (the apply would be `unrendered`).
+//   - `settings` WAITS FOR `workspaces`, IN BOTH DIRECTIONS. Its workspace-scoped
+//     entries are built and applied for the master's workspace set only
+//     (sections.ts, applier.ts), so the section means nothing apart from the
+//     `workspaces` it was written against:
+//       pull — applied while `workspaces` is behind, the entry of a workspace
+//         that has not arrived is not written (no such master workspace here);
+//         the stores then hash differently from the SOT, the section is dirty,
+//         and it is PUSHED BACK WITHOUT THAT ENTRY — the setting is deleted on
+//         the device that made it. So no `settings` pull while `workspaces` is
+//         not UP TO DATE (judged again after the fetch, like every pull).
+//       push — sent before the `workspaces` that lists a workspace created
+//         here, the entry is an orphan to every other client, which removes it
+//         the same way. So no `settings` push while `workspaces` is not UP TO
+//         DATE either. With that, the SOT never holds a scoped entry ahead of
+//         its workspace, and events reach a client in SOT order — which is what
+//         makes the pull gate sufficient. (The cost: while `workspaces` is
+//         locked or failing, no setting of any kind travels.)
+//     An entry whose workspace is on NO client is an orphan an older build
+//     pushed: it is dropped by the apply and pushed back without it, once.
 //   - AN EMPTY `tabs.<id>` THAT WAS NEVER AGREED ON, WHILE THE SOT HAS CONTENT,
 //     IS NOT AN EDIT — IT HAS NOT ARRIVED YET. Applying `workspaces` from another
 //     client makes an empty workspace appear here; 500 ms later the collector
@@ -247,6 +266,14 @@ const DEFAULT_CONTENDED_MS = 1_000
 const STUCK_DELETION_ATTEMPTS = 4
 /** The sections every `tabs.*` pull waits for (apply-to-stores' CALLER CONTRACT). */
 const GATES: readonly string[] = ['hosts', 'workspaces']
+/** The sections `settings` waits for, pull and push (see the header). */
+const SETTINGS_GATES: readonly string[] = ['workspaces']
+
+/** What must be up to date before `key` is pulled. */
+function pullGatesOf(key: string): readonly string[] {
+  const kind = sectionKind(key)
+  return kind === 'tabs' ? GATES : kind === 'settings' ? SETTINGS_GATES : []
+}
 
 /** How an action ended: decide again now · wait for the next event · decide again after `ms`. */
 type Finish = { how: 'again' } | { how: 'wait' } | { how: 'retry'; ms: number }
@@ -513,8 +540,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     if (pumpAfter) {
       pump(key)
-      // `hosts` / `workspaces` gate every `tabs.*` pull
-      if (GATES.includes(key)) pumpTabs()
+      // `hosts` / `workspaces` gate every `tabs.*` pull, `workspaces` gates `settings`
+      pumpGatedBy(key)
       checkSettled()
     }
     return true
@@ -668,6 +695,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     for (const key of [...sections.keys()]) if (sectionKind(key) === 'tabs') pump(key)
   }
 
+  /** A gate moved: decide again for everything that waits for it. */
+  function pumpGatedBy(key: string): void {
+    if (GATES.includes(key)) pumpTabs()
+    if (SETTINGS_GATES.includes(key)) pump('settings')
+  }
+
   function backingOff(key: string): boolean {
     const until = notBefore.get(key)
     return until !== undefined && now() < until
@@ -720,8 +753,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         if (finish.how === 'retry') armRetry(key, finish.ms)
         // The state machine may have a next step; a pump respects the backoff just armed.
         if (finish.how === 'again' || pumpedMeanwhile) pump(key)
-        // only now is a gate "not running": the `tabs.*` pulls it held back may go
-        if (GATES.includes(key)) pumpTabs()
+        // only now is a gate "not running": what it held back may go
+        pumpGatedBy(key)
         const s = sections.get(key)
         if (s !== undefined) forgetIfGone(key, s)
         settleManual()
@@ -730,15 +763,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       })
   }
 
-  /** `tabs.*` only: `hosts` and `workspaces` are UP TO DATE, and the workspace is here.
-   *  `status === 'synced'` alone is not that: it means clean, and a clean section
+  /** The section's gates are UP TO DATE (`tabs.*`: `hosts` and `workspaces`; `settings`: `workspaces`), and a
+   *  `tabs.*` has its workspace here. `status === 'synced'` alone is not that: it means clean, and a clean section
    *  that is behind the SOT (its pull decided or still out) reads `synced` too. */
   function mayPull(key: string): boolean {
-    if (sectionKind(key) !== 'tabs') return true
-    for (const gate of GATES) {
+    for (const gate of pullGatesOf(key)) {
       const s = sections.get(gate)
       if (s === undefined || s.status !== 'synced' || s.indexStale || sotMoved(s) || running.has(gate)) return false
     }
+    if (sectionKind(key) !== 'tabs') return true
     const id = workspaceIdOf(key)
     return id !== null && localWorkspaceIds().includes(id)
   }
@@ -785,6 +818,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           const id = workspaceIdOf(key)
           if (!gatesUpToDate() || id === null || !localWorkspaceIds().includes(id)) return
         }
+        // A scoped entry must not reach the SOT ahead of the `workspaces` that lists its workspace (see the header).
+        if (key === 'settings' && action.do === 'push' && !SETTINGS_GATES.every(upToDate)) return
         const token = action.token
         run(key, () => new Promise<Finish>((done) => enqueueWrite(key, token, done)))
         return

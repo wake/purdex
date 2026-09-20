@@ -19,7 +19,7 @@ import type { HostConfig } from '../../stores/useHostStore'
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
 import { PROJECTIONS, workspaceIdOf } from './projections'
-import { isSyncableWorkspaceId } from './sections'
+import { WORKSPACE_SCOPED_SETTINGS, isSyncableWorkspaceId } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type {
   HostsPayload,
@@ -263,6 +263,31 @@ function shapeOf(value: unknown): string {
 }
 
 /**
+ * The workspace-scoped record after an apply: the payload decides the MASTER's
+ * workspace ids and nothing else.
+ *   - a master id takes the incoming entry; one the payload lacks loses its local
+ *     entry (the replace semantics every other field has);
+ *   - a local entry under any other id stays, BY REFERENCE — it is not the
+ *     profile's (another local profile's workspace, an unsyncable id, an orphan),
+ *     the builder never sends it, so no payload can mean "delete it";
+ *   - an incoming entry under any other id is not written: no filtering client
+ *     builds one, so it is an orphan an older client pushed. The section then
+ *     reads dirty and is pushed back without it — once; the older client takes that.
+ * An incoming value that is not a record is returned as it is: the shape check
+ * rejects it (or, `undefined`, the clear rule applies — which a well-formed
+ * payload cannot trigger, this being the store's only listed field).
+ */
+function scopeToMaster(current: unknown, sent: unknown, masterWorkspaceIds: ReadonlySet<string>): unknown {
+  if (!isPlainObject(sent)) return sent
+  const out: Rec = {}
+  if (isPlainObject(current)) {
+    for (const id of Object.keys(current)) if (id !== PROTO_KEY && !masterWorkspaceIds.has(id)) out[id] = current[id]
+  }
+  for (const id of Object.keys(sent)) if (id !== PROTO_KEY && masterWorkspaceIds.has(id)) out[id] = sent[id]
+  return out
+}
+
+/**
  * Per store, the listed fields whose incoming value differs from the local one.
  * Unlisted fields and unknown stores are left alone (the guard refuses both;
  * ignoring them here as well is defence in depth).
@@ -290,9 +315,15 @@ function shapeOf(value: unknown): string {
  * incoming `undefined` (a clear — see above). ONE mismatch rejects the payload:
  * `patches` comes back empty, never partial, and `rejected` names the fields.
  *
+ * The workspace-scoped record (`WORKSPACE_SCOPED_SETTINGS`) is the exception to
+ * "a field is replaced whole": see `scopeToMaster`. The builder filters by the
+ * same set, so the property this file is about becomes
+ * `hash(build(apply(local, p))) === hash(build-filtered(p))` — equal to
+ * `hash(p)` for every `p` a filtering client built.
+ *
  * Does not heal layout invariants — that is the store's business (P2b).
  */
-export function applySettings(local: SettingsBuildInput, incoming: SettingsPayload): ApplySettingsResult {
+export function applySettings(local: SettingsBuildInput, incoming: SettingsPayload, masterWorkspaceIds: ReadonlySet<string>): ApplySettingsResult {
   const patches: SettingsPatches = {}
   const rejected = new Set<string>()
   for (const [key, fields] of listedSettingsFields()) {
@@ -304,8 +335,10 @@ export function applySettings(local: SettingsBuildInput, incoming: SettingsPaylo
     const patch: Rec = {}
     for (const field of fields) {
       // An absent field and an `undefined` one are the same thing: cleared on the sending side.
-      const next = Object.hasOwn(theirs, field) ? theirs[field] : undefined
+      const sent = Object.hasOwn(theirs, field) ? theirs[field] : undefined
       const current = mine !== undefined && Object.hasOwn(mine, field) ? mine[field] : undefined
+      const scoped = storageKey === WORKSPACE_SCOPED_SETTINGS.storageKey && field === WORKSPACE_SCOPED_SETTINGS.field
+      const next = scoped ? scopeToMaster(current, sent, masterWorkspaceIds) : sent
       if (sameValue(current, next)) continue
       if (current !== undefined && next !== undefined && shapeOf(current) !== shapeOf(next)) rejected.add(`${storageKey}.${field}`)
       patch[field] = next
