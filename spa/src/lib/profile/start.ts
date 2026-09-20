@@ -41,12 +41,23 @@
 // index is marked stale); its "decide as if autoSync were on" is, at that
 // moment, simply true.
 //
+// THE DIRECTION OF AN ATTACH (spec §4.9, decision 10). A client that attaches
+// has agreed with the SOT on nothing, so wherever both sides hold something the
+// state machine can only lock and ask. The user answers ONCE, at attach: `push`
+// or `pull`. `attachMaster` stores it next to the master
+// (`useProfileStore.pendingDirection` — persisted and synced, because the first
+// reconciliation may span a reload and may be run by another window's leader);
+// the executor reads it live (`initialDirection`) and says when everything has
+// settled (`onInitialSettled`), at which point it is cleared here and conflicts
+// are the user's again. Never cleared by a timeout — see executor.ts.
+//
 // `attachMaster` / `detachMaster` are THE way in and out — P3's wizard calls
 // them; the dev hook is a thin layer over them. They run one at a time.
 import { getClientId, isClientIdPersisted } from '../client-identity'
 import { effectiveDeviceName, useDeviceStateStore } from '../../stores/useDeviceStateStore'
 import { useHostStore } from '../../stores/useHostStore'
-import { isMasterPair, selectMaster, useProfileStore } from '../../stores/useProfileStore'
+import { isMasterPair, isSyncDirection, selectMaster, useProfileStore } from '../../stores/useProfileStore'
+import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
@@ -82,7 +93,7 @@ export type AttachResult = { ok: true } | { ok: false; reason: string }
 
 /** Only in `import.meta.env.DEV`, as `window.__purdexProfileSync`. */
 export interface ProfileSyncDebug {
-  attach(hostId: string, profileId: string): Promise<AttachResult>
+  attach(hostId: string, profileId: string, direction: SyncDirection): Promise<AttachResult>
   detach(): Promise<void>
   state(): ProfileSyncState
   syncNow(): void
@@ -118,6 +129,10 @@ function message(e: unknown): string {
 
 // === The leader ===
 
+function isCurrentMaster(master: Master): boolean {
+  return sameMaster(selectMaster(useProfileStore.getState()), master)
+}
+
 interface Leader {
   executor: Executor
   status(): ExecutorStatus
@@ -137,6 +152,11 @@ function lead(master: Master, leadership: Leadership): Leader {
     isLeader: () => leadership.isLeader(),
     isReachable: connected,
     autoSync: () => useProfileStore.getState().autoSync,
+    // Only while the store's master is still THIS one: a direction belongs to the attach that gave it.
+    initialDirection: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingDirection),
+    onInitialSettled: () => {
+      if (!disposed && isCurrentMaster(master)) useProfileStore.getState().clearPendingDirection()
+    },
     onProblem: reportProblem,
     onStatus: (s) => {
       if (!disposed) lastStatus = s
@@ -280,8 +300,14 @@ export function startProfileSync(): () => void {
   const unsubscribe = useProfileStore.subscribe((next, prev) => {
     if (stopped) return
     sync(selectMaster(next))
-    // Nothing pumps the executor when a preference changes: do it here.
-    if (next.autoSync && !prev.autoSync) mode?.leader()?.executor.syncNow()
+    // Nothing pumps the executor when a preference changes, or when a new first
+    // reconciliation is asked of a driver that is already running: do it here.
+    // (A NEW master builds a new driver, which starts by itself once it has primed.)
+    const redirected =
+      next.pendingDirection !== null &&
+      next.pendingDirection !== prev.pendingDirection &&
+      sameMaster(selectMaster(prev), selectMaster(next))
+    if ((next.autoSync && !prev.autoSync) || redirected) mode?.leader()?.executor.syncNow()
   })
   sync(selectMaster(useProfileStore.getState()))
 
@@ -330,9 +356,22 @@ async function dropAttachment(master: Master): Promise<void> {
  * The attachment is written FIRST and the master set only if the daemon took
  * it: a master without an attachment is a profile the daemon would let someone
  * delete under this client (spec acceptance 12).
+ *
+ * `direction` — which side wins wherever both hold something, until the first
+ * reconciliation has settled: `'push'` = this machine overwrites the SOT (and
+ * `tabs.*` of workspaces that are not here are deleted from it); `'pull'` = the
+ * SOT overwrites this machine.
+ *
+ * SAFETY — `'pull'` REPLACES THIS MACHINE'S workspaces, tabs, hosts and
+ * settings with the SOT's. The user's decision 12 requires that the local state
+ * is first saved as a slave profile, and that the user confirms. Slaves arrive
+ * with P3, so UNTIL P3'S WIZARD IS WIRED UP THE ONLY CALLER OF THIS PATH IS THE
+ * DEV HOOK; P3 must have completed that step BEFORE it calls
+ * `attachMaster(…, 'pull')`. Nothing in here does it for the caller.
  */
-export function attachMaster(hostId: string, profileId: string): Promise<AttachResult> {
+export function attachMaster(hostId: string, profileId: string, direction: SyncDirection): Promise<AttachResult> {
   return serial(async (): Promise<AttachResult> => {
+    if (!isSyncDirection(direction)) return { ok: false, reason: 'invalid-direction' }
     if (!isClientIdPersisted()) return { ok: false, reason: 'client-id-not-persisted' }
     if (useHostStore.getState().hosts[hostId] === undefined) return { ok: false, reason: 'unknown-host' }
     if (!isMasterPair(hostId, profileId)) return { ok: false, reason: 'invalid-profile-id' }
@@ -354,7 +393,7 @@ export function attachMaster(hostId: string, profileId: string): Promise<AttachR
       // base in between, and the new one must not be seeded from the old bases.
       clearSectionStore()
     }
-    return useProfileStore.getState().setMaster(hostId, profileId)
+    return useProfileStore.getState().setMaster(hostId, profileId, direction)
       ? { ok: true }
       : { ok: false, reason: 'invalid-profile-id' }
   })

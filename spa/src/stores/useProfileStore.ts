@@ -1,9 +1,10 @@
 // spa/src/stores/useProfileStore.ts — Profile Sync's control plane.
 //
 // Which profile this client is attached to (`masterHostId` + `masterProfileId`)
-// and whether it syncs on its own (`autoSync`). Nothing else.
+// whether it syncs on its own (`autoSync`), and which side wins the FIRST
+// reconciliation after an attach (`pendingDirection`). Nothing else.
 //
-// WHY ONLY THESE THREE. This store holds exactly what EVERY window of this
+// WHY ONLY THESE. This store holds exactly what EVERY window of this
 // client must agree on, and so it is registered with `syncManager`. If windows
 // disagreed, a follower's detach would never reach the leader (which would go
 // on pushing to a profile the user left), and a window that was open before the
@@ -21,9 +22,22 @@
 // profile of the same id — or at nothing — the moment the user switched hosts.
 // Attaching is an explicit act; so is pointing it somewhere else.
 //
-// INVARIANT: `masterHostId` and `masterProfileId` are both null or both
-// non-null. `setMaster` is the only way in and validates both; the persist
-// `merge` re-establishes it for whatever storage hands back.
+// WHY `pendingDirection` IS HERE and not in the driver's memory (spec §4.9,
+// decision 10). A client that attaches has never agreed with the SOT on
+// anything, so every section where both sides hold something is a conflict the
+// state machine cannot settle — only the user can, and they did, once, when
+// they attached: "push" (this machine overwrites the SOT) or "pull" (the SOT
+// overwrites this machine). That answer has to outlive the call that gave it:
+// the first reconciliation may span a reload (the host is offline right now),
+// and it may be carried out by ANOTHER window — the one holding the lease. So it
+// is persisted and synced like the master itself, and the leader clears it
+// (`clearPendingDirection`) once everything has settled. It is never cleared by
+// a timeout: see `lib/profile/executor.ts`, THE FIRST RECONCILIATION.
+//
+// INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
+// non-null; `pendingDirection` is null whenever there is no master. `setMaster`
+// is the only way in and validates all three; the persist `merge` re-establishes
+// both for whatever storage hands back.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
@@ -31,19 +45,27 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 /** The daemon's profile id: "p_" + 12 lowercase hex chars. */
 const PROFILE_ID_PATTERN = /^p_[0-9a-f]{12}$/
 
+export type SyncDirection = 'push' | 'pull'
+
 interface ProfileControl {
   masterHostId: string | null
   masterProfileId: string | null
+  /** Non-null from an attach until the first reconciliation has settled. */
+  pendingDirection: SyncDirection | null
   /** Sync without being asked. Default on. */
   autoSync: boolean
 }
 
 export interface ProfileState extends ProfileControl {
-  /** Attach. Both must be non-empty strings and `profileId` a daemon profile
-   *  id; otherwise nothing changes and the answer is `false`. */
-  setMaster: (hostId: string, profileId: string) => boolean
-  /** Detach. `autoSync` is a preference and survives. */
+  /** Attach. Both ids must be non-empty strings, `profileId` a daemon profile
+   *  id and `direction` one of the two; otherwise nothing changes and the answer
+   *  is `false`. Attaching again to the same master starts a new first
+   *  reconciliation in the direction given. */
+  setMaster: (hostId: string, profileId: string, direction: SyncDirection) => boolean
+  /** Detach. `autoSync` is a preference and survives; the direction does not. */
   clearMaster: () => void
+  /** The first reconciliation has settled: conflicts go to the user from now on. */
+  clearPendingDirection: () => void
   setAutoSync: (value: boolean) => void
 }
 
@@ -58,6 +80,10 @@ export function isMasterPair(hostId: unknown, profileId: unknown): boolean {
   )
 }
 
+export function isSyncDirection(v: unknown): v is SyncDirection {
+  return v === 'push' || v === 'pull'
+}
+
 /** Whatever storage held → a record that satisfies the invariant. Half a
  *  master, a wrong type or a malformed profile id all mean "detached": there is
  *  no safe way to guess the missing half, and a detached client does nothing. */
@@ -67,6 +93,7 @@ function sanitiseControl(persisted: unknown): ProfileControl {
   return {
     masterHostId: attached ? (p.masterHostId as string) : null,
     masterProfileId: attached ? (p.masterProfileId as string) : null,
+    pendingDirection: attached && isSyncDirection(p.pendingDirection) ? p.pendingDirection : null,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
   }
 }
@@ -76,13 +103,15 @@ export const useProfileStore = create<ProfileState>()(
     (set) => ({
       masterHostId: null,
       masterProfileId: null,
+      pendingDirection: null,
       autoSync: true,
-      setMaster: (hostId, profileId) => {
-        if (!isMasterPair(hostId, profileId)) return false
-        set({ masterHostId: hostId, masterProfileId: profileId })
+      setMaster: (hostId, profileId, direction) => {
+        if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction)) return false
+        set({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction })
         return true
       },
-      clearMaster: () => set({ masterHostId: null, masterProfileId: null }),
+      clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null }),
+      clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
     }),
     {
@@ -92,9 +121,10 @@ export const useProfileStore = create<ProfileState>()(
       partialize: (state) => ({
         masterHostId: state.masterHostId,
         masterProfileId: state.masterProfileId,
+        pendingDirection: state.pendingDirection,
         autoSync: state.autoSync,
       }),
-      // Only the three sanitised fields ever come out of storage: persisted
+      // Only the four sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },
