@@ -118,7 +118,7 @@ Persisted stores, their keys, and where each field lands. `L` = device-local (ne
 | `stores/useHostStore.ts` | `purdex-hosts` | `hosts` (`hosts`, `hostOrder`; every `HostConfig` field — `id name ip port token order color colors icon iconWeight`) | `activeHostId`, **`devHostId`**, `runtime` |
 | `stores/useLayoutStore.ts` | `purdex-layout` | `settings` — **only `tabPosition`** | regions (views, widths, mode, activeViewId), `activityBarWidth`, `activityBarWideSize`, `workspaceExpanded` |
 | `stores/useUISettingsStore.ts` | `purdex-ui-settings` (v4) | `settings` | `terminalSettingsVersion` (a reconnect bump counter, not a preference) |
-| `stores/useEditorSettingsStore.ts` | `purdex-editor-settings` | `settings` | — |
+| `stores/useEditorSettingsStore.ts` | `purdex-editor-settings` | **not synced** *(P2b-2, §9.9 — pending the user's confirmation)* | the whole store: its own source says editor preferences are "a device-local choice (the small-screen laptop may want fontSize 11 while the big monitor uses 14) rather than shared config" |
 | `stores/useThemeStore.ts` | `purdex-themes` | `settings` | — |
 | `stores/useI18nStore.ts` | `purdex-i18n` | `settings` | — |
 | `stores/useNotificationSettingsStore.ts` | `purdex-notification-settings` | `settings` | — |
@@ -863,3 +863,29 @@ above. Two evidenced objections, both to `section-store`:
 |---|---|---|---|
 | C-1 | high | the generation fence is itself a non-atomic read-compare-write on `localStorage`: A reads g1, B claims g2, A writes its whole g1 document back over B's claim and data — B-1 again, just narrower | **one key per section, one content-addressed key per payload; the fence removed**, not patched. A stale write has no unrelated data left to destroy. What remains (same key, two leaders, last writer wins → at worst a false conflict) is written down as a residual, not claimed as prevented |
 | C-2 | high | the 1 MiB cap meant a larger conflict silently failed to persist, against Task 5 and §4.6.2 — and "kept in memory, re-derived after a restart" must not be described as meeting the contract | the cap is the daemon's 5 MiB again and the browser's quota decides; when it does not fit, that is recorded as a **known gap** (§7, #1244), in those words |
+
+### 9.9 P2b-2 — what integration found, 2026-09-20
+
+The driver is where five separately-built parts first met, and most of what it turned up was a
+contract that read fine on its own and was wrong in company. Full list in the P2b plan ("P2b-2 as
+built"); the ones that change this spec's meaning:
+
+- **A second store leaves the profile, for the user to confirm**: `useEditorSettingsStore` declares
+  itself device-local in its own source, with the very scenario this project exists for (a small
+  laptop and a big monitor). `settings` ordinal → 3.
+- **§4.7 "apply" is `setState` + `persist.rehydrate()`**, proven store by store — except the tab and
+  workspace stores, which must *not* be rehydrated (it rebuilds every tab object and re-renders every
+  pane); and a rehydrate's in-place heal is invisible until an empty `setState` follows it.
+- **§4.6.3 ordering is a correctness rule, not a nicety**: `tabs.*` is not pulled until `hosts` and
+  `workspaces` are *settled* — synced, indexed, SOT unmoved, idle. "Synced" alone also describes a
+  section that is clean but behind, and applying tabs against stale hosts marks another client's
+  live panes `host-removed` and pushes that back to everyone.
+- **§4.6.1 "the profile was recreated" is not per-section.** A profile that vanishes from the list is
+  handled above the state machines (`profileGone`): telling each of them "absent" would pull
+  deletions and erase the local state. A *failed* list tells them nothing.
+- **A pull reports two hashes** — what the SOT held, and what the stores hold after the apply — so
+  that a sanitiser's correction is pushed back instead of being mistaken for the SOT's content.
+- **An empty, never-agreed `tabs.<id>` facing a SOT with content is a placeholder**, not a local
+  edit; otherwise every workspace arriving from another machine could open as a conflict.
+- **A persisted conflict needs only its local side's payload** (the sent snapshot, §4.6.2); the SOT
+  side is re-fetchable.
