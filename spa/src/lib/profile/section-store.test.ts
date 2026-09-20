@@ -356,7 +356,6 @@ describe('section-store', () => {
       ['a conflict payload that cannot be serialised', () => { const o: Record<string, unknown> = {}; o.self = o; return saveConflict(P1, 'settings', LOCKED, { ...LOCKED_PAYLOADS, [H('b')]: o }) }],
       ['a conflict payload over the size limit', () => saveConflict(P1, 'settings', LOCKED, { ...LOCKED_PAYLOADS, [H('b')]: asciiPayloadOfBytes(MAX_STASH_PAYLOAD_BYTES + 1) })],
       ['a conflict without its localHash payload', () => saveConflict(P1, 'settings', LOCKED, { [H('d')]: { theirs: 1 } })],
-      ['a conflict without its sot payload', () => saveConflict(P1, 'settings', LOCKED, { [H('b')]: { mine: 1 } })],
       ['a conflict with no payloads at all', () => saveConflict(P1, 'settings', LOCKED, {})],
       ['an empty section key', () => saveSection(P1, '', SETTINGS)],
       ['a conflict with an empty section key', () => saveConflict(P1, '', DELETE_LOCKED, {})],
@@ -554,13 +553,27 @@ describe('section-store', () => {
       expect(getStash(P1, H('e'))).toEqual({ theirs: 2 })
     })
 
-    it('a missing payload: failed, and NOTHING is written — not the section, not the payloads that were passed', () => {
+    it('the LOCAL payload missing: failed, and NOTHING is written — not the section, not the payloads that were passed', () => {
       saveSection(P1, 'settings', SETTINGS)
       const before = snapshot()
 
-      expect(saveConflict(P1, 'settings', LOCKED, { [H('b')]: { mine: 1 } })).toBe('failed')
+      expect(saveConflict(P1, 'settings', LOCKED, { [H('d')]: { theirs: 1 } })).toBe('failed')
 
       expect(snapshot()).toBe(before)
+    })
+
+    it('ASYMMETRIC: only the local payload (the snapshot that was sent) → ok, and the lock survives a load', () => {
+      expect(saveConflict(P1, 'settings', LOCKED, { [H('b')]: { mine: 1 } })).toBe('ok')
+      expect(loadSectionStore(P1).sections.settings).toEqual(LOCKED)
+      expect(getStash(P1, H('b'))).toEqual({ mine: 1 })
+      expect(getStash(P1, H('d'))).toBeUndefined() // the SOT side can be fetched again; it was never held
+    })
+
+    it('ASYMMETRIC: the SOT moving on while locked, announced by hash only → re-saved without its payload', () => {
+      saveConflict(P1, 'settings', LOCKED, LOCKED_PAYLOADS)
+      const moved = { ...LOCKED, conflict: { localHash: H('b'), sot: { rev: 7, hash: H('e') } } }
+      expect(saveConflict(P1, 'settings', moved, {})).toBe('ok') // b is already stored; e is not held by anyone
+      expect(loadSectionStore(P1).sections.settings).toEqual(moved)
     })
   })
 
@@ -612,10 +625,7 @@ describe('section-store', () => {
 
     it.each([
       ['the localHash payload is missing', { [H('d')]: { theirs: 1 } }],
-      ['the sot payload is missing', { [H('b')]: { mine: 1 } }],
       ['the localHash payload is damaged', { [H('b')]: 'not an object', [H('d')]: { theirs: 1 } }],
-      ['the sot payload is damaged', { [H('b')]: { mine: 1 }, [H('d')]: [1] }],
-      ['the sot payload is not JSON', { [H('b')]: { mine: 1 }, [H('d')]: '{nope' }],
       ['there are no payloads', {}],
     ])('%s → the conflict is dropped, base and currentHash stay, the other sections too', (_label, payloads) => {
       stored(payloads)
@@ -627,18 +637,29 @@ describe('section-store', () => {
       expect(loaded.hosts).toEqual(HOSTS)
     })
 
+    // The two sides are not alike: the local one is the snapshot that was SENT and
+    // exists nowhere else; the SOT's can be fetched again (and keep-sot does just that).
+    it.each([
+      ['the sot payload is missing', { [H('b')]: { mine: 1 } }],
+      ['the sot payload is damaged', { [H('b')]: { mine: 1 }, [H('d')]: [1] }],
+      ['the sot payload is not JSON', { [H('b')]: { mine: 1 }, [H('d')]: '{nope' }],
+    ])('%s → the conflict is KEPT: only the local side is required', (_label, payloads) => {
+      stored(payloads)
+      expect(loadSectionStore(P1).sections.settings).toEqual(LOCKED)
+    })
+
     it('a null hash needs no payload: a delete over a tombstone is kept with no payload keys', () => {
       stored({}, DELETE_LOCKED)
       expect(loadSectionStore(P1).sections.settings).toEqual(DELETE_LOCKED)
     })
 
-    it('only the non-null side is required', () => {
+    it('a sent DELETE (localHash null) needs nothing at all, whatever the SOT holds', () => {
       const sentDelete = { ...LOCKED, conflict: { localHash: null, sot: { rev: 5, hash: H('d') } } }
       stored({ [H('d')]: { theirs: 1 } }, sentDelete)
       expect(loadSectionStore(P1).sections.settings).toEqual(sentDelete)
 
       stored({}, sentDelete)
-      expect(loadSectionStore(P1).sections.settings).toEqual(UNLOCKED)
+      expect(loadSectionStore(P1).sections.settings).toEqual(sentDelete)
     })
 
     it('the load does not write', () => {

@@ -75,6 +75,7 @@ function index(sections: SectionMeta[]): Result<ProfileIndexEntry[]> {
 const flush = (): Promise<unknown> => vi.advanceTimersByTimeAsync(0)
 const debounce = (): Promise<unknown> => vi.advanceTimersByTimeAsync(600)
 
+let reachable = true
 let executor: Executor
 let collector: Collector
 const problems: Array<{ kind: string; section?: string; detail: string }> = []
@@ -84,7 +85,7 @@ function start(): void {
     hostId: M,
     profileId: PROFILE,
     isLeader: () => true,
-    isReachable: () => true,
+    isReachable: () => reachable,
     autoSync: () => true,
     onProblem: (p) => problems.push(p),
   })
@@ -112,6 +113,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   localStorage.clear()
   problems.length = 0
+  reachable = true
   vi.clearAllMocks()
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: {} })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
@@ -210,6 +212,54 @@ describe('executor — integration (real collector, section store, apply, stores
     await debounce()
     expect(executor.status().sections.hosts).toBe('synced')
     expect(loadSectionStore(PROFILE).sections.hosts).toEqual({ base: { rev: 6, hash: sentHash }, currentHash: sentHash })
+    expect(problems).toEqual([])
+  })
+
+  it('DECIDE-TIME conflict (the SOT side is a hash only): persisted, restored after a restart, and keep-local restores what was local THEN', async () => {
+    await attach()
+    const theirHash = await hashSection(theirHosts('theirs'))
+    const stored = loadSectionStore(PROFILE).sections
+
+    // offline: a local edit; meanwhile the SOT moves. Back online the index shows both → row 8, no 409 involved.
+    renameH2('mine-at-lock')
+    const mine = buildHostsSection(useHostStore.getState())
+    const mineHash = await hashSection(mine)
+    reachable = false
+    await debounce()
+    reachable = true
+    api.listProfiles.mockResolvedValue(
+      index([meta('hosts', 5, theirHash), meta('settings', 1, stored.settings.currentHash!), meta('workspaces', 1, stored.workspaces.currentHash!)]),
+    )
+    executor.onReconnected()
+    await flush()
+    expect(executor.status().sections.hosts).toBe('locked:conflict')
+    expect(loadSectionStore(PROFILE).sections.hosts.conflict).toEqual({ localHash: mineHash, sot: { rev: 5, hash: theirHash } })
+
+    // locked, the SOT moves again — announced by an event, which carries no payload: persisted again
+    const newerHash = await hashSection(theirHosts('theirs-newer'))
+    executor.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'hosts', rev: 6, hash: newerHash, writerClientId: OTHER_CLIENT })
+    expect(loadSectionStore(PROFILE).sections.hosts.conflict).toEqual({ localHash: mineHash, sot: { rev: 6, hash: newerHash } })
+    expect(problems).toEqual([])
+
+    // the stores move on, then a restart
+    renameH2('mine-later')
+    await debounce()
+    stop()
+    api.listProfiles.mockResolvedValue(
+      index([meta('hosts', 6, newerHash), meta('settings', 1, stored.settings.currentHash!), meta('workspaces', 1, stored.workspaces.currentHash!)]),
+    )
+    api.putSection.mockClear()
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 7 })
+    start()
+    await collector.primeAll()
+    executor.onReconnected()
+    await flush()
+    expect(executor.status().sections.hosts).toBe('locked:conflict')
+
+    executor.resolve('hosts', 'local')
+    await flush()
+    expect(h2Name()).toBe('mine-at-lock')
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 6, hash: mineHash, payload: mine })
     expect(problems).toEqual([])
   })
 })

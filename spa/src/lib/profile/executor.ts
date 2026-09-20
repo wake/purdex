@@ -67,9 +67,11 @@
 //     `deleteAttachment` are the start layer's too.
 //
 // KNOWN GAPS, SURFACED THROUGH `onProblem` RATHER THAN HIDDEN
-//   - `conflict-not-persisted`: `saveConflict` refused (quota, or a payload this
-//     executor does not hold — see `persist`). The lock lives in memory only; the
-//     sent snapshot does not survive a restart (spec §7, issue #1244).
+//   - `conflict-not-persisted`: `saveConflict` refused — storage would not take
+//     the sent snapshot (quota), or it is not held. The lock lives in memory
+//     only; the sent snapshot does not survive a restart (spec §7, issue #1244).
+//     (A missing SOT-side payload is NOT this: the store requires the local
+//     side only.)
 //   - `restore-payload-missing`: keep-local was chosen but the sent snapshot is
 //     in neither stash. `local-restored` is NOT dispatched (it would claim a
 //     restore that did not happen); the section stays on `restore-local` until a
@@ -298,17 +300,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     attempted.set(key, signature)
 
     if (s.conflict !== null) {
-      // The payloads this executor HOLDS. A side it does not hold must already
-      // be in storage, or `saveConflict` refuses — which happens for a conflict
-      // whose SOT side was only ever announced (a decide-time lock, or a lock
-      // that learnt of a newer SOT rev): neither event carries a payload.
+      // The LOCAL side — the snapshot that was sent — is the one the store
+      // requires (it exists nowhere else); it is in the stash because
+      // `retainedHashes` kept it. The SOT side goes along when it is held (a
+      // 409 brought it); a lock decided from an index, or one that learnt of a
+      // newer SOT rev, has only its hash, and the store does not miss it.
       const payloads: Record<string, unknown> = {}
       for (const hash of [s.conflict.localHash, s.conflict.sot.hash]) {
         if (hash !== null && stash.has(hash)) payloads[hash] = stash.get(hash)
       }
       const result = saveConflict(profileId, key, { base: s.base, currentHash: s.currentHash, conflict: s.conflict }, payloads)
       if (result === 'ok') storedConflict.add(key)
-      else problemOnce(`conflict:${key}`, 'conflict-not-persisted', 'the section store refused the conflict: it lives in memory only and will not survive a restart', key)
+      else problemOnce(`conflict:${key}`, 'conflict-not-persisted', 'the sent snapshot is not held, or storage refused it: the conflict lives in memory only and will not survive a restart', key)
       return
     }
     reportedOnce.delete(`conflict:${key}`)
