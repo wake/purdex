@@ -30,7 +30,7 @@ import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { deleteHostCascade } from '../host-lifecycle'
 import { getTheme, unregisterTheme } from '../theme-registry'
 import { registerBuiltinThemes } from '../register-themes'
-import { unregisterLocale } from '../locale-registry'
+import { getLocale, unregisterLocale } from '../locale-registry'
 import { STORAGE_KEYS } from '../storage'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { hashSection } from './hash'
@@ -524,6 +524,71 @@ describe('applySectionToStores — settings', () => {
     expect(getTheme('custom-1')).toBeUndefined()
     expect(useThemeStore.getState().activeThemeId).toBe('dark')
     expect(outcome).not.toEqual({ ok: true, hash: await hashSection(dropped) }) // honestly dirty
+  })
+})
+
+describe('applySectionToStores — settings: a failed apply rolls back registries, DOM and translator too', () => {
+  const customTheme = () => ({ id: 'custom-1', name: 'Mine', tokens: getTheme('dark')!.tokens, builtin: false })
+  const customLocale = { id: 'custom-loc', name: 'Dansk', translations: { 'common.cancel': 'Annuller' }, builtin: false }
+  const current = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources()))) as SettingsPayload
+
+  /** This device runs a custom theme and a custom locale; the payload drops both and moves the tab bar. */
+  async function seedCustom(): Promise<SettingsPayload> {
+    const seeded = current()
+    seeded['purdex-themes'] = { activeThemeId: 'custom-1', customThemes: { 'custom-1': customTheme() } }
+    seeded['purdex-i18n'] = { activeLocaleId: 'custom-loc', customLocales: { 'custom-loc': customLocale } }
+    expect(await applySectionToStores('settings', seeded, ctx)).toMatchObject({ ok: true })
+    expect(useI18nStore.getState().t('common.cancel')).toBe('Annuller')
+    expect(document.documentElement.dataset.theme).toBe('custom-1')
+    const incoming = current()
+    incoming['purdex-themes'] = { activeThemeId: 'nord', customThemes: {} }
+    incoming['purdex-i18n'] = { activeLocaleId: 'zh-TW', customLocales: {} }
+    incoming['purdex-layout'] = { tabPosition: 'left' }
+    return incoming
+  }
+
+  const observed = () => ({
+    settings: current(),
+    theme: getTheme('custom-1'),
+    locale: getLocale('custom-loc'),
+    domTheme: document.documentElement.dataset.theme,
+    domLang: document.documentElement.lang,
+    cancel: useI18nStore.getState().t('common.cancel'),
+  })
+
+  it('a later store throws → the eight stores, both registries, <html> theme/lang and `t` are all as before', async () => {
+    const incoming = await seedCustom()
+    const before = observed()
+    expect(before).toMatchObject({ domTheme: 'custom-1', domLang: 'custom-loc', cancel: 'Annuller' })
+    vi.spyOn(useLayoutStore, 'setState').mockImplementationOnce(() => {
+      // by now themes and i18n HAVE been applied — the rollback has real work to do
+      expect(getTheme('custom-1')).toBeUndefined()
+      expect(useI18nStore.getState().t('common.cancel')).toBe('取消')
+      throw new Error('layout write failed')
+    })
+    const failure = await applySectionToStores('settings', incoming, ctx).then(() => null, (e: Error) => e)
+    expect(failure?.message).toBe('layout write failed') // a complete rollback adds nothing to the error
+    expect(observed()).toEqual(before)
+  })
+
+  it('the rollback\'s own persist fails → memory and registries are still restored, and the error says the rollback is incomplete', async () => {
+    const incoming = await seedCustom()
+    const before = observed()
+    const realSetItem = Storage.prototype.setItem
+    let armed = false
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === STORAGE_KEYS.LAYOUT) armed = true
+      if (armed) throw new DOMException('quota', 'QuotaExceededError')
+      realSetItem.call(this, key, value)
+    })
+    const failure = await applySectionToStores('settings', incoming, ctx).then(() => null, (e: Error) => e)
+    expect(failure?.message).toMatch(/quota/)
+    expect(failure?.message).toMatch(/rollback incomplete/)
+    expect(failure?.message).toMatch(/purdex-themes/)
+    const after = observed()
+    expect(after.settings).toEqual(before.settings) // memory
+    expect(after.theme).toEqual(before.theme) // re-registered explicitly: no rehydrate ran for this store
+    expect(after.locale).toEqual(before.locale)
   })
 })
 

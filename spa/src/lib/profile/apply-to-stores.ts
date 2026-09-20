@@ -37,8 +37,10 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
-import { unregisterLocale } from '../locale-registry'
-import { unregisterTheme } from '../theme-registry'
+import { registerLocale, unregisterLocale } from '../locale-registry'
+import type { LocaleDef } from '../locale-registry'
+import { registerTheme, unregisterTheme } from '../theme-registry'
+import type { ThemeDefinition } from '../theme-registry'
 import { applyHosts, applySettings, applyTabs, applyWorkspaces, deriveTabOrder, isWellFormedSection } from './applier'
 import { hashSection } from './hash'
 import { sectionKind, workspaceIdOf } from './projections'
@@ -224,17 +226,33 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
 
 // === settings ===
 
-/** Custom themes / locales the patch drops leave the registries too; rehydrate only ever registers. Runs BEFORE the rehydrate, so an `active*Id` naming a dropped entry falls back. */
-function unregisterDropped(key: SettingsStorageKey, before: Record<string, unknown>, patch: Record<string, unknown>): void {
+/** Puts a dropped custom theme / locale back in its registry. */
+type Reregister = () => void
+
+/**
+ * Custom themes / locales the patch drops leave the registries too; rehydrate only
+ * ever registers. Runs BEFORE the rehydrate, so an `active*Id` naming a dropped
+ * entry falls back. Returns how to undo each removal, for the rollback.
+ */
+function unregisterDropped(key: SettingsStorageKey, before: Record<string, unknown>, patch: Record<string, unknown>): Reregister[] {
   const field = key === 'purdex-themes' ? 'customThemes' : key === 'purdex-i18n' ? 'customLocales' : null
-  if (field === null || !Object.hasOwn(patch, field)) return
+  if (field === null || !Object.hasOwn(patch, field)) return []
   const kept = (patch[field] ?? {}) as Record<string, unknown>
-  for (const id of Object.keys((before[field] ?? {}) as Record<string, unknown>)) {
+  const undo: Reregister[] = []
+  for (const [id, def] of Object.entries((before[field] ?? {}) as Record<string, unknown>)) {
     if (Object.hasOwn(kept, id)) continue
-    if (key === 'purdex-themes') unregisterTheme(id)
-    else unregisterLocale(id)
+    if (key === 'purdex-themes') {
+      unregisterTheme(id)
+      undo.push(() => registerTheme(def as ThemeDefinition))
+    } else {
+      unregisterLocale(id)
+      undo.push(() => registerLocale(def as LocaleDef))
+    }
   }
+  return undo
 }
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   if (payload === null) return invalid('the settings section cannot be deleted')
@@ -243,7 +261,8 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   if (rejected.length > 0) return invalid(`rejected: ${rejected.join(', ')}`)
 
   const rendererBefore = useUISettingsStore.getState().terminalRenderer
-  const written: Array<[PersistedStore, Record<string, unknown>]> = []
+  const written: Array<{ key: SettingsStorageKey; store: PersistedStore; old: Record<string, unknown> }> = []
+  const reregister: Reregister[] = []
   try {
     for (const key of Object.keys(patches) as SettingsStorageKey[]) {
       const patch = patches[key] as Record<string, unknown>
@@ -251,15 +270,34 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
       const before = store.getState() as Record<string, unknown>
       const old: Record<string, unknown> = {}
       for (const field of Object.keys(patch)) old[field] = before[field]
-      written.push([store, old])
+      written.push({ key, store, old })
       store.setState(patch)
-      unregisterDropped(key, before, patch)
+      reregister.push(...unregisterDropped(key, before, patch))
       await rehydrate(store)
       publish(store)
     }
   } catch (err) {
-    for (const [store, old] of written.reverse()) restore(store, old)
-    throw err
+    // A settings write is more than fields: registries, <html> theme / lang, the
+    // i18n `t`. So the way back is the way in — re-register what was dropped, then
+    // per store `setState(old)` → rehydrate → publish, so the store's own hooks put
+    // the DOM and the translator back. If `setState(old)` itself throws (persist:
+    // the storage is what is failing), memory IS restored (zustand sets before it
+    // persists) but the rehydrate is skipped — it would read the NEW value back
+    // from storage — and the hooks have not re-run. That is not swallowed: the
+    // error that leaves here says which stores the rollback could not finish.
+    const unfinished: string[] = []
+    for (const put of reregister) put()
+    for (const { key, store, old } of written.reverse()) {
+      try {
+        store.setState(old)
+        await rehydrate(store)
+        publish(store)
+      } catch (rollbackErr) {
+        unfinished.push(`${key}: ${messageOf(rollbackErr)}`)
+      }
+    }
+    if (unfinished.length === 0) throw err
+    throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
   }
   // Terminals read the renderer on (re)connect only; the bump is what makes them reconnect.
   if (useUISettingsStore.getState().terminalRenderer !== rendererBefore) useUISettingsStore.getState().bumpTerminalSettingsVersion()
