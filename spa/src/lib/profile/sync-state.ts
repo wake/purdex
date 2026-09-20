@@ -91,6 +91,28 @@
 //     restored state starts `indexStale`, and `reconnected` sets it again, so the
 //     first action of every connection is `reindex` (spec §4.6, reconcile on
 //     connect). Row 0d (`reindex`) shadows every row below it.
+//   - `locked:invalid` (P2b plan Task 6): the SOT holds a payload this client
+//     REFUSES TO APPLY — ill-formed, settings with `rejected` entries, a `hosts`
+//     payload that removes or re-points the master's own host. Pulling it again
+//     every 30 s would fetch the same unusable bytes for ever, and pretending
+//     it was applied would be a lie. So the driver says `locked{invalid, rev}`
+//     and the section shuts, remembering the SOT rev the verdict was about
+//     (`invalidRev`). The event is accepted only if this very state decides
+//     `pull` and `rev` is the `sot.rev` held — a verdict on any other payload,
+//     or on a state that no longer wants it, is stale. `forcePull` is dropped
+//     by the lock (the user's "take the SOT" cannot be honoured; forcePull and
+//     locked never coexist). It opens in two ways only:
+//       · a SOT observation (`remote-event`, or a `sot-index` made at the
+//         current `indexEpoch`) that leaves `sot.rev > invalidRev`: someone
+//         fixed it. The status is re-derived and the table takes over — a clean
+//         section pulls the new rev. `rev <= invalidRev` never opens it, so no
+//         index poll can turn into a re-fetch loop.
+//       · `resolved keep:'local'`: `base = sot`, and the local copy is pushed
+//         over the refused one (wire baseRev 0 if the SOT is absent by then).
+//         `resolved keep:'sot'` is REFUSED: that payload is the one that cannot
+//         be applied.
+//     It is never persisted: after a restart the section reindexes, pulls, and
+//     is judged again — cheap, and it cannot go stale on disk.
 //   - Decision order, first match wins: 0a locked → 0b in flight → 0c
 //     `restore-local` → 0d `reindex` → 0e `forcePull` → rows 1–8. The restore
 //     sits ABOVE the reindex because putting the sent snapshot back is a purely
@@ -106,10 +128,13 @@
 //     after `reconnected`). `reconnected` does not close a flight: whatever was on the
 //     wire still owes its one terminal event (`push-failed` on timeout).
 //   - startup: sections with a persisted base are rebuilt with
-//     `restoreSectionState`, never-synced ones with `initialSectionState`. Only
-//     `base` is persisted; flights, locks, conflicts, `forcePull` and
-//     `restoreLocal` are not — an unresolved conflict is re-derived by the
-//     decision table (row 8) after the first index.
+//     `restoreSectionState`, never-synced ones with `initialSectionState`.
+//     `base` is persisted, and so is an open `conflict` pair (with both
+//     payloads): a 409's local side is the snapshot that was SENT, which the
+//     table cannot re-derive. Flights, `locked:reset`, `locked:invalid`,
+//     `forcePull` and `restoreLocal` are not — a decide-time conflict that was
+//     never recorded is re-derived by the decision table (row 8) after the
+//     first index.
 //   - push / delete: dispatch `push-started` with the token from
 //     `decideSection`, then send the request only if the resulting
 //     `inFlight === token` (same object). Every outcome — timeouts and
@@ -117,7 +142,10 @@
 //   - lock-conflict / lock-reset: dispatch `{type:'locked', reason}`. It is
 //     refused if the state no longer calls for that lock.
 //   - pull: fetch, then check `canApplyPull` on the *current* state before
-//     touching the stores; then dispatch `pull-applied`. For an absent SOT
+//     touching the stores; then dispatch `pull-applied`. If the payload cannot
+//     be applied, dispatch `{type:'locked', reason:'invalid', rev}` with the rev
+//     that was FETCHED instead, and touch nothing. If that is refused (same
+//     reference back) the verdict was stale; just decide again. For an absent SOT
 //     (404) the deletion is applied and reported with `rev = state.sot.rev`.
 //   - sot-index: tag the response with the `indexEpoch` the `reindex` action
 //     carried (i.e. read when the request was *sent*), unchanged.
@@ -138,7 +166,7 @@ export interface Held {
   hash: string | null
 }
 
-export type SectionStatus = 'synced' | 'pending' | 'locked:conflict' | 'locked:reset'
+export type SectionStatus = 'synced' | 'pending' | 'locked:conflict' | 'locked:reset' | 'locked:invalid'
 
 export interface FlightToken {
   kind: 'put' | 'delete'
@@ -173,6 +201,9 @@ export interface SectionSyncState {
   inFlight: FlightToken | null
   sotMovedWhileInFlight: boolean
   conflict: SectionConflict | null
+  /** Non-null ⇔ `status === 'locked:invalid'`: the SOT rev whose payload this
+   *  client refused to apply. Only an observed `sot.rev` above it unlocks. */
+  invalidRev: number | null
   /** Set by `resolved keep:'sot'`: pull even though the section is dirty. */
   forcePull: boolean
   /** Set by `resolved keep:'local'`: the sent snapshot the driver must put back.
@@ -198,7 +229,12 @@ export type SectionEvent =
   | { type: 'pull-applied'; rev: number; hash: string | null } // null = applied a deletion
   | { type: 'local-restored'; hash: string | null } // the driver put the snapshot back
   | { type: 'resolved'; keep: 'local' | 'sot' }
+  | LockedEvent
+
+/** `rev` exists only on `'invalid'`: the SOT rev of the payload that was judged. */
+export type LockedEvent =
   | { type: 'locked'; reason: 'conflict' | 'reset' } // the driver acting on lock-conflict / lock-reset
+  | { type: 'locked'; reason: 'invalid'; rev: number } // the driver refusing to apply what a pull fetched
 
 export type SectionAction =
   | { do: 'nothing' }
@@ -223,24 +259,40 @@ export function initialSectionState(currentHash: string | null): SectionSyncStat
   return restoreSectionState({ base: { rev: 0, hash: null }, currentHash })
 }
 
-/** Rebuild a section from what P2b persists device-locally: the agreed `base`
- *  and the hash of the live payload. `sot` starts as a copy of `base` — a
- *  placeholder that `indexStale` keeps anyone from acting on. Flight, lock,
- *  conflict, `forcePull` and `restoreLocal` are deliberately NOT persisted:
- *  after a restart every section reconciles from scratch, and an unresolved
- *  conflict is re-derived by the decision table once the index is in. */
-export function restoreSectionState(persisted: { base: Held; currentHash: string | null }): SectionSyncState {
-  const { base, currentHash } = persisted
+/** Rebuild a section from what P2b persists device-locally: the agreed `base`,
+ *  the hash of the live payload and — if one was open — the `conflict` pair.
+ *
+ *  Without a conflict, `sot` starts as a copy of `base` — a placeholder that
+ *  `indexStale` keeps anyone from acting on.
+ *
+ *  With one, the section comes back `locked:conflict`, the pair as persisted
+ *  and `sot = conflict.sot`. Why it is persisted rather than re-derived (spec
+ *  §4.6.2): the local side of a 409 is the snapshot that was SENT. A conflict
+ *  re-derived after a restart by the decision table (row 8) would take the
+ *  live hash of that moment as its local side instead, and keep-local would
+ *  push something other than what the user was shown. The restored lock is an
+ *  ordinary one: it keeps learning (`remote-event` / `sot-index` move `sot` and
+ *  `conflict.sot`), decides `nothing` (0a precedes the 0d reindex, so the
+ *  stale index waits for `resolved`), and both `resolved` directions work.
+ *
+ *  Flight, `locked:reset`, `locked:invalid`, `forcePull` and `restoreLocal`
+ *  are deliberately NOT persisted: after a restart the section reconciles from
+ *  scratch. For `locked:invalid` that means reindex → pull → judged again,
+ *  which is cheap and cannot leave a verdict on disk that outlives its payload. */
+export function restoreSectionState(persisted: { base: Held; currentHash: string | null; conflict?: SectionConflict }): SectionSyncState {
+  const { base, currentHash, conflict } = persisted
+  const sot = conflict !== undefined ? conflict.sot : base
   return {
     base: { rev: base.rev, hash: base.hash },
     currentHash,
-    sot: { rev: base.rev, hash: base.hash },
+    sot: { rev: sot.rev, hash: sot.hash },
     epoch: 0,
     indexEpoch: 0,
-    status: currentHash === base.hash ? 'synced' : 'pending',
+    status: conflict !== undefined ? 'locked:conflict' : currentHash === base.hash ? 'synced' : 'pending',
     inFlight: null,
     sotMovedWhileInFlight: false,
-    conflict: null,
+    conflict: conflict !== undefined ? { localHash: conflict.localHash, sot: { rev: sot.rev, hash: sot.hash } } : null,
+    invalidRev: null,
     forcePull: false,
     restoreLocal: null,
     indexStale: true,
@@ -260,7 +312,7 @@ export function sotMoved(s: SectionSyncState): boolean {
 }
 
 function isLocked(s: SectionSyncState): boolean {
-  return s.status === 'locked:conflict' || s.status === 'locked:reset'
+  return s.status === 'locked:conflict' || s.status === 'locked:reset' || s.status === 'locked:invalid'
 }
 
 /** May the driver apply a pulled payload (or deletion) to the stores right now?
@@ -341,6 +393,16 @@ function withSot(s: SectionSyncState, sot: Held): SectionSyncState {
   }
 }
 
+/** A SOT OBSERVATION (`remote-event`, an accepted `sot-index`): move `sot`, and
+ *  open a `locked:invalid` section iff what is now known lies past the rev that
+ *  was refused. Strictly past: the same rev is the same unusable payload.
+ *  `finish` re-derives the status. */
+function observeSot(s: SectionSyncState, sot: Held): SectionSyncState {
+  const next = withSot(s, sot)
+  if (next.invalidRev === null || next.sot.rev <= next.invalidRev) return next
+  return { ...next, status: 'pending', invalidRev: null }
+}
+
 function tokensEqual(a: FlightToken, b: FlightToken): boolean {
   return a.kind === b.kind && a.hash === b.hash && a.baseRev === b.baseRev && a.epoch === b.epoch
 }
@@ -355,6 +417,7 @@ function unchanged(a: SectionSyncState, b: SectionSyncState): boolean {
     a.sotMovedWhileInFlight === b.sotMovedWhileInFlight &&
     (a.conflict === b.conflict ||
       (a.conflict !== null && b.conflict !== null && a.conflict.localHash === b.conflict.localHash && sameHeld(a.conflict.sot, b.conflict.sot))) &&
+    a.invalidRev === b.invalidRev &&
     a.forcePull === b.forcePull &&
     (a.restoreLocal === b.restoreLocal || (a.restoreLocal !== null && b.restoreLocal !== null && a.restoreLocal.hash === b.restoreLocal.hash)) &&
     a.indexStale === b.indexStale &&
@@ -403,12 +466,12 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
 
     case 'remote-event':
       if (e.own || e.rev <= s.sot.rev) return s
-      return withSot(s, { rev: e.rev, hash: e.hash })
+      return observeSot(s, { rev: e.rev, hash: e.hash })
 
     case 'sot-index': {
       if (e.epoch !== s.indexEpoch) return s.indexStale ? s : { ...s, indexStale: true }
       const sot: Held = e.entry !== null ? { rev: e.entry.rev, hash: e.entry.hash } : { rev: Math.max(s.sot.rev, s.base.rev), hash: null }
-      const next = withSot(s, sot)
+      const next = observeSot(s, sot)
       return next.indexStale ? { ...next, indexStale: false } : next
     }
 
@@ -476,6 +539,13 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
 
     case 'locked': {
       const want = decideSection(s, { reachable: true, autoSync: true })
+      if (e.reason === 'invalid') {
+        // Only a verdict on the payload this state would pull right now. Decides
+        // `pull` ⇒ not locked, no flight, index fresh. `forcePull` goes: locked
+        // and forcePull never coexist, and that pull cannot be honoured anyway.
+        if (want.do !== 'pull' || e.rev !== s.sot.rev) return s
+        return { ...s, status: 'locked:invalid', invalidRev: e.rev, forcePull: false }
+      }
       if (want.do !== (e.reason === 'conflict' ? 'lock-conflict' : 'lock-reset')) return s
       return e.reason === 'conflict'
         ? { ...s, status: 'locked:conflict', conflict: { localHash: s.currentHash, sot: s.sot } }
@@ -484,9 +554,11 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
 
     case 'resolved': {
       if (!isLocked(s)) return s
-      const unlocked: SectionSyncState = { ...s, status: 'pending', conflict: null }
+      // the SOT side of locked:invalid is the payload that cannot be applied
+      if (s.status === 'locked:invalid' && e.keep === 'sot') return s
+      const unlocked: SectionSyncState = { ...s, status: 'pending', conflict: null, invalidRev: null }
       if (e.keep === 'sot') return { ...unlocked, forcePull: true }
-      // conflict.sot and sot move together; locked:reset has no pair and reads sot
+      // conflict.sot and sot move together; locked:reset / locked:invalid have no pair and read sot
       const target = s.conflict !== null ? s.conflict.sot : s.sot
       return { ...unlocked, base: { rev: target.rev, hash: target.hash }, restoreLocal: s.conflict !== null ? { hash: s.conflict.localHash } : null }
     }
