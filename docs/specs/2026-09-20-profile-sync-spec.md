@@ -1031,3 +1031,21 @@ state the device-local workspace exception. Four evidenced objections to *fixes*
 | C-4 | the hosts rollback ran in one synchronous block, so React never saw the host leave and no subscription re-ran — the execution store was simply gone. (The "no `await`" invariant the subagent had built to keep `runtime` truthful is exactly what falsified its own comment.) | the three stores' per-host state is snapshotted before the cascade and written back whole. Checked first whether `clearHost` does anything irreversible: only the execution-list store does (it closes the site-wide SSE), and an existing watcher reopens it. "Defer the destructive cascade" was considered and is impossible without changing `host-lifecycle.ts`: its own last step is the persisted `removeHost`. The remaining gap — a cascade that throws half-way returns no undo — is #1248 |
 
 A narrow re-review of C-2, C-3, C-4: no residue of Important or above.
+
+A last narrow re-review of the C-1 fixes: both races closed. It found one more of the same family —
+**a detach in another window could be undone by an attach that had started earlier and finished
+later** (A awaits its PUT; B detaches; A's PUT returns and A sets the master again) — against "detach
+means stop". `attachGeneration` now advances on every attach *and* detach; an attach notes it at the
+call and re-reads it **from `localStorage`**, not from memory, after each await and immediately
+before its commit; overtaken, it answers `superseded`, clears no base, sets no master, and removes
+the attachment it had just made unless the winner wants that same profile. One thing the fix needed
+that nobody had specified, found by the subagent's tests: the overtaken window must **rehydrate its
+store from storage before it writes anything** — its memory still holds the old master, and *any*
+write, even clearing its own suspension, would persist that old master back over the other window's
+detach.
+
+**Stop.** Five review passes on this phase (R1, two attackers, the critic, two narrow re-reviews);
+every pass found something real and each finding was narrower than the last — from "detach awaits in
+the wrong order" to "the suspend runs one microtask late". No pass found a critical. What is left is
+written in the code as residuals, not claimed as prevented: `localStorage` is not a transactional
+store, a read followed by an act is not atomic, and bytes already sent cannot be recalled.
