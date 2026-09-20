@@ -138,7 +138,10 @@ vi.mock('../client-identity', () => ({
   isClientIdPersisted: () => h.persisted,
 }))
 
+import { useWorkspaceStore } from '../../features/workspace/store'
 import { useHostStore } from '../../stores/useHostStore'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import { useTabStore } from '../../stores/useTabStore'
 import { selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { STORAGE_KEYS } from '../storage/keys'
@@ -1671,6 +1674,64 @@ describe('the dev hook', () => {
 
     stop()
     expect(window.__purdexProfileSync).toBeUndefined()
+  })
+})
+
+describe('the dev hook: local profiles (P3b has no UI; the real-machine acceptance drives it from here)', () => {
+  const tab = (id: string) => ({ id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf' as const, pane: { id: `p-${id}`, content: { kind: 'dashboard' as const } } } })
+  const resetWorld = (): void => {
+    useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [], worldId: 'master', worldEpoch: 0 })
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, worldId: 'master', worldEpoch: 0 })
+  }
+  beforeEach(() => {
+    resetWorld()
+    useTabStore.setState({ tabs: { t1: tab('t1') }, tabOrder: ['t1'], activeTabId: 't1' })
+    useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'Alpha', tabs: ['t1'], activeTabId: 't1' }], activeWorkspaceId: 'w1' })
+  })
+  afterEach(resetWorld)
+
+  it('list / copyMaster / switch / world / rename / saveScreen / remove / promote are the functions of switch-active.ts', async () => {
+    stop = startProfileSync()
+    const profiles = window.__purdexProfileSync?.profiles
+    expect(profiles).toBeDefined()
+    if (!profiles) return
+
+    expect(profiles.list()).toEqual({ active: 'master', slaves: [] })
+    expect(profiles.world()).toEqual({ settled: true, onScreen: true, workspaces: ['Alpha'] })
+
+    const copy = profiles.copyMaster('Copy')
+    if (!copy.ok) throw new Error(copy.reason)
+    expect(profiles.list()).toEqual({ active: 'master', slaves: [{ id: copy.id, name: 'Copy', onScreen: false }] })
+
+    expect(await profiles.switch(copy.id)).toEqual({ ok: true })
+    expect(profiles.list()).toEqual({ active: copy.id, slaves: [{ id: copy.id, name: 'Copy', onScreen: true }] })
+    expect(profiles.world()).toEqual({ settled: true, onScreen: false, workspaces: ['Alpha'] })
+    expect(profiles.rename(copy.id, 'Renamed')).toEqual({ ok: true })
+    expect(profiles.remove(copy.id)).toEqual({ ok: false, reason: 'on-screen' })
+
+    const saved = profiles.saveScreen('Saved')
+    if (!saved.ok) throw new Error(saved.reason)
+    expect(profiles.list().slaves.map((s) => s.name)).toEqual(['Renamed', 'Saved'])
+    expect(profiles.remove(saved.id)).toEqual({ ok: true })
+
+    const promoted = profiles.promote(copy.id, 'Old master')
+    expect(promoted.ok).toBe(true)
+    expect(profiles.list().active).toBe('master')
+    expect(profiles.world()).toEqual({ settled: true, onScreen: true, workspaces: ['Alpha'] })
+
+    useTabStore.setState({ worldEpoch: 99 })
+    expect(profiles.world()).toEqual({ settled: false, reason: 'epoch-mismatch' })
+  })
+
+  it('outside DEV there is no hook at all', () => {
+    vi.stubEnv('DEV', false)
+    try {
+      stop = startProfileSync()
+      expect(window.__purdexProfileSync).toBeUndefined()
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

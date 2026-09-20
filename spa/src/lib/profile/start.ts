@@ -88,6 +88,7 @@ import { getClientId, isClientIdPersisted } from '../client-identity'
 import { effectiveDeviceName } from '../device-name'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { isMasterPair, isSyncDirection, selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
@@ -97,7 +98,10 @@ import type { Executor, ExecutorStatus, SectionLock } from './executor'
 import { contendForLeadership, leaderWindowId, readLeaderLease } from './leader'
 import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
+import { readMasterWorld } from './master-world'
 import { clearSectionStore } from './section-store'
+import { copyMasterAsSlave, deleteSlave, promoteToMaster, renameSlave, saveScreenAsSlave, switchActiveProfile } from './switch-active'
+import type { CopyResult, PromoteResult, SwitchResult } from './switch-active'
 import { __resetSyncStatusForTest, masterTagOf, openStatusChannel, setLocalSnapshot } from './sync-status'
 import type { StatusChannel } from './sync-status'
 import { STORAGE_KEYS } from '../storage/keys'
@@ -141,6 +145,20 @@ export interface ProfileSyncDebug {
   state(): ProfileSyncState
   syncNow(): void
   resolve(section: string, keep: 'local' | 'sot'): void
+  /** Local profiles ("slaves") — P3b ships without a UI; the real-machine acceptance drives switch-active.ts from here. */
+  profiles: ProfilesDebug
+}
+
+export interface ProfilesDebug {
+  list(): { active: string; slaves: { id: string; name: string; onScreen: boolean }[] }
+  switch(id: string): Promise<SwitchResult>
+  copyMaster(name: string): CopyResult
+  saveScreen(name: string): CopyResult
+  promote(id: string, demotedName: string): PromoteResult
+  rename(id: string, name: string): ReturnType<typeof renameSlave>
+  remove(id: string): ReturnType<typeof deleteSlave>
+  /** A summary of `readMasterWorld()` — never the world itself. */
+  world(): { settled: true; onScreen: boolean; workspaces: string[] } | { settled: false; reason: string }
 }
 
 declare global {
@@ -650,6 +668,22 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
       state: profileSyncState,
       syncNow: () => mode?.leader()?.executor.syncNow(),
       resolve: (section, keep) => mode?.leader()?.executor.resolve(section, keep),
+      profiles: {
+        list: () => {
+          const local = useLocalProfilesStore.getState()
+          return { active: local.activeProfileId, slaves: local.slaveOrder.map((id) => ({ id, name: local.slaves[id].name, onScreen: local.slaves[id].world === null })) }
+        },
+        switch: switchActiveProfile,
+        copyMaster: copyMasterAsSlave,
+        saveScreen: saveScreenAsSlave,
+        promote: promoteToMaster,
+        rename: renameSlave,
+        remove: deleteSlave,
+        world: () => {
+          const read = readMasterWorld()
+          return read.settled ? { settled: true, onScreen: read.onScreen, workspaces: read.world.workspaces.map((w) => w.name) } : read
+        },
+      },
     }
   }
 
