@@ -1,6 +1,7 @@
 # Spec — worker pane: room and chat views
 
-- Status: v0.1 (2026-09-20) — **design draft for the user, not yet a build plan.**
+- Status: v0.2 (2026-09-20) — **design draft for the user, not yet a build plan.**
+  v0.2 folds in a source-level audit of the pane at alpha.415 (§3.2); screenshots pending.
   Open questions in §10 need answers before a plan is written.
 - Scope: how one worker's pane presents itself. No daemon work, no Nexen work
   in the first phase; §9 collects what would need Nexen later.
@@ -53,7 +54,9 @@ buttons; Aigora for chat.
 ## 3. What is there today, and what is wrong with it
 
 Screenshots: `docs/specs/assets/2026-09-20-pane/*` (captured on :5174 at
-alpha.415 — see the file names in §3.1).
+alpha.415 — file names in §3.1). §3.2 is a source-level audit of the same
+build: every item there is verifiable in the code, which is why the problems
+below are stated as facts and not impressions.
 
 Today the pane is: a one-line header carrying eight things (state · provider ·
 profile · cwd | observers · lease · turns · cost · SSE · Interrupt · Terminate
@@ -69,20 +72,91 @@ The problems this pass exists to fix:
 2. **The bubble frame wastes the width it is given.** A worker pane is often a
    full-width tab; a chat bubble column throws away half of it exactly where
    tool output, diffs and tables need it.
-3. **The header is a dumping ground.** Eight facts of unequal importance on one
-   line, and it is the same header at 1600px and at 900px.
-4. **Folding is per-component, not per-volume.** Each block decided its own
-   collapse rule as it was built; there is no single "this is N lines / N KB,
-   therefore show this much" rule, and no consistent "expand" affordance.
+3. **The header is a dumping ground.** Eight facts at one visual weight, with
+   the destructive actions styled like the facts, and no responsive behaviour
+   whatsoever (§3.2).
+4. **Folding is per-component, not per-volume.** Three components, three
+   different truncation mechanisms, three height caps, and no collapsed
+   header tells you how much is hidden — even though the data to do it has
+   been on the wire since N2 (§3.2).
 5. **Nothing is persistent.** A background shell, a dev server, a watch — the
    things that are *still running* — have no place on screen (and, today, no
    data either: §9).
 6. **No search.** Collie has output search; a long worker transcript has none.
 
 What is good and should not be touched: the typewriter (P-B2), the tool
-summary line with status and duration (P-B3), the line-numbered diff, the cost
-panel (P-B4), and the input box's plain behaviour (Enter sends, Shift+Enter
-newline, lease-aware disabling).
+summary line with status and duration (P-B3), `ToolDiffView` (old/new gutters,
+`@@` headers, truncation note — already close to the reference), `CostPanel`
+(the only responsive logic in the pane today: `panelWidth()` + a resize
+listener; use it as the model for everything else), the shared formatters
+(`formatUsd` / `formatTokens` / `formatDuration`, so the header, the tooltip
+and the panel cannot disagree), and the input box's plain behaviour (Enter
+sends, Shift+Enter newline, lease-aware disabling).
+
+### 3.2 Source audit (alpha.415)
+
+**Header** (`execution/ExecutionHeader.tsx`)
+- Eight facts at one visual weight: two rows, both `text-xs text-text-muted`,
+  only `state` promoted. Nothing anchors the eye.
+- Destructive actions styled as facts: Interrupt / Terminate / Take to
+  terminal are three text buttons sharing one class; Terminate only turns red
+  *after* the first click, and the binding change (Take to terminal) looks
+  exactly like an interrupt.
+- No responsive logic at all: two `flex-1` spacers, no `flex-wrap`, no
+  `min-w-0`, no `truncate` (cwd has a `title` but cannot shrink). ~900px has
+  nowhere to put row 2.
+
+**Conversation** (`ConversationMessages.tsx`)
+- Already chat-shaped, which is the opposite of room: user is a right-aligned
+  bubble at `max-w-[75%]`, assistant is left at `max-w-[90%]` — so **the pane
+  never uses its full width at any size**. Room is a rewrite of this
+  component, not a tweak.
+- Flat rhythm: `p-4 space-y-4`, every block (thinking / text / tool_use /
+  tool_result) a sibling at the same depth. **A turn has no container**, so
+  there is nothing to label, collapse or hang per-turn facts on — §4.1's turn
+  grouping has to create that unit.
+- Interrupted and slash-command messages are inline special cases with
+  hard-coded colours carrying `TODO: theme token`.
+
+**Folding — three components, three rules**
+
+| | collapsed header shows | expanded cap |
+|---|---|---|
+| `ToolCallBlock` | name + summary cut at `SUMMARY_LIMIT = 80` | `max-h-60` |
+| `ToolResultBlock` | `content.slice(0, 80) + '...'` (different mechanism) | `max-h-60` |
+| `ThinkingBlock` | a caret, **no size hint at all** | none |
+
+- **No collapsed header says how much is hidden**, although N2 supplies
+  `total_lines` / `total_bytes` / `truncated` and `toolResultFacts` already
+  surfaces some of it. This is the largest single gap against the reference's
+  `… +166 lines (ctrl+o to expand)`.
+- "按照長度／量體折疊" is simply not implemented: all three default to
+  `useState(false)` regardless of payload size; no auto-expand policy, no
+  expand-all, and fold state is component-local so it dies on remount.
+- Three different height caps (`max-h-60`, `max-h-60`, `max-h-64`).
+
+**Pairing and nesting**
+- `tool_use` and its `tool_result` render as two independent cards with no
+  indent, rule or connector: the pairing exists in the data
+  (`tools[block.tool_use_id]`) but is never expressed spatially. The `⎿` rail
+  in §4.2 is exactly this relationship.
+- `parent_tool_use_id` appears nowhere in the render tree, so subagent calls
+  (#1228) would land flat, indistinguishable from top-level ones.
+
+**Input** (`StreamInput.tsx`)
+- `mx-2 mb-2 border rounded-xl` — inset, bordered, rounded; the target is
+  full-width and borderless, so this is opposite on both counts.
+- Auto-grow has **no max height**: a long paste can squeeze the conversation
+  to nothing.
+- Carries affordances unused here (`showAttach={false}`, an `onHandoffToTerm`
+  that is never passed).
+
+**常駐** — confirmed absent: no component, no state, no data path. It is a
+wire ask (§9 A1), not a rendering gap.
+
+**Theme debt to clear in the same pass**: `TODO: theme token` in
+`ToolCallBlock` ×2, `ToolResultBlock` ×3, `ConversationMessages` ×2,
+`MessageBubble` ×1, `ToolDiffView` ×1.
 
 ### 3.1 Screenshot index
 
