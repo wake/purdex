@@ -3,6 +3,7 @@ import { browserStorage } from './browser-backend'
 
 export { STORAGE_KEYS } from './keys'
 export { syncManager } from './sync'
+export { fencedWorldStorage, registerFencedStore } from './world-fence'
 
 /**
  * Zustand persist storage backend.

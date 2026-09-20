@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createWorkspace, isStandaloneTab, type Workspace, type IconWeight } from '../../types/tab'
-import { purdexStorage, STORAGE_KEYS, syncManager } from '../../lib/storage'
+import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../../lib/storage'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
@@ -299,7 +299,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: STORAGE_KEYS.WORKSPACES,
-      storage: purdexStorage,
+      // A world store: a write from a window that still holds an older world is dropped (lib/storage/world-fence.ts).
+      storage: fencedWorldStorage,
       // No version bump for `worldId` / `worldEpoch`: data written before them merges over the defaults
       // (`'master'` / 0), which is what it is. See `useTabStore`.
       version: 1,
@@ -314,3 +315,4 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 )
 
 syncManager.register(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
+registerFencedStore(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)

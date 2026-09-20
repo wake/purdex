@@ -281,8 +281,12 @@ describe('switchActiveProfile', () => {
     // Another window switched to the slave; this one has its tabs already and the pointer not yet.
     useTabStore.setState({ tabs: slaveWorld().tabs, worldId: SLAVE, worldEpoch: 1 })
     const before = threeStores()
-    expect(await switchActiveProfile(OTHER)).toEqual({ ok: false, reason: 'unsettled' })
+    const pending = switchActiveProfile(OTHER)
+    // Looked at before the promise is: the refusal wrote nothing. (A turn later the three stores are asked to read
+    // storage again — master-world.ts, `recoverUnsettledWorld` — and that does give every object a new identity.)
     threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+    expect(await pending).toEqual({ ok: false, reason: 'unsettled' })
+    expect(readMasterWorld().settled).toBe(false) // storage holds the same disagreement: nothing to recover from
   })
 
   it('takes the operation lock: refused while a rebuild, a restore or an apply holds it; released afterwards either way', async () => {

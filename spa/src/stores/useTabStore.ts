@@ -6,7 +6,7 @@ import { createTab } from '../types/tab'
 import { getPrimaryPane, findPane, collectLeaves, updatePaneInLayout, splitAtPane, removePane, applyLayoutPattern, remountLeaf } from '../lib/pane-tree'
 import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/binding'
-import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { UntitledDocumentState } from '../types/tab'
 
 // --- Persist migration helpers ---
@@ -909,7 +909,8 @@ export const useTabStore = create<TabState>()(
     }),
     {
       name: STORAGE_KEYS.TABS,
-      storage: purdexStorage,
+      // A world store: a write from a window that still holds an older world is dropped (lib/storage/world-fence.ts).
+      storage: fencedWorldStorage,
       // `worldId` / `worldEpoch` joined the persisted shape WITHOUT a version bump:
       // persist's default merge is `{...current, ...persisted}`, so data written
       // before them rehydrates with the initial `'master'` / 0 — which is what it
@@ -929,3 +930,4 @@ export const useTabStore = create<TabState>()(
 )
 
 syncManager.register(STORAGE_KEYS.TABS, useTabStore)
+registerFencedStore(STORAGE_KEYS.TABS, useTabStore)

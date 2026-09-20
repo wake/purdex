@@ -37,6 +37,23 @@
 // (start.ts) — a user without a master pays for nothing — is kept by having no
 // listener and no timer of its own; `subscribeMasterWorld` costs three
 // subscriptions and only the collector, which exists only under a master, asks.
+//
+// …EXCEPT ONE REHYDRATE (`recoverUnsettledWorld`). A BroadcastChannel message is
+// not guaranteed to arrive, and a window that missed one of the three would stay
+// `epoch-mismatch` until its next reload although storage holds a perfectly
+// settled world. So whoever LOOKS at an unsettled world — the collector's
+// subscription, `masterWorldStuck`, a refused switch — asks the three stores to
+// read storage again: only for a mismatch of epoch or world id (a missing parked
+// master is not in storage either), a microtask later and only if it is STILL
+// unsettled then (a window's own switch is unsettled for the length of its
+// synchronous block, and must not pay for a rehydrate), and ONCE per unsettled
+// stretch — a rehydrate notifies the very subscribers that ask, so "once" is
+// what keeps this from looping. No timer. It does not contradict `commitTabWorld`
+// ("no rehydrate here"): that is about the apply path, where a rehydrate per
+// write would rebuild every tab object for a change to one; this is a one-off for
+// a window whose screen is wrong anyway. It mislabels nothing: memory becomes what
+// storage holds, tags and content together. The disk side of the same accident
+// is lib/storage/world-fence.ts.
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
@@ -108,6 +125,9 @@ export interface TabWorld {
 export interface WorldStamp {
   worldId: string
   worldEpoch: number
+  /** Runs first when the write is rolled back. The caller lowers the epoch fence here (lib/storage/world-fence.ts):
+   *  the restore writes carry the OLD epoch, and behind a fence still raised they would never reach storage. */
+  beforeRollback?: () => void
 }
 
 /**
@@ -181,6 +201,7 @@ export function commitTabWorld(world: TabWorld, afterWrite?: () => void, stamp?:
     wsStore.setState({ workspaces: world.workspaces, activeWorkspaceId: world.activeWorkspaceId, ...tag })
     afterWrite?.()
   } catch (err) {
+    stamp?.beforeRollback?.()
     restore(tabStore, oldTab)
     restore(wsStore, oldWs)
     if (useWorkspaceSettingsStore.getState().workspaces !== oldScoped.workspaces) restore(useWorkspaceSettingsStore as unknown as WritableStore, oldScoped)
@@ -208,6 +229,7 @@ export function restampWorld(stamp: WorldStamp): void {
     tabStore.setState(tag)
     wsStore.setState(tag)
   } catch (err) {
+    stamp.beforeRollback?.()
     restore(tabStore, oldTab)
     restore(wsStore, oldWs)
     throw err
@@ -274,7 +296,9 @@ function signature(read: MasterWorldRead): readonly unknown[] {
 export function subscribeMasterWorld(fn: () => void): () => void {
   let last = signature(readMasterWorld())
   const check = (): void => {
-    const now = signature(readMasterWorld())
+    const read = readMasterWorld()
+    recoverUnsettledWorld(read)
+    const now = signature(read)
     if (now.length === last.length && now.every((v, i) => v === last[i])) return
     last = now
     fn()
@@ -302,7 +326,9 @@ let unsettledSince: number | null = null
  * session without a master.
  */
 export function masterWorldStuck(now: number): boolean {
-  if (readMasterWorld().settled) {
+  const read = readMasterWorld()
+  recoverUnsettledWorld(read)
+  if (read.settled) {
     unsettledSince = null
     return false
   }
@@ -310,6 +336,43 @@ export function masterWorldStuck(now: number): boolean {
   return now - unsettledSince > MASTER_WORLD_STUCK_MS
 }
 
+// === Recovering ===
+
+/** A recovery was asked for in the current unsettled stretch; forgotten by the first look that finds it settled. */
+let recoveryAsked = false
+
+/**
+ * `read` is what the caller has just read. Unsettled by a mismatch → the three
+ * stores read storage again, once per stretch (see …EXCEPT ONE REHYDRATE in the
+ * header). `force`: the caller KNOWS storage is ahead of this window (a switch
+ * refused because the epoch fence is above the window's epoch) — the world reads
+ * settled then, so there is no stretch to count; the fence itself stops a repeat,
+ * since after the rehydrate the window is no longer behind it.
+ */
+export function recoverUnsettledWorld(read: MasterWorldRead, force = false): void {
+  if (!force) {
+    if (read.settled) {
+      recoveryAsked = false
+      return
+    }
+    if (recoveryAsked || read.reason === 'no-parked-master') return
+    recoveryAsked = true
+  }
+  queueMicrotask(() => {
+    if (!force && readMasterWorld().settled) return // it was a switch of this window, half-way through its block
+    // The pointer first, as a switch writes them. Each is synchronous over `localStorage`; one that throws must
+    // not keep the others from reading.
+    for (const store of [useLocalProfilesStore, useTabStore, useWorkspaceStore]) {
+      try {
+        void Promise.resolve(store.persist.rehydrate()).catch(() => {})
+      } catch {
+        // as it was; the next unsettled stretch asks again
+      }
+    }
+  })
+}
+
 export function __resetMasterWorldForTest(): void {
   unsettledSince = null
+  recoveryAsked = false
 }

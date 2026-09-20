@@ -28,6 +28,18 @@
 // collector would push them. Refused (`unsettled`); it settles by itself within
 // milliseconds, or never (master-world.ts, NOTHING HERE REPAIRS).
 //
+// THE EPOCH FENCE IS RAISED FIRST (lib/storage/world-fence.ts). Before any of the
+// three stores is written the block puts the new epoch into the side key, so from
+// that instant no other window can persist a store of the old world over what
+// follows. A refusal or a throw lowers it again — BEFORE the stores are put back,
+// because those restores carry the old epoch and would otherwise be dropped by
+// this window's own fence (`WorldStamp.beforeRollback` hands the same step to
+// master-world.ts, which restores its two stores itself). And a window that is
+// itself BEHIND the fence — settled, all three stores agreeing on a world another
+// window has already replaced — is refused like an unsettled one: its switch
+// would park an outdated screen over the device's current world. It is told to
+// catch up (`recoverUnsettledWorld`), and the next attempt works.
+//
 // THE OPERATION LOCK. A switch replaces the tab tree, so it takes the lock every
 // other tree-rewriter takes (rebuild, snapshot restore, a profile apply): none of
 // them is ever half-way through a world that is then swapped from under it, and
@@ -62,7 +74,8 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { generateId } from '../id'
-import { commitTabWorld, readMasterWorld, restampWorld } from './master-world'
+import { raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
+import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
 
@@ -102,19 +115,43 @@ function readScreen(): ParkedWorld {
 
 // === The switch ===
 
+/**
+ * May this window move the world? Settled — and not behind the epoch fence (see
+ * THE EPOCH FENCE IS RAISED FIRST). Either way the stores are asked to catch up
+ * with storage, so that a refusal is not the last word.
+ */
+function worldIsCurrent(): boolean {
+  const read = readMasterWorld()
+  if (!read.settled) {
+    recoverUnsettledWorld(read)
+    return false
+  }
+  if (useLocalProfilesStore.getState().worldEpoch < readWorldEpochFence()) {
+    recoverUnsettledWorld(read, true)
+    return false
+  }
+  return true
+}
+
 export type SwitchResult = { ok: true } | Refused<'busy' | 'unsettled' | 'not-found' | 'already-on-screen' | 'bad-world' | 'bad-epoch'> | WriteFailed
 
 /** THE SYNCHRONOUS BLOCK. Not `async`, on purpose: an `await` cannot be written in here. */
 function exchange(targetId: string): SwitchResult {
-  if (!readMasterWorld().settled) return { ok: false, reason: 'unsettled' }
+  if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
   const old = captureLocal()
-  const stamp = { worldId: targetId, worldEpoch: old.worldEpoch + 1 }
+  const worldEpoch = old.worldEpoch + 1
+  let lowerFence = (): void => {}
   try {
-    const swapped = useLocalProfilesStore.getState().swapActive(targetId, readScreen(), stamp.worldEpoch)
-    if (!swapped.ok) return swapped
-    commitTabWorld(swapped.world, undefined, stamp)
+    lowerFence = raiseWorldEpochFence(worldEpoch)
+    const swapped = useLocalProfilesStore.getState().swapActive(targetId, readScreen(), worldEpoch)
+    if (!swapped.ok) {
+      lowerFence()
+      return swapped
+    }
+    commitTabWorld(swapped.world, undefined, { worldId: targetId, worldEpoch, beforeRollback: lowerFence })
     return { ok: true }
   } catch (err) {
+    lowerFence()
     restoreLocal(old)
     return writeFailed(err)
   }
@@ -319,15 +356,21 @@ export function promoteToMaster(slaveId: string, demotedName: string): PromoteRe
   const grant = useRebuildStore.getState().acquireOperationLock(PROFILE_SWITCH_LOCK_OWNER)
   if (grant === null) return { ok: false, reason: 'busy' }
   try {
-    if (!readMasterWorld().settled) return { ok: false, reason: 'unsettled' }
+    if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
     const old = captureLocal()
     const worldEpoch = old.worldEpoch + 1
+    let lowerFence = (): void => {}
     try {
+      lowerFence = raiseWorldEpochFence(worldEpoch)
       const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch)
-      if (!promoted.ok) return promoted
-      restampWorld({ worldId: promoted.activeProfileId, worldEpoch })
+      if (!promoted.ok) {
+        lowerFence()
+        return promoted
+      }
+      restampWorld({ worldId: promoted.activeProfileId, worldEpoch, beforeRollback: lowerFence })
       return { ok: true, demotedId: promoted.demotedId }
     } catch (err) {
+      lowerFence()
       restoreLocal(old)
       return writeFailed(err)
     }
