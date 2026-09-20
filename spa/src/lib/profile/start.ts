@@ -16,7 +16,11 @@
 //   master mode  a master is set. EVERY window: `watchUnsyncedStores()` and a
 //                contender for the lease. A master that changes (host OR
 //                profile) ends this mode and starts a new one.
-//   leading      this window holds the lease. ONLY here: executor, WS
+//                It also watches the master host's endpoint: `ip` / `port`
+//                edited in place → BLOCKED, no driver in any window, until the
+//                old value is back, or `attachMaster` / `detachMaster`; a new
+//                `token` alone → the same daemon, the driver is rebuilt.
+//   leading      this window holds the lease (and the mode is not blocked). ONLY here: executor, WS
 //                subscription, collector, host watcher. Losing the lease
 //                disposes all four and the window is a follower again.
 //
@@ -94,6 +98,8 @@ export interface ProfileSyncState {
   master: Master | null
   /** This window holds the lease right now. */
   leader: boolean
+  /** The master host's ip / port is not the one the profile was attached at: nothing syncs (see `enterMasterMode`). */
+  blocked: 'master-endpoint-changed' | null
   /** Null in a follower and without a master: only the leader knows. */
   status: ExecutorStatus | null
   /** The latest `PROBLEM_BUFFER_SIZE`, oldest first. */
@@ -284,13 +290,27 @@ interface MasterMode {
   /** `useProfileStore.attachGeneration` when this mode was entered. */
   generation: number
   isLeader(): boolean
+  /** The master host was re-pointed in place: no driver, whoever holds the lease. */
+  blocked(): boolean
   leader(): Leader | null
   end(): void
+}
+
+/** Where the master's daemon is, and the credential for it. Null = the host is not in the store. */
+function endpointOf(hostId: string): { at: string; token: string } | null {
+  const host = useHostStore.getState().hosts[hostId]
+  return host === undefined ? null : { at: `${host.ip}:${host.port}`, token: host.token ?? '' }
 }
 
 function enterMasterMode(master: Master, generation: number): MasterMode {
   let ended = false
   let leader: Leader | null = null
+  // The endpoint the bases (and the attachment, the schema lock, `profileGone`)
+  // belong to. `api.ts` resolves the address from the host store on every
+  // request, so an edit of the master host IN PLACE would send the next request,
+  // with the old daemon's CAS bases, to whatever answers at the new address.
+  let home = endpointOf(master.hostId)
+  let blocked = false
   warned.clear()
   const unwatchUnsynced = watchUnsyncedStores()
   const leadership = contendForLeadership()
@@ -301,10 +321,44 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   }
   const apply = (isLeader: boolean): void => {
     if (ended) return
-    if (!isLeader) follow()
+    if (!isLeader || blocked) follow()
     else if (leader === null) leader = lead(master, leadership)
   }
   const unsubscribe = leadership.onChange(apply)
+
+  // Only a LOCAL edit can do this: a `hosts` payload from the SOT that re-points
+  // the master's own host is refused by apply-to-stores.
+  const unwatchEndpoint = useHostStore.subscribe((next, prev) => {
+    if (ended || next.hosts[master.hostId] === prev.hosts[master.hostId]) return
+    const now = endpointOf(master.hostId)
+    if (now === null) return // removed: the leader reports it; coming back is judged against `home`
+    if (home === null) {
+      home = now
+      return
+    }
+    if (now.at !== home.at) {
+      // ip or port: nobody can tell whether this is the same daemon. Stop. Do not
+      // detach (the user's setting) and do not drop the bases (a typo may be
+      // corrected): the ways out are the old value, `attachMaster`, `detachMaster`.
+      if (blocked) return
+      blocked = true
+      follow()
+      reportProblem({
+        kind: 'master-endpoint-changed',
+        detail: `host ${master.hostId} now points at ${now.at}, the profile was attached at ${home.at}; nothing syncs until it is attached again, detached, or the address is put back`,
+      })
+      return
+    }
+    const rotated = now.token !== home.token
+    if (!blocked && !rotated) return
+    // Back where the bases belong, or the same daemon with a new token: a new
+    // driver on the bases there are — a reconnect, in effect.
+    home = now
+    blocked = false
+    follow()
+    apply(leadership.isLeader())
+  })
+
   // `onChange` does not replay: ask once.
   if (leadership.isLeader()) apply(true)
 
@@ -312,11 +366,13 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     master,
     generation,
     isLeader: () => !ended && leadership.isLeader(),
+    blocked: () => !ended && blocked,
     leader: () => leader,
     end() {
       if (ended) return
       ended = true
       unsubscribe()
+      unwatchEndpoint()
       follow()
       leadership.stop()
       unwatchUnsynced()
@@ -337,6 +393,7 @@ export function profileSyncState(): ProfileSyncState {
   return {
     master: selectMaster(useProfileStore.getState()),
     leader: mode?.isLeader() ?? false,
+    blocked: mode?.blocked() === true ? 'master-endpoint-changed' : null,
     status: mode?.leader()?.status() ?? null,
     problems: problems.map((p) => ({ ...p })),
   }

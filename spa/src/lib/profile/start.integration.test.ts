@@ -179,3 +179,18 @@ describe('the attachment comes first', () => {
     expect((daemon.rows.get('hosts')!.payload as { hosts: Record<string, { name: string }> }).hosts[H2].name).toBe('edited-while-closed')
   })
 })
+
+describe('the master host is re-pointed in place', () => {
+  it('not one request reaches the new address with the old daemon\'s bases', async () => {
+    await attachedAndSettled()
+    vi.clearAllMocks()
+    const { hosts } = useHostStore.getState()
+    useHostStore.setState({ hosts: { ...hosts, [M]: { ...hosts[M], ip: '10.9.9.9' } } }) // also an edit of the `hosts` section
+    renameH2('edited-after')
+    await settle()
+    await vi.advanceTimersByTimeAsync(120_000)
+    for (const fn of Object.values(api)) expect(fn).not.toHaveBeenCalled()
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+  })
+})
+

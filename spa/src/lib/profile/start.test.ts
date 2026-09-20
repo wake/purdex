@@ -220,7 +220,7 @@ describe('the iron rule: no master, no Profile Sync', () => {
     expect(clearSectionStore).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
     expect(localStorage.getItem(STORAGE_KEYS.PROFILE_LEADER)).toBeNull()
-    expect(profileSyncState()).toEqual({ master: null, leader: false, status: null, problems: [] })
+    expect(profileSyncState()).toEqual({ master: null, leader: false, blocked: null, status: null, problems: [] })
   })
 })
 
@@ -437,6 +437,118 @@ describe('master set → contend → lead', () => {
     expect(e.syncNow).toHaveBeenCalledTimes(1)
     useProfileStore.getState().setAutoSync(true)
     expect(e.syncNow).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the master host is edited in place', () => {
+  const edit = (over: Record<string, unknown>): void => {
+    const { hosts } = useHostStore.getState()
+    useHostStore.setState({ hosts: { ...hosts, h1: { ...hosts.h1, ...over } } })
+  }
+
+  async function leading(): Promise<void> {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    vi.mocked(putAttachment).mockClear()
+    vi.mocked(clearSectionStore).mockClear()
+  }
+
+  it.each([
+    ['ip', { ip: '100.64.0.77' }],
+    ['port', { port: 7999 }],
+  ])('%s changed while connected: is this the same daemon? Nobody knows — the driver stops, the master and the bases stay', async (_what, over) => {
+    await leading()
+    edit(over)
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.collectors[0].stop).toHaveBeenCalledTimes(1)
+    expect(h.wsListeners.size).toBe(0)
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+    expect(profileSyncState().status).toBeNull()
+    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['master-endpoint-changed'])
+    // not a detach, not a wipe
+    expect(useProfileStore.getState().masterHostId).toBe('h1')
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    expect(h.leaderships[0].stop).not.toHaveBeenCalled()
+
+    // and it stays stopped: reconnects, more edits, a lease change
+    disconnect('h1')
+    connect('h1')
+    edit({ name: 'renamed' })
+    h.leaderships[0].set(false)
+    h.leaderships[0].set(true)
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(h.executors).toHaveLength(1)
+    expect(putAttachment).not.toHaveBeenCalled()
+    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['master-endpoint-changed'])
+  })
+
+  it('changed BACK: a typo corrected — unblocked, a new driver, the bases kept', async () => {
+    await leading()
+    edit({ ip: '100.64.0.77' })
+    edit({ ip: '100.64.0.9' })
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    expect(clearSectionStore).not.toHaveBeenCalled()
+  })
+
+  it('only the token changed (a rotation): the same daemon — the driver is rebuilt like a reconnect, the bases kept, the attachment refreshed', async () => {
+    await leading()
+    edit({ token: 'rotated' })
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    expect(clearSectionStore).not.toHaveBeenCalled()
+  })
+
+  it('an edit that touches neither (name, colour, order) is nobody\'s business', async () => {
+    await leading()
+    edit({ name: 'renamed', order: 3 })
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    expect(h.executors[0].dispose).not.toHaveBeenCalled()
+    expect(profileSyncState().blocked).toBeNull()
+  })
+
+  it('attachMaster — the same master — is the way out: THIS endpoint is the master now, from cleared bases', async () => {
+    await leading()
+    edit({ ip: '100.64.0.77' })
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(clearSectionStore).toHaveBeenCalled()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+  })
+
+  it('detachMaster is the other way out', async () => {
+    await leading()
+    edit({ ip: '100.64.0.77' })
+    await detachMaster()
+    expect(profileSyncState()).toMatchObject({ master: null, blocked: null })
+    expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('a follower is blocked too: the lease falling to it builds nothing', async () => {
+    h.initialLeader = false
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    edit({ port: 7999 })
+    h.leaderships[0].set(true)
+    await flush()
+    expect(h.executors).toHaveLength(0)
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
   })
 })
 
