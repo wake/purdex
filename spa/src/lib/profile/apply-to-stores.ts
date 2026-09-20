@@ -280,7 +280,10 @@ interface TabWorld {
  * keeping `useTabStore`'s four fields consistent: `tabOrder` re-derived,
  * `visitHistory` restricted to surviving tabs, the global `activeTabId` kept
  * while its tab survives, else the active workspace's, else `null`.
- * `afterWrite` runs inside the same try: if it throws, both stores roll back.
+ * `afterWrite` runs inside the same try, and what it touches — the scoped
+ * workspace settings a removal clears — is part of the same snapshot: if anything
+ * throws, all THREE stores go back. (A clear that landed before a later one threw
+ * would otherwise be lost for good while its workspace came back.)
  *
  * No rehydrate here, on purpose. Neither store has a `merge` or an
  * `onRehydrateStorage` (the tab store's `migrate` does not run on a same-version
@@ -293,6 +296,7 @@ function commitTabWorld(world: TabWorld, afterWrite?: () => void): void {
   const wsState = useWorkspaceStore.getState()
   const oldTab = { tabs: tabState.tabs, tabOrder: tabState.tabOrder, activeTabId: tabState.activeTabId, visitHistory: tabState.visitHistory }
   const oldWs = { workspaces: wsState.workspaces, activeWorkspaceId: wsState.activeWorkspaceId }
+  const oldScoped = { workspaces: useWorkspaceSettingsStore.getState().workspaces }
 
   const exists = (id: string | null | undefined): id is string => typeof id === 'string' && Object.hasOwn(world.tabs, id)
   const activeWs = world.workspaces.find((w) => w.id === world.activeWorkspaceId)
@@ -313,6 +317,7 @@ function commitTabWorld(world: TabWorld, afterWrite?: () => void): void {
   } catch (err) {
     restore(tabStore, oldTab)
     restore(wsStore, oldWs)
+    if (useWorkspaceSettingsStore.getState().workspaces !== oldScoped.workspaces) restore(asPersisted(useWorkspaceSettingsStore), oldScoped)
     throw err
   }
 }

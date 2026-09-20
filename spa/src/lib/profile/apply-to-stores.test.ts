@@ -620,6 +620,60 @@ describe('applySectionToStores — workspaces', () => {
   })
 })
 
+describe('applySectionToStores — workspaces: the scoped-settings cleanup is part of the same rollback', () => {
+  const scoped = { wa: { files: { x: 1 } }, wb: { files: { x: 2 } }, keep: { files: { x: 3 } } }
+  const removeBoth: WorkspacesPayload = { order: ['keep'], workspaces: { keep: { name: 'Keep' } } }
+
+  function seed(): void {
+    seedTabWorld()
+    useWorkspaceStore.setState({ workspaces: [...useWorkspaceStore.getState().workspaces, ws('keep', [])] })
+    useWorkspaceSettingsStore.setState({ workspaces: scoped } as never)
+  }
+
+  function memory(): unknown {
+    const t = useTabStore.getState()
+    const w = useWorkspaceStore.getState()
+    return {
+      tab: { tabs: t.tabs, tabOrder: t.tabOrder, activeTabId: t.activeTabId, visitHistory: t.visitHistory },
+      ws: { workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId },
+      scoped: useWorkspaceSettingsStore.getState().workspaces,
+    }
+  }
+
+  it('first clear lands, second throws → all THREE stores are back where they were', async () => {
+    seed()
+    const before = memory()
+    const real = useWorkspaceSettingsStore.getState().clearWorkspace
+    let calls = 0
+    useWorkspaceSettingsStore.setState({
+      clearWorkspace: (id: string) => {
+        if (++calls === 2) throw new Error('second clear failed')
+        real(id)
+      },
+    })
+    try {
+      await expect(applySectionToStores('workspaces', removeBoth, ctx)).rejects.toThrow('second clear failed')
+    } finally {
+      useWorkspaceSettingsStore.setState({ clearWorkspace: real })
+    }
+    expect(calls).toBe(2)
+    expect(memory()).toEqual(before)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('the clear\'s own persist throws (state already changed in memory) → all three stores are back', async () => {
+    seed()
+    const before = memory()
+    const realSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === STORAGE_KEYS.WORKSPACE_SETTINGS) throw new DOMException('quota', 'QuotaExceededError')
+      realSetItem.call(this, key, value)
+    })
+    await expect(applySectionToStores('workspaces', removeBoth, ctx)).rejects.toThrow('quota')
+    expect(memory()).toEqual(before)
+  })
+})
+
 describe('applySectionToStores — tabs.<id>', () => {
   function incomingFor(wsTabs: Tab[]): TabsPayload {
     return buildTabsSection(ws('wa', wsTabs.map((t) => t.id)), Object.fromEntries(wsTabs.map((t) => [t.id, t])))
