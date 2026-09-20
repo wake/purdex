@@ -20,6 +20,8 @@ import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import type { DeleteOutcome, DeleteSectionParams, ProfileIndexEntry, PutOutcome, PutSectionBody, Result, Section, SectionMeta } from './api'
 import { startCollector, type Collector } from './collector'
 import { createExecutor, type Executor } from './executor'
+import { hashSection } from './hash'
+import { buildWorkspacesSection } from './sections'
 import { clearSectionStore } from './section-store'
 
 const h = vi.hoisted(() => ({ clientId: 'c_aaaaaaaaaaaa' }))
@@ -362,5 +364,43 @@ describe('a NEWER Purdex writes a section (spec §4.4: an old client must not wr
     expect(executor!.status().profile).toBe('locked:schema')
     expect(daemon.writes.filter((w) => w.clientId === B)).toEqual([])
     expect(daemon.revs()).toEqual({ ...revsBefore, settings: written.rev })
+  })
+})
+
+describe('another client removes a workspace, and the tabs deletion gets here before the workspaces change', () => {
+  it('the workspace keeps its tabs until `workspaces` says it is gone; this client writes NOTHING; no orphan, no leftover section, no problem', async () => {
+    await clientAHasPushed()
+    world(H2, [], [])
+    await attach(B, 'pull')
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1', 'wa2'])
+    problems.length = 0
+    const writesBefore = daemon.writes.length
+
+    // A removes wa2: PUT workspaces (without it) + DELETE tabs.wa2
+    const remaining = useWorkspaceStore.getState().workspaces.filter((w) => w.id !== 'wa2')
+    const payload = JSON.parse(JSON.stringify(buildWorkspacesSection(remaining))) as Record<string, unknown>
+    const wsRow = daemon.rows.get('workspaces')!
+    daemon.rows.set('workspaces', { ...wsRow, rev: wsRow.rev + 1, hash: await hashSection(payload), payload, writer: A })
+    const tabsRow = daemon.rows.get('tabs.wa2')!
+    daemon.rows.set('tabs.wa2', { ...tabsRow, rev: tabsRow.rev + 1, hash: null, payload: null, writer: A })
+
+    // only the DELETE's event arrives (the other one is late — or lost)
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'tabs.wa2', rev: tabsRow.rev + 1, hash: null, writerClientId: A })
+    // wa2 must never be seen EMPTIED: it keeps its tab until it goes as a whole
+    const emptied: string[][] = []
+    const unsubscribe = useWorkspaceStore.subscribe((next) => {
+      const wa2 = next.workspaces.find((w) => w.id === 'wa2')
+      if (wa2 !== undefined && wa2.tabs.length === 0) emptied.push(wa2.tabs)
+    })
+    for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    unsubscribe()
+    expect(emptied).toEqual([])
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1'])
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(['ta1'])
+    expect(executor!.status()).toMatchObject({ profile: 'synced' })
+    expect(Object.keys(executor!.status().sections).sort()).toEqual(['hosts', 'settings', 'tabs.wa1', 'workspaces'])
+    expect(daemon.writes.slice(writesBefore)).toEqual([]) // no orphan re-created, no second delete
+    expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.wa1', 'workspaces'])
+    expect(problems).toEqual([])
   })
 })

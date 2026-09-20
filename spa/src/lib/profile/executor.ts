@@ -51,6 +51,12 @@
 //     content → dropped; SOT has nothing → delivered (a workspace created HERE,
 //     which is pushed). A non-empty payload is a real edit and conflicts, as it
 //     should; once there is a base, an empty report is an ordinary one.
+//   - A `tabs.<id>` DELETION IS NEVER APPLIED BY A PULL. Its workspace still
+//     being here means the `workspaces` change that removes it has not arrived
+//     (two writes, two events, either order): the pull waits (backoff, the index
+//     asked once) instead of emptying a live workspace and pushing the emptiness
+//     back as an orphan. The section converges when the workspace goes: the
+//     collector reports it gone, both sides are absent, the reducer folds that.
 //   - THE SCHEMA LOCK HAS THREE ENTRANCES AND ONE EXIT. It is set by the index
 //     (`profileLock`), by a PUT answered `schema`, and by a PULL whose fetched
 //     section carries a newer / unorderable shape (a remote-event brings only
@@ -205,6 +211,8 @@ export const BACKOFF_CAP_MS = 30_000
 /** `busy` (the operation lock is held by someone else) is not a failure: a short, flat wait. */
 export const BUSY_RETRY_MS = 500
 const DEFAULT_CONTENDED_MS = 1_000
+/** A deleted `tabs.<id>` whose workspace stays: said once after this many retries. */
+const STUCK_DELETION_ATTEMPTS = 4
 /** The sections every `tabs.*` pull waits for (apply-to-stores' CALLER CONTRACT). */
 const GATES: readonly string[] = ['hosts', 'workspaces']
 
@@ -412,6 +420,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     attempted.delete(key)
     clearBackoff(key)
     parkedRestore.delete(key)
+    reportedOnce.delete(`stuck-deletion:${key}`)
   }
 
   /* ─── the loop ─── */
@@ -972,6 +981,25 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       requestReindex(true)
       return failed(key)
     }
+    // A DELETED `tabs.<id>` WHOSE WORKSPACE IS STILL HERE is a `workspaces` change
+    // that has not arrived yet (removing a workspace is two writes, and their
+    // events come in either order). Applying it would empty a workspace the user
+    // is looking at, and the emptiness would then be pushed back as a create —
+    // an orphan on the SOT — only for `workspaces` to arrive and undo it all.
+    // So: not applied, nothing dispatched. The index is asked once (it shows
+    // `workspaces` moved even if that event was lost); when the workspace goes,
+    // the collector reports this section gone, both sides are absent, and that
+    // is agreement. `mayPull` only lets a `tabs.*` pull run while its workspace
+    // is here, so a `tabs.*` deletion is in fact never applied by a pull.
+    if (fetched === null && sectionKind(key) === 'tabs') {
+      const attempts = failures.get(key) ?? 0
+      if (attempts === 0) requestReindex(true)
+      if (attempts >= STUCK_DELETION_ATTEMPTS) {
+        problemOnce(`stuck-deletion:${key}`, 'tabs-deleted-workspace-kept', 'the SOT deleted this section but `workspaces` still lists its workspace; it is left as it is here', key)
+      }
+      return failed(key)
+    }
+
     // THE SHAPE OF WHAT WAS FETCHED (§4.4 / §4.5). A client learns of a new rev
     // from a remote-event, which carries no fingerprint and no ordinal; the index
     // — where `profileLock` looks — is not asked again for it. The fetched

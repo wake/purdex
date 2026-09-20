@@ -803,16 +803,74 @@ describe('executor — pull', () => {
     expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 1, hash: 'S1', localHash: 'S1' }])
   })
 
-  it('a deletion (404, and the index agrees) is applied as null at the known rev, and the section is dropped', async () => {
+  it('REGRESSION: a tabs.<id> deletion that arrives BEFORE its `workspaces` change is not applied — the tabs stay, nothing is written, and it converges once the workspace is gone', async () => {
     useWorkspaceStore.setState({ workspaces: [ws('w1')] })
-    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
-    api.getSection.mockResolvedValue({ kind: 'ok', value: null })
-    applySectionToStores.mockResolvedValue({ ok: true, hash: null })
+    const { ex, problems } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
+    // the other client removed workspace w1: PUT workspaces + DELETE tabs.w1 — and the DELETE's event got here first
+    api.getSection.mockImplementation(async (_h, _p, section) =>
+      section === 'workspaces' ? sectionOf(meta('workspaces', 2, 'W2'), { order: [] }) : { kind: 'ok', value: null },
+    )
+    const list = deferred<Result<ProfileIndexEntry[]>>()
+    api.listProfiles.mockReturnValue(list.promise)
+    applySectionToStores.mockImplementation(async (key) => {
+      if (key === 'workspaces') useWorkspaceStore.setState({ workspaces: [] }) // what the real apply does
+      return { ok: true, hash: key === 'workspaces' ? 'W2' : 'EMPTY' }
+    })
     ex.onRemoteEvent(remote('tabs.w1', 2, null))
     await flush()
-    expect(applySectionToStores).toHaveBeenCalledWith('tabs.w1', null, { masterHostId: HOST })
-    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: null, localHash: null }])
+    expect(applySectionToStores).not.toHaveBeenCalled() // the workspace's tabs were NOT emptied
+    expect(eventsOf('pull-applied')).toEqual([])
+    expect(api.listProfiles).toHaveBeenCalledTimes(1) // "is `workspaces` behind?" — asked at once
+    expect(ex.status().sections['tabs.w1']).toBe('synced')
+
+    // the index shows `workspaces` moved → it is pulled → w1 goes → the collector reports tabs.w1 gone
+    list.resolve(index([meta('hosts', 1, 'H1'), meta('workspaces', 2, 'W2')]))
+    await flush()
+    expect(applySectionToStores.mock.calls.map((c) => c[0])).toEqual(['workspaces'])
+    ex.onSection({ key: 'tabs.w1', hash: null, payload: null })
+    await vi.advanceTimersByTimeAsync(120_000)
+
+    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' } }) // forgotten
     expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'tabs.w1')
+    expect(applySectionToStores.mock.calls.map((c) => c[0])).toEqual(['workspaces']) // never the deletion
+    expect(api.putSection).not.toHaveBeenCalled() // no orphan re-created
+    expect(api.deleteSection).not.toHaveBeenCalled() // and no second delete: both sides are absent, that is agreement
+    expect(problems).toEqual([])
+  })
+
+  it('a tabs.<id> deleted on the SOT while its workspace STAYS (not a normal operation): retried with backoff, never applied, reported once', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w1')] })
+    const { ex, problems } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
+    api.getSection.mockResolvedValue({ kind: 'ok', value: null })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1')]))
+    ex.onRemoteEvent(remote('tabs.w1', 2, null))
+    await flush()
+    expect(api.getSection).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(api.getSection).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.getSection).toHaveBeenCalledTimes(2)
+    expect(problems).toEqual([])
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(applySectionToStores).not.toHaveBeenCalled()
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(api.listProfiles).toHaveBeenCalledTimes(1) // the index is asked once, not on every retry
+    expect(problems).toEqual([{ kind: 'tabs-deleted-workspace-kept', section: 'tabs.w1', detail: expect.any(String) }])
+  })
+
+  it('a tabs.<id> deletion whose workspace is NOT here is never pulled at all: the local absence already agrees', async () => {
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
+    ex.onSection({ key: 'tabs.w1', hash: null, payload: null }) // the workspace went first
+    api.deleteSection.mockReturnValue(new Promise(() => {}))
+    await flush()
+    vi.clearAllMocks()
+    const { ex: ex2 } = await synced({ hosts: 'H1', workspaces: 'W1' })
+    ex2.onRemoteEvent(remote('tabs.w9', 2, null))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(api.getSection).not.toHaveBeenCalled()
+    expect(applySectionToStores).not.toHaveBeenCalled()
+    expect(ex2.status().sections).toEqual({ hosts: 'synced', workspaces: 'synced' })
+    void ex
   })
 
   it('a 404 for a section the index lists as LIVE is not applied as a deletion: the list is asked', async () => {
@@ -1027,17 +1085,6 @@ describe('executor — pull', () => {
     await flush()
     expect(api.putSection).toHaveBeenCalledTimes(1)
     expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-clean', payload: { v: 2 } })
-  })
-
-  it('a deleted tabs.<id> whose workspace is still here: base is absent, the empty tabs the stores hold are dirty against it', async () => {
-    useWorkspaceStore.setState({ workspaces: [ws('w1')] })
-    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
-    api.getSection.mockResolvedValue({ kind: 'ok', value: null })
-    applySectionToStores.mockResolvedValue({ ok: true, hash: 'EMPTY' })
-    ex.onRemoteEvent(remote('tabs.w1', 2, null))
-    await flush()
-    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: null, localHash: 'EMPTY' }])
-    expect(store.saveSection).toHaveBeenLastCalledWith(PROFILE, 'tabs.w1', { base: { rev: 2, hash: null }, currentHash: 'EMPTY' })
   })
 })
 
