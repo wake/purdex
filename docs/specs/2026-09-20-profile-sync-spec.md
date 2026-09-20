@@ -118,7 +118,7 @@ Persisted stores, their keys, and where each field lands. `L` = device-local (ne
 | `stores/useHostStore.ts` | `purdex-hosts` | `hosts` (`hosts`, `hostOrder`; every `HostConfig` field — `id name ip port token order color colors icon iconWeight`) | `activeHostId`, **`devHostId`**, `runtime` |
 | `stores/useLayoutStore.ts` | `purdex-layout` | `settings` — **only `tabPosition`** | regions (views, widths, mode, activeViewId), `activityBarWidth`, `activityBarWideSize`, `workspaceExpanded` |
 | `stores/useUISettingsStore.ts` | `purdex-ui-settings` (v4) | `settings` | `terminalSettingsVersion` (a reconnect bump counter, not a preference) |
-| `stores/useEditorSettingsStore.ts` | `purdex-editor-settings` | `settings` | — |
+| `stores/useEditorSettingsStore.ts` | `purdex-editor-settings` | **not synced** *(P2b-2, §9.9 — pending the user's confirmation)* | the whole store: its own source says editor preferences are "a device-local choice (the small-screen laptop may want fontSize 11 while the big monitor uses 14) rather than shared config" |
 | `stores/useThemeStore.ts` | `purdex-themes` | `settings` | — |
 | `stores/useI18nStore.ts` | `purdex-i18n` | `settings` | — |
 | `stores/useNotificationSettingsStore.ts` | `purdex-notification-settings` | `settings` | — |
@@ -863,3 +863,118 @@ above. Two evidenced objections, both to `section-store`:
 |---|---|---|---|
 | C-1 | high | the generation fence is itself a non-atomic read-compare-write on `localStorage`: A reads g1, B claims g2, A writes its whole g1 document back over B's claim and data — B-1 again, just narrower | **one key per section, one content-addressed key per payload; the fence removed**, not patched. A stale write has no unrelated data left to destroy. What remains (same key, two leaders, last writer wins → at worst a false conflict) is written down as a residual, not claimed as prevented |
 | C-2 | high | the 1 MiB cap meant a larger conflict silently failed to persist, against Task 5 and §4.6.2 — and "kept in memory, re-derived after a restart" must not be described as meeting the contract | the cap is the daemon's 5 MiB again and the browser's quota decides; when it does not fit, that is recorded as a **known gap** (§7, #1244), in those words |
+
+### 9.9 P2b-2 — what integration found, 2026-09-20
+
+The driver is where five separately-built parts first met, and most of what it turned up was a
+contract that read fine on its own and was wrong in company. Full list in the P2b plan ("P2b-2 as
+built"); the ones that change this spec's meaning:
+
+- **A second store leaves the profile, for the user to confirm**: `useEditorSettingsStore` declares
+  itself device-local in its own source, with the very scenario this project exists for (a small
+  laptop and a big monitor). `settings` ordinal → 3.
+- **§4.7 "apply" is `setState` + `persist.rehydrate()`**, proven store by store — except the tab and
+  workspace stores, which must *not* be rehydrated (it rebuilds every tab object and re-renders every
+  pane); and a rehydrate's in-place heal is invisible until an empty `setState` follows it.
+- **§4.6.3 ordering is a correctness rule, not a nicety**: `tabs.*` is not pulled until `hosts` and
+  `workspaces` are *settled* — synced, indexed, SOT unmoved, idle. "Synced" alone also describes a
+  section that is clean but behind, and applying tabs against stale hosts marks another client's
+  live panes `host-removed` and pushes that back to everyone.
+- **§4.6.1 "the profile was recreated" is not per-section.** A profile that vanishes from the list is
+  handled above the state machines (`profileGone`): telling each of them "absent" would pull
+  deletions and erase the local state. A *failed* list tells them nothing.
+- **A pull reports two hashes** — what the SOT held, and what the stores hold after the apply — so
+  that a sanitiser's correction is pushed back instead of being mistaken for the SOT's content.
+- **An empty, never-agreed `tabs.<id>` facing a SOT with content is a placeholder**, not a local
+  edit; otherwise every workspace arriving from another machine could open as a conflict.
+- **A persisted conflict needs only its local side's payload** (the sent snapshot, §4.6.2); the SOT
+  side is re-fetchable.
+
+### 9.10 P2b-2 real-machine acceptance, 2026-09-20 (first pass)
+
+Worktree dev server `http://100.64.0.2:5175` (plain HTTP on the tailnet IP — the same kind of origin
+the Electron dev window loads), the live mlab daemon (alpha.411), two Playwright browser contexts =
+two clients with their own `clientId` and `localStorage`. Hosts were seeded through a 0600
+storage-state file; the token never appeared on a command line or in output. Driven through the
+dev-only `window.__purdexProfileSync` hook, which calls the same `attachMaster` / `detachMaster`
+P3's wizard will.
+
+| Spec §6 | Result |
+|---|---|
+| iron rule (no master) | **pass** — 0 requests to `/api/profiles`, no `purdex-profile*` key, before attach |
+| 1 first push | **pass** — `hosts`, `settings` (ordinal 3), `workspaces` at rev 1; adding two workspaces created `tabs.<id>` × 2 and moved `workspaces` to rev 2 |
+| 2 second client pulls | **pass after a manual `Take SOT`** — see the second finding below |
+| 3 propagation | **pass — 519 ms** from the rename on A to the store change on B (500 ms debounce + 19 ms for PUT → broadcast → GET → apply). Only `workspaces` advanced |
+| 4 converged | **pass** — the same rename on both at once advanced the rev exactly once; both `synced`, no lock |
+| 5 conflict locks one section | **pass** — different renames at once: A applied, B got 409 and only `workspaces` went `locked:conflict`; B's local text was not overwritten; a tab B added elsewhere meanwhile still synced (`tabs.<id>` rev 2); `Keep local` on B converged both |
+| 8 focus not mirrored | **pass** — A switched active workspace; B's did not move and no section advanced |
+| 12 delete refused while attached | **pass** — 409 `{reason: 'attached'}` with two attachments |
+
+**Two real findings, neither reachable by the 8,459 unit tests:**
+
+1. **`crypto.subtle` does not exist outside a secure context**, and `http://100.64.0.2:5175` is not
+   one — so not a single section hash could be computed: `Cannot read properties of undefined
+   (reading 'digest')`. The P2a measurement had flagged exactly this and the main session filed it
+   under "pre-existing exposure"; it is in fact the main path, because plain HTTP on the tailnet IP
+   is how both workstations load the app in dev mode. jsdom has Node's `crypto.subtle`, so every test
+   was green. Fixed with a pure-JS SHA-256 fallback in `lib/crypto-hash.ts`, byte-identical to
+   WebCrypto (NIST vectors, padding boundaries, 200 seeded random inputs) — two clients on different
+   paths must agree on every hash or they never converge. ~15 ms/MiB.
+2. **Attach had no direction.** A brand-new client's empty `workspaces` list is a payload with a
+   hash; it has never agreed with the SOT; the SOT has content → the decision table says conflict,
+   correctly — it cannot know which side should win. What was missing is the user's decision 10: the
+   wizard's **push / pull**. `attachMaster` takes a direction, persisted in the control store as
+   `pendingDirection` until the first full settle; during that initial reconciliation a conflict is
+   resolved by the direction instead of being put to the user, and `push` also removes `tabs.*`
+   another client left behind. `pull` overwrites local state, and decision 12 requires saving it as
+   a slave first — slaves arrive in P3, so until the wizard exists only the dev hook calls this path.
+
+**A lesson about the procedure itself.** The first pass polluted its own SOT: a subagent was fixing
+`crypto-hash.ts` in the same worktree while client A's page was open, and its mutation tests —
+SHA-256 deliberately broken three ways — were **hot-reloaded into the live page by Vite**, which then
+pushed sections hashed and fingerprinted by a mutant. The next, correct build found a different
+fingerprint at the same ordinal and went `locked:schema` — which is, at least, the schema lock failing
+closed on a real machine. Rule since: **no mutation testing in a worktree while a page served from it
+is open**; close the browser and the dev server first.
+
+**Second pass, after the direction fix** (fresh profile; A attached with `push`, B — which had a
+workspace of its own — with `pull`):
+
+| Spec §6 | Result |
+|---|---|
+| 2 second client pulls | **pass, unattended** — B ended with A's two workspaces and three tabs, its own workspace gone (that is what `pull` means), every section `synced`, `pendingDirection` cleared; **every section still at rev 1 with A as writer — B wrote nothing** |
+| 9 split ratios | **pass** — B got the split with its own `[50, 50]`; B dragging to `[20, 80]` left A at `[70, 30]` and wrote nothing |
+| 6a merely behind | **pass** — B paused, A renamed five times, B resumed: fast-forward to the last name, no lock |
+| 6 / 6b a dirty section refuses an inbound apply | **pass** — B's unsynced tab was not replaced by A's; `Keep local` converged both on B's version. One departure from the letter of 6b: B went `locked:conflict` *when A's event arrived*, not on `Sync now`. Locking is local bookkeeping and sends nothing; learning of the conflict earlier is more useful than later. §6 6b should read "is `locked:conflict` no later than `Sync now`" |
+| 6c section lifecycle | **pass** — A created a workspace, B gained it and its tabs; B deleted it, A lost both; **no `tabs.<id>` row left on the daemon** |
+| two windows, one context | **pass** — exactly one led; an edit made in the *follower* window reached the daemon through the leader, **exactly once**, and B saw it; closing the leader window, the follower took over within the lease TTL |
+| 7 schema lock | **FAIL → fixed** — see below |
+
+Offline was simulated with `autoSync: false` rather than by stopping the mlab daemon (the user's
+working environment): the state machine treats `!reachable` and `!autoSync` in the same branch.
+
+**Third real finding.** A `settings` write with another fingerprint and ordinal 99 (a "newer Purdex",
+by `curl`) was accepted and broadcast, as it should be. Both clients answered with that *section*
+`locked:invalid` — and a later edit on B **was written out**. §4.4 says the whole profile locks and
+an older client writes nothing. `profileLock` was evaluated only on reindex, while clients learn of
+a new revision through the event — which carries no fingerprint — and pull; the fetched section's
+`fingerprint` / `ordinal` went unread. The pull path now compares shape before applying.
+
+Also seen, self-healing but wrong in passing: when a `tabs.<id>` deletion overtook the `workspaces`
+change that caused it, the receiver emptied a workspace it still had and nearly recreated the
+section on the SOT. A deletion of `tabs.<id>` for a workspace that still exists locally now waits.
+
+**Third pass, after those two fixes** (fresh profile again): item 7 **passes** — both clients read
+`profile: locked:schema`, name `settings`, verdict `sot-is-newer`; an edit made on each afterwards
+produced **zero writes** on the daemon while staying in the local stores. Item 6c again, with a
+subscriber on A watching for the bad intermediate state: the workspace B deleted was **never seen
+present-but-emptied** on A, the daemon kept no `tabs.<id>` row, and neither client reported a
+`pull-hash-mismatch` or `push-payload-missing`.
+
+Afterwards: both browsers closed, the dev server stopped, **every acceptance profile deleted from
+the daemon** (`profiles: []`), the storage-state file that held the token removed.
+
+**Not run here:** item 13 in its real form (a second *machine* reaching every host with the pulled
+tokens — both contexts were seeded with the same host), and the cross-machine run on air-2026. The
+App there loads the main checkout's `:5174`, which this isolated worktree session cannot `git pull`;
+that run is the user's acceptance.

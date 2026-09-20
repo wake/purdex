@@ -11,6 +11,7 @@ import { startHostConfigLoader } from './lib/host-config-loader'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { startExecutionListInvalidation } from './stores/useExecutionListStore'
+import { startProfileSync } from './lib/profile/start'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -37,6 +38,8 @@ startPeerCacheInvalidation()
 startNexHostInvalidation()
 // Execution lists: open/close a host's site-wide stream on nex readiness, drop its rows on identity change.
 startExecutionListInvalidation()
+// Profile Sync: with no master set this is one subscription to useProfileStore and nothing else (app lifetime).
+startProfileSync()
 
 useLayoutStore.getState().reconcileViews()
 

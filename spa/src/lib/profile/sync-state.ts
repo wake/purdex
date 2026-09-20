@@ -150,7 +150,14 @@
 //   - lock-conflict / lock-reset: dispatch `{type:'locked', reason}`. It is
 //     refused if the state no longer calls for that lock.
 //   - pull: fetch, then check `canApplyPull` on the *current* state before
-//     touching the stores; then dispatch `pull-applied`. If the payload cannot
+//     touching the stores; then dispatch `pull-applied` with BOTH hashes:
+//     `hash` = the one the SOT served (`null` for a 404 / deletion), `localHash`
+//     = the one rebuilt from the stores after the apply. They are kept apart
+//     because one number cannot be both: recording the rebuilt hash as the
+//     SOT's makes the next index look like a move (a re-pull on every
+//     reconnect) and never sends the sanitised content back; recording the
+//     SOT's as `currentHash` claims the stores hold what they do not. Apart,
+//     a difference is simply a dirty section, and row 4 pushes it. If the payload cannot
 //     be applied, dispatch `{type:'locked', reason:'invalid', rev}` with the rev
 //     that was FETCHED instead, and touch nothing. If that is refused (same
 //     reference back) the verdict was stale — the SOT moved on, or a
@@ -243,7 +250,16 @@ export type SectionEvent =
   | { type: 'push-converged'; rev: number } // 200 applied:false
   | { type: 'push-conflict'; rev: number; hash: string | null } // 409 conflict; rev 0 + null = absent
   | { type: 'push-failed' } // network, 5xx, 503, timeout, malformed
-  | { type: 'pull-applied'; rev: number; hash: string | null } // null = applied a deletion
+  /** A pulled payload (or deletion) has landed in the stores. TWO hashes, from
+   *  two places: `hash` is the SOT's — what `getSection` served (`null` = the
+   *  deletion was applied) — and goes into `base` (and `sot`, if `rev` is not
+   *  behind it). `localHash` is rebuilt FROM THE STORES after the apply and goes
+   *  into `currentHash`. Normally they are equal → clean. They differ when the
+   *  stores did not keep what arrived (a sanitiser; a deleted `tabs.<id>` whose
+   *  workspace is still here holds the empty tabs, not nothing) → the section
+   *  is honestly dirty against the base it has just agreed on, and the table
+   *  pushes the local version over the pulled rev. */
+  | { type: 'pull-applied'; rev: number; hash: string | null; localHash: string | null }
   | { type: 'local-restored'; hash: string | null } // the driver put the snapshot back
   | { type: 'resolved'; keep: 'local' | 'sot' }
   | LockedEvent
@@ -546,8 +562,9 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
 
     case 'pull-applied': {
       if (!canApplyPull(s)) return s
+      // base (and sot) take the SOT's hash; currentHash takes what the stores hold NOW
       const held: Held = { rev: e.rev, hash: e.hash }
-      const next = { ...s, base: held, currentHash: e.hash, forcePull: false }
+      const next = { ...s, base: held, currentHash: e.localHash, forcePull: false }
       return e.rev >= s.sot.rev ? withSot(next, held) : next
     }
 

@@ -278,7 +278,7 @@ persist → decideSection → act`.
 - **`reindex` is profile-level single-flight** (#14): many sections asking share one
   `listProfiles`. `ok:false` → **no event at all**, sections stay stale, retry with backoff
   (2 s → 30 s cap, reset on success). Only a well-formed `ok:true` list that lacks the master id
-  means the profile is gone → every section `locked:reset`. Otherwise `profileLock(index,
+  means the profile is gone → the executor's **`profileGone`** (status `locked:reset`; see "as built" — never a per-section `sot-index(null)`, which the state machine would read as deletions to pull, wiping the local state). Otherwise `profileLock(index,
   shapeTable())`, then one `sot-index{epoch: indexEpoch}` per known section, then
   `reconcileSectionSet`.
 - `push`/`delete`: dispatch `push-started`; **send only if the resulting `inFlight === token` and
@@ -311,6 +311,66 @@ becoming `connected` into `reconnected` for every section (and `reachable = fals
 Followers run `watchUnsyncedStores()` only. `import.meta.env.DEV` only:
 `window.__purdexProfileSync = {attach(hostId, profileId), detach(), state()}` — attach/detach go
 through the same code path P3's wizard will call (attachment included).
+
+### P2b-2 as built — what integration found (spec §9.9)
+
+Every task prompt said *"if the contract contradicts itself or cannot be implemented as written,
+report it — do not silently pick a reading."* The integrating tasks reported the following, and the
+main session ruled on each:
+
+- **Two more stores are device-local by their own source**, by the same rule as `module-enabled`:
+  `useEditorSettingsStore` ("editor preferences are a device-local choice (the small-screen laptop
+  may want fontSize 11 while the big monitor uses 14) rather than shared config"). Removed from the
+  `settings` projection, **ordinal → 3**, eight stores. **For the user to confirm.** With it gone no
+  projected store is unregistered with `syncManager`; `watchUnsyncedStores()` stays as a mechanism
+  with an empty list, guarded by a test that fails the day that stops being true.
+- **`setState` + `persist.rehydrate()` holds** — proven per store family in
+  `apply-to-stores.test.ts`: `persist` flushes synchronously, the hooks run (the i18n `t` switches,
+  the theme reaches the DOM, `healLayoutInvariant` fires, a same-version rehydrate does not
+  `migrate`), `detectLocale` does not override an applied locale, non-persisted fields and actions
+  survive, and with a synchronous storage the whole `hydrate()` runs without yielding — no write can
+  slip between. Two things the plan had not foreseen: a heal that mutates the state object in place
+  **notifies no subscriber and is not written back**, so each rehydrate is followed by an empty
+  `setState({})`; and **`useTabStore` / `useWorkspaceStore` must not be rehydrated** — they have no
+  hook to run, and a rehydrate rebuilds every tab object from JSON, re-rendering every pane for one
+  remote edit. Those two are written synchronously with a two-store rollback.
+- **Removing a host reuses the app's own `deleteHostCascade`**, unchanged: the hosts slice is written
+  in stages (new list ∪ the ones leaving → cascade each → the exact new list) to get past its "never
+  the last host" veto. Pinned by a test that the final state equals a manual deletion's. A hosts
+  apply that removes a host therefore takes the operation lock and may answer `busy`; one that does
+  not, never touches the lock.
+- **"`hosts` is `synced`" is not "`hosts` is settled".** `synced` only means not dirty; a hosts
+  section that is clean but *behind* reads `synced` too, and applying `tabs.*` then is exactly the
+  case that marks a newly added host's live panes `host-removed` and pushes that back. The executor
+  defers every `tabs.*` pull until `hosts` (and `workspaces`) are synced **and** indexed **and** the
+  SOT has not moved **and** no action of theirs is running.
+- **A profile missing from the list must not become `sot-index(null)` per section** — the state
+  machine would read "deleted on the SOT" and pull the deletions, wiping the local hosts,
+  workspaces and tabs. The executor enters `profileGone`: every action stops, nothing local is
+  touched, status reads `locked:reset`, and the wizard (P3) is the way out. A **failed** list
+  dispatches nothing at all. Same guard on reads: a 404 for a section the index lists as live is not
+  applied as a deletion (`getSection`'s 404 also means "no such profile"); it forces a reindex.
+- **`pull-applied` carries two hashes**: the SOT's (→ `base`, `sot`) and the one recomputed from the
+  stores after the apply (→ `currentHash`). With one hash, "a sanitiser's change shows up honestly
+  as dirty" could never happen, and the recomputed hash was recorded as the SOT's.
+- **An empty `tabs.<id>` that has never agreed with a SOT that has content is a placeholder, not an
+  edit.** A workspace arriving from another client exists locally, empty, before its tabs do; if the
+  collector reported that emptiness as a local change the user would be asked to choose between
+  "nothing" and the other machine's tabs without having done anything. Held back while the index is
+  stale, dropped if the SOT turns out to have content, dispatched if it does not.
+- **A stored conflict needs the payload of its *local* side only.** That one is the snapshot that
+  was sent and cannot be had again (§4.6.2); the SOT side can always be re-fetched, and `Take SOT`
+  pulls fresh anyway. Requiring both made every decide-time conflict unpersistable.
+- `locked:invalid` unlocks on **any** SOT different from the one judged (rev *or* hash): an absent
+  SOT has no revision to be higher, and a recreated profile's revisions go backwards.
+- The lease: `isLeader()` reads storage on every call; with storage unavailable the window leads on
+  its in-memory flag and probes every `renewMs`; `pageshow` re-contends after a bfcache restore; a
+  lease dated more than 10 × TTL ahead is treated as damaged (clock set back, holder dead).
+- `createExecutor` starts nothing. **Task 11 must call `onReconnected()` when the master's host is
+  connected — the first time included** — or restored sections stay index-stale forever.
+- Test environment: jsdom's `localStorage.setItem` schedules a 0 ms timer of its own, so
+  `vi.getTimerCount()` is never 0 right after a persisted `setState`; advance 1 ms first.
+
 
 ### Acceptance for P2b-2 (real machine — run, not assumed)
 Worktree dev server `:5175` against the mlab daemon; **two Playwright browser contexts = two clients

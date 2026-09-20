@@ -53,7 +53,21 @@
 // like any other damaged conflict. The leader that wrote it still holds it in
 // memory; what is lost is its survival across a restart.
 //
-// A STORED CONFLICT HAS ITS PAYLOADS — BY WRITE ORDER. Several keys cannot be
+// THE TWO SIDES OF A CONFLICT ARE NOT ALIKE, AND ONLY ONE IS REQUIRED. The
+// LOCAL side (`conflict.localHash`) is the snapshot that was SENT: the stores
+// have moved on since, nothing else holds it, and spec §4.6.2 exists to keep it
+// — lose it and the user chooses against a moving target. The SOT side
+// (`conflict.sot.hash`) can be fetched again at any time, and `keep:'sot'` does
+// exactly that (a fresh pull) rather than use a stored copy. Nor is it always
+// there to store: the state machine makes conflicts whose SOT side is a hash
+// only — a lock decided from an index (row 8), and any lock that learns of a
+// newer SOT rev from an event. So: the local payload must be passed or already
+// stored, else `saveConflict` fails; the SOT payload is stored WHEN PASSED and
+// its absence is not a failure. The same at load: a conflict is dropped only
+// when its LOCAL payload is missing or unreadable. `pruneStash` still protects
+// both — what is stored and referred to is not removed.
+//
+// A STORED CONFLICT HAS ITS (REQUIRED) PAYLOAD — BY WRITE ORDER. Several keys cannot be
 // written atomically, so `saveConflict` writes every payload key first and the
 // section key, which carries the `conflict`, LAST and only if all of those
 // succeeded. Any failure on the way returns `'failed'` with the section key
@@ -62,8 +76,8 @@
 // refers to, and `pruneStash` removes those. `saveSection` refuses a section
 // that carries a conflict — there is no other way to store one.
 //   The same is enforced on the way IN, because storage can be damaged behind
-// this module's back: at load, a conflict that needs a payload which is missing
-// or unreadable is dropped. Only the `conflict` goes — `base` and `currentHash`
+// this module's back: at load, a conflict whose LOCAL payload is missing or
+// unreadable is dropped. Only the `conflict` goes — `base` and `currentHash`
 // stay and the section comes back unlocked. And `pruneStash` will not remove a
 // payload a stored conflict refers to, whatever its caller's `keep` says.
 //
@@ -203,10 +217,16 @@ function serialisePayload(payload: unknown): string | null {
   return new TextEncoder().encode(serialised).length <= MAX_STASH_PAYLOAD_BYTES ? serialised : null
 }
 
-/** The hashes whose payloads a conflict cannot be resolved without. `null` is
- *  "does not exist" (a delete was sent / the SOT holds a tombstone): no payload. */
-function neededHashes(conflict: SectionConflict): string[] {
+/** Every payload a conflict REFERS to — what `pruneStash` must leave alone.
+ *  `null` is "does not exist" (a delete was sent / the SOT holds a tombstone): no payload. */
+function referencedHashes(conflict: SectionConflict): string[] {
   return [conflict.localHash, conflict.sot.hash].filter((h): h is string => h !== null)
+}
+
+/** The payload a conflict cannot exist without: the LOCAL side only — see
+ *  "THE TWO SIDES ARE NOT ALIKE" in the header. */
+function requiredHashes(conflict: SectionConflict): string[] {
+  return conflict.localHash === null ? [] : [conflict.localHash]
 }
 
 function isSectionKey(v: unknown): v is string {
@@ -309,7 +329,7 @@ export function loadSectionStore(profileId: string): SectionStoreData {
     const read = readKey(storageKey)
     const section = read.ok ? parseSection(parseJson(read.raw)) : null
     if (section === null) continue // a bad section is dropped alone
-    const intact = section.conflict === undefined || neededHashes(section.conflict).every((h) => payloadState(profileId, h) === 'present')
+    const intact = section.conflict === undefined || requiredHashes(section.conflict).every((h) => payloadState(profileId, h) === 'present')
     sections.push([key, intact ? section : { base: section.base, currentHash: section.currentHash }])
   }
   return { profileId, sections: recordOf(sections) }
@@ -327,8 +347,9 @@ export function saveSection(profileId: string, key: string, s: PersistedSection)
 }
 
 /** A locked section and the payloads its conflict refers to. `payloads` is by
- *  hash; every non-null hash of `s.conflict` must be in it or already stored
- *  (and readable), else `'failed'` before anything is written.
+ *  hash; `s.conflict.localHash` (if not null) must be in it or already stored
+ *  (and readable), else `'failed'` before anything is written. The SOT side is
+ *  stored when passed and not missed when it is not (see the header).
  *    ORDER IS THE INVARIANT: each payload key first — one that is already
  *  stored with the same content is skipped — and the section key last, only
  *  once every payload is in. A refusal half-way returns `'failed'` and leaves
@@ -352,7 +373,7 @@ export function saveConflict(
     writes.push([hash, serialised])
   }
   const passed = new Set(writes.map(([hash]) => hash))
-  if (neededHashes(conflict).some((h) => !passed.has(h) && payloadState(profileId, h) !== 'present')) return 'failed'
+  if (requiredHashes(conflict).some((h) => !passed.has(h) && payloadState(profileId, h) !== 'present')) return 'failed'
 
   for (const [hash, serialised] of writes) {
     const storageKey = `${payloadPrefix(profileId)}${hash}`
@@ -414,7 +435,7 @@ export function pruneStash(profileId: string, keep: ReadonlySet<string>): WriteR
     const read = readKey(storageKey)
     if (!read.ok) return 'failed'
     const conflict = parseSection(parseJson(read.raw))?.conflict
-    if (conflict !== undefined) for (const h of neededHashes(conflict)) referenced.add(h)
+    if (conflict !== undefined) for (const h of referencedHashes(conflict)) referenced.add(h)
   }
   const prefixLength = payloadPrefix(profileId).length
   return removeAll(payloadKeys.filter((storageKey) => {

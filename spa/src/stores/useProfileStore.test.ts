@@ -7,7 +7,7 @@ const OTHER_PROFILE = 'p_ba9876543210'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -41,7 +41,7 @@ describe('useProfileStore', () => {
 
   describe('setMaster', () => {
     it('sets both halves and reports true', () => {
-      expect(useProfileStore.getState().setMaster('host-1', PROFILE)).toBe(true)
+      expect(useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')).toBe(true)
       const s = useProfileStore.getState()
       expect(s.masterHostId).toBe('host-1')
       expect(s.masterProfileId).toBe(PROFILE)
@@ -58,9 +58,9 @@ describe('useProfileStore', () => {
       ['a non-string host id', 7 as unknown as string, PROFILE],
       ['a non-string profile id', 'host-1', null as unknown as string],
     ])('refuses %s and leaves the current master alone', (_label, hostId, profileId) => {
-      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE)
+      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull')
 
-      expect(useProfileStore.getState().setMaster(hostId, profileId)).toBe(false)
+      expect(useProfileStore.getState().setMaster(hostId, profileId, 'pull')).toBe(false)
 
       const s = useProfileStore.getState()
       expect(s.masterHostId).toBe('host-0')
@@ -68,7 +68,7 @@ describe('useProfileStore', () => {
     })
 
     it('a refusal while detached stays detached (never half a master)', () => {
-      expect(useProfileStore.getState().setMaster('host-1', 'nope')).toBe(false)
+      expect(useProfileStore.getState().setMaster('host-1', 'nope', 'pull')).toBe(false)
       const s = useProfileStore.getState()
       expect(s.masterHostId).toBeNull()
       expect(s.masterProfileId).toBeNull()
@@ -76,7 +76,7 @@ describe('useProfileStore', () => {
   })
 
   it('clearMaster clears both halves and leaves autoSync alone', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
     useProfileStore.getState().setAutoSync(false)
 
     useProfileStore.getState().clearMaster()
@@ -89,7 +89,7 @@ describe('useProfileStore', () => {
   })
 
   it('setAutoSync flips the flag and leaves the master alone', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
     useProfileStore.getState().setAutoSync(false)
     expect(useProfileStore.getState().autoSync).toBe(false)
     expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: 'host-1', profileId: PROFILE })
@@ -103,13 +103,13 @@ describe('useProfileStore', () => {
     expect(selectMaster({ ...base, masterHostId: null, masterProfileId: PROFILE })).toBeNull()
   })
 
-  it('persists exactly the three fields', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE)
+  it('persists exactly the four fields', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
     useProfileStore.getState().setAutoSync(false)
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull' })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
@@ -131,7 +131,7 @@ describe('useProfileStore', () => {
       ['a malformed profile id', { masterHostId: 'host-1', masterProfileId: 'p_nothex000000', autoSync: true }],
     ])('%s → detached, both halves null', async (_label, state) => {
       // Start attached, so "null afterwards" cannot be the untouched default.
-      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE)
+      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull')
 
       await rehydrateFrom(state)
 
@@ -162,7 +162,7 @@ describe('useProfileStore', () => {
       ['a string', 'garbage'],
       ['an array', [1, 2]],
     ])('a persisted state that is %s → defaults, actions intact', async (_label, state) => {
-      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE)
+      useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'pull')
 
       await rehydrateFrom(state)
 
@@ -220,6 +220,62 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) await Promise.resolve()
 }
 
+describe('pendingDirection — which side wins the first reconciliation', () => {
+  it('starts null', () => {
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
+  })
+
+  it.each(['push', 'pull'] as const)('setMaster records %s', (direction) => {
+    expect(useProfileStore.getState().setMaster('host-1', PROFILE, direction)).toBe(true)
+    expect(useProfileStore.getState().pendingDirection).toBe(direction)
+  })
+
+  it.each([undefined, null, '', 'both', 'PULL', 1])('setMaster refuses the direction %j and changes nothing', (direction) => {
+    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push')
+    expect(useProfileStore.getState().setMaster('host-1', PROFILE, direction as never)).toBe(false)
+    const s = useProfileStore.getState()
+    expect(s.masterHostId).toBe('host-0')
+    expect(s.pendingDirection).toBe('push')
+  })
+
+  it('a refused master does not touch the direction either', () => {
+    useProfileStore.getState().setMaster('host-0', OTHER_PROFILE, 'push')
+    expect(useProfileStore.getState().setMaster('host-1', 'nope', 'pull')).toBe(false)
+    expect(useProfileStore.getState().pendingDirection).toBe('push')
+  })
+
+  it('clearPendingDirection clears it and leaves the master alone', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
+    useProfileStore.getState().clearPendingDirection()
+    const s = useProfileStore.getState()
+    expect(s.pendingDirection).toBeNull()
+    expect(s.masterHostId).toBe('host-1')
+    expect(s.masterProfileId).toBe(PROFILE)
+  })
+
+  it('clearMaster clears it too', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'push')
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
+  })
+
+  it('survives a reload', async () => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: true, pendingDirection: 'push' })
+    expect(useProfileStore.getState().pendingDirection).toBe('push')
+  })
+
+  it.each([
+    ['a direction without a master', { masterHostId: null, masterProfileId: null, pendingDirection: 'pull' }],
+    ['a direction with half a master', { masterHostId: 'host-1', masterProfileId: null, pendingDirection: 'pull' }],
+    ['an unknown direction', { masterHostId: 'host-1', masterProfileId: PROFILE, pendingDirection: 'sideways' }],
+    ['a non-string direction', { masterHostId: 'host-1', masterProfileId: PROFILE, pendingDirection: 1 }],
+    ['a record from before the field existed', { masterHostId: 'host-1', masterProfileId: PROFILE }],
+  ])('rehydrate: %s → null', async (_label, state) => {
+    await rehydrateFrom(state)
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
+  })
+})
+
 describe('every window agrees on the master', () => {
   beforeEach(() => {
     FakeBroadcastChannel.bus.clear()
@@ -237,7 +293,7 @@ describe('every window agrees on the master', () => {
     const b = await openWindow()
     expect(a.useProfileStore).not.toBe(b.useProfileStore)
 
-    a.useProfileStore.getState().setMaster('host-1', PROFILE)
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
     await flush()
 
     expect(b.selectMaster(b.useProfileStore.getState())).toEqual({ hostId: 'host-1', profileId: PROFILE })
@@ -246,7 +302,7 @@ describe('every window agrees on the master', () => {
   it('a detach in window B (a follower) reaches window A (the leader)', async () => {
     const a = await openWindow()
     const b = await openWindow()
-    a.useProfileStore.getState().setMaster('host-1', PROFILE)
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull')
     await flush()
     expect(b.useProfileStore.getState().masterProfileId).toBe(PROFILE)
 
