@@ -4,9 +4,11 @@
   user's decisions 9–13. The driver's contract is `spa/src/lib/profile/start.ts` and the "as built"
   sections of `2026-09-20-profile-sync-p2b-plan.md`.
 - Worktree `.claude/worktrees/profile-sync`, based on `origin/main` alpha.414.
-- **Five PRs**, each ≤ 20 files, merged in order; each leaves the app working:
-  **P3a** foundations (no UI) → **P3b** slaves and the active pointer → **P3c** standalone tabs removed
-  → **P3d** the UI → **P3e** the new-tab "profile" rename (may slip to an issue).
+- **Six PRs**, each ≤ 20 files, merged in order; each leaves the app working:
+  **P3a** foundations (no UI) → **P3b** slaves and the active pointer → **P3c-1** every tab gets a
+  workspace → **P3c-2** the dead standalone code goes → **P3d** the UI → **P3e** the new-tab "profile"
+  rename (may slip to an issue). *(Revised after the codex plan review `task-mu992a03-9xfv6x`: ten
+  findings, three critical, all accepted; spec §9.12.)*
 - **Invariant: a user who never opens Settings › Profile sees today's app** (spec Law 4). P3c is the
   one exception by design — it removes a concept — and is called out below.
 - Every task: subagent, TDD, one commit per task, `git commit --only`, Bash prefixed with
@@ -84,60 +86,109 @@ for its remaining callers (they die in P4b). `start.ts` imports the new home.
   per 250 ms, trailing); every window listens to the native `storage` event for that key. A
   follower's snapshot is the published one, marked `remote: true`; older than 10 s with no leader
   lease → `stale: true`. Cleared when the master is cleared.
-- **Commands reach the leader the same way**: `requestSyncNow()` / `requestResolve(section, keep)`
-  act locally in the leader; in a follower they append `{id, kind, section?, keep?, at}` to
-  `localStorage['purdex-profile-commands']`; the leader consumes and removes them (ids make a
-  re-delivery harmless; entries older than 30 s are dropped unexecuted — a stale "Keep local" must
-  not fire minutes later against a different conflict). `resolve` also carries the conflict it was
-  answering (`sot.rev`), and the leader ignores it if the section's conflict has moved on.
+- **Commands reach the leader the same way, one key per command** (review #5: an array in one key
+  is read-modify-write and loses commands by construction — two followers both read `[]`; the leader
+  clears what a follower has just appended): `localStorage['purdex-profile-cmd:<id>'] = {kind,
+  section?, keep?, conflict?, at}`. The leader executes and removes the key; a command older than
+  30 s is removed unexecuted. Two leaders in a hand-over may both execute one — harmless, because
+  `resolve` on a section that is no longer locked and `syncNow` are both no-ops in the reducer.
+- **A `resolve` is bound to the conflict the user was looking at** (review #6): it carries
+  `{localHash, sot: {rev, hash}}` and the leader refuses it unless the section's current conflict is
+  that one. `sot.rev` alone is not enough — the local side can change under an unchanged revision,
+  and `Keep local` would push content nobody confirmed.
 - `hooks/useProfileSync.ts`: `useSyncExternalStore` over the above.
 
 ## P3b — slaves and the active pointer
 
+**Rewritten after the plan review (spec §9.12).** The first draft swapped the live stores' contents
+and called the switch "one synchronous block". That holds inside the window that switches and
+nowhere else: the tab store, the workspace store and the local-profiles store are three persisted
+stores that other windows rehydrate one by one, in no guaranteed order — so a *leader* in another
+window could see a slave's world in the live stores while still believing the master was on screen,
+and report it to the SOT.
+
 ### Task 3 — `stores/useLocalProfilesStore.ts`
-Device-local, persisted (`purdex-local-profiles`, `syncManager`-registered so every window agrees on
-which profile is on screen):
+Device-local, persisted (`purdex-local-profiles`, `syncManager`-registered):
 ```ts
 interface ParkedWorld { workspaces: Workspace[]; tabs: Record<string, Tab>; activeWorkspaceId: string | null; activeTabId: string | null }
-interface LocalProfile { id: string; name: string; createdAt: number; world: ParkedWorld | null }  // world === null ⇔ this one is on screen
+interface LocalProfile { id: string; name: string; createdAt: number; world: ParkedWorld | null }  // null ⇔ on screen
 slaves: Record<string, LocalProfile>; slaveOrder: string[]
-activeProfileId: 'master' | string            // 'master' also when there is no master: the live world
-parkedMaster: ParkedWorld | null              // the master's world while a slave is on screen
+activeProfileId: 'master' | string
+parkedMaster: ParkedWorld | null
+worldEpoch: number                            // see Task 4
 ```
-Invariant: **exactly one world is on screen and has `world === null` / `parkedMaster === null`;
-every other is parked.** `merge` sanitises anything else back to "master on screen".
+Invariant: exactly one world is on screen (`world === null` / `parkedMaster === null`); `merge`
+sanitises anything else back to "master on screen".
 
-### Task 4 — `lib/profile/master-world.ts`: where the master's tab world lives *right now*
+### Task 4 — `lib/profile/master-world.ts`: where the master's tab world is — *or that nobody can say yet*
+**A world tag and an epoch barrier.** `useTabStore` and `useWorkspaceStore` each gain two persisted
+fields, `worldId: 'master' | string` and `worldEpoch: number`. A switch writes the **same** epoch
+and world id into all three stores in its synchronous block. Then:
 ```ts
-export function readMasterWorld(): { workspaces; tabs; tabOrder }     // live stores, or parkedMaster
-export function writeMasterWorld(next, afterWrite?): void             // commitTabWorld, or the parked copy
-export function subscribeMasterWorld(fn): () => void                  // live stores + the local-profiles store
+export type MasterWorldRead =
+  | { settled: true; world: { workspaces; tabs; tabOrder }; onScreen: boolean }
+  | { settled: false }                                            // the three stores disagree
+export function readMasterWorld(): MasterWorldRead
+export function writeMasterWorld(next, afterWrite?): 'ok' | 'unsettled'
+export function subscribeMasterWorld(fn): () => void
 ```
-`collector.ts` and `apply-to-stores.ts` go through it for `workspaces` and `tabs.*` (hosts and
-settings are always live — a slave borrows them, decision 9). With the master on screen nothing
-changes; with a slave on screen the collector hashes the parked master (so **a slave's workspaces
-can never be built into a section**) and an inbound apply updates the parked copy without touching
-the screen. `commitTabWorld` is exported from `apply-to-stores.ts` for Task 5.
+`settled` ⇔ the three `worldEpoch`s are equal **and** the two live stores carry the same `worldId`
+**and** that id equals `activeProfileId`. Unsettled: the collector reports **nothing** for
+`workspaces` / `tabs.*` / `settings` and re-checks on the next store change (a rehydrate that never
+arrives leaves it silent, never wrong — the executor sees an ordinary clean section); an apply
+answers `busy`. With the master on screen and settled nothing changes from today. Tests drive the
+three rehydrates in every order, including one that never arrives, and assert that **no report ever
+carries a slave's content** (each world's tabs hold a sentinel).
+
+- **`settings` is not "always live"** (review #1, critical): `purdex-workspace-settings.workspaces`
+  is a synced field keyed by workspace id. The settings builder projects only the ids of the
+  **master** world; the applier keeps local entries whose id is not the master's. Same rule for any
+  other listed settings field keyed by workspace id — Task 4 starts by grepping the eight stores for
+  one and reports what it finds.
+- **Hosts** stay live (a slave borrows them, decision 9) — but removing a host marks
+  `host-removed` panes in **every** world: the live one through `deleteHostCascade`, every parked one
+  (master and slaves) through `markHostRemovedPanes` (review #3).
+- `commitTabWorld` is exported from `apply-to-stores.ts` and stamps `worldId` / `worldEpoch`.
 
 ### Task 5 — `lib/profile/switch-active.ts`
-`switchActiveProfile(targetId)`: under `withOperationLock('profile-switch')`, in **one synchronous
-block**: park the on-screen world into its slot → take the target's parked world →
-`commitTabWorld(target)` → set `activeProfileId`; any throw restores all of it. Refused (`busy`)
-when the lock is held or a terminal-affecting operation is running. Also: `copyMasterAsSlave(name)`
-(the only copy operation, decision 10 — fresh tab and workspace ids via the existing
-`cloneTabWithFreshIds`, or a slave's tab ids would collide with the master's when both exist in
-memory), `renameSlave`, `deleteSlave` (never the one on screen), and `saveScreenAsSlave(name)` — what
-the wizard calls before a pull (decision 12).
-The executor's `pull`-direction reconciliation and every apply go through Task 4, so none of this
-changes the driver's contract.
+`switchActiveProfile(targetId)`: `withOperationLock('profile-switch')`; **one synchronous block**:
+park the on-screen world → take the target's → `commitTabWorld(target, {worldId, worldEpoch: n+1})`
+→ write `activeProfileId` and the epoch to the local-profiles store; any throw restores all three.
+Afterwards (not in the block) it asks every host for its sessions, so the reconciliation that only
+ever looks at the live tabs (`useMultiHostEventWs.ts:149`, `useTabStore.ts:852`) runs over the world
+that has just come on screen (review #4). What that leaves: **a parked world does not hear about a
+session that closed while it was parked** — for the master that is exactly a section that was
+offline for a while, and it is said so in the code; rebuild works the same for both (decision 13)
+because its inputs travel with the tab.
+- `copyMasterAsSlave(name)` — the only copy (decision 10); fresh tab / pane / workspace ids.
+- **`promoteToMaster(slaveId)`** — a *move*, never a copy (decision 10: "沒有複製為 master"): the
+  slave's world takes the master slot and the previous master world, if there was one, becomes a
+  slave named after it. Only while no master is attached (the wizard stops sync first).
+- `saveScreenAsSlave(name)`, `renameSlave`, `deleteSlave` (never the one on screen).
 
-## P3c — standalone tabs removed (§4.3)
+## P3c — standalone tabs removed (§4.3), in two PRs
+
+**P3c-1 — every tab gets a workspace** (the policy and the invariant; the standalone UI still
+compiles but becomes unreachable). **P3c-2 — the dead code goes** (`isStandaloneTab`,
+`reorderStandaloneTabOrder`, the two drag actions, the `home-header` drop target, `HomeRow`'s list,
+`getVisibleTabIds`' Home branches, both `handleSelectHome`s, the collector's census, and their
+tests rewritten). Measured at 17 production + ~12 test files, which is why it is two PRs
+(review #9).
 
 **Every tab belongs to exactly one workspace.** This is the one PR that changes the app for a user
 who never opens Settings › Profile; both of the user's machines have zero standalone tabs (spec §3.1).
-- **Boot adoption**: `main.tsx`, before the first render, runs `adoptStandaloneTabs` (already in
-  `lib/profile/sections.ts`) over the live stores — into a workspace named `t('workspace.unsorted')`,
-  created only if there is something to adopt. Idempotent; logged once.
+- **Adoption is a standing invariant, not a boot step** (review #7): a subscriber installed in
+  `main.tsx` before the first render runs `adoptStandaloneTabs` (already in
+  `lib/profile/sections.ts`) **whenever** the tab or workspace store changes and a tab belongs to no
+  workspace — into `t('workspace.unsorted')`, created only when needed. That covers the producer the
+  first draft missed, device-state's restore and merge (`device-state/merge.ts:146`,
+  `restore.ts:127`; they live until P4b), and any other nobody has found. It runs on the on-screen
+  world only and stamps nothing when the world is unsettled (Task 4). **Two windows adopting at
+  once**: the workspace id is derived from a fixed seed (`unsorted`) rather than generated, so both
+  produce the same workspace and the cross-window rehydrate converges; for the same reason two
+  *machines* that both upgrade with standalone tabs end with one `Unsorted`, not two.
+- The existing first-workspace flow (`MigrateTabsDialog`, `App.tsx:190-226`) no longer has tabs to
+  offer — there are none without a workspace — and is removed in P3c-2.
 - **A target-workspace policy for every producer**: `insertTab` with no target → the active
   workspace → else the first workspace → else **create** `Unsorted` and use it (never a silent
   no-op). `insertTab(id, null)` is removed from the type. Deleting a workspace with "keep these
@@ -173,8 +224,12 @@ no tab list under it after P3c).
 1. **Current** — master name, host, per-section state and revision (Task 2; a follower shows the
    leader's, labelled), last sync, **Auto-sync** toggle, **Sync now**, **Stop sync** (confirm).
    `blocked` reasons in words: endpoint changed (with the two addresses), profile gone, suspended.
-2. **Wizard** — one confirmed step at a time (decision 10): pick the host (the dev host by default)
-   → pick the SOT profile, existing or new (`listProfiles` / `createProfile`) → pick direction —
+2. **Wizard** — one confirmed step at a time, **the five of decision 10 in its order**: *stop sync*
+   (if a master is attached) → *pick the SOT profile*, existing or new, on the chosen host (the dev
+   host by default; `listProfiles` / `createProfile`) → ***pick which local profile becomes the
+   master*** — the one on screen or any slave; choosing a slave runs `promoteToMaster` (a move: the
+   previous master world becomes a slave; there is no "copy as master") (review #8, critical — the
+   first draft had dropped this step) → *direction* —
    **a new profile offers push only**; **pull first shows what will be replaced, offers to save the
    current screen as a slave named after this device (default on, decision 12), and only then
    calls `attachMaster(…, 'pull')`** → done. Refuses to start when `isClientIdPersisted()` is false,
@@ -187,7 +242,10 @@ no tab list under it after P3c).
    summary in counts (tabs, workspaces, hosts, settings keys — not a diff); `locked:invalid` → why,
    and `Keep local` only; `locked:reset` and profile-level `locked:schema` → the explanation and the
    one way out. All through Task 2's `requestResolve`.
-`SyncSection` is left registered until P4a removes the module; its sidebar entry gains "(legacy)".
+**`Settings › Sync` leaves the sidebar in this PR** (review #10: the spec says *replaces*, and two
+sync entry points with different stores behind them is not an IA anyone chose). The Sync module's
+`settings` contribution is dropped; the module, its engine and `SnapshotHistoryPage` stay until P4a
+deletes them. `TitleBar.tsx:31`'s icon predicate, which mirrors the Sync banner, goes with it.
 
 ### Task 8 — i18n (en + zh-TW, every key in both, placeholders paired) and PRODUCT.md §3.9 Profile
 (master / slave / active / SOT in the vocabulary's own format; the PR body lists the IA, visual and

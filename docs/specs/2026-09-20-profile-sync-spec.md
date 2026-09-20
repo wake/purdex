@@ -1049,3 +1049,29 @@ every pass found something real and each finding was narrower than the last — 
 the wrong order" to "the suspend runs one microtask late". No pass found a critical. What is left is
 written in the code as residuals, not claimed as prevented: `localStorage` is not a transactional
 store, a read followed by an act is not atomic, and bytes already sent cannot be recalled.
+
+### 9.12 P3 plan — measured, then reviewed (codex `task-mu992a03-9xfv6x`), 2026-09-20
+
+**Measured:** `getScopeTabs` (§4.3) does not exist — the standalone branch is inline in
+`closeTabInWorkspace`; standalone tabs have three live producers and touch 17 production files;
+`profileSyncState()` cannot back a React subscription and status exists only in the leader window;
+the driver already imports the device name from a module P4b deletes; "named after the host" (§4.9)
+can only mean this computer's device name.
+
+**Plan review: ten findings, three critical, all accepted.** Two were the main session's own
+suspicions, put to the reviewer as questions, and both were confirmed:
+- **A slave's workspace-scoped settings would have reached the SOT** — `purdex-workspace-settings`
+  is a synced field keyed by workspace id and the collector read it live. The settings builder now
+  projects master-world ids only.
+- **The switch was atomic in one window and nowhere else.** Three persisted stores rehydrate
+  separately in the other windows, so a leader elsewhere could read a slave's world as the master's.
+  Every store now carries a world tag and an epoch; while they disagree the master world is
+  *unsettled* and nothing is reported — silent, never wrong.
+- **The wizard had lost decision 10's third step**, "pick which local profile becomes the master".
+  Restored, with `promoteToMaster` as a move, not a copy.
+Also: host removal marks panes in every parked world, not only the one on screen; a world coming on
+screen re-runs the session reconciliation; follower commands are one `localStorage` key each (an
+array in one key loses commands by construction); a `resolve` is bound to the whole conflict, not
+to `sot.rev`; standalone adoption is a standing invariant, which also covers device-state's restore
+and merge; P3c is two PRs because it was measured at ~29 files; `Settings › Sync` leaves the sidebar
+when `Settings › Profile` arrives.
