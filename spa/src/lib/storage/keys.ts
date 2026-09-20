@@ -31,6 +31,7 @@ export const STORAGE_KEYS = {
   CLIENT_IDENTITY: 'purdex-client-identity',
   /** Profile Sync control plane（useProfileStore）：master 與 autoSync，走 syncManager 讓每個視窗一致 */
   PROFILE: 'purdex-profile',
-  /** 手動管理（非 Zustand store）：lib/profile/section-store.ts 經 browserStorage 直接讀寫；只有 leader 會寫，刻意不註冊 syncManager */
+  /** 手動管理（非 Zustand store）：這是 key 的**前綴**，不是完整的 key —— lib/profile/section-store.ts 組出
+   *  `<前綴>:<profileId>:s:<section>` 與 `<前綴>:<profileId>:p:<hash>`；只有 leader 會寫，刻意不註冊 syncManager */
   PROFILE_SECTIONS: 'purdex-profile-sections',
 } as const
