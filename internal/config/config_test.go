@@ -119,11 +119,13 @@ func TestLoadInvalidTOML(t *testing.T) {
 
 func TestDefaultsHaveUploadDir(t *testing.T) {
 	home, _ := os.UserHomeDir()
-	cfg, err := config.Load("")
+	// Point at a missing file so the real ~/.config/pdx/config.toml (which
+	// may override upload_dir) cannot leak into the defaults assertion.
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, "tmp", "purdex-upload")
+	want := filepath.Join(home, ".config", "pdx", "uploads")
 	if cfg.UploadDir != want {
 		t.Errorf("UploadDir = %q, want %q", cfg.UploadDir, want)
 	}

@@ -278,11 +278,12 @@ type Config struct {
 
 func defaults() Config {
 	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".config", "pdx")
 	return Config{
 		Bind:      "127.0.0.1",
 		Port:      7860,
-		DataDir:   filepath.Join(home, ".config", "pdx"),
-		UploadDir: filepath.Join(home, "tmp", "purdex-upload"),
+		DataDir:   dataDir,
+		UploadDir: filepath.Join(dataDir, "uploads"),
 		Detect: DetectConfig{
 			CCCommands:   []string{"claude"},
 			PollInterval: 2,
