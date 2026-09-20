@@ -828,3 +828,25 @@ payload this client refuses to apply (never re-fetched on a timer; unlocked by a
 a `hosts` payload may not remove or re-point the master's own host; conflicts and their payloads
 persist across restarts; the client id is read from storage every time; reindex is single-flight and
 a failed list is never an empty list.
+
+### 9.8 PR #1242 / P2b-1b review — R1 + two attackers (gpt-5.6-sol), 2026-09-20
+
+R1 over the whole of P2b-1: no findings. Two attackers, scoped by focus to each half:
+
+| # | Sev. | Finding | Resolution |
+|---|---|---|---|
+| A-1 | high | with storage unavailable, the realm-only fallback client id is still written to the daemon (pre-existing in the Sync store, heavier once attachments exist) | `isClientIdPersisted()`; the driver refuses to attach without it. Existing callers unchanged |
+| A-2 | medium | first-run, two windows: the losing id can be used before they converge (pre-existing; this PR narrows it — an existing install adopts its old id) | #1243 |
+| B-1 | high | `section-store` read-modify-write: overlapping leaders silently overwrite each other — a lost base is a false conflict, a lost stash is an unrecoverable one | write generations; a superseded leader is `fenced` |
+| B-2 | high | the 5 MiB cap counted one payload, not the document or the origin's quota; a conflict could persist without its payloads; the test mocked `setItem` away | 1 MiB cap, **conflict + payloads in one `setItem`**, real-storage boundary tests; IndexedDB → #1244 |
+| B-3 | high | a loaded conflict could point at a stash entry the loader had just discarded | referential integrity on load — the conflict is dropped, the base kept |
+| B-4 | medium | path encoding and `JSON.stringify` ran outside the protected entry, breaking "never throws" | moved inside |
+| B-5 | medium | the WS parser treated a contradictory event as a delete (**the main session had specified that lenient rule; it was wrong**) | only the two wire shapes the daemon emits |
+| B-6 | medium | one listener slot, cleared unconditionally — a previous driver's late cleanup silenced the next | an unsubscribe that removes only itself |
+| B-7 | low | `api.ts` is ~630 lines of several concerns | #1240 |
+
+Also found while implementing, by a subagent, against this plan's own text: **`getDaemonBase` falls
+back to another host for an unknown id instead of throwing**, so a CAS could have reached the wrong
+daemon; the client refuses before sending.
+
+_(critic verdicts to follow.)_
