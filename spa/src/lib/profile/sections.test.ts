@@ -38,7 +38,6 @@ export function _typePins(): CollectInput {
   const tabs: TabsSource = useTabStore.getState()
   const settings: SettingsBuildInput = {
     'purdex-ui-settings': useUISettingsStore.getState(),
-    'purdex-editor-settings': useEditorSettingsStore.getState(),
     'purdex-themes': useThemeStore.getState(),
     'purdex-i18n': useI18nStore.getState(),
     'purdex-notification-settings': useNotificationSettingsStore.getState(),
@@ -50,6 +49,8 @@ export function _typePins(): CollectInput {
   buildSettingsSection({ 'purdex-ui-settings': useUISettingsStore.getState() })
   // @ts-expect-error — module on/off is device-local: its store is not a settings source
   buildSettingsSection({ 'purdex-module-enabled': useModuleEnabledStore.getState() })
+  // @ts-expect-error — editor preferences are device-local (the store's own header): not a settings source
+  buildSettingsSection({ 'purdex-editor-settings': useEditorSettingsStore.getState() })
   return { hosts, workspaces, tabs, settings }
 }
 
@@ -287,7 +288,7 @@ describe('buildSettingsSection', () => {
     expect(buildSettingsSection({})).toEqual({})
   })
 
-  it('ignores a storage key that is not one of the nine', () => {
+  it('ignores a storage key that is not one of the eight', () => {
     const out = buildSettingsSection({ 'purdex-tabs': { tabs: S } } as unknown as SettingsBuildInput)
     expect(out).toEqual({})
   })
@@ -296,6 +297,14 @@ describe('buildSettingsSection', () => {
     const out = buildSettingsSection({
       'purdex-ui-settings': { keepAliveCount: 3 },
       'purdex-module-enabled': { enabled: { files: false }, baseline: { files: true } },
+    } as unknown as SettingsBuildInput)
+    expect(out).toEqual({ 'purdex-ui-settings': { keepAliveCount: 3 } })
+  })
+
+  it('editor preferences are device-local: useEditorSettingsStore contributes nothing', () => {
+    const out = buildSettingsSection({
+      'purdex-ui-settings': { keepAliveCount: 3 },
+      'purdex-editor-settings': { fontSize: 11, tabSize: 2, wordWrap: 'on' },
     } as unknown as SettingsBuildInput)
     expect(out).toEqual({ 'purdex-ui-settings': { keepAliveCount: 3 } })
   })
@@ -380,6 +389,11 @@ describe('buildProfileDocument', () => {
         'purdex-device-state': { baseline: S },
         // the WHOLE store is device-local — `enabled` as much as the in-memory `baseline`
         'purdex-module-enabled': { enabled: { files: S, [S]: true }, baseline: { files: S } },
+        // the WHOLE store is device-local — every one of its nine fields
+        'purdex-editor-settings': {
+          tabSize: N, insertSpaces: S, wordWrap: S, lineNumbers: S, minimap: S, fontSize: N, popupOnMissingFile: S,
+          autoSearchLayer1: S, contentWidth: S,
+        },
       },
       baseline: S,
       activeWorkspaceId: S,
@@ -392,6 +406,8 @@ describe('buildProfileDocument', () => {
     expect(hasKeyDeep(document, 'sizes')).toBe(false)
     expect(hasKeyDeep(document, 'purdex-module-enabled')).toBe(false)
     expect(hasKeyDeep(document, 'enabled')).toBe(false)
+    expect(hasKeyDeep(document, 'purdex-editor-settings')).toBe(false)
+    expect(hasKeyDeep(document, 'fontSize')).toBe(false)
     expect(standaloneTabIds).toEqual([S])
     // …and the fixture is not vacuous: the synced neighbours of those fields did travel.
     expect(key).toContain('"terminalRenderer":"webgl"')

@@ -3,7 +3,7 @@
 // of the applier: applier.ts computes `(local, incoming) → next`, this file reads
 // the slices, writes `next`, and reports the hash the stores hold AFTERWARDS.
 //
-// How a write lands (hosts and the nine settings stores). A bare `store.setState(patch)` skips the invariants that
+// How a write lands (hosts and the eight settings stores). A bare `store.setState(patch)` skips the invariants that
 // live in each store's persist `merge` / `onRehydrateStorage` (sanitise, heal,
 // theme DOM attribute, the i18n translator `t`). So every write is followed by
 // `store.persist.rehydrate()` — the path a cross-window sync already takes. That
@@ -23,7 +23,6 @@
 // The returned hash is rebuilt from the stores, never copied from the SOT: when a
 // sanitiser changed what arrived, the section is honestly dirty.
 import { useWorkspaceStore } from '../../features/workspace/store'
-import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useHostStore } from '../../stores/useHostStore'
 import type { HostConfig, HostRuntime } from '../../stores/useHostStore'
@@ -76,7 +75,6 @@ const asPersisted = (store: unknown): PersistedStore => store as PersistedStore
 
 const SETTINGS_STORES: Record<SettingsStorageKey, PersistedStore> = {
   'purdex-ui-settings': asPersisted(useUISettingsStore),
-  'purdex-editor-settings': asPersisted(useEditorSettingsStore),
   'purdex-themes': asPersisted(useThemeStore),
   'purdex-i18n': asPersisted(useI18nStore),
   'purdex-notification-settings': asPersisted(useNotificationSettingsStore),
@@ -86,7 +84,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, PersistedStore> = {
   'purdex-layout': asPersisted(useLayoutStore),
 }
 
-/** The nine settings stores' current states, by storage key: the input of `buildSettingsSection` and `applySettings`. */
+/** The eight settings stores' current states, by storage key: the input of `buildSettingsSection` and `applySettings`. */
 export function readSettingsSources(): SettingsBuildInput {
   const out: SettingsBuildInput = {}
   for (const key of Object.keys(SETTINGS_STORES) as SettingsStorageKey[]) out[key] = SETTINGS_STORES[key].getState()

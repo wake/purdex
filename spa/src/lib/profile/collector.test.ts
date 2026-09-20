@@ -50,12 +50,12 @@ vi.mock('../storage/sync', async (importOriginal) => {
 const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash')
 
 const SETTINGS_STORES = [
-  useUISettingsStore, useEditorSettingsStore, useThemeStore, useI18nStore, useNotificationSettingsStore,
+  useUISettingsStore, useThemeStore, useI18nStore, useNotificationSettingsStore,
   useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore,
 ] as const
 
-const NINE_KEYS = [
-  'purdex-editor-settings', 'purdex-host-settings', 'purdex-i18n', 'purdex-layout', 'purdex-newtab-layout',
+const EIGHT_KEYS = [
+  'purdex-host-settings', 'purdex-i18n', 'purdex-layout', 'purdex-newtab-layout',
   'purdex-notification-settings', 'purdex-themes', 'purdex-ui-settings', 'purdex-workspace-settings',
 ]
 
@@ -175,7 +175,7 @@ describe('startCollector — debounce', () => {
 
   it('is per section: a busy `hosts` does not postpone a scheduled `settings`', async () => {
     start()
-    useEditorSettingsStore.setState({ fontSize: 20 })
+    useUISettingsStore.setState({ keepAliveCount: 5 })
     for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(100)
       useHostStore.setState({ hosts: { h1: host('h1', `n${i}`) } })
@@ -302,7 +302,6 @@ describe('startCollector — settings', () => {
   it('every settings store with a listed field schedules `settings`', async () => {
     const changes: (() => void)[] = [
       () => useUISettingsStore.setState({ keepAliveCount: 7 }),
-      () => useEditorSettingsStore.setState({ fontSize: 21 }),
       () => useThemeStore.setState({ customThemes: {} }),
       () => useI18nStore.setState({ customLocales: {} }),
       () => useNotificationSettingsStore.setState({ agents: {} }),
@@ -320,14 +319,21 @@ describe('startCollector — settings', () => {
     }
   })
 
-  it('always carries all nine stores, whichever one changed', async () => {
+  it('a device-local store schedules nothing: editor preferences are not part of the profile', async () => {
     start()
-    useEditorSettingsStore.setState({ fontSize: 20 })
+    useEditorSettingsStore.setState({ fontSize: 21 })
+    expect(await pendingTimers()).toBe(0)
+  })
+
+  it('always carries all eight stores, whichever one changed', async () => {
+    start()
+    useUISettingsStore.setState({ keepAliveCount: 5 })
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, Record<string, unknown>>
-    expect(Object.keys(payload).sort()).toEqual(NINE_KEYS)
-    expect(payload['purdex-editor-settings'].fontSize).toBe(20)
+    expect(Object.keys(payload).sort()).toEqual(EIGHT_KEYS)
+    expect(payload['purdex-ui-settings'].keepAliveCount).toBe(5)
+    expect(payload).not.toHaveProperty('purdex-editor-settings')
     expect(payload['purdex-ui-settings']).not.toHaveProperty('terminalSettingsVersion')
     expect(payload['purdex-layout']).toEqual({ tabPosition: 'top' })
   })
@@ -408,7 +414,7 @@ describe('startCollector — stop', () => {
     const c = start()
     useHostStore.setState({ hosts: { h1: host('h1', 'held') } })
     await vi.advanceTimersByTimeAsync(500) // hosts hash in flight
-    useEditorSettingsStore.setState({ fontSize: 22 }) // a pending timer
+    useUISettingsStore.setState({ keepAliveCount: 4 }) // a pending timer
     expect(await pendingTimers()).toBe(1)
     c.stop()
     expect(await pendingTimers()).toBe(0)
@@ -422,15 +428,14 @@ describe('startCollector — stop', () => {
 })
 
 describe('watchUnsyncedStores', () => {
-  const EDITOR = 'purdex-editor-settings'
+  // The list is EMPTY today: the one projected store that never registered with
+  // syncManager was `purdex-editor-settings`, and it left the profile (it is
+  // device-local by its own header). The mechanism stays for the day a projected
+  // store forgets to register — the first test is what notices.
   let unwatch: (() => void) | null = null
 
   function storageEvent(key: string | null): void {
     window.dispatchEvent(new StorageEvent('storage', { key }))
-  }
-
-  function writeEditor(fontSize: number): void {
-    localStorage.setItem(EDITOR, JSON.stringify({ state: { fontSize }, version: useEditorSettingsStore.persist.getOptions().version }))
   }
 
   beforeEach(() => vi.useRealTimers())
@@ -438,43 +443,30 @@ describe('watchUnsyncedStores', () => {
     unwatch?.()
     unwatch = null
     vi.restoreAllMocks()
-    localStorage.removeItem(EDITOR)
   })
 
-  it('UNSYNCED_SETTINGS_KEYS is exactly the projected stores that never registered with syncManager', () => {
+  it('UNSYNCED_SETTINGS_KEYS is exactly the projected stores that never registered with syncManager — none today', () => {
     // Fails the day a projected store starts (or stops) calling syncManager.register.
     const projected = [...new Set(PROJECTIONS.settings.map((p) => p.slice(0, p.indexOf('.'))))]
-    expect(projected.sort()).toEqual(NINE_KEYS)
+    expect(projected.sort()).toEqual(EIGHT_KEYS)
     expect(h.registered).toContain('purdex-ui-settings') // the recorder is live
     expect([...UNSYNCED_SETTINGS_KEYS].sort()).toEqual(projected.filter((k) => !h.registered.includes(k)).sort())
+    expect(UNSYNCED_SETTINGS_KEYS).toEqual([])
   })
 
-  it('rehydrates an unregistered store when its key changes in another window', async () => {
+  it('rehydrates nothing: neither a registered store a second time, nor the device-local editor store', () => {
+    const spies = [...SETTINGS_STORES, useEditorSettingsStore].map((s) => vi.spyOn(s.persist, 'rehydrate'))
     unwatch = watchUnsyncedStores()
-    writeEditor(19)
-    storageEvent(EDITOR)
-    await vi.waitFor(() => expect(useEditorSettingsStore.getState().fontSize).toBe(19))
-  })
-
-  it('does not rehydrate a syncManager-registered store a second time', () => {
-    const spies = SETTINGS_STORES.filter((s) => s !== useEditorSettingsStore).map((s) => vi.spyOn(s.persist, 'rehydrate'))
-    unwatch = watchUnsyncedStores()
-    for (const key of NINE_KEYS.filter((k) => k !== EDITOR)) storageEvent(key)
+    for (const key of [...EIGHT_KEYS, 'purdex-editor-settings', 'something-else', null]) storageEvent(key)
     for (const spy of spies) expect(spy).not.toHaveBeenCalled()
   })
 
-  it('ignores unrelated keys and a storage clear', () => {
-    const spy = vi.spyOn(useEditorSettingsStore.persist, 'rehydrate')
-    unwatch = watchUnsyncedStores()
-    storageEvent('something-else')
-    storageEvent(null)
-    expect(spy).not.toHaveBeenCalled()
-  })
-
-  it('stops reacting once unwatched', () => {
-    const spy = vi.spyOn(useEditorSettingsStore.persist, 'rehydrate')
+  it('removes its listener when unwatched', () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
     watchUnsyncedStores()()
-    storageEvent(EDITOR)
-    expect(spy).not.toHaveBeenCalled()
+    const listener = add.mock.calls.find(([type]) => type === 'storage')?.[1]
+    expect(listener).toBeDefined()
+    expect(remove).toHaveBeenCalledWith('storage', listener)
   })
 })

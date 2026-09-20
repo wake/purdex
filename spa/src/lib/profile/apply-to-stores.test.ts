@@ -144,7 +144,11 @@ describe('premises: setState → persist.rehydrate() is a sound way to land a pa
     expect(useHostStore.getState().hosts[M].ip).toBe('10.0.0.1')
   })
 
-  it('(b) editor-settings (not registered with syncManager): rehydrate sanitises through merge', async () => {
+  // Mechanism only: `purdex-editor-settings` is device-local and no longer part of
+  // the profile, so NO projected store is in this situation today. Kept because it
+  // is the one store that never registers with syncManager — proof that
+  // `persist.rehydrate()` does not depend on that registration.
+  it('(b) mechanism: a store NOT registered with syncManager (editor-settings, not projected) rehydrates through merge all the same', async () => {
     useEditorSettingsStore.setState({ fontSize: 9999 })
     await useEditorSettingsStore.persist.rehydrate()
     expect(useEditorSettingsStore.getState().fontSize).toBeLessThan(9999)
@@ -340,6 +344,19 @@ describe('applySectionToStores — settings', () => {
     unsub()
     expect(seen.at(-1)).toBe('wide')
     expect(persistedOf(STORAGE_KEYS.LAYOUT).activityBarWidth).toBe('wide')
+  })
+
+  it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {
+    expect(Object.keys(readSettingsSources())).toHaveLength(8)
+    expect(readSettingsSources()).not.toHaveProperty('purdex-editor-settings')
+    const payload = { ...settingsNow(), 'purdex-editor-settings': { fontSize: 20 } }
+    let outcome: unknown
+    const writes = await countWrites(async () => {
+      outcome = await applySectionToStores('settings', payload, ctx)
+    })
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(writes).toBe(0)
+    expect(useEditorSettingsStore.getState().fontSize).toBe(EDITOR_DEFAULTS.fontSize)
   })
 
   it('rejected fields → invalid with the list, nothing written', async () => {

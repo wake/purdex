@@ -12,7 +12,6 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useTabStore } from '../../stores/useTabStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
@@ -56,7 +55,7 @@ export interface Collector {
   stop(): void
 }
 
-// === The nine settings stores ===
+// === The eight settings stores ===
 
 interface SettingsStore {
   getState: () => object
@@ -64,10 +63,9 @@ interface SettingsStore {
   persist: { rehydrate: () => void | Promise<void> }
 }
 
-/** Keyed by `SettingsStorageKey`, so a tenth projected store is a compile error here until it is added. */
+/** Keyed by `SettingsStorageKey`, so a ninth projected store is a compile error here until it is added. */
 const SETTINGS_STORES: Record<SettingsStorageKey, SettingsStore> = {
   'purdex-ui-settings': useUISettingsStore,
-  'purdex-editor-settings': useEditorSettingsStore,
   'purdex-themes': useThemeStore,
   'purdex-i18n': useI18nStore,
   'purdex-notification-settings': useNotificationSettingsStore,
@@ -90,7 +88,7 @@ const WORKSPACE_FIELDS = PROJECTIONS.workspaces
   .filter((p) => p.startsWith('workspaces.*.'))
   .map((p) => p.slice('workspaces.*.'.length).split('.')[0]) as (keyof Workspace)[]
 
-/** ALL nine, always: a store left out reads as "not sent", and the receiving side would stay dirty forever. */
+/** ALL eight, always: a store left out reads as "not sent", and the receiving side would stay dirty forever. */
 function allSettings(): SettingsBuildInput {
   const input: SettingsBuildInput = {}
   for (const key of SETTINGS_KEYS) input[key] = SETTINGS_STORES[key].getState()
@@ -290,8 +288,13 @@ export function startCollector(opts: CollectorOptions): Collector {
  * registry is private to its closure (`storage/sync.ts` exposes register /
  * notify / destroy only), so this cannot be derived at runtime; collector.test.ts
  * records the real `register` calls and fails the day this list stops matching.
+ *
+ * EMPTY today. Its one member was `purdex-editor-settings`, which left the
+ * profile (device-local by its own header — see PROJECTIONS.settings), and every
+ * store still projected registers. The list and `watchUnsyncedStores` stay for
+ * the day a projected store does not: with an empty list the watcher is a no-op.
  */
-export const UNSYNCED_SETTINGS_KEYS: readonly SettingsStorageKey[] = ['purdex-editor-settings']
+export const UNSYNCED_SETTINGS_KEYS: readonly SettingsStorageKey[] = []
 
 /**
  * Listens to the native `storage` event (other windows only, by definition) and
