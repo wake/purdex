@@ -276,7 +276,7 @@ function shapeOf(value: unknown): string {
  * local value is not `undefined` must arrive in the same shape class (`shapeOf`)
  * — `{"purdex-layout":{"tabPosition":{}}}` must not land in a store that expects
  * a string union. `null` is a class of its own: none of the listed fields of the
- * ten stores is nullable today (checked against the store types), so a `null`
+ * nine stores is nullable today (checked against the store types), so a `null`
  * where a value lives is a mismatch. Only the TOP-LEVEL value of a field is
  * compared. Not compared: a local `undefined` (nothing to compare with) and an
  * incoming `undefined` (a clear — see above). ONE mismatch rejects the payload:

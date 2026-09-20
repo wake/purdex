@@ -61,13 +61,18 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     ...settingsPaths('purdex-themes', ['activeThemeId', 'customThemes']),
     ...settingsPaths('purdex-i18n', ['activeLocaleId', 'customLocales']),
     ...settingsPaths('purdex-notification-settings', ['agents']),
-    ...settingsPaths('purdex-module-enabled', ['enabled']),
     ...settingsPaths('purdex-workspace-settings', ['workspaces']),
     ...settingsPaths('purdex-host-settings', ['hosts']),
     // NOT `knownIds` (derived registry), NOT `activeEditingProfile` (editor UI state).
     ...settingsPaths('purdex-newtab-layout', ['profiles']),
     // The only field taken from useLayoutStore; the rest of it is device-local.
     ...settingsPaths('purdex-layout', ['tabPosition']),
+    // NOT `purdex-module-enabled` — nine stores, not ten. useModuleEnabledStore
+    // says so itself: toggling a module on or off "is a device-local preference
+    // (a host with limited resources can turn off modules it doesn't want to
+    // run), not a config to sync between devices". P2a listed `.enabled` here;
+    // P2b removed it (settings ordinal 1 → 2). Reversing that costs one line
+    // here (plus the `SettingsStorageKey` member) and ANOTHER ordinal bump.
   ],
 }
 
@@ -78,7 +83,7 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
  */
 export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   hosts: 1,
-  settings: 1,
+  settings: 2, // 2: `purdex-module-enabled.enabled` removed (device-local, see PROJECTIONS.settings)
   workspaces: 1,
   tabs: 1,
 }

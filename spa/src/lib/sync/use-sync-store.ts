@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../storage'
+import { getClientId } from '../client-identity'
 import type { ConflictItem, SyncBundle } from './types'
 import type { StoredSnapshot } from './snapshot-types'
 import { getSnapshotStore } from './snapshot-store-instance'
@@ -113,19 +114,6 @@ const initialState = {
 >
 
 // ---------------------------------------------------------------------------
-// Client ID generation
-// Stable identifier for this browser/device: "c_" + 12 lowercase hex chars
-// ---------------------------------------------------------------------------
-
-function generateClientId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(6))
-  const hex = Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
-  return `c_${hex}`
-}
-
-// ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
@@ -163,11 +151,13 @@ export const useSyncStore = create<SyncStoreState>()(
           }
         }),
 
+      // The id itself lives in lib/client-identity.ts (its own storage key).
+      // This only mirrors it into the `clientId` field, which other Sync code
+      // reads directly (register-sync.ts, createPreOperationSnapshot). Set only
+      // on a real change: every set is a persist write plus a cross-window notify.
       getClientId: () => {
-        const existing = get().clientId
-        if (existing) return existing
-        const id = generateClientId()
-        set({ clientId: id })
+        const id = getClientId()
+        if (get().clientId !== id) set({ clientId: id })
         return id
       },
 

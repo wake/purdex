@@ -1,0 +1,212 @@
+// `getClientId()` — the id daemon-side records (device-state, storage backups,
+// profile writes) hang off. Storage is the truth: every call reads the key, so
+// these tests drive it through `localStorage` rather than through module state.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { STORAGE_KEYS } from './storage'
+
+const KEY = 'purdex-client-identity'
+const LEGACY_KEY = 'purdex-sync-state'
+const ID_PATTERN = /^c_[0-9a-f]{12}$/
+const LEGACY_ID = 'c_0123456789ab'
+
+type Identity = typeof import('./client-identity')
+
+/** A fresh module graph = a fresh realm (its own module-level state) over the SAME `localStorage`. */
+async function openRealm(): Promise<Identity> {
+  vi.resetModules()
+  return import('./client-identity')
+}
+
+/** What zustand `persist` actually writes for `useSyncStore`: `{state, version}`. */
+function legacyEnvelope(clientId: unknown): string {
+  return JSON.stringify({ state: { clientId, enabledModules: [] }, version: 0 })
+}
+
+beforeEach(() => {
+  localStorage.clear()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  localStorage.clear()
+})
+
+describe('getClientId', () => {
+  it('registers its own storage key', () => {
+    expect(STORAGE_KEYS.CLIENT_IDENTITY).toBe(KEY)
+  })
+
+  it('generates a well-formed id and writes it to its own key when nothing exists', async () => {
+    const { getClientId } = await openRealm()
+    const id = getClientId()
+    expect(id).toMatch(ID_PATTERN)
+    expect(localStorage.getItem(KEY)).toBe(id)
+  })
+
+  it('is stable across calls and across realms', async () => {
+    const a = await openRealm()
+    const id = a.getClientId()
+    expect(a.getClientId()).toBe(id)
+    const b = await openRealm()
+    expect(b.getClientId()).toBe(id)
+  })
+
+  it('returns the stored id without rewriting it', async () => {
+    localStorage.setItem(KEY, 'c_aaaaaaaaaaaa')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const { getClientId } = await openRealm()
+    expect(getClientId()).toBe('c_aaaaaaaaaaaa')
+    expect(setItem).not.toHaveBeenCalled()
+  })
+
+  it('adopts the legacy sync-store id so daemon-side records keep their owner', async () => {
+    localStorage.setItem(LEGACY_KEY, legacyEnvelope(LEGACY_ID))
+    const { getClientId } = await openRealm()
+    expect(getClientId()).toBe(LEGACY_ID)
+    expect(localStorage.getItem(KEY)).toBe(LEGACY_ID)
+  })
+
+  it('prefers its own key over the legacy one once it holds a valid id', async () => {
+    localStorage.setItem(KEY, 'c_aaaaaaaaaaaa')
+    localStorage.setItem(LEGACY_KEY, legacyEnvelope(LEGACY_ID))
+    const { getClientId } = await openRealm()
+    expect(getClientId()).toBe('c_aaaaaaaaaaaa')
+  })
+
+  it.each([
+    ['garbage', 'not-an-id'],
+    ['an empty string', ''],
+    ['uppercase hex', 'c_AAAAAAAAAAAA'],
+    ['too short', 'c_abc'],
+    ['a JSON wrapper', JSON.stringify({ clientId: 'c_aaaaaaaaaaaa' })],
+  ])('replaces a malformed stored value (%s)', async (_label, bad) => {
+    localStorage.setItem(KEY, bad)
+    const { getClientId } = await openRealm()
+    const id = getClientId()
+    expect(id).toMatch(ID_PATTERN)
+    expect(localStorage.getItem(KEY)).toBe(id)
+  })
+
+  it('a malformed own key still falls back to adopting the legacy id', async () => {
+    localStorage.setItem(KEY, 'not-an-id')
+    localStorage.setItem(LEGACY_KEY, legacyEnvelope(LEGACY_ID))
+    const { getClientId } = await openRealm()
+    expect(getClientId()).toBe(LEGACY_ID)
+  })
+
+  it.each([
+    ['broken JSON', '{not json'],
+    ['a malformed id', legacyEnvelope('c_local')],
+    ['a null id', legacyEnvelope(null)],
+    ['a non-string id', legacyEnvelope(42)],
+    ['no state', JSON.stringify({ version: 0 })],
+    ['a JSON null', 'null'],
+    ['a bare string', JSON.stringify(LEGACY_ID)],
+  ])('ignores a legacy entry holding %s and generates instead', async (_label, legacy) => {
+    localStorage.setItem(LEGACY_KEY, legacy)
+    const { getClientId } = await openRealm()
+    const id = getClientId()
+    expect(id).toMatch(ID_PATTERN)
+    expect(id).not.toBe(LEGACY_ID)
+    expect(localStorage.getItem(KEY)).toBe(id)
+    expect(localStorage.getItem(LEGACY_KEY)).toBe(legacy)
+  })
+
+  it('two realms racing the first call converge on the last writer', async () => {
+    const a = await openRealm()
+    const b = await openRealm()
+
+    // Interleave: A reads the key (empty) → B runs its whole first call
+    // (reads empty, generates, writes) → A carries on with its stale "empty"
+    // read, generates its own and overwrites B's.
+    const realGetItem = Storage.prototype.getItem
+    let idFromB: string | null = null
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+    ) {
+      const value = realGetItem.call(this, key)
+      if (key === KEY && idFromB === null) {
+        idFromB = '' // re-entrancy guard: only the very first read yields to B
+        idFromB = b.getClientId()
+      }
+      return value
+    })
+    const idFromA = a.getClientId()
+    spy.mockRestore()
+
+    expect(idFromB).toMatch(ID_PATTERN)
+    expect(idFromA).toMatch(ID_PATTERN)
+    expect(idFromA).not.toBe(idFromB) // they really did each generate one
+    expect(localStorage.getItem(KEY)).toBe(idFromA) // A wrote last
+
+    // The point: B must not keep answering with the id it generated.
+    expect(b.getClientId()).toBe(idFromA)
+    expect(a.getClientId()).toBe(idFromA)
+  })
+
+  it('does not throw when localStorage is unavailable, and stays stable within the realm', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    const { getClientId } = await openRealm()
+    const id = getClientId()
+    expect(id).toMatch(ID_PATTERN)
+    expect(getClientId()).toBe(id)
+  })
+
+  it('does not throw when only writes fail (quota), and stays stable within the realm', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    const { getClientId } = await openRealm()
+    const id = getClientId()
+    expect(id).toMatch(ID_PATTERN)
+    expect(getClientId()).toBe(id)
+  })
+
+  it('still adopts the legacy id when the write fails', async () => {
+    localStorage.setItem(LEGACY_KEY, legacyEnvelope(LEGACY_ID))
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    const { getClientId } = await openRealm()
+    expect(getClientId()).toBe(LEGACY_ID)
+  })
+})
+
+describe('useSyncStore.getClientId delegates', () => {
+  it('returns the same id as getClientId() and populates the state field', async () => {
+    vi.resetModules()
+    const { getClientId } = await import('./client-identity')
+    const { useSyncStore } = await import('./sync/use-sync-store')
+    expect(useSyncStore.getState().clientId).toBeNull()
+    const id = getClientId()
+    expect(useSyncStore.getState().getClientId()).toBe(id)
+    expect(useSyncStore.getState().clientId).toBe(id)
+  })
+
+  it('follows the stored id when it changes under it (another window won the race)', async () => {
+    vi.resetModules()
+    const { useSyncStore } = await import('./sync/use-sync-store')
+    const first = useSyncStore.getState().getClientId()
+    localStorage.setItem(KEY, 'c_bbbbbbbbbbbb')
+    expect(first).not.toBe('c_bbbbbbbbbbbb')
+    expect(useSyncStore.getState().getClientId()).toBe('c_bbbbbbbbbbbb')
+    expect(useSyncStore.getState().clientId).toBe('c_bbbbbbbbbbbb')
+  })
+
+  it('does not write the store again when the field already matches', async () => {
+    vi.resetModules()
+    const { useSyncStore } = await import('./sync/use-sync-store')
+    useSyncStore.getState().getClientId()
+    const listener = vi.fn()
+    const unsubscribe = useSyncStore.subscribe(listener)
+    useSyncStore.getState().getClientId()
+    unsubscribe()
+    expect(listener).not.toHaveBeenCalled()
+  })
+})

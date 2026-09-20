@@ -42,13 +42,14 @@ export function _typePins(): CollectInput {
     'purdex-themes': useThemeStore.getState(),
     'purdex-i18n': useI18nStore.getState(),
     'purdex-notification-settings': useNotificationSettingsStore.getState(),
-    'purdex-module-enabled': useModuleEnabledStore.getState(),
     'purdex-workspace-settings': useWorkspaceSettingsStore.getState(),
     'purdex-host-settings': useHostSettingsStore.getState(),
     'purdex-newtab-layout': useNewTabLayoutStore.getState(),
     'purdex-layout': useLayoutStore.getState(),
   }
   buildSettingsSection({ 'purdex-ui-settings': useUISettingsStore.getState() })
+  // @ts-expect-error — module on/off is device-local: its store is not a settings source
+  buildSettingsSection({ 'purdex-module-enabled': useModuleEnabledStore.getState() })
   return { hosts, workspaces, tabs, settings }
 }
 
@@ -286,9 +287,17 @@ describe('buildSettingsSection', () => {
     expect(buildSettingsSection({})).toEqual({})
   })
 
-  it('ignores a storage key that is not one of the ten', () => {
+  it('ignores a storage key that is not one of the nine', () => {
     const out = buildSettingsSection({ 'purdex-tabs': { tabs: S } } as unknown as SettingsBuildInput)
     expect(out).toEqual({})
+  })
+
+  it('module on/off is device-local: useModuleEnabledStore contributes nothing, `enabled` included', () => {
+    const out = buildSettingsSection({
+      'purdex-ui-settings': { keepAliveCount: 3 },
+      'purdex-module-enabled': { enabled: { files: false }, baseline: { files: true } },
+    } as unknown as SettingsBuildInput)
+    expect(out).toEqual({ 'purdex-ui-settings': { keepAliveCount: 3 } })
   })
 })
 
@@ -369,6 +378,8 @@ describe('buildProfileDocument', () => {
         'purdex-newtab-layout': { profiles: {}, activeEditingProfile: S, knownIds: [S] },
         'purdex-layout': { tabPosition: 'top', regions: { primary: S }, activityBarWidth: N, activityBarWideSize: N, workspaceExpanded: { wsA: S } },
         'purdex-device-state': { baseline: S },
+        // the WHOLE store is device-local — `enabled` as much as the in-memory `baseline`
+        'purdex-module-enabled': { enabled: { files: S, [S]: true }, baseline: { files: S } },
       },
       baseline: S,
       activeWorkspaceId: S,
@@ -379,6 +390,8 @@ describe('buildProfileDocument', () => {
     expect(key).not.toContain(S)
     expect(key).not.toContain(String(N))
     expect(hasKeyDeep(document, 'sizes')).toBe(false)
+    expect(hasKeyDeep(document, 'purdex-module-enabled')).toBe(false)
+    expect(hasKeyDeep(document, 'enabled')).toBe(false)
     expect(standaloneTabIds).toEqual([S])
     // …and the fixture is not vacuous: the synced neighbours of those fields did travel.
     expect(key).toContain('"terminalRenderer":"webgl"')

@@ -3,7 +3,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useHostStore } from '../../stores/useHostStore'
 import { useDeviceStateStore } from '../../stores/useDeviceStateStore'
-import { useSyncStore } from '../sync/use-sync-store'
+import { getClientId } from '../client-identity'
 import type { Tab } from '../../types/tab'
 import { putDeviceState } from './api'
 import { resolveDefaultDeviceName } from './device-name'
@@ -92,7 +92,7 @@ describe('startDeviceStateUploader', () => {
     expect(put).toHaveBeenCalledTimes(1)
     const [hostId, clientId, body] = put.mock.calls[0]
     expect(hostId).toBe('h1')
-    expect(clientId).toBe(useSyncStore.getState().getClientId())
+    expect(clientId).toBe(getClientId())
     expect(body.deviceName).toBe('Mac')
     expect(body.appVersion).toBe('1.0.0')
     expect(body.capturedAt).toBe(1234)

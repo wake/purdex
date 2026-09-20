@@ -11,7 +11,7 @@
  * own lineage (R1-P1a).
  */
 import type { HostEvent } from '../host-events'
-import { useSyncStore } from '../sync/use-sync-store'
+import { getClientId } from '../client-identity'
 import { useBackupStore, type RemoteBackupDonePayload } from '../../stores/useBackupStore'
 
 export function dispatchBackupWsEvent(hostId: string, event: HostEvent): void {
@@ -22,6 +22,6 @@ export function dispatchBackupWsEvent(hostId: string, event: HostEvent): void {
     return // malformed — ignore, never throw on the WS path
   }
   // Own-device events are already reflected locally by backupNow; ignore them.
-  if (payload.device === useSyncStore.getState().getClientId()) return
+  if (payload.device === getClientId()) return
   useBackupStore.getState().applyRemoteBackupDone(hostId, payload)
 }

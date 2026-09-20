@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { HostEvent } from '../host-events'
-import { useSyncStore } from '../sync/use-sync-store'
+import { getClientId } from '../client-identity'
 import { useBackupStore } from '../../stores/useBackupStore'
 import { dispatchBackupWsEvent } from './backup-ws-dispatch'
 
@@ -28,7 +28,7 @@ describe('dispatchBackupWsEvent — cross-device backup:done refresh', () => {
   })
 
   it('ignores its OWN device event (own posts refresh locally, R1-P1a)', () => {
-    const ownId = useSyncStore.getState().getClientId()
+    const ownId = getClientId()
     const ev = backupDoneEvent({
       storeId: 'inapp:buffer', snapshotId: 9, currentHeadId: 9,
       device: ownId, trigger: 'auto', createdAt: 1_751_230_000,

@@ -268,8 +268,19 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(10)
+    expect(prefixes).toHaveLength(9)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
+  })
+
+  // Module on/off is a device-local preference (useModuleEnabledStore's own
+  // comment): a host with limited resources turns off what it cannot run.
+  it('no settings path starts with purdex-module-enabled — the whole store is device-local', () => {
+    expect(STORAGE_KEYS.MODULE_ENABLED).toBe('purdex-module-enabled')
+    expect(Object.keys(useModuleEnabledStore.getState())).toContain('enabled') // the field exists; it is unlisted on purpose
+    for (const path of PROJECTIONS.settings) {
+      expect(path.startsWith('purdex-module-enabled'), path).toBe(false)
+    }
+    expect(settingsFieldsByStore()[STORAGE_KEYS.MODULE_ENABLED]).toBeUndefined()
   })
 
   it('never lists the three persisted non-preference fields', () => {
@@ -286,7 +297,6 @@ describe('PROJECTIONS', () => {
       [STORAGE_KEYS.THEMES]: useThemeStore.getState,
       [STORAGE_KEYS.I18N]: useI18nStore.getState,
       [STORAGE_KEYS.NOTIFICATION_SETTINGS]: useNotificationSettingsStore.getState,
-      [STORAGE_KEYS.MODULE_ENABLED]: useModuleEnabledStore.getState,
       [STORAGE_KEYS.WORKSPACE_SETTINGS]: useWorkspaceSettingsStore.getState,
       [STORAGE_KEYS.HOST_SETTINGS]: useHostSettingsStore.getState,
       [STORAGE_KEYS.NEW_TAB_LAYOUT]: useNewTabLayoutStore.getState,
@@ -409,8 +419,8 @@ describe('shape: fingerprint and ordinal', () => {
           1,
         ],
         "settings": [
-          "66e3c41c6b973d2d8c3a702d1f7f353dc975688171e5b826b0e11a6d5abccd22",
-          1,
+          "b72a54b993213728c12d00ed9aa5a2446fb1696e8d712212c737f35091982b0f",
+          2,
         ],
         "tabs": [
           "e8d2e6e42bdd9037c505f57bfd79e023aaf9746549d0e33f8a40a9848155debd",

@@ -3,7 +3,7 @@ import { InAppBackend } from '../lib/fs-backend-inapp'
 import { closeAllIDB } from '../lib/storage/idb'
 import { registerFsBackend, clearFsBackendRegistry } from '../lib/fs-backend'
 import { sha256Hex } from '../lib/crypto-hash'
-import { useSyncStore } from '../lib/sync/use-sync-store'
+import { getClientId } from '../lib/client-identity'
 import { useBackupStore } from './useBackupStore'
 
 const enc = (s: string) => new TextEncoder().encode(s)
@@ -69,7 +69,7 @@ describe('useBackupStore — backup engine', () => {
     await backend.write('/buffer/a.txt', enc('hi'))
     await useBackupStore.getState().backupNow('h1')
     const req = postSnapshot.mock.calls[0][1]
-    expect(req.device).toBe(useSyncStore.getState().getClientId())
+    expect(req.device).toBe(getClientId())
     expect(req.parentId).toBeNull()
     expect(req.storeId).toBe('inapp:buffer')
     expect(req.trigger).toBe('auto')

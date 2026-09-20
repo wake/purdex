@@ -8,7 +8,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { useDeviceStateStore } from '../../../stores/useDeviceStateStore'
 import type { DeviceStateStatus } from '../../../stores/useDeviceStateStore'
 import { selectDevHostId, useHostStore } from '../../../stores/useHostStore'
-import { useSyncStore } from '../../../lib/sync/use-sync-store'
+import { getClientId } from '../../../lib/client-identity'
 import { deleteDeviceState } from '../../../lib/device-state/api'
 import { SettingItem } from '../SettingItem'
 import { DeviceNameField } from './DeviceNameField'
@@ -61,7 +61,7 @@ export function DeviceStateSection({ onRestored }: { onRestored?: () => void } =
   const targetName = useHostStore((s) => (targetId ? s.hosts[targetId]?.name : undefined))
   // getClientId() creates and persists an id on a fresh profile, so the own
   // row is recognised (badge, Delete disabled) even before sync ever ran.
-  const [ownClientId] = useState(() => useSyncStore.getState().getClientId())
+  const [ownClientId] = useState(() => getClientId())
   const { view, reload } = useDeviceStateList(targetId)
   const { busy, actionStatus, setActionStatus, exclusive, replaceLocked, mergeLocked, replace, merge } =
     useDeviceStateActions(onRestored)

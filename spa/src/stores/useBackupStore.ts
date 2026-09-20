@@ -21,7 +21,7 @@ import { create } from 'zustand'
 import { buildManifest } from '../lib/storage-backup/manifest'
 import { postMissing, putBlob, postSnapshot } from '../lib/storage-backup/backup-api'
 import { getFsBackend } from '../lib/fs-backend'
-import { useSyncStore } from '../lib/sync/use-sync-store'
+import { getClientId } from '../lib/client-identity'
 
 /** Fixed logical store for the In-App tree (spec §4.1 — single store today). */
 const STORE_ID = 'inapp:buffer'
@@ -149,7 +149,7 @@ export const useBackupStore = create<BackupStore>((set, get) => {
       }
       const res = await postSnapshot(hostId, {
         storeId: STORE_ID,
-        device: useSyncStore.getState().getClientId(),
+        device: getClientId(),
         parentId: current.lastSnapshotId,
         trigger,
         manifest: built.entries,
