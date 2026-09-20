@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.416] - 2026-09-21
+
+### Fix: 預設 `upload_dir` 移出家目錄（#1266）
+
+上傳暫存區的預設值本來是 `~/tmp/purdex-upload`——一個純暫存目錄卻佔在家目錄第一層。改放到 daemon 自己的狀態目錄底下：`<data_dir>/uploads`（預設 `~/.config/pdx/uploads`），與既有的 `<data_dir>/logs`、`<data_dir>/nex` 一致；新位置的父目錄實測是 0700，比原本 755 的 `~/tmp` 更私有。
+
+**既有安裝不受影響**：`config.toml` 都已寫死 `upload_dir`，所以只有全新安裝吃得到新預設；各 host 的實體檔案搬移另外執行。順帶修掉一個測試隔離問題——`TestDefaultsHaveUploadDir` 原本呼叫 `config.Load("")`，會讀到真實的 `~/.config/pdx/config.toml`，使用者自訂的 `upload_dir` 會滲進「預設值」斷言（改成指向不存在的檔案，與同檔 `TestLoadDefaultsWhenFileNotExist` 同作法）。
+
+**不在本次範圍**：TTL 自動清理（目前只有 Host › 上傳暫存頁手動刪除，沒有任何保留期限）、上傳目錄與檔案的權限位元（維持 0755／0644）。
+
 ## [1.0.0-alpha.415] - 2026-09-20
 
 ### Feature: Profile Sync P3a＋P3b——可訂閱的跨視窗同步狀態、slave profile 與 active 指標（無 UI）（#1253、#1254、#1257–#1261）
