@@ -183,6 +183,45 @@ because its inputs travel with the tab.
   slave named after it. Only while no master is attached (the wizard stops sync first).
 - `saveScreenAsSlave(name)`, `renameSlave`, `deleteSlave` (never the one on screen).
 
+### As built (for P3d) — spec §9.13 has the why
+
+`lib/profile/switch-active.ts` — every refusal has written nothing; `write-failed` has put everything back:
+
+```ts
+switchActiveProfile(targetId: 'master' | string): Promise<SwitchResult>
+//   { ok: true } | { ok: false, reason: 'busy' | 'unsettled' | 'superseded' | 'not-found'
+//                     | 'already-on-screen' | 'bad-world' | 'bad-epoch' }
+//               | { ok: false, reason: 'write-failed', detail: string }
+promoteToMaster(slaveId: string, demotedName: string): Promise<PromoteResult>   // ASYNC since C1'
+//   { ok: true, demotedId } | reason: 'master-attached' | 'busy' | 'unsettled' | 'superseded'
+//                           | 'not-found' | 'bad-name' | 'bad-epoch' | 'write-failed' (+ detail)
+copyMasterAsSlave(name): CopyResult      // { ok: true, id } | 'unsettled' | 'bad-name' | 'bad-world' | 'write-failed'
+saveScreenAsSlave(name): CopyResult      // works while unsettled, too
+renameSlave(id, name)                    // 'not-found' | 'bad-name'
+reorderSlaves(order: string[])           // 'bad-order'
+deleteSlave(id)                          // 'not-found' | 'on-screen'
+```
+
+What the UI must do with the reasons: `busy` (an operation lock, or the cross-window lock not granted
+in 3 s) and `unsettled` are **retryable** — an `unsettled` refusal has already asked the stores to
+catch up, so the same click a moment later works; `superseded` means another window's switch won and
+this window is about to show ITS world — say so, do not retry; `master-attached` → the wizard stops
+the sync first.
+
+`stores/useLocalProfilesStore.ts` — persisted fields: `slaves: Record<id, { id, name, createdAt,
+world: ParkedWorld | null }>` (`world === null` ⇔ on screen), `slaveOrder: string[]`,
+`activeProfileId: 'master' | id`, `parkedMaster: ParkedWorld | null`, `worldEpoch`, `relabelCount`
+(+1 per promote). `MASTER_PROFILE_ID = 'master'`. The UI reads these and calls switch-active.ts —
+never the store's actions directly (they do not touch the tab stores).
+
+`lib/profile/master-world.ts` — `readMasterWorld()`: `{ settled: true, onScreen, world }` or
+`{ settled: false, reason }`, `reason` ∈ `'epoch-mismatch' | 'world-mismatch' | 'behind-fence' |
+'junk-epoch' | 'no-parked-master'`. Only `no-parked-master` is permanent; `junk-epoch` is healed by
+the next switch; the others by a rehydrate, which every user-facing refusal asks for.
+
+`lib/host-lifecycle.ts` — `deleteHostWithUndoToast(hostId, closeTabs, { deleted, worldSkipped })`;
+the undo of `deleteHostCascade` returns `{ worldSkipped: boolean }`.
+
 ## P3c — standalone tabs removed (§4.3), in two PRs
 
 **P3c-1 — every tab gets a workspace** (the policy and the invariant; the standalone UI still

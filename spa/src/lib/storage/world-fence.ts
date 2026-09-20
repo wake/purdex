@@ -54,6 +54,17 @@
 // (lib/profile/switch-active.ts). The loser's `lower()` does nothing: the key no
 // longer holds what it wrote.
 //
+// AN EPOCH HAS A CEILING (`MAX_WORLD_EPOCH`, 8e15: below 2^53, and the clock in
+// microseconds stays under it until the year 2223). Only corrupt storage can hold
+// more — but a fence at `Number.MAX_SAFE_INTEGER` would refuse every raise for
+// ever, and a store up there would leave no epoch above it. So anything beyond
+// the ceiling is JUNK, like a string or a NaN: the fence reads as 0, a store's
+// epoch is no lower bound for the next one, and the door
+// (lib/profile/master-world.ts) reads such a store as unsettled — with one way
+// out, a switch (`junk-epoch`, there). What a raise ACCEPTS is any safe integer:
+// a bound of exactly the ceiling yields ceiling + 1, which is written, reads as
+// junk from then on, and is healed by the same way out — no value is a dead end.
+//
 // WHAT IS LEFT, stated plainly: `localStorage` is not transactional. Between
 // "read the side key" and "write the store" another window can still raise the
 // fence and write; the fence narrows the window from "a whole sequence of three
@@ -61,6 +72,24 @@
 // between" to ONE synchronous read-then-write. And between two renderer
 // processes `localStorage` itself is only eventually shared (start.ts,
 // `suspendedInStorage`, says the same of the suspension).
+//   THE SAME HOLDS FOR RAISING THE FENCE ITSELF, and that one has a name. `raise`
+// is read → check → write, and `localStorage` has no compare-and-swap: window A
+// reads the fence and finds it below its epoch; window B raises a HIGHER one and
+// starts writing its stores; A writes its LOWER epoch over B's. From then on the
+// store writes of both pass the fence and land interleaved. Two windows have to
+// switch inside the same few microseconds — no hand does that — but it cannot be
+// closed on `localStorage` alone, and no further protocol is invented for it
+// here. WHERE THERE IS A REAL MUTEX IT IS USED: world-lock.ts runs the block of
+// a switch / promote under a Web Lock, and the window is shut. Where there is
+// none (no secure context: a dev build over plain http) the consequence is this,
+// pinned by a test: the three stores ON SCREEN may end up mixed — one window's
+// pointer, the other's tabs. Both windows then rehydrate into a world whose
+// epochs or ids disagree: UNSETTLED — nothing is reported to the SOT, nothing is
+// applied, a switch is refused; silent, never wrong, and visible
+// (`world-unsettled`). THE PARKED WORLDS ARE NOT TOUCHED BY IT: they live in ONE
+// key, written in one `setItem`, so they are one window's version, whole. What
+// can be lost is the arrangement of the world that was on screen in the losing
+// window; the way back is a reload, which reads whatever storage holds.
 import { createJSONStorage } from 'zustand/middleware'
 import type { PersistStorage, StorageValue } from 'zustand/middleware'
 import { browserStorage } from './browser-backend'
@@ -71,13 +100,38 @@ const inner = createJSONStorage<unknown>(() => browserStorage) as PersistStorage
 
 const DECIMAL = /^(0|[1-9][0-9]*)$/
 
-/** The fence as `localStorage` holds it right now; 0 when absent, unreadable or not a decimal safe integer. */
+/** See AN EPOCH HAS A CEILING. */
+export const MAX_WORLD_EPOCH = 8e15
+
+/** A value a world epoch can have: a safe integer in [0, MAX_WORLD_EPOCH]. Everything else is storage junk. */
+export function isWorldEpoch(v: unknown): v is number {
+  return Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= MAX_WORLD_EPOCH
+}
+
+/**
+ * The `worldEpoch` in the record `localStorage` holds for a world store right
+ * now, unjudged; undefined: absent, unreadable. For the one question memory
+ * cannot answer — is a junk epoch junk ON DISK too, i.e. will a rehydrate not
+ * help (master-world.ts, `junk-epoch`). This file is these stores' storage, so
+ * the envelope is its to read.
+ */
+export function persistedWorldEpoch(name: string): unknown {
+  try {
+    const raw = localStorage.getItem(name)
+    if (raw === null) return undefined
+    return epochOf(JSON.parse(raw) as StorageValue<unknown>)
+  } catch {
+    return undefined
+  }
+}
+
+/** The fence as `localStorage` holds it right now; 0 when absent, unreadable or not the decimal form of a world epoch. */
 export function readWorldEpochFence(): number {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.WORLD_EPOCH)
     if (raw === null || !DECIMAL.test(raw)) return 0
     const n = Number(raw)
-    return Number.isSafeInteger(n) ? n : 0
+    return isWorldEpoch(n) ? n : 0
   } catch {
     return 0
   }
@@ -87,10 +141,10 @@ export function readWorldEpochFence(): number {
  * The epoch of the NEXT operation that moves the world (see AN EPOCH BELONGS TO
  * ONE OPERATION). `current`: the epochs the three world stores hold in memory —
  * this file is below the stores in the import graph, so the caller hands them in;
- * one that is no safe integer (storage junk) is no bound.
+ * one that is no world epoch (storage junk, the ceiling included) is no bound.
  */
 export function nextWorldEpoch(current: readonly number[]): number {
-  const floor = Math.max(readWorldEpochFence(), ...current.filter((e) => Number.isSafeInteger(e)))
+  const floor = Math.max(readWorldEpochFence(), ...current.filter(isWorldEpoch))
   return Math.max(Date.now() * 1000 + Math.floor(Math.random() * 1000), floor + 1)
 }
 
@@ -159,8 +213,8 @@ function rehydrateSoon(name: string): void {
   })
 }
 
-function epochOf(value: StorageValue<unknown>): unknown {
-  const state = value.state
+function epochOf(value: StorageValue<unknown> | null): unknown {
+  const state = value?.state
   return typeof state === 'object' && state !== null ? (state as { worldEpoch?: unknown }).worldEpoch : undefined
 }
 

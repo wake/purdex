@@ -579,6 +579,26 @@ describe('updateParkedWorlds', () => {
   })
 })
 
+describe('relabelCountInStorage — what storage holds right now, by the rule `merge` applies', () => {
+  it('absent or unreadable → null; junk → 0; a count → the count — whatever this window\'s memory says', async () => {
+    const { relabelCountInStorage } = await import('./useLocalProfilesStore')
+    localStorage.removeItem(STORAGE_KEYS.LOCAL_PROFILES)
+    expect(relabelCountInStorage()).toBeNull()
+    localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, '{not json')
+    expect(relabelCountInStorage()).toBeNull()
+    localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify({ state: 'junk', version: 1 }))
+    expect(relabelCountInStorage()).toBeNull()
+    for (const junk of [-1, 1.5, '3', null]) {
+      localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify({ state: { relabelCount: junk }, version: 1 }))
+      expect(relabelCountInStorage()).toBe(0)
+    }
+    localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify({ state: { relabelCount: 4 }, version: 1 }))
+    expect(relabelCountInStorage()).toBe(4)
+    expect(get().relabelCount).toBe(0)
+    resetStore() // put a well-formed record back for the invariant check
+  })
+})
+
 describe('persist', () => {
   it('persists exactly the six data fields, at version 1', () => {
     const a = add('alpha')

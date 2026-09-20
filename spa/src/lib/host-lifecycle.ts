@@ -11,7 +11,8 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
+import { MASTER_PROFILE_ID, relabelCountInStorage, useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
+import { readMasterWorld, recoverUnsettledWorld } from './profile/master-world'
 import { useUndoToast } from '../stores/useUndoToast'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
@@ -64,6 +65,16 @@ import type { PaneContent, PaneLayout, Tab } from '../types/tab'
 // closed tab, no workspace membership, no mark — and says so
 // (`{ worldSkipped: true }`; the caller tells the user). An undo that loses tabs,
 // against one that files them under the wrong profile.
+//   AND THE PROMOTE MAY BE ANOTHER WINDOW'S, NOT HEARD OF HERE YET: this window's
+// memory still holds the old labels and the old count. So the undo asks storage,
+// not memory, twice over — the door (`readMasterWorld`: ANY unsettled answer,
+// `behind-fence` included, means nobody can name the worlds right now; the stores
+// are asked to catch up), and the persisted count (`relabelCountInStorage`, for
+// the instant in which the other window's pointer is visible and its fence is
+// not). Without them the restore went into the old world, was dropped by the
+// fence — or, worse, was not — and the undo answered "nothing skipped".
+//   (No import cycle: master-world.ts imports stores and pure profile modules;
+// the edge that would close one is apply-to-stores.ts → this file.)
 
 /** `'master'` or a slave id. */
 type WorldOwner = string
@@ -385,7 +396,10 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => Hos
     // They go back into the world they were closed in (`snapshot.owner`), wherever
     // that is by now — never into whatever happens to be on screen.
     // …unless the worlds were relabelled meanwhile (see A PROMOTE RELABELS THE WORLDS): then nothing of any world.
-    const relabelled = useLocalProfilesStore.getState().relabelCount !== snapshot.relabelCount
+    const door = readMasterWorld()
+    recoverUnsettledWorld(door, true) // the user asked: catch up, whatever the background has tried
+    const onDisk = relabelCountInStorage()
+    const relabelled = !door.settled || useLocalProfilesStore.getState().relabelCount !== snapshot.relabelCount || (onDisk !== null && onDisk !== snapshot.relabelCount)
     const home: ReturnType<typeof locateWorld> = relabelled ? { where: 'gone' } : locateWorld(snapshot.owner)
     if (closeTabs && !hostWasRecreated && snapshot.closedTabs.length > 0 && home.where === 'screen') {
       const ts = useTabStore.getState()

@@ -239,10 +239,10 @@ describe('C2 — a PROMOTE inside the undo window relabels the worlds: `master` 
   /** Every world on this device, as bytes. */
   const worlds = (): string => JSON.stringify([useTabStore.getState().tabs, useTabStore.getState().tabOrder, useWorkspaceStore.getState().workspaces, useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves])
 
-  it.each([true, false])('master on screen, delete (closeTabs=%s), the slave is promoted — the old master is a slave under a NEW id now: the undo restores the host and touches no world', (closeTabs) => {
+  it.each([true, false])('master on screen, delete (closeTabs=%s), the slave is promoted — the old master is a slave under a NEW id now: the undo restores the host and touches no world', async (closeTabs) => {
     masterOnScreen(world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]), world(SLAVE, [tab('st-a', HOST_A, SLAVE), tab('st-b', HOST_B, SLAVE)]))
     const undo = deleteHostCascade(HOST_A, closeTabs)
-    expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    expect(await promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
     const before = worlds()
 
     const result = undo()
@@ -254,10 +254,10 @@ describe('C2 — a PROMOTE inside the undo window relabels the worlds: `master` 
     expect(useHostStore.getState().hostOrder).toEqual([HOST_B, HOST_A])
   })
 
-  it.each([true, false])('the slave on screen, delete (closeTabs=%s), THAT slave is promoted — the screen is the master now: same', (closeTabs) => {
+  it.each([true, false])('the slave on screen, delete (closeTabs=%s), THAT slave is promoted — the screen is the master now: same', async (closeTabs) => {
     slaveOnScreen(world(SLAVE, [tab('st-a', HOST_A, SLAVE), tab('st-b', HOST_B, SLAVE)]), world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]))
     const undo = deleteHostCascade(HOST_A, closeTabs)
-    expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    expect(await promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
     const before = worlds()
 
     expect(undo()).toEqual({ worldSkipped: true })
@@ -266,10 +266,10 @@ describe('C2 — a PROMOTE inside the undo window relabels the worlds: `master` 
     expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
   })
 
-  it('the two worlds share their tab and pane ids (a demoted master and the master pulled after it): not one mark is taken back in either', () => {
+  it('the two worlds share their tab and pane ids (a demoted master and the master pulled after it): not one mark is taken back in either', async () => {
     masterOnScreen(world(MASTER, [tab('t1', HOST_A, MASTER), tab('t2', HOST_B, MASTER)]), world(SLAVE, [tab('t1', HOST_A, SLAVE), tab('t2', HOST_B, SLAVE)]))
     const undo = deleteHostCascade(HOST_A, false)
-    expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    expect(await promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
     const before = worlds()
     expect(undo()).toEqual({ worldSkipped: true })
     expect(worlds()).toBe(before)
@@ -312,7 +312,7 @@ describe('C2 — a PROMOTE inside the undo window relabels the worlds: `master` 
       deleteHostWithUndoToast(HOST_A, true, MESSAGES)
       expect(useUndoToast.getState().toast).toMatchObject({ message: 'A deleted' })
       expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
-      expect(promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+      expect(await promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
 
       await clickUndo()
 

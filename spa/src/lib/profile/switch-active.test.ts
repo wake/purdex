@@ -14,6 +14,7 @@ import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../storage'
+import { MAX_WORLD_EPOCH } from '../storage/world-fence'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { readSettingsSources } from './apply-to-stores'
 import { startCollector, type Collector, type SectionReport } from './collector'
@@ -257,6 +258,63 @@ describe('switchActiveProfile', () => {
     localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH)
     expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
     expect(oneEpochAbove(ahead)).toBe(ahead + 1)
+  })
+
+  describe('an epoch beyond MAX_WORLD_EPOCH is storage junk — and no dead end', () => {
+    const JUNK = Number.MAX_SAFE_INTEGER
+
+    it('the FENCE holds it: it reads as no fence at all, and the switch puts a real one in its place', async () => {
+      localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, String(JUNK))
+      expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: true }) // nobody is "behind" junk
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+      expect(oneEpochAbove(0)).toBeLessThan(MAX_WORLD_EPOCH)
+      expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+    })
+
+    it.each([
+      ['the two live stores', { tab: JUNK, ws: JUNK }],
+      ['the tab store alone', { tab: JUNK, ws: 0 }],
+      ['the workspace store alone', { tab: 0, ws: JUNK }],
+    ])('%s hold it, in memory AND in storage, and the world ids agree: whose world the screen holds is not in doubt — said as `junk-epoch`, and a SWITCH goes through and heals all three', async (_name, e) => {
+      useTabStore.setState({ worldEpoch: e.tab })
+      useWorkspaceStore.setState({ worldEpoch: e.ws })
+      expect(readMasterWorld()).toEqual({ settled: false, reason: 'junk-epoch' })
+      expect(masterWorkspaceIds()).toBeNull() // and still nothing of it is reported
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'unsettled' }) // the way out is the switch, nothing else
+
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+
+      expect(oneEpochAbove(0)).toBeLessThan(MAX_WORLD_EPOCH)
+      expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
+      expect(screen()).toEqual(slaveWorld())
+      expect(useLocalProfilesStore.getState().parkedMaster).toEqual(masterWorld())
+    })
+
+    it('the parking lot holds it: `merge` reads it as 0, like every other junk epoch', async () => {
+      localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify({ state: { slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: JUNK }, version: 1 }))
+      await useLocalProfilesStore.persist.rehydrate()
+      expect(useLocalProfilesStore.getState().worldEpoch).toBe(0)
+    })
+
+    it('junk in MEMORY only — storage holds a good epoch (another window has just healed it, or switched): no way through; the stores catch up instead', async () => {
+      const real = Storage.prototype.setItem
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+        if (key !== STORAGE_KEYS.TABS) real.call(this, key, value) // the junk never reaches storage
+      })
+      useTabStore.setState({ worldEpoch: JUNK })
+      vi.restoreAllMocks()
+      const before = threeStores()
+      const pending = switchActiveProfile(SLAVE)
+      threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+      expect(await pending).toEqual({ ok: false, reason: 'unsettled' })
+      expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: true }) // rehydrated from the good record
+    })
+
+    it('junk epoch AND world ids that disagree: that is a world nobody can name — refused as ever', async () => {
+      useTabStore.setState({ worldEpoch: JUNK, worldId: SLAVE })
+      expect(readMasterWorld()).toEqual({ settled: false, reason: 'epoch-mismatch' })
+      expect(await switchActiveProfile(OTHER)).toEqual({ ok: false, reason: 'unsettled' })
+    })
   })
 
   it('master → slave → master: the master world is what it was, byte for byte, under a newer epoch', async () => {
@@ -596,10 +654,10 @@ describe('renameSlave / reorderSlaves / deleteSlave', () => {
 describe('promoteToMaster — a move, never a copy (decision 10)', () => {
   const demoted = (id: string) => useLocalProfilesStore.getState().slaves[id]
 
-  it('refused while a master is attached, whatever else is true', () => {
+  it('refused while a master is attached, whatever else is true', async () => {
     useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1' })
     const before = threeStores()
-    expect(promoteToMaster(SLAVE, 'Old master')).toEqual({ ok: false, reason: 'master-attached' })
+    expect(await promoteToMaster(SLAVE, 'Old master')).toEqual({ ok: false, reason: 'master-attached' })
     threeStores().forEach((v, i) => expect(v).toBe(before[i]))
   })
 
@@ -607,30 +665,30 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     const attachedOnDisk = (state: Record<string, unknown>): void =>
       localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ state: { masterHostId: 'h1', masterProfileId: 'p_0123456789ab', masterEndpoint: '10.0.0.1:7860', pendingDirection: 'push', suspension: null, attachGeneration: 1, autoSync: true, ...state }, version: 1 }))
 
-    it('storage says attached, memory says not: refused — the promoted slave would be pushed over the SOT as the master', () => {
+    it('storage says attached, memory says not: refused — the promoted slave would be pushed over the SOT as the master', async () => {
       attachedOnDisk({})
       expect(useProfileStore.getState().masterHostId).toBeNull()
       const before = threeStores()
-      expect(promoteToMaster(SLAVE, 'Old master')).toEqual({ ok: false, reason: 'master-attached' })
+      expect(await promoteToMaster(SLAVE, 'Old master')).toEqual({ ok: false, reason: 'master-attached' })
       threeStores().forEach((v, i) => expect(v).toBe(before[i]))
       expect(useRebuildStore.getState().lockedBy).toBeNull()
       expect(localStorage.getItem(STORAGE_KEYS.WORLD_EPOCH)).toBeNull()
     })
 
-    it('what storage holds is judged by the store\'s own rule: half a master, or one without an endpoint, is no master', () => {
+    it('what storage holds is judged by the store\'s own rule: half a master, or one without an endpoint, is no master', async () => {
       attachedOnDisk({ masterEndpoint: null })
-      expect(promoteToMaster(SLAVE, 'Old master')).toMatchObject({ ok: true })
+      expect(await promoteToMaster(SLAVE, 'Old master')).toMatchObject({ ok: true })
     })
 
-    it('unreadable storage is no master', () => {
+    it('unreadable storage is no master', async () => {
       localStorage.setItem(STORAGE_KEYS.PROFILE, '{not json')
-      expect(promoteToMaster(SLAVE, 'Old master')).toMatchObject({ ok: true })
+      expect(await promoteToMaster(SLAVE, 'Old master')).toMatchObject({ ok: true })
     })
   })
 
-  it('the master on screen: the screen does not move and is now the demoted slave\'s; the parked slave is the master', () => {
+  it('the master on screen: the screen does not move and is now the demoted slave\'s; the parked slave is the master', async () => {
     const live = screen()
-    const result = promoteToMaster(SLAVE, 'Old master')
+    const result = await promoteToMaster(SLAVE, 'Old master')
     expect(result.ok).toBe(true)
     if (!result.ok) return
 
@@ -647,10 +705,10 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     if (read.settled) expect(read.world).toEqual(slaveWorld())
   })
 
-  it('that slave on screen: the screen does not move and is now the master\'s; the old master is a parked slave', () => {
+  it('that slave on screen: the screen does not move and is now the master\'s; the old master is a parked slave', async () => {
     slaveOnScreen()
     const live = screen()
-    const result = promoteToMaster(SLAVE, 'Old master')
+    const result = await promoteToMaster(SLAVE, 'Old master')
     expect(result.ok).toBe(true)
     if (!result.ok) return
 
@@ -665,9 +723,9 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     if (read.settled) expect(read.world).toEqual(slaveWorld())
   })
 
-  it('ANOTHER slave on screen: the screen keeps its label, and still all three stores get the new epoch', () => {
+  it('ANOTHER slave on screen: the screen keeps its label, and still all three stores get the new epoch', async () => {
     slaveOnScreen()
-    const result = promoteToMaster(OTHER, 'Old master')
+    const result = await promoteToMaster(OTHER, 'Old master')
     expect(result.ok).toBe(true)
     if (!result.ok) return
 
@@ -684,31 +742,31 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
   it.each([
     ['an unknown slave', 'nope', 'Old', 'not-found'],
     ['a blank name for the demoted master', SLAVE, '  ', 'bad-name'],
-  ])('%s: refused, nothing written', (_name, id, name, reason) => {
+  ])('%s: refused, nothing written', async (_name, id, name, reason) => {
     const before = threeStores()
-    expect(promoteToMaster(id, name)).toEqual({ ok: false, reason })
+    expect(await promoteToMaster(id, name)).toEqual({ ok: false, reason })
     threeStores().forEach((v, i) => expect(v).toBe(before[i]))
   })
 
-  it('unsettled: refused', () => {
+  it('unsettled: refused', async () => {
     useTabStore.setState({ worldEpoch: 9 })
-    expect(promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'unsettled' })
+    expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'unsettled' })
   })
 
-  it('refused while the operation lock is held, and leaves no lock behind', () => {
+  it('refused while the operation lock is held, and leaves no lock behind', async () => {
     const grant = useRebuildStore.getState().acquireOperationLock('rebuild:batch')
-    expect(promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'busy' })
+    expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'busy' })
     useRebuildStore.getState().releaseOperationLock(grant)
-    expect(promoteToMaster(SLAVE, 'Old').ok).toBe(true)
+    expect((await promoteToMaster(SLAVE, 'Old')).ok).toBe(true)
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
-  it('a re-stamp that throws: the parking lot is put back, all three stores are as they were', () => {
+  it('a re-stamp that throws: the parking lot is put back, all three stores are as they were', async () => {
     const before = threeStores()
     vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
       throw new Error('stamp failed')
     })
-    expect(promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: 'stamp failed' })
+    expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: 'stamp failed' })
     threeStores().forEach((v, i) => expect(v).toBe(before[i]))
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })

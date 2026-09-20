@@ -51,6 +51,15 @@
 // means its world never reached storage — `superseded`; what it holds in memory
 // is about to be replaced by the winner's, and the stores are asked to hurry.
 //
+// ONE BLOCK AT A TIME, ACROSS WINDOWS (lib/storage/world-lock.ts). A switch and a
+// promote run their block under the Web Lock `purdex-world-switch` where the
+// browser has one: the fence is raised by read-check-write on `localStorage`,
+// which two renderers can interleave, and only a real mutex closes that. The
+// block inside is unchanged and still synchronous — the lock decides when it
+// starts, nothing else; not granted within 3 s → `busy`. Where there is no Web
+// Locks (no secure context) the block runs inside the call as it always did, and
+// what is left open is written down in lib/storage/world-fence.ts.
+//
 // THE OPERATION LOCK. A switch replaces the tab tree, so it takes the lock every
 // other tree-rewriter takes (rebuild, snapshot restore, a profile apply): none of
 // them is ever half-way through a world that is then swapped from under it, and
@@ -80,13 +89,16 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { MASTER_PROFILE_ID, normalizeLocalProfileName, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { masterAttachedInStorage, useProfileStore } from '../../stores/useProfileStore'
-import { useRebuildStore, withOperationLock } from '../../stores/useRebuildStore'
+import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { generateId } from '../id'
-import { nextWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
+import { STORAGE_KEYS } from '../storage/keys'
+import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
+import type { MasterWorldRead } from './master-world'
+import { withWorldLock } from '../storage/world-lock'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
 
@@ -152,9 +164,32 @@ function superseded(worldEpoch: number): boolean {
   return true
 }
 
+/**
+ * THE ONE WAY OUT OF A CORRUPT EPOCH (master-world.ts, `junk-epoch`): a live
+ * store holds an epoch that is none, everything else agrees — and STORAGE HOLDS
+ * THE SAME JUNK, so the rehydrate the refusal asks for will bring it right back.
+ * (Junk in memory over a good record in storage is another window's switch or
+ * heal half-way here: that one the rehydrate fixes, and it is refused as ever.)
+ * The switch then parks the screen under the label all three stores agree on
+ * and stamps a real epoch into all of them. A switch only: a promote relabels,
+ * and has no business doing that on a world it cannot read.
+ */
+function junkEpochForGood(read: MasterWorldRead): boolean {
+  if (read.settled || read.reason !== 'junk-epoch') return false
+  const live = [
+    [STORAGE_KEYS.TABS, useTabStore.getState().worldEpoch],
+    [STORAGE_KEYS.WORKSPACES, useWorkspaceStore.getState().worldEpoch],
+  ] as const
+  return live.every(([key, inMemory]) => isWorldEpoch(inMemory) || !isWorldEpoch(persistedWorldEpoch(key)))
+}
+
 /** THE SYNCHRONOUS BLOCK. Not `async`, on purpose: an `await` cannot be written in here. */
 function exchange(targetId: string): SwitchResult {
-  if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
+  const read = readMasterWorld()
+  if (!read.settled && !junkEpochForGood(read)) {
+    recoverUnsettledWorld(read, true) // a refusal is not the last word: the stores are asked to catch up with storage
+    return { ok: false, reason: 'unsettled' }
+  }
   const old = captureLocal()
   let lowerFence = (): void => {}
   try {
@@ -176,11 +211,23 @@ function exchange(targetId: string): SwitchResult {
   }
 }
 
+/** `block`, synchronously, under this window's operation lock; `busy` when somebody else holds it. Released whatever happens. */
+function underOperationLock<R>(block: () => R, busy: R): R {
+  const grant = useRebuildStore.getState().acquireOperationLock(PROFILE_SWITCH_LOCK_OWNER)
+  if (grant === null) return busy
+  try {
+    return block()
+  } finally {
+    useRebuildStore.getState().releaseOperationLock(grant)
+  }
+}
+
 /**
  * Puts `targetId`'s world on screen and parks the one that was there. A refusal
- * has written nothing; `write-failed` has put everything back. The exchange has
- * happened — or not — by the time this function RETURNS its promise: the promise
- * is there for the lock's signature, nothing in here waits.
+ * has written nothing; `write-failed` has put everything back. Where there is no
+ * Web Locks the exchange has happened — or not — by the time this function
+ * RETURNS its promise; with Web Locks, once the cross-window lock is granted (or
+ * `busy` after 3 s). Either way the exchange itself never waits.
  *
  * NOT DONE HERE, AND WHY (see WHAT A PARKED WORLD DOES NOT HEAR): the plan has
  * the switch ask every connected host for its sessions afterwards, so that the
@@ -193,10 +240,8 @@ function exchange(targetId: string): SwitchResult {
  * happens to every pane of an app that was closed for a while, too.
  */
 export function switchActiveProfile(targetId: typeof MASTER_PROFILE_ID | string): Promise<SwitchResult> {
-  return withOperationLock<SwitchResult>(
-    PROFILE_SWITCH_LOCK_OWNER,
-    // `async` with no `await`: the body runs to its `return` inside `withOperationLock`'s own synchronous prefix.
-    async () => exchange(targetId),
+  return withWorldLock<SwitchResult>(
+    () => underOperationLock<SwitchResult>(() => exchange(targetId), { ok: false, reason: 'busy' }),
     () => ({ ok: false, reason: 'busy' }),
   )
 }
@@ -386,34 +431,35 @@ export type PromoteResult = { ok: true; demotedId: string } | Refused<'master-at
  * until it has caught up, and then the world labelled "master" is the promoted
  * one, which is what the user made it.
  */
-export function promoteToMaster(slaveId: string, demotedName: string): PromoteResult {
-  if (useProfileStore.getState().masterHostId !== null) return { ok: false, reason: 'master-attached' }
-  const grant = useRebuildStore.getState().acquireOperationLock(PROFILE_SWITCH_LOCK_OWNER)
-  if (grant === null) return { ok: false, reason: 'busy' }
+export function promoteToMaster(slaveId: string, demotedName: string): Promise<PromoteResult> {
+  return withWorldLock<PromoteResult>(
+    () => underOperationLock<PromoteResult>(() => relabel(slaveId, demotedName), { ok: false, reason: 'busy' }),
+    () => ({ ok: false, reason: 'busy' }),
+  )
+}
+
+/** THE SYNCHRONOUS BLOCK of a promote. Not `async`, on purpose — as `exchange`. */
+function relabel(slaveId: string, demotedName: string): PromoteResult {
+  if (useProfileStore.getState().masterHostId !== null || masterAttachedInStorage()) return { ok: false, reason: 'master-attached' }
+  if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
+  const old = captureLocal()
+  let lowerFence = (): void => {}
   try {
-    if (useProfileStore.getState().masterHostId !== null || masterAttachedInStorage()) return { ok: false, reason: 'master-attached' }
-    if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
-    const old = captureLocal()
-    let lowerFence = (): void => {}
-    try {
-      const epoch = openEpoch()
-      if (epoch === null) return { ok: false, reason: 'busy' }
-      const { worldEpoch } = epoch
-      lowerFence = epoch.lowerFence
-      const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch)
-      if (!promoted.ok) {
-        lowerFence()
-        return promoted
-      }
-      restampWorld({ worldId: promoted.activeProfileId, worldEpoch, beforeRollback: lowerFence })
-      return superseded(worldEpoch) ? { ok: false, reason: 'superseded' } : { ok: true, demotedId: promoted.demotedId }
-    } catch (err) {
+    const epoch = openEpoch()
+    if (epoch === null) return { ok: false, reason: 'busy' }
+    const { worldEpoch } = epoch
+    lowerFence = epoch.lowerFence
+    const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch)
+    if (!promoted.ok) {
       lowerFence()
-      restoreLocal(old)
-      return writeFailed(err)
+      return promoted
     }
-  } finally {
-    useRebuildStore.getState().releaseOperationLock(grant)
+    restampWorld({ worldId: promoted.activeProfileId, worldEpoch, beforeRollback: lowerFence })
+    return superseded(worldEpoch) ? { ok: false, reason: 'superseded' } : { ok: true, demotedId: promoted.demotedId }
+  } catch (err) {
+    lowerFence()
+    restoreLocal(old)
+    return writeFailed(err)
   }
 }
 

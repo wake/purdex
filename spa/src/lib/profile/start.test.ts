@@ -1715,7 +1715,7 @@ describe('the dev hook: local profiles (P3b has no UI; the real-machine acceptan
     expect(profiles.list().slaves.map((s) => s.name)).toEqual(['Renamed', 'Saved'])
     expect(profiles.remove(saved.id)).toEqual({ ok: true })
 
-    const promoted = profiles.promote(copy.id, 'Old master')
+    const promoted = await profiles.promote(copy.id, 'Old master')
     expect(promoted.ok).toBe(true)
     expect(profiles.list().active).toBe('master')
     expect(profiles.world()).toEqual({ settled: true, onScreen: true, workspaces: ['Alpha'] })
