@@ -440,6 +440,83 @@ describe('master set → contend → lead', () => {
   })
 })
 
+describe('the attachment answers 404: the profile is not there any more', () => {
+  const notFound = { kind: 'failed', reason: 'not-found', status: 404, message: 'profile not found' } as never
+
+  async function gone(): Promise<void> {
+    vi.mocked(putAttachment).mockResolvedValue(notFound)
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+  }
+
+  it('no retry, no driver, `blocked: profile-gone`, a status that reads locked:reset — and nothing local is touched', async () => {
+    await gone()
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.executors[0].onReconnected).not.toHaveBeenCalled()
+    expect(h.collectors[0].stop).toHaveBeenCalledTimes(1)
+    expect(h.wsListeners.size).toBe(0)
+    expect(profileSyncState()).toMatchObject({
+      master: { hostId: 'h1', profileId: P1 },
+      blocked: 'profile-gone',
+      status: { profile: 'locked:reset', schemaLock: null, sections: {} },
+    })
+    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['profile-gone'])
+
+    // five minutes, a reconnect, a lease change: still one request, still one problem
+    await vi.advanceTimersByTimeAsync(300_000)
+    disconnect('h1')
+    connect('h1')
+    h.leaderships[0].set(false)
+    h.leaderships[0].set(true)
+    await flush()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    expect(h.executors).toHaveLength(1)
+    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['profile-gone'])
+    vi.advanceTimersByTime(1)
+    expect(vi.getTimerCount()).toBe(0)
+
+    // not a detach, not a wipe
+    expect(useProfileStore.getState().masterProfileId).toBe(P1)
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    expect(Object.keys(useHostStore.getState().hosts)).toEqual(['h1', 'h2'])
+  })
+
+  it('attachMaster to another profile is a way out: a normal start', async () => {
+    await gone()
+    vi.mocked(putAttachment).mockResolvedValue(okAttach)
+    expect(await attachMaster('h1', P2, 'pull')).toEqual({ ok: true })
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].deps.profileId).toBe(P2)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {} })
+  })
+
+  it('detachMaster is the other', async () => {
+    await gone()
+    await detachMaster()
+    expect(profileSyncState()).toMatchObject({ master: null, blocked: null, status: null })
+  })
+
+  it.each(['unknown-host', 'unauthorized', 'network', 'server'])('%s is NOT that: the host may come back, the token may be fixed — retried as before', async (reason) => {
+    vi.mocked(putAttachment).mockResolvedValue(failed(reason))
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(putAttachment).toHaveBeenCalledTimes(2)
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors[0].dispose).not.toHaveBeenCalled()
+  })
+})
+
 describe('the master host is edited in place', () => {
   const edit = (over: Record<string, unknown>): void => {
     const { hosts } = useHostStore.getState()

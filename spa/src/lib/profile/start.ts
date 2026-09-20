@@ -103,9 +103,11 @@ export interface ProfileSyncState {
   master: Master | null
   /** This window holds the lease right now. */
   leader: boolean
-  /** The master host's ip / port is not the one the profile was attached at: nothing syncs (see `enterMasterMode`). */
-  blocked: 'master-endpoint-changed' | null
-  /** Null in a follower and without a master: only the leader knows. */
+  /** Nothing syncs, in any window (see `enterMasterMode`): the master host's ip / port is not the one the
+   *  profile was attached at · the attachment answered 404, i.e. the profile is not on the daemon any more. */
+  blocked: 'master-endpoint-changed' | 'profile-gone' | null
+  /** Null in a follower and without a master: only the leader knows. With `blocked: 'profile-gone'` there is
+   *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections. */
   status: ExecutorStatus | null
   /** The latest `PROBLEM_BUFFER_SIZE`, oldest first. */
   problems: ProfileSyncProblem[]
@@ -163,7 +165,7 @@ interface Leader {
   dispose(): void
 }
 
-function lead(master: Master, leadership: Leadership): Leader {
+function lead(master: Master, leadership: Leadership, onProfileGone: (detail: string) => void): Leader {
   const { hostId, profileId } = master
   let disposed = false
   let lastStatus: ExecutorStatus | null = null
@@ -223,14 +225,26 @@ function lead(master: Master, leadership: Leadership): Leader {
       return
     }
     let failure: string | null = null
+    let notFound = false
     try {
       const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
       const r = await putAttachment(hostId, profileId, body)
-      if (r.kind === 'failed') failure = `${r.reason}: ${r.message}`
+      if (r.kind === 'failed') {
+        failure = `${r.reason}: ${r.message}`
+        notFound = r.reason === 'not-found'
+      }
     } catch (e) {
       failure = message(e)
     }
     if (disposed || mine !== round || !connected()) return
+    if (notFound) {
+      // 404 on the attachment = the profile is not on this daemon. The executor
+      // would say `profileGone` — but it is never started without an attachment,
+      // so the start layer says it (the caller disposes this leader). No retry:
+      // a profile that is made again gets a new id.
+      onProfileGone(failure ?? 'not-found')
+      return
+    }
     if (failure === null) {
       attached = true
       attachFailures = 0
@@ -295,8 +309,8 @@ interface MasterMode {
   /** `useProfileStore.attachGeneration` when this mode was entered. */
   generation: number
   isLeader(): boolean
-  /** The master host was re-pointed in place: no driver, whoever holds the lease. */
-  blocked(): boolean
+  /** No driver, whoever holds the lease: the master host was re-pointed in place, or the profile is gone. */
+  blocked(): ProfileSyncState['blocked']
   leader(): Leader | null
   end(): void
 }
@@ -316,6 +330,8 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   // with the old daemon's CAS bases, to whatever answers at the new address.
   let home = endpointOf(master.hostId)
   let blocked = false
+  /** The attachment answered 404. Final for this mode: only `attachMaster` / `detachMaster` (a new mode) end it. */
+  let gone = false
   warned.clear()
   const unwatchUnsynced = watchUnsyncedStores()
   const leadership = contendForLeadership()
@@ -326,8 +342,15 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   }
   const apply = (isLeader: boolean): void => {
     if (ended) return
-    if (!isLeader || blocked) follow()
-    else if (leader === null) leader = lead(master, leadership)
+    if (!isLeader || blocked || gone) follow()
+    else if (leader === null) leader = lead(master, leadership, profileGone)
+  }
+  const profileGone = (detail: string): void => {
+    if (ended || gone) return
+    gone = true
+    follow()
+    // Not a detach and not a wipe: what to do with a master that is gone is the user's call (P3's wizard).
+    reportProblem({ kind: 'profile-gone', detail: `profile ${master.profileId} is not on host ${master.hostId} any more (${detail}); nothing was applied and nothing was dropped` })
   }
   const unsubscribe = leadership.onChange(apply)
 
@@ -371,7 +394,7 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     master,
     generation,
     isLeader: () => !ended && leadership.isLeader(),
-    blocked: () => !ended && blocked,
+    blocked: () => (ended ? null : gone ? 'profile-gone' : blocked ? 'master-endpoint-changed' : null),
     leader: () => leader,
     end() {
       if (ended) return
@@ -395,11 +418,12 @@ function sameMaster(a: Master | null, b: Master | null): boolean {
 }
 
 export function profileSyncState(): ProfileSyncState {
+  const blocked = mode?.blocked() ?? null
   return {
     master: selectMaster(useProfileStore.getState()),
     leader: mode?.isLeader() ?? false,
-    blocked: mode?.blocked() === true ? 'master-endpoint-changed' : null,
-    status: mode?.leader()?.status() ?? null,
+    blocked,
+    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {} } : (mode?.leader()?.status() ?? null),
     problems: problems.map((p) => ({ ...p })),
   }
 }
