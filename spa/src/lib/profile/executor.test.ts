@@ -1041,6 +1041,117 @@ describe('executor — pull', () => {
   })
 })
 
+/* ─── the shape of what a pull fetched (spec §4.4 / §4.5) ─── */
+
+describe('executor — a pulled section carries its shape, and a newer one locks the WHOLE profile', () => {
+  const remote = (section: string, rev: number, hash: string | null) => ({ hostId: HOST, profileId: PROFILE, section, rev, hash, writerClientId: OTHER_CLIENT })
+
+  it.each([
+    ['sot-is-newer', ['fp-newer', 99] as [string, number]],
+    ['shape-changed-without-ordinal', ['fp-other', 3] as [string, number]],
+  ])('%s, learnt from a remote-event → pull: nothing is applied, the section is NOT locked:invalid, and no other section writes any more', async (verdict, shape) => {
+    const { ex, problems, statuses } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
+    // what a newer Purdex wrote: another fingerprint, and a store this build does not know
+    api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', shape), { 'purdex-from-the-future': { x: 1 } }))
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', detail: 'unknown store' })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
+    ex.onRemoteEvent(remote('settings', 2, 'S2'))
+    await flush()
+
+    expect(applySectionToStores).not.toHaveBeenCalled()
+    expect(eventsOf('locked', 'pull-applied')).toEqual([])
+    expect(ex.status().profile).toBe('locked:schema')
+    expect(ex.status().schemaLock).toEqual({
+      section: 'settings', kind: 'settings', verdict,
+      mine: { fingerprint: 'fp-settings', ordinal: 3 }, sot: { fingerprint: shape[0], ordinal: shape[1] },
+    })
+    expect(ex.status().sections.settings).toBe('synced') // the SECTION is fine; the PROFILE is locked
+    expect(problems.map((p) => p.kind)).toEqual(['schema-lock'])
+    expect(statuses.at(-1)?.profile).toBe('locked:schema')
+
+    // the bug the real machines showed: a local edit of ANOTHER section went out
+    ex.onSection({ key: 'workspaces', hash: 'W2', payload: { order: [] } })
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { hosts: {} } })
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(api.deleteSection).not.toHaveBeenCalled()
+    expect(api.getSection).toHaveBeenCalledTimes(1) // and the refused payload is not fetched again
+  })
+
+  it('while locked, a remote-event is recorded (the section KNOWS) and sends nothing', async () => {
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', ['fp-newer', 99]), {}))
+    ex.onRemoteEvent(remote('settings', 2, 'S2'))
+    await flush()
+    vi.clearAllMocks()
+    h.events.length = 0
+    ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+    ex.onRemoteEvent(remote('settings', 3, 'S3'))
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(h.events.map((e) => [e.event.type, e.changed])).toEqual([['remote-event', true], ['remote-event', true]])
+    expect(api.getSection).not.toHaveBeenCalled()
+    expect(api.listProfiles).not.toHaveBeenCalled()
+    expect(api.putSection).not.toHaveBeenCalled()
+  })
+
+  it('NO OSCILLATION: a lock set by a pull survives the next reindex (the index lists the same shape); it lifts only when the index no longer offends', async () => {
+    const { ex, problems } = await synced({ hosts: 'H1', settings: 'S1' })
+    api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', ['fp-newer', 99]), {}))
+    ex.onRemoteEvent(remote('settings', 2, 'S2'))
+    await flush()
+    expect(ex.status().profile).toBe('locked:schema')
+
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('settings', 2, 'S2', ['fp-newer', 99])]))
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
+    ex.onReconnected()
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { hosts: {} } })
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(ex.status().schemaLock).toMatchObject({ section: 'settings', verdict: 'sot-is-newer' })
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(api.getSection).toHaveBeenCalledTimes(1)
+    expect(problems.filter((p) => p.kind === 'schema-lock')).toHaveLength(1) // the same lock is not announced twice
+
+    // this build was upgraded / the SOT was rewritten in a shape it knows
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('settings', 2, 'S2')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2'), { s: 2 }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
+    ex.onReconnected()
+    await flush()
+    expect(ex.status().schemaLock).toBeNull()
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(ex.status().profile).toBe('synced')
+  })
+
+  it.each([
+    ['ok (same fingerprint, the ordinal may differ)', ['fp-settings', 9] as [string, number]],
+    ['i-am-newer (an OLDER shape: a pull only ever lands on a clean section — see the header)', ['fp-older', 2] as [string, number]],
+  ])('%s → applied as usual, no lock', async (_name, shape) => {
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', shape), { s: 2 }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
+    ex.onRemoteEvent(remote('settings', 2, 'S2'))
+    await flush()
+    expect(applySectionToStores).toHaveBeenCalledWith('settings', { s: 2 }, { masterHostId: HOST })
+    expect(ex.status()).toMatchObject({ profile: 'synced', schemaLock: null })
+  })
+
+  it('a write queued behind the pull that locks is not sent', async () => {
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1' })
+    const get = deferred<Result<Section | null>>()
+    api.getSection.mockReturnValue(get.promise)
+    const put = deferred<PutOutcome>()
+    api.putSection.mockReturnValueOnce(put.promise).mockResolvedValue({ kind: 'applied', rev: 9 })
+    ex.onRemoteEvent(remote('settings', 2, 'S2'))
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { hosts: {} } }) // on the wire before anyone knew
+    await flush()
+    get.resolve(sectionOf(meta('settings', 2, 'S2', ['fp-newer', 99]), {}))
+    await flush()
+    put.resolve(failure('server', { status: 500 })) // it would be retried in 2 s …
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api.putSection).toHaveBeenCalledTimes(1) // … but the profile is locked
+  })
+})
+
 /* ─── the empty placeholder of a workspace that arrived from elsewhere ─── */
 
 describe('executor — an empty tabs placeholder is not an edit while the SOT has (or may have) content', () => {

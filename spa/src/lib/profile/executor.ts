@@ -51,6 +51,26 @@
 //     content → dropped; SOT has nothing → delivered (a workspace created HERE,
 //     which is pushed). A non-empty payload is a real edit and conflicts, as it
 //     should; once there is a base, an empty report is an ordinary one.
+//   - THE SCHEMA LOCK HAS THREE ENTRANCES AND ONE EXIT. It is set by the index
+//     (`profileLock`), by a PUT answered `schema`, and by a PULL whose fetched
+//     section carries a newer / unorderable shape (a remote-event brings only
+//     rev and hash, so the fetch is where a newer writer is first seen). All
+//     three set the same profile-level lock: no push, no delete, no pull, for
+//     any section. It is lifted only by an index that no longer offends — and
+//     the index lists every live section's shape, so a lock set by a pull is
+//     confirmed, not cleared, by the next reindex.
+//   - AN OLDER SHAPE ON THE SOT (`i-am-newer`) IS PULLED LIKE ANY OTHER. The
+//     worry is `applySettings`' rule that a field the payload lacks was cleared
+//     on the sending side: would it wipe this build's new fields? It cannot, by
+//     construction: a pull lands on a CLEAN section only, and clean means the
+//     local payload — built with THIS build's projection — hashes to the base
+//     agreed under the old one, i.e. the new fields hold nothing (`undefined`
+//     members are dropped from payload and hash alike). A new field that holds
+//     a value makes the section dirty → push (my shape replaces the stored one,
+//     §4.5) or, if the SOT moved too, a conflict the user answers; and
+//     keep-sot IS the user asking for the SOT's content. Overwriting the SOT
+//     unasked instead would discard the edits other (older) devices made while
+//     this one was being upgraded.
 //   - Every retry goes through one timer mechanism, all of it cancelled by
 //     `dispose()`. A failed network action is not retried before its backoff has
 //     passed, whatever else pumps the section meanwhile (2 s → 4 → 8 … 30 s cap;
@@ -929,6 +949,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /* ─── pull ─── */
 
   async function pull(key: string): Promise<Finish> {
+    const mine = await shapes() // before the request: nothing may `await` between judging the state and applying
+    if (disposed) return WAIT
     const result = await getSection(hostId, profileId, key, requestOptions)
     if (disposed) return WAIT
     if (result.kind === 'failed') {
@@ -949,6 +971,24 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       problem('pull-absent-but-listed', 'the section answered 404 while the index lists it; asking the index again', key)
       requestReindex(true)
       return failed(key)
+    }
+    // THE SHAPE OF WHAT WAS FETCHED (§4.4 / §4.5). A client learns of a new rev
+    // from a remote-event, which carries no fingerprint and no ordinal; the index
+    // — where `profileLock` looks — is not asked again for it. The fetched
+    // section is therefore the first place a newer shape shows up, and it is
+    // judged BEFORE the apply: a newer (or unorderable) shape locks the whole
+    // profile, exactly as the index would have. Not `locked:invalid` — that is
+    // one section's business and leaves every other section writing, which is
+    // the very thing an old client must stop doing.
+    const kind = sectionKind(key)
+    if (fetched !== null && kind !== null) {
+      const sot: Shape = { fingerprint: fetched.fingerprint, ordinal: fetched.ordinal }
+      const verdict = compareShape(mine[kind], sot)
+      if (verdict === 'sot-is-newer' || verdict === 'shape-changed-without-ordinal') {
+        setSchemaLock({ section: key, kind, verdict, mine: mine[kind], sot })
+        return WAIT
+      }
+      // 'i-am-newer' is applied like 'ok' — see "AN OLDER SHAPE ON THE SOT" in the header.
     }
     const payload = fetched === null ? null : fetched.payload
     const rev = fetched === null ? s.sot.rev : fetched.rev

@@ -307,3 +307,60 @@ describe('a second client attaches', () => {
     expect(run.settled).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('a NEWER Purdex writes a section (spec §4.4: an old client must not write anything once any shape has moved)', () => {
+  /** What curl did on the real machines: a legal CAS write with another fingerprint, ordinal 99 and a store this build does not know. */
+  function newerWriterWritesSettings(): { rev: number; hash: string } {
+    const cur = daemon.rows.get('settings')!
+    const row: Row = {
+      rev: cur.rev + 1,
+      hash: 'e'.repeat(64),
+      payload: { ...(cur.payload as Record<string, unknown>), 'purdex-from-the-future': { x: 1 } },
+      fingerprint: 'fp-settings-of-a-newer-purdex',
+      ordinal: 99,
+      writer: 'c_cccccccccccc',
+    }
+    daemon.rows.set('settings', row)
+    return { rev: row.rev, hash: row.hash! }
+  }
+
+  function renameFirstWorkspace(name: string): void {
+    const { workspaces } = useWorkspaceStore.getState()
+    useWorkspaceStore.setState({ workspaces: workspaces.map((w, i) => (i === 0 ? { ...w, name } : w)) })
+  }
+
+  it('the attached client locks the WHOLE profile on the pull, and its next edit of ANOTHER section never reaches the daemon; a client attaching later locks on the index', async () => {
+    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
+    await attach(A, 'push')
+    expect(executor!.status().profile).toBe('synced')
+    const writesBefore = daemon.writes.length
+    const revsBefore = daemon.revs()
+
+    const written = newerWriterWritesSettings()
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'settings', rev: written.rev, hash: written.hash, writerClientId: 'c_cccccccccccc' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(executor!.status()).toMatchObject({ profile: 'locked:schema', schemaLock: { section: 'settings', verdict: 'sot-is-newer' } })
+    expect(executor!.status().sections.settings).toBe('synced') // not locked:invalid — the PROFILE is what is locked
+
+    renameFirstWorkspace('renamed-under-the-lock') // on the real machines this went out: workspaces rev 9 → 10
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+    expect(daemon.revs()).toEqual({ ...revsBefore, settings: written.rev })
+
+    // a reconnect re-reads the index: the same shape is listed there, the lock stays, still nothing goes out
+    executor!.onReconnected()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(executor!.status().profile).toBe('locked:schema')
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+    leave()
+
+    // the second old client: it meets the newer shape on its first index
+    world(H2, [ws('wb1', ['tb1'])], [tab('tb1')])
+    await attach(B, 'push')
+    renameFirstWorkspace('b-renamed')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(executor!.status().profile).toBe('locked:schema')
+    expect(daemon.writes.filter((w) => w.clientId === B)).toEqual([])
+    expect(daemon.revs()).toEqual({ ...revsBefore, settings: written.rev })
+  })
+})
