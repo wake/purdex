@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.413] - 2026-09-20
+
+### Feature: Profile Sync P2b-1——傳輸層：CAS client、`'profile'` 事件、control／section 兩個儲存、client identity（#1242、#1245）
+
+Profile Sync 第三支，**仍未接線**（沒有任何 service 啟動；除 `keys.ts` 外沒有非測試檔引用新模組），driver 是 P2b-2。因為整包 31 檔，依規則在 commit 邊界拆成兩個 PR。唯一可觀察的變化：首次使用時多寫一個 `localStorage` key `purdex-client-identity`。
+
+`lib/client-identity.ts`：client id 原本住在 P4a 要刪的 `useSyncStore`，但它有兩個 caller 屬於不會被刪的 Storage-backup。新家用 `browserStorage` 直接讀寫、**沒有永久的 in-memory cache**（以 storage 為準、寫入後讀回，兩個視窗同時首次呼叫會收斂到最後寫入者，而不是各自永久 cache 自己產生的那個）；**沿用既有 id**（daemon 上的 device-state 與 backup 紀錄都掛在它上面）；`useSyncStore.getClientId()` delegate 過去並仍填 state 欄位；`isClientIdPersisted()` 讓 P2b-2 的 driver 在 identity 撐不過 reload 時拒絕 attach。`lib/profile/api.ts`：P1 十條路由的 client，**任何函式都不 throw、不 reject**——每個結果都是 discriminated union，因為 executor 要保證一個 flight 恰好一個 terminal event，而且「清單請求失敗」必須無法被表示成「清單是空的」；status→outcome 對照表直接從 Go 原始碼整理、一列一個測試；409 先分支再讀 body；每個欄位驗證而不是 cast；request 的建構（路徑編碼、`JSON.stringify`）也在受保護入口之內。`profile-ws-dispatch.ts`：只接受 daemon 實際送出的兩種 wire shape（刪除＝`deleted:true` 且 `hash:""`；live＝64 hex），`subscribeProfileEvents(fn)` 回傳只會移除自己的 unsubscribe。`useProfileStore`：control plane（master、autoSync），註冊 `syncManager`——每個視窗必須對它有一致認知。`section-store.ts`：leader 的工作狀態，**一個東西一個 key**（每個 section 一個 key、每個 conflict payload 以 hash 定址）。另外一項 P2a 的選擇被翻回：`useModuleEnabledStore` 的原始碼自己寫明模組開關是 device-local 偏好（「資源有限的 host 可以關掉不想跑的模組」），從 settings projection 移除、`settings` ordinal → 2——**待使用者確認**，翻回來是一行 projection ＋再 bump 一次。
+
+**兩個讀程式碼（而不是讀 plan）才發現的事實**：`getDaemonBase` 對未知的 hostId **不會 throw，而是默默退回 active host、再不然就是 `127.0.0.1:7860`**——master host 若從 store 消失，CAS 會被送到**另一台 daemon**、還帶著那台的 token；`api.ts` 先確認 `hosts[hostId]` 存在，否則回 `failed/unknown-host`、一個 byte 都不送。`AbortSignal.timeout` **不受 fake timers 驅動**，用它寫的 timeout 測試等於沒驗；改成手寫 `AbortController`＋`setTimeout`，每條路徑都清、並與請求賽跑。
+
+Codex：**plan review 十七條（五條 critical）全收**，我自己點名懷疑的兩個設計都在寫任何一行 driver 之前被打穿——Web Locks 只存在於 secure context（Electron dev 視窗載的是純 HTTP 的 `100.64.0.2:5174`），而且我寫的 `acquireLeadership()` 簽名本身就會卡死（`locks.request()` 的 promise 要等鎖釋放才 resolve）→ P2b-2 改用 localStorage 租約＋心跳；「follower 的編輯經 `syncManager` 進 leader」不成立，因為 `useEditorSettingsStore` 根本沒註冊 → 每個視窗在原生 `storage` 事件上 rehydrate 未註冊的投影 store。其餘：attachment 路由沒有任何 task 呼叫（daemon 的「attach 中不准刪」形同虛設）、profile 層級一次只送一個寫入（schema 409 才擋得住「之後」的寫入）、`locked:invalid`、hosts payload 不得移除或改指 master 自己的 host、conflict 與 payload 跨重啟持久化、reindex single-flight 且失敗的清單絕不是空清單。PR review：R1 無 finding；兩份攻擊方九條，七條修、兩條延後（#1243 首次啟動的 id race——既有行為，本 PR 反而縮小它；#1240 拆檔）。其中 WS parser 把矛盾事件當刪除是**我在 prompt 裡指定的寬鬆規則、指定錯了**。critic 確認六條關閉，對 section-store 提出兩條有證據的反對：我第一次修 lost update 用的 generation fencing，本身就是 localStorage 上非原子的讀→比→寫（A 讀 g1 → B claim g2 → A 把整份 g1 文件寫回，蓋掉 B 的一切）——在沒有交易的儲存上做 fence 只是把窗口縮小，卻讓 API 看起來像有保證 → **移除 fencing、改成一個東西一個 key**，stale write 再也沒有不相干的資料可以毀掉；剩下的（同一個 section key、兩個 leader、last writer wins → 最壞是一次假衝突，SOT 由 daemon 的 CAS 保護）寫成殘留、不宣稱防住了。第二條：1 MiB 的人為上限讓較大的 conflict 靜默地無法跨重啟保存，而「留在記憶體、重啟後重新得出」**不得被描述成符合契約** → 上限回到 daemon 的 5 MiB、由瀏覽器配額決定；存不下時，spec §7 如實記為「違反 §4.6.2 的已知缺口」（#1244，遷 IndexedDB）。增量 re-review approve。
+
+每個 task 與每個修正都回報 mutation 結果；`section-store` 的邊界測試真的把 payload 寫進 jsdom 的 storage（實測配額：每個 origin 5,000,000 個 UTF-16 code unit）而不是 mock `setItem`。vitest 8148、lint、tsc、build 綠。下一支 P2b-2：collector、executor、apply 接線、租約 leader、`startProfileSync()` ＋真機驗收。
+
 ## [1.0.0-alpha.412] - 2026-09-20
 
 ### Feature: Profile Sync P2a——`spa/src/lib/profile/`，同步的純核心（#1239）
