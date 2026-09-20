@@ -964,6 +964,16 @@ Also seen, self-healing but wrong in passing: when a `tabs.<id>` deletion overto
 change that caused it, the receiver emptied a workspace it still had and nearly recreated the
 section on the SOT. A deletion of `tabs.<id>` for a workspace that still exists locally now waits.
 
+**Third pass, after those two fixes** (fresh profile again): item 7 **passes** — both clients read
+`profile: locked:schema`, name `settings`, verdict `sot-is-newer`; an edit made on each afterwards
+produced **zero writes** on the daemon while staying in the local stores. Item 6c again, with a
+subscriber on A watching for the bad intermediate state: the workspace B deleted was **never seen
+present-but-emptied** on A, the daemon kept no `tabs.<id>` row, and neither client reported a
+`pull-hash-mismatch` or `push-payload-missing`.
+
+Afterwards: both browsers closed, the dev server stopped, **every acceptance profile deleted from
+the daemon** (`profiles: []`), the storage-state file that held the token removed.
+
 **Not run here:** item 13 in its real form (a second *machine* reaching every host with the pulled
 tokens — both contexts were seeded with the same host), and the cross-machine run on air-2026. The
 App there loads the main checkout's `:5174`, which this isolated worktree session cannot `git pull`;
