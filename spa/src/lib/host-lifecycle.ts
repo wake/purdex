@@ -11,9 +11,85 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
-import type { Tab } from '../types/tab'
+import type { PaneContent, PaneLayout, Tab } from '../types/tab'
+
+// === Parked worlds (Profile Sync P3b) ===
+//
+// The tab store holds ONE tab world — the profile on screen. The master's world
+// and every other local profile's are parked in `useLocalProfilesStore`, and they
+// all use the same hosts (a local profile borrows them). A host that is removed is
+// gone for all of them, so the cascade reaches the parked worlds too: otherwise a
+// world that comes back on screen would show live-looking panes on a host that no
+// longer exists, and the parked MASTER — which keeps syncing while parked — would
+// never tell the other devices what the device that removed the host always tells
+// them (`terminated: 'host-removed'` is a synced field).
+//
+// A PARKED WORLD IS MARKED, NEVER CLOSED — also under `closeTabs: true`. That flag
+// is the user's answer about the tabs they are looking at; tabs of a profile that
+// is out of sight are not theirs to lose to it (a close records no history, so
+// after the undo toast it could not be taken back). Marked, they say what
+// happened the next time that profile is opened, like every `host-removed` pane.
+
+interface PaneRef {
+  tabId: string
+  paneId: string
+}
+
+/** `layout` with `fn` applied to every pane's content; the same object when `fn` changed nothing. */
+function mapPaneContents(layout: PaneLayout, fn: (content: PaneContent, paneId: string) => PaneContent): PaneLayout {
+  if (layout.type === 'leaf') {
+    const content = fn(layout.pane.content, layout.pane.id)
+    return content === layout.pane.content ? layout : { ...layout, pane: { ...layout.pane, content } }
+  }
+  const children = layout.children.map((child) => mapPaneContents(child, fn))
+  return children.some((c, i) => c !== layout.children[i]) ? { ...layout, children } : layout
+}
+
+function mapWorldPanes(world: ParkedWorld, fn: (content: PaneContent, tabId: string, paneId: string) => PaneContent): ParkedWorld {
+  let changed = false
+  const tabs: Record<string, Tab> = {}
+  for (const [tabId, tab] of Object.entries(world.tabs)) {
+    const layout = mapPaneContents(tab.layout, (content, paneId) => fn(content, tabId, paneId))
+    tabs[tabId] = layout === tab.layout ? tab : { ...tab, layout }
+    if (layout !== tab.layout) changed = true
+  }
+  return changed ? { ...world, tabs } : world
+}
+
+/**
+ * What keep-tabs mode does to the world on screen, for every parked one: live
+ * `tmux-session` panes on `hostId` marked `host-removed`, hostless execution
+ * panes pinned when the host was the fallback. Returns the panes it MARKED.
+ */
+function removeHostFromParkedWorlds(hostId: string, pinHostless: boolean): PaneRef[] {
+  const marked: PaneRef[] = []
+  useLocalProfilesStore.getState().updateParkedWorlds((world) =>
+    mapWorldPanes(world, (content, tabId, paneId) => {
+      if (content.kind === 'tmux-session' && content.hostId === hostId && !content.terminated) {
+        marked.push({ tabId, paneId })
+        return { ...content, terminated: 'host-removed' }
+      }
+      if (content.kind === 'execution' && !content.host && pinHostless) return { ...content, host: hostId }
+      return content
+    }),
+  )
+  return marked
+}
+
+/** Takes `host-removed` back off exactly `refs` — in whatever parked world each pane is by now. */
+function unmarkInParkedWorlds(refs: readonly PaneRef[]): void {
+  const wanted = new Set(refs.map((r) => `${r.tabId}\u0000${r.paneId}`))
+  useLocalProfilesStore.getState().updateParkedWorlds((world) =>
+    mapWorldPanes(world, (content, tabId, paneId) => {
+      if (content.kind !== 'tmux-session' || content.terminated !== 'host-removed' || !wanted.has(`${tabId}\u0000${paneId}`)) return content
+      const { terminated: _, ...rest } = content
+      return rest as typeof content
+    }),
+  )
+}
 
 /**
  * Execute cascade delete for a host: tabs -> sessions -> agent -> host.
@@ -136,6 +212,9 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     }
   }
 
+  // Every parked world, in both modes (see "Parked worlds" above).
+  const parkedMarks = removeHostFromParkedWorlds(hostId, fallbackHost === hostId)
+
   sessionStore.removeHost(hostId)
   agentStore.removeHost(hostId)
   // Nexen execution view state for this host. Runs after the tab-close loop
@@ -240,28 +319,27 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
           useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
         }
       }
-    } else if (!closeTabs && !hostWasRecreated && snapshot.terminatedTabPaneIds.length > 0) {
-      // Clear terminated marking on panes that were marked by this delete
-      for (const { tabId, paneId } of snapshot.terminatedTabPaneIds) {
+    }
+
+    // --- Clear the `host-removed` marks this delete made ---
+    // On screen (keep-tabs mode) and in the parked worlds (both modes) — and looked
+    // for in BOTH places whichever it was: the user may have switched profiles
+    // inside the undo window, so a pane marked on screen can be parked by now and
+    // the other way round. Same gate as the tabs above: a recreated host owns
+    // these panes now, and what it made of them is not this undo's to touch.
+    const marks = [...snapshot.terminatedTabPaneIds, ...parkedMarks]
+    if (!hostWasRecreated && marks.length > 0) {
+      for (const { tabId, paneId } of marks) {
         const currentTab = useTabStore.getState().tabs[tabId]
         if (!currentTab) continue
-        // Find the pane and clear its terminated field
-        let found = false
         scanPaneTree(currentTab.layout, (pane) => {
           if (pane.id === paneId && pane.content.kind === 'tmux-session' && pane.content.terminated === 'host-removed') {
-            found = true
+            const { terminated: _, ...contentWithoutTerminated } = pane.content
+            useTabStore.getState().setPaneContent(tabId, paneId, contentWithoutTerminated as typeof pane.content)
           }
         })
-        if (found) {
-          // Re-read to get current content and remove terminated
-          scanPaneTree(useTabStore.getState().tabs[tabId].layout, (pane) => {
-            if (pane.id === paneId && pane.content.kind === 'tmux-session' && pane.content.terminated === 'host-removed') {
-              const { terminated: _, ...contentWithoutTerminated } = pane.content  
-              useTabStore.getState().setPaneContent(tabId, paneId, contentWithoutTerminated as typeof pane.content)
-            }
-          })
-        }
       }
+      unmarkInParkedWorlds(marks)
     }
   }
 }

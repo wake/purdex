@@ -8,6 +8,23 @@
 //   2. when a timer fires the section is rebuilt from the stores, hashed, and
 //      reported only if the hash differs from the last one reported.
 // Nothing here talks to a daemon: the executor (Task 9) owns what a report means.
+//
+// THE TAB WORLD IS READ THROUGH master-world.ts, NEVER FROM THE LIVE STORES. With a
+// local profile ("slave") on screen the live stores hold a world that must never
+// reach the SOT, and the master's is parked; while a switch is half-way through
+// this window's rehydrates nobody can say where it is ("unsettled"). So for
+// `workspaces`, `tabs.*` and `settings` (which depends on the master's workspace
+// set):
+//   - unsettled → NOTHING: no timer kept, nothing built, hashed or reported. A
+//     rehydrate that never comes is silence for ever — silent, never wrong;
+//   - back to settled → EVERYTHING of the master world is scheduled once (a timer
+//     dropped above took its edit with it); layer 2 then reports only a hash that
+//     really moved, so a switch does not re-send a single section;
+//   - a slave on screen → its edits change nothing the master world is made of,
+//     and `subscribeMasterWorld` does not even call.
+// `hosts` is live whatever is on screen (a slave borrows them, decision 9).
+// (The two live tab stores are still SUBSCRIBED to, for one thing only: a moment
+// at which to ask whether an unsettled stretch is stuck. Their content is not read.)
 import { useHostStore } from '../../stores/useHostStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useTabStore } from '../../stores/useTabStore'
@@ -21,13 +38,15 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { Workspace } from '../../types/tab'
 import { hashSection } from './hash'
-import { masterWorkspaceIds } from './master-world'
+import { masterWorldStuck, readMasterWorld, subscribeMasterWorld } from './master-world'
+import type { MasterWorld } from './master-world'
 import { PROJECTIONS, tabsSectionKey, workspaceIdOf } from './projections'
 import {
   buildHostsSection,
   buildSettingsSection,
   buildTabsSection,
   buildWorkspacesSection,
+  isSyncableWorkspaceId,
   unsyncableWorkspaceIds,
   type SettingsBuildInput,
 } from './sections'
@@ -44,10 +63,13 @@ export interface SectionReport {
 
 export interface CollectorOptions {
   onSection: (r: SectionReport) => void
-  /** `invalid-workspace-id` (detail: the id), `standalone-tabs` (detail: the count), `build-failed` (detail: key + message). */
+  /** `invalid-workspace-id` (detail: the id), `standalone-tabs` (detail: the count), `build-failed` (detail: key + message),
+   *  `world-unsettled` (detail: the reason; once per unsettled stretch, and only after it has lasted `MASTER_WORLD_STUCK_MS`). */
   onProblem?: (p: { kind: string; detail: string }) => void
   /** Per-section trailing debounce; default 500. */
   debounceMs?: number
+  /** The clock `world-unsettled` is timed on; default `Date.now`. */
+  now?: () => number
 }
 
 export interface Collector {
@@ -97,8 +119,13 @@ function allSettings(): SettingsBuildInput {
   return input
 }
 
-function masterSetKey(): string {
-  return [...masterWorkspaceIds()].sort().join('\n')
+/** The master's syncable workspace ids (what `masterWorkspaceIds()` answers), as one comparable string. No `\n` in a syncable id. */
+function masterSetKey(world: MasterWorld): string {
+  return syncableIds(world).sort().join('\n')
+}
+
+function syncableIds(world: MasterWorld): string[] {
+  return world.workspaces.map((ws) => ws.id).filter(isSyncableWorkspaceId)
 }
 
 /** First occurrence wins — the same rule `buildWorkspacesSection` applies. */
@@ -115,6 +142,8 @@ const STANDALONE = '#standalone'
 type Slot = ProfileSectionKey | typeof STANDALONE
 
 const ABSENT = Symbol('absent')
+/** Nobody can say where the master's world is (master-world.ts): nothing is built, hashed or reported. */
+const UNSETTLED = Symbol('unsettled')
 
 export function startCollector(opts: CollectorOptions): Collector {
   const debounceMs = opts.debounceMs ?? 500
@@ -130,9 +159,20 @@ export function startCollector(opts: CollectorOptions): Collector {
    * The master workspace set `settings` was last scheduled for. The section
    * carries workspace-scoped entries for that set only, so it depends on it as
    * much as on the settings stores: a workspace that appears or goes changes the
-   * payload without any settings store moving. (Syncable ids: no `\n` in them.)
+   * payload without any settings store moving.
    */
-  let masterSet = masterSetKey()
+  let masterSet: string | null = null
+  /** The master world the subscriber last diffed against; `null` = unsettled when last looked: on settling, schedule it all. */
+  let lastWorld: MasterWorld | null = null
+  {
+    const read = readMasterWorld()
+    if (read.settled) {
+      lastWorld = read.world
+      masterSet = masterSetKey(read.world)
+    }
+  }
+  const clock = opts.now ?? Date.now
+  let stuckReported = false
 
   function problemOnce(kind: string, detail: string): void {
     const id = `${kind}\n${detail}`
@@ -152,29 +192,32 @@ export function startCollector(opts: CollectorOptions): Collector {
   }
 
   /** Never `buildProfileDocument`: it throws as a whole on one bad workspace id. Each section is built alone. */
-  function build(key: ProfileSectionKey): unknown | typeof ABSENT {
+  function build(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED {
     if (key === 'hosts') return buildHostsSection(useHostStore.getState())
-    if (key === 'settings') return buildSettingsSection(allSettings(), masterWorkspaceIds())
+    const read = readMasterWorld()
+    if (!read.settled) return UNSETTLED
+    const { workspaces, tabs } = read.world
+    if (key === 'settings') return buildSettingsSection(allSettings(), new Set(syncableIds(read.world)))
     if (key === 'workspaces') {
-      const { workspaces } = useWorkspaceStore.getState()
       // Left out of the payload by the builder (device-local); said once per id, like their `tabs.*`.
       for (const id of unsyncableWorkspaceIds(workspaces)) problemOnce('invalid-workspace-id', id)
       return buildWorkspacesSection(workspaces)
     }
     const id = workspaceIdOf(key)
-    const ws = id === null ? undefined : byId(useWorkspaceStore.getState().workspaces).get(id)
-    return ws === undefined ? ABSENT : buildTabsSection(ws, useTabStore.getState().tabs)
+    const ws = id === null ? undefined : byId(workspaces).get(id)
+    return ws === undefined ? ABSENT : buildTabsSection(ws, tabs)
   }
 
   async function run(key: ProfileSectionKey, force: boolean): Promise<void> {
     if (stopped) return
     const mine = (seq.get(key) ?? 0) + 1
     seq.set(key, mine)
-    let payload: unknown | typeof ABSENT
+    let payload: unknown | typeof ABSENT | typeof UNSETTLED
     let hash: string | null = null
     try {
       // Payload first, then the hash OF THAT payload: the stores may move during the await.
       payload = build(key)
+      if (payload === UNSETTLED) return
       if (payload !== ABSENT) hash = await hashSection(payload)
     } catch (err) {
       // Only build/hash failures land here — never an exception thrown by `onSection`.
@@ -193,9 +236,12 @@ export function startCollector(opts: CollectorOptions): Collector {
     opts.onSection({ key, hash, payload })
   }
 
+  /** Of the MASTER world — the problem is about what the profile cannot carry, wherever that world is. */
   function censusStandalone(): void {
-    const owned = new Set(useWorkspaceStore.getState().workspaces.flatMap((ws) => ws.tabs))
-    const count = Object.keys(useTabStore.getState().tabs).filter((id) => !owned.has(id)).length
+    const read = readMasterWorld()
+    if (!read.settled) return
+    const owned = new Set(read.world.workspaces.flatMap((ws) => ws.tabs))
+    const count = Object.keys(read.world.tabs).filter((id) => !owned.has(id)).length
     if (count === standaloneCount) return
     standaloneCount = count
     opts.onProblem?.({ kind: 'standalone-tabs', detail: String(count) })
@@ -225,18 +271,21 @@ export function startCollector(opts: CollectorOptions): Collector {
     timers.clear()
   }
 
-  const unsubscribers: (() => void)[] = [
-    useHostStore.subscribe((next, prev) => {
-      if (next.hosts !== prev.hosts || next.hostOrder !== prev.hostOrder) schedule('hosts')
-    }),
+  /** The slots that are made of the master's tab world (everything but `hosts`). */
+  const isWorldSlot = (slot: Slot): boolean => slot !== 'hosts'
 
-    useWorkspaceStore.subscribe((next, prev) => {
-      if (next.workspaces === prev.workspaces) return
-      const master = masterSetKey()
-      if (master !== masterSet) {
-        masterSet = master
-        schedule('settings')
-      }
+  /** Everything of `world`, plus every section reported earlier and possibly gone now (`run` reports those as vanished). */
+  function scheduleWholeWorld(world: MasterWorld): void {
+    schedule('workspaces')
+    schedule('settings')
+    schedule(STANDALONE)
+    for (const id of byId(world.workspaces).keys()) scheduleTabs(id)
+    for (const [key, hash] of lastHash) if (hash !== null && key !== 'hosts') schedule(key)
+  }
+
+  /** Hand-diff of two settled master worlds, by reference — layer 1, allowed to over-schedule. */
+  function scheduleDiff(prev: MasterWorld, next: MasterWorld): void {
+    if (next.workspaces !== prev.workspaces) {
       const now = byId(next.workspaces)
       const before = byId(prev.workspaces)
       let listChanged = now.size !== before.size || [...now.keys()].some((id, i) => id !== [...before.keys()][i])
@@ -257,19 +306,78 @@ export function startCollector(opts: CollectorOptions): Collector {
       }
       if (listChanged) schedule('workspaces')
       if (membershipChanged) schedule(STANDALONE)
-    }),
-
-    useTabStore.subscribe((next, prev) => {
-      if (next.tabs === prev.tabs) return
+    }
+    if (next.tabs !== prev.tabs) {
       const changed = new Set<string>()
       for (const id of Object.keys(next.tabs)) if (next.tabs[id] !== prev.tabs[id]) changed.add(id)
       for (const id of Object.keys(prev.tabs)) if (!Object.hasOwn(next.tabs, id)) changed.add(id)
-      if (changed.size === 0) return
-      for (const ws of byId(useWorkspaceStore.getState().workspaces).values()) {
-        if (ws.tabs.some((id) => changed.has(id))) scheduleTabs(ws.id)
+      if (changed.size > 0) {
+        for (const ws of byId(next.workspaces).values()) {
+          if (ws.tabs.some((id) => changed.has(id))) scheduleTabs(ws.id)
+        }
+        schedule(STANDALONE)
       }
-      schedule(STANDALONE)
+    }
+  }
+
+  /**
+   * An unsettled stretch that does not end is made VISIBLE, never repaired (master-world.ts): `world-unsettled`,
+   * once per stretch. There is no timer for it — this file's only timers are debounces of a change, and the iron
+   * rule's test counts them. It is asked on what does happen while the app is in use: a change of the live tab
+   * stores (the subscription below), which a user looking at a stuck screen keeps making.
+   */
+  function checkStuck(): void {
+    if (stopped) return
+    const read = readMasterWorld()
+    const stuck = masterWorldStuck(clock()) // also what starts, and forgets, the stretch's clock
+    if (read.settled) {
+      stuckReported = false
+      return
+    }
+    if (!stuck || stuckReported) return
+    stuckReported = true
+    opts.onProblem?.({ kind: 'world-unsettled', detail: read.reason })
+  }
+  const checkStuckWhileUnsettled = (): void => {
+    if (lastWorld === null) checkStuck()
+  }
+
+  /**
+   * The master world moved, went out of sight, or came back (`subscribeMasterWorld`). Unsettled: every timer of a world slot is dropped — what it
+   * would have built is unreadable now — and the world is forgotten, so that settling schedules ALL of it.
+   */
+  function onMasterWorld(): void {
+    if (stopped) return
+    const read = readMasterWorld()
+    if (!read.settled) {
+      for (const [slot, timer] of [...timers]) {
+        if (!isWorldSlot(slot)) continue
+        clearTimeout(timer)
+        timers.delete(slot)
+      }
+      lastWorld = null
+      checkStuck() // starts the stretch's clock
+      return
+    }
+    checkStuck() // settled: forgets the stretch
+    const master = masterSetKey(read.world)
+    if (lastWorld === null) scheduleWholeWorld(read.world)
+    else {
+      scheduleDiff(lastWorld, read.world)
+      if (master !== masterSet) schedule('settings')
+    }
+    masterSet = master
+    lastWorld = read.world
+  }
+
+  const unsubscribers: (() => void)[] = [
+    useHostStore.subscribe((next, prev) => {
+      if (next.hosts !== prev.hosts || next.hostOrder !== prev.hostOrder) schedule('hosts')
     }),
+
+    subscribeMasterWorld(onMasterWorld),
+    useTabStore.subscribe(checkStuckWhileUnsettled),
+    useWorkspaceStore.subscribe(checkStuckWhileUnsettled),
 
     ...SETTINGS_KEYS.map((storageKey) => {
       const fields = projectedSettingsFields(storageKey)
@@ -285,14 +393,25 @@ export function startCollector(opts: CollectorOptions): Collector {
     async primeAll() {
       if (stopped) return
       clearTimers()
-      const live = new Set<ProfileSectionKey>(['hosts', 'settings', 'workspaces'])
-      for (const id of byId(useWorkspaceStore.getState().workspaces).keys()) {
-        const key = tabsKey(id)
-        if (key !== null) live.add(key)
+      const live = new Set<ProfileSectionKey>(['hosts'])
+      const read = readMasterWorld()
+      if (read.settled) {
+        live.add('settings')
+        live.add('workspaces')
+        for (const id of byId(read.world.workspaces).keys()) {
+          const key = tabsKey(id)
+          if (key !== null) live.add(key)
+        }
+        // A section reported earlier and gone now is reported as vanished (once: `run` records the null).
+        for (const [key, hash] of lastHash) if (hash !== null) live.add(key)
+        censusStandalone()
+        masterSet = masterSetKey(read.world)
+        lastWorld = read.world
+      } else {
+        // Nothing of the tab world can be primed. `lastWorld === null` is the promise that it all is, the moment
+        // the world settles — by the subscriber, not forced: nothing of it has a `lastHash` to be equal to.
+        lastWorld = null
       }
-      // A section reported earlier and gone now is reported as vanished (once: `run` records the null).
-      for (const [key, hash] of lastHash) if (hash !== null) live.add(key)
-      censusStandalone()
       await Promise.all([...live].map((key) => run(key, true)))
     },
     stop() {

@@ -18,6 +18,7 @@ import { getPrimaryPane, scanPaneTree } from './pane-tree'
 import { deleteHostCascade, startPeerCacheInvalidation } from './host-lifecycle'
 import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
+import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
 import { STORAGE_KEYS } from './storage/keys'
 import type { Tab } from '../types/tab'
 import type { Session } from './host-api'
@@ -56,6 +57,7 @@ function resetAllStores() {
   useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
   useHostSettingsStore.setState({ hosts: {} })
   useWorkspaceStore.getState().reset()
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
   useUndoToast.setState({ toast: null })
 }
 
@@ -1011,5 +1013,121 @@ describe('peer cache invalidation', () => {
     useHostStore.getState().updateHost(HOST_A, { ip: '9.9.9.9' })
     expect(usePeerStore.getState().byHost[HOST_A]).toBeDefined()
     expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeDefined()
+  })
+})
+
+// Profile Sync P3b: the tabs on screen are ONE world; the master's and every other
+// local profile's are parked in `useLocalProfilesStore`. A host is gone for all of
+// them (a slave borrows the hosts), so the cascade reaches the parked worlds too.
+describe('host delete cascade — parked worlds', () => {
+  beforeEach(resetAllStores)
+
+  function parkedWorld(...tabs: Tab[]): ParkedWorld {
+    const record: Record<string, Tab> = {}
+    for (const t of tabs) record[t.id] = t
+    return { workspaces: [{ id: `ws-${tabs[0].id}`, name: 'W', tabs: tabs.map((t) => t.id), activeTabId: tabs[0].id }], tabs: record, activeWorkspaceId: `ws-${tabs[0].id}`, activeTabId: tabs[0].id }
+  }
+
+  const terminatedOf = (world: ParkedWorld | null | undefined, tabId: string): string | undefined => {
+    const content = world ? getPrimaryPane(world.tabs[tabId].layout).content : undefined
+    return content?.kind === 'tmux-session' ? content.terminated : 'not-a-session'
+  }
+
+  /** A slave `on` on screen (its tab is live), the master and the slave `off` parked — every world has a tab on A and one on B. */
+  function threeWorlds() {
+    const live = { a: makeSessionTab(HOST_A, 'live-a'), b: makeSessionTab(HOST_B, 'live-b') }
+    const master = { a: makeSessionTab(HOST_A, 'm-a'), b: makeSessionTab(HOST_B, 'm-b') }
+    const off = { a: makeSessionTab(HOST_A, 'o-a'), b: makeSessionTab(HOST_B, 'o-b') }
+    useTabStore.getState().addTab(live.a)
+    useTabStore.getState().addTab(live.b)
+    useTabStore.setState({ worldId: 'on', worldEpoch: 1 })
+    useWorkspaceStore.setState({ worldId: 'on', worldEpoch: 1 })
+    useLocalProfilesStore.setState({
+      slaves: { on: { id: 'on', name: 'On', createdAt: 1, world: null }, off: { id: 'off', name: 'Off', createdAt: 2, world: parkedWorld(off.a, off.b) } },
+      slaveOrder: ['on', 'off'],
+      activeProfileId: 'on',
+      parkedMaster: parkedWorld(master.a, master.b),
+      worldEpoch: 1,
+    })
+    return { live, master, off }
+  }
+
+  it.each([false, true])('closeTabs=%s: the host\'s panes are marked host-removed in the parked master and in every parked slave; other hosts\' are not', (closeTabs) => {
+    const { master, off } = threeWorlds()
+
+    deleteHostCascade(HOST_A, closeTabs)
+
+    const lp = useLocalProfilesStore.getState()
+    expect(terminatedOf(lp.parkedMaster, master.a.id)).toBe('host-removed')
+    expect(terminatedOf(lp.parkedMaster, master.b.id)).toBeUndefined()
+    expect(terminatedOf(lp.slaves.off.world, off.a.id)).toBe('host-removed')
+    expect(terminatedOf(lp.slaves.off.world, off.b.id)).toBeUndefined()
+    // closeTabs is a choice about the tabs the user is looking at: a parked world keeps its tabs, marked.
+    expect(Object.keys(lp.parkedMaster!.tabs)).toEqual([master.a.id, master.b.id])
+    expect(lp.slaves.on.world).toBeNull()
+  })
+
+  it.each([false, true])('closeTabs=%s: undo clears exactly the marks this delete made, in every parked world', (closeTabs) => {
+    const { master, off } = threeWorlds()
+    // Already terminated before the delete, for another reason: not this delete's to clear.
+    const dead = createTab({ kind: 'tmux-session', hostId: HOST_A, sessionCode: 'dead', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'session-closed' })
+    const pm = useLocalProfilesStore.getState().parkedMaster!
+    useLocalProfilesStore.setState({ parkedMaster: { ...pm, tabs: { ...pm.tabs, [dead.id]: dead } } })
+
+    const undo = deleteHostCascade(HOST_A, closeTabs)
+    undo()
+
+    const lp = useLocalProfilesStore.getState()
+    expect(terminatedOf(lp.parkedMaster, master.a.id)).toBeUndefined()
+    expect(terminatedOf(lp.slaves.off.world, off.a.id)).toBeUndefined()
+    expect(terminatedOf(lp.parkedMaster, dead.id)).toBe('session-closed')
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+  })
+
+  it('undo finds a marked pane wherever its world is by then: a world parked at delete time that is on screen at undo time, and the other way round', () => {
+    const { live, master } = threeWorlds()
+    const undo = deleteHostCascade(HOST_A, false)
+
+    // The user switches to the master in between (what Task 5's switch does to the three stores).
+    const t = useTabStore.getState()
+    const w = useWorkspaceStore.getState()
+    const swapped = useLocalProfilesStore.getState().swapActive('master', { tabs: t.tabs, workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId, activeTabId: t.activeTabId }, 2)
+    if (!swapped.ok) throw new Error(swapped.reason)
+    useTabStore.setState({ tabs: swapped.world.tabs, tabOrder: Object.keys(swapped.world.tabs), activeTabId: swapped.world.activeTabId, worldId: 'master', worldEpoch: 2 })
+    useWorkspaceStore.setState({ workspaces: swapped.world.workspaces, activeWorkspaceId: swapped.world.activeWorkspaceId, worldId: 'master', worldEpoch: 2 })
+
+    undo()
+
+    const onScreen = getPrimaryPane(useTabStore.getState().tabs[master.a.id].layout).content
+    expect(onScreen.kind === 'tmux-session' && onScreen.terminated).toBeUndefined()
+    expect(terminatedOf(useLocalProfilesStore.getState().slaves.on.world, live.a.id)).toBeUndefined()
+  })
+
+  it('a hostless execution pane in a parked world is pinned to the removed FIRST host, as on screen', () => {
+    threeWorlds()
+    const exec = createTab({ kind: 'execution', executionId: 'e1' } as never)
+    const pm = useLocalProfilesStore.getState().parkedMaster!
+    useLocalProfilesStore.setState({ parkedMaster: { ...pm, tabs: { ...pm.tabs, [exec.id]: exec } } })
+
+    deleteHostCascade(HOST_A, false) // HOST_A is hostOrder[0]
+
+    const content = getPrimaryPane(useLocalProfilesStore.getState().parkedMaster!.tabs[exec.id].layout).content
+    expect(content).toMatchObject({ kind: 'execution', host: HOST_A })
+  })
+
+  it('no parked world: the local-profiles store is not written at all', () => {
+    useTabStore.getState().addTab(makeSessionTab(HOST_A, 'x'))
+    const before = useLocalProfilesStore.getState()
+    const undo = deleteHostCascade(HOST_A, false)
+    undo()
+    expect(useLocalProfilesStore.getState()).toBe(before)
+  })
+
+  it('the veto (last host) touches no parked world', () => {
+    threeWorlds()
+    useHostStore.setState({ hosts: { [HOST_A]: useHostStore.getState().hosts[HOST_A] }, hostOrder: [HOST_A] })
+    const before = useLocalProfilesStore.getState()
+    deleteHostCascade(HOST_A, false)
+    expect(useLocalProfilesStore.getState()).toBe(before)
   })
 })

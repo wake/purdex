@@ -22,7 +22,6 @@
 //
 // The returned hash is rebuilt from the stores, never copied from the SOT: when a
 // sanitiser changed what arrived, the section is honestly dirty.
-import { useWorkspaceStore } from '../../features/workspace/store'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useHostStore } from '../../stores/useHostStore'
 import type { HostConfig } from '../../stores/useHostStore'
@@ -37,19 +36,18 @@ import type { NexHostEntry } from '../../stores/useNexHostStore'
 import type { ExecutionState } from '../nex/event-reducer'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
 import { withOperationLock } from '../../stores/useRebuildStore'
-import { useTabStore } from '../../stores/useTabStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
-import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import type { PaneLayout, Tab } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
 import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
 import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
-import { applyHosts, applySettings, applyTabs, applyWorkspaces, deriveTabOrder, isWellFormedSection } from './applier'
+import { applyHosts, applySettings, applyTabs, applyWorkspaces, isWellFormedSection } from './applier'
 import { hashSection } from './hash'
-import { masterWorkspaceIds } from './master-world'
+import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
 import { sectionKind, workspaceIdOf } from './projections'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
 import type { SettingsBuildInput } from './sections'
@@ -60,7 +58,9 @@ import type { HostsPayload, ProfileSectionKey, SettingsPayload, SettingsStorageK
 export type ApplyOutcome =
   /** Written. `hash` is rebuilt from the stores afterwards; `null` = the section does not exist locally (nothing was written). */
   | { ok: true; hash: string | null }
-  /** The operation lock is held by someone else: retry later, never lock the section. */
+  /** Not now, retry later, never lock the section: the operation lock is held by someone else — or the master's
+   *  tab world is unsettled (master-world.ts: a switch is half-way through this window's rehydrates), so there is
+   *  nowhere to write `workspaces` / `tabs.*` and no master workspace set to scope `settings` by. */
   | { ok: false; reason: 'busy' }
   /** This payload must not be applied: the caller locks the section (`locked:invalid`). No store was written. */
   | { ok: false; reason: 'invalid'; detail: string }
@@ -123,6 +123,8 @@ function restore(store: PersistedStore, old: Record<string, unknown>): void {
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 const invalid = (detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid', detail })
+
+const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
 
 // === host-removed ===
 
@@ -228,6 +230,10 @@ function restoreHostCaches(snap: HostCaches): string[] {
  * execution-list / nex / host-settings / peer / cwd state cleared, every pane on
  * it marked `terminated: 'host-removed'`, hostless execution panes pinned,
  * `runtime` dropped, focus moved off it. Its undo handle is kept only to roll back.
+ * The cascade reaches EVERY tab world — the one on screen and the parked ones, the
+ * master's included (host-lifecycle.ts, "Parked worlds") — and so does its undo:
+ * hosts are live whichever profile is on screen, so this apply never asks
+ * master-world.ts anything and is never `busy` for an unsettled world.
  *
  * Two consequences, both intended:
  *   - the marked panes (and the cleared `purdex-host-settings.hosts` row) are
@@ -374,7 +380,10 @@ function unregisterDropped(key: SettingsStorageKey, before: Record<string, unkno
 async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   if (payload === null) return invalid('the settings section cannot be deleted')
   if (!isWellFormedSection('settings', payload)) return invalid('malformed settings payload')
-  const { patches, rejected } = applySettings(readSettingsSources(), payload as SettingsPayload, masterWorkspaceIds())
+  // Unsettled → no master set: scoping by an empty one would DROP every scoped entry the payload carries.
+  const masterIds = masterWorkspaceIds()
+  if (masterIds === null) return BUSY
+  const { patches, rejected } = applySettings(readSettingsSources(), payload as SettingsPayload, masterIds)
   if (rejected.length > 0) return invalid(`rejected: ${rejected.join(', ')}`)
 
   const rendererBefore = useUISettingsStore.getState().terminalRenderer
@@ -418,64 +427,15 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   }
   // Terminals read the renderer on (re)connect only; the bump is what makes them reconnect.
   if (useUISettingsStore.getState().terminalRenderer !== rendererBefore) useUISettingsStore.getState().bumpTerminalSettingsVersion()
-  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds())) }
+  // The set as it is NOW (what the collector will hash); the one this apply was scoped by if nobody can say any more.
+  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds() ?? masterIds)) }
 }
 
 // === workspaces / tabs.<id> ===
 
-interface TabWorld {
-  tabs: Record<string, Tab>
-  workspaces: Workspace[]
-  activeWorkspaceId: string | null
-}
-
-/**
- * Writes the tab store and the workspace store as one unit — either both hold the
- * new world or both hold the old one (`replaceTabSnapshot` is the precedent) —
- * keeping `useTabStore`'s four fields consistent: `tabOrder` re-derived,
- * `visitHistory` restricted to surviving tabs, the global `activeTabId` kept
- * while its tab survives, else the active workspace's, else `null`.
- * `afterWrite` runs inside the same try, and what it touches — the scoped
- * workspace settings a removal clears — is part of the same snapshot: if anything
- * throws, all THREE stores go back. (A clear that landed before a later one threw
- * would otherwise be lost for good while its workspace came back.)
- *
- * No rehydrate here, on purpose. Neither store has a `merge` or an
- * `onRehydrateStorage` (the tab store's `migrate` does not run on a same-version
- * read), so there is no hook to run — while a rehydrate rebuilds the WHOLE state
- * from JSON, giving every tab and workspace a new identity and re-rendering
- * every pane for a change to one of them. Synchronous, so nothing interleaves.
- */
-function commitTabWorld(world: TabWorld, afterWrite?: () => void): void {
-  const tabState = useTabStore.getState()
-  const wsState = useWorkspaceStore.getState()
-  const oldTab = { tabs: tabState.tabs, tabOrder: tabState.tabOrder, activeTabId: tabState.activeTabId, visitHistory: tabState.visitHistory }
-  const oldWs = { workspaces: wsState.workspaces, activeWorkspaceId: wsState.activeWorkspaceId }
-  const oldScoped = { workspaces: useWorkspaceSettingsStore.getState().workspaces }
-
-  const exists = (id: string | null | undefined): id is string => typeof id === 'string' && Object.hasOwn(world.tabs, id)
-  const activeWs = world.workspaces.find((w) => w.id === world.activeWorkspaceId)
-  const fallback = activeWs?.activeTabId
-  const activeTabId = exists(tabState.activeTabId) ? tabState.activeTabId : exists(fallback) ? fallback : null
-
-  const tabStore = asPersisted(useTabStore)
-  const wsStore = asPersisted(useWorkspaceStore)
-  try {
-    tabStore.setState({
-      tabs: world.tabs,
-      tabOrder: deriveTabOrder(world.workspaces, world.tabs, tabState.tabOrder),
-      activeTabId,
-      visitHistory: tabState.visitHistory.filter(exists),
-    })
-    wsStore.setState({ workspaces: world.workspaces, activeWorkspaceId: world.activeWorkspaceId })
-    afterWrite?.()
-  } catch (err) {
-    restore(tabStore, oldTab)
-    restore(wsStore, oldWs)
-    if (useWorkspaceSettingsStore.getState().workspaces !== oldScoped.workspaces) restore(asPersisted(useWorkspaceSettingsStore), oldScoped)
-    throw err
-  }
-}
+// `commitTabWorld` — the two-store write both of these end in — lives in master-world.ts, next to the rule that
+// says WHICH world a write is for; it is re-exported here because this file is where a caller looks for it.
+export { commitTabWorld } from './master-world'
 
 async function applyWorkspacesSection(payload: unknown): Promise<ApplyOutcome> {
   if (payload === null) return invalid('the workspaces section cannot be deleted')
@@ -483,19 +443,26 @@ async function applyWorkspacesSection(payload: unknown): Promise<ApplyOutcome> {
   return withOperationLock<ApplyOutcome>(
     PROFILE_SYNC_LOCK_OWNER,
     async () => {
-      const wsState = useWorkspaceStore.getState()
-      const { next, removedWorkspaceIds } = applyWorkspaces({ workspaces: wsState.workspaces, activeWorkspaceId: wsState.activeWorkspaceId }, payload as WorkspacesPayload)
+      const read = readMasterWorld()
+      if (!read.settled) return BUSY
+      const local = read.world
+      const { next, removedWorkspaceIds } = applyWorkspaces({ workspaces: local.workspaces, activeWorkspaceId: local.activeWorkspaceId }, payload as WorkspacesPayload)
       // A removed workspace takes its tabs with it; left in the record they would turn into standalone tabs.
-      const gone = new Set(wsState.workspaces.filter((w) => removedWorkspaceIds.includes(w.id)).flatMap((w) => w.tabs))
+      const gone = new Set(local.workspaces.filter((w) => removedWorkspaceIds.includes(w.id)).flatMap((w) => w.tabs))
       const tabs: Record<string, Tab> = {}
-      for (const [id, tab] of Object.entries(useTabStore.getState().tabs)) {
+      for (const [id, tab] of Object.entries(local.tabs)) {
         if (!gone.has(id)) tabs[id] = tab
       }
-      commitTabWorld({ tabs, workspaces: next.workspaces, activeWorkspaceId: next.activeWorkspaceId }, () => {
-        // What `removeWorkspace` does besides dropping the row.
+      const written = writeMasterWorld({ tabs, workspaces: next.workspaces, activeWorkspaceId: next.activeWorkspaceId }, () => {
+        // What `removeWorkspace` does besides dropping the row. On the parked path too: the scoped settings are a
+        // live store whatever is on screen.
         for (const id of removedWorkspaceIds) useWorkspaceSettingsStore.getState().clearWorkspace(id)
       })
-      return { ok: true, hash: await hashSection(buildWorkspacesSection(useWorkspaceStore.getState().workspaces)) }
+      // Read back from wherever it landed (the hash is never copied from what was meant to be written), before
+      // anything is awaited. Synchronous since the write, so "unsettled" here is for the type only.
+      const after = readMasterWorld()
+      if (written === 'unsettled' || !after.settled) return BUSY
+      return { ok: true, hash: await hashSection(buildWorkspacesSection(after.world.workspaces)) }
     },
     () => ({ ok: false, reason: 'busy' }),
   )
@@ -519,22 +486,28 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
   return withOperationLock<ApplyOutcome>(
     PROFILE_SYNC_LOCK_OWNER,
     async () => {
-      const wsState = useWorkspaceStore.getState()
-      const applied = applyTabs({ tabs: useTabStore.getState().tabs, workspaces: wsState.workspaces }, workspaceId, incoming)
+      const read = readMasterWorld()
+      if (!read.settled) return BUSY
+      const local = read.world
+      const applied = applyTabs({ tabs: local.tabs, workspaces: local.workspaces }, workspaceId, incoming)
       if (applied.unrendered) return { ok: true, hash: null }
 
       // Session codes are host-scoped and every client talks to the same hosts,
       // so an arriving pane needs no reattach — unless its host is not known here.
+      // (Hosts are live whichever world is on screen: a slave borrows them.)
       const knownHosts = new Set(Object.keys(useHostStore.getState().hosts))
       const tabs = { ...applied.next.tabs }
       for (const id of incoming.order) {
         const layout = markHostRemovedPanes(tabs[id].layout, knownHosts)
         if (layout !== tabs[id].layout) tabs[id] = { ...tabs[id], layout }
       }
-      commitTabWorld({ tabs, workspaces: applied.next.workspaces, activeWorkspaceId: wsState.activeWorkspaceId })
+      if (writeMasterWorld({ tabs, workspaces: applied.next.workspaces, activeWorkspaceId: local.activeWorkspaceId }) === 'unsettled') return BUSY
 
-      const ws = useWorkspaceStore.getState().workspaces.find((w) => w.id === workspaceId)
-      return { ok: true, hash: ws ? await hashSection(buildTabsSection(ws, useTabStore.getState().tabs)) : null }
+      // Read back from wherever it landed, before anything is awaited.
+      const after = readMasterWorld()
+      if (!after.settled) return BUSY
+      const ws = after.world.workspaces.find((w) => w.id === workspaceId)
+      return { ok: true, hash: ws ? await hashSection(buildTabsSection(ws, after.world.tabs)) : null }
     },
     () => ({ ok: false, reason: 'busy' }),
   )

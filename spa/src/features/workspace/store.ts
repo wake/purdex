@@ -9,6 +9,10 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 interface WorkspaceState {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
+  /** Whose workspaces these are, and the epoch of the switch that put them here — the twin of the two fields
+   *  on `useTabStore` (see there). Persisted, device-local, written only by `commitTabWorld`. */
+  worldId: string
+  worldEpoch: number
 
   addWorkspace: (name: string, opts?: { icon?: string }) => Workspace
   removeWorkspace: (wsId: string, opts?: { keepSettings?: boolean }) => void
@@ -29,8 +33,8 @@ interface WorkspaceState {
   reset: () => void
 }
 
-function createDefaultState(): Pick<WorkspaceState, 'workspaces' | 'activeWorkspaceId'> {
-  return { workspaces: [], activeWorkspaceId: null }
+function createDefaultState(): Pick<WorkspaceState, 'workspaces' | 'activeWorkspaceId' | 'worldId' | 'worldEpoch'> {
+  return { workspaces: [], activeWorkspaceId: null, worldId: 'master', worldEpoch: 0 }
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -287,15 +291,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }),
         })),
 
-      reset: () => set(createDefaultState()),
+      // Empties the world; does NOT touch its tag. `worldId` / `worldEpoch` say whose world this store holds, and
+      // emptying it does not change whose it is: the Electron tear-off `replace` path (useElectronIpc.ts) resets a
+      // window that may be showing a slave, and a tag thrown back to `master` / 0 there would disagree with
+      // `useLocalProfilesStore` for ever (lib/profile/master-world.ts: unsettled, and nothing repairs it).
+      reset: () => set({ workspaces: [], activeWorkspaceId: null }),
     }),
     {
       name: STORAGE_KEYS.WORKSPACES,
       storage: purdexStorage,
+      // No version bump for `worldId` / `worldEpoch`: data written before them merges over the defaults
+      // (`'master'` / 0), which is what it is. See `useTabStore`.
       version: 1,
       partialize: (state) => ({
         workspaces: state.workspaces,
         activeWorkspaceId: state.activeWorkspaceId,
+        worldId: state.worldId,
+        worldEpoch: state.worldEpoch,
       }),
     },
   ),

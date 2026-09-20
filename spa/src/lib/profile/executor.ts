@@ -182,13 +182,13 @@
 //     what was fetched (a sanitiser; a deleted `tabs.<id>` whose workspace is
 //     still here). Not a fault: `pull-applied` carries both hashes, the section
 //     is dirty against the base it just agreed on, and it is pushed back.
-import { useWorkspaceStore } from '../../features/workspace/store'
 import { getClientId } from '../client-identity'
 import { deleteSection, getSection, listProfiles, putSection } from './api'
 import type { DeleteOutcome, Failure, PutOutcome } from './api'
 import { applySectionToStores } from './apply-to-stores'
 import type { ApplyOutcome } from './apply-to-stores'
 import type { SectionReport } from './collector'
+import { readMasterWorld } from './master-world'
 import { compareShape, profileLock, profileStatus, reconcileSectionSet } from './profile-state'
 import type { ProfileStatus, SchemaLock } from './profile-state'
 import type { ProfileRemoteEvent } from './profile-ws-dispatch'
@@ -307,8 +307,15 @@ function persistedSignature(s: SectionSyncState): string {
   return JSON.stringify([s.base.rev, s.base.hash, s.currentHash, s.conflict === null ? null : [s.conflict.localHash, s.conflict.sot.rev, s.conflict.sot.hash]])
 }
 
-function localWorkspaceIds(): string[] {
-  return useWorkspaceStore.getState().workspaces.map((w) => w.id)
+/**
+ * The MASTER world's workspace ids — from the parked master while a local profile is on screen — or `null` while
+ * nobody can say where that world is (master-world.ts). `null` is never "no workspaces": every caller below turns
+ * it into "do nothing yet". Read as an empty list it would make every `tabs.*` of the SOT look unrendered, and
+ * under `push` the orphan sweep would DELETE them.
+ */
+function localWorkspaceIds(): string[] | null {
+  const read = readMasterWorld()
+  return read.settled ? read.world.workspaces.map((w) => w.id) : null
 }
 
 export function createExecutor(deps: ExecutorDeps): Executor {
@@ -368,7 +375,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   const orphanDeferred = new Set<string>()
 
   let shapesPromise: Promise<Shapes> | null = null
-  let previousWorkspaceIds = localWorkspaceIds()
+  let previousWorkspaceIds = localWorkspaceIds() ?? []
   let lastStatus = ''
 
   /* ─── the one door every request goes through ─── */
@@ -595,7 +602,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   function isUnrendered(key: string, s: SectionSyncState): boolean {
     if (sectionKind(key) !== 'tabs' || s.currentHash !== null || s.base.hash !== null || s.sot.hash === null) return false
     const id = workspaceIdOf(key)
-    return id === null || !localWorkspaceIds().includes(id)
+    if (id === null) return true
+    const ids = localWorkspaceIds()
+    return ids !== null && !ids.includes(id) // unsettled: not known to be missing — no sweep, and the period stays open
   }
 
   /** `push` only: queue the delete of every unrendered `tabs.*`, once `workspaces` says what this machine has. */
@@ -773,7 +782,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     if (sectionKind(key) !== 'tabs') return true
     const id = workspaceIdOf(key)
-    return id !== null && localWorkspaceIds().includes(id)
+    return id !== null && (localWorkspaceIds()?.includes(id) ?? false)
   }
 
   function pump(key: string): void {
@@ -816,7 +825,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         // Nor of a workspace the pull has just removed (the collector's `null` for it is 500 ms away).
         if (sectionKind(key) === 'tabs' && action.do === 'push' && direction() === 'pull') {
           const id = workspaceIdOf(key)
-          if (!gatesUpToDate() || id === null || !localWorkspaceIds().includes(id)) return
+          if (!gatesUpToDate() || id === null || !(localWorkspaceIds()?.includes(id) ?? false)) return
         }
         // A scoped entry must not reach the SOT ahead of the `workspaces` that lists its workspace (see the header).
         if (key === 'settings' && action.do === 'push' && !SETTINGS_GATES.every(upToDate)) return
@@ -958,13 +967,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    *  and the section's own state machine pushes / deletes. What is left is to
    *  make the two "carried" sets visible. */
   function reportSectionSet(sotKeys: string[]): void {
+    const workspaceIds = localWorkspaceIds()
+    if (workspaceIds === null) return // unsettled: nothing to compare the SOT's set with; the next index does
     try {
       const localKeys = [...sections].filter(([, s]) => s.currentHash !== null).map(([key]) => key)
       // A workspace whose id cannot form `tabs.<id>` is device-local (the builder leaves it out, the applier
       // keeps it): it has no section to reconcile, and `reconcileSectionSet` throws on such an id — which
       // used to cost the whole report.
       const set = reconcileSectionSet({
-        workspaceIds: localWorkspaceIds().filter(isSyncableWorkspaceId),
+        workspaceIds: workspaceIds.filter(isSyncableWorkspaceId),
         previousWorkspaceIds: previousWorkspaceIds.filter(isSyncableWorkspaceId),
         localKeys,
         sotKeys,
@@ -1204,7 +1215,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (mismatch) {
       problem('pull-hash-mismatch', `the stores did not keep what arrived (fetched ${String(sotHash)}, they hold ${String(outcome.hash)}): the section is dirty and will be pushed back`, key)
     }
-    if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds()
+    if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds() ?? previousWorkspaceIds
     if (!dispatch(key, { type: 'pull-applied', rev, hash: sotHash, localHash: outcome.hash }, false)) {
       problem('pull-applied-refused', 'the section changed while the payload was being applied', key)
     }
@@ -1260,7 +1271,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       return failed(key)
     }
     clearBackoff(key)
-    if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds()
+    if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds() ?? previousWorkspaceIds
     dispatch(key, { type: 'local-restored', hash }, false)
     return AGAIN
   }

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWorkspaceStore } from '../../features/workspace/store'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import { useTabStore } from '../../stores/useTabStore'
 import type { Workspace } from '../../types/tab'
 import type { Failure, ProfileIndexEntry, PutOutcome, Result, Section, SectionMeta } from './api'
 import type { ApplyOutcome } from './apply-to-stores'
@@ -174,7 +176,9 @@ beforeEach(() => {
   store.saveSection.mockReturnValue('ok')
   store.saveConflict.mockReturnValue('ok')
   store.dropSection.mockReturnValue('ok')
-  useWorkspaceStore.setState({ workspaces: [] })
+  useWorkspaceStore.setState({ workspaces: [], worldId: 'master', worldEpoch: 0 })
+  useTabStore.setState({ worldId: 'master', worldEpoch: 0 })
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
 })
 
 afterEach(() => {
@@ -1977,6 +1981,36 @@ describe('executor — the first reconciliation (initialDirection)', () => {
       expect(Object.keys(ex.status().sections).sort()).toEqual(['hosts', 'tabs.w1', 'workspaces'])
       expect(settled).toHaveBeenCalledTimes(1)
       expect(problems.filter((p) => p.kind.startsWith('orphan'))).toEqual([])
+    })
+
+    it('UNSETTLED master world (a switch half-way through this window\'s rehydrates): nothing is deleted, the period stays open', async () => {
+      mineAgrees([meta('tabs.w7', 3, 'T7')])
+      useWorkspaceStore.setState({ worldEpoch: 5 }) // the other two stores have not caught up
+      const { ex, settled } = first('push')
+      reportMine(ex)
+      ex.onReconnected()
+      await flush()
+      expect(api.deleteSection).not.toHaveBeenCalled()
+      expect(settled).not.toHaveBeenCalled()
+    })
+
+    it('a local profile on screen: "here" is the PARKED master — its sections are kept, the screen\'s workspaces count for nothing', async () => {
+      mineAgrees([meta('tabs.w7', 3, 'T7')])
+      api.deleteSection.mockResolvedValue({ kind: 'applied', rev: 4 })
+      useLocalProfilesStore.setState({
+        slaves: { s1: { id: 's1', name: 'S', createdAt: 1, world: null } },
+        slaveOrder: ['s1'],
+        activeProfileId: 's1',
+        parkedMaster: { workspaces: [ws('w1')], tabs: {}, activeWorkspaceId: null, activeTabId: null },
+        worldEpoch: 1,
+      })
+      useTabStore.setState({ worldId: 's1', worldEpoch: 1 })
+      useWorkspaceStore.setState({ workspaces: [ws('w7')], worldId: 's1', worldEpoch: 1 }) // the SLAVE has a w7, the master does not
+      const { ex } = first('push')
+      reportMine(ex)
+      ex.onReconnected()
+      await flush()
+      expect(api.deleteSection.mock.calls.map((c) => c[2])).toEqual(['tabs.w7'])
     })
 
     it.each(['pull', null] as const)('direction %s: nothing is deleted', async (direction) => {
