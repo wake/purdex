@@ -100,7 +100,7 @@ function slaveOnScreen(): void {
   putOnScreen(slaveWorld(), SLAVE, 1)
 }
 
-const LOCAL_FIELDS = ['slaves', 'slaveOrder', 'activeProfileId', 'parkedMaster', 'worldEpoch'] as const
+const LOCAL_FIELDS = ['slaves', 'slaveOrder', 'activeProfileId', 'parkedMaster', 'worldEpoch', 'relabelCount'] as const
 const TAB_FIELDS = ['tabs', 'tabOrder', 'activeTabId', 'visitHistory', 'worldId', 'worldEpoch'] as const
 const WS_FIELDS = ['workspaces', 'activeWorkspaceId', 'worldId', 'worldEpoch'] as const
 
@@ -113,6 +113,16 @@ const screen = (): ParkedWorld => {
   const t = useTabStore.getState()
   const w = useWorkspaceStore.getState()
   return { workspaces: w.workspaces, tabs: t.tabs, activeWorkspaceId: w.activeWorkspaceId, activeTabId: t.activeTabId }
+}
+
+/** An epoch is an operation's own (clock-based — world-fence.ts, `nextWorldEpoch`), so tests compare and do not
+ *  count: the three stores carry ONE epoch, strictly above `previous`, and the fence is at it. */
+function oneEpochAbove(previous: number): number {
+  const epoch = useLocalProfilesStore.getState().worldEpoch
+  expect([useTabStore.getState().worldEpoch, useWorkspaceStore.getState().worldEpoch]).toEqual([epoch, epoch])
+  expect(epoch).toBeGreaterThan(previous)
+  expect(localStorage.getItem(STORAGE_KEYS.WORLD_EPOCH)).toBe(String(epoch))
+  return epoch
 }
 
 const persisted = (key: string): Record<string, unknown> => (JSON.parse(localStorage.getItem(key) ?? '{"state":{}}') as { state: Record<string, unknown> }).state
@@ -201,14 +211,15 @@ describe('switchActiveProfile', () => {
     expect(useTabStore.getState().tabOrder).toEqual(['st1', 'st2'])
     expect(useLocalProfilesStore.getState().parkedMaster).toEqual(masterWorld())
     expect(useLocalProfilesStore.getState().slaves[SLAVE].world).toBeNull()
-    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: 1 })
-    expect(useTabStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: 1 })
-    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: 1 })
+    const epoch = oneEpochAbove(0)
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: epoch })
+    expect(useTabStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: epoch })
+    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: epoch })
     expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
     // …and that is what another window will read.
-    expect(persisted(STORAGE_KEYS.TABS)).toMatchObject({ worldId: SLAVE, worldEpoch: 1 })
-    expect(persisted(STORAGE_KEYS.WORKSPACES)).toMatchObject({ worldId: SLAVE, worldEpoch: 1 })
-    expect(persisted(STORAGE_KEYS.LOCAL_PROFILES)).toMatchObject({ activeProfileId: SLAVE, worldEpoch: 1 })
+    expect(persisted(STORAGE_KEYS.TABS)).toMatchObject({ worldId: SLAVE, worldEpoch: epoch })
+    expect(persisted(STORAGE_KEYS.WORKSPACES)).toMatchObject({ worldId: SLAVE, worldEpoch: epoch })
+    expect(persisted(STORAGE_KEYS.LOCAL_PROFILES)).toMatchObject({ activeProfileId: SLAVE, worldEpoch: epoch })
   })
 
   it('the whole exchange is ONE synchronous block: it is over before the promise is even looked at, and no microtask ran inside it', () => {
@@ -239,19 +250,30 @@ describe('switchActiveProfile', () => {
     expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
   })
 
-  it('master → slave → master: the master world is what it was, byte for byte, at epoch 2', async () => {
+  it('stores whose epoch is AHEAD of the clock, and no fence (a device clock set back; data from before the fence): the new epoch is still above them', async () => {
+    const ahead = Date.now() * 1000 + 10 ** 12
+    useLocalProfilesStore.setState({ worldEpoch: ahead })
+    putOnScreen(masterWorld(), MASTER_PROFILE_ID, ahead)
+    localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    expect(oneEpochAbove(ahead)).toBe(ahead + 1)
+  })
+
+  it('master → slave → master: the master world is what it was, byte for byte, under a newer epoch', async () => {
     const before = JSON.stringify(screen())
     const orderBefore = JSON.stringify(useTabStore.getState().tabOrder)
     await switchActiveProfile(SLAVE)
+    const first = oneEpochAbove(0)
     expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
 
     expect(JSON.stringify(screen())).toBe(before)
     expect(JSON.stringify(useTabStore.getState().tabOrder)).toBe(orderBefore)
-    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 2 })
+    const epoch = oneEpochAbove(first)
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: epoch })
     expect(JSON.stringify(useLocalProfilesStore.getState().slaves[SLAVE].world)).toBe(JSON.stringify(slaveWorld()))
     expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
-    expect(useTabStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: 2 })
-    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: 2 })
+    expect(useTabStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: epoch })
+    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: epoch })
   })
 
   it('what was edited on screen is what gets parked', async () => {
@@ -614,9 +636,10 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
 
     expect(screen().tabs).toBe(live.tabs) // content untouched: a re-stamp, not a rewrite
     expect(screen().workspaces).toBe(live.workspaces)
-    expect(useTabStore.getState()).toMatchObject({ worldId: result.demotedId, worldEpoch: 1 })
-    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: result.demotedId, worldEpoch: 1 })
-    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: result.demotedId, worldEpoch: 1, slaveOrder: [result.demotedId, OTHER] })
+    const epoch = oneEpochAbove(0)
+    expect(useTabStore.getState()).toMatchObject({ worldId: result.demotedId, worldEpoch: epoch })
+    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: result.demotedId, worldEpoch: epoch })
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: result.demotedId, worldEpoch: epoch, slaveOrder: [result.demotedId, OTHER] })
     expect(demoted(result.demotedId)).toMatchObject({ name: 'Old master', world: null })
     expect(demoted(SLAVE)).toBeUndefined()
     const read = readMasterWorld()
@@ -632,9 +655,10 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     if (!result.ok) return
 
     expect(screen().tabs).toBe(live.tabs)
-    expect(useTabStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: 2 })
-    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: 2 })
-    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 2 })
+    const epoch = oneEpochAbove(1)
+    expect(useTabStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: epoch })
+    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: epoch })
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: epoch })
     expect(demoted(result.demotedId).world).toEqual(masterWorld())
     const read = readMasterWorld()
     expect(read).toMatchObject({ settled: true, onScreen: true })
@@ -647,9 +671,10 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
 
-    expect(useTabStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: 2 })
-    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: 2 })
-    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: 2 })
+    const epoch = oneEpochAbove(1)
+    expect(useTabStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: epoch })
+    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: SLAVE, worldEpoch: epoch })
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: epoch })
     expect(demoted(result.demotedId).world).toEqual(masterWorld())
     const read = readMasterWorld()
     expect(read).toMatchObject({ settled: true, onScreen: false })

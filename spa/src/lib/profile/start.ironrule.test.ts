@@ -60,6 +60,10 @@ describe('no master → the app is exactly what it was', () => {
     const wsSub = vi.spyOn(useWorkspaceStore, 'subscribe')
     const localSub = vi.spyOn(useLocalProfilesStore, 'subscribe')
     useTabStore.setState({ worldEpoch: 9 }) // a stuck unsettled world, even: nobody looks
+    // Spied from HERE on, i.e. around `startProfileSync()` and what follows — a DIFFERENCE, not a census of
+    // `window`. One `storage` listener exists already and is not Profile Sync's: `syncManager`'s (lib/storage/
+    // sync.ts), the storage layer of the whole app, installed by the first `register` when the stores above were
+    // imported. What this test pins is that Profile Sync adds none of its own without a master.
     const listen = vi.spyOn(window, 'addEventListener')
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
     const getItem = vi.spyOn(Storage.prototype, 'getItem')

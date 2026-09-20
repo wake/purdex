@@ -1037,6 +1037,7 @@
   "hosts.connection_failed": "Connection failed",
   "hosts.confirm_delete_tabs": "Also close all tabs for this host",
   "hosts.deleted_toast": "{{name}} deleted",
+  "hosts.undo_world_skipped": "{{name}} is back, but its tabs were not restored: a local profile was promoted to master in the meantime",
   "hosts.undo": "Undo",
   "hosts.error_unreachable": "Host unreachable",
   "hosts.error_refused": "Daemon not running",

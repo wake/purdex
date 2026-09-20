@@ -43,6 +43,13 @@
 // that it moves forward: the caller supplies the value (it has to write the same
 // one elsewhere), and one that does not exceed the current epoch is refused.
 //
+// `relabelCount` — +1 with every `promoteSlave`, never down; its value means
+// nothing, only that it moved. A promote changes WHICH WORLD the label `'master'`
+// (and a slave id) names, and anything that remembered a world by its label
+// across time must be able to tell: lib/host-lifecycle.ts keeps it in the
+// snapshot of a host delete, and an undo that finds it moved touches no world.
+// Persisted and synced like the rest, so another window's promote counts too.
+//
 // `promoteSlave` IS A RELABELLING, NOT A SWITCH. It never takes a world off the
 // screen or puts one on, so the tab stores' CONTENT is never involved — only, in
 // two of the three cases, their world tag (see the action's comment).
@@ -78,6 +85,8 @@ interface LocalProfilesData {
   /** Non-null exactly while a slave is on screen. */
   parkedMaster: ParkedWorld | null
   worldEpoch: number
+  /** +1 with every promote: the labels of the worlds have moved (see the header). */
+  relabelCount: number
 }
 
 type Refused<R extends string> = { ok: false; reason: R }
@@ -226,6 +235,7 @@ function sanitiseData(persisted: unknown): LocalProfilesData {
     activeProfileId,
     parkedMaster,
     worldEpoch: Number.isSafeInteger(p.worldEpoch) && (p.worldEpoch as number) >= 0 ? (p.worldEpoch as number) : 0,
+    relabelCount: Number.isSafeInteger(p.relabelCount) && (p.relabelCount as number) >= 0 ? (p.relabelCount as number) : 0,
   }
 }
 
@@ -237,6 +247,7 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
       activeProfileId: MASTER_PROFILE_ID,
       parkedMaster: null,
       worldEpoch: 0,
+      relabelCount: 0,
 
       addSlave: (name, world) => {
         const normalized = normalizeLocalProfileName(name)
@@ -329,6 +340,7 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
           parkedMaster: promoted.world,
           activeProfileId,
           worldEpoch,
+          relabelCount: s.relabelCount + 1,
         })
         return { ok: true, demotedId, activeProfileId }
       },
@@ -374,8 +386,9 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         activeProfileId: state.activeProfileId,
         parkedMaster: state.parkedMaster,
         worldEpoch: state.worldEpoch,
+        relabelCount: state.relabelCount,
       }),
-      // Only the five sanitised fields ever come out of storage: persisted junk
+      // Only the six sanitised fields ever come out of storage: persisted junk
       // can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseData(persisted) }),
     },

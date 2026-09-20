@@ -37,6 +37,23 @@
 // memory and React re-runs on that. A write dropped BY that rehydrate (a
 // `migrate` that re-persists) asks for no second one: no loop.
 //
+// AN EPOCH BELONGS TO ONE OPERATION (`nextWorldEpoch`). With `epoch + 1`, two
+// windows at epoch n that switched at the same time BOTH wrote n + 1: the second
+// found the fence already there, and their six store writes interleaved into a
+// pointer of one world over the tabs of another — all under one epoch, with no
+// higher one ever coming to retire it. So an epoch is the clock in microseconds
+// plus a random 0–999, and never below (fence + 1) or (any store's epoch + 1):
+// still a safe integer, still strictly increasing on this device, and two
+// operations share one only when two windows draw the same number in the same
+// millisecond — which is then the old behaviour, not a new one. And
+// `raiseWorldEpochFence` FAILS when the fence is already at or above its target.
+// Of two overlapping operations the one with the higher epoch wins, whole: from
+// the moment its fence is up, every store write of the other is below it —
+// dropped, and answered with a rehydrate of the winner's world; the loser sees
+// that the fence is no longer its own and says `superseded`
+// (lib/profile/switch-active.ts). The loser's `lower()` does nothing: the key no
+// longer holds what it wrote.
+//
 // WHAT IS LEFT, stated plainly: `localStorage` is not transactional. Between
 // "read the side key" and "write the store" another window can still raise the
 // fence and write; the fence narrows the window from "a whole sequence of three
@@ -67,16 +84,30 @@ export function readWorldEpochFence(): number {
 }
 
 /**
+ * The epoch of the NEXT operation that moves the world (see AN EPOCH BELONGS TO
+ * ONE OPERATION). `current`: the epochs the three world stores hold in memory —
+ * this file is below the stores in the import graph, so the caller hands them in;
+ * one that is no safe integer (storage junk) is no bound.
+ */
+export function nextWorldEpoch(current: readonly number[]): number {
+  const floor = Math.max(readWorldEpochFence(), ...current.filter((e) => Number.isSafeInteger(e)))
+  return Math.max(Date.now() * 1000 + Math.floor(Math.random() * 1000), floor + 1)
+}
+
+/**
  * Raises the fence to `epoch` — the FIRST write of a switch / promote — and
  * returns how to take that back: the key's previous bytes (or its absence),
  * restored only while the key still holds what this call wrote, and only once.
  * A rollback must lower the fence BEFORE it puts the stores back, or those very
- * writes (they carry the old epoch) would be dropped. Never lowers a fence that
- * is already higher. Throws when storage refuses the write; lowering never throws.
- * Not announced: the side key is no store, and every reader reads storage.
+ * writes (they carry the old epoch) would be dropped.
+ *   `null` — NOT RAISED: the fence is already at or above `epoch` (another
+ * operation got there between `nextWorldEpoch` and here), or `epoch` is no
+ * positive safe integer. Nothing was written; the caller draws a new epoch or
+ * gives up. Throws when storage refuses the write; lowering never throws. Not
+ * announced: the side key is no store, and every reader reads storage.
  */
-export function raiseWorldEpochFence(epoch: number): () => void {
-  if (readWorldEpochFence() >= epoch) return () => {}
+export function raiseWorldEpochFence(epoch: number): (() => void) | null {
+  if (!Number.isSafeInteger(epoch) || epoch <= readWorldEpochFence()) return null
   const previous = localStorage.getItem(STORAGE_KEYS.WORLD_EPOCH)
   const mine = String(epoch)
   localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, mine)

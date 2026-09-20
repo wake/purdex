@@ -1037,6 +1037,7 @@
   "hosts.connection_failed": "連線失敗",
   "hosts.confirm_delete_tabs": "一併關閉所有此 Host 的分頁",
   "hosts.deleted_toast": "已刪除 {{name}}",
+  "hosts.undo_world_skipped": "已還原 {{name}}，但分頁未還原：期間有本機 profile 被升為 master",
   "hosts.undo": "復原",
   "hosts.error_unreachable": "主機無法連線",
   "hosts.error_refused": "Daemon 未啟動",
