@@ -1100,3 +1100,67 @@ and then removed it when it moved. A channel closed for the next generation of t
 carries a still-valid `syncNow` over — same id (two windows doing it write one key), same `at` (the
 TTL is not extended). A `resolve` is dropped instead: an attach is a new first reconciliation, and
 the lock the user confirmed belonged to the driver that is gone. Another master: nothing is carried.
+
+### 9.13 P3b — slaves and the active pointer: review and real-machine acceptance, 2026-09-20
+
+**Measured:** `settings` has exactly ONE workspace-keyed field (`purdex-workspace-settings.workspaces`,
+`WORKSPACE_SCOPED_SETTINGS`) — so "scope settings by the master's workspaces" is one filter, not a
+family of them. **`syncManager` ran one write behind between windows**: two windows are two renderer
+processes, the BroadcastChannel message arrives before the write is visible to the receiver's
+`localStorage`, and the rehydrate it triggers reads the PREVIOUS value (n = 5, 6, 7 written; 4, 5, 6
+held) — app-wide, and unnoticed as long as the next write brought a store level. `replaceTabSnapshot`
+(snapshot / device-state restore) is a THIRD place that writes both live tab stores in one block,
+besides a profile apply and a switch; it writes INTO a world and leaves the tag alone.
+
+**Real machine, three passes.**
+- **First: an old window wrote the old world back over a new epoch.** Between the `tabs` and the
+  `workspaces` rehydrate of another window's switch, any workspace action (route sync does) made
+  zustand persist write the whole OLD workspace store over the switch; the window then rehydrated its
+  own stale write, stayed `epoch-mismatch` for good and could not switch back. The epoch barrier had
+  kept the SOT clean throughout. Fix: **the epoch fence** — a side key raised FIRST by a switch /
+  promote; the three world stores persist through a storage that drops a write whose `worldEpoch` is
+  below it and rehydrates that store. No side key = fence 0 = byte-identical behaviour and zero new
+  keys for a user who never switched (the iron rule, pinned).
+- **Second: the disk was perfect and the window still stuck** — the one-write-behind above. A switch
+  writes each world store ONCE, so two of three stayed a write behind: unsettled for good. Fix:
+  `syncManager` also rehydrates on the native `storage` event, which the HTML spec dispatches AFTER
+  the storage area is updated and only in other documents; the second rehydrate is skipped only when
+  the broadcast provably read the very string the event carries. The iron-rule test already counted
+  listeners around `startProfileSync()`, i.e. a difference — it stands unchanged.
+- **Third: all passed** — after a cross-window switch both windows settled in the same world every
+  round, four round trips wrote nothing to the SOT, sentinel count on the SOT = 0.
+
+**Codex, by round (gpt-5.6-sol).**
+- **R1:** a `settings` apply scoped its patch by the master's workspace set ONCE and then awaited per
+  store — a `workspaces` apply landing in between left an old scoped entry that the hash, taken over
+  the NEW set, called a local edit (the executor's gate is looked at when the pull starts, not during
+  the apply). The set is re-read after every await; moved → rollback, `busy`. And the undo of a host
+  delete cleared marks by bare tab / pane ids, which two worlds can share.
+- **Attacker:** that undo restored closed tabs into WHATEVER was on screen — a slave's tab into the
+  master, and from there to the SOT; every snapshot entry now carries its world owner and goes back
+  into that world, live or parked, or is skipped. `promoteToMaster` checked "attached" in this
+  window's memory only; it asks storage (`storedControl`, one parser, in `useProfileStore`). The
+  other half of that race is closed at the one door: three stores that agree on an epoch BELOW the
+  fence read `behind-fence` — nothing reported, applied, switched or promoted until caught up.
+- **Critic one:** two switches from the same epoch both wrote `epoch + 1` and interleaved under one
+  epoch nothing would retire → an epoch belongs to ONE operation (`nextWorldEpoch`: µs clock + random,
+  above the fence and every store), raising the fence can FAIL, and the block looks back before it
+  says ok (`superseded`). A promote inside the undo window re-binds the label `'master'` → a persisted
+  `relabelCount`; an undo that finds it moved restores the host and no world, and says so.
+- **Critic two:** the undo must ask STORAGE, not memory (another window's promote not heard of yet):
+  any unsettled answer of the door, or a moved persisted `relabelCount`, skips the worlds. An epoch
+  at `Number.MAX_SAFE_INTEGER` was a dead end → `MAX_WORLD_EPOCH = 8e15`, beyond it is junk, and
+  `junk-epoch` — junk epoch, everything trustworthy agreeing, the same junk on disk — is the one
+  unsettled state a SWITCH may pass, healing all three stores. Raising the fence is read-check-write
+  with no CAS → a switch / promote runs its (still synchronous) block under the Web Lock
+  `purdex-world-switch`, 3 s, then `busy`; `promoteToMaster` became async.
+
+**Accepted residue.** (1) **No Web Locks** (no secure context — a dev build over plain http on a
+tailnet IP; the same trap as `crypto.subtle`): the read-check-write window stays open. Pinned by a
+test: the on-screen stores may end up mixed, both windows then read unsettled — silent, never wrong —
+and the parked worlds, one key written in one `setItem`, are one window's version, whole. (2) **A
+parked world does not hear of a session that closed while it was parked** (#1255); it is reconciled
+by its hosts' next `sessions` payload, like an app that was closed for a while. (3) **The `settings`
+push gate** waits for `workspaces` to be up to date, so a LOCKED `workspaces` holds back every
+settings push, not only the workspace-scoped field.
+
