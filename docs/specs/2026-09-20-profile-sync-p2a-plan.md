@@ -258,7 +258,9 @@ export type SectionEvent =
   | { type: 'push-converged'; rev: number }                     // 200 applied:false
   | { type: 'push-conflict'; rev: number; hash: string | null } // 409 conflict; rev 0 + null = absent
   | { type: 'push-failed' }                                     // network, 5xx, 503, timeout, malformed
-  | { type: 'pull-applied'; rev: number; hash: string | null }  // null = applied a deletion
+  | { type: 'pull-applied'; rev: number; hash: string | null; localHash: string | null }
+      // hash = what the SOT held (null = a deletion); localHash = what the stores hold after the apply.
+      // Two hashes since P2b-2 (spec §9.9): with one, a sanitiser's correction could never read as dirty.
   | { type: 'local-restored'; hash: string | null }             // the driver put the snapshot back
   | { type: 'resolved'; keep: 'local' | 'sot' }
 
@@ -337,7 +339,8 @@ This table **is** spec §4.6.1 with "absent" folded into `hash === null`: its si
      `conflict = {localHash: inFlight.hash, sot}` — **the sent snapshot**, not the live stores.
    - `push-failed` → back to dirty/pending; nothing else changes. The driver maps timeouts and
      malformed responses to it, so there is no path that leaves a flight open.
-6. `pull-applied` → `base = sot = {rev, hash}` (if `rev >= sot.rev`), `currentHash = hash`,
+6. `pull-applied` → `base = sot = {rev, hash}` (if `rev >= sot.rev`), `currentHash = localHash`
+   *(P2b-2: was `hash`)*,
    `forcePull = false`.
 7. `resolved keep:'sot'` → unlock, `forcePull = true` (row 0e pulls even though the section is
    dirty — the user said so). `keep:'local'` → unlock, **`base = conflict.sot`** (the newest known,
