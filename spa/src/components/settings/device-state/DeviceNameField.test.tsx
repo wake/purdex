@@ -1,17 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { DeviceNameField } from './DeviceNameField'
-import { useDeviceStateStore } from '../../../stores/useDeviceStateStore'
+import { useDeviceNameStore } from '../../../stores/useDeviceNameStore'
 
 function nameInput() {
   return screen.getByTestId('device-state-name') as HTMLInputElement
 }
 
 beforeEach(() => {
-  useDeviceStateStore.setState({
+  useDeviceNameStore.setState({
     deviceName: null,
     defaultDeviceName: 'Chrome · macOS',
-    status: { kind: 'idle' },
   })
 })
 
@@ -25,7 +24,7 @@ describe('DeviceNameField', () => {
   })
 
   it('shows the custom name when set', () => {
-    useDeviceStateStore.setState({ deviceName: 'Work Air' })
+    useDeviceNameStore.setState({ deviceName: 'Work Air' })
     render(<DeviceNameField />)
     expect(nameInput().value).toBe('Work Air')
   })
@@ -34,7 +33,7 @@ describe('DeviceNameField', () => {
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: '  Studio  ' } })
     fireEvent.keyDown(nameInput(), { key: 'Enter' })
-    expect(useDeviceStateStore.getState().deviceName).toBe('Studio')
+    expect(useDeviceNameStore.getState().deviceName).toBe('Studio')
     expect(nameInput().value).toBe('Studio')
   })
 
@@ -42,21 +41,21 @@ describe('DeviceNameField', () => {
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: ' Laptop ' } })
     fireEvent.blur(nameInput())
-    expect(useDeviceStateStore.getState().deviceName).toBe('Laptop')
+    expect(useDeviceNameStore.getState().deviceName).toBe('Laptop')
     expect(nameInput().value).toBe('Laptop')
   })
 
   it('blur without typing does not create an override', () => {
     render(<DeviceNameField />)
     fireEvent.blur(nameInput())
-    expect(useDeviceStateStore.getState().deviceName).toBeNull()
+    expect(useDeviceNameStore.getState().deviceName).toBeNull()
   })
 
   it('does not commit on Enter while composing', () => {
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: '筆電' } })
     fireEvent.keyDown(nameInput(), { key: 'Enter', isComposing: true })
-    expect(useDeviceStateStore.getState().deviceName).toBeNull()
+    expect(useDeviceNameStore.getState().deviceName).toBeNull()
     expect(nameInput().value).toBe('筆電')
   })
 
@@ -64,11 +63,11 @@ describe('DeviceNameField', () => {
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: 'My dra' } })
     act(() => {
-      useDeviceStateStore.setState({ defaultDeviceName: 'Electron · macOS' })
+      useDeviceNameStore.setState({ defaultDeviceName: 'Electron · macOS' })
     })
     expect(nameInput().value).toBe('My dra')
     fireEvent.keyDown(nameInput(), { key: 'Enter' })
-    expect(useDeviceStateStore.getState().deviceName).toBe('My dra')
+    expect(useDeviceNameStore.getState().deviceName).toBe('My dra')
     expect(nameInput().value).toBe('My dra')
   })
 
@@ -76,21 +75,21 @@ describe('DeviceNameField', () => {
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: 'Local edit' } })
     act(() => {
-      useDeviceStateStore.setState({ deviceName: 'From sync' })
+      useDeviceNameStore.setState({ deviceName: 'From sync' })
     })
     expect(nameInput().value).toBe('Local edit')
     fireEvent.blur(nameInput())
-    expect(useDeviceStateStore.getState().deviceName).toBe('Local edit')
+    expect(useDeviceNameStore.getState().deviceName).toBe('Local edit')
   })
 
   it('an untouched field follows store changes', () => {
     render(<DeviceNameField />)
     act(() => {
-      useDeviceStateStore.setState({ defaultDeviceName: 'Electron · macOS' })
+      useDeviceNameStore.setState({ defaultDeviceName: 'Electron · macOS' })
     })
     expect(nameInput().value).toBe('Electron · macOS')
     act(() => {
-      useDeviceStateStore.setState({ deviceName: 'From sync' })
+      useDeviceNameStore.setState({ deviceName: 'From sync' })
     })
     expect(nameInput().value).toBe('From sync')
   })
@@ -101,17 +100,17 @@ describe('DeviceNameField', () => {
     fireEvent.blur(nameInput())
     expect(nameInput().value).toBe('draft')
     act(() => {
-      useDeviceStateStore.setState({ deviceName: 'From sync' })
+      useDeviceNameStore.setState({ deviceName: 'From sync' })
     })
     expect(nameInput().value).toBe('From sync')
   })
 
   it('committing a blank name falls back to the default', () => {
-    useDeviceStateStore.setState({ deviceName: 'Work Air' })
+    useDeviceNameStore.setState({ deviceName: 'Work Air' })
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: '   ' } })
     fireEvent.blur(nameInput())
-    expect(useDeviceStateStore.getState().deviceName).toBeNull()
+    expect(useDeviceNameStore.getState().deviceName).toBeNull()
     expect(nameInput().value).toBe('Chrome · macOS')
   })
 
@@ -121,36 +120,36 @@ describe('DeviceNameField', () => {
   })
 
   it('reset restores the default name', () => {
-    useDeviceStateStore.setState({ deviceName: 'Work Air' })
+    useDeviceNameStore.setState({ deviceName: 'Work Air' })
     render(<DeviceNameField />)
     fireEvent.click(screen.getByTestId('device-state-name-reset'))
-    expect(useDeviceStateStore.getState().deviceName).toBeNull()
+    expect(useDeviceNameStore.getState().deviceName).toBeNull()
     expect(nameInput().value).toBe('Chrome · macOS')
     expect(screen.queryByTestId('device-state-name-reset')).not.toBeInTheDocument()
   })
 
   it('reset clears a draft and follows later default changes', () => {
-    useDeviceStateStore.setState({ deviceName: 'Work Air' })
+    useDeviceNameStore.setState({ deviceName: 'Work Air' })
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: 'half-typed' } })
     fireEvent.click(screen.getByTestId('device-state-name-reset'))
-    expect(useDeviceStateStore.getState().deviceName).toBeNull()
+    expect(useDeviceNameStore.getState().deviceName).toBeNull()
     expect(nameInput().value).toBe('Chrome · macOS')
     act(() => {
-      useDeviceStateStore.setState({ defaultDeviceName: 'Electron · macOS' })
+      useDeviceNameStore.setState({ defaultDeviceName: 'Electron · macOS' })
     })
     expect(nameInput().value).toBe('Electron · macOS')
   })
 
   it('Escape discards the draft and resumes following the store', () => {
-    useDeviceStateStore.setState({ deviceName: 'Work Air' })
+    useDeviceNameStore.setState({ deviceName: 'Work Air' })
     render(<DeviceNameField />)
     fireEvent.change(nameInput(), { target: { value: 'oops' } })
     fireEvent.keyDown(nameInput(), { key: 'Escape' })
     expect(nameInput().value).toBe('Work Air')
-    expect(useDeviceStateStore.getState().deviceName).toBe('Work Air')
+    expect(useDeviceNameStore.getState().deviceName).toBe('Work Air')
     act(() => {
-      useDeviceStateStore.setState({ deviceName: 'From sync' })
+      useDeviceNameStore.setState({ deviceName: 'From sync' })
     })
     expect(nameInput().value).toBe('From sync')
   })

@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useHostStore } from '../../stores/useHostStore'
+import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { useDeviceStateStore } from '../../stores/useDeviceStateStore'
 import { getClientId } from '../client-identity'
 import type { Tab } from '../../types/tab'
 import { putDeviceState } from './api'
-import { resolveDefaultDeviceName } from './device-name'
+import { resolveDefaultDeviceName } from '../device-name'
 import { resolveAppVersion, startDeviceStateUploader } from './uploader'
 
 vi.mock('./api', async (importOriginal) => ({
@@ -14,8 +15,8 @@ vi.mock('./api', async (importOriginal) => ({
   putDeviceState: vi.fn(),
 }))
 
-vi.mock('./device-name', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./device-name')>()),
+vi.mock('../device-name', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../device-name')>()),
   resolveDefaultDeviceName: vi.fn(),
 }))
 
@@ -72,7 +73,9 @@ beforeEach(() => {
     devHostId: 'h1',
     runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } },
   })
-  useDeviceStateStore.setState({ deviceName: null, defaultDeviceName: 'Browser', status: { kind: 'idle' } })
+  __resetDefaultDeviceNameForTest()
+  useDeviceNameStore.setState({ deviceName: null, defaultDeviceName: 'Browser' })
+  useDeviceStateStore.setState({ status: { kind: 'idle' } })
 })
 
 afterEach(() => {
@@ -86,7 +89,7 @@ describe('startDeviceStateUploader', () => {
     start()
     await vi.advanceTimersByTimeAsync(0)
     expect(resolveDefaultDeviceName).toHaveBeenCalledTimes(1)
-    expect(useDeviceStateStore.getState().defaultDeviceName).toBe('Mac')
+    expect(useDeviceNameStore.getState().defaultDeviceName).toBe('Mac')
     expect(put).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(5000)
     expect(put).toHaveBeenCalledTimes(1)
@@ -104,7 +107,7 @@ describe('startDeviceStateUploader', () => {
     vi.mocked(resolveDefaultDeviceName).mockResolvedValue(`  ${'字'.repeat(100)}  `)
     start()
     await vi.advanceTimersByTimeAsync(0)
-    expect(useDeviceStateStore.getState().defaultDeviceName).toBe('字'.repeat(64))
+    expect(useDeviceNameStore.getState().defaultDeviceName).toBe('字'.repeat(64))
     await vi.advanceTimersByTimeAsync(5000)
     expect(put.mock.calls[0][2].deviceName).toBe('字'.repeat(64))
   })
@@ -113,7 +116,7 @@ describe('startDeviceStateUploader', () => {
     vi.mocked(resolveDefaultDeviceName).mockResolvedValue('   ')
     start()
     await vi.advanceTimersByTimeAsync(0)
-    expect(useDeviceStateStore.getState().defaultDeviceName).toBe('Browser')
+    expect(useDeviceNameStore.getState().defaultDeviceName).toBe('Browser')
   })
 
   it('collapses a burst of changes into one PUT after the debounce', async () => {
@@ -181,7 +184,7 @@ describe('startDeviceStateUploader', () => {
     await vi.advanceTimersByTimeAsync(5000)
     const first = put.mock.calls[0][2]
     put.mockClear()
-    useDeviceStateStore.getState().setDeviceName('Studio')
+    useDeviceNameStore.getState().setDeviceName('Studio')
     await vi.advanceTimersByTimeAsync(5000)
     expect(put).toHaveBeenCalledTimes(1)
     const second = put.mock.calls[0][2]

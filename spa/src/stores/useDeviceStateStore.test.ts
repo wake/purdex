@@ -1,11 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useDeviceStateStore, effectiveDeviceName, normalizeDeviceName } from './useDeviceStateStore'
+// The device name moved to `useDeviceNameStore`; the name suites below still
+// go through this module's re-exports, which is what its remaining callers use.
+import {
+  useDeviceNameStore,
+  useDeviceStateStore,
+  effectiveDeviceName,
+  normalizeDeviceName,
+} from './useDeviceStateStore'
 import { STORAGE_KEYS } from '../lib/storage/keys'
 
-const store = () => useDeviceStateStore.getState()
+const store = () => ({ ...useDeviceNameStore.getState(), ...useDeviceStateStore.getState() })
 
 beforeEach(() => {
-  useDeviceStateStore.setState({ deviceName: null, defaultDeviceName: 'Browser', status: { kind: 'idle' } })
+  useDeviceNameStore.setState({ deviceName: null, defaultDeviceName: 'Browser' })
+  useDeviceStateStore.setState({ status: { kind: 'idle' } })
   localStorage.clear()
 })
 
@@ -18,7 +26,7 @@ describe('useDeviceStateStore — defaults', () => {
 
   it('uses the purdex-device-state storage key', () => {
     expect(STORAGE_KEYS.DEVICE_STATE).toBe('purdex-device-state')
-    expect(useDeviceStateStore.persist.getOptions().name).toBe('purdex-device-state')
+    expect(useDeviceNameStore.persist.getOptions().name).toBe('purdex-device-state')
   })
 })
 
@@ -80,13 +88,9 @@ describe('useDeviceStateStore — setStatus', () => {
 
 describe('useDeviceStateStore — persistence', () => {
   it('persists only deviceName', () => {
-    useDeviceStateStore.setState({
-      deviceName: 'Office Mac',
-      defaultDeviceName: 'mlab',
-      status: { kind: 'ok', at: 1, hostId: 'h1' },
-    })
-    const partialize = useDeviceStateStore.persist.getOptions().partialize!
-    expect(partialize(store())).toEqual({ deviceName: 'Office Mac' })
+    useDeviceNameStore.setState({ deviceName: 'Office Mac', defaultDeviceName: 'mlab' })
+    const partialize = useDeviceNameStore.persist.getOptions().partialize!
+    expect(partialize(useDeviceNameStore.getState())).toEqual({ deviceName: 'Office Mac' })
   })
 })
 

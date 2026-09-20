@@ -8,14 +8,15 @@
 // mirrors the stored (effective) name; no render-phase or effect resync needed.
 import { useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { effectiveDeviceName, useDeviceStateStore } from '../../../stores/useDeviceStateStore'
+import { effectiveDeviceName } from '../../../lib/device-name'
+import { useDeviceNameStore } from '../../../stores/useDeviceNameStore'
 import { SettingItem } from '../SettingItem'
 
 export function DeviceNameField() {
   const t = useI18nStore((s) => s.t)
-  const deviceName = useDeviceStateStore((s) => s.deviceName)
-  const defaultDeviceName = useDeviceStateStore((s) => s.defaultDeviceName)
-  const setDeviceName = useDeviceStateStore((s) => s.setDeviceName)
+  const deviceName = useDeviceNameStore((s) => s.deviceName)
+  const defaultDeviceName = useDeviceNameStore((s) => s.defaultDeviceName)
+  const setDeviceName = useDeviceNameStore((s) => s.setDeviceName)
 
   const current = effectiveDeviceName({ deviceName, defaultDeviceName })
   const [draft, setDraft] = useState('')
