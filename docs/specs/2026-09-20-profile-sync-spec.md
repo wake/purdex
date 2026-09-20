@@ -978,3 +978,27 @@ the daemon** (`profiles: []`), the storage-state file that held the token remove
 tokens — both contexts were seeded with the same host), and the cross-machine run on air-2026. The
 App there loads the main checkout's `:5174`, which this isolated worktree session cannot `git pull`;
 that run is the user's acceptance.
+
+### 9.11 PR #1247 / P2b-2b review — R1 + two attackers (gpt-5.6-sol), 2026-09-20
+
+R1 reviewed the whole of P2b-2; each attacker was scoped by its focus to one half.
+
+| # | Source | Sev. | Finding | Resolution |
+|---|---|---|---|---|
+| R1-1 | R1 | P1 | `detachMaster` awaited the server-side cleanup first — up to a 15 s timeout during which the driver kept pulling and pushing after the user had said stop | `clearMaster()` first (the driver dies synchronously), then the best-effort `deleteAttachment` |
+| R1-2 / B-1 | R1, attacker B | P1 / high | re-attaching to the **same** master: with `pull`, the kept bases made a locally dirty section an ordinary push — the local edit overwrote the SOT, the opposite of what was asked; and `pendingDirection` could **stay set forever**, so an ordinary conflict hours later was answered silently by a stale direction | every attach is a fresh reconciliation (section store cleared, the whole master mode rebuilt, `attachGeneration` tells other windows); one reconciliation period per executor — once settled it answers no lock, reports `stale-direction` and asks to be cleared; the settle check runs after every round, including rounds with no action |
+| B-2 | attacker B | high | the master host's `ip` / `port` edited in place: the executor went on using the *old* daemon's bases against the new address | the attach-time endpoint is **persisted**; a different one blocks the driver (`master-endpoint-changed`) until the user re-attaches or puts it back. A token change alone rebuilds the driver and keeps the bases |
+| B-3 | attacker B | medium | on reload / leader hand-over, syncing began before the attachment PUT had succeeded — a window in which the profile could be deleted from under it | reachability is `attached && connected`; nothing is requested before the attachment is confirmed. (Measured first: an executor that never received `onReconnected` *does* issue requests once the collector reports, so withholding that call gated nothing.) An attachment **404 means the profile is gone**: no retry, `blocked: 'profile-gone'` |
+| B-4 | attacker B | medium | the control store's `syncManager.register` at module load creates a `BroadcastChannel`, so "no master, no effect" is false | **refuted with evidence**: `lib/storage/sync.ts:12` — the channel is a singleton, and 18 stores on `main` already register at load; this adds one entry to a Map. The wording of the rule was made exact instead |
+| A-4 | attacker A | high | a workspace whose id cannot form a `tabs.<id>` key was skipped for tabs but still pushed inside `workspaces`; every other client's guard then refused the payload and locked — self-propagating poison | such a workspace is **device-local**: the builder leaves it out, the applier keeps the local one in place, the collector reports it |
+| A-2, A-3 | attacker A | high | rollbacks covered less than the apply: removing a workspace also cleared a third store; a settings rollback restored fields but not the theme/locale registries, the DOM or the translator | the third store joins the snapshot; a settings rollback re-registers what was dropped and re-runs the rehydrate path; a rollback that itself fails says so (`rollback incomplete`) instead of being swallowed |
+| A-1 | attacker A | high | a failed hosts apply does not restore three cache stores | the claim "they are re-fetched" was **checked rather than repeated, and is only one third true**: the execution store recovers, `nex-host` and the execution list do not (nothing re-runs `ensure` for a host that reappears under the same id). The rollback now calls `ensure`; from the first staged write to the end of the rollback there is no `await`, so the connection layer never sees the intermediate host list and `runtime` is restored truthfully. The same gap in the app's own delete → Undo path is #1248 |
+| A-5 | attacker A | medium | the lease's release is read-then-remove; a window frozen in between for longer than the TTL deletes the next leader's lease | recorded in the header as a residual, with a test of what actually happens (one extra hand-over) |
+| A-6 / B-5 | both | low | `executor.ts` (~1,200 lines), `apply-to-stores.ts`, `collector.ts` do too much | #1240 |
+
+Three times in this phase a subagent was told *"verify this premise; if it does not hold, stop and say
+so"* and it did not hold as stated: the rehydrate path (held, with two side effects nobody had
+predicted), "the caches re-fetch" (one third), and "restore `runtime` as reconnecting" (wrong — the
+WebSocket had never been touched). Each would have shipped as a plausible comment otherwise.
+
+_(critic verdicts to follow.)_
