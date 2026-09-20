@@ -11,7 +11,7 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
+import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
 import { scanPaneTree } from './pane-tree'
 import type { Session } from './host-api'
 import type { PaneContent, PaneLayout, Tab } from '../types/tab'
@@ -33,9 +33,68 @@ import type { PaneContent, PaneLayout, Tab } from '../types/tab'
 // after the undo toast it could not be taken back). Marked, they say what
 // happened the next time that profile is opened, like every `host-removed` pane.
 
+//
+// THE UNDO KNOWS WHOSE WORLD EACH ENTRY IS FROM. Tab, pane and workspace ids are
+// unique inside ONE world only: a demoted master keeps its ids, and a master
+// pulled later brings the very same ones (switch-active.ts, `deleteSlave`). And
+// the user can switch profiles while the undo toast is up. So everything the
+// snapshot holds — a closed tab, a marked pane — carries its WORLD OWNER
+// (`'master'` or a slave id: whoever was on screen, or the parked world it was
+// found in), and the undo puts it back into THAT world, wherever it is by then:
+//
+//   on screen → the live stores          parked → its `ParkedWorld`
+//   gone (the slave was deleted)         → that entry is skipped
+//
+// Without it a tab closed in a slave and undone after a switch landed in the
+// MASTER's live stores — in its workspace, when the ids matched — and the
+// collector pushed a slave's tab to the SOT; and a mark was cleared by bare ids,
+// taking `host-removed` off a pane of another world that an earlier delete had
+// marked. "On screen" is asked of all three world stores (both tags and the
+// pointer): half-way through another window's switch nobody can say whose tabs
+// the screen holds (lib/profile/master-world.ts), and then the entry is skipped
+// as well — an undo that loses a tab in a window of milliseconds, against one
+// that files it under the wrong profile.
+//   What this does NOT follow is a promote (`promoteToMaster`), which relabels
+// worlds: inside one undo window `'master'` would then name another world. A
+// promote is refused while a master is attached, so nothing of it reaches a SOT.
+
+/** `'master'` or a slave id. */
+type WorldOwner = string
+
 interface PaneRef {
   tabId: string
   paneId: string
+  owner: WorldOwner
+}
+
+/** Whose world the live stores hold — the tab store's tag says it of the tabs; the pointer when the tag is junk. */
+function screenOwner(): WorldOwner {
+  const tag = useTabStore.getState().worldId as unknown
+  return typeof tag === 'string' ? tag : useLocalProfilesStore.getState().activeProfileId
+}
+
+/** Where `owner`'s world is right now (see THE UNDO KNOWS WHOSE WORLD EACH ENTRY IS FROM). */
+function locateWorld(owner: WorldOwner): { where: 'screen' } | { where: 'parked'; world: ParkedWorld } | { where: 'gone' } {
+  const local = useLocalProfilesStore.getState()
+  if (local.activeProfileId === owner) {
+    const agreed = useTabStore.getState().worldId === owner && useWorkspaceStore.getState().worldId === owner
+    return agreed ? { where: 'screen' } : { where: 'gone' }
+  }
+  const world = owner === MASTER_PROFILE_ID ? local.parkedMaster : Object.hasOwn(local.slaves, owner) ? local.slaves[owner].world : null
+  return world === null ? { where: 'gone' } : { where: 'parked', world }
+}
+
+/** `world` with `tabs` back — those it does not hold by now — and each one back in its workspace, if that still exists. */
+function restoreTabsInWorld(world: ParkedWorld, tabs: readonly Tab[], workspaceOf: Record<string, string>): ParkedWorld {
+  const nextTabs = { ...world.tabs }
+  for (const tab of tabs) {
+    if (!Object.hasOwn(nextTabs, tab.id)) nextTabs[tab.id] = tab
+  }
+  const workspaces = world.workspaces.map((ws) => {
+    const back = tabs.map((t) => t.id).filter((id) => workspaceOf[id] === ws.id && !ws.tabs.includes(id))
+    return back.length === 0 ? ws : { ...ws, tabs: [...ws.tabs, ...back] }
+  })
+  return { ...world, tabs: nextTabs, workspaces }
 }
 
 /** `layout` with `fn` applied to every pane's content; the same object when `fn` changed nothing. */
@@ -66,10 +125,10 @@ function mapWorldPanes(world: ParkedWorld, fn: (content: PaneContent, tabId: str
  */
 function removeHostFromParkedWorlds(hostId: string, pinHostless: boolean): PaneRef[] {
   const marked: PaneRef[] = []
-  useLocalProfilesStore.getState().updateParkedWorlds((world) =>
+  useLocalProfilesStore.getState().updateParkedWorlds((world, owner) =>
     mapWorldPanes(world, (content, tabId, paneId) => {
       if (content.kind === 'tmux-session' && content.hostId === hostId && !content.terminated) {
-        marked.push({ tabId, paneId })
+        marked.push({ tabId, paneId, owner })
         return { ...content, terminated: 'host-removed' }
       }
       if (content.kind === 'execution' && !content.host && pinHostless) return { ...content, host: hostId }
@@ -79,12 +138,13 @@ function removeHostFromParkedWorlds(hostId: string, pinHostless: boolean): PaneR
   return marked
 }
 
-/** Takes `host-removed` back off exactly `refs` — in whatever parked world each pane is by now. */
+/** Takes `host-removed` back off exactly `refs` — each in ITS OWNER's world, if that world is parked by now. */
 function unmarkInParkedWorlds(refs: readonly PaneRef[]): void {
-  const wanted = new Set(refs.map((r) => `${r.tabId}\u0000${r.paneId}`))
-  useLocalProfilesStore.getState().updateParkedWorlds((world) =>
+  const key = (owner: WorldOwner, tabId: string, paneId: string): string => `${owner}\u0000${tabId}\u0000${paneId}`
+  const wanted = new Set(refs.map((r) => key(r.owner, r.tabId, r.paneId)))
+  useLocalProfilesStore.getState().updateParkedWorlds((world, owner) =>
     mapWorldPanes(world, (content, tabId, paneId) => {
-      if (content.kind !== 'tmux-session' || content.terminated !== 'host-removed' || !wanted.has(`${tabId}\u0000${paneId}`)) return content
+      if (content.kind !== 'tmux-session' || content.terminated !== 'host-removed' || !wanted.has(key(owner, tabId, paneId))) return content
       const { terminated: _, ...rest } = content
       return rest as typeof content
     }),
@@ -132,9 +192,11 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     agentUnread: Record<string, boolean>
     agentModels: Record<string, string>
     // Tab data for undo
+    /** Whose world was on screen: the owner of `closedTabs` / `tabWorkspaces` and of every on-screen mark. */
+    owner: WorldOwner
     closedTabs: Tab[]
     tabWorkspaces: Record<string, string>  // tabId -> workspaceId
-    terminatedTabPaneIds: { tabId: string; paneId: string }[]
+    terminatedTabPaneIds: PaneRef[]
   } = {
     host: hostStore.hosts[hostId],
     hostOrder: [...hostStore.hostOrder],
@@ -145,6 +207,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     agentStatuses: {},
     agentUnread: {},
     agentModels: {},
+    owner: screenOwner(),
     closedTabs: [],
     tabWorkspaces: {},
     terminatedTabPaneIds: [],
@@ -192,7 +255,7 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     for (const [tabId, tab] of Object.entries(tabStore.tabs)) {
       scanPaneTree(tab.layout, (pane) => {
         if (pane.content.kind === 'tmux-session' && pane.content.hostId === hostId && !pane.content.terminated) {
-          snapshot.terminatedTabPaneIds.push({ tabId, paneId: pane.id })
+          snapshot.terminatedTabPaneIds.push({ tabId, paneId: pane.id, owner: snapshot.owner })
         }
       })
     }
@@ -303,7 +366,10 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
     // Tabs carry the deleted host's hostId/sessionCode; if a different entity
     // now owns the same hostId (recreated during undo window), we must not
     // re-bind stale panes to it — gate tab restore on !hostWasRecreated too.
-    if (closeTabs && !hostWasRecreated && snapshot.closedTabs.length > 0) {
+    // They go back into the world they were closed in (`snapshot.owner`), wherever
+    // that is by now — never into whatever happens to be on screen.
+    const home = locateWorld(snapshot.owner)
+    if (closeTabs && !hostWasRecreated && snapshot.closedTabs.length > 0 && home.where === 'screen') {
       const ts = useTabStore.getState()
       for (const tab of snapshot.closedTabs) {
         // Only restore if tab wasn't re-created by user during undo window
@@ -319,17 +385,22 @@ export function deleteHostCascade(hostId: string, closeTabs: boolean): () => voi
           useWorkspaceStore.getState().addTabToWorkspace(wsId, tabId)
         }
       }
+    } else if (closeTabs && !hostWasRecreated && snapshot.closedTabs.length > 0 && home.where === 'parked') {
+      // A refusal (`bad-world`) leaves the parked world as it was: the undo loses these tabs, and nothing else.
+      useLocalProfilesStore.getState().replaceParkedWorld(snapshot.owner, restoreTabsInWorld(home.world, snapshot.closedTabs, snapshot.tabWorkspaces))
     }
 
     // --- Clear the `host-removed` marks this delete made ---
-    // On screen (keep-tabs mode) and in the parked worlds (both modes) — and looked
-    // for in BOTH places whichever it was: the user may have switched profiles
-    // inside the undo window, so a pane marked on screen can be parked by now and
-    // the other way round. Same gate as the tabs above: a recreated host owns
-    // these panes now, and what it made of them is not this undo's to touch.
+    // On screen (keep-tabs mode) and in the parked worlds (both modes). The user may
+    // have switched profiles inside the undo window, so a pane marked on screen can
+    // be parked by now and the other way round: each mark is looked for where ITS
+    // OWNER's world is now, and nowhere else — the same ids in another world are
+    // another pane. Same gate as the tabs above: a recreated host owns these panes
+    // now, and what it made of them is not this undo's to touch.
     const marks = [...snapshot.terminatedTabPaneIds, ...parkedMarks]
     if (!hostWasRecreated && marks.length > 0) {
-      for (const { tabId, paneId } of marks) {
+      for (const { tabId, paneId, owner } of marks) {
+        if (locateWorld(owner).where !== 'screen') continue
         const currentTab = useTabStore.getState().tabs[tabId]
         if (!currentTab) continue
         scanPaneTree(currentTab.layout, (pane) => {
