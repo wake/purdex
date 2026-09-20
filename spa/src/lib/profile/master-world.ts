@@ -21,6 +21,17 @@
 //   settled ⇔ the three `worldEpoch`s are equal
 //           ∧ the two live stores carry the same `worldId`
 //           ∧ that id is `useLocalProfilesStore.activeProfileId`
+//           ∧ that epoch is not BEHIND THE FENCE (lib/storage/world-fence.ts)
+//
+// The last line is the window to which NOTHING of another window's switch or
+// promote has arrived yet: its three stores agree with each other — on a world
+// the device has already replaced. Agreement in memory cannot tell; the side key
+// the other window raised FIRST, read from `localStorage`, can (`behind-fence`).
+// Such a window must not lead a sync (it would push, or pull into, a world that
+// is no longer the master's — after a promote, under the very label "master"),
+// must not switch (it would park an outdated screen over the current world) and
+// must not promote. One synchronous read of a tiny key per look; absent for a
+// user who never switched, and then it is 0 and no epoch is behind it.
 //
 // Unsettled is an answer, not an error: the collector reports NOTHING of the
 // tab world, an apply answers `busy`, the executor neither pulls, pushes nor
@@ -43,8 +54,9 @@
 // `epoch-mismatch` until its next reload although storage holds a perfectly
 // settled world. So whoever LOOKS at an unsettled world — the collector's
 // subscription, `masterWorldStuck`, a refused switch — asks the three stores to
-// read storage again: only for a mismatch of epoch or world id (a missing parked
-// master is not in storage either), a microtask later and only if it is STILL
+// read storage again: only for a mismatch of epoch or world id, or a window
+// behind the fence (a missing parked master is not in storage either), a
+// microtask later and only if it is STILL
 // unsettled then (a window's own switch is unsettled for the length of its
 // synchronous block, and must not pay for a rehydrate), and ONCE per unsettled
 // stretch — a rehydrate notifies the very subscribers that ask, so "once" is
@@ -59,6 +71,7 @@ import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalP
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import { readWorldEpochFence } from '../storage/world-fence'
 import type { Tab, Workspace } from '../../types/tab'
 import { deriveTabOrder } from './applier'
 import { isSyncableWorkspaceId } from './sections'
@@ -67,7 +80,7 @@ import { isSyncableWorkspaceId } from './sections'
 
 export type MasterWorld = ParkedWorld
 
-export type UnsettledReason = 'epoch-mismatch' | 'world-mismatch' | 'no-parked-master'
+export type UnsettledReason = 'epoch-mismatch' | 'world-mismatch' | 'behind-fence' | 'no-parked-master'
 
 export type MasterWorldRead =
   /** `onScreen`: the world IS the live stores' (same references); else it is `parkedMaster`'s. */
@@ -83,6 +96,7 @@ export function readMasterWorld(): MasterWorldRead {
 
   if (!Number.isSafeInteger(tab.worldEpoch) || tab.worldEpoch !== ws.worldEpoch || ws.worldEpoch !== local.worldEpoch) return unsettled('epoch-mismatch')
   if (typeof tab.worldId !== 'string' || tab.worldId !== ws.worldId || ws.worldId !== local.activeProfileId) return unsettled('world-mismatch')
+  if (local.worldEpoch < readWorldEpochFence()) return unsettled('behind-fence')
 
   if (local.activeProfileId === MASTER_PROFILE_ID) {
     return { settled: true, onScreen: true, world: { workspaces: ws.workspaces, tabs: tab.tabs, activeWorkspaceId: ws.activeWorkspaceId, activeTabId: tab.activeTabId } }
@@ -342,24 +356,19 @@ export function masterWorldStuck(now: number): boolean {
 let recoveryAsked = false
 
 /**
- * `read` is what the caller has just read. Unsettled by a mismatch → the three
- * stores read storage again, once per stretch (see …EXCEPT ONE REHYDRATE in the
- * header). `force`: the caller KNOWS storage is ahead of this window (a switch
- * refused because the epoch fence is above the window's epoch) — the world reads
- * settled then, so there is no stretch to count; the fence itself stops a repeat,
- * since after the rehydrate the window is no longer behind it.
+ * `read` is what the caller has just read. Unsettled by a mismatch, or behind the
+ * fence → the three stores read storage again, once per stretch (see …EXCEPT ONE
+ * REHYDRATE in the header).
  */
-export function recoverUnsettledWorld(read: MasterWorldRead, force = false): void {
-  if (!force) {
-    if (read.settled) {
-      recoveryAsked = false
-      return
-    }
-    if (recoveryAsked || read.reason === 'no-parked-master') return
-    recoveryAsked = true
+export function recoverUnsettledWorld(read: MasterWorldRead): void {
+  if (read.settled) {
+    recoveryAsked = false
+    return
   }
+  if (recoveryAsked || read.reason === 'no-parked-master') return
+  recoveryAsked = true
   queueMicrotask(() => {
-    if (!force && readMasterWorld().settled) return // it was a switch of this window, half-way through its block
+    if (readMasterWorld().settled) return // it was a switch of this window, half-way through its block
     // The pointer first, as a switch writes them. Each is synchronous over `localStorage`; one that throws must
     // not keep the others from reading.
     for (const store of [useLocalProfilesStore, useTabStore, useWorkspaceStore]) {

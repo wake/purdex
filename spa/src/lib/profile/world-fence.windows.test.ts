@@ -288,12 +288,29 @@ describe('window 2 switches; window 1 still holds the old world', () => {
 
   it('a SWITCH made from the stale window is refused — it would park the old screen over window 2\'s world — and the window catches up', async () => {
     const { w1, w2, after } = await switchedUnderWindow1()
-    expect(w1.readMasterWorld().settled).toBe(true) // settled — on a world that is no longer the device's
     expect(await w1.switchActiveProfile('master')).toEqual({ ok: false, reason: 'unsettled' })
     for (const key of Object.keys(after)) expect(disk(key)).toBe(after[key])
     await flush()
     expect(screenOf(w1)).toBe(screenOf(w2))
     expect(w1.readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
+  })
+
+  it('THE ONE DOOR SAYS SO: three stores that agree on a world BEHIND the fence are unsettled — nothing of it is read, written or promoted', async () => {
+    const { w1, w2, slaveId, after } = await switchedUnderWindow1()
+    // No broadcast has arrived: window 1's three stores agree with each other, on epoch 1. Without the fence this reads "settled".
+    expect(w1.readMasterWorld()).toEqual({ settled: false, reason: 'behind-fence' })
+    expect(w1.masterWorkspaceIds()).toBeNull() // the collector builds nothing
+    const parked = w1.useLocalProfilesStore.getState().parkedMaster
+    if (parked === null) throw new Error('window 1 should still hold the master parked')
+    expect(w1.writeMasterWorld(parked)).toBe('unsettled') // an apply answers `busy`
+    expect(w1.promoteToMaster(slaveId, 'Old')).toEqual({ ok: false, reason: 'unsettled' })
+    expect(w1.copyMasterAsSlave('copy')).toEqual({ ok: false, reason: 'unsettled' })
+    for (const key of Object.keys(after)) expect(disk(key)).toBe(after[key])
+    // The look itself asked the stores to catch up.
+    await flush()
+    expect(w1.readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
+    expect(screenOf(w1)).toBe(screenOf(w2))
+    expect(w2.readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
   })
 
   it('writes of the window that is up to date go through as ever', async () => {
