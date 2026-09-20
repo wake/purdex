@@ -700,6 +700,86 @@ describe('suspended: an attach is being made somewhere', () => {
     expect(useProfileStore.getState().suspension).toBeNull()
   })
 
+  it('attachMaster suspends IN THE CALL — not one microtask later: the driver is down before the caller gets its promise back', async () => {
+    await leading()
+    const attaching = attachMaster('h1', P1, 'pull')
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(useProfileStore.getState().suspension).toMatchObject({ until: 1_000_000 + ATTACH_SUSPEND_MS })
+    expect(putAttachment).not.toHaveBeenCalled() // the request itself still waits its turn in the queue
+    expect(await attaching).toEqual({ ok: true })
+  })
+
+  it('a refusal found only when its turn comes (the host left while it was queued) lifts what the call had suspended', async () => {
+    await leading()
+    const attaching = attachMaster('h2', P2, 'push')
+    useHostStore.setState({ hosts: { h1: host('h1') }, hostOrder: ['h1'] })
+    expect(await attaching).toEqual({ ok: false, reason: 'unknown-host' })
+    await flush()
+    expect(useProfileStore.getState().suspension).toBeNull()
+    expect(vi.mocked(putAttachment).mock.calls.map((c) => c[1])).toEqual([P1]) // nothing for P2; the old mode, back, refreshes its own
+    expect(h.executors).toHaveLength(2) // as you were
+  })
+
+  it('a queued attach\'s suspension cannot run out while the one in front of it works (two requests, 20 s each): it is refreshed under ITS token', async () => {
+    await leading()
+    let releasePut: (v: typeof okAttach) => void = () => {}
+    let releaseDelete: (v: typeof okDetach) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (releasePut = r)))
+    vi.mocked(deleteAttachment).mockReturnValueOnce(new Promise((r) => (releaseDelete = r)))
+    const first = attachMaster('h2', P2, 'push') // another master: a PUT, then the DELETE of the old attachment
+    const second = attachMaster('h1', P1, 'pull') // suspends in its call: the newer owner, from t0
+    const owner = useProfileStore.getState().suspension?.token
+    await vi.advanceTimersByTimeAsync(20_000)
+    releasePut(okAttach)
+    await flush()
+    expect(useProfileStore.getState().suspension).toEqual({ token: owner, until: 1_020_000 + ATTACH_SUSPEND_MS })
+    await vi.advanceTimersByTimeAsync(15_000) // t0 + 35 s: the second's own 30 s are over
+    expect(profileSyncState().blocked).toBe('suspended')
+    expect(h.executors).toHaveLength(1)
+    releaseDelete(okDetach)
+    expect(await first).toEqual({ ok: true })
+    expect(await second).toEqual({ ok: true })
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', masterProfileId: P1, suspension: null })
+  })
+
+  it('attaches queued in ONE window: the one that runs keeps the suspension alive for the one that waits (it is the newer owner)', async () => {
+    await leading()
+    let releaseFirst: (v: never) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (releaseFirst = r)))
+    const first = attachMaster('h2', P2, 'push')
+    const second = attachMaster('h1', P1, 'pull')
+    await flush()
+    await vi.advanceTimersByTimeAsync(14_000) // the first PUT is slow…
+    releaseFirst(failed('timeout')) // …and fails: it must not lift the second's suspension
+    expect(await first).toEqual({ ok: false, reason: 'timeout' })
+    expect(await second).toEqual({ ok: true })
+    await flush()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', masterProfileId: P1, pendingDirection: 'pull', suspension: null })
+    // between the two, no driver ever ran
+    expect(h.executors.slice(1, -1).every((e) => e.onReconnected.mock.calls.length === 0)).toBe(true)
+  })
+
+  it('THE LEADER\'S isReachable READS THE SUSPENSION FROM localStorage — another window\'s attach is seen before its broadcast arrives', async () => {
+    await leading()
+    await flush()
+    const e = h.executors[0]
+    expect(e.deps.isReachable()).toBe(true)
+
+    // window B persisted its suspension; this window's store has not been told yet
+    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE) ?? '{}') as { state: Record<string, unknown> }
+    const write = (suspension: unknown): void => localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...envelope.state, suspension } }))
+    write({ token: 'window-b', until: 1_000_000 + 30_000 })
+    expect(useProfileStore.getState().suspension).toBeNull()
+    expect(e.deps.isReachable()).toBe(false)
+
+    write({ token: 'window-b', until: 999_999 }) // expired: none
+    expect(e.deps.isReachable()).toBe(true)
+    write(null)
+    expect(e.deps.isReachable()).toBe(true)
+    localStorage.setItem(STORAGE_KEYS.PROFILE, '{not json') // unreadable is "not suspended": the store's own sanitiser decides what it is
+    expect(e.deps.isReachable()).toBe(true)
+  })
+
   it('a refusal BEFORE any request suspends nothing', async () => {
     await leading()
     expect(await attachMaster('nope', P1, 'pull')).toEqual({ ok: false, reason: 'unknown-host' })

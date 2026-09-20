@@ -240,3 +240,53 @@ describe('the old driver stands still while an attach is being made', () => {
   })
 })
 
+describe('C-1a — the write that had not left yet', () => {
+  /** Attached and settled, then an edit kept home by `autoSync: false`: dirty, decided on, not sent. */
+  async function dirtyAndHeld(): Promise<{ onTheSot: string; writes: number; revs: Record<string, number> }> {
+    await attachedAndSettled()
+    const onTheSot = h2Name()
+    useProfileStore.getState().setAutoSync(false)
+    renameH2('edited-here')
+    await settle()
+    expect(profileSyncState().status?.sections.hosts).toBe('pending')
+    return { onTheSot, writes: daemon.writes.length, revs: daemon.revs() }
+  }
+
+  it('SAME TURN: the old driver\'s PUT is one microtask away when attachMaster(pull) is called — it never goes out, and the SOT wins', async () => {
+    const before = await dirtyAndHeld()
+    let release: () => void = () => {}
+    api.putAttachment.mockReturnValueOnce(new Promise((r) => (release = () => r({ kind: 'ok', value: { attached: true } }))))
+    api.putSection.mockClear()
+
+    useProfileStore.getState().setAutoSync(true) // → syncNow(): the push is decided and waits behind `await shapes()`
+    const attaching = attachMaster(M, PROFILE, 'pull') // same turn, not awaited
+    await settle()
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+
+    release()
+    expect(await attaching).toEqual({ ok: true })
+    await settle()
+    expect(h2Name()).toBe(before.onTheSot)
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+    expect(daemon.revs()).toEqual(before.revs)
+  })
+
+  it('ANOTHER WINDOW: its suspension is in localStorage, this window\'s store has not heard — the leader\'s next write is not sent, and no flight is left open', async () => {
+    await attachedAndSettled()
+    const writes = daemon.writes.length
+    const envelope = JSON.parse(localStorage.getItem('purdex-profile') ?? '{}') as { state: Record<string, unknown> }
+    localStorage.setItem('purdex-profile', JSON.stringify({ ...envelope, state: { ...envelope.state, suspension: { token: 'window-b', until: Date.now() + 30_000 } } }))
+    expect(useProfileStore.getState().suspension).toBeNull()
+
+    renameH2('edited-here') // the collector reports it, the executor decides to push…
+    await settle()
+    expect(daemon.writes.slice(writes)).toEqual([]) // …and the request is not made
+    expect(profileSyncState().status?.sections.hosts).toBe('pending')
+
+    await useProfileStore.persist.rehydrate() // the broadcast arrives
+    expect(profileSyncState().blocked).toBe('suspended')
+    expect(daemon.writes.slice(writes)).toEqual([])
+  })
+})
+

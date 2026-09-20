@@ -86,6 +86,7 @@ import { contendForLeadership } from './leader'
 import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { clearSectionStore } from './section-store'
+import { STORAGE_KEYS } from '../storage/keys'
 
 export interface Master {
   hostId: string
@@ -134,7 +135,15 @@ declare global {
 export const PROBLEM_BUFFER_SIZE = 50
 export const ATTACH_RETRY_BASE_MS = 2_000
 export const ATTACH_RETRY_CAP_MS = 30_000
-/** How long an attach may keep every driver still: above the 15 s timeout of the one request it waits for at a time. */
+/**
+ * How long ONE stretch of an attach keeps every driver still. Each stretch covers exactly one request
+ * (15 s timeout) and is strictly longer than it: the attachment PUT, then — only when the master changes —
+ * the DELETE of the old attachment, which gets a fresh stretch before it starts (the first began at most
+ * 15 s earlier, so it cannot have run out). An attach waiting in this window's queue suspended in its call;
+ * the attach working in front of it refreshes that suspension at each of its own stretches, and the queued
+ * one refreshes it again when its turn comes — so no gap opens however many are queued. A detach in the
+ * queue clears the master, and with it everything there was to hold still.
+ */
 export const ATTACH_SUSPEND_MS = 30_000
 
 /** Epoch ms. `startProfileSync({ now })` replaces it. */
@@ -143,6 +152,35 @@ let clock: () => number = () => Date.now()
 function isSuspended(): boolean {
   const suspension = useProfileStore.getState().suspension
   return suspension !== null && clock() < suspension.until
+}
+
+/**
+ * The suspension as `localStorage` holds it RIGHT NOW — not as this window's
+ * store remembers it. Another window's attach reaches this store through a
+ * BroadcastChannel message and a rehydrate, i.e. some turns later; the storage
+ * it persisted to is shared synchronously, like the lease. The leader's
+ * `isReachable()` asks this before every request (executor.ts, `request`), so an
+ * unexpired suspension set anywhere stops the next request here, and closes a
+ * flight that was already open.
+ *   WHAT IS LEFT, stated plainly: between two renderer processes `localStorage`
+ * is not instantaneous either (Chromium propagates it eventually — usually
+ * within milliseconds); "read: not suspended → send" is a read followed by an
+ * act, not an atomic step; and bytes that have been sent cannot be called back
+ * (disposing the executor aborts the request, the daemon may have applied it).
+ * The window is no longer a broadcast and a rehydrate, nor "whatever the old
+ * driver had decided on": it is one synchronous read, the same grade as the lease.
+ *   Unreadable or malformed = not suspended: what the record IS, is the store's
+ * sanitiser's business, and a broken record has no master to sync for anyway.
+ */
+function suspendedInStorage(): boolean {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PROFILE)
+    if (raw === null) return false
+    const until = (JSON.parse(raw) as { state?: { suspension?: { until?: unknown } | null } }).state?.suspension?.until
+    return typeof until === 'number' && Number.isFinite(until) && clock() < until
+  } catch {
+    return false
+  }
 }
 
 /** The owner of one attach's suspension (see `useProfileStore`, WHY `suspension`). */
@@ -203,7 +241,7 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     hostId,
     profileId,
     isLeader: () => leadership.isLeader(),
-    isReachable: () => attached && connected(),
+    isReachable: () => attached && connected() && !suspendedInStorage(),
     autoSync: () => useProfileStore.getState().autoSync,
     // Only while the store's master is still THIS one: a direction belongs to the attach that gave it.
     initialDirection: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingDirection),
@@ -564,13 +602,31 @@ async function dropAttachment(master: Master): Promise<void> {
  * `attachMaster(…, 'pull')`. Nothing in here does it for the caller.
  */
 export function attachMaster(hostId: string, profileId: string, direction: SyncDirection): Promise<AttachResult> {
-  return serial(async (): Promise<AttachResult> => {
+  const refusal = (): AttachResult | null => {
     if (!isSyncDirection(direction)) return { ok: false, reason: 'invalid-direction' }
     if (!isClientIdPersisted()) return { ok: false, reason: 'client-id-not-persisted' }
     if (useHostStore.getState().hosts[hostId] === undefined) return { ok: false, reason: 'unknown-host' }
     if (!isMasterPair(hostId, profileId)) return { ok: false, reason: 'invalid-profile-id' }
-    const hold = holdStill()
+    return null
+  }
+  const refused = refusal()
+  if (refused !== null) return Promise.resolve(refused)
+  // IN THE CALL, not in the queue below: `serial` is a `.then`, i.e. at least one
+  // microtask away, and a write the old driver had already decided on (it sits
+  // behind `await shapes()`, or next in its queue) is no further away than that —
+  // it was not on the wire when the user attached, and it would be by the time
+  // the queue got here. An earlier attach or detach still waiting in the queue is
+  // not disturbed by this: each looks after the master itself.
+  const hold = holdStill()
+  return serial(async (): Promise<AttachResult> => {
     try {
+      // what was true in the call may not be by the time its turn comes
+      const late = refusal()
+      if (late !== null) {
+        hold.giveUp()
+        return late
+      }
+      hold.extend() // the wait in the queue is not part of the first request's budget
       return await attachHeld({ hostId, profileId }, direction, hold)
     } finally {
       hold.stop()
@@ -581,7 +637,7 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
 /** One attach's grip on every driver of this client (see `useProfileStore`, WHY `suspension`). */
 interface Hold {
   token: string
-  /** A fresh 30 s — only while the suspension is still this attach's: a NEWER attach's is never replaced by an older one's. */
+  /** A fresh 30 s for the suspension in force, if it belongs to this window; never a change of owner. */
   extend(): void
   /** Stops watching. Does not lift anything. */
   stop(): void
@@ -590,7 +646,7 @@ interface Hold {
 }
 
 /**
- * BEFORE THE FIRST REQUEST of an attach: every driver of this client stands
+ * FROM THE CALL of an attach on (`attachMaster` holds before it queues): every driver of this client stands
  * still — here at once (the store subscription is synchronous), in the other
  * windows as soon as the store reaches them — and stays so WHILE ANY ATTACH IS IN
  * PROGRESS, this one included: if a newer attach (another window's) replaced our
@@ -599,21 +655,30 @@ interface Hold {
  * begin a driver on the lifted suspension; it is disposed again in the same turn,
  * before anything of it could reach the network.)
  */
+/** The attaches of THIS window that are queued or running. */
+const liveHolds = new Set<string>()
+
 function holdStill(): Hold {
   const token = newToken()
+  liveHolds.add(token)
   const suspend = (): void => useProfileStore.getState().suspend(token, clock() + ATTACH_SUSPEND_MS)
   suspend()
   let unsubscribe = useProfileStore.subscribe((state) => {
     if (state.suspension === null && selectMaster(state) !== null) suspend()
   })
   const stop = (): void => {
+    liveHolds.delete(token)
     unsubscribe()
     unsubscribe = () => undefined
   }
   return {
     token,
+    // Ours — or that of an attach of this window waiting in the queue BEHIND us (it suspended in its call, so
+    // it is the newer owner, and its 30 s are running while we work): refreshed under ITS token, so that it
+    // cannot run out before its turn. Another window's is left alone.
     extend: () => {
-      if (useProfileStore.getState().suspension?.token === token) suspend()
+      const current = useProfileStore.getState().suspension
+      if (current !== null && liveHolds.has(current.token)) useProfileStore.getState().suspend(current.token, clock() + ATTACH_SUSPEND_MS)
     },
     stop,
     giveUp: () => {
