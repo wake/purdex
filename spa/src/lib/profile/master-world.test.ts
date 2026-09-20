@@ -161,11 +161,40 @@ describe('readMasterWorld', () => {
     ['the tab store is behind', () => useTabStore.setState({ worldEpoch: 0 })],
     ['the workspace store is behind', () => useWorkspaceStore.setState({ worldEpoch: 0 })],
     ['the local-profiles store is behind', () => useLocalProfilesStore.setState({ worldEpoch: 0 })],
-    ['an epoch is not a number', () => useTabStore.setState({ worldEpoch: '1' as unknown as number })],
+    ['an epoch is no epoch AND the real ones disagree', () => {
+      useTabStore.setState({ worldEpoch: '1' as unknown as number })
+      useWorkspaceStore.setState({ worldEpoch: 0 })
+    }],
   ])('unsettled (epoch-mismatch) when %s', (_name, breakIt) => {
     putSlaveOnScreen(1)
     breakIt()
     expect(readMasterWorld()).toEqual({ settled: false, reason: 'epoch-mismatch' })
+  })
+
+  it.each([
+    ['a string', '1'],
+    ['NaN', Number.NaN],
+    ['negative', -1],
+    ['beyond the ceiling', Number.MAX_SAFE_INTEGER],
+  ])('unsettled (junk-epoch) when a live store\'s epoch is no epoch (%s) and everything that can be trusted agrees — still unsettled, only named', (_name, junk) => {
+    putSlaveOnScreen(1)
+    useTabStore.setState({ worldEpoch: junk as number })
+    expect(readMasterWorld()).toEqual({ settled: false, reason: 'junk-epoch' })
+    expect(masterWorkspaceIds()).toBeNull()
+  })
+
+  it('all three stores AGREE on an epoch beyond the ceiling: agreement on junk settles nothing', () => {
+    putSlaveOnScreen(1)
+    for (const store of [useTabStore, useWorkspaceStore, useLocalProfilesStore]) (store as unknown as { setState: (p: object) => void }).setState({ worldEpoch: Number.MAX_SAFE_INTEGER })
+    expect(readMasterWorld()).toEqual({ settled: false, reason: 'junk-epoch' })
+  })
+
+  it('junk epoch, and the real epochs are BEHIND THE FENCE: not `junk-epoch` — another window has moved the world', () => {
+    putSlaveOnScreen(1)
+    useTabStore.setState({ worldEpoch: Number.NaN })
+    localStorage.setItem('purdex-world-epoch', '5')
+    expect(readMasterWorld()).toEqual({ settled: false, reason: 'epoch-mismatch' })
+    localStorage.removeItem('purdex-world-epoch')
   })
 
   it.each([

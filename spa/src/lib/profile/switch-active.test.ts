@@ -14,6 +14,7 @@ import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../storage'
+import { MAX_WORLD_EPOCH } from '../storage/world-fence'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { readSettingsSources } from './apply-to-stores'
 import { startCollector, type Collector, type SectionReport } from './collector'
@@ -257,6 +258,63 @@ describe('switchActiveProfile', () => {
     localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH)
     expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
     expect(oneEpochAbove(ahead)).toBe(ahead + 1)
+  })
+
+  describe('an epoch beyond MAX_WORLD_EPOCH is storage junk — and no dead end', () => {
+    const JUNK = Number.MAX_SAFE_INTEGER
+
+    it('the FENCE holds it: it reads as no fence at all, and the switch puts a real one in its place', async () => {
+      localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, String(JUNK))
+      expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: true }) // nobody is "behind" junk
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+      expect(oneEpochAbove(0)).toBeLessThan(MAX_WORLD_EPOCH)
+      expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+    })
+
+    it.each([
+      ['the two live stores', { tab: JUNK, ws: JUNK }],
+      ['the tab store alone', { tab: JUNK, ws: 0 }],
+      ['the workspace store alone', { tab: 0, ws: JUNK }],
+    ])('%s hold it, in memory AND in storage, and the world ids agree: whose world the screen holds is not in doubt — said as `junk-epoch`, and a SWITCH goes through and heals all three', async (_name, e) => {
+      useTabStore.setState({ worldEpoch: e.tab })
+      useWorkspaceStore.setState({ worldEpoch: e.ws })
+      expect(readMasterWorld()).toEqual({ settled: false, reason: 'junk-epoch' })
+      expect(masterWorkspaceIds()).toBeNull() // and still nothing of it is reported
+      expect(promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'unsettled' }) // the way out is the switch, nothing else
+
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+
+      expect(oneEpochAbove(0)).toBeLessThan(MAX_WORLD_EPOCH)
+      expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
+      expect(screen()).toEqual(slaveWorld())
+      expect(useLocalProfilesStore.getState().parkedMaster).toEqual(masterWorld())
+    })
+
+    it('the parking lot holds it: `merge` reads it as 0, like every other junk epoch', async () => {
+      localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify({ state: { slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: JUNK }, version: 1 }))
+      await useLocalProfilesStore.persist.rehydrate()
+      expect(useLocalProfilesStore.getState().worldEpoch).toBe(0)
+    })
+
+    it('junk in MEMORY only — storage holds a good epoch (another window has just healed it, or switched): no way through; the stores catch up instead', async () => {
+      const real = Storage.prototype.setItem
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+        if (key !== STORAGE_KEYS.TABS) real.call(this, key, value) // the junk never reaches storage
+      })
+      useTabStore.setState({ worldEpoch: JUNK })
+      vi.restoreAllMocks()
+      const before = threeStores()
+      const pending = switchActiveProfile(SLAVE)
+      threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+      expect(await pending).toEqual({ ok: false, reason: 'unsettled' })
+      expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: true }) // rehydrated from the good record
+    })
+
+    it('junk epoch AND world ids that disagree: that is a world nobody can name — refused as ever', async () => {
+      useTabStore.setState({ worldEpoch: JUNK, worldId: SLAVE })
+      expect(readMasterWorld()).toEqual({ settled: false, reason: 'epoch-mismatch' })
+      expect(await switchActiveProfile(OTHER)).toEqual({ ok: false, reason: 'unsettled' })
+    })
   })
 
   it('master → slave → master: the master world is what it was, byte for byte, under a newer epoch', async () => {

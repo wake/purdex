@@ -58,6 +58,7 @@ import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { normalizeDeviceName } from '../lib/device-name'
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { isWorldEpoch } from '../lib/storage/world-fence'
 import type { Tab, Workspace } from '../types/tab'
 
 /** The `activeProfileId` of the master; never a slave's id. */
@@ -253,7 +254,7 @@ function sanitiseData(persisted: unknown): LocalProfilesData {
     slaveOrder,
     activeProfileId,
     parkedMaster,
-    worldEpoch: Number.isSafeInteger(p.worldEpoch) && (p.worldEpoch as number) >= 0 ? (p.worldEpoch as number) : 0,
+    worldEpoch: isWorldEpoch(p.worldEpoch) ? p.worldEpoch : 0, // beyond the ceiling is junk too (lib/storage/world-fence.ts)
     relabelCount: sanitiseCount(p.relabelCount),
   }
 }

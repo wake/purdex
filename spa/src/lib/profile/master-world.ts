@@ -76,7 +76,7 @@ import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalP
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
-import { readWorldEpochFence } from '../storage/world-fence'
+import { isWorldEpoch, readWorldEpochFence } from '../storage/world-fence'
 import type { Tab, Workspace } from '../../types/tab'
 import { deriveTabOrder } from './applier'
 import { isSyncableWorkspaceId } from './sections'
@@ -85,7 +85,7 @@ import { isSyncableWorkspaceId } from './sections'
 
 export type MasterWorld = ParkedWorld
 
-export type UnsettledReason = 'epoch-mismatch' | 'world-mismatch' | 'behind-fence' | 'no-parked-master'
+export type UnsettledReason = 'epoch-mismatch' | 'world-mismatch' | 'behind-fence' | 'junk-epoch' | 'no-parked-master'
 
 export type MasterWorldRead =
   /** `onScreen`: the world IS the live stores' (same references); else it is `parkedMaster`'s. */
@@ -99,7 +99,9 @@ export function readMasterWorld(): MasterWorldRead {
   const ws = useWorkspaceStore.getState()
   const local = useLocalProfilesStore.getState()
 
-  if (!Number.isSafeInteger(tab.worldEpoch) || tab.worldEpoch !== ws.worldEpoch || ws.worldEpoch !== local.worldEpoch) return unsettled('epoch-mismatch')
+  if (!isWorldEpoch(tab.worldEpoch) || tab.worldEpoch !== ws.worldEpoch || ws.worldEpoch !== local.worldEpoch) {
+    return unsettled(isJunkEpochOnly(tab, ws, local) ? 'junk-epoch' : 'epoch-mismatch')
+  }
   if (typeof tab.worldId !== 'string' || tab.worldId !== ws.worldId || ws.worldId !== local.activeProfileId) return unsettled('world-mismatch')
   if (local.worldEpoch < readWorldEpochFence()) return unsettled('behind-fence')
 
@@ -109,6 +111,23 @@ export function readMasterWorld(): MasterWorldRead {
   // Task 3's `merge` never lets this through from storage; an in-memory write could.
   if (local.parkedMaster === null) return unsettled('no-parked-master')
   return { settled: true, onScreen: false, world: local.parkedMaster }
+}
+
+/**
+ * `junk-epoch`: the epochs disagree ONLY because a live store holds one that is no
+ * epoch at all (a string, a NaN, beyond the ceiling — the two live stores have no
+ * `merge`), while everything that can be trusted agrees: the epochs that ARE
+ * epochs are one value and not behind the fence, and the world ids are one id,
+ * the pointer's. Still unsettled — nothing is reported, applied or promoted — but
+ * it names the one unsettled state in which whose world the screen holds is not
+ * in doubt, and switch-active.ts lets a SWITCH through it when storage holds the
+ * same junk (then no rehydrate will ever help, and the switch stamps a real
+ * epoch into all three stores). Without that way out a corrupt epoch is for ever.
+ */
+function isJunkEpochOnly(tab: { worldId: unknown; worldEpoch: unknown }, ws: { worldId: unknown; worldEpoch: unknown }, local: { activeProfileId: string; worldEpoch: number }): boolean {
+  const real = [tab.worldEpoch, ws.worldEpoch, local.worldEpoch].filter(isWorldEpoch)
+  if (real.length === 3 || real.some((e) => e !== real[0] || e < readWorldEpochFence())) return false
+  return typeof tab.worldId === 'string' && tab.worldId === ws.worldId && ws.worldId === local.activeProfileId
 }
 
 /**

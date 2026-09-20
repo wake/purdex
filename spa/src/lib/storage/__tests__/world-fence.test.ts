@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { STORAGE_KEYS } from '../keys'
 import { syncManager } from '../sync'
-import { fencedWorldStorage, nextWorldEpoch, raiseWorldEpochFence, readWorldEpochFence, registerFencedStore } from '../world-fence'
+import { MAX_WORLD_EPOCH, fencedWorldStorage, isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence, readWorldEpochFence, registerFencedStore } from '../world-fence'
 
 const KEY = STORAGE_KEYS.WORKSPACES
 const FENCE = STORAGE_KEYS.WORLD_EPOCH
@@ -36,6 +36,15 @@ describe('readWorldEpochFence', () => {
   it.each(['', 'abc', '1.5', '-1', '1e3', ' 4', '9007199254740993', 'null'])('a side key that is not a decimal safe integer (%j) → 0', (raw) => {
     localStorage.setItem(FENCE, raw)
     expect(readWorldEpochFence()).toBe(0)
+  })
+
+  it('a value above MAX_WORLD_EPOCH is junk too → 0 (only corrupt storage gets there, and it must not be a dead end); the bound itself is a value', () => {
+    localStorage.setItem(FENCE, String(MAX_WORLD_EPOCH + 1))
+    expect(readWorldEpochFence()).toBe(0)
+    localStorage.setItem(FENCE, String(Number.MAX_SAFE_INTEGER))
+    expect(readWorldEpochFence()).toBe(0)
+    localStorage.setItem(FENCE, String(MAX_WORLD_EPOCH))
+    expect(readWorldEpochFence()).toBe(MAX_WORLD_EPOCH)
   })
 
   it('a decimal integer → that integer', () => {
@@ -215,6 +224,31 @@ describe('nextWorldEpoch — unique per operation, and above everything there is
 
   it('an epoch that is no safe integer (storage junk) is not a bound', () => {
     expect(nextWorldEpoch([Number.NaN, 'x' as unknown as number, Infinity])).toBe(NOW * 1000 + 456)
+  })
+
+  it('an epoch above MAX_WORLD_EPOCH — in a store or in the fence — is no bound: the next one comes from the clock, and can be raised over the junk', () => {
+    localStorage.setItem(FENCE, String(Number.MAX_SAFE_INTEGER))
+    const next = nextWorldEpoch([Number.MAX_SAFE_INTEGER, MAX_WORLD_EPOCH + 1, 3])
+    expect(next).toBe(NOW * 1000 + 456)
+    expect(raiseWorldEpochFence(next)).not.toBeNull()
+    expect(localStorage.getItem(FENCE)).toBe(String(next))
+  })
+
+  it('MAX_WORLD_EPOCH is far above the clock (year 2223) and below 2^53', () => {
+    expect(MAX_WORLD_EPOCH).toBeLessThan(Number.MAX_SAFE_INTEGER)
+    expect(Date.UTC(2200, 0, 1) * 1000 + 999).toBeLessThan(MAX_WORLD_EPOCH)
+    expect([0, 5, MAX_WORLD_EPOCH].every(isWorldEpoch)).toBe(true)
+    expect([-1, 1.5, Number.NaN, '5', null, MAX_WORLD_EPOCH + 1].some(isWorldEpoch)).toBe(false)
+  })
+
+  it('persistedWorldEpoch: what a world store\'s record in storage says — undefined when absent or unreadable', () => {
+    expect(persistedWorldEpoch(KEY)).toBeUndefined()
+    localStorage.setItem(KEY, '{nope')
+    expect(persistedWorldEpoch(KEY)).toBeUndefined()
+    localStorage.setItem(KEY, JSON.stringify(value(7)))
+    expect(persistedWorldEpoch(KEY)).toBe(7)
+    localStorage.setItem(KEY, JSON.stringify(value('junk')))
+    expect(persistedWorldEpoch(KEY)).toBe('junk')
   })
 
   it('what it returns can be raised', () => {

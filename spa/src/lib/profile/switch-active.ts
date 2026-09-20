@@ -85,8 +85,10 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { generateId } from '../id'
-import { nextWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
+import { STORAGE_KEYS } from '../storage/keys'
+import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
+import type { MasterWorldRead } from './master-world'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
 
@@ -152,9 +154,32 @@ function superseded(worldEpoch: number): boolean {
   return true
 }
 
+/**
+ * THE ONE WAY OUT OF A CORRUPT EPOCH (master-world.ts, `junk-epoch`): a live
+ * store holds an epoch that is none, everything else agrees — and STORAGE HOLDS
+ * THE SAME JUNK, so the rehydrate the refusal asks for will bring it right back.
+ * (Junk in memory over a good record in storage is another window's switch or
+ * heal half-way here: that one the rehydrate fixes, and it is refused as ever.)
+ * The switch then parks the screen under the label all three stores agree on
+ * and stamps a real epoch into all of them. A switch only: a promote relabels,
+ * and has no business doing that on a world it cannot read.
+ */
+function junkEpochForGood(read: MasterWorldRead): boolean {
+  if (read.settled || read.reason !== 'junk-epoch') return false
+  const live = [
+    [STORAGE_KEYS.TABS, useTabStore.getState().worldEpoch],
+    [STORAGE_KEYS.WORKSPACES, useWorkspaceStore.getState().worldEpoch],
+  ] as const
+  return live.every(([key, inMemory]) => isWorldEpoch(inMemory) || !isWorldEpoch(persistedWorldEpoch(key)))
+}
+
 /** THE SYNCHRONOUS BLOCK. Not `async`, on purpose: an `await` cannot be written in here. */
 function exchange(targetId: string): SwitchResult {
-  if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
+  const read = readMasterWorld()
+  if (!read.settled && !junkEpochForGood(read)) {
+    recoverUnsettledWorld(read, true) // a refusal is not the last word: the stores are asked to catch up with storage
+    return { ok: false, reason: 'unsettled' }
+  }
   const old = captureLocal()
   let lowerFence = (): void => {}
   try {
