@@ -29,6 +29,9 @@ import {
 } from './sections'
 import type { HostsSource, TabsSource, WorkspacesSource } from './types'
 
+/** No master workspace: for the tests that are not about workspace-scoped settings. */
+const NO_WS: ReadonlySet<string> = new Set()
+
 // --- type pins ---------------------------------------------------------------
 // Compile-time only (never called): the real store states must be assignable to
 // the builders' inputs WITHOUT a cast, so a store refactor fails
@@ -47,11 +50,11 @@ export function _typePins(): CollectInput {
     'purdex-newtab-layout': useNewTabLayoutStore.getState(),
     'purdex-layout': useLayoutStore.getState(),
   }
-  buildSettingsSection({ 'purdex-ui-settings': useUISettingsStore.getState() })
+  buildSettingsSection({ 'purdex-ui-settings': useUISettingsStore.getState() }, NO_WS)
   // @ts-expect-error — module on/off is device-local: its store is not a settings source
-  buildSettingsSection({ 'purdex-module-enabled': useModuleEnabledStore.getState() })
+  buildSettingsSection({ 'purdex-module-enabled': useModuleEnabledStore.getState() }, NO_WS)
   // @ts-expect-error — editor preferences are device-local (the store's own header): not a settings source
-  buildSettingsSection({ 'purdex-editor-settings': useEditorSettingsStore.getState() })
+  buildSettingsSection({ 'purdex-editor-settings': useEditorSettingsStore.getState() }, NO_WS)
   return { hosts, workspaces, tabs, settings }
 }
 
@@ -296,18 +299,18 @@ describe('buildSettingsSection', () => {
     const out = buildSettingsSection({
       'purdex-ui-settings': { terminalRenderer: 'dom', terminalSettingsVersion: N, setTerminalRenderer: () => undefined },
       'purdex-layout': { tabPosition: 'left', activityBarWidth: N, regions: { a: S } },
-    })
+    }, NO_WS)
     expect(out).toEqual({ 'purdex-ui-settings': { terminalRenderer: 'dom' }, 'purdex-layout': { tabPosition: 'left' } })
   })
 
   it('skips an absent store, and a store none of whose listed fields is present (no empty object)', () => {
-    const out = buildSettingsSection({ 'purdex-themes': { activeThemeId: 'dark' }, 'purdex-layout': { regions: {} } })
+    const out = buildSettingsSection({ 'purdex-themes': { activeThemeId: 'dark' }, 'purdex-layout': { regions: {} } }, NO_WS)
     expect(out).toEqual({ 'purdex-themes': { activeThemeId: 'dark' } })
-    expect(buildSettingsSection({})).toEqual({})
+    expect(buildSettingsSection({}, NO_WS)).toEqual({})
   })
 
   it('ignores a storage key that is not one of the eight', () => {
-    const out = buildSettingsSection({ 'purdex-tabs': { tabs: S } } as unknown as SettingsBuildInput)
+    const out = buildSettingsSection({ 'purdex-tabs': { tabs: S } } as unknown as SettingsBuildInput, NO_WS)
     expect(out).toEqual({})
   })
 
@@ -315,7 +318,7 @@ describe('buildSettingsSection', () => {
     const out = buildSettingsSection({
       'purdex-ui-settings': { keepAliveCount: 3 },
       'purdex-module-enabled': { enabled: { files: false }, baseline: { files: true } },
-    } as unknown as SettingsBuildInput)
+    } as unknown as SettingsBuildInput, NO_WS)
     expect(out).toEqual({ 'purdex-ui-settings': { keepAliveCount: 3 } })
   })
 
@@ -323,8 +326,40 @@ describe('buildSettingsSection', () => {
     const out = buildSettingsSection({
       'purdex-ui-settings': { keepAliveCount: 3 },
       'purdex-editor-settings': { fontSize: 11, tabSize: 2, wordWrap: 'on' },
-    } as unknown as SettingsBuildInput)
+    } as unknown as SettingsBuildInput, NO_WS)
     expect(out).toEqual({ 'purdex-ui-settings': { keepAliveCount: 3 } })
+  })
+
+  describe('workspace-scoped settings: the master’s workspaces only', () => {
+    const scoped = (): SettingsBuildInput => ({
+      'purdex-workspace-settings': { workspaces: { m1: { files: { root: '/m1' } }, m2: { files: { root: '/m2' } }, slave: { files: { root: S } }, orphan: { files: { root: S } } } },
+      'purdex-host-settings': { hosts: { slave: { x: 1 }, h1: { x: 2 } } },
+      'purdex-newtab-layout': { profiles: { slave: { cols: 2 } } },
+    })
+
+    it('carries an entry iff its key is a master workspace id', () => {
+      const out = buildSettingsSection(scoped(), new Set(['m1', 'm2', 'not-in-the-store']))
+      expect(out['purdex-workspace-settings']).toEqual({ workspaces: { m1: { files: { root: '/m1' } }, m2: { files: { root: '/m2' } } } })
+      expect(JSON.stringify(out)).not.toContain(S)
+    })
+
+    it('filters NOTHING else: a record of another store that happens to use the same key is untouched', () => {
+      const out = buildSettingsSection(scoped(), new Set(['m1']))
+      expect(out['purdex-host-settings']).toEqual({ hosts: { slave: { x: 1 }, h1: { x: 2 } } })
+      expect(out['purdex-newtab-layout']).toEqual({ profiles: { slave: { cols: 2 } } })
+    })
+
+    it('with no master entry left the field is `{}`, not absent — what a store with no entry builds', () => {
+      expect(buildSettingsSection(scoped(), new Set())['purdex-workspace-settings']).toEqual({ workspaces: {} })
+      expect(buildSettingsSection({ 'purdex-workspace-settings': { workspaces: {} } }, new Set(['m1']))).toEqual({ 'purdex-workspace-settings': { workspaces: {} } })
+    })
+
+    it('does not mutate its input', () => {
+      const input = scoped()
+      const before = structuralKey(input)
+      buildSettingsSection(input, new Set(['m1']))
+      expect(structuralKey(input)).toBe(before)
+    })
   })
 })
 
@@ -357,6 +392,14 @@ describe('buildProfileDocument', () => {
       tabOrder: ['t1', 't2', 't3', 'loose'],
     }
     expect(buildProfileDocument(input).standaloneTabIds).toEqual(['loose', 'hidden'])
+  })
+
+  it('workspace-scoped settings follow the `workspaces` section: a workspace that is not in it (unknown, or unsyncable id) has no entry', () => {
+    const input = baseInput()
+    input.workspaces = { workspaces: [...input.workspaces.workspaces, ws('bad id!', 'Bad', [])] }
+    input.settings = { ...input.settings, 'purdex-workspace-settings': { workspaces: { wsA: { files: { root: '/a' } }, 'bad id!': { files: { root: S } }, gone: { files: { root: S } } } } }
+    const { document } = buildProfileDocument(input)
+    expect((document.settings as Record<string, unknown>)['purdex-workspace-settings']).toEqual({ workspaces: { wsA: { files: { root: '/a' } } } })
   })
 
   it('a workspace id the daemon would reject is device-local: no entry, no tabs section, and its tabs are not standalone', () => {

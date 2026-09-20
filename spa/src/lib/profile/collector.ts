@@ -21,6 +21,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { Workspace } from '../../types/tab'
 import { hashSection } from './hash'
+import { masterWorkspaceIds } from './master-world'
 import { PROJECTIONS, tabsSectionKey, workspaceIdOf } from './projections'
 import {
   buildHostsSection,
@@ -96,6 +97,10 @@ function allSettings(): SettingsBuildInput {
   return input
 }
 
+function masterSetKey(): string {
+  return [...masterWorkspaceIds()].sort().join('\n')
+}
+
 /** First occurrence wins — the same rule `buildWorkspacesSection` applies. */
 function byId(workspaces: readonly Workspace[]): Map<string, Workspace> {
   const map = new Map<string, Workspace>()
@@ -121,6 +126,13 @@ export function startCollector(opts: CollectorOptions): Collector {
   const reportedProblems = new Set<string>()
   let standaloneCount = 0
   let stopped = false
+  /**
+   * The master workspace set `settings` was last scheduled for. The section
+   * carries workspace-scoped entries for that set only, so it depends on it as
+   * much as on the settings stores: a workspace that appears or goes changes the
+   * payload without any settings store moving. (Syncable ids: no `\n` in them.)
+   */
+  let masterSet = masterSetKey()
 
   function problemOnce(kind: string, detail: string): void {
     const id = `${kind}\n${detail}`
@@ -142,7 +154,7 @@ export function startCollector(opts: CollectorOptions): Collector {
   /** Never `buildProfileDocument`: it throws as a whole on one bad workspace id. Each section is built alone. */
   function build(key: ProfileSectionKey): unknown | typeof ABSENT {
     if (key === 'hosts') return buildHostsSection(useHostStore.getState())
-    if (key === 'settings') return buildSettingsSection(allSettings())
+    if (key === 'settings') return buildSettingsSection(allSettings(), masterWorkspaceIds())
     if (key === 'workspaces') {
       const { workspaces } = useWorkspaceStore.getState()
       // Left out of the payload by the builder (device-local); said once per id, like their `tabs.*`.
@@ -220,6 +232,11 @@ export function startCollector(opts: CollectorOptions): Collector {
 
     useWorkspaceStore.subscribe((next, prev) => {
       if (next.workspaces === prev.workspaces) return
+      const master = masterSetKey()
+      if (master !== masterSet) {
+        masterSet = master
+        schedule('settings')
+      }
       const now = byId(next.workspaces)
       const before = byId(prev.workspaces)
       let listChanged = now.size !== before.size || [...now.keys()].some((id, i) => id !== [...before.keys()][i])

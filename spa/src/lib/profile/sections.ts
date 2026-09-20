@@ -143,9 +143,36 @@ export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>): Tabs
   return { tabs: {}, ...(project({ order, tabs: record }, PROJECTIONS.tabs) as object) } as TabsPayload
 }
 
-/** `settings`: `{<storageKey>: {<listed fields>}}`. A store that is absent, or contributes no listed field, has no key. */
-export function buildSettingsSection(stores: SettingsBuildInput): SettingsPayload {
-  return project(stores, PROJECTIONS.settings) as SettingsPayload
+/**
+ * The one synced settings field whose record is keyed by WORKSPACE id
+ * (`wsId → moduleId → payload`, useWorkspaceSettingsStore). Named once, here:
+ * the builder filters it and `applySettings` scopes it, by the same constant.
+ */
+export const WORKSPACE_SCOPED_SETTINGS: { storageKey: SettingsStorageKey; field: string } = {
+  storageKey: 'purdex-workspace-settings',
+  field: 'workspaces',
+}
+
+/**
+ * `settings`: `{<storageKey>: {<listed fields>}}`. A store that is absent, or contributes no listed field, has no key.
+ *
+ * The workspace-scoped record carries the entries of `masterWorkspaceIds` ONLY —
+ * the workspaces the `workspaces` section of this profile holds. Anything else
+ * in the store is not the profile's: an orphan (its workspace is gone and nothing
+ * cleared the entry), a workspace whose id cannot sync, or a workspace of a
+ * local profile that must never reach the SOT. The set is a PARAMETER, not
+ * "whatever the workspace store holds": what is on screen need not be the
+ * master's world. Filtered down to nothing the field is `{}`, exactly what a
+ * store with no entry builds. `applySettings` is the other half.
+ */
+export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspaceIds: ReadonlySet<string>): SettingsPayload {
+  const payload = project(stores, PROJECTIONS.settings) as SettingsPayload
+  const scoped = payload[WORKSPACE_SCOPED_SETTINGS.storageKey]?.[WORKSPACE_SCOPED_SETTINGS.field]
+  // `project` returns fresh structure, so deleting from it touches no store.
+  if (typeof scoped === 'object' && scoped !== null && !Array.isArray(scoped)) {
+    for (const id of Object.keys(scoped)) if (!masterWorkspaceIds.has(id)) delete (scoped as Record<string, unknown>)[id]
+  }
+  return payload
 }
 
 // === Document ===
@@ -169,7 +196,8 @@ export function buildProfileDocument(input: CollectInput): ProfileDocumentResult
   const workspacesPayload = buildWorkspacesSection(workspaces)
   const document: Record<ProfileSectionKey, SectionPayload> = {
     hosts: buildHostsSection(input.hosts),
-    settings: buildSettingsSection(input.settings),
+    // The master's workspaces ARE the ones this document's `workspaces` section lists.
+    settings: buildSettingsSection(input.settings, new Set(workspacesPayload.order)),
     workspaces: workspacesPayload,
   }
   for (const id of workspacesPayload.order) {

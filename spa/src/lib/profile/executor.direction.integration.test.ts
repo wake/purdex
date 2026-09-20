@@ -16,6 +16,7 @@ import type { HostConfig } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { startCollector, type Collector } from './collector'
 import { createExecutor, type Executor } from './executor'
@@ -328,5 +329,109 @@ describe('another client removes a workspace, and the tabs deletion gets here be
     expect(daemon.writes.slice(writesBefore)).toEqual([]) // no orphan re-created, no second delete
     expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.wa1', 'workspaces'])
     expect(problems).toEqual([])
+  })
+})
+
+describe('workspace-scoped settings wait for `workspaces` (the builder and the applier both go by the master workspace set)', () => {
+  const WSS = 'purdex-workspace-settings'
+  const ENTRY = { files: { root: '/set-on-A' } }
+
+  beforeEach(() => useWorkspaceSettingsStore.setState({ workspaces: {} }))
+  afterEach(() => useWorkspaceSettingsStore.setState({ workspaces: {} }))
+
+  const scopedOnSot = (): unknown => (daemon.rows.get('settings')!.payload as Record<string, Record<string, unknown>>)[WSS].workspaces
+
+  async function write(key: string, payload: unknown): Promise<{ rev: number; hash: string }> {
+    const cur = daemon.rows.get(key)
+    const plain = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
+    const shape: Record<string, [string, number]> = { settings: ['fp-settings', 3], workspaces: ['fp-workspaces', 1], tabs: ['fp-tabs', 1] }
+    const [fingerprint, ordinal] = shape[key.startsWith('tabs.') ? 'tabs' : key]
+    const row: Row = { rev: (cur?.rev ?? 0) + 1, hash: await hashSection(plain), payload: plain, fingerprint, ordinal, writer: A }
+    daemon.rows.set(key, row)
+    return { rev: row.rev, hash: row.hash! }
+  }
+
+  /** On another machine: A creates `wa2` and gives it a scoped setting — `workspaces`, `tabs.wa2`, then `settings`. */
+  async function clientACreatesWa2WithASetting(): Promise<Record<'workspaces' | 'settings', { rev: number; hash: string }>> {
+    const workspaces = await write('workspaces', buildWorkspacesSection([...useWorkspaceStore.getState().workspaces, ws('wa2', [])]))
+    await write('tabs.wa2', { order: [], tabs: {} })
+    const settings = daemon.rows.get('settings')!.payload as Record<string, Record<string, unknown>>
+    return { workspaces, settings: await write('settings', { ...settings, [WSS]: { workspaces: { ...(settings[WSS].workspaces as object), wa2: ENTRY } } }) }
+  }
+
+  async function expectNothingLost(writesBefore: number): Promise<void> {
+    for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wb1', 'wa2'])
+    expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({ wa2: ENTRY })
+    expect(scopedOnSot()).toEqual({ wa2: ENTRY }) // NOT pushed back without it: that would delete A's setting for everyone
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+    expect(executor!.status().profile).toBe('synced')
+    // `tabs.wa2` is listed before its workspace is here: said once, as in the PULL test above
+    expect(problems.filter((p) => p.kind !== 'sections-unrendered')).toEqual([])
+  }
+
+  it('DATA LOSS, reproduced: both moved while this client was away — `settings` is not pulled before `workspaces`', async () => {
+    world(H2, [ws('wb1', [])], [])
+    await attach(B, 'push')
+    const writesBefore = daemon.writes.length
+    await clientACreatesWa2WithASetting()
+    executor!.onReconnected() // the index shows `settings` AND `workspaces` moved; `settings` comes first in it
+    await expectNothingLost(writesBefore)
+  })
+
+  it('the two events arrive in SOT order but the `settings` read is the faster one: it is still applied second', async () => {
+    world(H2, [ws('wb1', [])], [])
+    await attach(B, 'push')
+    const writesBefore = daemon.writes.length
+    const written = await clientACreatesWa2WithASetting()
+    api.getSection.mockImplementation(async (_h, _p, key) => {
+      if (key === 'workspaces') await new Promise((r) => setTimeout(r, 300))
+      return daemon.get(key)
+    })
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'workspaces', rev: written.workspaces.rev, hash: written.workspaces.hash, writerClientId: A })
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'settings', rev: written.settings.rev, hash: written.settings.hash, writerClientId: A })
+    await expectNothingLost(writesBefore)
+  })
+
+  it('a `settings` read already on the wire when `workspaces` moves is judged again when it lands: not applied, asked again afterwards', async () => {
+    world(H2, [ws('wb1', [])], [])
+    await attach(B, 'push')
+    const writesBefore = daemon.writes.length
+    api.getSection.mockImplementation(async (_h, _p, key) => {
+      await new Promise((r) => setTimeout(r, key === 'settings' ? 300 : 600))
+      return daemon.get(key) // the daemon serves what it holds WHEN it answers
+    })
+    // an unrelated `settings` write starts a read …
+    const cur = daemon.rows.get('settings')!
+    const first = await write('settings', { ...(cur.payload as object), 'purdex-layout': { tabPosition: 'left' } })
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'settings', rev: first.rev, hash: first.hash, writerClientId: A })
+    await vi.advanceTimersByTimeAsync(100)
+    // … and while it is out, A creates wa2 with its setting: the read will come back carrying an entry for a workspace not here yet
+    const written = await clientACreatesWa2WithASetting()
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'workspaces', rev: written.workspaces.rev, hash: written.workspaces.hash, writerClientId: A })
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'settings', rev: written.settings.rev, hash: written.settings.hash, writerClientId: A })
+    await expectNothingLost(writesBefore)
+  })
+
+  it('PUSH side: a scoped setting of a workspace created here does not reach the SOT before the `workspaces` that lists it', async () => {
+    world(H2, [ws('wb1', [])], [])
+    await attach(B, 'push')
+    const writesBefore = daemon.writes.length
+    let failed = false
+    api.putSection.mockImplementation(async (_h, _p, key, body) => {
+      if (key === 'workspaces' && !failed) {
+        failed = true
+        return { kind: 'failed', reason: 'network', status: 0, message: 'dropped' }
+      }
+      return daemon.put(key, body)
+    })
+    useWorkspaceStore.setState({ workspaces: [...useWorkspaceStore.getState().workspaces, ws('wb2', [])] })
+    useWorkspaceSettingsStore.getState().set('wb2', 'files', { root: '/set-on-B' })
+    for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    const order = daemon.writes.slice(writesBefore).filter((w) => w.outcome === 'applied').map((w) => w.key)
+    expect(order.indexOf('workspaces')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('workspaces')).toBeLessThan(order.indexOf('settings'))
+    expect(scopedOnSot()).toEqual({ wb2: { files: { root: '/set-on-B' } } })
+    expect(executor!.status().profile).toBe('synced')
   })
 })

@@ -34,6 +34,7 @@ import { getLocale, unregisterLocale } from '../locale-registry'
 import { STORAGE_KEYS } from '../storage'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { hashSection } from './hash'
+import { masterWorkspaceIds } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
 import { applySectionToStores, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
@@ -568,7 +569,7 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
 })
 
 describe('applySectionToStores — settings', () => {
-  const settingsNow = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources()))) as SettingsPayload
+  const settingsNow = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
 
   it('patches only the stores that differ, through their hooks, and returns the rebuilt hash', async () => {
     const payload = settingsNow()
@@ -584,7 +585,25 @@ describe('applySectionToStores — settings', () => {
     expect(document.documentElement.dataset.theme).toBe('nord')
     expect(touched).toEqual([])
     expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources())) })
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds())) })
+  })
+
+  it('workspace-scoped settings: the payload decides the master workspaces only — a foreign local entry survives, a foreign incoming one is not written', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('m1', []), ws('m2', []), ws('bad id!', [])], activeWorkspaceId: 'm1' })
+    const foreign = { files: { root: '__NOT_THE_MASTERS__' } }
+    useWorkspaceSettingsStore.setState({ workspaces: { m1: { files: { root: '/old' } }, m2: { files: { root: '/dropped' } }, slave: foreign, 'bad id!': foreign } })
+    const payload = settingsNow()
+    expect(payload['purdex-workspace-settings']).toEqual({ workspaces: { m1: { files: { root: '/old' } }, m2: { files: { root: '/dropped' } } } })
+    payload['purdex-workspace-settings'] = { workspaces: { m1: { files: { root: '/new' } }, orphan: { files: { root: '/orphan' } } } }
+
+    const outcome = await applySectionToStores('settings', payload, ctx)
+
+    expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({ m1: { files: { root: '/new' } }, slave: foreign, 'bad id!': foreign })
+    expect(persistedOf(STORAGE_KEYS.WORKSPACE_SETTINGS).workspaces).toEqual({ m1: { files: { root: '/new' } }, slave: foreign, 'bad id!': foreign })
+    // the rebuilt hash is the FILTERED payload's: the orphan makes this section honestly dirty
+    const filtered = { ...payload, 'purdex-workspace-settings': { workspaces: { m1: { files: { root: '/new' } } } } }
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(filtered) })
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
   })
 
   it('an in-place heal reaches subscribers and localStorage', async () => {
@@ -657,7 +676,7 @@ describe('applySectionToStores — settings', () => {
 describe('applySectionToStores — settings: a failed apply rolls back registries, DOM and translator too', () => {
   const customTheme = () => ({ id: 'custom-1', name: 'Mine', tokens: getTheme('dark')!.tokens, builtin: false })
   const customLocale = { id: 'custom-loc', name: 'Dansk', translations: { 'common.cancel': 'Annuller' }, builtin: false }
-  const current = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources()))) as SettingsPayload
+  const current = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
 
   /** This device runs a custom theme and a custom locale; the payload drops both and moves the tab bar. */
   async function seedCustom(): Promise<SettingsPayload> {
