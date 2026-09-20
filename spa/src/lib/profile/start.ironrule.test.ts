@@ -77,7 +77,7 @@ describe('no master → the app is exactly what it was', () => {
     const leave = subscribeProfileSync(heard)
     const snapshot = profileSyncSnapshot()
     requestSyncNow()
-    requestResolve('hosts', 'sot', null)
+    requestResolve('hosts', 'sot', { status: 'locked:reset', currentHash: null, sot: { rev: 0, hash: null }, conflict: null })
     useHostStore.getState().setRuntime('h1', { status: 'connected' })
     await vi.advanceTimersByTimeAsync(60_000)
     leave()
@@ -113,7 +113,9 @@ describe('no master → the app is exactly what it was', () => {
     await vi.advanceTimersByTimeAsync(1_000) // the lease is taken, the leader has published
     expect(profileSyncSnapshot()).toMatchObject({ master: { hostId: 'h1' }, leader: true })
     expect(localStorage.getItem(STORAGE_KEYS.PROFILE_STATUS)).not.toBeNull()
-    localStorage.setItem(`${STORAGE_KEYS.PROFILE_COMMAND_PREFIX}left`, JSON.stringify({ kind: 'syncNow', at: 0 }))
+    // A command of THIS master (sync-status.ts scopes keys by `hostId|profileId|attachGeneration`): it goes with it.
+    const masterTag = `h1|p_000000000001|${useProfileStore.getState().attachGeneration}`
+    localStorage.setItem(`${STORAGE_KEYS.PROFILE_COMMAND_PREFIX}${encodeURIComponent(masterTag)}:left`, JSON.stringify({ kind: 'syncNow', master: masterTag, at: 0 }))
     const listeners = (spy: typeof add) => spy.mock.calls.filter(([type]) => type === 'storage').map(([, fn]) => fn)
     expect(listeners(add).length).toBeGreaterThanOrEqual(2) // the lease's and the status channel's
 

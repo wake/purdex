@@ -4,9 +4,10 @@
 // when nobody is there to correct it). Without a master: `master: null`, and
 // subscribing costs a Set entry — no storage, no listener, no timer (start.ts,
 // THE IRON RULE).
-//   To act on it: `requestSyncNow()` and `requestResolve(section, keep,
-// snapshot.status?.conflicts[section] ?? null)` from lib/profile/start — pass the
-// pair that was ON SCREEN, that is what makes the resolve safe.
+//   To act on it: `requestSyncNow()` and `requestResolve(section, keep, lock)` from
+// lib/profile/start, where `lock` is `snapshot.status.locks[section]` — the one
+// that was ON SCREEN when the user chose, that is what makes the resolve safe. A
+// section without an entry there is not locked: there is nothing to resolve.
 import { useSyncExternalStore } from 'react'
 import { profileSyncSnapshot, subscribeProfileSync } from '../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../lib/profile/start'

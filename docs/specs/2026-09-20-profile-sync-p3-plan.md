@@ -81,21 +81,32 @@ for its remaining callers (they die in P4b). `start.ts` imports the new home.
 - `start.ts`: re-emit instead of swallowing. `subscribeProfileSync(fn): () => void` and a **cached**
   `profileSyncSnapshot()` whose identity changes only when something did (status, leader, blocked,
   problems) — what `useSyncExternalStore` needs.
-- **The leader publishes, followers read.** The leader writes `{at, leader: windowId, status,
-  blocked, problems}` to `localStorage['purdex-profile-status']` on change (throttled to one write
-  per 250 ms, trailing); every window listens to the native `storage` event for that key. A
+- **Everything is scoped to the master it was made for** (PR review, codex R1/R2): the master is
+  persisted and every window rehydrates it in its own time, so for a moment two windows are on
+  different masters. `masterTag = hostId|profileId|attachGeneration`; one channel per tag. A status
+  record of another tag is "no record"; a command lives under its tag's key prefix and names the
+  tag in its payload as well; a window that lets go of a master removes that master's keys only
+  (there is no resend — a command removed by a late window is a lost user action). Expired commands
+  of other tags are swept by whoever opens a channel; never by a user without a master.
+- **The leader publishes, followers read.** The leader writes `{at, leader: windowId, master: tag,
+  status, blocked, problems}` to `localStorage['purdex-profile-status']` on change (throttled to one
+  write per 250 ms, trailing); every window listens to the native `storage` event for that key. A
   follower's snapshot is the published one, marked `remote: true`; older than 10 s with no leader
   lease → `stale: true`. Cleared when the master is cleared.
 - **Commands reach the leader the same way, one key per command** (review #5: an array in one key
   is read-modify-write and loses commands by construction — two followers both read `[]`; the leader
-  clears what a follower has just appended): `localStorage['purdex-profile-cmd:<id>'] = {kind,
-  section?, keep?, conflict?, at}`. The leader executes and removes the key; a command older than
-  30 s is removed unexecuted. Two leaders in a hand-over may both execute one — harmless, because
-  `resolve` on a section that is no longer locked and `syncNow` are both no-ops in the reducer.
-- **A `resolve` is bound to the conflict the user was looking at** (review #6): it carries
-  `{localHash, sot: {rev, hash}}` and the leader refuses it unless the section's current conflict is
-  that one. `sot.rev` alone is not enough — the local side can change under an unchanged revision,
-  and `Keep local` would push content nobody confirmed.
+  clears what a follower has just appended): `localStorage['purdex-profile-cmd:<encoded tag>:<id>'] =
+  {kind, section?, keep?, lock?, master, at}`. The leader executes and removes the key; a command
+  older than 30 s — or more than 5 s in the future (a clock set back) — is removed unexecuted. Two
+  leaders in a hand-over may both execute one — harmless, because `resolve` on a section that is no
+  longer locked and `syncNow` are both no-ops in the reducer.
+- **A `resolve` is bound to the lock the user was looking at** (review #6, widened by the PR
+  review): it carries the section's `SectionLock` — `{status, currentHash, sot: {rev, hash},
+  conflict: {localHash, sot} | null}`, published per locked section in `ExecutorStatus.locks` — and
+  the leader refuses it unless the executor holds that very lock now, field by field. The pair alone
+  is not enough: `locked:reset` / `locked:invalid` have none, and under them the local content, the
+  SOT and even the kind of lock can change while "no pair" stays true — `Keep local` would push
+  content, or overwrite a SOT, nobody confirmed.
 - `hooks/useProfileSync.ts`: `useSyncExternalStore` over the above.
 
 ## P3b — slaves and the active pointer

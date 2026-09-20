@@ -190,7 +190,7 @@ describe('executor — state and persistence', () => {
     h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H1' }, settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S2' } }
     const { ex } = make()
     expect(store.loadSectionStore).toHaveBeenCalledWith(PROFILE)
-    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' } , conflicts: {} })
+    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' } , locks: {} })
   })
 
   it('restores a persisted conflict as locked:conflict', () => {
@@ -198,12 +198,14 @@ describe('executor — state and persistence', () => {
     expect(make().ex.status().sections).toEqual({ hosts: 'locked:conflict' })
   })
 
-  it('status() carries the open conflict pairs — what a `resolve` is bound to (P3 plan Task 2)', () => {
+  it('status() carries the fingerprint of every LOCKED section — what a `resolve` is bound to (P3 plan Task 2)', () => {
     h.stored = {
       hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } },
       settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' },
     }
-    expect(make().ex.status().conflicts).toEqual({ hosts: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } })
+    expect(make().ex.status().locks).toEqual({
+      hosts: { status: 'locked:conflict', currentHash: 'H2', sot: { rev: 5, hash: 'H9' }, conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } },
+    })
   })
 
   it('onStatus fires when an open conflict moves under an unchanged status: the SOT advanced while locked', async () => {
@@ -211,11 +213,23 @@ describe('executor — state and persistence', () => {
     api.putSection.mockResolvedValue({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
     await flush()
-    expect(statuses.at(-1)).toMatchObject({ sections: { hosts: 'locked:conflict' }, conflicts: { hosts: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } })
+    expect(statuses.at(-1)).toMatchObject({ sections: { hosts: 'locked:conflict' }, locks: { hosts: { conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } } })
     const before = statuses.length
     ex.onRemoteEvent({ hostId: HOST, profileId: PROFILE, section: 'hosts', rev: 6, hash: 'HA', writerClientId: OTHER_CLIENT })
     expect(statuses).toHaveLength(before + 1)
-    expect(statuses.at(-1)).toMatchObject({ sections: { hosts: 'locked:conflict' }, conflicts: { hosts: { localHash: 'H2', sot: { rev: 6, hash: 'HA' } } } })
+    expect(statuses.at(-1)).toMatchObject({ sections: { hosts: 'locked:conflict' }, locks: { hosts: { sot: { rev: 6, hash: 'HA' }, conflict: { localHash: 'H2', sot: { rev: 6, hash: 'HA' } } } } })
+  })
+
+  it('onStatus fires when the LOCAL side of a locked section moves under an unchanged status: `locks` carries currentHash', async () => {
+    const { ex, statuses } = await synced({ hosts: 'H1' })
+    api.putSection.mockResolvedValue({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    await flush()
+    expect(ex.status().locks.hosts).toMatchObject({ status: 'locked:conflict', currentHash: 'H2' })
+    const before = statuses.length
+    ex.onSection({ key: 'hosts', hash: 'H3', payload: { mine: 'again' } })
+    expect(statuses).toHaveLength(before + 1)
+    expect(statuses.at(-1)).toMatchObject({ sections: { hosts: 'locked:conflict' }, locks: { hosts: { status: 'locked:conflict', currentHash: 'H3' } } })
   })
 
   it('a collector report creates the section, persists it and asks for the index', async () => {
@@ -259,7 +273,7 @@ describe('executor — state and persistence', () => {
     api.putSection.mockReturnValue(deferred<PutOutcome>().promise)
     ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
     expect(statuses).toHaveLength(1)
-    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' } , conflicts: {} })
+    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' } , locks: {} })
     ex.onSection({ key: 'hosts', hash: 'H3', payload: {} }) // still pending: no second call
     expect(statuses).toHaveLength(1)
   })
@@ -850,7 +864,7 @@ describe('executor — pull', () => {
     ex.onSection({ key: 'tabs.w1', hash: null, payload: null })
     await vi.advanceTimersByTimeAsync(120_000)
 
-    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' } , conflicts: {} }) // forgotten
+    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' } , locks: {} }) // forgotten
     expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'tabs.w1')
     expect(applySectionToStores.mock.calls.map((c) => c[0])).toEqual(['workspaces']) // never the deletion
     expect(api.putSection).not.toHaveBeenCalled() // no orphan re-created
@@ -954,6 +968,8 @@ describe('executor — pull', () => {
     await flush()
     expect(eventsOf('locked')).toEqual([{ type: 'locked', reason: 'invalid', rev: 2 }])
     expect(ex.status().sections.hosts).toBe('locked:invalid')
+    // a lock WITHOUT a pair has a fingerprint too: what a resolve from the UI is checked against (sync-status.ts)
+    expect(ex.status().locks).toEqual({ hosts: { status: 'locked:invalid', currentHash: 'H1', sot: { rev: 2, hash: 'H2' }, conflict: null } })
     expect(problems).toEqual([{ kind: 'pull-invalid', section: 'hosts', detail: 'removes the master host' }])
     await vi.advanceTimersByTimeAsync(600_000)
     expect(api.getSection).toHaveBeenCalledTimes(1)
@@ -1465,6 +1481,10 @@ describe('executor — resolve and restore-local', () => {
     await flush()
     expect(eventsOf('locked')).toEqual([{ type: 'locked', reason: 'conflict' }, { type: 'locked', reason: 'reset' }])
     expect(ex.status()).toMatchObject({ profile: 'locked:reset', sections: { hosts: 'locked:conflict', settings: 'locked:reset' } })
+    expect(ex.status().locks).toEqual({
+      hosts: { status: 'locked:conflict', currentHash: 'H2', sot: { rev: 6, hash: 'H9' }, conflict: { localHash: 'H2', sot: { rev: 6, hash: 'H9' } } },
+      settings: { status: 'locked:reset', currentHash: 'S1', sot: { rev: 2, hash: 'S0' }, conflict: null },
+    })
   })
 })
 

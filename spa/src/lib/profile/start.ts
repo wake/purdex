@@ -93,14 +93,13 @@ import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
-import type { Executor, ExecutorStatus } from './executor'
+import type { Executor, ExecutorStatus, SectionLock } from './executor'
 import { contendForLeadership, leaderWindowId, readLeaderLease } from './leader'
 import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { clearSectionStore } from './section-store'
-import { __resetSyncStatusForTest, openStatusChannel, setLocalSnapshot } from './sync-status'
+import { __resetSyncStatusForTest, masterTagOf, openStatusChannel, setLocalSnapshot } from './sync-status'
 import type { StatusChannel } from './sync-status'
-import type { SectionConflict } from './sync-state'
 import { STORAGE_KEYS } from '../storage/keys'
 
 export { profileSyncSnapshot, subscribeProfileSync } from './sync-status'
@@ -264,8 +263,8 @@ function isCurrentMaster(master: Master): boolean {
 interface Leader {
   executor: Executor
   status(): ExecutorStatus
-  /** The section's open conflict pair as the executor holds it NOW — asked of the executor, not of the last status it announced. */
-  conflict(section: string): SectionConflict | null
+  /** The section's lock as the executor holds it NOW — asked of the executor, not of the last status it announced. Null = not locked. */
+  lock(section: string): SectionLock | null
   dispose(): void
 }
 
@@ -396,7 +395,7 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
   return {
     executor,
     status: () => lastStatus ?? executor.status(),
-    conflict: (section) => executor.status().conflicts[section] ?? null,
+    lock: (section) => executor.status().locks[section] ?? null,
     dispose() {
       if (disposed) return
       disposed = true
@@ -564,12 +563,12 @@ export function requestSyncNow(): void {
 }
 
 /**
- * Answer a lock, from any window. `conflict` is the pair the user was shown — `snapshot.status.conflicts[section]`,
- * or null if the section had none (`locked:reset`, `locked:invalid`): whoever leads executes it only if the
- * section's pair is still that one (sync-status.ts). Without a master: nothing.
+ * Answer a lock, from any window. `lock` is what the user was shown — `snapshot.status.locks[section]`: whoever
+ * leads THIS master executes it only if the section's lock is still that one, field by field (sync-status.ts).
+ * Without a master: nothing.
  */
-export function requestResolve(section: string, keep: 'local' | 'sot', conflict: SectionConflict | null): void {
-  channel?.requestResolve(section, keep, conflict)
+export function requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): void {
+  channel?.requestResolve(section, keep, lock)
 }
 
 function sameMaster(a: Master | null, b: Master | null): boolean {
@@ -583,7 +582,7 @@ export function profileSyncState(): ProfileSyncState {
     master: selectMaster(useProfileStore.getState()),
     leader: mode?.isLeader() ?? false,
     blocked,
-    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {}, conflicts: {} } : (mode?.leader()?.status() ?? null),
+    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} } : (mode?.leader()?.status() ?? null),
     problems: problems.map((p) => ({ ...p })),
   }
 }
@@ -606,7 +605,8 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
     // A follower must not: by now the leader may have written the new ones.
     const wasLeader = same && mode !== null && mode.isLeader()
     mode?.end()
-    // The old master's status and whatever was asked of its leader go with it, in every window (sync-status.ts, `close`).
+    // The old master's status and whatever was asked of ITS leader go with it, in every window — and nothing of the
+    // next master's, which other windows may be on already (sync-status.ts, `close`).
     channel?.close(true)
     channel = null
     if (wasLeader && master !== null) clearSectionStore(master.profileId)
@@ -615,11 +615,14 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
       channel = openStatusChannel({
         now: () => clock(),
         windowId: leaderWindowId(),
+        // One channel per (master, generation) — this function's own condition for getting here — so the tag is the
+        // channel's for life, and a window that has not heard of a change yet is on another tag than one that has.
+        masterTag: masterTagOf(master, generation),
         local: profileSyncState,
         leaseLive,
         syncNow: () => mode?.leader()?.executor.syncNow(),
         resolve: (section, keep) => mode?.leader()?.executor.resolve(section, keep),
-        conflictOf: (section) => mode?.leader()?.conflict(section) ?? null,
+        lockOf: (section) => mode?.leader()?.lock(section) ?? null,
       })
     }
     // `enterMasterMode` has called `changed()` already — before `mode` pointed at it. This is the one that counts.
