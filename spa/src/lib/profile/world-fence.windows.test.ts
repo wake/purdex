@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { STORAGE_KEYS } from '../storage/keys'
 import type { Tab, Workspace } from '../../types/tab'
+import { FakeLockManager, navigatorWithLocks } from '../storage/__tests__/fake-web-locks'
 
 interface Message {
   to: QueuedBroadcastChannel
@@ -79,7 +80,7 @@ async function openWindow() {
 
 async function loadWindow() {
   const onStorage = (): ((e: Event) => void) | null => lastStorageListener
-  const [tab, ws, local, sw, mw, hosts, lifecycle, toast] = await Promise.all([
+  const [tab, ws, local, sw, mw, hosts, lifecycle, toast, rebuild] = await Promise.all([
     import('../../stores/useTabStore'),
     import('../../features/workspace/store'),
     import('../../stores/useLocalProfilesStore'),
@@ -88,6 +89,7 @@ async function loadWindow() {
     import('../../stores/useHostStore'),
     import('../host-lifecycle'),
     import('../../stores/useUndoToast'),
+    import('../../stores/useRebuildStore'),
   ])
   return {
     useTabStore: tab.useTabStore,
@@ -95,6 +97,7 @@ async function loadWindow() {
     useLocalProfilesStore: local.useLocalProfilesStore,
     useHostStore: hosts.useHostStore,
     useUndoToast: toast.useUndoToast,
+    useRebuildStoreForTest: rebuild.useRebuildStore,
     deleteHostWithUndoToast: lifecycle.deleteHostWithUndoToast,
     ...sw,
     ...mw,
@@ -187,7 +190,7 @@ describe('a switch raises the fence first', () => {
 
   it('a promote raises it too', async () => {
     const { w2, slaveId } = await seeded()
-    expect(w2.promoteToMaster(slaveId, 'Old master')).toMatchObject({ ok: true })
+    expect(await w2.promoteToMaster(slaveId, 'Old master')).toMatchObject({ ok: true })
     expect(epochOf(w2)).toBeGreaterThan(0)
     expect(fence()).toBe(String(epochOf(w2)))
     expect(w2.readMasterWorld().settled).toBe(true)
@@ -201,7 +204,7 @@ describe('a switch raises the fence first', () => {
 
   it('a refused promote leaves no side key behind', async () => {
     const { w2 } = await seeded()
-    expect(w2.promoteToMaster('nope', 'Old')).toEqual({ ok: false, reason: 'not-found' })
+    expect(await w2.promoteToMaster('nope', 'Old')).toEqual({ ok: false, reason: 'not-found' })
     expect(fence()).toBeNull()
   })
 
@@ -234,7 +237,7 @@ describe('a switch raises the fence first', () => {
       if (key === STORAGE_KEYS.WORKSPACES && thrown++ === 0) throw new Error('quota')
       real.call(this, key, value)
     })
-    expect(w2.promoteToMaster(slaveId, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: 'quota' })
+    expect(await w2.promoteToMaster(slaveId, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: 'quota' })
     vi.restoreAllMocks()
     expect(fence()).toBeNull()
     expect(diskState(STORAGE_KEYS.LOCAL_PROFILES)).toMatchObject({ activeProfileId: 'master', worldEpoch: 0 })
@@ -347,8 +350,10 @@ describe('window 2 switches; window 1 still holds the old world', () => {
     const parked = w1.useLocalProfilesStore.getState().parkedMaster
     if (parked === null) throw new Error('window 1 should still hold the master parked')
     expect(w1.writeMasterWorld(parked)).toBe('unsettled') // an apply answers `busy`
-    expect(w1.promoteToMaster(slaveId, 'Old')).toEqual({ ok: false, reason: 'unsettled' })
     expect(w1.copyMasterAsSlave('copy')).toEqual({ ok: false, reason: 'unsettled' })
+    const promoting = w1.promoteToMaster(slaveId, 'Old') // refused inside the call (no Web Locks here) — before the catch-up, which is a turn away
+    for (const key of Object.keys(after)) expect(disk(key)).toBe(after[key])
+    expect(await promoting).toEqual({ ok: false, reason: 'unsettled' })
     for (const key of Object.keys(after)) expect(disk(key)).toBe(after[key])
     // The look itself asked the stores to catch up.
     await flush()
@@ -455,7 +460,7 @@ describe('C1 — two switches from the same epoch, at the same time', () => {
    * A's switch, for real, with B's writes landing at `plan[n]` = just before A's n-th read of the side key after A
    * raised its fence (1–3: before A's local-profiles / tabs / workspaces write; 4: before A's final check).
    */
-  async function switchWithReplay(a: Win, target: string, random: number, written: Record<Key, string | null>, plan: Partial<Record<1 | 2 | 3 | 4, Key[]>>) {
+  async function switchWithReplay(a: Win, target: string, random: number, written: Record<Key, string | null>, plan: Partial<Record<1 | 2 | 3 | 4, Key[]>>, beforeFenceWrite: Key[] = []) {
     vi.spyOn(Math, 'random').mockReturnValue(random)
     const realGet = Storage.prototype.getItem
     const realSet = Storage.prototype.setItem
@@ -463,6 +468,12 @@ describe('C1 — two switches from the same epoch, at the same time', () => {
     let reads = 0
     let replaying = false
     const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === FENCE && !replaying && !raised) {
+        // A has READ the fence and found it below its epoch; this is the write. What lands in between is `beforeFenceWrite`.
+        replaying = true
+        for (const k of beforeFenceWrite) put(k, written[k])
+        replaying = false
+      }
       realSet.call(this, key, value)
       if (key === FENCE && !replaying) raised = true
     })
@@ -602,6 +613,123 @@ describe('C1 — two switches from the same epoch, at the same time', () => {
     })
   })
 
+  // === C1' — the read-check-write of the fence itself ===
+
+  it('WITHOUT WEB LOCKS, THE RESIDUE, PINNED: B raises its (higher) fence between A\'s read of the fence and A\'s write of it — A lowers it, both windows\' stores pass, storage ends up MIXED. Silent, never wrong: both windows unsettled, nothing reported, and the parked worlds — one atomic key — are one window\'s, whole', async () => {
+    const { a, b, s1, s2 } = await twoWindows()
+    const written = await switchedButNotVisible(b, s2, 0.9)
+    // B's fence lands inside A's raise; B's pointer and tabs after A's pointer (A's tabs then overwrite B's); B's workspaces last.
+    const result = await switchWithReplay(a, s1, 0.1, written, { 2: [STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TABS], 4: [STORAGE_KEYS.WORKSPACES] }, [FENCE])
+    expect(result).toEqual({ ok: true }) // A cannot know: the fence it reads back is its own
+    expect(Number(fence())).toBeLessThan(Number(written[FENCE])) // the fence went DOWN — what a mutex is for
+
+    await deliverAll()
+    await flush()
+    // Storage: B's pointer, A's tabs, B's workspaces.
+    expect(disk(STORAGE_KEYS.LOCAL_PROFILES)).toBe(written[STORAGE_KEYS.LOCAL_PROFILES])
+    expect(diskState(STORAGE_KEYS.LOCAL_PROFILES).activeProfileId).toBe(s2)
+    expect(diskState(STORAGE_KEYS.TABS).worldId).toBe(s1)
+    expect(diskState(STORAGE_KEYS.WORKSPACES).worldId).toBe(s2)
+    for (const w of [a, b]) {
+      expect(w.readMasterWorld().settled).toBe(false)
+      expect(w.masterWorkspaceIds()).toBeNull() // the collector builds nothing, an apply answers `busy`
+      // every PARKED world is what B parked, byte for byte: the master, and the slave nobody put on screen
+      expect(JSON.stringify(w.useLocalProfilesStore.getState().parkedMaster)).toBe(JSON.stringify(world('m', MASTER)))
+      expect(JSON.stringify(w.useLocalProfilesStore.getState().slaves[s1].world)).toBe(JSON.stringify(world('s', SLAVE)))
+    }
+  })
+
+  describe('WITH WEB LOCKS: one block at a time, across windows', () => {
+    let locks: FakeLockManager
+
+    beforeEach(() => {
+      locks = new FakeLockManager()
+      vi.stubGlobal('navigator', navigatorWithLocks(locks))
+    })
+
+    it('two switches asked for at the same instant are serialised: the second enters its block only when the first has left, reads what the first wrote — and is a late-comer to the fence like any other', async () => {
+      const { a, b, s1, s2 } = await twoWindows()
+      vi.spyOn(Math, 'random').mockReturnValue(0.5)
+      const entered: string[] = []
+      for (const [name, w] of [['a', a], ['b', b]] as const) {
+        const acquire = w.useRebuildStoreForTest.getState().acquireOperationLock
+        vi.spyOn(w.useRebuildStoreForTest.getState(), 'acquireOperationLock').mockImplementation((...args) => {
+          entered.push(`${name} enters; fence ${fence() === null ? 'absent' : 'raised'}`)
+          return acquire(...args)
+        })
+      }
+      const first = a.switchActiveProfile(s1)
+      const second = b.switchActiveProfile(s2)
+      expect(entered).toEqual([]) // neither block runs inside the call
+      expect(await first).toEqual({ ok: true })
+      expect(await second).toEqual({ ok: false, reason: 'unsettled' })
+      expect(entered).toEqual(['a enters; fence absent', 'b enters; fence raised'])
+      expect(locks.grants.map((g) => g.returned instanceof Promise)).toEqual([false, false]) // THE BLOCK IS SYNCHRONOUS: it hands the lock a value
+      expect(locks.isHeld('purdex-world-switch')).toBe(false)
+      await expectOneWorld(a, b, s1, SLAVE)
+    })
+
+    it('a promote goes through the same lock', async () => {
+      const { a, b, s1, s2 } = await twoWindows()
+      const first = a.promoteToMaster(s1, 'Old master')
+      const second = b.switchActiveProfile(s2)
+      expect(await first).toMatchObject({ ok: true })
+      expect(await second).toEqual({ ok: false, reason: 'unsettled' })
+      expect(locks.grants.map((g) => [g.name, g.returned instanceof Promise])).toEqual([['purdex-world-switch', false], ['purdex-world-switch', false]])
+    })
+
+    it('the lock is not granted within 3 s (a renderer frozen inside its block): `busy`, nothing written — and nothing happens when the lock comes free after all', async () => {
+      const { a, s1 } = await twoWindows()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      let release = (): void => {}
+      void locks.request('purdex-world-switch', {}, () => new Promise<void>((done) => (release = done)))
+      const before = [disk(STORAGE_KEYS.LOCAL_PROFILES), disk(STORAGE_KEYS.TABS), disk(STORAGE_KEYS.WORKSPACES)]
+      const pending = a.switchActiveProfile(s1)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(await pending).toEqual({ ok: false, reason: 'busy' })
+      release()
+      await vi.advanceTimersByTimeAsync(100)
+      vi.useRealTimers()
+      expect([disk(STORAGE_KEYS.LOCAL_PROFILES), disk(STORAGE_KEYS.TABS), disk(STORAGE_KEYS.WORKSPACES)]).toEqual(before)
+      expect(fence()).toBeNull()
+      expect(a.useLocalProfilesStore.getState().activeProfileId).toBe('master')
+    })
+
+    it('a store write that throws inside the block: everything is put back, the fence is lowered, and the lock is free for the next window', async () => {
+      const { a, b, s1, s2 } = await twoWindows()
+      vi.spyOn(a.useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('workspace write failed')
+      })
+      const first = a.switchActiveProfile(s1)
+      const second = b.switchActiveProfile(s2)
+      expect(await first).toEqual({ ok: false, reason: 'write-failed', detail: 'workspace write failed' })
+      expect(await second).toEqual({ ok: true })
+      expect(locks.isHeld('purdex-world-switch')).toBe(false)
+      await expectOneWorld(a, b, s2, 'SENTINEL-OTHER')
+    })
+
+    it('the block itself THROWS (not a store write it catches — the operation lock blows up): the call rejects, and the lock is released all the same', async () => {
+      const { a, b, s1, s2 } = await twoWindows()
+      vi.spyOn(a.useRebuildStoreForTest.getState(), 'acquireOperationLock').mockImplementationOnce(() => {
+        throw new Error('lock store broken')
+      })
+      await expect(a.switchActiveProfile(s1)).rejects.toThrow('lock store broken')
+      expect(locks.isHeld('purdex-world-switch')).toBe(false)
+      expect(await b.switchActiveProfile(s2)).toEqual({ ok: true })
+    })
+
+    it('…and a throw from INSIDE the block, the operation lock already taken: both locks are released', async () => {
+      const { a, s1 } = await twoWindows()
+      vi.spyOn(a.useLocalProfilesStore, 'getState').mockImplementationOnce(() => {
+        throw new Error('store broken')
+      })
+      await expect(a.switchActiveProfile(s1)).rejects.toThrow('store broken')
+      expect(a.useRebuildStoreForTest.getState().lockedBy).toBeNull()
+      expect(locks.isHeld('purdex-world-switch')).toBe(false)
+      expect(await a.switchActiveProfile(s1)).toEqual({ ok: true })
+    })
+  })
+
   it('a promote is superseded the same way', async () => {
     const { a, b, s1, s2 } = await twoWindows()
     const written = await switchedButNotVisible(b, s2, 0.9)
@@ -621,7 +749,7 @@ describe('C1 — two switches from the same epoch, at the same time', () => {
       }
       return realGet.call(this, key)
     })
-    const result = a.promoteToMaster(s1, 'Old master')
+    const result = await a.promoteToMaster(s1, 'Old master')
     set.mockRestore()
     get.mockRestore()
     expect(result).toEqual({ ok: false, reason: 'superseded' })
@@ -809,7 +937,7 @@ describe("C2' — undo in a window that has not heard of another window's promot
     expect(w1.useTabStore.getState().tabs.mt1).toBeUndefined()
     await deliverAll() // window 2 is level with the delete
     view.freeze() // from here on window 1's PROCESS sees nothing new until told
-    expect(w2.promoteToMaster(slaveId, 'Old master')).toMatchObject({ ok: true })
+    expect(await w2.promoteToMaster(slaveId, 'Old master')).toMatchObject({ ok: true })
     return { w1, w2 }
   }
 

@@ -72,6 +72,24 @@
 // between" to ONE synchronous read-then-write. And between two renderer
 // processes `localStorage` itself is only eventually shared (start.ts,
 // `suspendedInStorage`, says the same of the suspension).
+//   THE SAME HOLDS FOR RAISING THE FENCE ITSELF, and that one has a name. `raise`
+// is read → check → write, and `localStorage` has no compare-and-swap: window A
+// reads the fence and finds it below its epoch; window B raises a HIGHER one and
+// starts writing its stores; A writes its LOWER epoch over B's. From then on the
+// store writes of both pass the fence and land interleaved. Two windows have to
+// switch inside the same few microseconds — no hand does that — but it cannot be
+// closed on `localStorage` alone, and no further protocol is invented for it
+// here. WHERE THERE IS A REAL MUTEX IT IS USED: world-lock.ts runs the block of
+// a switch / promote under a Web Lock, and the window is shut. Where there is
+// none (no secure context: a dev build over plain http) the consequence is this,
+// pinned by a test: the three stores ON SCREEN may end up mixed — one window's
+// pointer, the other's tabs. Both windows then rehydrate into a world whose
+// epochs or ids disagree: UNSETTLED — nothing is reported to the SOT, nothing is
+// applied, a switch is refused; silent, never wrong, and visible
+// (`world-unsettled`). THE PARKED WORLDS ARE NOT TOUCHED BY IT: they live in ONE
+// key, written in one `setItem`, so they are one window's version, whole. What
+// can be lost is the arrangement of the world that was on screen in the losing
+// window; the way back is a reload, which reads whatever storage holds.
 import { createJSONStorage } from 'zustand/middleware'
 import type { PersistStorage, StorageValue } from 'zustand/middleware'
 import { browserStorage } from './browser-backend'

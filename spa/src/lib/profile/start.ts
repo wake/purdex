@@ -153,7 +153,7 @@ export interface ProfilesDebug {
   switch(id: string): Promise<SwitchResult>
   copyMaster(name: string): CopyResult
   saveScreen(name: string): CopyResult
-  promote(id: string, demotedName: string): PromoteResult
+  promote(id: string, demotedName: string): Promise<PromoteResult>
   rename(id: string, name: string): ReturnType<typeof renameSlave>
   remove(id: string): ReturnType<typeof deleteSlave>
   /** A summary of `readMasterWorld()` — never the world itself. */
