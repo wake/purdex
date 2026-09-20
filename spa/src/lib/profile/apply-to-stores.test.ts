@@ -616,6 +616,84 @@ describe('applySectionToStores — settings', () => {
     expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
   })
 
+  describe('the master\'s workspace set moves WHILE the apply is awaiting (a `workspaces` apply, a user edit)', () => {
+    /** Master workspaces [m1]; a scoped entry for `m3`, which is not the master's YET. The payload is the SOT's, where it is. */
+    function seed(): { payload: SettingsPayload; before: unknown } {
+      useWorkspaceStore.setState({ workspaces: [ws('m1', []), ws('m3', [])], activeWorkspaceId: 'm1' })
+      useWorkspaceSettingsStore.setState({ workspaces: { m1: { files: { root: '/sot-m1' } }, m3: { files: { root: '/sot-m3' } } } })
+      const payload = settingsNow()
+      payload['purdex-ui-settings'] = { ...payload['purdex-ui-settings'], dynamicTabName: !UI_DEFAULTS.dynamicTabName }
+      // …and locally it is still [m1], with an OLD value under m3.
+      useWorkspaceStore.setState({ workspaces: [ws('m1', [])], activeWorkspaceId: 'm1' })
+      useWorkspaceSettingsStore.setState({ workspaces: { m1: { files: { root: '/old-m1' } }, m3: { files: { root: '/old-m3' } } } })
+      return { payload, before: JSON.parse(JSON.stringify(readSettingsSources())) }
+    }
+
+    /** The `workspaces` apply lands during the first rehydrate this apply awaits. */
+    function workspacesArriveMidApply(): void {
+      for (const store of [useUISettingsStore, useWorkspaceSettingsStore]) {
+        const real = store.persist.rehydrate.bind(store.persist)
+        let done = false
+        vi.spyOn(store.persist, 'rehydrate').mockImplementation(async () => {
+          if (!done && useWorkspaceStore.getState().workspaces.length === 1) {
+            done = true
+            useWorkspaceStore.setState({ workspaces: [ws('m1', []), ws('m3', [])] })
+          }
+          await real()
+        })
+      }
+    }
+
+    it('the apply gives up — `busy` — and everything it wrote is put back; it never answers with a hash over the NEW set and the OLD values', async () => {
+      const { payload, before } = seed()
+      workspacesArriveMidApply()
+
+      const outcome = await applySectionToStores('settings', payload, ctx)
+      vi.restoreAllMocks()
+
+      expect(outcome).toEqual({ ok: false, reason: 'busy' })
+      expect(JSON.parse(JSON.stringify(readSettingsSources()))).toEqual(before)
+      expect(persistedOf(STORAGE_KEYS.UI_SETTINGS).dynamicTabName).toBe(UI_DEFAULTS.dynamicTabName)
+      expect(persistedOf(STORAGE_KEYS.WORKSPACE_SETTINGS).workspaces).toEqual({ m1: { files: { root: '/old-m1' } }, m3: { files: { root: '/old-m3' } } })
+    })
+
+    it('…and the retry, scoped by the set as it now is, lands the SOT\'s value for the new workspace: clean', async () => {
+      const { payload } = seed()
+      workspacesArriveMidApply()
+      await applySectionToStores('settings', payload, ctx)
+      vi.restoreAllMocks()
+
+      const outcome = await applySectionToStores('settings', payload, ctx)
+      expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({ m1: { files: { root: '/sot-m1' } }, m3: { files: { root: '/sot-m3' } } })
+      expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    })
+
+    it('the world going UNSETTLED mid-apply is the same: nobody can say what the set is', async () => {
+      const { payload, before } = seed()
+      const real = useUISettingsStore.persist.rehydrate.bind(useUISettingsStore.persist)
+      vi.spyOn(useUISettingsStore.persist, 'rehydrate').mockImplementation(async () => {
+        useTabStore.setState({ worldEpoch: useTabStore.getState().worldEpoch + 1 })
+        await real()
+      })
+      const outcome = await applySectionToStores('settings', payload, ctx)
+      vi.restoreAllMocks()
+      useTabStore.setState({ worldEpoch: useWorkspaceStore.getState().worldEpoch })
+      expect(outcome).toEqual({ ok: false, reason: 'busy' })
+      expect(JSON.parse(JSON.stringify(readSettingsSources()))).toEqual(before)
+    })
+
+    it('a set that is the same ids again (another array, another order) is no reason to give up', async () => {
+      const { payload } = seed()
+      const real = useUISettingsStore.persist.rehydrate.bind(useUISettingsStore.persist)
+      vi.spyOn(useUISettingsStore.persist, 'rehydrate').mockImplementation(async () => {
+        useWorkspaceStore.setState({ workspaces: [ws('m1', [])] })
+        await real()
+      })
+      expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+      vi.restoreAllMocks()
+    })
+  })
+
   it('an in-place heal reaches subscribers and localStorage', async () => {
     useLayoutStore.setState({ activityBarWidth: 'narrow' })
     const payload = settingsNow()

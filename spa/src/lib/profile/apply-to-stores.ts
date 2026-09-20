@@ -377,6 +377,30 @@ function unregisterDropped(key: SettingsStorageKey, before: Record<string, unkno
   return undo
 }
 
+/** Thrown — and caught — inside `applySettingsSection`: the master's workspace set moved under the apply. */
+const SCOPE_MOVED = Symbol('the master workspace set moved')
+
+const sameIds = (a: ReadonlySet<string> | null, b: ReadonlySet<string>): boolean => a !== null && a.size === b.size && [...a].every((id) => b.has(id))
+
+/**
+ * THE SCOPE IS RE-READ AFTER EVERY AWAIT. The patches are computed once, scoped
+ * by the master's workspace set as it is at that moment (`masterIds`) — and then
+ * this function awaits, once per store. A `workspaces` apply can land in any of
+ * those gaps (the executor's gate — no `settings` pull while `workspaces` is not
+ * up to date — is looked at when the pull STARTS and once more before this apply
+ * is called; nothing stops a `workspaces` pull from starting afterwards), and so
+ * can a user's edit. The scoped patch would then keep the OLD entry of a workspace
+ * that has just become the master's — it was "foreign, leave alone" when the
+ * patch was cut — and the hash, taken over the NEW set, would call that old value
+ * a local edit: pushed, over the SOT's. So: a set that differs after an await (or
+ * that nobody can name any more) ends the apply — what was written is put back
+ * the way a failure puts it back, and the answer is `busy`; the executor retries,
+ * scoped by the set as it then is.
+ *   Not the operation lock `applyWorkspacesSection` takes: that lock is for who
+ * REWRITES the tab tree; held here it would answer `busy` for every rebuild and
+ * switch, and still not see a user's edit. The re-read sees both, for the price
+ * of one set comparison per store.
+ */
 async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   if (payload === null) return invalid('the settings section cannot be deleted')
   if (!isWellFormedSection('settings', payload)) return invalid('malformed settings payload')
@@ -401,6 +425,7 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
       reregister.push(...unregisterDropped(key, before, patch))
       await rehydrate(store)
       publish(store)
+      if (!sameIds(masterWorkspaceIds(), masterIds)) throw SCOPE_MOVED
     }
   } catch (err) {
     // A settings write is more than fields: registries, <html> theme / lang, the
@@ -422,13 +447,14 @@ async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
         unfinished.push(`${key}: ${messageOf(rollbackErr)}`)
       }
     }
+    if (unfinished.length === 0 && err === SCOPE_MOVED) return BUSY
     if (unfinished.length === 0) throw err
-    throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
+    throw new Error(`${err === SCOPE_MOVED ? 'the master workspace set moved during the apply' : messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
   }
   // Terminals read the renderer on (re)connect only; the bump is what makes them reconnect.
   if (useUISettingsStore.getState().terminalRenderer !== rendererBefore) useUISettingsStore.getState().bumpTerminalSettingsVersion()
-  // The set as it is NOW (what the collector will hash); the one this apply was scoped by if nobody can say any more.
-  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds() ?? masterIds)) }
+  // No await since the last re-read: the set is still the one this apply was scoped by — which is what the collector will hash.
+  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterIds)) }
 }
 
 // === workspaces / tabs.<id> ===
