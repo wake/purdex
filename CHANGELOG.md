@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.415] - 2026-09-20
+
+### Feature: Profile Sync P3a＋P3b——可訂閱的跨視窗同步狀態、slave profile 與 active 指標（無 UI）（#1253、#1254、#1257–#1261）
+
+Profile Sync 第五、六支，**仍然沒有 UI**：唯一的入口是 dev-only 的 `window.__purdexProfileSync`（production build 裡 grep 不到）。沒設 master、沒用過 slave 的使用者與 alpha.414 相同——零新 key、零 listener、零 timer，由不 mock 的鐵則測試守著。P3 的 plan（`docs/specs/2026-09-20-profile-sync-p3-plan.md`）先量再寫、經 codex 審過（10 條、3 critical 全採納）後拆成六個 PR 階段；這一版是前兩個。
+
+**P3a（地基）**：device name 搬到 P4b 刪不到的地方（`useDeviceNameStore`／`lib/device-name.ts`，同 key 同 bytes、免 migration；預設名稱的解析改由 store 擁有——原本只有 device-state 的 uploader 會解析，P4b 之後 driver 會永遠回報 `Browser`）。`start.ts` 不再吞掉 executor 的狀態：`subscribeProfileSync`＋有快取的 snapshot＋`useProfileSync` hook；**leader 發布、follower 讀**；指令一個 key 一個（陣列是 read-modify-write，必然掉指令）。review 的五條 findings 同一個根因——跨視窗資料沒綁 master 身分——→ status 與指令一律綁 `hostId|profileId|attachGeneration`，`resolve` 綁使用者當時看到的整個 lock（status＋currentHash＋sot＋conflict pair）。
+
+**P3b（slave 與 active 指標）**：`useLocalProfilesStore`（slaves、active 指標、停放的 master；永不進 SOT）。兩個 tab store 帶**世界標記＋epoch**，`master-world.ts` 是讀寫 master 世界的唯一入口——三個 store 的 epoch 相等且標記等於指標才算 *settled*，否則 collector 什麼都不回報、apply 回 `busy`、executor 不 sweep 不 push（**寧可沉默，不可錯報**）。slave 在畫面上時 applier 寫進**停放的** master；刪 host 會處理每個停放的世界，undo 依世界歸屬還原。`switch-active.ts`：三個 store 的單一同步區塊＋rollback、唯一的複製（所有 id 重映射、tmux 綁定照抄）、唯一的搬移（`promoteToMaster`，attach 中拒絕）。`settings` 裡唯一以 workspace id 為 key 的欄位只投影 master 的 workspace，並重現、關掉一個資料遺失：`settings` 比 `workspaces` 先到時新 workspace 的設定被丟掉、再把「沒有那筆」推回 SOT → `settings` 對 `workspaces` 加 pull **與** push 閘。
+
+**真機驗收三輪**（worktree `:5175`、活的 mlab daemon、兩個 client＋同 client 雙視窗；以 sentinel 字串掃 daemon 上每個 section 的 payload）：**slave 的內容在 SOT 上的出現次數三輪都是 0**；複製、在 slave 裡大量編輯、切回 master 全程零寫入；別台改 master 時停放的 master 跟著更新、畫面不動。抓到兩個 9000 個單元測試與 codex 都沒抓到的問題：(1) 拿著舊世界的視窗一寫入就把舊 epoch 蓋回磁碟 → 儲存層 **epoch fencing**（`lib/storage/world-fence.ts`）；(2) 量測到 BroadcastChannel 觸發的 rehydrate 在另一個 renderer **落後恰好一筆寫入**（磁碟 7 個 workspace、記憶體 6 個）——整個 app 既有的潛在問題，平常下一次寫入就補上，三個 store 必須精確一致時才變成永久卡住 → `syncManager` 同時聽原生 `storage` 事件。第三輪全過（四輪跨視窗來回，兩個視窗每一輪都 settled 在同一個世界）。
+
+Codex：P3a 三次、P3b 五次（R1、攻擊方、critic 三輪），全 `gpt-5.6-sol`。P3b 的 critic 三輪找到的是同一類問題的逐步收窄（同 epoch 並行 → read-check-write 不原子 → 取得鎖後 storage 視圖過期），都源自 localStorage 沒有跨 renderer 的一致性；前兩條已修（每次操作唯一的 epoch、有 Web Locks 就用、沒有就把殘留用測試釘成已知行為），第三條**刻意不修**、記為殘留 #1256（人手到不了的毫秒級窗口、後果是「後切換的人贏」、屏障仍成立）。follow-up：#1255（切換後重跑 session 對帳，P3d 的前置）、#1256、#1240（拆大檔，`sync-status.ts` 併入）。
+
+vitest 9256、lint、tsc、build 綠。純 SPA，daemon 仍是 411、免 deploy。下一支 P3c-1：每個 tab 都有 workspace（standalone tab 移除）。
+
 ## [1.0.0-alpha.414] - 2026-09-20
 
 ### Feature: Profile Sync P2b-2——driver 接線：collector、executor、租約 leader、`startProfileSync()`；真機驗收（#1247、#1249、#1250、#1251）
