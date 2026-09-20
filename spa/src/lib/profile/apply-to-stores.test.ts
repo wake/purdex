@@ -445,6 +445,20 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
       return JSON.parse(JSON.stringify({ hosts: h.hosts, hostOrder: h.hostOrder, activeHostId: h.activeHostId, devHostId: h.devHostId, runtime: h.runtime }))
     }
 
+    /** The three stores the cascade clears and its own undo does NOT bring back — by reference, so "equal" means "the very same entries". */
+    const threeStores = () => ({
+      executions: useExecutionStore.getState().executions,
+      list: useExecutionListStore.getState().byHost,
+      nex: useNexHostStore.getState().byHost,
+    })
+
+    /** A richer H2: a second execution holding a lease, so the snapshot has more than one entry and more than default fields. */
+    function seedRich(): void {
+      seedHostWorld()
+      useExecutionStore.getState().applyEvents(H2, 'exc_2', [{ seq: 7, execution_id: 'exc_2', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }] as never)
+      useExecutionStore.getState().setLease(H2, 'exc_2', { leaseId: 'ls_1', expiresAt: 9_999_999_999_999 })
+    }
+
     /** The n-th `useHostStore.setState` made by the apply throws (1 = staging, 2 = the final write, 3 = publish). */
     function failHostWrite(n: number, message = 'host write failed'): void {
       const real = useHostStore.setState
@@ -455,25 +469,54 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
       })
     }
 
-    it('the host slice is back, the removed host\'s runtime row included, and nex-host is asked again for it — and only for it', async () => {
-      seedHostWorld()
+    it('the host slice is back — the removed host\'s runtime row included — and so is what the cascade\'s own undo restores', async () => {
+      seedRich()
       const before = hostSlice()
       failHostWrite(2)
       await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
       vi.mocked(useHostStore.setState).mockRestore()
       expect(hostSlice()).toEqual(before)
       expect(useHostStore.getState().runtime[H2]).toEqual({ status: 'connected' })
-      expect(useSessionStore.getState().sessions[H2]).toHaveLength(1) // the cascade's own undo
-      expect(ensure.mock.calls).toEqual([[H2]])
+      expect(useSessionStore.getState().sessions[H2]).toHaveLength(1)
       expect(useRebuildStore.getState().lockedBy).toBeNull()
     })
 
-    it('a host nex-host knew nothing about is not fetched by the rollback', async () => {
-      seedHostWorld()
-      useNexHostStore.setState({ byHost: {} })
+    it('execution / execution-list / nex-host: the removed host\'s entries are back, the very same ones, and the other host\'s were never touched', async () => {
+      seedRich()
+      const before = threeStores()
+      expect(Object.keys(before.executions).sort()).toEqual([`${H2}:exc_1`, `${H2}:exc_2`, `${M}:exc_1`].sort())
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
+      vi.mocked(useHostStore.setState).mockRestore()
+
+      const after = threeStores()
+      expect(after.executions).toEqual(before.executions)
+      expect(after.list).toEqual(before.list)
+      expect(after.nex).toEqual(before.nex)
+      for (const key of Object.keys(before.executions)) expect(after.executions[key], key).toBe(before.executions[key])
+      for (const h of [M, H2]) {
+        expect(after.list[h], h).toBe(before.list[h])
+        expect(after.nex[h], h).toBe(before.nex[h])
+      }
+      expect(after.executions[`${H2}:exc_2`].lease).toEqual({ leaseId: 'ls_1', expiresAt: 9_999_999_999_999 })
+      expect(ensure).not.toHaveBeenCalled() // restored as it was: nothing to re-fetch
+    })
+
+    it('an entry that appeared for the removed host DURING the cascade (a lease hook writing `lease: null`) does not survive the restore', async () => {
+      seedRich()
+      const before = threeStores()
+      // what a mounted useExecutionLease does, synchronously, the moment its host leaves the store
+      const unsub = useHostStore.subscribe((next, prev) => {
+        if (prev.hosts[H2] && !next.hosts[H2]) {
+          useExecutionStore.getState().setLease(H2, 'exc_2', null)
+          useExecutionStore.getState().setLease(H2, 'exc_ghost', null)
+        }
+      })
       failHostWrite(2)
       await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('host write failed')
-      expect(ensure).not.toHaveBeenCalled()
+      unsub()
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(threeStores().executions).toEqual(before.executions)
     })
 
     // Why `runtime[H]` may be restored verbatim (`connected` included): the
@@ -481,38 +524,36 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
     // can run inside a synchronous block. From the staging write to the end of the
     // rollback there must therefore be NO await — this pins it on the last
     // fallible step (publish).
-    it('from the cascade to the end of the rollback nothing is awaited: the state is back before the promise is even looked at', () => {
-      seedHostWorld()
+    it('from the cascade to the end of the rollback nothing is awaited: everything is back before the promise is even looked at', () => {
+      seedRich()
       const before = hostSlice()
+      const three = threeStores()
       failHostWrite(3)
       const pending = applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
       vi.mocked(useHostStore.setState).mockRestore()
       expect(hostSlice()).toEqual(before) // synchronously
-      expect(ensure.mock.calls).toEqual([[H2]])
+      expect(threeStores()).toEqual(three)
       return expect(pending).rejects.toThrow('host write failed')
     })
 
-    it('ensure itself throws → the original error survives, and says the rollback is incomplete', async () => {
-      seedHostWorld()
+    it('a restore that throws is not swallowed: the original error survives and says the rollback is incomplete', async () => {
+      seedRich()
       const before = hostSlice()
-      ensure.mockImplementation(() => {
-        throw new Error('ensure blew up')
-      })
       failHostWrite(2)
+      const realNexSet = useNexHostStore.setState
+      vi.spyOn(useNexHostStore, 'setState').mockImplementation((...args) => {
+        const patch = args[0] as { byHost?: unknown }
+        if (typeof patch === 'function') throw new Error('nex restore blew up') // the rollback's functional merge; afterEach's plain patch passes
+        realNexSet(...(args as Parameters<typeof realNexSet>))
+      })
       const failure = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx).then(() => null, (e: Error) => e)
       vi.mocked(useHostStore.setState).mockRestore()
+      vi.mocked(useNexHostStore.setState).mockRestore()
       expect(failure?.message).toMatch(/^host write failed/)
       expect(failure?.message).toMatch(/rollback incomplete/)
-      expect(failure?.message).toMatch(/ensure blew up/)
+      expect(failure?.message).toMatch(/nex restore blew up/)
       expect(hostSlice()).toEqual(before)
-    })
-
-    it('ensure rejects later → nothing unhandled, the original error is what is thrown', async () => {
-      seedHostWorld()
-      ensure.mockImplementation(() => Promise.reject(new Error('offline')))
-      failHostWrite(2)
-      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
-      await Promise.resolve()
+      expect(Object.keys(useExecutionStore.getState().executions)).toContain(`${H2}:exc_2`) // the others were still restored
     })
   })
 

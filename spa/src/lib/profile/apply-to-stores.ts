@@ -29,7 +29,12 @@ import type { HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
+import { splitExecutionKey, useExecutionStore } from '../../stores/useExecutionStore'
+import { useExecutionListStore } from '../../stores/useExecutionListStore'
+import type { HostListCache } from '../../stores/useExecutionListStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
+import type { NexHostEntry } from '../../stores/useNexHostStore'
+import type { ExecutionState } from '../nex/event-reducer'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
 import { withOperationLock } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -158,6 +163,62 @@ function hostsRefusal(local: Record<string, HostConfig>, incoming: HostsPayload,
   return changed.length > 0 ? `payload changes the master host's ${changed.join(', ')}` : null
 }
 
+/** What `deleteHostCascade` clears for a host and its undo does not bring back — exactly the scope of the three `clearHost`s. */
+interface HostCaches {
+  hostIds: ReadonlySet<string>
+  /** `useExecutionStore.executions` entries whose key names one of the hosts. */
+  executions: Record<string, ExecutionState>
+  /** `useExecutionListStore.byHost[id]`, where present. */
+  lists: Record<string, HostListCache>
+  /** `useNexHostStore.byHost[id]`, where present. */
+  nex: Record<string, NexHostEntry>
+}
+
+function snapshotHostCaches(hostIds: readonly string[]): HostCaches {
+  const ids = new Set(hostIds)
+  const pick = <T>(record: Record<string, T>): Record<string, T> => {
+    const out: Record<string, T> = {}
+    for (const id of ids) if (Object.hasOwn(record, id)) out[id] = record[id]
+    return out
+  }
+  const executions: Record<string, ExecutionState> = {}
+  for (const [key, value] of Object.entries(useExecutionStore.getState().executions)) {
+    if (ids.has(splitExecutionKey(key).hostId)) executions[key] = value
+  }
+  return { hostIds: ids, executions, lists: pick(useExecutionListStore.getState().byHost), nex: pick(useNexHostStore.getState().byHost) }
+}
+
+/**
+ * Writes the snapshot back: for THOSE hosts, the entries become exactly what they
+ * were (anything that appeared for them meanwhile is dropped); every other host's
+ * entries are left as they are now. None of the three stores persists, so a
+ * throw here is unexpected — it is still reported, never swallowed. Returns what
+ * could not be restored. Order matters: see ROLLBACK in `applyHostsSection`.
+ */
+function restoreHostCaches(snap: HostCaches): string[] {
+  if (snap.hostIds.size === 0) return []
+  const others = <T>(record: Record<string, T>, hostOf: (key: string) => string): Record<string, T> => {
+    const out: Record<string, T> = {}
+    for (const [key, value] of Object.entries(record)) if (!snap.hostIds.has(hostOf(key))) out[key] = value
+    return out
+  }
+  const self = (key: string): string => key
+  const steps: Array<[string, () => void]> = [
+    ['execution', () => useExecutionStore.setState((s) => ({ executions: { ...others(s.executions, (k) => splitExecutionKey(k).hostId), ...snap.executions } }))],
+    ['execution-list', () => useExecutionListStore.setState((s) => ({ byHost: { ...others(s.byHost, self), ...snap.lists } }))],
+    ['nex-host', () => useNexHostStore.setState((s) => ({ byHost: { ...others(s.byHost, self), ...snap.nex } }))],
+  ]
+  const unfinished: string[] = []
+  for (const [name, step] of steps) {
+    try {
+      step()
+    } catch (err) {
+      unfinished.push(`${name}: ${messageOf(err)}`)
+    }
+  }
+  return unfinished
+}
+
 /**
  * Replaces the host list. Additions, edits and reorders are one write. A host the
  * payload REMOVES goes through `deleteHostCascade(id, false)` — the app's own
@@ -189,42 +250,60 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   if (refusal !== null) return invalid(refusal)
 
   const store = asPersisted(useHostStore)
-  // ROLLBACK, and what it is not. When a host-store write throws after the
-  // cascade ran (persist: quota / SecurityError), the catch runs the cascade's
-  // own undo handles and restores the host slice. That is not a transaction:
-  //   - sessions, agent state, host settings, the marked panes: restored by the
-  //     cascade's undo (what "Undo" does after a manual delete);
-  //   - execution store: NOT restored. Its data comes back by itself — a pane
-  //     that is still mounted re-runs summary → history → SSE when its host
-  //     reappears (`useExecutionSubscription` depends on `hostPresent`). A held
-  //     lease is gone locally and is re-acquired by the next send, exactly as
-  //     after a manual undo (`useExecutionLease` drops it the moment the host goes);
-  //   - nex-host and execution-list: NOT restored, and NOT re-fetched by
-  //     themselves when a host returns under the same id — every `ensure` effect
-  //     depends on `hostId` alone, and the reconnect watcher in useNexHostStore
-  //     requires `byHost[hostId]` to still exist, which `clearHost` removed. So
-  //     the rollback asks once, `ensure(id)`, for each restored host nex-host
-  //     knew before; the execution-list watcher opens on its own once nex is
-  //     ready. `ensure` must not add a new failure: a synchronous throw is
-  //     reported as "rollback incomplete" on the ORIGINAL error, a later
-  //     rejection is dropped (the nex-host entry records its own error);
-  //   - `runtime[H]` IS restored verbatim, `connected` included, and that is
-  //     true rather than stale ONLY because nothing is awaited between the
-  //     staging write and the end of the rollback: the connection layer
-  //     (`useMultiHostEventWs`) closes a host's WS from a React effect keyed on
-  //     the host list, no effect runs inside a synchronous block, and by the time
-  //     one can, the list is what it was — the WS never noticed. An `await` in
-  //     that stretch would let the effect tear the connection down, and the
-  //     restored `connected` would then be a lie until the layer reconnected.
-  //     Hence `persist.rehydrate()` is NOT awaited inside the try (it is
-  //     synchronous with this storage — premise (d) in the tests — and is awaited
-  //     after the last fallible step, for the day it is not).
+  // ROLLBACK, and its edges. When a host-store write throws after the cascade ran
+  // (persist: quota / SecurityError), the catch puts back, in this order:
+  //   1. what the cascade's own undo handles restore — sessions, agent state,
+  //      host settings, the marked panes (what "Undo" does after a manual delete);
+  //   2. the host slice, `runtime[H]` included;
+  //   3. the three stores the cascade clears and its undo does NOT restore —
+  //      execution, execution-list, nex-host — from `snapshotHostCaches`, taken
+  //      before the cascade. Nothing here counts on a re-fetch: the removal and
+  //      the restore happen inside ONE synchronous block (see below), so React
+  //      never sees the host go, no `hostPresent` / `hostId` effect re-runs, and
+  //      what is not written back stays lost. (No `ensure` either: the nex-host
+  //      entry returns as it was, `fetchedAt` included, so there is nothing to
+  //      re-ask — on a fresh entry `ensure` is a no-op, on a stale one a TTL
+  //      refresh that the next reader triggers anyway.)
+  // What writing state back cannot undo, and why that is acceptable:
+  //   - execution-list: `clearHost` CLOSES that host's site-wide SSE and frees its
+  //     lane. The cache comes back; the stream is reopened by the app's own
+  //     watcher (`startExecutionListInvalidation`), which sees nex-host go from
+  //     absent to ready when step 3 restores it, and re-fetches the list. The
+  //     list is restored BEFORE nex-host for that reason.
+  //   - a mounted `useExecutionLease` reacts to the host leaving the store in a
+  //     zustand subscriber (synchronous, so it does run): it stops its heartbeat
+  //     and writes `lease: null`. The restore puts the lease back without a
+  //     heartbeat — the state that hook already calls "idle": its next
+  //     `ensureLease` re-arms the timer if the lease is still valid and
+  //     re-acquires if not. Entries such a subscriber CREATED for the removed
+  //     host during the cascade are dropped by the restore (it replaces the
+  //     host's entries, it does not merge into them).
+  //   - the per-pane SSE of `useExecutionSubscription` is torn down from a React
+  //     effect, which never ran: it is still open and continues from the restored
+  //     `lastSeq`.
+  //   - NOT covered: `deleteHostCascade` throwing half-way (its own persist
+  //     writes — tab store, host settings, host store — can fail too). It then
+  //     returns no undo handle, so step 1 has nothing for that host; steps 2–3
+  //     still run. Closing that needs an undo that survives a throw, in
+  //     host-lifecycle.ts.
+  // A restore step that throws is not swallowed: it is appended to the ORIGINAL
+  // error as "rollback incomplete".
+  //   `runtime[H]` is restored verbatim, `connected` included, and that is true
+  // rather than stale ONLY because nothing is awaited between the staging write
+  // and the end of the rollback: the connection layer (`useMultiHostEventWs`)
+  // closes a host's WS from a React effect keyed on the host list, no effect runs
+  // inside a synchronous block, and by the time one can, the list is what it was
+  // — the WS never noticed. An `await` in that stretch would let the effect tear
+  // the connection down, and the restored `connected` would be a lie until the
+  // layer reconnected. Hence `persist.rehydrate()` is NOT awaited inside the try
+  // (it is synchronous with this storage — premise (d) in the tests — and is
+  // awaited after the last fallible step, for the day it is not).
   const write = async (): Promise<ApplyOutcome> => {
     const state = useHostStore.getState()
     const old = { hosts: state.hosts, hostOrder: state.hostOrder, activeHostId: state.activeHostId, devHostId: state.devHostId, runtime: state.runtime }
     const { next, removedHostIds } = applyHosts(old, incoming)
     const undos: Array<() => void> = []
-    const nexKnown = removedHostIds.filter((id) => Object.hasOwn(useNexHostStore.getState().byHost, id))
+    const caches = snapshotHostCaches(removedHostIds) // BEFORE the cascade clears them
     let hooks: void | Promise<void>
     try {
       if (removedHostIds.length > 0) {
@@ -249,15 +328,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
         }
       }
       restore(store, old)
-      if (undos.length > 0) {
-        for (const id of nexKnown) {
-          try {
-            void useNexHostStore.getState().ensure(id).catch(() => {})
-          } catch (ensureErr) {
-            unfinished.push(`nex-host ensure(${id}): ${messageOf(ensureErr)}`)
-          }
-        }
-      }
+      unfinished.push(...restoreHostCaches(caches))
       if (unfinished.length === 0) throw err
       throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
