@@ -8,6 +8,10 @@
 // `syncManager`-registered store like the eighteen others on main — its one
 // storage key and its entry in the (singleton) sync channel's registry exist for
 // everybody and are not part of "nothing".
+//   Since P3b (plan Task 4) the master's tab world can be "unsettled", and a
+// stretch of that which does not end is reported (`world-unsettled`). With no
+// master nobody even looks: `useLocalProfilesStore` is not subscribed to, and
+// there is no timer for it with a master either — it is asked on store changes.
 //   Since P3 (plan Task 2) a UI can subscribe to the sync status and ask for a
 // sync from any window. With no master that, too, is memory only: no `storage`
 // listener, no `purdex-profile-status`, no `purdex-profile-cmd:*` — and a user
@@ -17,6 +21,8 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useProfileStore } from '../../stores/useProfileStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import { __resetMasterWorldForTest } from './master-world'
 import { STORAGE_KEYS } from '../storage/keys'
 import { profileSyncSnapshot, requestResolve, requestSyncNow, startProfileSync, subscribeProfileSync } from './start'
 
@@ -28,10 +34,15 @@ beforeEach(() => {
   vi.useFakeTimers()
   localStorage.clear()
   useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true })
+  __resetMasterWorldForTest()
+  useTabStore.setState({ worldId: 'master', worldEpoch: 0 })
+  useWorkspaceStore.setState({ worldId: 'master', worldEpoch: 0 })
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
 })
 
 afterEach(() => {
   stop()
+  useTabStore.setState({ worldId: 'master', worldEpoch: 0 })
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.useRealTimers()
@@ -47,6 +58,8 @@ describe('no master → the app is exactly what it was', () => {
     const hostSub = vi.spyOn(useHostStore, 'subscribe')
     const tabSub = vi.spyOn(useTabStore, 'subscribe')
     const wsSub = vi.spyOn(useWorkspaceStore, 'subscribe')
+    const localSub = vi.spyOn(useLocalProfilesStore, 'subscribe')
+    useTabStore.setState({ worldEpoch: 9 }) // a stuck unsettled world, even: nobody looks
     const listen = vi.spyOn(window, 'addEventListener')
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
     const getItem = vi.spyOn(Storage.prototype, 'getItem')
@@ -91,6 +104,7 @@ describe('no master → the app is exactly what it was', () => {
     expect(hostSub).not.toHaveBeenCalled()
     expect(tabSub).not.toHaveBeenCalled()
     expect(wsSub).not.toHaveBeenCalled()
+    expect(localSub).not.toHaveBeenCalled()
     expect(listen).not.toHaveBeenCalled()
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(digest).not.toHaveBeenCalled()
@@ -118,6 +132,15 @@ describe('no master → the app is exactly what it was', () => {
     localStorage.setItem(`${STORAGE_KEYS.PROFILE_COMMAND_PREFIX}${encodeURIComponent(masterTag)}:left`, JSON.stringify({ kind: 'syncNow', master: masterTag, at: 0 }))
     const listeners = (spy: typeof add) => spy.mock.calls.filter(([type]) => type === 'storage').map(([, fn]) => fn)
     expect(listeners(add).length).toBeGreaterThanOrEqual(2) // the lease's and the status channel's
+
+    // The master's tab world goes unsettled and stays so: said once it has lasted (on a store change — there is no
+    // timer for it, which the count at the end of this test would see).
+    useTabStore.setState({ worldEpoch: 9 })
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(profileSyncSnapshot().problems.map((p) => p.kind)).not.toContain('world-unsettled')
+    useTabStore.setState({ activeTabId: null })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(profileSyncSnapshot().problems.filter((p) => p.kind === 'world-unsettled')).toMatchObject([{ detail: 'epoch-mismatch' }])
 
     useProfileStore.getState().clearMaster()
     await vi.advanceTimersByTimeAsync(60_000)

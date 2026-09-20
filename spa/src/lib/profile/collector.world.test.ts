@@ -19,7 +19,7 @@ import { STORAGE_KEYS } from '../storage'
 import type { Tab, Workspace } from '../../types/tab'
 import { applySectionToStores } from './apply-to-stores'
 import { startCollector, type Collector, type SectionReport } from './collector'
-import { __resetMasterWorldForTest, commitTabWorld, readMasterWorld } from './master-world'
+import { MASTER_WORLD_STUCK_MS, __resetMasterWorldForTest, commitTabWorld, readMasterWorld } from './master-world'
 import type { WorkspacesPayload } from './types'
 
 // As collector.test.ts: a `crypto.subtle` digest cannot be flushed by fake timers; the structural key is an
@@ -97,9 +97,10 @@ function permutations<T>(items: T[]): T[][] {
 let reports: SectionReport[] = []
 let problems: { kind: string; detail: string }[] = []
 let collector: Collector | null = null
+let clock = 0
 
 function start(): Collector {
-  collector = startCollector({ onSection: (r) => reports.push(r), onProblem: (p) => problems.push(p) })
+  collector = startCollector({ onSection: (r) => reports.push(r), onProblem: (p) => problems.push(p), now: () => clock })
   return collector
 }
 
@@ -119,6 +120,7 @@ beforeEach(() => {
   __resetMasterWorldForTest()
   reports = []
   problems = []
+  clock = 0
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'], activeHostId: 'h1', devHostId: null, runtime: {} })
   useWorkspaceSettingsStore.setState({ workspaces: {} })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
@@ -313,5 +315,42 @@ describe('unsettled → settled: the master world is looked at again, whole', ()
     useTabStore.setState({ worldEpoch: 0 })
     await vi.advanceTimersByTimeAsync(SETTLE)
     expect(reports.map((r) => r.key)).toEqual(['settings'])
+  })
+})
+
+describe('world-unsettled: a stretch that does not end is said, once', () => {
+  it('not at five seconds, at the first change after them; once per stretch; again for the next one', async () => {
+    await primed()
+    clock = 1_000
+    useTabStore.setState({ worldEpoch: 9, worldId: SLAVE }) // the stretch begins
+    clock = 1_000 + MASTER_WORLD_STUCK_MS
+    useTabStore.getState().togglePin('mt1')
+    expect(problems).toEqual([])
+    clock += 1
+    useTabStore.getState().togglePin('mt1')
+    expect(problems).toEqual([{ kind: 'world-unsettled', detail: 'epoch-mismatch' }])
+    clock += 60_000
+    useTabStore.getState().togglePin('mt1')
+    expect(problems).toHaveLength(1)
+
+    useTabStore.setState({ worldEpoch: 0, worldId: MASTER_PROFILE_ID }) // settled
+    clock += 60_000
+    useTabStore.setState({ worldId: SLAVE }) // a new stretch, with its own clock
+    useTabStore.getState().togglePin('mt1')
+    expect(problems).toHaveLength(1)
+    clock += MASTER_WORLD_STUCK_MS + 1
+    useTabStore.getState().togglePin('mt1')
+    expect(problems).toEqual([
+      { kind: 'world-unsettled', detail: 'epoch-mismatch' },
+      { kind: 'world-unsettled', detail: 'world-mismatch' },
+    ])
+  })
+
+  it('a settled collector never asks, whatever the screen does', async () => {
+    slaveOnScreen()
+    await primed()
+    clock = 1_000_000
+    useTabStore.getState().togglePin('st1')
+    expect(problems).toEqual([])
   })
 })

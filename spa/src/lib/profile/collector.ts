@@ -23,7 +23,11 @@
 //   - a slave on screen → its edits change nothing the master world is made of,
 //     and `subscribeMasterWorld` does not even call.
 // `hosts` is live whatever is on screen (a slave borrows them, decision 9).
+// (The two live tab stores are still SUBSCRIBED to, for one thing only: a moment
+// at which to ask whether an unsettled stretch is stuck. Their content is not read.)
 import { useHostStore } from '../../stores/useHostStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { useTabStore } from '../../stores/useTabStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -34,7 +38,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { Workspace } from '../../types/tab'
 import { hashSection } from './hash'
-import { readMasterWorld, subscribeMasterWorld } from './master-world'
+import { masterWorldStuck, readMasterWorld, subscribeMasterWorld } from './master-world'
 import type { MasterWorld } from './master-world'
 import { PROJECTIONS, tabsSectionKey, workspaceIdOf } from './projections'
 import {
@@ -59,10 +63,13 @@ export interface SectionReport {
 
 export interface CollectorOptions {
   onSection: (r: SectionReport) => void
-  /** `invalid-workspace-id` (detail: the id), `standalone-tabs` (detail: the count), `build-failed` (detail: key + message). */
+  /** `invalid-workspace-id` (detail: the id), `standalone-tabs` (detail: the count), `build-failed` (detail: key + message),
+   *  `world-unsettled` (detail: the reason; once per unsettled stretch, and only after it has lasted `MASTER_WORLD_STUCK_MS`). */
   onProblem?: (p: { kind: string; detail: string }) => void
   /** Per-section trailing debounce; default 500. */
   debounceMs?: number
+  /** The clock `world-unsettled` is timed on; default `Date.now`. */
+  now?: () => number
 }
 
 export interface Collector {
@@ -164,6 +171,8 @@ export function startCollector(opts: CollectorOptions): Collector {
       masterSet = masterSetKey(read.world)
     }
   }
+  const clock = opts.now ?? Date.now
+  let stuckReported = false
 
   function problemOnce(kind: string, detail: string): void {
     const id = `${kind}\n${detail}`
@@ -312,6 +321,28 @@ export function startCollector(opts: CollectorOptions): Collector {
   }
 
   /**
+   * An unsettled stretch that does not end is made VISIBLE, never repaired (master-world.ts): `world-unsettled`,
+   * once per stretch. There is no timer for it — this file's only timers are debounces of a change, and the iron
+   * rule's test counts them. It is asked on what does happen while the app is in use: a change of the live tab
+   * stores (the subscription below), which a user looking at a stuck screen keeps making.
+   */
+  function checkStuck(): void {
+    if (stopped) return
+    const read = readMasterWorld()
+    const stuck = masterWorldStuck(clock()) // also what starts, and forgets, the stretch's clock
+    if (read.settled) {
+      stuckReported = false
+      return
+    }
+    if (!stuck || stuckReported) return
+    stuckReported = true
+    opts.onProblem?.({ kind: 'world-unsettled', detail: read.reason })
+  }
+  const checkStuckWhileUnsettled = (): void => {
+    if (lastWorld === null) checkStuck()
+  }
+
+  /**
    * The master world moved, went out of sight, or came back (`subscribeMasterWorld`). Unsettled: every timer of a world slot is dropped — what it
    * would have built is unreadable now — and the world is forgotten, so that settling schedules ALL of it.
    */
@@ -325,8 +356,10 @@ export function startCollector(opts: CollectorOptions): Collector {
         timers.delete(slot)
       }
       lastWorld = null
+      checkStuck() // starts the stretch's clock
       return
     }
+    checkStuck() // settled: forgets the stretch
     const master = masterSetKey(read.world)
     if (lastWorld === null) scheduleWholeWorld(read.world)
     else {
@@ -343,6 +376,8 @@ export function startCollector(opts: CollectorOptions): Collector {
     }),
 
     subscribeMasterWorld(onMasterWorld),
+    useTabStore.subscribe(checkStuckWhileUnsettled),
+    useWorkspaceStore.subscribe(checkStuckWhileUnsettled),
 
     ...SETTINGS_KEYS.map((storageKey) => {
       const fields = projectedSettingsFields(storageKey)

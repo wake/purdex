@@ -299,7 +299,10 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     },
   })
   const unsubscribeWs = subscribeProfileEvents((e) => executor.onRemoteEvent(e))
-  const collector = startCollector({ onSection: (r) => executor.onSection(r), onProblem: reportProblem })
+  // `world-unsettled` (collector.ts) arrives through `onProblem` like every other problem of the collector's; it is
+  // timed on this file's clock. Neither the collector nor master-world.ts has a timer for it (THE IRON RULE's test
+  // counts timers after a detach), and master-world.ts is subscribed to by the collector only — so only under a master.
+  const collector = startCollector({ onSection: (r) => executor.onSection(r), onProblem: reportProblem, now: () => clock() })
 
   /**
    * The master host is connected: FIRST the attachment, and only once the daemon
