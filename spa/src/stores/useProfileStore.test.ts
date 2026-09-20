@@ -288,14 +288,23 @@ describe('attachGeneration — every attach is a new one, the same master includ
     expect(useProfileStore.getState().attachGeneration).toBe(3)
   })
 
-  it('a refused setMaster, clearMaster, clearPendingDirection and setAutoSync leave it alone (it never goes down)', () => {
+  it('a refused setMaster, clearPendingDirection, setAutoSync, suspend and resume leave it alone (it never goes down)', () => {
     useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().setMaster('host-1', 'nope', 'pull', EP)
     useProfileStore.getState().setMaster('host-1', PROFILE, 'sideways' as never, EP)
     useProfileStore.getState().clearPendingDirection()
     useProfileStore.getState().setAutoSync(false)
-    useProfileStore.getState().clearMaster()
+    useProfileStore.getState().suspend('t', 5_000)
+    useProfileStore.getState().resume('t')
     expect(useProfileStore.getState().attachGeneration).toBe(1)
+  })
+
+  it('clearMaster moves it too: it is the generation of the CONTROL PLANE — an attach still in flight elsewhere must be able to see that a detach overtook it', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().attachGeneration).toBe(2)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    expect(useProfileStore.getState().attachGeneration).toBe(3)
   })
 
   it('survives a reload', async () => {

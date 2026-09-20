@@ -173,14 +173,26 @@ function isSuspended(): boolean {
  * sanitiser's business, and a broken record has no master to sync for anyway.
  */
 function suspendedInStorage(): boolean {
+  const until = storedControl()?.suspension?.until
+  return typeof until === 'number' && Number.isFinite(until) && clock() < until
+}
+
+/** The control plane as `localStorage` holds it right now (the persist envelope's `state`), or null: absent, unreadable. */
+function storedControl(): { masterHostId?: unknown; masterProfileId?: unknown; attachGeneration?: unknown; suspension?: { until?: unknown } | null } | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.PROFILE)
-    if (raw === null) return false
-    const until = (JSON.parse(raw) as { state?: { suspension?: { until?: unknown } | null } }).state?.suspension?.until
-    return typeof until === 'number' && Number.isFinite(until) && clock() < until
+    if (raw === null) return null
+    const state = (JSON.parse(raw) as { state?: unknown }).state
+    return typeof state === 'object' && state !== null ? (state as ReturnType<typeof storedControl>) : null
   } catch {
-    return false
+    return null
   }
+}
+
+/** `attachGeneration` as storage holds it; this window's memory only when storage cannot be read. */
+function storedGeneration(): number {
+  const g = storedControl()?.attachGeneration
+  return typeof g === 'number' && Number.isSafeInteger(g) ? g : useProfileStore.getState().attachGeneration
 }
 
 /** The owner of one attach's suspension (see `useProfileStore`, WHY `suspension`). */
@@ -643,6 +655,18 @@ interface Hold {
   stop(): void
   /** The attach failed: lift OUR suspension. A newer attach's stays, and the drivers with it; otherwise the old mode comes back. */
   giveUp(): void
+  /**
+   * ANOTHER WINDOW's attach or detach overtook this attach: the generation in `localStorage` is not the one
+   * this attach was asked in (plus what this window's own queue did since). Windows have separate queues, so
+   * nothing else can tell an attach whose PUT is out that the user has meanwhile said "stop" elsewhere — and
+   * this window's store may not have heard yet, which is why STORAGE is read, synchronously, like the lease.
+   *   What is left: the check is "read, then commit" — not atomic; and `localStorage` is not instantaneous
+   * between two renderer processes. The window is one synchronous read and the synchronous commit that
+   * follows it, no longer the whole wait for the PUT (up to 15 s).
+   */
+  superseded(): boolean
+  /** This window's own queue moved the generation (a `setMaster` / `clearMaster` of ours): not an overtaking. */
+  expected: number
 }
 
 /**
@@ -657,6 +681,12 @@ interface Hold {
  */
 /** The attaches of THIS window that are queued or running. */
 const liveHolds = new Set<string>()
+const liveAttaches = new Set<Hold>()
+
+/** This window has just moved the generation itself: the attaches waiting behind it expect that. */
+function ownGenerationMove(): void {
+  for (const hold of liveAttaches) hold.expected += 1
+}
 
 function holdStill(): Hold {
   const token = newToken()
@@ -668,11 +698,15 @@ function holdStill(): Hold {
   })
   const stop = (): void => {
     liveHolds.delete(token)
+    liveAttaches.delete(hold)
     unsubscribe()
     unsubscribe = () => undefined
   }
-  return {
+  const hold: Hold = {
     token,
+    // read AFTER our own `suspend()` above, which persists the store but does not move the generation
+    expected: storedGeneration(),
+    superseded: () => storedGeneration() !== hold.expected,
     // Ours — or that of an attach of this window waiting in the queue BEHIND us (it suspended in its call, so
     // it is the newer owner, and its 30 s are running while we work): refreshed under ITS token, so that it
     // cannot run out before its turn. Another window's is left alone.
@@ -686,6 +720,8 @@ function holdStill(): Hold {
       useProfileStore.getState().resume(token)
     },
   }
+  liveAttaches.add(hold)
+  return hold
 }
 
 async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): Promise<AttachResult> {
@@ -704,6 +740,7 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
     return asYouWere(message(e))
   }
   if (put.kind === 'failed') return asYouWere(put.reason)
+  if (hold.superseded()) return standDown(next, hold)
   if (endpointOf(hostId) === null) return asYouWere('unknown-host') // gone while the PUT was out: leave the previous master whole
   if (previous !== null && !sameMaster(previous, next)) {
     // A second request to wait for, so a fresh budget. Each stretch (`ATTACH_SUSPEND_MS`, 30 s) is strictly
@@ -711,6 +748,7 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
     // this one starts (it began at most 15 s ago).
     hold.extend()
     await dropAttachment(previous)
+    if (hold.superseded()) return standDown(next, hold)
   }
   // The address the attachment was written to: the home of every base from here
   // on. Read after the last `await`, checked before anything is cleared (the host
@@ -724,10 +762,30 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
   // `setMaster`: the old driver cannot write a base in between, and the new one
   // (built by the subscription, on the new `attachGeneration`) is not seeded
   // from the old ones.
+  // THE COMMIT. Last look at storage first: no `await` lies between it and `setMaster`.
+  if (hold.superseded()) return standDown(next, hold)
   clearSectionStore()
   hold.stop() // `setMaster` lifts our suspension on purpose
   // One write: master, direction, endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
-  return useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token) ? { ok: true } : asYouWere('invalid-profile-id')
+  if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token)) return asYouWere('invalid-profile-id')
+  ownGenerationMove()
+  return { ok: true }
+}
+
+/**
+ * Overtaken by another window (`Hold.superseded`): this attach commits NOTHING — no bases cleared, no master
+ * set. This window's store is first brought up to what storage holds (its broadcast may still be on the way;
+ * a write made from the stale memory — even lifting our own suspension — would persist the OLD master over
+ * the other window's decision), then our suspension is lifted if it is still ours. The attachment this attach
+ * has just written is taken down again, best effort, unless it is exactly the one the winner wants: overtaken
+ * by a DETACH → nobody wants it; by an attach to the same (host, profile) → theirs now; to another → nobody's.
+ */
+async function standDown(next: Master, hold: Hold): Promise<AttachResult> {
+  await useProfileStore.persist.rehydrate() // synchronous storage: memory is storage before this yields
+  hold.giveUp()
+  const winner = selectMaster(useProfileStore.getState())
+  if (!sameMaster(winner, next)) await dropAttachment(next)
+  return { ok: false, reason: 'superseded' }
 }
 
 /**
@@ -744,6 +802,7 @@ export function detachMaster(): Promise<void> {
     const master = selectMaster(useProfileStore.getState())
     if (master === null) return
     useProfileStore.getState().clearMaster()
+    ownGenerationMove() // an attach of THIS window queued behind us is not "overtaken" by it: the user asked in that order
     clearSectionStore(master.profileId)
     await dropAttachment(master)
   })

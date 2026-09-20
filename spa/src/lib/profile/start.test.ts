@@ -136,7 +136,7 @@ vi.mock('../client-identity', () => ({
 }))
 
 import { useHostStore } from '../../stores/useHostStore'
-import { useProfileStore } from '../../stores/useProfileStore'
+import { selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import { useDeviceStateStore } from '../../stores/useDeviceStateStore'
 import { STORAGE_KEYS } from '../storage/keys'
 import { deleteAttachment, listProfiles, putAttachment } from './api'
@@ -791,6 +791,124 @@ describe('suspended: an attach is being made somewhere', () => {
   it('a first attach (no master yet) has nobody to suspend', async () => {
     expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
     expect(useProfileStore.getState().suspension).toBeNull()
+  })
+})
+
+describe('an attach overtaken by ANOTHER window (its store has not heard yet: only localStorage has)', () => {
+  type Envelope = { state: Record<string, unknown>; version: number }
+  const stored = (): Envelope => JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE) ?? '{}') as Envelope
+  /** What window B persisted. This window's `useProfileStore` is NOT told: the broadcast is still on its way. */
+  const otherWindowWrote = (over: Record<string, unknown>): void => {
+    const envelope = stored()
+    const generation = (envelope.state.attachGeneration as number) + 1
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...envelope.state, suspension: null, ...over, attachGeneration: generation } }))
+  }
+  const DETACHED = { masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null }
+
+  async function attachingWithThePutOut(hostId: string, profileId: string): Promise<{ result: Promise<unknown>; release: (v: never) => void }> {
+    connect('h1')
+    connect('h2')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    vi.mocked(putAttachment).mockClear()
+    vi.mocked(clearSectionStore).mockClear()
+    let release: (v: never) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (release = r)))
+    const result = attachMaster(hostId, profileId, 'pull')
+    await flush()
+    return { result, release }
+  }
+
+  it('DETACH in window B while our PUT is out: no master comes back — nothing cleared, nothing set, our attachment taken down again, `superseded`', async () => {
+    const { result, release } = await attachingWithThePutOut('h1', P1)
+    otherWindowWrote(DETACHED)
+    const generation = stored().state.attachGeneration
+
+    release(okAttach as never)
+    expect(await result).toEqual({ ok: false, reason: 'superseded' })
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(deleteAttachment).toHaveBeenCalledTimes(1)
+    expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
+    // storage still says what window B said — our late writes did not put the master back
+    expect(stored().state).toMatchObject({ ...DETACHED, suspension: null, attachGeneration: generation })
+    expect(selectMaster(useProfileStore.getState())).toBeNull()
+    await flush()
+    expect(profileSyncState()).toMatchObject({ master: null, blocked: null })
+    expect(h.executors.every((e) => e.dispose.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('a newer ATTACH to the SAME profile in window B: the attachment is the one they want — not deleted; ours steps back', async () => {
+    const { result, release } = await attachingWithThePutOut('h1', P1)
+    otherWindowWrote({ pendingDirection: 'push' })
+    release(okAttach as never)
+    expect(await result).toEqual({ ok: false, reason: 'superseded' })
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    // not OUR commit's clear (that one takes no argument) — only the leader's duty towards THEIR re-attach, once it has heard of it
+    expect(vi.mocked(clearSectionStore).mock.calls).toEqual([[P1]])
+    expect(useProfileStore.getState().pendingDirection).toBe('push') // theirs
+  })
+
+  it('a newer ATTACH to ANOTHER profile in window B: the attachment we have just written is nobody\'s — deleted; their master stands', async () => {
+    const { result, release } = await attachingWithThePutOut('h2', P2)
+    otherWindowWrote({ masterHostId: 'h1', masterProfileId: 'p_00000000000b', masterEndpoint: EP, pendingDirection: 'push' })
+    release(okAttach as never)
+    expect(await result).toEqual({ ok: false, reason: 'superseded' })
+    expect(deleteAttachment).toHaveBeenCalledTimes(1)
+    expect(deleteAttachment).toHaveBeenCalledWith('h2', P2, 'client-1')
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(useProfileStore.getState().masterProfileId).toBe('p_00000000000b')
+  })
+
+  it('a failed take-down of our attachment is a problem, not a different answer', async () => {
+    const { result, release } = await attachingWithThePutOut('h1', P1)
+    otherWindowWrote(DETACHED)
+    vi.mocked(deleteAttachment).mockResolvedValue(failed('network'))
+    release(okAttach as never)
+    expect(await result).toEqual({ ok: false, reason: 'superseded' })
+    expect(profileSyncState().problems.map((p) => p.kind)).toContain('detach-failed')
+  })
+
+  it('overtaken while the OLD attachment was being deleted (the second await): caught there too', async () => {
+    const { result, release } = await attachingWithThePutOut('h2', P2)
+    let releaseDelete: (v: typeof okDetach) => void = () => {}
+    vi.mocked(deleteAttachment).mockReturnValueOnce(new Promise((r) => (releaseDelete = r)))
+    release(okAttach as never)
+    await flush()
+    otherWindowWrote(DETACHED)
+    releaseDelete(okDetach)
+    expect(await result).toEqual({ ok: false, reason: 'superseded' })
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(selectMaster(useProfileStore.getState())).toBeNull()
+    expect(vi.mocked(deleteAttachment).mock.calls.map((c) => c[1])).toEqual([P1, P2])
+  })
+
+  it('NOT overtaken by this window\'s own queue: an attach queued behind another one still attaches, and behind a detach too', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    const first = attachMaster('h1', P1, 'pull')
+    const second = attachMaster('h1', P2, 'push')
+    expect(await first).toEqual({ ok: true })
+    expect(await second).toEqual({ ok: true })
+    expect(useProfileStore.getState().masterProfileId).toBe(P2)
+
+    const detaching = detachMaster()
+    const third = attachMaster('h1', P1, 'pull')
+    await detaching
+    expect(await third).toEqual({ ok: true })
+    expect(useProfileStore.getState().masterProfileId).toBe(P1)
+  })
+
+  it('SAME window: detach called while an attach is in progress → detached in the end', async () => {
+    const { result, release } = await attachingWithThePutOut('h1', P1)
+    const detaching = detachMaster()
+    release(okAttach as never)
+    await result
+    await detaching
+    await flush()
+    expect(selectMaster(useProfileStore.getState())).toBeNull()
+    expect(profileSyncState().master).toBeNull()
+    expect(h.executors.every((e) => e.dispose.mock.calls.length === 1)).toBe(true)
   })
 })
 

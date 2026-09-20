@@ -40,8 +40,14 @@
 // `attachMaster`). But "the same master, again" changes neither id, so a driver
 // that is already running — in this window, or the leader in another — could
 // not tell. The counter is what it watches: it goes up by one with every
-// accepted `setMaster` and never down; its value means nothing, only that it
-// moved.
+// accepted `setMaster` — AND WITH EVERY `clearMaster` — and never down; its
+// value means nothing, only that it moved. It is, in effect, the generation of
+// this control plane. The detach counts because windows have separate attach
+// queues: an attach that window A began (its PUT is out) can be overtaken by a
+// detach in window B, and A must be able to see, when its PUT returns, that the
+// world it was asked in is gone — or it would re-attach a client the user has
+// just told to stop (`lib/profile/start.ts` compares the value it read at the
+// call with the one in `localStorage` before it commits).
 //
 // WHY `masterEndpoint` ("<ip>:<port>" of the master host AT ATTACH). The section
 // bases, the attachment, a schema lock — all of it belongs to ONE daemon, and the
@@ -103,7 +109,7 @@ interface ProfileControl {
   masterEndpoint: string | null
   /** While `now < suspension.until` (epoch ms) no window runs a driver: an attach — `token`'s — is in progress. */
   suspension: Suspension | null
-  /** +1 with every accepted `setMaster`. A change with the same master = attach was called again. */
+  /** +1 with every accepted `setMaster` and every `clearMaster`. A change with the same master = attach was called again. */
   attachGeneration: number
   /** Sync without being asked. Default on. */
   autoSync: boolean
@@ -190,7 +196,8 @@ export const useProfileStore = create<ProfileState>()(
       },
       suspend: (token, until) => set((s) => (selectMaster(s) === null || !isSuspension(token, until) ? s : { suspension: { token, until } })),
       resume: (token) => set((s) => (s.suspension !== null && s.suspension.token === token ? { suspension: null } : s)),
-      clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null, suspension: null }),
+      clearMaster: () =>
+        set((s) => ({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null, suspension: null, attachGeneration: s.attachGeneration + 1 })),
       clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
     }),
