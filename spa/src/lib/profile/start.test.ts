@@ -617,32 +617,6 @@ describe('the master host is edited in place', () => {
     expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
   })
 
-  it('RELOAD while blocked: the endpoint the bases belong to is the STORED one, not whatever the host says when the window opens', async () => {
-    await leading()
-    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
-    edit({ ip: '100.64.0.77' })
-    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
-
-    // the window goes away and comes back; the stores keep what they persisted
-    stop()
-    __resetProfileSyncForTest()
-    vi.mocked(putAttachment).mockClear()
-    const drivers = h.executors.length
-    stop = startProfileSync()
-    await flush()
-    await vi.advanceTimersByTimeAsync(120_000)
-    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
-    expect(h.executors).toHaveLength(drivers)
-    expect(putAttachment).not.toHaveBeenCalled()
-    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['master-endpoint-changed'])
-
-    edit({ ip: '100.64.0.9' }) // put back
-    await flush()
-    expect(profileSyncState().blocked).toBeNull()
-    expect(h.executors).toHaveLength(drivers + 1)
-    expect(putAttachment).toHaveBeenCalledTimes(1)
-  })
-
   it('attachMaster records the endpoint of THAT moment — the way out of a block moves the home', async () => {
     await leading()
     edit({ ip: '100.64.0.77' })
@@ -654,27 +628,14 @@ describe('the master host is edited in place', () => {
     expect(profileSyncState().blocked).toBe('master-endpoint-changed')
   })
 
-  it('a master attached before the field existed (endpoint unknown): the current one is adopted once, and guards from then on', async () => {
+  it('a master without an endpoint is no master: nothing is built (only a hand-built state can hold one; storage cannot)', async () => {
     connect('h1')
     stop = startProfileSync()
     useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: null })
     await flush()
-    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
-    expect(profileSyncState().blocked).toBeNull()
-    expect(h.executors).toHaveLength(1)
-    expect(h.leaderships).toHaveLength(1) // adopting is not a new mode
-    edit({ port: 7999 })
-    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
-  })
-
-  it('…and if the host is not in the store yet, it is adopted when it shows up', async () => {
-    useHostStore.setState({ hosts: { h2: host('h2') }, hostOrder: ['h2'] })
-    stop = startProfileSync()
-    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: null })
-    await flush()
-    expect(useProfileStore.getState().masterEndpoint).toBeNull()
-    useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'] })
-    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
+    expect(contendForLeadership).not.toHaveBeenCalled()
+    expect(putAttachment).not.toHaveBeenCalled()
+    expect(profileSyncState().master).toBeNull()
   })
 
   it('a follower is blocked too: the lease falling to it builds nothing', async () => {
@@ -824,7 +785,7 @@ describe('teardown', () => {
     useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
     useProfileStore.getState().clearPendingDirection()
-    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1 })
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP })
     await flush()
     expect(contendForLeadership).toHaveBeenCalledTimes(1)
     expect(h.executors).toHaveLength(1)
@@ -897,12 +858,12 @@ describe('teardown', () => {
 
   it('another window attaching (a rehydrate of the synced store) puts this window into master mode, and detaching takes it out', async () => {
     stop = startProfileSync()
-    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1 })
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP })
     await flush()
     expect(contendForLeadership).toHaveBeenCalledTimes(1)
     expect(h.executors).toHaveLength(1)
 
-    useProfileStore.setState({ masterHostId: null, masterProfileId: null })
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
     expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
     expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
   })
@@ -1041,7 +1002,7 @@ describe('the direction of an attach', () => {
 
   it('a direction set by ANOTHER window is the one this window\'s leader uses', async () => {
     stop = startProfileSync()
-    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, pendingDirection: 'pull' })
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull' })
     await flush()
     expect(h.executors[0].deps.initialDirection()).toBe('pull')
   })
@@ -1161,7 +1122,7 @@ describe('detachMaster', () => {
     vi.mocked(deleteAttachment).mockReturnValue(new Promise((r) => (release = r)))
     const detaching = detachMaster()
     await flush()
-    useProfileStore.setState({ masterHostId: 'h2', masterProfileId: P2, pendingDirection: 'push' })
+    useProfileStore.setState({ masterHostId: 'h2', masterProfileId: P2, masterEndpoint: EP, pendingDirection: 'push' })
     vi.mocked(clearSectionStore).mockClear()
     release(okDetach)
     await detaching

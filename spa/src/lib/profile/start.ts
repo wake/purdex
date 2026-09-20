@@ -321,13 +321,6 @@ function endpointOf(hostId: string): { at: string; token: string } | null {
   return host === undefined ? null : { at: `${host.ip}:${host.port}`, token: host.token ?? '' }
 }
 
-/** The master's home address is unknown (attached before `masterEndpoint` existed) and the host is here: adopt it. */
-function adoptEndpointIfUnknown(master: Master): void {
-  if (!isCurrentMaster(master) || useProfileStore.getState().masterEndpoint !== null) return
-  const now = endpointOf(master.hostId)
-  if (now !== null) useProfileStore.getState().adoptMasterEndpoint(now.at)
-}
-
 function enterMasterMode(master: Master, generation: number): MasterMode {
   let ended = false
   let leader: Leader | null = null
@@ -336,12 +329,9 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   // reload cannot mistake an edited address for the original. `api.ts` resolves
   // the address from the host store on every request, so an edit of the master
   // host IN PLACE would send the next request, with the old daemon's CAS bases,
-  // to whatever answers at the new address. Unknown (null) blocks nothing; it is
-  // adopted right after this mode exists (see `sync`) or when the host shows up.
-  const foreign = (at: string): boolean => {
-    const home = useProfileStore.getState().masterEndpoint
-    return home !== null && at !== home
-  }
+  // to whatever answers at the new address. (A master always has one: without it
+  // `selectMaster` says there is no master. Null here would still read as foreign.)
+  const foreign = (at: string): boolean => at !== useProfileStore.getState().masterEndpoint
   const here = endpointOf(master.hostId)
   let token = here?.token ?? null
   let blocked = here !== null && foreign(here.at)
@@ -381,7 +371,6 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     if (ended || next.hosts[master.hostId] === prev.hosts[master.hostId]) return
     const now = endpointOf(master.hostId)
     if (now === null) return // removed: the leader reports it; coming back is judged like any edit
-    adoptEndpointIfUnknown(master)
     if (foreign(now.at)) {
       // ip or port: nobody can tell whether this is the same daemon. Stop. Do not
       // detach (the user's setting) and do not drop the bases (a typo may be
@@ -462,9 +451,6 @@ export function startProfileSync(): () => void {
     mode?.end()
     if (wasLeader && master !== null) clearSectionStore(master.profileId)
     mode = master === null ? null : enterMasterMode(master, generation)
-    // After `mode` is assigned: this writes the store we are being called from,
-    // and the nested notification must find the mode it belongs to.
-    if (master !== null) adoptEndpointIfUnknown(master)
   }
 
   const unsubscribe = useProfileStore.subscribe((next, prev) => {

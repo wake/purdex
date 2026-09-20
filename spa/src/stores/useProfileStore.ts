@@ -50,13 +50,16 @@
 // old daemon's CAS bases to whatever answers at the new address. The start layer
 // blocks the driver when the two differ; the home address is stored HERE, not
 // remembered by the driver, because a reload while blocked would otherwise take
-// the edited address for the original and unblock itself. Null = unknown: only a
-// master attached before this field existed; the start layer adopts the current
-// address once (`adoptMasterEndpoint`) — trusting it the first time is the best
-// that can be done for such an installation, and it guards from then on.
+// the edited address for the original and unblock itself.
+//   A MASTER WITHOUT AN ENDPOINT IS NO MASTER (fail closed; `merge` and
+// `selectMaster` both). Such a record can only come from before this field
+// existed — dev builds, never a shipped one — and "adopt the address the host
+// has today" would legitimise bases of an unknown daemon against whatever the
+// user has since pointed the host at. There is nothing worth migrating: the user
+// attaches again, which clears the bases anyway.
 //
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
-// non-null; `pendingDirection` and `masterEndpoint` are null whenever there is no master. `setMaster`
+// non-null, and non-null only together with `masterEndpoint`; `pendingDirection` is null whenever there is no master. `setMaster`
 // is the only way in and validates all three; the persist `merge` re-establishes
 // both for whatever storage hands back.
 import { create } from 'zustand'
@@ -73,7 +76,7 @@ interface ProfileControl {
   masterProfileId: string | null
   /** Non-null from an attach until the first reconciliation has settled. */
   pendingDirection: SyncDirection | null
-  /** `"<ip>:<port>"` of the master host when it was attached; null = unknown (see the header) or no master. */
+  /** `"<ip>:<port>"` of the master host when it was attached; null exactly when there is no master. */
   masterEndpoint: string | null
   /** +1 with every accepted `setMaster`. A change with the same master = attach was called again. */
   attachGeneration: number
@@ -87,8 +90,6 @@ export interface ProfileState extends ProfileControl {
    *  is `false`. Attaching again to the same master starts a new first
    *  reconciliation in the direction given. */
   setMaster: (hostId: string, profileId: string, direction: SyncDirection, endpoint: string) => boolean
-  /** Fills in an UNKNOWN endpoint of the current master; anything else is ignored. Not an attach. */
-  adoptMasterEndpoint: (endpoint: string) => void
   /** Detach. `autoSync` is a preference and survives; the direction does not. */
   clearMaster: () => void
   /** The first reconciliation has settled: conflicts go to the user from now on. */
@@ -120,12 +121,12 @@ function isEndpoint(v: unknown): v is string {
  *  no safe way to guess the missing half, and a detached client does nothing. */
 function sanitiseControl(persisted: unknown): ProfileControl {
   const p = (typeof persisted === 'object' && persisted !== null ? persisted : {}) as Record<string, unknown>
-  const attached = isMasterPair(p.masterHostId, p.masterProfileId)
+  const attached = isMasterPair(p.masterHostId, p.masterProfileId) && isEndpoint(p.masterEndpoint)
   return {
     masterHostId: attached ? (p.masterHostId as string) : null,
     masterProfileId: attached ? (p.masterProfileId as string) : null,
     pendingDirection: attached && isSyncDirection(p.pendingDirection) ? p.pendingDirection : null,
-    masterEndpoint: attached && isEndpoint(p.masterEndpoint) ? p.masterEndpoint : null,
+    masterEndpoint: attached ? (p.masterEndpoint as string) : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
   }
@@ -145,8 +146,6 @@ export const useProfileStore = create<ProfileState>()(
         set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, attachGeneration: s.attachGeneration + 1 }))
         return true
       },
-      adoptMasterEndpoint: (endpoint) =>
-        set((s) => (s.masterHostId === null || s.masterEndpoint !== null || !isEndpoint(endpoint) ? s : { masterEndpoint: endpoint })),
       clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null }),
       clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
@@ -174,9 +173,9 @@ export const useProfileStore = create<ProfileState>()(
  *  has to re-check the invariant. Returns a fresh object: as a zustand selector
  *  it needs `useShallow`. */
 export function selectMaster(
-  s: Pick<ProfileState, 'masterHostId' | 'masterProfileId'>,
+  s: Pick<ProfileState, 'masterHostId' | 'masterProfileId' | 'masterEndpoint'>,
 ): { hostId: string; profileId: string } | null {
-  if (s.masterHostId === null || s.masterProfileId === null) return null
+  if (s.masterHostId === null || s.masterProfileId === null || s.masterEndpoint === null) return null
   return { hostId: s.masterHostId, profileId: s.masterProfileId }
 }
 
