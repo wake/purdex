@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.414] - 2026-09-20
+
+### Feature: Profile Sync P2b-2——driver 接線：collector、executor、租約 leader、`startProfileSync()`；真機驗收（#1247、#1249、#1250、#1251）
+
+Profile Sync 第四支，**第一次真的接線**：`main.tsx` 呼叫 `startProfileSync()`。鐵則：沒有設定 master 的使用者，app 與今天相同——只訂閱 `useProfileStore`，不訂閱其他 store、不算 hash、不讀寫租約、不發請求、不排 timer；由一個**完全不 mock** 的測試守著（真的 collector／executor／lease／api 在後面：一次訂閱、零 `fetch`、零 `crypto.subtle.digest`、零 `purdex-profile*` key、60 秒後 timer 數為 0）。**目前設定 master 的唯一途徑是 dev-only 的 `window.__purdexProfileSync`**（production build 裡 grep 不到），P3 的 wizard 之後會呼叫同一條 `attachMaster(host, profile, direction)`／`detachMaster()`。38 檔，依規則在 commit 邊界拆成四個 PR、連續 merge。
+
+零件：reducer 加 `locked:invalid`（SOT 上有這台 client 拒絕套用的 payload——不會每 30 秒重抓，觀察到**任何**與被拒那份不同的 SOT 就解鎖：absent 沒有 rev 可比、profile 重建時 rev 會倒退）並能還原持久化的 conflict；`apply-to-stores`（把拉下來的 section 寫進 store）；`collector`（per-section 500 ms debounce）；`leader`（localStorage 租約，檔頭明寫「IT IS NOT A LOCK」）；`executor`（dispatch → reduce → persist → decide → act：profile 層級一次只送一個寫入，所以 schema 409 擋得住「之後」的寫入；reindex single-flight、失敗的清單不告訴 section 任何事；profile 從清單消失走 executor 層級的 `profileGone`——對每個 section 說 absent 會讓狀態機去 pull 刪除、清光本地；`hosts`／`workspaces` **settled**（synced＋已 index＋SOT 沒動＋閒置）之前不 pull `tabs.*`）。另有兩個 store 依各自原始碼的宣告改為 device-local、**待使用者確認**：`useEditorSettingsStore`（「the small-screen laptop may want fontSize 11 while the big monitor uses 14」）；settings ordinal → 3。
+
+**整合時，被要求「契約自相矛盾就如實回報、不要默默選一種解讀」的 subagent 報上來的**：`setState`＋`persist.rehydrate()` 的前提逐 store 家族驗證成立，但挖出兩個沒人料到的事——rehydrate 的 heal 是原地改 state 物件、不通知 subscriber 也不寫回（→ 之後補一個空 `setState`）；tab／workspace store **不能** rehydrate（沒有 hook 可跑，卻會從 JSON 重建每個 tab 物件、讓所有 pane re-render）。「`hosts` 是 `synced`」不等於 settled（乾淨但落後的也讀作 `synced`，此時套 `tabs.*` 會把別台新增的活 pane 標成 `host-removed` 再推回去）。`pull-applied` 要帶兩個 hash（SOT 的進 base、套用後從 store 重算的進 `currentHash`；只有一個時 sanitiser 的修正永遠推不回去）。別台新增的 workspace 到貨時，本地那個空的 `tabs.<id>` 是 placeholder 不是編輯。移除 host **重用 app 既有的 `deleteHostCascade`、一行都沒改**（分段寫入繞過「只剩一台不准刪」，以「最終狀態 deep-equal 手動刪除」的測試守著）。
+
+**真機驗收**（spec §9.10；worktree `:5175`、活的 mlab daemon、兩個 Playwright context ＝兩台 client；token 經 0600 的 storage-state 檔載入，從未出現在指令列或輸出）三輪全過：鐵則、第一次 push、第二台**無人介入**地 pull 且零寫入、**傳播 519 ms**、converged（rev 只前進一次）、衝突只鎖一個 section 且其他照常同步、只是落後不算衝突、dirty 拒絕 inbound、section 生滅無孤兒、schema lock 後零寫入、焦點與 split 比例不鏡射、attach 中不可刪 profile、同一 context 雙視窗（單一 leader、follower 的編輯經 leader 恰好寫一次、關閉後接手）。**抓到三個 8500 個單元測試抓不到的真問題**：`crypto.subtle` 在純 HTTP 的 tailnet IP 上不存在——而那正是兩台工作站 dev 模式載入 app 的方式——一個 hash 都算不出來（P2a 的量測其實寫了這點，我歸為「既有風險」放過；→ 純 JS SHA-256 fallback，與 WebCrypto 逐位元組相同）；attach 沒有方向，第二台 client 一開場就衝突（→ 定案第 10 條的 push／pull）；schema lock 只在 reindex 時評估，但 client 是經事件得知新 rev 再 pull 的，舊 client 照寫不誤。流程教訓：第一輪我讓 subagent 在同一個 worktree 做 mutation test 時頁面還開著，**Vite HMR 把故意改壞的 SHA-256 送進活頁面、推上了真 daemon**（→ 真機頁面開著時不做 mutation）。未跑：air-2026 的跨機驗收（它的 App 載入主 checkout 的 `:5174`，隔離的 worktree session 無法 `git pull`）。
+
+Codex 五輪（R1、兩份攻擊方、critic、兩次窄範圍 re-review），每一輪都找到真東西、一輪比一輪窄，**沒有任何一輪出現 critical**：detach 先 await 伺服器端清理而 driver 還在跑；同 master 再 attach 時 `pull` 沒生效、`pendingDirection` 永久殘留（日後的衝突會被過期的方向靜默覆寫）→ 每次 attach 都是全新對帳；master host 的 ip／port 被原地改掉 → attach 當時的 endpoint 持久化、不同就擋住；attachment 確認前就開始同步 → reachable ＝ attached＋connected，且在**每個請求送出的地方**再問一次；非法 workspace id 被推進 `workspaces`、讓別台的 guard 拒絕而鎖死（會傳播的毒資料）→ 視為 device-local；rollback 的範圍比 apply 小。我有一條以證據反駁、critic 判定反駁成立（`BroadcastChannel` 是單例，main 上早有 18 個 store 註冊）。critic 對四個**修法**提出反對，全部成立並重做——最細的一條：attach 等 PUT 的 15 秒內舊 writer 還活著 → suspension（帶 token、會到期、同步設下、由 `localStorage` 直接讀而不等 BroadcastChannel）；再下一輪又找到「suspend 晚了一個 microtask」與「別的視窗的 detach 被較早開始的 attach 反轉」（後者的修正需要一件沒人指定的事：被超車的視窗必須先從 storage rehydrate 才能寫任何東西，否則記憶體裡的舊 master 會被 persist 回去、蓋掉對方的 detach）。三次要 subagent「查證這個前提、不成立就停下來說」，三次前提都不如我所述。剩下的以殘留的名義寫在註解裡：`localStorage` 不是交易式儲存、讀後動作不是原子、已送出的位元組收不回來。follow-up：#1240（拆大檔）、#1244（conflict stash → IndexedDB）、#1248（刪 host 後 Undo 的既有缺口）。
+
+vitest 8695、lint、tsc、build 綠。純 SPA，daemon 仍是 411、免 deploy。下一支 P3：profile switcher、Settings › Profile（wizard／Resolve 面板）。
+
 ## [1.0.0-alpha.413] - 2026-09-20
 
 ### Feature: Profile Sync P2b-1——傳輸層：CAS client、`'profile'` 事件、control／section 兩個儲存、client identity（#1242、#1245）
