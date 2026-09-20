@@ -60,7 +60,12 @@
 // unsettled then (a window's own switch is unsettled for the length of its
 // synchronous block, and must not pay for a rehydrate), and ONCE per unsettled
 // stretch — a rehydrate notifies the very subscribers that ask, so "once" is
-// what keeps this from looping. No timer. It does not contradict `commitTabWorld`
+// what keeps this from looping. That "once" is for the BACKGROUND (the
+// collector, `masterWorldStuck`). A refusal handed to the USER — a switch, a
+// promote, a copy — asks again every time: one call, one rehydrate, nothing to
+// loop; and the background's one try can be spent too early (seen on real
+// hardware: the fence visible to this process, the three stores not yet — the
+// rehydrate read the old world, and nothing ever asked again). No timer. It does not contradict `commitTabWorld`
 // ("no rehydrate here"): that is about the apply path, where a rehydrate per
 // write would rebuild every tab object for a change to one; this is a one-off for
 // a window whose screen is wrong anyway. It mislabels nothing: memory becomes what
@@ -357,15 +362,16 @@ let recoveryAsked = false
 
 /**
  * `read` is what the caller has just read. Unsettled by a mismatch, or behind the
- * fence → the three stores read storage again, once per stretch (see …EXCEPT ONE
+ * fence → the three stores read storage again: once per stretch, or — `byUser`,
+ * the refusal of something the user asked for — every time (see …EXCEPT ONE
  * REHYDRATE in the header).
  */
-export function recoverUnsettledWorld(read: MasterWorldRead): void {
+export function recoverUnsettledWorld(read: MasterWorldRead, byUser = false): void {
   if (read.settled) {
     recoveryAsked = false
     return
   }
-  if (recoveryAsked || read.reason === 'no-parked-master') return
+  if (read.reason === 'no-parked-master' || (recoveryAsked && !byUser)) return
   recoveryAsked = true
   queueMicrotask(() => {
     if (readMasterWorld().settled) return // it was a switch of this window, half-way through its block

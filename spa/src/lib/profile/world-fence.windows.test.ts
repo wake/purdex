@@ -57,8 +57,28 @@ async function deliverAll(): Promise<void> {
   while (QueuedBroadcastChannel.queue.length > 0) await deliver(waiting()[0])
 }
 
+/** The `storage` listener of the window opened last — `syncManager`'s, installed by its first `register`. All
+ *  windows of this file share ONE `window` object, so the listener is captured instead of installed: a storage
+ *  event must reach the OTHER documents only, and `window.dispatchEvent` would hand it to the writer as well. */
+let lastStorageListener: ((e: Event) => void) | null = null
+
 async function openWindow() {
   vi.resetModules()
+  lastStorageListener = null
+  const realAdd = window.addEventListener.bind(window)
+  const add = vi.spyOn(window, 'addEventListener').mockImplementation((type: string, fn: unknown, opts?: unknown) => {
+    if (type === 'storage') lastStorageListener = fn as (e: Event) => void
+    else realAdd(type, fn as EventListener, opts as AddEventListenerOptions)
+  })
+  try {
+    return await loadWindow()
+  } finally {
+    add.mockRestore()
+  }
+}
+
+async function loadWindow() {
+  const onStorage = (): ((e: Event) => void) | null => lastStorageListener
   const [tab, ws, local, sw, mw] = await Promise.all([
     import('../../stores/useTabStore'),
     import('../../features/workspace/store'),
@@ -66,7 +86,7 @@ async function openWindow() {
     import('./switch-active'),
     import('./master-world'),
   ])
-  return { useTabStore: tab.useTabStore, useWorkspaceStore: ws.useWorkspaceStore, useLocalProfilesStore: local.useLocalProfilesStore, ...sw, ...mw }
+  return { useTabStore: tab.useTabStore, useWorkspaceStore: ws.useWorkspaceStore, useLocalProfilesStore: local.useLocalProfilesStore, ...sw, ...mw, storageListener: onStorage() }
 }
 type Win = Awaited<ReturnType<typeof openWindow>>
 
@@ -362,5 +382,154 @@ describe('belt and braces: a window that MISSED a broadcast recovers by itself',
     for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     expect(w2.useTabStore.getState().tabs).toBe(tabs) // same objects: no pane was rebuilt
     stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// S1 — two renderer PROCESSES. Measured on real hardware: the BroadcastChannel
+// message reaches window 1 BEFORE window 2's write is visible to window 1's
+// `localStorage`; the native `storage` event comes after it is. So window 1 gets
+// its own VIEW of storage here: frozen at some point, caught up key by key. Reads
+// made while `reader === 1` go to the view; every write goes to the real storage
+// (and to the view: a process sees its own writes). Window code is synchronous
+// or a few microtasks long, so `inWindow1` brackets it.
+// ---------------------------------------------------------------------------
+
+class LaggedView {
+  reader: 1 | 2 = 2
+  private frozen: Map<string, string | null> | null = null
+  private readonly real: Storage
+  constructor(real: Storage) {
+    this.real = real
+  }
+  /** From now on window 1 sees storage as it is at this instant. */
+  freeze(): void {
+    this.frozen = new Map(Object.keys(this.real).map((k) => [k, this.real.getItem(k)]))
+  }
+  /** Window 1's process has caught up with `key` (all keys when omitted). */
+  catchUp(key?: string): void {
+    if (key === undefined) this.frozen = null
+    else this.frozen?.set(key, this.real.getItem(key))
+  }
+  getItem(key: string): string | null {
+    if (this.reader === 1 && this.frozen !== null) return this.frozen.get(key) ?? null
+    return this.real.getItem(key)
+  }
+  setItem(key: string, value: string): void {
+    this.real.setItem(key, value)
+    if (this.reader === 1) this.frozen?.set(key, value)
+  }
+  removeItem(key: string): void {
+    this.real.removeItem(key)
+    if (this.reader === 1) this.frozen?.set(key, null)
+  }
+  clear(): void {
+    this.real.clear()
+  }
+}
+
+describe('S1 — another PROCESS: the broadcast arrives before the write is visible, the storage event after', () => {
+  const WORLD_KEYS = [STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TABS, STORAGE_KEYS.WORKSPACES]
+  let view: LaggedView
+  let real: Storage
+
+  beforeEach(() => {
+    real = window.localStorage
+    view = new LaggedView(real)
+    vi.stubGlobal('localStorage', view)
+  })
+
+  async function inWindow1(fn: () => unknown): Promise<void> {
+    view.reader = 1
+    try {
+      await fn()
+      await flush()
+    } finally {
+      view.reader = 2
+    }
+  }
+
+  /** What the browser hands window 1 for window 2's write of `key`: by then the key IS visible to window 1. */
+  function storageEventFor(key: string): Event {
+    view.catchUp(key)
+    return Object.assign(new Event('storage'), { key, newValue: real.getItem(key), storageArea: view })
+  }
+
+  /** Both windows on the slave; window 1's view freezes; window 2 switches back to the master. */
+  async function switchedInAnotherProcess(): Promise<{ w1: Win; w2: Win }> {
+    const { w2, slaveId } = await seeded()
+    expect(await w2.switchActiveProfile(slaveId)).toEqual({ ok: true })
+    QueuedBroadcastChannel.queue = []
+    const w1 = await openWindow()
+    view.freeze()
+    expect(await w2.switchActiveProfile('master')).toEqual({ ok: true })
+    expect(waiting()).toEqual(WORLD_KEYS)
+    return { w1, w2 }
+  }
+
+  it('THE FIELD CASE — the first two broadcasts read the OLD value, the third the new one: one write behind, unsettled; the storage events bring the window level', async () => {
+    const { w1, w2 } = await switchedInAnotherProcess()
+    await inWindow1(async () => {
+      await deliver(STORAGE_KEYS.LOCAL_PROFILES)
+      await deliver(STORAGE_KEYS.TABS)
+      view.catchUp()
+      await deliver(STORAGE_KEYS.WORKSPACES)
+    })
+    // What was measured: two stores one write behind, the third level.
+    expect(w1.useWorkspaceStore.getState().worldEpoch).toBe(w2.useWorkspaceStore.getState().worldEpoch)
+    expect(w1.useTabStore.getState().worldEpoch).toBeLessThan(w2.useTabStore.getState().worldEpoch)
+    expect(w1.useLocalProfilesStore.getState().worldEpoch).toBeLessThan(w2.useLocalProfilesStore.getState().worldEpoch)
+
+    await inWindow1(() => {
+      for (const key of [STORAGE_KEYS.WORLD_EPOCH, ...WORLD_KEYS]) w1.storageListener?.(storageEventFor(key))
+    })
+
+    expect(w1.readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
+    expect(screenOf(w1)).toBe(screenOf(w2))
+    expect(screenOf(w1)).toContain(MASTER)
+    expect(screenOf(w1)).not.toContain(SLAVE)
+  })
+
+  it('EVERY broadcast reads the old value, and each key becomes visible only with its storage event: level after the last one', async () => {
+    const { w1, w2 } = await switchedInAnotherProcess()
+    await inWindow1(() => deliverAll())
+    expect(screenOf(w1)).toContain(SLAVE) // three rehydrates, all of the previous world
+    for (const key of [STORAGE_KEYS.WORLD_EPOCH, ...WORLD_KEYS]) {
+      expect(w1.readMasterWorld().settled && screenOf(w1) === screenOf(w2)).toBe(false)
+      await inWindow1(() => w1.storageListener?.(storageEventFor(key)))
+    }
+    expect(w1.readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
+    expect(screenOf(w1)).toBe(screenOf(w2))
+  })
+
+  it('the ONE background recovery of an unsettled stretch was spent while storage still read old — a refused SWITCH (the user asking) tries again, every time', async () => {
+    const { w1, w2 } = await switchedInAnotherProcess()
+    QueuedBroadcastChannel.queue = [] // no signal of any kind reaches window 1 in this test
+    const rehydrate = vi.spyOn(w1.useTabStore.persist, 'rehydrate')
+    await inWindow1(() => {
+      view.catchUp(STORAGE_KEYS.WORLD_EPOCH) // only the fence is visible yet
+      expect(w1.masterWorldStuck(0)).toBe(false) // a background look: `behind-fence` → the stretch's one recovery…
+    })
+    expect(rehydrate).toHaveBeenCalledTimes(1) // …which read the old world
+    expect(w1.readMasterWorld()).toEqual({ settled: false, reason: 'behind-fence' })
+
+    view.catchUp()
+    await inWindow1(() => w1.masterWorldStuck(1)) // background: once per stretch, and that was it
+    expect(rehydrate).toHaveBeenCalledTimes(1)
+
+    await inWindow1(async () => expect(await w1.switchActiveProfile('master')).toEqual({ ok: false, reason: 'unsettled' }))
+    expect(rehydrate).toHaveBeenCalledTimes(2)
+    expect(w1.readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
+    expect(screenOf(w1)).toBe(screenOf(w2))
+  })
+
+  it('no broadcast at all (it is not guaranteed to arrive): the storage events alone do it', async () => {
+    const { w1, w2 } = await switchedInAnotherProcess()
+    QueuedBroadcastChannel.queue = []
+    await inWindow1(() => {
+      for (const key of [STORAGE_KEYS.WORLD_EPOCH, ...WORLD_KEYS]) w1.storageListener?.(storageEventFor(key))
+    })
+    expect(w1.readMasterWorld()).toMatchObject({ settled: true, onScreen: true })
+    expect(screenOf(w1)).toBe(screenOf(w2))
   })
 })

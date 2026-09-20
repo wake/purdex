@@ -119,7 +119,7 @@ function readScreen(): ParkedWorld {
 /** May this window move the world? Only a settled one; an unsettled one is asked to catch up with storage, so that a refusal is not the last word. */
 function worldIsCurrent(): boolean {
   const read = readMasterWorld()
-  recoverUnsettledWorld(read)
+  recoverUnsettledWorld(read, true)
   return read.settled
 }
 
@@ -311,7 +311,7 @@ function addCopyAsSlave(name: string, source: ParkedWorld): CopyResult {
  */
 export function copyMasterAsSlave(name: string): CopyResult {
   const read = readMasterWorld()
-  recoverUnsettledWorld(read)
+  recoverUnsettledWorld(read, true)
   if (!read.settled) return { ok: false, reason: 'unsettled' }
   return addCopyAsSlave(name, read.world)
 }
