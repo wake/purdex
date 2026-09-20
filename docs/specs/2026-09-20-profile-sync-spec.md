@@ -1071,7 +1071,32 @@ suspicions, put to the reviewer as questions, and both were confirmed:
   Restored, with `promoteToMaster` as a move, not a copy.
 Also: host removal marks panes in every parked world, not only the one on screen; a world coming on
 screen re-runs the session reconciliation; follower commands are one `localStorage` key each (an
-array in one key loses commands by construction); a `resolve` is bound to the whole conflict, not
-to `sot.rev`; standalone adoption is a standing invariant, which also covers device-state's restore
+array in one key loses commands by construction); a `resolve` is bound to the whole LOCK the user
+was shown — its status, `currentHash`, `sot` and the conflict pair, compared field by field — not to
+`sot.rev` (the plan review asked for the pair; the P3a review below widened it); standalone adoption is a standing invariant, which also covers device-state's restore
 and merge; P3c is two PRs because it was measured at ~29 files; `Settings › Sync` leaves the sidebar
 when `Settings › Profile` arrives.
+
+**P3a review (codex R1 + attack + critic).** Five findings on the cross-window status channel, one
+root cause: **nothing that crossed windows said which master it was for**, while the master is
+persisted and every window rehydrates it in its own time.
+- **F1 (critical)** — a window still on P1 showed P2's status as P1's, and its `resolve` / `syncNow`
+  was executed by P2's leader. Records and commands now carry `masterTag =
+  hostId|profileId|attachGeneration`; command keys live under the tag's (URI-encoded) prefix.
+- **F2 (high; R1's P2 is the same)** — a window that heard late of a detach removed *every* command,
+  including those just sent to the next master; there is no resend. `close` removes its own tag's
+  keys only; expired orphans of other tags are swept by whoever opens a channel.
+- **F3 (high)** — a `resolve` of a pairless lock (`locked:reset`, `locked:invalid`) was checked
+  against "still no pair", which is true of all of them. It is bound to the whole lock;
+  `ExecutorStatus.conflicts` became `locks`. `sot` is part of it: measured, it advances under
+  `locked:reset` with no other field moving, and "keep local" rebases on it.
+- **F4 (medium)** — the TTL had no lower bound, so a clock set back kept a command valid. More than
+  5 s in the future is dropped like more than 30 s old.
+- **F5 (low)** — file constitution; joins the other file-size items in #1240.
+
+The critic added the **generation hand-over**: the same master attached again is a new tag, so a
+follower still on generation N wrote its "Sync now" where generation N+1's leader does not listen,
+and then removed it when it moved. A channel closed for the next generation of the *same* master
+carries a still-valid `syncNow` over — same id (two windows doing it write one key), same `at` (the
+TTL is not extended). A `resolve` is dropped instead: an attach is a new first reconciliation, and
+the lock the user confirmed belonged to the driver that is gone. Another master: nothing is carried.

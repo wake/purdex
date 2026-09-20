@@ -718,6 +718,115 @@ describe('everything is scoped to the master it was made for (hostId|profileId|a
   })
 })
 
+/* ─── attach again: the generation hand-over ─── */
+
+describe('the SAME master attached again: a `syncNow` sent to the old generation is carried over, a `resolve` is not', () => {
+  /** `TAG1`'s master, one generation on: what `close(true, …)` is told when only the generation moved. */
+  const TAG1B = 'h1|p_000000000001|2'
+  const CMD1B = cmdOf(TAG1B)
+
+  it('the critic’s case: B (still gen 1) presses Sync now, A leads gen 2 → executed EXACTLY once, after B has moved', async () => {
+    const a = await openWindow('A', { leader: true, status: SYNCED }, TAG1B)
+    const b = await openWindow('B') // has not rehydrated: gen 1
+    b.channel.requestSyncNow()
+    const [sent] = commandKeys()
+    expect(sent.startsWith(CMD1)).toBe(true)
+    deliver()
+    expect(a.syncNow).not.toHaveBeenCalled() // not A's prefix
+
+    b.channel.close(true, TAG1B) // B rehydrates: start.ts closes gen 1 for gen 2 of the same master
+    const id = sent.slice(CMD1.length)
+    expect(commandKeys()).toEqual([`${CMD1B}${id}`]) // the same id, under the new prefix; the old key is gone
+    expect(JSON.parse(localStorage.getItem(`${CMD1B}${id}`) ?? 'null')).toEqual({ kind: 'syncNow', master: TAG1B, at: 1_000_000 })
+    deliver()
+    deliver()
+    expect(a.syncNow).toHaveBeenCalledTimes(1)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('`at` is the ORIGINAL one: carrying a command over does not make it younger', async () => {
+    const b = await openWindow('B')
+    localStorage.setItem(`${CMD1}c`, syncNowCmd(TAG1, Date.now() - 29_000))
+    b.channel.close(true, TAG1B)
+    expect(JSON.parse(localStorage.getItem(`${CMD1B}c`) ?? 'null')).toMatchObject({ at: 1_000_000 - 29_000 })
+    vi.advanceTimersByTime(1_001)
+    const a = await openWindow('A', { leader: true, status: SYNCED }, TAG1B)
+    expect(a.syncNow).not.toHaveBeenCalled() // 30_001 ms after it was pressed
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('the window that carries it over is ITSELF the new leader: no event will tell it — the scan of a new leader finds it', async () => {
+    const b = await openWindow('B')
+    b.channel.requestSyncNow()
+    b.channel.close(true, TAG1B)
+    const again = await openWindow('B', { leader: true, status: SYNCED }, TAG1B) // no `deliver()` anywhere
+    expect(again.syncNow).toHaveBeenCalledTimes(1)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('a `resolve` is NOT carried over: it is dropped, and its key goes', async () => {
+    const a = await openWindow('A', { leader: true, status: SYNCED }, TAG1B)
+    a.locks.hosts = LOCK // even if the new driver happens to hold that very lock
+    const b = await openWindow('B')
+    b.channel.requestResolve('hosts', 'local', LOCK)
+    expect(commandKeys()).toHaveLength(1)
+    b.channel.close(true, TAG1B)
+    deliver()
+    expect(commandKeys()).toEqual([])
+    expect(a.resolve).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['expired', -30_001],
+    ['from the future', 5_001],
+  ])('a syncNow that is %s is not carried over', async (_name, offset) => {
+    const b = await openWindow('B')
+    localStorage.setItem(`${CMD1}x`, syncNowCmd(TAG1, Date.now() + offset))
+    b.channel.close(true, TAG1B)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('damaged, or naming another master in its payload: not carried over', async () => {
+    const b = await openWindow('B')
+    localStorage.setItem(`${CMD1}bad`, 'nope')
+    localStorage.setItem(`${CMD1}forged`, syncNowCmd(TAG2, Date.now()))
+    b.channel.close(true, TAG1B)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('ANOTHER master (no successor is named): nothing is carried over — as before', async () => {
+    const a = await openWindow('A', { master: MASTER2, leader: true, status: SYNCED }, TAG2)
+    const b = await openWindow('B')
+    b.channel.requestSyncNow()
+    b.channel.close(true)
+    deliver()
+    expect(commandKeys()).toEqual([])
+    expect(a.syncNow).not.toHaveBeenCalled()
+  })
+
+  it('close(false) carries nothing over, successor or not: the keys are the other windows’ business', async () => {
+    const b = await openWindow('B')
+    b.channel.requestSyncNow()
+    const keys = commandKeys()
+    b.channel.close(false, TAG1B)
+    expect(commandKeys()).toEqual(keys)
+  })
+
+  it('TWO windows carry the same command over before the leader looks → ONE key, executed once (the id is kept)', async () => {
+    const b = await openWindow('B')
+    const c = await openWindow('C')
+    const raw = syncNowCmd(TAG1, Date.now())
+    localStorage.setItem(`${CMD1}same`, raw)
+    b.channel.close(true, TAG1B)
+    localStorage.setItem(`${CMD1}same`, raw) // C had read the key before B removed it: two windows, no lock between them
+    c.channel.close(true, TAG1B)
+    expect(commandKeys()).toEqual([`${CMD1B}same`])
+    const a = await openWindow('A', { leader: true, status: SYNCED }, TAG1B)
+    expect(a.syncNow).toHaveBeenCalledTimes(1)
+    expect(commandKeys()).toEqual([])
+  })
+})
+
 /* ─── the end ─── */
 
 describe('close', () => {

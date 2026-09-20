@@ -607,7 +607,9 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
     mode?.end()
     // The old master's status and whatever was asked of ITS leader go with it, in every window — and nothing of the
     // next master's, which other windows may be on already (sync-status.ts, `close`).
-    channel?.close(true)
+    // Same master, new generation: a "Sync now" this window's channel still holds for the old one is carried over
+    // (sync-status.ts, THE GENERATION HAND-OVER). `same` with a null master never gets here (returned above).
+    channel?.close(true, same && master !== null ? masterTagOf(master, generation) : undefined)
     channel = null
     if (wasLeader && master !== null) clearSectionStore(master.profileId)
     mode = master === null ? null : enterMasterMode(master, generation)

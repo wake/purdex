@@ -54,6 +54,32 @@
 //     for a master this window has not heard of yet. Only with a master: a user
 //     without one never opens a channel, and never looks (THE IRON RULE).
 //
+// THE GENERATION HAND-OVER. The SAME master attached again is a new tag, and the
+// windows move to it one by one. B, still on generation 1, presses "Sync now":
+// the key goes under generation 1's prefix, which A — leading generation 2 —
+// does not hear; then B moves, and its `close(true)` removes it. A press lost
+// without a sound. So a window that closes a channel FOR THE NEXT GENERATION OF
+// THE SAME MASTER (`close(true, successor)`; start.ts knows, it compares the two
+// masters) first carries over what is under its own prefix:
+//   - `syncNow`, still in time → written under the successor's prefix with the
+//     SAME id and the SAME `at`, `master` renamed; then the old key goes. The id:
+//     two windows that carry the same command over write the same key, not two.
+//     The `at`: a hand-over does not make a command younger than the user's press.
+//     (Two windows with no lock between them can still get it executed twice —
+//     A executes and removes it between B's write and C's. `syncNow` is
+//     idempotent; that is the same "harmless" as two leaders in a hand-over.)
+//   - `resolve` → DROPPED. An attach is a new first reconciliation from cleared
+//     bases: the lock the user confirmed belongs to a driver that is gone, and a
+//     lock of the new one that happens to look the same was not what they saw.
+//   - another master (no successor) → nothing: "sync P1 now" means nothing to P2.
+// It is done in `close` and not in the next channel's open: `close` is the one
+// place that knows the old prefix and removes its keys, so "carry over, then
+// remove" is one step per key with nothing in between — an open would have to be
+// told every tag this window was ever on, after their keys were gone. And when
+// the window that carries over is itself the new leader, no `storage` event
+// tells it: its new channel starts as "not the leader yet" and scans on the
+// first refresh, like any leader that has just taken the lease.
+//
 // THE LEADER PUBLISHES, FOLLOWERS READ. The leader writes its state on change —
 // trailing throttle, one write per `STATUS_THROTTLE_MS`: the executor reports
 // every section of a reindex one by one, and every write is a `storage` event in
@@ -188,8 +214,12 @@ export interface StatusChannel {
   requestSyncNow(): void
   /** `lock`: what the user was shown for this section — `snapshot.status.locks[section]`. */
   requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): void
-  /** `clear`: the master is gone or replaced — ITS status and ITS commands go with it, nobody else's. Otherwise they are the other windows' business. */
-  close(clear: boolean): void
+  /**
+   * `clear`: the master is gone or replaced — ITS status and ITS commands go with it, nobody else's. Otherwise they
+   * are the other windows' business. `successor`, only with `clear`: the tag of the SAME master's next generation
+   * (it was attached again) — a `syncNow` still in time is carried over to it (the header, THE GENERATION HAND-OVER).
+   */
+  close(clear: boolean, successor?: string): void
 }
 
 // === The snapshot ===
@@ -493,6 +523,20 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     }
   }
 
+  /** THE GENERATION HAND-OVER: a `syncNow` of this master, still in time, under the successor's prefix — same id, same `at`. */
+  const carryOver = (key: string, successor: string): void => {
+    const raw = readItem(key)
+    const command = raw === null ? null : parseCommand(raw)
+    // A `resolve` is not carried over, on purpose: the lock it names was the old driver's (the header).
+    if (command === null || command.kind !== 'syncNow' || command.master !== tag || !inTime(command.at, deps.now())) return
+    const next: Command = { kind: 'syncNow', master: successor, at: command.at }
+    try {
+      localStorage.setItem(`${commandPrefixOf(successor)}${key.slice(ownPrefix.length)}`, JSON.stringify(next))
+    } catch {
+      /* the user presses again */
+    }
+  }
+
   // Orphans of OTHER masters (the header, "so who removes …"). Its own master's are its leader's to judge.
   const openedAt = deps.now()
   for (const key of commandKeys(COMMAND_PREFIX)) {
@@ -518,7 +562,7 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       if (deps.local().leader) execute(command)
       else send(command)
     },
-    close(clear) {
+    close(clear, successor) {
       if (closed) return
       closed = true
       clearPublishTimer()
@@ -531,7 +575,10 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       // A record that does not parse is nobody's — a leader only ever writes one that does — and goes as well.
       const record = parsePublished(readItem(STATUS_KEY))
       if (record === null || record.master === tag) removeItem(STATUS_KEY)
-      for (const key of commandKeys(ownPrefix)) removeItem(key)
+      for (const key of commandKeys(ownPrefix)) {
+        if (successor !== undefined && successor !== tag) carryOver(key, successor)
+        removeItem(key)
+      }
     },
   }
 }

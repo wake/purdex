@@ -1878,6 +1878,39 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     expect(JSON.parse(localStorage.getItem(STATUS) ?? 'null')).toMatchObject({ master: tag() })
   })
 
+  it('attach again, SAME master: a syncNow this window had sent to the old generation is carried over and executed once — a resolve is not', async () => {
+    h.initialLeader = false
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    requestSyncNow() // a follower: written under generation N
+    requestResolve('hosts', 'local', lockOf(PAIR))
+    const oldPrefix = cmd()
+    expect(commandKeys().filter((k) => k.startsWith(oldPrefix))).toHaveLength(2)
+
+    h.initialLeader = true // … and this very window leads generation N+1: no storage event will tell it
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    h.executors.at(-1)?.status.mockReturnValue(locked(PAIR))
+    expect(cmd()).not.toBe(oldPrefix)
+    expect(h.executors.at(-1)?.syncNow).toHaveBeenCalledTimes(1)
+    expect(h.executors.at(-1)?.resolve).not.toHaveBeenCalled()
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('ANOTHER master: a syncNow sent to the old one is not carried over', async () => {
+    h.initialLeader = false
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    requestSyncNow()
+    h.initialLeader = true
+    useProfileStore.getState().setMaster('h2', P2, 'pull', EP)
+    await flush()
+    expect(h.executors.at(-1)?.syncNow).not.toHaveBeenCalled()
+    expect(commandKeys()).toEqual([])
+  })
+
   it('stop() with a master: this window lets go, the keys are the other windows’ business', async () => {
     const add = vi.spyOn(window, 'addEventListener')
     const remove = vi.spyOn(window, 'removeEventListener')

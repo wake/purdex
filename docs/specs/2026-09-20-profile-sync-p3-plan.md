@@ -88,6 +88,12 @@ for its remaining callers (they die in P4b). `start.ts` imports the new home.
   tag in its payload as well; a window that lets go of a master removes that master's keys only
   (there is no resend — a command removed by a late window is a lost user action). Expired commands
   of other tags are swept by whoever opens a channel; never by a user without a master.
+- **The generation hand-over** (critic): the same master attached again is a new tag. A window that
+  closes its channel for the next generation of the SAME master first carries over every `syncNow`
+  under its own prefix that is still in time — same id, same `at`, `master` renamed — and then
+  removes the old keys. A `resolve` is never carried over (an attach is a new first reconciliation;
+  the confirmed lock was the old driver's), and nothing is when the master itself changed. Done in
+  `close(true, successor)`; a window that is itself the new leader finds it by its take-over scan.
 - **The leader publishes, followers read.** The leader writes `{at, leader: windowId, master: tag,
   status, blocked, problems}` to `localStorage['purdex-profile-status']` on change (throttled to one
   write per 250 ms, trailing); every window listens to the native `storage` event for that key. A
