@@ -1438,3 +1438,357 @@ describe('executor — lifecycle', () => {
     expect(store.saveSection).not.toHaveBeenCalled()
   })
 })
+
+/* ─── the first reconciliation: an attach has a direction ─── */
+
+describe('executor — the first reconciliation (initialDirection)', () => {
+  type Direction = 'push' | 'pull' | null
+  const SEQUENCE = ['locked', 'resolved', 'push-started', 'push-applied', 'pull-applied']
+  const sequence = (): string[] =>
+    h.events
+      .filter((e) => e.changed && SEQUENCE.includes(e.event.type))
+      .map((e) => (e.event.type === 'resolved' ? `resolved:${String(e.event.keep)}` : e.event.type === 'locked' ? `locked:${String(e.event.reason)}` : e.event.type))
+
+  function first(direction: Direction, over: Partial<ExecutorDeps> = {}): Harness & { settled: ReturnType<typeof vi.fn>; dir: { value: Direction } } {
+    const dir = { value: direction }
+    const settled = vi.fn()
+    return { ...make({ initialDirection: () => dir.value, onInitialSettled: settled, ...over }), settled, dir }
+  }
+
+  /** A client that never agreed on `hosts` (H2 here) meets a SOT that holds H9 at rev 5. */
+  function bothSidesHaveHosts(): void {
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 5, 'H9')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 5, 'H9'), { theirs: true }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H9' })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
+  }
+
+  it('pull: a decide-time conflict is locked, resolved keep-SOT at once, and pulled — nothing is written', async () => {
+    bothSidesHaveHosts()
+    const { ex, settled } = first('pull')
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    ex.onReconnected()
+    await flush()
+    expect(sequence()).toEqual(['locked:conflict', 'resolved:sot', 'pull-applied'])
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(applySectionToStores).toHaveBeenCalledWith('hosts', { theirs: true }, { masterHostId: HOST })
+    expect(ex.status().sections).toEqual({ hosts: 'synced' })
+    expect(settled).toHaveBeenCalledTimes(1)
+  })
+
+  it('push: the same conflict is resolved keep-local and pushed over the SOT rev — nothing is pulled or re-applied', async () => {
+    bothSidesHaveHosts()
+    const { ex, settled } = first('push')
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    ex.onReconnected()
+    await flush()
+    expect(sequence()).toEqual(['locked:conflict', 'resolved:local', 'push-started', 'push-applied'])
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'H2', payload: { mine: true } })
+    expect(api.getSection).not.toHaveBeenCalled()
+    expect(applySectionToStores).not.toHaveBeenCalled()
+    expect(ex.status().sections).toEqual({ hosts: 'synced' })
+    expect(settled).toHaveBeenCalledTimes(1)
+  })
+
+  it('no direction: exactly as before — the conflict is the user\'s, and nothing ever settles', async () => {
+    bothSidesHaveHosts()
+    const { ex, settled } = first(null)
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    ex.onReconnected()
+    await flush()
+    expect(sequence()).toEqual(['locked:conflict'])
+    expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' })
+    expect(settled).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['pull', ['locked:reset', 'resolved:sot', 'pull-applied']],
+    ['push', ['locked:reset', 'resolved:local', 'push-started', 'push-applied']],
+  ] as const)('%s: a reset (the SOT rev went backwards) is resolved the same way', async (direction, expected) => {
+    h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H1' } }
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 2, 'H9')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H9'), { theirs: true }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H9' })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+    const { ex } = first(direction)
+    ex.onSection({ key: 'hosts', hash: 'H1', payload: { mine: true } })
+    ex.onReconnected()
+    await flush()
+    expect(sequence()).toEqual(expected)
+    if (direction === 'push') expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H1' })
+  })
+
+  it('a 409 during the first reconciliation is resolved too (pull)', async () => {
+    const dir: { value: Direction } = { value: 'pull' }
+    const { ex } = await synced({ hosts: 'H1' }, { initialDirection: () => dir.value })
+    api.putSection.mockResolvedValue({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 5, 'H9'), { theirs: true }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H9' })
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    await flush()
+    expect(ex.status().sections).toEqual({ hosts: 'synced' })
+    expect(eventsOf('resolved')).toEqual([{ type: 'resolved', keep: 'sot' }])
+  })
+
+  it('push: a 409 whose sent snapshot is no longer what the stores hold is left to the user (keep-local would undo the newer edit)', async () => {
+    const { ex } = await synced({ hosts: 'H1' }, { initialDirection: () => 'push' })
+    const put = deferred<PutOutcome>()
+    api.putSection.mockReturnValueOnce(put.promise)
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
+    await flush()
+    ex.onSection({ key: 'hosts', hash: 'H3', payload: { mine: 'later' } })
+    put.resolve({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
+    await flush()
+    expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' })
+    expect(eventsOf('resolved')).toEqual([])
+  })
+
+  it.each(['pull', 'push'] as const)('%s: locked:invalid is NOT resolved by a direction, and nothing settles while it stands', async (direction) => {
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 2, 'H9')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H9'), { theirs: true }))
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', detail: 'removes the master host' })
+    const { ex, settled } = first(direction)
+    ex.onSection({ key: 'hosts', hash: 'H1', payload: { mine: true } })
+    ex.onReconnected()
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(ex.status().sections).toEqual({ hosts: 'locked:invalid' })
+    expect(eventsOf('resolved')).toEqual([])
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(settled).not.toHaveBeenCalled()
+  })
+
+  it('a conflict restored from the section store is resolved when the host connects', async () => {
+    h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
+    bothSidesHaveHosts()
+    const { ex, settled } = first('pull')
+    expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' })
+    ex.onReconnected()
+    await flush()
+    expect(ex.status().sections).toEqual({ hosts: 'synced' })
+    expect(settled).toHaveBeenCalledTimes(1)
+  })
+
+  describe('onInitialSettled', () => {
+    it('exactly once, and only when nothing is pending, in flight or queued', async () => {
+      api.listProfiles.mockResolvedValue(index([]))
+      const hostsPut = deferred<PutOutcome>()
+      const settingsPut = deferred<PutOutcome>()
+      api.putSection.mockReturnValueOnce(hostsPut.promise).mockReturnValueOnce(settingsPut.promise)
+      const { ex, settled } = first('push')
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onSection({ key: 'settings', hash: 'S1', payload: { b: 1 } })
+      ex.onReconnected()
+      await flush()
+      expect(settled).not.toHaveBeenCalled() // hosts in flight, settings queued
+
+      hostsPut.resolve({ kind: 'applied', rev: 1 })
+      await flush()
+      expect(ex.status().sections.hosts).toBe('synced')
+      expect(settled).not.toHaveBeenCalled() // settings in flight
+
+      settingsPut.resolve({ kind: 'applied', rev: 1 })
+      await flush()
+      expect(settled).toHaveBeenCalledTimes(1)
+
+      // the start layer has not cleared the direction yet: still once
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
+      ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 2 } })
+      await flush()
+      expect(settled).toHaveBeenCalledTimes(1)
+    })
+
+    it('an empty SOT + pull: nothing to take, the ordinary rules push, and it settles', async () => {
+      api.listProfiles.mockResolvedValue(index([]))
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 1 })
+      const { ex, settled } = first('pull')
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onSection({ key: 'workspaces', hash: 'W1', payload: { b: 1 } })
+      ex.onReconnected()
+      await flush()
+      expect(api.putSection).toHaveBeenCalledTimes(2)
+      expect(ex.status().profile).toBe('synced')
+      expect(settled).toHaveBeenCalledTimes(1)
+    })
+
+    it('a section that is clean but BEHIND reads `synced` — and does not settle until its pull has landed', async () => {
+      h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 2, 'H9')]))
+      const get = deferred<Result<Section | null>>()
+      api.getSection.mockReturnValue(get.promise)
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H9' })
+      const { ex, settled } = first('pull')
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onReconnected()
+      await flush()
+      expect(ex.status().sections).toEqual({ hosts: 'synced' })
+      expect(settled).not.toHaveBeenCalled()
+      get.resolve(sectionOf(meta('hosts', 2, 'H9'), { theirs: true }))
+      await flush()
+      expect(settled).toHaveBeenCalledTimes(1)
+    })
+
+    it('not before an index has been SEEN: offline, or a failed list, settles nothing — and the next connect carries on', async () => {
+      const { ex, settled, env } = await (async () => {
+        h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+        return first('pull')
+      })()
+      env.reachable = false
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onReconnected()
+      await flush()
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(api.listProfiles).not.toHaveBeenCalled()
+      expect(settled).not.toHaveBeenCalled()
+
+      env.reachable = true
+      api.listProfiles.mockResolvedValueOnce(failure('network'))
+      ex.onReconnected()
+      await flush()
+      expect(settled).not.toHaveBeenCalled()
+
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+      ex.onReconnected()
+      await flush()
+      expect(settled).toHaveBeenCalledTimes(1)
+    })
+
+    it('a new first reconciliation (the direction went null and came back) settles again', async () => {
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+      h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+      const { ex, settled, dir } = first('pull')
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onReconnected()
+      await flush()
+      expect(settled).toHaveBeenCalledTimes(1)
+      dir.value = null
+      ex.onReconnected()
+      await flush()
+      expect(settled).toHaveBeenCalledTimes(1)
+      dir.value = 'push'
+      ex.onReconnected()
+      await flush()
+      expect(settled).toHaveBeenCalledTimes(2)
+    })
+
+    it('a schema lock settles nothing', async () => {
+      h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1', ['fp-future', 9])]))
+      const { ex, settled } = first('pull')
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onReconnected()
+      await flush()
+      expect(ex.status().schemaLock).not.toBeNull()
+      expect(settled).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('push: `tabs.*` of workspaces that are not here are deleted from the SOT', () => {
+    /** Local: hosts, workspaces, tabs.w1 — all already equal to the SOT. The SOT also lists `others`. */
+    function mineAgrees(others: SectionMeta[]): void {
+      useWorkspaceStore.setState({ workspaces: [ws('w1')] })
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.w1', 1, 'T1'), ...others]))
+    }
+    function reportMine(ex: Executor): void {
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onSection({ key: 'workspaces', hash: 'W1', payload: { b: 1 } })
+      ex.onSection({ key: 'tabs.w1', hash: 'T1', payload: { order: ['t'], tabs: { t: {} } } })
+    }
+
+    it('deletes it with the index rev as baseRev, forgets it, and settles; an unknown kind is carried', async () => {
+      mineAgrees([meta('tabs.w7', 3, 'T7'), meta('gizmo.x', 2, 'G1')])
+      api.deleteSection.mockResolvedValue({ kind: 'applied', rev: 4 })
+      const { ex, settled, problems } = first('push')
+      reportMine(ex)
+      ex.onReconnected()
+      await flush()
+      expect(api.deleteSection).toHaveBeenCalledTimes(1)
+      expect(api.deleteSection).toHaveBeenCalledWith(HOST, PROFILE, 'tabs.w7', { baseRev: 3, clientId: h.clientId }, expect.anything())
+      expect(Object.keys(ex.status().sections).sort()).toEqual(['hosts', 'tabs.w1', 'workspaces'])
+      expect(settled).toHaveBeenCalledTimes(1)
+      expect(problems.filter((p) => p.kind.startsWith('orphan'))).toEqual([])
+    })
+
+    it.each(['pull', null] as const)('direction %s: nothing is deleted', async (direction) => {
+      mineAgrees([meta('tabs.w7', 3, 'T7')])
+      const { ex } = first(direction)
+      reportMine(ex)
+      ex.onReconnected()
+      await flush()
+      expect(api.deleteSection).not.toHaveBeenCalled()
+    })
+
+    it('goes through the write queue, and only once `workspaces` is up to date', async () => {
+      useWorkspaceStore.setState({ workspaces: [ws('w1')] })
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 2, 'W-theirs'), meta('tabs.w7', 3, 'T7')]))
+      const put = deferred<PutOutcome>()
+      api.putSection.mockReturnValue(put.promise)
+      api.deleteSection.mockResolvedValue({ kind: 'applied', rev: 4 })
+      const { ex, settled } = first('push')
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+      ex.onSection({ key: 'workspaces', hash: 'W1', payload: { b: 1 } })
+      ex.onReconnected()
+      await flush()
+      expect(api.putSection).toHaveBeenCalledTimes(1) // workspaces, keep-local over rev 2
+      expect(api.deleteSection).not.toHaveBeenCalled()
+      expect(settled).not.toHaveBeenCalled()
+      put.resolve({ kind: 'applied', rev: 3 })
+      await flush()
+      expect(api.deleteSection).toHaveBeenCalledTimes(1)
+      expect(settled).toHaveBeenCalledTimes(1)
+    })
+
+    it('a 409 is a problem and is NOT retried — not by the next index either; the rest still settles', async () => {
+      mineAgrees([meta('tabs.w7', 3, 'T7')])
+      api.deleteSection.mockResolvedValue({ kind: 'conflict', rev: 4, hash: 'T8', payload: { order: [], tabs: {} } })
+      const { ex, settled, problems } = first('push')
+      reportMine(ex)
+      ex.onReconnected()
+      await flush()
+      ex.onReconnected()
+      await flush()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(api.deleteSection).toHaveBeenCalledTimes(1)
+      expect(problems.filter((p) => p.kind === 'orphan-delete-conflict')).toHaveLength(1)
+      expect(settled).toHaveBeenCalledTimes(1)
+    })
+
+    it('not sent without the lease', async () => {
+      mineAgrees([meta('tabs.w7', 3, 'T7')])
+      const { ex, env } = first('push')
+      env.leader = false
+      reportMine(ex)
+      ex.onReconnected()
+      await flush()
+      expect(api.deleteSection).not.toHaveBeenCalled()
+    })
+  })
+
+  it('pull: a local `tabs.*` is not pushed while `workspaces` is still behind — the workspace may be about to go', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w9')] })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 2, 'W-theirs')]))
+    const get = deferred<Result<Section | null>>()
+    api.getSection.mockReturnValue(get.promise)
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 1 })
+    applySectionToStores.mockImplementation(async () => {
+      useWorkspaceStore.setState({ workspaces: [] })
+      return { ok: true, hash: 'W-theirs' }
+    })
+    const { ex, settled } = first('pull')
+    ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+    ex.onSection({ key: 'workspaces', hash: 'W-mine', payload: { b: 1 } })
+    ex.onSection({ key: 'tabs.w9', hash: 'T9', payload: { order: ['t'], tabs: { t: {} } } })
+    ex.onReconnected()
+    await flush()
+    expect(api.putSection).not.toHaveBeenCalled()
+    get.resolve(sectionOf(meta('workspaces', 2, 'W-theirs'), { theirs: true }))
+    await flush()
+    ex.onSection({ key: 'tabs.w9', hash: null, payload: null }) // the collector, after the workspace went
+    await flush()
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(api.deleteSection).not.toHaveBeenCalled()
+    expect(settled).toHaveBeenCalledTimes(1)
+  })
+})

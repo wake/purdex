@@ -58,6 +58,52 @@
 //   - After `dispose()` every continuation checks `disposed` after every
 //     `await` and drops its result: no dispatch, no persistence, no timer.
 //
+// THE FIRST RECONCILIATION (spec §4.9, decision 10) — while `initialDirection()`
+// is not null
+//   A client that has just attached never agreed with the SOT on anything, so a
+//   section both sides hold is dirty + moved → `lock-conflict`. The state
+//   machine is right: it cannot know which side to keep. The user said so when
+//   they attached — `push` (this machine overwrites the SOT) or `pull` (the SOT
+//   overwrites this machine) — and during this period the executor answers the
+//   lock on their behalf, THROUGH THE SAME DOOR the user would use: `locked` is
+//   dispatched as always and `resolved{keep}` right after it (`pull` → 'sot' →
+//   forcePull; `push` → 'local' → rebase, push). `locked:reset` likewise, and a
+//   lock restored from the section store or made by a 409.
+//   - NOT `locked:invalid` (the payload cannot be applied; no direction fixes
+//     that), not the schema lock, not `profileGone`.
+//   - NOT, under `push`, a 409 whose sent snapshot is no longer what the stores
+//     hold: keep-local restores the SENT snapshot, which would undo the edit
+//     made since. That one is the user's.
+//   - `push` means this machine REPLACES the SOT, so a `tabs.<id>` another
+//     client left there, whose workspace is not here, must not stay behind as an
+//     orphan. Once `workspaces` is up to date such a section (no local content,
+//     never agreed on, live on the SOT) gets a `deleteSection(baseRev = the rev
+//     the index gave)` through the write FIFO. 200 → the section is observed as
+//     gone. 409 → someone is writing it right now: a problem, no retry (by this
+//     executor), the ordinary rules have it afterwards. Sections of a kind this
+//     client does not know never enter the executor at all: carried, not deleted.
+//   - `pull` means nothing of this machine's should reach the SOT before the
+//     SOT's `workspaces` has been taken: a local `tabs.<id>` is not pushed until
+//     `hosts` and `workspaces` are up to date, nor once its workspace is no
+//     longer here — its workspace may be about to be replaced, and the push
+//     would plant an orphan only to delete it again. (An
+//     empty SOT has nothing to take: `workspaces` is pushed by the ordinary
+//     rules, becomes up to date, and the tabs follow.)
+//   - It ends when, with an index SEEN by this executor, every section is up to
+//     date (clean, index fresh, SOT not moved, nothing in flight / forced /
+//     to restore / running), the write queue is empty, no placeholder is held
+//     and nothing is locked: `onInitialSettled()` — once per period; the start
+//     layer clears the stored direction. A `tabs.*` section that cannot be
+//     rendered here (no such workspace, no local content) does not count: it is
+//     carried, and would otherwise hold the period open for ever.
+//   - IT NEVER ENDS BY TIMEOUT. Offline, a `locked:invalid`, a schema lock: the
+//     direction stays and the period resumes at the next connect, reload
+//     included. Ending it early would be SAFE — later conflicts go to the user —
+//     but "pull onto a new machine" would then turn into a dialog per section
+//     whenever the first attempt was cut short. The cost of the choice made
+//     here: a conflict that arises while the period is still open (another
+//     client writing meanwhile) is settled by the direction, not by the user.
+//
 // WHAT THE START LAYER (Task 11) OWES THIS FILE
 //   - `onReconnected()` whenever the master host's event stream (re)connects —
 //     THE FIRST CONNECT INCLUDED. Creating an executor starts nothing by itself:
@@ -108,6 +154,10 @@ export interface ExecutorDeps {
   onProblem?: (p: { kind: string; section?: string; detail: string }) => void
   /** For P3's UI. Called only when the status actually changed. */
   onStatus?: (s: ExecutorStatus) => void
+  /** The direction chosen at attach, until the first reconciliation has settled (see the header). Absent = null. Read live. */
+  initialDirection?: () => 'push' | 'pull' | null
+  /** The first reconciliation has settled. Once per period; the callee clears the direction. */
+  onInitialSettled?: () => void
 }
 
 export interface ExecutorStatus {
@@ -214,8 +264,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   let reindexNotBefore = 0
   let reindexTimer: Timer | null = null
 
-  const queue: Array<{ key: string; token: FlightToken; done: (f: Finish) => void }> = []
+  /** The profile's write FIFO. `fail` = what a throwing `send` owes (closing the flight it opened). */
+  const queue: Array<{ key: string; send: () => Promise<Finish>; fail: () => void; done: (f: Finish) => void }> = []
   let draining = false
+
+  /** The first reconciliation (see the header). */
+  let indexSeen = false
+  let settledReported = false
+  /** Orphan deletes queued or out, and the ones already tried (never again by this executor). */
+  const orphanPending = new Set<string>()
+  const orphanTried = new Set<string>()
 
   let shapesPromise: Promise<Shapes> | null = null
   let previousWorkspaceIds = localWorkspaceIds()
@@ -349,12 +407,135 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     pruneMemoryStash()
     forgetIfGone(key, next)
     emitStatus()
+    const keep = answerFor(next)
+    if (keep !== null) {
+      dispatch(key, { type: 'resolved', keep }, pumpAfter)
+      return true
+    }
     if (pumpAfter) {
       pump(key)
       // `hosts` / `workspaces` gate every `tabs.*` pull
       if (GATES.includes(key)) pumpTabs()
+      checkSettled()
     }
     return true
+  }
+
+  /* ─── the first reconciliation ─── */
+
+  function direction(): 'push' | 'pull' | null {
+    if (deps.initialDirection === undefined) return null
+    const d = deps.initialDirection()
+    return d === 'push' || d === 'pull' ? d : null
+  }
+
+  /** What the direction answers to this lock, or null: not locked, not its to answer, or no direction. */
+  function answerFor(s: SectionSyncState): 'local' | 'sot' | null {
+    if (s.status !== 'locked:conflict' && s.status !== 'locked:reset') return null
+    const d = direction()
+    if (d === null) return null
+    if (d === 'pull') return 'sot'
+    // keep-local restores the SENT snapshot: not over an edit made since
+    if (s.conflict !== null && s.conflict.localHash !== s.currentHash) return null
+    return 'local'
+  }
+
+  /** Locks that were not made under this direction: restored from the store, or older than the attach. */
+  function answerStandingLocks(): void {
+    for (const [key, s] of [...sections]) {
+      const keep = answerFor(s)
+      if (keep !== null) dispatch(key, { type: 'resolved', keep }, false)
+    }
+  }
+
+  function upToDate(key: string): boolean {
+    const s = sections.get(key)
+    return (
+      s !== undefined && s.status === 'synced' && !s.indexStale && !sotMoved(s) && s.inFlight === null &&
+      s.restoreLocal === null && !s.forcePull && !running.has(key)
+    )
+  }
+
+  function gatesUpToDate(): boolean {
+    return GATES.every(upToDate)
+  }
+
+  /** A `tabs.*` the SOT holds, this client never had, and whose workspace is not here. */
+  function isUnrendered(key: string, s: SectionSyncState): boolean {
+    if (sectionKind(key) !== 'tabs' || s.currentHash !== null || s.base.hash !== null || s.sot.hash === null) return false
+    const id = workspaceIdOf(key)
+    return id === null || !localWorkspaceIds().includes(id)
+  }
+
+  /** `push` only: queue the delete of every unrendered `tabs.*`, once `workspaces` says what this machine has. */
+  function sweepOrphans(): void {
+    if (disposed || profileGone || schemaLock !== null || blocked || !indexSeen || direction() !== 'push') return
+    if (!deps.isReachable() || !gatesUpToDate()) return
+    for (const [key, s] of [...sections]) {
+      if (s.indexStale || s.inFlight !== null || running.has(key) || !isUnrendered(key, s)) continue
+      if (orphanPending.has(key) || orphanTried.has(key)) continue
+      orphanPending.add(key)
+      const rev = s.sot.rev
+      queue.push({
+        key,
+        send: () => sendOrphanDelete(key, rev),
+        fail: () => undefined,
+        done: () => {
+          orphanPending.delete(key)
+          checkSettled()
+        },
+      })
+    }
+    void drain()
+  }
+
+  async function sendOrphanDelete(key: string, rev: number): Promise<Finish> {
+    const s = sections.get(key)
+    // Decided on the CURRENT state: still `push`, still the rev that was judged, still not here.
+    if (schemaLock !== null || profileGone || blocked || direction() !== 'push') return WAIT
+    if (s === undefined || s.sot.rev !== rev || !isUnrendered(key, s)) return WAIT
+    if (!deps.isLeader()) {
+      problem('not-leader', 'the lease is not ours: the write was not sent', key)
+      return WAIT
+    }
+    orphanTried.add(key)
+    const outcome = await deleteSection(hostId, profileId, key, { baseRev: rev, clientId: getClientId() }, requestOptions)
+    if (disposed) return WAIT
+    if (outcome.kind === 'applied') {
+      // Our own delete: the WS echo is `own` and ignored, so observe it here.
+      dispatch(key, { type: 'remote-event', rev: outcome.rev, hash: null, own: false }, false)
+      return WAIT
+    }
+    if (outcome.kind === 'conflict') {
+      problem('orphan-delete-conflict', `someone wrote it meanwhile (now rev ${outcome.rev}); left to the ordinary rules`, key)
+      return WAIT
+    }
+    if (!blocks(outcome)) {
+      if (outcome.reason !== 'aborted') orphanTried.delete(key) // nothing was decided: the next index may try again
+      problem('orphan-delete-failed', `${outcome.reason} (${outcome.status}): ${outcome.message}`, key)
+    }
+    return WAIT
+  }
+
+  /** The end of the first reconciliation (see the header). */
+  function checkSettled(): void {
+    if (disposed || deps.onInitialSettled === undefined) return
+    if (direction() === null) {
+      settledReported = false
+      return
+    }
+    if (settledReported || !indexSeen || profileGone || schemaLock !== null || blocked) return
+    if (reindexing || draining || queue.length > 0 || orphanPending.size > 0 || heldPlaceholders.size > 0) return
+    for (const [key, s] of sections) {
+      if (isUnrendered(key, s) && !s.indexStale) continue
+      if (!upToDate(key)) return
+    }
+    settledReported = true
+    try {
+      deps.onInitialSettled()
+    } catch {
+      // a listener's bug is not the driver's
+    }
   }
 
   function pumpAll(): void {
@@ -422,6 +603,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         const s = sections.get(key)
         if (s !== undefined) forgetIfGone(key, s)
         settleManual()
+        if (GATES.includes(key)) sweepOrphans()
+        checkSettled()
       })
   }
 
@@ -474,6 +657,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       case 'push':
       case 'delete': {
         if (schemaLock !== null || blocked || backingOff(key)) return
+        // The first reconciliation, `pull`: nothing of a workspace's goes out before the SOT's `workspaces` is in.
+        // Nor of a workspace the pull has just removed (the collector's `null` for it is 500 ms away).
+        if (sectionKind(key) === 'tabs' && action.do === 'push' && direction() === 'pull') {
+          const id = workspaceIdOf(key)
+          if (!gatesUpToDate() || id === null || !localWorkspaceIds().includes(id)) return
+        }
         const token = action.token
         run(key, () => new Promise<Finish>((done) => enqueueWrite(key, token, done)))
         return
@@ -500,6 +689,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         pumpAll()
         if (reindexForced) requestReindex()
         settleManual()
+        sweepOrphans()
+        checkSettled()
       })
   }
 
@@ -551,6 +742,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       dispatch(m.section, { type: 'sot-index', epoch: initialSectionState(null).indexEpoch, entry: { rev: m.rev, hash: m.hash } }, false)
     }
 
+    indexSeen = true
     settleHeldPlaceholders()
     reportSectionSet(entry.sections.map((m) => m.section))
   }
@@ -627,7 +819,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /* ─── push / delete ─── */
 
   function enqueueWrite(key: string, token: FlightToken, done: (f: Finish) => void): void {
-    queue.push({ key, token, done })
+    queue.push({ key, send: () => send(key, token), fail: () => closeFlight(key, token), done })
     void drain()
   }
 
@@ -639,11 +831,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         const job = queue.shift()!
         let finish: Finish
         try {
-          finish = await send(job.key, job.token)
+          finish = await job.send()
         } catch (err) {
           if (disposed) return
           problem('executor-error', message(err), job.key)
-          closeFlight(job.key, job.token)
+          job.fail()
           finish = failed(job.key)
         }
         if (disposed) return
@@ -652,6 +844,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     } finally {
       draining = false
     }
+    checkSettled()
   }
 
   function closeFlight(key: string, token: FlightToken): void {
@@ -896,6 +1089,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       resetRetries()
       // EVERY section first, the index request after: its epochs are read post-`reconnected`.
       for (const key of [...sections.keys()]) dispatch(key, { type: 'reconnected' }, false)
+      answerStandingLocks()
       pumpAll()
       if (heldPlaceholders.size > 0 && online()) requestReindex()
     },
