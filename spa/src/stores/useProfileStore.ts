@@ -58,8 +58,20 @@
 // user has since pointed the host at. There is nothing worth migrating: the user
 // attaches again, which clears the bases anyway.
 //
+// WHY `suspendedUntil`. `attachMaster` has to wait for the daemon (the attachment
+// PUT, up to 15 s) before it can clear the bases and start the new
+// reconciliation. A driver left running meanwhile — in this window, or the leader
+// in another — could push a dirty section in that gap, and a `pull` would then
+// find a SOT that this machine has just overwritten: the direction the user asked
+// for, reversed, for good. So the attach first tells EVERY window to stand still:
+// no driver, no request, master and bases untouched. It is a TIME and not a flag
+// because the window that set it may die before it can lift it (closed or
+// reloaded mid-attach), and a flag would leave every window of this client
+// suspended for ever; an expired suspension is simply none. `setMaster` (success)
+// and `resume` (failure) lift it at once.
+//
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
-// non-null, and non-null only together with `masterEndpoint`; `pendingDirection` is null whenever there is no master. `setMaster`
+// non-null, and non-null only together with `masterEndpoint`; `pendingDirection` and `suspendedUntil` are null whenever there is no master. `setMaster`
 // is the only way in and validates all three; the persist `merge` re-establishes
 // both for whatever storage hands back.
 import { create } from 'zustand'
@@ -78,6 +90,8 @@ interface ProfileControl {
   pendingDirection: SyncDirection | null
   /** `"<ip>:<port>"` of the master host when it was attached; null exactly when there is no master. */
   masterEndpoint: string | null
+  /** Epoch ms. While `now < suspendedUntil` no window runs a driver (an attach is in progress). */
+  suspendedUntil: number | null
   /** +1 with every accepted `setMaster`. A change with the same master = attach was called again. */
   attachGeneration: number
   /** Sync without being asked. Default on. */
@@ -90,6 +104,9 @@ export interface ProfileState extends ProfileControl {
    *  is `false`. Attaching again to the same master starts a new first
    *  reconciliation in the direction given. */
   setMaster: (hostId: string, profileId: string, direction: SyncDirection, endpoint: string) => boolean
+  /** Every driver stands still until `until` (epoch ms) or `resume` / `setMaster`. Ignored without a master. */
+  suspend: (until: number) => void
+  resume: () => void
   /** Detach. `autoSync` is a preference and survives; the direction does not. */
   clearMaster: () => void
   /** The first reconciliation has settled: conflicts go to the user from now on. */
@@ -127,6 +144,7 @@ function sanitiseControl(persisted: unknown): ProfileControl {
     masterProfileId: attached ? (p.masterProfileId as string) : null,
     pendingDirection: attached && isSyncDirection(p.pendingDirection) ? p.pendingDirection : null,
     masterEndpoint: attached ? (p.masterEndpoint as string) : null,
+    suspendedUntil: attached && typeof p.suspendedUntil === 'number' && Number.isFinite(p.suspendedUntil) ? p.suspendedUntil : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
   }
@@ -139,14 +157,18 @@ export const useProfileStore = create<ProfileState>()(
       masterProfileId: null,
       pendingDirection: null,
       masterEndpoint: null,
+      suspendedUntil: null,
       attachGeneration: 0,
       autoSync: true,
       setMaster: (hostId, profileId, direction, endpoint) => {
         if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction) || !isEndpoint(endpoint)) return false
-        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, attachGeneration: s.attachGeneration + 1 }))
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, suspendedUntil: null, attachGeneration: s.attachGeneration + 1 }))
         return true
       },
-      clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null }),
+      suspend: (until) =>
+        set((s) => (selectMaster(s) === null || typeof until !== 'number' || !Number.isFinite(until) ? s : { suspendedUntil: until })),
+      resume: () => set({ suspendedUntil: null }),
+      clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null, suspendedUntil: null }),
       clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
     }),
@@ -159,10 +181,11 @@ export const useProfileStore = create<ProfileState>()(
         masterProfileId: state.masterProfileId,
         pendingDirection: state.pendingDirection,
         masterEndpoint: state.masterEndpoint,
+        suspendedUntil: state.suspendedUntil,
         attachGeneration: state.attachGeneration,
         autoSync: state.autoSync,
       }),
-      // Only the six sanitised fields ever come out of storage: persisted
+      // Only the seven sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },

@@ -104,8 +104,9 @@ export interface ProfileSyncState {
   /** This window holds the lease right now. */
   leader: boolean
   /** Nothing syncs, in any window (see `enterMasterMode`): the master host's ip / port is not the one the
-   *  profile was attached at · the attachment answered 404, i.e. the profile is not on the daemon any more. */
-  blocked: 'master-endpoint-changed' | 'profile-gone' | null
+   *  profile was attached at · the attachment answered 404, i.e. the profile is not on the daemon any more ·
+   *  an `attachMaster` is in progress somewhere (transient: lifted by its outcome, or by its expiry). */
+  blocked: 'master-endpoint-changed' | 'profile-gone' | 'suspended' | null
   /** Null in a follower and without a master: only the leader knows. With `blocked: 'profile-gone'` there is
    *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections. */
   status: ExecutorStatus | null
@@ -133,6 +134,16 @@ declare global {
 export const PROBLEM_BUFFER_SIZE = 50
 export const ATTACH_RETRY_BASE_MS = 2_000
 export const ATTACH_RETRY_CAP_MS = 30_000
+/** How long an attach may keep every driver still: above the 15 s timeout of the one request it waits for at a time. */
+export const ATTACH_SUSPEND_MS = 30_000
+
+/** Epoch ms. `startProfileSync({ now })` replaces it. */
+let clock: () => number = () => Date.now()
+
+function isSuspended(): boolean {
+  const until = useProfileStore.getState().suspendedUntil
+  return until !== null && clock() < until
+}
 
 // === Problems ===
 
@@ -311,6 +322,8 @@ interface MasterMode {
   isLeader(): boolean
   /** No driver, whoever holds the lease: the master host was re-pointed in place, or the profile is gone. */
   blocked(): ProfileSyncState['blocked']
+  /** `suspendedUntil` moved: take the driver down, or bring it back. */
+  reapply(): void
   leader(): Leader | null
   end(): void
 }
@@ -353,7 +366,7 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   }
   const apply = (isLeader: boolean): void => {
     if (ended) return
-    if (!isLeader || blocked || gone) follow()
+    if (!isLeader || blocked || gone || isSuspended()) follow()
     else if (leader === null) leader = lead(master, leadership, profileGone)
   }
   const profileGone = (detail: string): void => {
@@ -391,20 +404,37 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     apply(leadership.isLeader())
   })
 
+  // SUSPENDED (`useProfileStore.suspendedUntil`): an attach is being made, in this
+  // window or another. No driver until it is lifted — or until it EXPIRES, which
+  // nobody announces: the window that set it may be gone, so the wake-up is a
+  // timer of this mode's own.
+  let wake: ReturnType<typeof setTimeout> | null = null
+  const reapply = (): void => {
+    if (wake !== null) clearTimeout(wake)
+    wake = null
+    if (ended) return
+    const until = useProfileStore.getState().suspendedUntil
+    if (until !== null && isSuspended()) wake = setTimeout(reapply, Math.max(1, until - clock()))
+    apply(leadership.isLeader())
+  }
+
   // `onChange` does not replay: ask once.
-  if (leadership.isLeader()) apply(true)
+  reapply()
 
   return {
     master,
     generation,
     isLeader: () => !ended && leadership.isLeader(),
-    blocked: () => (ended ? null : gone ? 'profile-gone' : blocked ? 'master-endpoint-changed' : null),
+    blocked: () => (ended ? null : gone ? 'profile-gone' : blocked ? 'master-endpoint-changed' : isSuspended() ? 'suspended' : null),
+    reapply,
     leader: () => leader,
     end() {
       if (ended) return
       ended = true
       unsubscribe()
       unwatchEndpoint()
+      if (wake !== null) clearTimeout(wake)
+      wake = null
       follow()
       leadership.stop()
       unwatchUnsynced()
@@ -436,8 +466,9 @@ export function profileSyncState(): ProfileSyncState {
  * App lifetime, called from main.tsx. Without a master this is one subscription
  * to `useProfileStore` and nothing else (THE IRON RULE above).
  */
-export function startProfileSync(): () => void {
+export function startProfileSync(opts: { now?: () => number } = {}): () => void {
   let stopped = false
+  clock = opts.now ?? (() => Date.now())
   const sync = (master: Master | null, generation: number): void => {
     const same = sameMaster(master, mode?.master ?? null)
     if (same && (mode === null || mode.generation === generation)) return
@@ -456,6 +487,7 @@ export function startProfileSync(): () => void {
   const unsubscribe = useProfileStore.subscribe((next, prev) => {
     if (stopped) return
     sync(selectMaster(next), next.attachGeneration)
+    if (next.suspendedUntil !== prev.suspendedUntil) mode?.reapply()
     // Nothing pumps the executor when a preference changes: do it here.
     if (next.autoSync && !prev.autoSync) mode?.leader()?.executor.syncNow()
   })
@@ -527,23 +559,38 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
     if (!isMasterPair(hostId, profileId)) return { ok: false, reason: 'invalid-profile-id' }
 
     const next: Master = { hostId, profileId }
+    const previous = selectMaster(useProfileStore.getState())
+    // BEFORE THE FIRST REQUEST: every driver of this client stands still — here at
+    // once (the subscription is synchronous), in the other windows as soon as the
+    // store reaches them. See `useProfileStore`, WHY `suspendedUntil`. What cannot
+    // be helped: a write that was already on the wire when this ran. Disposing the
+    // executor aborts it, but bytes that reached the daemon may have been applied;
+    // the window is that one request, not the 15 s of the PUT below.
+    const standStill = (): void => useProfileStore.getState().suspend(clock() + ATTACH_SUSPEND_MS)
+    const asYouWere = (reason: string): AttachResult => {
+      useProfileStore.getState().resume() // the old mode comes back, bases and attachment as they were
+      return { ok: false, reason }
+    }
+    standStill()
+
     let put: Awaited<ReturnType<typeof putAttachment>>
     try {
       const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
       put = await putAttachment(hostId, profileId, body)
     } catch (e) {
-      return { ok: false, reason: message(e) }
+      return asYouWere(message(e))
     }
-    if (put.kind === 'failed') return { ok: false, reason: put.reason }
-
-    const previous = selectMaster(useProfileStore.getState())
-    if (endpointOf(hostId) === null) return { ok: false, reason: 'unknown-host' } // gone while the PUT was out: leave the previous master whole
-    if (previous !== null && !sameMaster(previous, next)) await dropAttachment(previous)
+    if (put.kind === 'failed') return asYouWere(put.reason)
+    if (endpointOf(hostId) === null) return asYouWere('unknown-host') // gone while the PUT was out: leave the previous master whole
+    if (previous !== null && !sameMaster(previous, next)) {
+      standStill() // a second request to wait for: a fresh budget
+      await dropAttachment(previous)
+    }
     // The address the attachment was written to: the home of every base from here
     // on. Read after the last `await`, checked before anything is cleared (the host
     // may have left the store meanwhile).
     const at = endpointOf(hostId)
-    if (at === null) return { ok: false, reason: 'unknown-host' }
+    if (at === null) return asYouWere('unknown-host')
     // EVERY attach starts from no bases, the same master included. With a base
     // still held, a section that is dirty while the SOT has not moved is simply
     // pushed — under `pull` too, the opposite of what was asked; without one it is
@@ -552,9 +599,8 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
     // (built by the subscription, on the new `attachGeneration`) is not seeded
     // from the old ones.
     clearSectionStore()
-    return useProfileStore.getState().setMaster(hostId, profileId, direction, at.at)
-      ? { ok: true }
-      : { ok: false, reason: 'invalid-profile-id' }
+    // `setMaster` lifts the suspension, records direction and endpoint, and bumps the generation — in one write.
+    return useProfileStore.getState().setMaster(hostId, profileId, direction, at.at) ? { ok: true } : asYouWere('invalid-profile-id')
   })
 }
 

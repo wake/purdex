@@ -83,7 +83,7 @@ beforeEach(() => {
   api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
   api.putAttachment.mockResolvedValue({ kind: 'ok', value: { attached: true } })
   api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspendedUntil: null })
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
@@ -191,6 +191,52 @@ describe('the master host is re-pointed in place', () => {
     await vi.advanceTimersByTimeAsync(120_000)
     for (const fn of Object.values(api)) expect(fn).not.toHaveBeenCalled()
     expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+  })
+})
+
+describe('the old driver stands still while an attach is being made', () => {
+  /** Attached and settled; then an edit made offline — dirty, unsent, the SOT not moved. */
+  async function dirtyAndOffline(): Promise<{ onTheSot: string; writes: number; revs: Record<string, number> }> {
+    await attachedAndSettled()
+    const onTheSot = h2Name()
+    useHostStore.getState().setRuntime(M, { status: 'disconnected' })
+    renameH2('edited-offline')
+    await settle()
+    return { onTheSot, writes: daemon.writes.length, revs: daemon.revs() }
+  }
+
+  it('C-1 — `pull`, the attachment PUT takes its time, the host comes back meanwhile: the old driver pushes NOTHING; then the SOT wins', async () => {
+    const before = await dirtyAndOffline()
+    let release: () => void = () => {}
+    vi.clearAllMocks()
+    api.putAttachment.mockReturnValueOnce(new Promise((r) => (release = () => r({ kind: 'ok', value: { attached: true } }))))
+    const attaching = attachMaster(M, PROFILE, 'pull')
+    await settle()
+    useHostStore.getState().setRuntime(M, { status: 'connected' }) // the old driver's cue to flush its dirty section
+    await settle()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+    for (const fn of [api.listProfiles, api.getSection, api.putSection, api.deleteSection]) expect(fn).not.toHaveBeenCalled()
+
+    release()
+    expect(await attaching).toEqual({ ok: true })
+    await settle()
+    expect(h2Name()).toBe(before.onTheSot)
+    expect(daemon.writes.slice(before.writes)).toEqual([])
+    expect(daemon.revs()).toEqual(before.revs)
+    expect(profileSyncState().status?.profile).toBe('synced')
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+  })
+
+  it('the attach fails: the old mode is back and carries on with what it had — the edit goes out after all', async () => {
+    const before = await dirtyAndOffline()
+    api.putAttachment.mockResolvedValueOnce({ kind: 'failed', reason: 'server', status: 500, message: 'nope' })
+    expect(await attachMaster(M, PROFILE, 'pull')).toEqual({ ok: false, reason: 'server' })
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+    useHostStore.getState().setRuntime(M, { status: 'connected' })
+    await settle()
+    expect(daemon.writes.slice(before.writes).map((w) => [w.key, w.outcome])).toEqual([['hosts', 'applied']])
+    expect(h2Name()).toBe('edited-offline')
   })
 })
 

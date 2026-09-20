@@ -146,6 +146,7 @@ import { contendForLeadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { clearSectionStore } from './section-store'
 import {
+  ATTACH_SUSPEND_MS,
   PROBLEM_BUFFER_SIZE,
   __resetProfileSyncForTest,
   attachMaster,
@@ -186,7 +187,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspendedUntil: null })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceStateStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -516,6 +517,136 @@ describe('the attachment answers 404: the profile is not there any more', () => 
     expect(putAttachment).toHaveBeenCalledTimes(2)
     expect(profileSyncState().blocked).toBeNull()
     expect(h.executors[0].dispose).not.toHaveBeenCalled()
+  })
+})
+
+describe('suspended: an attach is being made somewhere', () => {
+  async function leading(): Promise<void> {
+    vi.setSystemTime(1_000_000)
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    vi.mocked(putAttachment).mockClear()
+    vi.mocked(clearSectionStore).mockClear()
+  }
+
+  it('ANOTHER window suspends: this window\'s leader takes its driver down — master, bases and lease stay — and sends nothing', async () => {
+    await leading()
+    useProfileStore.setState({ suspendedUntil: 1_030_000 }) // the rehydrate
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.collectors[0].stop).toHaveBeenCalledTimes(1)
+    expect(h.wsListeners.size).toBe(0)
+    expect(profileSyncState()).toMatchObject({ master: { hostId: 'h1', profileId: P1 }, blocked: 'suspended', status: null })
+    expect(h.leaderships[0].stop).not.toHaveBeenCalled()
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    disconnect('h1')
+    connect('h1')
+    h.leaderships[0].set(false)
+    h.leaderships[0].set(true)
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    expect(putAttachment).not.toHaveBeenCalled()
+
+    useProfileStore.setState({ suspendedUntil: null }) // that attach failed: as you were
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+  })
+
+  it('EXPIRY: the window that suspended died — nobody lifts it, and at `suspendedUntil` the driver comes back by itself', async () => {
+    await leading()
+    useProfileStore.setState({ suspendedUntil: 1_030_000 })
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(h.executors).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(2)
+  })
+
+  it('a suspension already expired when the window opens is none; one still running holds the driver back until it ends', async () => {
+    vi.setSystemTime(2_000_000)
+    connect('h1')
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, suspendedUntil: 1_999_999 })
+    stop = startProfileSync()
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    stop()
+
+    useProfileStore.setState({ suspendedUntil: 2_010_000 })
+    stop = startProfileSync()
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    expect(profileSyncState().blocked).toBe('suspended')
+    await vi.advanceTimersByTimeAsync(10_000)
+    await flush()
+    expect(h.executors).toHaveLength(2)
+  })
+
+  it('clearMaster while suspended leaves no timer behind', async () => {
+    await leading()
+    useProfileStore.setState({ suspendedUntil: 1_030_000 })
+    useProfileStore.getState().clearMaster()
+    vi.advanceTimersByTime(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('attachMaster suspends BEFORE its first await: the old driver is down while the attachment PUT is out', async () => {
+    await leading()
+    let release: (v: typeof okAttach) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (release = r)))
+    const attaching = attachMaster('h1', P1, 'pull')
+    await flush() // attach and detach run one at a time: the queue hop, no request in it
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(useProfileStore.getState().suspendedUntil).toBe(1_000_000 + ATTACH_SUSPEND_MS)
+    await flush()
+    disconnect('h1')
+    connect('h1')
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    expect(putAttachment).toHaveBeenCalledTimes(1) // the attach's own; no driver refreshed anything
+
+    release(okAttach)
+    expect(await attaching).toEqual({ ok: true })
+    await flush()
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['the PUT fails', () => vi.mocked(putAttachment).mockResolvedValueOnce(failed('network')), 'network'],
+    ['the PUT throws', () => vi.mocked(putAttachment).mockRejectedValueOnce(new Error('boom')), 'boom'],
+    ['the host leaves the store meanwhile', () => vi.mocked(putAttachment).mockImplementationOnce(async () => {
+      useHostStore.setState({ hosts: { h1: host('h1') }, hostOrder: ['h1'] })
+      return okAttach
+    }), 'unknown-host'],
+  ])('attachMaster fails (%s): the suspension is lifted and the OLD mode is back, bases and attachment untouched', async (_label, arrange, reason) => {
+    await leading()
+    arrange()
+    expect(await attachMaster('h2', P2, 'push')).toEqual({ ok: false, reason })
+    await flush()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', masterProfileId: P1, suspendedUntil: null })
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].deps.profileId).toBe(P1)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refusal BEFORE any request suspends nothing', async () => {
+    await leading()
+    expect(await attachMaster('nope', P1, 'pull')).toEqual({ ok: false, reason: 'unknown-host' })
+    expect(await attachMaster('h1', P1, 'sideways' as never)).toEqual({ ok: false, reason: 'invalid-direction' })
+    expect(h.executors[0].dispose).not.toHaveBeenCalled()
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+  })
+
+  it('a first attach (no master yet) has nobody to suspend', async () => {
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
   })
 })
 

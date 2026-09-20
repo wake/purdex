@@ -8,7 +8,7 @@ const EP = '100.64.0.2:7860'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspendedUntil: null })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -104,13 +104,13 @@ describe('useProfileStore', () => {
     expect(selectMaster({ ...base, masterHostId: null, masterProfileId: PROFILE })).toBeNull()
   })
 
-  it('persists exactly the six fields', () => {
+  it('persists exactly the seven fields', () => {
     useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, masterEndpoint: EP })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, masterEndpoint: EP, suspendedUntil: null })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
@@ -375,6 +375,60 @@ describe('masterEndpoint — where the daemon was when the bases were agreed', (
   })
 })
 
+describe('suspendedUntil — every driver, in every window, stands still while an attach is being made', () => {
+  it('starts null; suspend sets it; resume, setMaster and clearMaster clear it', () => {
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().suspend(5_000)
+    expect(useProfileStore.getState().suspendedUntil).toBe(5_000)
+    useProfileStore.getState().resume()
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+
+    useProfileStore.getState().suspend(6_000)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'push', EP)
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+
+    useProfileStore.getState().suspend(7_000)
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+  })
+
+  it('without a master there is nothing to suspend', () => {
+    useProfileStore.getState().suspend(5_000)
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+  })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, '5000', null, undefined])('suspend(%j) is ignored', (until) => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().suspend(until as never)
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+  })
+
+  it('a refused setMaster does not lift it', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().suspend(5_000)
+    useProfileStore.getState().setMaster('host-1', 'nope', 'pull', EP)
+    expect(useProfileStore.getState().suspendedUntil).toBe(5_000)
+  })
+
+  it('survives a reload (the attach may have died with the window: it carries its own expiry)', async () => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, suspendedUntil: 9_000 })
+    expect(useProfileStore.getState().suspendedUntil).toBe(9_000)
+  })
+
+  it.each([
+    ['without a master', { masterHostId: null, masterProfileId: null, suspendedUntil: 9_000 }],
+    ['with a master that fails closed', { masterHostId: 'host-1', masterProfileId: PROFILE, suspendedUntil: 9_000 }],
+    ['a string', { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, suspendedUntil: '9000' }],
+    ['a boolean', { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, suspendedUntil: true }],
+    ['NaN', { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, suspendedUntil: Number.NaN }],
+    ['missing', { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP }],
+  ])('rehydrate: %s → null', async (_label, state) => {
+    await rehydrateFrom(state)
+    expect(useProfileStore.getState().suspendedUntil).toBeNull()
+  })
+})
+
 describe('every window agrees on the master', () => {
   beforeEach(() => {
     FakeBroadcastChannel.bus.clear()
@@ -408,6 +462,15 @@ describe('every window agrees on the master', () => {
     await flush()
     expect(b.useProfileStore.getState().attachGeneration).toBe(before + 1)
     expect(b.useProfileStore.getState().pendingDirection).toBe('push')
+  })
+
+  it('a suspension in window A reaches window B', async () => {
+    const a = await openWindow()
+    const b = await openWindow()
+    a.useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    a.useProfileStore.getState().suspend(5_000)
+    await flush()
+    expect(b.useProfileStore.getState().suspendedUntil).toBe(5_000)
   })
 
   it('a detach in window B (a follower) reaches window A (the leader)', async () => {
