@@ -299,7 +299,10 @@ At narrow widths the header degrades to name + state + an overflow menu.
 ### 4.8 Input
 
 Unchanged in behaviour, restated as design: **full width, no border**, sitting
-directly under the content with a hairline separator, growing with the text.
+directly under the content with a hairline separator (today there is none, so
+the transcript always looks truncated — §3.1.1 #6), growing with the text **up
+to a ceiling** (today it has none, so a long paste squeezes the conversation to
+nothing — §3.2).
 From Collie, two additions worth having (later phase, §11):
 
 - a **quick-reply dock** above the field (a small set of one-tap replies —
