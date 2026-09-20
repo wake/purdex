@@ -76,7 +76,7 @@ describe('initialSectionState / predicates', () => {
       inFlight: null,
       sotMovedWhileInFlight: false,
       conflict: null,
-      invalidRev: null,
+      invalid: null,
       forcePull: false,
       restoreLocal: null,
       indexStale: true,
@@ -109,7 +109,7 @@ describe('initialSectionState / predicates', () => {
       inFlight: null,
       sotMovedWhileInFlight: false,
       conflict: null,
-      invalidRev: null,
+      invalid: null,
       forcePull: false,
       restoreLocal: null,
       indexStale: true,
@@ -1090,11 +1090,11 @@ describe('reduceSection — locked:invalid (P2b plan Task 6): the SOT holds a pa
   const pullable = () => run(synced(5, H0), { type: 'remote-event', rev: 6, hash: H2, own: false })
   const invalid = () => reduceSection(pullable(), { type: 'locked', reason: 'invalid', rev: 6 })
 
-  it('locked{invalid, rev} on a state that decides pull, for the very rev held → locked:invalid, invalidRev = that rev', () => {
+  it('locked{invalid, rev} on a state that decides pull, for the very rev held → locked:invalid, invalid = the sot that was refused', () => {
     const s = pullable()
     expect(decideSection(s, ON)).toEqual({ do: 'pull' })
     const l = reduceSection(s, { type: 'locked', reason: 'invalid', rev: 6 })
-    expect(l).toEqual({ ...s, status: 'locked:invalid', invalidRev: 6, epoch: s.epoch + 1 })
+    expect(l).toEqual({ ...s, status: 'locked:invalid', invalid: { rev: 6, hash: H2 }, epoch: s.epoch + 1 })
     expect(l.conflict).toBeNull()
     expect(l.indexEpoch).toBe(s.indexEpoch)
   })
@@ -1161,59 +1161,93 @@ describe('reduceSection — locked:invalid (P2b plan Task 6): the SOT holds a pa
     })
   })
 
-  describe('auto-unlock: only a SOT observation with rev > invalidRev', () => {
-    it('remote-event rev = invalidRev + 1 → unlocked, invalidRev cleared, status re-derived, the next decision pulls again', () => {
+  describe('auto-unlock: a SOT observation that differs from `invalid` in ANY way — and only that', () => {
+    it('THE loop guard: the same rev and the same hash, by index or by event, never unlocks — same reference back', () => {
+      const l = invalid()
+      expect(reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 6, hash: H2 } })).toBe(l)
+      expect(reduceSection(l, { type: 'remote-event', rev: 6, hash: H2, own: false })).toBe(l)
+      // … also when the index was stale: it lands, clears indexStale, and the section stays shut
+      const stale = reduceSection(l, { type: 'reconnected' })
+      const landed = reduceSection(stale, { type: 'sot-index', epoch: stale.indexEpoch, entry: { rev: 6, hash: H2 } })
+      expect(landed.indexStale).toBe(false)
+      expect(landed.status).toBe('locked:invalid')
+      expect(landed.invalid).toEqual({ rev: 6, hash: H2 })
+      expect(decideSection(landed, ON)).toEqual({ do: 'nothing' })
+    })
+    it('remote-event with a higher rev → unlocked, invalid cleared, status re-derived, the next decision pulls again', () => {
       const l = invalid()
       const u = reduceSection(l, { type: 'remote-event', rev: 7, hash: H3, own: false })
       expect(u.status).toBe('synced')
-      expect(u.invalidRev).toBeNull()
+      expect(u.invalid).toBeNull()
       expect(u.sot).toEqual({ rev: 7, hash: H3 })
       expect(u.epoch).toBe(l.epoch + 1)
       expect(decideSection(u, ON)).toEqual({ do: 'pull' })
     })
-    it('an epoch-matching sot-index with rev = invalidRev + 1 → unlocked', () => {
+    it('a higher rev carrying the SAME hash still unlocks: it is another write', () => {
+      const u = reduceSection(invalid(), { type: 'remote-event', rev: 7, hash: H2, own: false })
+      expect(u.invalid).toBeNull()
+      expect(decideSection(u, ON)).toEqual({ do: 'pull' })
+    })
+    it('an epoch-matching sot-index with a higher rev → unlocked', () => {
       const l = invalid()
       const u = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 7, hash: H3 } })
       expect(u.status).toBe('synced')
-      expect(u.invalidRev).toBeNull()
+      expect(u.invalid).toBeNull()
       expect(decideSection(u, ON)).toEqual({ do: 'pull' })
     })
-    it('rev === invalidRev does NOT unlock, even when the observation changes sot (same rev, another hash / not listed)', () => {
+    it('same rev, another hash (index) → unlocked: that payload is no longer the SOT', () => {
       const l = invalid()
-      const sameRev = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 6, hash: H3 } })
-      expect(sameRev.sot).toEqual({ rev: 6, hash: H3 })
-      expect(sameRev.status).toBe('locked:invalid')
-      expect(sameRev.invalidRev).toBe(6)
-      const absent = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: null })
-      expect(absent.sot).toEqual({ rev: 6, hash: null })
-      expect(absent.status).toBe('locked:invalid')
-      expect(reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 6, hash: H2 } })).toBe(l)
-      expect(reduceSection(l, { type: 'remote-event', rev: 6, hash: H3, own: false })).toBe(l)
+      const u = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 6, hash: H3 } })
+      expect(u.sot).toEqual({ rev: 6, hash: H3 })
+      expect(u.invalid).toBeNull()
+      expect(u.status).toBe('synced')
+      expect(decideSection(u, ON)).toEqual({ do: 'pull' })
     })
-    it('a lower rev (an index made at the current indexEpoch) does not unlock; climbing back up to invalidRev does not either, one past it does', () => {
+    it('not listed any more (index → absent, rev = max(...) = the refused rev) → unlocked; clean + moved → pull, i.e. apply the deletion', () => {
       const l = invalid()
-      const low = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 2, hash: H8 } })
-      expect(low.status).toBe('locked:invalid')
-      const back = reduceSection(low, { type: 'remote-event', rev: 6, hash: H3, own: false })
-      expect(back.sot).toEqual({ rev: 6, hash: H3 })
-      expect(back.status).toBe('locked:invalid')
-      expect(reduceSection(back, { type: 'remote-event', rev: 7, hash: H3, own: false }).status).not.toBe('locked:invalid')
+      const u = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: null })
+      expect(u.sot).toEqual({ rev: 6, hash: null })
+      expect(u.invalid).toBeNull()
+      expect(u.status).toBe('synced')
+      expect(decideSection(u, ON)).toEqual({ do: 'pull' })
+      const p = reduceSection(u, { type: 'pull-applied', rev: 6, hash: null })
+      expect(p.currentHash).toBeNull()
+      expect(decideSection(p, ON)).toEqual({ do: 'nothing' })
+    })
+    it('the profile was rebuilt (index lowers the rev below the base) → unlocked, and row 1 asks for lock-reset', () => {
+      const l = invalid()
+      const u = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 2, hash: H8 } })
+      expect(u.sot).toEqual({ rev: 2, hash: H8 })
+      expect(u.invalid).toBeNull()
+      expect(decideSection(u, ON)).toEqual({ do: 'lock-reset' })
+      expect(reduceSection(u, { type: 'locked', reason: 'reset' }).status).toBe('locked:reset')
+    })
+    it('a lower rev with the same hash unlocks too', () => {
+      const l = invalid()
+      const u = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: { rev: 2, hash: H2 } })
+      expect(u.invalid).toBeNull()
+      expect(decideSection(u, ON)).toEqual({ do: 'lock-reset' })
+    })
+    it('while locked:invalid, sot is exactly what was refused', () => {
+      const l = invalid()
+      expect(l.invalid).toEqual(l.sot)
+      expect(l.invalid).not.toBe(l.sot)
     })
     it('not an observation: own events, a discarded index, reconnected, local edits', () => {
       const l = invalid()
       expect(reduceSection(l, { type: 'remote-event', rev: 9, hash: H3, own: true })).toBe(l)
       const discarded = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch - 1, entry: { rev: 9, hash: H3 } })
       expect(discarded.status).toBe('locked:invalid')
-      expect(discarded.invalidRev).toBe(6)
+      expect(discarded.invalid).toEqual({ rev: 6, hash: H2 })
       expect(discarded.indexStale).toBe(true)
       expect(reduceSection(l, { type: 'reconnected' }).status).toBe('locked:invalid')
       const edited = reduceSection(l, { type: 'local-changed', hash: H1 })
       expect(edited).toEqual({ ...l, currentHash: H1, epoch: l.epoch + 1 })
     })
-    it('edited while locked, then unlocked by a newer rev → dirty against a moved SOT: the table asks for lock-conflict', () => {
+    it('edited while locked, then unlocked → dirty against a moved SOT: the table asks for lock-conflict', () => {
       const u = run(invalid(), { type: 'local-changed', hash: H1 }, { type: 'remote-event', rev: 7, hash: H3, own: false })
       expect(u.status).toBe('pending')
-      expect(u.invalidRev).toBeNull()
+      expect(u.invalid).toBeNull()
       expect(decideSection(u, ON)).toEqual({ do: 'lock-conflict' })
     })
     it('a newer rev does not touch the other locks', () => {
@@ -1230,7 +1264,7 @@ describe('reduceSection — locked:invalid (P2b plan Task 6): the SOT holds a pa
     it('keep:local → unlocked, base = sot; the clean section is now dirty and the whole road to the push is open', () => {
       const l = invalid()
       const r = reduceSection(l, { type: 'resolved', keep: 'local' })
-      expect(r).toEqual({ ...l, status: 'pending', invalidRev: null, base: { rev: 6, hash: H2 }, epoch: l.epoch + 1, indexEpoch: l.indexEpoch + 1 })
+      expect(r).toEqual({ ...l, status: 'pending', invalid: null, base: { rev: 6, hash: H2 }, epoch: l.epoch + 1, indexEpoch: l.indexEpoch + 1 })
       expect(r.base).not.toBe(l.sot)
       expect(r.restoreLocal).toBeNull()
       expect(r.forcePull).toBe(false)
@@ -1241,14 +1275,10 @@ describe('reduceSection — locked:invalid (P2b plan Task 6): the SOT holds a pa
       expect(done.base).toEqual({ rev: 7, hash: H0 })
       expect(decideSection(done, ON)).toEqual({ do: 'nothing' })
     })
-    it('keep:local when the SOT has meanwhile been seen ABSENT (index, same rev): the create goes out with wire baseRev 0', () => {
-      const l = invalid()
-      const gone = reduceSection(l, { type: 'sot-index', epoch: l.indexEpoch, entry: null })
-      expect(gone.status).toBe('locked:invalid')
-      const r = reduceSection(gone, { type: 'resolved', keep: 'local' })
-      expect(r.base).toEqual({ rev: 6, hash: null })
-      const [, token] = startFlight(r)
-      expect(token).toMatchObject({ kind: 'put', hash: H0, baseRev: 0 })
+    it('keep:local over an ABSENT sot cannot arise from this lock: seeing the SOT absent already unlocked it (the deletion is pulled)', () => {
+      const gone = reduceSection(invalid(), { type: 'sot-index', epoch: invalid().indexEpoch, entry: null })
+      expect(gone.status).toBe('synced')
+      expect(reduceSection(gone, { type: 'resolved', keep: 'local' })).toBe(gone)
     })
     it('keep:local on a section that does not exist locally → delete against the rev that was refused', () => {
       const s = indexed(initialSectionState(null), { rev: 3, hash: H2 })
@@ -1280,7 +1310,7 @@ describe('reduceSection — locked:invalid (P2b plan Task 6): the SOT holds a pa
       expect(decideSection(s, ON)).toEqual({ do: 'pull' })
       const l = reduceSection(s, { type: 'locked', reason: 'invalid', rev: 6 })
       expect(l.status).toBe('locked:invalid')
-      expect(l.invalidRev).toBe(6)
+      expect(l.invalid).toEqual({ rev: 6, hash: H2 })
       expect(l.forcePull).toBe(false)
       expect(l.conflict).toBeNull()
     })
@@ -1309,7 +1339,7 @@ describe('restoreSectionState — a persisted conflict (spec §4.6.2: the local 
       inFlight: null,
       sotMovedWhileInFlight: false,
       conflict: { localHash: H1, sot: { rev: 6, hash: H2 } },
-      invalidRev: null,
+      invalid: null,
       forcePull: false,
       restoreLocal: null,
       indexStale: true,
@@ -1372,7 +1402,7 @@ describe('restoreSectionState — a persisted conflict (spec §4.6.2: the local 
     const events: SectionEvent[] = [{ type: 'remote-event', rev: 7, hash: H8, own: false }, { type: 'resolved', keep: 'local' }]
     const a = run(live, ...events)
     const b = run(back, ...events)
-    for (const k of ['base', 'currentHash', 'sot', 'status', 'conflict', 'restoreLocal', 'forcePull', 'invalidRev'] as const) expect(b[k]).toEqual(a[k])
+    for (const k of ['base', 'currentHash', 'sot', 'status', 'conflict', 'restoreLocal', 'forcePull', 'invalid'] as const) expect(b[k]).toEqual(a[k])
     expect(decideSection(b, ON)).toEqual(decideSection(a, ON))
   })
 })
@@ -1580,6 +1610,7 @@ describe('property tests (seeded)', () => {
     let invalidWrongRev = 0
     let invalidAutoUnlocks = 0
     let invalidHeld = 0
+    let invalidUnlockedNotByRev = 0
     let invalidKeepLocal = 0
     let invalidKeepSotRefused = 0
 
@@ -1696,33 +1727,40 @@ describe('property tests (seeded)', () => {
         if (e.type === 'sot-index' && e.epoch === prev.indexEpoch && next.indexStale) fail('an index made at the current indexEpoch was discarded')
         // a locked section never has a flight
         const locked = next.status === 'locked:conflict' || next.status === 'locked:reset' || next.status === 'locked:invalid'
-        // locked:invalid ⇔ invalidRev is set (conflict === null, inFlight === null and decide → nothing follow from the `locked` checks)
-        if ((next.status === 'locked:invalid') !== (next.invalidRev !== null)) fail('invalidRev out of step with status')
+        // locked:invalid ⇔ `invalid` is set (conflict === null, inFlight === null and decide → nothing follow from the `locked` checks)
+        if ((next.status === 'locked:invalid') !== (next.invalid !== null)) fail('invalid out of step with status')
+        // … and while it is shut, sot IS the refused SOT: any other sot would have opened it
+        if (next.invalid !== null && (next.invalid.rev !== next.sot.rev || next.invalid.hash !== next.sot.hash)) fail('locked:invalid although sot is not the refused one')
         // locked{invalid} is accepted iff the state decides pull for exactly the rev held
         if (e.type === 'locked' && e.reason === 'invalid') {
           const called = d0.do === 'pull' && e.rev === prev.sot.rev
           if ((next !== prev) !== called) fail('locked{invalid} acceptance does not follow "decides pull, for sot.rev"')
-          if (called && (next.status !== 'locked:invalid' || next.invalidRev !== e.rev)) fail('locked{invalid} did not record the rev')
+          if (called && (next.status !== 'locked:invalid' || next.invalid?.rev !== prev.sot.rev || next.invalid?.hash !== prev.sot.hash)) fail('locked{invalid} did not record the sot')
           if (called) invalidLocks++
           else if (d0.do === 'pull') invalidWrongRev++
           else invalidRefused++
         } else if (prev.status !== 'locked:invalid' && next.status === 'locked:invalid') fail('locked:invalid entered without locked{invalid}')
-        // an invalid lock opens only through keep:local, or a SOT observation with rev > invalidRev — and then always
-        if (prev.invalidRev !== null) {
-          const observed = (e.type === 'remote-event' || e.type === 'sot-index') && next.sot.rev > prev.invalidRev
+        // an invalid lock opens only through keep:local, or by observing a SOT that differs from `invalid` — and then always
+        if (prev.invalid !== null) {
+          const sotChanged = next.sot.rev !== prev.invalid.rev || next.sot.hash !== prev.invalid.hash
+          if (sotChanged && e.type !== 'remote-event' && e.type !== 'sot-index') fail('sot moved under locked:invalid without an observation')
+          const observed = sotChanged
           const keptLocal = e.type === 'resolved' && e.keep === 'local'
           if ((next.status !== 'locked:invalid') !== (observed || keptLocal)) fail('locked:invalid opened (or stayed shut) against the rule')
           if (e.type === 'resolved' && e.keep === 'sot') {
             if (next !== prev) fail('keep:sot accepted on locked:invalid')
             invalidKeepSotRefused++
           }
-          if (observed) invalidAutoUnlocks++
+          if (observed) {
+            invalidAutoUnlocks++
+            if (next.sot.rev <= prev.invalid.rev) invalidUnlockedNotByRev++
+          }
           if (keptLocal) {
             if (next.base.rev !== prev.sot.rev || next.base.hash !== prev.sot.hash) fail('keep:local on locked:invalid did not rebase on the sot')
             invalidKeepLocal++
           }
-          // the SOT was observed to change, but not past invalidRev: still shut
-          if (!observed && !keptLocal && (next.sot.rev !== prev.sot.rev || next.sot.hash !== prev.sot.hash)) invalidHeld++
+          // an observation of the very same SOT (an index that lands and confirms it): still shut
+          if (!observed && (e.type === 'remote-event' || e.type === 'sot-index')) invalidHeld++
         }
         if (locked && next.inFlight !== null) fail('inFlight set in a locked state')
         if ((next.status === 'locked:conflict') !== (next.conflict !== null)) fail('conflict pair out of step with status')
@@ -1821,7 +1859,8 @@ describe('property tests (seeded)', () => {
     expect(invalidRefused).toBeGreaterThan(10)
     expect(invalidWrongRev).toBeGreaterThan(10)
     expect(invalidAutoUnlocks).toBeGreaterThan(10)
-    expect(invalidHeld).toBeGreaterThan(0)
+    expect(invalidHeld).toBeGreaterThan(10)
+    expect(invalidUnlockedNotByRev).toBeGreaterThan(0)
     expect(invalidKeepLocal).toBeGreaterThan(10)
     expect(invalidKeepSotRefused).toBeGreaterThan(10)
     for (const t of ['local-changed', 'sot-index', 'remote-event', 'push-started', 'push-applied', 'push-converged', 'push-conflict', 'push-failed', 'pull-applied', 'local-restored', 'resolved', 'locked', 'reconnected']) {

@@ -96,21 +96,29 @@
 //     payload that removes or re-points the master's own host. Pulling it again
 //     every 30 s would fetch the same unusable bytes for ever, and pretending
 //     it was applied would be a lie. So the driver says `locked{invalid, rev}`
-//     and the section shuts, remembering the SOT rev the verdict was about
-//     (`invalidRev`). The event is accepted only if this very state decides
-//     `pull` and `rev` is the `sot.rev` held — a verdict on any other payload,
-//     or on a state that no longer wants it, is stale. `forcePull` is dropped
-//     by the lock (the user's "take the SOT" cannot be honoured; forcePull and
-//     locked never coexist). It opens in two ways only:
+//     and the section shuts, remembering the SOT the verdict was about
+//     (`invalid`, a copy of `sot` at that moment). The event is accepted only
+//     if this very state decides `pull` and `rev` is the `sot.rev` held — a
+//     verdict on any other payload, or on a state that no longer wants it, is
+//     stale. `forcePull` is dropped by the lock: the user's "take the SOT"
+//     cannot be honoured, and forcePull and locked never coexist. (So a section
+//     that was dirty when it shut — judged during a forcePull pull — and is
+//     later opened by an observation comes back dirty against a moved SOT: row
+//     8, `lock-conflict`, and the user is asked again.) It opens in two ways:
 //       · a SOT observation (`remote-event`, or a `sot-index` made at the
-//         current `indexEpoch`) that leaves `sot.rev > invalidRev`: someone
-//         fixed it. The status is re-derived and the table takes over — a clean
-//         section pulls the new rev. `rev <= invalidRev` never opens it, so no
-//         index poll can turn into a re-fetch loop.
+//         current `indexEpoch`) that leaves `sot` different from `invalid` IN
+//         ANY WAY — rev or hash. Not "a higher rev": absent has no rev to
+//         compare (a section no longer listed reads `{max(...), null}`, which
+//         may well be the refused rev), and a rebuilt profile makes the rev go
+//         DOWN. Both mean the same thing as a higher rev does: the payload that
+//         was refused is no longer what the SOT holds. The status is re-derived
+//         and the table takes over — pull the new rev, pull the deletion, or
+//         row 1 `lock-reset`. An observation of the SAME `{rev, hash}` never
+//         opens it, so no index poll can turn into a re-fetch loop; and while
+//         it is shut, `sot` equals `invalid`.
 //       · `resolved keep:'local'`: `base = sot`, and the local copy is pushed
-//         over the refused one (wire baseRev 0 if the SOT is absent by then).
-//         `resolved keep:'sot'` is REFUSED: that payload is the one that cannot
-//         be applied.
+//         over the refused one. `resolved keep:'sot'` is REFUSED: that payload
+//         is the one that cannot be applied.
 //     It is never persisted: after a restart the section reindexes, pulls, and
 //     is judged again — cheap, and it cannot go stale on disk.
 //   - Decision order, first match wins: 0a locked → 0b in flight → 0c
@@ -145,7 +153,15 @@
 //     touching the stores; then dispatch `pull-applied`. If the payload cannot
 //     be applied, dispatch `{type:'locked', reason:'invalid', rev}` with the rev
 //     that was FETCHED instead, and touch nothing. If that is refused (same
-//     reference back) the verdict was stale; just decide again. For an absent SOT
+//     reference back) the verdict was stale — the SOT moved on, or a
+//     `reconnected` staled the index while the fetch was out; just decide
+//     again. An accepted one CLEARS `forcePull`: if the pull was the user's
+//     "take the SOT" on a dirty section, that choice is spent. When a different
+//     SOT is later observed the section reopens dirty against a moved SOT and
+//     decides `lock-conflict` — the user is asked again, nothing is pulled over
+//     their edits on the strength of an answer given about another payload.
+//     Never re-fetch on a timer while `locked:invalid`: `decideSection` says
+//     `nothing` until the SOT observed differs from the one refused. For an absent SOT
 //     (404) the deletion is applied and reported with `rev = state.sot.rev`.
 //   - sot-index: tag the response with the `indexEpoch` the `reindex` action
 //     carried (i.e. read when the request was *sent*), unchanged.
@@ -201,9 +217,10 @@ export interface SectionSyncState {
   inFlight: FlightToken | null
   sotMovedWhileInFlight: boolean
   conflict: SectionConflict | null
-  /** Non-null ⇔ `status === 'locked:invalid'`: the SOT rev whose payload this
-   *  client refused to apply. Only an observed `sot.rev` above it unlocks. */
-  invalidRev: number | null
+  /** Non-null ⇔ `status === 'locked:invalid'`: the SOT (a copy of `sot` at lock
+   *  time) whose payload this client refused to apply. While it is set, `sot`
+   *  equals it: observing any other SOT — rev OR hash — unlocks. */
+  invalid: Held | null
   /** Set by `resolved keep:'sot'`: pull even though the section is dirty. */
   forcePull: boolean
   /** Set by `resolved keep:'local'`: the sent snapshot the driver must put back.
@@ -292,7 +309,7 @@ export function restoreSectionState(persisted: { base: Held; currentHash: string
     inFlight: null,
     sotMovedWhileInFlight: false,
     conflict: conflict !== undefined ? { localHash: conflict.localHash, sot: { rev: sot.rev, hash: sot.hash } } : null,
-    invalidRev: null,
+    invalid: null,
     forcePull: false,
     restoreLocal: null,
     indexStale: true,
@@ -394,13 +411,16 @@ function withSot(s: SectionSyncState, sot: Held): SectionSyncState {
 }
 
 /** A SOT OBSERVATION (`remote-event`, an accepted `sot-index`): move `sot`, and
- *  open a `locked:invalid` section iff what is now known lies past the rev that
- *  was refused. Strictly past: the same rev is the same unusable payload.
- *  `finish` re-derives the status. */
+ *  open a `locked:invalid` section iff what is now known is not the SOT that
+ *  was refused. "Any difference", not "a higher rev": absent carries no rev of
+ *  its own (not listed ⇒ `{max(...), null}`, possibly the refused rev), and a
+ *  rebuilt profile lowers the rev — either way the unusable payload is no
+ *  longer the SOT. The identical `{rev, hash}` keeps it shut, which is what
+ *  keeps a poll from re-fetching it for ever. `finish` re-derives the status. */
 function observeSot(s: SectionSyncState, sot: Held): SectionSyncState {
   const next = withSot(s, sot)
-  if (next.invalidRev === null || next.sot.rev <= next.invalidRev) return next
-  return { ...next, status: 'pending', invalidRev: null }
+  if (next.invalid === null || sameHeld(next.sot, next.invalid)) return next
+  return { ...next, status: 'pending', invalid: null }
 }
 
 function tokensEqual(a: FlightToken, b: FlightToken): boolean {
@@ -417,7 +437,7 @@ function unchanged(a: SectionSyncState, b: SectionSyncState): boolean {
     a.sotMovedWhileInFlight === b.sotMovedWhileInFlight &&
     (a.conflict === b.conflict ||
       (a.conflict !== null && b.conflict !== null && a.conflict.localHash === b.conflict.localHash && sameHeld(a.conflict.sot, b.conflict.sot))) &&
-    a.invalidRev === b.invalidRev &&
+    (a.invalid === b.invalid || (a.invalid !== null && b.invalid !== null && sameHeld(a.invalid, b.invalid))) &&
     a.forcePull === b.forcePull &&
     (a.restoreLocal === b.restoreLocal || (a.restoreLocal !== null && b.restoreLocal !== null && a.restoreLocal.hash === b.restoreLocal.hash)) &&
     a.indexStale === b.indexStale &&
@@ -544,7 +564,7 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
         // `pull` ⇒ not locked, no flight, index fresh. `forcePull` goes: locked
         // and forcePull never coexist, and that pull cannot be honoured anyway.
         if (want.do !== 'pull' || e.rev !== s.sot.rev) return s
-        return { ...s, status: 'locked:invalid', invalidRev: e.rev, forcePull: false }
+        return { ...s, status: 'locked:invalid', invalid: { rev: s.sot.rev, hash: s.sot.hash }, forcePull: false }
       }
       if (want.do !== (e.reason === 'conflict' ? 'lock-conflict' : 'lock-reset')) return s
       return e.reason === 'conflict'
@@ -556,7 +576,7 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       if (!isLocked(s)) return s
       // the SOT side of locked:invalid is the payload that cannot be applied
       if (s.status === 'locked:invalid' && e.keep === 'sot') return s
-      const unlocked: SectionSyncState = { ...s, status: 'pending', conflict: null, invalidRev: null }
+      const unlocked: SectionSyncState = { ...s, status: 'pending', conflict: null, invalid: null }
       if (e.keep === 'sot') return { ...unlocked, forcePull: true }
       // conflict.sot and sot move together; locked:reset / locked:invalid have no pair and read sot
       const target = s.conflict !== null ? s.conflict.sot : s.sot
