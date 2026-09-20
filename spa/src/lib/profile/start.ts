@@ -321,18 +321,39 @@ function endpointOf(hostId: string): { at: string; token: string } | null {
   return host === undefined ? null : { at: `${host.ip}:${host.port}`, token: host.token ?? '' }
 }
 
+/** The master's home address is unknown (attached before `masterEndpoint` existed) and the host is here: adopt it. */
+function adoptEndpointIfUnknown(master: Master): void {
+  if (!isCurrentMaster(master) || useProfileStore.getState().masterEndpoint !== null) return
+  const now = endpointOf(master.hostId)
+  if (now !== null) useProfileStore.getState().adoptMasterEndpoint(now.at)
+}
+
 function enterMasterMode(master: Master, generation: number): MasterMode {
   let ended = false
   let leader: Leader | null = null
-  // The endpoint the bases (and the attachment, the schema lock, `profileGone`)
-  // belong to. `api.ts` resolves the address from the host store on every
-  // request, so an edit of the master host IN PLACE would send the next request,
-  // with the old daemon's CAS bases, to whatever answers at the new address.
-  let home = endpointOf(master.hostId)
-  let blocked = false
+  // The bases (and the attachment, the schema lock, `profileGone`) belong to the
+  // daemon at `useProfileStore.masterEndpoint` — STORED at attach, so that a
+  // reload cannot mistake an edited address for the original. `api.ts` resolves
+  // the address from the host store on every request, so an edit of the master
+  // host IN PLACE would send the next request, with the old daemon's CAS bases,
+  // to whatever answers at the new address. Unknown (null) blocks nothing; it is
+  // adopted right after this mode exists (see `sync`) or when the host shows up.
+  const foreign = (at: string): boolean => {
+    const home = useProfileStore.getState().masterEndpoint
+    return home !== null && at !== home
+  }
+  const here = endpointOf(master.hostId)
+  let token = here?.token ?? null
+  let blocked = here !== null && foreign(here.at)
   /** The attachment answered 404. Final for this mode: only `attachMaster` / `detachMaster` (a new mode) end it. */
   let gone = false
   warned.clear()
+  const blockedProblem = (at: string): void =>
+    reportProblem({
+      kind: 'master-endpoint-changed',
+      detail: `host ${master.hostId} points at ${at}, the profile was attached at ${String(useProfileStore.getState().masterEndpoint)}; nothing syncs until it is attached again, detached, or the address is put back`,
+    })
+  if (blocked && here !== null) blockedProblem(here.at)
   const unwatchUnsynced = watchUnsyncedStores()
   const leadership = contendForLeadership()
 
@@ -359,29 +380,23 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   const unwatchEndpoint = useHostStore.subscribe((next, prev) => {
     if (ended || next.hosts[master.hostId] === prev.hosts[master.hostId]) return
     const now = endpointOf(master.hostId)
-    if (now === null) return // removed: the leader reports it; coming back is judged against `home`
-    if (home === null) {
-      home = now
-      return
-    }
-    if (now.at !== home.at) {
+    if (now === null) return // removed: the leader reports it; coming back is judged like any edit
+    adoptEndpointIfUnknown(master)
+    if (foreign(now.at)) {
       // ip or port: nobody can tell whether this is the same daemon. Stop. Do not
       // detach (the user's setting) and do not drop the bases (a typo may be
       // corrected): the ways out are the old value, `attachMaster`, `detachMaster`.
       if (blocked) return
       blocked = true
       follow()
-      reportProblem({
-        kind: 'master-endpoint-changed',
-        detail: `host ${master.hostId} now points at ${now.at}, the profile was attached at ${home.at}; nothing syncs until it is attached again, detached, or the address is put back`,
-      })
+      blockedProblem(now.at)
       return
     }
-    const rotated = now.token !== home.token
+    const rotated = token !== null && now.token !== token
+    token = now.token
     if (!blocked && !rotated) return
     // Back where the bases belong, or the same daemon with a new token: a new
     // driver on the bases there are — a reconnect, in effect.
-    home = now
     blocked = false
     follow()
     apply(leadership.isLeader())
@@ -447,6 +462,9 @@ export function startProfileSync(): () => void {
     mode?.end()
     if (wasLeader && master !== null) clearSectionStore(master.profileId)
     mode = master === null ? null : enterMasterMode(master, generation)
+    // After `mode` is assigned: this writes the store we are being called from,
+    // and the nested notification must find the mode it belongs to.
+    if (master !== null) adoptEndpointIfUnknown(master)
   }
 
   const unsubscribe = useProfileStore.subscribe((next, prev) => {
@@ -533,7 +551,13 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
     if (put.kind === 'failed') return { ok: false, reason: put.reason }
 
     const previous = selectMaster(useProfileStore.getState())
+    if (endpointOf(hostId) === null) return { ok: false, reason: 'unknown-host' } // gone while the PUT was out: leave the previous master whole
     if (previous !== null && !sameMaster(previous, next)) await dropAttachment(previous)
+    // The address the attachment was written to: the home of every base from here
+    // on. Read after the last `await`, checked before anything is cleared (the host
+    // may have left the store meanwhile).
+    const at = endpointOf(hostId)
+    if (at === null) return { ok: false, reason: 'unknown-host' }
     // EVERY attach starts from no bases, the same master included. With a base
     // still held, a section that is dirty while the SOT has not moved is simply
     // pushed — under `pull` too, the opposite of what was asked; without one it is
@@ -542,7 +566,7 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
     // (built by the subscription, on the new `attachGeneration`) is not seeded
     // from the old ones.
     clearSectionStore()
-    return useProfileStore.getState().setMaster(hostId, profileId, direction)
+    return useProfileStore.getState().setMaster(hostId, profileId, direction, at.at)
       ? { ok: true }
       : { ok: false, reason: 'invalid-profile-id' }
   })

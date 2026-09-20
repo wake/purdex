@@ -43,8 +43,20 @@
 // accepted `setMaster` and never down; its value means nothing, only that it
 // moved.
 //
+// WHY `masterEndpoint` ("<ip>:<port>" of the master host AT ATTACH). The section
+// bases, the attachment, a schema lock — all of it belongs to ONE daemon, and the
+// api layer resolves a host's address from the host store on every request. If
+// the user re-points the master host in place, the next request would carry the
+// old daemon's CAS bases to whatever answers at the new address. The start layer
+// blocks the driver when the two differ; the home address is stored HERE, not
+// remembered by the driver, because a reload while blocked would otherwise take
+// the edited address for the original and unblock itself. Null = unknown: only a
+// master attached before this field existed; the start layer adopts the current
+// address once (`adoptMasterEndpoint`) — trusting it the first time is the best
+// that can be done for such an installation, and it guards from then on.
+//
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
-// non-null; `pendingDirection` is null whenever there is no master. `setMaster`
+// non-null; `pendingDirection` and `masterEndpoint` are null whenever there is no master. `setMaster`
 // is the only way in and validates all three; the persist `merge` re-establishes
 // both for whatever storage hands back.
 import { create } from 'zustand'
@@ -61,6 +73,8 @@ interface ProfileControl {
   masterProfileId: string | null
   /** Non-null from an attach until the first reconciliation has settled. */
   pendingDirection: SyncDirection | null
+  /** `"<ip>:<port>"` of the master host when it was attached; null = unknown (see the header) or no master. */
+  masterEndpoint: string | null
   /** +1 with every accepted `setMaster`. A change with the same master = attach was called again. */
   attachGeneration: number
   /** Sync without being asked. Default on. */
@@ -69,10 +83,12 @@ interface ProfileControl {
 
 export interface ProfileState extends ProfileControl {
   /** Attach. Both ids must be non-empty strings, `profileId` a daemon profile
-   *  id and `direction` one of the two; otherwise nothing changes and the answer
+   *  id, `direction` one of the two and `endpoint` a non-empty string; otherwise nothing changes and the answer
    *  is `false`. Attaching again to the same master starts a new first
    *  reconciliation in the direction given. */
-  setMaster: (hostId: string, profileId: string, direction: SyncDirection) => boolean
+  setMaster: (hostId: string, profileId: string, direction: SyncDirection, endpoint: string) => boolean
+  /** Fills in an UNKNOWN endpoint of the current master; anything else is ignored. Not an attach. */
+  adoptMasterEndpoint: (endpoint: string) => void
   /** Detach. `autoSync` is a preference and survives; the direction does not. */
   clearMaster: () => void
   /** The first reconciliation has settled: conflicts go to the user from now on. */
@@ -95,6 +111,10 @@ export function isSyncDirection(v: unknown): v is SyncDirection {
   return v === 'push' || v === 'pull'
 }
 
+function isEndpoint(v: unknown): v is string {
+  return typeof v === 'string' && v !== ''
+}
+
 /** Whatever storage held → a record that satisfies the invariant. Half a
  *  master, a wrong type or a malformed profile id all mean "detached": there is
  *  no safe way to guess the missing half, and a detached client does nothing. */
@@ -105,6 +125,7 @@ function sanitiseControl(persisted: unknown): ProfileControl {
     masterHostId: attached ? (p.masterHostId as string) : null,
     masterProfileId: attached ? (p.masterProfileId as string) : null,
     pendingDirection: attached && isSyncDirection(p.pendingDirection) ? p.pendingDirection : null,
+    masterEndpoint: attached && isEndpoint(p.masterEndpoint) ? p.masterEndpoint : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
   }
@@ -116,14 +137,17 @@ export const useProfileStore = create<ProfileState>()(
       masterHostId: null,
       masterProfileId: null,
       pendingDirection: null,
+      masterEndpoint: null,
       attachGeneration: 0,
       autoSync: true,
-      setMaster: (hostId, profileId, direction) => {
-        if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction)) return false
-        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, attachGeneration: s.attachGeneration + 1 }))
+      setMaster: (hostId, profileId, direction, endpoint) => {
+        if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction) || !isEndpoint(endpoint)) return false
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, attachGeneration: s.attachGeneration + 1 }))
         return true
       },
-      clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null }),
+      adoptMasterEndpoint: (endpoint) =>
+        set((s) => (s.masterHostId === null || s.masterEndpoint !== null || !isEndpoint(endpoint) ? s : { masterEndpoint: endpoint })),
+      clearMaster: () => set({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null }),
       clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
     }),
@@ -135,10 +159,11 @@ export const useProfileStore = create<ProfileState>()(
         masterHostId: state.masterHostId,
         masterProfileId: state.masterProfileId,
         pendingDirection: state.pendingDirection,
+        masterEndpoint: state.masterEndpoint,
         attachGeneration: state.attachGeneration,
         autoSync: state.autoSync,
       }),
-      // Only the five sanitised fields ever come out of storage: persisted
+      // Only the six sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },

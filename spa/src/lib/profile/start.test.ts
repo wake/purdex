@@ -156,6 +156,8 @@ import {
 
 const P1 = 'p_000000000001'
 const P2 = 'p_000000000002'
+/** `ip:port` of every host of this file (see `host`). */
+const EP = '100.64.0.9:7860'
 const host = (id: string) => ({ id, name: id, ip: '100.64.0.9', port: 7860, token: null, order: 0 })
 const connect = (id: string) => useHostStore.getState().setRuntime(id, { status: 'connected' })
 const disconnect = (id: string) => useHostStore.getState().setRuntime(id, { status: 'disconnected' })
@@ -184,7 +186,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0 })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceStateStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -230,7 +232,7 @@ describe('master set → contend → lead', () => {
     stop = startProfileSync()
     expect(contendForLeadership).not.toHaveBeenCalled()
 
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     expect(contendForLeadership).toHaveBeenCalledTimes(1)
     expect(watchUnsyncedStores).toHaveBeenCalledTimes(1)
     // Nothing is announced before primeAll has resolved.
@@ -246,7 +248,7 @@ describe('master set → contend → lead', () => {
 
   it('hands the executor live deps, and wires collector and WS into it', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const e = h.executors[0]
     expect(e.deps.hostId).toBe('h1')
@@ -276,7 +278,7 @@ describe('master set → contend → lead', () => {
   })
 
   it('a master already in the store at start is entered at once', async () => {
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     stop = startProfileSync()
     await flush()
     expect(h.executors).toHaveLength(1)
@@ -285,7 +287,7 @@ describe('master set → contend → lead', () => {
 
   it('host not connected yet: nothing announced; the FIRST connect announces; every reconnect announces again', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const e = h.executors[0]
     expect(e.onReconnected).not.toHaveBeenCalled()
@@ -316,7 +318,7 @@ describe('master set → contend → lead', () => {
     vi.mocked(putAttachment).mockReturnValue(new Promise((r) => (release = r)))
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const e = h.executors[0]
     expect(putAttachment).toHaveBeenCalledTimes(1)
@@ -333,7 +335,7 @@ describe('master set → contend → lead', () => {
     vi.mocked(putAttachment).mockResolvedValue(failed('network'))
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const e = h.executors[0]
     expect(e.onReconnected).not.toHaveBeenCalled()
@@ -360,7 +362,7 @@ describe('master set → contend → lead', () => {
     vi.mocked(putAttachment).mockResolvedValue(failed('server'))
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     await vi.advanceTimersByTimeAsync(2_000 + 4_000 + 8_000 + 16_000)
     expect(putAttachment).toHaveBeenCalledTimes(5)
@@ -385,7 +387,7 @@ describe('master set → contend → lead', () => {
       vi.mocked(putAttachment).mockReturnValue(new Promise((r) => (release = r)))
       connect('h1')
       const end = startProfileSync()
-      useProfileStore.getState().setMaster('h1', P1, 'pull')
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
       await flush()
       const e = h.executors[h.executors.length - 1]
       if (interrupt === 'lease') h.leaderships[h.leaderships.length - 1].set(false)
@@ -407,7 +409,7 @@ describe('master set → contend → lead', () => {
     h.persisted = false
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     expect(putAttachment).not.toHaveBeenCalled()
     expect(h.executors[0].onReconnected).not.toHaveBeenCalled()
@@ -418,7 +420,7 @@ describe('master set → contend → lead', () => {
   it('the master host leaving the store is a problem and nothing more', async () => {
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     useHostStore.setState({ hosts: { h2: host('h2') }, hostOrder: ['h2'] })
     expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['master-host-removed'])
@@ -428,7 +430,7 @@ describe('master set → contend → lead', () => {
 
   it('autoSync off → on makes the executor decide again; on → off and no-ops do not', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const e = h.executors[0]
     useProfileStore.getState().setAutoSync(false)
@@ -447,7 +449,7 @@ describe('the attachment answers 404: the profile is not there any more', () => 
     vi.mocked(putAttachment).mockResolvedValue(notFound)
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
   }
 
@@ -508,7 +510,7 @@ describe('the attachment answers 404: the profile is not there any more', () => 
     vi.mocked(putAttachment).mockResolvedValue(failed(reason))
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     await vi.advanceTimersByTimeAsync(2_000)
     expect(putAttachment).toHaveBeenCalledTimes(2)
@@ -526,7 +528,7 @@ describe('the master host is edited in place', () => {
   async function leading(): Promise<void> {
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     vi.mocked(putAttachment).mockClear()
     vi.mocked(clearSectionStore).mockClear()
@@ -615,11 +617,71 @@ describe('the master host is edited in place', () => {
     expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
   })
 
+  it('RELOAD while blocked: the endpoint the bases belong to is the STORED one, not whatever the host says when the window opens', async () => {
+    await leading()
+    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
+    edit({ ip: '100.64.0.77' })
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+
+    // the window goes away and comes back; the stores keep what they persisted
+    stop()
+    __resetProfileSyncForTest()
+    vi.mocked(putAttachment).mockClear()
+    const drivers = h.executors.length
+    stop = startProfileSync()
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+    expect(h.executors).toHaveLength(drivers)
+    expect(putAttachment).not.toHaveBeenCalled()
+    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['master-endpoint-changed'])
+
+    edit({ ip: '100.64.0.9' }) // put back
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(drivers + 1)
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+  })
+
+  it('attachMaster records the endpoint of THAT moment — the way out of a block moves the home', async () => {
+    await leading()
+    edit({ ip: '100.64.0.77' })
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    expect(useProfileStore.getState().masterEndpoint).toBe('100.64.0.77:7860')
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    edit({ ip: '100.64.0.9' }) // the OLD address is now the foreign one
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+  })
+
+  it('a master attached before the field existed (endpoint unknown): the current one is adopted once, and guards from then on', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: null })
+    await flush()
+    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(1)
+    expect(h.leaderships).toHaveLength(1) // adopting is not a new mode
+    edit({ port: 7999 })
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+  })
+
+  it('…and if the host is not in the store yet, it is adopted when it shows up', async () => {
+    useHostStore.setState({ hosts: { h2: host('h2') }, hostOrder: ['h2'] })
+    stop = startProfileSync()
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: null })
+    await flush()
+    expect(useProfileStore.getState().masterEndpoint).toBeNull()
+    useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'] })
+    expect(useProfileStore.getState().masterEndpoint).toBe(EP)
+  })
+
   it('a follower is blocked too: the lease falling to it builds nothing', async () => {
     h.initialLeader = false
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     edit({ port: 7999 })
     h.leaderships[0].set(true)
@@ -634,7 +696,7 @@ describe('leader and follower', () => {
     h.initialLeader = false
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     expect(watchUnsyncedStores).toHaveBeenCalledTimes(1)
     expect(createExecutor).not.toHaveBeenCalled()
@@ -648,7 +710,7 @@ describe('leader and follower', () => {
     h.initialLeader = false
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
 
     h.leaderships[0].set(true)
@@ -682,7 +744,7 @@ describe('leader and follower', () => {
 
   it('a repeated onChange(true) does not build a second driver', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     h.leaderships[0].set(true)
     await flush()
     expect(h.executors).toHaveLength(1)
@@ -693,7 +755,7 @@ describe('teardown', () => {
   it('clearMaster takes everything down and leaves no timer or subscription', async () => {
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
 
     useProfileStore.getState().clearMaster()
@@ -721,10 +783,10 @@ describe('teardown', () => {
     connect('h1')
     connect('h2')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
 
-    useProfileStore.getState().setMaster('h2', P2, 'pull')
+    useProfileStore.getState().setMaster('h2', P2, 'pull', EP)
     await flush()
     const [old, fresh] = h.executors
     expect(old.dispose).toHaveBeenCalledTimes(1)
@@ -749,8 +811,8 @@ describe('teardown', () => {
 
   it('the same host with another profile is a changed master too', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
-    useProfileStore.getState().setMaster('h1', P2, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    useProfileStore.getState().setMaster('h1', P2, 'pull', EP)
     await flush()
     expect(h.executors).toHaveLength(2)
     expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
@@ -759,7 +821,7 @@ describe('teardown', () => {
 
   it('an unrelated change of the profile store does not rebuild anything', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
     useProfileStore.getState().clearPendingDirection()
     useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1 })
@@ -772,7 +834,7 @@ describe('teardown', () => {
     h.holdPrime = true
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     expect(h.collectors[0].primeAll).toHaveBeenCalledTimes(1)
 
@@ -793,7 +855,7 @@ describe('teardown', () => {
     h.holdPrime = true
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     h.leaderships[0].set(false)
     h.collectors[0].releasePrime()
     await flush()
@@ -809,7 +871,7 @@ describe('teardown', () => {
       h.collectors.push(c as never)
       return c
     })
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['prime-failed'])
     expect(h.executors[0].onReconnected).toHaveBeenCalledTimes(1)
@@ -817,7 +879,7 @@ describe('teardown', () => {
 
   it('stop() takes everything down and unsubscribes from the profile store', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     stop()
     expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
@@ -825,7 +887,7 @@ describe('teardown', () => {
     expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
     expect(h.unsyncedStops[0]).toHaveBeenCalledTimes(1)
 
-    useProfileStore.getState().setMaster('h2', P2, 'pull')
+    useProfileStore.getState().setMaster('h2', P2, 'pull', EP)
     await flush()
     expect(contendForLeadership).toHaveBeenCalledTimes(1)
     expect(h.executors).toHaveLength(1)
@@ -865,6 +927,18 @@ describe('attachMaster', () => {
     expect(putAttachment).not.toHaveBeenCalled()
   })
 
+  it('the host leaves the store while the PUT is out: no master, and the previous master\'s bases are not cleared', async () => {
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    vi.mocked(putAttachment).mockImplementation(async () => {
+      useHostStore.setState({ hosts: { h1: host('h1') }, hostOrder: ['h1'] })
+      return okAttach
+    })
+    expect(await attachMaster('h2', P2, 'pull')).toEqual({ ok: false, reason: 'unknown-host' })
+    expect(useProfileStore.getState().masterProfileId).toBe(P1)
+    expect(clearSectionStore).not.toHaveBeenCalled()
+    expect(deleteAttachment).not.toHaveBeenCalled()
+  })
+
   it('a failed putAttachment sets no master and reports the reason', async () => {
     vi.mocked(putAttachment).mockResolvedValue(failed('unauthorized'))
     expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: false, reason: 'unauthorized' })
@@ -887,7 +961,7 @@ describe('attachMaster', () => {
   })
 
   it('switching master: the old attachment is deleted (best effort) and the section store cleared BEFORE the new master is set', async () => {
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     vi.mocked(deleteAttachment).mockResolvedValue(failed('network'))
     vi.mocked(clearSectionStore).mockImplementation(() => {
       expect(useProfileStore.getState().masterProfileId).toBe(P1)
@@ -902,7 +976,7 @@ describe('attachMaster', () => {
   })
 
   it('EVERY attach is a new reconciliation — the same master too: the bases are cleared before the master is set, the attachment is not deleted', async () => {
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     const generation = useProfileStore.getState().attachGeneration
     vi.mocked(clearSectionStore).mockImplementation(() => {
       expect(useProfileStore.getState().attachGeneration).toBe(generation)
@@ -1010,7 +1084,7 @@ describe('the direction of an attach', () => {
   it('a re-attach made in ANOTHER window: this window\'s LEADER clears the bases it alone writes, then rebuilds', async () => {
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     vi.mocked(clearSectionStore).mockClear()
     const { attachGeneration } = useProfileStore.getState()
@@ -1030,7 +1104,7 @@ describe('the direction of an attach', () => {
   it('…while a FOLLOWER re-enters without touching the bases (the leader may already have written new ones)', async () => {
     h.initialLeader = false
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const { attachGeneration } = useProfileStore.getState()
     useProfileStore.setState({ pendingDirection: 'push', attachGeneration: attachGeneration + 1 })
@@ -1042,7 +1116,7 @@ describe('the direction of an attach', () => {
 
   it('a changed direction ALONE (no new generation) rebuilds nothing and pumps nothing: the executor calls it stale by itself', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     useProfileStore.setState({ pendingDirection: 'push' })
     await flush()
@@ -1082,7 +1156,7 @@ describe('detachMaster', () => {
   })
 
   it('a master another window set while the DELETE was out is not touched by the late continuation', async () => {
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     let release: (v: typeof okDetach) => void = () => {}
     vi.mocked(deleteAttachment).mockReturnValue(new Promise((r) => (release = r)))
     const detaching = detachMaster()
@@ -1097,7 +1171,7 @@ describe('detachMaster', () => {
   })
 
   it('detaches even when the daemon cannot be told — and says so', async () => {
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     vi.mocked(deleteAttachment).mockResolvedValue(failed('network'))
     await detachMaster()
     expect(useProfileStore.getState().masterHostId).toBeNull()
@@ -1106,7 +1180,7 @@ describe('detachMaster', () => {
   })
 
   it('detaches even when deleteAttachment throws', async () => {
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     vi.mocked(deleteAttachment).mockRejectedValue(new Error('boom'))
     await detachMaster()
     expect(useProfileStore.getState().masterHostId).toBeNull()
@@ -1123,7 +1197,7 @@ describe('problems and status', () => {
   it('keeps the latest PROBLEM_BUFFER_SIZE problems, timestamped', async () => {
     vi.setSystemTime(5_000)
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const { onProblem } = h.executors[0].deps
     for (let i = 0; i < PROBLEM_BUFFER_SIZE + 7; i++) onProblem({ kind: 'k', section: 'hosts', detail: `#${i}` })
@@ -1140,7 +1214,7 @@ describe('problems and status', () => {
 
   it('warns once per kind + section; the collector reports into the same buffer', async () => {
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     const { onProblem } = h.executors[0].deps
     onProblem({ kind: 'k', section: 'hosts', detail: 'a' })
@@ -1156,7 +1230,7 @@ describe('problems and status', () => {
   it('state() reports master, leader and the latest status; null status without a driver', async () => {
     h.initialLeader = false
     stop = startProfileSync()
-    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     expect(profileSyncState()).toMatchObject({ master: { hostId: 'h1', profileId: P1 }, leader: false, status: null })
 
