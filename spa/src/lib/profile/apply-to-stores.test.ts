@@ -27,6 +27,8 @@ import type { HostListCache } from '../../stores/useExecutionListStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import type { NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
+import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
 import { getTheme, unregisterTheme } from '../theme-registry'
 import { registerBuiltinThemes } from '../register-themes'
@@ -34,12 +36,19 @@ import { getLocale, unregisterLocale } from '../locale-registry'
 import { STORAGE_KEYS } from '../storage'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { hashSection } from './hash'
-import { masterWorkspaceIds } from './master-world'
+import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
 import { applySectionToStores, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
 
 // === fixtures ===
+
+/** Every test in this file that asks has the master world settled. */
+function masterWorkspaceIds(): ReadonlySet<string> {
+  const ids = masterWorkspaceIdsOrNull()
+  if (ids === null) throw new Error('the master world is unsettled')
+  return ids
+}
 
 const M = 'host-master'
 const H2 = 'host-two'
@@ -68,8 +77,9 @@ const EDITOR_DEFAULTS = useEditorSettingsStore.getInitialState()
 
 function resetStores(): void {
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: H2, devHostId: H2, runtime: {} })
-  useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+  useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [], worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0 })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   useUISettingsStore.setState({ terminalRenderer: UI_DEFAULTS.terminalRenderer, keepAliveCount: UI_DEFAULTS.keepAliveCount, terminalSettingsVersion: 0, dynamicTabName: UI_DEFAULTS.dynamicTabName })
   useLayoutStore.setState({ tabPosition: LAYOUT_DEFAULTS.tabPosition, activityBarWidth: LAYOUT_DEFAULTS.activityBarWidth })
@@ -215,7 +225,7 @@ const hostsPayloadOf = (hosts: HostConfig[]): HostsPayload => buildHostsSection(
 /** Counts every store write made while `run` executes. */
 async function countWrites(run: () => Promise<unknown>): Promise<number> {
   let writes = 0
-  const stores = [useSessionStore, useAgentStore, useExecutionStore, useExecutionListStore, useNexHostStore, useHostSettingsStore, useHostStore, useTabStore, useWorkspaceStore, useUISettingsStore, useEditorSettingsStore, useThemeStore, useI18nStore, useLayoutStore, useWorkspaceSettingsStore]
+  const stores = [useSessionStore, useAgentStore, useExecutionStore, useExecutionListStore, useNexHostStore, useHostSettingsStore, useHostStore, useTabStore, useWorkspaceStore, useUISettingsStore, useEditorSettingsStore, useThemeStore, useI18nStore, useLayoutStore, useWorkspaceSettingsStore, useLocalProfilesStore]
   const unsubs = stores.map((s) => s.subscribe(() => writes++))
   try {
     await run()
@@ -963,5 +973,116 @@ describe('markHostRemovedPanes', () => {
     expect(markHostRemovedPanes(dead, new Set())).toBe(dead)
     const other: PaneLayout = { type: 'leaf', pane: { id: 'p3', content: { kind: 'new-tab' } as never } }
     expect(markHostRemovedPanes(other, new Set())).toBe(other)
+  })
+})
+
+// === a local profile is on screen: the master's world is parked, and that is where an apply lands ===
+
+describe('applySectionToStores — a local profile (slave) is on screen', () => {
+  const SLAVE = 'slave-1'
+
+  /** `seedTabWorld()`'s world becomes the PARKED master; the screen shows a slave's world (sentinel: `SLAVE-ONLY`). */
+  function parkMasterShowSlave(): ParkedWorld {
+    seedTabWorld()
+    return parkMasterShowSlaveFromCurrent()
+  }
+
+  /** Whatever the live stores hold becomes the parked master. */
+  function parkMasterShowSlaveFromCurrent(): ParkedWorld {
+    const t = useTabStore.getState()
+    const w = useWorkspaceStore.getState()
+    const parked: ParkedWorld = { tabs: t.tabs, workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId, activeTabId: t.activeTabId }
+    useLocalProfilesStore.setState({ slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, world: null } }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: parked, worldEpoch: 1 })
+    const st = { ...tab('SLAVE-ONLY-t1', tmuxLeaf('SLAVE-ONLY-p1', M)) }
+    useTabStore.setState({ tabs: { [st.id]: st }, tabOrder: [st.id], activeTabId: st.id, visitHistory: [st.id], worldId: SLAVE, worldEpoch: 1 })
+    useWorkspaceStore.setState({ workspaces: [ws('SLAVE-ONLY-ws', [st.id])], activeWorkspaceId: 'SLAVE-ONLY-ws', worldId: SLAVE, worldEpoch: 1 })
+    return parked
+  }
+
+  const screen = (): string => JSON.stringify([persistedOf(STORAGE_KEYS.TABS), persistedOf(STORAGE_KEYS.WORKSPACES)])
+
+  it('workspaces: the parked master takes it, the scoped settings of a removed workspace are cleared, the screen is byte-for-byte what it was', async () => {
+    parkMasterShowSlave()
+    useWorkspaceSettingsStore.setState({ workspaces: { wa: { files: { x: 1 } }, wb: { files: { x: 2 } }, 'SLAVE-ONLY-ws': { files: { x: 3 } } } } as never)
+    const liveTabs = useTabStore.getState()
+    const liveWs = useWorkspaceStore.getState()
+    const before = screen()
+    const payload: WorkspacesPayload = { order: ['wb'], workspaces: { wb: { name: 'Renamed' } } }
+
+    const outcome = await applySectionToStores('workspaces', payload, ctx)
+
+    const parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(parked.workspaces).toEqual([{ ...ws('wb', ['b1']), name: 'Renamed' }])
+    expect(Object.keys(parked.tabs).sort()).toEqual(['b1', 'solo']) // wa's tabs went with it
+    expect(parked.activeTabId).toBe('b1') // 'a2' is gone → re-pointed by the rule the live path uses
+    expect(Object.keys(useWorkspaceSettingsStore.getState().workspaces).sort()).toEqual(['SLAVE-ONLY-ws', 'wb'])
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(useTabStore.getState()).toBe(liveTabs)
+    expect(useWorkspaceStore.getState()).toBe(liveWs)
+    expect(screen()).toBe(before)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('tabs.<id>: the parked master takes it and the hash is the parked world\'s; the screen does not move', async () => {
+    const parkedBefore = parkMasterShowSlave()
+    const before = screen()
+    const payload = JSON.parse(JSON.stringify(buildTabsSection({ ...ws('wa', ['a2']) , activeTabId: 'a2' }, parkedBefore.tabs))) as TabsPayload
+
+    const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+
+    const parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(parked.workspaces.find((w) => w.id === 'wa')?.tabs).toEqual(['a2'])
+    expect(Object.hasOwn(parked.tabs, 'a1')).toBe(false)
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildTabsSection(parked.workspaces.find((w) => w.id === 'wa')!, parked.tabs)) })
+    expect(screen()).toBe(before)
+    expect(JSON.stringify(parked)).not.toContain('SLAVE-ONLY')
+  })
+
+  it('tabs.<id> of a workspace only the SLAVE has is unrendered — the screen is not where the master looks', async () => {
+    parkMasterShowSlave()
+    const before = screen()
+    expect(await applySectionToStores('tabs.SLAVE-ONLY-ws', { order: [], tabs: {} }, ctx)).toEqual({ ok: true, hash: null })
+    expect(screen()).toBe(before)
+  })
+
+  it('settings: scoped by the PARKED master\'s workspaces — the slave\'s own entries are kept, and never hashed', async () => {
+    parkMasterShowSlave()
+    useWorkspaceSettingsStore.setState({ workspaces: { 'SLAVE-ONLY-ws': { files: { x: 3 } } } } as never)
+    const payload = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
+    ;(payload['purdex-workspace-settings'] as { workspaces: Record<string, unknown> }).workspaces = { wa: { files: { x: 9 } } }
+
+    const outcome = await applySectionToStores('settings', payload, ctx)
+
+    expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({ wa: { files: { x: 9 } }, 'SLAVE-ONLY-ws': { files: { x: 3 } } })
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('hosts: a removed host is marked host-removed in the PARKED master too (and on screen), through the app\'s own cascade', async () => {
+    seedTabWorld()
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, b1: tab('b1', tmuxLeaf('p-b1', H2)) } })
+    parkMasterShowSlaveFromCurrent()
+    useTabStore.setState({ tabs: { 'SLAVE-ONLY-t1': tab('SLAVE-ONLY-t1', tmuxLeaf('SLAVE-ONLY-p1', H2)) } })
+    const payload: HostsPayload = JSON.parse(JSON.stringify(buildHostsSection({ hosts: { [M]: host(M) }, hostOrder: [M] } as never)))
+
+    expect((await applySectionToStores('hosts', payload, ctx)).ok).toBe(true)
+
+    const terminated = (layout: PaneLayout): unknown => (layout.type === 'leaf' && layout.pane.content.kind === 'tmux-session' ? layout.pane.content.terminated : 'n/a')
+    const parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(terminated(parked.tabs.b1.layout)).toBe('host-removed')
+    expect(terminated(parked.tabs.a2.layout)).toBeUndefined()
+    expect(terminated(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).toBe('host-removed')
+  })
+
+  it.each(['workspaces', 'tabs.wa', 'settings'] as const)('%s while the master world is UNSETTLED: busy, nothing written, the lock released', async (key) => {
+    parkMasterShowSlave()
+    useWorkspaceStore.setState({ worldEpoch: 0 }) // the workspace store's rehydrate has not arrived
+    const payloads = { workspaces: { order: [], workspaces: {} }, 'tabs.wa': { order: [], tabs: {} }, settings: {} }
+    let outcome: unknown
+    const writes = await countWrites(async () => {
+      outcome = await applySectionToStores(key, payloads[key], ctx)
+    })
+    expect(outcome).toEqual({ ok: false, reason: 'busy' })
+    expect(writes).toBe(0)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 })
