@@ -1,0 +1,868 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { STORAGE_KEYS } from '../lib/storage/keys'
+import { PROJECTIONS } from '../lib/profile/projections'
+import { DEVICE_NAME_MAX_CODE_POINTS } from '../lib/device-name'
+import type { Tab, Workspace } from '../types/tab'
+
+// `generateId` is scripted where a test needs a particular id (the collision
+// with 'master', above all); everywhere else the queue is empty and a counter
+// hands out distinct six-character ids.
+const idQueue: string[] = []
+let idCounter = 0
+vi.mock('../lib/id', () => ({
+  generateId: () => idQueue.shift() ?? `id${String(++idCounter).padStart(4, '0')}`,
+}))
+
+import { isParkedWorld, useLocalProfilesStore } from './useLocalProfilesStore'
+import type { LocalProfile, LocalProfilesState, ParkedWorld } from './useLocalProfilesStore'
+
+type Data = Pick<LocalProfilesState, 'slaves' | 'slaveOrder' | 'activeProfileId' | 'parkedMaster' | 'worldEpoch'>
+
+/** A world whose single tab carries `sentinel` in its pane — so a test can tell which world it is holding. */
+function world(sentinel: string): ParkedWorld {
+  const tab: Tab = {
+    id: `t-${sentinel}`,
+    pinned: false,
+    locked: false,
+    createdAt: 1,
+    layout: { type: 'leaf', pane: { id: `p-${sentinel}`, content: { kind: 'new-tab' } } },
+  }
+  const ws: Workspace = { id: `w-${sentinel}`, name: sentinel, tabs: [tab.id], activeTabId: tab.id, moduleConfig: {} }
+  return { workspaces: [ws], tabs: { [tab.id]: tab }, activeWorkspaceId: ws.id, activeTabId: tab.id }
+}
+
+const EMPTY_WORLD: ParkedWorld = { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null }
+
+/** Written independently of the store's own sanitiser on purpose: it is the referee. */
+function assertInvariant(s: Data): void {
+  expect([...s.slaveOrder].sort(), 'slaveOrder ≡ keys of slaves').toEqual(Object.keys(s.slaves).sort())
+  expect(new Set(s.slaveOrder).size, 'slaveOrder has no duplicates').toBe(s.slaveOrder.length)
+  for (const [key, slave] of Object.entries(s.slaves)) {
+    expect(slave.id, 'a slave is filed under its own id').toBe(key)
+    expect(slave.id).not.toBe('master')
+    expect(slave.name.trim()).toBe(slave.name)
+    expect(slave.name).not.toBe('')
+  }
+  const onScreen = Object.values(s.slaves).filter((p) => p.world === null).map((p) => p.id)
+  if (s.activeProfileId === 'master') {
+    expect(s.parkedMaster, 'master on screen ⇒ nothing parked for it').toBeNull()
+    expect(onScreen, 'master on screen ⇒ every slave is parked').toEqual([])
+  } else {
+    expect(onScreen, 'a slave on screen ⇒ it, and only it, has no parked world').toEqual([s.activeProfileId])
+    expect(s.parkedMaster, 'a slave on screen ⇒ the master is parked').not.toBeNull()
+  }
+  expect(Number.isSafeInteger(s.worldEpoch) && s.worldEpoch >= 0).toBe(true)
+}
+
+const get = (): LocalProfilesState => useLocalProfilesStore.getState()
+
+/** Merge-mode reset with every mutable field listed (the harness convention). */
+const resetStore = (): void => {
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+}
+
+const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
+  JSON.parse(localStorage.getItem(STORAGE_KEYS.LOCAL_PROFILES) ?? 'null')
+
+async function rehydrateFrom(state: unknown): Promise<void> {
+  localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify({ state, version: 1 }))
+  await useLocalProfilesStore.persist.rehydrate()
+}
+
+/** addSlave that must succeed; returns the id. */
+function add(name: string, w: ParkedWorld = world(name)): string {
+  const r = get().addSlave(name, w)
+  if (!r.ok) throw new Error(`addSlave failed: ${r.reason}`)
+  return r.id
+}
+
+/** swapActive that must succeed; returns the world taken out. */
+function swap(targetId: string, onScreen: ParkedWorld, epoch = get().worldEpoch + 1): ParkedWorld {
+  const r = get().swapActive(targetId, onScreen, epoch)
+  if (!r.ok) throw new Error(`swapActive failed: ${r.reason}`)
+  return r.world
+}
+
+const slave = (id: string, name: string, w: ParkedWorld | null, createdAt = 1): LocalProfile => ({ id, name, createdAt, world: w })
+
+beforeEach(() => {
+  localStorage.clear()
+  idQueue.length = 0
+  idCounter = 0
+  resetStore()
+})
+
+afterEach(() => {
+  assertInvariant(get())
+})
+
+describe('useLocalProfilesStore', () => {
+  it('uses its own storage key', () => {
+    expect(STORAGE_KEYS.LOCAL_PROFILES).toBe('purdex-local-profiles')
+  })
+
+  it('starts with the master on screen and no slaves', () => {
+    const s = get()
+    expect(s.slaves).toEqual({})
+    expect(s.slaveOrder).toEqual([])
+    expect(s.activeProfileId).toBe('master')
+    expect(s.parkedMaster).toBeNull()
+    expect(s.worldEpoch).toBe(0)
+  })
+
+  // Slaves never reach the daemon (decision 9). PROJECTIONS is the only
+  // allowlist, so "not listed" is the whole guarantee — pinned here.
+  it('is not in the sync allowlist', () => {
+    for (const list of Object.values(PROJECTIONS)) {
+      for (const path of list) expect(path, path).not.toContain('purdex-local-profiles')
+    }
+  })
+})
+
+describe('isParkedWorld', () => {
+  it('accepts a world and the empty world', () => {
+    expect(isParkedWorld(world('a'))).toBe(true)
+    expect(isParkedWorld(EMPTY_WORLD)).toBe(true)
+  })
+
+  it.each([
+    ['null', null],
+    ['an array', []],
+    ['a string', 'world'],
+    ['workspaces not an array', { ...EMPTY_WORLD, workspaces: {} }],
+    ['a workspace without an id', { ...EMPTY_WORLD, workspaces: [{ name: 'x', tabs: [], activeTabId: null }] }],
+    ['a workspace whose tabs is not a string list', { ...EMPTY_WORLD, workspaces: [{ id: 'w', name: 'x', tabs: [1], activeTabId: null }] }],
+    ['a workspace with a numeric activeTabId', { ...EMPTY_WORLD, workspaces: [{ id: 'w', name: 'x', tabs: [], activeTabId: 3 }] }],
+    ['tabs an array', { ...EMPTY_WORLD, tabs: [] }],
+    ['tabs null', { ...EMPTY_WORLD, tabs: null }],
+    ['a tab filed under another id', { ...EMPTY_WORLD, tabs: { x: world('a').tabs['t-a'] } }],
+    ['a tab without a layout', { ...EMPTY_WORLD, tabs: { x: { id: 'x', pinned: false, locked: false, createdAt: 1 } } }],
+    ['activeWorkspaceId a number', { ...EMPTY_WORLD, activeWorkspaceId: 1 }],
+    ['activeTabId undefined', { workspaces: [], tabs: {}, activeWorkspaceId: null }],
+  ])('refuses %s', (_label, v) => {
+    expect(isParkedWorld(v)).toBe(false)
+  })
+})
+
+describe('addSlave', () => {
+  it('adds a parked slave at the end of the order', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1234)
+    const a = add('alpha')
+    const b = add('beta')
+    vi.restoreAllMocks()
+    expect(get().slaveOrder).toEqual([a, b])
+    expect(get().slaves[a]).toEqual({ id: a, name: 'alpha', createdAt: 1234, world: world('alpha') })
+    expect(get().activeProfileId).toBe('master')
+  })
+
+  it('trims the name, and cuts it by code points at the device-name limit', () => {
+    const long = '😀'.repeat(DEVICE_NAME_MAX_CODE_POINTS + 5)
+    const a = add('  padded  ')
+    const b = add(long)
+    expect(get().slaves[a].name).toBe('padded')
+    expect(Array.from(get().slaves[b].name)).toHaveLength(DEVICE_NAME_MAX_CODE_POINTS)
+    expect(get().slaves[b].name).toBe('😀'.repeat(DEVICE_NAME_MAX_CODE_POINTS))
+  })
+
+  it('allows two slaves of one name — the id is the identity', () => {
+    const a = add('same')
+    const b = add('same')
+    expect(a).not.toBe(b)
+    expect(Object.keys(get().slaves)).toHaveLength(2)
+  })
+
+  it.each(['', '   ', '\n\t'])('refuses the name %j and changes nothing', (name) => {
+    const before = get()
+    expect(get().addSlave(name, world('x'))).toEqual({ ok: false, reason: 'bad-name' })
+    expect(get()).toBe(before)
+  })
+
+  it('refuses a name that is not a string', () => {
+    expect(get().addSlave(7 as never, world('x'))).toEqual({ ok: false, reason: 'bad-name' })
+  })
+
+  it('refuses a malformed world and changes nothing', () => {
+    const before = get()
+    expect(get().addSlave('x', { ...EMPTY_WORLD, tabs: [] } as never)).toEqual({ ok: false, reason: 'bad-world' })
+    expect(get().addSlave('x', null as never)).toEqual({ ok: false, reason: 'bad-world' })
+    expect(get()).toBe(before)
+  })
+
+  it("never hands out the id 'master' (six base-36 characters: generateId CAN produce it)", () => {
+    idQueue.push('master', 'okid01')
+    expect(add('x')).toBe('okid01')
+    expect(get().slaves.master).toBeUndefined()
+  })
+
+  it('never hands out an id that is taken', () => {
+    idQueue.push('taken1')
+    add('first')
+    idQueue.push('taken1', 'taken1', 'fresh1')
+    expect(add('second')).toBe('fresh1')
+    expect(get().slaves.taken1.name).toBe('first')
+  })
+})
+
+describe('renameSlave', () => {
+  it('renames, normalising like addSlave', () => {
+    const a = add('alpha')
+    expect(get().renameSlave(a, '  new name ')).toEqual({ ok: true })
+    expect(get().slaves[a].name).toBe('new name')
+    expect(get().slaves[a].world).toEqual(world('alpha'))
+  })
+
+  it('renames the slave that is on screen too', () => {
+    const a = add('alpha')
+    swap(a, world('M'))
+    expect(get().renameSlave(a, 'live')).toEqual({ ok: true })
+    expect(get().slaves[a]).toMatchObject({ name: 'live', world: null })
+  })
+
+  it('refuses an unknown id, and the master', () => {
+    add('alpha')
+    const before = get()
+    expect(get().renameSlave('nope', 'x')).toEqual({ ok: false, reason: 'not-found' })
+    expect(get().renameSlave('master', 'x')).toEqual({ ok: false, reason: 'not-found' })
+    expect(get()).toBe(before)
+  })
+
+  it('refuses a blank name and changes nothing', () => {
+    const a = add('alpha')
+    const before = get()
+    expect(get().renameSlave(a, '  ')).toEqual({ ok: false, reason: 'bad-name' })
+    expect(get()).toBe(before)
+  })
+})
+
+describe('removeSlave', () => {
+  it('removes a parked slave and hands back its world', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    expect(get().removeSlave(a)).toEqual({ ok: true, world: world('alpha') })
+    expect(get().slaves[a]).toBeUndefined()
+    expect(get().slaveOrder).toEqual([b])
+  })
+
+  it('never removes the one on screen', () => {
+    const a = add('alpha')
+    swap(a, world('M'))
+    const before = get()
+    expect(get().removeSlave(a)).toEqual({ ok: false, reason: 'on-screen' })
+    expect(get()).toBe(before)
+  })
+
+  it('removes a parked slave while another is on screen', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    swap(a, world('M'))
+    expect(get().removeSlave(b).ok).toBe(true)
+    expect(get().activeProfileId).toBe(a)
+  })
+
+  it('refuses an unknown id, and the master', () => {
+    const before = get()
+    expect(get().removeSlave('nope')).toEqual({ ok: false, reason: 'not-found' })
+    expect(get().removeSlave('master')).toEqual({ ok: false, reason: 'not-found' })
+    expect(get()).toBe(before)
+  })
+})
+
+describe('reorderSlaves', () => {
+  it('takes a permutation of the ids', () => {
+    const a = add('a')
+    const b = add('b')
+    const c = add('c')
+    expect(get().reorderSlaves([c, a, b])).toEqual({ ok: true })
+    expect(get().slaveOrder).toEqual([c, a, b])
+  })
+
+  it.each([
+    ['a missing id', (ids: string[]) => [ids[0], ids[1]]],
+    ['a duplicate', (ids: string[]) => [ids[0], ids[0], ids[1]]],
+    ['an unknown id', (ids: string[]) => [ids[0], ids[1], 'nope']],
+    ['an extra id', (ids: string[]) => [...ids, 'nope']],
+    ['not an array', () => 'abc' as never],
+    ['a non-string member', (ids: string[]) => [ids[0], ids[1], 3 as never]],
+  ])('refuses %s and changes nothing', (_label, make) => {
+    const ids = [add('a'), add('b'), add('c')]
+    const before = get()
+    expect(get().reorderSlaves(make(ids))).toEqual({ ok: false, reason: 'bad-order' })
+    expect(get()).toBe(before)
+  })
+})
+
+describe('swapActive — the one atomic exchange', () => {
+  it('master → slave: parks the screen as the master, hands out the slave world', () => {
+    const a = add('alpha')
+    const r = get().swapActive(a, world('M'), 1)
+    expect(r).toEqual({ ok: true, world: world('alpha'), previousId: 'master' })
+    const s = get()
+    expect(s.activeProfileId).toBe(a)
+    expect(s.parkedMaster).toEqual(world('M'))
+    expect(s.slaves[a].world).toBeNull()
+    expect(s.worldEpoch).toBe(1)
+  })
+
+  it('slave → master: parks the screen in that slave, hands out the master world', () => {
+    const a = add('alpha')
+    swap(a, world('M'))
+    const r = get().swapActive('master', world('alpha-edited'), 2)
+    expect(r).toEqual({ ok: true, world: world('M'), previousId: a })
+    const s = get()
+    expect(s.activeProfileId).toBe('master')
+    expect(s.parkedMaster).toBeNull()
+    expect(s.slaves[a].world).toEqual(world('alpha-edited'))
+    expect(s.worldEpoch).toBe(2)
+  })
+
+  it('slave → slave: the master stays parked, untouched', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    swap(a, world('M'))
+    const parkedBefore = get().parkedMaster
+    const r = get().swapActive(b, world('alpha-edited'), 5)
+    expect(r).toEqual({ ok: true, world: world('beta'), previousId: a })
+    const s = get()
+    expect(s.activeProfileId).toBe(b)
+    expect(s.parkedMaster).toBe(parkedBefore)
+    expect(s.slaves[a].world).toEqual(world('alpha-edited'))
+    expect(s.slaves[b].world).toBeNull()
+    expect(s.worldEpoch).toBe(5)
+  })
+
+  it('is ONE set: a subscriber hears once, and what it sees already satisfies the invariant', () => {
+    const a = add('alpha')
+    const seen: Data[] = []
+    const off = useLocalProfilesStore.subscribe((s) => seen.push(s))
+    swap(a, world('M'))
+    off()
+    expect(seen).toHaveLength(1)
+    assertInvariant(seen[0])
+    expect(seen[0].activeProfileId).toBe(a)
+    expect(seen[0].worldEpoch).toBe(1)
+  })
+
+  it('is ONE write to storage', () => {
+    const a = add('alpha')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    swap(a, world('M'))
+    const writes = setItem.mock.calls.filter(([key]) => key === STORAGE_KEYS.LOCAL_PROFILES)
+    setItem.mockRestore()
+    expect(writes).toHaveLength(1)
+  })
+
+  it.each([
+    ['the master while the master is on screen', 'master'],
+    ['an unknown slave', 'nope'],
+  ])('refuses %s and changes nothing', (_label, target) => {
+    add('alpha')
+    const before = get()
+    const r = get().swapActive(target, world('M'), 1)
+    expect(r).toEqual({ ok: false, reason: target === 'master' ? 'already-on-screen' : 'not-found' })
+    expect(get()).toBe(before)
+  })
+
+  it('refuses the slave that is already on screen', () => {
+    const a = add('alpha')
+    swap(a, world('M'))
+    const before = get()
+    expect(get().swapActive(a, world('x'), 9)).toEqual({ ok: false, reason: 'already-on-screen' })
+    expect(get()).toBe(before)
+  })
+
+  it('refuses a malformed screen world and changes nothing', () => {
+    const a = add('alpha')
+    const before = get()
+    expect(get().swapActive(a, { ...EMPTY_WORLD, workspaces: null } as never, 1)).toEqual({ ok: false, reason: 'bad-world' })
+    expect(get()).toBe(before)
+  })
+
+  it.each([0, -1, 1.5, NaN, Infinity, '2', undefined, Number.MAX_SAFE_INTEGER + 1])('refuses the epoch %j (it must be a safe integer above the current one)', (epoch) => {
+    const a = add('alpha')
+    const before = get()
+    expect(get().swapActive(a, world('M'), epoch as never)).toEqual({ ok: false, reason: 'bad-epoch' })
+    expect(get()).toBe(before)
+  })
+
+  it('refuses an epoch equal to the current one', () => {
+    const a = add('alpha')
+    swap(a, world('M'), 4)
+    expect(get().swapActive('master', world('x'), 4)).toEqual({ ok: false, reason: 'bad-epoch' })
+    expect(get().worldEpoch).toBe(4)
+  })
+})
+
+describe('promoteSlave — a move, never a copy', () => {
+  it('master on screen, the slave parked: the screen is relabelled as the demoted slave', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    const c = add('gamma')
+    vi.spyOn(Date, 'now').mockReturnValue(777)
+    idQueue.push('demote')
+    const r = get().promoteSlave(b, ' old master ', 1)
+    vi.restoreAllMocks()
+    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: 'demote' })
+    const s = get()
+    expect(s.parkedMaster).toEqual(world('beta'))
+    expect(s.slaves[b]).toBeUndefined()
+    expect(s.slaves.demote).toEqual({ id: 'demote', name: 'old master', createdAt: 777, world: null })
+    expect(s.activeProfileId).toBe('demote')
+    expect(s.slaveOrder).toEqual([a, 'demote', c])
+    expect(s.worldEpoch).toBe(1)
+  })
+
+  it('that slave on screen: the screen is relabelled as the master, the parked master becomes a slave', () => {
+    const a = add('alpha')
+    swap(a, world('M'))
+    idQueue.push('demote')
+    const r = get().promoteSlave(a, 'old master', 2)
+    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: 'master' })
+    const s = get()
+    expect(s.activeProfileId).toBe('master')
+    expect(s.parkedMaster).toBeNull()
+    expect(s.slaves[a]).toBeUndefined()
+    expect(s.slaves.demote.world).toEqual(world('M'))
+    expect(s.slaveOrder).toEqual(['demote'])
+    expect(s.worldEpoch).toBe(2)
+  })
+
+  it('another slave on screen: the two parked worlds trade places, the screen is not involved', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    swap(a, world('M'))
+    idQueue.push('demote')
+    const r = get().promoteSlave(b, 'old master', 2)
+    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: a })
+    const s = get()
+    expect(s.activeProfileId).toBe(a)
+    expect(s.slaves[a].world).toBeNull()
+    expect(s.parkedMaster).toEqual(world('beta'))
+    expect(s.slaves[b]).toBeUndefined()
+    expect(s.slaves.demote.world).toEqual(world('M'))
+    expect(s.slaveOrder).toEqual([a, 'demote'])
+  })
+
+  it('no world is copied or lost: the same world objects, each held exactly once', () => {
+    const wA = world('alpha')
+    const wB = world('beta')
+    const wM = world('M')
+    const a = add('alpha', wA)
+    const b = add('beta', wB)
+    swap(a, wM)
+    get().promoteSlave(b, 'old master', 2)
+    const held = [get().parkedMaster, ...Object.values(get().slaves).map((p) => p.world)].filter((w) => w !== null)
+    expect(held).toHaveLength(2)
+    expect(held).toContain(wB)
+    expect(held).toContain(wM)
+  })
+
+  it('is one set', () => {
+    const a = add('alpha')
+    const seen: Data[] = []
+    const off = useLocalProfilesStore.subscribe((s) => seen.push(s))
+    get().promoteSlave(a, 'old', 1)
+    off()
+    expect(seen).toHaveLength(1)
+    assertInvariant(seen[0])
+  })
+
+  it("the demoted slave's id is never 'master' nor one in use — the promoted slave's own included", () => {
+    idQueue.push('alpha1')
+    const a = add('alpha')
+    idQueue.push('master', 'alpha1', 'fresh1')
+    expect(get().promoteSlave(a, 'old', 1)).toMatchObject({ ok: true, demotedId: 'fresh1' })
+  })
+
+  it.each([
+    ['an unknown slave', 'nope', 'old', 1, 'not-found'],
+    ['the master', 'master', 'old', 1, 'not-found'],
+    ['a blank name for the demoted master', null, '  ', 1, 'bad-name'],
+    ['an epoch that does not move', null, 'old', 0, 'bad-epoch'],
+    ['a fractional epoch', null, 'old', 1.5, 'bad-epoch'],
+  ])('refuses %s and changes nothing', (_label, id, name, epoch, reason) => {
+    const a = add('alpha')
+    const before = get()
+    expect(get().promoteSlave(id ?? a, name, epoch)).toEqual({ ok: false, reason })
+    expect(get()).toBe(before)
+  })
+})
+
+describe('replaceParkedWorld', () => {
+  it('replaces a parked slave world', () => {
+    const a = add('alpha')
+    expect(get().replaceParkedWorld(a, world('next'))).toEqual({ ok: true })
+    expect(get().slaves[a].world).toEqual(world('next'))
+  })
+
+  it('replaces the parked master world (the master keeps syncing while a slave is on screen)', () => {
+    const a = add('alpha')
+    swap(a, world('M'))
+    expect(get().replaceParkedWorld('master', world('M2'))).toEqual({ ok: true })
+    expect(get().parkedMaster).toEqual(world('M2'))
+    expect(get().worldEpoch).toBe(1)
+  })
+
+  it('refuses whatever is on screen — that world lives in the tab stores, not here', () => {
+    const a = add('alpha')
+    expect(get().replaceParkedWorld('master', world('x'))).toEqual({ ok: false, reason: 'on-screen' })
+    swap(a, world('M'))
+    const before = get()
+    expect(get().replaceParkedWorld(a, world('x'))).toEqual({ ok: false, reason: 'on-screen' })
+    expect(get()).toBe(before)
+  })
+
+  it('refuses an unknown id and a malformed world', () => {
+    const a = add('alpha')
+    const before = get()
+    expect(get().replaceParkedWorld('nope', world('x'))).toEqual({ ok: false, reason: 'not-found' })
+    expect(get().replaceParkedWorld(a, { tabs: {} } as never)).toEqual({ ok: false, reason: 'bad-world' })
+    expect(get()).toBe(before)
+  })
+})
+
+describe('updateParkedWorlds', () => {
+  it('maps every parked world — master and slaves — in one set, and skips the one on screen', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    swap(a, world('M'))
+    const owners: string[] = []
+    const seen: Data[] = []
+    const off = useLocalProfilesStore.subscribe((s) => seen.push(s))
+    const changed = get().updateParkedWorlds((w, owner) => {
+      owners.push(owner)
+      return { ...w, activeTabId: null }
+    })
+    off()
+    expect(changed).toBe(2)
+    expect(owners.sort()).toEqual([b, 'master'].sort())
+    expect(seen).toHaveLength(1)
+    expect(get().parkedMaster?.activeTabId).toBeNull()
+    expect(get().slaves[b].world?.activeTabId).toBeNull()
+    expect(get().slaves[a].world).toBeNull()
+  })
+
+  it('nothing changed (same references back) → no set at all', () => {
+    add('alpha')
+    const before = get()
+    expect(get().updateParkedWorlds((w) => w)).toBe(0)
+    expect(get()).toBe(before)
+  })
+
+  it('a malformed result is ignored for that world; the others still change', () => {
+    const a = add('alpha')
+    const b = add('beta')
+    const changed = get().updateParkedWorlds((w, owner) => (owner === a ? (null as never) : { ...w, activeTabId: null }))
+    expect(changed).toBe(1)
+    expect(get().slaves[a].world).toEqual(world('alpha'))
+    expect(get().slaves[b].world?.activeTabId).toBeNull()
+  })
+})
+
+describe('persist', () => {
+  it('persists exactly the five data fields, at version 1', () => {
+    const a = add('alpha')
+    swap(a, world('M'))
+    const env = persistedEnvelope()
+    expect(env.version).toBe(1)
+    expect(Object.keys(env.state).sort()).toEqual(['activeProfileId', 'parkedMaster', 'slaveOrder', 'slaves', 'worldEpoch'])
+    expect(env.state).toEqual({
+      slaves: { [a]: { ...get().slaves[a], world: null } },
+      slaveOrder: [a],
+      activeProfileId: a,
+      parkedMaster: world('M'),
+      worldEpoch: 1,
+    })
+  })
+
+  it('a consistent record comes back as it was', async () => {
+    const state = {
+      slaves: { s1: slave('s1', 'one', null), s2: slave('s2', 'two', world('two'), 9) },
+      slaveOrder: ['s2', 's1'],
+      activeProfileId: 's1',
+      parkedMaster: world('M'),
+      worldEpoch: 12,
+    }
+    await rehydrateFrom(state)
+    const { slaves, slaveOrder, activeProfileId, parkedMaster, worldEpoch } = get()
+    expect({ slaves, slaveOrder, activeProfileId, parkedMaster, worldEpoch }).toEqual(state)
+  })
+})
+
+describe('rehydrate sanitises what storage holds', () => {
+  const data = (): Data => {
+    const { slaves, slaveOrder, activeProfileId, parkedMaster, worldEpoch } = get()
+    return { slaves, slaveOrder, activeProfileId, parkedMaster, worldEpoch }
+  }
+
+  it.each([
+    ['null', null],
+    ['a string', 'junk'],
+    ['an array', []],
+    ['an empty object', {}],
+  ])('%s → the initial state', async (_label, state) => {
+    add('left over in memory')
+    await rehydrateFrom(state)
+    // zustand merges into the CURRENT state; the sanitiser must not let what
+    // memory held survive a storage that says otherwise.
+    expect(data()).toEqual({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+  })
+
+  it('persisted junk can neither add a key nor replace an action', async () => {
+    await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 1, addSlave: 'junk', extra: 1 })
+    expect(typeof get().addSlave).toBe('function')
+    expect((get() as unknown as Record<string, unknown>).extra).toBeUndefined()
+  })
+
+  it.each([
+    ['not an object', 'junk'],
+    ['filed under another id', slave('other', 'x', world('x'))],
+    ["the id 'master'", slave('master', 'x', world('x'))],
+    ['an empty id', slave('', 'x', world('x'))],
+    ['a malformed world', { id: 'bad', name: 'x', createdAt: 1, world: { tabs: [] } }],
+    ['a world of undefined', { id: 'bad', name: 'x', createdAt: 1 }],
+  ])('a broken slave (%s) is dropped alone; the others stay', async (_label, broken) => {
+    const key = (broken as { id?: string }).id === 'master' ? 'master' : (broken as { id?: string }).id === '' ? '' : 'bad'
+    await rehydrateFrom({
+      slaves: { good: slave('good', 'good', world('good')), [key]: broken },
+      slaveOrder: [key, 'good'],
+      activeProfileId: 'master',
+      parkedMaster: null,
+      worldEpoch: 3,
+    })
+    expect(data()).toEqual({ slaves: { good: slave('good', 'good', world('good')) }, slaveOrder: ['good'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 3 })
+  })
+
+  it('a slave whose NAME is broken keeps its world: the name is replaced, the data is not thrown away', async () => {
+    await rehydrateFrom({
+      slaves: { a: { id: 'a', name: '   ', createdAt: 1, world: world('a') }, b: { id: 'b', name: 7, createdAt: 'x', world: world('b') } },
+      slaveOrder: ['a', 'b'],
+      activeProfileId: 'master',
+      parkedMaster: null,
+      worldEpoch: 0,
+    })
+    expect(get().slaves.a).toEqual({ id: 'a', name: 'Recovered', createdAt: 1, world: world('a') })
+    expect(get().slaves.b).toEqual({ id: 'b', name: 'Recovered', createdAt: 0, world: world('b') })
+  })
+
+  it('an over-long persisted name is cut like a new one', async () => {
+    await rehydrateFrom({ slaves: { a: slave('a', ` ${'x'.repeat(100)} `, world('a')) }, slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+    expect(get().slaves.a.name).toBe('x'.repeat(DEVICE_NAME_MAX_CODE_POINTS))
+  })
+
+  it('slaveOrder is rebuilt: unknown ids and duplicates go, missing ids are appended (oldest first, then by id)', async () => {
+    await rehydrateFrom({
+      slaves: { a: slave('a', 'a', world('a'), 5), b: slave('b', 'b', world('b'), 2), c: slave('c', 'c', world('c'), 2), d: slave('d', 'd', world('d'), 9) },
+      slaveOrder: ['d', 'ghost', 'd', 7],
+      activeProfileId: 'master',
+      parkedMaster: null,
+      worldEpoch: 0,
+    })
+    expect(get().slaveOrder).toEqual(['d', 'b', 'c', 'a'])
+  })
+
+  it.each([['not an array', 'abc'], ['missing', undefined]])('slaveOrder %s → rebuilt from the slaves', async (_label, slaveOrder) => {
+    await rehydrateFrom({ slaves: { a: slave('a', 'a', world('a')) }, slaveOrder, activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+    expect(get().slaveOrder).toEqual(['a'])
+  })
+
+  it.each([-1, 1.5, NaN, Infinity, '3', null, undefined, Number.MAX_SAFE_INTEGER + 1])('worldEpoch %j → 0', async (worldEpoch) => {
+    await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch })
+    expect(get().worldEpoch).toBe(0)
+  })
+
+  // --- the invariant ------------------------------------------------------
+
+  it('master on screen BUT a master world is parked: the parked world is rescued as a slave, never dropped', async () => {
+    await rehydrateFrom({
+      slaves: { a: slave('a', 'a', world('a')) },
+      slaveOrder: ['a'],
+      activeProfileId: 'master',
+      parkedMaster: world('M'),
+      worldEpoch: 4,
+    })
+    expect(data()).toEqual({
+      slaves: { a: slave('a', 'a', world('a')), recovered: { id: 'recovered', name: 'Recovered master', createdAt: 0, world: world('M') } },
+      slaveOrder: ['a', 'recovered'],
+      activeProfileId: 'master',
+      parkedMaster: null,
+      worldEpoch: 4,
+    })
+  })
+
+  it('the rescue id is deterministic (every window must arrive at the same one) and steps past one in use', async () => {
+    await rehydrateFrom({
+      slaves: { recovered: slave('recovered', 'mine', world('r')), 'recovered-2': slave('recovered-2', 'mine too', world('r2')) },
+      slaveOrder: ['recovered', 'recovered-2'],
+      activeProfileId: 'master',
+      parkedMaster: world('M'),
+      worldEpoch: 0,
+    })
+    expect(get().slaveOrder).toEqual(['recovered', 'recovered-2', 'recovered-3'])
+    expect(get().slaves['recovered-3'].world).toEqual(world('M'))
+  })
+
+  it('master on screen but a slave has no world: that slave holds nothing and goes', async () => {
+    await rehydrateFrom({
+      slaves: { a: slave('a', 'a', null), b: slave('b', 'b', world('b')) },
+      slaveOrder: ['a', 'b'],
+      activeProfileId: 'master',
+      parkedMaster: null,
+      worldEpoch: 0,
+    })
+    expect(data()).toMatchObject({ slaves: { b: slave('b', 'b', world('b')) }, slaveOrder: ['b'], activeProfileId: 'master', parkedMaster: null })
+    expect(get().slaves.a).toBeUndefined()
+  })
+
+  it('a slave on screen and a SECOND slave without a world: the second goes, the pointer stays where the tab stores are', async () => {
+    await rehydrateFrom({
+      slaves: { a: slave('a', 'a', null), b: slave('b', 'b', null), c: slave('c', 'c', world('c')) },
+      slaveOrder: ['a', 'b', 'c'],
+      activeProfileId: 'a',
+      parkedMaster: world('M'),
+      worldEpoch: 2,
+    })
+    expect(data()).toEqual({
+      slaves: { a: slave('a', 'a', null), c: slave('c', 'c', world('c')) },
+      slaveOrder: ['a', 'c'],
+      activeProfileId: 'a',
+      parkedMaster: world('M'),
+      worldEpoch: 2,
+    })
+  })
+
+  it.each([
+    ['names a slave that does not exist', 'ghost'],
+    ['names a slave that is parked', 'c'],
+    ['is not a string', 42],
+    ['is missing', undefined],
+  ])('the pointer %s → master on screen; the parked master is rescued, parked slaves stay, world-less ones go', async (_label, activeProfileId) => {
+    await rehydrateFrom({
+      slaves: { b: slave('b', 'b', null), c: slave('c', 'c', world('c')) },
+      slaveOrder: ['b', 'c'],
+      activeProfileId,
+      parkedMaster: world('M'),
+      worldEpoch: 2,
+    })
+    const s = get()
+    expect(s.activeProfileId).toBe('master')
+    expect(s.parkedMaster).toBeNull()
+    expect(s.slaveOrder).toEqual(['c', 'recovered'])
+    expect(s.slaves.c.world).toEqual(world('c'))
+    expect(s.slaves.recovered.world).toEqual(world('M'))
+  })
+
+  it.each([
+    ['null', null],
+    ['malformed', { tabs: [] }],
+  ])('a slave on screen but the parked master is %s → master on screen (no master world is invented)', async (_label, parkedMaster) => {
+    await rehydrateFrom({
+      slaves: { a: slave('a', 'a', null), c: slave('c', 'c', world('c')) },
+      slaveOrder: ['a', 'c'],
+      activeProfileId: 'a',
+      parkedMaster,
+      worldEpoch: 2,
+    })
+    expect(data()).toEqual({ slaves: { c: slave('c', 'c', world('c')) }, slaveOrder: ['c'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 2 })
+  })
+
+  it('master on screen and a malformed parked master: nothing to rescue, it goes', async () => {
+    await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: 'junk', worldEpoch: 0 })
+    expect(data()).toEqual({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+  })
+
+  it('slaves not a record → none', async () => {
+    await rehydrateFrom({ slaves: [slave('a', 'a', world('a'))], slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+    expect(get().slaves).toEqual({})
+    expect(get().slaveOrder).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Two windows. Each `openWindow()` is a fresh module graph — its own store, its
+// own syncManager, its own channel — over the SAME localStorage and one shared
+// BroadcastChannel bus (the pattern of useProfileStore.test.ts).
+// ---------------------------------------------------------------------------
+
+class FakeBroadcastChannel {
+  static bus = new Set<FakeBroadcastChannel>()
+  name: string
+  onmessage: ((event: MessageEvent) => void) | null = null
+  constructor(name: string) {
+    this.name = name
+    FakeBroadcastChannel.bus.add(this)
+  }
+  postMessage(data: unknown): void {
+    for (const peer of FakeBroadcastChannel.bus) {
+      if (peer === this || peer.name !== this.name) continue
+      peer.onmessage?.({ data } as MessageEvent)
+    }
+  }
+  close(): void {
+    FakeBroadcastChannel.bus.delete(this)
+  }
+}
+
+type Win = typeof import('./useLocalProfilesStore')
+
+async function openWindow(): Promise<Win> {
+  vi.resetModules()
+  const mod = await import('./useLocalProfilesStore')
+  await mod.useLocalProfilesStore.persist.rehydrate()
+  return mod
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+}
+
+describe('every window agrees on which world is on screen', () => {
+  beforeEach(() => {
+    FakeBroadcastChannel.bus.clear()
+    localStorage.clear()
+    vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  const dataOf = (w: Win): Data => {
+    const { slaves, slaveOrder, activeProfileId, parkedMaster, worldEpoch } = w.useLocalProfilesStore.getState()
+    return { slaves, slaveOrder, activeProfileId, parkedMaster, worldEpoch }
+  }
+
+  it('a slave added and a switch made in window A reach window B, which was already open', async () => {
+    const a = await openWindow()
+    const b = await openWindow()
+    expect(a.useLocalProfilesStore).not.toBe(b.useLocalProfilesStore)
+
+    const added = a.useLocalProfilesStore.getState().addSlave('alpha', world('alpha'))
+    if (!added.ok) throw new Error('addSlave failed')
+    a.useLocalProfilesStore.getState().swapActive(added.id, world('M'), 1)
+    await flush()
+
+    expect(dataOf(b)).toEqual(dataOf(a))
+    expect(dataOf(b).activeProfileId).toBe(added.id)
+    assertInvariant(dataOf(b))
+  })
+
+  it('a window opened later starts from what storage holds', async () => {
+    const a = await openWindow()
+    const added = a.useLocalProfilesStore.getState().addSlave('alpha', world('alpha'))
+    if (!added.ok) throw new Error('addSlave failed')
+    const c = await openWindow()
+    expect(dataOf(c)).toEqual(dataOf(a))
+  })
+
+  it('a corrupt record is repaired to the SAME state in both windows (the rescue is deterministic)', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.LOCAL_PROFILES,
+      JSON.stringify({ state: { slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: world('M'), worldEpoch: 1 }, version: 1 }),
+    )
+    const a = await openWindow()
+    const b = await openWindow()
+    expect(dataOf(a)).toEqual(dataOf(b))
+    expect(dataOf(a).slaveOrder).toEqual(['recovered'])
+  })
+})
