@@ -174,6 +174,7 @@ import { compareShape, profileLock, profileStatus, reconcileSectionSet } from '.
 import type { ProfileStatus, SchemaLock } from './profile-state'
 import type { ProfileRemoteEvent } from './profile-ws-dispatch'
 import { sectionKind, shapeTable, workspaceIdOf } from './projections'
+import { isSyncableWorkspaceId } from './sections'
 import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
 import type { FlightToken, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
@@ -867,7 +868,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   function reportSectionSet(sotKeys: string[]): void {
     try {
       const localKeys = [...sections].filter(([, s]) => s.currentHash !== null).map(([key]) => key)
-      const set = reconcileSectionSet({ workspaceIds: localWorkspaceIds(), previousWorkspaceIds, localKeys, sotKeys })
+      // A workspace whose id cannot form `tabs.<id>` is device-local (the builder leaves it out, the applier
+      // keeps it): it has no section to reconcile, and `reconcileSectionSet` throws on such an id — which
+      // used to cost the whole report.
+      const set = reconcileSectionSet({
+        workspaceIds: localWorkspaceIds().filter(isSyncableWorkspaceId),
+        previousWorkspaceIds: previousWorkspaceIds.filter(isSyncableWorkspaceId),
+        localKeys,
+        sotKeys,
+      })
       if (set.keepUnrendered.length > 0) problemOnce(`unrendered:${set.keepUnrendered.join(',')}`, 'sections-unrendered', set.keepUnrendered.join(', '))
       if (set.unknown.length > 0) problemOnce(`unknown:${set.unknown.join(',')}`, 'sections-unknown-kind', set.unknown.join(', '))
     } catch (err) {

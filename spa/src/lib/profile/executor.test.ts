@@ -2034,3 +2034,39 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     expect(settled).toHaveBeenCalledTimes(1)
   })
 })
+
+/* ─── a device-local workspace (an id that cannot form `tabs.<id>`) ─── */
+
+describe('executor — a workspace whose id cannot be synced is not the reconcile\'s business', () => {
+  it('the section set is still reconciled: unrendered and unknown sections are reported, nothing fails', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w1'), ws('not a valid id!')] })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('tabs.w7', 3, 'T7'), meta('gizmo.x', 2, 'G1')]))
+    const { ex, problems } = make()
+    ex.onSection({ key: 'hosts', hash: 'H1', payload: { a: 1 } })
+    ex.onReconnected()
+    await flush()
+    expect(problems.filter((p) => p.kind === 'reconcile-failed' || p.kind === 'executor-error')).toEqual([])
+    expect(problems.filter((p) => p.kind === 'sections-unrendered').map((p) => p.detail)).toEqual(['tabs.w7'])
+    expect(problems.filter((p) => p.kind === 'sections-unknown-kind').map((p) => p.detail)).toEqual(['gizmo.x'])
+  })
+
+  it('…also when the unsyncable one was there BEFORE a `workspaces` pull (the previous set)', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('not a valid id!')] })
+    h.stored = { workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' } }
+    api.listProfiles.mockResolvedValue(index([meta('workspaces', 2, 'W2'), meta('tabs.w7', 3, 'T7')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('workspaces', 2, 'W2'), { theirs: true }))
+    applySectionToStores.mockImplementation(async () => {
+      useWorkspaceStore.setState({ workspaces: [ws('w1')] }) // the applier would keep the device-local one; irrelevant here
+      return { ok: true, hash: 'W2' }
+    })
+    const { ex, problems } = make()
+    ex.onSection({ key: 'workspaces', hash: 'W1', payload: { a: 1 } })
+    ex.onReconnected()
+    await flush()
+    api.listProfiles.mockResolvedValue(index([meta('workspaces', 2, 'W2'), meta('tabs.w7', 3, 'T7'), meta('gizmo.x', 2, 'G1')]))
+    ex.onReconnected()
+    await flush()
+    expect(problems.filter((p) => p.kind === 'reconcile-failed')).toEqual([])
+    expect(problems.some((p) => p.kind === 'sections-unknown-kind')).toBe(true)
+  })
+})
