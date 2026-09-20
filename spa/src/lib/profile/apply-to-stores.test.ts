@@ -430,6 +430,92 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
     expect(useRebuildStore.getState().lockGrant).toBe(grant)
   })
 
+  describe('a store write fails AFTER the cascade ran', () => {
+    const realEnsure = useNexHostStore.getState().ensure
+    let ensure: ReturnType<typeof vi.fn<(hostId: string) => Promise<void>>>
+
+    beforeEach(() => {
+      ensure = vi.fn<(hostId: string) => Promise<void>>(() => Promise.resolve())
+      useNexHostStore.setState({ ensure })
+    })
+    afterEach(() => useNexHostStore.setState({ ensure: realEnsure }))
+
+    const hostSlice = () => {
+      const h = useHostStore.getState()
+      return JSON.parse(JSON.stringify({ hosts: h.hosts, hostOrder: h.hostOrder, activeHostId: h.activeHostId, devHostId: h.devHostId, runtime: h.runtime }))
+    }
+
+    /** The n-th `useHostStore.setState` made by the apply throws (1 = staging, 2 = the final write, 3 = publish). */
+    function failHostWrite(n: number, message = 'host write failed'): void {
+      const real = useHostStore.setState
+      let calls = 0
+      vi.spyOn(useHostStore, 'setState').mockImplementation((...args) => {
+        if (++calls === n) throw new Error(message)
+        real(...(args as Parameters<typeof real>))
+      })
+    }
+
+    it('the host slice is back, the removed host\'s runtime row included, and nex-host is asked again for it — and only for it', async () => {
+      seedHostWorld()
+      const before = hostSlice()
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(hostSlice()).toEqual(before)
+      expect(useHostStore.getState().runtime[H2]).toEqual({ status: 'connected' })
+      expect(useSessionStore.getState().sessions[H2]).toHaveLength(1) // the cascade's own undo
+      expect(ensure.mock.calls).toEqual([[H2]])
+      expect(useRebuildStore.getState().lockedBy).toBeNull()
+    })
+
+    it('a host nex-host knew nothing about is not fetched by the rollback', async () => {
+      seedHostWorld()
+      useNexHostStore.setState({ byHost: {} })
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('host write failed')
+      expect(ensure).not.toHaveBeenCalled()
+    })
+
+    // Why `runtime[H]` may be restored verbatim (`connected` included): the
+    // connection layer tears a host's WS down from a React effect, and no effect
+    // can run inside a synchronous block. From the staging write to the end of the
+    // rollback there must therefore be NO await — this pins it on the last
+    // fallible step (publish).
+    it('from the cascade to the end of the rollback nothing is awaited: the state is back before the promise is even looked at', () => {
+      seedHostWorld()
+      const before = hostSlice()
+      failHostWrite(3)
+      const pending = applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(hostSlice()).toEqual(before) // synchronously
+      expect(ensure.mock.calls).toEqual([[H2]])
+      return expect(pending).rejects.toThrow('host write failed')
+    })
+
+    it('ensure itself throws → the original error survives, and says the rollback is incomplete', async () => {
+      seedHostWorld()
+      const before = hostSlice()
+      ensure.mockImplementation(() => {
+        throw new Error('ensure blew up')
+      })
+      failHostWrite(2)
+      const failure = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx).then(() => null, (e: Error) => e)
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(failure?.message).toMatch(/^host write failed/)
+      expect(failure?.message).toMatch(/rollback incomplete/)
+      expect(failure?.message).toMatch(/ensure blew up/)
+      expect(hostSlice()).toEqual(before)
+    })
+
+    it('ensure rejects later → nothing unhandled, the original error is what is thrown', async () => {
+      seedHostWorld()
+      ensure.mockImplementation(() => Promise.reject(new Error('offline')))
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
+      await Promise.resolve()
+    })
+  })
+
   it('removes the last local hosts too when the master is new here (removeHost\'s one-host veto does not apply to a replace)', async () => {
     useHostStore.setState({ hosts: { [H2]: host(H2) }, hostOrder: [H2], activeHostId: H2, devHostId: null })
     useSessionStore.getState().replaceHost(H2, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~' }] as never)

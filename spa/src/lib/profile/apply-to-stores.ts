@@ -29,6 +29,7 @@ import type { HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
 import { withOperationLock } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -113,6 +114,8 @@ function restore(store: PersistedStore, old: Record<string, unknown>): void {
   }
 }
 
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
 const invalid = (detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid', detail })
 
 // === host-removed ===
@@ -186,11 +189,43 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   if (refusal !== null) return invalid(refusal)
 
   const store = asPersisted(useHostStore)
+  // ROLLBACK, and what it is not. When a host-store write throws after the
+  // cascade ran (persist: quota / SecurityError), the catch runs the cascade's
+  // own undo handles and restores the host slice. That is not a transaction:
+  //   - sessions, agent state, host settings, the marked panes: restored by the
+  //     cascade's undo (what "Undo" does after a manual delete);
+  //   - execution store: NOT restored. Its data comes back by itself — a pane
+  //     that is still mounted re-runs summary → history → SSE when its host
+  //     reappears (`useExecutionSubscription` depends on `hostPresent`). A held
+  //     lease is gone locally and is re-acquired by the next send, exactly as
+  //     after a manual undo (`useExecutionLease` drops it the moment the host goes);
+  //   - nex-host and execution-list: NOT restored, and NOT re-fetched by
+  //     themselves when a host returns under the same id — every `ensure` effect
+  //     depends on `hostId` alone, and the reconnect watcher in useNexHostStore
+  //     requires `byHost[hostId]` to still exist, which `clearHost` removed. So
+  //     the rollback asks once, `ensure(id)`, for each restored host nex-host
+  //     knew before; the execution-list watcher opens on its own once nex is
+  //     ready. `ensure` must not add a new failure: a synchronous throw is
+  //     reported as "rollback incomplete" on the ORIGINAL error, a later
+  //     rejection is dropped (the nex-host entry records its own error);
+  //   - `runtime[H]` IS restored verbatim, `connected` included, and that is
+  //     true rather than stale ONLY because nothing is awaited between the
+  //     staging write and the end of the rollback: the connection layer
+  //     (`useMultiHostEventWs`) closes a host's WS from a React effect keyed on
+  //     the host list, no effect runs inside a synchronous block, and by the time
+  //     one can, the list is what it was — the WS never noticed. An `await` in
+  //     that stretch would let the effect tear the connection down, and the
+  //     restored `connected` would then be a lie until the layer reconnected.
+  //     Hence `persist.rehydrate()` is NOT awaited inside the try (it is
+  //     synchronous with this storage — premise (d) in the tests — and is awaited
+  //     after the last fallible step, for the day it is not).
   const write = async (): Promise<ApplyOutcome> => {
     const state = useHostStore.getState()
     const old = { hosts: state.hosts, hostOrder: state.hostOrder, activeHostId: state.activeHostId, devHostId: state.devHostId, runtime: state.runtime }
     const { next, removedHostIds } = applyHosts(old, incoming)
     const undos: Array<() => void> = []
+    const nexKnown = removedHostIds.filter((id) => Object.hasOwn(useNexHostStore.getState().byHost, id))
+    let hooks: void | Promise<void>
     try {
       if (removedHostIds.length > 0) {
         const leaving: Record<string, HostConfig> = {}
@@ -202,19 +237,31 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
       const now = useHostStore.getState()
       const survives = (id: string | null): string | null => (id !== null && Object.hasOwn(next.hosts, id) ? id : null)
       store.setState({ hosts: next.hosts, hostOrder: next.hostOrder, activeHostId: survives(now.activeHostId), devHostId: survives(now.devHostId) })
-      await rehydrate(store)
+      hooks = store.persist.rehydrate() // not awaited here — see ROLLBACK above
       publish(store)
     } catch (err) {
+      const unfinished: string[] = []
       for (const undo of undos.reverse()) {
         try {
           undo()
-        } catch {
-          // best effort: the host slice below is restored regardless
+        } catch (undoErr) {
+          unfinished.push(`undo: ${messageOf(undoErr)}`) // the host slice below is restored regardless
         }
       }
       restore(store, old)
-      throw err
+      if (undos.length > 0) {
+        for (const id of nexKnown) {
+          try {
+            void useNexHostStore.getState().ensure(id).catch(() => {})
+          } catch (ensureErr) {
+            unfinished.push(`nex-host ensure(${id}): ${messageOf(ensureErr)}`)
+          }
+        }
+      }
+      if (unfinished.length === 0) throw err
+      throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
+    await hooks
     return { ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) }
   }
 
@@ -251,8 +298,6 @@ function unregisterDropped(key: SettingsStorageKey, before: Record<string, unkno
   }
   return undo
 }
-
-const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
   if (payload === null) return invalid('the settings section cannot be deleted')
