@@ -889,3 +889,52 @@ built"); the ones that change this spec's meaning:
   edit; otherwise every workspace arriving from another machine could open as a conflict.
 - **A persisted conflict needs only its local side's payload** (the sent snapshot, §4.6.2); the SOT
   side is re-fetchable.
+
+### 9.10 P2b-2 real-machine acceptance, 2026-09-20 (first pass)
+
+Worktree dev server `http://100.64.0.2:5175` (plain HTTP on the tailnet IP — the same kind of origin
+the Electron dev window loads), the live mlab daemon (alpha.411), two Playwright browser contexts =
+two clients with their own `clientId` and `localStorage`. Hosts were seeded through a 0600
+storage-state file; the token never appeared on a command line or in output. Driven through the
+dev-only `window.__purdexProfileSync` hook, which calls the same `attachMaster` / `detachMaster`
+P3's wizard will.
+
+| Spec §6 | Result |
+|---|---|
+| iron rule (no master) | **pass** — 0 requests to `/api/profiles`, no `purdex-profile*` key, before attach |
+| 1 first push | **pass** — `hosts`, `settings` (ordinal 3), `workspaces` at rev 1; adding two workspaces created `tabs.<id>` × 2 and moved `workspaces` to rev 2 |
+| 2 second client pulls | **pass after a manual `Take SOT`** — see the second finding below |
+| 3 propagation | **pass — 519 ms** from the rename on A to the store change on B (500 ms debounce + 19 ms for PUT → broadcast → GET → apply). Only `workspaces` advanced |
+| 4 converged | **pass** — the same rename on both at once advanced the rev exactly once; both `synced`, no lock |
+| 5 conflict locks one section | **pass** — different renames at once: A applied, B got 409 and only `workspaces` went `locked:conflict`; B's local text was not overwritten; a tab B added elsewhere meanwhile still synced (`tabs.<id>` rev 2); `Keep local` on B converged both |
+| 8 focus not mirrored | **pass** — A switched active workspace; B's did not move and no section advanced |
+| 12 delete refused while attached | **pass** — 409 `{reason: 'attached'}` with two attachments |
+
+**Two real findings, neither reachable by the 8,459 unit tests:**
+
+1. **`crypto.subtle` does not exist outside a secure context**, and `http://100.64.0.2:5175` is not
+   one — so not a single section hash could be computed: `Cannot read properties of undefined
+   (reading 'digest')`. The P2a measurement had flagged exactly this and the main session filed it
+   under "pre-existing exposure"; it is in fact the main path, because plain HTTP on the tailnet IP
+   is how both workstations load the app in dev mode. jsdom has Node's `crypto.subtle`, so every test
+   was green. Fixed with a pure-JS SHA-256 fallback in `lib/crypto-hash.ts`, byte-identical to
+   WebCrypto (NIST vectors, padding boundaries, 200 seeded random inputs) — two clients on different
+   paths must agree on every hash or they never converge. ~15 ms/MiB.
+2. **Attach had no direction.** A brand-new client's empty `workspaces` list is a payload with a
+   hash; it has never agreed with the SOT; the SOT has content → the decision table says conflict,
+   correctly — it cannot know which side should win. What was missing is the user's decision 10: the
+   wizard's **push / pull**. `attachMaster` takes a direction, persisted in the control store as
+   `pendingDirection` until the first full settle; during that initial reconciliation a conflict is
+   resolved by the direction instead of being put to the user, and `push` also removes `tabs.*`
+   another client left behind. `pull` overwrites local state, and decision 12 requires saving it as
+   a slave first — slaves arrive in P3, so until the wizard exists only the dev hook calls this path.
+
+**A lesson about the procedure itself.** The first pass polluted its own SOT: a subagent was fixing
+`crypto-hash.ts` in the same worktree while client A's page was open, and its mutation tests —
+SHA-256 deliberately broken three ways — were **hot-reloaded into the live page by Vite**, which then
+pushed sections hashed and fingerprinted by a mutant. The next, correct build found a different
+fingerprint at the same ordinal and went `locked:schema` — which is, at least, the schema lock failing
+closed on a real machine. Rule since: **no mutation testing in a worktree while a page served from it
+is open**; close the browser and the dev server first.
+
+_(Remaining items — 6, 6a, 6b, 6c, 7, 9, 13, two windows of one context — after the direction fix.)_
