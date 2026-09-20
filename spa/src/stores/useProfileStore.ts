@@ -221,6 +221,31 @@ export const useProfileStore = create<ProfileState>()(
   ),
 )
 
+/**
+ * The control plane as `localStorage` holds it RIGHT NOW (the persist envelope's
+ * `state`, unsanitised), or null: absent, unreadable. Another window's write
+ * reaches THIS window's store a broadcast and a rehydrate later; the storage it
+ * persisted to is shared synchronously. For the few decisions that must not be
+ * made on a stale memory — lib/profile/start.ts (the suspension, the attach
+ * generation), lib/profile/switch-active.ts (`promoteToMaster`). ONE parser, here,
+ * next to the shape it reads.
+ */
+export function storedControl(): { masterHostId?: unknown; masterProfileId?: unknown; masterEndpoint?: unknown; attachGeneration?: unknown; suspension?: { until?: unknown } | null } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PROFILE)
+    if (raw === null) return null
+    const state = (JSON.parse(raw) as { state?: unknown }).state
+    return typeof state === 'object' && state !== null ? (state as ReturnType<typeof storedControl>) : null
+  } catch {
+    return null
+  }
+}
+
+/** Does storage hold an attached master right now? Judged by the rule `merge` applies to it (`sanitiseControl`). */
+export function masterAttachedInStorage(): boolean {
+  return selectMaster(sanitiseControl(storedControl())) !== null
+}
+
 /** The attached master, or null. Null for half a master too, so a caller never
  *  has to re-check the invariant. Returns a fresh object: as a zustand selector
  *  it needs `useShallow`. */

@@ -89,7 +89,7 @@ import { effectiveDeviceName } from '../device-name'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
-import { isMasterPair, isSyncDirection, selectMaster, useProfileStore } from '../../stores/useProfileStore'
+import { isMasterPair, isSyncDirection, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
 import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
@@ -104,7 +104,6 @@ import { copyMasterAsSlave, deleteSlave, promoteToMaster, renameSlave, saveScree
 import type { CopyResult, PromoteResult, SwitchResult } from './switch-active'
 import { __resetSyncStatusForTest, masterTagOf, openStatusChannel, setLocalSnapshot } from './sync-status'
 import type { StatusChannel } from './sync-status'
-import { STORAGE_KEYS } from '../storage/keys'
 
 export { profileSyncSnapshot, subscribeProfileSync } from './sync-status'
 export type { ProfileSyncSnapshot } from './sync-status'
@@ -210,18 +209,6 @@ function isSuspended(): boolean {
 function suspendedInStorage(): boolean {
   const until = storedControl()?.suspension?.until
   return typeof until === 'number' && Number.isFinite(until) && clock() < until
-}
-
-/** The control plane as `localStorage` holds it right now (the persist envelope's `state`), or null: absent, unreadable. */
-function storedControl(): { masterHostId?: unknown; masterProfileId?: unknown; attachGeneration?: unknown; suspension?: { until?: unknown } | null } | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PROFILE)
-    if (raw === null) return null
-    const state = (JSON.parse(raw) as { state?: unknown }).state
-    return typeof state === 'object' && state !== null ? (state as ReturnType<typeof storedControl>) : null
-  } catch {
-    return null
-  }
 }
 
 /** `attachGeneration` as storage holds it; this window's memory only when storage cannot be read. */

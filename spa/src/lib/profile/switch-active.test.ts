@@ -281,8 +281,12 @@ describe('switchActiveProfile', () => {
     // Another window switched to the slave; this one has its tabs already and the pointer not yet.
     useTabStore.setState({ tabs: slaveWorld().tabs, worldId: SLAVE, worldEpoch: 1 })
     const before = threeStores()
-    expect(await switchActiveProfile(OTHER)).toEqual({ ok: false, reason: 'unsettled' })
+    const pending = switchActiveProfile(OTHER)
+    // Looked at before the promise is: the refusal wrote nothing. (A turn later the three stores are asked to read
+    // storage again — master-world.ts, `recoverUnsettledWorld` — and that does give every object a new identity.)
     threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+    expect(await pending).toEqual({ ok: false, reason: 'unsettled' })
+    expect(readMasterWorld().settled).toBe(false) // storage holds the same disagreement: nothing to recover from
   })
 
   it('takes the operation lock: refused while a rebuild, a restore or an apply holds it; released afterwards either way', async () => {
@@ -575,6 +579,31 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     const before = threeStores()
     expect(promoteToMaster(SLAVE, 'Old master')).toEqual({ ok: false, reason: 'master-attached' })
     threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+  })
+
+  describe('another window has attached, and this one has not heard yet (its `useProfileStore` is not rehydrated)', () => {
+    const attachedOnDisk = (state: Record<string, unknown>): void =>
+      localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ state: { masterHostId: 'h1', masterProfileId: 'p_0123456789ab', masterEndpoint: '10.0.0.1:7860', pendingDirection: 'push', suspension: null, attachGeneration: 1, autoSync: true, ...state }, version: 1 }))
+
+    it('storage says attached, memory says not: refused — the promoted slave would be pushed over the SOT as the master', () => {
+      attachedOnDisk({})
+      expect(useProfileStore.getState().masterHostId).toBeNull()
+      const before = threeStores()
+      expect(promoteToMaster(SLAVE, 'Old master')).toEqual({ ok: false, reason: 'master-attached' })
+      threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+      expect(useRebuildStore.getState().lockedBy).toBeNull()
+      expect(localStorage.getItem(STORAGE_KEYS.WORLD_EPOCH)).toBeNull()
+    })
+
+    it('what storage holds is judged by the store\'s own rule: half a master, or one without an endpoint, is no master', () => {
+      attachedOnDisk({ masterEndpoint: null })
+      expect(promoteToMaster(SLAVE, 'Old master')).toMatchObject({ ok: true })
+    })
+
+    it('unreadable storage is no master', () => {
+      localStorage.setItem(STORAGE_KEYS.PROFILE, '{not json')
+      expect(promoteToMaster(SLAVE, 'Old master')).toMatchObject({ ok: true })
+    })
   })
 
   it('the master on screen: the screen does not move and is now the demoted slave\'s; the parked slave is the master', () => {

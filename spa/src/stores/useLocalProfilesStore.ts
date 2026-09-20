@@ -50,7 +50,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { normalizeDeviceName } from '../lib/device-name'
-import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { Tab, Workspace } from '../types/tab'
 
 /** The `activeProfileId` of the master; never a slave's id. */
@@ -365,7 +365,8 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
     }),
     {
       name: STORAGE_KEYS.LOCAL_PROFILES,
-      storage: purdexStorage,
+      // A world store: a write from a window that still holds an older world is dropped (lib/storage/world-fence.ts).
+      storage: fencedWorldStorage,
       version: 1,
       partialize: (state) => ({
         slaves: state.slaves,
@@ -382,3 +383,4 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
 )
 
 syncManager.register(STORAGE_KEYS.LOCAL_PROFILES, useLocalProfilesStore)
+registerFencedStore(STORAGE_KEYS.LOCAL_PROFILES, useLocalProfilesStore)

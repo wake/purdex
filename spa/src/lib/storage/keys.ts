@@ -34,6 +34,9 @@ export const STORAGE_KEYS = {
   /** 本機的 slave profiles、active 指標、停放中的 master 世界（useLocalProfilesStore）：device-local，
    *  **永遠不進 SOT**（不得列入 lib/profile/projections.ts）；走 syncManager 讓每個視窗一致 */
   LOCAL_PROFILES: 'purdex-local-profiles',
+  /** 手動管理（非 Zustand store）：lib/storage/world-fence.ts —— 三個世界 store（TABS／WORKSPACES／LOCAL_PROFILES）的
+   *  epoch 柵欄，值是十進位整數字串；直接操作 localStorage，不走 browserStorage/syncManager。**從沒切換過 profile 時這個 key 不存在** */
+  WORLD_EPOCH: 'purdex-world-epoch',
   /** 手動管理（非 Zustand store）：這是 key 的**前綴**，不是完整的 key —— lib/profile/section-store.ts 組出
    *  `<前綴>:<profileId>:s:<section>` 與 `<前綴>:<profileId>:p:<hash>`；只有 leader 會寫，刻意不註冊 syncManager */
   PROFILE_SECTIONS: 'purdex-profile-sections',
