@@ -324,6 +324,23 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   let previousWorkspaceIds = localWorkspaceIds()
   let lastStatus = ''
 
+  /* ─── the one door every request goes through ─── */
+
+  /**
+   * `null` = the host is not reachable NOW: the request is not made. `decideSection`
+   * asks `isReachable()` when an action is chosen, but between that and the
+   * request lie `await shapes()`, the write queue, a backoff timer — and the start
+   * layer makes this executor unreachable WITHOUT disposing it (the connection
+   * dropped; the attachment is not confirmed). So the question is asked again
+   * here, where the request is made, for all five of them: list, get, put,
+   * delete, orphan delete. The caller neither dispatches nor retries on `null`
+   * (no busy wait): `onReconnected()` pumps everything again. A flight that was
+   * already opened is closed (`push-failed`).
+   */
+  function request<T>(call: () => Promise<T>): Promise<T> | null {
+    return deps.isReachable() ? call() : null
+  }
+
   /* ─── reporting ─── */
 
   function problem(kind: string, detail: string, section?: string): void {
@@ -552,7 +569,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       problem('not-leader', 'the lease is not ours: the write was not sent', key)
       return WAIT
     }
-    const outcome = await deleteSection(hostId, profileId, key, { baseRev: rev, clientId: getClientId() }, requestOptions)
+    const sent = request(() => deleteSection(hostId, profileId, key, { baseRev: rev, clientId: getClientId() }, requestOptions))
+    if (sent === null) return WAIT // stays deferred: the next index tries again
+    const outcome = await sent
     if (disposed) return WAIT
     if (outcome.kind === 'applied') {
       orphanDeferred.delete(key)
@@ -766,7 +785,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (disposed) return
     // Read when the request is SENT (sync-state driver contract).
     const epochs = new Map([...sections].map(([key, s]) => [key, s.indexEpoch]))
-    const result = await listProfiles(hostId, requestOptions)
+    const listing = request(() => listProfiles(hostId, requestOptions))
+    if (listing === null) return // no event, no retry timer: the sections stay stale and the next connect asks
+    const result = await listing
     if (disposed) return
 
     if (result.kind === 'failed') {
@@ -927,6 +948,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (sections.get(key)?.inFlight === token) dispatch(key, { type: 'push-failed' }, false)
   }
 
+  /** The flight was opened and the host is not reachable: it is closed, nothing was sent, nothing is retried. */
+  function unsent(key: string): Finish {
+    dispatch(key, { type: 'push-failed' }, false)
+    return WAIT
+  }
+
   async function send(key: string, token: FlightToken): Promise<Finish> {
     const mine = await shapes()
     if (disposed) return WAIT
@@ -953,9 +980,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         return failed(key)
       }
       const body = { clientId: getClientId(), baseRev: token.baseRev, hash: token.hash, fingerprint: mine[kind].fingerprint, ordinal: mine[kind].ordinal, payload }
-      outcome = await putSection(hostId, profileId, key, body, requestOptions)
+      const sent = request(() => putSection(hostId, profileId, key, body, requestOptions))
+      if (sent === null) return unsent(key)
+      outcome = await sent
     } else {
-      outcome = await deleteSection(hostId, profileId, key, { baseRev: token.baseRev, clientId: getClientId() }, requestOptions)
+      const sent = request(() => deleteSection(hostId, profileId, key, { baseRev: token.baseRev, clientId: getClientId() }, requestOptions))
+      if (sent === null) return unsent(key)
+      outcome = await sent
     }
     if (disposed) return WAIT
 
@@ -1007,7 +1038,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   async function pull(key: string): Promise<Finish> {
     const mine = await shapes() // before the request: nothing may `await` between judging the state and applying
     if (disposed) return WAIT
-    const result = await getSection(hostId, profileId, key, requestOptions)
+    const fetching = request(() => getSection(hostId, profileId, key, requestOptions))
+    if (fetching === null) return WAIT
+    const result = await fetching
     if (disposed) return WAIT
     if (result.kind === 'failed') {
       if (blocks(result)) return WAIT
