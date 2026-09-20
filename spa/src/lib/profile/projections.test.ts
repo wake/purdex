@@ -268,7 +268,7 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(9)
+    expect(prefixes).toHaveLength(8)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
   })
 
@@ -283,6 +283,19 @@ describe('PROJECTIONS', () => {
     expect(settingsFieldsByStore()[STORAGE_KEYS.MODULE_ENABLED]).toBeUndefined()
   })
 
+  // Editor preferences are device-local too — useEditorSettingsStore's header:
+  // "Not registered with `syncManager` — editor preferences are a device-local
+  // choice (the small-screen laptop may want fontSize 11 while the big monitor
+  // uses 14) rather than shared config."
+  it('no settings path starts with purdex-editor-settings — the whole store is device-local', () => {
+    expect(STORAGE_KEYS.EDITOR_SETTINGS).toBe('purdex-editor-settings')
+    expect(Object.keys(useEditorSettingsStore.getState())).toContain('fontSize') // the fields exist; they are unlisted on purpose
+    for (const path of PROJECTIONS.settings) {
+      expect(path.startsWith('purdex-editor-settings'), path).toBe(false)
+    }
+    expect(settingsFieldsByStore()[STORAGE_KEYS.EDITOR_SETTINGS]).toBeUndefined()
+  })
+
   it('never lists the three persisted non-preference fields', () => {
     const fields = settingsFieldsByStore()
     expect(fields[STORAGE_KEYS.UI_SETTINGS]).not.toContain('terminalSettingsVersion')
@@ -293,7 +306,6 @@ describe('PROJECTIONS', () => {
   it('every listed settings field exists in its store (a rename must not silently unsync a field)', () => {
     const stores: Record<string, () => object> = {
       [STORAGE_KEYS.UI_SETTINGS]: useUISettingsStore.getState,
-      [STORAGE_KEYS.EDITOR_SETTINGS]: useEditorSettingsStore.getState,
       [STORAGE_KEYS.THEMES]: useThemeStore.getState,
       [STORAGE_KEYS.I18N]: useI18nStore.getState,
       [STORAGE_KEYS.NOTIFICATION_SETTINGS]: useNotificationSettingsStore.getState,
@@ -419,8 +431,8 @@ describe('shape: fingerprint and ordinal', () => {
           1,
         ],
         "settings": [
-          "b72a54b993213728c12d00ed9aa5a2446fb1696e8d712212c737f35091982b0f",
-          2,
+          "86a2fce1b6e8da4f50e2f5ffeb7aaf6ddf0b87db2198c740d941f7ad8c28d50e",
+          3,
         ],
         "tabs": [
           "e8d2e6e42bdd9037c505f57bfd79e023aaf9746549d0e33f8a40a9848155debd",

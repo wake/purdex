@@ -54,10 +54,6 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
       'hostBadgeTabBarEnabled', 'hostBadgeTabBarLineColor', 'hostBadgeTabBarBox', 'hostBadgeTabBarInset',
       'hostBadgeTabBarRadius',
     ]),
-    ...settingsPaths('purdex-editor-settings', [
-      'tabSize', 'insertSpaces', 'wordWrap', 'lineNumbers', 'minimap', 'fontSize', 'popupOnMissingFile',
-      'autoSearchLayer1', 'contentWidth',
-    ]),
     ...settingsPaths('purdex-themes', ['activeThemeId', 'customThemes']),
     ...settingsPaths('purdex-i18n', ['activeLocaleId', 'customLocales']),
     ...settingsPaths('purdex-notification-settings', ['agents']),
@@ -67,12 +63,23 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     ...settingsPaths('purdex-newtab-layout', ['profiles']),
     // The only field taken from useLayoutStore; the rest of it is device-local.
     ...settingsPaths('purdex-layout', ['tabPosition']),
-    // NOT `purdex-module-enabled` — nine stores, not ten. useModuleEnabledStore
+    // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — eight
+    // stores, not ten. useModuleEnabledStore
     // says so itself: toggling a module on or off "is a device-local preference
     // (a host with limited resources can turn off modules it doesn't want to
     // run), not a config to sync between devices". P2a listed `.enabled` here;
     // P2b removed it (settings ordinal 1 → 2). Reversing that costs one line
     // here (plus the `SettingsStorageKey` member) and ANOTHER ordinal bump.
+    //
+    // NOT `purdex-editor-settings` either, by the same rule — the store declares
+    // itself device-local. useEditorSettingsStore's header: "Not registered with
+    // `syncManager` — editor preferences are a device-local choice (the
+    // small-screen laptop may want fontSize 11 while the big monitor uses 14)
+    // rather than shared config." P2a/P2b listed its nine fields here; they were
+    // removed (settings ordinal 2 → 3). Reversing that costs the nine lines back
+    // here, the `SettingsStorageKey` member back in types.ts (and the store back
+    // in the collector's and apply-to-stores' maps — a compile error until then),
+    // and ANOTHER ordinal bump.
   ],
 }
 
@@ -83,7 +90,7 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
  */
 export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   hosts: 1,
-  settings: 2, // 2: `purdex-module-enabled.enabled` removed (device-local, see PROJECTIONS.settings)
+  settings: 3, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings)
   workspaces: 1,
   tabs: 1,
 }

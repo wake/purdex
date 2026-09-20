@@ -864,7 +864,7 @@ describe('isWellFormedSection', () => {
         const dot = path.indexOf('.')
         byStore.set(path.slice(0, dot), [...(byStore.get(path.slice(0, dot)) ?? []), path.slice(dot + 1)])
       }
-      expect(byStore.size).toBe(9)
+      expect(byStore.size).toBe(8)
       for (const [store, fields] of byStore) {
         for (const field of fields) expect(isWellFormedSection('settings', { [store]: { [field]: 1 } })).toBe(true)
         expect(isWellFormedSection('settings', { [store]: { [`${fields[0]}X`]: 1 } })).toBe(false)
@@ -893,6 +893,11 @@ describe('isWellFormedSection', () => {
       expect(isWellFormedSection('settings', { 'purdex-module-enabled': { enabled: {} } })).toBe(false)
       expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3 }, 'purdex-module-enabled': { enabled: { files: true } } })).toBe(false)
       expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3 } })).toBe(true) // …and only that store is the reason
+    })
+
+    it('purdex-editor-settings is an unknown store: editor preferences are device-local (settings ordinal 3)', () => {
+      expect(isWellFormedSection('settings', { 'purdex-editor-settings': { fontSize: 14 } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3 }, 'purdex-editor-settings': { tabSize: 2 } })).toBe(false)
     })
 
     it('applySettings still ignores an unknown store, should one ever get past the guard', () => {

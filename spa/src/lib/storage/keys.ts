@@ -34,4 +34,7 @@ export const STORAGE_KEYS = {
   /** 手動管理（非 Zustand store）：這是 key 的**前綴**，不是完整的 key —— lib/profile/section-store.ts 組出
    *  `<前綴>:<profileId>:s:<section>` 與 `<前綴>:<profileId>:p:<hash>`；只有 leader 會寫，刻意不註冊 syncManager */
   PROFILE_SECTIONS: 'purdex-profile-sections',
+  /** 手動管理（非 Zustand store）：lib/profile/leader.ts 的租約 `{windowId, expiresAt}`，直接操作 localStorage，
+   *  不走 browserStorage/syncManager（每 2 秒續約一次，不需要廣播；喚醒 follower 靠原生 `storage` 事件） */
+  PROFILE_LEADER: 'purdex-profile-leader',
 } as const
