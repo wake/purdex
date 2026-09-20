@@ -189,6 +189,32 @@ export function commitTabWorld(world: TabWorld, afterWrite?: () => void, stamp?:
 }
 
 /**
+ * The world on screen CHANGES HANDS and its content does not — a promote (Task 5)
+ * relabels what the screen holds, or only moves the epoch under it. Writes the
+ * tag, and nothing but the tag, into both live stores: not one tab or workspace
+ * gets a new identity, so no pane re-renders and no terminal re-attaches. Both
+ * or neither, like `commitTabWorld`; the caller has written — and on a throw
+ * takes back — the same epoch in `useLocalProfilesStore`.
+ */
+export function restampWorld(stamp: WorldStamp): void {
+  const tabState = useTabStore.getState()
+  const wsState = useWorkspaceStore.getState()
+  const oldTab = { worldId: tabState.worldId, worldEpoch: tabState.worldEpoch }
+  const oldWs = { worldId: wsState.worldId, worldEpoch: wsState.worldEpoch }
+  const tag = { worldId: stamp.worldId, worldEpoch: stamp.worldEpoch }
+  const tabStore = useTabStore as unknown as WritableStore
+  const wsStore = useWorkspaceStore as unknown as WritableStore
+  try {
+    tabStore.setState(tag)
+    wsStore.setState(tag)
+  } catch (err) {
+    restore(tabStore, oldTab)
+    restore(wsStore, oldWs)
+    throw err
+  }
+}
+
+/**
  * Replaces the master's tab world, wherever it is. On screen: `commitTabWorld`.
  * Parked: `replaceParkedWorld('master', …)` — the live stores and the epoch do
  * not move, and the parked world's active tab is re-pointed by the same rule.

@@ -21,6 +21,7 @@ import {
   masterWorldStuck,
   readMasterWorld,
   repointActiveTab,
+  restampWorld,
   subscribeMasterWorld,
   writeMasterWorld,
 } from './master-world'
@@ -106,10 +107,14 @@ describe('the world tag on useTabStore / useWorkspaceStore', () => {
     expect(persisted(STORAGE_KEYS.WORKSPACES)).toMatchObject({ worldId: 's1', worldEpoch: 4 })
   })
 
-  it('reset() of the workspace store goes back to the master at epoch 0', () => {
+  // The tag says WHOSE world the store holds; emptying the store does not change whose it is. The Electron
+  // tear-off `replace` path (useElectronIpc.ts) calls `reset()` with whatever is on screen: going back to
+  // `master` / 0 there would leave a slave's window unsettled for good.
+  it('reset() of the workspace store empties the world and KEEPS its tag', () => {
     putSlaveOnScreen(4)
     useWorkspaceStore.getState().reset()
-    expect(useWorkspaceStore.getState()).toMatchObject({ workspaces: [], activeWorkspaceId: null, worldId: 'master', worldEpoch: 0 })
+    expect(useWorkspaceStore.getState()).toMatchObject({ workspaces: [], activeWorkspaceId: null, worldId: 's1', worldEpoch: 4 })
+    expect(readMasterWorld()).toMatchObject({ settled: true, onScreen: false })
   })
 
   it('a user whose persisted data predates the tag boots settled, master on screen, with everything they had', async () => {
@@ -362,5 +367,33 @@ describe('masterWorldStuck', () => {
     useTabStore.setState({ worldEpoch: 9 })
     expect(masterWorldStuck(100_000)).toBe(false)
     expect(masterWorldStuck(105_001)).toBe(true)
+  })
+})
+
+// === restampWorld: the world on screen changes hands, its content does not (Task 5, promote) ===
+
+describe('restampWorld', () => {
+  it('writes the tag into both live stores and touches nothing else', () => {
+    const tab = useTabStore.getState()
+    const wss = useWorkspaceStore.getState()
+    restampWorld({ worldId: 's9', worldEpoch: 7 })
+    expect(useTabStore.getState()).toMatchObject({ worldId: 's9', worldEpoch: 7 })
+    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: 's9', worldEpoch: 7 })
+    expect(useTabStore.getState().tabs).toBe(tab.tabs)
+    expect(useTabStore.getState().tabOrder).toBe(tab.tabOrder)
+    expect(useTabStore.getState().visitHistory).toBe(tab.visitHistory)
+    expect(useWorkspaceStore.getState().workspaces).toBe(wss.workspaces)
+    const persisted = (key: string): Record<string, unknown> => (JSON.parse(localStorage.getItem(key) ?? '{}') as { state: Record<string, unknown> }).state
+    expect(persisted(STORAGE_KEYS.TABS)).toMatchObject({ worldId: 's9', worldEpoch: 7 })
+    expect(persisted(STORAGE_KEYS.WORKSPACES)).toMatchObject({ worldId: 's9', worldEpoch: 7 })
+  })
+
+  it('both or neither: the second write throwing takes the first one back, and the error gets out', () => {
+    vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+      throw new Error('stamp failed')
+    })
+    expect(() => restampWorld({ worldId: 's9', worldEpoch: 7 })).toThrow('stamp failed')
+    expect(useTabStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
   })
 })

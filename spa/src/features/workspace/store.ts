@@ -291,7 +291,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }),
         })),
 
-      reset: () => set(createDefaultState()),
+      // Empties the world; does NOT touch its tag. `worldId` / `worldEpoch` say whose world this store holds, and
+      // emptying it does not change whose it is: the Electron tear-off `replace` path (useElectronIpc.ts) resets a
+      // window that may be showing a slave, and a tag thrown back to `master` / 0 there would disagree with
+      // `useLocalProfilesStore` for ever (lib/profile/master-world.ts: unsettled, and nothing repairs it).
+      reset: () => set({ workspaces: [], activeWorkspaceId: null }),
     }),
     {
       name: STORAGE_KEYS.WORKSPACES,
