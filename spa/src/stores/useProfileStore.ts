@@ -47,7 +47,9 @@ export interface ProfileState extends ProfileControl {
   setAutoSync: (value: boolean) => void
 }
 
-function isMasterPair(hostId: unknown, profileId: unknown): boolean {
+/** What `setMaster` accepts. Exported for `lib/profile/start.ts`, which must know
+ *  BEFORE it writes an attachment that the master it is about to set will be taken. */
+export function isMasterPair(hostId: unknown, profileId: unknown): boolean {
   return (
     typeof hostId === 'string' &&
     hostId !== '' &&
