@@ -191,15 +191,30 @@ Split into **P2b-1a** (PR #1242: Tasks 1–2, 20 files) and **P2b-1b** (Tasks 3�
 - `useProfileStore` (synced control plane): `masterHostId`, `masterProfileId`, `autoSync`,
   `setMaster → boolean`, `clearMaster`, `setAutoSync`, `selectMaster`; `merge` sanitises half-set or
   malformed masters to `null`.
-- **`section-store` is fenced.** `claimSectionStore(profileId) → generation` (monotonic for the life
-  of the origin — across profile changes and `clearSectionStore`, which writes an empty document
-  rather than deleting the key); every write takes that generation and answers
-  `'ok' | 'fenced' | 'failed'`. **`'fenced'` means a newer leader has claimed: stop the driver.**
-  A section with a conflict is written only through **`saveConflict(…, payloads)`, one `setItem`
-  for the section and the payloads it needs**; `saveSection` refuses a conflict. On load a conflict
-  whose payload is missing is dropped (the base survives; the reindex re-derives it). Payload cap
-  1 MiB; over it, the conflict simply stays in memory. `pruneStash` never removes a payload a stored
-  conflict still refers to. IndexedDB → #1244.
+- **`section-store`: one thing, one key — and no fencing** (critic C-1/C-2, spec §9.8).
+  `purdex-profile-sections:<profileId>:s:<sectionKey>` holds `{base, currentHash, conflict?}`;
+  `…:p:<hash>` holds one payload, content-addressed (rewriting it is idempotent). A write to
+  `settings` cannot touch `hosts`, a stash write cannot touch a section, and another profile's keys
+  are out of reach by prefix. **The generation fence was removed on purpose**: `localStorage` has no
+  cross-process transaction, so "read, compare, write" narrowed the window and closed nothing, while
+  the API read as a guarantee. Leader exclusion is the lease's job (Task 10), and only the lease's.
+  API: `loadSectionStore`, `saveSection`, `saveConflict(profileId, key, section, payloads)`,
+  `dropSection`, `putStash`, `getStash`, `pruneStash`, `clearSectionStore(profileId?)` →
+  `'ok' | 'failed'`. `saveConflict` writes **payloads first, the section last**, so a stored
+  conflict always has its payloads; `saveSection` refuses a conflict; on load a conflict whose
+  payload is missing is dropped and the base kept.
+  - *Residual, stated not solved:* the same section key written by two leaders is last-writer-wins.
+    Both values are bases a leader wrote after a completed CAS; if the older wins, the next push
+    409s and either converges or becomes one conflict the user resolves — a false conflict, never
+    silent loss, because the SOT is guarded by the daemon. In that same window one leader's
+    `pruneStash` can remove a payload the other has just written; that conflict then does not
+    survive a restart.
+  - *Known limitation — this is not conformance:* the payload cap is the daemon's 5 MiB, and
+    whether a payload is actually kept is decided by the browser's quota (~5–10 MB per origin,
+    shared). When it does not fit, the conflict lives in memory only and **the sent snapshot is
+    gone after a restart** — the user would then be choosing against a moving target, which is
+    exactly what spec §4.6.2 exists to prevent. Tracked in #1244 (IndexedDB). Real payloads are
+    KB-sized today; the executor must still surface it (`onProblem`) rather than hide it.
 
 ## P2b-2 — driver
 

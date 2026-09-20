@@ -668,6 +668,12 @@ On mlab (worktree dev server :5175) and air-2026, with mlab as dev host:
 - **The 1 s target is a budget, not a guarantee.** Broadcast subscribers are dropped when their
   64-deep buffer fills (§3.5); reconcile-on-connect is what makes that survivable, and step 3 of §6
   measures the happy path rather than asserting it.
+- **A large conflict may not survive a restart — a known gap against §4.6.2, not a trade-off that
+  meets it.** The client keeps the two snapshots of an open conflict in `localStorage` (~5–10 MB per
+  origin, shared with every other key, no transactions). When they do not fit, the conflict lives in
+  memory only; restart before resolving it and the snapshot that was sent is gone, so the user
+  would choose against the live state instead. Section payloads are KB-sized today, which is why
+  this ships; #1244 moves the store to IndexedDB. *(P2b-1, §9.8)*
 - **`profile` is already a word in this codebase.** `useNewTabLayoutStore` persists `{profiles,
   knownIds, activeEditingProfile}` for the new-tab layout editor (308 lines, and already on the
   inventory page's "decide" list). With PRODUCT.md §3 being a strict vocabulary, that concept must
@@ -849,4 +855,11 @@ Also found while implementing, by a subagent, against this plan's own text: **`g
 back to another host for an unknown id instead of throwing**, so a CAS could have reached the wrong
 daemon; the client refuses before sending.
 
-_(critic verdicts to follow.)_
+**R2 critic** (incremental, `--base 34985254`): agrees with all eight and finds the handling of
+A-1, A-2 (an issue, not a fix), B-3, B-4, B-5 and B-6 sound; no other wire drift of Important or
+above. Two evidenced objections, both to `section-store`:
+
+| # | Sev. | Objection | Resolution |
+|---|---|---|---|
+| C-1 | high | the generation fence is itself a non-atomic read-compare-write on `localStorage`: A reads g1, B claims g2, A writes its whole g1 document back over B's claim and data — B-1 again, just narrower | **one key per section, one content-addressed key per payload; the fence removed**, not patched. A stale write has no unrelated data left to destroy. What remains (same key, two leaders, last writer wins → at worst a false conflict) is written down as a residual, not claimed as prevented |
+| C-2 | high | the 1 MiB cap meant a larger conflict silently failed to persist, against Task 5 and §4.6.2 — and "kept in memory, re-derived after a restart" must not be described as meeting the contract | the cap is the daemon's 5 MiB again and the browser's quota decides; when it does not fit, that is recorded as a **known gap** (§7, #1244), in those words |
