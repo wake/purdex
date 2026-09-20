@@ -25,7 +25,7 @@
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useHostStore } from '../../stores/useHostStore'
-import type { HostConfig, HostRuntime } from '../../stores/useHostStore'
+import type { HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
@@ -36,6 +36,7 @@ import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import { deleteHostCascade } from '../host-lifecycle'
 import { unregisterLocale } from '../locale-registry'
 import { unregisterTheme } from '../theme-registry'
 import { applyHosts, applySettings, applyTabs, applyWorkspaces, deriveTabOrder, isWellFormedSection } from './applier'
@@ -152,28 +153,73 @@ function hostsRefusal(local: Record<string, HostConfig>, incoming: HostsPayload,
   return changed.length > 0 ? `payload changes the master host's ${changed.join(', ')}` : null
 }
 
+/**
+ * Replaces the host list. Additions, edits and reorders are one write. A host the
+ * payload REMOVES goes through `deleteHostCascade(id, false)` — the app's own
+ * "remove this host, keep its tabs" — so this device ends up exactly where it
+ * would be had the user deleted that host here: sessions / agent / execution /
+ * execution-list / nex / host-settings / peer / cwd state cleared, every pane on
+ * it marked `terminated: 'host-removed'`, hostless execution panes pinned,
+ * `runtime` dropped, focus moved off it. Its undo handle is kept only to roll back.
+ *
+ * Two consequences, both intended:
+ *   - the marked panes (and the cleared `purdex-host-settings.hosts` row) are
+ *     synced fields, so those `tabs.<ws>` sections (and `settings`) go dirty and
+ *     are pushed. That is correct — the host is gone from the profile, the device
+ *     that removed it marked the same panes, and the two converge;
+ *   - the cascade writes the tab store, so a removal needs the operation lock and
+ *     can come back `busy`. The lock is taken BEFORE anything is written; an apply
+ *     that removes no host never asks for it.
+ *
+ * The cascade ends in `useHostStore.removeHost`, which refuses to delete the last
+ * host. So the write is staged: first `next` PLUS the hosts about to go (never
+ * fewer than `next`, which the guard made non-empty), then the cascades, then
+ * `next` exactly. All synchronous — no other writer sees the staging.
+ */
 async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<ApplyOutcome> {
   if (payload === null) return invalid('the hosts section cannot be deleted')
   if (!isWellFormedSection('hosts', payload)) return invalid('malformed hosts payload')
   const incoming = payload as HostsPayload
-  const state = useHostStore.getState()
-  const refusal = hostsRefusal(state.hosts, incoming, ctx.masterHostId)
+  const refusal = hostsRefusal(useHostStore.getState().hosts, incoming, ctx.masterHostId)
   if (refusal !== null) return invalid(refusal)
 
-  const old = { hosts: state.hosts, hostOrder: state.hostOrder, activeHostId: state.activeHostId, devHostId: state.devHostId, runtime: state.runtime }
-  const { next, removedHostIds } = applyHosts(old, incoming)
-  const runtime: Record<string, HostRuntime> = { ...state.runtime }
-  for (const id of removedHostIds) delete runtime[id] // what `removeHost` does; `applyHosts` knows nothing of `runtime`
   const store = asPersisted(useHostStore)
-  try {
-    store.setState({ ...next, runtime })
-    await rehydrate(store)
-    publish(store)
-  } catch (err) {
-    restore(store, old)
-    throw err
+  const write = async (): Promise<ApplyOutcome> => {
+    const state = useHostStore.getState()
+    const old = { hosts: state.hosts, hostOrder: state.hostOrder, activeHostId: state.activeHostId, devHostId: state.devHostId, runtime: state.runtime }
+    const { next, removedHostIds } = applyHosts(old, incoming)
+    const undos: Array<() => void> = []
+    try {
+      if (removedHostIds.length > 0) {
+        const leaving: Record<string, HostConfig> = {}
+        for (const id of removedHostIds) leaving[id] = state.hosts[id]
+        store.setState({ hosts: { ...next.hosts, ...leaving }, hostOrder: [...next.hostOrder, ...removedHostIds] })
+        for (const id of removedHostIds) undos.push(deleteHostCascade(id, false))
+      }
+      // Focus is whatever the cascade left (it moves `activeHostId` to the first host, as a manual delete does) while that host survives.
+      const now = useHostStore.getState()
+      const survives = (id: string | null): string | null => (id !== null && Object.hasOwn(next.hosts, id) ? id : null)
+      store.setState({ hosts: next.hosts, hostOrder: next.hostOrder, activeHostId: survives(now.activeHostId), devHostId: survives(now.devHostId) })
+      await rehydrate(store)
+      publish(store)
+    } catch (err) {
+      for (const undo of undos.reverse()) {
+        try {
+          undo()
+        } catch {
+          // best effort: the host slice below is restored regardless
+        }
+      }
+      restore(store, old)
+      throw err
+    }
+    return { ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) }
   }
-  return { ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) }
+
+  // Decided on the state as it is now; `write` re-reads under the lock, and nothing can run in between (no await).
+  const removesAHost = Object.keys(useHostStore.getState().hosts).some((id) => !Object.hasOwn(incoming.hosts, id))
+  if (!removesAHost) return write()
+  return withOperationLock<ApplyOutcome>(PROFILE_SYNC_LOCK_OWNER, write, () => ({ ok: false, reason: 'busy' }))
 }
 
 // === settings ===
@@ -340,8 +386,17 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
  * Applies one section from the SOT to the stores. `payload === null` means the
  * section does not exist on the SOT (deleted): meaningful for `tabs.<id>` only —
  * `hosts` / `settings` / `workspaces` are never deleted, so `null` is `invalid`
- * there. Returns `invalid` without having written anything; throws (after rolling
- * back what it wrote) only when a store write itself throws.
+ * there. Returns `invalid` or `busy` without having written anything; throws
+ * (after rolling back what it wrote) only when a store write itself throws.
+ * `busy` can come from `workspaces`, `tabs.<id>`, and a `hosts` apply that removes
+ * a host.
+ *
+ * CALLER CONTRACT: when a `tabs.<id>` section is applied, the `hosts` section
+ * must already be synced. An arriving pane whose host is unknown here is marked
+ * `host-removed` — and that mark is a synced field that gets pushed back. Applied
+ * while `hosts` is behind, it would brand the live pane of a host the other
+ * device has just ADDED, on both devices. This layer does not defend against
+ * that; the executor orders the pulls (no `tabs.*` before `hosts` is synced).
  */
 export async function applySectionToStores(key: ProfileSectionKey, payload: unknown | null, ctx: ApplyContext): Promise<ApplyOutcome> {
   switch (sectionKind(key)) {

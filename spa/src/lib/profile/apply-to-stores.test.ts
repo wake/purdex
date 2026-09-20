@@ -19,6 +19,15 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { useAgentStore } from '../../stores/useAgentStore'
+import { useExecutionStore } from '../../stores/useExecutionStore'
+import { useExecutionListStore } from '../../stores/useExecutionListStore'
+import type { HostListCache } from '../../stores/useExecutionListStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
+import type { NexHostEntry } from '../../stores/useNexHostStore'
+import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
+import { deleteHostCascade } from '../host-lifecycle'
 import { getTheme, unregisterTheme } from '../theme-registry'
 import { registerBuiltinThemes } from '../register-themes'
 import { unregisterLocale } from '../locale-registry'
@@ -68,6 +77,12 @@ function resetStores(): void {
   useI18nStore.getState().setLocale('en')
   useI18nStore.setState({ customLocales: {} })
   useWorkspaceSettingsStore.setState({ workspaces: {} })
+  useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+  useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, agentTypes: {}, models: {} })
+  useExecutionStore.setState({ executions: {} })
+  useExecutionListStore.setState({ byHost: {} })
+  useNexHostStore.setState({ byHost: {} })
+  useHostSettingsStore.setState({ hosts: {} })
 }
 
 beforeAll(() => registerBuiltinThemes())
@@ -199,7 +214,7 @@ const hostsPayloadOf = (hosts: HostConfig[]): HostsPayload => buildHostsSection(
 /** Counts every store write made while `run` executes. */
 async function countWrites(run: () => Promise<unknown>): Promise<number> {
   let writes = 0
-  const stores = [useHostStore, useTabStore, useWorkspaceStore, useUISettingsStore, useEditorSettingsStore, useThemeStore, useI18nStore, useLayoutStore, useWorkspaceSettingsStore]
+  const stores = [useSessionStore, useAgentStore, useExecutionStore, useExecutionListStore, useNexHostStore, useHostSettingsStore, useHostStore, useTabStore, useWorkspaceStore, useUISettingsStore, useEditorSettingsStore, useThemeStore, useI18nStore, useLayoutStore, useWorkspaceSettingsStore]
   const unsubs = stores.map((s) => s.subscribe(() => writes++))
   try {
     await run()
@@ -311,6 +326,117 @@ describe('applySectionToStores — hosts', () => {
     expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
     // and the sanitised value is what got persisted
     expect((persistedOf(STORAGE_KEYS.HOSTS).hosts as Record<string, HostConfig>)[M].icon).toBeUndefined()
+  })
+})
+
+describe('applySectionToStores — hosts: removing a host is the app\'s own host removal', () => {
+  /** Both hosts own data in every per-host store, and there are live panes on each. */
+  function seedHostWorld(): void {
+    const split: PaneLayout = { type: 'split', id: 's1', direction: 'h', children: [tmuxLeaf('on-h2', H2), tmuxLeaf('on-m', M)], sizes: [60, 40] }
+    useTabStore.setState({ tabs: { t1: tab('t1', split), t2: tab('t2', tmuxLeaf('p-t2', H2)), t3: tab('t3') }, tabOrder: ['t1', 't2', 't3'], activeTabId: 't2', visitHistory: ['t1'] })
+    useWorkspaceStore.setState({ workspaces: [ws('wa', ['t1', 't2', 't3'], 't2')], activeWorkspaceId: 'wa' })
+    for (const h of [M, H2]) {
+      useHostStore.getState().setRuntime(h, { status: 'connected' })
+      useSessionStore.getState().replaceHost(h, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~' }] as never)
+      useAgentStore.getState().handleNormalizedEvent(h, 'dev001', { agent_type: 'cc', status: 'idle', subagents: [], raw_event_name: 'Stop', broadcast_ts: 1 } as never)
+      useExecutionStore.getState().applyEvents(h, 'exc_1', [{ seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }] as never)
+    }
+    const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1, fingerprint: '' }
+    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2 }
+    useNexHostStore.setState({ byHost: { [M]: nexEntry, [H2]: nexEntry } })
+    useExecutionListStore.setState({ byHost: { [M]: listCache, [H2]: listCache } })
+    useHostSettingsStore.setState({ hosts: { [M]: { editor: { homePath: '/m' } }, [H2]: { editor: { homePath: '/h2' } } } } as never)
+    useHostStore.setState({ activeHostId: H2, devHostId: H2 })
+  }
+
+  /** Everything a host removal is allowed to touch, as plain data. */
+  function world(): unknown {
+    const h = useHostStore.getState()
+    const t = useTabStore.getState()
+    const w = useWorkspaceStore.getState()
+    const a = useAgentStore.getState()
+    return JSON.parse(JSON.stringify({
+      hosts: { hosts: h.hosts, hostOrder: h.hostOrder, activeHostId: h.activeHostId, devHostId: h.devHostId, runtime: h.runtime },
+      tabs: { tabs: t.tabs, tabOrder: t.tabOrder, activeTabId: t.activeTabId, visitHistory: t.visitHistory },
+      workspaces: { workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId },
+      sessions: useSessionStore.getState().sessions,
+      agent: { lastEvents: a.lastEvents, statuses: a.statuses, unread: a.unread, models: a.models, agentTypes: a.agentTypes },
+      executions: Object.keys(useExecutionStore.getState().executions),
+      executionList: useExecutionListStore.getState().byHost,
+      nex: useNexHostStore.getState().byHost,
+      hostSettings: useHostSettingsStore.getState().hosts,
+    }))
+  }
+
+  it('ends in the same state as deleting that host by hand (keep-tabs mode)', async () => {
+    seedHostWorld()
+    const before = world()
+    deleteHostCascade(H2, false)
+    const byHand = world()
+    expect(byHand).not.toEqual(before)
+
+    resetStores()
+    seedHostWorld()
+    expect(world()).toEqual(before) // same starting point
+    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
+
+    expect(outcome).toMatchObject({ ok: true })
+    expect(world()).toEqual(byHand)
+    // …and the fixture is not vacuous
+    const w = byHand as { sessions: object; executions: string[]; hostSettings: object; nex: object; executionList: object; hosts: { activeHostId: string } }
+    expect(Object.keys(w.sessions)).toEqual([M])
+    expect(w.executions).toEqual([`${M}:exc_1`])
+    expect(Object.keys(w.hostSettings)).toEqual([M])
+    expect(Object.keys(w.nex)).toEqual([M])
+    expect(Object.keys(w.executionList)).toEqual([M])
+    expect(w.hosts.activeHostId).toBe(M)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('marks the panes already here that sit on the removed host, and only those', async () => {
+    seedHostWorld()
+    await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
+    const { tabs } = useTabStore.getState()
+    const split = tabs.t1.layout as Extract<PaneLayout, { type: 'split' }>
+    expect(split.children[0]).toMatchObject({ pane: { content: { hostId: H2, terminated: 'host-removed' } } })
+    expect((split.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
+    expect(split.sizes).toEqual([60, 40])
+    expect(tabs.t2.layout).toMatchObject({ pane: { content: { terminated: 'host-removed' } } })
+    expect((tabs.t3.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
+  })
+
+  it('busy: removing a host needs the operation lock — held elsewhere, NOTHING is written', async () => {
+    seedHostWorld()
+    const before = world()
+    const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+    let outcome: unknown
+    const writes = await countWrites(async () => {
+      outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' })]), ctx)
+    })
+    expect(outcome).toEqual({ ok: false, reason: 'busy' })
+    expect(writes).toBe(0)
+    expect(world()).toEqual(before)
+    expect(useRebuildStore.getState().lockGrant).toBe(grant)
+  })
+
+  it('an apply that removes no host does not take the lock: it lands even while the lock is held', async () => {
+    seedHostWorld()
+    const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+    const h3 = host('host-three', { ip: '10.0.0.3', order: 2 })
+    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' }), host(H2, { ip: '10.0.0.2', order: 1 }), h3]), ctx)
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useHostStore.getState().hosts[M].name).toBe('renamed')
+    expect(Object.keys(useHostStore.getState().hosts)).toEqual([M, H2, 'host-three'])
+    expect(useRebuildStore.getState().lockGrant).toBe(grant)
+  })
+
+  it('removes the last local hosts too when the master is new here (removeHost\'s one-host veto does not apply to a replace)', async () => {
+    useHostStore.setState({ hosts: { [H2]: host(H2) }, hostOrder: [H2], activeHostId: H2, devHostId: null })
+    useSessionStore.getState().replaceHost(H2, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~' }] as never)
+    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
+    expect(outcome).toMatchObject({ ok: true })
+    expect(Object.keys(useHostStore.getState().hosts)).toEqual([M])
+    expect(useSessionStore.getState().sessions[H2]).toBeUndefined()
   })
 })
 
