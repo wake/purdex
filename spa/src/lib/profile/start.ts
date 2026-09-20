@@ -74,7 +74,8 @@
 // `attachMaster` / `detachMaster` are THE way in and out — P3's wizard calls
 // them; the dev hook is a thin layer over them. They run one at a time.
 import { getClientId, isClientIdPersisted } from '../client-identity'
-import { effectiveDeviceName, useDeviceStateStore } from '../../stores/useDeviceStateStore'
+import { effectiveDeviceName } from '../device-name'
+import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { isMasterPair, isSyncDirection, selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import type { SyncDirection } from '../../stores/useProfileStore'
@@ -225,6 +226,17 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/**
+ * What an attachment PUT says about this client. The device name's default (Electron's hostname, else the
+ * user agent) is resolved on demand, and this is the demand: only ever on a path that has, or is about to
+ * have, a master — a user without one never gets here (THE IRON RULE). `ensureDefaultDeviceName()` is
+ * idempotent, single-flight and never throws; on a failure the name falls back and the next PUT retries.
+ */
+async function attachmentBody(): Promise<{ clientId: string; deviceName: string }> {
+  await ensureDefaultDeviceName()
+  return { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceNameStore.getState()) }
+}
+
 // === The leader ===
 
 function isCurrentMaster(master: Master): boolean {
@@ -299,7 +311,8 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     let failure: string | null = null
     let notFound = false
     try {
-      const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
+      const body = await attachmentBody()
+      if (disposed || mine !== round || !connected()) return // the name took a moment: nothing goes out for a round that is over
       const r = await putAttachment(hostId, profileId, body)
       if (r.kind === 'failed') {
         failure = `${r.reason}: ${r.message}`
@@ -734,8 +747,7 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
 
   let put: Awaited<ReturnType<typeof putAttachment>>
   try {
-    const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
-    put = await putAttachment(hostId, profileId, body)
+    put = await putAttachment(hostId, profileId, await attachmentBody())
   } catch (e) {
     return asYouWere(message(e))
   }

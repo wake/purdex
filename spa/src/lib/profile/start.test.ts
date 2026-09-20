@@ -137,7 +137,7 @@ vi.mock('../client-identity', () => ({
 
 import { useHostStore } from '../../stores/useHostStore'
 import { selectMaster, useProfileStore } from '../../stores/useProfileStore'
-import { useDeviceStateStore } from '../../stores/useDeviceStateStore'
+import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { STORAGE_KEYS } from '../storage/keys'
 import { deleteAttachment, listProfiles, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
@@ -162,8 +162,9 @@ const EP = '100.64.0.9:7860'
 const host = (id: string) => ({ id, name: id, ip: '100.64.0.9', port: 7860, token: null, order: 0 })
 const connect = (id: string) => useHostStore.getState().setRuntime(id, { status: 'connected' })
 const disconnect = (id: string) => useHostStore.getState().setRuntime(id, { status: 'disconnected' })
+/** Enough turns for the longest chain: primeAll → the device name's default (its first resolution is a few awaits deep) → the PUT → onReconnected. */
 const flush = async (): Promise<void> => {
-  for (let i = 0; i < 5; i++) await Promise.resolve()
+  for (let i = 0; i < 12; i++) await Promise.resolve()
 }
 const okAttach = { kind: 'ok', value: { attached: true } } as const
 const okDetach = { kind: 'ok', value: { detached: true } } as const
@@ -189,7 +190,7 @@ beforeEach(() => {
   localStorage.clear()
   useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
-  useDeviceStateStore.setState({ deviceName: 'Test device' })
+  useDeviceNameStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -1598,6 +1599,45 @@ describe('problems and status', () => {
 
     h.leaderships[0].set(false)
     expect(profileSyncState().status).toBeNull()
+  })
+})
+
+describe('the device name of an attachment', () => {
+  it('the default name is resolved BEFORE the PUT, on attach and on every announce — and never for a user without a master', async () => {
+    const status = vi.fn(async () => ({ hostname: 'mlab.local' }))
+    vi.stubGlobal('electronAPI', { localDaemonStatus: status })
+    __resetDefaultDeviceNameForTest()
+    useDeviceNameStore.setState({ deviceName: null, defaultDeviceName: 'Browser' })
+    stop = startProfileSync()
+    connect('h1')
+    await flush()
+    vi.advanceTimersByTime(60_000)
+    expect(status).not.toHaveBeenCalled() // THE IRON RULE
+
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    await flush()
+    expect(status).toHaveBeenCalledTimes(1) // idempotent: the announce that followed did not ask again
+    expect(vi.mocked(putAttachment).mock.calls.map((c) => c[2])).toEqual([
+      { clientId: 'client-1', deviceName: 'mlab.local' },
+      { clientId: 'client-1', deviceName: 'mlab.local' },
+    ])
+    vi.unstubAllGlobals()
+  })
+
+  it('a round that ended while the name was being resolved sends nothing', async () => {
+    let answer: (v: { hostname: string }) => void = () => {}
+    vi.stubGlobal('electronAPI', { localDaemonStatus: () => new Promise((r) => (answer = r)) })
+    __resetDefaultDeviceNameForTest()
+    useDeviceNameStore.setState({ deviceName: null, defaultDeviceName: 'Browser' })
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    connect('h1')
+    stop = startProfileSync()
+    await flush()
+    disconnect('h1')
+    answer({ hostname: 'mlab.local' })
+    await flush()
+    expect(putAttachment).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
   })
 })
 
