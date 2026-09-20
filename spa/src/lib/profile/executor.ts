@@ -59,10 +59,10 @@
 //     in neither stash. `local-restored` is NOT dispatched (it would claim a
 //     restore that did not happen); the section stays on `restore-local` until a
 //     local edit cancels the restore — the only way out the reducer offers.
-//   - `pull-hash-mismatch`: the stores hold something else than what was fetched
-//     after an apply (a sanitiser, a deleted `tabs.<id>` whose workspace is still
-//     here). `pull-applied` carries the hash REBUILT FROM THE STORES, as Task 9
-//     specifies; the reducer then records that hash as the SOT's too.
+//   - `pull-hash-mismatch`: after an apply the stores hold something else than
+//     what was fetched (a sanitiser; a deleted `tabs.<id>` whose workspace is
+//     still here). Not a fault: `pull-applied` carries both hashes, the section
+//     is dirty against the base it just agreed on, and it is pushed back.
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { getClientId } from '../client-identity'
 import { deleteSection, getSection, listProfiles, putSection } from './api'
@@ -710,12 +710,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       return WAIT
     }
     reportedOnce.delete(`unrendered-pull:${key}`)
-    if (outcome.hash !== (fetched === null ? null : fetched.hash)) {
-      problem('pull-hash-mismatch', `fetched ${String(fetched?.hash ?? null)}, the stores now hold ${String(outcome.hash)}`, key)
+    // TWO hashes (sync-state, `pull-applied`): the SOT's goes into the base, the
+    // one rebuilt from the stores into `currentHash`.
+    const sotHash = fetched === null ? null : fetched.hash
+    const mismatch = outcome.hash !== sotHash
+    if (mismatch) {
+      problem('pull-hash-mismatch', `the stores did not keep what arrived (fetched ${String(sotHash)}, they hold ${String(outcome.hash)}): the section is dirty and will be pushed back`, key)
     }
     if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds()
-    if (!dispatch(key, { type: 'pull-applied', rev, hash: outcome.hash }, false)) {
+    if (!dispatch(key, { type: 'pull-applied', rev, hash: sotHash, localHash: outcome.hash }, false)) {
       problem('pull-applied-refused', 'the section changed while the payload was being applied', key)
+    }
+    // The push that follows needs the payload of what the stores hold, and only
+    // the collector has it: its report of this very apply pumps the section.
+    if (mismatch && outcome.hash !== null && !stash.has(outcome.hash)) {
+      clearBackoff(key)
+      return WAIT
     }
     return afterPull(key)
   }
@@ -800,7 +810,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     onSection(r) {
       if (disposed) return
       if (r.hash !== null) stash.set(r.hash, r.payload)
-      if (!dispatch(r.key, { type: 'local-changed', hash: r.hash })) pruneMemoryStash()
+      if (dispatch(r.key, { type: 'local-changed', hash: r.hash })) return
+      // Nothing changed — but a payload may just have arrived that a push was waiting for.
+      pruneMemoryStash()
+      pump(r.key)
     },
     onRemoteEvent(e) {
       if (disposed || e.hostId !== hostId || e.profileId !== profileId) return

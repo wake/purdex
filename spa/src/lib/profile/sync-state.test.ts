@@ -291,7 +291,7 @@ describe('reduceSection — epoch', () => {
     let s = synced(5, H0)
     const events: SectionEvent[] = [
       { type: 'remote-event', rev: 6, hash: H1, own: false },
-      { type: 'pull-applied', rev: 6, hash: H1 },
+      { type: 'pull-applied', rev: 6, hash: H1, localHash: H1 },
       { type: 'local-changed', hash: H2 },
     ]
     for (const e of events) {
@@ -483,7 +483,7 @@ describe('reduceSection — rule 3: sot-index', () => {
       expect(reduceSection(f, { type: 'push-failed' }).indexEpoch).toBe(2)
       expect(reduceSection(f, { type: 'push-applied', rev: 6 }).indexEpoch).toBe(2)
       const moved = reduceSection(synced(5, H0), { type: 'remote-event', rev: 6, hash: H8, own: false })
-      expect(reduceSection(moved, { type: 'pull-applied', rev: 6, hash: H8 }).indexEpoch).toBe(moved.indexEpoch + 1)
+      expect(reduceSection(moved, { type: 'pull-applied', rev: 6, hash: H8, localHash: H8 }).indexEpoch).toBe(moved.indexEpoch + 1)
       expect(reduceSection(s, { type: 'reconnected' }).indexEpoch).toBe(1)
     })
 
@@ -847,14 +847,34 @@ describe('reduceSection — rule 5: terminal events', () => {
 
 describe('reduceSection — rule 6: pull-applied', () => {
   it('base = sot = {rev, hash}, currentHash = hash, forcePull cleared', () => {
-    const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: H1, own: false }, { type: 'pull-applied', rev: 6, hash: H1 })
+    const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: H1, own: false }, { type: 'pull-applied', rev: 6, hash: H1, localHash: H1 })
     expect(s.base).toEqual({ rev: 6, hash: H1 })
     expect(s.sot).toEqual({ rev: 6, hash: H1 })
     expect(s.currentHash).toBe(H1)
     expect(s.status).toBe('synced')
   })
+  it('TWO HASHES, equal (the normal case): what was fetched is what the stores hold → clean', () => {
+    const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: H1, own: false }, { type: 'pull-applied', rev: 6, hash: H1, localHash: H1 })
+    expect(isDirty(s)).toBe(false)
+    expect(decideSection(s, ON)).toEqual({ do: 'nothing' })
+  })
+  it('TWO HASHES, different (a sanitiser changed what arrived): base and sot are the SOT’s, currentHash is the stores’ → dirty → push over the pulled rev', () => {
+    const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: H1, own: false }, { type: 'pull-applied', rev: 6, hash: H1, localHash: H2 })
+    expect(s.base).toEqual({ rev: 6, hash: H1 })
+    expect(s.sot).toEqual({ rev: 6, hash: H1 }) // the rebuilt hash is NOT recorded as the SOT's
+    expect(s.currentHash).toBe(H2)
+    expect(s.status).toBe('pending')
+    expect(decideSection(s, ON)).toEqual({ do: 'push', token: { kind: 'put', hash: H2, baseRev: 6, epoch: s.epoch } })
+  })
+  it('TWO HASHES, a deletion applied while the workspace is still here (hash null, localHash = the empty tabs) → dirty against absent → create with wire baseRev 0', () => {
+    const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: null, own: false }, { type: 'pull-applied', rev: 6, hash: null, localHash: H3 })
+    expect(s.base).toEqual({ rev: 6, hash: null })
+    expect(s.sot).toEqual({ rev: 6, hash: null })
+    expect(s.currentHash).toBe(H3)
+    expect(decideSection(s, ON)).toEqual({ do: 'push', token: { kind: 'put', hash: H3, baseRev: 0, epoch: s.epoch } })
+  })
   it('a pull of an absent SOT applies a deletion', () => {
-    const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: null, own: false }, { type: 'pull-applied', rev: 6, hash: null })
+    const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: null, own: false }, { type: 'pull-applied', rev: 6, hash: null, localHash: null })
     expect(s.base).toEqual({ rev: 6, hash: null })
     expect(s.currentHash).toBeNull()
     expect(decideSection(s, ON)).toEqual({ do: 'nothing' })
@@ -864,7 +884,7 @@ describe('reduceSection — rule 6: pull-applied', () => {
       synced(5, H0),
       { type: 'remote-event', rev: 6, hash: H1, own: false },
       { type: 'remote-event', rev: 7, hash: H2, own: false },
-      { type: 'pull-applied', rev: 6, hash: H1 },
+      { type: 'pull-applied', rev: 6, hash: H1, localHash: H1 },
     )
     expect(s.base).toEqual({ rev: 6, hash: H1 })
     expect(s.sot).toEqual({ rev: 7, hash: H2 })
@@ -873,18 +893,18 @@ describe('reduceSection — rule 6: pull-applied', () => {
   it('is refused on a dirty section without forcePull (§4.6.2 rule 1) — canApplyPull says so first', () => {
     const s = run(synced(5, H0), { type: 'remote-event', rev: 6, hash: H1, own: false }, { type: 'local-changed', hash: H2 })
     expect(canApplyPull(s)).toBe(false)
-    expect(reduceSection(s, { type: 'pull-applied', rev: 6, hash: H1 })).toBe(s)
+    expect(reduceSection(s, { type: 'pull-applied', rev: 6, hash: H1, localHash: H1 })).toBe(s)
   })
   it('is refused while a flight is open', () => {
     const [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
     expect(canApplyPull(s)).toBe(false)
-    expect(reduceSection(s, { type: 'pull-applied', rev: 6, hash: H2 })).toBe(s)
+    expect(reduceSection(s, { type: 'pull-applied', rev: 6, hash: H2, localHash: H2 })).toBe(s)
   })
   it('is refused while locked (a locked section refuses inbound)', () => {
     const [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
     const locked = reduceSection(s, { type: 'push-conflict', rev: 6, hash: H2 })
     expect(canApplyPull(locked)).toBe(false)
-    expect(reduceSection(locked, { type: 'pull-applied', rev: 6, hash: H2 })).toBe(locked)
+    expect(reduceSection(locked, { type: 'pull-applied', rev: 6, hash: H2, localHash: H2 })).toBe(locked)
   })
   it('forcePull is only ever set by an unlock, so forcePull and locked never coexist', () => {
     const [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
@@ -1073,7 +1093,7 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
     const s0 = synced(5, H0)
     const l = run(s0, { type: 'sot-index', epoch: s0.indexEpoch, entry: { rev: 2, hash: H8 } }, { type: 'locked', reason: 'reset' }, { type: 'resolved', keep: 'sot' })
     expect(decideSection(l, ON)).toEqual({ do: 'pull' })
-    const p = reduceSection(l, { type: 'pull-applied', rev: 2, hash: H8 })
+    const p = reduceSection(l, { type: 'pull-applied', rev: 2, hash: H8, localHash: H8 })
     expect(p.base).toEqual({ rev: 2, hash: H8 })
     expect(p.status).toBe('synced')
     expect(decideSection(p, ON)).toEqual({ do: 'nothing' })
@@ -1103,7 +1123,7 @@ describe('reduceSection — locked:invalid (P2b plan Task 6): the SOT holds a pa
     expect(decideSection(l, ON)).toEqual({ do: 'nothing' })
     expect(decideSection(l, { reachable: false, autoSync: false })).toEqual({ do: 'nothing' })
     expect(canApplyPull(l)).toBe(false)
-    expect(reduceSection(l, { type: 'pull-applied', rev: 6, hash: H2 })).toBe(l)
+    expect(reduceSection(l, { type: 'pull-applied', rev: 6, hash: H2, localHash: H2 })).toBe(l)
     expect(reduceSection(l, { type: 'push-started', token: { kind: 'put', hash: H0, baseRev: 5, epoch: l.epoch } })).toBe(l)
     expect(retainedHashes(l)).toEqual([])
   })
@@ -1210,7 +1230,7 @@ describe('reduceSection — locked:invalid (P2b plan Task 6): the SOT holds a pa
       expect(u.invalid).toBeNull()
       expect(u.status).toBe('synced')
       expect(decideSection(u, ON)).toEqual({ do: 'pull' })
-      const p = reduceSection(u, { type: 'pull-applied', rev: 6, hash: null })
+      const p = reduceSection(u, { type: 'pull-applied', rev: 6, hash: null, localHash: null })
       expect(p.currentHash).toBeNull()
       expect(decideSection(p, ON)).toEqual({ do: 'nothing' })
     })
@@ -1356,7 +1376,7 @@ describe('restoreSectionState — a persisted conflict (spec §4.6.2: the local 
   it('0a precedes 0d: locked and index-stale decides nothing — it does not reindex, and it is not stuck either (resolved comes first)', () => {
     const s = restoreSectionState(persisted())
     expect(decideSection(s, ON)).toEqual({ do: 'nothing' })
-    expect(reduceSection(s, { type: 'pull-applied', rev: 6, hash: H2 })).toBe(s)
+    expect(reduceSection(s, { type: 'pull-applied', rev: 6, hash: H2, localHash: H2 })).toBe(s)
     expect(canApplyPull(s)).toBe(false)
   })
   it('keeps learning like a lock made in the session: remote-event and the first index move sot AND conflict.sot', () => {
@@ -1390,7 +1410,7 @@ describe('restoreSectionState — a persisted conflict (spec §4.6.2: the local 
     const i = indexed(r, { rev: 6, hash: H2 })
     expect(decideSection(i, ON)).toEqual({ do: 'pull' })
     expect(canApplyPull(i)).toBe(true)
-    const p = reduceSection(i, { type: 'pull-applied', rev: 6, hash: H2 })
+    const p = reduceSection(i, { type: 'pull-applied', rev: 6, hash: H2, localHash: H2 })
     expect(p.status).toBe('synced')
     expect(p.currentHash).toBe(H2)
   })
@@ -1525,7 +1545,7 @@ describe('regression sequences — spec §9.4, verbatim', () => {
     s = reduceSection(s, { type: 'resolved', keep: 'sot' })
     expect(isDirty(s)).toBe(true)
     expect(decideSection(s, ON)).toEqual({ do: 'pull' })
-    s = reduceSection(s, { type: 'pull-applied', rev: 6, hash: 'h6' })
+    s = reduceSection(s, { type: 'pull-applied', rev: 6, hash: 'h6', localHash: 'h6' })
     expect(isDirty(s)).toBe(false)
     expect(s.forcePull).toBe(false)
     expect(s.status).toBe('synced')
@@ -1650,7 +1670,10 @@ describe('property tests (seeded)', () => {
         if (r < 72) return { type: 'push-converged', rev: 1 + int(9) }
         if (r < 80) return rnd() < 0.3 ? { type: 'push-conflict', rev: 0, hash: null } : { type: 'push-conflict', rev: 1 + int(9), hash: pick(LIVE) }
         if (r < 84) return { type: 'push-failed' }
-        if (r < 90) return { type: 'pull-applied', rev: int(10), hash: pick(HASHES) }
+        if (r < 90) {
+          const hash = pick(HASHES)
+          return { type: 'pull-applied', rev: int(10), hash, localHash: rnd() < 0.7 ? hash : pick(HASHES) }
+        }
         if (r < 93) return { type: 'local-restored', hash: pick(HASHES) }
         if (r < 96) return { type: 'resolved', keep: rnd() < 0.5 ? 'local' : 'sot' }
         if (r < 98) return { type: 'reconnected' }
@@ -1673,7 +1696,7 @@ describe('property tests (seeded)', () => {
           else if (d0.do === 'restore-local') e = rnd() < 0.3 ? { type: 'local-changed', hash: pick(HASHES) } : { type: 'local-restored', hash: d0.hash }
           // the driver fetched the payload and sometimes refuses it — now and then for a rev that is not the one held
           else if (d0.do === 'pull' && rnd() < 0.3) e = { type: 'locked', reason: 'invalid', rev: rnd() < 0.8 ? s.sot.rev : s.sot.rev + 1 }
-          else if (d0.do === 'pull') e = { type: 'pull-applied', rev: s.sot.rev, hash: s.sot.hash }
+          else if (d0.do === 'pull') e = { type: 'pull-applied', rev: s.sot.rev, hash: s.sot.hash, localHash: s.sot.hash }
           else if (d0.do === 'reindex') e = { type: 'sot-index', epoch: s.indexEpoch, entry: s.sot.hash === null ? null : { rev: s.sot.rev, hash: s.sot.hash } }
           else if (d0.do === 'push' || d0.do === 'delete') e = { type: 'push-started', token: d0.token }
           else if (s.status !== 'synced' && s.status !== 'pending') e = { type: 'resolved', keep: rnd() < 0.5 ? 'local' : 'sot' }
@@ -1788,6 +1811,12 @@ describe('property tests (seeded)', () => {
         // … and never folded on a stale index: there the base moves only through events that SET it
         const baseMoved = next.base.rev !== prev.base.rev || next.base.hash !== prev.base.hash
         if (next.indexStale && baseMoved && !['push-applied', 'push-converged', 'pull-applied', 'resolved'].includes(e.type)) fail('folded on a stale index')
+        // an accepted pull sets the base to what was FETCHED and currentHash to what the stores hold afterwards
+        if (e.type === 'pull-applied' && next !== prev) {
+          if (next.currentHash !== e.localHash) fail('pull-applied: currentHash is not the hash rebuilt from the stores')
+          const folded = next.base.hash === next.sot.hash && next.base.hash === next.currentHash
+          if ((next.base.rev !== e.rev || next.base.hash !== e.hash) && !folded) fail('pull-applied: base is not the fetched {rev, hash}')
+        }
         if (next.restoreLocal !== null && next.restoreLocal.hash === next.currentHash) fail('restoreLocal lingers although already restored')
         if (e.type === 'reconnected' && !next.indexStale) fail('reconnected left the index fresh')
         // a 409 locks iff something unsynced is left: dirty, and not already what the SOT holds

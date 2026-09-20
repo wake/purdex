@@ -750,7 +750,7 @@ describe('executor — pull', () => {
     ex.onRemoteEvent(remote('hosts', 2, 'H2'))
     await flush()
     expect(applySectionToStores).toHaveBeenCalledWith('hosts', { v: 3 }, { masterHostId: HOST })
-    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 3, hash: 'H3' }])
+    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 3, hash: 'H3', localHash: 'H3' }])
     expect(store.saveSection).toHaveBeenLastCalledWith(PROFILE, 'hosts', { base: { rev: 3, hash: 'H3' }, currentHash: 'H3' })
     expect(ex.status().profile).toBe('synced')
   })
@@ -800,7 +800,7 @@ describe('executor — pull', () => {
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'S1' })
     ex.onRemoteEvent(remote('settings', 1, 'S1'))
     await flush()
-    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 1, hash: 'S1' }])
+    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 1, hash: 'S1', localHash: 'S1' }])
   })
 
   it('a deletion (404, and the index agrees) is applied as null at the known rev, and the section is dropped', async () => {
@@ -811,7 +811,7 @@ describe('executor — pull', () => {
     ex.onRemoteEvent(remote('tabs.w1', 2, null))
     await flush()
     expect(applySectionToStores).toHaveBeenCalledWith('tabs.w1', null, { masterHostId: HOST })
-    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: null }])
+    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: null, localHash: null }])
     expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'tabs.w1')
   })
 
@@ -1010,14 +1010,34 @@ describe('executor — pull', () => {
     expect(api.getSection).toHaveBeenCalledTimes(2)
   })
 
-  it('a rebuilt hash that differs from the fetched one is dispatched as Task 9 says, and reported', async () => {
+  it('SANITISER: the stores did not keep what arrived → base is the SOT’s, and the sanitised content is pushed back over the pulled rev', async () => {
     const { ex, problems } = await synced({ hosts: 'H1' })
-    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-sanitised' })
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2, junk: true }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-clean' })
+    api.putSection.mockReturnValue(new Promise(() => {}))
     ex.onRemoteEvent(remote('hosts', 2, 'H2'))
     await flush()
-    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: 'H2-sanitised' }])
-    expect(problems.map((p) => p.kind)).toEqual(['pull-hash-mismatch'])
+    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: 'H2', localHash: 'H2-clean' }])
+    expect(store.saveSection).toHaveBeenLastCalledWith(PROFILE, 'hosts', { base: { rev: 2, hash: 'H2' }, currentHash: 'H2-clean' })
+    expect(problems).toEqual([{ kind: 'pull-hash-mismatch', section: 'hosts', detail: expect.stringContaining('pushed back') }])
+    expect(api.getSection).toHaveBeenCalledTimes(1) // dirty, not "moved": no re-pull
+    // the payload of the sanitised content comes with the collector's report of it
+    expect(api.putSection).not.toHaveBeenCalled()
+    ex.onSection({ key: 'hosts', hash: 'H2-clean', payload: { v: 2 } })
+    await flush()
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-clean', payload: { v: 2 } })
+  })
+
+  it('a deleted tabs.<id> whose workspace is still here: base is absent, the empty tabs the stores hold are dirty against it', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w1')] })
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
+    api.getSection.mockResolvedValue({ kind: 'ok', value: null })
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'EMPTY' })
+    ex.onRemoteEvent(remote('tabs.w1', 2, null))
+    await flush()
+    expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: null, localHash: 'EMPTY' }])
+    expect(store.saveSection).toHaveBeenLastCalledWith(PROFILE, 'tabs.w1', { base: { rev: 2, hash: null }, currentHash: 'EMPTY' })
   })
 })
 
