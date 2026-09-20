@@ -668,6 +668,12 @@ On mlab (worktree dev server :5175) and air-2026, with mlab as dev host:
 - **The 1 s target is a budget, not a guarantee.** Broadcast subscribers are dropped when their
   64-deep buffer fills (§3.5); reconcile-on-connect is what makes that survivable, and step 3 of §6
   measures the happy path rather than asserting it.
+- **A large conflict may not survive a restart — a known gap against §4.6.2, not a trade-off that
+  meets it.** The client keeps the two snapshots of an open conflict in `localStorage` (~5–10 MB per
+  origin, shared with every other key, no transactions). When they do not fit, the conflict lives in
+  memory only; restart before resolving it and the snapshot that was sent is gone, so the user
+  would choose against the live state instead. Section payloads are KB-sized today, which is why
+  this ships; #1244 moves the store to IndexedDB. *(P2b-1, §9.8)*
 - **`profile` is already a word in this codebase.** `useNewTabLayoutStore` persists `{profiles,
   knownIds, activeEditingProfile}` for the new-tab layout editor (308 lines, and already on the
   inventory page's "decide" list). With PRODUCT.md §3 being a strict vocabulary, that concept must
@@ -828,3 +834,32 @@ payload this client refuses to apply (never re-fetched on a timer; unlocked by a
 a `hosts` payload may not remove or re-point the master's own host; conflicts and their payloads
 persist across restarts; the client id is read from storage every time; reindex is single-flight and
 a failed list is never an empty list.
+
+### 9.8 PR #1242 / P2b-1b review — R1 + two attackers (gpt-5.6-sol), 2026-09-20
+
+R1 over the whole of P2b-1: no findings. Two attackers, scoped by focus to each half:
+
+| # | Sev. | Finding | Resolution |
+|---|---|---|---|
+| A-1 | high | with storage unavailable, the realm-only fallback client id is still written to the daemon (pre-existing in the Sync store, heavier once attachments exist) | `isClientIdPersisted()`; the driver refuses to attach without it. Existing callers unchanged |
+| A-2 | medium | first-run, two windows: the losing id can be used before they converge (pre-existing; this PR narrows it — an existing install adopts its old id) | #1243 |
+| B-1 | high | `section-store` read-modify-write: overlapping leaders silently overwrite each other — a lost base is a false conflict, a lost stash is an unrecoverable one | write generations; a superseded leader is `fenced` |
+| B-2 | high | the 5 MiB cap counted one payload, not the document or the origin's quota; a conflict could persist without its payloads; the test mocked `setItem` away | 1 MiB cap, **conflict + payloads in one `setItem`**, real-storage boundary tests; IndexedDB → #1244 |
+| B-3 | high | a loaded conflict could point at a stash entry the loader had just discarded | referential integrity on load — the conflict is dropped, the base kept |
+| B-4 | medium | path encoding and `JSON.stringify` ran outside the protected entry, breaking "never throws" | moved inside |
+| B-5 | medium | the WS parser treated a contradictory event as a delete (**the main session had specified that lenient rule; it was wrong**) | only the two wire shapes the daemon emits |
+| B-6 | medium | one listener slot, cleared unconditionally — a previous driver's late cleanup silenced the next | an unsubscribe that removes only itself |
+| B-7 | low | `api.ts` is ~630 lines of several concerns | #1240 |
+
+Also found while implementing, by a subagent, against this plan's own text: **`getDaemonBase` falls
+back to another host for an unknown id instead of throwing**, so a CAS could have reached the wrong
+daemon; the client refuses before sending.
+
+**R2 critic** (incremental, `--base 34985254`): agrees with all eight and finds the handling of
+A-1, A-2 (an issue, not a fix), B-3, B-4, B-5 and B-6 sound; no other wire drift of Important or
+above. Two evidenced objections, both to `section-store`:
+
+| # | Sev. | Objection | Resolution |
+|---|---|---|---|
+| C-1 | high | the generation fence is itself a non-atomic read-compare-write on `localStorage`: A reads g1, B claims g2, A writes its whole g1 document back over B's claim and data — B-1 again, just narrower | **one key per section, one content-addressed key per payload; the fence removed**, not patched. A stale write has no unrelated data left to destroy. What remains (same key, two leaders, last writer wins → at worst a false conflict) is written down as a residual, not claimed as prevented |
+| C-2 | high | the 1 MiB cap meant a larger conflict silently failed to persist, against Task 5 and §4.6.2 — and "kept in memory, re-derived after a restart" must not be described as meeting the contract | the cap is the daemon's 5 MiB again and the browser's quota decides; when it does not fit, that is recorded as a **known gap** (§7, #1244), in those words |
