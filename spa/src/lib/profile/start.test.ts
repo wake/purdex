@@ -253,7 +253,13 @@ describe('master set → contend → lead', () => {
     expect(e.deps.profileId).toBe(P1)
     expect(e.deps.isReachable()).toBe(false)
     connect('h1')
+    expect(e.deps.isReachable()).toBe(false) // connected, but the attachment is not confirmed yet
+    await flush()
     expect(e.deps.isReachable()).toBe(true)
+    disconnect('h1')
+    expect(e.deps.isReachable()).toBe(false)
+    connect('h1')
+    await flush()
     expect(e.deps.autoSync()).toBe(true)
     useProfileStore.getState().setAutoSync(false)
     expect(e.deps.autoSync()).toBe(false)
@@ -286,40 +292,126 @@ describe('master set → contend → lead', () => {
     expect(putAttachment).not.toHaveBeenCalled()
 
     connect('h2') // another host is nobody's business
+    await flush()
     expect(e.onReconnected).not.toHaveBeenCalled()
 
     connect('h1')
+    await flush()
     expect(e.onReconnected).toHaveBeenCalledTimes(1)
     expect(putAttachment).toHaveBeenCalledTimes(1)
 
     useHostStore.getState().setRuntime('h1', { latency: 5 }) // still connected: not a reconnect
+    await flush()
     expect(e.onReconnected).toHaveBeenCalledTimes(1)
 
     disconnect('h1')
     connect('h1')
+    await flush()
     expect(e.onReconnected).toHaveBeenCalledTimes(2)
     expect(putAttachment).toHaveBeenCalledTimes(2)
   })
 
-  it('a failed attachment refresh is a problem, not a stop', async () => {
+  it('NOTHING syncs before the attachment is confirmed: the executor is unreachable and unannounced while the PUT is out', async () => {
+    let release: (v: typeof okAttach) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValue(new Promise((r) => (release = r)))
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    const e = h.executors[0]
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    expect(e.onReconnected).not.toHaveBeenCalled()
+    expect(e.deps.isReachable()).toBe(false)
+
+    release(okAttach)
+    await flush()
+    expect(e.deps.isReachable()).toBe(true)
+    expect(e.onReconnected).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed attachment does not start the sync; it is retried 2 s → 4 s → … and the sync starts when it succeeds', async () => {
     vi.mocked(putAttachment).mockResolvedValue(failed('network'))
     connect('h1')
     stop = startProfileSync()
     useProfileStore.getState().setMaster('h1', P1, 'pull')
     await flush()
-    expect(h.executors[0].onReconnected).toHaveBeenCalledTimes(1)
-    expect(h.executors[0].dispose).not.toHaveBeenCalled()
-    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['attachment-refresh-failed'])
+    const e = h.executors[0]
+    expect(e.onReconnected).not.toHaveBeenCalled()
+    expect(e.deps.isReachable()).toBe(false)
+    expect(e.dispose).not.toHaveBeenCalled()
+    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['attachment-failed'])
+
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(putAttachment).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(putAttachment).toHaveBeenCalledTimes(2)
+    vi.mocked(putAttachment).mockResolvedValue(okAttach)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(putAttachment).toHaveBeenCalledTimes(3)
+    expect(e.onReconnected).toHaveBeenCalledTimes(1)
+    expect(e.deps.isReachable()).toBe(true)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(putAttachment).toHaveBeenCalledTimes(3)
   })
 
-  it('never writes a client id that does not survive a reload into an attachment', async () => {
+  it('the retry backoff is capped at 30 s and starts over with a reconnect', async () => {
+    vi.mocked(putAttachment).mockResolvedValue(failed('server'))
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull')
+    await flush()
+    await vi.advanceTimersByTimeAsync(2_000 + 4_000 + 8_000 + 16_000)
+    expect(putAttachment).toHaveBeenCalledTimes(5)
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(putAttachment).toHaveBeenCalledTimes(5)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(putAttachment).toHaveBeenCalledTimes(6)
+
+    disconnect('h1')
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(putAttachment).toHaveBeenCalledTimes(6) // nobody to tell
+    connect('h1')
+    await flush()
+    expect(putAttachment).toHaveBeenCalledTimes(7)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(putAttachment).toHaveBeenCalledTimes(8)
+  })
+
+  it('a lost lease, a detach or a dropped connection while the PUT is out: its answer starts nothing, and no retry is left behind', async () => {
+    for (const interrupt of ['lease', 'detach', 'drop'] as const) {
+      let release: (v: typeof okAttach) => void = () => {}
+      vi.mocked(putAttachment).mockReturnValue(new Promise((r) => (release = r)))
+      connect('h1')
+      const end = startProfileSync()
+      useProfileStore.getState().setMaster('h1', P1, 'pull')
+      await flush()
+      const e = h.executors[h.executors.length - 1]
+      if (interrupt === 'lease') h.leaderships[h.leaderships.length - 1].set(false)
+      if (interrupt === 'detach') useProfileStore.getState().clearMaster()
+      if (interrupt === 'drop') disconnect('h1')
+      release(okAttach)
+      await flush()
+      expect(e.onReconnected, interrupt).not.toHaveBeenCalled()
+      expect(e.deps.isReachable(), interrupt).toBe(false)
+      end()
+      useProfileStore.getState().clearMaster()
+      disconnect('h1')
+      vi.advanceTimersByTime(1)
+      expect(vi.getTimerCount(), interrupt).toBe(0)
+    }
+  })
+
+  it('a client id that does not survive a reload: no attachment is written — and so nothing syncs', async () => {
     h.persisted = false
     connect('h1')
     stop = startProfileSync()
     useProfileStore.getState().setMaster('h1', P1, 'pull')
     await flush()
     expect(putAttachment).not.toHaveBeenCalled()
-    expect(h.executors[0].onReconnected).toHaveBeenCalledTimes(1)
+    expect(h.executors[0].onReconnected).not.toHaveBeenCalled()
+    expect(h.executors[0].deps.isReachable()).toBe(false)
     expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['client-id-not-persisted'])
   })
 
@@ -458,6 +550,7 @@ describe('teardown', () => {
     connect('h1')
     disconnect('h2')
     connect('h2')
+    await flush()
     for (const fn of h.wsListeners) fn({ profileId: P2 })
     expect(old.onReconnected).toHaveBeenCalledTimes(oldCalls)
     expect(old.onRemoteEvent).not.toHaveBeenCalled()

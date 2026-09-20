@@ -33,7 +33,12 @@
 //     the status is read at that moment, so a connect that happened meanwhile is
 //     not lost and is not announced early.
 //   - the attachment: `putAttachment` on attach and on every (re)connect (it
-//     refreshes `lastSeen`), `deleteAttachment` on detach.
+//     refreshes `lastSeen`), `deleteAttachment` on detach. THE ATTACHMENT COMES
+//     FIRST: `onReconnected()` is called only after the daemon has confirmed it,
+//     and until then the executor is told the host is unreachable — an executor
+//     that was never announced still reindexes by itself as soon as the collector
+//     reports (that is how a section asks for its index), so "not announced" is
+//     not a gate; `isReachable()` is, because every request asks it first.
 //
 // `autoSync` off → on: the executor decides only when something pumps it, and
 // its only entries that pump every section are `onReconnected()` and
@@ -113,6 +118,8 @@ declare global {
 }
 
 export const PROBLEM_BUFFER_SIZE = 50
+export const ATTACH_RETRY_BASE_MS = 2_000
+export const ATTACH_RETRY_CAP_MS = 30_000
 
 // === Problems ===
 
@@ -150,13 +157,18 @@ function lead(master: Master, leadership: Leadership): Leader {
   let disposed = false
   let lastStatus: ExecutorStatus | null = null
   let unwatchHost: (() => void) | null = null
+  /** The daemon has confirmed this client's attachment on the CURRENT connection. */
+  let attached = false
+  let attachFailures = 0
+  let round = 0
+  let retry: ReturnType<typeof setTimeout> | null = null
   const connected = (): boolean => useHostStore.getState().runtime[hostId]?.status === 'connected'
 
   const executor = createExecutor({
     hostId,
     profileId,
     isLeader: () => leadership.isLeader(),
-    isReachable: connected,
+    isReachable: () => attached && connected(),
     autoSync: () => useProfileStore.getState().autoSync,
     // Only while the store's master is still THIS one: a direction belongs to the attach that gave it.
     initialDirection: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingDirection),
@@ -171,27 +183,56 @@ function lead(master: Master, leadership: Leadership): Leader {
   const unsubscribeWs = subscribeProfileEvents((e) => executor.onRemoteEvent(e))
   const collector = startCollector({ onSection: (r) => executor.onSection(r), onProblem: reportProblem })
 
-  /** The master host is connected: refresh the attachment, tell the executor. */
+  /**
+   * The master host is connected: FIRST the attachment, and only once the daemon
+   * has confirmed it, the executor. Until then `isReachable()` is false, which
+   * is the one thing every request of the executor asks first — so nothing is
+   * listed, pulled or pushed for a profile the daemon does not yet know this
+   * client is attached to (and would let another client delete meanwhile).
+   * A failure is retried, 2 s doubling to a 30 s cap; every new connection starts
+   * a new round, and the answer of an older round is dropped.
+   */
   const announce = (): void => {
-    if (isClientIdPersisted()) {
-      const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
-      putAttachment(hostId, profileId, body).then(
-        (r) => {
-          if (!disposed && r.kind === 'failed') {
-            reportProblem({ kind: 'attachment-refresh-failed', detail: `${r.reason}: ${r.message}` })
-          }
-        },
-        (e: unknown) => {
-          if (!disposed) reportProblem({ kind: 'attachment-refresh-failed', detail: message(e) })
-        },
-      )
-    } else {
-      reportProblem({
-        kind: 'client-id-not-persisted',
-        detail: 'attachment not refreshed: this client id would not survive a reload',
-      })
+    const mine = ++round
+    attached = false
+    attachFailures = 0
+    cancelRetry()
+    void attach(mine)
+  }
+
+  const cancelRetry = (): void => {
+    if (retry !== null) clearTimeout(retry)
+    retry = null
+  }
+
+  const attach = async (mine: number): Promise<void> => {
+    if (!isClientIdPersisted()) {
+      // Reload-proof or nothing: no attachment is written — and without one, nothing syncs.
+      reportProblem({ kind: 'client-id-not-persisted', detail: 'no attachment, no sync: this client id would not survive a reload' })
+      return
     }
-    executor.onReconnected()
+    let failure: string | null = null
+    try {
+      const body = { clientId: getClientId(), deviceName: effectiveDeviceName(useDeviceStateStore.getState()) }
+      const r = await putAttachment(hostId, profileId, body)
+      if (r.kind === 'failed') failure = `${r.reason}: ${r.message}`
+    } catch (e) {
+      failure = message(e)
+    }
+    if (disposed || mine !== round || !connected()) return
+    if (failure === null) {
+      attached = true
+      attachFailures = 0
+      executor.onReconnected()
+      return
+    }
+    const ms = Math.min(ATTACH_RETRY_BASE_MS * 2 ** attachFailures, ATTACH_RETRY_CAP_MS)
+    attachFailures += 1
+    reportProblem({ kind: 'attachment-failed', detail: `${failure}; nothing syncs until it succeeds, retry in ${ms} ms` })
+    retry = setTimeout(() => {
+      retry = null
+      if (!disposed && mine === round && connected()) void attach(mine)
+    }, ms)
   }
 
   void (async () => {
@@ -210,6 +251,12 @@ function lead(master: Master, leadership: Leadership): Leader {
       const is = next.runtime[hostId]?.status === 'connected'
       const was = prev.runtime[hostId]?.status === 'connected'
       if (is && !was) announce()
+      if (!is && was) {
+        // the attachment is confirmed per connection; whatever is out or pending belongs to the old one
+        round += 1
+        attached = false
+        cancelRetry()
+      }
     })
     if (connected()) announce()
   })()
@@ -220,6 +267,7 @@ function lead(master: Master, leadership: Leadership): Leader {
     dispose() {
       if (disposed) return
       disposed = true
+      cancelRetry()
       unwatchHost?.()
       unwatchHost = null
       unsubscribeWs()

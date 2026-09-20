@@ -155,3 +155,27 @@ describe('attachMaster, again, to the same master', () => {
     expect(useProfileStore.getState().pendingDirection).toBeNull()
   })
 })
+
+describe('the attachment comes first', () => {
+  it('not one profile request goes out while the attachment PUT is unanswered — a reload or a lease takeover included', async () => {
+    await attachedAndSettled()
+    stop() // the window goes away…
+    vi.clearAllMocks()
+    let release: () => void = () => {}
+    api.putAttachment.mockReturnValue(new Promise((r) => (release = () => r({ kind: 'ok', value: { attached: true } }))))
+    renameH2('edited-while-closed')
+
+    stop = startProfileSync() // …and comes back: master in the store, bases in the section store, a dirty section
+    await settle()
+    expect(api.putAttachment).toHaveBeenCalledTimes(1)
+    expect(api.listProfiles).not.toHaveBeenCalled()
+    expect(api.getSection).not.toHaveBeenCalled()
+    expect(api.putSection).not.toHaveBeenCalled()
+    expect(api.deleteSection).not.toHaveBeenCalled()
+
+    release()
+    await settle()
+    expect(api.listProfiles).toHaveBeenCalled()
+    expect((daemon.rows.get('hosts')!.payload as { hosts: Record<string, { name: string }> }).hosts[H2].name).toBe('edited-while-closed')
+  })
+})
