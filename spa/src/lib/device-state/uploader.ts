@@ -8,10 +8,11 @@
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { selectDevHostId, useHostStore } from '../../stores/useHostStore'
-import { effectiveDeviceName, normalizeDeviceName, useDeviceStateStore } from '../../stores/useDeviceStateStore'
+import { effectiveDeviceName } from '../device-name'
+import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
+import { useDeviceStateStore } from '../../stores/useDeviceStateStore'
 import { getClientId } from '../client-identity'
 import { putDeviceState } from './api'
-import { resolveDefaultDeviceName } from './device-name'
 import { buildDeviceStatePayload, hashPayload } from './payload'
 
 export interface UploaderDeps {
@@ -99,7 +100,7 @@ export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
     try {
       const capturedAt = now()
       const payload = buildDeviceStatePayload(capturedAt)
-      const deviceName = effectiveDeviceName(useDeviceStateStore.getState())
+      const deviceName = effectiveDeviceName(useDeviceNameStore.getState())
       const hash = await hashPayload(payload)
       if (stopped) return
       if (hash === lastUploadedHash[target] && deviceName === lastUploadedDeviceName[target]) return
@@ -160,19 +161,13 @@ export function startDeviceStateUploader(deps: UploaderDeps = {}): () => void {
       }
       if (n.target !== p.target || n.status !== p.status) schedule()
     }),
-    useDeviceStateStore.subscribe((next, prev) => {
+    useDeviceNameStore.subscribe((next, prev) => {
       if (effectiveDeviceName(next) !== effectiveDeviceName(prev)) schedule()
     }),
   ]
 
-  void resolveDefaultDeviceName().then(
-    (defaultDeviceName) => {
-      if (!stopped) useDeviceStateStore.setState({ defaultDeviceName: normalizeDeviceName(defaultDeviceName) ?? 'Browser' })
-    },
-    () => {
-      // keep the store's fallback name
-    },
-  )
+  // Never rejects; a failure keeps the store's fallback name.
+  void ensureDefaultDeviceName()
 
   schedule()
 

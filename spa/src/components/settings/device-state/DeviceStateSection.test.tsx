@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { DeviceStateSection } from './DeviceStateSection'
+import { useDeviceNameStore } from '../../../stores/useDeviceNameStore'
 import { useDeviceStateStore } from '../../../stores/useDeviceStateStore'
 import type { DeviceStateStatus } from '../../../stores/useDeviceStateStore'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -83,11 +84,8 @@ function nameInput() {
 }
 
 beforeEach(() => {
-  useDeviceStateStore.setState({
-    deviceName: null,
-    defaultDeviceName: 'Chrome · macOS',
-    status: { kind: 'idle' },
-  })
+  useDeviceNameStore.setState({ deviceName: null, defaultDeviceName: 'Chrome · macOS' })
+  useDeviceStateStore.setState({ status: { kind: 'idle' } })
   useHostStore.setState({
     hosts: { h1: { id: 'h1', name: 'Mini', ip: '100.64.0.2', port: 7860, order: 0 } },
     hostOrder: ['h1'],
