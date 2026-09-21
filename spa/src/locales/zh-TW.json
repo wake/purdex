@@ -1489,5 +1489,22 @@
   "settings.profile.local.error.unsettled": "另一個視窗剛切換了 profile，請稍後再試一次。",
   "settings.profile.local.error.bad_world": "目前的畫面無法複製，沒有任何變更。",
   "settings.profile.local.error.write_failed": "無法儲存 profile，沒有任何變更：{{detail}}",
-  "settings.profile.local.error.unknown": "沒有成功（{{reason}}）。"
+  "settings.profile.local.error.unknown": "沒有成功（{{reason}}）。",
+  "settings.profile.sot.title": "同步主機上的 profiles",
+  "settings.profile.sot.desc": "這台裝置同步的那台主機上存的 profiles。在這裡改名或刪除，會影響所有裝置。",
+  "settings.profile.sot.refresh": "重新整理",
+  "settings.profile.sot.loading": "正在詢問主機…",
+  "settings.profile.sot.load_failed": "無法取得清單：{{message}}",
+  "settings.profile.sot.empty": "主機上沒有任何 profile。",
+  "settings.profile.sot.current": "這台裝置正在同步它",
+  "settings.profile.sot.devices": "已連結的裝置：{{names}}",
+  "settings.profile.sot.rename": "改名",
+  "settings.profile.sot.rename_failed": "無法改名：{{message}}",
+  "settings.profile.sot.delete_blocked_current": "這台裝置正在同步它。請先停止同步。",
+  "settings.profile.sot.delete_blocked_attached": "還有裝置連結著它。請先在那些裝置上停止同步。",
+  "settings.profile.sot.delete_title": "從主機刪除「{{name}}」？",
+  "settings.profile.sot.delete_body": "所有裝置都會失去主機上的這個 profile，各裝置本機的內容不受影響。這個動作無法復原。",
+  "settings.profile.sot.delete_failed": "無法刪除：{{message}}",
+  "settings.profile.sot.attached": "沒有刪除。仍然連結著的裝置：{{names}}",
+  "settings.profile.sot.attached_none": "沒有刪除：剛才還有裝置連結著。請再試一次。"
 }

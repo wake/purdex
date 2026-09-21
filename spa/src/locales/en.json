@@ -1489,5 +1489,22 @@
   "settings.profile.local.error.unsettled": "Another window just switched profile. Try again in a moment.",
   "settings.profile.local.error.bad_world": "What is on screen could not be copied. Nothing was changed.",
   "settings.profile.local.error.write_failed": "Couldn't save the profile, nothing was changed: {{detail}}",
-  "settings.profile.local.error.unknown": "That didn't work ({{reason}})."
+  "settings.profile.local.error.unknown": "That didn't work ({{reason}}).",
+  "settings.profile.sot.title": "Profiles on the sync host",
+  "settings.profile.sot.desc": "What the host this device syncs with holds. Renaming or deleting one here changes it for every device.",
+  "settings.profile.sot.refresh": "Refresh",
+  "settings.profile.sot.loading": "Asking the host…",
+  "settings.profile.sot.load_failed": "Couldn't get the list: {{message}}",
+  "settings.profile.sot.empty": "The host holds no profile.",
+  "settings.profile.sot.current": "This device syncs with it",
+  "settings.profile.sot.devices": "Attached: {{names}}",
+  "settings.profile.sot.rename": "Rename",
+  "settings.profile.sot.rename_failed": "Couldn't rename it: {{message}}",
+  "settings.profile.sot.delete_blocked_current": "This device is syncing with it. Stop sync first.",
+  "settings.profile.sot.delete_blocked_attached": "Devices are still attached. Stop sync on each of them first.",
+  "settings.profile.sot.delete_title": "Delete \"{{name}}\" from the host?",
+  "settings.profile.sot.delete_body": "Every device loses this profile on the host. What each device holds locally stays. This cannot be undone.",
+  "settings.profile.sot.delete_failed": "Couldn't delete it: {{message}}",
+  "settings.profile.sot.attached": "Not deleted. Still attached: {{names}}",
+  "settings.profile.sot.attached_none": "Not deleted: a device was attached a moment ago. Try again."
 }
