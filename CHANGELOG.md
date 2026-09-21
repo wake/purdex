@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.418] - 2026-09-21
+
+### Refactor: standalone tab 的死碼移除——Profile Sync P3c-2（#1271、#1272、#1273）
+
+alpha.417 讓「每個 tab 恰好屬於一個 workspace」成為政策＋持續性不變式之後，standalone tab 的 UI 與 helper 已經到不了；這一版把它們刪掉（52 檔分三個 PR、淨 −500 行）。刪除型的改動沒有 mutation 可做，改成**反向驗證**：每一類刪除都附上證明「零引用／到不了」的 `rg` 指令與結果。
+
+- **刪掉的**：`move-tab-to-standalone`／`reorder-standalone-tabs` 兩個 drag action、`home-header` 作為 drop target、`HomeRow` 的 tab 清單與展開 chevron、Home 的未讀 badge 與狀態點（那些未讀現在顯示在擁有該 tab 的 workspace 上，原本就有測試）、`isStandaloneTab`、`reorderStandaloneTabOrder`、`MigrateTabsDialog`、`getVisibleTabIds` 的 Home 分支、`closeTabInWorkspace` 的 standalone 分支、Profile Sync collector 的 standalone census。**Home 列在窄版與寬版都是單一按鈕**（點了聚焦第一個 workspace；P3d 會把它變成 profile 切換器）。
+- **過渡狀態落在安全的預設上**（codex R1＋攻擊方四條，同一個根因——standalone 分支刪掉之後，過渡狀態落到了不安全的預設）：`activeWorkspaceId` 暫為 null 而有 workspace 時，可見範圍不再是整個 `tabOrder`（「關閉其他分頁」會關到別的 workspace 的 tab），而是 active tab 所屬的 workspace、否則第一個；active 的孤兒 tab 在被收養前可以用快捷鍵關掉；收養到 active tab 時 workspace 指標跟著走（只在那時）；在收養空窗內切 profile 不再把孤兒連同 master 一起靜默停放——要停放的世界由**同一個**純函式 `repairTabOwnership` 修好，且只在 membership 確知靜止時才修，否則回可重試的 `busy`。
+- **有界的出口**（critic）：靜止閘會被持續的 membership 變動餓死（忙碌的 agent 連續開關 tab 做得到）→ 改以「**同一個待修狀態持續存在多久**」為準：同一個 tab 連續待修滿 3 秒就修它、而且只修年齡已滿的（年齡未滿的可能正是別的視窗剛新增、歸屬還在路上的那一個）；unsettled 期間不累計。`sections-unrendered` 保留——它與 standalone 無關（SOT 上有這台從沒見過的 workspace 的 `tabs.<wsId>`）。
+
+Review：codex 三次（R1、攻擊方、critic），全 `gpt-5.6-sol`；critic 對 F1–F4 判定已修好，唯一追加的一條已修並以測試釘住上界。真機回歸兩輪（修正前後）十二步：每一步孤兒 0、重複歸屬 0、雙視窗一致、兩種側欄的 Home 都是單一按鈕、空窗內關孤兒乾淨、console 零錯誤。spec §9.14 與 plan 的「P3c › As built」記下給 P3d 的契約（`getVisibleTabIds` 在指標為 null 時的語意、`repairTabOwnership`、切換多了一種最壞 3 秒的可重試 `busy`）。
+
+vitest 9321、lint、tsc、build 綠。純 SPA，daemon 仍是 411、免 deploy。下一支：#1255（切換後重跑 session 對帳）→ P3d（Home 變成 profile 切換器、Settings › Profile）。
+
 ## [1.0.0-alpha.417] - 2026-09-21
 
 ### Change: 每個 tab 恰好屬於一個 workspace——Profile Sync P3c-1（#1269）
