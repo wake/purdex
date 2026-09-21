@@ -263,6 +263,42 @@ who never opens Settings › Profile; both of the user's machines have zero stan
 - The Home button itself stays (it becomes the switcher in P3d); in this PR a click focuses the
   first workspace, so there is no dead control between the two merges.
 
+### As built (for P3d) — spec §9.14 has the why
+
+**The Home button is a plain button now, in both bars.** No tab list, no chevron, no drop target, no
+unread badge, no status dot; a click calls `onSelectHome` whatever the row's state or the tab
+position (the "active + expanded → toggle" overload of the baseline is gone).
+- Wide: `features/workspace/components/HomeRow.tsx`, props `{ isActive, onSelectHome }` and nothing
+  else; the wrapper `<div>` carries **`data-testid="home-header"`** (the `<button>` inside has the
+  logo and `t('nav.home')`). It renders inside `ActivityBarWide`'s `DndContext` but registers
+  nothing with it, and renders fine without one.
+- Narrow: the first `<button>` of `ActivityBarNarrow.tsx`, found by **`title={t('nav.home')}`**; its
+  `relative group` wrapper now holds the button only.
+- `isActive` / the purple ring = `!activeWorkspaceId`: zero workspaces, or the moment before the
+  invariant re-points a `null` pointer. With a workspace it is never lit.
+- What a click does today: `App.handleSelectHome` → `handleSelectWorkspace(workspaces[0].id)` (nothing
+  with zero workspaces); its twin is the `switch-workspace-home` shortcut in `useShortcuts.ts`. P3d
+  replaces both with "open the profile switcher".
+- `ActivityBarProps` (`activity-bar-props.ts`) no longer has `standaloneTabIds`,
+  `activeStandaloneTabId`, `onReorderStandaloneTabs`, `onMoveTabToStandalone`; `onSelectHome` is the
+  one Home prop.
+
+**The workspace side P3d can lean on.**
+- `UNSORTED_WORKSPACE_ID = 'unsorted'` (`features/workspace/store.ts`), `ensureUnsortedWorkspace()`,
+  and `insertTab(tabId, workspaceId?, afterTabId?)` — no target → active → first → a new `Unsorted`;
+  `null` is not a target.
+- `startStandaloneAdoption(): () => void` (`features/workspace/lib/adopt-standalone.ts`, installed in
+  `main.tsx` before the first render; returns its stop): zero owners → `Unsorted`, several → the
+  first workspace keeps the tab, a `null` `activeWorkspaceId` → the workspace of the tab on screen,
+  else the first. It acts `ADOPTION_SETTLE_MS` (500) after the last MEMBERSHIP change and only on a
+  settled world — so a profile switch (Task 5) that lands a world with ownerless tabs sees them
+  adopted half a second after it settles, in the world on screen only.
+- For that half second a tab can be in no workspace. It is in no bar (`getVisibleTabIds` = the active
+  workspace's tabs, else `tabOrder`), the content area shows it if it is active, and it closes
+  whole (`closeTabInWorkspace`; focus → the active workspace). Nothing else treats it as a kind.
+- `HOME_WS_KEY` (`useLayoutStore`) has no reader left but `reconcileWorkspaceExpanded`, which keeps
+  the key alive; P3d may delete it with the rest of "Home".
+
 ## P3d — the UI
 
 ### Task 6 — `components/ProfileSwitcher.tsx`

@@ -63,7 +63,7 @@ export interface SectionReport {
 
 export interface CollectorOptions {
   onSection: (r: SectionReport) => void
-  /** `invalid-workspace-id` (detail: the id), `standalone-tabs` (detail: the count), `build-failed` (detail: key + message),
+  /** `invalid-workspace-id` (detail: the id), `build-failed` (detail: key + message),
    *  `world-unsettled` (detail: the reason; once per unsettled stretch, and only after it has lasted `MASTER_WORLD_STUCK_MS`). */
   onProblem?: (p: { kind: string; detail: string }) => void
   /** Per-section trailing debounce; default 500. */
@@ -137,9 +137,8 @@ function byId(workspaces: readonly Workspace[]): Map<string, Workspace> {
 
 // === Collector ===
 
-/** A timer slot: one per section, plus one for the standalone-tab census. */
-const STANDALONE = '#standalone'
-type Slot = ProfileSectionKey | typeof STANDALONE
+/** A timer slot: one per section. */
+type Slot = ProfileSectionKey
 
 const ABSENT = Symbol('absent')
 /** Nobody can say where the master's world is (master-world.ts): nothing is built, hashed or reported. */
@@ -153,7 +152,6 @@ export function startCollector(opts: CollectorOptions): Collector {
   /** Per-section sequence: a hash that finishes after a newer run began is stale. */
   const seq = new Map<ProfileSectionKey, number>()
   const reportedProblems = new Set<string>()
-  let standaloneCount = 0
   let stopped = false
   /**
    * The master workspace set `settings` was last scheduled for. The section
@@ -236,17 +234,6 @@ export function startCollector(opts: CollectorOptions): Collector {
     opts.onSection({ key, hash, payload })
   }
 
-  /** Of the MASTER world — the problem is about what the profile cannot carry, wherever that world is. */
-  function censusStandalone(): void {
-    const read = readMasterWorld()
-    if (!read.settled) return
-    const owned = new Set(read.world.workspaces.flatMap((ws) => ws.tabs))
-    const count = Object.keys(read.world.tabs).filter((id) => !owned.has(id)).length
-    if (count === standaloneCount) return
-    standaloneCount = count
-    opts.onProblem?.({ kind: 'standalone-tabs', detail: String(count) })
-  }
-
   function schedule(slot: Slot): void {
     if (stopped) return
     const pending = timers.get(slot)
@@ -255,8 +242,7 @@ export function startCollector(opts: CollectorOptions): Collector {
       slot,
       setTimeout(() => {
         timers.delete(slot)
-        if (slot === STANDALONE) censusStandalone()
-        else void run(slot, false)
+        void run(slot, false)
       }, debounceMs),
     )
   }
@@ -278,7 +264,6 @@ export function startCollector(opts: CollectorOptions): Collector {
   function scheduleWholeWorld(world: MasterWorld): void {
     schedule('workspaces')
     schedule('settings')
-    schedule(STANDALONE)
     for (const id of byId(world.workspaces).keys()) scheduleTabs(id)
     for (const [key, hash] of lastHash) if (hash !== null && key !== 'hosts') schedule(key)
   }
@@ -289,23 +274,15 @@ export function startCollector(opts: CollectorOptions): Collector {
       const now = byId(next.workspaces)
       const before = byId(prev.workspaces)
       let listChanged = now.size !== before.size || [...now.keys()].some((id, i) => id !== [...before.keys()][i])
-      let membershipChanged = false
       for (const [id, ws] of now) {
         const old = before.get(id)
-        if (old === undefined || old.tabs !== ws.tabs) {
-          membershipChanged = true
-          scheduleTabs(id)
-        }
+        if (old === undefined || old.tabs !== ws.tabs) scheduleTabs(id)
         if (old !== undefined && WORKSPACE_FIELDS.some((f) => old[f] !== ws[f])) listChanged = true
       }
       for (const id of before.keys()) {
-        if (!now.has(id)) {
-          membershipChanged = true
-          scheduleTabs(id)
-        }
+        if (!now.has(id)) scheduleTabs(id)
       }
       if (listChanged) schedule('workspaces')
-      if (membershipChanged) schedule(STANDALONE)
     }
     if (next.tabs !== prev.tabs) {
       const changed = new Set<string>()
@@ -315,7 +292,6 @@ export function startCollector(opts: CollectorOptions): Collector {
         for (const ws of byId(next.workspaces).values()) {
           if (ws.tabs.some((id) => changed.has(id))) scheduleTabs(ws.id)
         }
-        schedule(STANDALONE)
       }
     }
   }
@@ -404,7 +380,6 @@ export function startCollector(opts: CollectorOptions): Collector {
         }
         // A section reported earlier and gone now is reported as vanished (once: `run` records the null).
         for (const [key, hash] of lastHash) if (hash !== null) live.add(key)
-        censusStandalone()
         masterSet = masterSetKey(read.world)
         lastWorld = read.world
       } else {

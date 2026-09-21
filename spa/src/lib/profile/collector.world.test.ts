@@ -233,12 +233,16 @@ describe('a slave is on screen (settled)', () => {
     expect(Object.keys(settings['purdex-workspace-settings'].workspaces ?? {})).toEqual(['mws'])
   })
 
-  it('the standalone census counts the MASTER world\'s tabs', async () => {
+  // (Was: "the standalone census counts the MASTER world's tabs" — the census is gone in P3c-2. What is left
+  // of it: a parked master's ownerless tab still enters no section, and is reported by nobody.)
+  it('a tab of the parked MASTER world that is in no workspace enters no section and is no problem', async () => {
     slaveOnScreen()
     const m = masterWorld()
     useLocalProfilesStore.setState({ parkedMaster: { ...m, tabs: { ...m.tabs, solo: tab('solo', MASTER_SENTINEL) } } })
     await start().primeAll()
-    expect(problems).toEqual([{ kind: 'standalone-tabs', detail: '1' }])
+    expect(reports.map((r) => r.key).sort()).toEqual(['hosts', 'settings', 'tabs.mws', 'workspaces'])
+    expect(JSON.stringify(reports)).not.toContain('"solo"')
+    expect(problems).toEqual([])
   })
 
   it('an apply lands in the parked master: the screen does not move, and the one report carries the hash the apply answered — what the executor already holds, so nothing is pushed back', async () => {

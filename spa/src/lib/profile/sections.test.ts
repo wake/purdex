@@ -367,31 +367,22 @@ describe('buildSettingsSection', () => {
 
 describe('buildProfileDocument', () => {
   it('has hosts, settings, workspaces and one tabs.<id> per workspace — empty ones included', () => {
-    const { document, standaloneTabIds } = buildProfileDocument(baseInput())
+    const { document } = buildProfileDocument(baseInput())
     expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
     expect(document['tabs.wsEmpty']).toEqual({ order: [], tabs: {} })
     expect(document['tabs.wsA']).toMatchObject({ order: ['t1', 't2'] })
-    expect(standaloneTabIds).toEqual([])
   })
 
-  it('a tab in no workspace enters no section and is reported, in tabOrder order', () => {
+  // (Was: "…and is reported, in tabOrder order" — `standaloneTabIds` is gone in P3c-2; adoption is the app's.)
+  it('a tab in no workspace enters no section', () => {
     const input = baseInput()
     input.tabs = {
       tabs: { ...input.tabs.tabs, loose2: tab('loose2', leaf('px', { kind: 'hosts' })), loose1: tab('loose1', leaf('py', { kind: 'history' })) },
       tabOrder: ['loose1', 't1', 'loose2', 't2', 't3'],
     }
-    const { document, standaloneTabIds } = buildProfileDocument(input)
-    expect(standaloneTabIds).toEqual(['loose1', 'loose2'])
+    const { document } = buildProfileDocument(input)
+    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
     expect(structuralKey(document)).not.toContain('loose')
-  })
-
-  it('a standalone tab missing from tabOrder is still reported, after the ordered ones', () => {
-    const input = baseInput()
-    input.tabs = {
-      tabs: { ...input.tabs.tabs, hidden: tab('hidden', leaf('px', { kind: 'hosts' })), loose: tab('loose', leaf('py', { kind: 'history' })) },
-      tabOrder: ['t1', 't2', 't3', 'loose'],
-    }
-    expect(buildProfileDocument(input).standaloneTabIds).toEqual(['loose', 'hidden'])
   })
 
   it('workspace-scoped settings follow the `workspaces` section: a workspace that is not in it (unknown, or unsyncable id) has no entry', () => {
@@ -402,15 +393,16 @@ describe('buildProfileDocument', () => {
     expect((document.settings as Record<string, unknown>)['purdex-workspace-settings']).toEqual({ workspaces: { wsA: { files: { root: '/a' } } } })
   })
 
-  it('a workspace id the daemon would reject is device-local: no entry, no tabs section, and its tabs are not standalone', () => {
+  it('a workspace id the daemon would reject is device-local: no entry, no tabs section, and its tabs are not up for adoption', () => {
     const input = baseInput()
     input.workspaces = { workspaces: [...input.workspaces.workspaces, ws('bad id!', 'Bad', ['tBad'])] }
     input.tabs = { tabs: { ...input.tabs.tabs, tBad: tab('tBad', leaf('pBad', { kind: 'hosts' })) }, tabOrder: [...input.tabs.tabOrder, 'tBad'] }
-    const { document, standaloneTabIds } = buildProfileDocument(input)
+    const { document } = buildProfileDocument(input)
     expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
     expect(structuralKey(document)).not.toContain('bad id!')
     expect(structuralKey(document)).not.toContain('tBad')
-    expect(standaloneTabIds).toEqual([])
+    // Owned, if by a workspace that does not travel: nothing for `adoptStandaloneTabs` to move.
+    expect(adoptStandaloneTabs({ workspaces: input.workspaces.workspaces, ...input.tabs }, { unsortedName: 'Unsorted', newWorkspaceId: 'ws-new' }).adopted).toEqual([])
   })
 
   it('every tabs section is well-formed: order has no duplicates and equals the record keys', () => {
@@ -465,7 +457,7 @@ describe('buildProfileDocument', () => {
       activeWorkspaceId: S,
     } as unknown as CollectInput
 
-    const { document, standaloneTabIds } = buildProfileDocument(input)
+    const { document } = buildProfileDocument(input)
     const key = structuralKey(document)
     expect(key).not.toContain(S)
     expect(key).not.toContain(String(N))
@@ -474,7 +466,6 @@ describe('buildProfileDocument', () => {
     expect(hasKeyDeep(document, 'enabled')).toBe(false)
     expect(hasKeyDeep(document, 'purdex-editor-settings')).toBe(false)
     expect(hasKeyDeep(document, 'fontSize')).toBe(false)
-    expect(standaloneTabIds).toEqual([S])
     // …and the fixture is not vacuous: the synced neighbours of those fields did travel.
     expect(key).toContain('"terminalRenderer":"webgl"')
     expect(key).toContain('"tabPosition":"top"')
@@ -574,12 +565,12 @@ describe('adoptStandaloneTabs', () => {
     expect(out.adopted).toEqual(['x', 'hidden'])
   })
 
-  it('after adoption the document has no standalone tab left', () => {
+  it('after adoption nothing is left to adopt, and the document carries the tab', () => {
     const input = baseInput()
     input.tabs = { tabs: { ...input.tabs.tabs, loose: tab('loose', leaf('px', { kind: 'hosts' })) }, tabOrder: ['loose', 't1', 't2', 't3'] }
     const adopted = adoptStandaloneTabs({ workspaces: input.workspaces.workspaces, ...input.tabs }, opts)
-    const { document, standaloneTabIds } = buildProfileDocument({ ...input, workspaces: { workspaces: adopted.workspaces } })
-    expect(standaloneTabIds).toEqual([])
+    const { document } = buildProfileDocument({ ...input, workspaces: { workspaces: adopted.workspaces } })
+    expect(adoptStandaloneTabs({ workspaces: adopted.workspaces, ...input.tabs }, opts).adopted).toEqual([])
     expect(document['tabs.ws-new']).toMatchObject({ order: ['loose'] })
   })
 

@@ -300,54 +300,89 @@ describe('useWorkspaceStore', () => {
       expect(updatedWs.activeTabId).toBe(tabs[0].id)
     })
 
-    it('closes standalone tab with global tabOrder adjacency', () => {
-      // No workspace — standalone tab
-      const tabs = [makeTab(), makeTab(), makeTab()]
-      tabs.forEach((t) => useTabStore.getState().addTab(t))
-      useTabStore.getState().setActiveTab(tabs[1].id)
-      useTabStore.setState({ visitHistory: [] }) // clear to test adjacent fallback
+    // Every tab belongs to a workspace (Profile Sync spec §4.3), but adopt-standalone.ts waits 500 ms before it
+    // believes a tab has none — and the user can close that tab in the meantime. It must still close, whole.
+    // (Were: three tests of the "standalone" scope — next tab among the other standalone tabs, else null.)
+    describe('a tab no workspace has adopted yet', () => {
+      it('closes: gone from tabs, tabOrder and visitHistory; recorded; no workspace touched or created', () => {
+        const ws = useWorkspaceStore.getState().addWorkspace('WS')
+        const wsTab = makeTab()
+        useTabStore.getState().addTab(wsTab)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, wsTab.id)
+        const orphan = makeTab()
+        useTabStore.getState().addTab(orphan)
+        useTabStore.getState().setActiveTab(orphan.id)
+        useTabStore.getState().setActiveTab(wsTab.id)
+        const before = useWorkspaceStore.getState().workspaces
 
-      useWorkspaceStore.getState().closeTabInWorkspace(tabs[1].id)
+        useWorkspaceStore.getState().closeTabInWorkspace(orphan.id)
 
-      expect(useTabStore.getState().tabs[tabs[1].id]).toBeUndefined()
-      expect(useTabStore.getState().activeTabId).toBe(tabs[2].id)
-    })
+        const tabState = useTabStore.getState()
+        expect(tabState.tabs[orphan.id]).toBeUndefined()
+        expect(tabState.tabOrder).toEqual([wsTab.id])
+        expect(tabState.visitHistory).not.toContain(orphan.id)
+        expect(tabState.activeTabId).toBe(wsTab.id) // it was not the active tab: focus stays
+        expect(useWorkspaceStore.getState().workspaces).toBe(before)
+        const closed = useHistoryStore.getState().closedTabs
+        expect(closed).toHaveLength(1)
+        expect(closed[0].tab.id).toBe(orphan.id)
+        expect(closed[0].fromWorkspaceId).toBeUndefined()
+      })
 
-    it('closing last standalone tab sets activeTabId to null (does not leak to workspace tabs)', () => {
-      const ws = useWorkspaceStore.getState().addWorkspace('WS')
-      const wsTab = makeTab()
-      useTabStore.getState().addTab(wsTab)
-      useWorkspaceStore.getState().addTabToWorkspace(ws.id, wsTab.id)
+      it('closes with no workspace at all: activeTabId null, and no Unsorted is made for a tab that is going', () => {
+        const orphan = makeTab()
+        useTabStore.getState().addTab(orphan)
+        useTabStore.getState().setActiveTab(orphan.id)
 
-      const standalone = makeTab()
-      useTabStore.getState().addTab(standalone)
-      useTabStore.getState().setActiveTab(standalone.id)
-      useTabStore.setState({ visitHistory: [] })
+        useWorkspaceStore.getState().closeTabInWorkspace(orphan.id)
 
-      useWorkspaceStore.getState().closeTabInWorkspace(standalone.id)
+        expect(useTabStore.getState().tabs).toEqual({})
+        expect(useTabStore.getState().tabOrder).toEqual([])
+        expect(useTabStore.getState().activeTabId).toBeNull()
+        expect(useWorkspaceStore.getState().workspaces).toEqual([])
+      })
 
-      // Should be null — not the workspace tab
-      expect(useTabStore.getState().activeTabId).toBeNull()
-    })
+      it('when it was the active tab, focus goes to the active workspace — its most recently visited tab', () => {
+        const ws = useWorkspaceStore.getState().addWorkspace('WS')
+        const [a, b] = [makeTab(), makeTab()]
+        for (const t of [a, b]) {
+          useTabStore.getState().addTab(t)
+          useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+        }
+        useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+        const otherOrphan = makeTab()
+        const orphan = makeTab()
+        useTabStore.getState().addTab(otherOrphan)
+        useTabStore.getState().addTab(orphan)
+        useTabStore.getState().setActiveTab(orphan.id)
+        // The most recent visit is another ownerless tab: never a place to land. Then b, then a.
+        useTabStore.setState({ visitHistory: [a.id, b.id, otherOrphan.id] })
 
-    it('visitHistory skips workspace tabs when closing standalone tab', () => {
-      const ws = useWorkspaceStore.getState().addWorkspace('WS')
-      const wsTab = makeTab()
-      useTabStore.getState().addTab(wsTab)
-      useWorkspaceStore.getState().addTabToWorkspace(ws.id, wsTab.id)
+        useWorkspaceStore.getState().closeTabInWorkspace(orphan.id)
 
-      const s1 = makeTab()
-      const s2 = makeTab()
-      useTabStore.getState().addTab(s1)
-      useTabStore.getState().addTab(s2)
-      useTabStore.getState().setActiveTab(s2.id)
-      // visitHistory has workspace tab more recently than standalone tab
-      useTabStore.setState({ visitHistory: [s1.id, wsTab.id] })
+        expect(useTabStore.getState().activeTabId).toBe(b.id)
+      })
 
-      useWorkspaceStore.getState().closeTabInWorkspace(s2.id)
+      it('when it was the active tab and nothing was visited, focus goes to the active workspace\'s own active tab', () => {
+        const ws = useWorkspaceStore.getState().addWorkspace('WS')
+        const [a, b] = [makeTab(), makeTab()]
+        for (const t of [a, b]) {
+          useTabStore.getState().addTab(t)
+          useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+        }
+        useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+        useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, b.id)
+        const orphan = makeTab()
+        useTabStore.getState().addTab(orphan)
+        useTabStore.getState().setActiveTab(orphan.id)
+        useTabStore.setState({ visitHistory: [] })
 
-      // Should pick s1 (standalone) from visitHistory, skipping wsTab
-      expect(useTabStore.getState().activeTabId).toBe(s1.id)
+        useWorkspaceStore.getState().closeTabInWorkspace(orphan.id)
+
+        expect(useTabStore.getState().activeTabId).toBe(b.id)
+        // The workspace's own pointer is its business, not the closing tab's.
+        expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === ws.id)!.activeTabId).toBe(b.id)
+      })
     })
 
     it('prefers visitHistory over adjacent when selecting next tab', () => {
@@ -417,9 +452,12 @@ describe('useWorkspaceStore', () => {
     })
 
     it('skips already-closed tabs in visitHistory', () => {
-      // Standalone — no workspace
+      const ws = useWorkspaceStore.getState().addWorkspace('WS')
       const tabs = [makeTab(), makeTab(), makeTab()]
-      tabs.forEach((t) => useTabStore.getState().addTab(t))
+      tabs.forEach((t) => {
+        useTabStore.getState().addTab(t)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+      })
       // Visit: tabs[0] → tabs[1] → tabs[2]
       useTabStore.getState().setActiveTab(tabs[1].id)
       useTabStore.getState().setActiveTab(tabs[2].id)
@@ -431,9 +469,12 @@ describe('useWorkspaceStore', () => {
     })
 
     it('traverses full history stack on repeated closes', () => {
-      // Standalone — no workspace
+      const ws = useWorkspaceStore.getState().addWorkspace('WS')
       const tabs = [makeTab(), makeTab(), makeTab(), makeTab()]
-      tabs.forEach((t) => useTabStore.getState().addTab(t))
+      tabs.forEach((t) => {
+        useTabStore.getState().addTab(t)
+        useWorkspaceStore.getState().addTabToWorkspace(ws.id, t.id)
+      })
       // Visit: tabs[0] → tabs[1] → tabs[2] → tabs[3]
       useTabStore.getState().setActiveTab(tabs[1].id)
       useTabStore.getState().setActiveTab(tabs[2].id)

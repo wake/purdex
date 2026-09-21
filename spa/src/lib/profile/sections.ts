@@ -44,10 +44,9 @@ export interface CollectInput {
   settings: SettingsBuildInput
 }
 
-/** A profile document, plus the tabs that belong to no workspace and therefore to no section (§4.3). */
+/** A profile document. A tab that belongs to no workspace belongs to no section (§4.3); the app adopts it. */
 export interface ProfileDocumentResult {
   document: Record<ProfileSectionKey, SectionPayload>
-  standaloneTabIds: string[]
 }
 
 // A record key that cannot travel: `project` never copies it, and assigning it
@@ -188,8 +187,7 @@ function standaloneIds(workspaces: readonly Workspace[], tabs: Record<string, Ta
  * EVERY workspace in the `workspaces` section — an empty workspace still gets
  * `{order: [], tabs: {}}`, because `workspaces` is the authority on which
  * `tabs.*` exist (§4.6.3). A workspace whose id the daemon would reject is in
- * neither (see `buildWorkspacesSection`); its tabs are owned, so not standalone.
- * Standalone tabs enter no section; they are reported.
+ * neither (see `buildWorkspacesSection`). A tab in no workspace enters no section.
  */
 export function buildProfileDocument(input: CollectInput): ProfileDocumentResult {
   const { workspaces } = input.workspaces
@@ -204,7 +202,7 @@ export function buildProfileDocument(input: CollectInput): ProfileDocumentResult
     const ws = workspaces.find((w) => w.id === id) as Workspace
     document[tabsSectionKey(id)] = buildTabsSection(ws, input.tabs.tabs)
   }
-  return { document, standaloneTabIds: standaloneIds(workspaces, input.tabs.tabs, input.tabs.tabOrder) }
+  return { document }
 }
 
 // === Standalone tabs (§4.3) ===

@@ -340,11 +340,12 @@ export function handleNotificationClick(action: NotificationAction): void {
       if (tabId) {
         useTabStore.getState().setActiveTab(tabId)
         const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
+        // No workspace = nobody has adopted the tab yet (features/workspace/lib/adopt-standalone.ts waits before
+        // it believes that). There is no "Home" view to switch to; like a click on the tab (`handleSelectTab`),
+        // the workspace on screen stays.
         if (ws) {
           useWorkspaceStore.getState().setActiveWorkspace(ws.id)
           useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
-        } else {
-          useWorkspaceStore.getState().setActiveWorkspace(null)
         }
         handled = true
       } else if (agentSettings.reopenTabOnClick) {
@@ -356,12 +357,9 @@ export function handleNotificationClick(action: NotificationAction): void {
         useTabStore.getState().addTab(newTab)
         useTabStore.getState().setActiveTab(newTab.id)
         useWorkspaceStore.getState().insertTab(newTab.id)
+        // `insertTab` with no target always finds or makes a workspace (active → first → Unsorted).
         const ws = useWorkspaceStore.getState().findWorkspaceByTab(newTab.id)
-        if (ws) {
-          useWorkspaceStore.getState().setActiveWorkspace(ws.id)
-        } else {
-          useWorkspaceStore.getState().setActiveWorkspace(null)
-        }
+        if (ws) useWorkspaceStore.getState().setActiveWorkspace(ws.id)
         handled = true
       }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createTab, createWorkspace, isStandaloneTab } from './tab'
+import { createTab, createWorkspace } from './tab'
 import type { SidebarRegion } from './layout'
 
 describe('createTab', () => {
@@ -65,20 +65,5 @@ describe('SidebarRegion type', () => {
       'secondary-sidebar',
     ]
     expect(regions).toHaveLength(4)
-  })
-})
-
-describe('isStandaloneTab', () => {
-  it('returns true when tab is not in any workspace', () => {
-    const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'abc', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    const workspaces = [createWorkspace('WS1')]
-    expect(isStandaloneTab(tab.id, workspaces)).toBe(true)
-  })
-
-  it('returns false when tab is in a workspace', () => {
-    const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'xyz', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    const ws = createWorkspace('WS1')
-    ws.tabs = [tab.id]
-    expect(isStandaloneTab(tab.id, [ws])).toBe(false)
   })
 })

@@ -184,7 +184,3 @@ export function createWorkspace(name: string, icon?: string): Workspace {
     moduleConfig: {},
   }
 }
-
-export function isStandaloneTab(tabId: string, workspaces: Workspace[]): boolean {
-  return !workspaces.some((ws) => ws.tabs.includes(tabId))
-}

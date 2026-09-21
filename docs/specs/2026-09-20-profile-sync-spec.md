@@ -1177,3 +1177,77 @@ protocol whose own reads go stale the same way. The case needs two switches in t
 milliseconds apart; the outcome is "the later switch wins" over a complete, self-consistent older
 state; nothing is relabelled as the master, and the barrier (settled + fence) still holds. #1256
 records it, with the only fix worth making: move the world stores' commit point off localStorage.
+
+### 9.14 P3c — standalone tabs removed
+
+**Measured:** §4.3 named three call sites. There were none of that shape: **`getScopeTabs` does not
+exist** (the branch was an inline block in `closeTabInWorkspace`), and a standalone tab was not three
+call sites but **a concept with four live producers** and 17 production / ~12 test files — (1)
+`insertTab` with no active workspace silently no-op'ed and left the tab in `tabOrder` only (the
+add-tab button, four shortcuts, the Electron IPC); (2) an explicit `insertTab(id, null)` from a drop
+on the Home header; (3) deleting a workspace while keeping its tabs, and tear-off / merge with the
+same shape; (4) — the one the first plan missed — **the settings tab of a deleted workspace**, left
+behind with no owner. Hence two PRs: P3c-1 makes the concept unreachable, P3c-2 deletes it.
+
+**P3c-1, the decisions.**
+- **`Unsorted` has a fixed id, `'unsorted'`** (`UNSORTED_WORKSPACE_ID`), not a generated one. Every
+  other workspace id is `generateId()` — 6 chars of base36, pinned by `lib/id.test.ts` — so nothing
+  else can be it, and two windows, or two machines, that both adopt converge on ONE workspace
+  instead of two. An existing one is used as is and never renamed (it may have been made on a device
+  that speaks another language).
+- **A standing invariant, not a boot step** (`features/workspace/lib/adopt-standalone.ts`,
+  `startStandaloneAdoption()` from `main.tsx`): whenever the tab world changes, zero owners → the tab
+  is adopted into `Unsorted`; **several owners → the first workspace in workspace order keeps it** —
+  a rule with no choice in it, so two windows that each apply it get the same world. It covers the
+  producers nobody has found, and device-state's restore / merge until P4b. Only a *settled* world
+  (§9.13) is written to.
+- **Neither synchronous nor a plain debounce: a debounce on the MEMBERSHIP signature, 500 ms.** Not
+  synchronous, because the tab store and the workspace store are two stores and a cross-window
+  rehydrate is two-phase: another window's `addTab` + `insertTab` arrive as two rehydrates in two
+  tasks, and in between a tab that HAS a workspace looks like one that has none — adopting it then
+  writes this window's not-yet-rehydrated workspaces over the other window's. Not a plain debounce,
+  because a busy agent rewrites pane records in the tab store several times a second, in every
+  window: the look would starve. Only a change of who-owns-what (plus the pointer and the world
+  tags) re-arms the timer. **Boot waits like any other look** — what storage held a moment ago may
+  be the first half of another window's write.
+- `insertTab` never silently no-ops: no target → the active workspace → the first → a new `Unsorted`;
+  `null` is gone from its type. Deleting a workspace while keeping its tabs moves them to a
+  neighbour, and closes every settings tab scoped to it. Home focuses the first workspace until P3d.
+
+**Review (gpt-5.6-sol).** R1: two findings (a P1 and a P2). Attacker: five (2 high, 2 medium, 1
+low). **Four fixed**; the critic, on the increment: **approve, no material findings**. Not fixed,
+with reasons: the `'unsorted'` id "hijack" (no path produces that id); `store.ts` constitution →
+#1240; orphan
+settings tabs on the sync-apply / tear-off paths, and dangling ids in `workspace.tabs` that are only
+filtered at render → #1268.
+
+**Real machine, twice** (before and after the fixes; real page, reload, two windows, a real click on
+Home): orphans 0 and duplicate memberships 0 at every step, five tabs opened in another window stayed
+in their workspace, double ownership on disk converged on reload, and no `purdex-profile*` key
+appeared for a user with no master.
+
+**P3c-2, what went** (two PRs again — 37 files against the 20-file limit; cut after the UI half).
+- *UI:* the `move-tab-to-standalone` / `reorder-standalone-tabs` drag actions and their dispatch;
+  the `home-header` **drop target** and its spring-load (the button stays, `data-testid` and all);
+  `HomeRow`'s tab list and its chevron — the "active + expanded → a click toggles" overload with
+  them; the narrow bar's Home unread badge and status dot (they counted standalone tabs and nothing
+  else — a workspace's badge is where those unreads show now); four `ActivityBarProps`;
+  `reorderStandaloneTabOrder`; the Home branches of `getVisibleTabIds` (and its `activeTabId`
+  parameter) and of `handleReorderTabs`.
+- *Stores:* `isStandaloneTab`; `MigrateTabsDialog`, its two handlers and four strings; the two
+  `setActiveWorkspace(null)` of a notification click — after `insertTab` one was unreachable, the
+  other now leaves the workspace on screen alone, as a click on the tab does.
+- **`closeTabInWorkspace` keeps one case alive on purpose**: for the 500 ms above a tab really has
+  no workspace, and the user can close it. It closes whole (tabs, `tabOrder`, visit history, the
+  history record); if it was on screen, focus goes to the active workspace — visit history, else
+  its active tab, else its first — where it used to go to `null`, a blank pane beside a full bar.
+- *Profile Sync:* the collector's `#standalone` slot, `censusStandalone` and the `standalone-tabs`
+  problem kind; `buildProfileDocument`'s `standaloneTabIds`. `adoptStandaloneTabs` stays (the
+  invariant is its caller). **No projection path was standalone-only, so no fingerprint moved and no
+  `SECTION_SCHEMA_ORDINAL` was bumped.** `sections-unrendered` is NOT part of this: it names a
+  `tabs.<id>` on the SOT whose workspace this client has never seen (§4.6.3 — an arrival that
+  overtook its `workspaces`, or a deletion it did not witness), and it is reported under the new
+  rule exactly as before.
+- **Left in place:** `TabDragData.sourceWsId` is still `string | null` (`InlineTab` defaults to
+  `null`; no list renders one, and a `null` on either side of a drop is a noop), and
+  `HOME_WS_KEY` still survives `reconcileWorkspaceExpanded` — both cost files and change nothing.

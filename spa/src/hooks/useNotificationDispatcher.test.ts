@@ -292,20 +292,24 @@ describe('handleNotificationClick workspace switching', () => {
     expect(state.workspaces.find(w => w.id === wsB.id)?.activeTabId).toBe(tabB.id)
   })
 
-  it('switches to Home when tab is standalone (not in any workspace)', () => {
+  // Every tab belongs to a workspace (Profile Sync spec §4.3) and there is no "Home" view; a tab in none is one
+  // adopt-standalone.ts has not adopted yet. (Was: "switches to Home when tab is standalone" → null.)
+  it('a tab no workspace has adopted yet: the tab is focused and the workspace on screen stays (never null)', () => {
     // Setup: tab not in any workspace, active workspace is wsA
     const tab = createTab({ kind: 'tmux-session', hostId: HOST_ID, sessionCode: SESSION_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
     useTabStore.getState().addTab(tab)
 
     const wsA = useWorkspaceStore.getState().addWorkspace('Workspace A')
     useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
-    // Tab is NOT added to any workspace (standalone)
+    // Tab is NOT added to any workspace
 
     // Action: handleNotificationClick open-session
     handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
 
-    // Assert: activeWorkspaceId is null (Home)
-    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsA.id)
+    // The click adopts nothing: that is adopt-standalone.ts's, after its wait.
+    expect(useWorkspaceStore.getState().workspaces.some((ws) => ws.tabs.includes(tab.id))).toBe(false)
   })
 
   it('reopenTabOnClick adds tab to active workspace and stays in that workspace', () => {
