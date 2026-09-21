@@ -326,7 +326,7 @@ thing. #1255 (re-run the session reconciliation after a switch) lands first, on 
 | PR | Reachable afterwards | Contents |
 |---|---|---|
 | **P3d-1** | the Home button opens a menu | `components/Menu.tsx` (the primitive) + `ProfileSwitcher` in both bars + its i18n. With no master and no slaves the menu is `Set up sync…` (→ Settings › Profile, which until P3d-2 is the existing Settings page — so the item is hidden until P3d-2 lands; the menu then has nothing to show and the button keeps today's behaviour. **No dead control between merges.**) |
-| **P3d-2** | Settings › Profile exists: *Current* + *Profiles* | the section registration (`SETTINGS_ORDER.PROFILE`), the *Current* block (read-only state, Auto-sync, Sync now, Stop sync) and the *Profiles* block (slaves: copy master / save screen / rename / delete; SOT profiles: rename / delete). A master can still only be attached through the dev hook. |
+| **P3d-2** | Settings › Profile exists: *Current* + *Profiles* | the section registration (`SETTINGS_ORDER.PROFILE`), the *Current* block (read-only state, Auto-sync, Sync now, Stop sync) and the *Profiles* block (slaves: copy master / save screen / rename / delete; **every local profile, the master included: name / icon / colour** — `setProfileAppearance`, with the two existing pickers, see "P3d-1 — As built"; SOT profiles: rename / delete). A master can still only be attached through the dev hook. |
 | **P3d-3** | a user can attach a master without the dev hook | the *Wizard* (decision 10's five steps). `Settings › Sync` leaves the sidebar **here**, not earlier: until the wizard exists it is the only sync UI a user has. |
 | **P3d-4** | conflicts can be resolved from the UI | the *Resolve* block, PRODUCT.md §3.9, and the real-machine acceptance of the whole of P3 (below), **through the UI**. |
 
@@ -380,9 +380,9 @@ two sentences and offers the wizard.
   - **Entries changing while open**: if the focused item was removed (focus fell to `<body>`), focus goes to the
     checked item → the first available → the menu itself. An item that is still there keeps focus even if it
     turned busy / disabled (the arrow keys work from it), and focus the user moved elsewhere is never taken back.
-- **The switcher exists only where there is a slave.** `useProfileSwitcherTrigger(onSelectHome)` →
-  `{ enabled, open, onClick, currentName, onSlave, triggerProps }`, used by `HomeRow` (chevron, `bottom-start`)
-  and `ActivityBarNarrow` (`right-start`). With no slave both buttons are exactly what they were, and
+- **The MENU exists only where there is a slave** (what the button shows does not depend on it — see below). `useProfileSwitcherTrigger(onSelectHome)` →
+  `{ enabled, open, onClick, current, label, triggerProps }`, used by `HomeRow` (chevron, `bottom-start`)
+  and `ActivityBarNarrow` (`right-start`). With no slave a click still selects Home, and
   `switch-workspace-home` still focuses the first workspace; with one, the shortcut sets `open` and the menu
   takes focus. **P3d-2 adds the `Settings › Profile` item** at the `TODO(P3d-2)` in `ProfileSwitcher.tsx` and,
   if the entry is to be discoverable with no slave, widens `enabled` in the hook — one place.
@@ -407,23 +407,52 @@ two sentences and offers the wizard.
 - **The master's dot** reads `useProfileSync()`: `blocked` (`suspended` → syncing, else problem) → `status.profile`
   (`locked:*` → locked, `synced`, `pending` → syncing) → unknown (no status, or `remote && stale`). It does **not**
   read `problems`: that is a log with no "over" signal; the *Current* block is where it is listed.
-- **The Home button says which world is on screen — only where there is a slave.**
+- **Every profile — the master included — has a name, an icon and a colour** (user decision, 2026-09-21: "Home
+  becomes the profile's name, `Home` when it has none; a profile can pick the logo / a Phosphor icon + a
+  colour"). Data model, in `useLocalProfilesStore` (device-local, persisted, sanitised by `merge`; NOT in the
+  SOT — per device for now, syncing it would take a section of its own, outside P3):
+  - `ProfileAppearance { icon?, iconWeight?, color? }`; `LocalProfile extends ProfileAppearance`; the master gets
+    `master: MasterAppearance = { name: string | null, …ProfileAppearance }` (`{ name: null }` by default). A
+    slave's name stays required; only the master can be unnamed.
+  - **The shapes are the app's own, so the existing pickers fit**: `icon` / `iconWeight` exactly as
+    `Workspace.icon` / `Workspace.iconWeight` (`IconWeight` in `types/tab.ts`; validated with
+    `isPhosphorIconName` / `isIconWeight` from `lib/host-color.ts` — an unknown name would be painted as TEXT by
+    `WorkspaceIcon`); `color` is a host's strict `#rrggbb` (`isValidHostColor`, stored lower-case). **For
+    P3d-2**: the icon picker is `features/workspace/components/WorkspaceIconPicker.tsx` (`currentIcon`,
+    `onSelect`, `onCancel`, `inline?`, `currentWeight?`, `onWeightChange?` — store-agnostic, reusable as is);
+    the colour side is `HOST_COLOR_PRESETS` (`lib/host-color.ts`) + `components/hosts/HostColorLayerEditor.tsx`
+    (`color`, `alpha`, `inherited`, `onChange`, `onClose` — store-agnostic; pass `layer="main"`, ignore alpha).
+    `components/hosts/HostColorField.tsx` is NOT reusable: it takes a `hostId` and writes `useHostStore` itself.
+  - `setProfileAppearance(id | 'master', { name?, icon?, iconWeight?, color? })` — absent key = unchanged, `null`
+    = clear; one bad value refuses the whole patch (`not-found` / `bad-name` / `bad-icon` / `bad-weight` /
+    `bad-color`); clearing the icon clears its weight. Dev hook: `profiles.setAppearance(id, patch)` and
+    `profiles.appearance(id)`.
+  - **`promoteSlave`: the look goes with the WORLD, not the label** — the promoted slave's name / icon / colour
+    become the master's, the old master's go to the demoted slave; `demotedName` names the demoted slave only
+    when the old master had no name. `switch-active.ts`'s rollback snapshot includes `master`.
+  - **A copy starts plain**: `copyMasterAsSlave` / `saveScreenAsSlave` give the new slave its name and no icon,
+    no colour.
+- **What the Home button shows — one rule, no "only with a slave" branch**: the name, icon and colour of the
+  profile ON SCREEN. Unnamed → `t('nav.home')`; no icon → the Purdex logo (the very `<img>` it always had); the
+  colour tints a Phosphor icon (`ProfileIcon` in `ProfileSwitcher.tsx` — a workspace-style icon with a host-style
+  tint; **it does nothing to the logo, which is a bitmap** — P3d-2's editor should say so or offer the colour
+  only with an icon). With nothing set and no slave both buttons are today's, attribute for attribute (pinned).
 
   | | wide (`HomeRow`) | narrow |
   |---|---|---|
-  | no slave | `Home`; no `aria-label`, no `title` | `title="Home"`; no `aria-label`, no marker |
-  | slave exists, master on screen | label + `title` = `t('profile.master')` | `title="Home"`, no marker |
-  | a slave on screen | label (CSS-truncated) + `title` = its name | `title` = its name + `home-profile-marker` |
+  | nothing set, no slave | logo + `Home`; no `title`, no `aria-*` | logo, `title="Home"`; no `aria-*` |
+  | named / icon set | icon + name (CSS-truncated); `title` = name (only when named); `aria-label` = name or `Home` | icon; `title` = `aria-label` = name or `Home` |
+  | a slave exists | + chevron, `aria-haspopup` / `aria-expanded`; `aria-label` = `t('profile.switcher.trigger', { name })` | the same, no chevron |
 
-  With a slave the trigger's `aria-label` is `t('profile.switcher.trigger', { name })` ("Profile: Scratch") in
-  both bars. The marker is a 7 px `bg-accent` dot at the icon's bottom-right — not the unread badge's corner,
-  colour or shape — and it means one thing: what is on screen never syncs.
-- test ids: `home-button`, `home-label` (wide), `home-switcher-chevron` (wide), `home-profile-marker` (narrow),
-  `profile-switcher-menu`, `profile-item-master`, `profile-item-<slaveId>`, `profile-sync-dot` (`data-state`);
+  In the menu every item is icon + name; the master's name is `Home` until it has one, and it alone carries the
+  `t('profile.master')` tag (the Menu item's `hint`) and the sync dot. **`profile.master` is the one key for the
+  word** (en `Master`, zh-TW 「主要」).
+- test ids: `home-button`, `home-label` (wide), `home-switcher-chevron` (wide), `profile-icon` (`data-icon`,
+  `data-weight`; absent while the logo shows), `profile-switcher-menu`, `profile-item-master`, `profile-item-<slaveId>`, `profile-sync-dot` (`data-state`);
   busy = `aria-busy="true"` on the item.
 - i18n: `profile.master`, `profile.switcher.label`, `profile.switcher.trigger`, `profile.sync.*`,
   `profile.switch.*`. zh-TW keeps "profile" as a noun (as `hosts.undo_world_skipped` already did): master =
-  「主要 profile」, slave = 「本機 profile」.
+  「主要」, slave = 「本機 profile」.
 
 ### Task 6 — `components/ProfileSwitcher.tsx`
 Portal-based menu anchored to the Home button (both bars), `role="menu"` with arrow keys, Home/End,

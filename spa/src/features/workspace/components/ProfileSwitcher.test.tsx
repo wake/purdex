@@ -57,7 +57,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.mocked(switchActiveProfile).mockReset()
   vi.mocked(useProfileSync).mockReturnValue(NO_MASTER)
-  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0 })
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
   __resetProfileSwitcherForTest()
   useUndoToast.setState({ toast: null })
 })
@@ -125,7 +125,7 @@ describe('Home button — with slaves: the profile switcher', () => {
     fireEvent.click(screen.getByTestId('home-button'))
     const items = screen.getAllByRole('menuitemradio')
     expect(items.map((el) => el.dataset.testid)).toEqual(['profile-item-master', 'profile-item-s2', 'profile-item-s1'])
-    expect(items[0]).toHaveTextContent(en['profile.master'])
+    expect(items[0]).toHaveTextContent(en['profile.master']) // the tag; the name is `Home` until it is given one
     expect(screen.queryAllByRole('menuitem')).toHaveLength(0)
     expect(screen.queryAllByRole('separator')).toHaveLength(0)
   })
@@ -494,7 +494,9 @@ describe('the master\'s sync dot', () => {
   })
 })
 
-describe('the Home button says which world is on screen', () => {
+// One rule, no branches: the Home button shows the name, icon and colour of the profile on screen. Unnamed →
+// `Home`; no icon → the Purdex logo; no colour → none. So with nothing set it is, item for item, today's button.
+describe('the Home button shows the profile on screen', () => {
   function renderNarrow() {
     return render(
       <ActivityBarNarrow
@@ -508,35 +510,122 @@ describe('the Home button says which world is on screen', () => {
       />,
     )
   }
-  const LONG = 'A very long local profile name that will certainly not fit in the bar'
+  const LONG = 'A long local profile name that will not fit in the bar' // names are capped at 64 code points
+  const LOOK = { icon: 'Rocket', iconWeight: 'fill', color: '#3b82f6' } as const
   const triggerLabel = (name: string) => en['profile.switcher.trigger'].replace('{{name}}', name)
+  const attrs = (el: Element) => Array.from(el.attributes).map((a) => a.name).sort()
+  const setLook = (id: string, patch: Parameters<ReturnType<typeof useLocalProfilesStore.getState>['setProfileAppearance']>[1]) => {
+    const r = useLocalProfilesStore.getState().setProfileAppearance(id, patch)
+    if (!r.ok) throw new Error(r.reason)
+  }
 
-  describe('wide', () => {
-    it('no slave: `Home`, no aria-label, no title — item for item what it was', () => {
+  describe('nothing set, no slave — today\'s button, attribute for attribute', () => {
+    it('wide: the logo and `Home`; no title, no aria-*, no chevron, no menu, nothing else inside', () => {
       renderHome()
       const button = screen.getByTestId('home-button')
-      expect(screen.getByTestId('home-label')).toHaveTextContent(en['nav.home'])
-      expect(button).not.toHaveAttribute('aria-label')
-      expect(button).not.toHaveAttribute('title')
+      expect(attrs(button)).toEqual(['class', 'data-testid', 'type'])
+      expect(button.children).toHaveLength(2)
+      const [img, label] = Array.from(button.children)
+      expect(img.tagName).toBe('IMG')
+      expect(img).toHaveAttribute('src', '/icons/logo-transparent.png')
+      expect(img).toHaveAttribute('alt', '')
+      expect(img).toHaveAttribute('width', '16')
+      expect(label).toHaveTextContent(en['nav.home'])
+      expect(screen.getByTestId('home-header').children).toHaveLength(1)
+      expect(screen.queryByTestId('profile-icon')).toBeNull()
     })
 
-    it('a slave exists, the master is on screen: the master\'s name', () => {
+    it('narrow: the logo, title `Home`; no aria-*, no menu, nothing else inside', () => {
+      renderNarrow()
+      const button = screen.getByTestId('home-button')
+      expect(attrs(button)).toEqual(['class', 'data-testid', 'title'])
+      expect(button).toHaveAttribute('title', en['nav.home'])
+      expect(button.children).toHaveLength(1)
+      const img = button.children[0]
+      expect(img.tagName).toBe('IMG')
+      expect(img).toHaveAttribute('src', '/icons/logo-transparent.png')
+      expect(img).toHaveAttribute('alt', 'Purdex')
+      expect(img).toHaveAttribute('width', '20')
+      expect(button.parentElement!.children).toHaveLength(1)
+    })
+  })
+
+  describe('the master, named and styled — slave or no slave', () => {
+    it('wide: its name (CSS-truncated, whole in the title), its icon in its colour, and no logo', () => {
+      setLook('master', { name: LONG, ...LOOK })
+      renderHome()
+      const button = screen.getByTestId('home-button')
+      expect(screen.getByTestId('home-label')).toHaveTextContent(LONG)
+      expect(screen.getByTestId('home-label')).toHaveClass('truncate')
+      expect(button).toHaveAttribute('title', LONG)
+      expect(button).toHaveAttribute('aria-label', LONG)
+      expect(button).not.toHaveAttribute('aria-haspopup') // a name does not make a menu
+      const icon = screen.getByTestId('profile-icon')
+      expect(icon).toHaveAttribute('data-icon', 'Rocket')
+      expect(icon).toHaveAttribute('data-weight', 'fill')
+      expect(icon.style.color).toBe('rgb(59, 130, 246)')
+      expect(button.querySelector('img')).toBeNull()
+    })
+
+    it('narrow: the icon in its colour; the name is the title and the accessible name', () => {
+      setLook('master', { name: 'Work', ...LOOK })
+      renderNarrow()
+      const button = screen.getByTestId('home-button')
+      expect(button).toHaveAttribute('title', 'Work')
+      expect(button).toHaveAttribute('aria-label', 'Work')
+      expect(screen.getByTestId('profile-icon')).toHaveAttribute('data-icon', 'Rocket')
+      expect(screen.getByTestId('profile-icon').style.color).toBe('rgb(59, 130, 246)')
+      expect(button.querySelector('img')).toBeNull()
+    })
+
+    it('a name alone keeps the logo; an icon alone keeps `Home`', () => {
+      setLook('master', { name: 'Work' })
+      const { unmount } = renderHome()
+      expect(screen.getByTestId('home-button').querySelector('img')).not.toBeNull()
+      expect(screen.getByTestId('home-label')).toHaveTextContent('Work')
+      unmount()
+      setLook('master', { name: null, icon: 'Rocket' })
+      renderHome()
+      expect(screen.getByTestId('home-label')).toHaveTextContent(en['nav.home'])
+      expect(screen.getByTestId('home-button')).toHaveAttribute('aria-label', en['nav.home'])
+      expect(screen.getByTestId('profile-icon')).toHaveAttribute('data-icon', 'Rocket')
+    })
+  })
+
+  describe('with a slave', () => {
+    it('the master on screen, unnamed: still `Home` — and the accessible name says it is the profile menu', () => {
       seedSlaves('master')
       renderHome()
-      expect(screen.getByTestId('home-label')).toHaveTextContent(en['profile.master'])
-      expect(screen.getByTestId('home-label')).not.toHaveTextContent(en['nav.home'])
-      expect(screen.getByTestId('home-button')).toHaveAttribute('aria-label', triggerLabel(en['profile.master']))
+      expect(screen.getByTestId('home-label')).toHaveTextContent(en['nav.home'])
+      expect(screen.getByTestId('home-button')).toHaveAttribute('aria-label', triggerLabel(en['nav.home']))
+      expect(screen.getByTestId('home-button')).toHaveAttribute('aria-haspopup', 'menu')
     })
 
-    it('a slave is on screen: ITS name — truncated by CSS, whole in the title — and never the master\'s', () => {
-      useLocalProfilesStore.setState({ slaves: { s1: slave('s1', LONG, true) }, slaveOrder: ['s1'], activeProfileId: 's1' })
-      renderHome()
-      const label = screen.getByTestId('home-label')
-      expect(label).toHaveTextContent(LONG)
-      expect(label).not.toHaveTextContent(en['profile.master'])
-      expect(label).toHaveClass('truncate')
-      expect(screen.getByTestId('home-button')).toHaveAttribute('title', LONG)
-      expect(screen.getByTestId('home-button')).toHaveAttribute('aria-label', triggerLabel(LONG))
+    it.each(['wide', 'narrow'] as const)('%s — a slave on screen: ITS name, icon and colour, never the master\'s', (bar) => {
+      setLook('master', { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
+      seedSlaves('s1')
+      setLook('s1', LOOK)
+      if (bar === 'wide') renderHome()
+      else renderNarrow()
+      const button = screen.getByTestId('home-button')
+      expect(button).toHaveAttribute('title', 'Scratch')
+      expect(button).toHaveAttribute('aria-label', triggerLabel('Scratch'))
+      expect(screen.getByTestId('profile-icon')).toHaveAttribute('data-icon', 'Rocket')
+      expect(screen.getByTestId('profile-icon').style.color).toBe('rgb(59, 130, 246)')
+      if (bar === 'wide') {
+        expect(screen.getByTestId('home-label')).toHaveTextContent('Scratch')
+        expect(screen.getByTestId('home-label')).not.toHaveTextContent('Work')
+      }
+    })
+
+    it.each(['wide', 'narrow'] as const)('%s — a plain slave on screen shows the logo, not the master\'s icon', (bar) => {
+      setLook('master', { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
+      seedSlaves('s1')
+      if (bar === 'wide') renderHome()
+      else renderNarrow()
+      expect(screen.queryByTestId('profile-icon')).toBeNull()
+      expect(screen.getByTestId('home-button').querySelector('img')).not.toBeNull()
+      expect(screen.getByTestId('home-button')).toHaveAttribute('title', 'Scratch')
     })
 
     it('follows a switch', () => {
@@ -547,32 +636,37 @@ describe('the Home button says which world is on screen', () => {
     })
   })
 
-  describe('narrow', () => {
-    it('no slave: title `Home`, no aria-label, no marker', () => {
-      renderNarrow()
-      const button = screen.getByTestId('home-button')
-      expect(button).toHaveAttribute('title', en['nav.home'])
-      expect(button).not.toHaveAttribute('aria-label')
-      expect(screen.queryByTestId('home-profile-marker')).toBeNull()
-    })
+  describe('the menu', () => {
+    const openMenu = () => fireEvent.click(screen.getByTestId('home-button'))
 
-    it('a slave exists, the master is on screen: looks as ever (title `Home`, no marker); only the accessible name says more', () => {
+    it('every item carries its profile\'s icon and name; the master is tagged as the master', () => {
+      setLook('master', { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
       seedSlaves('master')
-      renderNarrow()
-      const button = screen.getByTestId('home-button')
-      expect(button).toHaveAttribute('title', en['nav.home'])
-      expect(screen.queryByTestId('home-profile-marker')).toBeNull()
-      expect(button).toHaveAttribute('aria-label', triggerLabel(en['profile.master']))
+      setLook('s2', LOOK)
+      renderHome()
+      openMenu()
+      const master = screen.getByTestId('profile-item-master')
+      expect(master).toHaveTextContent('Work')
+      expect(master).toHaveTextContent(en['profile.master'])
+      expect(master.querySelector('[data-testid="profile-icon"]')).toHaveAttribute('data-icon', 'Briefcase')
+      const s2 = screen.getByTestId('profile-item-s2')
+      expect(s2).toHaveTextContent('Client work')
+      expect(s2).not.toHaveTextContent(en['profile.master'])
+      expect(s2.querySelector('[data-testid="profile-icon"]')).toHaveAttribute('data-icon', 'Rocket')
+      expect((s2.querySelector('[data-testid="profile-icon"]') as HTMLElement).style.color).toBe('rgb(59, 130, 246)')
+      // a plain slave: the logo
+      const s1 = screen.getByTestId('profile-item-s1')
+      expect(s1.querySelector('[data-testid="profile-icon"]')).toBeNull()
+      expect(s1.querySelector('img')).toHaveAttribute('src', '/icons/logo-transparent.png')
     })
 
-    it('a slave is on screen: a marker on the icon, and the title is the slave\'s name', () => {
-      seedSlaves('s1')
-      renderNarrow()
-      const button = screen.getByTestId('home-button')
-      expect(screen.getByTestId('home-profile-marker')).toBeInTheDocument()
-      expect(button).toHaveAttribute('title', 'Scratch')
-      expect(button).toHaveAttribute('aria-label', triggerLabel('Scratch'))
+    it('an unnamed master is `Home` + the tag', () => {
+      seedSlaves('master')
+      renderHome()
+      openMenu()
+      const master = screen.getByTestId('profile-item-master')
+      expect(master).toHaveTextContent(en['nav.home'])
+      expect(master).toHaveTextContent(en['profile.master'])
     })
   })
 })
-

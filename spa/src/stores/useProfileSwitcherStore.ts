@@ -28,7 +28,7 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { useI18nStore } from './useI18nStore'
-import { useLocalProfilesStore, MASTER_PROFILE_ID } from './useLocalProfilesStore'
+import { useLocalProfilesStore, type ProfileAppearance } from './useLocalProfilesStore'
 import { useUndoToast } from './useUndoToast'
 import { switchActiveProfile, type SwitchResult } from '../lib/profile/switch-active'
 
@@ -152,22 +152,33 @@ export function hasLocalSlaves(): boolean {
   return useLocalProfilesStore.getState().slaveOrder.length > 0
 }
 
-/** What a Home button needs: is it a menu trigger, is the menu open, what a click does, and what it says. */
+/** The name and look of the profile on screen, as the Home button shows it. */
+export interface CurrentProfile extends ProfileAppearance {
+  /** null = the master, never named: shown as `Home`. */
+  name: string | null
+}
+
+/**
+ * What a Home button needs. ONE RULE, NO BRANCHES: the button shows the name, icon and colour of the profile on
+ * screen — unnamed → `Home`, no icon → the Purdex logo, no colour → none. So with nothing set and no slave it
+ * is, attribute for attribute, the button it always was (`triggerProps` is then empty). It is a MENU trigger
+ * only where there is a slave.
+ */
 export function useProfileSwitcherTrigger(onSelectHome: () => void): {
   enabled: boolean
   open: boolean
   onClick: () => void
-  /** The name of the profile on screen — null without a slave: there is one world, and the button is `Home`. */
-  currentName: string | null
-  /** The on-screen profile is a slave: a world that never syncs, which is what a user most needs to see. */
-  onSlave: boolean
-  /** Spread on the button. Empty without a slave: a plain button must not announce a menu. */
+  current: CurrentProfile
+  /** `current.name`, or `Home`. */
+  label: string
+  /** Spread on the button. Empty in the default state: a plain button must not announce a menu, nor re-state a
+   *  name it already shows. With an icon of the user's there is no logo `alt` left to name the narrow button. */
   triggerProps: { 'aria-haspopup'?: 'menu'; 'aria-expanded'?: boolean; 'aria-label'?: string }
 } {
   const t = useI18nStore((s) => s.t)
   const enabled = useLocalProfilesStore((s) => s.slaveOrder.length > 0)
-  const activeProfileId = useLocalProfilesStore((s) => s.activeProfileId)
-  const slaveName = useLocalProfilesStore((s) => s.slaves[s.activeProfileId]?.name)
+  // A pointer at a slave that is not there is the store's `merge` to heal; until then the master is the honest answer.
+  const current: CurrentProfile = useLocalProfilesStore((s) => s.slaves[s.activeProfileId] ?? s.master)
   const requested = useProfileSwitcherStore((s) => s.open)
   const setOpen = useProfileSwitcherStore((s) => s.setOpen)
   const open = enabled && requested
@@ -178,19 +189,19 @@ export function useProfileSwitcherTrigger(onSelectHome: () => void): {
     if (requested && !enabled) setOpen(false)
   }, [requested, enabled, setOpen])
 
-  const onSlave = enabled && activeProfileId !== MASTER_PROFILE_ID
-  // A slave's name is the user's own text, never through t(). (A pointer at a slave that is not there is the
-  // store's `merge` to heal; until then the master's name is the honest fallback for a label.)
-  const currentName = !enabled ? null : onSlave && slaveName !== undefined ? slaveName : t('profile.master')
-
+  // A slave's / the master's name is the user's own text, never through t().
+  const label = current.name ?? t('nav.home')
+  const customised = current.name !== null || current.icon !== undefined
   return {
     enabled,
     open,
     onClick: enabled ? () => setOpen(!open) : onSelectHome,
-    currentName,
-    onSlave,
-    triggerProps: currentName === null
-      ? {}
-      : { 'aria-haspopup': 'menu', 'aria-expanded': open, 'aria-label': t('profile.switcher.trigger', { name: currentName }) },
+    current,
+    label,
+    triggerProps: enabled
+      ? { 'aria-haspopup': 'menu', 'aria-expanded': open, 'aria-label': t('profile.switcher.trigger', { name: label }) }
+      : customised
+        ? { 'aria-label': label }
+        : {},
   }
 }

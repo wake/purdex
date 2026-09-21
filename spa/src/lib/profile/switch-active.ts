@@ -119,11 +119,11 @@ const writeFailed = (err: unknown): WriteFailed => ({ ok: false, reason: 'write-
 
 // === The parking lot, captured ===
 
-type LocalSnapshot = Pick<ReturnType<typeof useLocalProfilesStore.getState>, 'slaves' | 'slaveOrder' | 'activeProfileId' | 'parkedMaster' | 'worldEpoch' | 'relabelCount'>
+type LocalSnapshot = Pick<ReturnType<typeof useLocalProfilesStore.getState>, 'slaves' | 'slaveOrder' | 'activeProfileId' | 'parkedMaster' | 'worldEpoch' | 'relabelCount' | 'master'>
 
 function captureLocal(): LocalSnapshot {
   const s = useLocalProfilesStore.getState()
-  return { slaves: s.slaves, slaveOrder: s.slaveOrder, activeProfileId: s.activeProfileId, parkedMaster: s.parkedMaster, worldEpoch: s.worldEpoch, relabelCount: s.relabelCount }
+  return { slaves: s.slaves, slaveOrder: s.slaveOrder, activeProfileId: s.activeProfileId, parkedMaster: s.parkedMaster, worldEpoch: s.worldEpoch, relabelCount: s.relabelCount, master: s.master } // `master`: a promote moves the looks too
 }
 
 /** As master-world.ts's `restore`: memory is back before persist's storage write can throw. */

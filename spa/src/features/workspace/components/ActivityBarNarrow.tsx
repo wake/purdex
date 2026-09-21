@@ -10,7 +10,7 @@ import type { ActiveStatus } from '../workspace-indicators'
 import type { ActivityBarProps } from './activity-bar-props'
 import { HoverTooltip } from '../../../components/HoverTooltip'
 import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
-import { ProfileSwitcher } from './ProfileSwitcher'
+import { ProfileIcon, ProfileSwitcher } from './ProfileSwitcher'
 
 const PILL_COLORS: Record<ActiveStatus, string> = {
   running: '#4ade80',
@@ -132,13 +132,14 @@ export function ActivityBarNarrow({
     <div className="group/narrow-bar relative hidden min-h-0 lg:flex">
       <div className="w-11 flex min-h-0 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0 overflow-hidden">
       {/* Home — a plain button: every tab belongs to a workspace (Profile Sync spec §4.3), so it has no tabs
-          of its own to count or to light up for. On a device with a local profile it opens the profile
-          switcher instead — a portal, beside the button: this bar is 44 px wide and overflow-hidden. */}
+          of its own to count or to light up for. It shows the icon of the profile on screen (the Purdex logo
+          unless one was chosen) and has its name as the title. On a device with a local profile it opens the
+          profile switcher — a portal, beside the button: this bar is 44 px wide and overflow-hidden. */}
       <div className="relative group">
         <button
           ref={homeRef}
           data-testid="home-button"
-          title={switcher.onSlave && switcher.currentName !== null ? switcher.currentName : t('nav.home')}
+          title={switcher.label}
           onClick={switcher.onClick}
           {...switcher.triggerProps}
           className={`w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
@@ -147,19 +148,8 @@ export function ActivityBarNarrow({
               : 'hover:bg-surface-tertiary opacity-70 hover:opacity-100'
           }`}
         >
-          <img src="/icons/logo-transparent.png" alt="Purdex" width={20} height={20} className="rounded-sm" />
+          <ProfileIcon appearance={switcher.current} size={20} logoAlt="Purdex" />
         </button>
-        {/* A slave is on screen — a world that never syncs. No room for its name here, so a mark: bottom-right
-            and accent-coloured, where the unread badge (top-right, red, a number) and the status pill (left,
-            green / yellow / red) are not. The master on screen shows nothing: the bar looks as it always did. */}
-        {switcher.onSlave && (
-          <span
-            data-testid="home-profile-marker"
-            aria-hidden="true"
-            className="absolute -bottom-px -right-px w-[7px] h-[7px] rounded-full bg-accent pointer-events-none"
-            style={{ boxShadow: '0 0 0 1.5px var(--surface-tertiary)' }}
-          />
-        )}
         {switcher.enabled && <ProfileSwitcher trigger={homeRef} placement="right-start" />}
       </div>
 

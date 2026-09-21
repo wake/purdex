@@ -88,7 +88,8 @@ import { getClientId, isClientIdPersisted } from '../client-identity'
 import { effectiveDeviceName } from '../device-name'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { useHostStore } from '../../stores/useHostStore'
-import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } from '../../stores/useLocalProfilesStore'
 import { isMasterPair, isSyncDirection, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
 import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
@@ -156,6 +157,10 @@ export interface ProfilesDebug {
   promote(id: string, demotedName: string): Promise<PromoteResult>
   rename(id: string, name: string): ReturnType<typeof renameSlave>
   remove(id: string): ReturnType<typeof deleteSlave>
+  /** Name / icon / colour of `'master'` or a slave — the editor arrives with Settings › Profile (P3d-2). */
+  setAppearance(id: string, patch: ProfileAppearancePatch): ReturnType<LocalProfilesState['setProfileAppearance']>
+  /** What is set, and nothing of the world; null: no such profile. */
+  appearance(id: string): MasterAppearance | null
   /** A summary of `readMasterWorld()` — never the world itself. */
   world(): { settled: true; onScreen: boolean; workspaces: string[] } | { settled: false; reason: string }
 }
@@ -666,6 +671,14 @@ export function startProfileSync(opts: { now?: () => number } = {}): () => void 
         promote: promoteToMaster,
         rename: renameSlave,
         remove: deleteSlave,
+        setAppearance: (id, patch) => useLocalProfilesStore.getState().setProfileAppearance(id, patch),
+        appearance: (id) => {
+          const local = useLocalProfilesStore.getState()
+          if (id === MASTER_PROFILE_ID) return { ...local.master }
+          if (!Object.hasOwn(local.slaves, id)) return null
+          const { name, icon, iconWeight, color } = local.slaves[id]
+          return { name, ...(icon !== undefined ? { icon } : {}), ...(iconWeight !== undefined ? { iconWeight } : {}), ...(color !== undefined ? { color } : {}) }
+        },
         world: () => {
           const read = readMasterWorld()
           return read.settled ? { settled: true, onScreen: read.onScreen, workspaces: read.world.workspaces.map((w) => w.name) } : read

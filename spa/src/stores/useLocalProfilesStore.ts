@@ -50,6 +50,17 @@
 // snapshot of a host delete, and an undo that finds it moved touches no world.
 // Persisted and synced like the rest, so another window's promote counts too.
 //
+// APPEARANCE — a name, an icon (+ weight) and a colour per profile, the master included (`master`): what the
+// Home button and the profile switcher show. With nothing set — `master: { name: null }` — the button is `Home`
+// and the Purdex logo, i.e. the app as it was. The shapes are the ones the app already has, so the existing
+// pickers fit: `icon` / `iconWeight` as on a `Workspace` (a Phosphor name from the catalog — an unknown one
+// would be painted as TEXT by `WorkspaceIcon`, hence `isPhosphorIconName`), `color` as a host's strict
+// `#rrggbb` (`isValidHostColor`; it reaches inline CSS). A profile's appearance is PER DEVICE for now, like
+// everything in this store; carrying it across devices would take a section of its own and is not in P3.
+//   It belongs to the WORLD, not to the label: `promoteSlave` hands the promoted slave's look to the master and
+// the old master's to the demoted slave — what a user recognises is "that working environment", whatever it is
+// called now. A copy (`addSlave`) starts plain: two worlds that look alike are one too many.
+//
 // `promoteSlave` IS A RELABELLING, NOT A SWITCH. It never takes a world off the
 // screen or puts one on, so the tab stores' CONTENT is never involved — only, in
 // two of the three cases, their world tag (see the action's comment).
@@ -59,7 +70,8 @@ import { generateId } from '../lib/id'
 import { normalizeDeviceName } from '../lib/device-name'
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { isWorldEpoch } from '../lib/storage/world-fence'
-import type { Tab, Workspace } from '../types/tab'
+import { isIconWeight, isPhosphorIconName, isValidHostColor } from '../lib/host-color'
+import type { IconWeight, Tab, Workspace } from '../types/tab'
 
 /** The `activeProfileId` of the master; never a slave's id. */
 export const MASTER_PROFILE_ID = 'master'
@@ -71,12 +83,35 @@ export interface ParkedWorld {
   activeTabId: string | null
 }
 
-export interface LocalProfile {
+/** How a profile looks. Every field optional: absent = the default (the Purdex logo, no colour). */
+export interface ProfileAppearance {
+  /** A Phosphor icon name from the catalog, as `Workspace.icon`. */
+  icon?: string
+  /** Only ever with `icon`. */
+  iconWeight?: IconWeight
+  /** Strict lower-case `#rrggbb`, as a host's colour. */
+  color?: string
+}
+
+export interface LocalProfile extends ProfileAppearance {
   id: string
   name: string
   createdAt: number
   /** null ⇔ this slave is the one on screen. */
   world: ParkedWorld | null
+}
+
+/** The master has no record of its own but this. `name: null` = never named: it is shown as `Home`. */
+export interface MasterAppearance extends ProfileAppearance {
+  name: string | null
+}
+
+/** Absent key = leave as is; `null` = clear. A slave's name cannot be cleared. */
+export interface ProfileAppearancePatch {
+  name?: string | null
+  icon?: string | null
+  iconWeight?: IconWeight | null
+  color?: string | null
 }
 
 interface LocalProfilesData {
@@ -88,6 +123,8 @@ interface LocalProfilesData {
   worldEpoch: number
   /** +1 with every promote: the labels of the worlds have moved (see the header). */
   relabelCount: number
+  /** The master's appearance (see APPEARANCE). */
+  master: MasterAppearance
 }
 
 type Refused<R extends string> = { ok: false; reason: R }
@@ -120,6 +157,11 @@ export interface LocalProfilesState extends LocalProfilesData {
     demotedName: string,
     worldEpoch: number,
   ) => { ok: true; demotedId: string; activeProfileId: string } | Refused<'not-found' | 'bad-name' | 'bad-epoch'>
+  /** Name / icon / colour of the master (`'master'`) or a slave. One bad value refuses the whole patch. */
+  setProfileAppearance: (
+    id: string,
+    patch: ProfileAppearancePatch,
+  ) => { ok: true } | Refused<'not-found' | 'bad-name' | 'bad-icon' | 'bad-weight' | 'bad-color'>
   /** Overwrite a PARKED world — `'master'` for the parked master (the master keeps syncing while a slave is on
    *  screen, so an apply lands here). The world on screen is not this store's to write. The epoch does not move. */
   replaceParkedWorld: (targetId: string, world: ParkedWorld) => { ok: true } | Refused<'not-found' | 'on-screen' | 'bad-world'>
@@ -169,6 +211,54 @@ const RECOVERED_SLAVE_NAME = 'Recovered'
 const RECOVERED_MASTER_NAME = 'Recovered master'
 const RECOVERED_ID = 'recovered'
 
+/** The appearance fields of whatever storage held: a field that is not what it must be is dropped, alone. */
+function sanitiseAppearance(v: Record<string, unknown>): ProfileAppearance {
+  const out: ProfileAppearance = {}
+  if (isPhosphorIconName(v.icon)) {
+    out.icon = v.icon
+    if (isIconWeight(v.iconWeight)) out.iconWeight = v.iconWeight
+  }
+  if (isValidHostColor(v.color)) out.color = v.color.toLowerCase()
+  return out
+}
+
+function sanitiseMaster(v: unknown): MasterAppearance {
+  return isRecord(v) ? { name: normalizeLocalProfileName(v.name), ...sanitiseAppearance(v) } : { name: null }
+}
+
+/** `patch` applied to `current`, or why not. */
+function patchAppearance(
+  current: ProfileAppearance,
+  patch: ProfileAppearancePatch,
+): { ok: true; appearance: ProfileAppearance } | Refused<'bad-icon' | 'bad-weight' | 'bad-color'> {
+  const next: ProfileAppearance = { icon: current.icon, iconWeight: current.iconWeight, color: current.color }
+  if (patch.icon !== undefined) {
+    if (patch.icon !== null && !isPhosphorIconName(patch.icon)) return { ok: false, reason: 'bad-icon' }
+    next.icon = patch.icon ?? undefined
+  }
+  if (patch.iconWeight !== undefined) {
+    if (patch.iconWeight !== null && !isIconWeight(patch.iconWeight)) return { ok: false, reason: 'bad-weight' }
+    next.iconWeight = patch.iconWeight ?? undefined
+  }
+  if (patch.color !== undefined) {
+    if (patch.color !== null && !isValidHostColor(patch.color)) return { ok: false, reason: 'bad-color' }
+    next.color = patch.color?.toLowerCase()
+  }
+  if (next.icon === undefined) next.iconWeight = undefined // a weight alone means nothing
+  // No `undefined`-valued keys: the record is compared and persisted as it is.
+  const appearance: ProfileAppearance = {}
+  if (next.icon !== undefined) appearance.icon = next.icon
+  if (next.iconWeight !== undefined) appearance.iconWeight = next.iconWeight
+  if (next.color !== undefined) appearance.color = next.color
+  return { ok: true, appearance }
+}
+
+/** Just the appearance fields of a record, without `undefined`-valued keys. */
+function appearanceOf(p: ProfileAppearance): ProfileAppearance {
+  const r = patchAppearance(p, {})
+  return r.ok ? r.appearance : {}
+}
+
 /** One persisted slave → a well-formed one, or null. Identity and world must be right (there is no guessing an
  *  id, and a malformed world is nothing the tab stores could take); a broken NAME or date is replaced instead,
  *  because dropping the record would throw the user's world away over a label. */
@@ -180,6 +270,7 @@ function sanitiseSlave(key: string, v: unknown): LocalProfile | null {
     name: normalizeLocalProfileName(v.name) ?? RECOVERED_SLAVE_NAME,
     createdAt: typeof v.createdAt === 'number' && Number.isFinite(v.createdAt) ? v.createdAt : 0,
     world: v.world,
+    ...sanitiseAppearance(v),
   }
 }
 
@@ -256,6 +347,7 @@ function sanitiseData(persisted: unknown): LocalProfilesData {
     parkedMaster,
     worldEpoch: isWorldEpoch(p.worldEpoch) ? p.worldEpoch : 0, // beyond the ceiling is junk too (lib/storage/world-fence.ts)
     relabelCount: sanitiseCount(p.relabelCount),
+    master: sanitiseMaster(p.master),
   }
 }
 
@@ -268,6 +360,7 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
       parkedMaster: null,
       worldEpoch: 0,
       relabelCount: 0,
+      master: { name: null },
 
       addSlave: (name, world) => {
         const normalized = normalizeLocalProfileName(name)
@@ -288,6 +381,27 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         const normalized = normalizeLocalProfileName(name)
         if (normalized === null) return { ok: false, reason: 'bad-name' }
         set({ slaves: { ...s.slaves, [id]: { ...s.slaves[id], name: normalized } } })
+        return { ok: true }
+      },
+
+      setProfileAppearance: (id, patch) => {
+        const s = get()
+        const isMaster = id === MASTER_PROFILE_ID
+        if (!isMaster && !Object.hasOwn(s.slaves, id)) return { ok: false, reason: 'not-found' }
+        const current = isMaster ? s.master : s.slaves[id]
+        let name = current.name
+        if (patch.name !== undefined) {
+          if (patch.name !== null && typeof patch.name !== 'string') return { ok: false, reason: 'bad-name' }
+          name = normalizeLocalProfileName(patch.name)
+          if (name === null && !isMaster) return { ok: false, reason: 'bad-name' } // only the master can be unnamed
+        }
+        const patched = patchAppearance(current, patch)
+        if (!patched.ok) return patched
+        if (isMaster) set({ master: { name, ...patched.appearance } })
+        else {
+          const { id: slaveId, createdAt, world } = s.slaves[id]
+          set({ slaves: { ...s.slaves, [id]: { id: slaveId, name: name as string, createdAt, world, ...patched.appearance } } })
+        }
         return { ok: true }
       },
 
@@ -350,7 +464,9 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         delete slaves[slaveId]
         // Each side simply takes the other's slot, `null` ("on screen") included — which is what makes the three
         // cases one: the master slot gets the slave's world, the new slave gets what the master slot held.
-        slaves[demotedId] = { id: demotedId, name, createdAt: Date.now(), world: s.parkedMaster }
+        // The look goes with the world (see APPEARANCE): the old master's — and its name, if it had one; `demotedName`
+        // is for a master nobody named — to the new slave, the promoted slave's to the master.
+        slaves[demotedId] = { id: demotedId, name: s.master.name ?? name, createdAt: Date.now(), world: s.parkedMaster, ...appearanceOf(s.master) }
         const activeProfileId =
           s.activeProfileId === MASTER_PROFILE_ID ? demotedId : s.activeProfileId === slaveId ? MASTER_PROFILE_ID : s.activeProfileId
 
@@ -358,6 +474,7 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
           slaves,
           slaveOrder: s.slaveOrder.map((id) => (id === slaveId ? demotedId : id)),
           parkedMaster: promoted.world,
+          master: { name: promoted.name, ...appearanceOf(promoted) },
           activeProfileId,
           worldEpoch,
           relabelCount: s.relabelCount + 1,
@@ -407,8 +524,9 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         parkedMaster: state.parkedMaster,
         worldEpoch: state.worldEpoch,
         relabelCount: state.relabelCount,
+        master: state.master,
       }),
-      // Only the six sanitised fields ever come out of storage: persisted junk
+      // Only the seven sanitised fields ever come out of storage: persisted junk
       // can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseData(persisted) }),
     },
