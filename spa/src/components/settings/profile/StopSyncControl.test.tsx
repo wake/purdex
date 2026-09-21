@@ -5,10 +5,10 @@ import { StopSyncControl } from './StopSyncControl'
 import { pendingDetachTestId } from './profile-rules'
 import { pendingDetachKey, useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
-import { detachMaster, retryPendingDetach } from '../../../lib/profile/start'
+import { detachMaster, dismissPendingDetach, retryPendingDetach } from '../../../lib/profile/start'
 import type { DetachResult } from '../../../lib/profile/start'
 
-vi.mock('../../../lib/profile/start', () => ({ detachMaster: vi.fn(), retryPendingDetach: vi.fn() }))
+vi.mock('../../../lib/profile/start', () => ({ detachMaster: vi.fn(), retryPendingDetach: vi.fn(), dismissPendingDetach: vi.fn() }))
 
 const P1 = 'p_000000000001'
 const EP = '10.0.0.1:7860'
@@ -37,6 +37,8 @@ function Mounted() {
 beforeEach(() => {
   vi.mocked(detachMaster).mockReset()
   vi.mocked(retryPendingDetach).mockReset()
+  // start.ts's: the removal under the cross-window lock. Here it just removes.
+  vi.mocked(dismissPendingDetach).mockReset().mockImplementation(async (key) => useProfileStore.getState().clearPendingDetach(key))
   useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
 })
@@ -261,6 +263,7 @@ describe('an attachment left on the daemon', () => {
       both()
       render(<Mounted />)
       fireEvent.click(within(item(LEFT)).getByTestId('profile-detach-dismiss'))
+      expect(dismissPendingDetach).toHaveBeenCalledWith(pendingDetachKey(LEFT)) // start.ts's door, not the store's setter: it is the one under the lock
       expect(useProfileStore.getState().pendingDetaches).toEqual([OTHER])
       expect(screen.getAllByTestId('profile-detach-leftover')).toHaveLength(1)
     })

@@ -101,6 +101,7 @@ import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { readMasterWorld } from './master-world'
 import { clearSectionStore } from './section-store'
+import { withNamedLock } from '../storage/world-lock'
 import { copyMasterAsSlave, deleteSlave, promoteToMaster, renameSlave, saveScreenAsSlave, switchActiveProfile } from './switch-active'
 import type { CopyResult, PromoteResult, SwitchResult } from './switch-active'
 import { __resetSyncStatusForTest, masterTagOf, openStatusChannel, setLocalSnapshot } from './sync-status'
@@ -771,24 +772,52 @@ function attachedAt(master: Master, endpoint: string | null): boolean {
   return sameMaster(selectMaster(state), master) && state.masterEndpoint === endpoint
 }
 
+export const PENDING_DETACH_LOCK_NAME = 'purdex-pending-detach'
+
+/**
+ * EVERY CHANGE OF THE LIST OF PENDING DETACHES IS "READ STORAGE → CHANGE → WRITE THE WHOLE STORE BACK", and two
+ * renderers can interleave that: both fail a drop in the same moment, both read the same list, each adds its
+ * record, the later write drops the earlier record (review F3, second round). So the three steps run as ONE
+ * SYNCHRONOUS block under the Web Lock `purdex-pending-detach` (lib/storage/world-lock.ts — the mutex of the
+ * world switch, under another name): `rehydrate()` is synchronous over `localStorage`, so it is called and not
+ * awaited, and nothing yields between the read and the write. Adding AND removing go through here — a removal
+ * written from a stale memory drops a record just as well.
+ *   The read also brings the rest of this window's memory up to storage, which is what the write needs: a persist
+ * of this store writes every field, and a master another window set meanwhile must not be written over.
+ *   Not granted within 3 s (a renderer frozen inside the lock): the block runs all the same — late and unlocked
+ * beats a ghost nobody knows of. WITHOUT WEB LOCKS (plain http is no secure context): the block runs inside the
+ * call, synchronously, and the window between two renderers' read and write stays open — the same trade as
+ * world-lock.ts, WITHOUT WEB LOCKS. NOT UNDER THIS LOCK: `setMaster`'s removal of the re-attached record — it is
+ * one write with the master itself, from memory, last-writer-wins like every field of that store.
+ */
+function changePendingDetaches(change: () => void): Promise<void> {
+  const block = (): void => {
+    try {
+      void useProfileStore.persist.rehydrate()
+    } catch {
+      // as it was: the write below is still better than a ghost attachment nobody knows of
+    }
+    change()
+  }
+  return withNamedLock(PENDING_DETACH_LOCK_NAME, block, block).catch(() => undefined)
+}
+
 /**
  * Write down the attachment a failed detach left on the daemon (useProfileStore, `pendingDetaches`) — with the
- * address of THAT daemon. This is a store write AFTER an `await` of up to 15 s, and a persist of this store
- * writes every field from THIS window's memory: so the memory is first brought up to what storage holds — a
- * master another window set meanwhile must not be written over by a stale copy, and the record is MERGED into
- * the list storage holds, not into the one this window remembered (`rehydrate` is synchronous over
- * `localStorage`). And if, by now, this client is attached to that very profile AT THAT ADDRESS again, the
- * attachment is wanted: nothing is written down.
+ * address of THAT daemon, merged into the list STORAGE holds (`changePendingDetaches`). And if, by now, this
+ * client is attached to that very profile AT THAT ADDRESS again, the attachment is wanted: nothing is written.
  */
-async function rememberPendingDetach(master: Master, endpoint: string, failure: Exclude<DetachResult, { ok: true }>): Promise<void> {
-  try {
-    await useProfileStore.persist.rehydrate()
-  } catch {
-    // as it was: the write below is still better than a ghost attachment nobody knows of
-  }
-  if (attachedAt(master, endpoint)) return
-  const detail = failure.reason === 'daemon-not-told' ? failure.detail : failure.reason
-  useProfileStore.getState().addPendingDetach({ hostId: master.hostId, profileId: master.profileId, endpoint, detail, at: clock() })
+function rememberPendingDetach(master: Master, endpoint: string, failure: Exclude<DetachResult, { ok: true }>): Promise<void> {
+  return changePendingDetaches(() => {
+    if (attachedAt(master, endpoint)) return
+    const detail = failure.reason === 'daemon-not-told' ? failure.detail : failure.reason
+    useProfileStore.getState().addPendingDetach({ hostId: master.hostId, profileId: master.profileId, endpoint, detail, at: clock() })
+  })
+}
+
+/** The user gives up on one record (Settings › Profile, Dismiss): removed from the list storage holds. */
+export function dismissPendingDetach(key: string): Promise<void> {
+  return changePendingDetaches(() => useProfileStore.getState().clearPendingDetach(key))
 }
 
 /**
@@ -1034,7 +1063,7 @@ export function detachMaster(): Promise<DetachResult> {
  * host may have been re-pointed since (`dropAttachment`: then nothing is sent, and the record stays for the day
  * the address is put back). In the attach / detach queue, so it cannot overlap one. Attached to that very
  * profile at that address by now → the attachment is wanted: not deleted, and forgotten. Only that record is
- * touched; giving up is `useProfileStore.clearPendingDetach(key)`.
+ * touched; giving up is `dismissPendingDetach(key)`.
  */
 export function retryPendingDetach(key: string): Promise<DetachResult> {
   return serial(async (): Promise<DetachResult> => {
@@ -1042,11 +1071,11 @@ export function retryPendingDetach(key: string): Promise<DetachResult> {
     if (left === undefined) return { ok: true }
     const target: Master = { hostId: left.hostId, profileId: left.profileId }
     if (attachedAt(target, left.endpoint)) {
-      useProfileStore.getState().clearPendingDetach(key)
+      await dismissPendingDetach(key)
       return { ok: true }
     }
     const told = await dropAttachment(target, left.endpoint)
-    if (told.ok) useProfileStore.getState().clearPendingDetach(key)
+    if (told.ok) await dismissPendingDetach(key)
     // Only a request that went out has a newer reason to write down; one that was not sent leaves the record as it is.
     else if (told.reason === 'daemon-not-told' && left.endpoint !== null) await rememberPendingDetach(target, left.endpoint, told)
     return told

@@ -26,7 +26,7 @@ import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { endpointOfHost, pendingDetachKey, useProfileStore, type PendingDetach } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
-import { detachMaster, retryPendingDetach } from '../../../lib/profile/start'
+import { detachMaster, dismissPendingDetach, retryPendingDetach } from '../../../lib/profile/start'
 import { ConfirmDialog } from '../../ConfirmDialog'
 import { SettingItem } from '../SettingItem'
 import { pendingDetachTestId } from './profile-rules'
@@ -103,7 +103,6 @@ export function StopSyncControl({ attached }: { attached: boolean }) {
 
 /** One record, with the state of ITS retry. Keyed by the record's key, so a record that goes takes its state with it. */
 function LeftoverItem({ left }: { left: PendingDetach }) {
-  const clearPendingDetach = useProfileStore((s) => s.clearPendingDetach)
   const hostNow = useHostStore((s) => s.hosts[left.hostId])
   const [retrying, setRetrying] = useState(false)
   const [retryFailed, setRetryFailed] = useState(false)
@@ -134,7 +133,7 @@ function LeftoverItem({ left }: { left: PendingDetach }) {
     setRetrying(false)
   }
 
-  return <Leftover left={left} hostName={hostNow?.name ?? left.hostId} state={leftStateOf(left, hostNow)} hostNow={hostNow} retrying={retrying} retryFailed={retryFailed} onRetry={() => void retry()} onDismiss={() => clearPendingDetach(key)} />
+  return <Leftover left={left} hostName={hostNow?.name ?? left.hostId} state={leftStateOf(left, hostNow)} hostNow={hostNow} retrying={retrying} retryFailed={retryFailed} onRetry={() => void retry()} onDismiss={() => void dismissPendingDetach(key)} />
 }
 
 interface LeftoverProps {

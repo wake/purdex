@@ -49,6 +49,15 @@ function webLocks(): Locks | undefined {
  * rejects the promise, with the lock released.
  */
 export function withWorldLock<T>(body: () => T, busy: () => T): Promise<T> {
+  return withNamedLock(WORLD_LOCK_NAME, body, busy)
+}
+
+/**
+ * The same mutex under another name, for another read-check-write on `localStorage` that two renderers must not
+ * interleave (lib/profile/start.ts: the list of pending detaches). Every rule of this file holds for it: `body`
+ * is synchronous, the wait is bounded, and where there is no Web Locks `body` runs inside the call.
+ */
+export function withNamedLock<T>(name: string, body: () => T, busy: () => T): Promise<T> {
   const locks = webLocks()
   if (locks === undefined) {
     // Not `async`: `body` must have run by the time this function RETURNS, as it always did.
@@ -63,7 +72,7 @@ export function withWorldLock<T>(body: () => T, busy: () => T): Promise<T> {
   const timer = setTimeout(() => controller.abort(), WORLD_LOCK_TIMEOUT_MS)
   let granted = false
   return locks
-    .request(WORLD_LOCK_NAME, { mode: 'exclusive', signal: controller.signal }, () => {
+    .request(name, { mode: 'exclusive', signal: controller.signal }, () => {
       granted = true
       return body()
     })
