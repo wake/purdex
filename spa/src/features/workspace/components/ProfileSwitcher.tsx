@@ -1,4 +1,6 @@
 import { useCallback, useMemo, type RefObject } from 'react'
+import { useLocation } from 'wouter'
+import { GearSix } from '@phosphor-icons/react'
 import { Menu, type MenuEntry, type MenuPlacement } from '../../../components/Menu'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLocalProfilesStore, MASTER_PROFILE_ID, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
@@ -29,6 +31,9 @@ export function ProfileIcon({ appearance, size, logoAlt = '' }: { appearance: Pr
   )
 }
 
+/** `profile` is the section's id in `registerSettingsSection` (lib/register-modules). */
+const PROFILE_SETTINGS_PATH = '/settings/profile'
+
 interface Props {
   /** The Home button. */
   trigger: RefObject<HTMLElement | null>
@@ -37,7 +42,7 @@ interface Props {
 
 /**
  * The Home button's menu: the master, then the slaves in `slaveOrder`, each with its icon and name; the one on
- * screen is checked. The master — the only one that ever syncs — is tagged as such, named or not. Choosing one
+ * screen is checked; then, under a divider, the way to Settings › Profile. The master — the only one that ever syncs — is tagged as such, named or not. Choosing one
  * calls `switchActiveProfile` and nothing else — switching never starts or stops syncing (spec §4.1). Rendered by
  * a Home button only while there is a slave (`useProfileSwitcherTrigger`).
  *
@@ -56,6 +61,7 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
   const pendingId = useProfileSwitcherStore((s) => s.pending?.targetId ?? null)
   const chooseProfile = useProfileSwitcherStore((s) => s.chooseProfile)
   const sync = useProfileSync()
+  const [, setLocation] = useLocation()
 
   const close = useCallback(() => setOpen(false), [setOpen])
 
@@ -94,12 +100,20 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
       }),
       // A name is the user's own text: shown as is, never through t().
       ...slaveOrder.filter((id) => slaves[id]).map((id) => entry(id, slaves[id].name, slaves[id])),
-      // TODO(P3d-2): once Settings › Profile exists, add `{ divider: true }` and a plain item here that opens it
-      // (`profile.switcher.settings`, testId `profile-item-settings`; spec §4.9 "then Settings › Profile"). With
-      // no master and no slaves that one item — labelled `Set up sync…` — is the whole menu, and
-      // `useProfileSwitcherTrigger` then enables the trigger for everyone. Not before: the page does not exist yet.
+      // Settings › Profile (spec §4.9). Reached the way every settings section is: by its route, which
+      // `useRouteSync` turns into the Settings tab (as TitleBar does for `/settings/sync`). A plain item, not one
+      // of the radio group, and never disabled by a switch under way. The MENU still exists only where there is
+      // a slave (`useProfileSwitcherTrigger`); with none, the page is reached from the Settings sidebar.
+      { divider: true },
+      {
+        id: 'settings',
+        label: t('profile.switcher.settings'),
+        icon: <GearSix size={14} />,
+        onSelect: () => setLocation(PROFILE_SETTINGS_PATH),
+        testId: 'profile-item-settings',
+      },
     ]
-  }, [slaves, slaveOrder, master, activeProfileId, pendingId, chooseProfile, dot, dotLabel, t])
+  }, [slaves, slaveOrder, master, activeProfileId, pendingId, chooseProfile, dot, dotLabel, t, setLocation])
 
   return <Menu trigger={trigger} open={open} onClose={close} items={items} label={t('profile.switcher.label')} placement={placement} testId="profile-switcher-menu" />
 }
