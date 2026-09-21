@@ -22,4 +22,10 @@ describe('Settings › Profile', () => {
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(en['settings.section.profile'])
     expect(screen.getByText(en['settings.profile.description'])).toBeInTheDocument()
   })
+
+  it('lists the profiles of this device — with nothing set up, the master alone', () => {
+    render(<ProfileSection />)
+    expect(screen.getByTestId('profile-local-block')).toBeInTheDocument()
+    expect(screen.getAllByTestId(/^profile-row-[a-z0-9]+$/)).toHaveLength(1)
+  })
 })
