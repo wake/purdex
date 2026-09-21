@@ -30,8 +30,8 @@ interface SotStepProps {
   onChoice: (choice: SotChoice) => void
   newName: string
   onNewName: (name: string) => void
-  /** A failed create's class (`requestKey`). */
-  createError: string | null
+  /** A create that did not end in a profile: what is known of it (wizard-run.ts, `CreateResult`) and the failure's class. */
+  createError: { outcome: 'failed' | 'not-created' | 'unknown' | 'same-name'; request: string } | null
   disabled: boolean
 }
 
@@ -41,6 +41,8 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
   const listed = hostOrder.filter((id) => hosts[id] !== undefined)
+  // Disabled only WHILE nothing can be chosen (review F5): a host that connects later must be pickable.
+  const anyConnected = listed.some((id) => runtime[id]?.status === 'connected')
   const state = view === null ? 'none' : view.kind === 'rows' ? (view.rows.length === 0 ? 'empty' : 'rows') : view.kind
 
   return (
@@ -52,11 +54,11 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
         <select
           data-testid="profile-wizard-host"
           value={hostId ?? ''}
-          disabled={disabled || hostId === null}
+          disabled={disabled || !anyConnected}
           onChange={(e) => onHost(e.target.value)}
           className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-60 hover:border-text-muted focus:border-border-active focus:outline-none"
         >
-          {hostId === null && <option value="">{t('settings.profile.wizard.sot.host_placeholder')}</option>}
+          {hostId === null && <option value="">{t(anyConnected ? 'settings.profile.wizard.sot.host_choose' : 'settings.profile.wizard.sot.host_placeholder')}</option>}
           {listed.map((id) => {
             const connected = runtime[id]?.status === 'connected'
             return (
@@ -67,7 +69,7 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
           })}
         </select>
       </label>
-      {hostId === null && (
+      {!anyConnected && (
         <p data-testid="profile-wizard-host-none" className={NOTICE}>{t('settings.profile.wizard.sot.host_none')}</p>
       )}
 
@@ -131,8 +133,10 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
             </div>
           )}
           {createError !== null && (
-            <p data-testid="profile-wizard-create-error" data-reason={createError} role="alert" className="mt-1 text-red-500">
-              {t('settings.profile.wizard.sot.create_failed')} {t(requestKey(createError))}
+            <p data-testid="profile-wizard-create-error" data-outcome={createError.outcome} data-reason={createError.request} role="alert" className="mt-1 text-red-500">
+              {createError.outcome === 'unknown' || createError.outcome === 'same-name'
+                ? t(`settings.profile.wizard.sot.create_${createError.outcome.replace('-', '_')}`)
+                : `${t('settings.profile.wizard.sot.create_failed')} ${t(requestKey(createError.request))}${createError.outcome === 'not-created' ? ` ${t('settings.profile.wizard.sot.create_not_created')}` : ''}`}
             </p>
           )}
         </div>

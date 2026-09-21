@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
 import { StopSyncControl } from './StopSyncControl'
-import { useProfileStore } from '../../../stores/useProfileStore'
+import { pendingDetachTestId } from './profile-rules'
+import { pendingDetachKey, useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { detachMaster, retryPendingDetach } from '../../../lib/profile/start'
 import type { DetachResult } from '../../../lib/profile/start'
@@ -22,7 +23,7 @@ function detachAnswers(): (r: DetachResult) => Promise<void> {
     return new Promise<DetachResult>((resolve) => { release = resolve })
   })
   return (r) => act(async () => {
-    if (!r.ok) useProfileStore.getState().setPendingDetach(LEFT)
+    if (!r.ok) useProfileStore.getState().addPendingDetach(LEFT)
     release(r)
   })
 }
@@ -36,7 +37,7 @@ function Mounted() {
 beforeEach(() => {
   vi.mocked(detachMaster).mockReset()
   vi.mocked(retryPendingDetach).mockReset()
-  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, pendingDetach: null })
+  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
 })
 
@@ -95,7 +96,7 @@ describe('Stop sync', () => {
 })
 
 describe('an attachment left on the daemon', () => {
-  const leftBehind = () => useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetach: LEFT })
+  const leftBehind = () => useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetaches: [LEFT] })
 
   it('is still said after the page is opened again — it is the store\'s, not the dialog\'s', () => {
     leftBehind()
@@ -109,7 +110,7 @@ describe('an attachment left on the daemon', () => {
   it('Try again that gets through: the notice goes', async () => {
     leftBehind()
     vi.mocked(retryPendingDetach).mockImplementation(async () => {
-      useProfileStore.getState().clearPendingDetach('h1', P1)
+      useProfileStore.getState().clearPendingDetach(pendingDetachKey(LEFT))
       return { ok: true }
     })
     render(<Mounted />)
@@ -131,7 +132,7 @@ describe('an attachment left on the daemon', () => {
     fireEvent.click(screen.getByTestId('profile-detach-retry'))
     expect(retryPendingDetach).toHaveBeenCalledTimes(1)
     await act(async () => {
-      useProfileStore.getState().setPendingDetach({ ...LEFT, detail: 'network', at: 2 })
+      useProfileStore.getState().addPendingDetach({ ...LEFT, detail: 'network', at: 2 })
       release({ ok: false, reason: 'daemon-not-told', detail: 'network' })
     })
     expect(screen.getByTestId('profile-detach-retry-failed')).toHaveTextContent(en['settings.profile.detach.retry_failed'])
@@ -143,7 +144,7 @@ describe('an attachment left on the daemon', () => {
     leftBehind()
     render(<Mounted />)
     fireEvent.click(screen.getByTestId('profile-detach-dismiss'))
-    expect(useProfileStore.getState().pendingDetach).toBeNull()
+    expect(useProfileStore.getState().pendingDetaches).toEqual([])
     expect(screen.queryByTestId('profile-detach-leftover')).toBeNull()
     expect(retryPendingDetach).not.toHaveBeenCalled()
   })
@@ -194,7 +195,7 @@ describe('an attachment left on the daemon', () => {
     })
 
     it('a record from before the address was written down: never sent on a guess — said, Dismiss only', () => {
-      useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetach: { ...LEFT, endpoint: null } })
+      useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetaches: [{ ...LEFT, endpoint: null }] })
       render(<Mounted />)
       const notice = screen.getByTestId('profile-detach-leftover')
       expect(notice).toHaveAttribute('data-state', 'endpoint-unknown')
@@ -214,17 +215,55 @@ describe('an attachment left on the daemon', () => {
   it('what is shown of the failure is the short reason the store keeps — never a transcript', () => {
     const transcript = `server ${'x'.repeat(200)} Authorization: Bearer xyz https://10.0.0.1:7860/api/profiles`
     useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
-    useProfileStore.getState().setPendingDetach({ ...LEFT, detail: transcript })
+    useProfileStore.getState().addPendingDetach({ ...LEFT, detail: transcript })
     render(<Mounted />)
     expect(screen.getByTestId('profile-detach-leftover')).not.toHaveTextContent('Bearer')
     expect(screen.getByTestId('profile-detach-leftover')).not.toHaveTextContent('https://')
   })
 
   it('is said while attached to ANOTHER profile too', () => {
-    useProfileStore.setState({ masterProfileId: 'p_000000000002', pendingDetach: LEFT })
+    useProfileStore.setState({ masterProfileId: 'p_000000000002', pendingDetaches: [LEFT] })
     render(<Mounted />)
     expect(screen.getByTestId('profile-detach-leftover')).toBeInTheDocument()
     expect(screen.getByTestId('profile-stop-sync')).toBeInTheDocument()
+  })
+
+  describe('several at once (review F3): one notice per attachment, each with its own buttons', () => {
+    const OTHER = { ...LEFT, profileId: 'p_000000000009', detail: 'server (HTTP 502)', at: 2 }
+    const item = (left: typeof LEFT) => screen.getByTestId(`profile-detach-item-${pendingDetachTestId(left)}`)
+    const both = () => useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetaches: [LEFT, OTHER] })
+
+    it('every record is said, under a test id made of its key — letters, digits, dot, dash and underscore only', () => {
+      both()
+      render(<Mounted />)
+      expect(screen.getAllByTestId('profile-detach-leftover')).toHaveLength(2)
+      expect(pendingDetachTestId(LEFT)).toMatch(/^[A-Za-z0-9._-]+$/)
+      expect(pendingDetachTestId(LEFT)).not.toBe(pendingDetachTestId(OTHER))
+      expect(within(item(LEFT)).getByTestId('profile-detach-leftover')).toHaveAttribute('data-profile', LEFT.profileId)
+      expect(within(item(OTHER)).getByTestId('profile-detach-leftover')).toHaveTextContent('server (HTTP 502)')
+    })
+
+    it('Try again asks about THAT record, and only it is busy', async () => {
+      both()
+      let release: (r: DetachResult) => void = () => {}
+      vi.mocked(retryPendingDetach).mockReturnValue(new Promise((resolve) => { release = resolve }))
+      render(<Mounted />)
+      fireEvent.click(within(item(OTHER)).getByTestId('profile-detach-retry'))
+      expect(retryPendingDetach).toHaveBeenCalledWith(pendingDetachKey(OTHER))
+      expect(within(item(OTHER)).getByTestId('profile-detach-retry')).toHaveAttribute('aria-busy', 'true')
+      expect(within(item(LEFT)).getByTestId('profile-detach-retry')).toBeEnabled()
+      await act(async () => { release({ ok: false, reason: 'daemon-not-told', detail: 'timeout' }) })
+      expect(within(item(OTHER)).getByTestId('profile-detach-retry-failed')).toBeInTheDocument()
+      expect(within(item(LEFT)).queryByTestId('profile-detach-retry-failed')).toBeNull()
+    })
+
+    it('Dismiss removes THAT record; the other stays', () => {
+      both()
+      render(<Mounted />)
+      fireEvent.click(within(item(LEFT)).getByTestId('profile-detach-dismiss'))
+      expect(useProfileStore.getState().pendingDetaches).toEqual([OTHER])
+      expect(screen.getAllByTestId('profile-detach-leftover')).toHaveLength(1)
+    })
   })
 
   it('nothing left, no master: renders nothing at all', () => {

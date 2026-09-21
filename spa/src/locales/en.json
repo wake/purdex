@@ -1687,5 +1687,20 @@
   "settings.profile.wizard.attach.unauthorized": "The host refused this device's credentials. Check the host's token in its settings, then try again.",
   "settings.profile.wizard.attach.server": "The host ran into an error of its own while registering this device. Try again.",
   "settings.profile.wizard.attach.malformed": "The host's answer to the registration could not be understood. Its daemon may be a different version.",
-  "settings.profile.wizard.attach.other": "Sync could not be started, for a reason this app has no words for. Try again."
+  "settings.profile.wizard.attach.other": "Sync could not be started, for a reason this app has no words for. Try again.",
+  "settings.profile.wizard.toast.done": "Now syncing with “{{profile}}” on {{host}}.",
+  "settings.profile.wizard.toast.done_saved": "Now syncing with “{{profile}}” on {{host}}. The workspaces and tabs this device had are kept as the local profile “{{name}}”.",
+  "settings.profile.wizard.toast.stopped_promote": "Sync setup stopped while changing this device's master. Open Settings › Profile to see where things are.",
+  "settings.profile.wizard.toast.stopped_save": "Sync setup stopped while keeping a copy of the master. This device is not syncing. Open Settings › Profile to see where things are.",
+  "settings.profile.wizard.toast.stopped_attach": "Sync setup stopped while registering with the host. Open Settings › Profile to see where things are.",
+  "settings.profile.wizard.notice.profile_changed": "Another device changed this profile while you were setting up, so nothing was started. Choose the direction again — it now holds content, and a push would replace it.",
+  "settings.profile.wizard.notice.profile_emptied": "Another device emptied this profile while you were setting up, so nothing was started. Choose the direction again.",
+  "settings.profile.wizard.notice.profile_gone": "This profile was deleted from the host while you were setting up, so nothing was started. Choose a profile again.",
+  "settings.profile.wizard.run.checking": "Checking with the host that the profile is still as you saw it…",
+  "settings.profile.wizard.run.check_failed": "Nothing was started: the host could not be asked whether the profile is still as you saw it.",
+  "settings.profile.wizard.sot.host_choose": "Choose a host",
+  "settings.profile.wizard.sot.create_unknown": "It is not known whether the profile was created: the host did not answer, and its list could not be read either. Press the button again — the host is asked what it holds first, and nothing is created twice.",
+  "settings.profile.wizard.sot.create_not_created": "The host was then asked, and no such profile is there. Pressing the button again creates it.",
+  "settings.profile.wizard.sot.create_same_name": "It is not known whether the profile was created, and the host now holds an empty profile of that name that may or may not be it. Choose it from the list above if it is yours, or give the new one another name.",
+  "settings.profile.wizard.notice.create_adopted": "The host had created the profile after all — its answer was lost. That one is used; nothing was created twice."
 }

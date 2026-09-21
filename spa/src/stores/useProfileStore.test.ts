@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { STORAGE_KEYS } from '../lib/storage/keys'
-import { endpointOfHost, selectMaster, useProfileStore } from './useProfileStore'
+import { PENDING_DETACH_MAX, endpointOfHost, pendingDetachKey, selectMaster, useProfileStore } from './useProfileStore'
 
 const PROFILE = 'p_0123456789ab'
 const OTHER_PROFILE = 'p_ba9876543210'
@@ -8,7 +8,7 @@ const EP = '100.64.0.2:7860'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetach: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [] })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -110,7 +110,7 @@ describe('useProfileStore', () => {
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, masterEndpoint: EP, suspension: null, pendingDetach: null })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, masterEndpoint: EP, suspension: null, pendingDetaches: [] })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
@@ -561,19 +561,44 @@ describe('every window agrees on the master', () => {
   })
 })
 
-describe('pendingDetach — a detach the daemon was not told of, kept until it is (or the user gives up)', () => {
+describe('pendingDetaches — every detach the daemon was not told of, kept until it is (or the user gives up)', () => {
   const LEFT = { hostId: 'host-1', profileId: PROFILE, endpoint: EP, detail: 'network', at: 1000 }
+  const SECOND = { hostId: 'host-1', profileId: OTHER_PROFILE, endpoint: EP, detail: 'timeout', at: 2000 }
+  const list = () => useProfileStore.getState().pendingDetaches
+  const add = (left: unknown) => useProfileStore.getState().addPendingDetach(left as never)
 
-  it('is null by default, set whole, persisted, and survives a reload WITHOUT a master', async () => {
-    expect(useProfileStore.getState().pendingDetach).toBeNull()
-    expect(useProfileStore.getState().setPendingDetach(LEFT)).toBe(true)
-    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
-    expect(persistedEnvelope().state.pendingDetach).toEqual(LEFT)
+  it('is empty by default, added whole, persisted, and survives a reload WITHOUT a master', async () => {
+    expect(list()).toEqual([])
+    expect(add(LEFT)).toBe(true)
+    expect(list()).toEqual([LEFT])
+    expect(persistedEnvelope().state.pendingDetaches).toEqual([LEFT])
     const stored = persistedEnvelope().state
     resetStore()
     await rehydrateFrom(stored)
     expect(selectMaster(useProfileStore.getState())).toBeNull()
-    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
+    expect(list()).toEqual([LEFT])
+  })
+
+  it('A SECOND FAILURE IS ADDED, NOT WRITTEN OVER THE FIRST (review F3): A→B→C with both drops failing leaves BOTH ghosts on record', () => {
+    add(LEFT)
+    add(SECOND)
+    expect(list()).toEqual([LEFT, SECOND])
+    expect(persistedEnvelope().state.pendingDetaches).toEqual([LEFT, SECOND])
+  })
+
+  it('the key is endpoint + host + profile: the same profile id on ANOTHER daemon is another record; the same three → the record is brought up to date, in place', () => {
+    const elsewhere = { ...LEFT, endpoint: '100.64.0.9:7860' }
+    add(LEFT)
+    add(elsewhere)
+    add(SECOND)
+    expect(list()).toEqual([LEFT, elsewhere, SECOND])
+    expect(new Set(list().map(pendingDetachKey)).size).toBe(3)
+    add({ ...LEFT, detail: 'server (HTTP 502)', at: 5000 })
+    expect(list()).toEqual([{ ...LEFT, detail: 'server (HTTP 502)', at: 5000 }, elsewhere, SECOND])
+  })
+
+  it('no key can pass for part of another', () => {
+    expect(pendingDetachKey({ ...LEFT, hostId: 'a|b', endpoint: 'c' })).not.toBe(pendingDetachKey({ ...LEFT, hostId: 'b', endpoint: 'c|a' }))
   })
 
   it.each([
@@ -584,65 +609,106 @@ describe('pendingDetach — a detach the daemon was not told of, kept until it i
     ['an endpoint that is no text', { ...LEFT, endpoint: 7 }],
     ['an empty endpoint', { ...LEFT, endpoint: '' }],
     ['not an object', 'x'],
-  ])('%s → refused by the setter, dropped by a rehydrate', async (_label, bad) => {
-    expect(useProfileStore.getState().setPendingDetach(bad as never)).toBe(false)
-    expect(useProfileStore.getState().pendingDetach).toBeNull()
-    await rehydrateFrom({ autoSync: true, pendingDetach: bad })
-    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  ])('%s → refused by the setter, dropped by a rehydrate — and the good records beside it stay', async (_label, bad) => {
+    expect(add(bad)).toBe(false)
+    expect(list()).toEqual([])
+    await rehydrateFrom({ autoSync: true, pendingDetaches: [bad, LEFT] })
+    expect(list()).toEqual([LEFT])
   })
 
   it('WHERE the daemon was is part of the record: the address the master was attached at, as `masterEndpoint` writes it', () => {
     expect(endpointOfHost({ ip: '100.64.0.2', port: 7860 })).toBe(EP)
-    useProfileStore.getState().setPendingDetach(LEFT)
-    expect(persistedEnvelope().state.pendingDetach).toMatchObject({ endpoint: EP })
+    add(LEFT)
+    expect(persistedEnvelope().state.pendingDetaches).toMatchObject([{ endpoint: EP }])
   })
 
-  it('a record from before the endpoint was written down is KEPT, with the endpoint unknown (null) — never guessed from the host of today', async () => {
-    const { endpoint: _dropped, ...legacy } = LEFT
-    void _dropped
-    await rehydrateFrom({ autoSync: true, pendingDetach: legacy })
-    expect(useProfileStore.getState().pendingDetach).toEqual({ ...LEFT, endpoint: null })
+  describe('what alpha.420 shipped — ONE record under `pendingDetach` — is not lost on the way', () => {
+    it('the single object becomes a list of one', async () => {
+      await rehydrateFrom({ autoSync: true, pendingDetach: LEFT })
+      expect(list()).toEqual([LEFT])
+    })
+
+    it('… and the next persist writes the new field only', async () => {
+      await rehydrateFrom({ autoSync: true, pendingDetach: LEFT })
+      add(SECOND)
+      expect(persistedEnvelope().state.pendingDetaches).toEqual([LEFT, SECOND])
+      expect('pendingDetach' in persistedEnvelope().state).toBe(false)
+    })
+
+    it('both fields in storage (a newer window wrote beside an older one): the list, and the single one added unless it is in it', async () => {
+      await rehydrateFrom({ autoSync: true, pendingDetach: LEFT, pendingDetaches: [SECOND] })
+      expect(list()).toEqual([SECOND, LEFT])
+      await rehydrateFrom({ autoSync: true, pendingDetach: { ...LEFT, detail: 'older' }, pendingDetaches: [LEFT] })
+      expect(list()).toEqual([LEFT])
+    })
+
+    it('a record from before the endpoint was written down is KEPT, with the endpoint unknown (null) — never guessed from the host of today', async () => {
+      const { endpoint: _dropped, ...legacy } = LEFT
+      void _dropped
+      await rehydrateFrom({ autoSync: true, pendingDetach: legacy })
+      expect(list()).toEqual([{ ...LEFT, endpoint: null }])
+    })
+
+    it('junk in either field is nothing', async () => {
+      await rehydrateFrom({ autoSync: true, pendingDetach: 'x', pendingDetaches: { not: 'a list' } })
+      expect(list()).toEqual([])
+    })
   })
 
-  it('… but nobody WRITES one without it: the setter refuses an unknown endpoint (whoever writes knows where the daemon was)', () => {
-    expect(useProfileStore.getState().setPendingDetach({ ...LEFT, endpoint: null } as never)).toBe(false)
+  it('… but nobody WRITES one without an endpoint: the setter refuses (whoever writes knows where the daemon was)', () => {
+    expect(add({ ...LEFT, endpoint: null })).toBe(false)
     const { endpoint: _dropped, ...legacy } = LEFT
     void _dropped
-    expect(useProfileStore.getState().setPendingDetach(legacy as never)).toBe(false)
-    expect(useProfileStore.getState().pendingDetach).toBeNull()
+    expect(add(legacy)).toBe(false)
+    expect(list()).toEqual([])
   })
 
   it('the detail is a short reason, not a transcript: cut at 120 characters, by the setter and by a rehydrate', async () => {
     const long = 'x'.repeat(500)
-    useProfileStore.getState().setPendingDetach({ ...LEFT, detail: long })
-    expect(useProfileStore.getState().pendingDetach?.detail).toHaveLength(120)
-    await rehydrateFrom({ autoSync: true, pendingDetach: { ...LEFT, detail: long } })
-    expect(useProfileStore.getState().pendingDetach?.detail).toHaveLength(120)
+    add({ ...LEFT, detail: long })
+    expect(list()[0].detail).toHaveLength(120)
+    await rehydrateFrom({ autoSync: true, pendingDetaches: [{ ...LEFT, detail: long }] })
+    expect(list()[0].detail).toHaveLength(120)
   })
 
-  it('is cleared only by the pair it names', () => {
-    useProfileStore.getState().setPendingDetach(LEFT)
-    useProfileStore.getState().clearPendingDetach('host-1', OTHER_PROFILE)
-    useProfileStore.getState().clearPendingDetach('host-2', PROFILE)
-    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
-    useProfileStore.getState().clearPendingDetach('host-1', PROFILE)
-    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  it('it does not grow for ever: the newest PENDING_DETACH_MAX are kept, by the setter and by a rehydrate; duplicates in storage collapse', async () => {
+    const many = Array.from({ length: PENDING_DETACH_MAX + 5 }, (_, i) => ({ ...LEFT, endpoint: `10.0.0.${i}:7860`, at: i }))
+    for (const left of many) add(left)
+    expect(list()).toEqual(many.slice(5))
+    resetStore()
+    await rehydrateFrom({ autoSync: true, pendingDetaches: [...many, many[10]] })
+    expect(list()).toHaveLength(PENDING_DETACH_MAX)
+    expect(list()).toEqual(many.slice(5))
   })
 
-  it('attaching to that very profile again makes the attachment wanted: the record goes', () => {
-    useProfileStore.getState().setPendingDetach(LEFT)
-    useProfileStore.getState().setMaster('host-1', OTHER_PROFILE, 'pull', EP)
-    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
+  it('is cleared ONE RECORD AT A TIME, by its key: the others stay', () => {
+    add(LEFT)
+    add(SECOND)
+    useProfileStore.getState().clearPendingDetach('nope')
+    expect(list()).toEqual([LEFT, SECOND])
+    useProfileStore.getState().clearPendingDetach(pendingDetachKey(LEFT))
+    expect(list()).toEqual([SECOND])
+    useProfileStore.getState().clearPendingDetach(pendingDetachKey(SECOND))
+    expect(list()).toEqual([])
+  })
+
+  it('attaching to that very profile AT THAT ADDRESS again makes the attachment wanted: THAT record goes, and only that one', () => {
+    const elsewhere = { ...LEFT, endpoint: '100.64.0.9:7860' }
+    add(LEFT)
+    add(elsewhere)
+    add(SECOND)
+    useProfileStore.getState().setMaster('host-1', 'p_cccccccccccc', 'pull', EP)
+    expect(list()).toEqual([LEFT, elsewhere, SECOND])
     useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
-    expect(useProfileStore.getState().pendingDetach).toBeNull()
+    expect(list()).toEqual([elsewhere, SECOND]) // the one on the other daemon is still a ghost there
   })
 
   it('a detach does not clear it, and it moves no generation', () => {
-    useProfileStore.getState().setMaster('host-1', OTHER_PROFILE, 'pull', EP)
+    useProfileStore.getState().setMaster('host-1', 'p_cccccccccccc', 'pull', EP)
     const generation = useProfileStore.getState().attachGeneration
-    useProfileStore.getState().setPendingDetach(LEFT)
+    add(LEFT)
     expect(useProfileStore.getState().attachGeneration).toBe(generation)
     useProfileStore.getState().clearMaster()
-    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
+    expect(list()).toEqual([LEFT])
   })
 })

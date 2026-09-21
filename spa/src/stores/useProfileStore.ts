@@ -82,7 +82,7 @@
 // STAND STILL. Which master wins two overlapping attaches is last-writer-wins, as
 // everywhere in this store. `clearMaster` lifts everything: detach means stop.
 //
-// WHY `pendingDetach` = { hostId, profileId, endpoint, detail, at } (P3d-2, review F2 / F4). A detach stops the sync FIRST and
+// WHY `pendingDetaches` = [{ hostId, profileId, endpoint, detail, at }] (P3d-2, review F2 / F4; a LIST since P3d-3, review F3). A detach stops the sync FIRST and
 // tells the daemon afterwards, best effort (lib/profile/start.ts, `detachMaster`). When that fails, the daemon
 // keeps this client's attachment to a profile this client has left — and an attached profile cannot be deleted,
 // by anybody (spec §4.8). The master is gone by then, so WHICH attachment is left has to be written down
@@ -96,8 +96,15 @@
 // has it (lib/profile/start.ts). `null` = a record from before this field existed (dev builds only): unknown,
 // so never sent — and never "adopted" from the host of today, which is exactly the guess that is wrong.
 //   `detail` is a short reason for a person (a failure class and an HTTP status), cut at
-// `PENDING_DETACH_DETAIL_MAX`: it is persisted and shown, and a transport's message can hold anything. One slot: a second failure
-// replaces the first (the older one is then only reachable from another device's SOT list).
+// `PENDING_DETACH_DETAIL_MAX`: it is persisted and shown, and a transport's message can hold anything.
+//   A LIST, KEYED BY (endpoint, hostId, profileId) — `pendingDetachKey`. It was one slot, and a second failure
+// replaced the first: master A→B with A's drop failing, then B→C with B's failing, and A's ghost attachment was
+// never mentioned again (P3d-3's two new writers made that likelier). Adding MERGES: the same key is brought up
+// to date in place, a new key is appended (oldest first); a retry, a dismissal and a re-attach each remove
+// exactly ONE record. Capped at `PENDING_DETACH_MAX`, the oldest dropped: every record is a line on a settings
+// page, and a list nobody can read is no reminder. WHAT alpha.420 PERSISTED — one object under `pendingDetach` —
+// is read by `merge` as a list of one (and added to `pendingDetaches` when a newer build wrote that beside it);
+// the old key is not written back.
 //
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
 // non-null, and non-null only together with `masterEndpoint`; `pendingDirection` and `suspension` are null whenever there is no master. `setMaster`
@@ -140,8 +147,8 @@ interface ProfileControl {
   attachGeneration: number
   /** Sync without being asked. Default on. */
   autoSync: boolean
-  /** Independent of the master: see the header. */
-  pendingDetach: PendingDetach | null
+  /** Independent of the master: see the header. Oldest first; at most one per `pendingDetachKey`. */
+  pendingDetaches: PendingDetach[]
 }
 
 export interface ProfileState extends ProfileControl {
@@ -161,10 +168,11 @@ export interface ProfileState extends ProfileControl {
   clearPendingDirection: () => void
   setAutoSync: (value: boolean) => void
   /** Anything malformed — an unknown endpoint included: whoever writes one knows where the daemon was — changes
-   *  nothing and answers `false`. Replaces the one there is. */
-  setPendingDetach: (left: PendingDetach & { endpoint: string }) => boolean
-  /** Only the pair it names: a late answer about an older record must not clear a newer one. */
-  clearPendingDetach: (hostId: string, profileId: string) => void
+   *  nothing and answers `false`. MERGED into the list: the record of the same key is replaced where it stands,
+   *  any other stays. */
+  addPendingDetach: (left: PendingDetach & { endpoint: string }) => boolean
+  /** Only the record of that `pendingDetachKey`: a late answer about one must not clear another. */
+  clearPendingDetach: (key: string) => void
 }
 
 /** What `setMaster` accepts. Exported for `lib/profile/start.ts`, which must know
@@ -214,8 +222,37 @@ function sanitisePendingDetach(v: unknown, endpointRequired = false): PendingDet
   return { hostId: hostId as string, profileId: profileId as string, endpoint: unknown ? null : (endpoint as string), detail: Array.from(detail).slice(0, PENDING_DETACH_DETAIL_MAX).join(''), at }
 }
 
-const samePair = (left: PendingDetach | null, hostId: string, profileId: string): boolean =>
-  left !== null && left.hostId === hostId && left.profileId === profileId
+export const PENDING_DETACH_MAX = 20
+
+/** Which attachment a record is about: the daemon (by address), the host entry, the profile. JSON, so that no
+ *  part can pass for part of another. */
+export function pendingDetachKey(left: Pick<PendingDetach, 'hostId' | 'profileId' | 'endpoint'>): string {
+  return JSON.stringify([left.endpoint, left.hostId, left.profileId])
+}
+
+/** `left` merged into `list`: in place under its key, else appended; the newest `PENDING_DETACH_MAX` kept. */
+function withPendingDetach(list: readonly PendingDetach[], left: PendingDetach): PendingDetach[] {
+  const key = pendingDetachKey(left)
+  const next = list.some((l) => pendingDetachKey(l) === key) ? list.map((l) => (pendingDetachKey(l) === key ? left : l)) : [...list, left]
+  return next.slice(-PENDING_DETACH_MAX)
+}
+
+/** The same array when nothing has that key: no write, no persist, no re-render. */
+function withoutKey(list: PendingDetach[], key: string): PendingDetach[] {
+  return list.some((l) => pendingDetachKey(l) === key) ? list.filter((l) => pendingDetachKey(l) !== key) : list
+}
+
+/** The list storage held, record by record; then alpha.420's single `pendingDetach`, unless the list has its key already. */
+function sanitisePendingDetaches(list: unknown, legacy: unknown): PendingDetach[] {
+  let out: PendingDetach[] = []
+  for (const item of Array.isArray(list) ? list : []) {
+    const clean = sanitisePendingDetach(item)
+    if (clean !== null) out = withPendingDetach(out, clean)
+  }
+  const single = sanitisePendingDetach(legacy)
+  if (single !== null && !out.some((l) => pendingDetachKey(l) === pendingDetachKey(single))) out = withPendingDetach(out, single)
+  return out
+}
 
 /** Whatever storage held → a record that satisfies the invariant. Half a
  *  master, a wrong type or a malformed profile id all mean "detached": there is
@@ -231,7 +268,7 @@ function sanitiseControl(persisted: unknown): ProfileControl {
     suspension: attached ? sanitiseSuspension(p.suspension) : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
-    pendingDetach: sanitisePendingDetach(p.pendingDetach),
+    pendingDetaches: sanitisePendingDetaches(p.pendingDetaches, p.pendingDetach),
   }
 }
 
@@ -245,10 +282,10 @@ export const useProfileStore = create<ProfileState>()(
       suspension: null,
       attachGeneration: 0,
       autoSync: true,
-      pendingDetach: null,
+      pendingDetaches: [],
       setMaster: (hostId, profileId, direction, endpoint, token) => {
         if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction) || !isEndpoint(endpoint)) return false
-        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, pendingDetach: samePair(s.pendingDetach, hostId, profileId) ? null : s.pendingDetach }))
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, pendingDetaches: withoutKey(s.pendingDetaches, pendingDetachKey({ hostId, profileId, endpoint })) }))
         return true
       },
       suspend: (token, until) => set((s) => (selectMaster(s) === null || !isSuspension(token, until) ? s : { suspension: { token, until } })),
@@ -257,13 +294,17 @@ export const useProfileStore = create<ProfileState>()(
         set((s) => ({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null, suspension: null, attachGeneration: s.attachGeneration + 1 })),
       clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
-      setPendingDetach: (left) => {
+      addPendingDetach: (left) => {
         const clean = sanitisePendingDetach(left, true)
         if (clean === null) return false
-        set({ pendingDetach: clean })
+        set((s) => ({ pendingDetaches: withPendingDetach(s.pendingDetaches, clean) }))
         return true
       },
-      clearPendingDetach: (hostId, profileId) => set((s) => (samePair(s.pendingDetach, hostId, profileId) ? { pendingDetach: null } : s)),
+      clearPendingDetach: (key) =>
+        set((s) => {
+          const pendingDetaches = withoutKey(s.pendingDetaches, key)
+          return pendingDetaches === s.pendingDetaches ? s : { pendingDetaches }
+        }),
     }),
     {
       name: STORAGE_KEYS.PROFILE,
@@ -277,7 +318,7 @@ export const useProfileStore = create<ProfileState>()(
         suspension: state.suspension,
         attachGeneration: state.attachGeneration,
         autoSync: state.autoSync,
-        pendingDetach: state.pendingDetach,
+        pendingDetaches: state.pendingDetaches,
       }),
       // Only the eight sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.

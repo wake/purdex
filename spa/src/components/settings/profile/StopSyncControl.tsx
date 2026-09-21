@@ -5,12 +5,14 @@
 // so it stops, NOW" — and the daemon is told afterwards, best effort, for up to 15 s. So there are two facts and
 // they can differ: this device HAS stopped syncing (always), and the daemon may not know. The second one matters
 // to everybody else: the daemon keeps this device's attachment, and an attached profile cannot be deleted by
-// anyone. It is written down by start.ts (`useProfileStore.pendingDetach`) and said HERE until a retry gets
+// anyone. It is written down by start.ts (`useProfileStore.pendingDetaches`) and said HERE until a retry gets
 // through or the user gives up — across a reload, because the master it was about is gone and nothing else
-// remembers which attachment is left.
+// remembers which attachment is left. ONE NOTICE PER ATTACHMENT (P3d-3, review F3): switching master twice can
+// leave two, and each has its own Try again, its own Dismiss and its own "tried" — a retry of one says nothing
+// about the other.
 //
 // THE ATTACHMENT IS ON ONE DAEMON (review F4): the one the master was attached at, whose address the record
-// carries (`pendingDetach.endpoint`, as `masterEndpoint`). A host's address is the user's to edit, and a retry
+// carries (`endpoint`, as `masterEndpoint`). A host's address is the user's to edit, and a retry
 // that followed the host id to a new address would remove this device from a profile of the same id on ANOTHER
 // daemon. start.ts refuses to send such a retry; here the same comparison — `endpointOfHost`, the one writer of
 // the form — decides what is OFFERED: Try again only while the host still has that address; otherwise both
@@ -19,14 +21,15 @@
 // WHY THIS IS ITS OWN COMPONENT, MOUNTED OUTSIDE THE "ATTACHED" HALF OF THE BLOCK. The confirmation has to stay up,
 // `busy`, until the answer arrives — and the half of the block that holds everything else about a master is
 // unmounted the moment the master is cleared, i.e. one microtask after Confirm.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { endpointOfHost, useProfileStore, type PendingDetach } from '../../../stores/useProfileStore'
+import { endpointOfHost, pendingDetachKey, useProfileStore, type PendingDetach } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { detachMaster, retryPendingDetach } from '../../../lib/profile/start'
 import { ConfirmDialog } from '../../ConfirmDialog'
 import { SettingItem } from '../SettingItem'
+import { pendingDetachTestId } from './profile-rules'
 
 const BTN =
   'shrink-0 flex items-center gap-1.5 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
@@ -45,13 +48,9 @@ const NOT_SENT = new Set(['endpoint-changed', 'host-gone', 'endpoint-unknown'])
 
 export function StopSyncControl({ attached }: { attached: boolean }) {
   const t = useI18nStore((s) => s.t)
-  const left = useProfileStore((s) => s.pendingDetach)
-  const clearPendingDetach = useProfileStore((s) => s.clearPendingDetach)
-  const leftHost = useHostStore((s) => (left === null ? undefined : s.hosts[left.hostId]))
+  const lefts = useProfileStore((s) => s.pendingDetaches)
   const [confirming, setConfirming] = useState(false)
   const [stopping, setStopping] = useState(false)
-  const [retrying, setRetrying] = useState(false)
-  const [retryFailed, setRetryFailed] = useState(false)
 
   const stop = async () => {
     if (stopping) return
@@ -67,21 +66,6 @@ export function StopSyncControl({ attached }: { attached: boolean }) {
     }
   }
 
-  const retry = async () => {
-    if (retrying) return
-    setRetrying(true)
-    setRetryFailed(false)
-    try {
-      const r = await retryPendingDetach()
-      // Only a request that went out and failed was "tried"; one start.ts would not send shows as its state.
-      setRetryFailed(!r.ok && r.reason === 'daemon-not-told')
-    } catch {
-      setRetryFailed(true)
-    } finally {
-      setRetrying(false)
-    }
-  }
-
   return (
     <>
       {attached && (
@@ -92,7 +76,15 @@ export function StopSyncControl({ attached }: { attached: boolean }) {
         </SettingItem>
       )}
 
-      {left !== null && <Leftover left={left} hostName={leftHost?.name ?? left.hostId} state={leftStateOf(left, leftHost)} hostNow={leftHost} retrying={retrying} retryFailed={retryFailed} onRetry={() => void retry()} onDismiss={() => clearPendingDetach(left.hostId, left.profileId)} />}
+      {lefts.length > 0 && (
+        <ul className="flex flex-col">
+          {lefts.map((left) => (
+            <li key={pendingDetachKey(left)} data-testid={`profile-detach-item-${pendingDetachTestId(left)}`}>
+              <LeftoverItem left={left} />
+            </li>
+          ))}
+        </ul>
+      )}
 
       {confirming && (
         <ConfirmDialog
@@ -107,6 +99,42 @@ export function StopSyncControl({ attached }: { attached: boolean }) {
       )}
     </>
   )
+}
+
+/** One record, with the state of ITS retry. Keyed by the record's key, so a record that goes takes its state with it. */
+function LeftoverItem({ left }: { left: PendingDetach }) {
+  const clearPendingDetach = useProfileStore((s) => s.clearPendingDetach)
+  const hostNow = useHostStore((s) => s.hosts[left.hostId])
+  const [retrying, setRetrying] = useState(false)
+  const [retryFailed, setRetryFailed] = useState(false)
+  const key = pendingDetachKey(left)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+
+  const retry = async () => {
+    if (retrying) return
+    setRetrying(true)
+    setRetryFailed(false)
+    let failed = true
+    try {
+      const r = await retryPendingDetach(key)
+      // Only a request that went out and failed was "tried"; one start.ts would not send shows as its state.
+      failed = !r.ok && r.reason === 'daemon-not-told'
+    } catch {
+      // start.ts does not throw; if it ever does, it was tried and did not get through
+    }
+    // A retry that got through has removed the record — and this component with it.
+    if (!alive.current) return
+    setRetryFailed(failed)
+    setRetrying(false)
+  }
+
+  return <Leftover left={left} hostName={hostNow?.name ?? left.hostId} state={leftStateOf(left, hostNow)} hostNow={hostNow} retrying={retrying} retryFailed={retryFailed} onRetry={() => void retry()} onDismiss={() => clearPendingDetach(key)} />
 }
 
 interface LeftoverProps {

@@ -11,6 +11,7 @@ import { useProfileStore } from '../../../../stores/useProfileStore'
 import { useHostStore } from '../../../../stores/useHostStore'
 import { useDeviceNameStore } from '../../../../stores/useDeviceNameStore'
 import { useLocalProfilesStore } from '../../../../stores/useLocalProfilesStore'
+import { useUndoToast } from '../../../../stores/useUndoToast'
 import { attachMaster, detachMaster } from '../../../../lib/profile/start'
 import { createProfile, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
@@ -88,7 +89,7 @@ beforeEach(() => {
   vi.mocked(copyMasterAsSlave).mockReset().mockImplementation(() => (calls.push('copy-master'), { ok: true, id: 'c1' }))
   vi.mocked(saveScreenAsSlave).mockReset().mockImplementation(() => (calls.push('save-screen'), { ok: true, id: 'c2' }))
   vi.mocked(attachMaster).mockReset().mockImplementation(async () => (calls.push('attach'), { ok: true }))
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null, suspension: null, pendingDetach: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: host('h1', 'mlab', '10.0.0.1'), h2: host('h2', 'air', '10.0.0.2'), h3: host('h3', 'gone', '10.0.0.3') }, hostOrder: ['h1', 'h2', 'h3'], devHostId: 'h1', runtime: { h1: { status: 'connected' }, h2: { status: 'connected' }, h3: { status: 'disconnected' } } })
   useDeviceNameStore.setState({ deviceName: 'Laptop' })
   useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: tabs(7), activeWorkspaceId: null, activeTabId: null } } }, slaveOrder: ['s1'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
@@ -651,5 +652,267 @@ describe('another window changed things: every premise is checked again, and the
     await waitFor(() => expect(step()).toBe('local'))
     expect(promoteToMaster).not.toHaveBeenCalled()
     expect(attachMaster).not.toHaveBeenCalled()
+  })
+})
+
+// === PR-B (review F1, F2, F5; acceptance F6) ===
+
+describe('Start asks the host ONCE MORE — the profile must still be what the user saw (review F1)', () => {
+  const full = (id: string, name: string, rev = 1) => ({ ...entry(id, name), sections: [{ section: 'workspaces', rev, hash: `h${rev}`, fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 1 }] })
+
+  it('THE ATTACK: seen empty (push only, no warning) → another device fills it → Start runs NOTHING, goes back to the direction, says why; now both directions and the warning are there', async () => {
+    await toDirection('master', P2)
+    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled()
+    expect(screen.queryByTestId('profile-wizard-push-warning')).toBeNull()
+    next()
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), full(P2, 'empty one')] })
+    click('profile-wizard-start')
+    await flush()
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'profile-changed')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveTextContent(en['settings.profile.wizard.notice.profile_changed'])
+    expect(screen.getByTestId('profile-wizard-direction-pull')).not.toBeDisabled()
+    expect((screen.getByTestId('profile-wizard-direction-push') as HTMLInputElement).checked).toBe(false) // chosen AGAIN, by the user
+    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
+    click('profile-wizard-direction-push')
+    expect(screen.getByTestId('profile-wizard-push-warning')).toBeInTheDocument()
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(attachMaster).toHaveBeenCalledWith('h1', P2, 'push') // what is there now is what the user has seen now
+  })
+
+  it('a profile THIS visit created is no exception: filled by another device before Start → the same', async () => {
+    open()
+    await flush()
+    click('profile-wizard-profile-new')
+    next()
+    await flush()
+    next()
+    next()
+    expect(step()).toBe('run')
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [full('p_00000000000c', 'Laptop')] })
+    click('profile-wizard-start')
+    await flush()
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-direction-pull')).not.toBeDisabled()
+  })
+
+  it('holding content, and the content MOVED (a rev): nothing runs either', async () => {
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [full(P1, 'default', 4)] })
+    await toRun('pull')
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [full(P1, 'default', 5)] })
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('direction')
+    expect((screen.getByTestId('profile-wizard-direction-pull') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('emptied meanwhile: said as that, and pull is no longer offered', async () => {
+    await toRun('pull')
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default', 0)] })
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'profile-emptied')
+    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled()
+  })
+
+  it('deleted meanwhile: back to the profile step, nothing chosen', async () => {
+    await toRun('push')
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P2, 'empty one', 0)] })
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('sot')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'profile-gone')
+    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
+  })
+
+  it('the host cannot be asked: NOTHING runs, it says why in a sentence of its own, and Start can be pressed again', async () => {
+    await toRun('push', 's1')
+    vi.mocked(listProfiles).mockResolvedValueOnce(failed('timeout'))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('run')
+    expect(screen.getByTestId('profile-wizard-check-failed')).toHaveAttribute('data-reason', 'timeout')
+    expect(screen.getByTestId('profile-wizard-check-failed')).toHaveTextContent(en['settings.profile.wizard.run.check_failed'])
+    expect(screen.getByTestId('profile-wizard-check-failed')).toHaveTextContent(en['settings.profile.wizard.request.timeout'])
+    expect(document.body.textContent).not.toMatch(/RAW-|SECRET/)
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['promote', 'attach'])
+    expect(screen.queryByTestId('profile-wizard-check-failed')).toBeNull()
+  })
+
+  it('while the host is being asked: said, and no second Start', async () => {
+    await toRun('push')
+    let release: (v: never) => void = () => {}
+    vi.mocked(listProfiles).mockReturnValueOnce(new Promise((r) => (release = r)))
+    click('profile-wizard-start')
+    expect(screen.getByTestId('profile-wizard-checking')).toBeInTheDocument()
+    expect(screen.queryByTestId('profile-wizard-start')).toBeNull()
+    expect(screen.getByTestId('profile-wizard-close')).toBeDisabled()
+    await act(async () => release({ kind: 'ok', value: [entry(P1, 'default')] } as never))
+    await flush()
+    expect(calls).toEqual(['attach'])
+  })
+
+  it('a Retry asks again, too: the profile changed since the first attempt → no second attempt', async () => {
+    vi.mocked(attachMaster).mockImplementationOnce(async () => (calls.push('attach'), { ok: false, reason: 'timeout' }))
+    await toRun('push')
+    click('profile-wizard-start')
+    await flush()
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [full(P1, 'default', 9)] })
+    click('profile-wizard-retry')
+    await flush()
+    expect(calls).toEqual(['attach'])
+    expect(step()).toBe('direction')
+  })
+})
+
+describe('a create whose outcome is not known is looked for, never simply sent again (review F2)', () => {
+  const OURS = { ...entry('p_00000000000d', 'Laptop', 0), createdAt: 9 }
+  const toNew = async () => {
+    open()
+    await flush()
+    click('profile-wizard-profile-new')
+  }
+
+  it('the answer was lost but the host HAD created it: found in the list, used, said — one POST', async () => {
+    vi.mocked(createProfile).mockResolvedValueOnce(failed('timeout'))
+    await toNew()
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
+    next()
+    await flush()
+    expect(step()).toBe('local')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'create-adopted')
+    expect(createProfile).toHaveBeenCalledTimes(1)
+    next()
+    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled() // it is a new, empty one
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(attachMaster).toHaveBeenCalledWith('h1', OURS.id, 'push')
+  })
+
+  it('unknown AND the list unreadable: said; the next press LOOKS FIRST — and finds it, without a second POST', async () => {
+    vi.mocked(createProfile).mockResolvedValueOnce(failed('network'))
+    await toNew()
+    vi.mocked(listProfiles).mockResolvedValueOnce(failed('network'))
+    next()
+    await flush()
+    expect(step()).toBe('sot')
+    expect(screen.getByTestId('profile-wizard-create-error')).toHaveAttribute('data-outcome', 'unknown')
+    expect(screen.getByTestId('profile-wizard-create-error')).toHaveTextContent(en['settings.profile.wizard.sot.create_unknown'])
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
+    next()
+    await flush()
+    expect(createProfile).toHaveBeenCalledTimes(1)
+    expect(step()).toBe('local')
+  })
+
+  it('a profile of that name, empty, that was in the list BEFORE the create is not taken for it', async () => {
+    const old = entry('p_00000000000e', 'Laptop', 0)
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), old] })
+    vi.mocked(createProfile).mockResolvedValueOnce(failed('timeout'))
+    await toNew()
+    fireEvent.change(screen.getByTestId('profile-wizard-new-name'), { target: { value: 'Laptop' } })
+    next()
+    await flush()
+    expect(step()).toBe('sot')
+    expect(screen.getByTestId('profile-wizard-create-error')).toHaveAttribute('data-outcome', 'not-created')
+    expect(screen.getByTestId('profile-wizard-create-error')).toHaveTextContent(en['settings.profile.wizard.sot.create_not_created'])
+    next()
+    await flush()
+    expect(createProfile).toHaveBeenCalledTimes(2) // looked first, still not there: now it may be sent again
+    expect(step()).toBe('local')
+  })
+
+  it('a definite refusal is just that: no list, and the next press sends again', async () => {
+    vi.mocked(createProfile).mockResolvedValueOnce(failed('rejected', 400))
+    await toNew()
+    const lists = vi.mocked(listProfiles).mock.calls.length
+    next()
+    await flush()
+    expect(screen.getByTestId('profile-wizard-create-error')).toHaveAttribute('data-outcome', 'failed')
+    expect(vi.mocked(listProfiles).mock.calls.length).toBe(lists)
+  })
+})
+
+describe('no host was connected when the wizard opened (review F5)', () => {
+  it('the select is disabled only WHILE nothing can be chosen: a host that connects later can be picked', async () => {
+    useHostStore.setState({ runtime: {} })
+    open()
+    await flush()
+    expect(screen.getByTestId('profile-wizard-host')).toBeDisabled()
+    act(() => useHostStore.getState().setRuntime('h2', { status: 'connected' }))
+    const select = screen.getByTestId('profile-wizard-host') as HTMLSelectElement
+    expect(select).not.toBeDisabled()
+    expect(select.value).toBe('') // nothing is chosen FOR the user
+    expect(screen.queryByTestId('profile-wizard-host-none')).toBeNull()
+    fireEvent.change(select, { target: { value: 'h2' } })
+    await flush()
+    expect(listProfiles).toHaveBeenLastCalledWith('h2')
+    expect(screen.getByTestId('profile-wizard-profiles')).toHaveAttribute('data-state', 'rows')
+  })
+})
+
+describe('the result outlives the page (acceptance F6)', () => {
+  const toast = () => useUndoToast.getState().toast?.message ?? null
+  beforeEach(() => useUndoToast.getState().dismiss())
+
+  it('push: the done line AND a toast', async () => {
+    await toRun('push')
+    click('profile-wizard-start')
+    await flush()
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+    expect(toast()).toBe(en['settings.profile.wizard.toast.done'].replace('{{profile}}', 'default').replace('{{host}}', 'mlab'))
+  })
+
+  it('pull with the copy: the toast says where the old workspaces and tabs are', async () => {
+    await toRun('pull')
+    click('profile-wizard-start')
+    await flush()
+    expect(toast()).toBe(en['settings.profile.wizard.toast.done_saved'].replace('{{profile}}', 'default').replace('{{host}}', 'mlab').replace('{{name}}', 'Laptop'))
+  })
+
+  it('the wizard is UNMOUNTED while the run is out (the world was replaced under it): the result still arrives as a toast, and no state is set on what is gone', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let release: (v: never) => void = () => {}
+    vi.mocked(attachMaster).mockReturnValueOnce(new Promise((r) => (release = r)))
+    await toRun('pull')
+    click('profile-wizard-start')
+    await flush()
+    cleanup()
+    expect(toast()).toBeNull()
+    await act(async () => release({ ok: true } as never))
+    await flush()
+    expect(toast()).toBe(en['settings.profile.wizard.toast.done_saved'].replace('{{profile}}', 'default').replace('{{host}}', 'mlab').replace('{{name}}', 'Laptop'))
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
+  })
+
+  it('… and a FAILURE that nobody is there to read is a toast naming the step; one the wizard shows is not', async () => {
+    let release: (v: never) => void = () => {}
+    vi.mocked(attachMaster).mockReturnValueOnce(new Promise((r) => (release = r)))
+    await toRun('push')
+    click('profile-wizard-start')
+    await flush()
+    cleanup()
+    await act(async () => release({ ok: false, reason: 'timeout' } as never))
+    expect(toast()).toBe(en['settings.profile.wizard.toast.stopped_attach'])
+
+    useUndoToast.getState().dismiss()
+    vi.mocked(attachMaster).mockResolvedValueOnce({ ok: false, reason: 'timeout' })
+    await toRun('push')
+    click('profile-wizard-start')
+    await flush()
+    expect(screen.getByTestId('profile-wizard-failure')).toBeInTheDocument()
+    expect(toast()).toBeNull()
   })
 })

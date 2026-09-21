@@ -17,10 +17,25 @@
 // and what a run had already done stays done (a promote is a fact). Opened again, it starts from the state as
 // it is then.
 //
-// EVERY PREMISE IS CHECKED AGAIN (`brokenPremise`) — on every store change and at every click that moves on:
-// another window may have attached a master, deleted the chosen local profile, or the host may have gone. The
-// wizard then returns to the latest step whose premises hold and says why. Not while a run is under way: there
-// each primitive refuses for itself, and its refusal is the run's failure.
+// EVERY PREMISE IS CHECKED AGAIN (`brokenPremise`, over wizard-run.ts's `brokenLocalPremise`) — on every store
+// change and at every click that moves on: another window may have attached a master, deleted the chosen local
+// profile, or the host may have gone. The wizard then returns to the latest step whose premises hold and says
+// why. Not while a run is under way: there each primitive refuses for itself, and its refusal is the run's
+// failure.
+//
+// START (AND EVERY RETRY) GOES THROUGH ONE DOOR: wizard-run.ts's `prepareRun` — this device's premises AND the
+// SOT profile, re-listed, against the fingerprint the user was looking at when they chose it (`seen`, review
+// F1). This file only presents what that door answers: a plan → the run; `profile-changed` → back to the
+// direction step, the direction un-chosen, what is offered recomputed from what is there NOW; `profile-gone` →
+// back to the profile step; `list-failed` → nothing runs, it is said, Start stays. "Pull is not offered" follows
+// `seen.empty` — never a local "I created it" flag alone.
+//
+// A CREATE WHOSE OUTCOME IS NOT KNOWN (review F2) is wizard-run.ts's `createSotProfile`; this file keeps the two
+// things it needs across presses: the BASELINE (the ids the host listed before this visit's first POST to it —
+// null when the list had never been read) and for which host + name the next press must LOOK FIRST.
+//
+// THE RESULT IS ALSO A TOAST (`announceRun`, acceptance F6): a pull replaces the world this page lives in. The
+// run's promise outlives the component — it announces, and sets state only while `alive`.
 //
 // WHAT IS SHOWN OF A FAILURE is a sentence chosen by the failure's class. Never a transport's message, an
 // `Error.message` or a response body (wizard-run.ts closes the list for the run; `requestKey` for the requests).
@@ -32,19 +47,22 @@ import { MASTER_PROFILE_ID, normalizeLocalProfileName, useLocalProfilesStore } f
 import { useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
 import { ensureDefaultDeviceName } from '../../../../stores/useDeviceNameStore'
 import { isClientIdPersisted } from '../../../../lib/client-identity'
-import { createProfile } from '../../../../lib/profile/api'
 import { readMasterWorld } from '../../../../lib/profile/master-world'
 import { detachMaster, type DetachResult } from '../../../../lib/profile/start'
 import { useSotProfiles } from '../useSotProfiles'
 import { DirectionStep, LocalStep, SotStep, type SotChoice } from './WizardChoiceSteps'
-import { offeredProfileName, runPlan, subStepsOf, type SubStepId, type SubStepState, type WizardPlan } from './wizard-run'
-import { BTN, NOTICE, reasonKey, useMasterWorldReason } from './wizard-shared'
+import { announceRun, brokenLocalPremise, createSotProfile, offeredProfileName, prepareRun, runPlan, sotNow, subStepsOf, type CreateResult, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import { BTN, NOTICE, reasonKey, requestKey, useMasterWorldReason } from './wizard-shared'
 
 type StepId = 'stop' | 'sot' | 'local' | 'direction' | 'run'
 const ORDER: readonly StepId[] = ['stop', 'sot', 'local', 'direction', 'run']
 
 type Refusal = 'client-id' | 'junk-epoch' | 'no-parked-master'
-type PremiseReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone'
+type NoticeReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone' | 'profile-changed' | 'profile-emptied' | 'profile-gone' | 'create-adopted'
+type PremiseReason = Extract<NoticeReason, 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone'>
+
+/** Which step a broken premise sends the wizard back to. */
+const PREMISE_STEP: Record<Exclude<PremiseReason, 'stopped-elsewhere'>, StepId> = { 'attached-elsewhere': 'stop', 'host-gone': 'sot', 'host-offline': 'sot', 'local-gone': 'local' }
 
 /** Reasons no retry cures: the wizard starts over, from the state as it is by then. */
 const FINAL: Record<SubStepId, ReadonlySet<string>> = {
@@ -78,24 +96,21 @@ function defaultHostId(): string | null {
 
 /** The EARLIEST premise of `step` that does not hold, read off the stores as they are this instant. */
 function brokenPremise(step: StepId, hostId: string | null, localId: string): { step: StepId; reason: PremiseReason } | null {
-  const at = ORDER.indexOf(step)
   if (step === 'stop') return masterAttached() ? null : { step: 'sot', reason: 'stopped-elsewhere' }
-  if (masterAttached()) return { step: 'stop', reason: 'attached-elsewhere' }
-  if (at > ORDER.indexOf('sot')) {
-    if (hostId === null || useHostStore.getState().hosts[hostId] === undefined) return { step: 'sot', reason: 'host-gone' }
-    if (!hostConnected(hostId)) return { step: 'sot', reason: 'host-offline' }
-  }
-  if (at > ORDER.indexOf('local') && localId !== MASTER_PROFILE_ID && !Object.hasOwn(useLocalProfilesStore.getState().slaves, localId)) {
-    return { step: 'local', reason: 'local-gone' }
-  }
-  return null
+  const at = ORDER.indexOf(step)
+  // A step's premises are those of the choices made BEFORE it: the host from `local` on, the local profile from `direction` on.
+  const reason = brokenLocalPremise(hostId, localId, { host: at > ORDER.indexOf('sot'), local: at > ORDER.indexOf('local') })
+  return reason === null ? null : { step: PREMISE_STEP[reason], reason }
 }
 
 interface RunState {
   plan: WizardPlan
   states: SubStepState[]
-  phase: 'idle' | 'running' | 'failed' | 'done'
+  /** `checking`: `prepareRun` is asking the host; nothing has been done (or, on a retry, nothing more). */
+  phase: 'idle' | 'checking' | 'running' | 'failed' | 'done'
   failure: { at: number; reason: string } | null
+  /** The host could not be asked before the run (a request's class): nothing ran. */
+  checkFailed: string | null
   /** The chosen local profile's name as it was when the run began: after the promote it is no local profile any more. */
   localName: string | null
 }
@@ -105,16 +120,22 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const [refusal] = useState<Refusal | null>(refusalNow)
   const [hadMaster, setHadMaster] = useState(masterAttached)
   const [step, setStep] = useState<StepId>(() => (masterAttached() ? 'stop' : 'sot'))
-  const [notice, setNotice] = useState<PremiseReason | null>(null)
+  const [notice, setNotice] = useState<NoticeReason | null>(null)
   const [stopping, setStopping] = useState(false)
   const [stopResult, setStopResult] = useState<Exclude<DetachResult, { ok: true }> | null>(null)
   const [hostId, setHostId] = useState<string | null>(defaultHostId)
   const [choice, setChoice] = useState<SotChoice | null>(null)
   const [newName, setNewName] = useState<{ value: string; touched: boolean }>(() => ({ value: offeredProfileName(), touched: false }))
-  /** Profiles THIS visit created: push only, whatever the list says of them by now. */
+  /** Profiles THIS visit created — for the WORDING of "pull is not offered" only; whether it is offered is `seen.empty`. */
   const [created, setCreated] = useState<readonly string[]>([])
   const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<Exclude<CreateResult, { ok: true }> | null>(null)
+  /** The chosen profile as the user SAW it when confirming step 2 (or as `prepareRun` found it since). */
+  const [seen, setSeen] = useState<SotNow | null>(null)
+  /** host id → the ids it listed before this visit's first POST to it (null: never read). Set once per host. */
+  const baselines = useRef(new Map<string, readonly string[] | null>())
+  /** The create for this host + name ended unknown: the next press looks before it sends. */
+  const [lookFirst, setLookFirst] = useState<{ hostId: string; name: string } | null>(null)
   const [localId, setLocalId] = useState<string>(MASTER_PROFILE_ID)
   const [direction, setDirection] = useState<SyncDirection | null>(null)
   const [saveFirst, setSaveFirst] = useState(true)
@@ -146,13 +167,11 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     })
   }, [refusal])
 
-  const busy = stopping || creating || run?.phase === 'running'
+  const busy = stopping || creating || run?.phase === 'running' || run?.phase === 'checking'
   const runStarted = run !== null && run.phase !== 'idle'
 
   /** Back to the step that still stands, and what no longer holds is forgotten. True = something was broken. */
-  const recheck = (at: StepId): boolean => {
-    const broken = brokenPremise(at, hostId, localId)
-    if (broken === null) return false
+  const sendBack = (broken: { step: StepId; reason: PremiseReason }): void => {
     setStep(broken.step)
     setNotice(broken.reason)
     setRun(null)
@@ -160,9 +179,15 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     if (broken.reason === 'host-gone' || broken.reason === 'host-offline') {
       setHostId(defaultHostId())
       setChoice(null)
+      setSeen(null)
     }
     if (broken.reason === 'local-gone') setLocalId(MASTER_PROFILE_ID)
-    return true
+  }
+
+  const recheck = (at: StepId): boolean => {
+    const broken = brokenPremise(at, hostId, localId)
+    if (broken !== null) sendBack(broken)
+    return broken !== null
   }
 
   useEffect(() => {
@@ -200,35 +225,41 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
 
   const confirmSot = async (): Promise<void> => {
     if (!sotReady || hostId === null || choice === null || creating) return
-    if (choice.kind === 'existing') return go('local')
+    if (choice.kind === 'existing') {
+      if (chosenRow === null) return
+      setSeen(sotNow(chosenRow)) // what the user is looking at, this instant
+      return go('local')
+    }
     const name = normalizeLocalProfileName(newName.value)
     if (name === null) return
+    if (!baselines.current.has(hostId)) baselines.current.set(hostId, rows === null ? null : rows.map((row) => row.id))
     setCreating(true)
     setCreateError(null)
-    let reason: string | null = null
-    let id: string | null = null
-    try {
-      const r = await createProfile(hostId, name)
-      if (r.kind === 'ok') id = r.value.id
-      else reason = r.reason
-    } catch {
-      reason = 'thrown'
-    }
+    const r = await createSotProfile(hostId, name, baselines.current.get(hostId) ?? null, lookFirst !== null && lookFirst.hostId === hostId && lookFirst.name === name)
     if (!alive.current) return
     setCreating(false)
-    if (id === null) return setCreateError(reason ?? 'thrown')
-    setCreated((c) => [...c, id])
-    setChoice({ kind: 'existing', id, name })
+    if (!r.ok) {
+      // A definite refusal created nothing. Anything else: the next press for this host and name LOOKS FIRST —
+      // `not-created` too (a POST still on its way may land after the look).
+      setLookFirst(r.outcome === 'failed' ? null : { hostId, name })
+      if (r.outcome !== 'failed') sot.reload() // the list is where the user can see what the host holds now
+      return setCreateError(r)
+    }
+    setLookFirst(null)
+    setCreated((c) => [...c, r.id])
+    setChoice({ kind: 'existing', id: r.id, name })
+    setSeen(sotNow({ sections: [] })) // created — or found with no section: empty, until `prepareRun` hears otherwise
     sot.reload()
-    go('local')
+    if (recheck('local')) return
+    setNotice(r.adopted ? 'create-adopted' : null)
+    setStep('local')
   }
 
   // === what the later steps read of the earlier ones ===
   const profileId = choice?.kind === 'existing' ? choice.id : null
   const profileName = choice?.kind === 'existing' ? (chosenRow?.name ?? choice.name ?? choice.id) : ''
-  const isNew = profileId !== null && created.includes(profileId)
-  const isEmpty = chosenRow !== null && chosenRow.sections.length === 0
-  const pullUnavailable: 'new' | 'empty' | null = isNew ? 'new' : isEmpty ? 'empty' : null
+  // Whether pull is offered is what the profile HELD when last looked at; `created` only picks the wording.
+  const pullUnavailable: 'new' | 'empty' | null = seen === null || !seen.empty ? null : profileId !== null && created.includes(profileId) ? 'new' : 'empty'
   const effectiveDirection: SyncDirection | null = pullUnavailable !== null ? 'push' : direction
   const worldReason = useMasterWorldReason()
   const saveNameOk = normalizeLocalProfileName(saveName.value) !== null
@@ -238,20 +269,54 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     if (!directionReady || hostId === null || profileId === null || effectiveDirection === null) return
     const plan: WizardPlan = { hostId, profileId, localId, direction: effectiveDirection, saveAs: effectiveDirection === 'pull' && saveFirst ? saveName.value : null }
     if (recheck('run')) return
-    setRun({ plan, states: subStepsOf(plan).map(() => 'pending'), phase: 'idle', failure: null, localName: localId === MASTER_PROFILE_ID ? null : (slaves[localId]?.name ?? null) })
+    setRun({ plan, states: subStepsOf(plan).map(() => 'pending'), phase: 'idle', failure: null, checkFailed: null, localName: localId === MASTER_PROFILE_ID ? null : (slaves[localId]?.name ?? null) })
     setNotice(null)
     setStep('run')
   }
 
   const execute = async (from: number): Promise<void> => {
-    if (run === null || run.phase === 'running') return
-    // The last look before anything irreversible: only for a run that has not begun (a retry's premises are the primitives' own).
-    if (from === 0 && run.phase === 'idle' && recheck('run')) return
-    const { plan } = run
-    setRun((r) => (r === null ? r : { ...r, phase: 'running', failure: null }))
+    if (run === null || run.phase === 'running' || run.phase === 'checking' || run.phase === 'done') return
+    const before = run.phase
+    const promoted = run.states[subStepsOf(run.plan).indexOf('promote')] === 'done'
+    const labels = { profile: profileName, host: hostId === null ? '' : (hosts[hostId]?.name ?? hostId) }
+    const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: seen?.fingerprint ?? null, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs }
+    setRun((r) => (r === null ? r : { ...r, phase: 'checking', checkFailed: null }))
+    // THE door: nothing irreversible happens before it has answered with a plan.
+    const prepared = await prepareRun(draft, promoted)
+    if (!alive.current) return
+    if (!prepared.ok) {
+      if (prepared.reason === 'list-failed') return setRun((r) => (r === null ? r : { ...r, phase: before, checkFailed: prepared.request }))
+      if (prepared.reason === 'profile-changed') {
+        setSeen(prepared.now)
+        setDirection(null)
+        // After a promote the chosen profile IS the master: the next plan must not promote again.
+        if (promoted) setLocalId(MASTER_PROFILE_ID)
+        setRun(null)
+        setNotice(prepared.now.empty ? 'profile-emptied' : 'profile-changed')
+        sot.reload()
+        return setStep('direction')
+      }
+      if (prepared.reason === 'profile-gone') {
+        setChoice(null)
+        setSeen(null)
+        setDirection(null)
+        if (promoted) setLocalId(MASTER_PROFILE_ID)
+        setRun(null)
+        setNotice('profile-gone')
+        sot.reload()
+        return setStep('sot')
+      }
+      if (prepared.reason === 'incomplete') return setRun((r) => (r === null ? r : { ...r, phase: before }))
+      return sendBack({ step: PREMISE_STEP[prepared.reason], reason: prepared.reason })
+    }
+    // A first run takes the door's plan; a retry keeps its own (its sub-steps' states are indexed by it).
+    const plan = from === 0 && before === 'idle' ? prepared.plan : run.plan
+    setRun((r) => (r === null ? r : { ...r, plan, phase: 'running', failure: null }))
     const result = await runPlan(plan, from, (index, state) => {
       if (alive.current) setRun((r) => (r === null ? r : { ...r, states: r.states.map((s, i) => (i === index ? state : s)) }))
     })
+    // Said whether or not this component is still there — a pull replaces the world it lives in.
+    announceRun(result, plan, labels, alive.current)
     if (!alive.current) return
     setRun((r) => (r === null ? r : result.done ? { ...r, phase: 'done' } : { ...r, phase: 'failed', failure: { at: result.failedAt, reason: result.reason } }))
   }
@@ -261,6 +326,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     setNotice(null)
     setStopResult(null)
     setChoice(null)
+    setSeen(null)
     setDirection(null)
     setLocalId(MASTER_PROFILE_ID)
     const attached = masterAttached()
@@ -332,6 +398,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
               onHost={(id) => {
                 setHostId(id)
                 setChoice(null)
+                setSeen(null)
                 setCreateError(null)
               }}
               view={sot.view}
@@ -432,6 +499,17 @@ function RunStep({ run, profileName, hostName }: { run: RunState; profileName: s
   return (
     <div className="mt-3 text-xs">
       <p className="text-text-secondary">{t(run.phase === 'idle' ? 'settings.profile.wizard.run.summary' : 'settings.profile.wizard.run.progress')}</p>
+      {run.phase === 'checking' && (
+        <p data-testid="profile-wizard-checking" role="status" className="flex items-center gap-1.5 text-text-secondary">
+          <ArrowsClockwise size={14} className="animate-spin" />
+          {t('settings.profile.wizard.run.checking')}
+        </p>
+      )}
+      {run.checkFailed !== null && run.phase !== 'checking' && (
+        <p data-testid="profile-wizard-check-failed" data-reason={run.checkFailed} role="alert" className="text-red-500">
+          {t('settings.profile.wizard.run.check_failed')} {t(requestKey(run.checkFailed))}
+        </p>
+      )}
       <ul data-testid="profile-wizard-summary" className="mt-1 flex flex-col gap-1">
         {steps.map((id, i) => {
           const state = run.states[i]

@@ -1687,5 +1687,20 @@
   "settings.profile.wizard.attach.unauthorized": "主機不接受這台裝置的憑證。請到該主機的設定檢查 token，然後再試一次。",
   "settings.profile.wizard.attach.server": "主機在登記這台裝置時自己發生了錯誤。請再試一次。",
   "settings.profile.wizard.attach.malformed": "看不懂主機對這次登記的回應。它的 daemon 版本可能不同。",
-  "settings.profile.wizard.attach.other": "無法開始同步，原因這個 app 說不上來。請再試一次。"
+  "settings.profile.wizard.attach.other": "無法開始同步，原因這個 app 說不上來。請再試一次。",
+  "settings.profile.wizard.toast.done": "現在與 {{host}} 上的「{{profile}}」同步。",
+  "settings.profile.wizard.toast.done_saved": "現在與 {{host}} 上的「{{profile}}」同步。這台裝置原本的工作區與分頁已存成本機 profile「{{name}}」。",
+  "settings.profile.wizard.toast.stopped_promote": "設定同步時，停在「更換這台裝置的主要 profile」這一步。請到「設定 › Profile」查看目前的狀態。",
+  "settings.profile.wizard.toast.stopped_save": "設定同步時，停在「替主要 profile 存一份副本」這一步，這台裝置沒有在同步。請到「設定 › Profile」查看目前的狀態。",
+  "settings.profile.wizard.toast.stopped_attach": "設定同步時，停在「向主機登記」這一步。請到「設定 › Profile」查看目前的狀態。",
+  "settings.profile.wizard.notice.profile_changed": "你設定的這段期間，這份 profile 被別的裝置改了，所以什麼都還沒開始。請重新選擇方向——它現在有內容了，「推」會取代那些內容。",
+  "settings.profile.wizard.notice.profile_emptied": "你設定的這段期間，這份 profile 被別的裝置清空了，所以什麼都還沒開始。請重新選擇方向。",
+  "settings.profile.wizard.notice.profile_gone": "你設定的這段期間，這份 profile 已從主機上被刪除，所以什麼都還沒開始。請重新選一份 profile。",
+  "settings.profile.wizard.run.checking": "正在向主機確認這份 profile 還是你看到的樣子…",
+  "settings.profile.wizard.run.check_failed": "什麼都還沒開始：無法向主機確認這份 profile 是否還是你看到的樣子。",
+  "settings.profile.wizard.sot.host_choose": "選擇一台主機",
+  "settings.profile.wizard.sot.create_unknown": "不確定 profile 有沒有建立成功：主機沒有回應，它的清單也讀不到。請再按一次按鈕——會先問主機現在有什麼，不會重複建立。",
+  "settings.profile.wizard.sot.create_not_created": "之後向主機查過，上面沒有這份 profile。再按一次按鈕就會建立。",
+  "settings.profile.wizard.sot.create_same_name": "不確定 profile 有沒有建立成功，而主機上現在有一份同名的空 profile，可能是、也可能不是剛才那一份。如果是你的，請從上面的清單選它；不然請替新的換一個名稱。",
+  "settings.profile.wizard.notice.create_adopted": "其實主機已經建立了那份 profile，只是回應遺失了。現在用的就是那一份，沒有重複建立。"
 }
