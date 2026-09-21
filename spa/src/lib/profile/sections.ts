@@ -217,9 +217,10 @@ export function buildProfileDocument(input: CollectInput): ProfileDocumentResult
  */
 export function adoptStandaloneTabs(
   world: { workspaces: readonly Workspace[]; tabs: Record<string, Tab>; tabOrder: readonly string[] },
-  opts: { unsortedName: string; newWorkspaceId: string },
+  opts: { unsortedName: string; newWorkspaceId: string; only?: ReadonlySet<string> },
 ): { workspaces: Workspace[]; adopted: string[]; createdWorkspaceId: string | null } {
-  const adopted = standaloneIds(world.workspaces, world.tabs, world.tabOrder)
+  const only = opts.only
+  const adopted = standaloneIds(world.workspaces, world.tabs, world.tabOrder).filter((id) => only === undefined || only.has(id))
   if (adopted.length === 0) return { workspaces: [...world.workspaces], adopted, createdWorkspaceId: null }
 
   const byId = world.workspaces.findIndex((ws) => ws.id === opts.newWorkspaceId)
@@ -233,13 +234,13 @@ export function adoptStandaloneTabs(
 }
 
 /** Every tab id once: the first workspace (in workspace order) that lists it keeps it, at its first position. */
-function dropExtraOwners(workspaces: readonly Workspace[]): { workspaces: readonly Workspace[]; dropped: number } {
+function dropExtraOwners(workspaces: readonly Workspace[], only?: ReadonlySet<string>): { workspaces: readonly Workspace[]; dropped: number } {
   const seen = new Set<string>()
   let dropped = 0
   const next = workspaces.map((ws) => {
     const tabs: string[] = []
     for (const id of ws.tabs) {
-      if (seen.has(id)) continue
+      if (seen.has(id) && (only === undefined || only.has(id))) continue
       seen.add(id)
       tabs.push(id)
     }
@@ -272,12 +273,15 @@ export interface OwnershipWorld {
  * can focus a tab before it has a workspace), or the pointed-at workspace is the one that lost its listing of
  * it — or the tab on screen would be in no bar, for good. Never "align the pointer with the active tab's
  * owner": a user who looks at B's bar while a tab of A is on screen chose that.
+ *
+ * `opts.only` — repair THESE tab ids and leave every other ownerless or twice-listed tab as it is (the
+ * invariant's bounded way out: only what has been broken long enough). Absent = all of them.
  */
 export function repairTabOwnership(
   world: OwnershipWorld,
-  opts: { unsortedName: string; newWorkspaceId: string },
+  opts: { unsortedName: string; newWorkspaceId: string; only?: ReadonlySet<string> },
 ): { workspaces: Workspace[]; activeWorkspaceId: string | null; adopted: string[]; dropped: number; membershipChanged: boolean } {
-  const deduped = dropExtraOwners(world.workspaces)
+  const deduped = dropExtraOwners(world.workspaces, opts.only)
   const { workspaces, adopted } = adoptStandaloneTabs({ ...world, workspaces: deduped.workspaces }, opts)
   const { activeTabId } = world
   const owner = activeTabId === null ? undefined : workspaces.find((ws) => ws.tabs.includes(activeTabId))

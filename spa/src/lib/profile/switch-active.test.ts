@@ -576,6 +576,31 @@ describe('a world is repaired before it is parked', () => {
     })
   })
 
+  // F5: another window changes the membership every 300 ms, for ever. "Quiet for 500 ms" never comes — the wait
+  // is bounded by the age of the broken state instead (ADOPTION_MAX_WAIT_MS).
+  it('a membership that never goes quiet: `busy` for 3 s, not for ever — then the switch goes through with the tab in `unsorted`', async () => {
+    addOrphan()
+    let n = 0
+    const churn = (forMs: number): void => {
+      for (let t = 0; t < forMs; t += 300) {
+        const id = `churn${n++}`
+        useTabStore.setState((st) => ({ tabs: { ...st.tabs, [id]: tab(id, MASTER_SENTINEL) }, tabOrder: [...st.tabOrder, id] }))
+        vi.advanceTimersByTime(100)
+        useWorkspaceStore.getState().addTabToWorkspace('mws', id)
+        vi.advanceTimersByTime(200)
+      }
+    }
+    churn(1200)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
+    churn(1500)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' }) // 2.7 s
+    churn(600)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true }) // 3.3 s
+    const parked = useLocalProfilesStore.getState().parkedMaster
+    expect(ownersIn(parked, 'mo')).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(parked!.workspaces.find((x) => x.id === UNSORTED_WORKSPACE_ID)!.tabs).toEqual(['mo']) // and none of the other window's tabs
+  })
+
   it('a clean world is parked BY REFERENCE, quiet or not: no repair, no copy, no `busy`', async () => {
     useTabStore.getState().togglePin('mt1') // a change a moment ago — not one of membership, and nothing to repair anyway
     const before = screen()

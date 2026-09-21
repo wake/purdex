@@ -605,6 +605,18 @@ describe('repairTabOwnership', () => {
     expect(again.workspaces).toEqual(out.workspaces)
   })
 
+  it('`only`: those tab ids are repaired and every other broken one is left exactly as it is; absent = all', () => {
+    const world = { workspaces: [ws('a', 'A', ['t1', 't2']), ws('b', 'B', ['t1', 't2'])], tabs: tabsOf('t1', 't2', 'o', 'p'), tabOrder: ['t1', 't2', 'o', 'p'], activeTabId: null, activeWorkspaceId: 'a' }
+    const some = repairTabOwnership(deepFreeze(world), { ...opts, only: new Set(['t2', 'p']) })
+    expect(some.workspaces.map((w) => [w.id, w.tabs])).toEqual([['a', ['t1', 't2']], ['b', ['t1']], ['unsorted', ['p']]])
+    expect(some).toMatchObject({ adopted: ['p'], dropped: 1, membershipChanged: true })
+    const none = repairTabOwnership(world, { ...opts, only: new Set() })
+    expect(none.membershipChanged).toBe(false)
+    expect(none.workspaces).toEqual(world.workspaces)
+    const all = repairTabOwnership(world, opts)
+    expect(all.workspaces.map((w) => [w.id, w.tabs])).toEqual([['a', ['t1', 't2']], ['b', []], ['unsorted', ['o', 'p']]])
+  })
+
   it.each([
     ['the tab on screen is the one adopted → the pointer follows it', { activeTabId: 'o', activeWorkspaceId: 'a' }, [ws('a', 'A', ['t1', 't2'])], 'unsorted'],
     ['another tab is adopted → the pointer stays', { activeTabId: 't1', activeWorkspaceId: 'a' }, [ws('a', 'A', ['t1', 't2'])], 'a'],
