@@ -90,7 +90,7 @@ import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDev
 import { useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } from '../../stores/useLocalProfilesStore'
-import { endpointOfHost, isMasterPair, isSyncDirection, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
+import { endpointOfHost, isMasterPair, isSyncDirection, pendingDetachKey, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
 import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
@@ -765,13 +765,20 @@ async function dropAttachment(master: Master, endpoint?: string | null): Promise
   return { ok: false, reason: 'daemon-not-told', detail }
 }
 
+/** Is this client attached, right now, to `master` on the daemon at `endpoint`? Then that attachment is no ghost. */
+function attachedAt(master: Master, endpoint: string | null): boolean {
+  const state = useProfileStore.getState()
+  return sameMaster(selectMaster(state), master) && state.masterEndpoint === endpoint
+}
+
 /**
- * Write down the attachment a failed detach left on the daemon (useProfileStore, `pendingDetach`) — with the
+ * Write down the attachment a failed detach left on the daemon (useProfileStore, `pendingDetaches`) — with the
  * address of THAT daemon. This is a store write AFTER an `await` of up to 15 s, and a persist of this store
  * writes every field from THIS window's memory: so the memory is first brought up to what storage holds — a
- * master another window set meanwhile must not be written over by a stale copy (`rehydrate` is synchronous over
- * `localStorage`). And if, by now, this client is attached to that very profile again, the attachment is wanted:
- * nothing is written down.
+ * master another window set meanwhile must not be written over by a stale copy, and the record is MERGED into
+ * the list storage holds, not into the one this window remembered (`rehydrate` is synchronous over
+ * `localStorage`). And if, by now, this client is attached to that very profile AT THAT ADDRESS again, the
+ * attachment is wanted: nothing is written down.
  */
 async function rememberPendingDetach(master: Master, endpoint: string, failure: Exclude<DetachResult, { ok: true }>): Promise<void> {
   try {
@@ -779,9 +786,9 @@ async function rememberPendingDetach(master: Master, endpoint: string, failure: 
   } catch {
     // as it was: the write below is still better than a ghost attachment nobody knows of
   }
-  if (sameMaster(selectMaster(useProfileStore.getState()), master)) return
+  if (attachedAt(master, endpoint)) return
   const detail = failure.reason === 'daemon-not-told' ? failure.detail : failure.reason
-  useProfileStore.getState().setPendingDetach({ hostId: master.hostId, profileId: master.profileId, endpoint, detail, at: clock() })
+  useProfileStore.getState().addPendingDetach({ hostId: master.hostId, profileId: master.profileId, endpoint, detail, at: clock() })
 }
 
 /**
@@ -967,7 +974,7 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
   if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token)) return asYouWere('invalid-profile-id')
   ownGenerationMove()
   // The attach has succeeded whatever comes of this: the ghost is the OLD master's, and it is said where a failed
-  // detach is said (`pendingDetach`, Settings › Profile). A stand-down after the drop does not get here — the
+  // detach is said (`pendingDetaches`, Settings › Profile). A stand-down after the drop does not get here — the
   // previous master is then still the master (or the winner's business), and its leader writes the attachment again.
   if (ghost !== null && previous !== null && previousAt !== null) await rememberPendingDetach(previous, previousAt, ghost)
   return { ok: true }
@@ -981,7 +988,7 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
  * has just written is taken down again, best effort, unless it is exactly the one the winner wants: overtaken
  * by a DETACH → nobody wants it; by an attach to the same (host, profile) → theirs now; to another → nobody's.
  * `putAt` — where that attachment was written (`attachHeld`): the take-down goes there or nowhere, and one that
- * did not get through is remembered with it (`pendingDetach`), like a failed detach. Null (the host had no
+ * did not get through is remembered with it (`pendingDetaches`), like a failed detach. Null (the host had no
  * address to read) cannot be remembered — the setter refuses a record without one — and stays a problem only.
  */
 async function standDown(next: Master, putAt: string | null, hold: Hold): Promise<AttachResult> {
@@ -1022,23 +1029,24 @@ export function detachMaster(): Promise<DetachResult> {
 }
 
 /**
- * Tell the daemon again about a detach it was not told of (`useProfileStore.pendingDetach`) — with what was
- * REMEMBERED, the address included: the master it was about is gone, and the host may have been re-pointed since
- * (`dropAttachment`: then nothing is sent, and the record stays for the day the address is put back). In the
- * attach / detach queue, so it cannot overlap one. Attached to that very profile by now → the attachment is
- * wanted: not deleted, and forgotten. Giving up is `useProfileStore.clearPendingDetach`.
+ * Tell the daemon again about ONE detach it was not told of (`useProfileStore.pendingDetaches`, by its
+ * `pendingDetachKey`) — with what was REMEMBERED, the address included: the master it was about is gone, and the
+ * host may have been re-pointed since (`dropAttachment`: then nothing is sent, and the record stays for the day
+ * the address is put back). In the attach / detach queue, so it cannot overlap one. Attached to that very
+ * profile at that address by now → the attachment is wanted: not deleted, and forgotten. Only that record is
+ * touched; giving up is `useProfileStore.clearPendingDetach(key)`.
  */
-export function retryPendingDetach(): Promise<DetachResult> {
+export function retryPendingDetach(key: string): Promise<DetachResult> {
   return serial(async (): Promise<DetachResult> => {
-    const left = useProfileStore.getState().pendingDetach
-    if (left === null) return { ok: true }
+    const left = useProfileStore.getState().pendingDetaches.find((l) => pendingDetachKey(l) === key)
+    if (left === undefined) return { ok: true }
     const target: Master = { hostId: left.hostId, profileId: left.profileId }
-    if (sameMaster(selectMaster(useProfileStore.getState()), target)) {
-      useProfileStore.getState().clearPendingDetach(left.hostId, left.profileId)
+    if (attachedAt(target, left.endpoint)) {
+      useProfileStore.getState().clearPendingDetach(key)
       return { ok: true }
     }
     const told = await dropAttachment(target, left.endpoint)
-    if (told.ok) useProfileStore.getState().clearPendingDetach(left.hostId, left.profileId)
+    if (told.ok) useProfileStore.getState().clearPendingDetach(key)
     // Only a request that went out has a newer reason to write down; one that was not sent leaves the record as it is.
     else if (told.reason === 'daemon-not-told' && left.endpoint !== null) await rememberPendingDetach(target, left.endpoint, told)
     return told

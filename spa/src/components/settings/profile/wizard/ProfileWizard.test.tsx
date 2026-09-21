@@ -88,7 +88,7 @@ beforeEach(() => {
   vi.mocked(copyMasterAsSlave).mockReset().mockImplementation(() => (calls.push('copy-master'), { ok: true, id: 'c1' }))
   vi.mocked(saveScreenAsSlave).mockReset().mockImplementation(() => (calls.push('save-screen'), { ok: true, id: 'c2' }))
   vi.mocked(attachMaster).mockReset().mockImplementation(async () => (calls.push('attach'), { ok: true }))
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null, suspension: null, pendingDetach: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: host('h1', 'mlab', '10.0.0.1'), h2: host('h2', 'air', '10.0.0.2'), h3: host('h3', 'gone', '10.0.0.3') }, hostOrder: ['h1', 'h2', 'h3'], devHostId: 'h1', runtime: { h1: { status: 'connected' }, h2: { status: 'connected' }, h3: { status: 'disconnected' } } })
   useDeviceNameStore.setState({ deviceName: 'Laptop' })
   useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: tabs(7), activeWorkspaceId: null, activeTabId: null } } }, slaveOrder: ['s1'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })

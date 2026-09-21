@@ -49,7 +49,7 @@ beforeEach(() => {
   vi.mocked(detachMaster).mockReset()
   vi.mocked(detachMaster).mockResolvedValue({ ok: true })
   vi.mocked(readMasterWorld).mockReturnValue(SETTLED)
-  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true, pendingDetach: null })
+  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 })
@@ -118,7 +118,7 @@ describe('the wizard\'s two ways in (P3d-3)', () => {
   })
 
   it('a host that was not told of a stop is still said while the wizard is open: the notice is not the wizard\'s to hide', () => {
-    useProfileStore.setState({ pendingDetach: { hostId: 'h1', profileId: 'p1', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 } })
+    useProfileStore.setState({ pendingDetaches: [{ hostId: 'h1', profileId: 'p1', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 }] })
     show(NO_MASTER)
     fireEvent.click(screen.getByTestId('profile-setup-start'))
     expect(screen.getByTestId('profile-detach-leftover')).toBeInTheDocument()
@@ -395,7 +395,7 @@ describe('the three controls', () => {
   })
 
   it('an attachment a failed detach left on the daemon is said WITHOUT a master too — that is when it matters', () => {
-    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetach: { hostId: 'h1', profileId: 'p_000000000001', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 } })
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetaches: [{ hostId: 'h1', profileId: 'p_000000000001', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 }] })
     show(NO_MASTER)
     expect(screen.getByTestId('profile-current-block')).toHaveAttribute('data-state', 'none')
     expect(screen.getByTestId('profile-detach-leftover')).toHaveTextContent('mlab')

@@ -2,6 +2,7 @@
 // DECISIONS rather than facts, each in one place so that changing one's mind is one edit.
 import { normalizeLocalProfileName, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
 import { DEVICE_NAME_MAX_CODE_POINTS } from '../../../lib/device-name'
+import type { PendingDetach } from '../../../stores/useProfileStore'
 
 /**
  * THE COLOUR NEEDS AN ICON (the main session's default, 2026-09-22; the user has not ruled on it). A profile's
@@ -51,4 +52,10 @@ export function sotScopeOf(hostId: string, attachedProfileId: string): string {
  */
 export function sotActionStillValid(openedUnder: string, scopeNow: string, profileId: string, rowsNow: readonly { id: string }[] | null): boolean {
   return openedUnder === scopeNow && rowsNow !== null && rowsNow.some((row) => row.id === profileId)
+}
+
+/** A record's key as a test id: `<host>.<profile>.<endpoint>`, everything but letters, digits, `.`, `-` and `_`
+ *  replaced by `_` (the endpoint's colon). For the acceptance run to address one notice; React keys use the real key. */
+export function pendingDetachTestId(left: Pick<PendingDetach, 'hostId' | 'profileId' | 'endpoint'>): string {
+  return `${left.hostId}.${left.profileId}.${left.endpoint ?? 'unknown'}`.replace(/[^A-Za-z0-9._-]/g, '_')
 }
