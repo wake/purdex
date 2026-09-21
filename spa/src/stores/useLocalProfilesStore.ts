@@ -189,10 +189,25 @@ export function isParkedWorld(v: unknown): v is ParkedWorld {
   return true
 }
 
-/** Trim; blank → null; cut at 64 code points. The device-name rule on purpose: a slave saved before a pull is
- *  "named after the host" (spec §4.9), so whatever is a device name must fit unchanged. Duplicates are fine. */
+/**
+ * Characters nobody can see, which a name must not carry: it is rendered as it is — the Home row, the menu, a
+ * `title`, an `aria-label` — and these re-order the text around them or make two names look the same.
+ *   - `\p{Cc}`: the C0 / C1 controls, line breaks and tabs included;
+ *   - the bidi controls: U+061C, U+200E–U+200F, U+202A–U+202E, U+2066–U+2069;
+ *   - zero-width and invisible format characters: U+200B–U+200D, U+2060, U+FEFF, U+00AD.
+ * U+200D (ZWJ) is on the list ON PURPOSE although it also joins emoji: a family emoji comes apart into its three people — uglier, not
+ * wrong — whereas keeping it would leave a zero-width hole in the rule. Consistency over ligatures.
+ * A list, not a category sweep, and NO Unicode normalisation: CJK, emoji with their variation selectors and skin
+ * tones, and combining marks (NFC or NFD) come through exactly as typed.
+ */
+const INVISIBLE_IN_A_NAME = /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\u200B-\u200D\u2060\uFEFF\u00AD]/gu
+
+/** Remove the invisible characters; THEN trim; blank → null; cut at 64 code points (the device-name rule for
+ *  the last three, on purpose: a slave saved before a pull is "named after the host" (spec §4.9), so a device
+ *  name must fit). Every way a name gets in — `addSlave`, `renameSlave`, `setProfileAppearance`, `promoteSlave`,
+ *  and `merge` on rehydrate, which is how a name stored by an older build gets cleaned. Duplicates are fine. */
 export function normalizeLocalProfileName(name: unknown): string | null {
-  return typeof name === 'string' ? normalizeDeviceName(name) : null
+  return typeof name === 'string' ? normalizeDeviceName(name.replace(INVISIBLE_IN_A_NAME, '')) : null
 }
 
 /** `generateId` yields six base-36 characters — and 'master' is six base-36 characters. */

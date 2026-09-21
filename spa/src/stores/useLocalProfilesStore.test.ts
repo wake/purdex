@@ -13,7 +13,7 @@ vi.mock('../lib/id', () => ({
   generateId: () => idQueue.shift() ?? `id${String(++idCounter).padStart(4, '0')}`,
 }))
 
-import { isParkedWorld, useLocalProfilesStore } from './useLocalProfilesStore'
+import { isParkedWorld, normalizeLocalProfileName, useLocalProfilesStore } from './useLocalProfilesStore'
 import type { LocalProfile, LocalProfilesState, ParkedWorld } from './useLocalProfilesStore'
 
 type Data = Pick<LocalProfilesState, 'slaves' | 'slaveOrder' | 'activeProfileId' | 'parkedMaster' | 'worldEpoch'>
@@ -1059,6 +1059,114 @@ describe('appearance', () => {
       await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: world('m'), worldEpoch: 0, master: { name: 'Work', ...LOOK } })
       expect(get().master).toEqual({ name: 'Work', ...LOOK })
       expect(get().slaves.recovered).toEqual(slave('recovered', 'Recovered master', world('m'), 0))
+    })
+  })
+})
+
+// A name is rendered as it is — the Home row, the menu, `title`, `aria-label`. Characters nobody can see re-order
+// the text around them or make two names look alike, so they are removed; nothing else is touched.
+describe('profile names — invisible characters are removed, and nothing else', () => {
+  const RLO = '\u202E'
+  const ZWSP = '\u200B'
+  const DIRTY: [string, string, string][] = [
+    ['a bidi override', `Work${RLO}abc`, 'Workabc'],
+    ['a zero-width space', `Work${ZWSP}`, 'Work'],
+    ['a line break and a tab', 'Work\nnight\tshift', 'Worknightshift'],
+  ]
+
+  describe('normalizeLocalProfileName', () => {
+    it.each(DIRTY)('%s', (_, dirty, clean) => {
+      expect(normalizeLocalProfileName(dirty)).toBe(clean)
+    })
+
+    it.each([
+      ['C0', '\u0000\u0007\u001B\u007F'],
+      ['C1', '\u0080\u0085\u009F'],
+      ['bidi marks and embeddings', '\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E'],
+      ['bidi isolates', '\u2066\u2067\u2068\u2069'],
+      ['zero-width and invisible format', '\u200B\u200C\u200D\u2060\uFEFF\u00AD'],
+    ])('every one of %s goes', (_, chars) => {
+      for (const ch of Array.from(chars)) expect(normalizeLocalProfileName(`a${ch}b`), `U+${ch.codePointAt(0)!.toString(16)}`).toBe('ab')
+    })
+
+    it('nothing but invisible characters is no name at all', () => {
+      expect(normalizeLocalProfileName(`${ZWSP}${RLO}\n`)).toBeNull()
+      expect(normalizeLocalProfileName(` ${ZWSP} `)).toBeNull()
+    })
+
+    it('removal comes first, then trim, then the 64 code point cut', () => {
+      expect(normalizeLocalProfileName(`${ZWSP} Work ${RLO}`)).toBe('Work') // the spaces the removal exposed are trimmed
+      expect(normalizeLocalProfileName(`${ZWSP.repeat(10)}${'x'.repeat(64)}`)).toBe('x'.repeat(64)) // invisible ones do not use up the budget
+      expect(Array.from(normalizeLocalProfileName('😀'.repeat(70))!)).toHaveLength(DEVICE_NAME_MAX_CODE_POINTS)
+    })
+
+    it.each([
+      ['CJK', '工作用 プロファイル 작업'],
+      ['an emoji with a variation selector and a skin tone', '❤️ 👍🏽 Work'],
+      ['a combining accent, NFC', 'Caf\u00E9'],
+      ['a combining accent, NFD — kept decomposed: no Unicode normalisation happens here', 'Cafe\u0301'],
+      ['Arabic and Hebrew (right-to-left by themselves, no control needed)', 'عمل עבודה'],
+      ['inner spaces', 'My  work'],
+      ['a no-break space inside', 'a\u00A0b'],
+    ])('%s is left exactly as it is', (_, name) => {
+      expect(normalizeLocalProfileName(name)).toBe(name)
+    })
+
+    // THE TRADE-OFF: U+200D also joins emoji. Keeping it would keep a zero-width hole in the rule.
+    it('a ZWJ emoji sequence comes apart — uglier, not wrong; consistency over ligatures', () => {
+      expect(normalizeLocalProfileName('👨\u200D👩\u200D👧')).toBe('👨👩👧')
+    })
+  })
+
+  describe('every way in', () => {
+    it.each(DIRTY)('addSlave — %s', (_, dirty, clean) => {
+      const r = get().addSlave(dirty, world('a'))
+      if (!r.ok) throw new Error(r.reason)
+      expect(get().slaves[r.id].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('renameSlave — %s', (_, dirty, clean) => {
+      const a = add('a')
+      expect(get().renameSlave(a, dirty)).toEqual({ ok: true })
+      expect(get().slaves[a].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('setProfileAppearance, master and slave — %s', (_, dirty, clean) => {
+      const a = add('a')
+      get().setProfileAppearance('master', { name: dirty })
+      get().setProfileAppearance(a, { name: dirty })
+      expect(get().master.name).toBe(clean)
+      expect(get().slaves[a].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('promoteSlave\'s demotedName — %s', (_, dirty, clean) => {
+      const a = add('a')
+      const r = get().promoteSlave(a, dirty, 1)
+      if (!r.ok) throw new Error(r.reason)
+      expect(get().slaves[r.demotedId].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('rehydrate cleans what an older build stored — %s', async (_, dirty, clean) => {
+      await rehydrateFrom({ slaves: { a: slave('a', dirty, world('a')) }, slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, master: { name: dirty } })
+      expect(get().slaves.a.name).toBe(clean)
+      expect(get().master.name).toBe(clean)
+    })
+
+    it('a name that is empty once cleaned: refused for a slave (nothing changes), null for the master, `Recovered` on rehydrate', async () => {
+      const invisible = `${ZWSP}${RLO}`
+      expect(get().addSlave(invisible, world('x'))).toEqual({ ok: false, reason: 'bad-name' })
+      const a = add('a')
+      const before = get().slaves
+      expect(get().renameSlave(a, invisible)).toEqual({ ok: false, reason: 'bad-name' })
+      expect(get().setProfileAppearance(a, { name: invisible })).toEqual({ ok: false, reason: 'bad-name' })
+      expect(get().slaves).toBe(before)
+      get().setProfileAppearance('master', { name: 'Work' })
+      expect(get().setProfileAppearance('master', { name: invisible })).toEqual({ ok: true })
+      expect(get().master.name).toBeNull()
+
+      await rehydrateFrom({ slaves: { a: slave('a', invisible, world('a')) }, slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, master: { name: invisible } })
+      expect(get().slaves.a.name).toBe('Recovered')
+      expect(get().master.name).toBeNull()
     })
   })
 })

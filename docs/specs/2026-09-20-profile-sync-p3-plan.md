@@ -423,6 +423,11 @@ two sentences and offers the wizard.
     the colour side is `HOST_COLOR_PRESETS` (`lib/host-color.ts`) + `components/hosts/HostColorLayerEditor.tsx`
     (`color`, `alpha`, `inherited`, `onChange`, `onClose` — store-agnostic; pass `layer="main"`, ignore alpha).
     `components/hosts/HostColorField.tsx` is NOT reusable: it takes a `hostId` and writes `useHostStore` itself.
+  - **A name carries nothing invisible.** `normalizeLocalProfileName` removes `\p{Cc}`, the bidi controls and the
+    zero-width / invisible format characters (the list is in the store file; ZWJ included on purpose — an emoji
+    family comes apart, the rule has no zero-width hole), THEN trims and cuts at 64 code points; no Unicode
+    normalisation. Every way in goes through it, `merge` included, so an older build's name is cleaned on load.
+    `normalizeDeviceName` is untouched — another field, another PR.
   - `setProfileAppearance(id | 'master', { name?, icon?, iconWeight?, color? })` — absent key = unchanged, `null`
     = clear; one bad value refuses the whole patch (`not-found` / `bad-name` / `bad-icon` / `bad-weight` /
     `bad-color`); clearing the icon clears its weight. Dev hook: `profiles.setAppearance(id, patch)` and
