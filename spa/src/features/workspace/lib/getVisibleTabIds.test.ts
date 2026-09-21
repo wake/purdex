@@ -11,7 +11,6 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs,
       tabOrder: ['t1', 't2', 't3'],
-      activeTabId: 't1',
       workspaces,
       activeWorkspaceId: 'ws-1',
     })
@@ -26,14 +25,15 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs,
       tabOrder: ['t1', 't3'],
-      activeTabId: 't1',
       workspaces,
       activeWorkspaceId: 'ws-1',
     })
     expect(result).toEqual(['t1', 't3'])
   })
 
-  it('returns only standalone tab when active tab is standalone', () => {
+  // Every tab belongs to a workspace (Profile Sync spec §4.3). A tab nobody has adopted yet (adopt-standalone.ts
+  // waits 500 ms) does not replace the bar. (Was: "returns only standalone tab when active tab is standalone".)
+  it('an active tab that is in no workspace yet does not replace the bar: the active workspace\'s tabs', () => {
     const workspaces: Workspace[] = [
       { id: 'ws-1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' },
     ]
@@ -41,40 +41,38 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs,
       tabOrder: ['t1', 't2'],
-      activeTabId: 't2',
       workspaces,
       activeWorkspaceId: 'ws-1',
     })
-    expect(result).toEqual(['t2'])
+    expect(result).toEqual(['t1'])
   })
 
   it('returns all tabs from tabOrder when 0 workspaces', () => {
     const result = getVisibleTabIds({
       tabs: { t1: {}, t2: {}, t3: {} },
       tabOrder: ['t1', 't2', 't3'],
-      activeTabId: 't1',
       workspaces: [],
       activeWorkspaceId: null,
     })
     expect(result).toEqual(['t1', 't2', 't3'])
   })
 
-  it('returns only standalone tabs when activeWorkspaceId is null (Home mode)', () => {
+  // There is no "Home" view of workspace-less tabs any more. `activeWorkspaceId === null` with workspaces is the
+  // moment before adopt-standalone.ts re-points it; the bar falls back to every tab. (Was: standalone tabs only.)
+  it('returns all tabs from tabOrder when activeWorkspaceId is null', () => {
     const workspaces: Workspace[] = [
       { id: 'ws-1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' },
     ]
     const result = getVisibleTabIds({
       tabs: { t1: {}, t2: {} },
       tabOrder: ['t1', 't2'],
-      activeTabId: null,
       workspaces,
       activeWorkspaceId: null,
     })
-    // t1 belongs to ws-1, only t2 is standalone
-    expect(result).toEqual(['t2'])
+    expect(result).toEqual(['t1', 't2'])
   })
 
-  it('returns all standalone tabs in Home mode with multiple workspaces', () => {
+  it('returns all tabs from tabOrder when activeWorkspaceId is null, with multiple workspaces', () => {
     const workspaces: Workspace[] = [
       { id: 'ws-1', name: 'WS1', tabs: ['t1', 't2'], activeTabId: 't1' },
       { id: 'ws-2', name: 'WS2', tabs: ['t3'], activeTabId: 't3' },
@@ -82,19 +80,16 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs: { t1: {}, t2: {}, t3: {}, t4: {}, t5: {} },
       tabOrder: ['t1', 't2', 't3', 't4', 't5'],
-      activeTabId: 't4',
       workspaces,
       activeWorkspaceId: null,
     })
-    // t1,t2 in ws-1; t3 in ws-2; t4,t5 are standalone
-    expect(result).toEqual(['t4', 't5'])
+    expect(result).toEqual(['t1', 't2', 't3', 't4', 't5'])
   })
 
   it('returns empty array when no tabs exist', () => {
     const result = getVisibleTabIds({
       tabs: {},
       tabOrder: [],
-      activeTabId: null,
       workspaces: [],
       activeWorkspaceId: null,
     })

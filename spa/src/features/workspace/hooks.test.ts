@@ -266,3 +266,45 @@ describe('handleReorderWorkspaceTabs', () => {
     expect(updated.tabs).toEqual([t2.id, t1.id, t3.id])
   })
 })
+
+// The tab bar's own reorder. Every tab belongs to a workspace (Profile Sync spec §4.3): the bar lists the active
+// workspace's tabs, and there is no list of workspace-less tabs for it to reorder.
+describe('handleReorderTabs', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+
+  function twoTabs(): [Tab, Tab] {
+    const a = createTab({ kind: 'dashboard' })
+    const b = createTab({ kind: 'hosts' })
+    useTabStore.getState().addTab(a)
+    useTabStore.getState().addTab(b)
+    return [a, b]
+  }
+
+  it('reorders the active workspace\'s tabs, and leaves the global tabOrder alone', () => {
+    const [a, b] = twoTabs()
+    const ws = useWorkspaceStore.getState().addWorkspace('WS')
+    useWorkspaceStore.getState().insertTab(a.id, ws.id)
+    useWorkspaceStore.getState().insertTab(b.id, ws.id)
+    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+
+    const { result } = renderHook(() => useTabWorkspaceActions([a, b]))
+    act(() => { result.current.handleReorderTabs([b.id, a.id]) })
+
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === ws.id)!.tabs).toEqual([b.id, a.id])
+    expect(useTabStore.getState().tabOrder).toEqual([a.id, b.id])
+  })
+
+  it('with no active workspace it changes nothing (was: reordered the standalone tabs in tabOrder)', () => {
+    const [a, b] = twoTabs()
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+
+    const { result } = renderHook(() => useTabWorkspaceActions([a, b]))
+    act(() => { result.current.handleReorderTabs([b.id, a.id]) })
+
+    expect(useTabStore.getState().tabOrder).toEqual([a.id, b.id])
+    expect(useWorkspaceStore.getState().workspaces).toEqual([])
+  })
+})

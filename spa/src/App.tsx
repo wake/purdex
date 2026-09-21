@@ -107,7 +107,6 @@ export default function App() {
   const visibleTabIds = getVisibleTabIds({
     tabs,
     tabOrder,
-    activeTabId,
     workspaces,
     activeWorkspaceId,
   })
