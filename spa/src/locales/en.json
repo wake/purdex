@@ -1548,5 +1548,11 @@
   "settings.profile.current.problems": "Recent problems",
   "settings.profile.current.problems_desc": "A log, newest first. An entry here does not mean the problem is still there.",
   "profile.switcher.settings": "Profile settings…",
-  "settings.profile.sot.stale_action": "Nothing was sent: the list changed while you were deciding. Look again and retry."
+  "settings.profile.sot.stale_action": "Nothing was sent: the list changed while you were deciding. Look again and retry.",
+  "settings.profile.detach.not_told": "This device has stopped syncing — but {{host}} could not be told ({{detail}}).",
+  "settings.profile.detach.consequence": "The host may still list this device as attached to the profile, and a profile with a device attached cannot be deleted from any device. Try again when the host is reachable.",
+  "settings.profile.detach.retry": "Try again",
+  "settings.profile.detach.retry_failed": "Tried again just now: the host still could not be told.",
+  "settings.profile.detach.dismiss": "Dismiss",
+  "settings.profile.detach.dismiss_hint": "Stop reminding me. The host may keep listing this device until someone removes it there."
 }

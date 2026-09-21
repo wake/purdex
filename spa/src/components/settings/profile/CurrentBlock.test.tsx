@@ -13,7 +13,7 @@ import type { MasterWorldRead, UnsettledReason } from '../../../lib/profile/mast
 import type { ExecutorStatus, SectionLock } from '../../../lib/profile/executor'
 
 vi.mock('../../../hooks/useProfileSync', () => ({ useProfileSync: vi.fn() }))
-vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn() }))
+vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn(), retryPendingDetach: vi.fn() }))
 vi.mock('../../../lib/profile/master-world', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/profile/master-world')>()),
   readMasterWorld: vi.fn(),
@@ -44,7 +44,7 @@ beforeEach(() => {
   vi.mocked(detachMaster).mockReset()
   vi.mocked(detachMaster).mockResolvedValue({ ok: true })
   vi.mocked(readMasterWorld).mockReturnValue(SETTLED)
-  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true })
+  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true, pendingDetach: null })
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 })
@@ -272,22 +272,30 @@ describe('the three controls', () => {
     expect(screen.getByTestId('profile-sync-asked')).toHaveTextContent(en['settings.profile.current.sync_asked'])
   })
 
-  it('Stop sync asks first, saying what stays; Cancel stops nothing', () => {
-    show(attached())
+  it('Stop sync: the confirmation outlives the half of the block that goes with the master — busy until the answer, then gone', async () => {
+    let answer: (r: { ok: true }) => void = () => {}
+    vi.mocked(detachMaster).mockReturnValue(new Promise((resolve) => { answer = resolve }))
+    const { rerender } = show(attached())
     fireEvent.click(screen.getByTestId('profile-stop-sync'))
-    expect(detachMaster).not.toHaveBeenCalled()
     expect(screen.getByTestId('profile-stop-sync-dialog')).toHaveTextContent(en['settings.profile.current.stop_body'])
-    fireEvent.click(screen.getByTestId('profile-stop-sync-cancel'))
+    fireEvent.click(screen.getByTestId('profile-stop-sync-confirm'))
+    expect(detachMaster).toHaveBeenCalledTimes(1)
+    // start.ts clears the master at once: the block is the no-master one from here on.
+    vi.mocked(useProfileSync).mockReturnValue(NO_MASTER)
+    rerender(<CurrentBlock masterName={null} />)
+    expect(screen.getByTestId('profile-current-block')).toHaveAttribute('data-state', 'none')
+    expect(screen.getByTestId('profile-stop-sync-dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-stop-sync-confirm')).toBeDisabled()
+    await act(async () => { answer({ ok: true }) })
     expect(screen.queryByTestId('profile-stop-sync-dialog')).toBeNull()
-    expect(detachMaster).not.toHaveBeenCalled()
   })
 
-  it('Confirm detaches', async () => {
-    show(attached())
-    fireEvent.click(screen.getByTestId('profile-stop-sync'))
-    await act(async () => { fireEvent.click(screen.getByTestId('profile-stop-sync-confirm')) })
-    expect(detachMaster).toHaveBeenCalledTimes(1)
-    expect(screen.queryByTestId('profile-stop-sync-dialog')).toBeNull()
+  it('an attachment a failed detach left on the daemon is said WITHOUT a master too — that is when it matters', () => {
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetach: { hostId: 'h1', profileId: 'p_000000000001', detail: 'timeout: no answer', at: 1 } })
+    show(NO_MASTER)
+    expect(screen.getByTestId('profile-current-block')).toHaveAttribute('data-state', 'none')
+    expect(screen.getByTestId('profile-detach-leftover')).toHaveTextContent('mlab')
+    expect(screen.getByTestId('profile-detach-retry')).toBeInTheDocument()
   })
 })
 

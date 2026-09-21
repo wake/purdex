@@ -9,6 +9,11 @@
 // timer — start.ts, THE IRON RULE); everything else this file subscribes to lives in `Attached`, which is not
 // mounted. Nothing in either half starts a timer.
 //
+// ONE <section>, THREE CHILDREN IN FIXED PLACES: the half that depends on the master (`Attached` | the two
+// sentences), `StopSyncControl`, the problem log. `StopSyncControl` sits OUTSIDE the first on purpose — its
+// confirmation must stay up while the master goes (see that file) — and keeps its place in the tree, so React
+// keeps its state across the change.
+//
 // WHAT THE SNAPSHOT DOES NOT CARRY, and this block therefore does not show: a revision per section (only a
 // LOCKED section has one, `locks[key].sot.rev`) and the time of the last sync. Both would have to be published
 // by the executor; neither is guessed from anything else.
@@ -21,13 +26,13 @@ import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useProfileSync } from '../../../hooks/useProfileSync'
-import { detachMaster, requestSyncNow } from '../../../lib/profile/start'
+import { requestSyncNow } from '../../../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 import { readMasterWorld, type UnsettledReason } from '../../../lib/profile/master-world'
 import { SYNC_DOT_CLASS, settingsWaitForWorkspaces, syncDotOf } from '../../../lib/profile/sync-view'
-import { ConfirmDialog } from '../../ConfirmDialog'
 import { SettingItem } from '../SettingItem'
 import { ToggleSwitch } from '../ToggleSwitch'
+import { StopSyncControl } from './StopSyncControl'
 
 const BTN =
   'shrink-0 flex items-center gap-1.5 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
@@ -67,20 +72,40 @@ interface Props {
 export function CurrentBlock({ masterName }: Props) {
   const t = useI18nStore((s) => s.t)
   const sync = useProfileSync()
+  const problems = sync.master === null ? [] : sync.problems.slice(-PROBLEMS_SHOWN).reverse()
 
-  if (sync.master === null) {
-    return (
-      <section data-testid="profile-current-block" data-state="none" className="mt-6">
-        <h3 className="text-sm text-text-primary">{t('settings.profile.current.title')}</h3>
-        <p className="text-xs text-text-secondary">{t('settings.profile.current.none_what')}</p>
-        <p className="text-xs text-text-secondary">{t('settings.profile.current.none_how')}</p>
-        {/* TODO(P3d-3): the wizard's entry goes HERE, under the two sentences — a button labelled
-            `settings.profile.current.setup`, testid `profile-setup-start`, opening the wizard. Not before the
-            wizard exists: a control that leads nowhere is worse than none. */}
-      </section>
-    )
-  }
-  return <Attached sync={sync} master={sync.master} masterName={masterName} />
+  return (
+    <section data-testid="profile-current-block" data-state={sync.master === null ? 'none' : 'attached'} className="mt-6">
+      <h3 className="text-sm text-text-primary">{t('settings.profile.current.title')}</h3>
+      {sync.master === null ? (
+        <div>
+          <p className="text-xs text-text-secondary">{t('settings.profile.current.none_what')}</p>
+          <p className="text-xs text-text-secondary">{t('settings.profile.current.none_how')}</p>
+          {/* TODO(P3d-3): the wizard's entry goes HERE, under the two sentences — a button labelled
+              `settings.profile.current.setup`, testid `profile-setup-start`, opening the wizard. Not before the
+              wizard exists: a control that leads nowhere is worse than none. */}
+        </div>
+      ) : (
+        <Attached sync={sync} master={sync.master} masterName={masterName} />
+      )}
+      <StopSyncControl attached={sync.master !== null} />
+      {problems.length > 0 && (
+        <div data-testid="profile-current-problems" className="mt-4">
+          <h4 className="text-xs text-text-secondary">{t('settings.profile.current.problems')}</h4>
+          <p className="text-xs text-text-muted">{t('settings.profile.current.problems_desc')}</p>
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {problems.map((p, i) => (
+              <li key={`${p.at}:${i}`} data-testid="profile-current-problem" className="text-xs text-text-muted">
+                <span className="font-mono">{new Date(p.at).toLocaleTimeString()}</span>{' '}
+                <span className="font-mono text-text-secondary">{p.section === undefined ? p.kind : `${p.kind} · ${p.section}`}</span>{' '}
+                {p.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; master: NonNullable<ProfileSyncSnapshot['master']>; masterName: string | null }) {
@@ -90,7 +115,6 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const attachedAt = useProfileStore((s) => s.masterEndpoint)
   const host = useHostStore((s) => s.hosts[master.hostId])
   const world = useSyncExternalStore(subscribeWorld, worldReason, worldReason)
-  const [confirmStop, setConfirmStop] = useState(false)
   /** The snapshot a "Sync now" was pressed under: the note stays until something in the state moves. No timer. */
   const [askedUnder, setAskedUnder] = useState<ProfileSyncSnapshot | null>(null)
 
@@ -103,7 +127,6 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const sections = sync.status === null ? [] : Object.keys(sync.status.sections).sort()
   const anyLocked = sync.status !== null && Object.keys(sync.status.locks).length > 0
   const schemaLock = sync.status?.schemaLock ?? null
-  const problems = sync.problems.slice(-PROBLEMS_SHOWN).reverse()
 
   const blockedText = (): string => {
     switch (sync.blocked) {
@@ -119,9 +142,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   }
 
   return (
-    <section data-testid="profile-current-block" data-state="attached" className="mt-6">
-      <h3 className="text-sm text-text-primary">{t('settings.profile.current.title')}</h3>
-
+    <div>
       <SettingItem label={t('settings.profile.current.master')} description={t('settings.profile.current.master_desc')}>
         <div className="flex flex-col items-end gap-0.5 text-xs">
           <span data-testid="profile-current-master" className={masterName === null ? 'font-mono text-text-secondary' : 'text-text-primary'}>
@@ -230,44 +251,6 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
           {t(sync.remote ? 'settings.profile.current.sync_asked_follower' : 'settings.profile.current.sync_asked')}
         </p>
       )}
-
-      <SettingItem label={t('settings.profile.current.stop')} description={t('settings.profile.current.stop_desc')}>
-        <button type="button" data-testid="profile-stop-sync" onClick={() => setConfirmStop(true)} className={BTN}>
-          {t('settings.profile.current.stop')}
-        </button>
-      </SettingItem>
-
-      {problems.length > 0 && (
-        <div data-testid="profile-current-problems" className="mt-4">
-          <h4 className="text-xs text-text-secondary">{t('settings.profile.current.problems')}</h4>
-          <p className="text-xs text-text-muted">{t('settings.profile.current.problems_desc')}</p>
-          <ul className="mt-1 flex flex-col gap-0.5">
-            {problems.map((p, i) => (
-              <li key={`${p.at}:${i}`} data-testid="profile-current-problem" className="text-xs text-text-muted">
-                <span className="font-mono">{new Date(p.at).toLocaleTimeString()}</span>{' '}
-                <span className="font-mono text-text-secondary">{p.section === undefined ? p.kind : `${p.kind} · ${p.section}`}</span>{' '}
-                {p.detail}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {confirmStop && (
-        <ConfirmDialog
-          testIdPrefix="profile-stop-sync"
-          title={t('settings.profile.current.stop_title')}
-          body={t('settings.profile.current.stop_body')}
-          confirmLabel={t('settings.profile.current.stop')}
-          onCancel={() => setConfirmStop(false)}
-          onConfirm={() => {
-            // The master is cleared at once (start.ts, `detachMaster`: "it stops — NOW"); telling the daemon is
-            // best effort and recorded as a problem when it fails. Nothing to wait for here.
-            setConfirmStop(false)
-            void detachMaster().catch(() => {})
-          }}
-        />
-      )}
-    </section>
+    </div>
   )
 }
