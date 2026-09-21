@@ -15,9 +15,14 @@ import { useWorkspaceSettingsStore } from '../../../../stores/useWorkspaceSettin
 import type { Tab, Workspace } from '../../../../types/tab'
 import { __resetMasterWorldForTest, readMasterWorld } from '../../../../lib/profile/master-world'
 import { attachMaster } from '../../../../lib/profile/start'
-import { ATTACH_REASONS, countWorld, runPlan, subStepsOf, worldToBeMaster, type SubStepState, type WizardPlan } from './wizard-run'
+import en from '../../../../locales/en.json'
+import { createProfile, listProfiles } from '../../../../lib/profile/api'
+import type { ProfileIndexEntry } from '../../../../lib/profile/api'
+import { useUndoToast } from '../../../../stores/useUndoToast'
+import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, runPlan, sotFingerprint, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
 vi.mock('../../../../lib/profile/start', () => ({ attachMaster: vi.fn() }))
+vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn() }))
 
 const MASTER = 'SENTINEL-MASTER'
 const S1 = 'SENTINEL-ONE'
@@ -64,6 +69,8 @@ beforeEach(() => {
   localStorage.clear()
   __resetMasterWorldForTest()
   atAttach = null
+  vi.mocked(listProfiles).mockReset()
+  vi.mocked(createProfile).mockReset()
   vi.mocked(attachMaster).mockReset().mockImplementation(async () => {
     const read = readMasterWorld()
     const kept = slaveNamed('Kept')
@@ -202,5 +209,208 @@ describe('the order, and what a failure stops', () => {
     expect((await run(plan({ saveAs: null }))).result).toEqual({ done: false, failedAt: 0, reason: 'other' })
     vi.mocked(attachMaster).mockRejectedValueOnce(new Error('boom SECRET'))
     expect((await run(plan({ saveAs: null }))).result).toEqual({ done: false, failedAt: 0, reason: 'other' })
+  })
+})
+
+// === PR-B: the one door before anything irreversible, the create whose outcome is not known, the result that outlives the page ===
+
+const meta = (section: string, rev: number, hash = `h-${section}-${rev}`) => ({ section, rev, hash, fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 1 })
+const indexEntry = (id: string, name: string, sections: ReturnType<typeof meta>[] = [], over: Partial<ProfileIndexEntry> = {}): ProfileIndexEntry => ({ id, name, createdAt: 1, updatedAt: 1, sections, attachments: [], ...over })
+const listed = (...rows: ProfileIndexEntry[]) => vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: rows })
+const transportFailure = (reason: string) => ({ kind: 'failed', reason, status: 0, message: `RAW ${reason} token=SECRET` }) as never
+const connectHost = () => useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+
+describe('prepareRun — the ONE door before the run: this device\'s premises AND the SOT profile as the user saw it', () => {
+  const SEEN = [meta('hosts', 3), meta('workspaces', 7)]
+  const draft = (over: Partial<WizardDraft> = {}): WizardDraft => ({ hostId: 'h1', profileId: P, seen: sotFingerprint(indexEntry(P, 'default', SEEN)), localId: MASTER_PROFILE_ID, direction: 'push', saveAs: null, ...over })
+
+  beforeEach(() => {
+    connectHost()
+    listed(indexEntry(P, 'default', SEEN))
+  })
+
+  it('nothing moved: a plan — frozen, and exactly what was asked for', async () => {
+    const r = await prepareRun(draft({ direction: 'pull', saveAs: 'Kept', localId: 's1' }))
+    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: 's1', direction: 'pull', saveAs: 'Kept' } })
+    expect(r.ok && Object.isFrozen(r.plan)).toBe(true)
+    expect(listProfiles).toHaveBeenCalledWith('h1')
+  })
+
+  it('the fingerprint is the live sections\' name, rev and hash — in any order; never a payload', () => {
+    expect(sotFingerprint(indexEntry(P, 'x', [SEEN[1], SEEN[0]]))).toBe(sotFingerprint(indexEntry(P, 'renamed', SEEN)))
+    expect(sotFingerprint(indexEntry(P, 'x', []))).not.toBe(sotFingerprint(indexEntry(P, 'x', SEEN)))
+    expect(sotFingerprint(indexEntry(P, 'x', [meta('hosts', 3), meta('workspaces', 8)]))).not.toBe(sotFingerprint(indexEntry(P, 'x', SEEN)))
+    expect(sotFingerprint(indexEntry(P, 'x', [meta('hosts', 3), meta('workspaces', 7, 'other')]))).not.toBe(sotFingerprint(indexEntry(P, 'x', SEEN)))
+  })
+
+  it('THE ATTACK (review F1): seen EMPTY, another device has pushed a whole world since → refused, with what is there now', async () => {
+    const fresh = indexEntry(P, 'default', SEEN)
+    const r = await prepareRun(draft({ seen: sotFingerprint(indexEntry(P, 'default', [])) }))
+    expect(r).toEqual({ ok: false, reason: 'profile-changed', now: { fingerprint: sotFingerprint(fresh), empty: false } })
+  })
+
+  it('same sections, ONE rev moved → refused (existence alone is not the check)', async () => {
+    listed(indexEntry(P, 'default', [meta('hosts', 3), meta('workspaces', 8)]))
+    expect(await prepareRun(draft())).toMatchObject({ ok: false, reason: 'profile-changed', now: { empty: false } })
+  })
+
+  it('a section was deleted → refused; emptied altogether → refused, and said to be empty now', async () => {
+    listed(indexEntry(P, 'default', [meta('hosts', 3)]))
+    expect(await prepareRun(draft())).toMatchObject({ ok: false, reason: 'profile-changed' })
+    listed(indexEntry(P, 'default', []))
+    expect(await prepareRun(draft())).toMatchObject({ ok: false, reason: 'profile-changed', now: { empty: true } })
+  })
+
+  it('the profile is not on the host any more → its own refusal', async () => {
+    listed(indexEntry('p_00000000000f', 'another', SEEN))
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'profile-gone' })
+  })
+
+  it('the host cannot be asked → refused, with the failure\'s CLASS — never its message', async () => {
+    vi.mocked(listProfiles).mockResolvedValue(transportFailure('timeout'))
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'list-failed', request: 'timeout' })
+    vi.mocked(listProfiles).mockRejectedValue(new Error('boom SECRET'))
+    const r = await prepareRun(draft())
+    expect(r).toEqual({ ok: false, reason: 'list-failed', request: 'thrown' })
+    expect(JSON.stringify(r)).not.toContain('SECRET')
+  })
+
+  it.each([
+    ['a master is attached', () => useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P, masterEndpoint: '10.0.0.1:7860' }), 'attached-elsewhere'],
+    ['the host is gone', () => useHostStore.setState({ hosts: {}, hostOrder: [] }), 'host-gone'],
+    ['the host is offline', () => useHostStore.setState({ runtime: {} }), 'host-offline'],
+    ['the local profile is gone', () => useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [] }), 'local-gone'],
+  ])('this device\'s premises first — %s: refused WITHOUT asking the host', async (_label, breakIt, reason) => {
+    breakIt()
+    expect(await prepareRun(draft({ localId: 's1' }))).toEqual({ ok: false, reason })
+    expect(listProfiles).not.toHaveBeenCalled()
+  })
+
+  it('… and AGAIN after the host has answered: what moved while it was asked is caught', async () => {
+    vi.mocked(listProfiles).mockImplementation(async () => {
+      useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P, masterEndpoint: '10.0.0.1:7860' })
+      return { kind: 'ok', value: [indexEntry(P, 'default', SEEN)] }
+    })
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'attached-elsewhere' })
+  })
+
+  it.each([
+    ['no host', { hostId: null }],
+    ['no profile', { profileId: null }],
+    ['no direction', { direction: null }],
+    ['never seen', { seen: null }],
+  ])('a draft with %s is no plan', async (_label, over) => {
+    expect(await prepareRun(draft(over as Partial<WizardDraft>))).toMatchObject({ ok: false, reason: 'incomplete' })
+  })
+})
+
+describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for before it is ever sent again (review F2)', () => {
+  const BASE = ['p_00000000000a']
+  const before = indexEntry('p_00000000000a', 'Work') // there when the wizard first listed: same name, empty — and NOT ours
+  const ours = indexEntry('p_00000000000b', 'Work', [], { createdAt: 50 })
+
+  it('created: its id, not adopted', async () => {
+    vi.mocked(createProfile).mockResolvedValue({ kind: 'ok', value: { id: 'p_00000000000b', name: 'Work', createdAt: 1, updatedAt: 1 } })
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: true, id: 'p_00000000000b', adopted: false })
+    expect(listProfiles).not.toHaveBeenCalled()
+  })
+
+  it.each(['rejected', 'unauthorized', 'too-large', 'contended', 'not-found', 'unknown-host'])('a DEFINITE failure (%s): said, nothing looked for — nothing was created', async (reason) => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure(reason))
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: false, outcome: 'failed', request: reason })
+    expect(listProfiles).not.toHaveBeenCalled()
+  })
+
+  it.each(['timeout', 'network', 'aborted', 'server', 'malformed'])('outcome unknown (%s), and the list now holds a profile of that name, empty, unattached, that was NOT there before → that is the one: adopted', async (reason) => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure(reason))
+    listed(before, ours)
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: true, id: ours.id, adopted: true })
+    expect(createProfile).toHaveBeenCalledTimes(1)
+  })
+
+  it('thrown: unknown likewise', async () => {
+    vi.mocked(createProfile).mockRejectedValue(new Error('SECRET'))
+    listed(before, ours)
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: true, id: ours.id, adopted: true })
+  })
+
+  it('THE SAME NAME, EMPTY, BUT THERE BEFORE the wizard opened is never taken for ours', async () => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
+    listed(before)
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: false, outcome: 'not-created', request: 'timeout' })
+  })
+
+  it('new since, same name — but it HOLDS something, or a device is attached to it: somebody else\'s, not ours', async () => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
+    listed(indexEntry('p_00000000000c', 'Work', [meta('hosts', 1)]), indexEntry('p_00000000000d', 'Work', [], { attachments: [{ clientId: 'c', profileId: 'p_00000000000d', deviceName: 'd', attachedAt: 1, lastSeen: 1 }] }), indexEntry('p_00000000000e', 'Other'))
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: false, outcome: 'not-created' })
+  })
+
+  it('two candidates (an earlier lost attempt of this visit, too): the newest', async () => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
+    listed(indexEntry('p_00000000000c', 'Work', [], { createdAt: 10 }), ours)
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: true, id: ours.id, adopted: true })
+  })
+
+  it('unknown, and the list cannot be read either: STILL unknown — and nothing may be sent again until it can', async () => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
+    vi.mocked(listProfiles).mockResolvedValue(transportFailure('network'))
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: false, outcome: 'unknown', request: 'timeout' })
+  })
+
+  it('THE NEXT PRESS LOOKS FIRST (`lookFirst`): found → adopted with NO second POST; list unreadable → no POST; not there → the POST goes out', async () => {
+    listed(before, ours)
+    expect(await createSotProfile('h1', 'Work', BASE, true)).toEqual({ ok: true, id: ours.id, adopted: true })
+    expect(createProfile).not.toHaveBeenCalled()
+
+    vi.mocked(listProfiles).mockResolvedValue(transportFailure('network'))
+    expect(await createSotProfile('h1', 'Work', BASE, true)).toEqual({ ok: false, outcome: 'unknown', request: 'network' })
+    expect(createProfile).not.toHaveBeenCalled()
+
+    listed(before)
+    vi.mocked(createProfile).mockResolvedValue({ kind: 'ok', value: { id: 'p_00000000000f', name: 'Work', createdAt: 1, updatedAt: 1 } })
+    expect(await createSotProfile('h1', 'Work', BASE, true)).toEqual({ ok: true, id: 'p_00000000000f', adopted: false })
+    expect(createProfile).toHaveBeenCalledTimes(1)
+  })
+
+  it('NO BASELINE (the list had never been read when "new" was chosen): nothing can be told apart — a same-name empty profile is neither adopted nor doubled', async () => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
+    listed(ours)
+    expect(await createSotProfile('h1', 'Work', null, false)).toEqual({ ok: false, outcome: 'same-name', request: 'timeout' })
+    expect(await createSotProfile('h1', 'Work', null, true)).toEqual({ ok: false, outcome: 'same-name', request: 'thrown' })
+    expect(createProfile).toHaveBeenCalledTimes(1)
+    listed()
+    expect(await createSotProfile('h1', 'Work', null, false)).toMatchObject({ ok: false, outcome: 'not-created' })
+  })
+})
+
+describe('announceRun — the result is said where a replaced world cannot take it away (acceptance F6)', () => {
+  const said = () => useUndoToast.getState().toast?.message ?? null
+  const labels = { profile: 'default', host: 'mlab' }
+  beforeEach(() => useUndoToast.getState().dismiss())
+
+  it('done, push: one sentence — also while the wizard is still there', () => {
+    announceRun({ done: true }, plan({ direction: 'push' }), labels, true)
+    expect(said()).toBe(en['settings.profile.wizard.toast.done'].replace('{{profile}}', 'default').replace('{{host}}', 'mlab'))
+  })
+
+  it('done, pull with the copy: and where what this device held is now', () => {
+    announceRun({ done: true }, plan({ saveAs: 'Laptop' }), labels, false)
+    expect(said()).toBe(en['settings.profile.wizard.toast.done_saved'].replace('{{profile}}', 'default').replace('{{host}}', 'mlab').replace('{{name}}', 'Laptop'))
+  })
+
+  it('done, pull without a copy: the plain sentence', () => {
+    announceRun({ done: true }, plan({ saveAs: null }), labels, false)
+    expect(said()).toBe(en['settings.profile.wizard.toast.done'].replace('{{profile}}', 'default').replace('{{host}}', 'mlab'))
+  })
+
+  it('failed while the wizard is on screen: the wizard says it, no toast', () => {
+    announceRun({ done: false, failedAt: 0, reason: 'timeout' }, plan({ saveAs: null }), labels, true)
+    expect(said()).toBeNull()
+  })
+
+  it.each([[0, 'promote'], [1, 'save'], [2, 'attach']] as const)('failed and the wizard is GONE: a toast names the step it stopped at (%i → %s) — and nothing of the reason', (failedAt, step) => {
+    announceRun({ done: false, failedAt, reason: 'Failed to fetch SECRET' }, plan({ localId: 's1' }), labels, false)
+    expect(said()).toBe(en[`settings.profile.wizard.toast.stopped_${step}`])
   })
 })

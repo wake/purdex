@@ -11,6 +11,7 @@ import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../../../stores/use
 import { selectMaster, useProfileStore } from '../../../../stores/useProfileStore'
 import { useRebuildStore } from '../../../../stores/useRebuildStore'
 import { useTabStore } from '../../../../stores/useTabStore'
+import { useUndoToast } from '../../../../stores/useUndoToast'
 import { useWorkspaceStore } from '../../../../features/workspace/store'
 import { __resetMasterWorldForTest } from '../../../../lib/profile/master-world'
 import { clearSectionStore } from '../../../../lib/profile/section-store'
@@ -100,6 +101,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ workspaces: [workspace('wa', 'SENTINEL-A')], activeWorkspaceId: 'wa', worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
+  useUndoToast.getState().dismiss()
   stop = startProfileSync()
 })
 
@@ -169,8 +171,39 @@ describe('the wizard, through its controls, against a daemon', () => {
     const kept = Object.values(useLocalProfilesStore.getState().slaves)
     expect(kept.map((s) => s.name)).toEqual(['Laptop'])
     expect(kept[0].world?.workspaces.map((w) => w.name)).toEqual(['SENTINEL-B'])
+    // said where a replaced world cannot take it away (acceptance F6)
+    expect(useUndoToast.getState().toast?.message).toContain('“Laptop”')
     // the host's copy was read, not written: SENTINEL-B never reached it
     expect(daemon.writes.slice(writes).filter((w) => w.outcome === 'applied')).toEqual([])
     expect(JSON.stringify([...daemon.rows.values()].map((r) => r.payload))).not.toContain('SENTINEL-B')
+  })
+
+  it('REVIEW F1 — seen EMPTY, and another device pushes its world into it before Start: NOTHING of this device reaches the host; the user is sent back to choose', async () => {
+    exists = true // an existing profile that holds nothing: push only, and no "replaces what is there" warning
+    render(<ProfileWizard onClose={() => {}} />)
+    await settle()
+    await click(`profile-wizard-profile-${PROFILE}`)
+    await click('profile-wizard-next')
+    await click('profile-wizard-next')
+    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled()
+    expect(screen.queryByTestId('profile-wizard-push-warning')).toBeNull()
+    await click('profile-wizard-next')
+
+    // the other device, meanwhile
+    const theirs = { clientId: 'c_bbbbbbbbbbbb', baseRev: 0, hash: 'e'.repeat(64), fingerprint: 'fp-workspaces', ordinal: 1, payload: { workspaces: [{ id: 'wz', name: 'SENTINEL-THEIRS' }] } }
+    expect(daemon.put('workspaces', theirs)).toMatchObject({ kind: 'applied' })
+    const writes = daemon.writes.length
+
+    await click('profile-wizard-start')
+    await settle()
+    expect(api.putAttachment).not.toHaveBeenCalled()
+    expect(selectMaster(useProfileStore.getState())).toBeNull()
+    expect(daemon.writes.length).toBe(writes)
+    expect(JSON.stringify(daemon.rows.get('workspaces')!.payload)).toContain('SENTINEL-THEIRS')
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'profile-changed')
+    expect(screen.getByTestId('profile-wizard-direction-pull')).not.toBeDisabled()
+    await click('profile-wizard-direction-push')
+    expect(screen.getByTestId('profile-wizard-push-warning')).toBeInTheDocument()
   })
 })
