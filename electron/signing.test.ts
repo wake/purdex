@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+// @ts-expect-error -- plain ESM build script, no type declarations
+import { ENTITLEMENTS_PATH, buildSignArgs } from '../scripts/mac-sign.mjs'
+
 const root = resolve(__dirname, '..')
 
 describe('Electron macOS signing configuration (static)', () => {
@@ -10,11 +13,27 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(pkg.build?.mac?.identity).not.toBeNull()
   })
 
-  it('signs and verifies the final moved app bundles', () => {
+  it('signs with hardened runtime AND an explicit entitlements file', () => {
+    // Behavioural, not a substring match on the build script: a bundle signed
+    // with --options runtime but no entitlements cannot load its own ad-hoc
+    // signed Electron Framework and aborts before main() on Intel.
+    // Spec: docs/specs/2026-09-22-x64-adhoc-entitlements-spec.md §5.5.
+    const args: string[] = buildSignArgs({ appPath: '/tmp/Purdex.app', identity: '-' })
+
+    const entitlementsIdx = args.indexOf('--entitlements')
+    expect(entitlementsIdx).toBeGreaterThan(-1)
+    expect(args[entitlementsIdx + 1]).toBe(ENTITLEMENTS_PATH)
+    expect(ENTITLEMENTS_PATH).toBe(resolve(root, 'electron/entitlements.mac.plist'))
+
+    const optionsIdx = args.indexOf('--options')
+    expect(optionsIdx).toBeGreaterThan(-1)
+    expect(args[optionsIdx + 1]).toBe('runtime')
+
+    // --identifier plus --deep flattens every nested bundle's identifier.
+    expect(args).not.toContain('--identifier')
+
     const script = readFileSync(resolve(root, 'scripts/build-electron.mjs'), 'utf8')
     expect(script).toContain('PDX_MAC_SIGN_IDENTITY')
-    expect(script).toContain('codesign')
-    expect(script).toContain('--verify')
   })
 
   it('updater no longer ships runtime signing helpers', () => {
