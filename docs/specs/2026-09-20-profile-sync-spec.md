@@ -1286,5 +1286,22 @@ all, console clean). Fixed as a third PR — the fixes touch eight files PR B do
   source stays; the worst case is a tab under Unsorted in the copy, which is where it would end up
   anyway). `promoteToMaster` needs nothing: it moves no world, and both doors into the parking lot
   now hand in repaired worlds.
-- Mutation: 15 mutants over the four fixes, all caught; one equivalent (the locked-tab guard exists
+- **F5 (medium, critic) — the quiet gate could be starved for ever.** "Quiet for 500 ms" is a
+  property of the whole membership: a real ownerless tab on screen plus another window that opens,
+  closes or moves a tab more often than that (a busy agent does) meant the debounce never fired,
+  `tabOwnershipQuiet()` was never true, the tab was never adopted and `switchActiveProfile` said
+  `busy` for good. **The way out is bounded by the age of THE SAME broken state, not by global
+  quiet:** the transition the wait protects (`addTab`, then `insertTab` one rehydrate later) lasts
+  milliseconds, so a tab id that has been ownerless — or listed twice — without a break for
+  `ADOPTION_MAX_WAIT_MS` (3 s) is no transition. `adopt-standalone.ts` keeps `pendingSince` (tab id
+  → first seen in need of repair; only what needs repair NOW, so it cannot grow; the `null` pointer
+  has an entry, too) and ONE deadline timer for the oldest entry — it exists only while something
+  needs repair, and a change that leaves the oldest entry alone does not re-arm it. At the deadline
+  **only the ids that are that old are repaired** (`repairTabOwnership`'s new `only`): a younger one
+  may be exactly the other window's tab whose workspace is on its way. `tabOwnershipQuiet()` = quiet
+  for 500 ms OR every pending id aged, so a switch waits 3 s at worst. **No age accrues while the
+  world is unsettled** (every tab looks ownerless then): the record is emptied, and a tab's clock
+  starts when the world settles. Residue, accepted: a `junk-epoch` world is unsettled, so there the
+  switch still needs the plain 500 ms of quiet.
+- Mutation: 15 mutants over the four fixes and 11 over F5, all caught; one equivalent (the locked-tab guard exists
   in `closeTab` AND in `closeTabInWorkspace` — removing one alone changes nothing; both → caught).

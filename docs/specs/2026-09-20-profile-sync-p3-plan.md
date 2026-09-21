@@ -290,7 +290,9 @@ position (the "active + expanded → toggle" overload of the baseline is gone).
 - `startStandaloneAdoption(): () => void` (`features/workspace/lib/adopt-standalone.ts`, installed in
   `main.tsx` before the first render; returns its stop): zero owners → `Unsorted`, several → the
   first workspace keeps the tab, a `null` `activeWorkspaceId` → the workspace of the tab on screen,
-  else the first. It acts `ADOPTION_SETTLE_MS` (500) after the last MEMBERSHIP change and only on a
+  else the first. It acts `ADOPTION_SETTLE_MS` (500) after the last MEMBERSHIP change **or, for a
+  tab that has needed repair without a break for `ADOPTION_MAX_WAIT_MS` (3000), at that moment —
+  whichever comes first** (a membership that never goes quiet cannot starve it), and only on a
   settled world — so a profile switch (Task 5) that lands a world with ownerless tabs sees them
   adopted half a second after it settles, in the world on screen only.
 - **`getVisibleTabIds({ tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId })`** — the bar AND the
@@ -304,9 +306,13 @@ position (the "active + expanded → toggle" overload of the baseline is gone).
   (`lib/profile/sections.ts`) → `{ workspaces, activeWorkspaceId, adopted, dropped, membershipChanged }`
   is the ONE rule — first owner keeps, zero owners → Unsorted, the pointer follows the tab on screen
   only when the repair moved it. Callers: the invariant, and `switch-active.ts` on a world it is
-  about to park or copy. **For the switcher UI:** `switchActiveProfile` can now answer `busy` for
-  one more reason — something to repair and `tabOwnershipQuiet()` (adopt-standalone.ts) not yet
-  true; it is retryable like every other `busy`, and at most `ADOPTION_SETTLE_MS` away.
+  about to park or copy; `opts.only` repairs the given tab ids and nothing else (the deadline).
+  **For the switcher UI:** `switchActiveProfile` can now answer `busy` for one more reason —
+  something to repair and `tabOwnershipQuiet()` (adopt-standalone.ts) not yet true. It is retryable
+  like every other `busy`; the wait ends after 500 ms of quiet membership or once everything that
+  needs repair has needed it for `ADOPTION_MAX_WAIT_MS`, whichever comes first — **3 s at worst**
+  (a `junk-epoch` world excepted: no age accrues while unsettled). A retry loop of ~250 ms for up to
+  ~4 s covers it; by then the invariant has usually repaired the screen and the switch has nothing to do.
 - `HOME_WS_KEY` (`useLayoutStore`) has no reader left but `reconcileWorkspaceExpanded`, which keeps
   the key alive; P3d may delete it with the rest of "Home".
 
