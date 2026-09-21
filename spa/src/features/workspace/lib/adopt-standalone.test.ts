@@ -6,6 +6,7 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { restoreDeviceStateMerge, restoreDeviceStateReplace } from '../../../lib/device-state/restore'
+import { replaceTabSnapshot } from '../../../lib/snapshot/restore'
 import { STORAGE_KEYS } from '../../../lib/storage/keys'
 import type { WorkspaceSnapshot } from '../../../lib/snapshot/types'
 import { createTab, type Tab, type Workspace } from '../../../types/tab'
@@ -27,6 +28,12 @@ function addStray(): Tab {
   const tab = createTab({ kind: 'new-tab' })
   useTabStore.getState().addTab(tab)
   return tab
+}
+
+/** Starts it and lets the first look happen: there is NO synchronous look at start (see the race in 'at start'). */
+function boot(): void {
+  stop = startStandaloneAdoption()
+  vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
 }
 
 function settleWorld(): void {
@@ -54,8 +61,8 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('at start (before the first render)', () => {
-  it('adopts the tabs persisted without a workspace into a new Unsorted, synchronously, in tab order', () => {
+describe('at start', () => {
+  it('adopts the tabs persisted without a workspace into a new Unsorted, in tab order — after the settle delay, not before', () => {
     const a = useWorkspaceStore.getState().addWorkspace('A')
     const owned = addStray()
     useWorkspaceStore.getState().addTabToWorkspace(a.id, owned.id)
@@ -63,6 +70,10 @@ describe('at start (before the first render)', () => {
     const s2 = addStray()
 
     stop = startStandaloneAdoption()
+    expect(unsorted()).toBeUndefined() // what storage held a moment ago may be half of another window's write
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS - 1)
+    expect(unsorted()).toBeUndefined()
+    vi.advanceTimersByTime(1)
 
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual([a.id, UNSORTED_WORKSPACE_ID])
     expect(unsorted()).toMatchObject({ name: 'Unsorted', tabs: [s1.id, s2.id] })
@@ -72,7 +83,7 @@ describe('at start (before the first render)', () => {
 
   it('no workspace at all: Unsorted is created and becomes the active workspace', () => {
     const s1 = addStray()
-    stop = startStandaloneAdoption()
+    boot()
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual([UNSORTED_WORKSPACE_ID])
     expect(ownersOf(s1.id)).toEqual([UNSORTED_WORKSPACE_ID])
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
@@ -91,7 +102,7 @@ describe('at start (before the first render)', () => {
   it('logs one line per adoption: the count, never the tabs', () => {
     const s1 = addStray()
     addStray()
-    stop = startStandaloneAdoption()
+    boot()
     expect(info).toHaveBeenCalledTimes(1)
     const line = info.mock.calls[0].map(String).join(' ')
     expect(line).toContain('2')
@@ -106,12 +117,15 @@ describe('at start (before the first render)', () => {
     useTabStore.getState().setActiveTab(t.id)
     useWorkspaceStore.getState().setActiveWorkspace(null)
     stop = startStandaloneAdoption()
+    // Re-pointing is a write of the whole persisted workspace store, too: it waits like an adoption does.
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(b.id)
 
     stop()
     useTabStore.getState().setActiveTab(null)
     useWorkspaceStore.getState().setActiveWorkspace(null)
-    stop = startStandaloneAdoption()
+    boot()
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(a.id)
   })
 })
@@ -144,7 +158,7 @@ describe('while the app runs', () => {
     expect(info).not.toHaveBeenCalled()
   })
 
-  it('does not loop: one adoption is one write, and leaves no timer behind', () => {
+  it('does not loop: one adoption is one write, and its own write arms nothing', () => {
     useWorkspaceStore.getState().addWorkspace('A')
     stop = startStandaloneAdoption()
     const writes = vi.fn()
@@ -154,33 +168,65 @@ describe('while the app runs', () => {
     addStray()
     vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
     expect(writes).toHaveBeenCalledTimes(1)
-    expect(armed()).toBe(1)
+    expect(armed()).toBe(2) // once per stray: the second re-armed it
 
     vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 100)
     expect(writes).toHaveBeenCalledTimes(1)
     expect(info).toHaveBeenCalledTimes(1)
-    expect(armed()).toBe(1) // the adoption's own write armed nothing
+    expect(armed()).toBe(2) // the adoption's own write armed nothing
     unsubscribe()
   })
 
-  it('a tab that gets its workspace in the same tick costs one look and no write; a change with nothing to do arms nothing', () => {
+  it('a tab that gets its workspace in the same tick is never looked at; a change that is not about membership arms nothing', () => {
     const a = useWorkspaceStore.getState().addWorkspace('A')
     stop = startStandaloneAdoption()
-    const before = useWorkspaceStore.getState().workspaces
     useTabStore.getState().setActiveTab(null)
     expect(armed()).toBe(0)
 
     const tab = createTab({ kind: 'new-tab' })
-    useTabStore.getState().addTab(tab) // ownerless until the next line: that is what the delay is for
-    useWorkspaceStore.getState().insertTab(tab.id, a.id)
+    useTabStore.getState().addTab(tab) // ownerless until the next line: armed …
+    useWorkspaceStore.getState().insertTab(tab.id, a.id) // … and disarmed
     const afterInsert = useWorkspaceStore.getState().workspaces
-    expect(afterInsert).not.toBe(before)
-    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+    const looks = vi.spyOn(useLocalProfilesStore, 'getState') // `readMasterWorld` is the first thing a look does
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 2)
+    expect(looks).not.toHaveBeenCalled()
     expect(useWorkspaceStore.getState().workspaces).toBe(afterInsert)
 
     useTabStore.getState().setActiveTab(tab.id)
     expect(armed()).toBe(1)
     expect(info).not.toHaveBeenCalled()
+  })
+
+  // Review F1: the delay is a DEBOUNCE. As a throttle, the timer armed for the first stray fired 10 ms after another
+  // window's `addTab` had been rehydrated here, adopted that tab — and the workspace that owns it arrived afterwards.
+  it('every membership change pushes the look back: a tab that arrives just before the first deadline is not adopted at it', () => {
+    const a = useWorkspaceStore.getState().addWorkspace('A')
+    stop = startStandaloneAdoption()
+
+    const stray = addStray() // t = 0: a real stray
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS - 10)
+    const theirs = addStray() // t = 490: another window's `addTab`, rehydrated here
+    vi.advanceTimersByTime(20) // t = 510: past the FIRST deadline
+    expect(ownersOf(theirs.id)).toEqual([])
+    expect(ownersOf(stray.id)).toEqual([])
+    useWorkspaceStore.getState().insertTab(theirs.id, a.id) // … and its `insertTab`
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS - 1)
+    expect(ownersOf(stray.id)).toEqual([])
+    vi.advanceTimersByTime(1)
+
+    expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(ownersOf(theirs.id)).toEqual([a.id])
+  })
+
+  it('tab-store writes that change no membership (a busy agent rewrites pane records all the time) do not push the look back', () => {
+    useWorkspaceStore.getState().addWorkspace('A')
+    stop = startStandaloneAdoption()
+    const stray = addStray()
+    for (let t = 0; t < ADOPTION_SETTLE_MS; t += 100) {
+      vi.advanceTimersByTime(100)
+      if (t + 100 < ADOPTION_SETTLE_MS) useTabStore.setState({ tabs: { ...useTabStore.getState().tabs } })
+    }
+    expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
   })
 
   it('an Unsorted made elsewhere (another language, other tabs in it) is reused as it is: found by id, never renamed', () => {
@@ -198,7 +244,7 @@ describe('while the app runs', () => {
   it('names a NEW Unsorted in the language of this device', () => {
     const t = vi.spyOn(useI18nStore.getState(), 't').mockImplementation((key: string) => (key === 'workspace.unsorted' ? '未分類' : key))
     addStray()
-    stop = startStandaloneAdoption()
+    boot()
     expect(unsorted()?.name).toBe('未分類')
     t.mockRestore()
   })
@@ -273,7 +319,7 @@ describe('only the world on screen, and only while it is settled', () => {
       parkedMaster: { workspaces: [ws('mmmmmm', 'M')], tabs: {}, activeWorkspaceId: 'mmmmmm', activeTabId: null },
     })
     const stray = addStray()
-    stop = startStandaloneAdoption()
+    boot()
     expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
     expect(useLocalProfilesStore.getState().parkedMaster?.workspaces.map((w) => w.id)).toEqual(['mmmmmm'])
   })
@@ -318,40 +364,154 @@ describe('device state (lives until P4b): what it restores without a workspace i
   })
 })
 
-describe('two windows adopt at once', () => {
-  it('both make the SAME workspace id, so after the rehydrate there is one Unsorted, not two', async () => {
-    vi.useRealTimers()
-    vi.stubGlobal('BroadcastChannel', undefined) // the two "windows" are one process here; they meet in localStorage only
-    const stray = createTab({ kind: 'new-tab' })
-    const seed = (key: string, state: unknown) => localStorage.setItem(key, JSON.stringify({ state, version: 1 }))
-    seed(STORAGE_KEYS.TABS, { tabs: { [stray.id]: stray }, tabOrder: [stray.id], activeTabId: stray.id, worldId: 'master', worldEpoch: 0 })
-    seed(STORAGE_KEYS.WORKSPACES, { workspaces: [ws('aaaaaa', 'A')], activeWorkspaceId: 'aaaaaa', worldId: 'master', worldEpoch: 0 })
+// The two "windows" are two instances of the modules (`vi.resetModules()`); they meet in localStorage only.
+describe('two windows', () => {
+  const seed = (key: string, state: unknown) => localStorage.setItem(key, JSON.stringify({ state, version: 1 }))
+  const seedTabs = (tabs: Tab[]) => seed(STORAGE_KEYS.TABS, { tabs: Object.fromEntries(tabs.map((t) => [t.id, t])), tabOrder: tabs.map((t) => t.id), activeTabId: null, worldId: 'master', worldEpoch: 0 })
+  const seedWorkspaces = (workspaces: Workspace[]) => seed(STORAGE_KEYS.WORKSPACES, { workspaces, activeWorkspaceId: workspaces[0]?.id ?? null, worldId: 'master', worldEpoch: 0 })
+  const stored = (): Workspace[] => JSON.parse(localStorage.getItem(STORAGE_KEYS.WORKSPACES)!).state.workspaces
 
-    const openWindow = async () => {
-      vi.resetModules()
-      const store = await import('../store')
-      const adoption = await import('./adopt-standalone')
-      await store.useWorkspaceStore.persist.rehydrate()
-      return { store: store.useWorkspaceStore, start: adoption.startStandaloneAdoption }
-    }
+  const openWindow = async () => {
+    vi.resetModules()
+    const store = await import('../store')
+    const adoption = await import('./adopt-standalone')
+    return { store: store.useWorkspaceStore, start: adoption.startStandaloneAdoption }
+  }
+  type Win = Awaited<ReturnType<typeof openWindow>>
+  const ids = (w: Win) => w.store.getState().workspaces.map((x) => x.id)
+
+  beforeEach(() => {
+    vi.stubGlobal('BroadcastChannel', undefined)
+  })
+
+  it('both adopt at once: they make the SAME workspace id, so after the rehydrate there is one Unsorted, not two', async () => {
+    const stray = createTab({ kind: 'new-tab' })
+    seedTabs([stray])
+    seedWorkspaces([ws('aaaaaa', 'A')])
     const w1 = await openWindow()
     const w2 = await openWindow()
     expect(w1.store).not.toBe(w2.store)
-    expect(w2.store.getState().workspaces.map((w) => w.id)).toEqual(['aaaaaa']) // loaded before anyone adopted
 
-    const stop1 = w1.start()
-    const stop2 = w2.start() // its memory has not seen window 1's Unsorted
-    const ids = (s: typeof w1.store) => s.getState().workspaces.map((w) => w.id)
-    expect(ids(w1.store)).toEqual(['aaaaaa', UNSORTED_WORKSPACE_ID])
-    expect(ids(w2.store)).toEqual(['aaaaaa', UNSORTED_WORKSPACE_ID])
+    const stops = [w1.start(), w2.start()]
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS) // window 2's memory has not seen window 1's Unsorted
+    expect(ids(w1)).toEqual(['aaaaaa', UNSORTED_WORKSPACE_ID])
+    expect(ids(w2)).toEqual(['aaaaaa', UNSORTED_WORKSPACE_ID])
 
     await w1.store.persist.rehydrate()
     await w2.store.persist.rehydrate()
-    for (const s of [w1.store, w2.store]) {
-      expect(ids(s)).toEqual(['aaaaaa', UNSORTED_WORKSPACE_ID])
-      expect(s.getState().workspaces[1].tabs).toEqual([stray.id])
+    for (const w of [w1, w2]) {
+      expect(ids(w)).toEqual(['aaaaaa', UNSORTED_WORKSPACE_ID])
+      expect(w.store.getState().workspaces[1].tabs).toEqual([stray.id])
     }
-    stop1()
-    stop2()
+    stops.forEach((off) => off())
+  })
+
+  // Review F2: window A has persisted `addTab`; its `insertTab` has not landed when window B starts.
+  it('a window that starts between another window\'s two writes adopts nothing, and does not write its old workspaces over them', async () => {
+    const theirs = createTab({ kind: 'new-tab' })
+    seedTabs([theirs]) // A's first write
+    seedWorkspaces([ws('aaaaaa', 'A')]) // … the second is not there yet
+    const b = await openWindow()
+    const stopB = b.start()
+    expect(ids(b)).toEqual(['aaaaaa'])
+
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS / 2)
+    seedWorkspaces([ws('aaaaaa', 'A', [theirs.id])]) // A's second write lands, and B is told
+    await b.store.persist.rehydrate()
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 4)
+
+    expect(ids(b)).toEqual(['aaaaaa'])
+    expect(stored()).toEqual([ws('aaaaaa', 'A', [theirs.id])])
+    expect(info).not.toHaveBeenCalled()
+    stopB()
+  })
+
+  it('both de-duplicate the same two-owner world: the same result in both, and no ping-pong afterwards', async () => {
+    const t = createTab({ kind: 'new-tab' })
+    seedTabs([t])
+    seedWorkspaces([ws('aaaaaa', 'A', [t.id]), ws('bbbbbb', 'B', [t.id])])
+    const w1 = await openWindow()
+    const w2 = await openWindow()
+    const stops = [w1.start(), w2.start()]
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+
+    const expected = [ws('aaaaaa', 'A', [t.id]), { ...ws('bbbbbb', 'B'), activeTabId: null }]
+    expect(w1.store.getState().workspaces).toEqual(expected)
+    expect(w2.store.getState().workspaces).toEqual(expected)
+
+    const before = timeouts.mock.calls.length
+    await w1.store.persist.rehydrate()
+    await w2.store.persist.rehydrate()
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 4)
+    expect(stored()).toEqual(expected)
+    expect(timeouts.mock.calls.slice(before).filter((call: unknown[]) => call[1] === ADOPTION_SETTLE_MS)).toEqual([])
+    stops.forEach((off) => off())
+  })
+})
+
+// Review F3: "exactly one" is also "not two". Old storage, a snapshot restore and cross-window last-write-wins can all
+// list one tab in two workspaces; the tab bar then renders it twice while `tabOrder` has it once.
+describe('a tab in more than one workspace', () => {
+  const twoOwners = (tabId: string): Workspace[] => [ws('aaaaaa', 'A', ['a1', tabId]), ws('bbbbbb', 'B', [tabId, 'b1']), ws('cccccc', 'C', [tabId])]
+
+  it('at start: the FIRST workspace in workspace order keeps it; a workspace that loses its active tab gets `null` (removeTabFromWorkspace\'s rule)', () => {
+    const t = addStray()
+    useWorkspaceStore.setState({ workspaces: twoOwners(t.id), activeWorkspaceId: 'bbbbbb' })
+    boot()
+    const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
+    expect(workspaces.map((w) => w.tabs)).toEqual([['a1', t.id], ['b1'], []])
+    expect(workspaces.map((w) => w.activeTabId)).toEqual(['a1', null, null])
+    expect(activeWorkspaceId).toBe('bbbbbb')
+    expect(unsorted()).toBeUndefined()
+  })
+
+  it('the same id twice in ONE workspace: the first stays', () => {
+    const t = addStray()
+    useWorkspaceStore.setState({ workspaces: [ws('aaaaaa', 'A', [t.id, 'a1', t.id])], activeWorkspaceId: 'aaaaaa' })
+    boot()
+    expect(useWorkspaceStore.getState().workspaces[0]).toMatchObject({ tabs: [t.id, 'a1'], activeTabId: t.id })
+  })
+
+  it('after a rehydrate / a snapshot restore: converges after the settle delay, with one log line that has the count and no tab id', () => {
+    useWorkspaceStore.getState().addWorkspace('Old')
+    stop = startStandaloneAdoption()
+    const t = createTab({ kind: 'new-tab' })
+    replaceTabSnapshot({
+      version: 1, capturedAt: 1, sessionMeta: {}, tabs: { [t.id]: t }, tabOrder: [t.id], activeTabId: null,
+      workspaces: [ws('aaaaaa', 'A', [t.id]), ws('bbbbbb', 'B', [t.id])], activeWorkspaceId: 'aaaaaa',
+    })
+    expect(ownersOf(t.id)).toEqual(['aaaaaa', 'bbbbbb'])
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+    expect(ownersOf(t.id)).toEqual(['aaaaaa'])
+    expect(info).toHaveBeenCalledTimes(1)
+    const line = info.mock.calls[0].map(String).join(' ')
+    expect(line).toContain('1')
+    expect(line).not.toContain(t.id)
+  })
+
+  it('together with a stray: one write does both', () => {
+    const t = addStray()
+    const stray = addStray()
+    useWorkspaceStore.setState({ workspaces: [ws('aaaaaa', 'A', [t.id]), ws('bbbbbb', 'B', [t.id])], activeWorkspaceId: 'aaaaaa' })
+    stop = startStandaloneAdoption()
+    const writes = vi.fn()
+    const unsubscribe = useWorkspaceStore.subscribe(writes)
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 10)
+    expect(writes).toHaveBeenCalledTimes(1)
+    expect(ownersOf(t.id)).toEqual(['aaaaaa'])
+    expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    unsubscribe()
+  })
+
+  it('not while the world is unsettled: the two owners may be two worlds', () => {
+    const t = addStray()
+    useWorkspaceStore.setState({ workspaces: [ws('aaaaaa', 'A', [t.id]), ws('bbbbbb', 'B', [t.id])], activeWorkspaceId: 'aaaaaa' })
+    useTabStore.setState({ worldEpoch: 9 })
+    boot()
+    expect(ownersOf(t.id)).toEqual(['aaaaaa', 'bbbbbb'])
+    useWorkspaceStore.setState({ worldEpoch: 9 })
+    useLocalProfilesStore.setState({ worldEpoch: 9 })
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+    expect(ownersOf(t.id)).toEqual(['aaaaaa'])
   })
 })
