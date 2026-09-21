@@ -324,6 +324,16 @@ describe('useSotProfiles — one host\'s answer never paints another host\'s lis
     expect(screen.getByTestId('profile-sot-block')).toHaveAttribute('data-state', 'rows')
   })
 
+  it('until the new host answers, the previous host\'s list is NOT shown as its list: loading', async () => {
+    vi.mocked(listProfiles).mockImplementation((hostId: string) =>
+      hostId === 'h1' ? Promise.resolve({ kind: 'ok', value: [profile('p1', 'default'), profile('p2', 'experiment')] }) : new Promise(() => {}))
+    const { rerender } = render(<Harness hostId="h1" attached="p1" />)
+    await ready()
+    rerender(<Harness hostId="h2" attached="p9" />)
+    expect(screen.getByTestId('profile-sot-block')).toHaveAttribute('data-state', 'loading')
+    expect(screen.queryByTestId('profile-sot-row-p2')).toBeNull()
+  })
+
   it('an answer after the page closed sets nothing', async () => {
     let answer: (v: { kind: 'ok'; value: ProfileIndexEntry[] }) => void = () => {}
     vi.mocked(listProfiles).mockReturnValue(new Promise((resolve) => { answer = resolve }))

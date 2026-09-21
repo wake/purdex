@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { canTintProfile, defaultSlaveName, COLOR_NEEDS_ICON } from './profile-rules'
+import { canTintProfile, defaultSlaveName, COLOR_NEEDS_ICON, sotActionStillValid, sotScopeOf } from './profile-rules'
 
 describe('canTintProfile — the colour tints an icon, and the logo is a bitmap', () => {
   it('no icon chosen (the logo) → the colour has nothing to tint', () => {
@@ -39,5 +39,31 @@ describe('defaultSlaveName — the device name, never equal to a name already th
 
   it('a blank device name still yields a name', () => {
     expect(defaultSlaveName('   ', [])).not.toBe('')
+  })
+})
+
+describe('sotActionStillValid — an action on a SOT profile belongs to the master it was opened under', () => {
+  const rows = [{ id: 'p1' }, { id: 'p2' }]
+  const under = sotScopeOf('h1', 'p1')
+
+  it('the same host, the same attached profile, the profile still listed → it may be sent', () => {
+    expect(sotActionStillValid(under, sotScopeOf('h1', 'p1'), 'p2', rows)).toBe(true)
+  })
+
+  it('ANOTHER HOST now — even though it lists a profile of the same id → not sent', () => {
+    expect(sotActionStillValid(under, sotScopeOf('h2', 'p1'), 'p2', rows)).toBe(false)
+  })
+
+  it('another profile attached now → not sent (what may be deleted was decided under the old one)', () => {
+    expect(sotActionStillValid(under, sotScopeOf('h1', 'p2'), 'p2', rows)).toBe(false)
+  })
+
+  it('the profile is not in the list any more, or there is no list → not sent', () => {
+    expect(sotActionStillValid(under, under, 'p3', rows)).toBe(false)
+    expect(sotActionStillValid(under, under, 'p2', null)).toBe(false)
+  })
+
+  it('a host id with the separator in it cannot pass for another pair', () => {
+    expect(sotScopeOf('a|b', 'c')).not.toBe(sotScopeOf('a', 'b|c'))
   })
 })
