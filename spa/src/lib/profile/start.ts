@@ -141,7 +141,7 @@ export type AttachResult = { ok: true } | { ok: false; reason: string }
 /** Only in `import.meta.env.DEV`, as `window.__purdexProfileSync`. */
 export interface ProfileSyncDebug {
   attach(hostId: string, profileId: string, direction: SyncDirection): Promise<AttachResult>
-  detach(): Promise<void>
+  detach(): Promise<DetachResult>
   state(): ProfileSyncState
   syncNow(): void
   resolve(section: string, keep: 'local' | 'sot'): void
@@ -711,14 +711,41 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
   return run
 }
 
-/** Best effort: whatever happens, the caller goes on. */
-async function dropAttachment(master: Master): Promise<void> {
+/** Was the daemon told that this client has left? `detail` is the api layer's own `reason: message`, or what was thrown. */
+export type DetachResult = { ok: true } | { ok: false; reason: 'daemon-not-told'; detail: string }
+
+/**
+ * Best effort: whatever happens, the caller goes on — but it is told. 404 is "told": the profile is not on the
+ * daemon, and its attachments went with it; there is nothing left to remove.
+ */
+async function dropAttachment(master: Master): Promise<DetachResult> {
+  let detail: string
   try {
     const r = await deleteAttachment(master.hostId, master.profileId, getClientId())
-    if (r.kind === 'failed') reportProblem({ kind: 'detach-failed', detail: `${r.reason}: ${r.message}` })
+    if (r.kind !== 'failed' || r.reason === 'not-found') return { ok: true }
+    detail = `${r.reason}: ${r.message}`
   } catch (e) {
-    reportProblem({ kind: 'detach-failed', detail: message(e) })
+    detail = message(e)
   }
+  reportProblem({ kind: 'detach-failed', detail })
+  return { ok: false, reason: 'daemon-not-told', detail }
+}
+
+/**
+ * Write down the attachment a failed detach left on the daemon (useProfileStore, `pendingDetach`). This is a
+ * store write AFTER an `await` of up to 15 s, and a persist of this store writes every field from THIS window's
+ * memory: so the memory is first brought up to what storage holds — a master another window set meanwhile must
+ * not be written over by a stale copy (`rehydrate` is synchronous over `localStorage`). And if, by now, this
+ * client is attached to that very profile again, the attachment is wanted: nothing is written down.
+ */
+async function rememberPendingDetach(master: Master, detail: string): Promise<void> {
+  try {
+    await useProfileStore.persist.rehydrate()
+  } catch {
+    // as it was: the write below is still better than a ghost attachment nobody knows of
+  }
+  if (sameMaster(selectMaster(useProfileStore.getState()), master)) return
+  useProfileStore.getState().setPendingDetach({ hostId: master.hostId, profileId: master.profileId, detail, at: clock() })
 }
 
 /**
@@ -921,14 +948,39 @@ async function standDown(next: Master, hold: Hold): Promise<AttachResult> {
  * recorded, not a reason to stay attached. Nothing after the `await` touches the
  * store — by then the master may be a new one, set by another window.
  */
-export function detachMaster(): Promise<void> {
-  return serial(async (): Promise<void> => {
+export function detachMaster(): Promise<DetachResult> {
+  return serial(async (): Promise<DetachResult> => {
     const master = selectMaster(useProfileStore.getState())
-    if (master === null) return
+    if (master === null) return { ok: true }
     useProfileStore.getState().clearMaster()
     ownGenerationMove() // an attach of THIS window queued behind us is not "overtaken" by it: the user asked in that order
     clearSectionStore(master.profileId)
-    await dropAttachment(master)
+    const told = await dropAttachment(master)
+    // The one thing written after the `await`, and not a field of the master: see `rememberPendingDetach`.
+    if (!told.ok) await rememberPendingDetach(master, told.detail)
+    return told
+  })
+}
+
+/**
+ * Tell the daemon again about a detach it was not told of (`useProfileStore.pendingDetach`) — with what was
+ * REMEMBERED: the master it was about is gone. In the attach / detach queue, so it cannot overlap one. Attached
+ * to that very profile by now → the attachment is wanted: not deleted, and forgotten. Giving up is
+ * `useProfileStore.clearPendingDetach`.
+ */
+export function retryPendingDetach(): Promise<DetachResult> {
+  return serial(async (): Promise<DetachResult> => {
+    const left = useProfileStore.getState().pendingDetach
+    if (left === null) return { ok: true }
+    const target: Master = { hostId: left.hostId, profileId: left.profileId }
+    if (sameMaster(selectMaster(useProfileStore.getState()), target)) {
+      useProfileStore.getState().clearPendingDetach(left.hostId, left.profileId)
+      return { ok: true }
+    }
+    const told = await dropAttachment(target)
+    if (told.ok) useProfileStore.getState().clearPendingDetach(left.hostId, left.profileId)
+    else await rememberPendingDetach(target, told.detail)
+    return told
   })
 }
 

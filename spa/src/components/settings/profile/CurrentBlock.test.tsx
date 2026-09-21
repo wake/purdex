@@ -42,7 +42,7 @@ const show = (snapshot: ProfileSyncSnapshot, masterName: string | null = 'defaul
 beforeEach(() => {
   vi.mocked(requestSyncNow).mockReset()
   vi.mocked(detachMaster).mockReset()
-  vi.mocked(detachMaster).mockResolvedValue(undefined)
+  vi.mocked(detachMaster).mockResolvedValue({ ok: true })
   vi.mocked(readMasterWorld).mockReturnValue(SETTLED)
   useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true })
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
