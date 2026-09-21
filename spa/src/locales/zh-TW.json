@@ -1554,5 +1554,7 @@
   "settings.profile.detach.retry": "再試一次",
   "settings.profile.detach.retry_failed": "剛剛又試了一次：還是沒能通知主機。",
   "settings.profile.detach.dismiss": "不再提醒",
-  "settings.profile.detach.dismiss_hint": "不再提醒。在有人到主機上移除之前，這台裝置的登記可能會一直留著。"
+  "settings.profile.detach.dismiss_hint": "不再提醒。在有人到主機上移除之前，這台裝置的登記可能會一直留著。",
+  "settings.profile.local.name_changed": "這個名稱剛在另一個視窗被改成「{{name}}」。按儲存會保留你輸入的。",
+  "settings.profile.local.name_take": "改用那個"
 }

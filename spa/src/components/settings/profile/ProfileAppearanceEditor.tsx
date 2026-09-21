@@ -4,6 +4,11 @@
 //
 // The name follows `DeviceNameField`: while there is an uncommitted edit the input shows the draft, otherwise it
 // mirrors the store — so after a save it shows what was KEPT (`normalizeLocalProfileName`), not what was typed.
+//   A name can be changed in another window while it is being edited here (the store is synced across windows).
+// Nothing typed → the input follows. A draft → it is KEPT, and the change is SAID (`base` is the stored name the
+// edit began from): Save is then the user's own overwrite, "Use that one" takes the other window's name instead.
+// Icon and colour are written on every click — there is no draft to lose. A profile deleted elsewhere closes the
+// editor (it renders nothing).
 // The icon follows `HostIconField`: the app's one icon picker, inline in a `FloatingPanel`.
 import { useRef, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -35,6 +40,8 @@ export function ProfileAppearanceEditor({ id }: { id: string }) {
   const profile = useLocalProfilesStore((s) => (isMaster ? s.master : s.slaves[id]))
   const [draft, setDraft] = useState('')
   const [dirty, setDirty] = useState(false)
+  /** The stored name the current edit began from; meaningful only while `dirty`. */
+  const [base, setBase] = useState('')
   const [hexDraft, setHexDraft] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [reason, setReason] = useState<Reason | null>(null)
@@ -76,6 +83,7 @@ export function ProfileAppearanceEditor({ id }: { id: string }) {
           spellCheck={false}
           value={dirty ? draft : storedName}
           onChange={(e) => {
+            if (!dirty) setBase(storedName)
             setDraft(e.target.value)
             setDirty(true)
           }}
@@ -98,6 +106,23 @@ export function ProfileAppearanceEditor({ id }: { id: string }) {
           </span>
         )}
       </div>
+      {dirty && storedName !== base && (
+        <p data-testid="profile-edit-name-changed" className="flex flex-wrap items-center gap-2 text-xs text-yellow-500">
+          {/* An un-named master is shown as `Home` everywhere else, so here too. */}
+          <span>{t('settings.profile.local.name_changed', { name: profile.name ?? t('nav.home') })}</span>
+          <button
+            type="button"
+            data-testid="profile-edit-name-take"
+            onClick={() => {
+              setDirty(false)
+              setReason(null)
+            }}
+            className={BTN}
+          >
+            {t('settings.profile.local.name_take')}
+          </button>
+        </p>
+      )}
 
       <div ref={iconRowRef} className="flex flex-wrap items-center gap-2">
         <span className={LABEL}>{t('settings.profile.local.icon')}</span>
