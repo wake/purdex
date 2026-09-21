@@ -325,10 +325,10 @@ thing. #1255 (re-run the session reconciliation after a switch) lands first, on 
 
 | PR | Reachable afterwards | Contents |
 |---|---|---|
-| **P3d-1** | the Home button opens a menu | `components/Menu.tsx` (the primitive) + `ProfileSwitcher` in both bars + its i18n. With no master and no slaves the menu is `Set up sync…` (→ Settings › Profile, which until P3d-2 is the existing Settings page — so the item is hidden until P3d-2 lands; the menu then has nothing to show and the button keeps today's behaviour. **No dead control between merges.**) |
+| **P3d-1** | the Home button opens a menu — **where there is a slave** | `components/Menu.tsx` (the primitive) + `ProfileSwitcher` in both bars + its i18n. **With no slave the Home button is NOT a menu, in any PR** (as built; this row first said the menu would shrink to a single `Set up sync…` item for everyone). Why: this plan's own iron rule is that a user who never touched the feature sees today's app, and turning every user's Home click into a menu breaks it — the iron rule wins. The entry for everyone is the Settings sidebar's *Profile*; `Set up sync…` is P3d-3's, in the *Current* block. |
 | **P3d-2** | Settings › Profile exists: *Current* + *Profiles* | the section registration (`SETTINGS_ORDER.PROFILE`), the *Current* block (read-only state, Auto-sync, Sync now, Stop sync) and the *Profiles* block (slaves: copy master / save screen / rename / delete; **every local profile, the master included: name / icon / colour** — `setProfileAppearance`, with the two existing pickers, see "P3d-1 — As built"; SOT profiles: rename / delete). A master can still only be attached through the dev hook. |
 | **P3d-3** | a user can attach a master without the dev hook | the *Wizard* (decision 10's five steps). `Settings › Sync` leaves the sidebar **here**, not earlier: until the wizard exists it is the only sync UI a user has. |
-| **P3d-4** | conflicts can be resolved from the UI | the *Resolve* block, PRODUCT.md §3.9, and the real-machine acceptance of the whole of P3 (below), **through the UI**. |
+| **P3d-4** | conflicts can be resolved from the UI | the *Resolve* block, PRODUCT.md §3.9, and the real-machine acceptance of the whole of P3 (below), **through the UI**. **Also (moved here from P3d-2, which found the snapshot does not carry them):** `ExecutorStatus` publishes, per section, its `rev` and whether it is `failing` / `backingOff`, plus a `lastSyncedAt`; the *Current* block then shows the three — a revision on every row, the time of the last sync, and "settings are waiting for workspaces" also while `workspaces` keeps FAILING (today it is said only while `workspaces` is locked: a failing section reads `pending`, like one that is through in a moment, and `problems` is a log with no "over" — `sync-view.ts`, `settingsWaitForWorkspaces`). |
 
 **What the UI must say, from the as-built contracts** (P3a / P3b / P3c "As built"):
 - `switchActiveProfile` → `busy`: retry every ≈ 250 ms for ≈ 4 s, silently (it is the 3 s
@@ -357,9 +357,12 @@ thing. #1255 (re-run the session reconciliation after a switch) lands first, on 
 settings row / section components the other built-in sections use (read two of them first and copy
 their structure, spacing and tone), Phosphor icons, Tailwind tokens already in use; no new colour,
 no new font size. Every string through `t()`, en + zh-TW in the same commit. Every control has a
-`data-testid` (acceptance drives the UI). Nothing renders for a user with no master and no slaves
-except the one `Set up sync…` entry and an empty *Current* block that says what Profile Sync is in
-two sentences and offers the wizard.
+`data-testid` (acceptance drives the UI). For a user with no master and no slaves the app is today's
+plus ONE sidebar entry, Settings › *Profile*: a *Current* block that says what Profile Sync is in two
+sentences (and, from P3d-3, offers the wizard — `profile-setup-start`), and the *Profiles* block with
+one row, the master. (Changed 2026-09-22; it first said "nothing but one `Set up sync…` entry".
+Why the master's row is not hidden: since the user's decision of 2026-09-21 every profile, the master
+included, has a name, an icon and a colour — that row is where an ordinary user edits them.)
 
 
 ### P3d-1 — As built (for P3d-2)
@@ -459,13 +462,140 @@ two sentences and offers the wizard.
   `profile.switch.*`. zh-TW keeps "profile" as a noun (as `hosts.undo_world_skipped` already did): master =
   「主要」, slave = 「本機 profile」.
 
+### P3d-2 — As built (for P3d-3 / P3d-4)
+
+Shipped as **three** PRs, not one (≤ 20 files each): **A** the section + the two *Profiles* blocks, **B** the
+*Current* block + the switcher's entry, **C** the review fixes (F1–F3, the section labels, this text).
+`components/settings/profile/` holds all of it; `SETTINGS_ORDER.PROFILE = 3` (last of the core band), section id
+`profile`, route `/settings/profile`. `Settings › Sync` is untouched (it leaves with P3d-3).
+
+**`ProfileSection.tsx`** — three blocks in this order: *Current*, *Profiles on this device*, *Profiles on the
+sync host* (the last only while a master is attached). Opening the page writes no storage, starts no timer, and
+with no master asks no host (pinned). It owns the ONE `useSotProfiles(hostId)` fetch and hands the master's SOT
+**name** to the *Current* block — the snapshot only has the id.
+
+**Current (`CurrentBlock.tsx` + `StopSyncControl.tsx`)**
+- Sync state: `useProfileSync()` only. Preferences (`autoSync`, `masterEndpoint`, `pendingDetach`):
+  `useProfileStore`. Host name / address: `useHostStore`. The master world (unsettled reason, workspace names):
+  `readMasterWorld()` behind plain subscriptions to the three stores — NOT `subscribeMasterWorld`, which asks
+  for a recovery rehydrate; a settings page must not. All of that lives in the half that is mounted only with a
+  master; without one the block is two sentences and the `TODO(P3d-3)`.
+- One `<section>`, three children in fixed places: the master-dependent half, `StopSyncControl`, the problem
+  log. `StopSyncControl` is outside the first on purpose (below).
+- The overall reading is `syncDotOf` (**`lib/profile/sync-view.ts`**, moved out of `ProfileSwitcher.tsx`
+  unchanged, with `SYNC_DOT_CLASS`) — the switcher's dot and this page cannot disagree. `sync-view.ts` also has
+  `settingsWaitForWorkspaces(status)` (true exactly when `settings` is `pending` and `workspaces` is `locked:*`;
+  the FAILING case is P3d-4's, see the table) and `describeSections(keys, masterWorkspaces)`.
+- **Sections are labelled for a person**: Hosts / Settings / Workspaces, then `Tabs · <workspace name>` in the
+  workspace order — name and order from the MASTER world, never the live store (a slave on screen has another
+  list, and a demoted master shares ids with it). A workspace not on this device yet, and a world nobody can
+  read right now, have their own words; an id is never shown. `data-section` and the tooltip keep the raw key.
+- A follower's figures carry a "reported by the window that is syncing" badge (state row and section list) and
+  `data-source="leader"`; `stale` is a sentence. `blocked` ×3 and the unsettled reasons ×3 are sentences in a
+  notice tone, never red. `Sync now` is disabled while `blocked` (no driver runs: the press would do nothing)
+  and answers with a line that stays until the snapshot next changes (no timer).
+- NOT shown, because the snapshot does not carry it: a revision per section (only a locked one has
+  `locks[key].sot.rev`) and the time of the last sync → P3d-4.
+- **Stop sync — what the outcome means.** `detachMaster()` now answers `DetachResult`: `{ ok: true }` or
+  `{ ok: false, reason: 'daemon-not-told', detail }` (a 404 counts as told: the profile, and its attachments,
+  are not there). This device has stopped syncing EITHER WAY — the master is cleared first. When the daemon was
+  not told, start.ts writes `useProfileStore.pendingDetach = { hostId, profileId, detail, at }`: persisted,
+  synced across windows, **independent of the master** (survives `clearMaster`, moves no generation), cleared by
+  a successful `retryPendingDetach()`, by `clearPendingDetach(hostId, profileId)` (the user gives up) or by
+  attaching to that very profile again (`setMaster`; and a retry made while attached to it deletes nothing). It
+  is written AFTER an `await`, so the store is re-read from storage first — a master another window set
+  meanwhile is not written over. One slot: a second failure replaces the first. The dialog stays up, `busy`,
+  until the answer — which is why `StopSyncControl` is mounted outside the half that unmounts with the master.
+  The notice (what happened, what it means for the other devices, *Try again*, *Dismiss*) is the store's: it is
+  there after a reload and without a master. **Not covered:** the two best-effort drops inside `attachMaster`
+  (switching master; an attach that was superseded) can leave the same ghost and still only log `detach-failed`
+  — for P3d-3, whose wizard is what calls them.
+
+**Profiles on this device (`LocalProfilesBlock` / `LocalProfileRow` / `ProfileAppearanceEditor`)**
+- The master first (unnamed → `Home`, tagged `profile.master`), then `slaveOrder`. Reads the stores; the worlds
+  are moved by `switch-active.ts` only. A **switch** is `useProfileSwitcherStore.chooseProfile` — the Home
+  menu's own path (silent `busy` retries, its one toast); the store needed no change.
+- Appearance through `setProfileAppearance`: name (the `DeviceNameField` draft pattern; what WILL be kept is
+  previewed when it differs from what is typed; a slave's cannot be blank, the master's can → `Home`), icon
+  (`WorkspaceIconPicker` inline in a `FloatingPanel`, as `HostIconField`; "use default" clears it), colour
+  (`HOST_COLOR_PRESETS` + a `#rrggbb` field — `HostColorLayerEditor` does not fit: an alpha slider and a host's
+  "Main" layer heading). **A name changed in another window while it is being edited here**: nothing typed →
+  the input follows; a draft → kept, and the change is said, with Save (the user's own overwrite) and "Use
+  that one". A profile deleted elsewhere closes its editor.
+- **`profile-rules.ts` holds the page's DECISIONS, one edit each**: `COLOR_NEEDS_ICON` / `canTintProfile` — *the
+  user has not ruled on this one*: with no icon the profile shows the logo, a bitmap the colour cannot tint, so
+  the colour control is disabled and says why, and a stored colour is KEPT; `false` offers the colour always.
+  `defaultSlaveName(deviceName, taken)` — the device name with the next free number (a default never makes a
+  duplicate; the number survives the 64 code point cut). `sotScopeOf` / `sotActionStillValid` (below).
+- Delete (`ConfirmDialog`; never the one on screen — disabled, with the reason), ▲▼ (`reorderSlaves`), and below
+  the list *Copy the master* / *Save what is on screen* (`ensureDefaultDeviceName()` is asked for at that click,
+  never by opening the page). Every refusal reason has its own sentence; `unsettled` is in an info tone.
+  `promoteToMaster` is not here (the wizard's step 3).
+
+**Profiles on the sync host (`SotProfilesBlock` + `useSotProfiles`)**
+- Loading / failed (with retry) / empty / rows; never polled. Rename; delete only where the FETCHED index shows
+  no attachment, and never the profile this device syncs with; a 409 `attached` is rendered as the devices it
+  names and the list is fetched again.
+- **An action belongs to the master it was opened under** (review F1: a confirmation opened for `p2` on host A
+  must not become "delete `p2` on host B" because another window moved the master). The scope is
+  `sotScopeOf(hostId, attachedProfileId)`; every open action (confirmation, rename draft, refusal, status, busy)
+  is dropped in the render that sees another scope; a send is checked again with `sotActionStillValid` — the
+  scope it was OPENED under, and the profile still in the fetched list — and said when dropped; an answer that
+  arrives after the scope moved sets nothing. `useSotProfiles` drops a previous host's late answer, shows
+  `loading` (not the old list) until the new host answers, and sets nothing after unmount.
+
+**The switcher** — a divider and a plain item `profile-item-settings` → `setLocation('/settings/profile')`
+(`useRouteSync` opens the tab, as `TitleBar` does for `/settings/sync`). The menu still exists only with a slave.
+
+**For P3d-3**: the wizard's entry goes at the `TODO(P3d-3)` in `CurrentBlock.tsx`'s no-master half (button,
+testid `profile-setup-start`, key `settings.profile.current.setup`); the `no-parked-master` sentence in the
+same file has a `TODO(P3d-3)` to link to the wizard; the SOT block shows only with a master — the wizard's
+host picker is what lets it (or its list) exist without one. **For P3d-4**: the `TODO(P3d-4)` at
+`profile-current-locked-note` is where the Resolve rows replace the sentence.
+
+**test ids**
+- section: `profile-section`
+- *Current*: `profile-current-block` (`data-state` none|attached), `profile-current-master`, `profile-current-host`,
+  `profile-current-state` (`data-state`, `data-source`), `profile-current-source`, `profile-current-stale`,
+  `profile-current-blocked` (`data-reason`), `profile-current-world` (`data-reason`), `profile-current-schema`,
+  `profile-current-settings-waiting`, `profile-current-sections`, `profile-current-no-status`,
+  `profile-current-section-<key>` (`data-section` = the raw key, `data-status`, `data-source`),
+  `profile-current-section-rev-<key>`, `profile-current-locked-note`, `profile-auto-sync`, `profile-sync-now`,
+  `profile-sync-asked`, `profile-current-problems`, `profile-current-problem`
+- Stop sync: `profile-stop-sync`, `profile-stop-sync-dialog` / `-cancel` / `-confirm`, `profile-detach-leftover`
+  (`data-host`, `data-profile`), `profile-detach-retry` (`aria-busy`), `profile-detach-dismiss`,
+  `profile-detach-retry-failed`
+- local profiles: `profile-local-block`, `profile-local-status` (`data-tone`), `profile-row-<id>` (`data-master`,
+  `data-on-screen`), `profile-row-name-<id>`, `profile-row-master-badge`, `profile-row-on-screen-<id>`,
+  `profile-icon`, `profile-row-switch-<id>` (`aria-busy`), `profile-row-edit-<id>`, `profile-row-up-<id>`,
+  `profile-row-down-<id>`, `profile-row-delete-<id>`, `profile-row-delete-blocked-<id>`, `profile-delete-dialog`
+  / `-cancel` / `-confirm`, `profile-new-copy`, `profile-new-save`, `profile-new-form` (`data-kind`),
+  `profile-new-name`, `profile-new-create`, `profile-new-cancel`, `profile-new-error` (`data-tone`)
+- the editor: `profile-edit-<id>`, `profile-edit-name`, `profile-edit-name-save`, `profile-edit-name-preview`,
+  `profile-edit-name-changed`, `profile-edit-name-take`, `profile-edit-icon`, `profile-edit-icon-default`,
+  `floating-panel`, `profile-edit-color-<#hex>` (×8), `profile-edit-color-hex`, `profile-edit-color-none`,
+  `profile-edit-color-needs-icon`, `profile-edit-error` (`data-reason`)
+- SOT profiles: `profile-sot-block` (`data-state` loading|error|empty|rows), `profile-sot-refresh`,
+  `profile-sot-loading`, `profile-sot-error`, `profile-sot-retry`, `profile-sot-empty`, `profile-sot-row-<id>`,
+  `profile-sot-name-<id>`, `profile-sot-current-<id>`, `profile-sot-devices-<id>`, `profile-sot-rename-<id>`,
+  `profile-sot-rename-input` / `-save` / `-cancel`, `profile-sot-delete-<id>`, `profile-sot-delete-blocked-<id>`,
+  `profile-sot-attached-<id>`, `profile-sot-delete-dialog` / `-cancel` / `-confirm`, `profile-sot-status`
+- the switcher: `profile-item-settings`
+- i18n: `settings.section.profile`, `settings.profile.description`, `settings.profile.local.*` (+ `.error.*`),
+  `settings.profile.sot.*`, `settings.profile.current.*` (+ `.blocked.*`, `.world.*`, `.schema.*`, `.section.*`
+  with `:` → `_`, `.label.*`), `settings.profile.detach.*`, `profile.switcher.settings`
+
 ### Task 6 — `components/ProfileSwitcher.tsx`
 Portal-based menu anchored to the Home button (both bars), `role="menu"` with arrow keys, Home/End,
 Enter, Escape, outside-click, focus returned to the button — the first real menu primitive in the
 repo, kept in `components/Menu.tsx` so it can be reused. Items: the master (badge + the sync state
 dot from Task 2; absent when there is no master), the slaves, a divider, `Settings › Profile`.
-Choosing one calls `switchActiveProfile`; `busy` shows a toast. With no master and no slaves the
-menu has one item, `Set up sync…` — the default path stays today's app plus one discoverable entry.
+Choosing one calls `switchActiveProfile`; `busy` shows a toast. ~~With no master and no slaves the
+menu has one item, `Set up sync…`~~ **As built: with no slave there is no menu at all** — the Home
+button does what it always did, and the discoverable entry is Settings › *Profile* in the sidebar
+(`Set up sync…` goes into its *Current* block with P3d-3). Why: a menu on every user's Home click
+contradicts the iron rule ("a user who never touched the feature sees today's app"), and the iron
+rule is the one that was promised to the user.
 The wide bar's row keeps its label and gains a chevron; the overloaded expand toggle goes (there is
 no tab list under it after P3c).
 

@@ -45,7 +45,7 @@ export function syncDotOf(sync: ProfileSyncSnapshot): SyncDot | null {
  * keeps FAILING (in back-off) — and the published status does not say so: a failing section reads `pending`,
  * exactly like one that will be through in a moment, and `problems` is a log with no "over". Saying "waiting"
  * for every `pending` would cry wolf on each edit; so the failing case is NOT said until the executor publishes
- * it (a per-section `backingOff` / `failing` in `ExecutorStatus` would do).
+ * it (a per-section `backingOff` / `failing` in `ExecutorStatus` would do — scheduled with P3d-4, P3 plan).
  */
 export function settingsWaitForWorkspaces(status: ExecutorStatus | null): boolean {
   if (status === null) return false
