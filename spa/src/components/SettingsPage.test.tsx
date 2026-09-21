@@ -13,7 +13,7 @@ vi.mock('../features/workspace/components/WorkspaceSettingsPage', () => ({
 }))
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
 import { SettingsPage, resetLastSection, useSettingsRoute } from './SettingsPage'
@@ -741,5 +741,68 @@ describe('SettingsPage (PR-2 alias map: link-detect / open-behavior)', () => {
     // no growth so a regression that re-entered setLocation on every render
     // would fail loudly.
     expect((history as string[]).length).toBe(initialLength)
+  })
+})
+
+describe('SettingsPage — a section that comes and goes while the page is OPEN (Profile Sync P3d-3, review F4 round 2)', () => {
+  // `visible()` is read at render, and nothing about another window's write re-renders this page: the
+  // contribution says WHEN to look again (`subscribeVisibility`), and the page has one subscription for all of them.
+  let shown = false
+  let emit: () => void = () => {}
+  let subscriptions = 0
+
+  beforeEach(() => {
+    resetLastSection()
+    clearSettingsSectionRegistry()
+    clearContributions()
+    shown = false
+    emit = () => {}
+    subscriptions = 0
+    registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: AppearanceSection })
+    dispatchSettingsContributions([])
+    registerSettingsContribution({
+      id: 'm.comes-and-goes', moduleId: 'm', localId: 'comes-and-goes', scope: 'purdex', order: 50, labelKey: 'Comes and goes', component: () => <div>its page</div>,
+      visible: () => shown,
+      subscribeVisibility: (onChange) => {
+        subscriptions += 1
+        emit = onChange
+        return () => {
+          subscriptions -= 1
+          emit = () => {}
+        }
+      },
+    })
+  })
+
+  it('hidden → the state moves (another window wrote it) → the entry APPEARS without anybody touching this page; moves back → it goes', async () => {
+    const view = renderWithLocation('/settings')
+    expect(screen.queryByText('Comes and goes')).toBeNull()
+    shown = true
+    act(() => emit())
+    expect(screen.getByText('Comes and goes')).toBeTruthy()
+    fireEvent.click(screen.getByText('Comes and goes'))
+    expect(screen.getByText('its page')).toBeTruthy()
+    shown = false
+    act(() => emit())
+    expect(screen.queryByText('Comes and goes')).toBeNull()
+    await waitFor(() => expect(view.history[view.history.length - 1]).toBe('/settings/appearance')) // its route went with it
+  })
+
+  it('subscribed only while a Settings page is mounted', () => {
+    expect(subscriptions).toBe(0)
+    const view = renderWithLocation('/settings')
+    expect(subscriptions).toBe(1)
+    view.unmount()
+    expect(subscriptions).toBe(0)
+  })
+
+  it('a contribution registered while the page is open (a module switched on) is subscribed to as well; one that is cleared is let go', () => {
+    renderWithLocation('/settings')
+    let late = 0
+    registerSettingsContribution({ id: 'm.late', moduleId: 'm', localId: 'late', scope: 'purdex', order: 51, labelKey: 'Late', component: () => null, subscribeVisibility: () => { late += 1; return () => { late -= 1 } } })
+    expect(late).toBe(1)
+    clearContributions()
+    expect(late).toBe(0)
+    expect(subscriptions).toBe(0)
   })
 })

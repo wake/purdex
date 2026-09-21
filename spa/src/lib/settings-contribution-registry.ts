@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react'
 import type {
   AnySettingsContribution,
   SettingsContribution,
@@ -69,6 +70,47 @@ export function registerSettingsContribution(def: AnySettingsContribution): void
   }
 
   contributions.set(def.id, def)
+  wireVisibility(def)
+}
+
+// === Visibility that moves while the shell is open ===
+//
+// `visible()` is read when the shell renders, and a change made elsewhere — another window's write arriving as a
+// rehydrate — renders nothing here. So a contribution may say WHEN to look again (`subscribeVisibility`), and the
+// shell subscribes ONCE, to all of them, through `useContributionVisibility()`. Wired only while somebody
+// listens; a contribution registered meanwhile (a re-dispatch) is wired too, and `clearContributions()` lets go
+// of every one — so nothing of a cleared registry keeps a store subscription alive.
+const visibilityListeners = new Set<() => void>()
+const visibilityStops = new Map<string, () => void>()
+let visibilityVersion = 0
+
+function visibilityMoved(): void {
+  visibilityVersion += 1
+  for (const listener of [...visibilityListeners]) listener()
+}
+
+function wireVisibility(def: AnySettingsContribution): void {
+  if (def.subscribeVisibility === undefined || visibilityListeners.size === 0 || visibilityStops.has(def.id)) return
+  visibilityStops.set(def.id, def.subscribeVisibility(visibilityMoved))
+}
+
+function unwireVisibility(): void {
+  for (const stop of visibilityStops.values()) stop()
+  visibilityStops.clear()
+}
+
+function subscribeVisibility(listener: () => void): () => void {
+  visibilityListeners.add(listener)
+  for (const def of contributions.values()) wireVisibility(def)
+  return () => {
+    visibilityListeners.delete(listener)
+    if (visibilityListeners.size === 0) unwireVisibility()
+  }
+}
+
+/** For the shell that lists contributions: re-renders it whenever a contribution says its visibility may have moved. */
+export function useContributionVisibility(): void {
+  useSyncExternalStore(subscribeVisibility, () => visibilityVersion, () => visibilityVersion)
 }
 
 /** `visible()` absent → listed; false, or throwing → not (a section that cannot say is not shown). */
@@ -117,5 +159,6 @@ export function getContribution(id: string): AnySettingsContribution | undefined
  *   Not for production consumer code. See #539.
  */
 export function clearContributions(): void {
+  unwireVisibility()
   contributions.clear()
 }

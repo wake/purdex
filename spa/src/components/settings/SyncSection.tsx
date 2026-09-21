@@ -269,7 +269,9 @@ export function SyncSection() {
       <h2 className="text-lg text-text-primary">{t('settings.section.sync')}</h2>
       <p className="text-xs text-text-secondary mb-6">{t('settings.sync.description')}</p>
 
-      {currentProvider !== 'off' && pendingConflicts.length > 0 && pendingRemoteBundle && pendingConflictsAt !== null && (
+      {/* Also with the provider off (Profile Sync P3d-3, review F4): pending conflicts are persisted, this page is
+          kept in the sidebar for whoever has them, and it is the only place they can be resolved or dismissed. */}
+      {pendingConflicts.length > 0 && pendingRemoteBundle && pendingConflictsAt !== null && (
         <SyncConflictBanner
           conflicts={pendingConflicts}
           remoteBundle={pendingRemoteBundle}

@@ -56,10 +56,17 @@ export interface SettingsContributionDeclaration<S extends SettingsScope = Setti
    * Is this section LISTED at all right now? Absent = always. Asked by `listContributions` on every call, with
    * no context: it is for a section that exists only while some state of the app's needs it (the old Sync page,
    * kept for whoever still has conflicts to resolve). Unlike `disabled` — a greyed-out row — a section that is
-   * not visible has no row and no route. Nothing re-renders the shell when the answer changes: it is read at
-   * the shell's next render, which is enough for state that only that very page changes.
+   * not visible has no row and no route. The answer is read at the shell's render; `subscribeVisibility` is
+   * how a section says that it is time to render again.
    */
   visible?: () => boolean
+  /**
+   * WHEN may `visible()` answer differently? Calls `onChange` then; returns the unsubscribe. Not a hook: the
+   * set of contributions changes while the Settings page is open (a module switched on or off re-dispatches),
+   * so one hook per contribution would change the page's hook count. The registry holds ONE subscription point
+   * over all of them (`useContributionVisibility`), alive only while a Settings page is mounted.
+   */
+  subscribeVisibility?: (onChange: () => void) => () => void
 }
 
 // Registry-stored / shell-consumed form. System-filled fields present.

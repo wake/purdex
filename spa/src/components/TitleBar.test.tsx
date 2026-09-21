@@ -124,13 +124,19 @@ describe('TitleBar — sync conflict warning', () => {
     expect(btn.getAttribute('title')).toMatch(/1/)
   })
 
-  it('hides warning icon when provider is off, even with pending conflicts', () => {
+  it('SHOWS the icon with the provider OFF and conflicts pending (review F4 round 2): that user has no other sign of them, and the page it leads to shows the banner', () => {
     const bundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
     useSyncStore.getState().setPendingConflicts(
       [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
       bundle,
     )
     // activeProviderId remains null (off)
+    render(<TitleBar title="test" />)
+    expect(screen.getByLabelText(/sync conflict|同步衝突/i)).toBeTruthy()
+  })
+
+  it('a provider that is on, with nothing pending, is nothing to warn about', () => {
+    useSyncStore.getState().setActiveProvider('daemon')
     render(<TitleBar title="test" />)
     expect(screen.queryByLabelText(/sync conflict|同步衝突/i)).toBeNull()
   })
