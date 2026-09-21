@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.421] - 2026-09-22
+
+### Feature: 設定同步的 wizard——第一次不靠 dev hook 設定 Profile Sync——Profile Sync P3d-3（#1283、#1284、#1285、#1286）
+
+Settings › Profile 的「開始設定」（已同步時是「換一份 profile／換一台主機…」）就地展開一個 wizard，走使用者定案第 10 條的五步、**一次一步、每步確認、順序不可調換**：(1) 已 attach 就先停止同步（主機沒被通知的結果不會被吞掉）→ (2) 選主機與 SOT profile（既有的或新建）→ (3) 選本機哪一份當 master（選本機 profile 是**搬移**不是複製）→ (4) 方向：新建的與空的 profile 只能「推」；「拉」先顯示會被取代的 workspace／tab 數量，並**預設勾選**「先存一份成本機 profile」→ (5) 顯示摘要、按「開始」才執行；任何子步驟失敗就停在那裡，說清楚已做、未做、現況與能怎麼辦，不自動往下做。
+
+- **「拉」之前要保住的是 attach 當下標成 master 的那個世界**，不是畫面上的那個：一律在 promote 之後、attach 之前用 `copyMasterAsSlave`（五種情況的表在 plan「P3d-3 — As built」，逐格有測試；原本預設的 `saveScreenAsSlave` 在「選停放的本機 profile 當 master」時會存錯世界）。
+- **按「開始」的那一刻重新讀 SOT**（codex 的 critical）：比對選擇當時每個 section 的 rev／hash，任何變動就不執行、回到方向步驟重選——否則 wizard 開著的期間別台往那份「空的」profile 推了內容，這台仍會被強制 push 而靜默覆蓋它。已查證 attach 的 push 在第一次對帳期間等同無條件覆蓋、沒有地方接 rev，所以只能靠這次重讀；殘留窗口寫在檔頭。
+- 建立 profile 的結果不明（timeout 等）時先重新列出，**不自動沿用**同名的空 profile（可能是另一台同時建的）：標示「可能是你剛才建立的」由使用者自己選；不會盲目再建一份。
+- 「主機沒被通知」的幽靈登記改成**集合**（每筆以 endpoint＋host＋profile 為 key、逐筆呈現與重試；合併在 Web Lock 內做；alpha.420 的單一格式會轉入）；`attachMaster` 內部兩處盡力而為的刪除也寫進它。
+- 「拉」完成後設定頁連同 wizard 會被新世界換掉（它屬於被取代的世界）→ 結果一律用 toast 說：現在與誰同步、原本的內容存成哪一份本機 profile。
+- **舊的 Settings › Sync 離開側欄**（spec：Profile 取代 Sync；模組本體 P4a 才刪）——但使用者還在用舊 Sync（provider 沒關）或還有待處理的衝突時，入口與 TitleBar 圖示保留，且會隨 store 更新即時出現／消失；順手修掉舊頁面「provider 關著就看不到衝突 banner」的條件。
+
+真機驗收（兩個 client、全程經 UI、不用 dev hook attach）：A 新建→推；B 既有→拉並保留副本（B 變成 A 的世界、原本的世界完整存成本機 profile、SOT 上找不到 B 舊世界的任何內容）；critical 的情境重現並確認被擋下（B 沒有執行、回到方向步驟、A 的內容原封不動）；Stop sync 後 daemon 登記歸零；console 零錯誤。codex：R1＋攻擊方（1 critical、2 high、1 medium、1 P2）＋critic（F1／F5／F6 已修好，追加三條 high，已修）。`ProfileWizard.tsx` 的職責 → #1240。
+
+使用者 2026-09-22 確認的兩點已從「待決定」改為定案：先選圖示才能配色；沒有本機 profile 的人點 Home 維持今天的行為。
+
+vitest 9932、lint、tsc、build 綠。純 SPA，daemon 仍是 411、免 deploy。下一支 P3d-4：解決衝突的面板、每個 section 的 rev／失敗狀態／上次同步時間、PRODUCT.md、整個 P3 的真機驗收。
+
 ## [1.0.0-alpha.420] - 2026-09-22
 
 ### Feature: Settings › Profile——這台裝置上的 profiles（名稱／圖示／配色）、主機上的 profiles、同步狀態——Profile Sync P3d-2（#1279、#1280、#1281）
