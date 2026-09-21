@@ -37,3 +37,18 @@ export function defaultSlaveName(deviceName: string, taken: readonly string[]): 
     if (!used.has(candidate)) return candidate
   }
 }
+
+/** Which master a SOT profile action was opened under: the host AND the profile this device syncs with (the
+ *  second decides what may be deleted). JSON, so that no id can pass for part of another pair. */
+export function sotScopeOf(hostId: string, attachedProfileId: string): string {
+  return JSON.stringify([hostId, attachedProfileId])
+}
+
+/**
+ * May an action that was opened under `openedUnder`, on profile `profileId`, still be sent? Only under the very
+ * scope it was opened under, and only while the fetched list still holds that profile. `p2` on host B is not the
+ * `p2` the user was asked about on host A — the master is every window's to move (review F1).
+ */
+export function sotActionStillValid(openedUnder: string, scopeNow: string, profileId: string, rowsNow: readonly { id: string }[] | null): boolean {
+  return openedUnder === scopeNow && rowsNow !== null && rowsNow.some((row) => row.id === profileId)
+}

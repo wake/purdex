@@ -157,6 +157,7 @@ import {
   __resetProfileSyncForTest,
   attachMaster,
   detachMaster,
+  retryPendingDetach,
   profileSyncSnapshot,
   profileSyncState,
   requestResolve,
@@ -199,7 +200,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetach: null })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceNameStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -1553,9 +1554,186 @@ describe('detachMaster', () => {
   })
 
   it('without a master it does nothing at all', async () => {
-    await detachMaster()
+    expect(await detachMaster()).toEqual({ ok: true })
     expect(deleteAttachment).not.toHaveBeenCalled()
     expect(clearSectionStore).not.toHaveBeenCalled()
+  })
+
+  describe('the answer says whether the daemon was told — and a detach it was not told of is remembered', () => {
+    it('told → ok, nothing is remembered', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      expect(await detachMaster()).toEqual({ ok: true })
+      expect(useProfileStore.getState().pendingDetach).toBeNull()
+    })
+
+    it('not told (a failure) → says so, and remembers WHICH attachment is left, after the master is gone', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      vi.mocked(deleteAttachment).mockResolvedValue(failed('network'))
+      expect(await detachMaster()).toEqual({ ok: false, reason: 'daemon-not-told', detail: 'network' })
+      expect(useProfileStore.getState().masterHostId).toBeNull()
+      expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'network' })
+    })
+
+    it('not told (it threw) → the same', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      vi.mocked(deleteAttachment).mockRejectedValue(new Error('boom'))
+      expect(await detachMaster()).toEqual({ ok: false, reason: 'daemon-not-told', detail: 'Error' })
+      expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1 })
+    })
+
+    it('404 — the profile, and its attachments with it, is not on the daemon: nothing is left there', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      vi.mocked(deleteAttachment).mockResolvedValue(failed('not-found'))
+      expect(await detachMaster()).toEqual({ ok: true })
+      expect(useProfileStore.getState().pendingDetach).toBeNull()
+    })
+
+    it('remembering does not write over a master another window set meanwhile (the store is read again first)', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      let release: (v: never) => void = () => {}
+      vi.mocked(deleteAttachment).mockReturnValue(new Promise((r) => (release = r)))
+      const detaching = detachMaster()
+      await flush()
+      // Window B attaches h2/P2: in storage, not (yet) in this window's memory.
+      const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE) ?? 'null')
+      localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...envelope.state, masterHostId: 'h2', masterProfileId: P2, masterEndpoint: EP, pendingDirection: 'push', attachGeneration: envelope.state.attachGeneration + 1 } }))
+      release(failed('timeout'))
+      await detaching
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE) ?? 'null').state
+      expect(stored.masterHostId).toBe('h2')
+      expect(stored.masterProfileId).toBe(P2)
+      expect(stored.pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1 })
+    })
+
+    it('attached to the same profile again while the DELETE was out: the attachment is wanted, nothing is remembered', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      let release: (v: never) => void = () => {}
+      vi.mocked(deleteAttachment).mockReturnValue(new Promise((r) => (release = r)))
+      const detaching = detachMaster()
+      await flush()
+      useProfileStore.getState().setMaster('h1', P1, 'push', EP)
+      release(failed('timeout'))
+      await detaching
+      expect(useProfileStore.getState().pendingDetach).toBeNull()
+    })
+  })
+})
+
+describe('retryPendingDetach — the way to get rid of an attachment a failed detach left on the daemon', () => {
+  const left = (over: Record<string, unknown> = {}) => useProfileStore.getState().setPendingDetach({ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'network', at: 1, ...over } as never)
+  const moveHost = (id: string, ip: string) => useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id]: { ...s.hosts[id], ip } } }))
+
+  it('nothing remembered → nothing asked', async () => {
+    expect(await retryPendingDetach()).toEqual({ ok: true })
+    expect(deleteAttachment).not.toHaveBeenCalled()
+  })
+
+  it('asks the daemon with what was REMEMBERED — there is no master to ask about any more', async () => {
+    left()
+    expect(selectMaster(useProfileStore.getState())).toBeNull()
+    expect(await retryPendingDetach()).toEqual({ ok: true })
+    expect(deleteAttachment).toHaveBeenCalledTimes(1)
+    expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('still failing → says so, stays remembered, with the newer reason', async () => {
+    left()
+    vi.mocked(deleteAttachment).mockResolvedValue(failed('timeout'))
+    expect(await retryPendingDetach()).toEqual({ ok: false, reason: 'daemon-not-told', detail: 'timeout' })
+    expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'timeout' })
+  })
+
+  it('attached to that very profile by now → the attachment is wanted: NOT deleted, and forgotten', async () => {
+    left()
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP })
+    expect(await retryPendingDetach()).toEqual({ ok: true })
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  describe('the attachment is on ONE daemon: a retry never follows the host id to another address (review F4)', () => {
+    it('the host was re-pointed since → NOTHING is sent, the answer names it, the record stays', async () => {
+      left()
+      moveHost('h1', '100.64.0.77')
+      expect(await retryPendingDetach()).toEqual({ ok: false, reason: 'endpoint-changed' })
+      expect(deleteAttachment).not.toHaveBeenCalled()
+      expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1, endpoint: EP })
+    })
+
+    it('… pointed back → the retry goes out, to the daemon it was always about', async () => {
+      left()
+      moveHost('h1', '100.64.0.77')
+      await retryPendingDetach()
+      moveHost('h1', '100.64.0.9')
+      expect(await retryPendingDetach()).toEqual({ ok: true })
+      expect(deleteAttachment).toHaveBeenCalledTimes(1)
+      expect(useProfileStore.getState().pendingDetach).toBeNull()
+    })
+
+    it('the host is not in the app any more → its own answer, nothing sent, the record stays', async () => {
+      left()
+      useHostStore.setState((s) => ({ hosts: Object.fromEntries(Object.entries(s.hosts).filter(([id]) => id !== 'h1')) }))
+      expect(await retryPendingDetach()).toEqual({ ok: false, reason: 'host-gone' })
+      expect(deleteAttachment).not.toHaveBeenCalled()
+      expect(useProfileStore.getState().pendingDetach).not.toBeNull()
+    })
+
+    it('a record from before the endpoint was written down (unknown) → never sent on a guess', async () => {
+      useProfileStore.setState({ pendingDetach: { hostId: 'h1', profileId: P1, endpoint: null, detail: 'network', at: 1 } })
+      expect(await retryPendingDetach()).toEqual({ ok: false, reason: 'endpoint-unknown' })
+      expect(deleteAttachment).not.toHaveBeenCalled()
+      expect(useProfileStore.getState().pendingDetach).not.toBeNull()
+    })
+
+    it('detachMaster itself: a master whose host was re-pointed (it is `blocked` for that) is not told at the NEW address — remembered with the OLD one', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      moveHost('h1', '100.64.0.77')
+      expect(await detachMaster()).toEqual({ ok: false, reason: 'endpoint-changed' })
+      expect(deleteAttachment).not.toHaveBeenCalled()
+      expect(useProfileStore.getState().masterHostId).toBeNull()
+      expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1, endpoint: EP })
+    })
+  })
+
+  describe('what is remembered of a failure is a short reason — never what the transport said', () => {
+    const SECRET = 'Authorization: Bearer xyz — DELETE https://100.64.0.9:7860/api/profiles/p_000000000001/attachment?clientId=client-1'
+    const nothingLeaked = (r: unknown): void => {
+      const everywhere = JSON.stringify(r) + JSON.stringify(useProfileStore.getState().pendingDetach) + (localStorage.getItem(STORAGE_KEYS.PROFILE) ?? '')
+      for (const piece of ['Bearer', 'xyz', 'https://', 'clientId', 'Authorization']) expect(everywhere).not.toContain(piece)
+    }
+
+    it('a failure: its class and the HTTP status, not its message', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      vi.mocked(deleteAttachment).mockResolvedValue({ kind: 'failed', reason: 'server', status: 502, message: SECRET } as never)
+      const r = await detachMaster()
+      expect(r).toEqual({ ok: false, reason: 'daemon-not-told', detail: 'server (HTTP 502)' })
+      nothingLeaked(r)
+    })
+
+    it('something thrown: the kind of error, not its message', async () => {
+      useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+      vi.mocked(deleteAttachment).mockRejectedValue(new TypeError(SECRET))
+      const r = await detachMaster()
+      expect(r).toEqual({ ok: false, reason: 'daemon-not-told', detail: 'TypeError' })
+      nothingLeaked(r)
+    })
+
+    it('the retry: the same', async () => {
+      left()
+      vi.mocked(deleteAttachment).mockResolvedValue({ kind: 'failed', reason: 'unauthorized', status: 401, message: SECRET } as never)
+      const r = await retryPendingDetach()
+      expect(r).toEqual({ ok: false, reason: 'daemon-not-told', detail: 'unauthorized (HTTP 401)' })
+      nothingLeaked(r)
+    })
+  })
+
+  it('attached to ANOTHER profile by now → the old one is still deleted', async () => {
+    left()
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P2, masterEndpoint: EP })
+    expect(await retryPendingDetach()).toEqual({ ok: true })
+    expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
+    expect(useProfileStore.getState().masterProfileId).toBe(P2)
   })
 })
 

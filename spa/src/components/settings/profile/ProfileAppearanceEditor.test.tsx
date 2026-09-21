@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import en from '../../../locales/en.json'
 import { ProfileAppearanceEditor } from './ProfileAppearanceEditor'
 import { useLocalProfilesStore, type LocalProfile } from '../../../stores/useLocalProfilesStore'
@@ -196,5 +196,74 @@ describe('a profile that is gone', () => {
     rerender(<ProfileAppearanceEditor id="s1" />)
     expect(gone).toHaveBeenCalled()
     expect(screen.getByTestId('profile-edit-error')).toHaveTextContent(en['settings.profile.local.error.not_found'])
+  })
+})
+
+describe('the name changed in another window while it is being edited here', () => {
+  const renamedElsewhere = (name: string) => act(() => { useLocalProfilesStore.getState().setProfileAppearance('s1', { name }) })
+
+  it('nothing typed: the input simply follows', () => {
+    render(<ProfileAppearanceEditor id="s1" />)
+    renamedElsewhere('Elsewhere')
+    expect(nameInput().value).toBe('Elsewhere')
+    expect(screen.queryByTestId('profile-edit-name-changed')).toBeNull()
+  })
+
+  it('a draft is KEPT, and the change is said — neither thrown away nor saved over in silence', () => {
+    render(<ProfileAppearanceEditor id="s1" />)
+    type('Mine')
+    expect(screen.queryByTestId('profile-edit-name-changed')).toBeNull()
+    renamedElsewhere('Elsewhere')
+    expect(nameInput().value).toBe('Mine')
+    expect(screen.getByTestId('profile-edit-name-changed')).toHaveTextContent('Elsewhere')
+    expect(state().slaves.s1.name).toBe('Elsewhere')
+  })
+
+  it('Save is then the user\'s own overwrite: it writes the draft, and the notice goes', () => {
+    render(<ProfileAppearanceEditor id="s1" />)
+    type('Mine')
+    renamedElsewhere('Elsewhere')
+    fireEvent.click(screen.getByTestId('profile-edit-name-save'))
+    expect(state().slaves.s1.name).toBe('Mine')
+    expect(screen.queryByTestId('profile-edit-name-changed')).toBeNull()
+  })
+
+  it('"Use that one" drops the draft for the other window\'s name and writes nothing', () => {
+    const write = vi.spyOn(useLocalProfilesStore.getState(), 'setProfileAppearance')
+    render(<ProfileAppearanceEditor id="s1" />)
+    type('Mine')
+    renamedElsewhere('Elsewhere')
+    write.mockClear()
+    fireEvent.click(screen.getByTestId('profile-edit-name-take'))
+    expect(nameInput().value).toBe('Elsewhere')
+    expect(write).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('profile-edit-name-changed')).toBeNull()
+    expect(screen.getByTestId('profile-edit-name-save')).toBeDisabled()
+  })
+
+  it('changed back to what it was when the edit began: nothing to say any more', () => {
+    render(<ProfileAppearanceEditor id="s1" />)
+    type('Mine')
+    renamedElsewhere('Elsewhere')
+    renamedElsewhere('Scratch')
+    expect(screen.queryByTestId('profile-edit-name-changed')).toBeNull()
+    expect(nameInput().value).toBe('Mine')
+  })
+
+  it('the master, un-named elsewhere: said as Home', () => {
+    useLocalProfilesStore.setState({ master: { name: 'Work' } })
+    render(<ProfileAppearanceEditor id="master" />)
+    type('Mine')
+    act(() => { useLocalProfilesStore.getState().setProfileAppearance('master', { name: null }) })
+    expect(screen.getByTestId('profile-edit-name-changed')).toHaveTextContent(en['nav.home'])
+    fireEvent.click(screen.getByTestId('profile-edit-name-take'))
+    expect(nameInput().value).toBe('')
+  })
+
+  it('the profile deleted elsewhere: the editor closes', () => {
+    render(<ProfileAppearanceEditor id="s1" />)
+    type('Mine')
+    act(() => useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [] }))
+    expect(screen.queryByTestId('profile-edit-s1')).toBeNull()
   })
 })

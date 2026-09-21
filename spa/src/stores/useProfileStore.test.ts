@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { STORAGE_KEYS } from '../lib/storage/keys'
-import { selectMaster, useProfileStore } from './useProfileStore'
+import { endpointOfHost, selectMaster, useProfileStore } from './useProfileStore'
 
 const PROFILE = 'p_0123456789ab'
 const OTHER_PROFILE = 'p_ba9876543210'
@@ -8,7 +8,7 @@ const EP = '100.64.0.2:7860'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetach: null })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -104,13 +104,13 @@ describe('useProfileStore', () => {
     expect(selectMaster({ ...base, masterHostId: null, masterProfileId: PROFILE })).toBeNull()
   })
 
-  it('persists exactly the seven fields', () => {
+  it('persists exactly the eight fields', () => {
     useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, masterEndpoint: EP, suspension: null })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, masterEndpoint: EP, suspension: null, pendingDetach: null })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
@@ -558,5 +558,91 @@ describe('every window agrees on the master', () => {
     await flush()
 
     expect(b.useProfileStore.getState().autoSync).toBe(false)
+  })
+})
+
+describe('pendingDetach — a detach the daemon was not told of, kept until it is (or the user gives up)', () => {
+  const LEFT = { hostId: 'host-1', profileId: PROFILE, endpoint: EP, detail: 'network', at: 1000 }
+
+  it('is null by default, set whole, persisted, and survives a reload WITHOUT a master', async () => {
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+    expect(useProfileStore.getState().setPendingDetach(LEFT)).toBe(true)
+    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
+    expect(persistedEnvelope().state.pendingDetach).toEqual(LEFT)
+    const stored = persistedEnvelope().state
+    resetStore()
+    await rehydrateFrom(stored)
+    expect(selectMaster(useProfileStore.getState())).toBeNull()
+    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
+  })
+
+  it.each([
+    ['no host', { ...LEFT, hostId: '' }],
+    ['a malformed profile id', { ...LEFT, profileId: 'nope' }],
+    ['a detail that is no text', { ...LEFT, detail: 7 }],
+    ['a time that is no number', { ...LEFT, at: 'now' }],
+    ['an endpoint that is no text', { ...LEFT, endpoint: 7 }],
+    ['an empty endpoint', { ...LEFT, endpoint: '' }],
+    ['not an object', 'x'],
+  ])('%s → refused by the setter, dropped by a rehydrate', async (_label, bad) => {
+    expect(useProfileStore.getState().setPendingDetach(bad as never)).toBe(false)
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+    await rehydrateFrom({ autoSync: true, pendingDetach: bad })
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('WHERE the daemon was is part of the record: the address the master was attached at, as `masterEndpoint` writes it', () => {
+    expect(endpointOfHost({ ip: '100.64.0.2', port: 7860 })).toBe(EP)
+    useProfileStore.getState().setPendingDetach(LEFT)
+    expect(persistedEnvelope().state.pendingDetach).toMatchObject({ endpoint: EP })
+  })
+
+  it('a record from before the endpoint was written down is KEPT, with the endpoint unknown (null) — never guessed from the host of today', async () => {
+    const { endpoint: _dropped, ...legacy } = LEFT
+    void _dropped
+    await rehydrateFrom({ autoSync: true, pendingDetach: legacy })
+    expect(useProfileStore.getState().pendingDetach).toEqual({ ...LEFT, endpoint: null })
+  })
+
+  it('… but nobody WRITES one without it: the setter refuses an unknown endpoint (whoever writes knows where the daemon was)', () => {
+    expect(useProfileStore.getState().setPendingDetach({ ...LEFT, endpoint: null } as never)).toBe(false)
+    const { endpoint: _dropped, ...legacy } = LEFT
+    void _dropped
+    expect(useProfileStore.getState().setPendingDetach(legacy as never)).toBe(false)
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('the detail is a short reason, not a transcript: cut at 120 characters, by the setter and by a rehydrate', async () => {
+    const long = 'x'.repeat(500)
+    useProfileStore.getState().setPendingDetach({ ...LEFT, detail: long })
+    expect(useProfileStore.getState().pendingDetach?.detail).toHaveLength(120)
+    await rehydrateFrom({ autoSync: true, pendingDetach: { ...LEFT, detail: long } })
+    expect(useProfileStore.getState().pendingDetach?.detail).toHaveLength(120)
+  })
+
+  it('is cleared only by the pair it names', () => {
+    useProfileStore.getState().setPendingDetach(LEFT)
+    useProfileStore.getState().clearPendingDetach('host-1', OTHER_PROFILE)
+    useProfileStore.getState().clearPendingDetach('host-2', PROFILE)
+    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
+    useProfileStore.getState().clearPendingDetach('host-1', PROFILE)
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('attaching to that very profile again makes the attachment wanted: the record goes', () => {
+    useProfileStore.getState().setPendingDetach(LEFT)
+    useProfileStore.getState().setMaster('host-1', OTHER_PROFILE, 'pull', EP)
+    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('a detach does not clear it, and it moves no generation', () => {
+    useProfileStore.getState().setMaster('host-1', OTHER_PROFILE, 'pull', EP)
+    const generation = useProfileStore.getState().attachGeneration
+    useProfileStore.getState().setPendingDetach(LEFT)
+    expect(useProfileStore.getState().attachGeneration).toBe(generation)
+    useProfileStore.getState().clearMaster()
+    expect(useProfileStore.getState().pendingDetach).toEqual(LEFT)
   })
 })

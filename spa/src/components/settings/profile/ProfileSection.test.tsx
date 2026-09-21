@@ -9,7 +9,7 @@ import { useProfileSync } from '../../../hooks/useProfileSync'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 
 vi.mock('../../../hooks/useProfileSync', () => ({ useProfileSync: vi.fn() }))
-vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn() }))
+vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn(), retryPendingDetach: vi.fn() }))
 vi.mock('../../../lib/profile/api', () => ({ listProfiles: vi.fn(), renameProfile: vi.fn(), deleteProfile: vi.fn() }))
 
 const NO_MASTER: ProfileSyncSnapshot = { master: null, leader: false, blocked: null, status: null, problems: [], remote: false, stale: false }

@@ -6,12 +6,21 @@
 // was fetched shows nobody attached — and never for the profile THIS device syncs with, listed or not (its
 // attachment may not have been written yet): stop sync first. The list can be old, so the daemon has the last
 // word: a 409 `attached` is rendered as the devices it names, and the list is fetched again.
-import { useState } from 'react'
+//
+// AN ACTION BELONGS TO THE MASTER IT WAS STARTED UNDER. The master is every window's to change, so `hostId` can
+// move under an open confirmation — and `p2` on host B is not the `p2` the user was asked about on host A. So:
+//   - the moment `hostId` or the attached profile changes, every open action (the delete confirmation, the rename
+//     editor, the refusal and status lines) is dropped — in the same render, before anything can be clicked;
+//   - what is sent is checked once more against the page as it is NOW: the scope it was opened under, and that the
+//     profile is still in the fetched list. Otherwise nothing is sent, and that is said;
+//   - an answer that arrives after the scope moved is for a page that is gone: it sets nothing.
+import { useRef, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { deleteProfile, renameProfile } from '../../../lib/profile/api'
 import type { Attachment, ProfileIndexEntry } from '../../../lib/profile/api'
 import { ConfirmDialog } from '../../ConfirmDialog'
+import { sotActionStillValid, sotScopeOf } from './profile-rules'
 import type { SotProfilesView } from './useSotProfiles'
 
 const BTN =
@@ -33,47 +42,81 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
   const t = useI18nStore((s) => s.t)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
-  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<ProfileIndexEntry | null>(null)
+  const [renaming, setRenaming] = useState<{ under: string; id: string; name: string } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<{ under: string; row: ProfileIndexEntry } | null>(null)
   /** A delete the daemon refused: who it says is still attached. */
   const [refused, setRefused] = useState<{ id: string; attachments: Attachment[] } | null>(null)
+
+  // Everything above was opened under ONE scope. A render under another drops it all (render-phase adjust, as
+  // `HostColorLayerEditor` does for an outside colour change): no frame shows host A's confirmation over host B.
+  const scope = sotScopeOf(hostId, attachedProfileId)
+  const [openedUnder, setOpenedUnder] = useState(scope)
+  if (openedUnder !== scope) {
+    setOpenedUnder(scope)
+    setBusy(false)
+    setStatus(null)
+    setRenaming(null)
+    setConfirmDelete(null)
+    setRefused(null)
+  }
+  /** The scope and the list as of the LAST render: what an `await` comes back to, and what a send is checked against. */
+  const live = useRef({ scope, view })
+  live.current = { scope, view }
+  /** May an action opened under `under` for profile `id` still be sent? If not, it is dropped and said. */
+  const stillValid = (under: string, id: string): boolean => {
+    const now = live.current
+    if (sotActionStillValid(under, now.scope, id, now.view.kind === 'rows' ? now.view.rows : null)) return true
+    setRenaming(null)
+    setConfirmDelete(null)
+    setStatus(t('settings.profile.sot.stale_action'))
+    return false
+  }
 
   const state = view.kind === 'rows' && view.rows.length === 0 ? 'empty' : view.kind
 
   const rename = async (row: ProfileIndexEntry) => {
     const name = renaming?.name.trim() ?? ''
-    if (busy || name === '' || name === row.name) return
+    if (renaming === null || busy || name === '' || name === row.name) return
+    // The scope the editor was OPENED under — not this render's, which is by construction the current one.
+    const under = renaming.under
+    if (!stillValid(under, row.id)) return
     setBusy(true)
     setStatus(null)
     try {
       const r = await renameProfile(hostId, row.id, name)
+      if (live.current.scope !== under) return
       if (r.kind === 'ok') {
         setRenaming(null)
         reload()
       } else setStatus(t('settings.profile.sot.rename_failed', { message: r.message }))
     } catch (e) {
-      setStatus(t('settings.profile.sot.rename_failed', { message: message(e) }))
+      if (live.current.scope === under) setStatus(t('settings.profile.sot.rename_failed', { message: message(e) }))
     } finally {
-      setBusy(false)
+      if (live.current.scope === under) setBusy(false)
     }
   }
 
-  const remove = async (row: ProfileIndexEntry) => {
-    if (busy) return
+  const remove = async () => {
+    if (confirmDelete === null || busy) return
+    const { under, row } = confirmDelete
+    if (!stillValid(under, row.id)) return
     setBusy(true)
     setStatus(null)
     setRefused(null)
     try {
       const r = await deleteProfile(hostId, row.id)
+      if (live.current.scope !== under) return
       if (r.kind === 'attached') setRefused({ id: row.id, attachments: r.attachments })
       else if (r.kind === 'failed') setStatus(t('settings.profile.sot.delete_failed', { message: r.message }))
       // Deleted, or refused because the index was out of date: either way it is asked again.
       if (r.kind !== 'failed') reload()
     } catch (e) {
-      setStatus(t('settings.profile.sot.delete_failed', { message: message(e) }))
+      if (live.current.scope === under) setStatus(t('settings.profile.sot.delete_failed', { message: message(e) }))
     } finally {
-      setBusy(false)
-      setConfirmDelete(null)
+      if (live.current.scope === under) {
+        setBusy(false)
+        setConfirmDelete(null)
+      }
     }
   }
 
@@ -128,7 +171,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       type="button"
                       data-testid={`profile-sot-rename-${row.id}`}
                       disabled={busy}
-                      onClick={() => setRenaming(draft === null ? { id: row.id, name: row.name } : null)}
+                      onClick={() => setRenaming(draft === null ? { under: scope, id: row.id, name: row.name } : null)}
                       className={BTN}
                     >
                       {t('settings.profile.sot.rename')}
@@ -137,7 +180,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       type="button"
                       data-testid={`profile-sot-delete-${row.id}`}
                       disabled={busy || blocked !== null}
-                      onClick={() => setConfirmDelete(row)}
+                      onClick={() => setConfirmDelete({ under: scope, row })}
                       className={BTN}
                     >
                       {t('common.delete')}
@@ -172,7 +215,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       data-testid="profile-sot-rename-input"
                       spellCheck={false}
                       value={draft}
-                      onChange={(e) => setRenaming({ id: row.id, name: e.target.value })}
+                      onChange={(e) => setRenaming({ under: renaming?.under ?? scope, id: row.id, name: e.target.value })}
                       onKeyDown={(e) => {
                         if (e.nativeEvent.isComposing) return
                         if (e.key === 'Enter') void rename(row)
@@ -208,11 +251,11 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
         <ConfirmDialog
           testIdPrefix="profile-sot-delete"
           busy={busy}
-          title={t('settings.profile.sot.delete_title', { name: confirmDelete.name })}
+          title={t('settings.profile.sot.delete_title', { name: confirmDelete.row.name })}
           body={t('settings.profile.sot.delete_body')}
           confirmLabel={t('common.delete')}
           onCancel={() => setConfirmDelete(null)}
-          onConfirm={() => void remove(confirmDelete)}
+          onConfirm={() => void remove()}
         />
       )}
     </section>
