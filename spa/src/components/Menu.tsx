@@ -117,14 +117,32 @@ function MenuPopup({ trigger, onClose, items, label, placement = 'bottom-start',
 
   const itemEls = () => Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[data-menu-item]') ?? [])
   const availableEls = () => itemEls().filter((el) => el.dataset.menuItem === 'available')
+  /** The chosen item, else the first that can be activated, else the menu itself (so the keys still have a target). */
+  const focusHome = () => {
+    const available = availableEls()
+    ;(available.find((el) => el.getAttribute('aria-checked') === 'true') ?? available[0] ?? menuRef.current)?.focus()
+  }
 
-  // Focus in on open: the chosen item, else the first that can be activated, else the menu itself (so Escape
-  // and Tab still have a target). Back to the trigger on close — unless something else took focus on purpose.
+  // The entries changed under an open menu and took the focused item with them: focus fell to <body>, where the
+  // key handler on the menu never hears a thing. Put it back. ONLY then — an item that is still there keeps its
+  // focus even if it just turned busy or disabled (the arrow keys work from it), and focus the user moved to
+  // another element on purpose is theirs.
+  const mounted = useRef(false)
+  useLayoutEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true // the first run is the opening, which the effect below handles
+      return
+    }
+    const active = document.activeElement
+    if (active === null || active === document.body) focusHome()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items])
+
+  // Focus in on open; back to the trigger on close — unless something else took focus on purpose.
   useEffect(() => {
     const menu = menuRef.current
     const triggerEl = trigger.current
-    const available = availableEls()
-    ;(available.find((el) => el.getAttribute('aria-checked') === 'true') ?? available[0] ?? menu)?.focus()
+    focusHome()
     return () => {
       const active = document.activeElement
       const stillOurs = active === null || active === document.body || (menu?.contains(active) ?? false)
@@ -141,16 +159,24 @@ function MenuPopup({ trigger, onClose, items, label, placement = 'bottom-start',
       if (trigger.current?.contains(target)) return
       onClose()
     }
+    // ESCAPE CLOSES ONE LAYER, AND AN OPEN MENU IS THE TOP ONE. `FloatingPanel` and `ConfirmDialog` each listen
+    // on `document` too (the panels settle it among themselves with a private stack; the dialog has no such
+    // thing), so a shared Escape would close the menu AND whatever it was opened from. The menu therefore takes
+    // it in the CAPTURE phase and lets nobody else hear it. This ASSUMES the menu is topmost: nothing opens over
+    // a menu, and z-index 100 puts it above every overlay the app has. The listener exists only while the menu
+    // is open — a terminal's or an editor's Escape is untouched otherwise — and the IME's own Escape is neither
+    // handled nor withheld.
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || isImeEscape(e)) return
       e.preventDefault()
+      e.stopImmediatePropagation()
       onClose()
     }
     document.addEventListener('mousedown', onMouseDown)
-    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('keydown', onKeyDown, { capture: true })
     return () => {
       document.removeEventListener('mousedown', onMouseDown)
-      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('keydown', onKeyDown, { capture: true })
     }
   }, [trigger, onClose])
 
@@ -208,8 +234,8 @@ function MenuPopup({ trigger, onClose, items, label, placement = 'bottom-start',
             role={radio ? 'menuitemradio' : 'menuitem'}
             aria-checked={radio ? entry.checked : undefined}
             // `aria-disabled`, not `disabled`: the item stays in the accessibility tree and keeps focus if it
-            // turns unavailable while focused. `activate` is what refuses.
-            aria-disabled={entry.disabled ? true : undefined}
+            // turns unavailable while focused. `activate` is what refuses — a busy item included.
+            aria-disabled={available ? undefined : true}
             aria-busy={entry.busy ? true : undefined}
             tabIndex={-1}
             title={entry.title}

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { Menu, type MenuEntry, type MenuPlacement } from './Menu'
+import { FloatingPanel } from './FloatingPanel'
 import { getPlatformCapabilities } from '../lib/platform'
 import type { PlatformCapabilities } from '../lib/platform'
 
@@ -101,6 +102,12 @@ describe('Menu — a11y', () => {
     render(<Harness items={entries({ b: { disabled: true }, c: { busy: true } })} />)
     expect(screen.getByTestId('item-b')).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByTestId('item-a')).not.toHaveAttribute('aria-disabled')
+    expect(screen.getByTestId('item-c')).toHaveAttribute('aria-busy', 'true')
+  })
+
+  it('a busy item is aria-disabled as well: it cannot be activated, and must say so', () => {
+    render(<Harness items={entries({ c: { busy: true } })} />)
+    expect(screen.getByTestId('item-c')).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByTestId('item-c')).toHaveAttribute('aria-busy', 'true')
   })
 
@@ -351,3 +358,119 @@ describe('Menu — placement', () => {
     expect(screen.getByTestId('menu').style.top).toBe('94px')
   })
 })
+
+describe('Menu — entries changing while open', () => {
+  const without = (id: string, items: MenuEntry[]) => items.filter((e) => 'divider' in e || e.id !== id)
+
+  it('the focused item is removed → focus goes to the checked item, and the arrow keys still work', () => {
+    const items = entries({ a: { checked: false }, b: { checked: false }, c: { checked: true } })
+    const { rerender } = render(<Harness items={items} />)
+    screen.getByTestId('item-b').focus()
+    rerender(<Harness items={without('b', items)} />)
+    expect(screen.getByTestId('item-c')).toHaveFocus()
+    key('ArrowDown')
+    expect(screen.getByTestId('item-a')).toHaveFocus()
+  })
+
+  it('no checked item → the first available one', () => {
+    const items = entries({ a: { disabled: true } })
+    const { rerender } = render(<Harness items={items} />)
+    expect(screen.getByTestId('item-b')).toHaveFocus()
+    rerender(<Harness items={without('b', items)} />)
+    expect(screen.getByTestId('item-c')).toHaveFocus()
+  })
+
+  it('nothing available is left → the menu itself holds focus (Escape and Tab still reach it), once', () => {
+    const items = entries({ b: { disabled: true }, c: { disabled: true } })
+    const { rerender } = render(<Harness items={items} />)
+    expect(screen.getByTestId('item-a')).toHaveFocus()
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+    rerender(<Harness items={without('a', items)} />)
+    expect(screen.getByTestId('menu')).toHaveFocus()
+    expect(focusSpy).toHaveBeenCalledTimes(1)
+    key('ArrowDown') // nowhere to go, and no throw
+    expect(screen.getByTestId('menu')).toHaveFocus()
+    key('Escape')
+    expect(screen.queryByTestId('menu')).toBeNull()
+  })
+
+  it('an item that is still there keeps its focus — entries changing is not a reason to move it', () => {
+    const items = entries({ a: { checked: true } })
+    const { rerender } = render(<Harness items={items} />)
+    screen.getByTestId('item-c').focus()
+    rerender(<Harness items={entries({ a: { checked: true }, b: { hint: 'new' } })} />)
+    expect(screen.getByTestId('item-c')).toHaveFocus()
+  })
+
+  it('focus the user moved elsewhere on purpose is not taken back', () => {
+    const items = entries()
+    const { rerender } = render(<Harness items={items} />)
+    screen.getByTestId('elsewhere').focus()
+    rerender(<Harness items={without('a', items)} />)
+    expect(screen.getByTestId('elsewhere')).toHaveFocus()
+  })
+})
+
+describe('Menu — Escape belongs to the topmost layer, and an open menu is it', () => {
+  function Stacked({ onPanelClose }: { onPanelClose: () => void }) {
+    const anchor = useRef<HTMLButtonElement>(null)
+    return (
+      <div>
+        <button ref={anchor}>anchor</button>
+        <FloatingPanel title="Under" anchorRef={anchor} onClose={onPanelClose} testId="panel">
+          <Harness items={entries()} />
+        </FloatingPanel>
+      </div>
+    )
+  }
+
+  it('over an open FloatingPanel: the first Escape closes the menu only, the second the panel', () => {
+    const onPanelClose = vi.fn()
+    render(<Stacked onPanelClose={onPanelClose} />)
+    expect(screen.getByTestId('menu')).toBeInTheDocument()
+    key('Escape')
+    expect(screen.queryByTestId('menu')).toBeNull()
+    expect(onPanelClose).not.toHaveBeenCalled()
+    key('Escape')
+    expect(onPanelClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('no other document listener hears the Escape the menu took', () => {
+    const other = vi.fn()
+    document.addEventListener('keydown', other)
+    render(<Harness items={entries()} />)
+    key('Escape')
+    document.removeEventListener('keydown', other)
+    expect(other).not.toHaveBeenCalled()
+  })
+
+  it('an IME composition Escape is neither handled nor withheld from anyone else', () => {
+    const other = vi.fn()
+    document.addEventListener('keydown', other)
+    render(<Harness items={entries()} />)
+    const notPrevented = fireEvent.keyDown(document.activeElement!, { key: 'Escape', isComposing: true })
+    document.removeEventListener('keydown', other)
+    expect(screen.getByTestId('menu')).toBeInTheDocument()
+    expect(other).toHaveBeenCalledTimes(1)
+    expect(notPrevented).toBe(true)
+  })
+
+  it('other keys pass through to document listeners', () => {
+    const other = vi.fn()
+    document.addEventListener('keydown', other)
+    render(<Harness items={entries()} />)
+    key('a')
+    document.removeEventListener('keydown', other)
+    expect(other).toHaveBeenCalledTimes(1)
+  })
+
+  it('a closed menu listens to nothing: Escape reaches whoever is below (a terminal, an editor)', () => {
+    const other = vi.fn()
+    document.addEventListener('keydown', other)
+    render(<Harness items={entries()} initiallyOpen={false} />)
+    key('Escape')
+    document.removeEventListener('keydown', other)
+    expect(other).toHaveBeenCalledTimes(1)
+  })
+})
+
