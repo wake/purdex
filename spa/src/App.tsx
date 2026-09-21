@@ -177,15 +177,12 @@ export default function App() {
     setWsContextMenu(null)
   }, [])
 
+  // Until the Home button becomes the profile switcher (P3d), Home = the first workspace: there is no
+  // "no workspace" view any more — every tab belongs to a workspace (Profile Sync spec §4.3).
   const handleSelectHome = useCallback(() => {
-    useWorkspaceStore.getState().setActiveWorkspace(null)
-    const firstStandalone = standaloneTabIds[0]
-    if (firstStandalone) {
-      handleSelectTab(firstStandalone)
-    } else {
-      useTabStore.getState().setActiveTab(null)
-    }
-  }, [standaloneTabIds, handleSelectTab])
+    const first = useWorkspaceStore.getState().workspaces[0]
+    if (first) handleSelectWorkspace(first.id)
+  }, [handleSelectWorkspace])
 
   const handleAddWorkspace = useCallback(() => {
     const names = workspaces.map(w => w.name)

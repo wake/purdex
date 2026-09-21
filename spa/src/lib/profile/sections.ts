@@ -210,10 +210,12 @@ export function buildProfileDocument(input: CollectInput): ProfileDocumentResult
 // === Standalone tabs (§4.3) ===
 
 /**
- * Moves every standalone tab into the first workspace NAMED `unsortedName`, or
- * into a new one with id `newWorkspaceId` (shaped like `createWorkspace`'s
- * result) — created only when there is something to adopt. `activeTabId` is
- * left alone: focus is the device's business.
+ * Moves every standalone tab into the workspace whose ID is `newWorkspaceId`
+ * (whatever it is called: it may have been made on a device that speaks another
+ * language, and an existing one is never renamed), else into the first workspace
+ * NAMED `unsortedName`, else into a new one with that id and that name (shaped
+ * like `createWorkspace`'s result) — created only when there is something to
+ * adopt. `activeTabId` is left alone: focus is the device's business.
  */
 export function adoptStandaloneTabs(
   world: { workspaces: readonly Workspace[]; tabs: Record<string, Tab>; tabOrder: readonly string[] },
@@ -222,7 +224,8 @@ export function adoptStandaloneTabs(
   const adopted = standaloneIds(world.workspaces, world.tabs, world.tabOrder)
   if (adopted.length === 0) return { workspaces: [...world.workspaces], adopted, createdWorkspaceId: null }
 
-  const target = world.workspaces.findIndex((ws) => ws.name === opts.unsortedName)
+  const byId = world.workspaces.findIndex((ws) => ws.id === opts.newWorkspaceId)
+  const target = byId !== -1 ? byId : world.workspaces.findIndex((ws) => ws.name === opts.unsortedName)
   if (target === -1) {
     const created: Workspace = { id: opts.newWorkspaceId, name: opts.unsortedName, tabs: adopted, activeTabId: null, moduleConfig: {} }
     return { workspaces: [...world.workspaces, created], adopted: [...adopted], createdWorkspaceId: created.id }

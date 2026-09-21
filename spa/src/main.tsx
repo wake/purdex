@@ -12,6 +12,7 @@ import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { startProfileSync } from './lib/profile/start'
+import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -40,6 +41,10 @@ startNexHostInvalidation()
 startExecutionListInvalidation()
 // Profile Sync: with no master set this is one subscription to useProfileStore and nothing else (app lifetime).
 startProfileSync()
+// Every tab belongs to exactly one workspace: a tab found in none is moved into `Unsorted`, one found in two keeps
+// the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
+// runs with no master, too.
+startStandaloneAdoption()
 
 useLayoutStore.getState().reconcileViews()
 

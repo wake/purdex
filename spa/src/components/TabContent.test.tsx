@@ -44,7 +44,9 @@ describe('TabContent', () => {
 
   it('renders empty state when no active tab', () => {
     render(<TabContent activeTab={null} allTabs={[]} />)
-    expect(screen.getByText(/選擇或建立/)).toBeTruthy()
+    // i18n (`tab.empty_state`), not the hard-coded Chinese string it used to be
+    expect(screen.getByText('Select or create a tab to get started')).toBeTruthy()
+    expect(screen.queryByText(/選擇或建立/)).toBeNull()
   })
 
   it('uses visibility:hidden for inactive keep-alive tabs (not left:-9999em)', () => {

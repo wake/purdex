@@ -361,25 +361,22 @@ describe('handleNotificationClick workspace switching', () => {
     expect(content?.kind === 'tmux-session' && content.mode).toBe('terminal')
   })
 
-  it('reopenTabOnClick at Home (null workspace) keeps tab standalone', () => {
-    // Setup: no existing tab, activeWorkspaceId is null (Home), reopenTabOnClick=true
-    // Workspaces exist but active is null
-    useWorkspaceStore.getState().addWorkspace('Workspace A')
+  it('reopenTabOnClick with no active workspace puts the tab in the FIRST workspace and focuses it', () => {
+    // Every tab belongs to exactly one workspace (Profile Sync spec §4.3). (Was: "keeps tab standalone".)
+    const first = useWorkspaceStore.getState().addWorkspace('Workspace A')
+    useWorkspaceStore.getState().addWorkspace('Workspace B')
     useWorkspaceStore.getState().setActiveWorkspace(null)
 
     // Enable reopenTabOnClick
     useNotificationSettingsStore.getState().setReopenTabOnClick('', true)
 
-    // Action: handleNotificationClick with reopenTabOnClick
     handleNotificationClick({ kind: 'open-session', hostId: HOST_ID, sessionCode: SESSION_CODE })
 
-    // Assert: insertTab is no-op (null wsId), tab is standalone, activeWorkspaceId stays null
     const wsState = useWorkspaceStore.getState()
-    expect(wsState.activeWorkspaceId).toBeNull()
-    // All workspaces should have no tabs (tab is standalone)
-    for (const ws of wsState.workspaces) {
-      expect(ws.tabs).toHaveLength(0)
-    }
+    const tabId = useTabStore.getState().activeTabId!
+    expect(tabId).toBeTruthy()
+    expect(wsState.workspaces.filter((ws) => ws.tabs.includes(tabId)).map((ws) => ws.id)).toEqual([first.id])
+    expect(wsState.activeWorkspaceId).toBe(first.id)
   })
 })
 

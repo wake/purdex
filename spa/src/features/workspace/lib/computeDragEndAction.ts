@@ -93,14 +93,9 @@ export function computeDragEndAction(
 
   // Cross-zone: tab dropped on a tab of another ws / standalone zone.
   if (overData.type === 'tab' && overData.sourceWsId !== activeData.sourceWsId) {
-    if (overData.sourceWsId === null) {
-      if (activeData.sourceWsId === null) return NOOP
-      return {
-        kind: 'move-tab-to-standalone',
-        tabId: activeData.tabId,
-        sourceWsId: activeData.sourceWsId,
-      }
-    }
+    // A tab never leaves its workspace for "no workspace" (Profile Sync spec §4.3). The
+    // `move-tab-to-standalone` action is no longer produced; it is removed in P3c-2.
+    if (overData.sourceWsId === null) return NOOP
     return {
       kind: 'move-tab-to-workspace',
       tabId: activeData.tabId,
@@ -123,16 +118,8 @@ export function computeDragEndAction(
     }
   }
 
-  // Home header drop target → make tab standalone.
-  if (overData.type === 'home-header') {
-    if (activeData.sourceWsId === null) return NOOP
-    return {
-      kind: 'move-tab-to-standalone',
-      tabId: activeData.tabId,
-      sourceWsId: activeData.sourceWsId,
-    }
-  }
-
+  // Home header drop target: used to make the tab standalone. Every tab belongs to a
+  // workspace now, so the drop changes nothing (the target itself goes in P3c-2).
   return NOOP
 }
 

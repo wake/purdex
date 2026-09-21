@@ -419,6 +419,7 @@
   "tab.close": "關閉分頁",
   "tab.close_others": "關閉其他分頁",
   "tab.close_right": "關閉右側分頁",
+  "tab.empty_state": "選擇或建立一個分頁開始使用",
   "tab.rename_session": "重新命名 Session",
   "tab.rename_placeholder": "Session 名稱",
   "tab.rename_invalid_format": "僅允許字母、數字、連字號和底線",
@@ -1353,6 +1354,7 @@
   "workspace.change_color": "變更顏色",
   "workspace.change_icon": "變更圖示",
   "workspace.delete": "刪除工作區",
+  "workspace.unsorted": "未分類",
 
   "workspace.migrate_title": "移動現有分頁？",
   "workspace.migrate_description": "您有 {{count}} 個開啟的分頁。要移入「{{name}}」嗎？",

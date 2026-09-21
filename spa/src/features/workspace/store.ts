@@ -5,6 +5,21 @@ import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } fr
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+
+/**
+ * The id of the `Unsorted` workspace — where a tab goes when there is no workspace to put it in (Profile Sync
+ * spec §4.3: every tab belongs to exactly one workspace). A CONSTANT, not `generateId()`: two windows that
+ * create it at once, or two machines that each do, make the SAME workspace, so a cross-window rehydrate and a
+ * profile sync converge on one `Unsorted` instead of two. It cannot collide with a generated id (those are
+ * exactly 6 chars of base36; this is 8) and it is a legal `tabs.<id>` section key (`[A-Za-z0-9_-]{1,64}`).
+ * Nor can it take over a workspace the user already has: every workspace id there is — made here, imported,
+ * or synced from another machine — came out of `generateId()`, whose output is always `^[0-9a-z]{6}$`
+ * (pinned by lib/id.test.ts), so no existing workspace is called `unsorted` unless it IS this one.
+ * The NAME is whatever `workspace.unsorted` said in the language of whoever created it first; an existing
+ * one is found by this id and never renamed.
+ */
+export const UNSORTED_WORKSPACE_ID = 'unsorted'
 
 interface WorkspaceState {
   workspaces: Workspace[]
@@ -23,7 +38,10 @@ interface WorkspaceState {
   reorderWorkspaceTabs: (wsId: string, tabIds: string[]) => void
   reorderWorkspaces: (orderedIds: string[]) => void
   findWorkspaceByTab: (tabId: string) => Workspace | null
-  insertTab: (tabId: string, workspaceId?: string | null, afterTabId?: string | null) => void
+  /** The `Unsorted` workspace (`UNSORTED_WORKSPACE_ID`): the existing one as it is, else a new one, appended. */
+  ensureUnsortedWorkspace: () => Workspace
+  /** No `workspaceId` → the active workspace → else the first → else a new `Unsorted`. Never a silent no-op. */
+  insertTab: (tabId: string, workspaceId?: string, afterTabId?: string | null) => void
   closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
   renameWorkspace: (wsId: string, name: string) => void
   setWorkspaceIcon: (wsId: string, icon: string) => void
@@ -60,10 +78,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!opts?.keepSettings) {
           useWorkspaceSettingsStore.getState().clearWorkspace(wsId)
         }
+        // Every tab belongs to exactly one workspace: the tabs of the removed workspace that still EXIST (the
+        // user kept them, or they were locked) move to the next workspace — the previous one when the last is
+        // removed, a new `Unsorted` when none is left. Tear-off / merge delete their tabs first: nothing moves.
+        const liveTabs = useTabStore.getState().tabs
         set((state) => {
-          const remaining = state.workspaces.filter((ws) => ws.id !== wsId)
-          const activeId = state.activeWorkspaceId === wsId
-            ? (remaining[0]?.id ?? null)
+          const index = state.workspaces.findIndex((ws) => ws.id === wsId)
+          const survivors = state.workspaces[index].tabs.filter((id) => Object.hasOwn(liveTabs, id))
+          let remaining = state.workspaces.filter((ws) => ws.id !== wsId)
+          let heirId: string | null = null
+          if (survivors.length > 0) {
+            const heir: Workspace = remaining[Math.min(index, remaining.length - 1)]
+              ?? { ...createWorkspace(useI18nStore.getState().t('workspace.unsorted')), id: UNSORTED_WORKSPACE_ID }
+            heirId = heir.id
+            const merged = { ...heir, tabs: [...heir.tabs, ...survivors], activeTabId: heir.activeTabId ?? survivors[0] }
+            remaining = remaining.length === 0 ? [merged] : remaining.map((ws) => (ws.id === heir.id ? merged : ws))
+          }
+          const activeId = state.activeWorkspaceId === wsId || state.activeWorkspaceId === null
+            ? (heirId ?? remaining[0]?.id ?? null)
             : state.activeWorkspaceId
           return { workspaces: remaining, activeWorkspaceId: activeId }
         })
@@ -141,14 +173,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return get().workspaces.find((ws) => ws.tabs.includes(tabId)) ?? null
       },
 
-      insertTab: (tabId, workspaceId, afterTabId) => {
-        const targetWsId = workspaceId === null
-          ? null
-          : workspaceId !== undefined
-            ? workspaceId
-            : get().activeWorkspaceId
+      ensureUnsortedWorkspace: () => {
+        const existing = get().workspaces.find((ws) => ws.id === UNSORTED_WORKSPACE_ID)
+        if (existing) return existing
+        const ws: Workspace = { ...createWorkspace(useI18nStore.getState().t('workspace.unsorted')), id: UNSORTED_WORKSPACE_ID }
+        set((state) => ({
+          workspaces: [...state.workspaces, ws],
+          activeWorkspaceId: state.activeWorkspaceId ?? ws.id,
+        }))
+        return ws
+      },
 
-        if (!targetWsId) return
+      insertTab: (tabId, workspaceId, afterTabId) => {
+        // `== null`, not `=== undefined`: `null` used to mean "force standalone" and is gone from the type; from
+        // an untyped caller it is "no target given", like everything else that is not a workspace id.
+        let targetWsId = workspaceId
+        if (targetWsId == null) {
+          const { workspaces, activeWorkspaceId } = get()
+          const active = workspaces.find((ws) => ws.id === activeWorkspaceId)
+          targetWsId = (active ?? workspaces[0] ?? get().ensureUnsortedWorkspace()).id
+        }
 
         // Concurrent-delete guard: if the caller passes a target workspace
         // that no longer exists (e.g. another session removed it mid-drag),
