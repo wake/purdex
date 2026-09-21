@@ -1547,5 +1547,6 @@
   "settings.profile.current.stop_body": "這台裝置上的內容完全不變，主機上的 profile 也不變，只是兩邊不再互相跟隨。",
   "settings.profile.current.problems": "最近的問題",
   "settings.profile.current.problems_desc": "這是紀錄，最新的在最上面。列在這裡不代表問題還在。",
-  "profile.switcher.settings": "Profile 設定…"
+  "profile.switcher.settings": "Profile 設定…",
+  "settings.profile.sot.stale_action": "沒有送出任何東西：你還在決定的時候清單變了。請重新確認後再試一次。"
 }
