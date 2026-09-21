@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.420] - 2026-09-22
+
+### Feature: Settings › Profile——這台裝置上的 profiles（名稱／圖示／配色）、主機上的 profiles、同步狀態——Profile Sync P3d-2（#1279、#1280、#1281）
+
+Settings 側欄多了「Profile」。沒有 master、沒有本機 profile 的人打開它：看到靜態內容、**不寫 storage、不向任何 host 發請求**；沒打開這一頁的人與 alpha.419 相同。
+
+- **這台裝置上的 profiles**：每個 profile 一列、master 在最上面。**每個 profile（含 master）的名稱／圖示／配色就地編輯**（使用者 2026-09-21 的決定；重用既有的 workspace icon picker 與 host 色票）——改完 Home 按鈕立刻跟著變。列內可以切換到該 profile（走切換器同一條路徑，不另寫重試）；本機 profile 可以排序、刪除（在畫面上的那個不能刪；要確認）；「把 master 複製成本機 profile」「把目前畫面存成本機 profile」，預設名稱用這台裝置的名字且不與既有的重名。
+- **主機上的 profiles**（attach 了 master 才顯示）：改名、刪除——只有**抓回來的**清單顯示沒有任何裝置 attach 時才能刪，409 `attached` 會列出還 attach 著的裝置，目前 attach 的那一份不能刪。
+- **同步狀態**（資料只來自 `useProfileSync()`）：同步的 profile 與 host、整體狀態（與切換器的狀態點同一個函式）、每個 section 一列（`Tabs · alpha`，不是 `tabs.4ecsi1`；名稱查 **master 的世界**）、Auto-sync、Sync now（follower 視窗也能按）、Stop sync（要確認）。follower 視窗標明數字來自哪個視窗、何時可能過期；`blocked` 與各種 unsettled 用白話說、當成**狀態不是錯誤**；「設定正在等 workspaces」會明講。
+- 切換器裡多一個通往這一頁的項目。還沒有 wizard（P3d-3）與解決衝突的按鈕（P3d-4）——也沒有任何點了沒反應的控制項；attach master 這一版仍只能用 dev hook。
+
+Review（codex R1＋攻擊方＋critic，全 `gpt-5.6-sol`）：刪除確認框開著時別的視窗把 master 換到另一台 host，確認後會**刪到新 host 上同 id 的 profile** → 每個主機端操作綁定發起時的 host 與 profile，一變就關閉、送出前再核對；**Stop sync 通知主機失敗完全看不到**、留下讓別台永遠刪不掉 profile 的幽靈登記 → `detachMaster()` 回報結果，提示存進 device-local 的 `pendingDetach`（reload 後還在）並提供重試；critic 追加：重試固定在 attach 當時的 **endpoint**，host 位址被改過就不送、顯示兩個位址；只持久化簡短的原因，不存 response body 或錯誤訊息；未存的名稱不再靜默覆寫別的視窗的改名。**改 plan 而非改程式**（附理由）：沒有本機 profile 的人點 Home 維持今天的行為、master 那一列不藏（鐵則＋使用者的決定）。移到 P3d-4：`workspaces` 持續**失敗**時的「設定在等」、每個 section 的 rev、上次同步時間——executor 得先公開這些。`CurrentBlock`／`SotProfilesBlock` 的職責 → #1240。
+
+真機驗收兩輪、十一步、全程經頁面操作：全過、console 零錯誤——含「讓主機通知失敗的 Stop sync」：提示 → reload 還在 → 改位址（不提供重試）→ 改回 → 重試 → 消失；塞進假錯誤裡的 token 字串在頁面與 storage 都找不到。
+
+待使用者決定（集中在 `profile-rules.ts` 的 `COLOR_NEEDS_ICON`，翻案改一處）：圖示是點陣的 logo 時配色沒有東西可以著色，目前的做法是先選圖示才能配色。
+
+vitest 9719、lint、tsc、build 綠。純 SPA，daemon 仍是 411、免 deploy。下一支 P3d-3：wizard——第一次不靠 dev hook 設定同步；舊的 Settings › Sync 屆時離開側欄。
+
 ## [1.0.0-alpha.419] - 2026-09-21
 
 ### Feature: Home 按鈕就是 profile——名稱、圖示、配色；有本機 profile 時變成 profile 切換器——Profile Sync P3d-1（#1276、#1277；#1275）
