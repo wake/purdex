@@ -85,7 +85,9 @@
 // pane, split — and every reference to one follows (`copyWorld` lists them).
 // What it BORROWS is copied as it is: host ids, session codes, tmux instances,
 // rebuild records — a slave works on the same sessions (decisions 9, 13).
-import { useWorkspaceStore } from '../../features/workspace/store'
+import { tabOwnershipQuiet } from '../../features/workspace/lib/adopt-standalone'
+import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../../features/workspace/store'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { MASTER_PROFILE_ID, normalizeLocalProfileName, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { masterAttachedInStorage, useProfileStore } from '../../stores/useProfileStore'
@@ -99,6 +101,7 @@ import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
 import type { MasterWorldRead } from './master-world'
 import { withWorldLock } from '../storage/world-lock'
+import { repairTabOwnership } from './sections'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
 
@@ -134,6 +137,23 @@ function readScreen(): ParkedWorld {
   const tab = useTabStore.getState()
   const ws = useWorkspaceStore.getState()
   return { workspaces: ws.workspaces, tabs: tab.tabs, activeWorkspaceId: ws.activeWorkspaceId, activeTabId: tab.activeTabId }
+}
+
+// === Every tab in exactly one workspace, before a world leaves the screen or is copied ===
+
+/**
+ * `world` with every tab in exactly one workspace — the SAME rule as the standing invariant
+ * (`repairTabOwnership`; features/workspace/lib/adopt-standalone.ts). That one repairs the world ON SCREEN;
+ * a parked world is repaired by nobody, and the parked MASTER keeps syncing: an ownerless tab in it is in no
+ * `tabs.<id>` section, never reaches the SOT, and nobody says so. The same reference back when there is
+ * nothing to repair (the usual case: nothing is copied, and the pointer is left as it is).
+ */
+function withOwnershipRepaired(world: ParkedWorld, tabOrder: readonly string[]): ParkedWorld {
+  const repaired = repairTabOwnership(
+    { workspaces: world.workspaces, tabs: world.tabs, tabOrder, activeTabId: world.activeTabId, activeWorkspaceId: world.activeWorkspaceId },
+    { unsortedName: useI18nStore.getState().t('workspace.unsorted'), newWorkspaceId: UNSORTED_WORKSPACE_ID },
+  )
+  return repaired.membershipChanged ? { ...world, workspaces: repaired.workspaces, activeWorkspaceId: repaired.activeWorkspaceId } : world
 }
 
 // === The switch ===
@@ -190,6 +210,17 @@ function exchange(targetId: string): SwitchResult {
     recoverUnsettledWorld(read, true) // a refusal is not the last word: the stores are asked to catch up with storage
     return { ok: false, reason: 'unsettled' }
   }
+  // WHAT IS PARKED IS REPAIRED FIRST — BUT ONLY A MEMBERSHIP THAT HAS BEEN QUIET. Settled + the world lock + the
+  // fence rule out a stale WORLD; they do not rule out another window's `addTab` whose `insertTab` — a second
+  // store, a second rehydrate — has not arrived here yet. That tab looks ownerless, and parking now would file
+  // it under Unsorted AND park this window's not-yet-rehydrated workspaces over the other window's. So: nothing
+  // to repair → go; something to repair and the membership signature quiet for ADOPTION_SETTLE_MS (the very
+  // wait the invariant applies) → repair what is parked, never the live stores (a refusal writes nothing);
+  // otherwise `busy` — retryable, and by the retry the invariant or the rehydrate has settled it.
+  const onScreen = readScreen()
+  const toPark = withOwnershipRepaired(onScreen, useTabStore.getState().tabOrder)
+  if (toPark !== onScreen && !tabOwnershipQuiet()) return { ok: false, reason: 'busy' }
+
   const old = captureLocal()
   let lowerFence = (): void => {}
   try {
@@ -197,7 +228,7 @@ function exchange(targetId: string): SwitchResult {
     if (epoch === null) return { ok: false, reason: 'busy' }
     const { worldEpoch } = epoch
     lowerFence = epoch.lowerFence
-    const swapped = useLocalProfilesStore.getState().swapActive(targetId, readScreen(), worldEpoch)
+    const swapped = useLocalProfilesStore.getState().swapActive(targetId, toPark, worldEpoch)
     if (!swapped.ok) {
       lowerFence()
       return swapped
@@ -349,12 +380,14 @@ export type CopyResult = { ok: true; id: string } | Refused<'unsettled' | 'bad-n
  * reach the SOT: the settings section projects the MASTER world's workspace ids
  * only (`masterWorkspaceIds`), and these ids are in no master world.
  */
-function addCopyAsSlave(name: string, source: ParkedWorld): CopyResult {
+function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly string[] = []): CopyResult {
   if (normalizeLocalProfileName(name) === null) return { ok: false, reason: 'bad-name' } // before anything is built
   const old = captureLocal()
   const oldScoped = useWorkspaceSettingsStore.getState().workspaces
   try {
-    const { world, workspaceIds } = copyWorld(source)
+    // A copy is a snapshot and its source stays where it is, so there is no wait here (see `exchange`): at
+    // worst a tab whose workspace was still on its way is under Unsorted in the COPY.
+    const { world, workspaceIds } = copyWorld(withOwnershipRepaired(source, tabOrder))
     const added = useLocalProfilesStore.getState().addSlave(name, world)
     if (!added.ok) return added
 
@@ -397,7 +430,7 @@ export function copyMasterAsSlave(name: string): CopyResult {
  * while unsettled, too: it files nothing under an existing label.
  */
 export function saveScreenAsSlave(name: string): CopyResult {
-  return addCopyAsSlave(name, readScreen())
+  return addCopyAsSlave(name, readScreen(), useTabStore.getState().tabOrder)
 }
 
 // === The move ===
