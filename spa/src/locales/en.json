@@ -1353,6 +1353,7 @@
   "workspace.change_color": "Change Color",
   "workspace.change_icon": "Change Icon",
   "workspace.delete": "Delete Workspace",
+  "workspace.unsorted": "Unsorted",
 
   "workspace.migrate_title": "Move Existing Tabs?",
   "workspace.migrate_description": "You have {{count}} open tab(s). Move them into \"{{name}}\"?",

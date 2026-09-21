@@ -1353,6 +1353,7 @@
   "workspace.change_color": "變更顏色",
   "workspace.change_icon": "變更圖示",
   "workspace.delete": "刪除工作區",
+  "workspace.unsorted": "未分類",
 
   "workspace.migrate_title": "移動現有分頁？",
   "workspace.migrate_description": "您有 {{count}} 個開啟的分頁。要移入「{{name}}」嗎？",

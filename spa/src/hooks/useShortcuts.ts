@@ -100,17 +100,14 @@ export function useShortcuts(): void {
         return
       }
 
+      // Home = the first workspace until the Home button becomes the profile switcher (P3d). There is no
+      // "no workspace" view any more: every tab belongs to a workspace (Profile Sync spec §4.3).
       if (action === 'switch-workspace-home') {
-        useWorkspaceStore.getState().setActiveWorkspace(null)
-        const standaloneIds = getVisibleTabIdsShared({
-          tabs: tabState.tabs,
-          tabOrder: tabState.tabOrder,
-          activeTabId: tabState.activeTabId,
-          workspaces: useWorkspaceStore.getState().workspaces,
-          activeWorkspaceId: null,
-        })
-        const firstTab = standaloneIds[0]
-        if (firstTab) activateTab(firstTab)
+        const first = useWorkspaceStore.getState().workspaces[0]
+        if (!first) return
+        useWorkspaceStore.getState().setActiveWorkspace(first.id)
+        const nextTab = first.activeTabId && tabState.tabs[first.activeTabId] ? first.activeTabId : first.tabs[0]
+        if (nextTab) activateTab(nextTab)
         else tabState.setActiveTab(null)
         return
       }

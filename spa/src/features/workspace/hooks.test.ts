@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useWorkspaceStore } from './store'
+import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTabWorkspaceActions } from './hooks'
 import { createTab } from '../../types/tab'
@@ -57,23 +57,64 @@ describe('workspace tab recall', () => {
     expect(useTabStore.getState().activeTabId).toBe(tab2.id)
   })
 
-  it('clears activeTab when selecting an empty workspace from a standalone tab', () => {
-    // Standalone tab (not in any workspace) is active (Home visually).
-    const standalone = createTab({ kind: 'dashboard' })
-    useTabStore.getState().addTab(standalone)
-    useTabStore.getState().setActiveTab(standalone.id)
+  it('clears activeTab when selecting an empty workspace while a tab of another workspace is active', () => {
+    // (Was: "from a standalone tab". Every tab belongs to a workspace now — spec §4.3 — and the rule is the same.)
+    const other = useWorkspaceStore.getState().addWorkspace('Other')
+    const tab = createTab({ kind: 'dashboard' })
+    useTabStore.getState().addTab(tab)
+    useWorkspaceStore.getState().insertTab(tab.id, other.id)
+    useTabStore.getState().setActiveTab(tab.id)
 
     // Empty workspace.
     const emptyWs = useWorkspaceStore.getState().addWorkspace('Empty')
 
-    const { result } = renderHook(() => useTabWorkspaceActions([standalone]))
+    const { result } = renderHook(() => useTabWorkspaceActions([tab]))
 
     act(() => { result.current.handleSelectWorkspace(emptyWs.id) })
 
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(emptyWs.id)
-    // Must drop the standalone tab so isStandaloneTab-derived `activeStandaloneTabId`
-    // stops masking the workspace selection in ActivityBar's `isActive` logic.
+    // Must drop the other workspace's tab so it stops masking the workspace selection.
     expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)?.id).toBe(other.id)
+  })
+})
+
+// Every tab belongs to exactly one workspace (Profile Sync spec §4.3): the `+` button is a producer.
+describe('handleAddTab', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+
+  const addOne = (): string => {
+    const { result } = renderHook(() => useTabWorkspaceActions([]))
+    act(() => { result.current.handleAddTab() })
+    const { tabOrder, activeTabId } = useTabStore.getState()
+    expect(tabOrder).toHaveLength(1)
+    expect(activeTabId).toBe(tabOrder[0])
+    return tabOrder[0]
+  }
+
+  it('puts the tab in the active workspace', () => {
+    useWorkspaceStore.getState().addWorkspace('A')
+    const b = useWorkspaceStore.getState().addWorkspace('B')
+    useWorkspaceStore.getState().setActiveWorkspace(b.id)
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(addOne())?.id).toBe(b.id)
+  })
+
+  it('no active workspace → the first workspace', () => {
+    const a = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addWorkspace('B')
+    useWorkspaceStore.getState().setActiveWorkspace(null)
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(addOne())?.id).toBe(a.id)
+  })
+
+  it('no workspace at all → Unsorted is created, gets the tab and becomes active', () => {
+    const tabId = addOne()
+    const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
+    expect(workspaces.map((w) => w.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(workspaces[0].tabs).toEqual([tabId])
+    expect(activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
   })
 })
 
@@ -124,7 +165,8 @@ describe('openSingletonAndSelect', () => {
     expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(1)
   })
 
-  it('works without active workspace (standalone tabs)', () => {
+  it('works without any workspace: the tab lands in a new Unsorted', () => {
+    useWorkspaceStore.getState().reset()
     const { result } = renderHook(() => useTabWorkspaceActions([]))
 
     let tabId: string
@@ -134,6 +176,8 @@ describe('openSingletonAndSelect', () => {
 
     expect(useTabStore.getState().tabs[tabId!]).toBeDefined()
     expect(useTabStore.getState().activeTabId).toBe(tabId!)
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(tabId!)?.id).toBe(UNSORTED_WORKSPACE_ID)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
   })
 
   it('inserts tab into explicit wsId even when a different workspace is active', () => {

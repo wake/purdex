@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useWorkspaceStore } from './store'
+import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { createTab } from '../../types/tab'
@@ -55,9 +55,41 @@ describe('useWorkspaceStore', () => {
 
   // === insertTab ===
 
-  it('insertTab with no workspace — tab stays standalone', () => {
+  // Every tab belongs to exactly one workspace (Profile Sync spec §4.3): with no explicit target the policy is
+  // the active workspace → else the first one → else a new `Unsorted`. Never a silent no-op.
+  it('insertTab with no workspace at all creates Unsorted (fixed id) and puts the tab there', () => {
     useWorkspaceStore.getState().insertTab('tab-1')
-    expect(useWorkspaceStore.getState().workspaces).toHaveLength(0)
+    const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
+    expect(workspaces).toHaveLength(1)
+    expect(workspaces[0]).toMatchObject({ id: UNSORTED_WORKSPACE_ID, name: 'Unsorted', tabs: ['tab-1'], activeTabId: 'tab-1' })
+    expect(activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
+  })
+
+  it('the Unsorted id is a constant no generated id can be, and one the daemon accepts as a section key', () => {
+    expect(UNSORTED_WORKSPACE_ID).toBe('unsorted')
+    expect(UNSORTED_WORKSPACE_ID).not.toMatch(/^[0-9a-z]{6}$/) // generateId(): exactly 6 of base36
+    expect(UNSORTED_WORKSPACE_ID).toMatch(/^[A-Za-z0-9_-]{1,64}$/) // `tabs.<id>` (profiles/validate.go)
+    useWorkspaceStore.getState().insertTab('tab-1')
+    useWorkspaceStore.getState().reset()
+    useWorkspaceStore.getState().insertTab('tab-2')
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual([UNSORTED_WORKSPACE_ID])
+  })
+
+  it('insertTab with no ACTIVE workspace falls back to the first workspace, and does not create Unsorted', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    useWorkspaceStore.getState().addWorkspace('WS2')
+    useWorkspaceStore.getState().setActiveWorkspace(null)
+    useWorkspaceStore.getState().insertTab('tab-1')
+    const { workspaces } = useWorkspaceStore.getState()
+    expect(workspaces).toHaveLength(2)
+    expect(workspaces.find((w) => w.id === ws1.id)!.tabs).toEqual(['tab-1'])
+  })
+
+  it('insertTab whose ACTIVE workspace is gone falls back to the first workspace', () => {
+    const ws1 = useWorkspaceStore.getState().addWorkspace('WS1')
+    useWorkspaceStore.setState({ activeWorkspaceId: 'deleted-ws' })
+    useWorkspaceStore.getState().insertTab('tab-1')
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === ws1.id)!.tabs).toEqual(['tab-1'])
   })
 
   it('insertTab with active workspace adds to that workspace', () => {
@@ -81,12 +113,12 @@ describe('useWorkspaceStore', () => {
     expect(updated2.activeTabId).toBe('tab-1')
   })
 
-  it('insertTab with explicit null forces standalone', () => {
+  it('insertTab has no "standalone" target any more: the type refuses null', () => {
     const ws = useWorkspaceStore.getState().addWorkspace('Test')
-    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+    // @ts-expect-error — `null` was "force standalone"; a tab always has a workspace now
     useWorkspaceStore.getState().insertTab('tab-1', null)
-    const updated = useWorkspaceStore.getState().workspaces.find(w => w.id === ws.id)!
-    expect(updated.tabs).not.toContain('tab-1')
+    // Storage junk / an untyped caller still cannot make a standalone tab: null means "no target given".
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === ws.id)!.tabs).toEqual(['tab-1'])
   })
 
   // === insertTab edge cases ===

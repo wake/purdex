@@ -10,6 +10,7 @@ vi.mock('../features/workspace/lib/icon-path-cache', () => ({
 import { renderHook } from '@testing-library/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { UNSORTED_WORKSPACE_ID } from '../features/workspace/store'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { useShortcuts } from './useShortcuts'
@@ -494,43 +495,93 @@ describe('useShortcuts', () => {
     })
   })
 
+  // Every tab belongs to exactly one workspace (Profile Sync spec §4.3). Each shortcut that makes a tab is a
+  // producer; each must say where the tab went when there is no active workspace, and when there is none at all.
+  describe('tab producers without an active workspace', () => {
+    const producers: Array<{ action: string; arrange?: () => void }> = [
+      { action: 'new-tab' },
+      { action: 'open-settings' },
+      { action: 'open-hosts' },
+      { action: 'open-history' },
+      { action: 'reopen-closed-tab', arrange: () => useHistoryStore.getState().recordClose(createTab({ kind: 'new-tab' })) },
+    ]
+    const ownerOf = (tabId: string) => useWorkspaceStore.getState().workspaces.filter((w) => w.tabs.includes(tabId)).map((w) => w.id)
+
+    for (const { action, arrange } of producers) {
+      it(`${action}: no active workspace → the tab goes to the FIRST workspace`, () => {
+        const { fire } = mockElectronAPI()
+        const first = useWorkspaceStore.getState().workspaces[0]
+        useWorkspaceStore.getState().addWorkspace('WS2')
+        useWorkspaceStore.getState().setActiveWorkspace(null)
+        arrange?.()
+        renderHook(() => useShortcuts())
+
+        fire(action)
+        const { tabOrder } = useTabStore.getState()
+        expect(tabOrder).toHaveLength(1)
+        expect(ownerOf(tabOrder[0])).toEqual([first.id])
+        expect(useWorkspaceStore.getState().workspaces).toHaveLength(2)
+      })
+
+      it(`${action}: no workspace at all → Unsorted is created and gets the tab`, () => {
+        const { fire } = mockElectronAPI()
+        useWorkspaceStore.getState().reset()
+        arrange?.()
+        renderHook(() => useShortcuts())
+
+        fire(action)
+        const { tabOrder } = useTabStore.getState()
+        expect(tabOrder).toHaveLength(1)
+        expect(ownerOf(tabOrder[0])).toEqual([UNSORTED_WORKSPACE_ID])
+        expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
+      })
+    }
+  })
+
+  // Until the Home button becomes the profile switcher (P3d), Home = the first workspace.
   describe('switch-workspace-home', () => {
-    it('switches to Home (null activeWorkspaceId)', () => {
+    it('focuses the FIRST workspace and its remembered tab', () => {
       const { fire } = mockElectronAPI()
-      seedTabs(1)
+      const [t1, t2] = seedTabs(2)
+      const first = useWorkspaceStore.getState().workspaces[0]
+      useWorkspaceStore.getState().setWorkspaceActiveTab(first.id, t2.id)
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
+      useTabStore.getState().setActiveTab(null)
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-home')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(first.id)
+      expect(useTabStore.getState().activeTabId).toBe(t2.id)
+      expect(t1.id).not.toBe(t2.id)
+    })
+
+    it('never leaves a tab of no workspace on screen: a tab outside every workspace is not activated', () => {
+      const { fire } = mockElectronAPI()
+      const stray = createTab({ kind: 'new-tab' })
+      useTabStore.getState().addTab(stray)
+      const first = useWorkspaceStore.getState().workspaces[0]
       const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
       useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
       renderHook(() => useShortcuts())
 
       fire('switch-workspace-home')
-      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(first.id)
+      expect(useTabStore.getState().activeTabId).toBeNull() // the first workspace is empty
     })
 
-    it('activates first standalone tab when switching to Home', () => {
+    it('does nothing when there is no workspace', () => {
       const { fire } = mockElectronAPI()
-      // Create a standalone tab (not added to any workspace)
-      const standaloneTab = createTab({ kind: 'new-tab' })
-      useTabStore.getState().addTab(standaloneTab)
-      // Create workspace and switch to it
-      const ws = useWorkspaceStore.getState().addWorkspace('WS1')
-      const wsTab = seedTabs(1, { addToWorkspace: false })[0]
-      useWorkspaceStore.getState().addTabToWorkspace(ws.id, wsTab.id)
-      useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+      useWorkspaceStore.getState().reset()
+      useTabStore.getState().addTab(createTab({ kind: 'new-tab' }))
+      const tab = createTab({ kind: 'new-tab' })
+      useTabStore.getState().addTab(tab)
+      useTabStore.getState().setActiveTab(tab.id)
       renderHook(() => useShortcuts())
 
       fire('switch-workspace-home')
       expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
-      expect(useTabStore.getState().activeTabId).toBe(standaloneTab.id)
-    })
-
-    it('sets activeTabId to null when no standalone tabs exist', () => {
-      const { fire } = mockElectronAPI()
-      seedTabs(1)
-      renderHook(() => useShortcuts())
-
-      fire('switch-workspace-home')
-      expect(useWorkspaceStore.getState().activeWorkspaceId).toBeNull()
-      expect(useTabStore.getState().activeTabId).toBeNull()
+      expect(useTabStore.getState().activeTabId).toBe(tab.id)
     })
   })
 

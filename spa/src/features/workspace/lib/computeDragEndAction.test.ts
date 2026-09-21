@@ -206,7 +206,9 @@ describe('computeDragEndAction', () => {
       })
     })
 
-    it('tab → home-header drop target → move-tab-to-standalone', () => {
+    // Every tab belongs to exactly one workspace (Profile Sync spec §4.3): nothing a drag can do takes a tab
+    // out of its workspace. The drop target itself goes in P3c-2; until then a drop on it changes nothing.
+    it('tab → home-header drop target → noop (the tab stays in its workspace)', () => {
       const action = computeDragEndAction(
         mkEvent(
           { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
@@ -214,11 +216,18 @@ describe('computeDragEndAction', () => {
         ),
         ctx(),
       )
-      expect(action).toEqual({
-        kind: 'move-tab-to-standalone',
-        tabId: 't1a',
-        sourceWsId: 'w1',
-      })
+      expect(action).toEqual({ kind: 'noop' })
+    })
+
+    it('tab → a standalone tab slot → noop (the tab stays in its workspace)', () => {
+      const action = computeDragEndAction(
+        mkEvent(
+          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
+          { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
+        ),
+        ctx(),
+      )
+      expect(action).toEqual({ kind: 'noop' })
     })
 
     it('standalone tab → workspace-header → move-tab-to-workspace afterTabId=null', () => {
