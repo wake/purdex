@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import en from '../../../../locales/en.json'
 import { ProfileWizard } from './ProfileWizard'
 import { ATTACH_REASONS } from './wizard-run'
+import { reasonKey, requestKey } from './wizard-shared'
 import { useProfileStore } from '../../../../stores/useProfileStore'
 import { useHostStore } from '../../../../stores/useHostStore'
 import { useDeviceNameStore } from '../../../../stores/useDeviceNameStore'
@@ -249,6 +250,17 @@ describe('step 2 — the host and the profile on it', () => {
     expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
     next()
     expect(step()).toBe('sot')
+  })
+
+  it('the step list is no way on either: a later step\'s name is text, not a door', async () => {
+    open()
+    await flush()
+    for (const id of ['local', 'direction', 'run']) {
+      fireEvent.click(screen.getByTestId(`profile-wizard-step-${id}`))
+      expect(step()).toBe('sot')
+      expect(screen.getByTestId(`profile-wizard-step-${id}`)).toHaveAttribute('data-state', 'todo')
+    }
+    expect(screen.getByTestId('profile-wizard-host')).toBeInTheDocument()
   })
 
   it('a new profile: named after this device by default, a name is required, and it is created only on Next', async () => {
@@ -561,6 +573,28 @@ describe('step 5 — the run', () => {
     await flush()
     expect(step()).toBe('run')
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+  })
+})
+
+describe('a reason becomes a sentence through a closed list — whatever the reason holds', () => {
+  it('a run reason that is on no list gets the step\'s `other` sentence; it is never made into a key', () => {
+    expect(reasonKey('attach', 'timeout')).toBe('settings.profile.wizard.attach.timeout')
+    expect(reasonKey('attach', 'Failed to fetch http://h/?token=SECRET')).toBe('settings.profile.wizard.attach.other')
+    expect(reasonKey('promote', 'master-attached')).toBe('settings.profile.wizard.promote.master_attached')
+    expect(reasonKey('promote', 'timeout')).toBe('settings.profile.wizard.promote.other') // another step's reason is not this step's
+    expect(reasonKey('save', 'QuotaExceededError: SECRET')).toBe('settings.profile.wizard.save.other')
+  })
+
+  it('a request reason likewise', () => {
+    expect(requestKey('too-large')).toBe('settings.profile.wizard.request.too_large')
+    expect(requestKey('TypeError SECRET')).toBe('settings.profile.wizard.request.thrown')
+  })
+
+  it('every key either list can produce exists', () => {
+    const promote = ['master-attached', 'busy', 'unsettled', 'superseded', 'not-found', 'bad-name', 'bad-epoch', 'write-failed', 'x']
+    const save = ['unsettled', 'bad-name', 'bad-world', 'write-failed', 'x']
+    const keys = [...promote.map((r) => reasonKey('promote', r)), ...save.map((r) => reasonKey('save', r)), ...[...ATTACH_REASONS, 'x'].map((r) => reasonKey('attach', r))]
+    for (const key of keys) expect(en[key as keyof typeof en], key).toBeTruthy()
   })
 })
 

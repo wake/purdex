@@ -524,7 +524,7 @@ with no master asks no host (pinned). It owns the ONE `useSotProfiles(hostId)` f
   The notice (what happened, what it means for the other devices, *Try again*, *Dismiss*) is the store's: it is
   there after a reload and without a master. **Not covered:** the two best-effort drops inside `attachMaster`
   (switching master; an attach that was superseded) can leave the same ghost and still only log `detach-failed`
-  — for P3d-3, whose wizard is what calls them.
+  — for P3d-3, whose wizard is what calls them. *(Done in P3d-3: both write `pendingDetach` — see "P3d-3 — As built".)*
 
 **Profiles on this device (`LocalProfilesBlock` / `LocalProfileRow` / `ProfileAppearanceEditor`)**
 - The master first (unnamed → `Home`, tagged `profile.master`), then `slaveOrder`. Reads the stores; the worlds
@@ -599,6 +599,125 @@ host picker is what lets it (or its list) exist without one. **For P3d-4**: the 
 - i18n: `settings.section.profile`, `settings.profile.description`, `settings.profile.local.*` (+ `.error.*`),
   `settings.profile.sot.*`, `settings.profile.current.*` (+ `.blocked.*`, `.world.*`, `.schema.*`, `.section.*`
   with `:` → `_`, `.label.*`), `settings.profile.detach.*`, `profile.switcher.settings`
+
+### P3d-3 — As built (for P3d-4)
+
+`components/settings/profile/wizard/` — `ProfileWizard.tsx` (the order, the premises, the stop step, the run's
+screen), `WizardChoiceSteps.tsx` (the three steps that only choose), `wizard-run.ts` (the run: no React),
+`wizard-shared.ts` (button / notice classes, the master world as a subscription, reason → i18n key).
+
+**Where it opens.** IN PLACE of the *Current* block's master-dependent half — not a dialog: no settings page has
+a user-confirmed multi-step flow to copy (Peers › Pair is an automated flow with a step line), and the design
+rules forbid a new primitive. `CurrentBlock` owns `wizardOpen` (component state: leaving the page closes it,
+nothing is persisted, and it does not follow the master — the wizard's first step clears the master and its last
+sets one). Two ways in: `profile-setup-start` (no master) and `profile-setup-change` (attached; the same wizard,
+from its first step). While it is open the plain *Stop sync* row is not offered beside it; `StopSyncControl`
+stays mounted, because the "host was not told" notice is the store's and the wizard must not hide it.
+
+**The steps, and what each one checks before it is shown** (`brokenPremise`, run on every store change and again
+at every click that moves on — never while a run is under way; the wizard goes back to the latest step that
+still stands and says why, `profile-wizard-notice`):
+
+| # | step | does | premise (else → where, `data-reason`) |
+|---|---|---|---|
+| — | refused | nothing. `isClientIdPersisted()` false → `client-id`; `readMasterWorld()` `junk-epoch` / `no-parked-master` → that reason. Checked once, when the wizard opens. | — |
+| 1 | `stop` (only with a master) | `detachMaster()` on the button — the call *Stop sync* makes. `{ ok: false }` → the step STAYS, says it (`profile-wizard-stop-not-told`), and *Continue* is the user's | a master is attached (else → `sot`, `stopped-elsewhere`) |
+| 2 | `sot` | host `<select>` (dev host if connected, else the first connected; others listed, disabled, "— not connected"); `useSotProfiles` (now carries the failure's `reason`) loading / error + retry / empty / rows; *A new profile* — name required, default = device name — is created (`createProfile`) when the step is confirmed | no master (else → `stop`, `attached-elsewhere`) |
+| 3 | `local` | the master + every slave, the master chosen by default, the one on screen badged; the consequence of a move in words. Nothing is promoted here | + host still in the store and connected (else → `sot`, `host-gone` / `host-offline`); Next is disabled while the world is catching up |
+| 4 | `direction` | push / pull, nothing pre-chosen for an existing profile. **Push only** for a profile this visit created AND for one whose fetched index has no sections (`pull_new` / `pull_empty`) | + the chosen slave still exists (else → `local`, `local-gone`, master chosen) |
+| 5 | `run` | the sub-steps as a list, all `pending`, and *Start*; nothing has been done before it is pressed | the same, checked once more inside the *Start* click |
+
+There is no way to a step but through the one before it: the step list is `<li>` text, *Next* is the only door,
+*Back* exists on 3, 4 and the not-yet-started 5.
+
+**`no-parked-master` — the plan was wrong to send it to the wizard.** `promoteToMaster` and `copyMasterAsSlave`
+both refuse an unsettled world, and this state does not settle by waiting; only the store's `merge` (a reload)
+repairs it. The wizard therefore refuses to start and says so; the *Current* block's sentence now ends with
+"Reload the app to repair it", and its `TODO(P3d-3)` became the explanation. `junk-epoch`: refused likewise,
+"switch profile once". The three transient reasons do not refuse: step 3 waits for them.
+
+**Step 5 — the order is `promote → copy → attach`, and the copy is `copyMasterAsSlave`, never
+`saveScreenAsSlave`.** A pull replaces THE MASTER's world as it is when the attach is made — after the promote —
+which is not "what is on screen":
+
+| on screen | chosen as master | world the pull replaces | primitive, when | what `saveScreenAsSlave` would have kept |
+|---|---|---|---|---|
+| master | the master | the master's = the screen | `copyMasterAsSlave`, before the attach (no promote) | the same world |
+| master | a parked slave S | S's (the parked master by then) | `copyMasterAsSlave`, AFTER the promote | **the old master** — which the promote has just kept as a slave anyway; S would be lost |
+| slave S | S | S's = the screen (labelled master by then) | `copyMasterAsSlave`, after the promote | the same world |
+| slave S | the (parked) master | the parked master's | `copyMasterAsSlave`, before the attach (no promote) | **S** — which the pull never touches |
+| slave S | a parked slave T | T's (the parked master by then) | `copyMasterAsSlave`, after the promote | **S** — likewise |
+
+One primitive at one point in time is right in every row because "the master's world, wherever it is" is by
+construction what the attach hands to the executor. Pinned row by row against the REAL switch-active.ts
+(`wizard-run.test.ts`: at the moment `attachMaster` is called, the master's sentinel and the copy's sentinel are
+the same) and end to end (`ProfileWizard.integration.test.tsx`). The counts step 4 shows are of that same world
+(`worldToBeMaster`). The demoted master is named after the device and never like the copy.
+A sub-step that fails STOPS the run (`runPlan`): nothing after it is attempted, nothing before it is undone, and
+the screen lists each sub-step's state plus what that means now. *Try again* re-runs from the failed sub-step
+only; a reason no retry cures (`master-attached`, `not-found`, `superseded`, `unknown-host`, …) offers *Start
+over* instead — the wizard from its first step, from the state as it is then.
+
+**`attachMaster`'s reasons** (start.ts): its own refusals `invalid-direction`, `client-id-not-persisted`,
+`unknown-host`, `invalid-profile-id`; `superseded`; the PUT's `FailureReason` — `network`, `timeout`, `aborted`,
+`contended`, `not-found`, `too-large`, `rejected`, `unauthorized`, `server`, `malformed` (`unknown-host` again);
+**and, when the PUT throws, that error's `message`**. `ATTACH_REASONS` is the closed list of the first fifteen,
+each with its own sentence (`settings.profile.wizard.attach.*`); anything else leaves `wizard-run.ts` as `other`,
+and `reasonKey` / `requestKey` are closed lists too — no `Error.message`, transport message or body is shown or
+stored. `write-failed` is shown without its `detail`.
+
+**start.ts — the two best-effort drops inside `attachMaster` now write `pendingDetach`.** *Switching master*:
+the DELETE goes to the address the OLD attachment was made at (`masterEndpoint`, read before anything else —
+`dropAttachment(previous, previousAt)`, so a re-pointed host is not told at its new address), and a drop that did
+not get through is remembered AFTER `setMaster` (before it the old master still IS the master, and
+`rememberPendingDetach` keeps nothing about the master). *Overtaken by another window*: there is no older address
+to compare with, but there is the one the PUT was just sent to — read in the same turn as the PUT (`putAt`); the
+take-down goes there or nowhere and is remembered with it. If the host had no address to read, nothing can be
+remembered (the setter refuses a record without one) and it stays a `detach-failed` problem. The wizard itself
+never switches master without detaching first; the dev hook still can.
+
+**`Settings › Sync` left the sidebar.** The `sync` module is registered without a `settings` contribution; the
+module, engine, contributors, `SyncSection`, `SnapshotHistoryPage` are untouched (P4a). What only that page
+offered, all unreachable now: provider off / daemon / file; the sync host; *Sync now*; per-contributor toggles;
+export / import of a `.purdex-sync` file; resolving the old engine's pending conflicts; snapshot history (view /
+restore). **None of it runs by itself** — `syncNow`, `push` and `applyImport` have no caller but that page, there
+is no timer and no subscription — so no engine is left running that a user cannot stop; their data stays where
+it is. `TitleBar`'s conflict icon mirrored that page's banner and led to `/settings/sync`, which now self-heals
+to the first section: removed with it.
+
+**test ids**
+- entry: `profile-setup-start`, `profile-setup-change`
+- shell: `profile-wizard` (`data-step` = refused|stop|sot|local|direction|run), `profile-wizard-close`,
+  `profile-wizard-steps`, `profile-wizard-step-<stop|sot|local|direction|run>` (`data-state` current|done|todo),
+  `profile-wizard-notice` (`data-reason`), `profile-wizard-refused` (`data-reason`), `profile-wizard-back`,
+  `profile-wizard-next` (`aria-busy` while creating)
+- stop: `profile-wizard-stop-confirm` (`aria-busy`), `profile-wizard-stop-not-told` (`data-reason`),
+  `profile-wizard-stop-continue`
+- sot: `profile-wizard-host`, `profile-wizard-host-option-<hostId>`, `profile-wizard-host-none`,
+  `profile-wizard-profiles` (`data-state` loading|error|empty|rows), `profile-wizard-profiles-loading`,
+  `profile-wizard-profiles-error` (`data-reason`), `profile-wizard-profiles-retry`, `profile-wizard-profiles-empty`,
+  `profile-wizard-profile-<profileId>`, `profile-wizard-profile-new`, `profile-wizard-new-name`,
+  `profile-wizard-create-error` (`data-reason`)
+- local: `profile-wizard-local-<master|slaveId>`, `profile-wizard-local-on-screen-<id>`,
+  `profile-wizard-local-consequence`, `profile-wizard-local-world` (`data-reason`)
+- direction: `profile-wizard-direction-push`, `profile-wizard-direction-pull`, `profile-wizard-pull-unavailable`,
+  `profile-wizard-push-warning`, `profile-wizard-pull-replaces`, `profile-wizard-save-first`,
+  `profile-wizard-save-name`, `profile-wizard-save-name-error`, `profile-wizard-no-copy-warning`
+- run: `profile-wizard-summary`, `profile-wizard-substep-<promote|save|attach>` (`data-state`
+  pending|running|done|failed), `profile-wizard-start`, `profile-wizard-failure` (`data-step`, `data-reason`),
+  `profile-wizard-retry`, `profile-wizard-restart`, `profile-wizard-done`
+- i18n: `settings.profile.current.setup` / `.change` / `.change_desc`, `settings.profile.wizard.*` (`.step.*`,
+  `.refused.*`, `.notice.*`, `.stop.*`, `.sot.*`, `.request.*`, `.local.*`, `.direction.*`, `.run.*` +
+  `.run.state.*`, `.now.*`, `.promote.*`, `.save.*`, `.attach.*`)
+
+**For P3d-4.** The Resolve rows still go at `TODO(P3d-4)` (`profile-current-locked-note`), in `Attached` — which
+is not mounted while the wizard is open, so the two never show together. A `profile-gone` master's one way out is
+now reachable: `profile-setup-change` → stop → choose again; the *Current* block's `profile_gone` sentence may
+point at it. The acceptance run drives the ids above; "wizard → existing → pull with save as slave" produces a
+slave named after the device (`Laptop`, `Laptop 2`, …) holding the pre-pull MASTER world. The SOT block still
+shows only with a master; the wizard's step 2 is the only list without one. Not done here: a way to delete the
+empty profile a user created in step 2 and then abandoned (it is listed next time, push-only because it holds
+nothing; deletable from the SOT block once attached to another).
 
 ### Task 6 — `components/ProfileSwitcher.tsx`
 Portal-based menu anchored to the Home button (both bars), `role="menu"` with arrow keys, Home/End,
