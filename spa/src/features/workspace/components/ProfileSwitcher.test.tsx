@@ -120,14 +120,37 @@ describe('Home button — with slaves: the profile switcher', () => {
     expect(menu()).toBeNull()
   })
 
-  it('lists the master first, then the slaves in slaveOrder — and nothing else', () => {
+  it('lists the master first, then the slaves in slaveOrder; then a divider and Settings › Profile', () => {
     renderHome()
     fireEvent.click(screen.getByTestId('home-button'))
     const items = screen.getAllByRole('menuitemradio')
     expect(items.map((el) => el.dataset.testid)).toEqual(['profile-item-master', 'profile-item-s2', 'profile-item-s1'])
     expect(items[0]).toHaveTextContent(en['profile.master']) // the tag; the name is `Home` until it is given one
-    expect(screen.queryAllByRole('menuitem')).toHaveLength(0)
-    expect(screen.queryAllByRole('separator')).toHaveLength(0)
+    expect(screen.getAllByRole('separator')).toHaveLength(1)
+    // A plain item, not one of the radio group: it is not a profile.
+    const plain = screen.getAllByRole('menuitem')
+    expect(plain.map((el) => el.dataset.testid)).toEqual(['profile-item-settings'])
+    expect(plain[0]).toHaveTextContent(en['profile.switcher.settings'])
+    expect(items[2].compareDocumentPosition(plain[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('Settings › Profile: goes to /settings/profile, closes the menu, switches nothing', () => {
+    window.history.replaceState(null, '', '/')
+    renderHome()
+    fireEvent.click(screen.getByTestId('home-button'))
+    fireEvent.click(screen.getByTestId('profile-item-settings'))
+    expect(window.location.pathname).toBe('/settings/profile')
+    expect(menu()).toBeNull()
+    expect(switchActiveProfile).not.toHaveBeenCalled()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('… and stays available while a switch is under way', () => {
+    vi.mocked(switchActiveProfile).mockReturnValue(new Promise(() => {}))
+    renderHome()
+    fireEvent.click(screen.getByTestId('home-button'))
+    fireEvent.click(screen.getByTestId('profile-item-s1'))
+    expect(screen.getByTestId('profile-item-settings')).not.toHaveAttribute('aria-disabled')
   })
 
   it('a slave shows its own name verbatim, with the full name as its title', () => {

@@ -6,6 +6,7 @@
 // Only with a master attached does it ask anybody anything: that master's host, once, for its profiles.
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useProfileStore } from '../../../stores/useProfileStore'
+import { CurrentBlock } from './CurrentBlock'
 import { LocalProfilesBlock } from './LocalProfilesBlock'
 import { SotProfilesBlock } from './SotProfilesBlock'
 import { useSotProfiles } from './useSotProfiles'
@@ -17,11 +18,14 @@ export function ProfileSection() {
   const hostId = useProfileStore((s) => (s.masterProfileId !== null && s.masterEndpoint !== null ? s.masterHostId : null))
   const profileId = useProfileStore((s) => s.masterProfileId)
   const sot = useSotProfiles(hostId)
+  // The snapshot names the master by id; its NAME is the host's to tell, and only this list asks the host.
+  const masterName = sot.view?.kind === 'rows' ? (sot.view.rows.find((row) => row.id === profileId)?.name ?? null) : null
 
   return (
     <div data-testid="profile-section">
       <h2 className="text-lg text-text-primary">{t('settings.section.profile')}</h2>
       <p className="text-xs text-text-secondary">{t('settings.profile.description')}</p>
+      <CurrentBlock masterName={masterName} />
       <LocalProfilesBlock />
       {hostId !== null && profileId !== null && sot.view !== null && (
         <SotProfilesBlock hostId={hostId} attachedProfileId={profileId} view={sot.view} reload={sot.reload} />

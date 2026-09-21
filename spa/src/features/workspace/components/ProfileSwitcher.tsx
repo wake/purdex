@@ -1,40 +1,13 @@
 import { useCallback, useMemo, type RefObject } from 'react'
+import { useLocation } from 'wouter'
+import { GearSix } from '@phosphor-icons/react'
 import { Menu, type MenuEntry, type MenuPlacement } from '../../../components/Menu'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLocalProfilesStore, MASTER_PROFILE_ID, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useProfileSync } from '../../../hooks/useProfileSync'
-import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
+import { SYNC_DOT_CLASS, syncDotOf } from '../../../lib/profile/sync-view'
 import { WorkspaceIcon } from './WorkspaceIcon'
-
-type SyncDot = 'synced' | 'syncing' | 'locked' | 'problem' | 'unknown'
-
-// Tailwind classes the app already uses for status dots; no new colour.
-const DOT_CLASS: Record<SyncDot, string> = {
-  synced: 'bg-green-500',
-  syncing: 'bg-yellow-500',
-  locked: 'bg-amber-500',
-  problem: 'bg-red-500',
-  unknown: 'bg-gray-500',
-}
-
-/**
- * One dot for the whole master; null = no master attached, no dot. In a follower window the figures are the
- * leader's (`remote`) and are shown all the same; once `stale` nobody is there to correct them, so the dot stops
- * vouching for them. `problems` is not read: it is a log of the last 50, with nothing saying one is over — a dot
- * driven by it would stay red for ever. What blocks the sync NOW is `blocked`; the log is Settings › Profile's.
- */
-function syncDotOf(sync: ProfileSyncSnapshot): SyncDot | null {
-  if (sync.master === null) return null
-  if (sync.blocked === 'suspended') return 'syncing' // an attach is under way somewhere: transient
-  if (sync.blocked !== null) return 'problem'
-  if (sync.status === null || (sync.remote && sync.stale)) return 'unknown'
-  const { profile } = sync.status
-  if (profile.startsWith('locked:')) return 'locked'
-  if (profile === 'synced') return 'synced'
-  if (profile === 'pending') return 'syncing'
-  return 'unknown'
-}
 
 /**
  * A profile's icon: its Phosphor icon tinted with its colour (as a workspace's icon, plus the tint a host's
@@ -58,6 +31,9 @@ export function ProfileIcon({ appearance, size, logoAlt = '' }: { appearance: Pr
   )
 }
 
+/** `profile` is the section's id in `registerSettingsSection` (lib/register-modules). */
+const PROFILE_SETTINGS_PATH = '/settings/profile'
+
 interface Props {
   /** The Home button. */
   trigger: RefObject<HTMLElement | null>
@@ -66,7 +42,7 @@ interface Props {
 
 /**
  * The Home button's menu: the master, then the slaves in `slaveOrder`, each with its icon and name; the one on
- * screen is checked. The master — the only one that ever syncs — is tagged as such, named or not. Choosing one
+ * screen is checked; then, under a divider, the way to Settings › Profile. The master — the only one that ever syncs — is tagged as such, named or not. Choosing one
  * calls `switchActiveProfile` and nothing else — switching never starts or stops syncing (spec §4.1). Rendered by
  * a Home button only while there is a slave (`useProfileSwitcherTrigger`).
  *
@@ -85,6 +61,7 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
   const pendingId = useProfileSwitcherStore((s) => s.pending?.targetId ?? null)
   const chooseProfile = useProfileSwitcherStore((s) => s.chooseProfile)
   const sync = useProfileSync()
+  const [, setLocation] = useLocation()
 
   const close = useCallback(() => setOpen(false), [setOpen])
 
@@ -117,18 +94,26 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
             title={dotLabel}
             data-testid="profile-sync-dot"
             data-state={dot}
-            className={`w-1.5 h-1.5 rounded-full ${DOT_CLASS[dot]}`}
+            className={`w-1.5 h-1.5 rounded-full ${SYNC_DOT_CLASS[dot]}`}
           />
         ),
       }),
       // A name is the user's own text: shown as is, never through t().
       ...slaveOrder.filter((id) => slaves[id]).map((id) => entry(id, slaves[id].name, slaves[id])),
-      // TODO(P3d-2): once Settings › Profile exists, add `{ divider: true }` and a plain item here that opens it
-      // (`profile.switcher.settings`, testId `profile-item-settings`; spec §4.9 "then Settings › Profile"). With
-      // no master and no slaves that one item — labelled `Set up sync…` — is the whole menu, and
-      // `useProfileSwitcherTrigger` then enables the trigger for everyone. Not before: the page does not exist yet.
+      // Settings › Profile (spec §4.9). Reached the way every settings section is: by its route, which
+      // `useRouteSync` turns into the Settings tab (as TitleBar does for `/settings/sync`). A plain item, not one
+      // of the radio group, and never disabled by a switch under way. The MENU still exists only where there is
+      // a slave (`useProfileSwitcherTrigger`); with none, the page is reached from the Settings sidebar.
+      { divider: true },
+      {
+        id: 'settings',
+        label: t('profile.switcher.settings'),
+        icon: <GearSix size={14} />,
+        onSelect: () => setLocation(PROFILE_SETTINGS_PATH),
+        testId: 'profile-item-settings',
+      },
     ]
-  }, [slaves, slaveOrder, master, activeProfileId, pendingId, chooseProfile, dot, dotLabel, t])
+  }, [slaves, slaveOrder, master, activeProfileId, pendingId, chooseProfile, dot, dotLabel, t, setLocation])
 
   return <Menu trigger={trigger} open={open} onClose={close} items={items} label={t('profile.switcher.label')} placement={placement} testId="profile-switcher-menu" />
 }
