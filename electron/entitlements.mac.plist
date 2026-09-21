@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Single source of truth for the macOS entitlements of every Purdex.app
+  bundle, both slices. Referenced explicitly from package.json
+  (build.mac.entitlements / entitlementsInherit) and from
+  scripts/mac-sign.mjs (ENTITLEMENTS_PATH).
+
+  The key/value set is deliberately identical to app-builder-lib's bundled
+  templates/entitlements.mac.plist — that is what the working arm64 slice
+  already carries, and keeping it identical is goal G4 of
+  docs/specs/2026-09-22-x64-adhoc-entitlements-spec.md.
+
+  disable-library-validation is the one that matters for the crash: with
+  Hardened Runtime on, Library Validation rejects an ad-hoc signed
+  "Electron Framework" because it shares no Team ID with the main
+  executable, and dyld aborts before main().
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

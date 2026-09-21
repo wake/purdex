@@ -31,6 +31,8 @@ const REBUILD_TRACKED_PATHS = [
   'pnpm-lock.yaml',
   'electron-builder.yml',
   'scripts/build-electron.mjs',
+  'scripts/mac-sign.mjs',
+  'electron/entitlements.mac.plist',
   'build/',
 ]
 

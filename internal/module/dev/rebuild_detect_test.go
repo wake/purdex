@@ -11,6 +11,26 @@ func TestRebuildTrackedPathsIncludesElectronBuilderScript(t *testing.T) {
 	t.Fatalf("rebuildTrackedPaths missing scripts/build-electron.mjs: %#v", rebuildTrackedPaths)
 }
 
+// The signing inputs decide whether a produced bundle can launch at all, and
+// changing either of them needs a full electron-builder rebuild — electron-vite
+// alone re-emits out/ without re-signing anything. mac-sign.mjs in particular
+// used to live inside build-electron.mjs, so it was tracked by accident until
+// it was extracted.
+func TestRebuildTrackedPathsIncludesSigningInputs(t *testing.T) {
+	for _, want := range []string{"scripts/mac-sign.mjs", "electron/entitlements.mac.plist"} {
+		found := false
+		for _, path := range rebuildTrackedPaths {
+			if path == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("rebuildTrackedPaths missing %s: %#v", want, rebuildTrackedPaths)
+		}
+	}
+}
+
 func TestDetectRequiresFullRebuild(t *testing.T) {
 	cases := []struct {
 		name        string

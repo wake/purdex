@@ -9,13 +9,14 @@ ship with Hardened Runtime + Apple-Developer-ID-signed + notarized binaries,
 distributed via Homebrew formula and direct curl download. **No DMG
 packaging** — locked 2026-04-29 per #709 epic decision.
 
-The roadmap is split into four stages; two are shipped, two remain.
+The roadmap is split into four stages; two are shipped, one is half done,
+two remain.
 
 | Stage | Status | Ships at | Scope |
 |-------|--------|----------|-------|
 | 0 | ✅ shipped | alpha.248 ([#711](https://github.com/wake/purdex/pull/711)) | Stop dev-update SIGKILL on unsigned bundles via three-state preflight |
 | 1b | ✅ shipped | alpha.250 ([#720](https://github.com/wake/purdex/pull/720)) | Retire runtime codesign entirely — Option β. Preflight + resign helpers deleted; three-layer `PDX_DEV_MODE === '1'` boundary unified |
-| 1a | ⏳ pending | TBD | Entitlements + Hardened Runtime + daemon signing pipeline |
+| 1a | 🟡 partial | app half TBD-bump ([#TBD](https://github.com/wake/purdex/pulls)) | Entitlements + Hardened Runtime + daemon signing pipeline. **App half shipped** (see below); daemon pipeline still pending |
 | 2 | ⏳ pending (optional) | TBD | Self-signed cert workflow + cross-machine trust docs |
 | 3 | ⏳ pending | TBD | Apple Developer ID + notarytool + GitHub Actions release |
 
@@ -84,22 +85,44 @@ Pure technical work, **independent of which signing identity will be used**.
 Configures the bundle so codesign produces a hardened, entitled binary —
 then any cert (ad-hoc `-`, self-signed, Developer ID) plugs in via env var.
 
-Concrete deliverables:
+#### App half — 🟡 shipped 2026-09-22
 
-- `package.json mac.hardenedRuntime: true` + `entitlements` path +
-  `entitlementsInherit`
-- `electron/entitlements.mac.plist` — V8 prerequisites:
-  - `com.apple.security.cs.allow-jit`
-  - `com.apple.security.cs.allow-unsigned-executable-memory`
-  - `com.apple.security.cs.disable-library-validation`
-  - `com.apple.security.cs.allow-dyld-environment-variables`
+Shipped ahead of the rest of the stage because its absence was a **launch
+crash**, not a gap: x64 bundles were ad-hoc signed with `--options runtime`
+and *no* entitlements, so Library Validation rejected the ad-hoc-signed
+`Electron Framework` and `dyld` aborted before `main()` on Intel Macs.
+arm64 was unaffected because electron-builder ad-hoc-signs that slice
+itself, with its default entitlements template.
+
+- `electron/entitlements.mac.plist` — the three V8 keys
+  (`allow-jit`, `allow-unsigned-executable-memory`,
+  `disable-library-validation`), now the single source of truth for both
+  slices
+- `package.json build.mac` — `entitlements` + `entitlementsInherit` point at
+  it (`hardenedRuntime` stays unset; electron-builder already defaults it to
+  `true` for non-MAS builds)
+- `scripts/mac-sign.mjs` (new) — `codesign` argv gains `--entitlements` and
+  **loses** `--identifier`, which combined with `--deep` had been flattening
+  every nested bundle's identifier
+- `scripts/build-electron.mjs` — asserts on **every** produced bundle that
+  Hardened Runtime implies `disable-library-validation`, so a regression
+  breaks the build instead of the user's launch
+
+Spec/plan: [`docs/specs/2026-09-22-x64-adhoc-entitlements-spec.md`](../specs/2026-09-22-x64-adhoc-entitlements-spec.md),
+[`...-plan.md`](../specs/2026-09-22-x64-adhoc-entitlements-plan.md).
+
+#### Still pending
+
+- `com.apple.security.cs.allow-dyld-environment-variables` — deliberately
+  **not** added by the app half: it would have changed the (working) arm64
+  entitlement set, and nothing in the current dev-launch path sets a
+  `DYLD_*` variable
 - `electron/entitlements.daemon.plist` — minimal/empty (Go binaries don't
   need V8 relaxations)
-- `scripts/build-electron.mjs` — codesign command gains `--entitlements`
 - New `Makefile release` target — signs `pdx` daemon with `--options runtime`
   and the daemon entitlements
-- Manual verification: bundle launches with `PDX_MAC_SIGN_IDENTITY=-`
-  (ad-hoc) and entitlements visible via `codesign -d --entitlements -`
+- Manual verification for the daemon path, as the app path already has
+  (`codesign -d --entitlements -` on both slices, plus a real Intel launch)
 
 **Risk**: misconfigured entitlements cause V8 to refuse to launch with
 cryptic errors. Mitigated by always running ad-hoc-signed verification
