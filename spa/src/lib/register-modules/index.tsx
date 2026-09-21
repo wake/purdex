@@ -29,7 +29,6 @@ import { TerminalSection } from '../../components/settings/TerminalSection'
 import { ElectronSection } from '../../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentSection'
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
-import { SyncSection } from '../../components/settings/SyncSection'
 import { ProfileSection } from '../../components/settings/profile/ProfileSection'
 import { FileTreeWorkspaceView } from '../../components/FileTreeView'
 import { FileTreeSessionView } from '../../components/FileTreeSessionView'
@@ -256,24 +255,14 @@ export function registerBuiltinModules(): void {
   // Editor module
   registerModule(editorModuleDefinition)
 
-  // Sync — promoted from a built-in section to a structural module
-  // (spec §4.3, PR-2). Intentionally NOT marked `disableable`: turning
-  // Sync off requires engine + contributor wiring that is a future spec
-  // item. The module-owned route makes Sync render with the puzzle icon
-  // in the sidebar, matching its peer surface area (engine, 7
-  // contributors, dedicated store).
+  // Sync — a structural module WITHOUT a settings section. Its sidebar entry left with Profile Sync P3d-3
+  // (Settings › Profile replaces Settings › Sync; two sync entry points with different stores behind them is
+  // not an IA anyone chose). The module, its engine, its contributors (`registerSyncContributors` above) and
+  // `SyncSection` / `SnapshotHistoryPage` stay until P4a deletes them. Nothing of it runs by itself — every
+  // entry point was a button on that page — so no engine is left running that a user could no longer stop.
   registerModule({
     id: 'sync',
     name: 'Sync',
-    settings: [
-      {
-        localId: 'sync',
-        scope: 'purdex',
-        order: SETTINGS_ORDER.MODULE_SYNC,
-        labelKey: 'settings.section.sync',
-        component: SyncSection,
-      },
-    ],
   })
 
   // FS backends
