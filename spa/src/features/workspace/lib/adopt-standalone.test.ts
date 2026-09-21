@@ -141,7 +141,12 @@ describe('while the app runs', () => {
     expect(ownersOf(stray.id)).toEqual([])
     vi.advanceTimersByTime(1)
     expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
-    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(a.id)
+    // The stray is the tab on screen (`addTab` focuses the first tab), so the pointer goes where it went
+    // (P3c-2 review, F3; was: stays on A — with the tab on screen in no bar). A stray that is NOT on screen
+    // leaves the pointer alone: see the last describe.
+    expect(useTabStore.getState().activeTabId).toBe(stray.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
+    expect(a.id).not.toBe(UNSORTED_WORKSPACE_ID)
   })
 
   it('does NOT adopt a tab whose workspace arrives a moment later (the two stores are written, and rehydrated, one after the other)', () => {
@@ -461,7 +466,10 @@ describe('a tab in more than one workspace', () => {
     const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
     expect(workspaces.map((w) => w.tabs)).toEqual([['a1', t.id], ['b1'], []])
     expect(workspaces.map((w) => w.activeTabId)).toEqual(['a1', null, null])
-    expect(activeWorkspaceId).toBe('bbbbbb')
+    // The tab is on screen and the ACTIVE workspace is the one that lost it: the pointer follows it to the
+    // owner that keeps it (P3c-2 review, F3; was: stays on 'bbbbbb', whose bar no longer has the tab).
+    expect(useTabStore.getState().activeTabId).toBe(t.id)
+    expect(activeWorkspaceId).toBe('aaaaaa')
     expect(unsorted()).toBeUndefined()
   })
 
@@ -513,5 +521,88 @@ describe('a tab in more than one workspace', () => {
     useLocalProfilesStore.setState({ worldEpoch: 9 })
     vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
     expect(ownersOf(t.id)).toEqual(['aaaaaa'])
+  })
+})
+
+// P3c-2 review, F3. A click on a notification (or on anything else) can put a tab nobody has adopted yet on
+// screen while `activeWorkspaceId` points at some workspace. Adoption then files the tab under Unsorted — and if
+// the pointer stayed, the tab on screen would be in no bar, for good. The pointer follows the tab on screen only
+// when THIS repair moved it; a pointer the user chose is otherwise never touched.
+describe('the pointer follows the tab on screen — only when this repair moved that tab', () => {
+  it('the adopted tab is the active tab → activeWorkspaceId becomes the workspace that adopted it, in the same write', () => {
+    const a = addStray()
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, a.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    boot()
+    const orphan = addStray()
+    useTabStore.getState().setActiveTab(orphan.id) // what handleNotificationClick / handleSelectTab do
+    const writes = vi.fn()
+    const off = useWorkspaceStore.subscribe(writes)
+    const before = armed()
+
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
+    expect(writes).toHaveBeenCalledTimes(1)
+    // No loop: the write changes the signature, finds nothing to do, arms nothing — now or later.
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 4)
+    expect(armed()).toBe(before)
+    expect(writes).toHaveBeenCalledTimes(1)
+    off()
+  })
+
+  it('the adopted tab is NOT the active tab → the pointer does not move', () => {
+    const a = addStray()
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, a.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useTabStore.getState().setActiveTab(a.id)
+    boot()
+    const orphan = addStray()
+
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsA.id)
+  })
+
+  it('a pointer the user chose is not "aligned": active tab in A, the user looks at B, a stray is adopted → still B', () => {
+    const [a, b] = [addStray(), addStray()]
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, a.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, b.id)
+    useTabStore.getState().setActiveTab(a.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsB.id)
+    boot()
+    const orphan = addStray()
+
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id)
+  })
+
+  it('de-duplication takes the active tab out of the ACTIVE workspace → the pointer follows it to the owner that keeps it', () => {
+    const t = addStray()
+    useTabStore.getState().setActiveTab(t.id)
+    useWorkspaceStore.setState({ workspaces: [ws('w1', 'One', [t.id]), ws('w2', 'Two', [t.id])], activeWorkspaceId: 'w2' })
+    boot()
+
+    expect(ownersOf(t.id)).toEqual(['w1'])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1')
+  })
+
+  it('de-duplication that leaves the active workspace\'s listing alone → the pointer does not move', () => {
+    const [t, c] = [addStray(), addStray()]
+    useTabStore.getState().setActiveTab(t.id)
+    // The user looks at w3; the active tab is listed in w1 and w2, and w2 loses it. Nobody asked for w1.
+    useWorkspaceStore.setState({ workspaces: [ws('w1', 'One', [t.id]), ws('w2', 'Two', [t.id]), ws('w3', 'Three', [c.id])], activeWorkspaceId: 'w3' })
+    boot()
+
+    expect(ownersOf(t.id)).toEqual(['w1'])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w3')
   })
 })

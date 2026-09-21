@@ -35,14 +35,18 @@
 // subscription). For a user who never made a local profile the world is always settled: the three epochs are
 // 0, both ids `master`, the fence absent.
 //
+// THE RULE ITSELF IS NOT IN THIS FILE: who keeps a tab, who adopts one, and when the pointer follows the tab on
+// screen is `repairTabOwnership` (lib/profile/sections.ts) — shared with switch-active.ts, which repairs a world
+// it is about to park (nobody repairs a parked one) and asks `tabOwnershipQuiet` below whether the wait this
+// file applies is over. This file is the WHEN: the debounce, the settled check, the write.
+//
 // NO LOOP. A write here changes the workspace store, which calls the subscriber again — which finds nothing to
 // do and arms nothing. The timer exists only while there is something to do.
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { readMasterWorld } from '../../../lib/profile/master-world'
-import { adoptStandaloneTabs } from '../../../lib/profile/sections'
-import type { Workspace } from '../../../types/tab'
+import { repairTabOwnership } from '../../../lib/profile/sections'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../store'
 
 /** How long the tab world must have been left alone before a tab without a workspace is believed to be one. */
@@ -76,22 +80,16 @@ function needsWork(): boolean {
   return Object.keys(useTabStore.getState().tabs).some((id) => !owned.has(id))
 }
 
-/** Every tab id once: the first workspace (in workspace order) that lists it keeps it, at its first position. */
-function dropExtraOwners(workspaces: readonly Workspace[]): { workspaces: readonly Workspace[]; dropped: number } {
-  const seen = new Set<string>()
-  let dropped = 0
-  const next = workspaces.map((ws) => {
-    const tabs: string[] = []
-    for (const id of ws.tabs) {
-      if (seen.has(id)) continue
-      seen.add(id)
-      tabs.push(id)
-    }
-    if (tabs.length === ws.tabs.length) return ws
-    dropped += ws.tabs.length - tabs.length
-    return { ...ws, tabs, activeTabId: ws.activeTabId !== null && tabs.includes(ws.activeTabId) ? ws.activeTabId : null }
-  })
-  return { workspaces: dropped === 0 ? workspaces : next, dropped }
+/**
+ * When the membership signature last moved, while the invariant is installed; `null` while it is not.
+ * `tabOwnershipQuiet` is for whoever must decide NOW whether a tab without a workspace is really one
+ * (switch-active.ts, about to park the screen): only after the same wait this file gives it. Not installed →
+ * nobody is watching → not quiet: it fails closed.
+ */
+let lastChangeAt: number | null = null
+
+export function tabOwnershipQuiet(now: number = Date.now()): boolean {
+  return lastChangeAt !== null && now - lastChangeAt >= ADOPTION_SETTLE_MS
 }
 
 /** One look, on what the stores hold NOW. */
@@ -99,23 +97,18 @@ function reconcile(): void {
   if (!needsWork() || !readMasterWorld().settled) return
   const { tabs, tabOrder, activeTabId } = useTabStore.getState()
   const current = useWorkspaceStore.getState()
-  const deduped = dropExtraOwners(current.workspaces)
-  const { workspaces, adopted } = adoptStandaloneTabs(
-    { workspaces: deduped.workspaces, tabs, tabOrder },
+  // The rule itself — who keeps a tab, who adopts one, when the pointer follows — is `repairTabOwnership`'s.
+  const { workspaces, activeWorkspaceId, adopted, dropped, membershipChanged: membership } = repairTabOwnership(
+    { workspaces: current.workspaces, tabs, tabOrder, activeTabId, activeWorkspaceId: current.activeWorkspaceId },
     { unsortedName: useI18nStore.getState().t('workspace.unsorted'), newWorkspaceId: UNSORTED_WORKSPACE_ID },
   )
-  // "Home" is gone: the workspace of the tab on screen, else the first one.
-  const activeWorkspaceId = current.activeWorkspaceId
-    ?? (workspaces.find((ws) => activeTabId !== null && ws.tabs.includes(activeTabId)) ?? workspaces[0])?.id
-    ?? null
-  const membership = adopted.length > 0 || deduped.dropped > 0
-  // Cannot happen while `needsWork` and the two steps above agree; if they ever stop, this is what keeps a
+  // Cannot happen while `needsWork` and the repair agree; if they ever stop, this is what keeps a
   // write that changes nothing from arming the next timer, for ever.
   if (!membership && activeWorkspaceId === current.activeWorkspaceId) return
 
   useWorkspaceStore.setState(membership ? { workspaces, activeWorkspaceId } : { activeWorkspaceId })
   if (adopted.length > 0) console.info(`[workspace] ${adopted.length} tab(s) had no workspace; moved into "${UNSORTED_WORKSPACE_ID}"`)
-  if (deduped.dropped > 0) console.info(`[workspace] ${deduped.dropped} tab listing(s) removed: a tab was in more than one workspace`)
+  if (dropped > 0) console.info(`[workspace] ${dropped} tab listing(s) removed: a tab was in more than one workspace`)
 }
 
 /** Installs the invariant for the lifetime of the app (main.tsx). Returns how to stop it. */
@@ -126,6 +119,7 @@ export function startStandaloneAdoption(): () => void {
     const now = signature()
     if (now === last) return
     last = now
+    lastChangeAt = Date.now()
     if (timer !== null) clearTimeout(timer)
     timer = needsWork()
       ? setTimeout(() => {
@@ -141,5 +135,6 @@ export function startStandaloneAdoption(): () => void {
     for (const off of unsubscribe) off()
     if (timer !== null) clearTimeout(timer)
     timer = null
+    lastChangeAt = null
   }
 }

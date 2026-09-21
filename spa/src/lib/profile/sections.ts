@@ -231,3 +231,62 @@ export function adoptStandaloneTabs(
   const workspaces = world.workspaces.map((ws, i) => (i === target ? { ...ws, tabs: [...ws.tabs, ...adopted] } : ws))
   return { workspaces, adopted, createdWorkspaceId: null }
 }
+
+/** Every tab id once: the first workspace (in workspace order) that lists it keeps it, at its first position. */
+function dropExtraOwners(workspaces: readonly Workspace[]): { workspaces: readonly Workspace[]; dropped: number } {
+  const seen = new Set<string>()
+  let dropped = 0
+  const next = workspaces.map((ws) => {
+    const tabs: string[] = []
+    for (const id of ws.tabs) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      tabs.push(id)
+    }
+    if (tabs.length === ws.tabs.length) return ws
+    dropped += ws.tabs.length - tabs.length
+    return { ...ws, tabs, activeTabId: ws.activeTabId !== null && tabs.includes(ws.activeTabId) ? ws.activeTabId : null }
+  })
+  return { workspaces: dropped === 0 ? workspaces : next, dropped }
+}
+
+/** One tab world, as much of it as ownership is about. `tabOrder` only orders what is adopted; `[]` will do. */
+export interface OwnershipWorld {
+  workspaces: readonly Workspace[]
+  tabs: Record<string, Tab>
+  tabOrder: readonly string[]
+  activeTabId: string | null
+  activeWorkspaceId: string | null
+}
+
+/**
+ * EVERY TAB BELONGS TO EXACTLY ONE WORKSPACE, as a pure function of one tab world: several owners → the first
+ * workspace in workspace order keeps the tab (a workspace that loses its active tab gets `activeTabId: null`);
+ * zero owners → `adoptStandaloneTabs`. A rule with no choice in it, so whoever applies it to the same world gets
+ * the same world. ONE copy, two callers: the standing invariant on the world on screen
+ * (features/workspace/lib/adopt-standalone.ts, after its wait) and switch-active.ts, on a world it is about to
+ * park or to copy — a parked world is one nobody repairs.
+ *
+ * THE POINTER. `null` with workspaces ("Home", which is gone) → the workspace of the tab on screen, else the
+ * first. Otherwise it FOLLOWS THE TAB ON SCREEN ONLY WHEN THIS REPAIR MOVED THAT TAB: it was adopted (a click
+ * can focus a tab before it has a workspace), or the pointed-at workspace is the one that lost its listing of
+ * it — or the tab on screen would be in no bar, for good. Never "align the pointer with the active tab's
+ * owner": a user who looks at B's bar while a tab of A is on screen chose that.
+ */
+export function repairTabOwnership(
+  world: OwnershipWorld,
+  opts: { unsortedName: string; newWorkspaceId: string },
+): { workspaces: Workspace[]; activeWorkspaceId: string | null; adopted: string[]; dropped: number; membershipChanged: boolean } {
+  const deduped = dropExtraOwners(world.workspaces)
+  const { workspaces, adopted } = adoptStandaloneTabs({ ...world, workspaces: deduped.workspaces }, opts)
+  const { activeTabId } = world
+  const owner = activeTabId === null ? undefined : workspaces.find((ws) => ws.tabs.includes(activeTabId))
+
+  let activeWorkspaceId = world.activeWorkspaceId ?? (owner ?? workspaces[0])?.id ?? null
+  if (activeTabId !== null && owner !== undefined) {
+    const pointed = world.workspaces.find((ws) => ws.id === world.activeWorkspaceId)
+    const lostByPointed = pointed !== undefined && pointed.tabs.includes(activeTabId) && owner.id !== pointed.id
+    if (adopted.includes(activeTabId) || lostByPointed) activeWorkspaceId = owner.id
+  }
+  return { workspaces, activeWorkspaceId, adopted, dropped: deduped.dropped, membershipChanged: adopted.length > 0 || deduped.dropped > 0 }
+}

@@ -17,6 +17,7 @@ import { isWellFormedSection } from './applier'
 import { hashSection, structuralKey } from './hash'
 import {
   adoptStandaloneTabs,
+  repairTabOwnership,
   buildHostsSection,
   buildProfileDocument,
   buildSettingsSection,
@@ -579,5 +580,39 @@ describe('adoptStandaloneTabs', () => {
     const out = adoptStandaloneTabs(world, opts)
     expect(out.workspaces[0].tabs).toEqual(['t1', 'x'])
     expect(world.workspaces[0].tabs).toEqual(['t1'])
+  })
+})
+
+// --- repairTabOwnership: the ONE rule of "every tab in exactly one workspace" (adopt-standalone.ts + switch-active.ts)
+
+describe('repairTabOwnership', () => {
+  const opts = { unsortedName: 'Unsorted', newWorkspaceId: 'unsorted' }
+  const tabsOf = (...ids: string[]): Record<string, Tab> => Object.fromEntries(ids.map((id) => [id, tab(id, leaf(`p-${id}`, { kind: 'dashboard' }))]))
+  const base = { tabs: tabsOf('t1', 't2', 'o'), tabOrder: ['t1', 't2', 'o'] }
+
+  it('a clean world: nothing changed, the pointer as it was', () => {
+    const out = repairTabOwnership({ workspaces: [ws('a', 'A', ['t1', 't2', 'o'])], ...base, activeTabId: 't1', activeWorkspaceId: 'a' }, opts)
+    expect(out).toMatchObject({ membershipChanged: false, adopted: [], dropped: 0, activeWorkspaceId: 'a' })
+  })
+
+  it('zero owners → Unsorted; several → the first keeps it and the loser\'s active tab is cleared; and it is idempotent', () => {
+    const world = { workspaces: [ws('a', 'A', ['t1', 't2']), { ...ws('b', 'B', ['t2']), activeTabId: 't2' }], ...base, activeTabId: 't1', activeWorkspaceId: 'a' }
+    const out = repairTabOwnership(deepFreeze(world), opts)
+    expect(out.workspaces.map((w) => [w.id, w.tabs, w.activeTabId])).toEqual([['a', ['t1', 't2'], null], ['b', [], null], ['unsorted', ['o'], null]])
+    expect(out).toMatchObject({ adopted: ['o'], dropped: 1, membershipChanged: true, activeWorkspaceId: 'a' })
+    const again = repairTabOwnership({ ...world, workspaces: out.workspaces, activeWorkspaceId: out.activeWorkspaceId }, opts)
+    expect(again).toMatchObject({ membershipChanged: false, activeWorkspaceId: 'a' })
+    expect(again.workspaces).toEqual(out.workspaces)
+  })
+
+  it.each([
+    ['the tab on screen is the one adopted → the pointer follows it', { activeTabId: 'o', activeWorkspaceId: 'a' }, [ws('a', 'A', ['t1', 't2'])], 'unsorted'],
+    ['another tab is adopted → the pointer stays', { activeTabId: 't1', activeWorkspaceId: 'a' }, [ws('a', 'A', ['t1', 't2'])], 'a'],
+    ['the pointed-at workspace loses the tab on screen → the pointer follows it', { activeTabId: 't2', activeWorkspaceId: 'b' }, [ws('a', 'A', ['t1', 't2']), ws('b', 'B', ['t2', 'o'])], 'a'],
+    ['a THIRD workspace is pointed at → the user chose that; it stays', { activeTabId: 't2', activeWorkspaceId: 'c' }, [ws('a', 'A', ['t1', 't2']), ws('b', 'B', ['t2']), ws('c', 'C', ['o'])], 'c'],
+    ['no pointer → the owner of the tab on screen', { activeTabId: 't2', activeWorkspaceId: null }, [ws('a', 'A', ['t1']), ws('b', 'B', ['t2', 'o'])], 'b'],
+    ['no pointer, no tab on screen → the first workspace', { activeTabId: null, activeWorkspaceId: null }, [ws('a', 'A', ['t1']), ws('b', 'B', ['t2', 'o'])], 'a'],
+  ])('%s', (_name, focus, workspaces, expected) => {
+    expect(repairTabOwnership({ workspaces, ...base, ...focus }, opts).activeWorkspaceId).toBe(expected)
   })
 })
