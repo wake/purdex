@@ -138,7 +138,7 @@ export function ActivityBarNarrow({
         <button
           ref={homeRef}
           data-testid="home-button"
-          title={t('nav.home')}
+          title={switcher.onSlave && switcher.currentName !== null ? switcher.currentName : t('nav.home')}
           onClick={switcher.onClick}
           {...switcher.triggerProps}
           className={`w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
@@ -149,6 +149,17 @@ export function ActivityBarNarrow({
         >
           <img src="/icons/logo-transparent.png" alt="Purdex" width={20} height={20} className="rounded-sm" />
         </button>
+        {/* A slave is on screen — a world that never syncs. No room for its name here, so a mark: bottom-right
+            and accent-coloured, where the unread badge (top-right, red, a number) and the status pill (left,
+            green / yellow / red) are not. The master on screen shows nothing: the bar looks as it always did. */}
+        {switcher.onSlave && (
+          <span
+            data-testid="home-profile-marker"
+            aria-hidden="true"
+            className="absolute -bottom-px -right-px w-[7px] h-[7px] rounded-full bg-accent pointer-events-none"
+            style={{ boxShadow: '0 0 0 1.5px var(--surface-tertiary)' }}
+          />
+        )}
         {switcher.enabled && <ProfileSwitcher trigger={homeRef} placement="right-start" />}
       </div>
 

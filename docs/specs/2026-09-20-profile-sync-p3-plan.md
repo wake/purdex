@@ -367,29 +367,63 @@ two sentences and offers the wizard.
 - **`components/Menu.tsx`** — `<Menu trigger={ref} open onClose items label placement? testId? />`; an entry is
   `{ divider: true }` or `{ id, label, icon?, hint?, trailing?, title?, checked?, disabled?, busy?, keepOpen?,
   onSelect, testId? }`. `checked` defined (true or false) → `menuitemradio`; `keepOpen` → the owner closes the
-  menu itself (async work); `busy` → spinner + `aria-busy`, not activatable. `placement`: `bottom-start` |
-  `right-start`, flipped / clamped into the viewport, below the Electron title bar. The TRIGGER owns
-  `aria-haspopup="menu"` / `aria-expanded`. Its own portal, not a `FloatingPanel` (that is a titled, draggable
-  `role="dialog"`); it shares that file's conventions and its `TITLE_BAR_HEIGHT`.
-- **The switcher exists only where there is a slave.** `stores/useProfileSwitcherStore.ts`: the `open` flag
-  (not persisted), `hasLocalSlaves()`, and `useProfileSwitcherTrigger(onSelectHome)` → `{ enabled, open, onClick,
-  triggerProps }`, used by `HomeRow` (chevron, `bottom-start`) and `ActivityBarNarrow` (`right-start`). With no
-  slave both buttons are exactly what they were, and `switch-workspace-home` still focuses the first workspace;
-  with one, the shortcut sets `open` and the menu takes focus. **P3d-2 adds the `Settings › Profile` item** at
-  the `TODO(P3d-2)` in `ProfileSwitcher.tsx` and, if the entry is to be discoverable with no slave, widens
-  `enabled` there — one place.
+  menu itself (async work); `busy` → spinner + `aria-busy` + `aria-disabled`, not activatable. `placement`:
+  `bottom-start` | `right-start`, flipped / clamped into the viewport, below the Electron title bar. The TRIGGER
+  owns `aria-haspopup="menu"` / `aria-expanded`. Its own portal, not a `FloatingPanel` (that is a titled,
+  draggable `role="dialog"`); it shares that file's conventions and its `TITLE_BAR_HEIGHT`.
+  - **Escape**: an open menu ASSUMES it is the topmost layer (nothing opens over a menu; z-index 100). Its
+    Escape listener is on `document` in the **capture** phase and calls `stopImmediatePropagation()` — so the
+    `FloatingPanel` / `ConfirmDialog` it may have been opened from does not close with it. It did not join
+    `FloatingPanel`'s private `openPanels` stack: `ConfirmDialog` is not in that stack, so joining it would have
+    fixed one of the two. The listener exists only while open; an IME-composition Escape is neither handled nor
+    withheld.
+  - **Entries changing while open**: if the focused item was removed (focus fell to `<body>`), focus goes to the
+    checked item → the first available → the menu itself. An item that is still there keeps focus even if it
+    turned busy / disabled (the arrow keys work from it), and focus the user moved elsewhere is never taken back.
+- **The switcher exists only where there is a slave.** `useProfileSwitcherTrigger(onSelectHome)` →
+  `{ enabled, open, onClick, currentName, onSlave, triggerProps }`, used by `HomeRow` (chevron, `bottom-start`)
+  and `ActivityBarNarrow` (`right-start`). With no slave both buttons are exactly what they were, and
+  `switch-workspace-home` still focuses the first workspace; with one, the shortcut sets `open` and the menu
+  takes focus. **P3d-2 adds the `Settings › Profile` item** at the `TODO(P3d-2)` in `ProfileSwitcher.tsx` and,
+  if the entry is to be discoverable with no slave, widens `enabled` in the hook — one place.
+- **`stores/useProfileSwitcherStore.ts` OWNS the switch under way** (not persisted; idle = no timer at all):
+  `open`, `pending: { targetId, generation, startedAt, abandoned } | null`, `setOpen(open)`,
+  `chooseProfile(targetId): boolean` (false while one is pending), plus `hasLocalSlaves()` and
+  `__resetProfileSwitcherForTest()`. Why the store: the two bars are two components sharing `open`, and a change
+  of bar width remounts the menu — a component-owned attempt let a second switch start beside the first.
+  - every answer is checked against `pending.generation`; a stale one is dropped.
+  - `busy` → retried every `BUSY_RETRY_MS` (250) until `BUSY_RETRY_TOTAL_MS` (4000) has passed since the click,
+    then a toast, menu stays; `unsettled` → the neutral toast, menu stays; `superseded` → the same toast, menu
+    closes; `write-failed` → toast with `detail`; `not-found` / anything else → a toast naming it; success and
+    `already-on-screen` → menu closes. **There is one toast and it has one look** (`useUndoToast`): "never a red
+    error" is a matter of wording.
+  - **closing the menu is "stop trying", not "undo"**: a pending retry timer is cleared and the switch is over;
+    a call already in flight runs to its end — `pending` stays meanwhile (`abandoned: true`, so no second switch
+    from a re-opened menu), a success is handled as a success (the world DID change), a real failure is still
+    said, and a `busy` is dropped without a retry or a word.
 - **`features/workspace/components/ProfileSwitcher.tsx`** (not `components/` as Task 6 says: it sits with the
-  two bars that render it). `busy` → retried every `BUSY_RETRY_MS` (250) until `BUSY_RETRY_TOTAL_MS` (4000) has
-  passed since the click, then a toast; `unsettled` → the neutral toast, menu stays; `superseded` → the same toast,
-  menu closes; `write-failed` → toast with `detail`; closing the menu or unmounting cancels the attempt.
-  **There is one toast and it has one look** (`useUndoToast`): "never a red error" is a matter of wording.
+  two bars that render it) only reads: the chosen item is `busy` from the click to the last answer, the others
+  are disabled.
 - **The master's dot** reads `useProfileSync()`: `blocked` (`suspended` → syncing, else problem) → `status.profile`
   (`locked:*` → locked, `synced`, `pending` → syncing) → unknown (no status, or `remote && stale`). It does **not**
   read `problems`: that is a log with no "over" signal; the *Current* block is where it is listed.
-- test ids: `home-button`, `home-switcher-chevron`, `profile-switcher-menu`, `profile-item-master`,
-  `profile-item-<slaveId>`, `profile-sync-dot` (`data-state`), busy = `aria-busy="true"` on the item.
-- i18n: `profile.master`, `profile.switcher.label`, `profile.sync.*`, `profile.switch.*`. zh-TW keeps "profile"
-  as a noun (as `hosts.undo_world_skipped` already did): master = 「主要 profile」, slave = 「本機 profile」.
+- **The Home button says which world is on screen — only where there is a slave.**
+
+  | | wide (`HomeRow`) | narrow |
+  |---|---|---|
+  | no slave | `Home`; no `aria-label`, no `title` | `title="Home"`; no `aria-label`, no marker |
+  | slave exists, master on screen | label + `title` = `t('profile.master')` | `title="Home"`, no marker |
+  | a slave on screen | label (CSS-truncated) + `title` = its name | `title` = its name + `home-profile-marker` |
+
+  With a slave the trigger's `aria-label` is `t('profile.switcher.trigger', { name })` ("Profile: Scratch") in
+  both bars. The marker is a 7 px `bg-accent` dot at the icon's bottom-right — not the unread badge's corner,
+  colour or shape — and it means one thing: what is on screen never syncs.
+- test ids: `home-button`, `home-label` (wide), `home-switcher-chevron` (wide), `home-profile-marker` (narrow),
+  `profile-switcher-menu`, `profile-item-master`, `profile-item-<slaveId>`, `profile-sync-dot` (`data-state`);
+  busy = `aria-busy="true"` on the item.
+- i18n: `profile.master`, `profile.switcher.label`, `profile.switcher.trigger`, `profile.sync.*`,
+  `profile.switch.*`. zh-TW keeps "profile" as a noun (as `hosts.undo_world_skipped` already did): master =
+  「主要 profile」, slave = 「本機 profile」.
 
 ### Task 6 — `components/ProfileSwitcher.tsx`
 Portal-based menu anchored to the Home button (both bars), `role="menu"` with arrow keys, Home/End,

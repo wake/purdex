@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import en from '../../../locales/en.json'
 import { HomeRow } from './HomeRow'
-import { BUSY_RETRY_MS, BUSY_RETRY_TOTAL_MS } from './ProfileSwitcher'
+import { ActivityBarNarrow } from './ActivityBarNarrow'
 import { useLocalProfilesStore, type LocalProfile } from '../../../stores/useLocalProfilesStore'
-import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
+import { __resetProfileSwitcherForTest, BUSY_RETRY_MS, BUSY_RETRY_TOTAL_MS, useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useUndoToast } from '../../../stores/useUndoToast'
 import { switchActiveProfile, type SwitchResult } from '../../../lib/profile/switch-active'
 import { useProfileSync } from '../../../hooks/useProfileSync'
@@ -58,12 +58,13 @@ beforeEach(() => {
   vi.mocked(switchActiveProfile).mockReset()
   vi.mocked(useProfileSync).mockReturnValue(NO_MASTER)
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0 })
-  useProfileSwitcherStore.setState({ open: false })
+  __resetProfileSwitcherForTest()
   useUndoToast.setState({ toast: null })
 })
 
 afterEach(() => {
   cleanup()
+  __resetProfileSwitcherForTest()
   vi.useRealTimers()
 })
 
@@ -220,6 +221,41 @@ describe('choosing a profile', () => {
     fireEvent.click(screen.getByTestId('profile-item-s2'))
     expect(switchActiveProfile).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('profile-item-s1')).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByTestId('profile-item-master')).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByTestId('profile-item-s2')).toHaveAttribute('aria-busy', 'true')
+  })
+
+  // The two bars are two components sharing one `open` flag: changing the bar's width unmounts one switcher and
+  // mounts the other with the menu still open. The switch under way must survive that — it is the store's.
+  it('the bar changes under a pending switch: the new menu is still busy, cannot start a second, and the first answer is still handled', async () => {
+    let answer: (r: SwitchResult) => void = () => {}
+    vi.mocked(switchActiveProfile).mockReturnValue(new Promise((resolve) => { answer = resolve }))
+    const { unmount } = renderHome()
+    open()
+    fireEvent.click(screen.getByTestId('profile-item-s2'))
+    unmount()
+    render(
+      <ActivityBarNarrow
+        workspaces={[]}
+        activeWorkspaceId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    expect(menu()).toBeInTheDocument() // `open` outlived the wide bar
+    expect(screen.getByTestId('profile-item-s2')).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByTestId('profile-item-s1')).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(screen.getByTestId('profile-item-s1'))
+    fireEvent.click(screen.getByTestId('profile-item-master'))
+    expect(switchActiveProfile).toHaveBeenCalledTimes(1)
+
+    await act(async () => { answer({ ok: true }) })
+    await flush()
+    expect(menu()).toBeNull()
+    expect(toast()).toBeNull()
   })
 
   describe('busy', () => {
@@ -295,20 +331,18 @@ describe('choosing a profile', () => {
       expect(toast()).toBeNull()
     })
 
-    it('unmounting stops the retries', async () => {
+    it('unmounting the menu\'s bar does NOT end the switch (the store owns it): the retries go on', async () => {
       result({ ok: false, reason: 'busy' })
       const { unmount } = renderHome()
       open()
       fireEvent.click(screen.getByTestId('profile-item-s2'))
       await flush()
-      expect(vi.getTimerCount()).toBe(1)
       unmount()
-      expect(vi.getTimerCount()).toBe(0)
-      await advance(60_000)
-      expect(switchActiveProfile).toHaveBeenCalledTimes(1)
+      await advance(BUSY_RETRY_MS)
+      expect(switchActiveProfile).toHaveBeenCalledTimes(2)
     })
 
-    it('an answer that arrives after the menu was closed says nothing and schedules nothing', async () => {
+    it('a busy that arrives after the menu was closed says nothing and schedules nothing', async () => {
       let answer: (r: SwitchResult) => void = () => {}
       vi.mocked(switchActiveProfile).mockReturnValue(new Promise((resolve) => { answer = resolve }))
       renderHome()
@@ -459,3 +493,86 @@ describe('the master\'s sync dot', () => {
     expect(screen.getAllByTestId('profile-sync-dot')).toHaveLength(1)
   })
 })
+
+describe('the Home button says which world is on screen', () => {
+  function renderNarrow() {
+    return render(
+      <ActivityBarNarrow
+        workspaces={[]}
+        activeWorkspaceId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        onAddWorkspace={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+  }
+  const LONG = 'A very long local profile name that will certainly not fit in the bar'
+  const triggerLabel = (name: string) => en['profile.switcher.trigger'].replace('{{name}}', name)
+
+  describe('wide', () => {
+    it('no slave: `Home`, no aria-label, no title — item for item what it was', () => {
+      renderHome()
+      const button = screen.getByTestId('home-button')
+      expect(screen.getByTestId('home-label')).toHaveTextContent(en['nav.home'])
+      expect(button).not.toHaveAttribute('aria-label')
+      expect(button).not.toHaveAttribute('title')
+    })
+
+    it('a slave exists, the master is on screen: the master\'s name', () => {
+      seedSlaves('master')
+      renderHome()
+      expect(screen.getByTestId('home-label')).toHaveTextContent(en['profile.master'])
+      expect(screen.getByTestId('home-label')).not.toHaveTextContent(en['nav.home'])
+      expect(screen.getByTestId('home-button')).toHaveAttribute('aria-label', triggerLabel(en['profile.master']))
+    })
+
+    it('a slave is on screen: ITS name — truncated by CSS, whole in the title — and never the master\'s', () => {
+      useLocalProfilesStore.setState({ slaves: { s1: slave('s1', LONG, true) }, slaveOrder: ['s1'], activeProfileId: 's1' })
+      renderHome()
+      const label = screen.getByTestId('home-label')
+      expect(label).toHaveTextContent(LONG)
+      expect(label).not.toHaveTextContent(en['profile.master'])
+      expect(label).toHaveClass('truncate')
+      expect(screen.getByTestId('home-button')).toHaveAttribute('title', LONG)
+      expect(screen.getByTestId('home-button')).toHaveAttribute('aria-label', triggerLabel(LONG))
+    })
+
+    it('follows a switch', () => {
+      seedSlaves('master')
+      renderHome()
+      act(() => seedSlaves('s2'))
+      expect(screen.getByTestId('home-label')).toHaveTextContent('Client work')
+    })
+  })
+
+  describe('narrow', () => {
+    it('no slave: title `Home`, no aria-label, no marker', () => {
+      renderNarrow()
+      const button = screen.getByTestId('home-button')
+      expect(button).toHaveAttribute('title', en['nav.home'])
+      expect(button).not.toHaveAttribute('aria-label')
+      expect(screen.queryByTestId('home-profile-marker')).toBeNull()
+    })
+
+    it('a slave exists, the master is on screen: looks as ever (title `Home`, no marker); only the accessible name says more', () => {
+      seedSlaves('master')
+      renderNarrow()
+      const button = screen.getByTestId('home-button')
+      expect(button).toHaveAttribute('title', en['nav.home'])
+      expect(screen.queryByTestId('home-profile-marker')).toBeNull()
+      expect(button).toHaveAttribute('aria-label', triggerLabel(en['profile.master']))
+    })
+
+    it('a slave is on screen: a marker on the icon, and the title is the slave\'s name', () => {
+      seedSlaves('s1')
+      renderNarrow()
+      const button = screen.getByTestId('home-button')
+      expect(screen.getByTestId('home-profile-marker')).toBeInTheDocument()
+      expect(button).toHaveAttribute('title', 'Scratch')
+      expect(button).toHaveAttribute('aria-label', triggerLabel('Scratch'))
+    })
+  })
+})
+

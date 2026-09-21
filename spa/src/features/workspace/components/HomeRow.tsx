@@ -35,6 +35,7 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
         data-testid="home-button"
         onClick={switcher.onClick}
         {...switcher.triggerProps}
+        title={switcher.currentName ?? undefined}
         className="flex-1 min-w-0 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none"
       >
         <img
@@ -44,7 +45,9 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
           height={16}
           className="rounded-sm"
         />
-        <span className="flex-1 truncate">{t('nav.home')}</span>
+        {/* With a slave on this device the row names the world on screen — a slave never syncs, and that must
+            be visible without opening the menu. Without one there is one world, and this is `Home`. */}
+        <span data-testid="home-label" className="flex-1 truncate">{switcher.currentName ?? t('nav.home')}</span>
         {switcher.enabled && <CaretDown size={12} data-testid="home-switcher-chevron" className="mr-2 shrink-0 text-text-muted" />}
       </button>
       {switcher.enabled && <ProfileSwitcher trigger={buttonRef} placement="bottom-start" />}

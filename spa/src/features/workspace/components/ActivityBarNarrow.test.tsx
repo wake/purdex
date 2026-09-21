@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { ActivityBarNarrow } from './ActivityBarNarrow'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
-import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
+import { __resetProfileSwitcherForTest } from '../../../stores/useProfileSwitcherStore'
 
 const NO_SLAVES = { slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0 }
 
 beforeEach(() => {
   useLocalProfilesStore.setState(NO_SLAVES)
-  useProfileSwitcherStore.setState({ open: false })
+  __resetProfileSwitcherForTest()
 })
 
 afterEach(() => {

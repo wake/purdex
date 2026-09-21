@@ -1442,6 +1442,7 @@
   "peer.reason.proxy": "reached through a proxy",
   "peer.reason.ambiguous": "several agents share this session",
   "profile.master": "Master",
+  "profile.switcher.trigger": "Profile: {{name}}",
   "profile.switcher.label": "Switch profile",
   "profile.sync.synced": "Synced",
   "profile.sync.syncing": "Syncing…",

@@ -1442,6 +1442,7 @@
   "peer.reason.proxy": "經由 proxy 連接",
   "peer.reason.ambiguous": "多個 agent 共用此 session",
   "profile.master": "主要 profile",
+  "profile.switcher.trigger": "Profile：{{name}}",
   "profile.switcher.label": "切換 profile",
   "profile.sync.synced": "已同步",
   "profile.sync.syncing": "同步中…",

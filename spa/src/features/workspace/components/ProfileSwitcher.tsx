@@ -1,18 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useCallback, useMemo, type RefObject } from 'react'
 import { Menu, type MenuEntry, type MenuPlacement } from '../../../components/Menu'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLocalProfilesStore, MASTER_PROFILE_ID } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
-import { useUndoToast } from '../../../stores/useUndoToast'
 import { useProfileSync } from '../../../hooks/useProfileSync'
-import { switchActiveProfile, type SwitchResult } from '../../../lib/profile/switch-active'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
-
-/** `busy` is the 3 s ownership gate or another window holding the world lock (P3 plan, "What the UI must say"):
- *  it ends by itself, so it is retried in silence — this often, for this long IN TOTAL (a refusal can itself
- *  have taken 3 s to arrive), and only then said. */
-export const BUSY_RETRY_MS = 250
-export const BUSY_RETRY_TOTAL_MS = 4_000
 
 type SyncDot = 'synced' | 'syncing' | 'locked' | 'problem' | 'unknown'
 
@@ -43,12 +35,6 @@ function syncDotOf(sync: ProfileSyncSnapshot): SyncDot | null {
   return 'unknown'
 }
 
-/** One chosen switch, across its retries. */
-interface Attempt {
-  cancelled: boolean
-  timer: ReturnType<typeof setTimeout> | null
-}
-
 interface Props {
   /** The Home button. */
   trigger: RefObject<HTMLElement | null>
@@ -59,6 +45,10 @@ interface Props {
  * The Home button's menu: the master, then the slaves in `slaveOrder`; the one on screen is checked. Choosing one
  * calls `switchActiveProfile` and nothing else — switching never starts or stops syncing (spec §4.1). Rendered by
  * a Home button only while there is a slave (`useProfileSwitcherTrigger`).
+ *
+ * It only READS the switch under way: `useProfileSwitcherStore` owns it (the attempt, its retries, every answer),
+ * because this component is one of two — the other bar's copy replaces it when the bar's width changes, and must
+ * come up just as busy.
  */
 export function ProfileSwitcher({ trigger, placement }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -67,87 +57,11 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
   const activeProfileId = useLocalProfilesStore((s) => s.activeProfileId)
   const open = useProfileSwitcherStore((s) => s.open)
   const setOpen = useProfileSwitcherStore((s) => s.setOpen)
+  const pendingId = useProfileSwitcherStore((s) => s.pending?.targetId ?? null)
+  const chooseProfile = useProfileSwitcherStore((s) => s.chooseProfile)
   const sync = useProfileSync()
 
-  /** The switch under way: no second one starts meanwhile; `retrying` once it has answered `busy`. */
-  const [pending, setPending] = useState<{ id: string; retrying: boolean } | null>(null)
-  /** The current attempt. Closing the menu (or unmounting) cancels it: its timer is cleared and a late answer is dropped. */
-  const attempt = useRef<Attempt | null>(null)
-
   const close = useCallback(() => setOpen(false), [setOpen])
-
-  useEffect(() => {
-    if (!open) return
-    return () => {
-      const a = attempt.current
-      if (a) {
-        a.cancelled = true
-        if (a.timer !== null) clearTimeout(a.timer)
-        attempt.current = null
-      }
-      setPending(null)
-    }
-  }, [open])
-
-  const choose = (id: string) => {
-    if (attempt.current) return
-    const mine: Attempt = { cancelled: false, timer: null }
-    attempt.current = mine
-    const startedAt = Date.now()
-    setPending({ id, retrying: false })
-
-    const say = (message: string) => useUndoToast.getState().show(message)
-    /** The attempt is over; the menu stays unless told otherwise — nothing was written, the user is where they were. */
-    const end = (closeMenu: boolean) => {
-      attempt.current = null
-      setPending(null)
-      if (closeMenu) close()
-    }
-
-    const settle = (r: SwitchResult) => {
-      if (r.ok || r.reason === 'already-on-screen') return end(true)
-      switch (r.reason) {
-        case 'busy':
-          if (Date.now() - startedAt < BUSY_RETRY_TOTAL_MS) {
-            setPending({ id, retrying: true })
-            mine.timer = setTimeout(run, BUSY_RETRY_MS)
-            return
-          }
-          say(t('profile.switch.busy'))
-          return end(false)
-        case 'unsettled':
-          // Not an error: the refusal has already asked the stores to catch up, the same click works a moment later.
-          say(t('profile.switch.try_again'))
-          return end(false)
-        case 'superseded':
-          // Another window's switch won and this window is about to show ITS world: not retried, and the menu goes.
-          say(t('profile.switch.try_again'))
-          return end(true)
-        case 'write-failed':
-          say(t('profile.switch.write_failed', { detail: r.detail }))
-          return end(false)
-        case 'not-found':
-          say(t('profile.switch.not_found'))
-          return end(false)
-        default:
-          say(t('profile.switch.failed', { reason: r.reason }))
-          return end(false)
-      }
-    }
-
-    function run() {
-      mine.timer = null
-      switchActiveProfile(id).then(
-        (r) => { if (!mine.cancelled) settle(r) },
-        (e: unknown) => {
-          if (mine.cancelled) return
-          say(t('profile.switch.failed', { reason: e instanceof Error ? e.message : String(e) }))
-          end(false)
-        },
-      )
-    }
-    run()
-  }
 
   const dot = syncDotOf(sync)
   const dotLabel = dot === null ? '' : t(`profile.sync.${dot}`)
@@ -157,10 +71,11 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
       id,
       label,
       checked: id === activeProfileId,
-      busy: pending?.id === id && pending.retrying,
-      disabled: pending !== null && pending.id !== id,
-      keepOpen: true, // `choose` closes the menu when the switch has ended
-      onSelect: () => choose(id),
+      // One switch at a time: the chosen item is busy from the click to the last answer, the others wait.
+      busy: pendingId === id,
+      disabled: pendingId !== null && pendingId !== id,
+      keepOpen: true, // the store closes the menu when the switch has ended
+      onSelect: () => { chooseProfile(id) },
       testId: `profile-item-${id}`,
       ...extra,
     })
@@ -184,9 +99,7 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
       // no master and no slaves that one item — labelled `Set up sync…` — is the whole menu, and
       // `useProfileSwitcherTrigger` then enables the trigger for everyone. Not before: the page does not exist yet.
     ]
-    // `choose` closes over refs and setters only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slaves, slaveOrder, activeProfileId, pending, dot, dotLabel, t])
+  }, [slaves, slaveOrder, activeProfileId, pendingId, chooseProfile, dot, dotLabel, t])
 
   return <Menu trigger={trigger} open={open} onClose={close} items={items} label={t('profile.switcher.label')} placement={placement} testId="profile-switcher-menu" />
 }
