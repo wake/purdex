@@ -9,17 +9,19 @@
 // Run with: pnpm run test:mac-sign   (i.e. `node scripts/mac-sign_test.mjs`)
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
   ENTITLEMENTS_PATH,
+  assertBundleTreeLibraryValidationDisabled,
   assertLibraryValidationDisabled,
   buildSignArgs,
   hasHardenedRuntime,
   readEntitlements,
+  readEntitlementsObject,
 } from './mac-sign.mjs'
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url))
@@ -269,34 +271,7 @@ test('4. signAndVerifyApp asserts on BOTH paths: freshly signed and existing-sig
     const signedApp = makeBundle(signedDir, { name: 'T', identifier: appId })
     codesign(buildSignArgs({ appPath: signedApp, identity: '-', entitlements: ENTITLEMENTS_PATH }))
 
-    const driverPath = join(dir, 'driver.mjs')
-    writeFileSync(driverPath, DRIVER)
-
-    const result = spawnSync(
-      process.execPath,
-      [driverPath, resolve(scriptsDir, 'build-electron.mjs'), unsignedApp, signedApp],
-      {
-        encoding: 'utf8',
-        timeout: 60_000,
-        killSignal: 'SIGKILL',
-        cwd: root,
-        env: {
-          // Deliberately minimal: `codesign` lives in /usr/bin, `npx` does not.
-          // If build-electron.mjs ever regains a top-level build side effect,
-          // this child dies immediately instead of launching electron-builder.
-          PATH: '/usr/bin:/bin',
-          HOME: process.env.HOME ?? '',
-          TMPDIR: process.env.TMPDIR ?? '/tmp',
-        },
-      },
-    )
-
-    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
-    assertEqual(result.status, 0, `the signAndVerifyApp driver must exit 0; output was:\n${output}`)
-
-    const marker = (result.stdout ?? '').match(/^__RESULT__(.*)$/m)
-    assertTrue(marker !== null, `driver produced no __RESULT__ line; output was:\n${output}`)
-    const { fresh, kept } = JSON.parse(marker[1])
+    const { result: { fresh, kept } } = runDriver(dir, 'driver.mjs', DRIVER, [buildElectronPath, unsignedApp, signedApp])
 
     assertEqual(
       JSON.stringify(fresh),
@@ -310,6 +285,337 @@ test('4. signAndVerifyApp asserts on BOTH paths: freshly signed and existing-sig
     )
   })
 })
+
+// ------------------------------------------------------------------- case 5
+
+test('5. the guard reads the entitlement VALUE, not merely the presence of the key', () => {
+  withTempDir((dir) => {
+    const app = makeBundle(dir, { name: 'T', identifier: appId })
+    // Same three keys as the shipped plist, but Library Validation is left ON.
+    // `codesign` accepts this happily; only the value distinguishes it from a
+    // bundle that can actually launch on Intel.
+    const falsePlist = writeEntitlementsPlist(dir, 'lib-val-false.plist', { [LIB_VAL_KEY]: false })
+    codesign(buildSignArgs({ appPath: app, identity: '-', entitlements: falsePlist }))
+
+    assertTrue(
+      readEntitlements(app).includes(LIB_VAL_KEY),
+      'precondition: the key IS embedded, so a key-substring guard would wave this bundle through',
+    )
+
+    const parsed = readEntitlementsObject(app)
+    assertEqual(parsed[LIB_VAL_KEY], false, 'readEntitlementsObject must surface the decoded boolean value')
+
+    let message = ''
+    assertThrows(
+      () => {
+        try {
+          assertLibraryValidationDisabled(app)
+        } catch (err) {
+          message = String(err?.message ?? err)
+          throw err
+        }
+      },
+      `${LIB_VAL_KEY}=<false/> leaves Library Validation ON, so the guard must throw`,
+    )
+    assertTrue(
+      /not true/.test(message),
+      `the error must say the key is present but not true, so the reader is not sent hunting for a missing key; got: ${message}`,
+    )
+
+    // And the other half of the distinction: a hardened bundle with no
+    // entitlements at all must report a *missing* key, not a wrong value.
+    codesign(['--force', '--options', 'runtime', '--sign', '-', '--timestamp=none', app])
+    assertEqual(
+      JSON.stringify(readEntitlementsObject(app)),
+      '{}',
+      'readEntitlementsObject must return {} for a bundle with no entitlements',
+    )
+    let missingMessage = ''
+    assertThrows(
+      () => {
+        try {
+          assertLibraryValidationDisabled(app)
+        } catch (err) {
+          missingMessage = String(err?.message ?? err)
+          throw err
+        }
+      },
+      'a hardened bundle with no entitlements must still throw',
+    )
+    assertTrue(
+      /does not carry/.test(missingMessage),
+      `the error must distinguish "key absent" from "key present but false"; got: ${missingMessage}`,
+    )
+  })
+})
+
+// ------------------------------------------------------------------- case 6
+
+test('6. the guard covers the whole bundle tree: every nested helper .app, but not frameworks', () => {
+  withTempDir((dir) => {
+    const { app, helper } = makeAppWithHelper(dir)
+    const framework = makeFramework(join(app, 'Contents', 'Frameworks'), { name: 'X', identifier: 'com.example.X' })
+    codesign(buildSignArgs({ appPath: app, identity: '-', entitlements: ENTITLEMENTS_PATH }))
+
+    // Happy path: everything deep-signed from the repo plist.
+    assertBundleTreeLibraryValidationDisabled(app)
+
+    // A helper that lost its entitlements is a blank renderer window, not a
+    // crash — the top-level app still passes the single-bundle guard.
+    codesign(['--force', '--options', 'runtime', '--sign', '-', '--timestamp=none', helper])
+    assertLibraryValidationDisabled(app)
+    let message = ''
+    assertThrows(
+      () => {
+        try {
+          assertBundleTreeLibraryValidationDisabled(app)
+        } catch (err) {
+          message = String(err?.message ?? err)
+          throw err
+        }
+      },
+      'a hardened, unentitled nested helper must fail the tree guard even though the top-level app is fine',
+    )
+    assertTrue(
+      message.includes(helper),
+      `the error must name the offending helper bundle; got: ${message}`,
+    )
+
+    // Restore the helper, then take the framework's entitlements away: a
+    // .framework is not a process entry point (spec §5.6) and the working
+    // arm64 bundle ships exactly this shape, so the guard must ignore it.
+    codesign(buildSignArgs({ appPath: helper, identity: '-', entitlements: ENTITLEMENTS_PATH }))
+    codesign(['--force', '--options', 'runtime', '--sign', '-', '--timestamp=none', framework])
+    assertTrue(hasHardenedRuntime(framework), 'precondition: the framework is hardened')
+    assertEqual(readEntitlements(framework), '', 'precondition: the framework carries no entitlements')
+    assertBundleTreeLibraryValidationDisabled(app)
+  })
+})
+
+// --------------------------------------------------------------- fixtures (2)
+
+/** Writes an entitlements plist with the shipped keys, overridden by `values`. */
+function writeEntitlementsPlist(dir, name, values = {}) {
+  const keys = {
+    'com.apple.security.cs.allow-jit': true,
+    'com.apple.security.cs.allow-unsigned-executable-memory': true,
+    [LIB_VAL_KEY]: true,
+    ...values,
+  }
+  const body = Object.entries(keys)
+    .map(([k, v]) => `    <key>${k}</key>\n    <${v ? 'true' : 'false'}/>`)
+    .join('\n')
+  const path = join(dir, name)
+  writeFileSync(
+    path,
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+${body}
+  </dict>
+</plist>
+`,
+  )
+  return path
+}
+
+/** Creates a minimal but real `<dir>/<name>.framework` that `codesign` accepts. */
+function makeFramework(dir, { name, identifier }) {
+  const framework = join(dir, `${name}.framework`)
+  const versioned = join(framework, 'Versions', 'A')
+  mkdirSync(join(versioned, 'Resources'), { recursive: true })
+  copyFileSync('/bin/echo', join(versioned, name))
+  chmodSync(join(versioned, name), 0o755)
+  writeFileSync(
+    join(versioned, 'Resources', 'Info.plist'),
+    infoPlist({ executable: name, identifier, name }).replace('<string>APPL</string>', '<string>FMWK</string>'),
+  )
+  symlinkSync('A', join(framework, 'Versions', 'Current'))
+  symlinkSync(join('Versions', 'Current', name), join(framework, name))
+  symlinkSync(join('Versions', 'Current', 'Resources'), join(framework, 'Resources'))
+  return framework
+}
+
+// ------------------------------------------------------------------- case 7
+
+const DEFAULTS_DRIVER = `
+const [, , moduleUrl, appPath] = process.argv
+const mod = await import(moduleUrl)
+let threw = false
+let message = ''
+try {
+  await mod.signAndVerifyApp(appPath)
+} catch (err) {
+  threw = true
+  message = String(err?.message ?? err)
+}
+console.log('__RESULT__' + JSON.stringify({ threw, message }))
+`
+
+test('7. the DEFAULT collaborators are the real ones: signAndVerifyApp(app) alone still guards', () => {
+  withTempDir((dir) => {
+    // Hardened, ad-hoc, `Identifier=` matching, and **no entitlements** — the
+    // exact shape the x64 slice used to ship in. `hasValidSignature()` is true
+    // for it, so this drives the early-return path with nothing injected.
+    const app = makeBundle(dir, { name: 'T', identifier: appId })
+    codesign(['--force', '--deep', '--options', 'runtime', '--identifier', appId, '--sign', '-', '--timestamp=none', app])
+    assertTrue(hasHardenedRuntime(app), 'precondition: the bundle is hardened')
+    assertEqual(readEntitlements(app), '', 'precondition: the bundle carries no entitlements')
+    assertEqual(identifierOf(app), appId, 'precondition: hasValidSignature() will accept this Identifier')
+
+    const { result, stdout } = runDriver(dir, 'defaults-driver.mjs', DEFAULTS_DRIVER, [buildElectronPath, app])
+
+    assertTrue(
+      stdout.includes('Keeping existing macOS signature'),
+      `precondition: this must exercise the hasValidSignature() early return; stdout was:\n${stdout}`,
+    )
+    assertTrue(
+      result.threw,
+      'signAndVerifyApp(app) with NO options must still throw — the default `assert` is what production runs',
+    )
+    assertTrue(
+      result.message.includes(LIB_VAL_KEY),
+      `the failure must come from the Library Validation guard; got: ${result.message}`,
+    )
+  })
+})
+
+// ------------------------------------------------------------------- case 8
+
+const CALLS_DRIVER = `
+const [, , moduleUrl, appPath] = process.argv
+const mod = await import(moduleUrl)
+const calls = []
+const sign = (p, identity) => { calls.push('sign:' + p + ':' + identity) }
+const assert = (p) => { calls.push('assert:' + p) }
+await mod.signAndVerifyApp(appPath, { sign, assert })
+console.log('__RESULT__' + JSON.stringify({ calls }))
+`
+
+test('8. PDX_MAC_SIGN_IDENTITY re-signs even a bundle that already carries a valid signature', () => {
+  const envBefore = process.env.PDX_MAC_SIGN_IDENTITY
+  withTempDir((dir) => {
+    // Already signed exactly the way the build would sign it: valid, hardened,
+    // entitled, `Identifier=` matching. Without the override this bundle takes
+    // the early return (case 4 pins that).
+    const app = makeBundle(dir, { name: 'T', identifier: appId })
+    codesign(buildSignArgs({ appPath: app, identity: '-', entitlements: ENTITLEMENTS_PATH }))
+    assertEqual(identifierOf(app), appId, 'precondition: hasValidSignature() would otherwise short-circuit')
+
+    const identity = 'Developer ID Application: Purdex Test (ABCDE12345)'
+    // The override lives in the CHILD's environment only, so no other case in
+    // this process can see it.
+    const { result } = runDriver(dir, 'calls-driver.mjs', CALLS_DRIVER, [buildElectronPath, app], {
+      PDX_MAC_SIGN_IDENTITY: identity,
+    })
+
+    assertEqual(
+      JSON.stringify(result.calls),
+      JSON.stringify([`sign:${app}:${identity}`, `assert:${app}`]),
+      'PDX_MAC_SIGN_IDENTITY means "re-sign with this identity": the existing-signature early return must be bypassed, ' +
+        'the identity forwarded to `sign`, and the guard must still run afterwards',
+    )
+  })
+  assertEqual(
+    process.env.PDX_MAC_SIGN_IDENTITY,
+    envBefore,
+    'this case must not leak PDX_MAC_SIGN_IDENTITY into the rest of the run',
+  )
+})
+
+// ------------------------------------------------------------------- case 9
+
+const MAIN_MODULE_DRIVER = `
+const [, , moduleUrl, symlinkPath, realPath] = process.argv
+const { pathToFileURL } = await import('node:url')
+const mod = await import(moduleUrl)
+if (typeof mod.isMainModule !== 'function') {
+  console.log('__RESULT__' + JSON.stringify({ hasIsMainModule: false }))
+  process.exit(0)
+}
+const href = pathToFileURL(realPath).href
+console.log('__RESULT__' + JSON.stringify({
+  hasIsMainModule: true,
+  direct: mod.isMainModule(realPath, href),
+  viaSymlink: mod.isMainModule(symlinkPath, href),
+  unrelated: mod.isMainModule('/usr/bin/node', href),
+  unresolvable: mod.isMainModule(join(realPath, 'nope', 'build-electron.mjs'), href),
+  empty: mod.isMainModule(undefined, href),
+}))
+`
+
+test('9. the main-module guard survives symlinks and says so out loud when it declines to build', () => {
+  withTempDir((dir) => {
+    const symlinkPath = join(dir, 'build-electron-link.mjs')
+    symlinkSync(buildElectronPath, symlinkPath)
+
+    const { result, stderr } = runDriver(
+      dir,
+      'main-module-driver.mjs',
+      `import { join } from 'node:path'\n${MAIN_MODULE_DRIVER}`,
+      [buildElectronPath, symlinkPath, buildElectronPath],
+    )
+
+    assertTrue(
+      result.hasIsMainModule,
+      'build-electron.mjs must export isMainModule(argv1, moduleUrl) so the entry-point decision is testable',
+    )
+    assertEqual(result.direct, true, 'invoked by its own real path, the script must recognise itself')
+    assertEqual(
+      result.viaSymlink,
+      true,
+      'process.argv[1] is not resolved through symlinks but import.meta.url is; without realpath the build ' +
+        'silently does nothing and still exits 0',
+    )
+    assertEqual(result.unrelated, false, 'an unrelated entry point must not be mistaken for this module')
+    assertEqual(result.unresolvable, false, 'a path realpath() cannot resolve must be false, not a crash')
+    assertEqual(result.empty, false, 'no argv[1] at all must be false, not a crash')
+
+    assertTrue(
+      /build-electron\.mjs/.test(stderr) && /skip/i.test(stderr),
+      `declining to build must be visible on stderr, not silent; stderr was:\n${stderr || '(empty)'}`,
+    )
+  })
+})
+
+// --------------------------------------------------------------- fixtures (3)
+
+const buildElectronPath = resolve(scriptsDir, 'build-electron.mjs')
+
+/**
+ * Runs `source` as a throwaway ESM script in a child process and parses its
+ * `__RESULT__` line.
+ *
+ * The child's PATH is deliberately minimal: `codesign` lives in /usr/bin,
+ * `npx` does not. If build-electron.mjs ever regains a top-level build side
+ * effect, the child dies immediately instead of launching electron-builder.
+ */
+function runDriver(dir, name, source, args, extraEnv = {}) {
+  const driverPath = join(dir, name)
+  writeFileSync(driverPath, source)
+
+  const r = spawnSync(process.execPath, [driverPath, ...args], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    killSignal: 'SIGKILL',
+    cwd: root,
+    env: {
+      PATH: '/usr/bin:/bin',
+      HOME: process.env.HOME ?? '',
+      TMPDIR: process.env.TMPDIR ?? '/tmp',
+      ...extraEnv,
+    },
+  })
+
+  const stdout = r.stdout ?? ''
+  const stderr = r.stderr ?? ''
+  assertEqual(r.status, 0, `the ${name} driver must exit 0; output was:\n${stdout}${stderr}`)
+
+  const marker = stdout.match(/^__RESULT__(.*)$/m)
+  assertTrue(marker !== null, `${name} produced no __RESULT__ line; output was:\n${stdout}${stderr}`)
+  return { result: JSON.parse(marker[1]), stdout, stderr }
+}
 
 // ---------------------------------------------------------------------- run
 

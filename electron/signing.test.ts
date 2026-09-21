@@ -36,6 +36,24 @@ describe('Electron macOS signing configuration (static)', () => {
     expect(script).toContain('PDX_MAC_SIGN_IDENTITY')
   })
 
+  it('points electron-builder at the repo entitlements file, app and helpers alike', () => {
+    // electron-builder signs the arm64 slice itself. Without these two keys it
+    // silently falls back to app-builder-lib's bundled template, so the repo
+    // plist stops being the single source of truth (spec §5.2, goal G2) and an
+    // edit to it would reach only x64.
+    //
+    // `entitlementsInherit` is the helper path: the four Purdex Helper*.app
+    // bundles are separate processes and each needs Library Validation off
+    // (spec §2).
+    const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+
+    expect(pkg.build?.mac?.entitlements).toBeTypeOf('string')
+    expect(resolve(root, pkg.build.mac.entitlements)).toBe(ENTITLEMENTS_PATH)
+
+    expect(pkg.build?.mac?.entitlementsInherit).toBeTypeOf('string')
+    expect(resolve(root, pkg.build.mac.entitlementsInherit)).toBe(ENTITLEMENTS_PATH)
+  })
+
   it('updater no longer ships runtime signing helpers', () => {
     const updater = readFileSync(resolve(root, 'electron/updater.ts'), 'utf8')
     expect(updater).not.toContain('detectSignedState')
