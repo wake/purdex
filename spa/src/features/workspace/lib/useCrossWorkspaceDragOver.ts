@@ -17,8 +17,9 @@ import type { DragData, TabDragData } from './computeDragEndAction'
  *  - If the drag is cancelled outside any drop target, the optimistic move is
  *    not reverted — matching dnd-kit's official multi-list example and VS
  *    Code's tab-drag UX.
- *  - Standalone ↔ workspace transitions (toWs=null or fromWs=null) are left to
- *    computeDragEndAction at drop time; this hook only handles ws↔ws.
+ *  - A tab with no source workspace (toWs=null or fromWs=null — no list renders
+ *    one since P3c-2) is left to computeDragEndAction at drop time; this hook
+ *    only handles ws↔ws.
  */
 export function useCrossWorkspaceDragOver() {
   const lastKeyRef = useRef<string | null>(null)

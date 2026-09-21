@@ -30,7 +30,6 @@ const ctx = (overrides?: Partial<DragEndContext>): DragEndContext => ({
     { id: 'w1', tabs: ['t1a', 't1b'] },
     { id: 'w2', tabs: ['t2a'] },
   ],
-  standaloneTabIds: ['sA', 'sB', 'sC'],
   ...overrides,
 })
 
@@ -99,23 +98,14 @@ describe('computeDragEndAction', () => {
     })
   })
 
-  describe('standalone tab reorder (sourceWsId = null)', () => {
-    it('moves sA to end', () => {
+  // Every tab belongs to exactly one workspace (Profile Sync spec §4.3): there is no list of tabs outside a
+  // workspace to reorder. (Was: "standalone tab reorder" → `reorder-standalone-tabs`.)
+  describe('two tabs with no source workspace (sourceWsId = null)', () => {
+    it('is a noop — there is no such list to reorder', () => {
       const action = computeDragEndAction(
         mkEvent(
           { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
           { id: 'sC', data: { type: 'tab', tabId: 'sC', sourceWsId: null } },
-        ),
-        ctx(),
-      )
-      expect(action).toEqual({ kind: 'reorder-standalone-tabs', order: ['sB', 'sC', 'sA'] })
-    })
-
-    it('returns noop when tab id not in standaloneTabIds', () => {
-      const action = computeDragEndAction(
-        mkEvent(
-          { id: 'sX', data: { type: 'tab', tabId: 'sX', sourceWsId: null } },
-          { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
         ),
         ctx(),
       )
@@ -207,8 +197,9 @@ describe('computeDragEndAction', () => {
     })
 
     // Every tab belongs to exactly one workspace (Profile Sync spec §4.3): nothing a drag can do takes a tab
-    // out of its workspace. The drop target itself goes in P3c-2; until then a drop on it changes nothing.
-    it('tab → home-header drop target → noop (the tab stays in its workspace)', () => {
+    // out of its workspace. The Home row is no drop target any more; a droppable of a type this function does
+    // not know changes nothing.
+    it('tab → a drop target of an unknown type → noop (the tab stays in its workspace)', () => {
       const action = computeDragEndAction(
         mkEvent(
           { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
@@ -219,7 +210,7 @@ describe('computeDragEndAction', () => {
       expect(action).toEqual({ kind: 'noop' })
     })
 
-    it('tab → a standalone tab slot → noop (the tab stays in its workspace)', () => {
+    it('tab → a tab slot with no workspace → noop (the tab stays in its workspace)', () => {
       const action = computeDragEndAction(
         mkEvent(
           { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1' } },
@@ -230,7 +221,7 @@ describe('computeDragEndAction', () => {
       expect(action).toEqual({ kind: 'noop' })
     })
 
-    it('standalone tab → workspace-header → move-tab-to-workspace afterTabId=null', () => {
+    it('tab with no source workspace → workspace-header → move-tab-to-workspace afterTabId=null', () => {
       const action = computeDragEndAction(
         mkEvent(
           { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
@@ -246,7 +237,7 @@ describe('computeDragEndAction', () => {
       })
     })
 
-    it('standalone tab → other ws tab-slot → move-tab-to-workspace afterTabId=targetTab', () => {
+    it('tab with no source workspace → ws tab-slot → move-tab-to-workspace afterTabId=targetTab', () => {
       const action = computeDragEndAction(
         mkEvent(
           { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
@@ -260,17 +251,6 @@ describe('computeDragEndAction', () => {
         targetWsId: 'w2',
         afterTabId: 't2a',
       })
-    })
-
-    it('standalone tab → home-header → noop (already standalone)', () => {
-      const action = computeDragEndAction(
-        mkEvent(
-          { id: 'sA', data: { type: 'tab', tabId: 'sA', sourceWsId: null } },
-          { id: 'home-header', data: { type: 'home-header' } },
-        ),
-        ctx(),
-      )
-      expect(action).toEqual({ kind: 'noop' })
     })
 
     it('pinned tab → other ws tab-slot → noop (#404)', () => {
@@ -289,17 +269,6 @@ describe('computeDragEndAction', () => {
         mkEvent(
           { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1', isPinned: true } },
           { id: 'ws-header-w2', data: { type: 'workspace-header', wsId: 'w2' } },
-        ),
-        ctx(),
-      )
-      expect(action).toEqual({ kind: 'noop' })
-    })
-
-    it('pinned tab → home-header → noop (#404)', () => {
-      const action = computeDragEndAction(
-        mkEvent(
-          { id: 't1a', data: { type: 'tab', tabId: 't1a', sourceWsId: 'w1', isPinned: true } },
-          { id: 'home-header', data: { type: 'home-header' } },
         ),
         ctx(),
       )
@@ -327,19 +296,11 @@ describe('dispatchDragEndAction', () => {
   it('dispatches reorder-workspaces to onReorderWorkspaces', () => {
     const d = {
       onReorderWorkspaces: vi.fn(),
-      onReorderStandaloneTabs: vi.fn(),
       onReorderWorkspaceTabs: vi.fn(),
     }
     dispatchDragEndAction({ kind: 'reorder-workspaces', order: ['w2', 'w1'] }, d)
     expect(d.onReorderWorkspaces).toHaveBeenCalledWith(['w2', 'w1'])
-    expect(d.onReorderStandaloneTabs).not.toHaveBeenCalled()
     expect(d.onReorderWorkspaceTabs).not.toHaveBeenCalled()
-  })
-
-  it('dispatches reorder-standalone-tabs to onReorderStandaloneTabs', () => {
-    const d = { onReorderStandaloneTabs: vi.fn() }
-    dispatchDragEndAction({ kind: 'reorder-standalone-tabs', order: ['sB', 'sA'] }, d)
-    expect(d.onReorderStandaloneTabs).toHaveBeenCalledWith(['sB', 'sA'])
   })
 
   it('dispatches reorder-workspace-tabs to onReorderWorkspaceTabs with wsId', () => {
@@ -354,12 +315,10 @@ describe('dispatchDragEndAction', () => {
   it('noop action fires nothing', () => {
     const d = {
       onReorderWorkspaces: vi.fn(),
-      onReorderStandaloneTabs: vi.fn(),
       onReorderWorkspaceTabs: vi.fn(),
     }
     dispatchDragEndAction({ kind: 'noop' }, d)
     expect(d.onReorderWorkspaces).not.toHaveBeenCalled()
-    expect(d.onReorderStandaloneTabs).not.toHaveBeenCalled()
     expect(d.onReorderWorkspaceTabs).not.toHaveBeenCalled()
   })
 
@@ -384,14 +343,5 @@ describe('dispatchDragEndAction', () => {
       d,
     )
     expect(d.onMoveTabToWorkspace).toHaveBeenCalledWith('t1', 'w2', 't2')
-  })
-
-  it('dispatches move-tab-to-standalone with tabId and sourceWsId', () => {
-    const d = { onMoveTabToStandalone: vi.fn() }
-    dispatchDragEndAction(
-      { kind: 'move-tab-to-standalone', tabId: 't1', sourceWsId: 'w1' },
-      d,
-    )
-    expect(d.onMoveTabToStandalone).toHaveBeenCalledWith('t1', 'w1')
   })
 })

@@ -22,7 +22,6 @@ import {
   useLayoutStore,
   MIN_WIDTH,
   MAX_WIDTH,
-  HOME_WS_KEY,
 } from '../../../stores/useLayoutStore'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -74,10 +73,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const {
     workspaces,
     activeWorkspaceId,
-    activeStandaloneTabId,
     onSelectWorkspace,
     onSelectHome,
-    standaloneTabIds,
     onAddWorkspace,
     onReorderWorkspaces,
     onContextMenuWorkspace,
@@ -91,10 +88,8 @@ export function ActivityBarWide(props: ActivityBarProps) {
     onContextMenuTab,
     onRenameTab,
     onReorderWorkspaceTabs,
-    onReorderStandaloneTabs,
     onAddTabToWorkspace,
     onMoveTabToWorkspace,
-    onMoveTabToStandalone,
   } = props
 
   const t = useI18nStore((s) => s.t)
@@ -146,30 +141,27 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const addTabToWs = onAddTabToWorkspace ?? NOOP
 
   const insertTab = useWorkspaceStore((s) => s.insertTab)
-  const removeTabFromWorkspace = useWorkspaceStore((s) => s.removeTabFromWorkspace)
   const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace)
   const toggleWorkspaceExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
   const springLoad = useSpringLoad(500)
   const handleCrossWsDragOver = useCrossWorkspaceDragOver()
 
   // When switching to a mode that renders inline tabs (left/both), ensure the
-  // active workspace (or Home, when a standalone tab is active) is expanded so
-  // the user can see their tabs without manually opening the accordion. Only
-  // flips from collapsed → expanded; never collapses what the user opened.
+  // active workspace is expanded so the user can see their tabs without
+  // manually opening the accordion. Only flips from collapsed → expanded;
+  // never collapses what the user opened.
   useEffect(() => {
-    if (tabPosition === 'top') return
+    if (tabPosition === 'top' || !activeWorkspaceId) return
     const state = useLayoutStore.getState()
-    const targetKey = activeStandaloneTabId || !activeWorkspaceId ? HOME_WS_KEY : activeWorkspaceId
-    if (!state.workspaceExpanded[targetKey]) {
-      state.toggleWorkspaceExpanded(targetKey)
+    if (!state.workspaceExpanded[activeWorkspaceId]) {
+      state.toggleWorkspaceExpanded(activeWorkspaceId)
     }
-  }, [tabPosition, activeWorkspaceId, activeStandaloneTabId])
+  }, [tabPosition, activeWorkspaceId])
 
   // Read activeTabId via getState() at dispatch time rather than via closure,
   // mirroring the stale-closure fix applied to the resize handler in PR #392.
   // Default behavior mutates the store directly; callers that need to
-  // intercept (e.g. workspace-locked mode) can pass onMoveTabToWorkspace /
-  // onMoveTabToStandalone via props.
+  // intercept (e.g. workspace-locked mode) can pass onMoveTabToWorkspace via props.
   const handleMoveTabToWorkspace = useCallback(
     (tabId: string, targetWsId: string, afterTabId: string | null) => {
       if (onMoveTabToWorkspace) {
@@ -195,25 +187,6 @@ export function ActivityBarWide(props: ActivityBarProps) {
       }
     },
     [insertTab, setActiveWorkspace, onMoveTabToWorkspace],
-  )
-
-  const handleMoveTabToStandalone = useCallback(
-    (tabId: string, sourceWsId: string) => {
-      if (onMoveTabToStandalone) {
-        onMoveTabToStandalone(tabId, sourceWsId)
-        return
-      }
-      const wsStore = useWorkspaceStore.getState()
-      const wasSourceActive = wsStore.activeWorkspaceId === sourceWsId
-      removeTabFromWorkspace(sourceWsId, tabId)
-      const movedActiveTab = tabId === useTabStore.getState().activeTabId
-      const sourceBecameEmpty =
-        (useWorkspaceStore.getState().workspaces.find((w) => w.id === sourceWsId)?.tabs.length ?? 0) === 0
-      if (movedActiveTab || (wasSourceActive && sourceBecameEmpty)) {
-        setActiveWorkspace(null)
-      }
-    },
-    [removeTabFromWorkspace, setActiveWorkspace, onMoveTabToStandalone],
   )
 
   const scheduleSpringLoad = useCallback(
@@ -268,14 +241,6 @@ export function ActivityBarWide(props: ActivityBarProps) {
         }
         return
       }
-      if (overData.type === 'home-header') {
-        if (!useLayoutStore.getState().workspaceExpanded[HOME_WS_KEY]) {
-          scheduleSpringLoad(HOME_WS_KEY)
-        } else {
-          springLoad.cancel(HOME_WS_KEY)
-        }
-        return
-      }
       springLoad.cancel()
     },
     [handleCrossWsDragOver, springLoad, scheduleSpringLoad],
@@ -284,24 +249,19 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const handleDragEnd = useCallback(
     (e: DragEndEvent) => {
       springLoad.cancel()
-      const action = computeDragEndAction(e, { wsIds, workspaces, standaloneTabIds })
+      const action = computeDragEndAction(e, { wsIds, workspaces })
       dispatchDragEndAction(action, {
         onReorderWorkspaces,
-        onReorderStandaloneTabs,
         onReorderWorkspaceTabs,
         onMoveTabToWorkspace: handleMoveTabToWorkspace,
-        onMoveTabToStandalone: handleMoveTabToStandalone,
       })
     },
     [
       wsIds,
       workspaces,
-      standaloneTabIds,
       onReorderWorkspaces,
       onReorderWorkspaceTabs,
-      onReorderStandaloneTabs,
       handleMoveTabToWorkspace,
-      handleMoveTabToStandalone,
       springLoad,
     ],
   )
@@ -321,18 +281,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
           onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
         >
-          <HomeRow
-            isActive={isHomeActive}
-            standaloneTabIds={standaloneTabIds}
-            tabsById={tabsById}
-            activeTabId={activeTabId}
-            onSelectHome={onSelectHome}
-            onSelectTab={selectTab}
-            onCloseTab={closeTab}
-            onMiddleClickTab={middleClickTab}
-            onContextMenuTab={contextMenuTab}
-            onRenameTab={renameTab}
-          />
+          <HomeRow isActive={isHomeActive} onSelectHome={onSelectHome} />
 
           {workspaces.length > 0 && (
             <div data-testid="activity-bar-workspace-separator" className="mx-3 my-1 h-px shrink-0 bg-border-default" />
@@ -349,9 +298,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
                   <WorkspaceRow
                     key={ws.id}
                     workspace={ws}
-                    isActive={
-                      activeWorkspaceId === ws.id && !activeStandaloneTabId
-                    }
+                    isActive={activeWorkspaceId === ws.id}
                     tabsById={tabsById}
                     activeTabId={activeTabId}
                     onSelectWorkspace={onSelectWorkspace}

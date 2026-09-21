@@ -39,10 +39,8 @@ const mockWorkspaces: Workspace[] = [
 const defaultProps = {
   workspaces: mockWorkspaces,
   activeWorkspaceId: 'ws-1' as string | null,
-  activeStandaloneTabId: null as string | null,
   onSelectWorkspace: vi.fn(),
   onSelectHome: vi.fn(),
-  standaloneTabIds: [] as string[],
   onAddWorkspace: vi.fn(),
   onOpenHosts: vi.fn(),
   onOpenSettings: vi.fn(),
@@ -93,123 +91,19 @@ describe('ActivityBar', () => {
     expect(onSelectHome).toHaveBeenCalled()
   })
 
-  it('shows unread badge on Home when standalone tabs have unreads and workspace is active', () => {
+  // Every tab belongs to a workspace (Profile Sync spec §4.3): Home has no tabs of its own, so it carries no
+  // unread badge and no status dot — the workspace that owns the tab does (the tests below). A tab that is in
+  // no workspace yet (adopt-standalone.ts waits 500 ms) lights nothing up on Home in the meantime.
+  it('Home shows no unread badge and no status dot, whatever the tabs outside every workspace are doing', () => {
     useTabStore.setState({
-      tabs: {
-        s1: mockSessionTab('s1', 'h1', 'sa'),
-        s2: mockSessionTab('s2', 'h1', 'sb'),
-        s3: mockSessionTab('s3', 'h1', 'sc'),
-      },
+      tabs: { s1: mockSessionTab('s1', 'h1', 'sa'), s2: mockSessionTab('s2', 'h1', 'sb') },
     })
-    useAgentStore.setState({ unread: { 'h1:sa': true, 'h1:sb': true } })
+    useAgentStore.setState({ unread: { 'h1:sa': true }, statuses: { 'h1:sb': 'running' } })
 
-    render(<ActivityBar {...defaultProps} standaloneTabIds={['s1', 's2', 's3']} />)
-    const badge = screen.getByTestId('home-unread-badge')
-    expect(badge.textContent).toBe('2')
-  })
-
-  it('hides Home badge when standalone tabs have no unreads', () => {
-    useTabStore.setState({
-      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
-    })
-    useAgentStore.setState({ unread: {} })
-
-    const { container } = render(<ActivityBar {...defaultProps} standaloneTabIds={['s1']} />)
+    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" />)
     expect(container.querySelector('[data-testid="home-unread-badge"]')).toBeNull()
-  })
-
-  it('hides Home unread badge when in Home mode', () => {
-    useTabStore.setState({
-      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
-    })
-    useAgentStore.setState({ unread: { 'h1:sa': true } })
-
-    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} standaloneTabIds={['s1']} />)
-    expect(container.querySelector('[data-testid="home-unread-badge"]')).toBeNull()
-  })
-
-  it('shows Home status dot when standalone tab has running agent', () => {
-    useTabStore.setState({
-      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
-    })
-    useAgentStore.setState({ statuses: { 'h1:sa': 'running' } })
-
-    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" standaloneTabIds={['s1']} />)
-
-    const dots = container.querySelectorAll('.animate-breathe')
-    // One for Home button — workspace dots won't render since ws-1 has no matching tab status
-    expect(dots.length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('hides Home status dot when in Home mode', () => {
-    useTabStore.setState({
-      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
-    })
-    useAgentStore.setState({ statuses: { 'h1:sa': 'running' } })
-
-    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} standaloneTabIds={['s1']} />)
-
-    // Home is active — dot should not render for Home
-    const dots = container.querySelectorAll('.animate-breathe')
-    expect(dots).toHaveLength(0)
-  })
-
-  it('shows Home unread badge when standalone tab is focused and other standalone tabs have unreads', () => {
-    useTabStore.setState({
-      tabs: {
-        s1: mockSessionTab('s1', 'h1', 'sa'),
-        s2: mockSessionTab('s2', 'h1', 'sb'),
-      },
-    })
-    useAgentStore.setState({ unread: { 'h1:sb': true } })
-
-    render(<ActivityBar {...defaultProps} activeWorkspaceId={null} activeStandaloneTabId="s1" standaloneTabIds={['s1', 's2']} />)
-    const badge = screen.getByTestId('home-unread-badge')
-    expect(badge.textContent).toBe('1')
-  })
-
-  it('shows Home status dot when standalone tab is focused and other standalone tabs have running agent', () => {
-    useTabStore.setState({
-      tabs: {
-        s1: mockSessionTab('s1', 'h1', 'sa'),
-        s2: mockSessionTab('s2', 'h1', 'sb'),
-      },
-    })
-    useAgentStore.setState({ statuses: { 'h1:sb': 'running' } })
-
-    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} activeStandaloneTabId="s1" standaloneTabIds={['s1', 's2']} />)
-    const dots = container.querySelectorAll('.animate-breathe')
-    expect(dots.length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('excludes focused standalone tab from Home badge unread count', () => {
-    useTabStore.setState({
-      tabs: {
-        s1: mockSessionTab('s1', 'h1', 'sa'),
-        s2: mockSessionTab('s2', 'h1', 'sb'),
-      },
-    })
-    // s1 (focused) has unread, s2 does not — badge should NOT show
-    useAgentStore.setState({ unread: { 'h1:sa': true } })
-
-    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId={null} activeStandaloneTabId="s1" standaloneTabIds={['s1', 's2']} />)
-    expect(container.querySelector('[data-testid="home-unread-badge"]')).toBeNull()
-  })
-
-  it('shows Home static dot for waiting status', () => {
-    useTabStore.setState({
-      tabs: { s1: mockSessionTab('s1', 'h1', 'sa') },
-    })
-    useAgentStore.setState({ statuses: { 'h1:sa': 'waiting' } })
-
-    const { container } = render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" standaloneTabIds={['s1']} />)
-
-    const dots = container.querySelectorAll('.rounded-full[style]')
-    const waitingDot = Array.from(dots).find(d =>
-      (d as HTMLElement).style.backgroundColor === 'rgb(250, 204, 21)'
-    )
-    expect(waitingDot).toBeTruthy()
-    expect(waitingDot!.className).not.toContain('animate-breathe')
+    expect(container.querySelectorAll('.animate-breathe')).toHaveLength(0)
+    expect(screen.getByTitle(/home/i).parentElement!.querySelectorAll('span')).toHaveLength(0)
   })
 
   it('shows unread badge on inactive workspace', () => {
@@ -357,22 +251,6 @@ describe('ActivityBar', () => {
     expect(badge.textContent).toBe('99+')
   })
 
-  it('truncates Home badge to 99+ when unread count exceeds 99', () => {
-    const tabIds = Array.from({ length: 100 }, (_, i) => `sh-${i}`)
-    const tabs: Record<string, Tab> = {}
-    const unread: Record<string, boolean> = {}
-    tabIds.forEach((id, i) => {
-      tabs[id] = mockSessionTab(id, 'h1', `hs${i}`)
-      unread[`h1:hs${i}`] = true
-    })
-    useTabStore.setState({ tabs })
-    useAgentStore.setState({ unread })
-
-    render(<ActivityBar {...defaultProps} activeWorkspaceId="ws-1" standaloneTabIds={tabIds} />)
-    const badge = screen.getByTestId('home-unread-badge')
-    expect(badge.textContent).toBe('99+')
-  })
-
   it('tooltip shows only name when no unread and no status', () => {
     useTabStore.setState({
       tabs: { t3: mockSessionTab('t3', 'h1', 's3') },
@@ -397,10 +275,8 @@ describe('ActivityBar coordinator', () => {
       <ActivityBar
         workspaces={[]}
         activeWorkspaceId={null}
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -417,10 +293,8 @@ describe('ActivityBar coordinator', () => {
       <ActivityBar
         workspaces={[]}
         activeWorkspaceId={null}
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}

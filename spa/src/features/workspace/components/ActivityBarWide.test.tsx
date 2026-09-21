@@ -19,10 +19,8 @@ describe('ActivityBarWide', () => {
       <ActivityBarWide
         workspaces={[ws('w1', 'Purdex'), ws('w2', 'Client A')]}
         activeWorkspaceId="w1"
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -38,10 +36,8 @@ describe('ActivityBarWide', () => {
       <ActivityBarWide
         workspaces={[ws('w1', 'Purdex')]}
         activeWorkspaceId={null}
-        activeStandaloneTabId={null}
         onSelectWorkspace={onSelect}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -56,10 +52,8 @@ describe('ActivityBarWide', () => {
       <ActivityBarWide
         workspaces={[]}
         activeWorkspaceId={null}
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -74,10 +68,8 @@ describe('ActivityBarWide', () => {
       <ActivityBarWide
         workspaces={[ws('w1', 'Purdex'), ws('w2', 'Client A')]}
         activeWorkspaceId="w1"
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -110,10 +102,8 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
           { id: 'w2', name: 'Beta', tabs: [], activeTabId: null },
         ]}
         activeWorkspaceId="w1"
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -124,7 +114,6 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
         onMiddleClickTab={() => {}}
         onContextMenuTab={() => {}}
         onReorderWorkspaceTabs={() => {}}
-        onReorderStandaloneTabs={() => {}}
         onAddTabToWorkspace={() => {}}
       />,
     )
@@ -138,10 +127,8 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
       <ActivityBarWide
         workspaces={[{ id: 'w1', name: 'Alpha', tabs: ['t1'], activeTabId: 't1' }]}
         activeWorkspaceId="w1"
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -165,7 +152,6 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
         onMiddleClickTab={() => {}}
         onContextMenuTab={() => {}}
         onReorderWorkspaceTabs={() => {}}
-        onReorderStandaloneTabs={() => {}}
         onAddTabToWorkspace={() => {}}
       />,
     )
@@ -174,15 +160,13 @@ describe('ActivityBarWide Phase 2 — inline tabs', () => {
     expect(screen.getAllByText('example.test').length).toBeGreaterThan(0)
   })
 
-  it('registers home-header and ws-header-<id> as droppable testids', () => {
+  it('renders home-header (the Home button) and ws-header-<id> (the droppable workspace headers)', () => {
     render(
       <ActivityBarWide
         workspaces={[ws('w1', 'Alpha'), ws('w2', 'Beta')]}
         activeWorkspaceId={null}
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -206,10 +190,8 @@ describe('ActivityBarWide — auto-expand active workspace', () => {
       <ActivityBarWide
         workspaces={[{ id: 'w1', name: 'Alpha', tabs: [], activeTabId: null }]}
         activeWorkspaceId="w1"
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -218,22 +200,22 @@ describe('ActivityBarWide — auto-expand active workspace', () => {
     expect(useLayoutStore.getState().workspaceExpanded['w1']).toBe(true)
   })
 
-  it("expands home when standalone tab is active and tabPosition='both'", () => {
+  // Home heads no tab list any more (Profile Sync spec §4.3), so there is nothing of it to expand.
+  // (Was: "expands home when standalone tab is active".)
+  it("expands nothing when there is no active workspace and tabPosition='both'", () => {
     useLayoutStore.setState({ tabPosition: 'both', activityBarWidth: 'wide' })
     render(
       <ActivityBarWide
-        workspaces={[]}
+        workspaces={[{ id: 'w1', name: 'Alpha', tabs: [], activeTabId: null }]}
         activeWorkspaceId={null}
-        activeStandaloneTabId="t1"
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={['t1']}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
       />,
     )
-    expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
+    expect(useLayoutStore.getState().workspaceExpanded).toEqual({})
   })
 
   it("does NOT auto-expand when tabPosition='top'", () => {
@@ -242,10 +224,8 @@ describe('ActivityBarWide — auto-expand active workspace', () => {
       <ActivityBarWide
         workspaces={[{ id: 'w1', name: 'Alpha', tabs: [], activeTabId: null }]}
         activeWorkspaceId="w1"
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}

@@ -5,21 +5,20 @@ export type WorkspaceDragData = { type: 'workspace'; wsId: string }
 export type TabDragData = {
   type: 'tab'
   tabId: string
+  /** `null` = rendered outside any workspace list (InlineTab's default). No list does since P3c-2 — every tab
+   *  belongs to a workspace (Profile Sync spec §4.3) — so a `null` on either side of a drop is a noop. */
   sourceWsId: string | null
   isPinned?: boolean
 }
 export type WorkspaceHeaderDropData = { type: 'workspace-header'; wsId: string }
-export type HomeHeaderDropData = { type: 'home-header' }
 export type DragData =
   | WorkspaceDragData
   | TabDragData
   | WorkspaceHeaderDropData
-  | HomeHeaderDropData
 
 export type DragEndAction =
   | { kind: 'noop' }
   | { kind: 'reorder-workspaces'; order: string[] }
-  | { kind: 'reorder-standalone-tabs'; order: string[] }
   | { kind: 'reorder-workspace-tabs'; wsId: string; order: string[] }
   | {
       kind: 'move-tab-to-workspace'
@@ -27,12 +26,10 @@ export type DragEndAction =
       targetWsId: string
       afterTabId: string | null
     }
-  | { kind: 'move-tab-to-standalone'; tabId: string; sourceWsId: string }
 
 export interface DragEndContext {
   wsIds: string[]
   workspaces: Array<{ id: string; tabs: string[] }>
-  standaloneTabIds: string[]
 }
 
 const NOOP: DragEndAction = { kind: 'noop' }
@@ -70,15 +67,7 @@ export function computeDragEndAction(
   // Same-zone tab reorder
   if (overData.type === 'tab' && overData.sourceWsId === activeData.sourceWsId) {
     const sourceWsId = activeData.sourceWsId
-    if (sourceWsId === null) {
-      const oldIdx = ctx.standaloneTabIds.indexOf(activeData.tabId)
-      const newIdx = ctx.standaloneTabIds.indexOf(overData.tabId)
-      if (oldIdx === -1 || newIdx === -1) return NOOP
-      return {
-        kind: 'reorder-standalone-tabs',
-        order: arrayMove(ctx.standaloneTabIds, oldIdx, newIdx),
-      }
-    }
+    if (sourceWsId === null) return NOOP
     const ws = ctx.workspaces.find((w) => w.id === sourceWsId)
     if (!ws) return NOOP
     const oldIdx = ws.tabs.indexOf(activeData.tabId)
@@ -91,10 +80,9 @@ export function computeDragEndAction(
     }
   }
 
-  // Cross-zone: tab dropped on a tab of another ws / standalone zone.
+  // Cross-zone: tab dropped on a tab of another workspace.
   if (overData.type === 'tab' && overData.sourceWsId !== activeData.sourceWsId) {
-    // A tab never leaves its workspace for "no workspace" (Profile Sync spec §4.3). The
-    // `move-tab-to-standalone` action is no longer produced; it is removed in P3c-2.
+    // A tab never leaves its workspace for "no workspace" (Profile Sync spec §4.3).
     if (overData.sourceWsId === null) return NOOP
     return {
       kind: 'move-tab-to-workspace',
@@ -118,17 +106,13 @@ export function computeDragEndAction(
     }
   }
 
-  // Home header drop target: used to make the tab standalone. Every tab belongs to a
-  // workspace now, so the drop changes nothing (the target itself goes in P3c-2).
   return NOOP
 }
 
 export interface DragEndDispatch {
   onReorderWorkspaces?: (order: string[]) => void
-  onReorderStandaloneTabs?: (order: string[]) => void
   onReorderWorkspaceTabs?: (wsId: string, order: string[]) => void
   onMoveTabToWorkspace?: (tabId: string, targetWsId: string, afterTabId: string | null) => void
-  onMoveTabToStandalone?: (tabId: string, sourceWsId: string) => void
 }
 
 export function dispatchDragEndAction(action: DragEndAction, d: DragEndDispatch): void {
@@ -136,17 +120,11 @@ export function dispatchDragEndAction(action: DragEndAction, d: DragEndDispatch)
     case 'reorder-workspaces':
       d.onReorderWorkspaces?.(action.order)
       return
-    case 'reorder-standalone-tabs':
-      d.onReorderStandaloneTabs?.(action.order)
-      return
     case 'reorder-workspace-tabs':
       d.onReorderWorkspaceTabs?.(action.wsId, action.order)
       return
     case 'move-tab-to-workspace':
       d.onMoveTabToWorkspace?.(action.tabId, action.targetWsId, action.afterTabId)
-      return
-    case 'move-tab-to-standalone':
-      d.onMoveTabToStandalone?.(action.tabId, action.sourceWsId)
       return
     case 'noop':
       return

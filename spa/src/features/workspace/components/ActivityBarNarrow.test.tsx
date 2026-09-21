@@ -8,10 +8,8 @@ describe('ActivityBarNarrow', () => {
       <ActivityBarNarrow
         workspaces={[]}
         activeWorkspaceId={null}
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
@@ -28,10 +26,8 @@ describe('ActivityBarNarrow', () => {
           { id: 'w2', name: 'Client A', tabs: [], activeTabId: null },
         ]}
         activeWorkspaceId="w1"
-        activeStandaloneTabId={null}
         onSelectWorkspace={() => {}}
         onSelectHome={() => {}}
-        standaloneTabIds={[]}
         onAddWorkspace={() => {}}
         onOpenHosts={() => {}}
         onOpenSettings={() => {}}
