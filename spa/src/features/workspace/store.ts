@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { createWorkspace, isStandaloneTab, type Workspace, type IconWeight } from '../../types/tab'
+import { createWorkspace, type Workspace, type IconWeight } from '../../types/tab'
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../../lib/storage'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
@@ -237,17 +237,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!tab || tab.locked) return
 
         const ws = get().findWorkspaceByTab(tabId)
-        const workspaces = get().workspaces
+        // A tab no workspace has adopted yet (lib/adopt-standalone.ts waits before it believes that) still
+        // closes; if it was on screen, what comes next is a tab of the workspace on screen.
+        const scopeWs = ws ?? get().workspaces.find((w) => w.id === get().activeWorkspaceId) ?? null
 
         // 1. Pre-compute next tab (before any mutation)
-        //    Priority: visitHistory (scoped) → adjacent in workspace/tabOrder
-        //    Standalone tabs only scope to other standalone tabs (not workspace tabs)
-        const standaloneOrder = tabStore.tabOrder.filter(
-          (id) => isStandaloneTab(id, workspaces),
-        )
-        const scopeIds = ws
-          ? new Set(ws.tabs.filter((id) => id !== tabId))
-          : new Set(standaloneOrder.filter((id) => id !== tabId))
+        //    Priority: visitHistory (scoped to the workspace) → adjacent in the workspace
+        const scopeIds = new Set((scopeWs?.tabs ?? []).filter((id) => id !== tabId))
 
         let nextTabId: string | null = null
         // Try visitHistory first (most recent visited tab still in scope)
@@ -258,12 +254,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             break
           }
         }
-        // Fallback to adjacent
-        if (nextTabId === null) {
-          const ordered = ws ? ws.tabs : standaloneOrder
-          const idx = ordered.indexOf(tabId)
-          const remaining = ordered.filter((id) => id !== tabId)
+        if (nextTabId === null && ws) {
+          // Fallback to adjacent
+          const idx = ws.tabs.indexOf(tabId)
+          const remaining = ws.tabs.filter((id) => id !== tabId)
           nextTabId = remaining[Math.min(idx, remaining.length - 1)] ?? null
+        } else if (nextTabId === null && scopeWs) {
+          // Not in the list, so nothing is adjacent: the workspace's own active tab, else its first.
+          const live = scopeWs.tabs.filter((id) => !!tabStore.tabs[id])
+          nextTabId = scopeWs.activeTabId !== null && live.includes(scopeWs.activeTabId) ? scopeWs.activeTabId : (live[0] ?? null)
         }
 
         // Pre-compute wasActive flags before any mutation
