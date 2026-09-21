@@ -32,10 +32,12 @@ interface SotStepProps {
   onNewName: (name: string) => void
   /** A create that did not end in a profile: what is known of it (wizard-run.ts, `CreateResult`) and the failure's class. */
   createError: { outcome: 'failed' | 'not-created' | 'unknown' | 'same-name'; request: string } | null
+  /** The profile that MAY be the one a create of unknown outcome made: marked, never chosen for the user. */
+  maybeId: string | null
   disabled: boolean
 }
 
-export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newName, onNewName, createError, disabled }: SotStepProps) {
+export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newName, onNewName, createError, maybeId, disabled }: SotStepProps) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -102,6 +104,7 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
                 {/* A profile's name is its owner's text: shown as it is. */}
                 <span>{row.name}</span>
                 <span className="text-text-muted">{t('settings.profile.wizard.sot.devices', { count: row.attachments.length })}</span>
+                {row.id === maybeId && <span data-testid={`profile-wizard-profile-maybe-${row.id}`} className={BADGE}>{t('settings.profile.wizard.sot.maybe_yours')}</span>}
               </label>
             ))}
           {/* A new one can be made whatever the list says — also when it could not be read. */}

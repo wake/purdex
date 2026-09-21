@@ -309,9 +309,9 @@ describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for
   const before = indexEntry('p_00000000000a', 'Work') // there when the wizard first listed: same name, empty — and NOT ours
   const ours = indexEntry('p_00000000000b', 'Work', [], { createdAt: 50 })
 
-  it('created: its id, not adopted', async () => {
+  it('created: its id', async () => {
     vi.mocked(createProfile).mockResolvedValue({ kind: 'ok', value: { id: 'p_00000000000b', name: 'Work', createdAt: 1, updatedAt: 1 } })
-    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: true, id: 'p_00000000000b', adopted: false })
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: true, id: 'p_00000000000b' })
     expect(listProfiles).not.toHaveBeenCalled()
   })
 
@@ -321,17 +321,17 @@ describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for
     expect(listProfiles).not.toHaveBeenCalled()
   })
 
-  it.each(['timeout', 'network', 'aborted', 'server', 'malformed'])('outcome unknown (%s), and the list now holds a profile of that name, empty, unattached, that was NOT there before → that is the one: adopted', async (reason) => {
+  it.each(['timeout', 'network', 'aborted', 'server', 'malformed'])('outcome unknown (%s), and the list now holds a profile of that name, empty, unattached, that was NOT there before → it MAY be ours — or another device\'s, created in the same moment: POINTED AT, never taken (review F2, second round)', async (reason) => {
     vi.mocked(createProfile).mockResolvedValue(transportFailure(reason))
     listed(before, ours)
-    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: true, id: ours.id, adopted: true })
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: false, outcome: 'maybe', candidateId: ours.id })
     expect(createProfile).toHaveBeenCalledTimes(1)
   })
 
-  it('thrown: unknown likewise', async () => {
+  it('thrown: unknown likewise — a candidate is pointed at', async () => {
     vi.mocked(createProfile).mockRejectedValue(new Error('SECRET'))
     listed(before, ours)
-    expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: true, id: ours.id, adopted: true })
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: false, outcome: 'maybe', candidateId: ours.id })
   })
 
   it('THE SAME NAME, EMPTY, BUT THERE BEFORE the wizard opened is never taken for ours', async () => {
@@ -349,7 +349,7 @@ describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for
   it('two candidates (an earlier lost attempt of this visit, too): the newest', async () => {
     vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
     listed(indexEntry('p_00000000000c', 'Work', [], { createdAt: 10 }), ours)
-    expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: true, id: ours.id, adopted: true })
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: false, outcome: 'maybe', candidateId: ours.id })
   })
 
   it('unknown, and the list cannot be read either: STILL unknown — and nothing may be sent again until it can', async () => {
@@ -358,9 +358,9 @@ describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for
     expect(await createSotProfile('h1', 'Work', BASE, false)).toEqual({ ok: false, outcome: 'unknown', request: 'timeout' })
   })
 
-  it('THE NEXT PRESS LOOKS FIRST (`lookFirst`): found → adopted with NO second POST; list unreadable → no POST; not there → the POST goes out', async () => {
+  it('THE NEXT PRESS LOOKS FIRST (`lookFirst`): a candidate → pointed at again, with NO second POST; list unreadable → no POST; not there → the POST goes out', async () => {
     listed(before, ours)
-    expect(await createSotProfile('h1', 'Work', BASE, true)).toEqual({ ok: true, id: ours.id, adopted: true })
+    expect(await createSotProfile('h1', 'Work', BASE, true)).toMatchObject({ ok: false, outcome: 'maybe', candidateId: ours.id })
     expect(createProfile).not.toHaveBeenCalled()
 
     vi.mocked(listProfiles).mockResolvedValue(transportFailure('network'))
@@ -369,11 +369,11 @@ describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for
 
     listed(before)
     vi.mocked(createProfile).mockResolvedValue({ kind: 'ok', value: { id: 'p_00000000000f', name: 'Work', createdAt: 1, updatedAt: 1 } })
-    expect(await createSotProfile('h1', 'Work', BASE, true)).toEqual({ ok: true, id: 'p_00000000000f', adopted: false })
+    expect(await createSotProfile('h1', 'Work', BASE, true)).toEqual({ ok: true, id: 'p_00000000000f' })
     expect(createProfile).toHaveBeenCalledTimes(1)
   })
 
-  it('NO BASELINE (the list had never been read when "new" was chosen): nothing can be told apart — a same-name empty profile is neither adopted nor doubled', async () => {
+  it('NO BASELINE (the list had never been read when "new" was chosen): nothing can be told apart — a same-name empty profile is neither pointed at as ours nor doubled', async () => {
     vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
     listed(ours)
     expect(await createSotProfile('h1', 'Work', null, false)).toEqual({ ok: false, outcome: 'same-name', request: 'timeout' })

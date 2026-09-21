@@ -1702,5 +1702,6 @@
   "settings.profile.wizard.sot.create_unknown": "不確定 profile 有沒有建立成功：主機沒有回應，它的清單也讀不到。請再按一次按鈕——會先問主機現在有什麼，不會重複建立。",
   "settings.profile.wizard.sot.create_not_created": "之後向主機查過，上面沒有這份 profile。再按一次按鈕就會建立。",
   "settings.profile.wizard.sot.create_same_name": "不確定 profile 有沒有建立成功，而主機上現在有一份同名的空 profile，可能是、也可能不是剛才那一份。如果是你的，請從上面的清單選它；不然請替新的換一個名稱。",
-  "settings.profile.wizard.notice.create_adopted": "其實主機已經建立了那份 profile，只是回應遺失了。現在用的就是那一份，沒有重複建立。"
+  "settings.profile.wizard.notice.create_maybe": "不確定你的 profile 有沒有建立成功——主機沒有回應。主機上現在有一份同名、全新的空 profile，已在清單中標示：可能就是它，也可能是另一台裝置在同一時間建立的。如果是你的就選它，不然請替新的 profile 換一個名稱。",
+  "settings.profile.wizard.sot.maybe_yours": "可能是你剛才建立的"
 }
