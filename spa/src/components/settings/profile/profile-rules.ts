@@ -5,7 +5,7 @@ import { DEVICE_NAME_MAX_CODE_POINTS } from '../../../lib/device-name'
 import type { PendingDetach } from '../../../stores/useProfileStore'
 
 /**
- * THE COLOUR NEEDS AN ICON (the main session's default, 2026-09-22; the user has not ruled on it). A profile's
+ * THE COLOUR NEEDS AN ICON (confirmed by the user, 2026-09-22: an icon first, then a colour). A profile's
  * colour tints its Phosphor icon; with no icon chosen the profile shows the Purdex logo, a bitmap the colour
  * does nothing to (`ProfileIcon`). So while the logo shows, the colour control is disabled and says why — and a
  * colour already stored is KEPT, not cleared: it comes back with the next icon. `false` = offer the colour

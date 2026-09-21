@@ -325,7 +325,7 @@ thing. #1255 (re-run the session reconciliation after a switch) lands first, on 
 
 | PR | Reachable afterwards | Contents |
 |---|---|---|
-| **P3d-1** | the Home button opens a menu — **where there is a slave** | `components/Menu.tsx` (the primitive) + `ProfileSwitcher` in both bars + its i18n. **With no slave the Home button is NOT a menu, in any PR** (as built; this row first said the menu would shrink to a single `Set up sync…` item for everyone). Why: this plan's own iron rule is that a user who never touched the feature sees today's app, and turning every user's Home click into a menu breaks it — the iron rule wins. The entry for everyone is the Settings sidebar's *Profile*; `Set up sync…` is P3d-3's, in the *Current* block. |
+| **P3d-1** | the Home button opens a menu — **where there is a slave** | `components/Menu.tsx` (the primitive) + `ProfileSwitcher` in both bars + its i18n. **With no slave the Home button is NOT a menu, in any PR** — **confirmed by the user, 2026-09-22: for someone with no local profile a click on Home does what it does today** (as built; this row first said the menu would shrink to a single `Set up sync…` item for everyone). Why: this plan's own iron rule is that a user who never touched the feature sees today's app, and turning every user's Home click into a menu breaks it — the iron rule wins. The entry for everyone is the Settings sidebar's *Profile*; `Set up sync…` is P3d-3's, in the *Current* block. |
 | **P3d-2** | Settings › Profile exists: *Current* + *Profiles* | the section registration (`SETTINGS_ORDER.PROFILE`), the *Current* block (read-only state, Auto-sync, Sync now, Stop sync) and the *Profiles* block (slaves: copy master / save screen / rename / delete; **every local profile, the master included: name / icon / colour** — `setProfileAppearance`, with the two existing pickers, see "P3d-1 — As built"; SOT profiles: rename / delete). A master can still only be attached through the dev hook. |
 | **P3d-3** | a user can attach a master without the dev hook | the *Wizard* (decision 10's five steps). `Settings › Sync` leaves the sidebar **here**, not earlier: until the wizard exists it is the only sync UI a user has. |
 | **P3d-4** | conflicts can be resolved from the UI | the *Resolve* block, PRODUCT.md §3.9, and the real-machine acceptance of the whole of P3 (below), **through the UI**. **Also (moved here from P3d-2, which found the snapshot does not carry them):** `ExecutorStatus` publishes, per section, its `rev` and whether it is `failing` / `backingOff`, plus a `lastSyncedAt`; the *Current* block then shows the three — a revision on every row, the time of the last sync, and "settings are waiting for workspaces" also while `workspaces` keeps FAILING (today it is said only while `workspaces` is locked: a failing section reads `pending`, like one that is through in a moment, and `problems` is a log with no "over" — `sync-view.ts`, `settingsWaitForWorkspaces`). |
@@ -537,8 +537,8 @@ with no master asks no host (pinned). It owns the ONE `useSotProfiles(hostId)` f
   "Main" layer heading). **A name changed in another window while it is being edited here**: nothing typed →
   the input follows; a draft → kept, and the change is said, with Save (the user's own overwrite) and "Use
   that one". A profile deleted elsewhere closes its editor.
-- **`profile-rules.ts` holds the page's DECISIONS, one edit each**: `COLOR_NEEDS_ICON` / `canTintProfile` — *the
-  user has not ruled on this one*: with no icon the profile shows the logo, a bitmap the colour cannot tint, so
+- **`profile-rules.ts` holds the page's DECISIONS, one edit each**: `COLOR_NEEDS_ICON` / `canTintProfile` —
+  **confirmed by the user, 2026-09-22: an icon first, then a colour**: with no icon the profile shows the logo, a bitmap the colour cannot tint, so
   the colour control is disabled and says why, and a stored colour is KEPT; `false` offers the colour always.
   `defaultSlaveName(deviceName, taken)` — the device name with the next free number (a default never makes a
   duplicate; the number survives the 64 code point cut). `sotScopeOf` / `sotActionStillValid` (below).
@@ -624,8 +624,8 @@ still stands and says why, `profile-wizard-notice`):
 | 1 | `stop` (only with a master) | `detachMaster()` on the button — the call *Stop sync* makes. `{ ok: false }` → the step STAYS, says it (`profile-wizard-stop-not-told`), and *Continue* is the user's | a master is attached (else → `sot`, `stopped-elsewhere`) |
 | 2 | `sot` | host `<select>` (dev host if connected, else the first connected; others listed, disabled, "— not connected"); `useSotProfiles` (now carries the failure's `reason`) loading / error + retry / empty / rows; *A new profile* — name required, default = device name — is created (`createProfile`) when the step is confirmed | no master (else → `stop`, `attached-elsewhere`) |
 | 3 | `local` | the master + every slave, the master chosen by default, the one on screen badged; the consequence of a move in words. Nothing is promoted here | + host still in the store and connected (else → `sot`, `host-gone` / `host-offline`); Next is disabled while the world is catching up |
-| 4 | `direction` | push / pull, nothing pre-chosen for an existing profile. **Push only** for a profile this visit created AND for one whose fetched index has no sections (`pull_new` / `pull_empty`) | + the chosen slave still exists (else → `local`, `local-gone`, master chosen) |
-| 5 | `run` | the sub-steps as a list, all `pending`, and *Start*; nothing has been done before it is pressed | the same, checked once more inside the *Start* click |
+| 4 | `direction` | push / pull, nothing pre-chosen for an existing profile. **Push only while the profile is EMPTY as last seen** (`seen.empty` — at step 2's confirm, or as `prepareRun` found it since); "this visit created it" only picks the wording (`pull_new` / `pull_empty`), it is never by itself the reason | + the chosen slave still exists (else → `local`, `local-gone`, master chosen) |
+| 5 | `run` | the sub-steps as a list, all `pending`, and *Start*; nothing has been done before it is pressed | the same — and *Start* (and every *Try again*) goes through `prepareRun`, below |
 
 There is no way to a step but through the one before it: the step list is `<li>` text, *Next* is the only door,
 *Back* exists on 3, 4 and the not-yet-started 5.
@@ -666,7 +666,64 @@ each with its own sentence (`settings.profile.wizard.attach.*`); anything else l
 and `reasonKey` / `requestKey` are closed lists too — no `Error.message`, transport message or body is shown or
 stored. `write-failed` is shown without its `detail`.
 
-**start.ts — the two best-effort drops inside `attachMaster` now write `pendingDetach`.** *Switching master*:
+**Before anything irreversible: `prepareRun(draft)` — ONE door, in `wizard-run.ts` (review F1).** It answers a
+frozen plan or the reason there is none; the component only presents the answer. It checks this device's
+premises (`brokenLocalPremise`: no master attached · the host in the store and connected · the chosen slave
+still there — before the host is asked AND again after it answered), then RE-LISTS the host's profiles and
+compares the chosen one's fingerprint — every live section's `[section, rev, hash]`, sorted; the index carries
+them, no payload is fetched, and a deleted section is simply one that is no longer listed (the index has no
+tombstone flag) — with the one captured when the user confirmed step 2 (`seen`). The attack it closes: a profile
+seen EMPTY is offered push only, with no "replaces what is there" warning; another device pushes a whole world
+into it; *Start* would have overwritten that in silence. Now: `profile-changed` → nothing runs, back to the
+direction step, the direction UN-chosen, what is offered recomputed from what is there now (both directions and
+the warning), notice `profile-changed` / `profile-emptied`; `profile-gone` → back to step 2; `list-failed` →
+nothing runs, `profile-wizard-check-failed` says why (a sentence by failure class), *Start* stays. A retry asks
+again (`promoted = true` once the promote went through: the chosen slave is the master by then and is not looked
+for among the slaves; a `profile-changed` then also re-points the choice at the master, so the next plan does not
+promote twice).
+**What is left, and why no rev is handed down.** `attachMaster` takes no rev and the executor could not use one:
+under `push` it answers every conflict of the first reconciliation with keep-local — each PUT is a CAS on the rev
+its OWN index read gave, rebased and re-sent on a 409 (executor.ts, THE FIRST RECONCILIATION). A push is thus an
+unconditional overwrite for as long as that reconciliation lasts. The window that remains is from the re-list to
+the end of the first reconciliation; a device writing into the profile in those seconds is overwritten, which is
+what the user was told a push does. (Under `pull`, an EMPTY SOT takes nothing and the ordinary rules push — so
+"pull from empty" would be harmless, but it is still not offered: it would say the opposite of what happens.)
+
+**A create whose outcome is not known is never simply sent again — `createSotProfile` (review F2).** The daemon
+gives every POST a new id and allows equal names. Unknown = `timeout` / `network` / `aborted` / thrown — and
+`server` / `malformed` too (a 5xx or an unreadable 2xx may follow the commit; counting them in costs one list
+request). Then the host is listed and OURS is looked for: same name, no section, no device attached, **and an id
+that is not in the BASELINE** — the ids the host had listed, in this wizard visit, before the visit's FIRST POST
+to that host (kept in a ref, set once per host; ids, not `createdAt`: the daemon's clock is not this device's).
+Found (the newest, if an earlier lost attempt left one too) → adopted, notice `create-adopted`. Not found →
+`not-created`, said. The list cannot be read → `unknown`; from any non-definite outcome on, the next press for
+that host + name LOOKS FIRST and sends nothing until a list has been read. No baseline (the list had never been
+read when *A new profile* was chosen): ours cannot be told from one that was always there → `same-name`: neither
+adopted nor doubled; the list is reloaded and the user picks it or renames. A definite refusal (`rejected`,
+`unauthorized`, `too-large`, `contended`, `not-found`, `unknown-host`) is just that.
+
+**The result is a toast, too — `announceRun` (real-machine acceptance F6).** The Settings tab belongs to the
+master's world and a pull REPLACES that world: page, wizard and "done" line unmount when the first section is
+applied. A finished run is therefore always said through `useUndoToast` (no world owns it; the switcher's
+precedent) — `toast.done`: *Now syncing with “X” on H.* / `toast.done_saved`: *… The workspaces and tabs this
+device had are kept as the local profile “Y”.* — a push's as well, beside the "done" line. A FAILED run is a
+toast only when the wizard is gone (`toast.stopped_promote` / `_save` / `_attach`: which step, never why). The
+run's promise outlives the component: it announces, and sets state only while mounted.
+
+**`useProfileStore.pendingDetaches` — a keyed LIST (review F3); it was one slot, `pendingDetach`.** Master A→B
+with A's drop failing, then B→C with B's failing, wrote B over A and A's ghost was never mentioned again. Now:
+`PendingDetach[]`, oldest first, at most one per `pendingDetachKey` = `JSON.stringify([endpoint, hostId,
+profileId])`; `addPendingDetach` merges (same key → replaced in place, else appended), capped at
+`PENDING_DETACH_MAX` = 20 (oldest dropped); `clearPendingDetach(key)`, `retryPendingDetach(key)` and a re-attach
+(`setMaster`: the record of that very endpoint + host + profile) each remove ONE record — a same-id profile on
+another daemon stays a ghost there. start.ts still re-reads storage before it writes, so the merge is onto what
+storage holds. **Migration:** `merge` reads `pendingDetaches` record by record and then alpha.420's single
+`pendingDetach` object, added as a record unless its key is already listed; the old key is not written back.
+`StopSyncControl` renders one notice per record (`LeftoverItem`, its own retry state), each inside
+`profile-detach-item-<pendingDetachTestId>` (`<host>.<profile>.<endpoint>`, every other character → `_`); the
+existing `profile-detach-*` ids are on every notice.
+
+**start.ts — the two best-effort drops inside `attachMaster` now write `pendingDetaches`.** *Switching master*:
 the DELETE goes to the address the OLD attachment was made at (`masterEndpoint`, read before anything else —
 `dropAttachment(previous, previousAt)`, so a re-pointed host is not told at its new address), and a drop that did
 not get through is remembered AFTER `setMaster` (before it the old master still IS the master, and
@@ -676,14 +733,18 @@ take-down goes there or nowhere and is remembered with it. If the host had no ad
 remembered (the setter refuses a record without one) and it stays a `detach-failed` problem. The wizard itself
 never switches master without detaching first; the dev hook still can.
 
-**`Settings › Sync` left the sidebar.** The `sync` module is registered without a `settings` contribution; the
-module, engine, contributors, `SyncSection`, `SnapshotHistoryPage` are untouched (P4a). What only that page
-offered, all unreachable now: provider off / daemon / file; the sync host; *Sync now*; per-contributor toggles;
-export / import of a `.purdex-sync` file; resolving the old engine's pending conflicts; snapshot history (view /
-restore). **None of it runs by itself** — `syncNow`, `push` and `applyImport` have no caller but that page, there
-is no timer and no subscription — so no engine is left running that a user cannot stop; their data stays where
-it is. `TitleBar`'s conflict icon mirrored that page's banner and led to `/settings/sync`, which now self-heals
-to the first section: removed with it.
+**`Settings › Sync` left the sidebar — except for whoever still needs it (review F4).** Contributions gained
+`visible?: () => boolean` (`settings-contribution-types.ts`; applied in `listContributions`, so a hidden section
+has no row AND no route; false or throwing → hidden; read at the shell's next render — nothing subscribes). The
+`sync` module still declares its section, visible while `activeProviderId !== null || pendingConflicts.length >
+0 || pendingRemoteBundle !== null`: pending conflicts and a pending bundle are persisted and only `SyncSection`
+resolves or dismisses them; a provider that is on means the user is using the old Sync (every sync is a button
+on that page), and the page is where it is switched off — after which, with nothing pending, the entry is gone.
+Everybody else sees no Sync entry. `TitleBar`'s conflict icon is back unchanged: its predicate is a subset of
+that condition, so the click always lands. What only that page offers (provider, sync host, *Sync now*,
+per-contributor toggles, `.purdex-sync` export / import, conflict resolution, snapshot history) is unreachable
+for a user with the provider off and nothing pending; **none of it runs by itself** — `syncNow`, `push` and
+`applyImport` have no caller but that page — so nothing is left running that cannot be stopped. P4a deletes it.
 
 **test ids**
 - entry: `profile-setup-start`, `profile-setup-change`
@@ -705,10 +766,14 @@ to the first section: removed with it.
   `profile-wizard-save-name`, `profile-wizard-save-name-error`, `profile-wizard-no-copy-warning`
 - run: `profile-wizard-summary`, `profile-wizard-substep-<promote|save|attach>` (`data-state`
   pending|running|done|failed), `profile-wizard-start`, `profile-wizard-failure` (`data-step`, `data-reason`),
-  `profile-wizard-retry`, `profile-wizard-restart`, `profile-wizard-done`
+  `profile-wizard-retry`, `profile-wizard-restart`, `profile-wizard-done`, `profile-wizard-checking`,
+  `profile-wizard-check-failed` (`data-reason`)
+- added by the review fixes: `profile-wizard-create-error` also carries `data-outcome`
+  (failed|not-created|unknown|same-name); `profile-wizard-notice` reasons + `profile-changed` /
+  `profile-emptied` / `profile-gone` / `create-adopted`; `profile-detach-item-<host>.<profile>.<endpoint>`
 - i18n: `settings.profile.current.setup` / `.change` / `.change_desc`, `settings.profile.wizard.*` (`.step.*`,
   `.refused.*`, `.notice.*`, `.stop.*`, `.sot.*`, `.request.*`, `.local.*`, `.direction.*`, `.run.*` +
-  `.run.state.*`, `.now.*`, `.promote.*`, `.save.*`, `.attach.*`)
+  `.run.state.*`, `.now.*`, `.promote.*`, `.save.*`, `.attach.*`, `.toast.*`)
 
 **For P3d-4.** The Resolve rows still go at `TODO(P3d-4)` (`profile-current-locked-note`), in `Attached` — which
 is not mounted while the wizard is open, so the two never show together. A `profile-gone` master's one way out is
@@ -725,7 +790,7 @@ Enter, Escape, outside-click, focus returned to the button — the first real me
 repo, kept in `components/Menu.tsx` so it can be reused. Items: the master (badge + the sync state
 dot from Task 2; absent when there is no master), the slaves, a divider, `Settings › Profile`.
 Choosing one calls `switchActiveProfile`; `busy` shows a toast. ~~With no master and no slaves the
-menu has one item, `Set up sync…`~~ **As built: with no slave there is no menu at all** — the Home
+menu has one item, `Set up sync…`~~ **As built, and confirmed by the user on 2026-09-22: with no slave there is no menu at all** — the Home
 button does what it always did, and the discoverable entry is Settings › *Profile* in the sidebar
 (`Set up sync…` goes into its *Current* block with P3d-3). Why: a menu on every user's Home click
 contradicts the iron rule ("a user who never touched the feature sees today's app"), and the iron
@@ -760,6 +825,8 @@ no tab list under it after P3c).
 sync entry points with different stores behind them is not an IA anyone chose). The Sync module's
 `settings` contribution is dropped; the module, its engine and `SnapshotHistoryPage` stay until P4a
 deletes them. `TitleBar.tsx:31`'s icon predicate, which mirrors the Sync banner, goes with it.
+*(As built, after review F4: the section stays DECLARED with a `visible()` — listed only while the old Sync has
+something pending or is switched on — and the icon stays with it. See "P3d-3 — As built".)*
 
 ### Task 8 — i18n (en + zh-TW, every key in both, placeholders paired) and PRODUCT.md §3.9 Profile
 (master / slave / active / SOT in the vocabulary's own format; the PR body lists the IA, visual and
