@@ -231,10 +231,21 @@ top-level side effects, so it is importable by a test:
 | Export | Responsibility |
 |---|---|
 | `ENTITLEMENTS_PATH` | absolute path to §5.1 |
+| `LIBRARY_VALIDATION_ENTITLEMENT` | the `com.apple.security.cs.disable-library-validation` key name |
 | `buildSignArgs({ appPath, identity, entitlements })` | pure — returns the `codesign` argv |
+| `signApp(appPath, { identity, entitlements })` | runs `codesign` with the `buildSignArgs` argv, then `verifyApp` |
+| `verifyApp(appPath)` | runs `codesign --verify --deep --strict`; throws when invalid |
 | `readEntitlements(appPath)` | runs `codesign -d --entitlements - --xml`, returns the plist text (`''` when none) |
+| `readEntitlementsObject(appPath)` | decodes that plist through `plutil -convert json`; `{}` when none |
 | `hasHardenedRuntime(appPath)` | parses the `CodeDirectory … flags=` line for `runtime` |
-| `assertLibraryValidationDisabled(appPath)` | throws unless *(no Hardened Runtime)* **or** *(entitlements contain `disable-library-validation`)* |
+| `assertLibraryValidationDisabled(appPath)` | one bundle: throws unless *(no Hardened Runtime)* **or** *(`disable-library-validation` is present **and `true`**)* |
+| `assertBundleTreeLibraryValidationDisabled(appPath)` | the above over the app **and** every nested `Contents/Frameworks/*.app` |
+
+The value, not the key, is what the guard keys off: a plist that spells the
+key with `<false/>` signs just as cleanly and leaves Library Validation on,
+so a substring match over the plist text would wave the crashing
+configuration through. Hence `readEntitlementsObject()` and the `=== true`
+comparison.
 
 Two changes to the argv relative to today:
 
@@ -251,13 +262,23 @@ keeps using it for its `Identifier=` comparison.
 ### 5.4 `scripts/build-electron.mjs`
 
 - `signAndVerifyApp()` passes `ENTITLEMENTS_PATH` when it signs.
-- `assertLibraryValidationDisabled(app)` runs on **every** produced bundle —
-  including the `hasValidSignature()` early-return path that keeps
+- `assertBundleTreeLibraryValidationDisabled(app)` runs on **every** produced
+  bundle — including the `hasValidSignature()` early-return path that keeps
   electron-builder's arm64 signature. That is G3: if a future
   electron-builder stops passing entitlements, the build breaks at build
   time rather than at the user's launch time.
+- The guard acts on the **bundle tree**, not just the top-level app: the
+  four `Purdex Helper*.app` are separate processes (§2) and a helper that
+  loses the entitlement shows up as a blank renderer window rather than as a
+  failure to launch, so checking only the app would let that ship. Nested
+  `.framework` bundles are excluded (§5.6).
 - `PDX_SKIP_MAC_SIGN=1` keeps skipping everything, assertion included; it
   is the documented escape hatch for non-signing environments.
+- The module-is-entry-point guard resolves `process.argv[1]` with
+  `realpathSync()` before comparing it to `import.meta.url` (which is always
+  symlink-resolved), and logs a line to stderr when it declines to build.
+  Without both, invoking the script through a symlink builds nothing and
+  still exits 0.
 
 To keep G3 from being a claim rather than a behaviour, the two collaborators
 (`sign` and `assert`) are injectable, and the test asserts that **both**
@@ -321,7 +342,34 @@ Developer ID and sandbox entitlements are in play — i.e. Stage 3.
    freshly-signed path and the `hasValidSignature()` early-return path.
    Without this, G3 is only a claim in prose.
 
+5. **The value is read, not just the key.** Sign a bundle with a plist whose
+   `disable-library-validation` is `<false/>`; `readEntitlementsObject()`
+   must decode `false`, `assertLibraryValidationDisabled()` must throw, and
+   its message must distinguish "present but not true" from "absent".
+6. **The guard covers the bundle tree.** Deep-sign an app with a nested
+   helper `.app` and a nested `.framework`; re-sign the helper alone,
+   hardened and unentitled → the single-bundle guard on the app still
+   passes but `assertBundleTreeLibraryValidationDisabled()` throws and names
+   the helper. Then strip the framework's entitlements → the tree guard must
+   still pass (§5.6).
+7. **The defaults are the real collaborators.** Drive `signAndVerifyApp(app)`
+   with **no** second argument against an ad-hoc, hardened, `--identifier`-ed
+   but unentitled bundle — the production early-return path — and assert it
+   throws. Case 4 injects doubles and therefore cannot see the defaults.
+8. **`PDX_MAC_SIGN_IDENTITY` means re-sign.** With the variable set (in the
+   child process only), an already-validly-signed bundle must still reach
+   `sign`, with the identity forwarded, and `assert` must run afterwards.
+9. **The entry-point guard.** `isMainModule()` is exported and returns true
+   for the script's own path *and* for a symlink to it, false for an
+   unrelated path, an unresolvable path and a missing `argv[1]`; importing
+   the module prints the "skipping the build" line to stderr.
+
 Skipped with a clear message on non-darwin (`process.platform !== 'darwin'`).
+
+`electron/signing.test.ts` additionally pins `build.mac.entitlements` and
+`build.mac.entitlementsInherit` in `package.json` to `ENTITLEMENTS_PATH`:
+without them electron-builder silently falls back to its bundled template
+and the repo plist stops being the single source of truth (§5.2, G2).
 
 Note on what "fails first" means here: on today's `main` the test fails
 because `scripts/mac-sign.mjs` does not exist. The assertion that pins the
