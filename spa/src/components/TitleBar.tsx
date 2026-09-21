@@ -1,10 +1,6 @@
-import { Columns, Rows, Square, SidebarSimple, SquareHalfBottom, Warning } from '@phosphor-icons/react'
-import { useLocation } from 'wouter'
+import { Columns, Rows, Square, SidebarSimple, SquareHalfBottom } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useLayoutStore } from '../stores/useLayoutStore'
-import { useSyncStore } from '../lib/sync/use-sync-store'
-import { useI18nStore } from '../stores/useI18nStore'
-import { pluralKey } from '../lib/plural'
 import type { LayoutPattern } from '../types/tab'
 import type { SidebarRegion } from '../types/layout'
 import { CollapseButton } from '../features/workspace/components/CollapseButton'
@@ -28,19 +24,6 @@ export function TitleBar({ title }: Props) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const regions = useLayoutStore((s) => s.regions)
   const toggleVisibility = useLayoutStore((s) => s.toggleVisibility)
-  // Match SyncSection banner predicate exactly — otherwise the icon flashes
-  // on states where the banner silently refuses to render, creating a
-  // dead-end click path.
-  const showSyncWarning = useSyncStore(
-    (s) =>
-      s.activeProviderId !== null &&
-      s.pendingConflicts.length > 0 &&
-      s.pendingRemoteBundle !== null &&
-      s.pendingConflictsAt !== null,
-  )
-  const pendingCount = useSyncStore((s) => s.pendingConflicts.length)
-  const t = useI18nStore((s) => s.t)
-  const [, setLocation] = useLocation()
 
   const handlePattern = (pattern: LayoutPattern) => {
     if (!activeTabId) return
@@ -64,17 +47,6 @@ export function TitleBar({ title }: Props) {
 
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2 gap-2">
         <span className="text-xs text-text-secondary truncate max-w-[calc(100%-27rem)]">{title}</span>
-        {showSyncWarning && (
-          <button
-            aria-label={t(pluralKey('settings.sync.conflict.tooltip', pendingCount), { count: pendingCount })}
-            title={t(pluralKey('settings.sync.conflict.tooltip', pendingCount), { count: pendingCount })}
-            className="pointer-events-auto flex items-center shrink-0 cursor-pointer"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            onClick={() => setLocation('/settings/sync')}
-          >
-            <Warning size={14} className="text-yellow-500" />
-          </button>
-        )}
       </div>
 
       <div className="flex-1" />

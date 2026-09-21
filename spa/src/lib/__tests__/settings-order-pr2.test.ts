@@ -25,7 +25,7 @@ import { SETTINGS_ORDER } from '../settings-order'
 //   editor(13)
 //   files(14)
 //   performance-monitor(15)
-//   sync(16)
+//   (sync(16) left the sidebar with Profile Sync P3d-3: Settings › Profile replaces it)
 //   dev-environment(20)     — only when caps.devUpdateEnabled
 //
 // Optional caps-gated entries are excluded from the strict equality so
@@ -68,7 +68,6 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'editor',              order: SETTINGS_ORDER.MODULE_EDITOR },               // 13
       { id: 'files',               order: SETTINGS_ORDER.MODULE_FILES },                // 14
       { id: 'performance-monitor', order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR },  // 15
-      { id: 'sync',                order: SETTINGS_ORDER.MODULE_SYNC },                 // 16
     ])
 
     // Step 2: any entry not in the always-on list must be one of the
@@ -76,7 +75,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     const expectedAlwaysOnIds = new Set([
       'appearance', 'terminal', 'interface', 'profile', 'module-config',
       'browser', 'editor', 'files',
-      'performance-monitor', 'sync',
+      'performance-monitor',
     ])
     const unexpected = items
       .map((x) => x.id)
@@ -89,7 +88,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     // this guard pins the *contents* of the band, not just relative order,
     // so a stray legacy section squeezed into 10.5 / 12.5 / 13.5 fails here.
     // Order is alphabetical by English sidebar short label
-    // (Browser / Editor / Files / Monitor / Sync — spec §3.1).
+    // (Browser / Editor / Files / Monitor — spec §3.1; Sync left with Profile Sync P3d-3).
     const moduleBand = listContributions('purdex')
       .slice()
       .sort((a, b) => a.order - b.order)
@@ -100,7 +99,6 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       'editor',
       'files',
       'performance-monitor',
-      'sync',
     ])
   })
 

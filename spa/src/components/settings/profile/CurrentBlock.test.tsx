@@ -15,6 +15,10 @@ import type { ExecutorStatus, SectionLock } from '../../../lib/profile/executor'
 
 vi.mock('../../../hooks/useProfileSync', () => ({ useProfileSync: vi.fn() }))
 vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn(), retryPendingDetach: vi.fn() }))
+// The wizard is its own file with its own tests; here it is a box that says it is open and can be closed.
+vi.mock('./wizard/ProfileWizard', () => ({
+  ProfileWizard: ({ onClose }: { onClose: () => void }) => <div data-testid="profile-wizard"><button data-testid="profile-wizard-close" onClick={onClose} /></div>,
+}))
 vi.mock('../../../lib/profile/master-world', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/profile/master-world')>()),
   readMasterWorld: vi.fn(),
@@ -62,7 +66,9 @@ describe('no master', () => {
     expect(block).toHaveAttribute('data-state', 'none')
     expect(block).toHaveTextContent(en['settings.profile.current.none_what'])
     expect(block).toHaveTextContent(en['settings.profile.current.none_how'])
-    expect(within(block).queryAllByRole('button')).toHaveLength(0)
+    // ONE control: the way into the wizard (P3d-3)
+    expect(within(block).getAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['profile-setup-start'])
+    expect(screen.getByTestId('profile-setup-start')).toHaveTextContent(en['settings.profile.current.setup'])
     expect(within(block).queryAllByRole('switch')).toHaveLength(0)
     expect(screen.queryByTestId('profile-sync-now')).toBeNull()
     expect(screen.queryByTestId('profile-stop-sync')).toBeNull()
@@ -74,6 +80,56 @@ describe('no master', () => {
     show(NO_MASTER)
     expect(readMasterWorld).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('the wizard\'s two ways in (P3d-3)', () => {
+  it('no master: "Set up sync…" opens it IN PLACE of the two sentences; closing brings them back', () => {
+    show(NO_MASTER)
+    expect(screen.queryByTestId('profile-wizard')).toBeNull()
+    fireEvent.click(screen.getByTestId('profile-setup-start'))
+    expect(screen.getByTestId('profile-wizard')).toBeInTheDocument()
+    expect(screen.queryByTestId('profile-setup-start')).toBeNull()
+    expect(screen.getByTestId('profile-current-block')).not.toHaveTextContent(en['settings.profile.current.none_how'])
+    fireEvent.click(screen.getByTestId('profile-wizard-close'))
+    expect(screen.queryByTestId('profile-wizard')).toBeNull()
+    expect(screen.getByTestId('profile-setup-start')).toBeInTheDocument()
+  })
+
+  it('a master attached: "another profile or host…" opens the same wizard in place of the state — and the plain Stop sync is not offered beside it', () => {
+    show(attached())
+    fireEvent.click(screen.getByTestId('profile-setup-change'))
+    expect(screen.getByTestId('profile-wizard')).toBeInTheDocument()
+    expect(screen.queryByTestId('profile-sync-now')).toBeNull()
+    expect(screen.queryByTestId('profile-stop-sync')).toBeNull()
+    fireEvent.click(screen.getByTestId('profile-wizard-close'))
+    expect(screen.getByTestId('profile-stop-sync')).toBeInTheDocument()
+  })
+
+  it('the wizard stays open while the master goes and comes (its first and last steps do exactly that)', () => {
+    const view = show(attached())
+    fireEvent.click(screen.getByTestId('profile-setup-change'))
+    vi.mocked(useProfileSync).mockReturnValue(NO_MASTER)
+    view.rerender(<CurrentBlock masterName={null} />)
+    expect(screen.getByTestId('profile-wizard')).toBeInTheDocument()
+    vi.mocked(useProfileSync).mockReturnValue(attached())
+    view.rerender(<CurrentBlock masterName="default" />)
+    expect(screen.getByTestId('profile-wizard')).toBeInTheDocument()
+  })
+
+  it('a host that was not told of a stop is still said while the wizard is open: the notice is not the wizard\'s to hide', () => {
+    useProfileStore.setState({ pendingDetach: { hostId: 'h1', profileId: 'p1', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 } })
+    show(NO_MASTER)
+    fireEvent.click(screen.getByTestId('profile-setup-start'))
+    expect(screen.getByTestId('profile-detach-leftover')).toBeInTheDocument()
+  })
+
+  it('opening the page still opens nothing: the wizard is a click away', () => {
+    show(NO_MASTER)
+    expect(screen.queryByTestId('profile-wizard')).toBeNull()
+    cleanup()
+    show(attached())
+    expect(screen.queryByTestId('profile-wizard')).toBeNull()
   })
 })
 

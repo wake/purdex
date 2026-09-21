@@ -39,50 +39,29 @@ describe('Sync modularize (spec §4.3)', () => {
     expect(ids).not.toContain('sync')
   })
 
-  it('2.3.c: sync contribution is module-owned (moduleId === "sync")', () => {
+  // Profile Sync P3d-3 (plan review #10): Settings › Profile REPLACES Settings › Sync, so the module's `settings`
+  // contribution is gone. The module itself, its engine and its contributors stay until P4a deletes them —
+  // nothing of the old Sync runs by itself (every entry point was a button on that page), so nothing is left
+  // running that a user could no longer stop.
+  it('2.3.c: the sync module contributes NO settings section — it is not in the sidebar', () => {
+    expect(getModule('sync')?.settings ?? []).toEqual([])
     const purdex = listContributions('purdex')
-    const syncContrib = purdex.find((c) => c.localId === 'sync')
-    expect(syncContrib).toBeDefined()
-    expect(syncContrib!.moduleId).toBe('sync')
-    // Module-owned predicate flips on (puzzle icon shows in sidebar).
-    expect(isModuleOwnedContribution(syncContrib!)).toBe(true)
+    expect(purdex.find((c) => c.localId === 'sync')).toBeUndefined()
+    expect(purdex.find((c) => c.moduleId === 'sync')).toBeUndefined()
+    expect(purdex.some(isModuleOwnedContribution)).toBe(true) // the registry itself still works: other modules are there
   })
 
-  it('2.3.d: sync contribution carries the SETTINGS_ORDER MODULE_SYNC value (=14)', () => {
-    const purdex = listContributions('purdex')
-    const syncContrib = purdex.find((c) => c.localId === 'sync')
-    expect(syncContrib).toBeDefined()
-    expect(syncContrib!.order).toBe(SETTINGS_ORDER.MODULE_SYNC)
+  it('2.3.d: the core band still has Profile, where sync lives now; MODULE_SYNC keeps its slot number for P4a to retire', () => {
+    expect(listContributions('purdex').find((c) => c.localId === 'profile')).toBeDefined()
+    expect(SETTINGS_ORDER.MODULE_SYNC).toBeGreaterThan(SETTINGS_ORDER.PROFILE)
   })
 
-  it('2.3.e: stale `useModuleEnabledStore` entry { sync: false } does NOT drop the contribution', () => {
-    // Clear any prior state then write a stale persisted-style entry as if a
-    // future PR turned `disableable` on, the user disabled sync, then PR-2
-    // reverted disableable. The dispatch filter only consults override when
-    // the module IS disableable; a `disableable: undefined` module always
-    // resolves to enabled.
-    useModuleEnabledStore.setState({ enabled: { sync: false }, baseline: null })
-    dispatchSettingsContributions()
-    const purdex = listContributions('purdex')
-    expect(purdex.find((c) => c.localId === 'sync')).toBeDefined()
-  })
-
-  it('2.3.f: repeated dispatch (HMR-like) keeps sync module-owned, no stale legacy moduleId', () => {
+  it('2.3.e: a stale `useModuleEnabledStore` entry and a repeated dispatch (HMR-like) do not bring the section back', () => {
+    useModuleEnabledStore.setState({ enabled: { sync: true }, baseline: null })
     dispatchSettingsContributions()
     dispatchSettingsContributions()
-    const purdex = listContributions('purdex')
-    const syncContrib = purdex.find((c) => c.localId === 'sync')
-    expect(syncContrib).toBeDefined()
-    expect(syncContrib!.moduleId).toBe('sync')
-    // Negative: the previous built-in registration moduleId must NOT come
-    // back through any code path.
-    expect(
-      purdex.find(
-        (c) =>
-          c.localId === 'sync' &&
-          c.moduleId === '_builtin.legacy-section',
-      ),
-    ).toBeUndefined()
+    expect(listContributions('purdex').find((c) => c.localId === 'sync')).toBeUndefined()
+    expect(getModule('sync')).toBeDefined()
   })
 
   it('2.3.g: registerSyncContributors() still wires all 6 contributors at boot', () => {

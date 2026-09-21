@@ -14,6 +14,13 @@
 // confirmation must stay up while the master goes (see that file) — and keeps its place in the tree, so React
 // keeps its state across the change.
 //
+// THE WIZARD (P3d-3) OPENS IN PLACE of the master-dependent half — no modal: the settings pages have no
+// multi-step flow to copy one from, and the plan forbids a new primitive. "Open" is this component's state and
+// nothing else's: leaving the page closes it, nothing is persisted, and it does NOT follow the master — the
+// wizard's first step clears the master and its last sets one. While it is open the plain Stop sync is not
+// offered beside it (the wizard's first step is that very call); `StopSyncControl` stays mounted, because the
+// notice of a host that was not told is its to show — the wizard must not hide that outcome.
+//
 // WHAT THE SNAPSHOT DOES NOT CARRY, and this block therefore does not show: a revision per section (only a
 // LOCKED section has one, `locks[key].sot.rev`) and the time of the last sync. Both would have to be published
 // by the executor; neither is guessed from anything else.
@@ -33,6 +40,7 @@ import { SYNC_DOT_CLASS, describeSections, settingsWaitForWorkspaces, syncDotOf,
 import { SettingItem } from '../SettingItem'
 import { ToggleSwitch } from '../ToggleSwitch'
 import { StopSyncControl } from './StopSyncControl'
+import { ProfileWizard } from './wizard/ProfileWizard'
 
 const BTN =
   'shrink-0 flex items-center gap-1.5 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
@@ -79,23 +87,33 @@ interface Props {
 export function CurrentBlock({ masterName }: Props) {
   const t = useI18nStore((s) => s.t)
   const sync = useProfileSync()
+  const [wizardOpen, setWizardOpen] = useState(false)
   const problems = sync.master === null ? [] : sync.problems.slice(-PROBLEMS_SHOWN).reverse()
 
   return (
     <section data-testid="profile-current-block" data-state={sync.master === null ? 'none' : 'attached'} className="mt-6">
       <h3 className="text-sm text-text-primary">{t('settings.profile.current.title')}</h3>
-      {sync.master === null ? (
+      {wizardOpen ? (
+        <ProfileWizard onClose={() => setWizardOpen(false)} />
+      ) : sync.master === null ? (
         <div>
           <p className="text-xs text-text-secondary">{t('settings.profile.current.none_what')}</p>
           <p className="text-xs text-text-secondary">{t('settings.profile.current.none_how')}</p>
-          {/* TODO(P3d-3): the wizard's entry goes HERE, under the two sentences — a button labelled
-              `settings.profile.current.setup`, testid `profile-setup-start`, opening the wizard. Not before the
-              wizard exists: a control that leads nowhere is worse than none. */}
+          <button type="button" data-testid="profile-setup-start" onClick={() => setWizardOpen(true)} className={`mt-3 ${BTN}`}>
+            {t('settings.profile.current.setup')}
+          </button>
         </div>
       ) : (
-        <Attached sync={sync} master={sync.master} masterName={masterName} />
+        <>
+          <Attached sync={sync} master={sync.master} masterName={masterName} />
+          <SettingItem label={t('settings.profile.current.change')} description={t('settings.profile.current.change_desc')}>
+            <button type="button" data-testid="profile-setup-change" onClick={() => setWizardOpen(true)} className={BTN}>
+              {t('settings.profile.current.setup')}
+            </button>
+          </SettingItem>
+        </>
       )}
-      <StopSyncControl attached={sync.master !== null} />
+      <StopSyncControl attached={sync.master !== null && !wizardOpen} />
       {problems.length > 0 && (
         <div data-testid="profile-current-problems" className="mt-4">
           <h4 className="text-xs text-text-secondary">{t('settings.profile.current.problems')}</h4>
@@ -187,8 +205,9 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
         <p data-testid="profile-current-blocked" data-reason={sync.blocked} className={NOTICE}>{blockedText()}</p>
       )}
       {world !== null && (
-        // A state, not an error (P3 plan, "What the UI must say"). TODO(P3d-3): for `no-parked-master` the way out
-        // is the wizard — link to it from this sentence once it exists.
+        // A state, not an error (P3 plan, "What the UI must say"). NOT linked to the wizard (P3d-3 looked): for
+        // `no-parked-master` the wizard can do nothing — a promote and the copy both refuse an unsettled world —
+        // and refuses to start, saying what does help (a reload: the store's `merge` repairs it).
         <p data-testid="profile-current-world" data-reason={world} className="mt-2 text-xs text-text-secondary">{t(WORLD_KEY[world])}</p>
       )}
       {schemaLock !== null && (

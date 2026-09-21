@@ -4,11 +4,12 @@
 // is checked again by the daemon (a delete answers 409 `attached`).
 import { useCallback, useEffect, useState } from 'react'
 import { listProfiles } from '../../../lib/profile/api'
-import type { ProfileIndexEntry } from '../../../lib/profile/api'
+import type { FailureReason, ProfileIndexEntry } from '../../../lib/profile/api'
 
 export type SotProfilesView =
   | { kind: 'loading' }
-  | { kind: 'error'; message: string }
+  /** `reason`: the failure's class — what a caller SAYS (the wizard); `message` is the transport's own text. */
+  | { kind: 'error'; message: string; reason: FailureReason | 'thrown' }
   | { kind: 'rows'; rows: ProfileIndexEntry[] }
 
 type Settled = { hostId: string } & Exclude<SotProfilesView, { kind: 'loading' }>
@@ -26,10 +27,10 @@ export function useSotProfiles(hostId: string | null): { view: SotProfilesView |
     listProfiles(hostId).then(
       (r) => {
         if (cancelled) return
-        setResult(r.kind === 'ok' ? { hostId, kind: 'rows', rows: r.value } : { hostId, kind: 'error', message: r.message })
+        setResult(r.kind === 'ok' ? { hostId, kind: 'rows', rows: r.value } : { hostId, kind: 'error', message: r.message, reason: r.reason })
       },
       (e: unknown) => {
-        if (!cancelled) setResult({ hostId, kind: 'error', message: e instanceof Error ? e.message : String(e) })
+        if (!cancelled) setResult({ hostId, kind: 'error', message: e instanceof Error ? e.message : String(e), reason: 'thrown' })
       },
     )
     return () => {
