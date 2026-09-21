@@ -5,7 +5,8 @@
 // `cachedName` and each workspace's name, so "whose content is that" is a string
 // search. The collector in here is the real one.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useWorkspaceStore } from '../../features/workspace/store'
+import { ADOPTION_SETTLE_MS, startStandaloneAdoption } from '../../features/workspace/lib/adopt-standalone'
+import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../../features/workspace/store'
 import { useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
@@ -19,7 +20,7 @@ import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { readSettingsSources } from './apply-to-stores'
 import { startCollector, type Collector, type SectionReport } from './collector'
 import { __resetMasterWorldForTest, masterWorkspaceIds, readMasterWorld } from './master-world'
-import { buildSettingsSection } from './sections'
+import { buildSettingsSection, repairTabOwnership } from './sections'
 import {
   PROFILE_SWITCH_LOCK_OWNER,
   copyMasterAsSlave,
@@ -448,6 +449,185 @@ describe('switchActiveProfile', () => {
       expect(reports.map((r) => r.key)).toEqual(['workspaces'])
       expect(JSON.stringify(reports)).not.toContain(SLAVE_SENTINEL)
     })
+  })
+})
+
+// === A2. A world is repaired before it is parked (P3c-2 review, F4) ===
+//
+// The standing invariant (adopt-standalone.ts) repairs the world ON SCREEN, 500 ms after the last membership
+// change. A world that is parked inside that half second would take its ownerless tab with it: in no `tabs.<id>`
+// section, so never on the SOT, and reported by nobody — until the master is on screen again.
+
+describe('a world is repaired before it is parked', () => {
+  let stopAdoption: () => void = () => {}
+  const orphan = (): Tab => tab('mo', MASTER_SENTINEL)
+  const ownersIn = (w: ParkedWorld | null | undefined, id: string): string[] => (w?.workspaces ?? []).filter((x) => x.tabs.includes(id)).map((x) => x.id)
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    stopAdoption = startStandaloneAdoption()
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+  })
+  afterEach(() => {
+    stopAdoption()
+  })
+
+  function addOrphan(): void {
+    const o = orphan()
+    useTabStore.setState((st) => ({ tabs: { ...st.tabs, [o.id]: o }, tabOrder: [...st.tabOrder, o.id] }))
+  }
+
+  it('an ownerless tab, and the membership has NOT been quiet for ADOPTION_SETTLE_MS: `busy`, nothing written — it may be another window\'s tab whose workspace is still on its way', async () => {
+    addOrphan()
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS - 1)
+    const before = threeStores()
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
+    threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('…and the same switch a moment later goes through, with the tab in `unsorted` in the PARKED master; back on screen it is still there, and the collector reports it in `tabs.unsorted`', async () => {
+    await primed()
+    addOrphan()
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
+    await vi.advanceTimersByTimeAsync(ADOPTION_SETTLE_MS)
+
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    expect(ownersIn(useLocalProfilesStore.getState().parkedMaster, 'mo')).toEqual([UNSORTED_WORKSPACE_ID])
+    await vi.advanceTimersByTimeAsync(SETTLE)
+    // The master keeps syncing while it is parked: the tab is on its way to the SOT now, not "some day".
+    expect(JSON.stringify(reports.find((r) => r.key === `tabs.${UNSORTED_WORKSPACE_ID}`)?.payload)).toContain('"mo"')
+
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+    expect(ownersIn(screen(), 'mo')).toEqual([UNSORTED_WORKSPACE_ID])
+    reports = []
+    await collector!.primeAll()
+    expect(JSON.stringify(reports.find((r) => r.key === `tabs.${UNSORTED_WORKSPACE_ID}`)?.payload)).toContain('"mo"')
+    expect(reports.filter((r) => r.key.startsWith('tabs.') && r.key !== `tabs.${UNSORTED_WORKSPACE_ID}`).every((r) => !JSON.stringify(r.payload).includes('"mo"'))).toBe(true)
+  })
+
+  // The one road on which the invariant does NOT get there first: it never writes to an unsettled world, and a
+  // `junk-epoch` world is one a switch may still park (see above).
+  describe('the switch repairs what the invariant could not (a `junk-epoch` world), once the membership is quiet', () => {
+    const JUNK = Number.MAX_SAFE_INTEGER
+    function junk(): void {
+      useTabStore.setState({ worldEpoch: JUNK })
+      useWorkspaceStore.setState({ worldEpoch: JUNK })
+      expect(readMasterWorld()).toEqual({ settled: false, reason: 'junk-epoch' })
+    }
+
+    it('zero owners → parked in `unsorted`; the screen it leaves is not written to before the exchange', async () => {
+      junk()
+      addOrphan()
+      vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 2)
+      expect(ownersIn(screen(), 'mo')).toEqual([]) // unsettled: the invariant kept its hands off
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+      const parked = useLocalProfilesStore.getState().parkedMaster
+      expect(ownersIn(parked, 'mo')).toEqual([UNSORTED_WORKSPACE_ID])
+      expect(Object.keys(parked!.tabs).sort()).toEqual(['mo', 'mt1', 'mt2'])
+      expect(screen()).toEqual(slaveWorld())
+    })
+
+    it('two owners → the first workspace keeps the tab, and the pointer follows the tab on screen', async () => {
+      junk()
+      useWorkspaceStore.setState((st) => ({ workspaces: [{ id: 'first', name: 'First', tabs: ['mt2'], activeTabId: 'mt2', moduleConfig: {} }, ...st.workspaces] }))
+      expect(useTabStore.getState().activeTabId).toBe('mt2')
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('mws')
+      vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 2)
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+      const parked = useLocalProfilesStore.getState().parkedMaster!
+      expect(ownersIn(parked, 'mt2')).toEqual(['first'])
+      expect(parked.activeWorkspaceId).toBe('first')
+    })
+
+    it('not quiet yet → `busy` here, too', async () => {
+      junk()
+      addOrphan()
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
+    })
+
+    it('ONE rule, not two: what gets parked is exactly what the invariant makes of the same world on screen', async () => {
+      const dirty = (): void => {
+        useWorkspaceStore.setState((st) => ({ workspaces: [...st.workspaces, { id: 'dup', name: 'Dup', tabs: ['mt1', 'mt2'], activeTabId: 'mt1', moduleConfig: {} }], activeWorkspaceId: 'dup' }))
+        addOrphan()
+        useTabStore.setState({ activeTabId: 'mo' })
+      }
+      // (a) on screen, settled: the invariant.
+      dirty()
+      vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+      const byInvariant = { workspaces: screen().workspaces, activeWorkspaceId: screen().activeWorkspaceId }
+      expect(ownersIn(screen(), 'mo')).toEqual([UNSORTED_WORKSPACE_ID])
+      // (b) the same world, unsettled-but-switchable: the switch.
+      masterOnScreen()
+      junk()
+      dirty()
+      vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 2)
+      expect(ownersIn(screen(), 'mo')).toEqual([])
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+      const parked = useLocalProfilesStore.getState().parkedMaster!
+      expect({ workspaces: parked.workspaces, activeWorkspaceId: parked.activeWorkspaceId }).toEqual(byInvariant)
+      // …and both are the pure function's answer.
+      const w = masterWorld()
+      const pure = repairTabOwnership(
+        { workspaces: [...w.workspaces, { id: 'dup', name: 'Dup', tabs: ['mt1', 'mt2'], activeTabId: 'mt1', moduleConfig: {} }], tabs: { ...w.tabs, mo: orphan() }, tabOrder: ['mt1', 'mt2', 'mo'], activeTabId: 'mo', activeWorkspaceId: 'dup' },
+        { unsortedName: 'Unsorted', newWorkspaceId: UNSORTED_WORKSPACE_ID },
+      )
+      expect(byInvariant).toEqual({ workspaces: pure.workspaces, activeWorkspaceId: pure.activeWorkspaceId })
+    })
+  })
+
+  // F5: another window changes the membership every 300 ms, for ever. "Quiet for 500 ms" never comes — the wait
+  // is bounded by the age of the broken state instead (ADOPTION_MAX_WAIT_MS).
+  it('a membership that never goes quiet: `busy` for 3 s, not for ever — then the switch goes through with the tab in `unsorted`', async () => {
+    addOrphan()
+    let n = 0
+    const churn = (forMs: number): void => {
+      for (let t = 0; t < forMs; t += 300) {
+        const id = `churn${n++}`
+        useTabStore.setState((st) => ({ tabs: { ...st.tabs, [id]: tab(id, MASTER_SENTINEL) }, tabOrder: [...st.tabOrder, id] }))
+        vi.advanceTimersByTime(100)
+        useWorkspaceStore.getState().addTabToWorkspace('mws', id)
+        vi.advanceTimersByTime(200)
+      }
+    }
+    churn(1200)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
+    churn(1500)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' }) // 2.7 s
+    churn(600)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true }) // 3.3 s
+    const parked = useLocalProfilesStore.getState().parkedMaster
+    expect(ownersIn(parked, 'mo')).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(parked!.workspaces.find((x) => x.id === UNSORTED_WORKSPACE_ID)!.tabs).toEqual(['mo']) // and none of the other window's tabs
+  })
+
+  it('a clean world is parked BY REFERENCE, quiet or not: no repair, no copy, no `busy`', async () => {
+    useTabStore.getState().togglePin('mt1') // a change a moment ago — not one of membership, and nothing to repair anyway
+    const before = screen()
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    expect(useLocalProfilesStore.getState().parkedMaster!.workspaces).toBe(before.workspaces)
+  })
+
+  it('without the invariant installed nobody can vouch for an ownerless tab: `busy` (fail closed)', async () => {
+    stopAdoption()
+    addOrphan()
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 4)
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
+  })
+
+  it('copyMasterAsSlave / saveScreenAsSlave: a copy never carries an ownerless tab — it is a snapshot, so no wait', () => {
+    addOrphan()
+    const copied = copyMasterAsSlave('Copy')
+    const saved = saveScreenAsSlave('Saved')
+    for (const r of [copied, saved]) {
+      if (!r.ok) throw new Error('refused')
+      const w = useLocalProfilesStore.getState().slaves[r.id].world!
+      const owned = new Set(w.workspaces.flatMap((x) => x.tabs))
+      expect(Object.keys(w.tabs).filter((id) => !owned.has(id))).toEqual([])
+      expect(Object.keys(w.tabs)).toHaveLength(3)
+      expect(w.workspaces.map((x) => x.name)).toContain('Unsorted')
+    }
+    expect(ownersIn(screen(), 'mo')).toEqual([]) // the source is not touched
   })
 })
 

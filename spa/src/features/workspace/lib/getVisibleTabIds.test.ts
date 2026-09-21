@@ -11,6 +11,7 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs,
       tabOrder: ['t1', 't2', 't3'],
+      activeTabId: null,
       workspaces,
       activeWorkspaceId: 'ws-1',
     })
@@ -25,6 +26,7 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs,
       tabOrder: ['t1', 't3'],
+      activeTabId: null,
       workspaces,
       activeWorkspaceId: 'ws-1',
     })
@@ -41,6 +43,7 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs,
       tabOrder: ['t1', 't2'],
+      activeTabId: null,
       workspaces,
       activeWorkspaceId: 'ws-1',
     })
@@ -51,45 +54,50 @@ describe('getVisibleTabIds', () => {
     const result = getVisibleTabIds({
       tabs: { t1: {}, t2: {}, t3: {} },
       tabOrder: ['t1', 't2', 't3'],
+      activeTabId: null,
       workspaces: [],
       activeWorkspaceId: null,
     })
     expect(result).toEqual(['t1', 't2', 't3'])
   })
 
-  // There is no "Home" view of workspace-less tabs any more. `activeWorkspaceId === null` with workspaces is the
-  // moment before adopt-standalone.ts re-points it; the bar falls back to every tab. (Was: standalone tabs only.)
-  it('returns all tabs from tabOrder when activeWorkspaceId is null', () => {
+  // `activeWorkspaceId === null` with workspaces is the moment before adopt-standalone.ts re-points it (boot, or
+  // an unsettled world). The set is what close-others / close-right act on, so it must never be every tab: it
+  // is what the bar will show once the pointer is back — the active tab's workspace, else the first.
+  describe('no active workspace, but workspaces exist', () => {
     const workspaces: Workspace[] = [
-      { id: 'ws-1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' },
+      { id: 'ws-1', name: 'WS1', tabs: ['a1', 'a2'], activeTabId: 'a1' },
+      { id: 'ws-2', name: 'WS2', tabs: ['b1', 'ghost', 'b2'], activeTabId: 'b1' },
     ]
-    const result = getVisibleTabIds({
-      tabs: { t1: {}, t2: {} },
-      tabOrder: ['t1', 't2'],
-      workspaces,
-      activeWorkspaceId: null,
-    })
-    expect(result).toEqual(['t1', 't2'])
-  })
+    const tabs = { a1: {}, a2: {}, b1: {}, b2: {}, o: {} }
+    const tabOrder = ['a1', 'b1', 'a2', 'b2', 'o']
 
-  it('returns all tabs from tabOrder when activeWorkspaceId is null, with multiple workspaces', () => {
-    const workspaces: Workspace[] = [
-      { id: 'ws-1', name: 'WS1', tabs: ['t1', 't2'], activeTabId: 't1' },
-      { id: 'ws-2', name: 'WS2', tabs: ['t3'], activeTabId: 't3' },
-    ]
-    const result = getVisibleTabIds({
-      tabs: { t1: {}, t2: {}, t3: {}, t4: {}, t5: {} },
-      tabOrder: ['t1', 't2', 't3', 't4', 't5'],
-      workspaces,
-      activeWorkspaceId: null,
+    it('the active tab has an owner → that workspace\'s tabs (existing ones), never tabOrder', () => {
+      expect(getVisibleTabIds({ tabs, tabOrder, activeTabId: 'b2', workspaces, activeWorkspaceId: null })).toEqual(['b1', 'b2'])
     })
-    expect(result).toEqual(['t1', 't2', 't3', 't4', 't5'])
+
+    it('the active tab is in no workspace → the first workspace\'s tabs', () => {
+      expect(getVisibleTabIds({ tabs, tabOrder, activeTabId: 'o', workspaces, activeWorkspaceId: null })).toEqual(['a1', 'a2'])
+    })
+
+    it('no active tab → the first workspace\'s tabs', () => {
+      expect(getVisibleTabIds({ tabs, tabOrder, activeTabId: null, workspaces, activeWorkspaceId: null })).toEqual(['a1', 'a2'])
+    })
+
+    it('a pointer at a workspace that is gone is no pointer', () => {
+      expect(getVisibleTabIds({ tabs, tabOrder, activeTabId: 'b1', workspaces, activeWorkspaceId: 'gone' })).toEqual(['b1', 'b2'])
+    })
+
+    it('an active workspace wins over the active tab\'s owner (the user is looking at ws-1\'s bar)', () => {
+      expect(getVisibleTabIds({ tabs, tabOrder, activeTabId: 'b1', workspaces, activeWorkspaceId: 'ws-1' })).toEqual(['a1', 'a2'])
+    })
   })
 
   it('returns empty array when no tabs exist', () => {
     const result = getVisibleTabIds({
       tabs: {},
       tabOrder: [],
+      activeTabId: null,
       workspaces: [],
       activeWorkspaceId: null,
     })

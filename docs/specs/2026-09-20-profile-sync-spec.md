@@ -1251,3 +1251,57 @@ appeared for a user with no master.
 - **Left in place:** `TabDragData.sourceWsId` is still `string | null` (`InlineTab` defaults to
   `null`; no list renders one, and a `null` on either side of a drop is a noop), and
   `HOME_WS_KEY` still survives `reconcileWorkspaceExpanded` — both cost files and change nothing.
+
+**P3c-2 review (gpt-5.6-sol) — four findings, one root cause: with the standalone branch gone, a
+TRANSITIONAL state fell through to an unsafe default.** Real machine: all passed (the eight P3c-1
+steps again, Home a single button in both bars, an ownerless tab closed cleanly inside the window,
+the visible set always inside the active workspace, no dialog on the first workspace after deleting
+all, console clean). Fixed as a third PR — the fixes touch eight files PR B does not.
+- **F1 (high, attacker).** `getVisibleTabIds` with workspaces but a `null` pointer returned the
+  whole `tabOrder`, and that set is the RANGE of close-others / close-right: "close others" on a tab
+  of one workspace closed the tabs of all of them. Now: the workspace that owns the active tab, else
+  the first; `tabOrder` only with zero workspaces — which is also what the re-pointing will show.
+- **F2 (medium, attacker).** An active tab in no workspace could not be closed at all: it is in no
+  bar, and the `close-tab` shortcut required it to be in the visible set. Now: in the visible set, or
+  owned by nobody. (Not "whatever is active": a stale `activeTabId` of ANOTHER workspace is still
+  left alone — an existing test pins that.)
+- **F3 (P2, R1).** A notification click focuses a tab before it has a workspace; adoption then filed
+  it under Unsorted and left `activeWorkspaceId` where it was — the tab on screen in no bar, for
+  good. Fixed on the adoption side, for every source: **the pointer follows the tab on screen only
+  when THIS repair moved it** (adopted, or the pointed-at workspace lost its listing of it). Never
+  "align the pointer with the active tab's owner" — that would take a pointer the user chose.
+- **F4 (medium, attacker).** A switch inside the 500 ms parked the master WITH its ownerless tab: in
+  no `tabs.<id>`, never on the SOT, reported by nobody. `exchange` now parks
+  `repairTabOwnership(screen)` — the one pure function the invariant uses, too (dedup, adoption,
+  pointer); the live stores are not written, so a refusal still writes nothing. **Measured, not
+  assumed: settled + world lock + fence rule out a stale WORLD, not a stale MEMBERSHIP** — another
+  window's `addTab` whose `insertTab` is a second store and a second rehydrate away looks exactly
+  like an ownerless tab, and parking then also parks this window's not-yet-rehydrated workspaces
+  over the other window's. So: nothing to repair → go (parked by reference); something to repair
+  and the membership signature quiet for `ADOPTION_SETTLE_MS` → repair; otherwise **`busy`**
+  (retryable — by the retry the invariant or the rehydrate has settled it), and `busy` too when the
+  invariant is not installed (fails closed). In practice the invariant gets there first; the road on
+  which only the switch can is a `junk-epoch` world, which the invariant will not write to and a
+  switch may park. `copyMasterAsSlave` / `saveScreenAsSlave` repair WITHOUT the wait (a snapshot; the
+  source stays; the worst case is a tab under Unsorted in the copy, which is where it would end up
+  anyway). `promoteToMaster` needs nothing: it moves no world, and both doors into the parking lot
+  now hand in repaired worlds.
+- **F5 (medium, critic) — the quiet gate could be starved for ever.** "Quiet for 500 ms" is a
+  property of the whole membership: a real ownerless tab on screen plus another window that opens,
+  closes or moves a tab more often than that (a busy agent does) meant the debounce never fired,
+  `tabOwnershipQuiet()` was never true, the tab was never adopted and `switchActiveProfile` said
+  `busy` for good. **The way out is bounded by the age of THE SAME broken state, not by global
+  quiet:** the transition the wait protects (`addTab`, then `insertTab` one rehydrate later) lasts
+  milliseconds, so a tab id that has been ownerless — or listed twice — without a break for
+  `ADOPTION_MAX_WAIT_MS` (3 s) is no transition. `adopt-standalone.ts` keeps `pendingSince` (tab id
+  → first seen in need of repair; only what needs repair NOW, so it cannot grow; the `null` pointer
+  has an entry, too) and ONE deadline timer for the oldest entry — it exists only while something
+  needs repair, and a change that leaves the oldest entry alone does not re-arm it. At the deadline
+  **only the ids that are that old are repaired** (`repairTabOwnership`'s new `only`): a younger one
+  may be exactly the other window's tab whose workspace is on its way. `tabOwnershipQuiet()` = quiet
+  for 500 ms OR every pending id aged, so a switch waits 3 s at worst. **No age accrues while the
+  world is unsettled** (every tab looks ownerless then): the record is emptied, and a tab's clock
+  starts when the world settles. Residue, accepted: a `junk-epoch` world is unsettled, so there the
+  switch still needs the plain 500 ms of quiet.
+- Mutation: 15 mutants over the four fixes and 11 over F5, all caught; one equivalent (the locked-tab guard exists
+  in `closeTab` AND in `closeTabInWorkspace` — removing one alone changes nothing; both → caught).

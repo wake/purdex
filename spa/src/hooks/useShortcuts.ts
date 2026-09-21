@@ -25,6 +25,7 @@ export function useShortcuts(): void {
       const visibleIds = getVisibleTabIdsShared({
         tabs: tabState.tabs,
         tabOrder: tabState.tabOrder,
+        activeTabId: tabState.activeTabId,
         workspaces: useWorkspaceStore.getState().workspaces,
         activeWorkspaceId: useWorkspaceStore.getState().activeWorkspaceId,
       })
@@ -58,7 +59,13 @@ export function useShortcuts(): void {
 
       if (action === 'close-tab') {
         const { activeTabId } = tabState
-        if (!activeTabId || !visibleIds.includes(activeTabId)) return
+        if (!activeTabId || !tabState.tabs[activeTabId]) return
+        // In the bar — or in NO bar: a tab nobody has adopted yet (adopt-standalone.ts waits 500 ms) has no
+        // close button anywhere, so this shortcut is the only way out. A stale pointer at a tab of ANOTHER
+        // workspace is still left alone. `closeTab` refuses a locked tab.
+        const ownedElsewhere = !visibleIds.includes(activeTabId)
+          && useWorkspaceStore.getState().findWorkspaceByTab(activeTabId) !== null
+        if (ownedElsewhere) return
         closeTab(activeTabId)
         return
       }

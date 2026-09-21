@@ -11,7 +11,7 @@ import { STORAGE_KEYS } from '../../../lib/storage/keys'
 import type { WorkspaceSnapshot } from '../../../lib/snapshot/types'
 import { createTab, type Tab, type Workspace } from '../../../types/tab'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../store'
-import { ADOPTION_SETTLE_MS, startStandaloneAdoption } from './adopt-standalone'
+import { ADOPTION_MAX_WAIT_MS, ADOPTION_SETTLE_MS, __allPendingAgedForTest, __pendingRepairCountForTest, startStandaloneAdoption, tabOwnershipQuiet } from './adopt-standalone'
 
 let stop: () => void = () => {}
 let info: ReturnType<typeof vi.spyOn>
@@ -141,7 +141,12 @@ describe('while the app runs', () => {
     expect(ownersOf(stray.id)).toEqual([])
     vi.advanceTimersByTime(1)
     expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
-    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(a.id)
+    // The stray is the tab on screen (`addTab` focuses the first tab), so the pointer goes where it went
+    // (P3c-2 review, F3; was: stays on A — with the tab on screen in no bar). A stray that is NOT on screen
+    // leaves the pointer alone: see the last describe.
+    expect(useTabStore.getState().activeTabId).toBe(stray.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
+    expect(a.id).not.toBe(UNSORTED_WORKSPACE_ID)
   })
 
   it('does NOT adopt a tab whose workspace arrives a moment later (the two stores are written, and rehydrated, one after the other)', () => {
@@ -461,7 +466,10 @@ describe('a tab in more than one workspace', () => {
     const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
     expect(workspaces.map((w) => w.tabs)).toEqual([['a1', t.id], ['b1'], []])
     expect(workspaces.map((w) => w.activeTabId)).toEqual(['a1', null, null])
-    expect(activeWorkspaceId).toBe('bbbbbb')
+    // The tab is on screen and the ACTIVE workspace is the one that lost it: the pointer follows it to the
+    // owner that keeps it (P3c-2 review, F3; was: stays on 'bbbbbb', whose bar no longer has the tab).
+    expect(useTabStore.getState().activeTabId).toBe(t.id)
+    expect(activeWorkspaceId).toBe('aaaaaa')
     expect(unsorted()).toBeUndefined()
   })
 
@@ -513,5 +521,209 @@ describe('a tab in more than one workspace', () => {
     useLocalProfilesStore.setState({ worldEpoch: 9 })
     vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
     expect(ownersOf(t.id)).toEqual(['aaaaaa'])
+  })
+})
+
+// P3c-2 review, F3. A click on a notification (or on anything else) can put a tab nobody has adopted yet on
+// screen while `activeWorkspaceId` points at some workspace. Adoption then files the tab under Unsorted — and if
+// the pointer stayed, the tab on screen would be in no bar, for good. The pointer follows the tab on screen only
+// when THIS repair moved it; a pointer the user chose is otherwise never touched.
+describe('the pointer follows the tab on screen — only when this repair moved that tab', () => {
+  it('the adopted tab is the active tab → activeWorkspaceId becomes the workspace that adopted it, in the same write', () => {
+    const a = addStray()
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, a.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    boot()
+    const orphan = addStray()
+    useTabStore.getState().setActiveTab(orphan.id) // what handleNotificationClick / handleSelectTab do
+    const writes = vi.fn()
+    const off = useWorkspaceStore.subscribe(writes)
+    const before = armed()
+
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED_WORKSPACE_ID)
+    expect(writes).toHaveBeenCalledTimes(1)
+    // No loop: the write changes the signature, finds nothing to do, arms nothing — now or later.
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 4)
+    expect(armed()).toBe(before)
+    expect(writes).toHaveBeenCalledTimes(1)
+    off()
+  })
+
+  it('the adopted tab is NOT the active tab → the pointer does not move', () => {
+    const a = addStray()
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, a.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsA.id)
+    useTabStore.getState().setActiveTab(a.id)
+    boot()
+    const orphan = addStray()
+
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsA.id)
+  })
+
+  it('a pointer the user chose is not "aligned": active tab in A, the user looks at B, a stray is adopted → still B', () => {
+    const [a, b] = [addStray(), addStray()]
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    useWorkspaceStore.getState().addTabToWorkspace(wsA.id, a.id)
+    useWorkspaceStore.getState().addTabToWorkspace(wsB.id, b.id)
+    useTabStore.getState().setActiveTab(a.id)
+    useWorkspaceStore.getState().setActiveWorkspace(wsB.id)
+    boot()
+    const orphan = addStray()
+
+    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
+
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsB.id)
+  })
+
+  it('de-duplication takes the active tab out of the ACTIVE workspace → the pointer follows it to the owner that keeps it', () => {
+    const t = addStray()
+    useTabStore.getState().setActiveTab(t.id)
+    useWorkspaceStore.setState({ workspaces: [ws('w1', 'One', [t.id]), ws('w2', 'Two', [t.id])], activeWorkspaceId: 'w2' })
+    boot()
+
+    expect(ownersOf(t.id)).toEqual(['w1'])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1')
+  })
+
+  it('de-duplication that leaves the active workspace\'s listing alone → the pointer does not move', () => {
+    const [t, c] = [addStray(), addStray()]
+    useTabStore.getState().setActiveTab(t.id)
+    // The user looks at w3; the active tab is listed in w1 and w2, and w2 loses it. Nobody asked for w1.
+    useWorkspaceStore.setState({ workspaces: [ws('w1', 'One', [t.id]), ws('w2', 'Two', [t.id]), ws('w3', 'Three', [c.id])], activeWorkspaceId: 'w3' })
+    boot()
+
+    expect(ownersOf(t.id)).toEqual(['w1'])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w3')
+  })
+})
+
+// P3c-2 review, F5. The debounce waits for a QUIET membership, and another window (a busy agent) can change the
+// membership more often than every ADOPTION_SETTLE_MS, for as long as it likes: the look would never happen and
+// a real ownerless tab would stay one for ever. The way out is bounded by the age of THE SAME broken state: the
+// gap between another window's `addTab` and its `insertTab` is milliseconds, so a tab id that has been ownerless
+// (or listed twice) for ADOPTION_MAX_WAIT_MS is no transition, whatever else is going on.
+describe('a membership that never goes quiet: the bounded way out', () => {
+  /** Another window, every 300 ms: a tab arrives, and its workspace membership 100 ms later. */
+  function churn(wsId: string, forMs: number, seen: string[]): void {
+    for (let t = 0; t < forMs; t += 300) {
+      const tab = addStray()
+      seen.push(tab.id)
+      vi.advanceTimersByTime(100)
+      useWorkspaceStore.getState().addTabToWorkspace(wsId, tab.id)
+      vi.advanceTimersByTime(200)
+    }
+  }
+
+  function calmWorld(): { wsId: string; keeper: Tab } {
+    const keeper = addStray()
+    const a = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addTabToWorkspace(a.id, keeper.id)
+    useWorkspaceStore.getState().setActiveWorkspace(a.id)
+    boot()
+    return { wsId: a.id, keeper }
+  }
+
+  it('a real ownerless tab is adopted after ADOPTION_MAX_WAIT_MS although the membership changes every 300 ms for 10 s — and no tab whose workspace was still on its way ever is', () => {
+    const { wsId } = calmWorld()
+    const orphan = addStray()
+    const others: string[] = []
+
+    churn(wsId, 2700, others)
+    expect(ownersOf(orphan.id)).toEqual([]) // 2.7 s: not yet — and the debounce never had its 500 ms
+    churn(wsId, 600, others)
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID]) // by 3.3 s
+    churn(wsId, 6700, others)
+
+    expect(unsorted()!.tabs).toEqual([orphan.id])
+    for (const id of others) expect(ownersOf(id)).toEqual([wsId])
+    expect(__pendingRepairCountForTest()).toBe(0)
+  })
+
+  it('at the deadline only the tabs that ARE that old are repaired: one that arrived a moment ago is left for its workspace to arrive', () => {
+    const { wsId } = calmWorld()
+    const orphan = addStray()
+    const others: string[] = []
+    churn(wsId, 2700, others)
+    vi.advanceTimersByTime(250) // 2950
+    const fresh = addStray() // another window's tab; its membership is 100 ms away
+    vi.advanceTimersByTime(50) // 3000: the deadline of `orphan`
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    expect(ownersOf(fresh.id)).toEqual([])
+    vi.advanceTimersByTime(50)
+    useWorkspaceStore.getState().addTabToWorkspace(wsId, fresh.id)
+    vi.advanceTimersByTime(ADOPTION_MAX_WAIT_MS * 2)
+    expect(ownersOf(fresh.id)).toEqual([wsId])
+    expect(__pendingRepairCountForTest()).toBe(0)
+  })
+
+  it('a tab listed twice gets the same bounded way out', () => {
+    const { wsId, keeper } = calmWorld()
+    useWorkspaceStore.setState((st) => ({ workspaces: [...st.workspaces, ws('zzzzzz', 'Z', [keeper.id])] }))
+    churn(wsId, 3300, [])
+    expect(ownersOf(keeper.id)).toEqual([wsId])
+  })
+
+  it('while the world is unsettled no age accrues: the clock of a tab starts when the world settles', () => {
+    const { wsId } = calmWorld()
+    const orphan = addStray()
+    useTabStore.setState({ worldEpoch: 7 }) // half of another window's switch
+    churn(wsId, 2700, [])
+    useTabStore.setState({ worldEpoch: 0 }) // settled again, at 2.7 s
+    churn(wsId, 900, []) // 3.6 s since the tab appeared, 0.9 s since the world settled
+    expect(ownersOf(orphan.id)).toEqual([])
+    churn(wsId, 2400, []) // 3.3 s since the world settled
+    expect(ownersOf(orphan.id)).toEqual([UNSORTED_WORKSPACE_ID])
+  })
+
+  it('tabOwnershipQuiet: quiet for 500 ms, OR every tab that needs repair is ADOPTION_MAX_WAIT_MS old', () => {
+    const { wsId } = calmWorld()
+    addStray() // needs repair since 0
+    churn(wsId, 2700, [])
+    const x = addStray()
+    useWorkspaceStore.getState().addTabToWorkspace(wsId, x.id) // the last change: at 2.7 s
+    const changedAt = Date.now()
+    expect(tabOwnershipQuiet(changedAt + 100)).toBe(false) // 100 ms of quiet, and the tab is 2.8 s old
+    expect(tabOwnershipQuiet(changedAt + ADOPTION_SETTLE_MS)).toBe(true) // the plain quiet
+    // 499 ms of quiet is none — but by then the one thing that needs repair has needed it for 3.199 s.
+    expect(tabOwnershipQuiet(changedAt + ADOPTION_SETTLE_MS - 1)).toBe(true)
+    addStray() // a second one, 0 ms old: it may be another window's, its workspace on its way
+    expect(tabOwnershipQuiet(changedAt + ADOPTION_SETTLE_MS - 1)).toBe(false)
+    expect(__allPendingAgedForTest(changedAt + ADOPTION_MAX_WAIT_MS)).toBe(true)
+  })
+
+  it('stop() forgets what needed repair, and its deadline: nothing is kept, nothing fires', () => {
+    calmWorld()
+    const orphan = addStray()
+    expect(__pendingRepairCountForTest()).toBe(1)
+    stop()
+    expect(__pendingRepairCountForTest()).toBe(0)
+    vi.advanceTimersByTime(ADOPTION_MAX_WAIT_MS * 2)
+    expect(ownersOf(orphan.id)).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('costs nothing when idle: no timer while nothing needs repair, one deadline timer however often the membership changes, none afterwards', () => {
+    const { wsId } = calmWorld()
+    vi.advanceTimersByTime(10)
+    expect(vi.getTimerCount()).toBe(0)
+    const deadlines = (): number => timeouts.mock.calls.filter((call: unknown[]) => typeof call[1] === 'number' && call[1] > ADOPTION_SETTLE_MS && call[1] <= ADOPTION_MAX_WAIT_MS).length
+    const before = deadlines()
+    addStray()
+    churn(wsId, 2700, [])
+    expect(deadlines() - before).toBe(1) // 18 membership changes, one deadline
+    churn(wsId, 900, [])
+    vi.advanceTimersByTime(ADOPTION_MAX_WAIT_MS)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(__pendingRepairCountForTest()).toBe(0)
   })
 })

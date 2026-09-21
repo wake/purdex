@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTabWorkspaceActions } from './hooks'
+import { getVisibleTabIds } from './lib/getVisibleTabIds'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 
@@ -306,5 +307,52 @@ describe('handleReorderTabs', () => {
 
     expect(useTabStore.getState().tabOrder).toEqual([a.id, b.id])
     expect(useWorkspaceStore.getState().workspaces).toEqual([])
+  })
+})
+
+// The range of close-others / close-right is what App hands the hook: `getVisibleTabIds`. With workspaces but no
+// pointer (boot, an unsettled world — the moment before adopt-standalone.ts re-points it) that used to be every
+// tab, and "close others" on a tab of one workspace closed the tabs of all of them.
+describe('closeOthers / closeRight while activeWorkspaceId is null', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  })
+
+  function world() {
+    const [a1, a2, a3, b1, b2] = [1, 2, 3, 4, 5].map(() => createTab({ kind: 'new-tab' }))
+    const wsA = useWorkspaceStore.getState().addWorkspace('A')
+    const wsB = useWorkspaceStore.getState().addWorkspace('B')
+    // Interleaved in tabOrder, so "right of a1" in tabOrder reaches into B.
+    for (const t of [a1, b1, a2, b2, a3]) useTabStore.getState().addTab(t)
+    for (const t of [a1, a2, a3]) useWorkspaceStore.getState().addTabToWorkspace(wsA.id, t.id)
+    for (const t of [b1, b2]) useWorkspaceStore.getState().addTabToWorkspace(wsB.id, t.id)
+    useTabStore.getState().setActiveTab(a1.id)
+    useWorkspaceStore.getState().setActiveWorkspace(null)
+    return { a1, a2, a3, b1, b2 }
+  }
+
+  function act_(action: 'closeOthers' | 'closeRight', tabId: string) {
+    const tabState = useTabStore.getState()
+    const ws = useWorkspaceStore.getState()
+    const displayTabs = getVisibleTabIds({
+      tabs: tabState.tabs, tabOrder: tabState.tabOrder, activeTabId: tabState.activeTabId,
+      workspaces: ws.workspaces, activeWorkspaceId: ws.activeWorkspaceId,
+    }).map((id) => tabState.tabs[id])
+    const { result } = renderHook(() => useTabWorkspaceActions(displayTabs))
+    act(() => { result.current.handleContextMenu({ preventDefault() {}, clientX: 0, clientY: 0 } as unknown as React.MouseEvent, tabId) })
+    act(() => { result.current.handleContextAction(action) })
+  }
+
+  it('closeOthers on a1 closes a2 and a3 — and nothing of workspace B', () => {
+    const { a1, b1, b2 } = world()
+    act_('closeOthers', a1.id)
+    expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([a1.id, b1.id, b2.id].sort())
+  })
+
+  it('closeRight of a1 closes a2 and a3 — and nothing of workspace B', () => {
+    const { a1, b1, b2 } = world()
+    act_('closeRight', a1.id)
+    expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([a1.id, b1.id, b2.id].sort())
   })
 })
