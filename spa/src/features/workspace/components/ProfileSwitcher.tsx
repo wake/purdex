@@ -4,37 +4,8 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLocalProfilesStore, MASTER_PROFILE_ID, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useProfileSync } from '../../../hooks/useProfileSync'
-import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
+import { SYNC_DOT_CLASS, syncDotOf } from '../../../lib/profile/sync-view'
 import { WorkspaceIcon } from './WorkspaceIcon'
-
-type SyncDot = 'synced' | 'syncing' | 'locked' | 'problem' | 'unknown'
-
-// Tailwind classes the app already uses for status dots; no new colour.
-const DOT_CLASS: Record<SyncDot, string> = {
-  synced: 'bg-green-500',
-  syncing: 'bg-yellow-500',
-  locked: 'bg-amber-500',
-  problem: 'bg-red-500',
-  unknown: 'bg-gray-500',
-}
-
-/**
- * One dot for the whole master; null = no master attached, no dot. In a follower window the figures are the
- * leader's (`remote`) and are shown all the same; once `stale` nobody is there to correct them, so the dot stops
- * vouching for them. `problems` is not read: it is a log of the last 50, with nothing saying one is over — a dot
- * driven by it would stay red for ever. What blocks the sync NOW is `blocked`; the log is Settings › Profile's.
- */
-function syncDotOf(sync: ProfileSyncSnapshot): SyncDot | null {
-  if (sync.master === null) return null
-  if (sync.blocked === 'suspended') return 'syncing' // an attach is under way somewhere: transient
-  if (sync.blocked !== null) return 'problem'
-  if (sync.status === null || (sync.remote && sync.stale)) return 'unknown'
-  const { profile } = sync.status
-  if (profile.startsWith('locked:')) return 'locked'
-  if (profile === 'synced') return 'synced'
-  if (profile === 'pending') return 'syncing'
-  return 'unknown'
-}
 
 /**
  * A profile's icon: its Phosphor icon tinted with its colour (as a workspace's icon, plus the tint a host's
@@ -117,7 +88,7 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
             title={dotLabel}
             data-testid="profile-sync-dot"
             data-state={dot}
-            className={`w-1.5 h-1.5 rounded-full ${DOT_CLASS[dot]}`}
+            className={`w-1.5 h-1.5 rounded-full ${SYNC_DOT_CLASS[dot]}`}
           />
         ),
       }),
