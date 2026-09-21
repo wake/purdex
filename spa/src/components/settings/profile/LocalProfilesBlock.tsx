@@ -99,7 +99,7 @@ export function LocalProfilesBlock() {
   }
 
   return (
-    <section data-testid="profile-local-block" className="mt-6">
+    <section data-testid="profile-local-block" className="mt-8">
       <h3 className="text-sm text-text-primary">{t('settings.profile.local.title')}</h3>
       <p className="mb-2 text-xs text-text-secondary">{t('settings.profile.local.desc')}</p>
 

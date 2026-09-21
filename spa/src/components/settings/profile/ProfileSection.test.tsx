@@ -5,12 +5,21 @@ import { ProfileSection } from './ProfileSection'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useProfileStore } from '../../../stores/useProfileStore'
 import { listProfiles } from '../../../lib/profile/api'
+import { useProfileSync } from '../../../hooks/useProfileSync'
+import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 
+vi.mock('../../../hooks/useProfileSync', () => ({ useProfileSync: vi.fn() }))
+vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn() }))
 vi.mock('../../../lib/profile/api', () => ({ listProfiles: vi.fn(), renameProfile: vi.fn(), deleteProfile: vi.fn() }))
 
-const attach = () => useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860' })
+const NO_MASTER: ProfileSyncSnapshot = { master: null, leader: false, blocked: null, status: null, problems: [], remote: false, stale: false }
+const attach = () => {
+  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860' })
+  vi.mocked(useProfileSync).mockReturnValue({ ...NO_MASTER, master: { hostId: 'h1', profileId: 'p1' }, leader: true, status: { profile: 'synced', schemaLock: null, sections: {}, locks: {} } })
+}
 
 beforeEach(() => {
+  vi.mocked(useProfileSync).mockReturnValue(NO_MASTER)
   vi.mocked(listProfiles).mockReset()
   vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [] })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
@@ -34,6 +43,28 @@ describe('Settings › Profile', () => {
     render(<ProfileSection />)
     expect(screen.getByTestId('profile-local-block')).toBeInTheDocument()
     expect(screen.getAllByTestId(/^profile-row-[a-z0-9]+$/)).toHaveLength(1)
+  })
+
+  it('the order of the blocks: the sync state, this device\'s profiles, the host\'s', async () => {
+    attach()
+    render(<ProfileSection />)
+    await screen.findByTestId('profile-sot-block')
+    const blocks = Array.from(screen.getByTestId('profile-section').querySelectorAll('section')).map((el) => el.getAttribute('data-testid'))
+    expect(blocks).toEqual(['profile-current-block', 'profile-local-block', 'profile-sot-block'])
+  })
+
+  it('no master: the Current block explains, and that is all it does', () => {
+    render(<ProfileSection />)
+    expect(screen.getByTestId('profile-current-block')).toHaveAttribute('data-state', 'none')
+  })
+
+  it('the master\'s name on the host reaches the Current block once the host has answered', async () => {
+    attach()
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ id: 'p1', name: 'default', createdAt: 1, updatedAt: 2, sections: [], attachments: [] }] })
+    render(<ProfileSection />)
+    expect(screen.getByTestId('profile-current-master')).toHaveTextContent('p1')
+    await screen.findByTestId('profile-sot-name-p1')
+    expect(screen.getByTestId('profile-current-master')).toHaveTextContent('default')
   })
 
   it('no master: the host is not asked for anything, and its profiles are not a block', () => {
