@@ -86,6 +86,24 @@ describe('Sync modularize (spec §4.3)', () => {
     expect(syncEntry()).toBeDefined()
   })
 
+  it('2.3.i: the section says WHEN to look again (round 2): its three conditions, and nothing else of the store', () => {
+    useSyncStore.getState().reset()
+    const entry = getContribution('sync.sync')!
+    let asked = 0
+    const stop = entry.subscribeVisibility!(() => { asked += 1 })
+    useSyncStore.getState().setSyncHostId('h1') // not a condition
+    expect(asked).toBe(0)
+    useSyncStore.getState().setPendingConflicts([conflict], bundle) // what another window's write looks like here after a rehydrate
+    expect(asked).toBeGreaterThan(0)
+    const afterConflicts = asked
+    useSyncStore.getState().setActiveProvider('daemon')
+    expect(asked).toBeGreaterThan(afterConflicts)
+    stop()
+    const afterStop = asked
+    useSyncStore.getState().reset()
+    expect(asked).toBe(afterStop)
+  })
+
   it('2.3.h: `visible()` is the registry\'s, for any contribution: false or throwing → not listed; absent → listed; `getContribution` still finds it', () => {
     const base = { scope: 'purdex' as const, order: 900, labelKey: 'x', component: () => null, moduleId: 'm' }
     registerSettingsContribution({ ...base, localId: 'shown', id: 'm.shown' })

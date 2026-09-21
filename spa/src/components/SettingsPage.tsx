@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/module-registry'
-import { listContributions } from '../lib/settings-contribution-registry'
+import { listContributions, useContributionVisibility } from '../lib/settings-contribution-registry'
 import type { SettingsContextFor } from '../lib/settings-contribution-types'
 import { SettingsSidebar } from './settings/SettingsSidebar'
 import { WorkspaceSettingsPage } from '../features/workspace/components/WorkspaceSettingsPage'
@@ -62,6 +62,8 @@ function GlobalSettingsPage() {
   const [location, setLocation] = useLocation()
   // Pull purdex-scoped contributions from the new registry. `listContributions`
   // returns a fresh array sorted by `order` ascending on each call.
+  // A section may come and go while this page is open (`visible()`): one subscription, for all of them.
+  useContributionVisibility()
   const sections = listContributions('purdex')
 
   // `ctx` is stable per page render — §5.3 rule 4 says only the shell is
@@ -124,6 +126,16 @@ function GlobalSettingsPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlSection])
+
+  // The MOUNTED section is no longer selectable — it went away under the page (a contribution's `visible()`
+  // turned false while it was open). Move to the first one that is; the URL self-heal below then follows
+  // `activeSection`, as it does for any URL that names a section that is not there.
+  const activeGone = activeSection !== '' && firstSelectable !== '' && !isSelectable(activeSection)
+  useEffect(() => {
+    if (!activeGone) return
+    setActiveSection(firstSelectable)
+    lastSection = firstSelectable
+  }, [activeGone, firstSelectable])
 
   // Self-heal:
   //   1. invalid OR disabled-by-ctx section → /settings/<activeSection>

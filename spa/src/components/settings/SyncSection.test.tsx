@@ -86,6 +86,18 @@ describe('SyncSection', () => {
     expect(screen.getByRole('button', { name: /view details|查看詳情/i })).toBeTruthy()
   })
 
+  it('renders the banner with the provider OFF, too (Profile Sync P3d-3, review F4): the page is kept in the sidebar for exactly that user, and it is the only place the conflicts can be resolved or dismissed', () => {
+    const bundle: SyncBundle = { version: 1, timestamp: 5000, device: 'A', collections: {} }
+    useSyncStore.setState({
+      activeProviderId: null,
+      pendingConflicts: [{ contributor: 'prefs', field: 'theme', lastSynced: 'x', local: 'y', remote: { value: 'z', device: 'A' } }],
+      pendingRemoteBundle: bundle,
+      pendingConflictsAt: Date.now(),
+    })
+    render(<SyncSection />)
+    expect(screen.getByRole('button', { name: /view details|查看詳情/i })).toBeTruthy()
+  })
+
   it('discards syncNow result if provider changes during await', async () => {
     useSyncStore.getState().setActiveProvider('daemon')
     useSyncStore.getState().setSyncHostId('h1')

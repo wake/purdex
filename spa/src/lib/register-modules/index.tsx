@@ -262,7 +262,7 @@ export function registerBuiltinModules(): void {
   // gone. But `pendingConflicts` / `pendingRemoteBundle` are persisted, and `SyncSection` is the only place that
   // resolves or dismisses them; and a provider other than off means the user is using it (every sync is a button
   // on that page — nothing runs by itself), so that page is also where it is switched off. Turn it off with
-  // nothing pending and the entry goes at the shell's next render. The module, its engine, its contributors
+  // nothing pending and the entry goes. The module, its engine, its contributors
   // (`registerSyncContributors` above) and `SnapshotHistoryPage` stay until P4a deletes them.
   registerModule({
     id: 'sync',
@@ -278,6 +278,12 @@ export function registerBuiltinModules(): void {
           const sync = useSyncStore.getState()
           return sync.activeProviderId !== null || sync.pendingConflicts.length > 0 || sync.pendingRemoteBundle !== null
         },
+        // Another window's write (conflicts found there) reaches this store as a rehydrate, and nothing else
+        // would re-render an open Settings page. The three conditions above, and nothing else of the store.
+        subscribeVisibility: (onChange) =>
+          useSyncStore.subscribe((next, prev) => {
+            if (next.activeProviderId !== prev.activeProviderId || next.pendingConflicts.length !== prev.pendingConflicts.length || (next.pendingRemoteBundle !== null) !== (prev.pendingRemoteBundle !== null)) onChange()
+          }),
       },
     ],
   })

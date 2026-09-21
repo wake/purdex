@@ -30,12 +30,14 @@ export function TitleBar({ title }: Props) {
   const toggleVisibility = useLayoutStore((s) => s.toggleVisibility)
   // Match SyncSection banner predicate exactly — otherwise the icon flashes
   // on states where the banner silently refuses to render, creating a
-  // dead-end click path. The page it leads to is listed exactly while the old
-  // Sync has something pending or is switched on (register-modules, the sync
-  // module's `visible()`) — a superset of this predicate, so the click lands.
+  // dead-end click path. NOT the provider (Profile Sync P3d-3, review F4):
+  // conflicts another window found stay pending with the provider off, and
+  // this icon is then the only sign of them. The page it leads to is listed
+  // while the old Sync has something pending or is switched on
+  // (register-modules, the sync module's `visible()`) — a superset of this
+  // predicate, so the click lands.
   const showSyncWarning = useSyncStore(
     (s) =>
-      s.activeProviderId !== null &&
       s.pendingConflicts.length > 0 &&
       s.pendingRemoteBundle !== null &&
       s.pendingConflictsAt !== null,
