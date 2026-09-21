@@ -5,6 +5,7 @@ import { CurrentBlock } from './CurrentBlock'
 import { useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
+import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useProfileSync } from '../../../hooks/useProfileSync'
 import { detachMaster, requestSyncNow } from '../../../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
@@ -101,13 +102,60 @@ describe('a master attached', () => {
     expect(screen.getByTestId('profile-current-state')).toHaveAttribute('data-state', dot)
   })
 
-  it('one row per section, sorted, each with its state', () => {
+  it('one row per section, in reading order, each with its state; the raw key stays in data-section and the title', () => {
     show(attached({ status: status({ workspaces: 'synced', hosts: 'pending', 'tabs.w1': 'synced' }, 'pending') }))
     const rows = screen.getAllByTestId(/^profile-current-section-(?!rev-)/)
-    expect(rows.map((r) => r.getAttribute('data-section'))).toEqual(['hosts', 'tabs.w1', 'workspaces'])
+    expect(rows.map((r) => r.getAttribute('data-section'))).toEqual(['hosts', 'workspaces', 'tabs.w1'])
     expect(screen.getByTestId('profile-current-section-hosts')).toHaveAttribute('data-status', 'pending')
     expect(screen.getByTestId('profile-current-section-hosts')).toHaveTextContent(en['settings.profile.current.section.pending'])
     expect(screen.getByTestId('profile-current-section-workspaces')).toHaveTextContent(en['settings.profile.current.section.synced'])
+    expect(screen.getByTestId('profile-current-section-hosts')).toHaveTextContent(en['settings.profile.current.label.hosts'])
+    expect(within(screen.getByTestId('profile-current-section-tabs.w1')).getByTitle('tabs.w1')).toBeInTheDocument()
+  })
+
+  describe('a tabs section is named after its workspace — in the MASTER world', () => {
+    const world = (workspaces: { id: string; name: string }[], onScreen = true): MasterWorldRead =>
+      ({ settled: true, onScreen, world: { workspaces: workspaces.map((w) => ({ ...w, tabs: [] })) as never, tabs: {}, activeWorkspaceId: null, activeTabId: null } })
+    const tabs = (...ids: string[]) => attached({ status: status(Object.fromEntries(ids.map((id) => [`tabs.${id}`, 'synced' as const]))) })
+
+    it('by name, never by id', () => {
+      vi.mocked(readMasterWorld).mockReturnValue(world([{ id: '4ecsi1', name: 'Client work' }]))
+      show(tabs('4ecsi1'))
+      const row = screen.getByTestId('profile-current-section-tabs.4ecsi1')
+      expect(row).toHaveTextContent('Client work')
+      expect(row).not.toHaveTextContent('4ecsi1')
+    })
+
+    it('a slave on screen: the master is PARKED — the name is the parked world\'s, not the live store\'s', () => {
+      useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'The slave\'s w1', tabs: [] }] as never })
+      vi.mocked(readMasterWorld).mockReturnValue(world([{ id: 'w1', name: 'The master\'s w1' }], false))
+      show(tabs('w1'))
+      expect(screen.getByTestId('profile-current-section-tabs.w1')).toHaveTextContent('The master\'s w1')
+      expect(screen.getByTestId('profile-current-section-tabs.w1')).not.toHaveTextContent('The slave')
+      useWorkspaceStore.setState({ workspaces: [] })
+    })
+
+    it('a workspace this device has not seen yet: said so, and the id is not shown', () => {
+      vi.mocked(readMasterWorld).mockReturnValue(world([]))
+      show(tabs('aapu1q'))
+      const row = screen.getByTestId('profile-current-section-tabs.aapu1q')
+      expect(row).toHaveTextContent(en['settings.profile.current.label.tabs_unseen'])
+      expect(row).not.toHaveTextContent('aapu1q')
+    })
+
+    it('the master world cannot be read right now: no name is claimed, and "unseen" is not either', () => {
+      vi.mocked(readMasterWorld).mockReturnValue({ settled: false, reason: 'world-mismatch' })
+      show(tabs('w1'))
+      const row = screen.getByTestId('profile-current-section-tabs.w1')
+      expect(row).toHaveTextContent(en['settings.profile.current.label.tabs_unknown'])
+      expect(row).not.toHaveTextContent('w1')
+    })
+
+    it('in the master world\'s workspace order', () => {
+      vi.mocked(readMasterWorld).mockReturnValue(world([{ id: 'w2', name: 'B' }, { id: 'w1', name: 'A' }]))
+      show(tabs('w1', 'w2'))
+      expect(screen.getAllByTestId(/^profile-current-section-tabs/).map((r) => r.getAttribute('data-section'))).toEqual(['tabs.w2', 'tabs.w1'])
+    })
   })
 
   it('no status yet: said, not an empty list', () => {

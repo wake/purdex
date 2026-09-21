@@ -29,7 +29,7 @@ import { useProfileSync } from '../../../hooks/useProfileSync'
 import { requestSyncNow } from '../../../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 import { readMasterWorld, type UnsettledReason } from '../../../lib/profile/master-world'
-import { SYNC_DOT_CLASS, settingsWaitForWorkspaces, syncDotOf } from '../../../lib/profile/sync-view'
+import { SYNC_DOT_CLASS, describeSections, settingsWaitForWorkspaces, syncDotOf, type SectionView } from '../../../lib/profile/sync-view'
 import { SettingItem } from '../SettingItem'
 import { ToggleSwitch } from '../ToggleSwitch'
 import { StopSyncControl } from './StopSyncControl'
@@ -53,6 +53,13 @@ function subscribeWorld(fn: () => void): () => void {
 function worldReason(): UnsettledReason | null {
   const read = readMasterWorld()
   return read.settled ? null : read.reason
+}
+
+/** The MASTER world's workspaces — parked while a slave is on screen — or null while nobody can say. The array is
+ *  the store's own, so its identity moves only when the list did. */
+function masterWorkspaces(): readonly { id: string; name: string }[] | null {
+  const read = readMasterWorld()
+  return read.settled ? read.world.workspaces : null
 }
 
 /** `epoch-mismatch` / `world-mismatch` / `behind-fence` heal with the next rehydrate: one sentence for the three. */
@@ -115,6 +122,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const attachedAt = useProfileStore((s) => s.masterEndpoint)
   const host = useHostStore((s) => s.hosts[master.hostId])
   const world = useSyncExternalStore(subscribeWorld, worldReason, worldReason)
+  const workspaces = useSyncExternalStore(subscribeWorld, masterWorkspaces, masterWorkspaces)
   /** The snapshot a "Sync now" was pressed under: the note stays until something in the state moves. No timer. */
   const [askedUnder, setAskedUnder] = useState<ProfileSyncSnapshot | null>(null)
 
@@ -124,9 +132,17 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const fromLeader = sync.remote && (
     <span data-testid="profile-current-source" className={BADGE}>{t('settings.profile.current.from_leader')}</span>
   )
-  const sections = sync.status === null ? [] : Object.keys(sync.status.sections).sort()
+  const sections = sync.status === null ? [] : describeSections(Object.keys(sync.status.sections), workspaces)
   const anyLocked = sync.status !== null && Object.keys(sync.status.locks).length > 0
   const schemaLock = sync.status?.schemaLock ?? null
+
+  const sectionLabel = (view: SectionView): string => {
+    if (view.kind === 'other') return view.key // a kind this build does not know: nothing better to call it
+    if (view.kind !== 'tabs') return t(`settings.profile.current.label.${view.kind}`)
+    if (view.workspace === undefined) return t('settings.profile.current.label.tabs_unknown')
+    // A workspace's name is the user's own text: into the sentence as it is.
+    return view.workspace === null ? t('settings.profile.current.label.tabs_unseen') : t('settings.profile.current.label.tabs', { workspace: view.workspace })
+  }
 
   const blockedText = (): string => {
     switch (sync.blocked) {
@@ -193,7 +209,8 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
           </p>
         ) : (
           <ul className="flex flex-col">
-            {sections.map((key) => {
+            {sections.map((view) => {
+              const { key } = view
               const state = sync.status!.sections[key]
               const lock = sync.status!.locks[key]
               return (
@@ -205,7 +222,8 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                   data-source={source}
                   className="flex flex-wrap items-center justify-between gap-2 border-t border-border-default py-1.5 text-xs"
                 >
-                  <span className="font-mono text-text-primary">{key}</span>
+                  {/* The raw key is for whoever needs it (a bug report, the acceptance run): the tooltip. */}
+                  <span title={key} className="text-text-primary">{sectionLabel(view)}</span>
                   <span className="flex items-center gap-2 text-text-secondary">
                     {lock !== undefined && (
                       <span data-testid={`profile-current-section-rev-${key}`} className="text-text-muted">

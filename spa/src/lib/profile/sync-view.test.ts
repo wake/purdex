@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { settingsWaitForWorkspaces, syncDotOf } from './sync-view'
+import { describeSections, settingsWaitForWorkspaces, syncDotOf } from './sync-view'
 import type { ProfileSyncSnapshot } from './start'
 import type { ExecutorStatus } from './executor'
 
@@ -58,5 +58,41 @@ describe('settingsWaitForWorkspaces — the executor\'s settings gate, as far as
     expect(settingsWaitForWorkspaces(status({ settings: 'pending' }))).toBe(false)
     expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:reset' }))).toBe(false)
     expect(settingsWaitForWorkspaces(null)).toBe(false)
+  })
+})
+
+describe('describeSections — the sections as a person reads them', () => {
+  const master = [{ id: 'w2', name: 'Client work' }, { id: 'w1', name: 'Scratch' }]
+
+  it('hosts, settings, workspaces — then the tabs in the MASTER world\'s workspace order, each by its workspace\'s name', () => {
+    expect(describeSections(['tabs.w1', 'workspaces', 'tabs.w2', 'settings', 'hosts'], master)).toEqual([
+      { key: 'hosts', kind: 'hosts' },
+      { key: 'settings', kind: 'settings' },
+      { key: 'workspaces', kind: 'workspaces' },
+      { key: 'tabs.w2', kind: 'tabs', workspace: 'Client work' },
+      { key: 'tabs.w1', kind: 'tabs', workspace: 'Scratch' },
+    ])
+  })
+
+  it('tabs of a workspace this device has not seen: no name — NOT its id — and after the known ones', () => {
+    expect(describeSections(['tabs.zz9', 'tabs.w1', 'tabs.aa0'], master)).toEqual([
+      { key: 'tabs.w1', kind: 'tabs', workspace: 'Scratch' },
+      { key: 'tabs.aa0', kind: 'tabs', workspace: null },
+      { key: 'tabs.zz9', kind: 'tabs', workspace: null },
+    ])
+  })
+
+  it('the master world cannot be read right now (null): tabs are there, none is named, none is called unseen', () => {
+    expect(describeSections(['tabs.w1', 'hosts'], null)).toEqual([
+      { key: 'hosts', kind: 'hosts' },
+      { key: 'tabs.w1', kind: 'tabs', workspace: undefined },
+    ])
+  })
+
+  it('a key of no known kind is kept, last, as it is', () => {
+    expect(describeSections(['future.thing', 'hosts'], master)).toEqual([
+      { key: 'hosts', kind: 'hosts' },
+      { key: 'future.thing', kind: 'other' },
+    ])
   })
 })

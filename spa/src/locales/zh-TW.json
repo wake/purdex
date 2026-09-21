@@ -1556,5 +1556,11 @@
   "settings.profile.detach.dismiss": "不再提醒",
   "settings.profile.detach.dismiss_hint": "不再提醒。在有人到主機上移除之前，這台裝置的登記可能會一直留著。",
   "settings.profile.local.name_changed": "這個名稱剛在另一個視窗被改成「{{name}}」。按儲存會保留你輸入的。",
-  "settings.profile.local.name_take": "改用那個"
+  "settings.profile.local.name_take": "改用那個",
+  "settings.profile.current.label.hosts": "主機",
+  "settings.profile.current.label.settings": "設定",
+  "settings.profile.current.label.workspaces": "工作區（清單與順序）",
+  "settings.profile.current.label.tabs": "分頁 · {{workspace}}",
+  "settings.profile.current.label.tabs_unseen": "分頁 ·（這台裝置還沒同步到的工作區）",
+  "settings.profile.current.label.tabs_unknown": "分頁 ·（目前無法取得工作區名稱）"
 }

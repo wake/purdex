@@ -1556,5 +1556,11 @@
   "settings.profile.detach.dismiss": "Dismiss",
   "settings.profile.detach.dismiss_hint": "Stop reminding me. The host may keep listing this device until someone removes it there.",
   "settings.profile.local.name_changed": "This name was just changed to \"{{name}}\" in another window. Save keeps yours.",
-  "settings.profile.local.name_take": "Use that one"
+  "settings.profile.local.name_take": "Use that one",
+  "settings.profile.current.label.hosts": "Hosts",
+  "settings.profile.current.label.settings": "Settings",
+  "settings.profile.current.label.workspaces": "Workspaces (the list and its order)",
+  "settings.profile.current.label.tabs": "Tabs · {{workspace}}",
+  "settings.profile.current.label.tabs_unseen": "Tabs · (a workspace not on this device yet)",
+  "settings.profile.current.label.tabs_unknown": "Tabs · (workspace name not available right now)"
 }
