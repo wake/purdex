@@ -293,9 +293,20 @@ position (the "active + expanded → toggle" overload of the baseline is gone).
   else the first. It acts `ADOPTION_SETTLE_MS` (500) after the last MEMBERSHIP change and only on a
   settled world — so a profile switch (Task 5) that lands a world with ownerless tabs sees them
   adopted half a second after it settles, in the world on screen only.
-- For that half second a tab can be in no workspace. It is in no bar (`getVisibleTabIds` = the active
-  workspace's tabs, else `tabOrder`), the content area shows it if it is active, and it closes
-  whole (`closeTabInWorkspace`; focus → the active workspace). Nothing else treats it as a kind.
+- **`getVisibleTabIds({ tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId })`** — the bar AND the
+  range of close-others / close-right / the tab shortcuts: the active workspace's tabs; with
+  workspaces but a `null` (or dangling) pointer, the workspace that owns `activeTabId`, else the
+  first; `tabOrder` only with zero workspaces. Never wider than one workspace while one exists.
+- For that half second a tab can be in no workspace. It is in no bar, the content area shows it if
+  it is active, the `close-tab` shortcut closes it (in the visible set OR owned by nobody), and it
+  closes whole (`closeTabInWorkspace`; focus → the active workspace). Nothing else treats it as a kind.
+- **`repairTabOwnership(world: OwnershipWorld, { unsortedName, newWorkspaceId })`**
+  (`lib/profile/sections.ts`) → `{ workspaces, activeWorkspaceId, adopted, dropped, membershipChanged }`
+  is the ONE rule — first owner keeps, zero owners → Unsorted, the pointer follows the tab on screen
+  only when the repair moved it. Callers: the invariant, and `switch-active.ts` on a world it is
+  about to park or copy. **For the switcher UI:** `switchActiveProfile` can now answer `busy` for
+  one more reason — something to repair and `tabOwnershipQuiet()` (adopt-standalone.ts) not yet
+  true; it is retryable like every other `busy`, and at most `ADOPTION_SETTLE_MS` away.
 - `HOME_WS_KEY` (`useLayoutStore`) has no reader left but `reconcileWorkspaceExpanded`, which keeps
   the key alive; P3d may delete it with the rest of "Home".
 
