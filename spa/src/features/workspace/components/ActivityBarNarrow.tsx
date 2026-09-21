@@ -90,10 +90,8 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
 export function ActivityBarNarrow({
   workspaces,
   activeWorkspaceId,
-  activeStandaloneTabId,
   onSelectWorkspace,
   onSelectHome,
-  standaloneTabIds,
   onAddWorkspace,
   onReorderWorkspaces,
   onContextMenuWorkspace,
@@ -125,32 +123,13 @@ export function ActivityBarNarrow({
     onReorderWorkspaces?.(newOrder)
   }, [wsIds, onReorderWorkspaces])
 
-  const nonActiveStandaloneTabIds = useMemo(
-    () => activeStandaloneTabId ? standaloneTabIds.filter(id => id !== activeStandaloneTabId) : standaloneTabIds,
-    [standaloneTabIds, activeStandaloneTabId],
-  )
-  const { unreadCount: homeUnreadCount, aggregatedStatus: homeStatus } = useWorkspaceIndicators(nonActiveStandaloneTabIds)
   const isHomeActive = !activeWorkspaceId
-  const showHomeBadge = (!isHomeActive || !!activeStandaloneTabId) && homeUnreadCount > 0
   return (
     <div className="group/narrow-bar relative hidden min-h-0 lg:flex">
       <div className="w-11 flex min-h-0 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0 overflow-hidden">
-      {/* Home — standalone tabs */}
+      {/* Home — a plain button: every tab belongs to a workspace (Profile Sync spec §4.3), so it has no tabs
+          of its own to count or to light up for. P3d turns it into the profile switcher. */}
       <div className="relative group">
-        {homeStatus && (!isHomeActive || !!activeStandaloneTabId) && (
-          <span
-            className={`absolute rounded-full ${homeStatus === 'running' ? 'animate-breathe' : ''}`}
-            style={{
-              width: '5px',
-              height: '5px',
-              left: '-1px',
-              top: '50%',
-              transform: 'translateY(calc(-50% - 1px))',
-              backgroundColor: PILL_COLORS[homeStatus],
-              boxShadow: '0 0 0 1.5px var(--surface-tertiary)',
-            }}
-          />
-        )}
         <button
           title={t('nav.home')}
           onClick={onSelectHome}
@@ -162,15 +141,6 @@ export function ActivityBarNarrow({
         >
           <img src="/icons/logo-transparent.png" alt="Purdex" width={20} height={20} className="rounded-sm" />
         </button>
-        {showHomeBadge && (
-          <span
-            data-testid="home-unread-badge"
-            className="absolute -top-[5px] -right-[6px] min-w-[15px] h-[15px] rounded-full flex items-center justify-center text-white text-[9px] font-bold px-[3px] leading-none z-10"
-            style={{ backgroundColor: '#dc2626', boxShadow: '0 0 0 2px var(--surface-tertiary)' }}
-          >
-            {homeUnreadCount > 99 ? '99+' : homeUnreadCount}
-          </span>
-        )}
       </div>
 
       {workspaces.length > 0 && <div data-testid="activity-bar-workspace-separator" className="w-5 h-px bg-border-default my-0.5 shrink-0" />}
@@ -188,7 +158,7 @@ export function ActivityBarNarrow({
                 <SortableWorkspaceButton
                   key={ws.id}
                   workspace={ws}
-                  isActive={activeWorkspaceId === ws.id && !activeStandaloneTabId}
+                  isActive={activeWorkspaceId === ws.id}
                   onSelect={onSelectWorkspace}
                   onContextMenu={onContextMenuWorkspace}
                 />

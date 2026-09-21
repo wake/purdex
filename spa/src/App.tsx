@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Router } from 'wouter'
 import { prefetchWeight } from './features/workspace/lib/icon-path-cache'
-import { reorderStandaloneTabOrder } from './features/workspace/lib/reorderStandaloneTabOrder'
 import { ActivityBar } from './components/ActivityBar'
 import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
@@ -24,7 +23,6 @@ import { useDeeplinkResolver } from './hooks/useDeeplinkResolver'
 import { useNewTabBootstrap } from './hooks/useNewTabBootstrap'
 import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
 import { useWorkspaceWindowActions } from './hooks/useWorkspaceWindowActions'
-import { isStandaloneTab } from './types/tab'
 import {
   getVisibleTabIds,
   nextWorkspaceName,
@@ -109,18 +107,10 @@ export default function App() {
   const visibleTabIds = getVisibleTabIds({
     tabs,
     tabOrder,
-    activeTabId,
     workspaces,
     activeWorkspaceId,
   })
   const displayTabs: Tab[] = visibleTabIds.map((id) => tabs[id]).filter(Boolean)
-
-  const standaloneTabIds = useMemo(
-    () => tabOrder.filter((id) => isStandaloneTab(id, workspaces)),
-    [tabOrder, workspaces],
-  )
-
-  const activeStandaloneTabId = activeTabId && isStandaloneTab(activeTabId, workspaces) ? activeTabId : null
 
   // --- Tab/Workspace action handlers ---
   const {
@@ -162,11 +152,6 @@ export default function App() {
 
   const handleReorderWorkspaces = useCallback((ids: string[]) => {
     useWorkspaceStore.getState().reorderWorkspaces(ids)
-  }, [])
-
-  const handleReorderStandaloneTabs = useCallback((newOrder: string[]) => {
-    const current = useTabStore.getState().tabOrder
-    useTabStore.getState().reorderTabs(reorderStandaloneTabOrder(current, newOrder))
   }, [])
 
   const handleCloseTabContextMenu = useCallback(() => {
@@ -236,11 +221,9 @@ export default function App() {
         <div className="flex-1 flex min-h-0">
           <ActivityBar
             workspaces={workspaces}
-            activeWorkspaceId={activeStandaloneTabId ? null : activeWorkspaceId}
-            activeStandaloneTabId={activeStandaloneTabId}
+            activeWorkspaceId={activeWorkspaceId}
             onSelectWorkspace={handleSelectWorkspace}
             onSelectHome={handleSelectHome}
-            standaloneTabIds={standaloneTabIds}
             onAddWorkspace={handleAddWorkspace}
             onReorderWorkspaces={handleReorderWorkspaces}
             onContextMenuWorkspace={handleWsContextMenu}
@@ -255,7 +238,6 @@ export default function App() {
             onContextMenuTab={handleContextMenu}
             onRenameTab={handleRenameTab}
             onReorderWorkspaceTabs={handleReorderWorkspaceTabs}
-            onReorderStandaloneTabs={handleReorderStandaloneTabs}
             onAddTabToWorkspace={handleAddTabToWorkspace}
           />
           <SidebarRegion region="primary-sidebar" resizeEdge="right" />

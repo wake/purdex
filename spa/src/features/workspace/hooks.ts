@@ -86,7 +86,6 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   const tabs = useTabStore((s) => s.tabs)
   const setActiveTab = useTabStore((s) => s.setActiveTab)
   const addTab = useTabStore((s) => s.addTab)
-  const reorderTabs = useTabStore((s) => s.reorderTabs)
 
   // Workspace store
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
@@ -144,13 +143,10 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
   }, [])
 
   const handleReorderTabs = useCallback((order: string[]) => {
-    if (activeWorkspaceId) {
-      reorderWorkspaceTabs(activeWorkspaceId, order)
-    } else {
-      // Standalone tabs — update global order
-      reorderTabs(order)
-    }
-  }, [reorderTabs, activeWorkspaceId, reorderWorkspaceTabs])
+    // The tab bar lists a workspace's tabs; with no active workspace there is no list of its own to reorder
+    // (every tab belongs to a workspace — Profile Sync spec §4.3).
+    if (activeWorkspaceId) reorderWorkspaceTabs(activeWorkspaceId, order)
+  }, [activeWorkspaceId, reorderWorkspaceTabs])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()

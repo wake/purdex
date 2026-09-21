@@ -25,7 +25,6 @@ export function useShortcuts(): void {
       const visibleIds = getVisibleTabIdsShared({
         tabs: tabState.tabs,
         tabOrder: tabState.tabOrder,
-        activeTabId: tabState.activeTabId,
         workspaces: useWorkspaceStore.getState().workspaces,
         activeWorkspaceId: useWorkspaceStore.getState().activeWorkspaceId,
       })

@@ -1,23 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import { DndContext } from '@dnd-kit/core'
 import { HomeRow } from './HomeRow'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
-import type { Tab } from '../../../types/tab'
-
-const mkTab = (id: string, hostname: string): Tab =>
-  ({
-    id,
-    kind: 'new-tab',
-    locked: false,
-    layout: {
-      type: 'leaf',
-      pane: {
-        id: `${id}-pane`,
-        content: { kind: 'browser', url: `https://${hostname}.example.com` },
-      },
-    },
-  }) as unknown as Tab
 
 beforeEach(() => {
   cleanup()
@@ -25,22 +9,8 @@ beforeEach(() => {
 })
 
 function renderRow(overrides: Partial<React.ComponentProps<typeof HomeRow>> = {}) {
-  return render(
-    <DndContext>
-      <HomeRow
-        isActive={false}
-        standaloneTabIds={[]}
-        tabsById={{}}
-        activeTabId={null}
-        onSelectHome={() => {}}
-        onSelectTab={() => {}}
-        onCloseTab={() => {}}
-        onMiddleClickTab={() => {}}
-        onContextMenuTab={() => {}}
-        {...overrides}
-      />
-    </DndContext>,
-  )
+  // No DndContext: the row is no drop target any more, and must not need one to render.
+  return render(<HomeRow isActive={false} onSelectHome={() => {}} {...overrides} />)
 }
 
 describe('HomeRow', () => {
@@ -56,81 +26,34 @@ describe('HomeRow', () => {
     expect(onSelectHome).toHaveBeenCalled()
   })
 
-  it('tabs hidden when home not expanded', () => {
-    renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
-    expect(screen.queryByText('alpha.example.com')).not.toBeInTheDocument()
-  })
-
-  it('tabs shown when workspaceExpanded["home"]=true', () => {
-    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { home: true } })
-    renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
-    // Label appears twice per row: visible title span + HoverTooltip.
-    expect(screen.getAllByText('alpha.example.com').length).toBeGreaterThan(0)
-  })
-
-  it('clicking title on ACTIVE Home toggles expand (does not re-select)', () => {
-    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+  // Every tab belongs to a workspace (Profile Sync spec §4.3): Home heads no tab list, so a click is a click
+  // whatever the row's state or the tab position. (Was: active + inline tabs → the click toggled the list.)
+  it.each(['top', 'left', 'both'] as const)("clicking an ACTIVE Home selects, and expands nothing (tabPosition='%s')", (tabPosition) => {
+    useLayoutStore.setState({ tabPosition, activityBarWidth: 'wide' })
     const onSelectHome = vi.fn()
     renderRow({ isActive: true, onSelectHome })
     fireEvent.click(screen.getByText(/home/i))
-    expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
-    expect(onSelectHome).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByText(/home/i))
-    expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(false)
-    expect(onSelectHome).not.toHaveBeenCalled()
-  })
-
-  it("active-click toggle is inert when tabPosition='top' (no inline tabs); still selects", () => {
-    useLayoutStore.setState({ tabPosition: 'top' })
-    const onSelectHome = vi.fn()
-    renderRow({ isActive: true, onSelectHome })
-    fireEvent.click(screen.getByText(/home/i))
-    expect(onSelectHome).toHaveBeenCalled()
+    expect(onSelectHome).toHaveBeenCalledTimes(1)
     expect(useLayoutStore.getState().workspaceExpanded['home']).toBeFalsy()
   })
 
-  it('clicking title on INACTIVE Home selects (does not toggle)', () => {
+  it('clicking an INACTIVE Home selects', () => {
     useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
     const onSelectHome = vi.fn()
     renderRow({ isActive: false, onSelectHome })
     fireEvent.click(screen.getByText(/home/i))
-    expect(onSelectHome).toHaveBeenCalled()
-    expect(useLayoutStore.getState().workspaceExpanded['home']).toBeFalsy()
+    expect(onSelectHome).toHaveBeenCalledTimes(1)
   })
 
-  it('chevron toggles home expand state', () => {
-    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
-    renderRow({ standaloneTabIds: ['t1'], tabsById: { t1: mkTab('t1', 'alpha') } })
-    const chevron = screen.getByRole('button', { name: /expand home|collapse home/i })
-    fireEvent.click(chevron)
-    expect(useLayoutStore.getState().workspaceExpanded['home']).toBe(true)
-  })
-
-  describe('droppable header (Phase 3 PR D)', () => {
-    it('exposes header with data-testid=home-header for drop target lookup', () => {
-      renderRow()
-      expect(screen.getByTestId('home-header')).toBeInTheDocument()
-    })
-  })
-})
-
-describe('HomeRow chevron visibility', () => {
-  it("hides chevron when tabPosition='top'", () => {
-    useLayoutStore.setState({ tabPosition: 'top' })
+  it.each(['top', 'left', 'both'] as const)("is one plain button: no expand/collapse chevron (tabPosition='%s')", (tabPosition) => {
+    useLayoutStore.setState({ tabPosition, activityBarWidth: 'wide', workspaceExpanded: { home: true } })
     renderRow()
-    expect(screen.queryByLabelText(/expand home/i)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(screen.queryByLabelText(/expand home|collapse home/i)).not.toBeInTheDocument()
   })
 
-  it("shows chevron when tabPosition='left'", () => {
-    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+  it('keeps data-testid=home-header (P3d turns this button into the profile switcher)', () => {
     renderRow()
-    expect(screen.getByLabelText(/expand home/i)).toBeInTheDocument()
-  })
-
-  it("shows chevron when tabPosition='both'", () => {
-    useLayoutStore.setState({ tabPosition: 'both', activityBarWidth: 'wide' })
-    renderRow()
-    expect(screen.getByLabelText(/expand home/i)).toBeInTheDocument()
+    expect(screen.getByTestId('home-header')).toBeInTheDocument()
   })
 })

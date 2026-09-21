@@ -9,10 +9,8 @@ import type { Workspace, Tab } from '../../../types/tab'
 export interface ActivityBarProps {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
-  activeStandaloneTabId: string | null
   onSelectWorkspace: (wsId: string) => void
   onSelectHome: () => void
-  standaloneTabIds: string[]
   onAddWorkspace: () => void
   onReorderWorkspaces?: (orderedIds: string[]) => void
   onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
@@ -28,12 +26,10 @@ export interface ActivityBarProps {
   onContextMenuTab?: (e: React.MouseEvent, tabId: string) => void
   onRenameTab?: (tabId: string) => void
   onReorderWorkspaceTabs?: (wsId: string, tabIds: string[]) => void
-  onReorderStandaloneTabs?: (tabIds: string[]) => void
   onAddTabToWorkspace?: (wsId: string) => void
 
   // Phase 3 PR D — cross-workspace DnD.
   // Default: ActivityBarWide calls the workspace store directly. Pass a
   // handler here to intercept or veto (e.g. workspace-locked mode).
   onMoveTabToWorkspace?: (tabId: string, targetWsId: string, afterTabId: string | null) => void
-  onMoveTabToStandalone?: (tabId: string, sourceWsId: string) => void
 }
