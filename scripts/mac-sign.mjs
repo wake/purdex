@@ -6,7 +6,8 @@
 // can import it and drive the real `codesign` against throwaway bundles.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { readdirSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -77,6 +78,32 @@ export function readEntitlements(appPath) {
 }
 
 /**
+ * The embedded entitlements of `appPath` decoded into a plain object.
+ *
+ * The key alone says nothing: `<key>…disable-library-validation</key><false/>`
+ * is a perfectly valid plist that `codesign` embeds happily and that leaves
+ * Library Validation switched **on**. Only the decoded value can tell the two
+ * apart, so the plist text goes through `plutil` rather than a substring match.
+ *
+ * Returns `{}` when the bundle carries no entitlements.
+ */
+export function readEntitlementsObject(appPath) {
+  const xml = readEntitlements(appPath)
+  if (!xml) return {}
+
+  const r = spawnSync('plutil', ['-convert', 'json', '-o', '-', '-'], { input: xml, encoding: 'utf8' })
+  if (r.error) throw r.error
+  if (r.status !== 0) {
+    throw new Error(`plutil could not decode the entitlements of ${appPath}: ${(r.stderr || '').trim()}`)
+  }
+  const parsed = JSON.parse(r.stdout)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${appPath}: entitlements did not decode to a dictionary`)
+  }
+  return parsed
+}
+
+/**
  * Whether `appPath` was signed with Hardened Runtime, read off the
  * `CodeDirectory … flags=0x…(adhoc,runtime)` line.
  */
@@ -97,18 +124,63 @@ export function hasHardenedRuntime(appPath) {
  * the user's launch time.
  *
  * Passes when the bundle either has no Hardened Runtime (no Library Validation
- * to disable) or carries {@link LIBRARY_VALIDATION_ENTITLEMENT}.
+ * to disable) or carries {@link LIBRARY_VALIDATION_ENTITLEMENT} set to `true`.
+ * The value is what matters, not the key: `<false/>` signs just as cleanly and
+ * leaves the crash in place.
  */
 export function assertLibraryValidationDisabled(appPath) {
   if (!hasHardenedRuntime(appPath)) return
 
-  const entitlements = readEntitlements(appPath)
-  if (entitlements.includes(LIBRARY_VALIDATION_ENTITLEMENT)) return
+  const entitlements = readEntitlementsObject(appPath)
+  const value = entitlements[LIBRARY_VALIDATION_ENTITLEMENT]
+  if (value === true) return
+
+  const complaint =
+    LIBRARY_VALIDATION_ENTITLEMENT in entitlements
+      ? `carries ${LIBRARY_VALIDATION_ENTITLEMENT} but its value is not true (got ${JSON.stringify(value)})`
+      : `does not carry ${LIBRARY_VALIDATION_ENTITLEMENT}`
 
   throw new Error(
-    `${appPath}: signed with Hardened Runtime but without ${LIBRARY_VALIDATION_ENTITLEMENT}. ` +
+    `${appPath}: signed with Hardened Runtime but it ${complaint}. ` +
       'Library Validation will reject the ad-hoc signed Electron Framework and the app will abort ' +
       `before main(). Sign with --entitlements ${ENTITLEMENTS_PATH}. ` +
-      `Embedded entitlements: ${entitlements || '(none)'}`,
+      `Embedded entitlements: ${JSON.stringify(entitlements)}`,
   )
+}
+
+/**
+ * The nested `.app` bundles of `appPath` — the four `Purdex Helper*.app`, each
+ * of which starts its own process.
+ *
+ * `.framework` bundles are deliberately excluded (spec §5.6): a framework is
+ * not a process entry point, Library Validation is decided by the entitlements
+ * of the executable a process was *started* from, and the working arm64 bundle
+ * ships hardened frameworks with no entitlements at all.
+ */
+function nestedHelperBundles(appPath) {
+  const frameworks = join(appPath, 'Contents', 'Frameworks')
+  let entries
+  try {
+    entries = readdirSync(frameworks, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries
+    .filter((e) => e.isDirectory() && e.name.endsWith('.app'))
+    .map((e) => join(frameworks, e.name))
+    .sort()
+}
+
+/**
+ * {@link assertLibraryValidationDisabled} over the whole bundle tree: the app
+ * itself plus every nested helper `.app`.
+ *
+ * Spec §2: the bundle starts five kinds of process, not one. A helper that
+ * loses the entitlement does not crash the app — it shows up as a blank
+ * renderer window — so checking only the top level would let exactly that
+ * ship.
+ */
+export function assertBundleTreeLibraryValidationDisabled(appPath) {
+  assertLibraryValidationDisabled(appPath)
+  for (const helper of nestedHelperBundles(appPath)) assertLibraryValidationDisabled(helper)
 }

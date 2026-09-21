@@ -1,10 +1,10 @@
 // scripts/build-electron.mjs — Build Electron for both archs with per-arch icons
 import { execSync, spawnSync } from 'child_process'
-import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { copyFileSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
-import { ENTITLEMENTS_PATH, assertLibraryValidationDisabled, signApp, verifyApp } from './mac-sign.mjs'
+import { ENTITLEMENTS_PATH, assertBundleTreeLibraryValidationDisabled, signApp, verifyApp } from './mac-sign.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const iconDest = resolve(root, 'build/icon.icns')
@@ -23,9 +23,11 @@ function defaultSign(appPath, identity) {
  *
  * `sign` and `assert` are injectable so scripts/mac-sign_test.mjs can prove
  * that the assertion runs on both the freshly-signed path and the
- * already-signed early return, rather than taking the prose for it.
+ * already-signed early return, rather than taking the prose for it. The
+ * defaults are the real collaborators, and the assertion covers the whole
+ * bundle tree — app plus every `Purdex Helper*.app` (spec §2).
  */
-export function signAndVerifyApp(appPath, { sign = defaultSign, assert = assertLibraryValidationDisabled } = {}) {
+export function signAndVerifyApp(appPath, { sign = defaultSign, assert = assertBundleTreeLibraryValidationDisabled } = {}) {
   if (process.platform !== 'darwin') return
   if (process.env.PDX_SKIP_MAC_SIGN === '1') {
     console.log(`Skipping macOS signing for ${appPath}`)
@@ -85,8 +87,41 @@ function build() {
   }
 }
 
+/**
+ * Whether this module is the entry point node was started with.
+ *
+ * `process.argv[1]` is whatever the caller typed; `import.meta.url` is always
+ * resolved through symlinks. Comparing them raw makes the guard quietly false
+ * whenever the script is invoked through one — `node /some/symlink/to/this.mjs`
+ * would then build nothing and still exit 0. Resolving argv[1] first closes
+ * that gap; if it cannot be resolved (deleted, unreadable, a bare name) the
+ * literal value is compared instead of throwing.
+ */
+export function isMainModule(argv1 = process.argv[1], moduleUrl = import.meta.url) {
+  if (!argv1) return false
+  let resolved = argv1
+  try {
+    resolved = realpathSync(argv1)
+  } catch {
+    // Keep the literal value; a path we cannot resolve simply is not this file.
+  }
+  try {
+    return pathToFileURL(resolved).href === moduleUrl
+  } catch {
+    return false
+  }
+}
+
 // Only build when run as a script. Importing this module must stay
 // side-effect-free so the signing tests can drive signAndVerifyApp().
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (isMainModule()) {
   build()
+} else {
+  // Never decline silently: a guard that misfires would otherwise look like a
+  // successful build that produced nothing.
+  console.error(
+    'build-electron.mjs: not the entry module, skipping the build ' +
+      `(process.argv[1]=${process.argv[1] ?? '(none)'}, import.meta.url=${import.meta.url}). ` +
+      'Expected when this module is imported; if you ran it directly, the build did nothing.',
+  )
 }
