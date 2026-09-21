@@ -52,8 +52,9 @@ describe('HomeRow', () => {
     expect(screen.queryByLabelText(/expand home|collapse home/i)).not.toBeInTheDocument()
   })
 
-  it('keeps data-testid=home-header (P3d turns this button into the profile switcher)', () => {
+  // What it does once there is a slave is ProfileSwitcher.test.tsx's.
+  it('keeps data-testid=home-header on the row, and the button inside it is home-button', () => {
     renderRow()
-    expect(screen.getByTestId('home-header')).toBeInTheDocument()
+    expect(screen.getByTestId('home-header').contains(screen.getByTestId('home-button'))).toBe(true)
   })
 })

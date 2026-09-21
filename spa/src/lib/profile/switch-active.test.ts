@@ -92,13 +92,13 @@ function putOnScreen(w: ParkedWorld, worldId: string, epoch: number): void {
 
 /** The master on screen, two slaves parked, epoch 0. */
 function masterOnScreen(): void {
-  useLocalProfilesStore.setState({ slaves: { [SLAVE]: slave(SLAVE, slaveWorld()), [OTHER]: slave(OTHER, otherWorld()) }, slaveOrder: [SLAVE, OTHER], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0 })
+  useLocalProfilesStore.setState({ slaves: { [SLAVE]: slave(SLAVE, slaveWorld()), [OTHER]: slave(OTHER, otherWorld()) }, slaveOrder: [SLAVE, OTHER], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, master: { name: null } })
   putOnScreen(masterWorld(), MASTER_PROFILE_ID, 0)
 }
 
 /** `s1` on screen, the master and `s2` parked, epoch 1. */
 function slaveOnScreen(): void {
-  useLocalProfilesStore.setState({ slaves: { [SLAVE]: slave(SLAVE, null), [OTHER]: slave(OTHER, otherWorld()) }, slaveOrder: [SLAVE, OTHER], activeProfileId: SLAVE, parkedMaster: masterWorld(), worldEpoch: 1 })
+  useLocalProfilesStore.setState({ slaves: { [SLAVE]: slave(SLAVE, null), [OTHER]: slave(OTHER, otherWorld()) }, slaveOrder: [SLAVE, OTHER], activeProfileId: SLAVE, parkedMaster: masterWorld(), worldEpoch: 1, master: { name: null } })
   putOnScreen(slaveWorld(), SLAVE, 1)
 }
 
@@ -199,7 +199,7 @@ afterEach(() => {
   __resetMasterWorldForTest()
   useProfileStore.setState({ masterHostId: null, masterProfileId: null })
   useWorkspaceSettingsStore.setState({ workspaces: {} })
-  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0 })
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, master: { name: null } })
   putOnScreen({ workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null }, MASTER_PROFILE_ID, 0)
 })
 
@@ -655,6 +655,18 @@ describe('copyMasterAsSlave', () => {
     after.forEach((v, i) => expect(v).toBe(before[i]))
   })
 
+  // Two worlds that look alike are one too many: a copy takes the name it is given and no icon, no colour.
+  it('the copy does not take the master\'s look (nor does saveScreenAsSlave)', () => {
+    useLocalProfilesStore.getState().setProfileAppearance(MASTER_PROFILE_ID, { name: 'Work', icon: 'Rocket', iconWeight: 'fill', color: '#3b82f6' })
+    for (const result of [copyMasterAsSlave('Copy'), saveScreenAsSlave('Saved')]) {
+      if (!result.ok) throw new Error(result.reason)
+      const made = useLocalProfilesStore.getState().slaves[result.id]
+      expect(made).not.toHaveProperty('icon')
+      expect(made).not.toHaveProperty('iconWeight')
+      expect(made).not.toHaveProperty('color')
+    }
+  })
+
   it('EVERY id is new — workspace, tab, pane, split — and the same world comes out underneath them', () => {
     const copy = copied()
     const source = mintedIds(masterWorld())
@@ -866,6 +878,17 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     })
   })
 
+  it('the look goes with the world: the promoted slave\'s becomes the master\'s, the old master\'s the demoted slave\'s', async () => {
+    const local = useLocalProfilesStore.getState()
+    local.setProfileAppearance(MASTER_PROFILE_ID, { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
+    local.setProfileAppearance(SLAVE, { icon: 'Rocket', iconWeight: 'fill', color: '#3b82f6' })
+    const slaveName = useLocalProfilesStore.getState().slaves[SLAVE].name
+    const result = await promoteToMaster(SLAVE, 'Old master')
+    if (!result.ok) throw new Error(result.reason)
+    expect(useLocalProfilesStore.getState().master).toEqual({ name: slaveName, icon: 'Rocket', iconWeight: 'fill', color: '#3b82f6' })
+    expect(demoted(result.demotedId)).toMatchObject({ name: 'Work', icon: 'Briefcase', color: '#ef4444' }) // named: `demotedName` is not needed
+  })
+
   it('the master on screen: the screen does not move and is now the demoted slave\'s; the parked slave is the master', async () => {
     const live = screen()
     const result = await promoteToMaster(SLAVE, 'Old master')
@@ -949,5 +972,15 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: 'stamp failed' })
     threeStores().forEach((v, i) => expect(v).toBe(before[i]))
     expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('… the looks included: a promote that is rolled back has not handed the slave\'s look to the master', async () => {
+    useLocalProfilesStore.getState().setProfileAppearance(MASTER_PROFILE_ID, { name: 'Work', icon: 'Briefcase' })
+    const master = useLocalProfilesStore.getState().master
+    vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+      throw new Error('stamp failed')
+    })
+    expect((await promoteToMaster(SLAVE, 'Old')).ok).toBe(false)
+    expect(useLocalProfilesStore.getState().master).toBe(master)
   })
 })

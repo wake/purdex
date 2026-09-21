@@ -9,6 +9,8 @@ import { useWorkspaceIndicators } from '../useWorkspaceIndicators'
 import type { ActiveStatus } from '../workspace-indicators'
 import type { ActivityBarProps } from './activity-bar-props'
 import { HoverTooltip } from '../../../components/HoverTooltip'
+import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
+import { ProfileIcon, ProfileSwitcher } from './ProfileSwitcher'
 
 const PILL_COLORS: Record<ActiveStatus, string> = {
   running: '#4ade80',
@@ -102,6 +104,8 @@ export function ActivityBarNarrow({
   const wsIds = useMemo(() => workspaces.map((ws) => ws.id), [workspaces])
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
   const wsZoneRef = useRef<HTMLDivElement>(null)
+  const homeRef = useRef<HTMLButtonElement>(null)
+  const switcher = useProfileSwitcherTrigger(onSelectHome)
 
   const restrictToVertical: Modifier = useCallback(({ transform, activeNodeRect }) => {
     if (!activeNodeRect || !wsZoneRef.current) return { ...transform, x: 0 }
@@ -128,19 +132,25 @@ export function ActivityBarNarrow({
     <div className="group/narrow-bar relative hidden min-h-0 lg:flex">
       <div className="w-11 flex min-h-0 flex-col items-center bg-surface-tertiary border-r border-border-subtle py-2 px-px gap-2.5 flex-shrink-0 overflow-hidden">
       {/* Home — a plain button: every tab belongs to a workspace (Profile Sync spec §4.3), so it has no tabs
-          of its own to count or to light up for. P3d turns it into the profile switcher. */}
+          of its own to count or to light up for. It shows the icon of the profile on screen (the Purdex logo
+          unless one was chosen) and has its name as the title. On a device with a local profile it opens the
+          profile switcher — a portal, beside the button: this bar is 44 px wide and overflow-hidden. */}
       <div className="relative group">
         <button
-          title={t('nav.home')}
-          onClick={onSelectHome}
+          ref={homeRef}
+          data-testid="home-button"
+          title={switcher.label}
+          onClick={switcher.onClick}
+          {...switcher.triggerProps}
           className={`w-[30px] h-[30px] rounded-lg flex items-center justify-center cursor-pointer transition-all ${
             isHomeActive
               ? 'ring-2 ring-purple-400'
               : 'hover:bg-surface-tertiary opacity-70 hover:opacity-100'
           }`}
         >
-          <img src="/icons/logo-transparent.png" alt="Purdex" width={20} height={20} className="rounded-sm" />
+          <ProfileIcon appearance={switcher.current} size={20} logoAlt="Purdex" />
         </button>
+        {switcher.enabled && <ProfileSwitcher trigger={homeRef} placement="right-start" />}
       </div>
 
       {workspaces.length > 0 && <div data-testid="activity-bar-workspace-separator" className="w-5 h-px bg-border-default my-0.5 shrink-0" />}

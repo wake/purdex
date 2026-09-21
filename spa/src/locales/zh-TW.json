@@ -1440,5 +1440,18 @@
   "peer.reason.not_cc": "不是 Claude Code session",
   "peer.reason.inbox_dead": "agent 的 inbox 沒有回應",
   "peer.reason.proxy": "經由 proxy 連接",
-  "peer.reason.ambiguous": "多個 agent 共用此 session"
+  "peer.reason.ambiguous": "多個 agent 共用此 session",
+  "profile.master": "主要",
+  "profile.switcher.trigger": "{{name}}：切換 profile",
+  "profile.switcher.label": "切換 profile",
+  "profile.sync.synced": "已同步",
+  "profile.sync.syncing": "同步中…",
+  "profile.sync.locked": "同步暫停，等你決定",
+  "profile.sync.problem": "同步已停止",
+  "profile.sync.unknown": "同步狀態不明",
+  "profile.switch.busy": "無法切換 profile：還有其他作業在進行。請稍後再試一次。",
+  "profile.switch.try_again": "另一個視窗剛切換了 profile，請再試一次。",
+  "profile.switch.write_failed": "無法切換 profile，沒有任何變更：{{detail}}",
+  "profile.switch.not_found": "這個 profile 已經不存在。",
+  "profile.switch.failed": "無法切換 profile（{{reason}}）。"
 }

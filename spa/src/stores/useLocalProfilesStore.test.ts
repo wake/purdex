@@ -13,7 +13,7 @@ vi.mock('../lib/id', () => ({
   generateId: () => idQueue.shift() ?? `id${String(++idCounter).padStart(4, '0')}`,
 }))
 
-import { isParkedWorld, useLocalProfilesStore } from './useLocalProfilesStore'
+import { isParkedWorld, normalizeLocalProfileName, useLocalProfilesStore } from './useLocalProfilesStore'
 import type { LocalProfile, LocalProfilesState, ParkedWorld } from './useLocalProfilesStore'
 
 type Data = Pick<LocalProfilesState, 'slaves' | 'slaveOrder' | 'activeProfileId' | 'parkedMaster' | 'worldEpoch'>
@@ -58,7 +58,7 @@ const get = (): LocalProfilesState => useLocalProfilesStore.getState()
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0 })
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -600,12 +600,12 @@ describe('relabelCountInStorage — what storage holds right now, by the rule `m
 })
 
 describe('persist', () => {
-  it('persists exactly the six data fields, at version 1', () => {
+  it('persists exactly the seven data fields, at version 1', () => {
     const a = add('alpha')
     swap(a, world('M'))
     const env = persistedEnvelope()
     expect(env.version).toBe(1)
-    expect(Object.keys(env.state).sort()).toEqual(['activeProfileId', 'parkedMaster', 'relabelCount', 'slaveOrder', 'slaves', 'worldEpoch'])
+    expect(Object.keys(env.state).sort()).toEqual(['activeProfileId', 'master', 'parkedMaster', 'relabelCount', 'slaveOrder', 'slaves', 'worldEpoch'])
     expect(env.state).toEqual({
       slaves: { [a]: { ...get().slaves[a], world: null } },
       slaveOrder: [a],
@@ -613,6 +613,7 @@ describe('persist', () => {
       parkedMaster: world('M'),
       worldEpoch: 1,
       relabelCount: 0,
+      master: { name: null },
     })
   })
 
@@ -922,3 +923,251 @@ describe('every window agrees on which world is on screen', () => {
     expect(dataOf(a).slaveOrder).toEqual(['recovered'])
   })
 })
+
+// A profile's appearance — name, icon (+ weight), colour — is what the Home button shows. The master has one too
+// (`master`), and with nothing set it is `{ name: null }`: the button is then today's `Home` + logo.
+describe('appearance', () => {
+  const LOOK = { icon: 'Rocket', iconWeight: 'fill', color: '#3b82f6' } as const
+
+  it('a fresh store has an unnamed, unadorned master', () => {
+    expect(get().master).toEqual({ name: null })
+  })
+
+  it('is persisted (device-local like the rest of this store: see "is not in the sync allowlist")', () => {
+    expect(get().setProfileAppearance('master', { name: 'Work', ...LOOK })).toEqual({ ok: true })
+    expect(persistedEnvelope().state.master).toEqual({ name: 'Work', ...LOOK })
+  })
+
+  describe('setProfileAppearance', () => {
+    it('master: sets what the patch names and leaves the rest', () => {
+      get().setProfileAppearance('master', { name: '  Work  ', icon: 'Rocket' })
+      expect(get().master).toEqual({ name: 'Work', icon: 'Rocket' })
+      get().setProfileAppearance('master', { color: '#3B82F6' })
+      expect(get().master).toEqual({ name: 'Work', icon: 'Rocket', color: '#3b82f6' })
+    })
+
+    it('master: null clears a field — the name included (back to `Home`), and a blank name is null', () => {
+      get().setProfileAppearance('master', { name: 'Work', ...LOOK })
+      get().setProfileAppearance('master', { name: null, color: null })
+      expect(get().master).toEqual({ name: null, icon: 'Rocket', iconWeight: 'fill' })
+      get().setProfileAppearance('master', { name: 'Work' })
+      get().setProfileAppearance('master', { name: '   ' })
+      expect(get().master.name).toBeNull()
+    })
+
+    it('clearing the icon clears its weight: a weight alone means nothing', () => {
+      get().setProfileAppearance('master', LOOK)
+      get().setProfileAppearance('master', { icon: null })
+      expect(get().master).toEqual({ name: null, color: '#3b82f6' })
+    })
+
+    it('a slave: the same, except that its name cannot be cleared', () => {
+      const a = add('a')
+      expect(get().setProfileAppearance(a, { name: 'Scratch', ...LOOK })).toEqual({ ok: true })
+      expect(get().slaves[a]).toMatchObject({ id: a, name: 'Scratch', ...LOOK })
+      expect(get().slaves[a].world).not.toBeNull() // the world is not an appearance
+      const before = get().slaves
+      expect(get().setProfileAppearance(a, { name: null })).toEqual({ ok: false, reason: 'bad-name' })
+      expect(get().setProfileAppearance(a, { name: ' ' })).toEqual({ ok: false, reason: 'bad-name' })
+      expect(get().slaves).toBe(before)
+    })
+
+    it('an unknown id is refused', () => {
+      expect(get().setProfileAppearance('nope', { icon: 'Rocket' })).toEqual({ ok: false, reason: 'not-found' })
+    })
+
+    it.each([
+      [{ icon: 'NotAnIcon' }, 'bad-icon'],
+      [{ icon: '<b>x</b>' }, 'bad-icon'],
+      [{ icon: 7 }, 'bad-icon'],
+      [{ iconWeight: 'heavy' }, 'bad-weight'],
+      [{ color: 'red' }, 'bad-color'],
+      [{ color: '#12345' }, 'bad-color'],
+      [{ color: 'url(x)' }, 'bad-color'],
+      [{ name: 7 }, 'bad-name'],
+    ])('a bad value refuses the WHOLE patch, state untouched: %j → %s', (patch, reason) => {
+      get().setProfileAppearance('master', { name: 'Work', ...LOOK })
+      const before = get().master
+      expect(get().setProfileAppearance('master', { name: 'Other', ...(patch as object) })).toEqual({ ok: false, reason })
+      expect(get().master).toBe(before)
+    })
+  })
+
+  describe('a copy starts plain', () => {
+    it('addSlave gives the new slave a name and nothing else, whatever the master looks like', () => {
+      get().setProfileAppearance('master', { name: 'Work', ...LOOK })
+      const a = add('copy')
+      expect(get().slaves[a]).toEqual({ id: a, name: 'copy', createdAt: expect.any(Number), world: expect.anything() })
+    })
+  })
+
+  describe('promoteSlave — the appearance goes with the WORLD, not with the label', () => {
+    it('the promoted slave\'s look becomes the master\'s; the old master\'s goes to the demoted slave', () => {
+      get().setProfileAppearance('master', { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
+      const a = add('Scratch')
+      get().setProfileAppearance(a, LOOK)
+      const r = get().promoteSlave(a, 'fallback', 1)
+      if (!r.ok) throw new Error(r.reason)
+      expect(get().master).toEqual({ name: 'Scratch', ...LOOK })
+      expect(get().slaves[r.demotedId]).toMatchObject({ name: 'Work', icon: 'Briefcase', color: '#ef4444' })
+      expect(get().slaves[r.demotedId].iconWeight).toBeUndefined()
+    })
+
+    it('an unnamed master takes `demotedName` as the demoted slave\'s name; nothing else is invented', () => {
+      const a = add('Scratch')
+      const r = get().promoteSlave(a, 'This Mac', 1)
+      if (!r.ok) throw new Error(r.reason)
+      expect(get().slaves[r.demotedId]).toEqual({ id: r.demotedId, name: 'This Mac', createdAt: expect.any(Number), world: null })
+      expect(get().master).toEqual({ name: 'Scratch' })
+    })
+  })
+
+  describe('rehydrate', () => {
+    const base = { slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 }
+
+    it('keeps a well-formed appearance', async () => {
+      await rehydrateFrom({ ...base, slaves: { a: { ...slave('a', 'a', world('a')), ...LOOK } }, master: { name: 'Work', ...LOOK } })
+      expect(get().master).toEqual({ name: 'Work', ...LOOK })
+      expect(get().slaves.a).toMatchObject(LOOK)
+    })
+
+    it('storage from before appearances existed: an unnamed master', async () => {
+      get().setProfileAppearance('master', { name: 'Work' })
+      await rehydrateFrom({ ...base, slaves: { a: slave('a', 'a', world('a')) } })
+      expect(get().master).toEqual({ name: null })
+    })
+
+    it.each([
+      ['an unknown icon name', { icon: 'NotAnIcon', iconWeight: 'fill', color: '#3b82f6' }, { color: '#3b82f6' }],
+      ['markup as an icon', { icon: '<img src=x>', color: '#3b82f6' }, { color: '#3b82f6' }],
+      ['a bad weight', { icon: 'Rocket', iconWeight: 'heavy' }, { icon: 'Rocket' }],
+      ['a weight without an icon', { iconWeight: 'fill' }, {}],
+      ['a bad colour', { icon: 'Rocket', color: 'expression(alert(1))' }, { icon: 'Rocket' }],
+      ['an upper-case colour', { color: '#3B82F6' }, { color: '#3b82f6' }],
+    ])('%s: that field goes, the profile stays', async (_, stored, kept) => {
+      await rehydrateFrom({ ...base, slaves: { a: { ...slave('a', 'a', world('a')), ...stored } }, master: { name: 'Work', ...stored } })
+      expect(get().master).toEqual({ name: 'Work', ...kept })
+      expect(get().slaves.a).toEqual({ ...slave('a', 'a', world('a')), ...kept })
+    })
+
+    it.each([null, 7, 'x', [], { name: 7 }, { name: '  ' }])('a malformed master record (%j) is an unnamed master', async (master) => {
+      await rehydrateFrom({ ...base, slaves: { a: slave('a', 'a', world('a')) }, master })
+      expect(get().master).toEqual({ name: null })
+    })
+
+    it('the rescued parked master (pointer says master, a world is parked) keeps no look: it is a recovery, not a profile anyone styled', async () => {
+      await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: world('m'), worldEpoch: 0, master: { name: 'Work', ...LOOK } })
+      expect(get().master).toEqual({ name: 'Work', ...LOOK })
+      expect(get().slaves.recovered).toEqual(slave('recovered', 'Recovered master', world('m'), 0))
+    })
+  })
+})
+
+// A name is rendered as it is — the Home row, the menu, `title`, `aria-label`. Characters nobody can see re-order
+// the text around them or make two names look alike, so they are removed; nothing else is touched.
+describe('profile names — invisible characters are removed, and nothing else', () => {
+  const RLO = '\u202E'
+  const ZWSP = '\u200B'
+  const DIRTY: [string, string, string][] = [
+    ['a bidi override', `Work${RLO}abc`, 'Workabc'],
+    ['a zero-width space', `Work${ZWSP}`, 'Work'],
+    ['a line break and a tab', 'Work\nnight\tshift', 'Worknightshift'],
+  ]
+
+  describe('normalizeLocalProfileName', () => {
+    it.each(DIRTY)('%s', (_, dirty, clean) => {
+      expect(normalizeLocalProfileName(dirty)).toBe(clean)
+    })
+
+    it.each([
+      ['C0', '\u0000\u0007\u001B\u007F'],
+      ['C1', '\u0080\u0085\u009F'],
+      ['bidi marks and embeddings', '\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E'],
+      ['bidi isolates', '\u2066\u2067\u2068\u2069'],
+      ['zero-width and invisible format', '\u200B\u200C\u200D\u2060\uFEFF\u00AD'],
+    ])('every one of %s goes', (_, chars) => {
+      for (const ch of Array.from(chars)) expect(normalizeLocalProfileName(`a${ch}b`), `U+${ch.codePointAt(0)!.toString(16)}`).toBe('ab')
+    })
+
+    it('nothing but invisible characters is no name at all', () => {
+      expect(normalizeLocalProfileName(`${ZWSP}${RLO}\n`)).toBeNull()
+      expect(normalizeLocalProfileName(` ${ZWSP} `)).toBeNull()
+    })
+
+    it('removal comes first, then trim, then the 64 code point cut', () => {
+      expect(normalizeLocalProfileName(`${ZWSP} Work ${RLO}`)).toBe('Work') // the spaces the removal exposed are trimmed
+      expect(normalizeLocalProfileName(`${ZWSP.repeat(10)}${'x'.repeat(64)}`)).toBe('x'.repeat(64)) // invisible ones do not use up the budget
+      expect(Array.from(normalizeLocalProfileName('😀'.repeat(70))!)).toHaveLength(DEVICE_NAME_MAX_CODE_POINTS)
+    })
+
+    it.each([
+      ['CJK', '工作用 プロファイル 작업'],
+      ['an emoji with a variation selector and a skin tone', '❤️ 👍🏽 Work'],
+      ['a combining accent, NFC', 'Caf\u00E9'],
+      ['a combining accent, NFD — kept decomposed: no Unicode normalisation happens here', 'Cafe\u0301'],
+      ['Arabic and Hebrew (right-to-left by themselves, no control needed)', 'عمل עבודה'],
+      ['inner spaces', 'My  work'],
+      ['a no-break space inside', 'a\u00A0b'],
+    ])('%s is left exactly as it is', (_, name) => {
+      expect(normalizeLocalProfileName(name)).toBe(name)
+    })
+
+    // THE TRADE-OFF: U+200D also joins emoji. Keeping it would keep a zero-width hole in the rule.
+    it('a ZWJ emoji sequence comes apart — uglier, not wrong; consistency over ligatures', () => {
+      expect(normalizeLocalProfileName('👨\u200D👩\u200D👧')).toBe('👨👩👧')
+    })
+  })
+
+  describe('every way in', () => {
+    it.each(DIRTY)('addSlave — %s', (_, dirty, clean) => {
+      const r = get().addSlave(dirty, world('a'))
+      if (!r.ok) throw new Error(r.reason)
+      expect(get().slaves[r.id].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('renameSlave — %s', (_, dirty, clean) => {
+      const a = add('a')
+      expect(get().renameSlave(a, dirty)).toEqual({ ok: true })
+      expect(get().slaves[a].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('setProfileAppearance, master and slave — %s', (_, dirty, clean) => {
+      const a = add('a')
+      get().setProfileAppearance('master', { name: dirty })
+      get().setProfileAppearance(a, { name: dirty })
+      expect(get().master.name).toBe(clean)
+      expect(get().slaves[a].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('promoteSlave\'s demotedName — %s', (_, dirty, clean) => {
+      const a = add('a')
+      const r = get().promoteSlave(a, dirty, 1)
+      if (!r.ok) throw new Error(r.reason)
+      expect(get().slaves[r.demotedId].name).toBe(clean)
+    })
+
+    it.each(DIRTY)('rehydrate cleans what an older build stored — %s', async (_, dirty, clean) => {
+      await rehydrateFrom({ slaves: { a: slave('a', dirty, world('a')) }, slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, master: { name: dirty } })
+      expect(get().slaves.a.name).toBe(clean)
+      expect(get().master.name).toBe(clean)
+    })
+
+    it('a name that is empty once cleaned: refused for a slave (nothing changes), null for the master, `Recovered` on rehydrate', async () => {
+      const invisible = `${ZWSP}${RLO}`
+      expect(get().addSlave(invisible, world('x'))).toEqual({ ok: false, reason: 'bad-name' })
+      const a = add('a')
+      const before = get().slaves
+      expect(get().renameSlave(a, invisible)).toEqual({ ok: false, reason: 'bad-name' })
+      expect(get().setProfileAppearance(a, { name: invisible })).toEqual({ ok: false, reason: 'bad-name' })
+      expect(get().slaves).toBe(before)
+      get().setProfileAppearance('master', { name: 'Work' })
+      expect(get().setProfileAppearance('master', { name: invisible })).toEqual({ ok: true })
+      expect(get().master.name).toBeNull()
+
+      await rehydrateFrom({ slaves: { a: slave('a', invisible, world('a')) }, slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, master: { name: invisible } })
+      expect(get().slaves.a.name).toBe('Recovered')
+      expect(get().master.name).toBeNull()
+    })
+  })
+})
+

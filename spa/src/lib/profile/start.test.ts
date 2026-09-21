@@ -1680,7 +1680,7 @@ describe('the dev hook', () => {
 describe('the dev hook: local profiles (P3b has no UI; the real-machine acceptance drives it from here)', () => {
   const tab = (id: string) => ({ id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf' as const, pane: { id: `p-${id}`, content: { kind: 'dashboard' as const } } } })
   const resetWorld = (): void => {
-    useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
+    useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, master: { name: null } })
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [], worldId: 'master', worldEpoch: 0 })
     useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, worldId: 'master', worldEpoch: 0 })
   }
@@ -1690,6 +1690,24 @@ describe('the dev hook: local profiles (P3b has no UI; the real-machine acceptan
     useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'Alpha', tabs: ['t1'], activeTabId: 't1' }], activeWorkspaceId: 'w1' })
   })
   afterEach(resetWorld)
+
+  it('setAppearance / appearance: the store\'s setProfileAppearance, for the master and for a slave', () => {
+    stop = startProfileSync()
+    const profiles = window.__purdexProfileSync?.profiles
+    if (!profiles) throw new Error('no dev hook')
+    expect(profiles.appearance('master')).toEqual({ name: null })
+    expect(profiles.setAppearance('master', { name: 'Work', icon: 'Rocket', color: '#3b82f6' })).toEqual({ ok: true })
+    expect(profiles.appearance('master')).toEqual({ name: 'Work', icon: 'Rocket', color: '#3b82f6' })
+    expect(profiles.setAppearance('master', { icon: 'NotAnIcon' })).toEqual({ ok: false, reason: 'bad-icon' })
+
+    const copy = profiles.copyMaster('Copy')
+    if (!copy.ok) throw new Error(copy.reason)
+    expect(profiles.appearance(copy.id)).toEqual({ name: 'Copy' })
+    expect(profiles.setAppearance(copy.id, { iconWeight: 'fill', icon: 'Cube' })).toEqual({ ok: true })
+    expect(profiles.appearance(copy.id)).toEqual({ name: 'Copy', icon: 'Cube', iconWeight: 'fill' })
+    expect(profiles.appearance('nope')).toBeNull()
+    expect(profiles.setAppearance('master', { name: null, icon: null, color: null })).toEqual({ ok: true })
+  })
 
   it('list / copyMaster / switch / world / rename / saveScreen / remove / promote are the functions of switch-active.ts', async () => {
     stop = startProfileSync()

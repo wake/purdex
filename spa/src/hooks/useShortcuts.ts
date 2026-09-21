@@ -7,6 +7,7 @@ import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspac
 import { closeTab } from '../lib/tab-lifecycle'
 import { getTabShortcutHandler } from '../lib/tab-shortcut-registry'
 import { getPrimaryPane } from '../lib/pane-tree'
+import { hasLocalSlaves, useProfileSwitcherStore } from '../stores/useProfileSwitcherStore'
 
 export function useShortcuts(): void {
   useEffect(() => {
@@ -106,9 +107,14 @@ export function useShortcuts(): void {
         return
       }
 
-      // Home = the first workspace until the Home button becomes the profile switcher (P3d). There is no
-      // "no workspace" view any more: every tab belongs to a workspace (Profile Sync spec §4.3).
+      // Home is the profile switcher on a device that has a local profile (a slave): the shortcut opens the
+      // Home button's menu, which takes focus. Otherwise Home = the first workspace, as ever — there is no
+      // "no workspace" view: every tab belongs to a workspace (Profile Sync spec §4.3).
       if (action === 'switch-workspace-home') {
+        if (hasLocalSlaves()) {
+          useProfileSwitcherStore.getState().setOpen(true)
+          return
+        }
         const first = useWorkspaceStore.getState().workspaces[0]
         if (!first) return
         useWorkspaceStore.getState().setActiveWorkspace(first.id)

@@ -1440,5 +1440,18 @@
   "peer.reason.not_cc": "not a Claude Code session",
   "peer.reason.inbox_dead": "the agent's inbox is not responding",
   "peer.reason.proxy": "reached through a proxy",
-  "peer.reason.ambiguous": "several agents share this session"
+  "peer.reason.ambiguous": "several agents share this session",
+  "profile.master": "Master",
+  "profile.switcher.trigger": "{{name}} — switch profile",
+  "profile.switcher.label": "Switch profile",
+  "profile.sync.synced": "Synced",
+  "profile.sync.syncing": "Syncing…",
+  "profile.sync.locked": "Sync is waiting for your decision",
+  "profile.sync.problem": "Sync is stopped",
+  "profile.sync.unknown": "Sync status unknown",
+  "profile.switch.busy": "Couldn't switch profile: something else is still working on it. Try again in a moment.",
+  "profile.switch.try_again": "Another window just switched profile. Try again.",
+  "profile.switch.write_failed": "Couldn't switch profile, nothing was changed: {{detail}}",
+  "profile.switch.not_found": "That profile no longer exists.",
+  "profile.switch.failed": "Couldn't switch profile ({{reason}})."
 }
