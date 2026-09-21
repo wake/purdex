@@ -22,6 +22,8 @@
     ],
     "mac": {
       "icon": "build/icon.icns",
+      "entitlements": "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.plist",
       "target": [
         {
           "target": "dir",
