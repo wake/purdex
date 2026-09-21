@@ -25,7 +25,7 @@ const MIN_VISIBLE = 40
  * window-dragging, so a panel header there could be neither dragged nor have
  * its × clicked. In the browser there's no such region, so the inset is just
  * the ordinary viewport padding. */
-const TITLE_BAR_HEIGHT = 36
+export const TITLE_BAR_HEIGHT = 36
 /** Floor on the panel's usable height when auto-placed below an anchor near the
  * bottom of the viewport — it slides up only as much as needed to keep at least
  * this much room, rather than opening with almost nothing to show. */
