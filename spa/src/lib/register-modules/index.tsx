@@ -30,6 +30,7 @@ import { ElectronSection } from '../../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentSection'
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { SyncSection } from '../../components/settings/SyncSection'
+import { ProfileSection } from '../../components/settings/profile/ProfileSection'
 import { FileTreeWorkspaceView } from '../../components/FileTreeView'
 import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
@@ -329,6 +330,7 @@ export function registerBuiltinModules(): void {
     order: SETTINGS_ORDER.INTERFACE,
     component: InterfaceSectionHost,
   })
+  registerSettingsSection({ id: 'profile', label: 'settings.section.profile', order: SETTINGS_ORDER.PROFILE, component: ProfileSection })
   // Sync was promoted to a structural module above (spec §4.3, PR-2);
   // its `registerSettingsSection({ id: 'sync', ... })` call lived here
   // and is intentionally removed.

@@ -18,6 +18,7 @@ import { SETTINGS_ORDER } from '../settings-order'
 //   appearance(0)
 //   terminal(1)
 //   interface(2)
+//   profile(3)              — Profile Sync P3d-2: the last of the core band
 //   electron(5)             — gated by canSystemTray; filtered out
 //   module-config(10)
 //   browser(11)
@@ -61,6 +62,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'appearance',          order: SETTINGS_ORDER.APPEARANCE },                  // 0
       { id: 'terminal',            order: SETTINGS_ORDER.TERMINAL },                    // 1
       { id: 'interface',           order: SETTINGS_ORDER.INTERFACE },                   // 2
+      { id: 'profile',             order: SETTINGS_ORDER.PROFILE },                     // 3
       { id: 'module-config',       order: SETTINGS_ORDER.MODULE_CONFIG },               // 10
       { id: 'browser',             order: SETTINGS_ORDER.MODULE_BROWSER },              // 11
       { id: 'editor',              order: SETTINGS_ORDER.MODULE_EDITOR },               // 13
@@ -72,7 +74,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     // Step 2: any entry not in the always-on list must be one of the
     // explicitly allowed gated ids — nothing else.
     const expectedAlwaysOnIds = new Set([
-      'appearance', 'terminal', 'interface', 'module-config',
+      'appearance', 'terminal', 'interface', 'profile', 'module-config',
       'browser', 'editor', 'files',
       'performance-monitor', 'sync',
     ])
