@@ -76,10 +76,15 @@
 // offline for a while — nothing new to the sync, which already has to cope with
 // it. Rebuild works the same for both kinds of world (decision 13): its inputs
 // (`PaneRebuildRecord`) travel with the tab.
-//   There is no entry point today that re-runs that reconciliation on demand —
-// it is an inline block of the WS handler, fed by the daemon's push — so this
-// file does not trigger one (and must not invent a network path to do so). See
-// `switchActiveProfile`.
+//   The reconciliation is callable (`reconcileHostSessions`, rebuild/
+// reconcile-host.ts) and this file still does not call it: there is no EVIDENCE
+// to call it with. The last payload has no version and can be behind the daemon,
+// and every verdict drawn from it changes a binding — `session-closed` is
+// irreversible, `tmux-restarted` and revive-by-name re-point the pane — which
+// the master then pushes to the SOT. A fresh GET does not help either: the
+// daemon serves the list from a one-second cache that a create does not
+// invalidate. #1255 has the measurements and what the daemon must offer first.
+// See `switchActiveProfile`.
 //
 // IDS. A copy gets a new id for everything the world MINTS — workspace, tab,
 // pane, split — and every reference to one follows (`copyWorld` lists them).
@@ -262,12 +267,13 @@ function underOperationLock<R>(block: () => R, busy: R): R {
  *
  * NOT DONE HERE, AND WHY (see WHAT A PARKED WORLD DOES NOT HEAR): the plan has
  * the switch ask every connected host for its sessions afterwards, so that the
- * reconciliation runs over the world that has just come on screen. There is
- * nothing to call: `useSessionStore.fetchHost` fills the session LIST and
- * reconciles nothing (and `rebuild/revive.ts` says why its result is not
- * evidence), and the reconciliation itself is an inline block of the WS handler
- * in `useMultiHostEventWs`. Until that block is a function, a world that comes on
- * screen is reconciled by its hosts' next `sessions` payload — which is what
+ * reconciliation runs over the world that has just come on screen. It was built
+ * and taken out again (#1255): replaying the last payload, or a fresh GET of the
+ * daemon's cached list, is not evidence newer than the panes it would judge, and
+ * two review rounds showed each verdict it could reach (`session-closed`, then
+ * `tmux-restarted` and revive-by-name) re-binding a live pane and pushing that to
+ * the SOT. Until the daemon can vouch for a list's freshness, a world that comes
+ * on screen is reconciled by its hosts' next `sessions` payload — which is what
  * happens to every pane of an app that was closed for a while, too.
  */
 export function switchActiveProfile(targetId: typeof MASTER_PROFILE_ID | string): Promise<SwitchResult> {

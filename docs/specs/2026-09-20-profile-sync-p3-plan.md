@@ -318,6 +318,50 @@ position (the "active + expanded → toggle" overload of the baseline is gone).
 
 ## P3d — the UI
 
+### P3d — how it is cut (written 2026-09-21, after P3a–P3c shipped; supersedes any PR count above)
+
+Four PRs, each ≤ 20 files, merged in order; each leaves a working app and adds **one** reachable
+thing. #1255 (re-run the session reconciliation after a switch) lands first, on its own.
+
+| PR | Reachable afterwards | Contents |
+|---|---|---|
+| **P3d-1** | the Home button opens a menu | `components/Menu.tsx` (the primitive) + `ProfileSwitcher` in both bars + its i18n. With no master and no slaves the menu is `Set up sync…` (→ Settings › Profile, which until P3d-2 is the existing Settings page — so the item is hidden until P3d-2 lands; the menu then has nothing to show and the button keeps today's behaviour. **No dead control between merges.**) |
+| **P3d-2** | Settings › Profile exists: *Current* + *Profiles* | the section registration (`SETTINGS_ORDER.PROFILE`), the *Current* block (read-only state, Auto-sync, Sync now, Stop sync) and the *Profiles* block (slaves: copy master / save screen / rename / delete; SOT profiles: rename / delete). A master can still only be attached through the dev hook. |
+| **P3d-3** | a user can attach a master without the dev hook | the *Wizard* (decision 10's five steps). `Settings › Sync` leaves the sidebar **here**, not earlier: until the wizard exists it is the only sync UI a user has. |
+| **P3d-4** | conflicts can be resolved from the UI | the *Resolve* block, PRODUCT.md §3.9, and the real-machine acceptance of the whole of P3 (below), **through the UI**. |
+
+**What the UI must say, from the as-built contracts** (P3a / P3b / P3c "As built"):
+- `switchActiveProfile` → `busy`: retry every ≈ 250 ms for ≈ 4 s, silently (it is the 3 s
+  ownership gate or another window holding the world lock); only then a toast. `unsettled` /
+  `superseded`: "another window just switched — try again", never a red error. `write-failed`:
+  the one real error (storage full), with `detail`.
+- `readMasterWorld()` unsettled reasons are **state, not errors**: `epoch-mismatch`,
+  `world-mismatch`, `behind-fence` → "catching up with another window"; `junk-epoch` and
+  `no-parked-master` → the *Current* block says sync is paused and why, in words, with the one way
+  out (`junk-epoch`: switch profile once; `no-parked-master`: there is no master world on this
+  device — run the wizard). The `world-unsettled` problem (P3b) is what makes the first group
+  visible when it lasts.
+- Sync state comes from `useProfileSync()` only (P3a). In a follower window every figure is the
+  leader's and is labelled so; `stale: true` is said in words. `requestResolve(section, keep, lock)`
+  must be given the **lock the user is looking at** — the panel passes the `SectionLock` it rendered,
+  never a fresh read at click time.
+- `settings` waits for `workspaces` (pull and push gates, P3b). When `workspaces` is locked or
+  failing and `settings` is dirty, the *Current* block says "settings are waiting for workspaces" —
+  otherwise a user sees a theme change that never leaves the device and no reason.
+- `promoteToMaster` is refused while attached (`master-attached`): the wizard's step 1 (stop sync)
+  is what makes step 3 possible; the order is not cosmetic.
+- The undo of a host delete may answer `worldSkipped` (P3b) — already a toast; nothing to add.
+
+**Design rules for all four PRs** (so that four subagents produce one UI): existing primitives only —
+`FloatingPanel` (portal, Escape, outside click), `ConfirmDialog` (`testIdPrefix`, `busy`), the
+settings row / section components the other built-in sections use (read two of them first and copy
+their structure, spacing and tone), Phosphor icons, Tailwind tokens already in use; no new colour,
+no new font size. Every string through `t()`, en + zh-TW in the same commit. Every control has a
+`data-testid` (acceptance drives the UI). Nothing renders for a user with no master and no slaves
+except the one `Set up sync…` entry and an empty *Current* block that says what Profile Sync is in
+two sentences and offers the wizard.
+
+
 ### Task 6 — `components/ProfileSwitcher.tsx`
 Portal-based menu anchored to the Home button (both bars), `role="menu"` with arrow keys, Home/End,
 Enter, Escape, outside-click, focus returned to the button — the first real menu primitive in the
