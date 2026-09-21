@@ -743,8 +743,8 @@ function briefReason(failure: { reason: string; status: number } | unknown): str
  * `endpoint` — where the daemon that HOLDS the attachment was (`masterEndpoint`, or a remembered detach's). The
  * api layer resolves a host's address from the host store on every request; a host re-pointed since would send
  * this DELETE to another daemon, where a profile of the same id (copied, migrated) would lose an attachment that
- * has nothing to do with this one. So: another address now → not sent. `undefined` = the caller has just written
- * the attachment itself, through this very host entry (the two drops inside `attachMaster`): nothing to compare.
+ * has nothing to do with this one. So: another address now → not sent. `undefined` = nothing to compare (no
+ * caller is left that says so: the two drops inside `attachMaster` know their address too — see `attachHeld`).
  */
 async function dropAttachment(master: Master, endpoint?: string | null): Promise<DetachResult> {
   if (endpoint !== undefined) {
@@ -915,27 +915,37 @@ function holdStill(): Hold {
 async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): Promise<AttachResult> {
   const { hostId, profileId } = next
   const previous = selectMaster(useProfileStore.getState())
+  // Where the PREVIOUS master's attachment is: read now, `setMaster` below replaces it.
+  const previousAt = useProfileStore.getState().masterEndpoint
   const asYouWere = (reason: string): AttachResult => {
     hold.giveUp() // bases and attachment of the previous master are as they were
     return { ok: false, reason }
   }
 
   let put: Awaited<ReturnType<typeof putAttachment>>
+  /** Where the PUT goes: the api layer resolves the host's address when it is called, i.e. in the same turn as this read. */
+  let putAt: string | null = null
   try {
-    put = await putAttachment(hostId, profileId, await attachmentBody())
+    const body = await attachmentBody()
+    putAt = endpointOf(hostId)?.at ?? null
+    put = await putAttachment(hostId, profileId, body)
   } catch (e) {
     return asYouWere(message(e))
   }
   if (put.kind === 'failed') return asYouWere(put.reason)
-  if (hold.superseded()) return standDown(next, hold)
+  if (hold.superseded()) return standDown(next, putAt, hold)
   if (endpointOf(hostId) === null) return asYouWere('unknown-host') // gone while the PUT was out: leave the previous master whole
+  /** The old master's daemon was not told (or not asked): written down AFTER the commit — until then it IS the master, and `rememberPendingDetach` keeps nothing about the master. */
+  let ghost: Exclude<DetachResult, { ok: true }> | null = null
   if (previous !== null && !sameMaster(previous, next)) {
     // A second request to wait for, so a fresh budget. Each stretch (`ATTACH_SUSPEND_MS`, 30 s) is strictly
     // longer than the ONE request it covers (15 s timeout), and the first stretch cannot have run out before
     // this one starts (it began at most 15 s ago).
     hold.extend()
-    await dropAttachment(previous)
-    if (hold.superseded()) return standDown(next, hold)
+    // At the address THAT attachment was made at (as `detachMaster`): a host re-pointed since is not told.
+    const told = await dropAttachment(previous, previousAt)
+    if (!told.ok) ghost = told
+    if (hold.superseded()) return standDown(next, putAt, hold)
   }
   // The address the attachment was written to: the home of every base from here
   // on. Read after the last `await`, checked before anything is cleared (the host
@@ -950,12 +960,16 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
   // (built by the subscription, on the new `attachGeneration`) is not seeded
   // from the old ones.
   // THE COMMIT. Last look at storage first: no `await` lies between it and `setMaster`.
-  if (hold.superseded()) return standDown(next, hold)
+  if (hold.superseded()) return standDown(next, putAt, hold)
   clearSectionStore()
   hold.stop() // `setMaster` lifts our suspension on purpose
   // One write: master, direction, endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
   if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token)) return asYouWere('invalid-profile-id')
   ownGenerationMove()
+  // The attach has succeeded whatever comes of this: the ghost is the OLD master's, and it is said where a failed
+  // detach is said (`pendingDetach`, Settings › Profile). A stand-down after the drop does not get here — the
+  // previous master is then still the master (or the winner's business), and its leader writes the attachment again.
+  if (ghost !== null && previous !== null && previousAt !== null) await rememberPendingDetach(previous, previousAt, ghost)
   return { ok: true }
 }
 
@@ -966,12 +980,18 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
  * the other window's decision), then our suspension is lifted if it is still ours. The attachment this attach
  * has just written is taken down again, best effort, unless it is exactly the one the winner wants: overtaken
  * by a DETACH → nobody wants it; by an attach to the same (host, profile) → theirs now; to another → nobody's.
+ * `putAt` — where that attachment was written (`attachHeld`): the take-down goes there or nowhere, and one that
+ * did not get through is remembered with it (`pendingDetach`), like a failed detach. Null (the host had no
+ * address to read) cannot be remembered — the setter refuses a record without one — and stays a problem only.
  */
-async function standDown(next: Master, hold: Hold): Promise<AttachResult> {
+async function standDown(next: Master, putAt: string | null, hold: Hold): Promise<AttachResult> {
   await useProfileStore.persist.rehydrate() // synchronous storage: memory is storage before this yields
   hold.giveUp()
   const winner = selectMaster(useProfileStore.getState())
-  if (!sameMaster(winner, next)) await dropAttachment(next)
+  if (!sameMaster(winner, next)) {
+    const told = await dropAttachment(next, putAt)
+    if (!told.ok && putAt !== null) await rememberPendingDetach(next, putAt, told)
+  }
   return { ok: false, reason: 'superseded' }
 }
 

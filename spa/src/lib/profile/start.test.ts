@@ -1737,6 +1737,66 @@ describe('retryPendingDetach — the way to get rid of an attachment a failed de
   })
 })
 
+describe('the two best-effort drops inside attachMaster leave no ghost unrecorded (P3d-3)', () => {
+  type Envelope = { state: Record<string, unknown>; version: number }
+  const stored = (): Envelope => JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE) ?? '{}') as Envelope
+
+  it('switching master, the old daemon not told: remembered with the OLD master and the address IT was attached at — after the new master is set', async () => {
+    useHostStore.setState({ hosts: { h1: host('h1'), h2: { ...host('h2'), ip: '100.64.0.10' } }, hostOrder: ['h1', 'h2'], runtime: {} })
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    vi.mocked(deleteAttachment).mockResolvedValue({ kind: 'failed', reason: 'server', status: 502, message: 'Bad Gateway: http://100.64.0.9:7860/api/profiles?token=SECRET' } as never)
+    expect(await attachMaster('h2', P2, 'pull')).toEqual({ ok: true })
+    expect(useProfileStore.getState().masterProfileId).toBe(P2)
+    expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'server (HTTP 502)' })
+    expect(JSON.stringify(useProfileStore.getState().pendingDetach) + (localStorage.getItem(STORAGE_KEYS.PROFILE) ?? '')).not.toContain('SECRET')
+  })
+
+  it('switching master, the old daemon told: nothing is remembered', async () => {
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    expect(await attachMaster('h2', P2, 'pull')).toEqual({ ok: true })
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('switching master away from a host that was re-pointed: the DELETE is NOT sent to the new address, and the old one is remembered', async () => {
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), ip: '100.64.0.77' }, h2: host('h2') } })
+    expect(await attachMaster('h2', P2, 'pull')).toEqual({ ok: true })
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'endpoint-changed' })
+  })
+
+  it('overtaken by a detach elsewhere, and the take-down of what we had just written fails: remembered with the address the PUT went to', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    let release: (v: never) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (release = r)))
+    const result = attachMaster('h1', P1, 'pull')
+    await flush()
+    const envelope = stored()
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...envelope.state, suspension: null, attachGeneration: (envelope.state.attachGeneration as number) + 1 } }))
+    vi.mocked(deleteAttachment).mockResolvedValue(failed('timeout'))
+    release(okAttach as never)
+    expect(await result).toEqual({ ok: false, reason: 'superseded' })
+    expect(useProfileStore.getState().pendingDetach).toMatchObject({ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'timeout' })
+    expect(selectMaster(useProfileStore.getState())).toBeNull()
+  })
+
+  it('overtaken by an attach to the SAME profile elsewhere: the attachment is wanted — nothing sent, nothing remembered', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    let release: (v: never) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (release = r)))
+    const result = attachMaster('h1', P1, 'pull')
+    await flush()
+    const envelope = stored()
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...envelope.state, suspension: null, masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'push', attachGeneration: (envelope.state.attachGeneration as number) + 1 } }))
+    release(okAttach as never)
+    expect(await result).toEqual({ ok: false, reason: 'superseded' })
+    expect(deleteAttachment).not.toHaveBeenCalled()
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+})
+
 describe('problems and status', () => {
   it('keeps the latest PROBLEM_BUFFER_SIZE problems, timestamped', async () => {
     vi.setSystemTime(5_000)
