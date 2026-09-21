@@ -238,6 +238,38 @@ describe('useShortcuts', () => {
       expect(ws.activeTabId).toBe(tabs[0].id)
     })
 
+    // A tab nobody has adopted yet (adopt-standalone.ts waits 500 ms) is in no bar, so the shortcut is the only
+    // way to close it — and "is it in the visible set?" used to say no.
+    it('closes an ACTIVE tab that is in no workspace yet, and focus lands on a tab of the workspace on screen', () => {
+      const { fire } = mockElectronAPI()
+      const tabs = seedTabs(2)
+      const orphan = createTab({ kind: 'new-tab' })
+      useTabStore.getState().addTab(orphan)
+      useTabStore.getState().setActiveTab(orphan.id)
+      expect(useWorkspaceStore.getState().findWorkspaceByTab(orphan.id)).toBeNull()
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      const state = useTabStore.getState()
+      expect(state.tabs[orphan.id]).toBeUndefined()
+      expect(state.tabOrder).toEqual(tabs.map((t) => t.id))
+      expect(state.activeTabId).toBe(tabs[0].id)
+    })
+
+    it('does not close a LOCKED active tab that is in no workspace yet', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const orphan = createTab({ kind: 'new-tab' })
+      useTabStore.getState().addTab(orphan)
+      useTabStore.getState().toggleLock(orphan.id)
+      useTabStore.getState().setActiveTab(orphan.id)
+      renderHook(() => useShortcuts())
+
+      fire('close-tab')
+      expect(useTabStore.getState().tabs[orphan.id]).toBeDefined()
+      expect(useTabStore.getState().activeTabId).toBe(orphan.id)
+    })
+
     it('closes last tab in workspace → activeTabId null', () => {
       const { fire } = mockElectronAPI()
       const tabs = seedTabs(1)
