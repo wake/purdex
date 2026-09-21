@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.417] - 2026-09-21
+
+### Change: 每個 tab 恰好屬於一個 workspace——Profile Sync P3c-1（#1269）
+
+Profile Sync 裡**唯一會改變一般使用者體驗**的一支（spec §4.3；使用者兩台機器實測 standalone tab 都是 0）：不屬於任何 workspace 的「standalone tab」這個概念取消。standalone 的 UI 與 helper 這一版仍然編譯得過、只是到不了，下一支 P3c-2 才刪。
+
+- **`insertTab` 永不靜默 no-op**：沒指定目標 → active workspace → 第一個 workspace → 新建 `Unsorted`（`未分類`）。它的 id 是固定的 `unsorted`（其他 workspace id 一律來自 `generateId()` 的 6 碼 base36，不可能相撞），所以兩個視窗、或兩台機器各自收養時會收斂成同一個 workspace；已存在就沿用、不改名。
+- **持續性的不變式，不是開機步驟**（`features/workspace/lib/adopt-standalone.ts`）：零個 owner → 收養；多個 owner → 依 workspace 順序保留第一個。只在 master 世界 settled、且 membership **靜止 500 ms** 之後才動——以 membership 簽章做 debounce：別的視窗的 `addTab`＋`insertTab` 是分兩次 rehydrate 抵達的（同步收養會把每個視窗新開的 tab 都拉進 `Unsorted`），而忙碌的 agent 每秒改寫 tab store 好幾次（單純的 debounce 會被餓死）。開機也走同一個延遲。
+- 刪 workspace 而保留 tabs → 移到相鄰的 workspace（一個都不剩就移到新的 `Unsorted`）；scope 指向被刪 workspace 的 settings tab 一律關掉，不論鎖定與否、不論被拖到哪裡（以前會留下一個「Workspace not found」的孤兒）。
+- Home 按鈕與 `switch-workspace-home` 暫時改為聚焦第一個 workspace（P3d 會把 Home 變成 profile 切換器）；零 workspace 的空狀態改用 i18n 字串。
+
+Review：codex R1＋攻擊方七條，修四條（throttle 不是 debounce、開機同步收養繞過延遲、不變式不修多 owner、被鎖定的 settings tab 被搬走）；critic 對增量判定 **approve、無 material findings**。不修並附理由：`unsorted` id「劫持」既有 workspace（沒有任何路徑能產生這個 id）；`store.ts` 職責 → #1240；sync apply／tear-off 路徑的孤兒 settings tab 與懸空 id → #1268。真機驗收兩輪（修正前後各一；真的頁面、reload、雙視窗、實際點擊 Home）：每一步孤兒 0、重複歸屬 0，別的視窗新開的 5 個 tab 留在自己的 workspace，磁碟上的雙 owner 在 reload 後收斂，沒設 master 的人零 `purdex-profile*` key。
+
+vitest 9312、lint、tsc、build 綠。純 SPA，daemon 仍是 411、免 deploy。下一支 P3c-2：刪除 standalone 的死碼。
+
 ## [1.0.0-alpha.416] - 2026-09-21
 
 ### Fix: 預設 `upload_dir` 移出家目錄（#1266）
