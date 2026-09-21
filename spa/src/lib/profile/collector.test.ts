@@ -289,20 +289,23 @@ describe('startCollector — tabs and workspaces', () => {
     ])
   })
 
-  it('standalone tabs enter no section and are reported once per count', async () => {
+  // Every tab belongs to a workspace (spec §4.3); one that is in none is the app's to adopt
+  // (features/workspace/lib/adopt-standalone.ts), not the profile's to count. It still enters no section.
+  // (Was: "…and are reported once per count" — the `standalone-tabs` census, gone in P3c-2.)
+  it('a tab in no workspace enters no section, and is nothing the collector reports', async () => {
     const c = start()
     useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, s1: tab('s1') } })
     await vi.advanceTimersByTimeAsync(500)
     expect(reports).toEqual([])
-    expect(problems).toEqual([{ kind: 'standalone-tabs', detail: '1' }])
+    expect(problems).toEqual([])
     await c.primeAll()
     patchTab('s1', { pinned: true })
     await vi.advanceTimersByTimeAsync(500)
-    expect(problems).toHaveLength(1)
     expect(JSON.stringify(reports)).not.toContain('"s1"')
     useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, s2: tab('s2') } })
     await vi.advanceTimersByTimeAsync(500)
-    expect(problems.at(-1)).toEqual({ kind: 'standalone-tabs', detail: '2' })
+    expect(JSON.stringify(reports)).not.toContain('"s2"')
+    expect(problems).toEqual([])
   })
 })
 
