@@ -14,6 +14,8 @@ import { UNSORTED_WORKSPACE_ID } from '../features/workspace/store'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { useShortcuts } from './useShortcuts'
+import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
+import { useProfileSwitcherStore } from '../stores/useProfileSwitcherStore'
 
 function mockElectronAPI() {
   let shortcutCallback: ((payload: { action: string }) => void) | null = null
@@ -570,8 +572,43 @@ describe('useShortcuts', () => {
     }
   })
 
-  // Until the Home button becomes the profile switcher (P3d), Home = the first workspace.
+  // Home = the first workspace — unless this device has a slave: then Home is the profile switcher.
   describe('switch-workspace-home', () => {
+    const NO_SLAVES = { slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0 }
+    beforeEach(() => {
+      useLocalProfilesStore.setState(NO_SLAVES)
+      useProfileSwitcherStore.setState({ open: false })
+    })
+    afterEach(() => {
+      useLocalProfilesStore.setState(NO_SLAVES)
+      useProfileSwitcherStore.setState({ open: false })
+    })
+
+    it('with a slave: asks the profile switcher to open, and touches no workspace', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
+      useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
+      useLocalProfilesStore.setState({
+        slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null } } },
+        slaveOrder: ['s1'],
+      })
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-home')
+      expect(useProfileSwitcherStore.getState().open).toBe(true)
+      expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws2.id)
+    })
+
+    it('without a slave: never asks for the switcher', () => {
+      const { fire } = mockElectronAPI()
+      seedTabs(1)
+      renderHook(() => useShortcuts())
+
+      fire('switch-workspace-home')
+      expect(useProfileSwitcherStore.getState().open).toBe(false)
+    })
+
     it('focuses the FIRST workspace and its remembered tab', () => {
       const { fire } = mockElectronAPI()
       const [t1, t2] = seedTabs(2)

@@ -362,6 +362,35 @@ except the one `Set up sync…` entry and an empty *Current* block that says wha
 two sentences and offers the wizard.
 
 
+### P3d-1 — As built (for P3d-2)
+
+- **`components/Menu.tsx`** — `<Menu trigger={ref} open onClose items label placement? testId? />`; an entry is
+  `{ divider: true }` or `{ id, label, icon?, hint?, trailing?, title?, checked?, disabled?, busy?, keepOpen?,
+  onSelect, testId? }`. `checked` defined (true or false) → `menuitemradio`; `keepOpen` → the owner closes the
+  menu itself (async work); `busy` → spinner + `aria-busy`, not activatable. `placement`: `bottom-start` |
+  `right-start`, flipped / clamped into the viewport, below the Electron title bar. The TRIGGER owns
+  `aria-haspopup="menu"` / `aria-expanded`. Its own portal, not a `FloatingPanel` (that is a titled, draggable
+  `role="dialog"`); it shares that file's conventions and its `TITLE_BAR_HEIGHT`.
+- **The switcher exists only where there is a slave.** `stores/useProfileSwitcherStore.ts`: the `open` flag
+  (not persisted), `hasLocalSlaves()`, and `useProfileSwitcherTrigger(onSelectHome)` → `{ enabled, open, onClick,
+  triggerProps }`, used by `HomeRow` (chevron, `bottom-start`) and `ActivityBarNarrow` (`right-start`). With no
+  slave both buttons are exactly what they were, and `switch-workspace-home` still focuses the first workspace;
+  with one, the shortcut sets `open` and the menu takes focus. **P3d-2 adds the `Settings › Profile` item** at
+  the `TODO(P3d-2)` in `ProfileSwitcher.tsx` and, if the entry is to be discoverable with no slave, widens
+  `enabled` there — one place.
+- **`features/workspace/components/ProfileSwitcher.tsx`** (not `components/` as Task 6 says: it sits with the
+  two bars that render it). `busy` → retried every `BUSY_RETRY_MS` (250) until `BUSY_RETRY_TOTAL_MS` (4000) has
+  passed since the click, then a toast; `unsettled` → the neutral toast, menu stays; `superseded` → the same toast,
+  menu closes; `write-failed` → toast with `detail`; closing the menu or unmounting cancels the attempt.
+  **There is one toast and it has one look** (`useUndoToast`): "never a red error" is a matter of wording.
+- **The master's dot** reads `useProfileSync()`: `blocked` (`suspended` → syncing, else problem) → `status.profile`
+  (`locked:*` → locked, `synced`, `pending` → syncing) → unknown (no status, or `remote && stale`). It does **not**
+  read `problems`: that is a log with no "over" signal; the *Current* block is where it is listed.
+- test ids: `home-button`, `home-switcher-chevron`, `profile-switcher-menu`, `profile-item-master`,
+  `profile-item-<slaveId>`, `profile-sync-dot` (`data-state`), busy = `aria-busy="true"` on the item.
+- i18n: `profile.master`, `profile.switcher.label`, `profile.sync.*`, `profile.switch.*`. zh-TW keeps "profile"
+  as a noun (as `hosts.undo_world_skipped` already did): master = 「主要 profile」, slave = 「本機 profile」.
+
 ### Task 6 — `components/ProfileSwitcher.tsx`
 Portal-based menu anchored to the Home button (both bars), `role="menu"` with arrow keys, Home/End,
 Enter, Escape, outside-click, focus returned to the button — the first real menu primitive in the

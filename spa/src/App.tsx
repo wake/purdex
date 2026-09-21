@@ -161,8 +161,9 @@ export default function App() {
     setWsContextMenu(null)
   }, [])
 
-  // Until the Home button becomes the profile switcher (P3d), Home = the first workspace: there is no
-  // "no workspace" view any more — every tab belongs to a workspace (Profile Sync spec §4.3).
+  // Home = the first workspace: there is no "no workspace" view any more — every tab belongs to a workspace
+  // (Profile Sync spec §4.3). On a device with a local profile the Home button never calls this: it opens the
+  // profile switcher instead (`useProfileSwitcherTrigger`).
   const handleSelectHome = useCallback(() => {
     const first = useWorkspaceStore.getState().workspaces[0]
     if (first) handleSelectWorkspace(first.id)

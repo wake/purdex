@@ -1,4 +1,8 @@
+import { useRef } from 'react'
+import { CaretDown } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
+import { ProfileSwitcher } from './ProfileSwitcher'
 
 interface Props {
   isActive: boolean
@@ -7,11 +11,14 @@ interface Props {
 
 /**
  * The Home button of the wide bar. It used to head a list of the tabs that were in no workspace; every tab
- * belongs to a workspace now (Profile Sync spec §4.3), so it is a plain button — no list, no chevron, no drop
- * target. `data-testid="home-header"` is what P3d looks for when it turns this into the profile switcher.
+ * belongs to a workspace now (Profile Sync spec §4.3), so it is a plain button — no list, no drop target.
+ * On a device with a local profile (a slave) it is the profile switcher's trigger instead: a chevron, and a
+ * click opens the menu (spec §4.9). Without one it is exactly the button it was.
  */
 export function HomeRow({ isActive, onSelectHome }: Props) {
   const t = useI18nStore((s) => s.t)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const switcher = useProfileSwitcherTrigger(onSelectHome)
 
   return (
     <div
@@ -23,9 +30,12 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
       }`}
     >
       <button
+        ref={buttonRef}
         type="button"
-        onClick={onSelectHome}
-        className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none"
+        data-testid="home-button"
+        onClick={switcher.onClick}
+        {...switcher.triggerProps}
+        className="flex-1 min-w-0 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none"
       >
         <img
           src="/icons/logo-transparent.png"
@@ -34,8 +44,10 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
           height={16}
           className="rounded-sm"
         />
-        <span className="truncate">{t('nav.home')}</span>
+        <span className="flex-1 truncate">{t('nav.home')}</span>
+        {switcher.enabled && <CaretDown size={12} data-testid="home-switcher-chevron" className="mr-2 shrink-0 text-text-muted" />}
       </button>
+      {switcher.enabled && <ProfileSwitcher trigger={buttonRef} placement="bottom-start" />}
     </div>
   )
 }
