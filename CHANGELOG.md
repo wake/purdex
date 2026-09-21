@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.419] - 2026-09-21
+
+### Feature: Home 按鈕就是 profile——名稱、圖示、配色；有本機 profile 時變成 profile 切換器——Profile Sync P3d-1（#1276、#1277；#1275）
+
+Profile Sync **第一次有看得見的東西**。使用者 2026-09-21 的兩個決定：「Home 統一改為 Profile 名稱，沒有命名時預設 Home」「Profile 可以選 logo / phosphor icon + 配色」。
+
+- **每個 profile（含 master）都有名稱、圖示、配色**：master 的名稱可以是空的（→ 顯示 `Home`），沒選圖示 → 現在的 Purdex logo，配色著色在 Phosphor 圖示上。存在 `useLocalProfilesStore`——**每台裝置各自的，不進 SOT**；型別重用 workspace 的圖示與 host 的配色，下一支 P3d-2 的編輯介面可以直接重用既有的 icon picker 與色盤。**編輯介面在 P3d-2**，這一版只能用 dev hook 設。
+- **沒命名、沒選圖示、沒選配色、沒有本機 profile 的使用者：兩種側欄的 DOM 與今天逐項相同**（測試釘住；也不會寫出任何新的 storage key）。
+- **有本機 profile（slave）時，Home 按鈕打開 profile 切換器**：master（帶 `Master` 標示；attach 了 master 才有同步狀態點，follower 視窗也看得到）、接著是各個 slave，畫面上那個打勾；快捷鍵 `switch-workspace-home` 開同一個選單。切到哪個 profile，Home 顯示的就是那個 profile 的名稱／圖示／配色——slave 是「永不同步」的世界，這是最需要看得見的地方。
+- **`components/Menu.tsx`——repo 第一個真正的 menu primitive**：portal 到 `document.body`（44 px 的窄版側欄是 `overflow-hidden`）、`role="menu"`、方向鍵循環並跳過不可用的項目、Home／End、Enter／Space、Escape、Tab；焦點進打勾的項目、關閉時回到 trigger（但不從使用者已移去的元素搶回來）；翻面並夾在 viewport 內、避開 Electron 標題列。
+- 外觀在 promote 時**跟著世界走**（回滾時也還原）；複製 slave 不複製外觀。`busy` 每 250 ms 靜默重試、距第一次點擊 4 秒才 toast；`unsettled`／`superseded` 用中性訊息；`write-failed` 帶細節。
+
+Review（codex R1＋攻擊方＋critic，全 `gpt-5.6-sol`）：五條修四條——切換進行中切側欄寬窄可以再起第二次切換（→ in-flight 的切換改由 store 擁有、帶 generation；關選單＝停止嘗試，不假裝能撤銷已送出的呼叫）、焦點所在的項目被別的視窗刪除後鍵盤失效、Escape 同時關掉底下的面板（→ capture 階段處理並消費，IME composition 不攔）、busy 項目缺 `aria-disabled`；`Menu.tsx` 的職責併入 #1240。critic 判定四條已修好，追加一條：profile 名稱濾掉控制字元、bidi 控制碼與零寬字元（不做 Unicode normalization；CJK、emoji 修飾符、NFD 不受影響）。真機驗收兩輪、兩種側欄、真的點擊與鍵盤：全過、console 零錯誤。
+
+**#1275（Refs #1255，未關閉）**：WS `sessions` handler 的對帳抽成可呼叫的 `reconcileHostSessions`（純搬移，逐宣告比對零差異）。「切換 profile 後立刻重跑 session 對帳」**做了又拿掉**：codex 兩輪依序證明，拿一份沒有版本的 payload 去判定（`session-closed`、`tmux-restarted`、依名稱 revive）都會改錯一個活著的 pane 的 binding 並推上 SOT；向 daemon 重新要清單也不行——`GET /api/sessions` 是 1 秒 TTL 的快取、建立 session 不會讓它失效。切換後的世界仍由各 host 的下一次 payload 對帳（晚，但不會錯）；根治需要先改 daemon，量測與做法記在 #1255。
+
+待 P3d-2 決定的一個設計點：圖示是（點陣的）logo 時，配色沒有東西可以著色。
+
+vitest 9509、lint、tsc、build 綠。純 SPA，daemon 仍是 411、免 deploy。下一支 P3d-2：Settings › Profile 的現況區塊與 profile 管理（含名稱／圖示／配色的編輯）。
+
 ## [1.0.0-alpha.418] - 2026-09-21
 
 ### Refactor: standalone tab 的死碼移除——Profile Sync P3c-2（#1271、#1272、#1273）
