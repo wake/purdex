@@ -90,7 +90,7 @@ import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDev
 import { useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } from '../../stores/useLocalProfilesStore'
-import { isMasterPair, isSyncDirection, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
+import { endpointOfHost, isMasterPair, isSyncDirection, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
 import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
@@ -440,7 +440,7 @@ interface MasterMode {
 /** Where the master's daemon is, and the credential for it. Null = the host is not in the store. */
 function endpointOf(hostId: string): { at: string; token: string } | null {
   const host = useHostStore.getState().hosts[hostId]
-  return host === undefined ? null : { at: `${host.ip}:${host.port}`, token: host.token ?? '' }
+  return host === undefined ? null : { at: endpointOfHost(host), token: host.token ?? '' }
 }
 
 function enterMasterMode(master: Master, generation: number): MasterMode {
@@ -711,41 +711,77 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
   return run
 }
 
-/** Was the daemon told that this client has left? `detail` is the api layer's own `reason: message`, or what was thrown. */
-export type DetachResult = { ok: true } | { ok: false; reason: 'daemon-not-told'; detail: string }
+/**
+ * Was the daemon told that this client has left?
+ *   `daemon-not-told`    it was asked and did not take it. `detail` is a SHORT reason (`briefReason`).
+ *   `endpoint-changed`   NOT ASKED: the host is not at the address the attachment was made at any more.
+ *   `host-gone`          NOT ASKED: the host is not in the app any more.
+ *   `endpoint-unknown`   NOT ASKED: a remembered detach from before the address was written down.
+ */
+export type DetachResult =
+  | { ok: true }
+  | { ok: false; reason: 'daemon-not-told'; detail: string }
+  | { ok: false; reason: 'endpoint-changed' | 'host-gone' | 'endpoint-unknown' }
+
+/**
+ * What is kept — persisted, published, shown — of a failed request: its class and, if there was an answer, the
+ * HTTP status. NOT its message: that is whatever a transport or a proxy chose to say, of any length, and nobody
+ * has checked that it holds no URL, header or body. Something thrown is named by its kind only.
+ */
+function briefReason(failure: { reason: string; status: number } | unknown): string {
+  if (typeof failure === 'object' && failure !== null && 'reason' in failure && 'status' in failure) {
+    const { reason, status } = failure as { reason: string; status: number }
+    return status > 0 ? `${reason} (HTTP ${status})` : reason
+  }
+  return failure instanceof Error ? failure.name : 'error'
+}
 
 /**
  * Best effort: whatever happens, the caller goes on — but it is told. 404 is "told": the profile is not on the
  * daemon, and its attachments went with it; there is nothing left to remove.
+ *
+ * `endpoint` — where the daemon that HOLDS the attachment was (`masterEndpoint`, or a remembered detach's). The
+ * api layer resolves a host's address from the host store on every request; a host re-pointed since would send
+ * this DELETE to another daemon, where a profile of the same id (copied, migrated) would lose an attachment that
+ * has nothing to do with this one. So: another address now → not sent. `undefined` = the caller has just written
+ * the attachment itself, through this very host entry (the two drops inside `attachMaster`): nothing to compare.
  */
-async function dropAttachment(master: Master): Promise<DetachResult> {
+async function dropAttachment(master: Master, endpoint?: string | null): Promise<DetachResult> {
+  if (endpoint !== undefined) {
+    const here = endpointOf(master.hostId)
+    if (here === null) return { ok: false, reason: 'host-gone' }
+    if (endpoint === null) return { ok: false, reason: 'endpoint-unknown' }
+    if (here.at !== endpoint) return { ok: false, reason: 'endpoint-changed' }
+  }
   let detail: string
   try {
     const r = await deleteAttachment(master.hostId, master.profileId, getClientId())
     if (r.kind !== 'failed' || r.reason === 'not-found') return { ok: true }
-    detail = `${r.reason}: ${r.message}`
+    detail = briefReason(r)
   } catch (e) {
-    detail = message(e)
+    detail = briefReason(e)
   }
   reportProblem({ kind: 'detach-failed', detail })
   return { ok: false, reason: 'daemon-not-told', detail }
 }
 
 /**
- * Write down the attachment a failed detach left on the daemon (useProfileStore, `pendingDetach`). This is a
- * store write AFTER an `await` of up to 15 s, and a persist of this store writes every field from THIS window's
- * memory: so the memory is first brought up to what storage holds — a master another window set meanwhile must
- * not be written over by a stale copy (`rehydrate` is synchronous over `localStorage`). And if, by now, this
- * client is attached to that very profile again, the attachment is wanted: nothing is written down.
+ * Write down the attachment a failed detach left on the daemon (useProfileStore, `pendingDetach`) — with the
+ * address of THAT daemon. This is a store write AFTER an `await` of up to 15 s, and a persist of this store
+ * writes every field from THIS window's memory: so the memory is first brought up to what storage holds — a
+ * master another window set meanwhile must not be written over by a stale copy (`rehydrate` is synchronous over
+ * `localStorage`). And if, by now, this client is attached to that very profile again, the attachment is wanted:
+ * nothing is written down.
  */
-async function rememberPendingDetach(master: Master, detail: string): Promise<void> {
+async function rememberPendingDetach(master: Master, endpoint: string, failure: Exclude<DetachResult, { ok: true }>): Promise<void> {
   try {
     await useProfileStore.persist.rehydrate()
   } catch {
     // as it was: the write below is still better than a ghost attachment nobody knows of
   }
   if (sameMaster(selectMaster(useProfileStore.getState()), master)) return
-  useProfileStore.getState().setPendingDetach({ hostId: master.hostId, profileId: master.profileId, detail, at: clock() })
+  const detail = failure.reason === 'daemon-not-told' ? failure.detail : failure.reason
+  useProfileStore.getState().setPendingDetach({ hostId: master.hostId, profileId: master.profileId, endpoint, detail, at: clock() })
 }
 
 /**
@@ -952,21 +988,25 @@ export function detachMaster(): Promise<DetachResult> {
   return serial(async (): Promise<DetachResult> => {
     const master = selectMaster(useProfileStore.getState())
     if (master === null) return { ok: true }
+    // Read BEFORE the master goes: it is where the attachment is, and `clearMaster` forgets it.
+    const attachedAt = useProfileStore.getState().masterEndpoint
     useProfileStore.getState().clearMaster()
     ownGenerationMove() // an attach of THIS window queued behind us is not "overtaken" by it: the user asked in that order
     clearSectionStore(master.profileId)
-    const told = await dropAttachment(master)
+    const told = await dropAttachment(master, attachedAt)
     // The one thing written after the `await`, and not a field of the master: see `rememberPendingDetach`.
-    if (!told.ok) await rememberPendingDetach(master, told.detail)
+    // (`attachedAt` is never null here — `selectMaster` answered — and a record cannot be written without it.)
+    if (!told.ok && attachedAt !== null) await rememberPendingDetach(master, attachedAt, told)
     return told
   })
 }
 
 /**
  * Tell the daemon again about a detach it was not told of (`useProfileStore.pendingDetach`) — with what was
- * REMEMBERED: the master it was about is gone. In the attach / detach queue, so it cannot overlap one. Attached
- * to that very profile by now → the attachment is wanted: not deleted, and forgotten. Giving up is
- * `useProfileStore.clearPendingDetach`.
+ * REMEMBERED, the address included: the master it was about is gone, and the host may have been re-pointed since
+ * (`dropAttachment`: then nothing is sent, and the record stays for the day the address is put back). In the
+ * attach / detach queue, so it cannot overlap one. Attached to that very profile by now → the attachment is
+ * wanted: not deleted, and forgotten. Giving up is `useProfileStore.clearPendingDetach`.
  */
 export function retryPendingDetach(): Promise<DetachResult> {
   return serial(async (): Promise<DetachResult> => {
@@ -977,9 +1017,10 @@ export function retryPendingDetach(): Promise<DetachResult> {
       useProfileStore.getState().clearPendingDetach(left.hostId, left.profileId)
       return { ok: true }
     }
-    const told = await dropAttachment(target)
+    const told = await dropAttachment(target, left.endpoint)
     if (told.ok) useProfileStore.getState().clearPendingDetach(left.hostId, left.profileId)
-    else await rememberPendingDetach(target, told.detail)
+    // Only a request that went out has a newer reason to write down; one that was not sent leaves the record as it is.
+    else if (told.reason === 'daemon-not-told' && left.endpoint !== null) await rememberPendingDetach(target, left.endpoint, told)
     return told
   })
 }

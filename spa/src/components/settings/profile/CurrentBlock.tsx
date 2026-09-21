@@ -20,7 +20,7 @@
 import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { useProfileStore } from '../../../stores/useProfileStore'
+import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -147,7 +147,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const blockedText = (): string => {
     switch (sync.blocked) {
       case 'master-endpoint-changed':
-        return t('settings.profile.current.blocked.endpoint_changed', { was: attachedAt ?? '', now: host ? `${host.ip}:${host.port}` : '' })
+        return t('settings.profile.current.blocked.endpoint_changed', { was: attachedAt ?? '', now: host ? endpointOfHost(host) : '' })
       case 'profile-gone':
         return t('settings.profile.current.blocked.profile_gone')
       case 'suspended':

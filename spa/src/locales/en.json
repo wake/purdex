@@ -1562,5 +1562,13 @@
   "settings.profile.current.label.workspaces": "Workspaces (the list and its order)",
   "settings.profile.current.label.tabs": "Tabs · {{workspace}}",
   "settings.profile.current.label.tabs_unseen": "Tabs · (a workspace not on this device yet)",
-  "settings.profile.current.label.tabs_unknown": "Tabs · (workspace name not available right now)"
+  "settings.profile.current.label.tabs_unknown": "Tabs · (workspace name not available right now)",
+  "settings.profile.detach.not_told_plain": "This device has stopped syncing — but {{host}} was not told.",
+  "settings.profile.detach.endpoint_changed": "{{host}} was at {{was}} when this device was attached and is at {{now}} now, so nothing is sent: the registration is on the machine at the old address.",
+  "settings.profile.detach.endpoint_changed_how": "Put the address back and try again, or remove the registration on that machine.",
+  "settings.profile.detach.host_gone": "That host is no longer in this app (it was at {{was}}), so there is nowhere to send the request.",
+  "settings.profile.detach.host_gone_unknown": "That host is no longer in this app, so there is nowhere to send the request.",
+  "settings.profile.detach.host_gone_how": "Add the host again at that address and try again, or remove the registration on that machine.",
+  "settings.profile.detach.endpoint_unknown": "This reminder was saved without the host's address, so it cannot be retried safely from here. Remove the registration on that machine.",
+  "settings.profile.detach.consequence_plain": "Until it is removed there, that machine may still list this device as attached to the profile, and a profile with a device attached cannot be deleted from any device."
 }

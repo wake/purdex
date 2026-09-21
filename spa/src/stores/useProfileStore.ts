@@ -82,13 +82,21 @@
 // STAND STILL. Which master wins two overlapping attaches is last-writer-wins, as
 // everywhere in this store. `clearMaster` lifts everything: detach means stop.
 //
-// WHY `pendingDetach` = { hostId, profileId, detail, at } (P3d-2, review F2). A detach stops the sync FIRST and
+// WHY `pendingDetach` = { hostId, profileId, endpoint, detail, at } (P3d-2, review F2 / F4). A detach stops the sync FIRST and
 // tells the daemon afterwards, best effort (lib/profile/start.ts, `detachMaster`). When that fails, the daemon
 // keeps this client's attachment to a profile this client has left — and an attached profile cannot be deleted,
 // by anybody (spec §4.8). The master is gone by then, so WHICH attachment is left has to be written down
 // somewhere that outlives the call, the page and the session: here, until a retry gets through, the user gives
 // up, or the client attaches to that very profile again (the attachment is then wanted). It is NOT part of the
-// master: it survives `clearMaster`, moves no generation, and no driver looks at it. One slot: a second failure
+// master: it survives `clearMaster`, moves no generation, and no driver looks at it.
+//   `endpoint` is `masterEndpoint`'s idea, for the same reason: the attachment is on ONE daemon — the one the
+// master was attached at — and a host's address is the user's to edit. A retry that followed the host id to a
+// new address would delete this client's attachment to a profile of the same id on ANOTHER daemon (a copied or
+// migrated one). So the address is written down with the record, and a retry is sent only while the host still
+// has it (lib/profile/start.ts). `null` = a record from before this field existed (dev builds only): unknown,
+// so never sent — and never "adopted" from the host of today, which is exactly the guess that is wrong.
+//   `detail` is a short reason for a person (a failure class and an HTTP status), cut at
+// `PENDING_DETACH_DETAIL_MAX`: it is persisted and shown, and a transport's message can hold anything. One slot: a second failure
 // replaces the first (the older one is then only reachable from another device's SOT list).
 //
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
@@ -113,6 +121,8 @@ export interface Suspension {
 export interface PendingDetach {
   hostId: string
   profileId: string
+  /** `"<ip>:<port>"` of the daemon that holds the attachment — the master's `masterEndpoint`. null = not known. */
+  endpoint: string | null
   detail: string
   at: number
 }
@@ -150,8 +160,9 @@ export interface ProfileState extends ProfileControl {
   /** The first reconciliation has settled: conflicts go to the user from now on. */
   clearPendingDirection: () => void
   setAutoSync: (value: boolean) => void
-  /** Anything malformed changes nothing and answers `false`. Replaces the one there is. */
-  setPendingDetach: (left: PendingDetach) => boolean
+  /** Anything malformed — an unknown endpoint included: whoever writes one knows where the daemon was — changes
+   *  nothing and answers `false`. Replaces the one there is. */
+  setPendingDetach: (left: PendingDetach & { endpoint: string }) => boolean
   /** Only the pair it names: a late answer about an older record must not clear a newer one. */
   clearPendingDetach: (hostId: string, profileId: string) => void
 }
@@ -185,11 +196,22 @@ function sanitiseSuspension(v: unknown): Suspension | null {
   return isSuspension(token, until) ? { token: token as string, until: until as number } : null
 }
 
-function sanitisePendingDetach(v: unknown): PendingDetach | null {
+export const PENDING_DETACH_DETAIL_MAX = 120
+
+/** `"<ip>:<port>"` — THE way an endpoint is written: `masterEndpoint`, `pendingDetach.endpoint`, and every
+ *  comparison of either with where a host is now. One function, so the two sides of a comparison cannot differ in form. */
+export function endpointOfHost(host: { ip: string; port: number }): string {
+  return `${host.ip}:${host.port}`
+}
+
+/** `endpoint` absent / null → kept as unknown (a record older than the field); present but no endpoint → no record. */
+function sanitisePendingDetach(v: unknown, endpointRequired = false): PendingDetach | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
-  const { hostId, profileId, detail, at } = v as Record<string, unknown>
+  const { hostId, profileId, endpoint, detail, at } = v as Record<string, unknown>
   if (!isMasterPair(hostId, profileId) || typeof detail !== 'string' || typeof at !== 'number' || !Number.isFinite(at)) return null
-  return { hostId: hostId as string, profileId: profileId as string, detail, at }
+  const unknown = endpoint === undefined || endpoint === null
+  if (unknown ? endpointRequired : !isEndpoint(endpoint)) return null
+  return { hostId: hostId as string, profileId: profileId as string, endpoint: unknown ? null : (endpoint as string), detail: Array.from(detail).slice(0, PENDING_DETACH_DETAIL_MAX).join(''), at }
 }
 
 const samePair = (left: PendingDetach | null, hostId: string, profileId: string): boolean =>
@@ -236,7 +258,7 @@ export const useProfileStore = create<ProfileState>()(
       clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
       setPendingDetach: (left) => {
-        const clean = sanitisePendingDetach(left)
+        const clean = sanitisePendingDetach(left, true)
         if (clean === null) return false
         set({ pendingDetach: clean })
         return true

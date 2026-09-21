@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { STORAGE_KEYS } from '../lib/storage/keys'
-import { selectMaster, useProfileStore } from './useProfileStore'
+import { endpointOfHost, selectMaster, useProfileStore } from './useProfileStore'
 
 const PROFILE = 'p_0123456789ab'
 const OTHER_PROFILE = 'p_ba9876543210'
@@ -562,7 +562,7 @@ describe('every window agrees on the master', () => {
 })
 
 describe('pendingDetach — a detach the daemon was not told of, kept until it is (or the user gives up)', () => {
-  const LEFT = { hostId: 'host-1', profileId: PROFILE, detail: 'network: down', at: 1000 }
+  const LEFT = { hostId: 'host-1', profileId: PROFILE, endpoint: EP, detail: 'network', at: 1000 }
 
   it('is null by default, set whole, persisted, and survives a reload WITHOUT a master', async () => {
     expect(useProfileStore.getState().pendingDetach).toBeNull()
@@ -581,12 +581,43 @@ describe('pendingDetach — a detach the daemon was not told of, kept until it i
     ['a malformed profile id', { ...LEFT, profileId: 'nope' }],
     ['a detail that is no text', { ...LEFT, detail: 7 }],
     ['a time that is no number', { ...LEFT, at: 'now' }],
+    ['an endpoint that is no text', { ...LEFT, endpoint: 7 }],
+    ['an empty endpoint', { ...LEFT, endpoint: '' }],
     ['not an object', 'x'],
   ])('%s → refused by the setter, dropped by a rehydrate', async (_label, bad) => {
     expect(useProfileStore.getState().setPendingDetach(bad as never)).toBe(false)
     expect(useProfileStore.getState().pendingDetach).toBeNull()
     await rehydrateFrom({ autoSync: true, pendingDetach: bad })
     expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('WHERE the daemon was is part of the record: the address the master was attached at, as `masterEndpoint` writes it', () => {
+    expect(endpointOfHost({ ip: '100.64.0.2', port: 7860 })).toBe(EP)
+    useProfileStore.getState().setPendingDetach(LEFT)
+    expect(persistedEnvelope().state.pendingDetach).toMatchObject({ endpoint: EP })
+  })
+
+  it('a record from before the endpoint was written down is KEPT, with the endpoint unknown (null) — never guessed from the host of today', async () => {
+    const { endpoint: _dropped, ...legacy } = LEFT
+    void _dropped
+    await rehydrateFrom({ autoSync: true, pendingDetach: legacy })
+    expect(useProfileStore.getState().pendingDetach).toEqual({ ...LEFT, endpoint: null })
+  })
+
+  it('… but nobody WRITES one without it: the setter refuses an unknown endpoint (whoever writes knows where the daemon was)', () => {
+    expect(useProfileStore.getState().setPendingDetach({ ...LEFT, endpoint: null } as never)).toBe(false)
+    const { endpoint: _dropped, ...legacy } = LEFT
+    void _dropped
+    expect(useProfileStore.getState().setPendingDetach(legacy as never)).toBe(false)
+    expect(useProfileStore.getState().pendingDetach).toBeNull()
+  })
+
+  it('the detail is a short reason, not a transcript: cut at 120 characters, by the setter and by a rehydrate', async () => {
+    const long = 'x'.repeat(500)
+    useProfileStore.getState().setPendingDetach({ ...LEFT, detail: long })
+    expect(useProfileStore.getState().pendingDetach?.detail).toHaveLength(120)
+    await rehydrateFrom({ autoSync: true, pendingDetach: { ...LEFT, detail: long } })
+    expect(useProfileStore.getState().pendingDetach?.detail).toHaveLength(120)
   })
 
   it('is cleared only by the pair it names', () => {

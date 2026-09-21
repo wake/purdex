@@ -1562,5 +1562,13 @@
   "settings.profile.current.label.workspaces": "工作區（清單與順序）",
   "settings.profile.current.label.tabs": "分頁 · {{workspace}}",
   "settings.profile.current.label.tabs_unseen": "分頁 ·（這台裝置還沒同步到的工作區）",
-  "settings.profile.current.label.tabs_unknown": "分頁 ·（目前無法取得工作區名稱）"
+  "settings.profile.current.label.tabs_unknown": "分頁 ·（目前無法取得工作區名稱）",
+  "settings.profile.detach.not_told_plain": "這台裝置已經停止同步——但沒有通知到 {{host}}。",
+  "settings.profile.detach.endpoint_changed": "這台裝置連結時 {{host}} 的位址是 {{was}}，現在是 {{now}}，所以不會送出任何東西：這筆登記留在原本那個位址的主機上。",
+  "settings.profile.detach.endpoint_changed_how": "把位址改回去再試一次，或到那台主機上處理這筆登記。",
+  "settings.profile.detach.host_gone": "這台主機已經不在這個 app 裡了（當時的位址是 {{was}}），沒有地方可以送出要求。",
+  "settings.profile.detach.host_gone_unknown": "這台主機已經不在這個 app 裡了，沒有地方可以送出要求。",
+  "settings.profile.detach.host_gone_how": "用那個位址把主機加回來再試一次，或到那台主機上處理這筆登記。",
+  "settings.profile.detach.endpoint_unknown": "這則提醒存下來時沒有記錄主機位址，無法從這裡安全地重試。請到那台主機上處理這筆登記。",
+  "settings.profile.detach.consequence_plain": "在那邊移除之前，那台主機上可能還留著這台裝置的登記；只要還有裝置登記著，任何裝置都無法刪除那份 profile。"
 }

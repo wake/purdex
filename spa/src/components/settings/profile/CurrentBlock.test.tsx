@@ -339,7 +339,7 @@ describe('the three controls', () => {
   })
 
   it('an attachment a failed detach left on the daemon is said WITHOUT a master too — that is when it matters', () => {
-    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetach: { hostId: 'h1', profileId: 'p_000000000001', detail: 'timeout: no answer', at: 1 } })
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetach: { hostId: 'h1', profileId: 'p_000000000001', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 } })
     show(NO_MASTER)
     expect(screen.getByTestId('profile-current-block')).toHaveAttribute('data-state', 'none')
     expect(screen.getByTestId('profile-detach-leftover')).toHaveTextContent('mlab')

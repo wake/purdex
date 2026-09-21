@@ -499,12 +499,27 @@ with no master asks no host (pinned). It owns the ONE `useSotProfiles(hostId)` f
 - **Stop sync — what the outcome means.** `detachMaster()` now answers `DetachResult`: `{ ok: true }` or
   `{ ok: false, reason: 'daemon-not-told', detail }` (a 404 counts as told: the profile, and its attachments,
   are not there). This device has stopped syncing EITHER WAY — the master is cleared first. When the daemon was
-  not told, start.ts writes `useProfileStore.pendingDetach = { hostId, profileId, detail, at }`: persisted,
+  not told, start.ts writes `useProfileStore.pendingDetach = { hostId, profileId, endpoint, detail, at }`: persisted,
   synced across windows, **independent of the master** (survives `clearMaster`, moves no generation), cleared by
   a successful `retryPendingDetach()`, by `clearPendingDetach(hostId, profileId)` (the user gives up) or by
   attaching to that very profile again (`setMaster`; and a retry made while attached to it deletes nothing). It
   is written AFTER an `await`, so the store is re-read from storage first — a master another window set
-  meanwhile is not written over. One slot: a second failure replaces the first. The dialog stays up, `busy`,
+  meanwhile is not written over. One slot: a second failure replaces the first.
+  **The attachment is on ONE daemon (review F4).** `endpoint` is the master's `masterEndpoint`, read before
+  `clearMaster` — the same idea, for the same reason: the api layer resolves a host's address on every request,
+  and a retry that followed the host id to an edited address would remove this client from a profile of the same
+  id on ANOTHER daemon. `dropAttachment(master, endpoint)` therefore sends nothing unless the host is there and
+  still at that address (`endpointOfHost`, the one writer of the `"<ip>:<port>"` form — `useProfileStore.ts`),
+  and answers `endpoint-changed` / `host-gone` / `endpoint-unknown` instead (`DetachResult`); `detachMaster`
+  itself obeys it too (a master that is `blocked: master-endpoint-changed` is NOT told at the new address — it
+  is remembered with the old one). A record without an endpoint (older than the field; dev builds only) is kept
+  as `endpoint: null` and never sent; the setter refuses to write one. The notice (`data-state` =
+  `retryable | endpoint-changed | host-gone | endpoint-unknown`) offers *Try again* only while `retryable`;
+  otherwise it shows the address then and the address now, says what to do, and leaves *Dismiss*.
+  **`detail` is a short reason, never a transcript**: the failure class plus the HTTP status (`timeout`,
+  `server (HTTP 502)`), a thrown error by its `name`; cut at 120 code points by the store. Not the transport's
+  message — it is persisted and shown, and nobody has checked it for a URL, a header or a body. (The
+  `detach-failed` entry of the problem log now carries the same short reason.) The dialog stays up, `busy`,
   until the answer — which is why `StopSyncControl` is mounted outside the half that unmounts with the master.
   The notice (what happened, what it means for the other devices, *Try again*, *Dismiss*) is the store's: it is
   there after a reload and without a master. **Not covered:** the two best-effort drops inside `attachMaster`
@@ -563,7 +578,7 @@ host picker is what lets it (or its list) exist without one. **For P3d-4**: the 
   `profile-current-section-rev-<key>`, `profile-current-locked-note`, `profile-auto-sync`, `profile-sync-now`,
   `profile-sync-asked`, `profile-current-problems`, `profile-current-problem`
 - Stop sync: `profile-stop-sync`, `profile-stop-sync-dialog` / `-cancel` / `-confirm`, `profile-detach-leftover`
-  (`data-host`, `data-profile`), `profile-detach-retry` (`aria-busy`), `profile-detach-dismiss`,
+  (`data-state`, `data-host`, `data-profile`), `profile-detach-retry` (`aria-busy`), `profile-detach-dismiss`,
   `profile-detach-retry-failed`
 - local profiles: `profile-local-block`, `profile-local-status` (`data-tone`), `profile-row-<id>` (`data-master`,
   `data-on-screen`), `profile-row-name-<id>`, `profile-row-master-badge`, `profile-row-on-screen-<id>`,
