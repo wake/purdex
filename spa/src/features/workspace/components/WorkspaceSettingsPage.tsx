@@ -194,12 +194,15 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
                   closeTab(id)
                 })
                 // The workspace's own settings tabs are not in the dialog; they are about a workspace that is
-                // going away, so they go with it rather than move to another one.
-                ws.tabs.forEach((id) => {
-                  const tab = useTabStore.getState().tabs[id]
-                  const content = tab ? getPrimaryPane(tab.layout).content : null
-                  if (content?.kind === 'settings' && content.scope !== 'global' && content.scope.workspaceId === workspaceId) closeTab(id)
-                })
+                // going away, so they go with it rather than move to another one — wherever they are (one may
+                // have been dragged into another workspace), locked or not (`closeTab` refuses a locked tab),
+                // and without a history record: there is nothing to reopen them into.
+                for (const tab of Object.values(useTabStore.getState().tabs)) {
+                  const content = getPrimaryPane(tab.layout).content
+                  if (content.kind !== 'settings' || content.scope === 'global' || content.scope.workspaceId !== workspaceId) continue
+                  if (tab.locked) useTabStore.getState().toggleLock(tab.id)
+                  closeTab(tab.id, { skipHistory: true })
+                }
                 // Every tab belongs to a workspace: the tabs that are left move to the next one (store.ts).
                 const kept = ws.tabs.filter((id) => useTabStore.getState().tabs[id])
                 useWorkspaceStore.getState().removeWorkspace(workspaceId)

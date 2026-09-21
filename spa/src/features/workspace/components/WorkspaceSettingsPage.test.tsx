@@ -9,6 +9,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useHistoryStore } from '../../../stores/useHistoryStore'
 import { createTab, type Tab } from '../../../types/tab'
 
 describe('WorkspaceSettingsPage', () => {
@@ -17,6 +18,7 @@ describe('WorkspaceSettingsPage', () => {
   beforeEach(() => {
     cleanup()
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
     useWorkspaceStore.getState().reset()
     const ws = useWorkspaceStore.getState().addWorkspace('Test WS')
     wsId = ws.id
@@ -64,7 +66,7 @@ describe('WorkspaceSettingsPage', () => {
     const deleteKeeping = (id: string, keep: number) => {
       render(<WorkspaceSettingsPage workspaceId={id} />)
       fireEvent.click(screen.getByTestId('delete-workspace-btn'))
-      screen.getAllByRole('checkbox').slice(0, keep).forEach((box) => fireEvent.click(box))
+      screen.queryAllByRole('checkbox').slice(0, keep).forEach((box) => fireEvent.click(box))
       fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     }
 
@@ -133,6 +135,25 @@ describe('WorkspaceSettingsPage', () => {
       expect(useTabStore.getState().tabs[own.id]).toBeUndefined()
       expect(useTabStore.getState().tabs[closed.id]).toBeUndefined()
       expect(useWorkspaceStore.getState().workspaces).toEqual([])
+    })
+
+    // Review F4: `closeTab` returns early for a locked tab, so a locked settings tab survived and was moved along.
+    it("a LOCKED settings tab of the deleted workspace is removed all the same; another workspace's settings tab is not touched", () => {
+      const b = useWorkspaceStore.getState().addWorkspace('B')
+      const own = tabIn(wsId, { kind: 'settings', scope: { workspaceId: wsId } })
+      useTabStore.getState().toggleLock(own.id)
+      const ownElsewhere = tabIn(b.id, { kind: 'settings', scope: { workspaceId: wsId } }) // dragged into B
+      const others = tabIn(wsId, { kind: 'settings', scope: { workspaceId: b.id } }) // B's settings, opened in here
+      const global = tabIn(wsId, { kind: 'settings', scope: 'global' })
+
+      deleteKeeping(wsId, 0)
+
+      const { tabs, tabOrder } = useTabStore.getState()
+      expect(tabs[own.id]).toBeUndefined()
+      expect(tabs[ownElsewhere.id]).toBeUndefined()
+      expect(tabOrder).toEqual([others.id, global.id])
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.tabs)).toEqual([[others.id, global.id]])
+      expect(useHistoryStore.getState().closedTabs.map((c) => c.tab.id)).toEqual([]) // nothing to reopen it into
     })
 
     it('closing every tab still focuses the workspace that takes over', () => {

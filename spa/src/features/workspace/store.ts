@@ -13,6 +13,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
  * create it at once, or two machines that each do, make the SAME workspace, so a cross-window rehydrate and a
  * profile sync converge on one `Unsorted` instead of two. It cannot collide with a generated id (those are
  * exactly 6 chars of base36; this is 8) and it is a legal `tabs.<id>` section key (`[A-Za-z0-9_-]{1,64}`).
+ * Nor can it take over a workspace the user already has: every workspace id there is — made here, imported,
+ * or synced from another machine — came out of `generateId()`, whose output is always `^[0-9a-z]{6}$`
+ * (pinned by lib/id.test.ts), so no existing workspace is called `unsorted` unless it IS this one.
  * The NAME is whatever `workspace.unsorted` said in the language of whoever created it first; an existing
  * one is found by this id and never renamed.
  */
