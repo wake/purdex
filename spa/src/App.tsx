@@ -27,7 +27,6 @@ import {
   getVisibleTabIds,
   nextWorkspaceName,
   WorkspaceContextMenu,
-  MigrateTabsDialog,
   WorkspaceEmptyState,
 } from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
@@ -144,7 +143,6 @@ export default function App() {
 
   // --- Workspace UI state ---
   const [wsContextMenu, setWsContextMenu] = useState<{ wsId: string; position: { x: number; y: number } } | null>(null)
-  const [migrateDialog, setMigrateDialog] = useState<{ wsId: string; wsName: string } | null>(null)
 
   const handleWsContextMenu = useCallback((e: React.MouseEvent, wsId: string) => {
     setWsContextMenu({ wsId, position: { x: e.clientX, y: e.clientY } })
@@ -171,14 +169,9 @@ export default function App() {
 
   const handleAddWorkspace = useCallback(() => {
     const names = workspaces.map(w => w.name)
-    if (workspaces.length === 0 && tabOrder.length > 0) {
-      const ws = useWorkspaceStore.getState().addWorkspace(nextWorkspaceName(names))
-      setMigrateDialog({ wsId: ws.id, wsName: ws.name })
-    } else {
-      const ws = useWorkspaceStore.getState().addWorkspace(nextWorkspaceName(names))
-      openWsSettings(ws.id)
-    }
-  }, [workspaces, tabOrder.length, openWsSettings])
+    const ws = useWorkspaceStore.getState().addWorkspace(nextWorkspaceName(names))
+    openWsSettings(ws.id)
+  }, [workspaces, openWsSettings])
 
   const handleOpenHosts = useCallback(() => {
     openSingletonAndSelect({ kind: 'hosts' })
@@ -197,20 +190,6 @@ export default function App() {
     const tab = tabs[tabId]
     if (tab) openRenameForTab(tab)
   }, [tabs, openRenameForTab])
-
-  const handleMigrateConfirm = useCallback(() => {
-    if (!migrateDialog) return
-    tabOrder.forEach((tabId) => {
-      useWorkspaceStore.getState().insertTab(tabId, migrateDialog.wsId)
-    })
-    setMigrateDialog(null)
-    openWsSettings(migrateDialog.wsId)
-  }, [migrateDialog, tabOrder, openWsSettings])
-
-  const handleMigrateSkip = useCallback(() => {
-    setMigrateDialog(null)
-    useWorkspaceStore.getState().setActiveWorkspace(null)
-  }, [])
 
   return (
     <ErrorBoundary>
@@ -307,14 +286,6 @@ export default function App() {
             onTearOff={window.electronAPI ? () => handleWsTearOff(wsContextMenu.wsId) : undefined}
             onMergeTo={window.electronAPI ? (targetWindowId) => handleWsMergeTo(wsContextMenu.wsId, targetWindowId) : undefined}
             onClose={handleCloseWsContextMenu}
-          />
-        )}
-        {migrateDialog && (
-          <MigrateTabsDialog
-            tabCount={tabOrder.length}
-            workspaceName={migrateDialog.wsName}
-            onMigrate={handleMigrateConfirm}
-            onSkip={handleMigrateSkip}
           />
         )}
         </div>
