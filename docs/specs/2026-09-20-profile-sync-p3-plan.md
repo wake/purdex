@@ -692,14 +692,20 @@ what the user was told a push does. (Under `pull`, an EMPTY SOT takes nothing an
 **A create whose outcome is not known is never simply sent again — `createSotProfile` (review F2).** The daemon
 gives every POST a new id and allows equal names. Unknown = `timeout` / `network` / `aborted` / thrown — and
 `server` / `malformed` too (a 5xx or an unreadable 2xx may follow the commit; counting them in costs one list
-request). Then the host is listed and OURS is looked for: same name, no section, no device attached, **and an id
+request). Then the host is listed and a CANDIDATE is looked for: same name, no section, no device attached, **and an id
 that is not in the BASELINE** — the ids the host had listed, in this wizard visit, before the visit's FIRST POST
 to that host (kept in a ref, set once per host; ids, not `createdAt`: the daemon's clock is not this device's).
-Found (the newest, if an earlier lost attempt left one too) → adopted, notice `create-adopted`. Not found →
-`not-created`, said. The list cannot be read → `unknown`; from any non-definite outcome on, the next press for
-that host + name LOOKS FIRST and sends nothing until a list has been read. No baseline (the list had never been
-read when *A new profile* was chosen): ours cannot be told from one that was always there → `same-name`: neither
-adopted nor doubled; the list is reloaded and the user picks it or renames. A definite refusal (`rejected`,
+**A candidate is POINTED AT, never adopted (second review round).** Another device starting from the same list
+may have created a profile of that name in the same moment, and nothing in the protocol ties a POST to its
+profile; taking it would attach two devices to one profile without either having chosen that. So: outcome
+`maybe` — the list is reloaded, that row carries `profile-wizard-profile-maybe-<id>` ("may be the one you just
+created"), the notice is `create-maybe`, the step stays, and the USER takes it like any existing profile (empty →
+push only; `prepareRun` catches it being filled meanwhile) or gives the new one another name (another name is
+another create, sent at once). Pressing again with the same name looks first and points again — no second POST.
+Not found → `not-created`, said. The list cannot be read → `unknown`; from any non-definite outcome on, the next
+press for that host + name LOOKS FIRST and sends nothing until a list has been read. No baseline (the list had
+never been read when *A new profile* was chosen): nothing can be told apart → `same-name`: not pointed at as the
+user's, not doubled; the list is reloaded and the user picks or renames. A definite refusal (`rejected`,
 `unauthorized`, `too-large`, `contended`, `not-found`, `unknown-host`) is just that.
 
 **The result is a toast, too — `announceRun` (real-machine acceptance F6).** The Settings tab belongs to the
@@ -716,8 +722,17 @@ with A's drop failing, then B→C with B's failing, wrote B over A and A's ghost
 profileId])`; `addPendingDetach` merges (same key → replaced in place, else appended), capped at
 `PENDING_DETACH_MAX` = 20 (oldest dropped); `clearPendingDetach(key)`, `retryPendingDetach(key)` and a re-attach
 (`setMaster`: the record of that very endpoint + host + profile) each remove ONE record — a same-id profile on
-another daemon stays a ghost there. start.ts still re-reads storage before it writes, so the merge is onto what
-storage holds. **Migration:** `merge` reads `pendingDetaches` record by record and then alpha.420's single
+another daemon stays a ghost there. **Every change of the list is ONE locked step (second review round):**
+"read storage → change → write the whole store back" could interleave between two renderers (both fail a drop,
+both read the same list, the later write drops the earlier record), so start.ts's `changePendingDetaches` runs
+the three as one SYNCHRONOUS block (`rehydrate()` is synchronous over `localStorage`: called, not awaited) under
+the Web Lock `purdex-pending-detach` — `lib/storage/world-lock.ts`, its lock name parameterised
+(`withNamedLock`), not copied. Adding (`rememberPendingDetach`) AND removing (a retry that got through, *Dismiss*
+→ `dismissPendingDetach(key)`, which `StopSyncControl` now calls instead of the store's setter) go through it.
+Not granted within 3 s → the block runs anyway (late and unlocked beats a ghost nobody knows of). No
+`navigator.locks` (plain http is no secure context) → the block runs inside the call, as before, and the window
+between two renderers stays open — world-lock.ts's own trade. Not under the lock: `setMaster`'s removal of the
+re-attached record (one write with the master, from memory, last-writer-wins like every field of that store). **Migration:** `merge` reads `pendingDetaches` record by record and then alpha.420's single
 `pendingDetach` object, added as a record unless its key is already listed; the old key is not written back.
 `StopSyncControl` renders one notice per record (`LeftoverItem`, its own retry state), each inside
 `profile-detach-item-<pendingDetachTestId>` (`<host>.<profile>.<endpoint>`, every other character → `_`); the
@@ -735,13 +750,25 @@ never switches master without detaching first; the dev hook still can.
 
 **`Settings › Sync` left the sidebar — except for whoever still needs it (review F4).** Contributions gained
 `visible?: () => boolean` (`settings-contribution-types.ts`; applied in `listContributions`, so a hidden section
-has no row AND no route; false or throwing → hidden; read at the shell's next render — nothing subscribes). The
+has no row AND no route; false or throwing → hidden). **It is reactive (second review round):** a contribution
+may also carry `subscribeVisibility(onChange) → unsubscribe`, and `SettingsPage` calls ONE hook,
+`useContributionVisibility()` — a `useSyncExternalStore` over a version counter in the registry, which wires every
+registered contribution's subscription while at least one Settings page is mounted, wires one registered
+meanwhile, and lets go of all of them on `clearContributions()`. NOT a hook per contribution, as first proposed:
+the set of contributions changes while the page is open (switching a module on or off re-dispatches), so the
+page's hook count would change. A mounted section that stops being selectable moves the page to the first one
+that is, and the URL follows. The
 `sync` module still declares its section, visible while `activeProviderId !== null || pendingConflicts.length >
 0 || pendingRemoteBundle !== null`: pending conflicts and a pending bundle are persisted and only `SyncSection`
 resolves or dismisses them; a provider that is on means the user is using the old Sync (every sync is a button
 on that page), and the page is where it is switched off — after which, with nothing pending, the entry is gone.
-Everybody else sees no Sync entry. `TitleBar`'s conflict icon is back unchanged: its predicate is a subset of
-that condition, so the click always lands. What only that page offers (provider, sync host, *Sync now*,
+The sync section's `subscribeVisibility` watches exactly those three. Everybody else sees no Sync entry.
+`TitleBar`'s conflict icon and `SyncSection`'s banner share ONE predicate, which no longer asks for a provider:
+`pendingConflicts.length > 0 && pendingRemoteBundle !== null && pendingConflictsAt !== null` — conflicts another
+window found stay pending with the provider off, the icon is then the only sign of them, and the banner is the
+only place to resolve or dismiss them. (Not "the entry's three conditions" for the icon: a provider that is on
+with nothing pending is nothing to warn about, and the tooltip counts conflicts.) The predicate is a subset of
+the entry's condition, so the click always lands. What only that page offers (provider, sync host, *Sync now*,
 per-contributor toggles, `.purdex-sync` export / import, conflict resolution, snapshot history) is unreachable
 for a user with the provider off and nothing pending; **none of it runs by itself** — `syncNow`, `push` and
 `applyImport` have no caller but that page — so nothing is left running that cannot be stopped. P4a deletes it.
@@ -769,8 +796,8 @@ for a user with the provider off and nothing pending; **none of it runs by itsel
   `profile-wizard-retry`, `profile-wizard-restart`, `profile-wizard-done`, `profile-wizard-checking`,
   `profile-wizard-check-failed` (`data-reason`)
 - added by the review fixes: `profile-wizard-create-error` also carries `data-outcome`
-  (failed|not-created|unknown|same-name); `profile-wizard-notice` reasons + `profile-changed` /
-  `profile-emptied` / `profile-gone` / `create-adopted`; `profile-detach-item-<host>.<profile>.<endpoint>`
+  (failed|not-created|unknown|same-name); `profile-wizard-profile-maybe-<id>`; `profile-wizard-notice` reasons +
+  `profile-changed` / `profile-emptied` / `profile-gone` / `create-maybe`; `profile-detach-item-<host>.<profile>.<endpoint>`
 - i18n: `settings.profile.current.setup` / `.change` / `.change_desc`, `settings.profile.wizard.*` (`.step.*`,
   `.refused.*`, `.notice.*`, `.stop.*`, `.sot.*`, `.request.*`, `.local.*`, `.direction.*`, `.run.*` +
   `.run.state.*`, `.now.*`, `.promote.*`, `.save.*`, `.attach.*`, `.toast.*`)
