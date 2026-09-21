@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.0.0-alpha.422] - 2026-09-22
+
+### Fix: x64 的 .app 在 Intel Mac 上啟動即 crash——ad-hoc 簽章少了 entitlements（#1288）
+
+air-2019（Intel、macOS 14.8.9）啟動 Purdex 時 dyld 直接 abort，錯誤訊息是
+`Library not loaded: @rpath/Electron Framework.framework/Electron Framework ... different Team IDs`。
+Team ID 是**假線索**——兩邊都是 ad-hoc、`TeamIdentifier` 都是空的，`codesign --verify` 也回 `valid on disk`。
+真正的原因是 **Library Validation**：`scripts/build-electron.mjs` 對 x64 用 `--options runtime`
+（Hardened Runtime）簽章卻**沒帶 `--entitlements`**，Hardened Runtime 會打開 Library Validation，
+而空的 entitlement set 沒有東西能把它關掉，於是自家的 `Electron Framework` 被擋。
+
+arm64 之所以沒事，是因為 electron-builder 只對 arm64／universal 做 ad-hoc fallback
+（`macPackager.js:215`）並帶上它的預設三鍵模板；x64 被 electron-builder 跳過不簽，落到我們的腳本手上——
+而腳本沒帶 entitlements。從 `7cad0823` 引入 `--options runtime` 起就壞著，因為平常只有 arm64 的機器在跑新建置。
+
+壞掉的不只主程式：x64 那一份**六個 bundle 全中**（app、framework、四個 helper），
+而且 `--deep` 與 `--identifier` 併用還把每個 nested bundle 的 identifier 都壓平成 `dev.wake.purdex`
+（arm64 的 framework 正常是 `com.github.Electron.framework`）。
+
+- **`electron/entitlements.mac.plist`（新）** ——三個 V8 鍵，成為兩個架構共用的單一來源；
+  key set 以 `plutil -convert json` diff 確認與 electron-builder 模板相同。
+- **`package.json`** —— `build.mac.entitlements` ＋ `entitlementsInherit` 指向它。
+  `hardenedRuntime` 刻意不設（electron-builder 對非 MAS 本來就預設 `true`）。
+- **`scripts/mac-sign.mjs`（新）** —— 無 top-level 副作用的簽章模組。`buildSignArgs()` **補上** `--entitlements`、
+  **拿掉** `--identifier`（實測：不帶它時頂層仍從 `Info.plist` 取得 `dev.wake.purdex`，nested 各自保留正確 identifier）。
+- **build 期守門（G3）** —— 對 app **與其四個 helper** 逐一檢查「Hardened Runtime ⇒ `disable-library-validation` 為 `true`」，
+  而且是**讀值**不是比對 key 字串（把 plist 的值改成 `<false/>` 也會被擋）。兩條路徑都吃到：x64 的新簽路徑，
+  以及 arm64「沿用 electron-builder 簽章」的早退路徑——後者正是偵測 electron-builder 回歸的唯一防線。
+- **`electron/signing.test.ts`** —— 原本斷言 `build-electron.mjs` 含 `'codesign'`／`'--verify'` 字串的案例
+  分不出能動的 build 與壞掉的 build，換成對 `buildSignArgs()` 的行為斷言。
+- **dev-update 的 full-rebuild 偵測** —— 兩份 tracked paths 補上 `scripts/mac-sign.mjs` 與
+  `electron/entitlements.mac.plist`；搬移程式碼後簽章改動原本會讓 rebuild 提示完全失聲。
+
+驗證：`scripts/mac-sign_test.mjs` 9 個案例全程驅動**真的 `codesign`** 簽臨時 bundle（不是原始碼字串比對）；
+兩輪 review 共 11 個 mutation，最後全數被殺。真機：air-2019 上新建的 x64 bundle 存活 45 秒以上、
+renderer helper 正常、無新的 `.ips`，行程組成與 air-2026 上正常運作的那份相同。
+產出對照：x64 十個 bundle 全帶 `disable-library-validation`、framework identifier 回到
+`com.github.Electron.framework`；arm64 與修改前基準線 `diff` 乾淨、entitlements XML 位元組相同（G4）。
+
+`test:mac-sign` 9/9、`electron` vitest 199/199、`go test ./internal/module/dev/` ok、
+`rm -rf dist && pnpm run electron:build` exit 0。這是 `docs/release/macos-signing.md` Stage 1a 的
+**app 半部**，daemon 簽章管線仍 pending。
+
+follow-up：兩份 rebuild 清單靠註解維持同步、無自動化防線；`nestedHelperBundles()` 目錄不存在的分支無覆蓋（fail-closed）；
+守門未涵蓋 `chrome_crashpad_handler`；`electron:build` 每個架構的呼叫都會把兩個架構都建一次（多建的直接刪掉）。
+
 ## [1.0.0-alpha.421] - 2026-09-22
 
 ### Feature: 設定同步的 wizard——第一次不靠 dev hook 設定 Profile Sync——Profile Sync P3d-3（#1283、#1284、#1285、#1286）
