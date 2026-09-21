@@ -1453,5 +1453,7 @@
   "profile.switch.try_again": "另一個視窗剛切換了 profile，請再試一次。",
   "profile.switch.write_failed": "無法切換 profile，沒有任何變更：{{detail}}",
   "profile.switch.not_found": "這個 profile 已經不存在。",
-  "profile.switch.failed": "無法切換 profile（{{reason}}）。"
+  "profile.switch.failed": "無法切換 profile（{{reason}}）。",
+  "settings.section.profile": "Profile",
+  "settings.profile.description": "一個 profile 就是一整組工作區與分頁。左上角的 Home 按鈕顯示目前在畫面上的那一個，也用來切換。"
 }

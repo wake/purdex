@@ -1453,5 +1453,7 @@
   "profile.switch.try_again": "Another window just switched profile. Try again.",
   "profile.switch.write_failed": "Couldn't switch profile, nothing was changed: {{detail}}",
   "profile.switch.not_found": "That profile no longer exists.",
-  "profile.switch.failed": "Couldn't switch profile ({{reason}})."
+  "profile.switch.failed": "Couldn't switch profile ({{reason}}).",
+  "settings.section.profile": "Profile",
+  "settings.profile.description": "A profile is one complete set of workspaces and tabs. The Home button shows the one on screen and switches between them."
 }
