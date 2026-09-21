@@ -193,13 +193,26 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
                 closedTabIds.forEach((id) => {
                   closeTab(id)
                 })
+                // The workspace's own settings tabs are not in the dialog; they are about a workspace that is
+                // going away, so they go with it rather than move to another one.
+                ws.tabs.forEach((id) => {
+                  const tab = useTabStore.getState().tabs[id]
+                  const content = tab ? getPrimaryPane(tab.layout).content : null
+                  if (content?.kind === 'settings' && content.scope !== 'global' && content.scope.workspaceId === workspaceId) closeTab(id)
+                })
+                // Every tab belongs to a workspace: the tabs that are left move to the next one (store.ts).
+                const kept = ws.tabs.filter((id) => useTabStore.getState().tabs[id])
                 useWorkspaceStore.getState().removeWorkspace(workspaceId)
-                const hasPreservedTabs = closedTabIds.length < tabItems.length
-                if (hasPreservedTabs) {
-                  useWorkspaceStore.getState().setActiveWorkspace(null)
+                const wsStore = useWorkspaceStore.getState()
+                const heir = kept.length > 0 ? wsStore.findWorkspaceByTab(kept[0]) : null
+                if (heir) {
+                  const current = useTabStore.getState().activeTabId
+                  const nextTab = current !== null && kept.includes(current) ? current : kept[0]
+                  wsStore.setActiveWorkspace(heir.id)
+                  wsStore.setWorkspaceActiveTab(heir.id, nextTab)
+                  useTabStore.getState().setActiveTab(nextTab)
                 } else {
-                  const { activeWorkspaceId: newWsId, workspaces: remaining } = useWorkspaceStore.getState()
-                  const newWs = remaining.find((w) => w.id === newWsId)
+                  const newWs = wsStore.workspaces.find((w) => w.id === wsStore.activeWorkspaceId)
                   const nextTab = newWs?.activeTabId ?? newWs?.tabs[0]
                   if (nextTab) useTabStore.getState().setActiveTab(nextTab)
                 }

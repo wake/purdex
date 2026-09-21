@@ -75,10 +75,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!opts?.keepSettings) {
           useWorkspaceSettingsStore.getState().clearWorkspace(wsId)
         }
+        // Every tab belongs to exactly one workspace: the tabs of the removed workspace that still EXIST (the
+        // user kept them, or they were locked) move to the next workspace — the previous one when the last is
+        // removed, a new `Unsorted` when none is left. Tear-off / merge delete their tabs first: nothing moves.
+        const liveTabs = useTabStore.getState().tabs
         set((state) => {
-          const remaining = state.workspaces.filter((ws) => ws.id !== wsId)
-          const activeId = state.activeWorkspaceId === wsId
-            ? (remaining[0]?.id ?? null)
+          const index = state.workspaces.findIndex((ws) => ws.id === wsId)
+          const survivors = state.workspaces[index].tabs.filter((id) => Object.hasOwn(liveTabs, id))
+          let remaining = state.workspaces.filter((ws) => ws.id !== wsId)
+          let heirId: string | null = null
+          if (survivors.length > 0) {
+            const heir: Workspace = remaining[Math.min(index, remaining.length - 1)]
+              ?? { ...createWorkspace(useI18nStore.getState().t('workspace.unsorted')), id: UNSORTED_WORKSPACE_ID }
+            heirId = heir.id
+            const merged = { ...heir, tabs: [...heir.tabs, ...survivors], activeTabId: heir.activeTabId ?? survivors[0] }
+            remaining = remaining.length === 0 ? [merged] : remaining.map((ws) => (ws.id === heir.id ? merged : ws))
+          }
+          const activeId = state.activeWorkspaceId === wsId || state.activeWorkspaceId === null
+            ? (heirId ?? remaining[0]?.id ?? null)
             : state.activeWorkspaceId
           return { workspaces: remaining, activeWorkspaceId: activeId }
         })

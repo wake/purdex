@@ -419,6 +419,7 @@
   "tab.close": "Close tab",
   "tab.close_others": "Close other tabs",
   "tab.close_right": "Close tabs to the right",
+  "tab.empty_state": "Select or create a tab to get started",
   "tab.rename_session": "Rename Session",
   "tab.rename_placeholder": "Session name",
   "tab.rename_invalid_format": "Only letters, numbers, hyphens, and underscores",

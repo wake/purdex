@@ -1,6 +1,7 @@
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
 import { useTabAlivePool } from '../hooks/useTabAlivePool'
 import { isLightTab } from '../lib/pane-weight'
+import { useI18nStore } from '../stores/useI18nStore'
 import type { Tab } from '../types/tab'
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function TabContent({ activeTab, allTabs }: Props) {
+  const t = useI18nStore((s) => s.t)
   const { aliveIds, poolVersion } = useTabAlivePool(
     activeTab?.id ?? null,
     allTabs.map((t) => ({ id: t.id, pinned: t.pinned, light: isLightTab(t.layout) })),
@@ -20,7 +22,7 @@ export function TabContent({ activeTab, allTabs }: Props) {
   if (!activeTab && !hasAliveTab) {
     return (
       <div className="flex-1 flex items-center justify-center text-text-secondary text-sm">
-        選擇或建立一個分頁開始使用
+        {t('tab.empty_state')}
       </div>
     )
   }
