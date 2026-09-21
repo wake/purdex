@@ -1702,5 +1702,6 @@
   "settings.profile.wizard.sot.create_unknown": "It is not known whether the profile was created: the host did not answer, and its list could not be read either. Press the button again — the host is asked what it holds first, and nothing is created twice.",
   "settings.profile.wizard.sot.create_not_created": "The host was then asked, and no such profile is there. Pressing the button again creates it.",
   "settings.profile.wizard.sot.create_same_name": "It is not known whether the profile was created, and the host now holds an empty profile of that name that may or may not be it. Choose it from the list above if it is yours, or give the new one another name.",
-  "settings.profile.wizard.notice.create_adopted": "The host had created the profile after all — its answer was lost. That one is used; nothing was created twice."
+  "settings.profile.wizard.notice.create_maybe": "It is not known whether your profile was created — the host did not answer. A new, empty profile of that name is on the host now, marked in the list: it may be the one, or another device may have created it in the same moment. Choose it if it is yours, or give the new profile another name.",
+  "settings.profile.wizard.sot.maybe_yours": "may be the one you just created"
 }

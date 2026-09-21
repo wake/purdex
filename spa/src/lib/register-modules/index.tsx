@@ -36,6 +36,8 @@ import { useTabStore } from '../../stores/useTabStore'
 import type { PaneContent } from '../../types/tab'
 import type { PaneRendererProps } from '../module-registry'
 import { registerSyncContributors } from '../sync/register-sync'
+import { useSyncStore } from '../sync/use-sync-store'
+import { SyncSection } from '../../components/settings/SyncSection'
 import {
   registerInterfaceSubsection,
   getInterfaceSubsections,
@@ -255,14 +257,29 @@ export function registerBuiltinModules(): void {
   // Editor module
   registerModule(editorModuleDefinition)
 
-  // Sync — a structural module WITHOUT a settings section. Its sidebar entry left with Profile Sync P3d-3
-  // (Settings › Profile replaces Settings › Sync; two sync entry points with different stores behind them is
-  // not an IA anyone chose). The module, its engine, its contributors (`registerSyncContributors` above) and
-  // `SyncSection` / `SnapshotHistoryPage` stay until P4a deletes them. Nothing of it runs by itself — every
-  // entry point was a button on that page — so no engine is left running that a user could no longer stop.
+  // Sync — a structural module whose settings section is listed ONLY WHILE THE OLD SYNC STILL NEEDS IT (Profile
+  // Sync P3d-3, review F4). Settings › Profile replaces Settings › Sync, and for nearly everyone the entry is
+  // gone. But `pendingConflicts` / `pendingRemoteBundle` are persisted, and `SyncSection` is the only place that
+  // resolves or dismisses them; and a provider other than off means the user is using it (every sync is a button
+  // on that page — nothing runs by itself), so that page is also where it is switched off. Turn it off with
+  // nothing pending and the entry goes at the shell's next render. The module, its engine, its contributors
+  // (`registerSyncContributors` above) and `SnapshotHistoryPage` stay until P4a deletes them.
   registerModule({
     id: 'sync',
     name: 'Sync',
+    settings: [
+      {
+        localId: 'sync',
+        scope: 'purdex',
+        order: SETTINGS_ORDER.MODULE_SYNC,
+        labelKey: 'settings.section.sync',
+        component: SyncSection,
+        visible: () => {
+          const sync = useSyncStore.getState()
+          return sync.activeProviderId !== null || sync.pendingConflicts.length > 0 || sync.pendingRemoteBundle !== null
+        },
+      },
+    ],
   })
 
   // FS backends

@@ -52,6 +52,14 @@ export interface SettingsContributionDeclaration<S extends SettingsScope = Setti
   component: React.ComponentType<{ ctx: SettingsContextFor<S> }>
   disabled?: (ctx: SettingsContextFor<S>) => boolean
   disabledReasonKey?: string
+  /**
+   * Is this section LISTED at all right now? Absent = always. Asked by `listContributions` on every call, with
+   * no context: it is for a section that exists only while some state of the app's needs it (the old Sync page,
+   * kept for whoever still has conflicts to resolve). Unlike `disabled` — a greyed-out row — a section that is
+   * not visible has no row and no route. Nothing re-renders the shell when the answer changes: it is read at
+   * the shell's next render, which is enough for state that only that very page changes.
+   */
+  visible?: () => boolean
 }
 
 // Registry-stored / shell-consumed form. System-filled fields present.

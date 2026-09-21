@@ -58,7 +58,7 @@ type StepId = 'stop' | 'sot' | 'local' | 'direction' | 'run'
 const ORDER: readonly StepId[] = ['stop', 'sot', 'local', 'direction', 'run']
 
 type Refusal = 'client-id' | 'junk-epoch' | 'no-parked-master'
-type NoticeReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone' | 'profile-changed' | 'profile-emptied' | 'profile-gone' | 'create-adopted'
+type NoticeReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone' | 'profile-changed' | 'profile-emptied' | 'profile-gone' | 'create-maybe'
 type PremiseReason = Extract<NoticeReason, 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone'>
 
 /** Which step a broken premise sends the wizard back to. */
@@ -129,12 +129,14 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   /** Profiles THIS visit created — for the WORDING of "pull is not offered" only; whether it is offered is `seen.empty`. */
   const [created, setCreated] = useState<readonly string[]>([])
   const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<Exclude<CreateResult, { ok: true }> | null>(null)
+  const [createError, setCreateError] = useState<Exclude<CreateResult, { ok: true } | { outcome: 'maybe' }> | null>(null)
   /** The chosen profile as the user SAW it when confirming step 2 (or as `prepareRun` found it since). */
   const [seen, setSeen] = useState<SotNow | null>(null)
   /** host id → the ids it listed before this visit's first POST to it (null: never read). Set once per host. */
   const baselines = useRef(new Map<string, readonly string[] | null>())
   /** The create for this host + name ended unknown: the next press looks before it sends. */
+  /** A profile that appeared after a create of unknown outcome: marked in the list as possibly the user's own. */
+  const [maybeId, setMaybeId] = useState<string | null>(null)
   const [lookFirst, setLookFirst] = useState<{ hostId: string; name: string } | null>(null)
   const [localId, setLocalId] = useState<string>(MASTER_PROFILE_ID)
   const [direction, setDirection] = useState<SyncDirection | null>(null)
@@ -243,6 +245,12 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
       // `not-created` too (a POST still on its way may land after the look).
       setLookFirst(r.outcome === 'failed' ? null : { hostId, name })
       if (r.outcome !== 'failed') sot.reload() // the list is where the user can see what the host holds now
+      if (r.outcome === 'maybe') {
+        // Pointed at, never taken: it may be another device's. The user chooses it from the list, or renames.
+        setMaybeId(r.candidateId)
+        setNotice('create-maybe')
+        return
+      }
       return setCreateError(r)
     }
     setLookFirst(null)
@@ -250,9 +258,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     setChoice({ kind: 'existing', id: r.id, name })
     setSeen(sotNow({ sections: [] })) // created — or found with no section: empty, until `prepareRun` hears otherwise
     sot.reload()
-    if (recheck('local')) return
-    setNotice(r.adopted ? 'create-adopted' : null)
-    setStep('local')
+    go('local')
   }
 
   // === what the later steps read of the earlier ones ===
@@ -411,6 +417,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
               newName={newName.value}
               onNewName={(value) => setNewName({ value, touched: true })}
               createError={createError}
+              maybeId={maybeId}
               disabled={creating}
             />
           )}

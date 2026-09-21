@@ -56,11 +56,16 @@
 // too (a 5xx or an unreadable 2xx may follow the commit; the cost of counting them in is one list request).
 // Then the host is listed and "ours" is looked for: same name, no section, no device attached, and an id that
 // was NOT in the BASELINE — the ids of the last list this wizard visit had read from that host BEFORE its first
-// POST (the component keeps it; ids, not `createdAt`: the daemon's clock is not this device's). Found → adopted,
-// and said. Not found → it was not created; the next press may POST. The list cannot be read → still unknown:
+// POST (the component keeps it; ids, not `createdAt`: the daemon's clock is not this device's). Found → it MAY
+// be ours, and that is all anybody can say: another device starting from the same list may have created a
+// profile of that name in the same moment, and nothing in the protocol ties a POST to its profile. Taking it
+// would attach two devices to one profile without either having chosen that. So it is POINTED AT (`maybe`), the
+// user takes it from the list like any existing profile — empty, so push only, and `prepareRun` catches it being
+// filled meanwhile — or gives the new one another name. Nothing is ever adopted. Not found → it was not
+// created; the next press may POST. The list cannot be read → still unknown:
 // the next press LOOKS FIRST (`lookFirst`) and does not POST until a list has been read. No baseline ("new" was
 // chosen while the list had never been read): ours cannot be told from one that was always there, so a
-// same-name empty profile is neither adopted nor doubled — the user is shown the list and picks, or renames.
+// same-name empty profile is neither pointed at nor doubled — the user is shown the list and picks, or renames.
 //
 // THE RESULT IS SAID OUTSIDE THE WIZARD, TOO (`announceRun`, acceptance F6). The Settings tab belongs to the
 // master's world, and a pull REPLACES that world: the page, the wizard and its "done" line are unmounted the
@@ -287,7 +292,9 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
 const OUTCOME_UNKNOWN: ReadonlySet<string> = new Set(['timeout', 'network', 'aborted', 'server', 'malformed', 'thrown'])
 
 export type CreateResult =
-  | { ok: true; id: string; adopted: boolean }
+  | { ok: true; id: string }
+  /** Unknown, and a profile that MAY be the one has appeared: shown to the user, never taken (see the header). */
+  | { ok: false; outcome: 'maybe'; request: string; candidateId: string }
   /** `failed`: the daemon said no — nothing was created. `not-created`: unknown at first, then looked for and not
    *  there. `unknown`: could not be looked for — the next press must look first. `same-name`: no baseline, and a
    *  profile of that name, empty, is there: ours or not, nobody can say. `request`: the failure's class. */
@@ -312,7 +319,7 @@ async function lookForCreated(hostId: string, name: string, baseline: readonly s
  */
 export async function createSotProfile(hostId: string, name: string, baseline: readonly string[] | null, lookFirst: boolean): Promise<CreateResult> {
   const settle = (looked: Looked, request: string): CreateResult | null => {
-    if (looked.kind === 'found') return { ok: true, id: looked.id, adopted: true }
+    if (looked.kind === 'found') return { ok: false, outcome: 'maybe', request, candidateId: looked.id }
     if (looked.kind === 'list-failed') return { ok: false, outcome: 'unknown', request }
     if (looked.kind === 'same-name') return { ok: false, outcome: 'same-name', request }
     return null
@@ -325,7 +332,7 @@ export async function createSotProfile(hostId: string, name: string, baseline: r
   let request: string
   try {
     const r = await createProfile(hostId, name)
-    if (r.kind === 'ok') return { ok: true, id: r.value.id, adopted: false }
+    if (r.kind === 'ok') return { ok: true, id: r.value.id }
     request = r.reason
   } catch {
     request = 'thrown'

@@ -783,37 +783,66 @@ describe('a create whose outcome is not known is looked for, never simply sent a
     click('profile-wizard-profile-new')
   }
 
-  it('the answer was lost but the host HAD created it: found in the list, used, said — one POST', async () => {
+  it('the answer was lost and a profile like it has appeared: it is POINTED AT, never taken — it may be another device\'s. The USER chooses it (or renames); one POST', async () => {
     vi.mocked(createProfile).mockResolvedValueOnce(failed('timeout'))
     await toNew()
     vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
     next()
     await flush()
-    expect(step()).toBe('local')
-    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'create-adopted')
-    expect(createProfile).toHaveBeenCalledTimes(1)
+    expect(step()).toBe('sot') // NOT moved on by itself
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'create-maybe')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveTextContent(en['settings.profile.wizard.notice.create_maybe'])
+    expect(screen.getByTestId(`profile-wizard-profile-maybe-${OURS.id}`)).toHaveTextContent(en['settings.profile.wizard.sot.maybe_yours'])
+    expect((screen.getByTestId(`profile-wizard-profile-${OURS.id}`) as HTMLInputElement).checked).toBe(false)
+    // pressing again with "new" still chosen creates nothing: the candidate is pointed at again
     next()
-    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled() // it is a new, empty one
+    await flush()
+    expect(createProfile).toHaveBeenCalledTimes(1)
+    expect(step()).toBe('sot')
+    // the user takes it: an existing profile like any other — empty, so push only; Start checks its fingerprint (F1)
+    click(`profile-wizard-profile-${OURS.id}`)
+    next()
+    await flush()
+    expect(step()).toBe('local')
+    next()
+    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled()
     next()
     click('profile-wizard-start')
     await flush()
     expect(attachMaster).toHaveBeenCalledWith('h1', OURS.id, 'push')
+    expect(createProfile).toHaveBeenCalledTimes(1)
   })
 
-  it('unknown AND the list unreadable: said; the next press LOOKS FIRST — and finds it, without a second POST', async () => {
+  it('… or renames: another name is another create, sent at once', async () => {
+    vi.mocked(createProfile).mockResolvedValueOnce(failed('timeout'))
+    await toNew()
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
+    next()
+    await flush()
+    fireEvent.change(screen.getByTestId('profile-wizard-new-name'), { target: { value: 'Laptop B' } })
+    next()
+    await flush()
+    expect(createProfile).toHaveBeenLastCalledWith('h1', 'Laptop B')
+    expect(step()).toBe('local')
+  })
+
+  it('unknown AND the list unreadable: said; the next press LOOKS FIRST — finds a candidate, points at it, and sends no second POST', async () => {
     vi.mocked(createProfile).mockResolvedValueOnce(failed('network'))
     await toNew()
-    vi.mocked(listProfiles).mockResolvedValueOnce(failed('network'))
+    // the look right after the POST cannot read the list; the list the page then reloads CAN — and shows the candidate
+    vi.mocked(listProfiles).mockResolvedValueOnce(failed('network')).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
     next()
     await flush()
     expect(step()).toBe('sot')
     expect(screen.getByTestId('profile-wizard-create-error')).toHaveAttribute('data-outcome', 'unknown')
     expect(screen.getByTestId('profile-wizard-create-error')).toHaveTextContent(en['settings.profile.wizard.sot.create_unknown'])
-    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
+    // THE BASELINE IS FROM BEFORE THE FIRST POST: the candidate is in the list on screen by now, and is still "new since"
+    expect(screen.getByTestId(`profile-wizard-profile-${OURS.id}`)).toBeInTheDocument()
     next()
     await flush()
     expect(createProfile).toHaveBeenCalledTimes(1)
-    expect(step()).toBe('local')
+    expect(step()).toBe('sot')
+    expect(screen.getByTestId(`profile-wizard-profile-maybe-${OURS.id}`)).toBeInTheDocument()
   })
 
   it('a profile of that name, empty, that was in the list BEFORE the create is not taken for it', async () => {

@@ -71,12 +71,22 @@ export function registerSettingsContribution(def: AnySettingsContribution): void
   contributions.set(def.id, def)
 }
 
+/** `visible()` absent → listed; false, or throwing → not (a section that cannot say is not shown). */
+function isVisible(c: AnySettingsContribution): boolean {
+  if (c.visible === undefined) return true
+  try {
+    return c.visible() === true
+  } catch {
+    return false
+  }
+}
+
 export function listContributions<S extends SettingsScope>(
   scope: S,
 ): Array<SettingsContribution<S>> {
   const out: Array<SettingsContribution<S>> = []
   for (const c of contributions.values()) {
-    if (c.scope === scope) out.push(c as unknown as SettingsContribution<S>)
+    if (c.scope === scope && isVisible(c)) out.push(c as unknown as SettingsContribution<S>)
   }
   // Spec §I2 (modules-switchboard sidebar alignment) — deterministic
   // comparator: (order, moduleId, localId). Centralized here so every
