@@ -803,13 +803,15 @@ describe('a create whose outcome is not known is looked for, never simply sent a
   it('unknown AND the list unreadable: said; the next press LOOKS FIRST — and finds it, without a second POST', async () => {
     vi.mocked(createProfile).mockResolvedValueOnce(failed('network'))
     await toNew()
-    vi.mocked(listProfiles).mockResolvedValueOnce(failed('network'))
+    // the look right after the POST cannot read the list; the list the page then reloads CAN — and shows ours
+    vi.mocked(listProfiles).mockResolvedValueOnce(failed('network')).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
     next()
     await flush()
     expect(step()).toBe('sot')
     expect(screen.getByTestId('profile-wizard-create-error')).toHaveAttribute('data-outcome', 'unknown')
     expect(screen.getByTestId('profile-wizard-create-error')).toHaveTextContent(en['settings.profile.wizard.sot.create_unknown'])
-    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [entry(P1, 'default'), OURS] })
+    // THE BASELINE IS FROM BEFORE THE FIRST POST: ours is on screen in the list by now, and is still "new since"
+    expect(screen.getByTestId(`profile-wizard-profile-${OURS.id}`)).toBeInTheDocument()
     next()
     await flush()
     expect(createProfile).toHaveBeenCalledTimes(1)
