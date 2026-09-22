@@ -12,8 +12,8 @@ import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { closeAttachGate } from '../lib/rebuild/attach-gate'
 import { provenanceBindings } from '../lib/rebuild/reconcile-host'
 import { connectionClosed, connectionOpened, forgetHost } from '../lib/rebuild/session-version'
-import { cancelSessionRefresh, operationLockAcquired, reconcileAfterLockRelease } from '../lib/rebuild/refresh-sessions'
-import { handleSessionsFrame } from '../lib/rebuild/ws-sessions'
+import { cancelSessionRefresh, currentLockGen, operationLockAcquired, reconcileAfterLockRelease } from '../lib/rebuild/refresh-sessions'
+import { endSessionsBarrier, handleSessionsFrame } from '../lib/rebuild/ws-sessions'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
@@ -24,8 +24,10 @@ import { ConnectionStateMachine } from '../lib/connection-state-machine'
  * a switch, a profile apply, a rebuild, a batch — writes under the lock and
  * releases it after its write, so a RELEASE is when the panes on screen are
  * reconciled from a list read after that write (`reconcileAfterLockRelease`,
- * which also runs the revive pass a rebuild in flight held back); an ACQUIRE
- * moves the lock generation that fences a release's refresh.
+ * which also runs the revive pass a rebuild in flight held back, and then ends
+ * each host's barrier); an ACQUIRE moves the lock generation that fences a
+ * release's refresh, and puts the versioned, live hosts in barrier — no WS
+ * verdict on the panes the holder is about to write (ws-sessions.ts).
  *
  * Transitions are read off the store as it is NOW, by grant identity, not off
  * the listener's `(state, prev)` pair: a listener that takes the lock inside a
@@ -45,7 +47,10 @@ export function createOperationLockObserver(): () => void {
     if (now === seen) return
     const was = seen
     seen = now
-    if (was !== null) void reconcileAfterLockRelease()
+    if (was !== null) {
+      const gen = currentLockGen()
+      void reconcileAfterLockRelease((hostId) => endSessionsBarrier(hostId, gen))
+    }
     if (now !== null) operationLockAcquired()
   }
 }

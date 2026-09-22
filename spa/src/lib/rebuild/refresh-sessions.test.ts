@@ -12,7 +12,7 @@ import type { FreshSessions, Session } from '../host-api'
 import { STORAGE_KEYS } from '../storage/keys'
 import type { Tab, TmuxSessionContent } from '../../types/tab'
 import { closeAttachGate, openAttachGate } from './attach-gate'
-import { __resetForTests, connectionClosed, connectionOpened, heldVersion, note } from './session-version'
+import { __resetForTests, clearHeld, connectionClosed, connectionOpened, forgetHost, heldVersion, inBarrier, note } from './session-version'
 import { handleSessionsFrame } from './ws-sessions'
 
 vi.mock('./cwd-probe', () => ({ probeMissingCwds: vi.fn(), probeSessionCwd: vi.fn(), resetCwdProbes: vi.fn() }))
@@ -37,6 +37,7 @@ vi.mock('./revive', async (importOriginal) => {
 const { reconcileHostSessions } = await import('./reconcile-host')
 const { runRevivePass, noteReconciledSessions } = await import('./revive')
 const { refreshSessionsAfterSwitch, reconcileAfterLockRelease, operationLockAcquired, cancelSessionRefresh, __resetRefreshForTests } = await import('./refresh-sessions')
+const { createOperationLockObserver } = await import('../../hooks/useMultiHostEventWs')
 const reconcile = vi.mocked(reconcileHostSessions)
 const revivePass = vi.mocked(runRevivePass)
 
@@ -582,6 +583,259 @@ describe('reconcileAfterLockRelease', () => {
       await drain(a)
       expect(listSessionsFresh).toHaveBeenCalledTimes(1)
       expect(reconcile).not.toHaveBeenCalled()
+    })
+  })
+})
+
+// #1309 + #1310 spec §3.1.1 (codex plan review #2): while the operation lock is
+// held — and until the release's refresh settles — a versioned frame on an open
+// gate is not reconciled: it may have been read before the write and would
+// judge the panes the write just put on screen. The newest one is kept and goes
+// through `decide` when the barrier ends, however it ends. Wired through the
+// hook's own lock observer.
+describe('the barrier', () => {
+  const NEWS: Session = { code: 'new777', name: 'fresh', cwd: '', mode: 'terminal', tmux_instance: '111:1000' }
+  let unsubscribe: () => void = () => {}
+  beforeEach(() => { unsubscribe = useRebuildStore.subscribe(createOperationLockObserver()) })
+  afterEach(() => unsubscribe())
+
+  const acquire = (owner = 'profile-sync') => {
+    const g = useRebuildStore.getState().acquireOperationLock(owner)
+    if (!g) throw new Error('lock held')
+    return g
+  }
+  const release = (g: ReturnType<typeof acquire>) => useRebuildStore.getState().releaseOperationLock(g)
+  const wsFrame = (seq: number, sessions: Session[]) =>
+    handleSessionsFrame(H, { type: 'sessions', session: '', value: JSON.stringify(sessions), epoch: E1, seq })
+  /** The write under the lock: a pane on `new777`, a session created just before it. */
+  function writePaneOnNews(): void {
+    const content: TmuxSessionContent = { kind: 'tmux-session', hostId: H, sessionCode: 'new777', mode: 'terminal', cachedName: 'fresh', tmuxInstance: '111:1000' }
+    const tab: Tab = { id: 'tn', pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: 'pn', content } } }
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, tn: tab }, tabOrder: [...useTabStore.getState().tabOrder, 'tn'] })
+  }
+  function newsPane(): TmuxSessionContent {
+    const layout = useTabStore.getState().tabs.tn.layout
+    if (layout.type !== 'leaf' || layout.pane.content.kind !== 'tmux-session') throw new Error('fixture')
+    return layout.pane.content
+  }
+  const settle = () => vi.advanceTimersByTimeAsync(0)
+
+  it('an acquire puts a versioned, live host in barrier — not a host with nothing versioned held, not one with its gate closed', () => {
+    useHostStore.setState({ hostOrder: [H, H2] })
+    openAttachGate(H2) // gate open, nothing versioned held
+    note(H, { epoch: E1, seq: 3 })
+    acquire()
+    expect(inBarrier(H)).toBe(true)
+    expect(inBarrier(H2)).toBe(false)
+  })
+
+  it('a gate-closed host is not put in barrier', () => {
+    note(H, { epoch: E1, seq: 3 })
+    closeAttachGate(H)
+    acquire()
+    expect(inBarrier(H)).toBe(false)
+  })
+
+  it('a versioned frame during the barrier is not reconciled; the newest by seq is kept and reconciled when the refresh ends without applying', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    const g = acquire()
+    wsFrame(6, [])   // newest: would close S
+    wsFrame(5, [S])  // older, arriving later
+    expect(reconcile).not.toHaveBeenCalled()
+    expect(terminated()).toBeUndefined()
+    listSessionsFresh.mockResolvedValue({ kind: 'unversioned' }) // ends without applying
+    release(g)
+    await settle()
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledWith(H, [])
+    expect(terminated()).toBe('session-closed')
+    expect(inBarrier(H)).toBe(false)
+  })
+
+  it('the refresh applies F: a stashed frame with seq ≤ F is dropped', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    const g = acquire()
+    wsFrame(4, [])
+    listSessionsFresh.mockResolvedValue(versioned(5, [S]))
+    release(g)
+    await settle()
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledWith(H, [S])
+    expect(terminated()).toBeUndefined()
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 5 })
+  })
+
+  it('the refresh applies F: a stashed frame with seq > F is reconciled after it', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    const g = acquire()
+    const d = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValue(d.promise)
+    release(g)
+    wsFrame(6, []) // pushed after the fetch was read, delivered before its answer
+    expect(reconcile).not.toHaveBeenCalled()
+    d.resolve(versioned(5, [S]))
+    await settle()
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenLastCalledWith(H, [])
+    expect(terminated()).toBe('session-closed')
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 6 })
+  })
+
+  describe('the refresh ends without applying → the stashed frame is reconciled through decide', () => {
+    it.each([
+      // (A moved world fence also stops this window's tab-store writes of the old world: only the call is asserted.)
+      ['the world fence moves', (d: ReturnType<typeof deferred<FreshSessions>>) => { setFence(200); d.resolve(versioned(9, [S])) }, false],
+      ['a stale answer', (d: ReturnType<typeof deferred<FreshSessions>>) => d.resolve(versioned(3, [S])), true],
+      ['it is cancelled', (d: ReturnType<typeof deferred<FreshSessions>>) => { cancelSessionRefresh(H); d.resolve(versioned(9, [S])) }, true],
+    ])('%s', async (_label, end, written) => {
+      note(H, { epoch: E1, seq: 3 })
+      const g = acquire()
+      wsFrame(5, [])
+      const d = deferred<FreshSessions>()
+      listSessionsFresh.mockReturnValue(d.promise)
+      release(g)
+      end(d)
+      await settle()
+      expect(reconcile).toHaveBeenCalledTimes(1)
+      expect(reconcile).toHaveBeenCalledWith(H, [])
+      if (written) expect(terminated()).toBe('session-closed')
+      expect(inBarrier(H)).toBe(false)
+    })
+
+    it('4 failed attempts', async () => {
+      note(H, { epoch: E1, seq: 3 })
+      const g = acquire()
+      wsFrame(5, [])
+      listSessionsFresh.mockRejectedValue(new Error('offline'))
+      release(g)
+      await settle()
+      expect(reconcile).not.toHaveBeenCalled() // still in barrier while retrying
+      await vi.advanceTimersByTimeAsync(7_000)
+      expect(listSessionsFresh).toHaveBeenCalledTimes(4)
+      expect(reconcile).toHaveBeenCalledTimes(1)
+      expect(terminated()).toBe('session-closed')
+    })
+
+    it('not refreshable at the release (nothing versioned held any more): reconciled right away', () => {
+      note(H, { epoch: E1, seq: 3 })
+      const g = acquire()
+      wsFrame(5, [])
+      clearHeld(H)
+      release(g)
+      expect(listSessionsFresh).not.toHaveBeenCalled()
+      expect(reconcile).toHaveBeenCalledTimes(1)
+      expect(terminated()).toBe('session-closed')
+    })
+
+    it('the gate closed (its connection dropped): the stash was that connection\'s — dropped, and the gate stays closed until the new connection\'s own frame', async () => {
+      note(H, { epoch: E1, seq: 3 })
+      const g = acquire()
+      wsFrame(5, [])
+      connectionClosed(H)
+      closeAttachGate(H)
+      release(g)
+      await settle()
+      expect(listSessionsFresh).not.toHaveBeenCalled()
+      expect(reconcile).not.toHaveBeenCalled()
+      expect(useHostStore.getState().runtime[H]?.attachReady).toBe(false)
+      expect(inBarrier(H)).toBe(false)
+    })
+  })
+
+  it('an unversioned frame and a closed-gate frame during the barrier are handled at once', () => {
+    note(H, { epoch: E1, seq: 3 })
+    acquire()
+    handleSessionsFrame(H, { type: 'sessions', session: '', value: JSON.stringify([S]) })
+    expect(reconcile).toHaveBeenCalledTimes(1)
+
+    note(H, { epoch: E1, seq: 3 })
+    connectionClosed(H)
+    closeAttachGate(H)
+    connectionOpened(H)
+    wsFrame(4, [])
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(terminated()).toBe('session-closed')
+    expect(useHostStore.getState().runtime[H]?.attachReady).toBe(true) // the gate opens exactly as it would have
+  })
+
+  it('a second acquire during the barrier keeps it: the next release\'s refresh ends it', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    const a = acquire()
+    wsFrame(5, [])
+    const d = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(d.promise)
+    release(a)
+    const b = acquire()
+    d.resolve(versioned(9, [S]))
+    await settle()
+    expect(reconcile).not.toHaveBeenCalled() // A's answer meets B's lock
+    expect(inBarrier(H)).toBe(true)
+    listSessionsFresh.mockResolvedValueOnce(versioned(3, [S])) // stale: ends without applying
+    release(b)
+    await settle()
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenCalledWith(H, [])
+    expect(inBarrier(H)).toBe(false)
+  })
+
+  it('a holder change inside the release notification (X → Y) keeps the barrier for Y', async () => {
+    unsubscribe()
+    let y: ReturnType<typeof acquire> | null = null
+    const takeOver = useRebuildStore.subscribe((s, prev) => {
+      if (prev.lockedBy === 'x' && s.lockedBy === null && y === null) y = acquire('y')
+    })
+    unsubscribe = useRebuildStore.subscribe(createOperationLockObserver()) // after `takeOver`: it hears of X's release late
+    try {
+      note(H, { epoch: E1, seq: 3 })
+      const x = acquire('x')
+      wsFrame(5, [])
+      listSessionsFresh.mockResolvedValue(versioned(9, [S]))
+      release(x)
+      expect(useRebuildStore.getState().lockedBy).toBe('y')
+      await settle()
+      expect(reconcile).not.toHaveBeenCalled()
+      expect(inBarrier(H)).toBe(true)
+      release(y!)
+      await settle()
+      expect(reconcile).toHaveBeenCalledTimes(1)
+      expect(reconcile).toHaveBeenCalledWith(H, [S]) // F = 9; the stash (5) is dropped
+    } finally {
+      takeOver()
+    }
+  })
+
+  it('entry teardown clears the barrier and the stash', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    const g = acquire()
+    wsFrame(5, [])
+    forgetHost(H)
+    expect(inBarrier(H)).toBe(false)
+    release(g)
+    await settle()
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  // The regression codex asked for: the apply lands a pane on `new777`, created
+  // just before it; a frame read before `new777` existed arrives after the write
+  // and before the release's refresh answers.
+  describe('a frame read before the write, delivered after it', () => {
+    it.each([
+      ['F has the session → the pane stays live', [S, NEWS], undefined],
+      ['F lacks it → session-closed, from F', [S], 'session-closed'],
+    ] as const)('%s', async (_label, fSessions, verdict) => {
+      note(H, { epoch: E1, seq: 3 })
+      const g = acquire()
+      writePaneOnNews()
+      wsFrame(4, [S]) // read before `new777` existed
+      expect(newsPane().terminated).toBeUndefined()
+      const d = deferred<FreshSessions>()
+      listSessionsFresh.mockReturnValue(d.promise)
+      release(g)
+      expect(newsPane().terminated).toBeUndefined() // still before the answer
+      d.resolve(versioned(5, [...fSessions]))
+      await settle()
+      expect(newsPane().terminated).toBe(verdict)
+      expect(reconcile).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -22,11 +22,27 @@
 // no list at all: the whole frame is ignored, versioned or not, and `held` is
 // left alone (codex adversarial F4). An unversioned reconcile that throws keeps
 // `held` and asks for the same recovery refresh as a versioned one.
+//
+// THE BARRIER (#1309 + #1310 spec §3.1.1, codex plan review #2). The version
+// orders lists against lists, not against this window's own writes: a frame
+// read by the daemon BEFORE a write under the operation lock but delivered
+// after it would judge the panes the write just put on screen — a session
+// created just before the write, absent from that frame, would be marked
+// `session-closed`, irreversibly. So from the lock's acquire until the
+// release's refresh settles, a versioned, live host is in barrier
+// (refresh-sessions.ts raises it, `endSessionsBarrier` lowers it): a versioned
+// frame on its open gate is not reconciled but held back, newest only. When the
+// barrier ends — however the refresh ended — the frame goes through the normal
+// path below, i.e. through `decide`: older than the refreshed list → dropped;
+// newer, or no list was applied → reconciled, as it would have been without
+// the barrier. Unversioned frames (nothing better is coming) and frames on a
+// closed gate (a new connection: the gate must open) are handled at once.
 import type { HostEvent } from '../host-events'
 import type { Session } from '../host-api'
 import { reconcileHostSessions } from './reconcile-host'
-import { recoverHostSessions } from './refresh-sessions'
-import { clearHeld, decide, note, parseVersion } from './session-version'
+import { canAttachTerminal } from './attach-gate'
+import { currentLockGen, recoverHostSessions } from './refresh-sessions'
+import { clearHeld, decide, dropStash, inBarrier, lowerBarrier, note, parseVersion, stashFrame } from './session-version'
 
 export function handleSessionsFrame(hostId: string, event: HostEvent): void {
   let parsed: unknown
@@ -39,6 +55,7 @@ export function handleSessionsFrame(hostId: string, event: HostEvent): void {
   const data = parsed as Session[]
   const v = parseVersion(event)
   if (v === null) {
+    dropStash(hostId) // this list came later on the same socket
     try {
       reconcileHostSessions(hostId, data)
     } catch {
@@ -46,6 +63,10 @@ export function handleSessionsFrame(hostId: string, event: HostEvent): void {
       return // held stays: this list was not applied, so nothing is known to be older than it
     }
     clearHeld(hostId)
+    return
+  }
+  if (inBarrier(hostId) && canAttachTerminal(hostId)) {
+    stashFrame(hostId, event, v)
     return
   }
   if (decide(hostId, v, { kind: 'ws' }) === 'stale') return
@@ -56,4 +77,17 @@ export function handleSessionsFrame(hostId: string, event: HostEvent): void {
   } catch {
     void recoverHostSessions(hostId)
   }
+}
+
+/**
+ * The refresh started by the lock release of lock generation `lockGen` is over
+ * for `hostId` (whether it applied a list or not): end the host's barrier and
+ * hand the frame it held back to the normal path. Nothing happens when the lock
+ * was taken again since — the barrier is the next holder's, and ITS release's
+ * refresh ends it.
+ */
+export function endSessionsBarrier(hostId: string, lockGen: number): void {
+  if (currentLockGen() !== lockGen) return
+  const stashed = lowerBarrier(hostId)
+  if (stashed !== null) handleSessionsFrame(hostId, stashed)
 }

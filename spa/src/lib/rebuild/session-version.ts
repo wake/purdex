@@ -15,8 +15,13 @@
 //            host-events socket and on entry teardown. A fetch records the
 //            `conn` it was sent on: a list from a DIFFERENT daemon process is
 //            only trusted when it was sent on the connection that is live now.
+//   `barrier` — (#1309 + #1310 spec §3.1.1) the host's versioned frames are
+//            held back, not reconciled, from an operation-lock acquire until
+//            the release's refresh settles; only the newest one is kept
+//            (`stash`), with the `conn` it arrived on. See ws-sessions.ts.
 //
 // Not zustand, not persisted, not synced: it describes this window's sockets.
+import type { HostEvent } from '../host-events'
 
 export interface SessionVersion {
   epoch: string
@@ -30,6 +35,14 @@ const EPOCH = /^[0-9a-f]{16}$/
 
 const held = new Map<string, SessionVersion>()
 const conns = new Map<string, number>()
+
+interface Stashed {
+  event: HostEvent
+  v: SessionVersion
+  conn: number
+}
+/** Hosts in barrier → the newest versioned frame held back (null: none yet). */
+const barriers = new Map<string, Stashed | null>()
 
 /** `{epoch, seq}` off a frame or a response body; null when it is unversioned (or malformed). */
 export function parseVersion(x: unknown): SessionVersion | null {
@@ -61,6 +74,7 @@ export function connectionClosed(hostId: string): void {
 /** The host's entry was torn down (removed, endpoint changed, unmount): nothing held survives it. */
 export function forgetHost(hostId: string): void {
   held.delete(hostId)
+  barriers.delete(hostId)
   bump(hostId)
 }
 
@@ -94,7 +108,50 @@ export function note(hostId: string, v: SessionVersion): void {
   held.set(hostId, v)
 }
 
+// === The barrier (spec §3.1.1) ===
+
+/** Hold back `hostId`'s versioned frames. A host already in barrier keeps it — and its stash. */
+export function raiseBarrier(hostId: string): void {
+  if (!barriers.has(hostId)) barriers.set(hostId, null)
+}
+
+export function inBarrier(hostId: string): boolean {
+  return barriers.has(hostId)
+}
+
+/**
+ * Keep `event` (version `v`, a frame of the current socket) if it is the
+ * newest held back so far: same epoch → the higher seq; another epoch → the
+ * later arrival (the current socket speaks for the running process, as `decide`).
+ */
+export function stashFrame(hostId: string, event: HostEvent, v: SessionVersion): void {
+  if (!barriers.has(hostId)) return
+  const prev = barriers.get(hostId) ?? null
+  if (prev !== null && prev.v.epoch === v.epoch && prev.v.seq >= v.seq) return
+  barriers.set(hostId, { event, v, conn: currentConn(hostId) })
+}
+
+/** A later list was handled on this socket: nothing held back may be reconciled after it. */
+export function dropStash(hostId: string): void {
+  if (barriers.has(hostId)) barriers.set(hostId, null)
+}
+
+/**
+ * End `hostId`'s barrier. Returns the frame held back when it came on the
+ * connection that is live now — the caller hands it to the normal path, where
+ * `decide` judges it. A frame of a connection that has since closed is dropped:
+ * that connection's gate is closed, and the new one's own first frame (read
+ * later) is what may open it.
+ */
+export function lowerBarrier(hostId: string): HostEvent | null {
+  const stashed = barriers.get(hostId) ?? null
+  barriers.delete(hostId)
+  if (stashed === null || stashed.conn !== currentConn(hostId)) return null
+  return stashed.event
+}
+
 export function __resetForTests(): void {
   held.clear()
   conns.clear()
+  barriers.clear()
 }

@@ -35,7 +35,7 @@ import { readWorldEpochFence } from '../storage/world-fence'
 import { canAttachTerminal } from './attach-gate'
 import { reconcileHostSessions } from './reconcile-host'
 import { runRevivePass } from './revive'
-import { currentConn, decide, heldVersion, note } from './session-version'
+import { currentConn, decide, heldVersion, note, raiseBarrier } from './session-version'
 
 /** `ip:port` of a host still in `hostOrder`; null otherwise. */
 function endpointOf(hostId: string): string | null {
@@ -85,9 +85,21 @@ export function currentLockGen(): number {
   return lockGen
 }
 
-/** The operation lock went from free to held. */
+/** The versioned, live hosts: gate open AND a versioned list reconciled on this connection. */
+function versionedLive(hostId: string): boolean {
+  return canAttachTerminal(hostId) && heldVersion(hostId) !== null
+}
+
+/**
+ * The operation lock went from free to held: the lock generation moves, and
+ * every versioned, live host enters barrier (spec §3.1.1, ws-sessions.ts) until
+ * the release's refresh for it settles. A host already in barrier keeps it.
+ */
 export function operationLockAcquired(): void {
   lockGen++
+  for (const hostId of useHostStore.getState().hostOrder) {
+    if (versionedLive(hostId)) raiseBarrier(hostId)
+  }
 }
 
 function lockFenceHolds(f: RefreshFences): boolean {
@@ -245,18 +257,29 @@ export function refreshSessionsAfterSwitch(): Promise<void> {
  *   list last reconciled — a closed gate waits for its connection's own first
  *   frame, and an old daemon offers nothing better.
  *
+ * `onHostSettled(hostId)` runs once that host is done — right away on the
+ * revive path, when its refresh is over otherwise, however it ended; the lock
+ * observer ends the host's barrier there (ws-sessions.ts,
+ * `endSessionsBarrier`).
+ *
  * Called synchronously from the lock observer, i.e. inside
  * `releaseOperationLock`'s `set`: nothing here may throw. The promise settles
  * when every host's refresh is over; it exists for tests.
  */
-export function reconcileAfterLockRelease(): Promise<void> {
+export function reconcileAfterLockRelease(onHostSettled: (hostId: string) => void = () => {}): Promise<void> {
   const gen = lockGen
+  const settled = (hostId: string) => {
+    try {
+      onHostSettled(hostId)
+    } catch { /* ignore */ }
+  }
   const hosts = useHostStore.getState().hostOrder
   return Promise.all(hosts.map((hostId) => {
     try {
-      if (canAttachTerminal(hostId) && heldVersion(hostId) !== null) return refreshLive(hostId, gen).catch(() => {})
+      if (versionedLive(hostId)) return refreshLive(hostId, gen).catch(() => {}).then(() => settled(hostId))
       runRevivePass(hostId)
     } catch { /* ignore */ }
+    settled(hostId)
     return Promise.resolve()
   })).then(() => {})
 }
