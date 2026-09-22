@@ -16,6 +16,20 @@ var nameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // --- HTTP Handlers ---
 
 func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
+	// ?fresh=1 (exactly) answers a versioned envelope from a new tmux read,
+	// never from the list cache (spec §3.1). Any other value keeps the bare
+	// array, so an old daemon's answer is structurally distinguishable.
+	if r.URL.Query().Get("fresh") == "1" {
+		v, err := m.versionedList()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(v)
+		return
+	}
+
 	sessions, err := m.cachedListSessions()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

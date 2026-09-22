@@ -238,6 +238,108 @@ func TestHandlerListSessionsEmpty(t *testing.T) {
 	assert.Equal(t, "[]", body)
 }
 
+// getList runs GET <path> through mux and returns the recorder.
+func getList(t *testing.T, mux *http.ServeMux, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
+}
+
+// getFresh runs GET /api/sessions?fresh=1 and decodes the envelope.
+func getFresh(t *testing.T, mux *http.ServeMux) VersionedSessions {
+	t.Helper()
+	w := getList(t, mux, "/api/sessions?fresh=1")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var v VersionedSessions
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &v))
+	return v
+}
+
+func sessionNames(list []SessionInfo) []string {
+	names := make([]string, 0, len(list))
+	for _, s := range list {
+		names = append(names, s.Name)
+	}
+	return names
+}
+
+func TestHandlerListSessionsFresh_Envelope(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	fake.AddSession("alpha", "/tmp/alpha")
+
+	w := getList(t, mux, "/api/sessions?fresh=1")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	require.Contains(t, raw, "epoch")
+	require.Contains(t, raw, "seq")
+	require.Contains(t, raw, "sessions")
+
+	var v VersionedSessions
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &v))
+	assert.Equal(t, mod.epoch, v.Epoch)
+	assert.GreaterOrEqual(t, v.Seq, uint64(1))
+	assert.Equal(t, []string{"alpha"}, sessionNames(v.Sessions))
+}
+
+func TestHandlerListSessionsFresh_EmptyIsArray(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	w := getList(t, mux, "/api/sessions?fresh=1")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"sessions":[]`)
+}
+
+// A warm plain-GET cache must not answer ?fresh=1 (spec §3.1).
+func TestHandlerListSessionsFresh_BypassesWarmCache(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	fake.AddSession("alpha", "/tmp")
+
+	require.Equal(t, http.StatusOK, getList(t, mux, "/api/sessions").Code) // warm
+	fake.AddSession("beta", "/tmp")                                         // inside the TTL
+
+	v := getFresh(t, mux)
+	assert.Equal(t, []string{"alpha", "beta"}, sessionNames(v.Sessions))
+}
+
+// Only the exact value fresh=1 selects the envelope; everything else keeps
+// today's bare array.
+func TestHandlerListSessionsFresh_OtherValuesStayArray(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	fake.AddSession("alpha", "/tmp")
+
+	for _, path := range []string{"/api/sessions", "/api/sessions?fresh=0", "/api/sessions?fresh=true", "/api/sessions?fresh="} {
+		w := getList(t, mux, path)
+		require.Equal(t, http.StatusOK, w.Code, path)
+		var arr []SessionInfo
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &arr), "%s must answer a bare array", path)
+		assert.Len(t, arr, 1, path)
+	}
+}
+
+func TestHandlerListSessionsFresh_TmuxErrorIs500(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mod.tmux = &listFailingExecutor{Executor: fake, err: errors.New("tmux list exploded")}
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	w := getList(t, mux, "/api/sessions?fresh=1")
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "tmux list exploded")
+}
+
 func TestHandlerGetSession(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	mux := http.NewServeMux()
