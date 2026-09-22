@@ -1,7 +1,8 @@
 // spa/src/hooks/useMultiHostEventWs.revive.test.ts — the two revive triggers
 // (spec §3.2): a reconciled `sessions` payload revives the host's
 // `tmux-restarted` panes by name, and an operation-lock release re-runs the
-// pass for every host. Real stores and the real engine / batch throughout —
+// pass for every host (from a fresh list for a versioned host, #1309 — the
+// frames here are unversioned unless a test says otherwise). Real stores and the real engine / batch throughout —
 // the scenarios are about how the pass interleaves with them.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
@@ -588,7 +589,8 @@ describe('useMultiHostEventWs revive — a profile switch', () => {
 
   it('after the post-switch reconcile it IS revived, from the new list', async () => {
     const view = await mount()
-    emit([NEW1])
+    // A versioned frame: the lock release refreshes this host from a fresh list (#1309).
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'sessions', session: '', value: JSON.stringify([NEW1]), epoch: '9f3c1a0b7d2e4c61', seq: 4 })) })
     listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: '9f3c1a0b7d2e4c61', seq: 5, sessions: [NEW1] })
 
     expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })

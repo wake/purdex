@@ -36,7 +36,7 @@ vi.mock('./revive', async (importOriginal) => {
 
 const { reconcileHostSessions } = await import('./reconcile-host')
 const { runRevivePass, noteReconciledSessions } = await import('./revive')
-const { refreshSessionsAfterSwitch, reconcileAfterLockRelease, operationLockAcquired, cancelSessionRefresh, __resetRefreshForTests } = await import('./refresh-sessions')
+const { reconcileAfterLockRelease, operationLockAcquired, cancelSessionRefresh, __resetRefreshForTests } = await import('./refresh-sessions')
 const { createOperationLockObserver } = await import('../../hooks/useMultiHostEventWs')
 const reconcile = vi.mocked(reconcileHostSessions)
 const revivePass = vi.mocked(runRevivePass)
@@ -110,16 +110,20 @@ async function drain(p: Promise<void>): Promise<void> {
   await p
 }
 
-describe('refreshSessionsAfterSwitch', () => {
+// The refresh itself (#1255 §3.2), driven by a lock release: the host is
+// versioned & live — gate open, a versioned list held (`held` below).
+describe('refreshHost — through reconcileAfterLockRelease', () => {
+  beforeEach(() => note(H, { epoch: E1, seq: 1 }))
+
   it('gate closed: no fetch', async () => {
     closeAttachGate(H)
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     expect(listSessionsFresh).not.toHaveBeenCalled()
   })
 
   it('an unversioned answer (old daemon) is not reconciled', async () => {
     listSessionsFresh.mockResolvedValue({ kind: 'unversioned' })
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     expect(listSessionsFresh).toHaveBeenCalledWith(H)
     expect(reconcile).not.toHaveBeenCalled()
   })
@@ -127,7 +131,7 @@ describe('refreshSessionsAfterSwitch', () => {
   it('a newer versioned list is reconciled with the fetched sessions, then held', async () => {
     note(H, { epoch: E1, seq: 3 })
     listSessionsFresh.mockResolvedValue(versioned(4, []))
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     expect(reconcile).toHaveBeenCalledWith(H, [])
     expect(terminated()).toBe('session-closed')
     expect(heldVersion(H)).toEqual({ epoch: E1, seq: 4 })
@@ -136,7 +140,7 @@ describe('refreshSessionsAfterSwitch', () => {
   it('an older or equal versioned list is dropped', async () => {
     note(H, { epoch: E1, seq: 9 })
     listSessionsFresh.mockResolvedValue(versioned(9, []))
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     expect(reconcile).not.toHaveBeenCalled()
     expect(terminated()).toBeUndefined()
   })
@@ -148,7 +152,7 @@ describe('refreshSessionsAfterSwitch', () => {
     reconcile.mockImplementationOnce(() => { throw new Error('quota') })
     listSessionsFresh.mockResolvedValueOnce(versioned(5, [S]))
     listSessionsFresh.mockResolvedValue({ kind: 'unversioned' }) // the retry: not evidence
-    const p = refreshSessionsAfterSwitch()
+    const p = reconcileAfterLockRelease()
     await expect(drain(p)).resolves.toBeUndefined()
     expect(heldVersion(H)).toEqual({ epoch: E1, seq: 5 })
 
@@ -191,7 +195,7 @@ describe('refreshSessionsAfterSwitch', () => {
     note(H, { epoch: E1, seq: 3 })
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     // The hook's onClose, then a new connection whose first frame reopens the gate.
     connectionClosed(H)
     closeAttachGate(H)
@@ -207,7 +211,7 @@ describe('refreshSessionsAfterSwitch', () => {
     setFence(100)
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     setFence(200)
     d.resolve(versioned(4, []))
     await pending
@@ -217,14 +221,14 @@ describe('refreshSessionsAfterSwitch', () => {
   it('the world generation of a device that never switched (no fence key) compares equal to itself', async () => {
     expect(localStorage.getItem(STORAGE_KEYS.WORLD_EPOCH)).toBeNull()
     listSessionsFresh.mockResolvedValue(versioned(4, []))
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     expect(reconcile).toHaveBeenCalledTimes(1)
   })
 
   it('…and the first switch ever (no fence → a fence) during the fetch drops it', async () => {
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     setFence(1_700_000_000_000_000)
     d.resolve(versioned(4, []))
     await pending
@@ -234,7 +238,7 @@ describe('refreshSessionsAfterSwitch', () => {
   it('the gate closes during the fetch: dropped', async () => {
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     closeAttachGate(H)
     d.resolve(versioned(4, []))
     await pending
@@ -244,7 +248,7 @@ describe('refreshSessionsAfterSwitch', () => {
   it('the host is removed during the fetch: dropped', async () => {
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     useHostStore.setState({ hostOrder: [] })
     d.resolve(versioned(4, []))
     await pending
@@ -254,7 +258,7 @@ describe('refreshSessionsAfterSwitch', () => {
   it('the host\'s endpoint changes during the fetch: dropped', async () => {
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     const h = useHostStore.getState().hosts[H]
     useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, [H]: { ...h, port: 7861 } } })
     d.resolve(versioned(4, []))
@@ -266,7 +270,7 @@ describe('refreshSessionsAfterSwitch', () => {
     note(H, { epoch: E1, seq: 3 })
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     connectionClosed(H)
     connectionOpened(H)
     d.resolve(versioned(1, [], E2))
@@ -278,7 +282,7 @@ describe('refreshSessionsAfterSwitch', () => {
     note(H, { epoch: E1, seq: 3 })
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     connectionClosed(H)
     connectionOpened(H)
     d.resolve(versioned(4, []))
@@ -291,7 +295,7 @@ describe('refreshSessionsAfterSwitch', () => {
     note(H, { epoch: E1, seq: 3 })
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValue(d.promise)
-    const pending = refreshSessionsAfterSwitch()
+    const pending = reconcileAfterLockRelease()
     handleSessionsFrame(H, { type: 'sessions', session: '', value: JSON.stringify([S]), epoch: E1, seq: 6 })
     reconcile.mockClear()
     d.resolve(versioned(5, [])) // read before the frame's list: would close S
@@ -305,11 +309,12 @@ describe('refreshSessionsAfterSwitch', () => {
     useHostStore.setState({ hostOrder: [H, H2] })
     seedLivePane(H2)
     openAttachGate(H2)
+    note(H2, { epoch: E1, seq: 1 })
     listSessionsFresh.mockImplementation(async (hostId) => {
       if (hostId === H) throw new Error('offline')
       return versioned(4, [])
     })
-    await drain(refreshSessionsAfterSwitch())
+    await drain(reconcileAfterLockRelease())
     expect(reconcile).toHaveBeenCalledTimes(1)
     expect(reconcile).toHaveBeenCalledWith(H2, [])
     expect(terminated(H)).toBeUndefined()
@@ -319,7 +324,7 @@ describe('refreshSessionsAfterSwitch', () => {
   it('idempotent: a list that still has the session changes no binding', async () => {
     listSessionsFresh.mockResolvedValue(versioned(4, [S]))
     const before = useTabStore.getState().tabs
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     expect(reconcile).toHaveBeenCalledTimes(1)
     expect(useTabStore.getState().tabs).toBe(before)
   })
@@ -328,13 +333,15 @@ describe('refreshSessionsAfterSwitch', () => {
 // A host with no further session change never pushes again, so one failed
 // fetch / reconcile must not leave the world un-reconciled for good (codex
 // adversarial F3): a bounded number of retries, each re-checking its fences.
-describe('refreshSessionsAfterSwitch — retries', () => {
+describe('refreshHost — retries', () => {
+  beforeEach(() => note(H, { epoch: E1, seq: 1 }))
+
   const offline = () => Promise.reject(new Error('offline'))
 
   it('a fetch that fails twice and then succeeds is reconciled once', async () => {
     listSessionsFresh.mockImplementationOnce(offline).mockImplementationOnce(offline)
       .mockResolvedValueOnce(versioned(4, []))
-    const p = refreshSessionsAfterSwitch()
+    const p = reconcileAfterLockRelease()
     await vi.advanceTimersByTimeAsync(0)
     expect(listSessionsFresh).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1_000)
@@ -348,7 +355,7 @@ describe('refreshSessionsAfterSwitch — retries', () => {
 
   it('every attempt fails: it stops after the last retry and schedules nothing more', async () => {
     listSessionsFresh.mockImplementation(offline)
-    await drain(refreshSessionsAfterSwitch())
+    await drain(reconcileAfterLockRelease())
     expect(listSessionsFresh).toHaveBeenCalledTimes(4) // the first try + 3 retries (1 s, 2 s, 4 s)
     expect(vi.getTimerCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(60_000)
@@ -359,7 +366,7 @@ describe('refreshSessionsAfterSwitch — retries', () => {
   it('a reconcile that throws is retried with a fresh fetch', async () => {
     reconcile.mockImplementationOnce(() => { throw new Error('quota') })
     listSessionsFresh.mockResolvedValueOnce(versioned(4, [])).mockResolvedValueOnce(versioned(5, []))
-    await drain(refreshSessionsAfterSwitch())
+    await drain(reconcileAfterLockRelease())
     expect(listSessionsFresh).toHaveBeenCalledTimes(2)
     expect(reconcile).toHaveBeenCalledTimes(2)
     expect(terminated()).toBe('session-closed')
@@ -377,7 +384,7 @@ describe('refreshSessionsAfterSwitch — retries', () => {
     }],
   ])('%s during the retry wait: no further attempt', async (_label, move) => {
     listSessionsFresh.mockImplementationOnce(offline).mockResolvedValue(versioned(4, []))
-    const p = refreshSessionsAfterSwitch()
+    const p = reconcileAfterLockRelease()
     await vi.advanceTimersByTimeAsync(0)
     expect(listSessionsFresh).toHaveBeenCalledTimes(1)
     move()
@@ -388,21 +395,21 @@ describe('refreshSessionsAfterSwitch — retries', () => {
 
   it('an unversioned answer is not retried', async () => {
     listSessionsFresh.mockResolvedValue({ kind: 'unversioned' })
-    await drain(refreshSessionsAfterSwitch())
+    await drain(reconcileAfterLockRelease())
     expect(listSessionsFresh).toHaveBeenCalledTimes(1)
   })
 
   it('a stale answer is not retried', async () => {
     note(H, { epoch: E1, seq: 9 })
     listSessionsFresh.mockResolvedValue(versioned(9, []))
-    await drain(refreshSessionsAfterSwitch())
+    await drain(reconcileAfterLockRelease())
     expect(listSessionsFresh).toHaveBeenCalledTimes(1)
     expect(reconcile).not.toHaveBeenCalled()
   })
 
   it('teardown (cancelSessionRefresh) ends a pending retry: no further attempt, no timer left', async () => {
     listSessionsFresh.mockImplementationOnce(offline).mockResolvedValue(versioned(4, []))
-    const p = refreshSessionsAfterSwitch()
+    const p = reconcileAfterLockRelease()
     await vi.advanceTimersByTimeAsync(0)
     cancelSessionRefresh(H)
     await p // settles without any timer firing
@@ -413,10 +420,10 @@ describe('refreshSessionsAfterSwitch — retries', () => {
 
   it('one refresh per host at a time: a newer one replaces the one waiting to retry', async () => {
     listSessionsFresh.mockImplementationOnce(offline)
-    const first = refreshSessionsAfterSwitch()
+    const first = reconcileAfterLockRelease()
     await vi.advanceTimersByTimeAsync(0)
     listSessionsFresh.mockResolvedValueOnce(versioned(4, []))
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     await drain(first)
     expect(listSessionsFresh).toHaveBeenCalledTimes(2) // the replaced one never retried
     expect(reconcile).toHaveBeenCalledTimes(1)
@@ -425,9 +432,9 @@ describe('refreshSessionsAfterSwitch — retries', () => {
   it('one refresh per host at a time: a replaced one\'s in-flight answer is dropped', async () => {
     const d = deferred<FreshSessions>()
     listSessionsFresh.mockReturnValueOnce(d.promise)
-    const first = refreshSessionsAfterSwitch()
+    const first = reconcileAfterLockRelease()
     listSessionsFresh.mockResolvedValueOnce(versioned(4, [S]))
-    await refreshSessionsAfterSwitch()
+    await reconcileAfterLockRelease()
     expect(reconcile).toHaveBeenCalledTimes(1)
     d.resolve(versioned(5, [])) // would close S if it were still the host's refresh
     await drain(first)

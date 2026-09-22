@@ -224,7 +224,7 @@ export function recoverHostSessions(hostId: string): Promise<void> {
   })
 }
 
-function refreshLive(hostId: string, lock: number | null): Promise<void> {
+function refreshLive(hostId: string, lock: number): Promise<void> {
   // ONE synchronous step (spec §3.3, last paragraph): the gate and `conn` are
   // read together, so the fetch is sent only while the gate is open AND `conn`
   // names the connection that opened it — the hook moves `conn` before it
@@ -235,16 +235,6 @@ function refreshLive(hostId: string, lock: number | null): Promise<void> {
   const endpoint = endpointOf(hostId)
   if (endpoint === null) return Promise.resolve()
   return refreshHost(hostId, { world, conn, endpoint, requireGate: true, lockGen: lock })
-}
-
-/**
- * Fire-and-forget for the caller (`switchActiveProfile`, after both locks are
- * released); the promise only exists for tests. Each host on its own: one
- * host's failure costs no other its refresh.
- */
-export function refreshSessionsAfterSwitch(): Promise<void> {
-  const hosts = useHostStore.getState().hostOrder
-  return Promise.all(hosts.map((hostId) => refreshLive(hostId, null).catch(() => {}))).then(() => {})
 }
 
 /**
