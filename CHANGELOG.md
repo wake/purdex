@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.423] - 2026-09-23
+
+### Feature（daemon）：不經快取、帶版本的 session 清單（#1255 daemon 那一半，#1292）
+
+Profile Sync 切換 profile 之後要重新對帳 session，但原本拿到的清單都不能當「session 已經關掉」的證據：
+`GET /api/sessions` 走 1 秒快取、create／rename／kill 都不會讓它失效；WS 的 `sessions` 推送經過 500 ms debounce，
+也沒辦法跟 fetch 比先後。
+
+- **`GET /api/sessions?fresh=1`** —— 回 `{epoch, seq, sessions}`，永遠是新的 tmux 讀取。只有 `fresh=1` 才是新格式，
+  其他照舊回陣列；舊 daemon 會忽略 query 回陣列，SPA 以此判定「沒有版本」。
+- **WS `sessions` frame** —— 訂閱快照、wait-for 推送、ticker 推送都多帶頂層 `epoch`／`seq`；其他 frame 位元組不變。
+- **語意** —— `epoch` 是 daemon 行程身分（64-bit 亂數，只比相等）；`seq` 所有管道共用一個計數器，
+  取號與 tmux 讀取在同一把鎖內，所以同一個 epoch 裡 seq 大的一定是後讀的，每個 seq 也只屬於產生那份清單的那次讀取。
+  收到 create／rename／delete 的回應後才發的 `?fresh=1` 一定反映該變更。
+- 舊的 1 秒快取現在會在 create／rename／delete／wait-for／ticker 偵測到變更時失效（舊 client 也受惠）。
+- SPA 那一半（切換後用這份清單重新對帳）另案處理；#1255 保持 open。已知殘留：tmux 讀取沒有 deadline（#1293，既有問題）。
+
 ## [1.0.0-alpha.422] - 2026-09-22
 
 ### Fix: x64 的 .app 在 Intel Mac 上啟動即 crash——ad-hoc 簽章少了 entitlements（#1288）
