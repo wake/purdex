@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { describeSections, settingsWaitForWorkspaces, syncDotOf } from './sync-view'
+import { describeSections, profileIsGone, settingsWaitForWorkspaces, syncDotOf } from './sync-view'
 import type { ProfileSyncSnapshot } from './start'
 import type { ExecutorStatus } from './executor'
 
@@ -37,27 +37,63 @@ describe('syncDotOf — one reading of the whole master, for the switcher\'s dot
 })
 
 describe('settingsWaitForWorkspaces — the executor\'s settings gate, as far as the published status shows it', () => {
-  it.each(['locked:conflict', 'locked:reset', 'locked:invalid'] as const)('workspaces %s and settings with something to send → waiting', (lock) => {
-    expect(settingsWaitForWorkspaces(status({ workspaces: lock, settings: 'pending' }))).toBe(true)
+  const failing = { rev: 1, failures: 2, retryAt: 5000 }
+  const fine = { rev: 1, failures: 0, retryAt: null }
+
+  it.each(['locked:conflict', 'locked:reset', 'locked:invalid'] as const)('workspaces %s and settings with something to send → waiting: locked', (lock) => {
+    expect(settingsWaitForWorkspaces(status({ workspaces: lock, settings: 'pending' }))).toBe('locked')
+  })
+
+  it('workspaces FAILING (its own requests, or the index read) and settings with something to send → waiting: failing', () => {
+    expect(settingsWaitForWorkspaces({ ...status({ workspaces: 'pending', settings: 'pending' }), detail: { workspaces: failing } })).toBe('failing')
+    expect(settingsWaitForWorkspaces({ ...status({ workspaces: 'synced', settings: 'pending' }), indexFailures: 1 })).toBe('failing')
+  })
+
+  it('locked AND failing → locked: that is the one the user can do something about', () => {
+    expect(settingsWaitForWorkspaces({ ...status({ workspaces: 'locked:conflict', settings: 'pending' }), detail: { workspaces: failing }, indexFailures: 2 })).toBe('locked')
   })
 
   it('settings with nothing to send → not waiting, whatever workspaces is', () => {
-    expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:conflict', settings: 'synced' }))).toBe(false)
+    expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:conflict', settings: 'synced' }))).toBeNull()
+    expect(settingsWaitForWorkspaces({ ...status({ workspaces: 'pending', settings: 'synced' }), detail: { workspaces: failing }, indexFailures: 1 })).toBeNull()
   })
 
-  it('workspaces merely pending → not SAID to be waiting: that gate opens by itself in a moment', () => {
-    expect(settingsWaitForWorkspaces(status({ workspaces: 'pending', settings: 'pending' }))).toBe(false)
-    expect(settingsWaitForWorkspaces(status({ workspaces: 'synced', settings: 'pending' }))).toBe(false)
+  it('workspaces merely pending, not failing → not SAID to be waiting: that gate opens by itself in a moment', () => {
+    expect(settingsWaitForWorkspaces(status({ workspaces: 'pending', settings: 'pending' }))).toBeNull()
+    expect(settingsWaitForWorkspaces(status({ workspaces: 'synced', settings: 'pending' }))).toBeNull()
+    expect(settingsWaitForWorkspaces({ ...status({ workspaces: 'pending', settings: 'pending' }), detail: { workspaces: fine } })).toBeNull()
+  })
+
+  it('another section failing is not workspaces failing', () => {
+    expect(settingsWaitForWorkspaces({ ...status({ workspaces: 'pending', settings: 'pending' }), detail: { hosts: failing, settings: failing } })).toBeNull()
   })
 
   it('settings itself locked → that is its own story, not a wait', () => {
-    expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:conflict', settings: 'locked:conflict' }))).toBe(false)
+    expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:conflict', settings: 'locked:conflict' }))).toBeNull()
   })
 
   it('a section that is not there, or no status at all → not waiting', () => {
-    expect(settingsWaitForWorkspaces(status({ settings: 'pending' }))).toBe(false)
-    expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:reset' }))).toBe(false)
-    expect(settingsWaitForWorkspaces(null)).toBe(false)
+    expect(settingsWaitForWorkspaces(status({ settings: 'pending' }))).toBeNull()
+    expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:reset' }))).toBeNull()
+    expect(settingsWaitForWorkspaces(null)).toBeNull()
+  })
+})
+
+describe('profileIsGone — the two sources, read alike', () => {
+  it('a 404 on the attachment (blocked) and the index no longer listing it (the executor) are both "gone"', () => {
+    expect(profileIsGone(snapshot({ blocked: 'profile-gone' }))).toBe(true)
+    expect(profileIsGone(snapshot({ status: { ...status({ hosts: 'synced' }, 'locked:reset'), profileGone: true } }))).toBe(true)
+  })
+
+  it('a reset that is not a gone profile, another block, or no status → not gone', () => {
+    expect(profileIsGone(snapshot({ status: status({ hosts: 'locked:reset' }, 'locked:reset') }))).toBe(false)
+    expect(profileIsGone(snapshot({ blocked: 'master-endpoint-changed' }))).toBe(false)
+    expect(profileIsGone(snapshot({ status: null }))).toBe(false)
+    expect(profileIsGone(snapshot({ master: null, status: null }))).toBe(false)
+  })
+
+  it('the dot reads the executor\'s gone profile as the 404 is read: a problem, not a lock', () => {
+    expect(syncDotOf(snapshot({ status: { ...status({}, 'locked:reset'), profileGone: true } }))).toBe('problem')
   })
 })
 
