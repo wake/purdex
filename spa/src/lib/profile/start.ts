@@ -131,7 +131,8 @@ export interface ProfileSyncState {
    *  an `attachMaster` is in progress somewhere (transient: lifted by its outcome, or by its expiry). */
   blocked: 'master-endpoint-changed' | 'profile-gone' | 'suspended' | null
   /** Null in a follower and without a master: only the leader knows. With `blocked: 'profile-gone'` there is
-   *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections. */
+   *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections,
+   *  `profileGone: true`. */
   status: ExecutorStatus | null
   /** The latest `PROBLEM_BUFFER_SIZE`, oldest first. */
   problems: ProfileSyncProblem[]
@@ -173,6 +174,12 @@ declare global {
 }
 
 export const PROBLEM_BUFFER_SIZE = 50
+/**
+ * A problem's `detail` is kept to this many code points (plus a trailing `…` when something was cut). Some details
+ * carry text of any length — a failed request's whole response body, an exception's message, a list of keys — and
+ * the buffer is published to every window (sync-status.ts, `MAX_PUBLISHED_STATUS_CHARS` is sized from this).
+ */
+export const PROBLEM_DETAIL_MAX = 1000
 export const ATTACH_RETRY_BASE_MS = 2_000
 export const ATTACH_RETRY_CAP_MS = 30_000
 /**
@@ -240,8 +247,17 @@ const problems: ProfileSyncProblem[] = []
 /** `kind` + section already warned about; forgotten when the master changes. */
 const warned = new Set<string>()
 
+/** The first `PROBLEM_DETAIL_MAX` code points, never half a surrogate pair; `…` appended iff something was cut. */
+function cutDetail(detail: string): string {
+  if (detail.length <= PROBLEM_DETAIL_MAX) return detail // UTF-16 units ≥ code points: short enough as it is
+  let end = 0
+  for (let n = 0; n < PROBLEM_DETAIL_MAX && end < detail.length; n += 1) end += detail.codePointAt(end)! > 0xffff ? 2 : 1
+  return end >= detail.length ? detail : `${detail.slice(0, end)}…`
+}
+
 function reportProblem(p: { kind: string; section?: string; detail: string }): void {
-  problems.push({ kind: p.kind, ...(p.section !== undefined ? { section: p.section } : {}), detail: p.detail, at: Date.now() })
+  // The console gets the whole detail (this window, not persisted); the buffer — published — gets it cut.
+  problems.push({ kind: p.kind, ...(p.section !== undefined ? { section: p.section } : {}), detail: cutDetail(p.detail), at: Date.now() })
   if (problems.length > PROBLEM_BUFFER_SIZE) problems.splice(0, problems.length - PROBLEM_BUFFER_SIZE)
   changed()
   const id = `${p.kind}\u0000${p.section ?? ''}`
@@ -590,13 +606,18 @@ function sameMaster(a: Master | null, b: Master | null): boolean {
   return a.hostId === b.hostId && a.profileId === b.profileId
 }
 
+/** What the executor's own `profileGone` publishes, for the 404 there is no executor to ask about (P3d-4 R6). */
+function profileGoneStatus(): ExecutorStatus {
+  return { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {}, profileGone: true, detail: {}, indexFailures: 0, lastSuccessAt: null }
+}
+
 export function profileSyncState(): ProfileSyncState {
   const blocked = mode?.blocked() ?? null
   return {
     master: selectMaster(useProfileStore.getState()),
     leader: mode?.isLeader() ?? false,
     blocked,
-    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} } : (mode?.leader()?.status() ?? null),
+    status: blocked === 'profile-gone' ? profileGoneStatus() : (mode?.leader()?.status() ?? null),
     problems: problems.map((p) => ({ ...p })),
   }
 }

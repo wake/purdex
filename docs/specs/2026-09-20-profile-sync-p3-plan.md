@@ -811,6 +811,132 @@ shows only with a master; the wizard's step 2 is the only list without one. Not 
 empty profile a user created in step 2 and then abandoned (it is listed next time, push-only because it holds
 nothing; deletable from the SOT block once attached to another).
 
+### P3d-4 — plan (written 2026-09-23, from a measurement of alpha.422)
+
+**What the measurement changed in the row above** (each is a decision here, not an open question):
+1. **`locked:reset` of a SECTION has two ways out, not one.** The reducer takes both `keep` values
+   (`sync-state.ts:592-600`), `parseLock` accepts it, spec §4.9 / table :399 says "push or pull, a fresh
+   start". Only the PROFILE-level reset (the profile is gone) has one way out: *Change…* → the wizard.
+2. **The profile being gone has two sources and one of them is invisible today.** A 404 on the attachment
+   sets `blocked: 'profile-gone'` (said); the executor's own `profileGone` (the index no longer lists it,
+   `executor.ts:890-896`) sets `status.profile = 'locked:reset'` with `blocked: null` — only a problem entry
+   says it. → `ExecutorStatus.profileGone: boolean`; the view treats both the same.
+3. **The host's payload is mostly not held.** Only a conflict learned from a 409 holds it (leader memory /
+   the conflict stash); a decide-time conflict, a reset and an invalid hold a hash. → counts come from ONE
+   read-only `getSection` per locked row, made when the confirmation opens (below), not from the stash.
+4. **Why a section is `locked:invalid` is not in the lock** (only a `pull-invalid` problem). → published
+   per section as `invalidReason` (a closed code, never the transport's text).
+5. **"Revision" is ambiguous** (`base.rev` = agreed, `sot.rev` = newest seen on the host). A row shows the
+   agreed one (`rev N`); a locked row keeps "host rev N" beside it.
+6. **`backingOff` is time-based and nothing emits when it starts or ends.** Published instead: `failures`
+   (count) and `retryAt` (ms | null), emitted at `armRetry`, at `clearBackoff`, and when a retry fires. No
+   timer is added to the page: "retrying at 14:02:31" is a fact that does not need a clock.
+7. **`lastSyncedAt` has no source and its name is taken** (the old Sync store). → `lastSuccessAt` (ms |
+   null), per profile, stamped at every applied pull, acknowledged push and converge.
+8. **"settings is dirty" is `sections.settings === 'pending'`** (includes a push in flight) — kept.
+
+**The status, as published** (`executor.ts`; `start.ts`'s synthetic `profile-gone` status too):
+```ts
+interface SectionDetail {        // every field present for every section in `sections`
+  rev: number | null             // base.rev; null = never agreed
+  failures: number               // consecutive failed requests for this section (0 = none)
+  retryAt: number | null         // when the next attempt is armed; null = none armed
+  invalidReason: InvalidReason | null   // only while locked:invalid
+}
+interface ExecutorStatus { …as today…; profileGone: boolean; detail: Record<string, SectionDetail>;
+                           indexFailures: number; lastSuccessAt: number | null }
+```
+A record from an older build lacks the new fields: `sync-status.ts` fills them as absent (`detail: {}`,
+`profileGone: false`, `indexFailures: 0`, `lastSuccessAt: null`) and the page shows nothing for what is
+absent — never "0" or "never". The published signature gains the fields; the status write is still
+throttled (250 ms).
+
+**`settingsWaitForWorkspaces(status)`** becomes: `settings` is `pending` AND (`workspaces` is `locked:*` OR
+`detail.workspaces.failures > 0` OR `indexFailures > 0`). Its sentence names which (`locked` / `failing`).
+
+**The Resolve block** (`components/settings/profile/ResolveBlock.tsx` + `ResolveRow.tsx`, mounted where
+`profile-current-locked-note` is; `locked_note` retires). One row per `locks[key]`, in `describeSections`
+order, labelled like the section list:
+
+| lock | row says | actions |
+|---|---|---|
+| `locked:conflict` | this device and the host both changed it since they last agreed; if `currentHash !== conflict.localHash`: "Keep this device's also undoes what you changed here since" | *Keep this device's* / *Take the host's* |
+| `locked:reset` | the host's copy was recreated (its revision went backwards) | *Keep this device's* / *Take the host's* |
+| `locked:invalid` | `invalidReason` in words (why this device refuses the host's copy) | *Keep this device's* only |
+
+Profile-level states are NOT rows: `locked:schema` keeps its sentence (`profile-current-schema`, "update
+Purdex"), and a gone profile keeps / gains its sentence pointing at `profile-setup-change`.
+
+**Every action goes through a `ConfirmDialog`** (both overwrite something another device or this one
+had). The dialog is opened with the `SectionLock` of the row the user clicked, **frozen**; it shows counts,
+not a diff: for this device — the payload the collector builds now; for the host — `getSection` read once
+when the dialog opens (loading / failed → the counts say "could not be read", the action stays allowed:
+the counts inform, they do not gate). Counts per kind: hosts → hosts; workspaces → workspaces; tabs → tabs;
+settings → how many settings entries. If the fetched rev ≠ the frozen `lock.sot.rev`, the dialog says the
+host changed again. **When the live lock stops being `sameLock` with the frozen one, the dialog closes
+itself and the row says "this changed while you were deciding"** (a follower's click on a stale lock is
+dropped by the leader anyway — this makes it visible instead of silent). Confirm → `requestResolve(key,
+keep, frozenLock)` → the row shows "sent" until the snapshot's lock for that key changes (no timer).
+In a follower window every row carries the existing "reported by the window that is syncing" badge.
+
+**The Current block** gains: `rev N` on every section row (`profile-current-section-rev-<key>` shows it for
+every row now; the host rev stays for locked rows as `-sot-rev-<key>`), "last synced <time>"
+(`profile-current-last-sync`, absolute local time), a failing row's "failing, next try at <time>"
+(`profile-current-section-failing-<key>`), and the widened "settings are waiting" sentence
+(`data-reason` locked|failing).
+
+**PRODUCT.md §3.9 Profile** — in §3's own format: Profile, master profile, local profile (slave), the
+profile on screen (active), sync host / host profile (SOT); what each is NOT; the word "profile" means this
+concept only (P3e renamed the new-tab layout's internal `profile` to `preset`; Nexen's user-visible
+"sandbox profile" is #1290). The zh-TW words are the user's call — proposed in the PR, confirmed before
+merge.
+
+**Plan review (codex `task-mud3tew0-uehg5m`, 8 findings, all taken) — these override the text above:**
+- **R1 (critical) — the counts must be of what the choice KEEPS.** *Keep this device's* on a `locked:conflict`
+  restores `conflict.localHash` (the snapshot that was sent), not what is built now. So this device's side is
+  counted from: conflict → the stash payload of `conflict.localHash` (`section-store.getStash`, any window);
+  reset / invalid → the payload built now (`restoreLocal` is not set; the current state is pushed). A payload
+  that cannot be read (not persisted — `conflict-not-persisted`; world unsettled) → "could not be read", never a
+  guess. When the side built now hashes differently from `lock.currentHash`, the dialog says this device changed
+  since the lock was taken.
+- **R2 — "sent" must end.** The command channel has no answer, so: `requestResolve` returns whether the command
+  was WRITTEN (`boolean`; a failed `setItem` → the row says it could not be sent). A written command's row says
+  "sent" until the lock for that key changes, or until the command's own TTL (30 s, `COMMAND_TTL_MS`, exported)
+  has passed — one `setTimeout` per sent row, cleared on unmount / lock change — then "no answer from the window
+  that is syncing; try again". The only timer on the page, and it is bounded by the TTL.
+- **R3 — every change of the published counters emits.** `emitStatus()` after `armRetry`, `clearBackoff`, the
+  retry timer firing, `resetRetries`, and each reindex failure / success / retry firing. The signature includes
+  the new fields, so an unchanged value still emits nothing. Tested: each of those seven points, alone, changes
+  the published status. *(As built: the index retry firing changes no published field, so that point cannot
+  be observed — dropped; the emit after a successful index read coincides with `setSchemaLock`'s.)*
+- **R4 — `lastSuccessAt`, defined:** the time the leader last handled an answer FROM THE HOST (an index read, a
+  pull, a push outcome incl. `push-converged`) after which `profileStatus` is `synced`. Shown as "in sync as of
+  <time>" (`profile-current-last-sync`), not "last synced". A local edit does not move it; neither does a failure.
+- **R5 — one builder, not two.** `collector.ts` exports `buildSectionPayload(key): payload | null` — the SAME
+  builders the leader's collector runs, over `readMasterWorld()` and the same projections; `null` while the world
+  is unsettled. The counts helper uses it. Tested: in a follower window with a slave on screen, the counts are the
+  parked master's, never the slave's.
+- **R6 — `profileGone` from both sources, tested each:** the executor's index-missing path publishes
+  `profileGone: true`; start.ts's synthetic 404 status is `{…, profileGone: true, detail: {}, indexFailures: 0,
+  lastSuccessAt: null}`; a published record from an older build (no new fields) parses to the defaults; the page
+  shows the gone sentence for both.
+- **R7 — the reducer's edges are pinned end to end** (component → channel → executor, real reducer): reset →
+  both directions; invalid → no *Take the host's* button, and a forged `sot` command changes nothing; a pairless
+  lock whose host rev moved on → the open dialog closes and the stale command is dropped; conflict with
+  `currentHash !== conflict.localHash` → *Keep this device's* pushes the SENT snapshot, and the dialog said so.
+- **`invalidReason` moved to 4b** (4a as built): its closed code list is chosen there, from `ApplyOutcome`'s
+  cases in `apply-to-stores.ts` — the file 4b touches anyway, and the invalid row is 4b's.
+- **R8 — 4c is reviewed like the others:** its fixes are TDD'd, and codex R1 runs on 4c's diff (`--base` = 4b's
+  merge); attack + critic only if R1 finds a critical.
+
+**Cut** (each ≤ 20 files, merged in order):
+- **P3d-4a — status**: executor / start / sync-status / sync-view (+ tests) and the Current block's three
+  additions. Includes the eight test files whose `ExecutorStatus` literals gain fields.
+- **P3d-4b — Resolve**: `ResolveBlock` / `ResolveRow` / the counts helper / i18n / CurrentBlock wiring.
+- **P3d-4c — §3.9 + acceptance fixes**, after the real-machine run below.
+
+Codex runs in full on 4a and 4b (R1 + attack + critic): 4b is a UI whose buttons overwrite data.
+
 ### Task 6 — `components/ProfileSwitcher.tsx`
 Portal-based menu anchored to the Home button (both bars), `role="menu"` with arrow keys, Home/End,
 Enter, Escape, outside-click, focus returned to the button — the first real menu primitive in the

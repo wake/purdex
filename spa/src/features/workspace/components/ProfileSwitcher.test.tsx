@@ -18,7 +18,7 @@ const attached = (over: Partial<ProfileSyncSnapshot> = {}, profile: NonNullable<
   master: { hostId: 'h1', profileId: 'p1' },
   leader: true,
   blocked: null,
-  status: { profile, schemaLock: null, sections: {}, locks: {} },
+  status: { profile, schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null },
   problems: [],
   remote: false,
   stale: false,

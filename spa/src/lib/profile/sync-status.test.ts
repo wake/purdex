@@ -33,8 +33,8 @@ const TAG2 = 'h2|p_000000000002|2'
 const cmdOf = (tag: string): string => `${CMD}${encodeURIComponent(tag)}:`
 const CMD1 = cmdOf(TAG1)
 const CMD2 = cmdOf(TAG2)
-const SYNCED = { profile: 'synced', schemaLock: null, sections: { hosts: 'synced' }, locks: {} } as const
-const PENDING = { profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {} } as const
+const SYNCED = { profile: 'synced', schemaLock: null, sections: { hosts: 'synced' }, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null } as const
+const PENDING = { profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null } as const
 const PAIR: SectionConflict = { localHash: 'L1', sot: { rev: 5, hash: 'S5' } }
 /** A `locked:conflict` section as the executor publishes it: the pair, the live hash, the SOT (which moves with the pair's). */
 const conflictLock = (pair: SectionConflict, currentHash: string | null = pair.localHash): SectionLock => ({ status: 'locked:conflict', currentHash, sot: { ...pair.sot }, conflict: pair })
@@ -267,6 +267,143 @@ describe('the leader publishes', () => {
   })
 })
 
+describe('the leader keeps a real record under MAX_PUBLISHED_STATUS_CHARS: it degrades, never the locks', () => {
+  const hash = (i: number) => `sha256:${String(i).padStart(64, '0')}`
+  const lockOf = (): SectionLock => ({ status: 'locked:conflict', currentHash: hash(1), sot: { rev: 7, hash: hash(2) }, conflict: { localHash: hash(3), sot: { rev: 7, hash: hash(2) } } })
+  /** `n` locked `tabs.*` sections, each with a lock and a detail entry: what a leader with many workspaces publishes. */
+  const manyLocked = (n: number) => {
+    const keys = Array.from({ length: n }, (_, i) => `tabs.ws_${String(i).padStart(12, '0')}`)
+    return {
+      ...SYNCED,
+      profile: 'locked:conflict',
+      sections: Object.fromEntries(keys.map((k) => [k, 'locked:conflict'])),
+      locks: Object.fromEntries(keys.map((k) => [k, lockOf()])),
+      detail: Object.fromEntries(keys.map((k) => [k, { rev: 7, failures: 0, retryAt: null }])),
+    } as unknown as ProfileSyncState['status']
+  }
+  const problemsOf = (n: number, chars: number) => Array.from({ length: n }, (_, i) => ({ kind: 'k', detail: `${i}:${'x'.repeat(chars)}`, at: i }))
+  const size = (local: Partial<ProfileSyncState>) =>
+    JSON.stringify({ at: 1_000_250, leader: 'A', master: TAG1, status: local.status ?? null, blocked: local.blocked ?? null, problems: local.problems ?? [] }).length
+  const cap = async () => (await import('./sync-status')).MAX_PUBLISHED_STATUS_CHARS
+
+  it('a record that fits — even one character under the cap — is written whole, as ever', async () => {
+    const MAX = await cap()
+    const problems = problemsOf(50, 10_000)
+    const pad = MAX - size({ status: SYNCED, problems })
+    problems[0] = { ...problems[0], detail: problems[0].detail + 'y'.repeat(pad) }
+    expect(size({ status: SYNCED, problems })).toBe(MAX)
+    await openWindow('A', { leader: true, status: SYNCED, problems })
+    vi.advanceTimersByTime(250)
+    expect(localStorage.getItem(STATUS)).toHaveLength(MAX)
+    expect(published()!.problems).toHaveLength(50)
+  })
+
+  it('(a) first: the newest 10 problems are kept when that is enough — the status whole', async () => {
+    const MAX = await cap()
+    const problems = problemsOf(50, 20_000)
+    expect(size({ status: SYNCED, problems })).toBeGreaterThan(MAX)
+    expect(size({ status: SYNCED, problems: problems.slice(-10) })).toBeLessThanOrEqual(MAX)
+    await openWindow('A', { leader: true, status: SYNCED, problems })
+    vi.advanceTimersByTime(250)
+    const record = published()!
+    expect((record.problems as Array<{ detail: string }>).map((p) => p.detail.split(':')[0])).toEqual(['40', '41', '42', '43', '44', '45', '46', '47', '48', '49'])
+    expect(record.status).toEqual(SYNCED)
+  })
+
+  it('(b) then: no problems at all — `detail` still there', async () => {
+    const MAX = await cap()
+    const status = manyLocked(20)
+    const problems = problemsOf(50, 60_000)
+    expect(size({ status, problems: problems.slice(-10) })).toBeGreaterThan(MAX)
+    await openWindow('A', { leader: true, status, problems })
+    vi.advanceTimersByTime(250)
+    const record = published()!
+    expect(record.problems).toEqual([])
+    expect(record.status).toEqual(status)
+  })
+
+  it('(c) last: no detail — and a follower still gets every lock, the profile, the schema lock and blocked', async () => {
+    const MAX = await cap()
+    const status = manyLocked(1050)
+    const problems = problemsOf(3, 10)
+    expect(size({ status, problems: [] })).toBeGreaterThan(MAX) // just over the cap even without problems
+    expect(size({ status: { ...status!, detail: {} }, problems: [] })).toBeLessThanOrEqual(MAX)
+    await openWindow('A', { leader: true, status, problems, blocked: 'suspended' })
+    vi.advanceTimersByTime(250)
+    const record = published()!
+    expect(JSON.stringify(record).length).toBeLessThanOrEqual(MAX)
+    expect(record.problems).toEqual([])
+    expect(record).toMatchObject({ blocked: 'suspended' })
+    expect(record.status).toEqual({ ...status, detail: {} })
+
+    const b = await openWindow('B')
+    deliver()
+    expect(b.snapshot()).toMatchObject({ remote: true, blocked: 'suspended', status: { profile: 'locked:conflict', schemaLock: null, detail: {} } })
+    expect(b.snapshot().status!.locks).toEqual(status!.locks)
+    expect(b.snapshot().status!.sections).toEqual(status!.sections)
+  })
+
+  it('not even (c) fits: the record is REMOVED — followers say "not known yet", never an old record as current — logged once, not retried', async () => {
+    const MAX = await cap()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    vi.advanceTimersByTime(250)
+    const b = await openWindow('B')
+    deliver()
+    expect(b.snapshot()).toMatchObject({ remote: true, status: SYNCED }) // a record that fitted was there
+
+    const absurd = manyLocked(3000)
+    expect(size({ status: { ...absurd!, detail: {} }, problems: [] })).toBeGreaterThan(MAX)
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem')
+    a.set({ status: absurd })
+    vi.advanceTimersByTime(250)
+    expect(localStorage.getItem(STATUS)).toBeNull()
+    expect(setItem.mock.calls.filter(([k]) => k === STATUS)).toEqual([])
+    expect(removeItem.mock.calls.filter(([k]) => k === STATUS)).toHaveLength(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    // B hears of it (a real browser tells only the OTHER windows; here every channel shares one realm, so B is asked directly)
+    b.channel.refresh()
+    expect(b.snapshot()).toMatchObject({ status: null, remote: false, stale: false, leader: false })
+
+    // the same content again: nothing is tried again, nothing logged again
+    a.channel.refresh()
+    vi.advanceTimersByTime(1_000)
+    expect(removeItem.mock.calls.filter(([k]) => k === STATUS)).toHaveLength(1)
+    // another oversized change: removed again (still nothing there), but not logged again
+    a.set({ status: { ...absurd!, profile: 'locked:reset' } })
+    vi.advanceTimersByTime(250)
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    // it fits again: written as ever
+    a.set({ status: PENDING })
+    vi.advanceTimersByTime(250)
+    expect(published()).toMatchObject({ status: PENDING })
+    // and a new oversized stretch is logged again
+    a.set({ status: absurd })
+    vi.advanceTimersByTime(250)
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('a removal that storage refuses is tried again at the next refresh — the same status included', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    vi.advanceTimersByTime(250)
+    expect(published()).not.toBeNull()
+    const absurd = manyLocked(3000)
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => {
+      throw new Error('blocked')
+    })
+    a.set({ status: absurd })
+    vi.advanceTimersByTime(250)
+    expect(published()).not.toBeNull() // still the old record: the removal failed
+    a.channel.refresh() // nothing changed — but nothing was done either
+    vi.advanceTimersByTime(250)
+    expect(removeItem.mock.calls.filter(([k]) => k === STATUS)).toHaveLength(2)
+    expect(localStorage.getItem(STATUS)).toBeNull()
+  })
+})
+
 /* ─── followers read ─── */
 
 describe('a follower reads what the leader published', () => {
@@ -289,7 +426,7 @@ describe('a follower reads what the leader published', () => {
   })
 
   it('the published `blocked` wins over nothing of its own: profile-gone is something only the leader knows', async () => {
-    await openWindow('A', { leader: true, blocked: 'profile-gone', status: { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} } })
+    await openWindow('A', { leader: true, blocked: 'profile-gone', status: { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {}, profileGone: true, detail: {}, indexFailures: 0, lastSuccessAt: null } })
     const b = await openWindow('B')
     vi.advanceTimersByTime(250)
     deliver()
@@ -345,10 +482,194 @@ describe('a follower reads what the leader published', () => {
     expect(b.snapshot()).toMatchObject({ status: null, remote: false, stale: false })
   })
 
+  // F1 (P3d-4a review): the page reads `profile`, `sections`, `locks` without asking — a record that lacks them
+  // would take the Profile UI down with it. So the fields that were always there are checked too.
+  const rec = (status: unknown) => JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] })
+  const { sections: _s, ...noSections } = SYNCED
+  const { locks: _l, ...noLocks } = SYNCED
+  const { profile: _p, ...noProfile } = SYNCED
+  const { schemaLock: _k, ...noSchemaLock } = SYNCED
+  it.each([
+    ['`status` an array', rec([])],
+    ['`status` only a detail', rec({ detail: {} })],
+    ['no `sections`', rec(noSections)],
+    ['no `locks`', rec(noLocks)],
+    ['no `profile`', rec(noProfile)],
+    ['no `schemaLock`', rec(noSchemaLock)],
+    ['an unknown `profile`', rec({ ...SYNCED, profile: 'dirty' })],
+    ['`profile` not a string', rec({ ...SYNCED, profile: 3 })],
+    ['`sections` an array', rec({ ...SYNCED, sections: ['synced'] })],
+    ['a section with an unknown status', rec({ ...SYNCED, sections: { hosts: 'dirty' } })],
+    ['a section status not a string', rec({ ...SYNCED, sections: { hosts: null } })],
+    ['`locks` an array', rec({ ...SYNCED, locks: [] })],
+    ['`locks` not an object', rec({ ...SYNCED, locks: 'none' })],
+    ['a lock not in the lock\'s shape', rec({ ...SYNCED, locks: { hosts: { status: 'locked:conflict' } } })],
+    ['a lock of an unknown kind', rec({ ...SYNCED, locks: { hosts: { ...INVALID, status: 'locked:schema' } } })],
+    ['`schemaLock` a string', rec({ ...SYNCED, schemaLock: 'sot-is-newer' })],
+    ['`schemaLock` an array', rec({ ...SYNCED, schemaLock: [] })],
+  ])('a status that is not an ExecutorStatus (%s) makes the WHOLE record no record', async (_name, raw) => {
+    localStorage.setItem(STATUS, raw)
+    const b = await openWindow('B')
+    expect(b.snapshot()).toMatchObject({ status: null, remote: false, stale: false })
+  })
+
+  it('the control: locks and a schema lock in their shape are taken', async () => {
+    const schemaLock = { section: 'hosts', kind: 'hosts', verdict: 'sot-is-newer', mine: { fingerprint: 'a', ordinal: 1 }, sot: { fingerprint: 'b', ordinal: 2 } }
+    const status = { ...SYNCED, profile: 'locked:schema', schemaLock, sections: { hosts: 'locked:conflict', settings: 'locked:invalid' }, locks: { hosts: LOCK, settings: INVALID } }
+    localStorage.setItem(STATUS, rec(status))
+    const b = await openWindow('B')
+    expect(b.snapshot().status).toEqual(status)
+  })
+
   it('the control: the same record, undamaged, IS one', async () => {
     localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status: SYNCED, blocked: null, problems: [] }))
     const b = await openWindow('B')
     expect(b.snapshot()).toMatchObject({ status: SYNCED, remote: true })
+  })
+
+  it('a record from an OLDER build (no detail, no counters, no profileGone) is one, with those read as absent', async () => {
+    const old = { profile: 'locked:reset', schemaLock: null, sections: { hosts: 'synced' }, locks: {} }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status: old, blocked: 'profile-gone', problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot()).toMatchObject({ blocked: 'profile-gone', remote: true })
+    expect(b.snapshot().status).toEqual({ ...old, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })
+  })
+
+  it('the new fields are taken only in their shape: a damaged one is read as absent, a damaged detail entry is left out', async () => {
+    const status = {
+      ...SYNCED,
+      sections: { hosts: 'synced', settings: 'pending', workspaces: 'pending', 'tabs.w1': 'synced', 'tabs.w2': 'synced', 'tabs.w3': 'synced', 'tabs.w4': 'synced' },
+      profileGone: 'yes',
+      indexFailures: -1,
+      lastSuccessAt: '12:00',
+      detail: {
+        hosts: { rev: 3, failures: 0, retryAt: null },
+        settings: { rev: null, failures: 2, retryAt: 5000 },
+        workspaces: { rev: '3', failures: 0, retryAt: null },
+        'tabs.w1': { rev: 1, failures: 1 },
+        'tabs.w2': { rev: 1, failures: 'many', retryAt: null },
+        'tabs.w3': 'rev 1',
+        'tabs.w4': null,
+      },
+    }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot().status).toMatchObject({
+      profileGone: false,
+      indexFailures: 0,
+      lastSuccessAt: null,
+      detail: { hosts: { rev: 3, failures: 0, retryAt: null }, settings: { rev: null, failures: 2, retryAt: 5000 } },
+    })
+    expect(Object.keys(b.snapshot().status!.detail).sort()).toEqual(['hosts', 'settings'])
+  })
+
+  describe('F4: `detail` is read for the sections the status lists, and nothing else', () => {
+    const detailOf = async (detail: unknown, sections: Record<string, string> = { hosts: 'synced', settings: 'pending' }) => {
+      // Written as text: `__proto__` as an OWN key is what a JSON record can carry, and a literal cannot express it.
+      const status = JSON.stringify({ ...SYNCED, sections }).replace(/}$/, `,"detail":${typeof detail === 'string' ? detail : JSON.stringify(detail)}}`)
+      localStorage.setItem(STATUS, `{"at":1,"leader":"A","master":${JSON.stringify(TAG1)},"status":${status},"blocked":null,"problems":[]}`)
+      const b = await openWindow('B')
+      return b.snapshot().status!.detail
+    }
+    const entry = { rev: 1, failures: 0, retryAt: null }
+
+    it('an array is no detail — even where its indices are section keys', async () => {
+      expect(await detailOf([entry, entry])).toEqual({})
+      open.splice(0).forEach((c) => c.close(false))
+      expect(await detailOf([entry], { '0': 'synced' })).toEqual({})
+    })
+
+    it('only OWN entries: one inherited from a prototype is not taken', async () => {
+      Object.defineProperty(Object.prototype, 'tabs.inherited', { value: entry, configurable: true })
+      try {
+        expect(await detailOf({}, { 'tabs.inherited': 'synced' })).toEqual({})
+      } finally {
+        delete (Object.prototype as Record<string, unknown>)['tabs.inherited']
+      }
+    })
+
+    it('keys the sections do not list are left out — `__proto__` included, and nothing lands on a prototype', async () => {
+      const detail = await detailOf(`{"hosts":${JSON.stringify(entry)},"__proto__":{"polluted":true},"tabs.zz":${JSON.stringify(entry)}}`)
+      expect(Object.keys(detail)).toEqual(['hosts'])
+      expect(Object.getPrototypeOf(detail)).toBe(Object.prototype)
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    })
+
+    it('a section the status lists but the detail does not → no entry for it', async () => {
+      expect(await detailOf({ hosts: entry })).toEqual({ hosts: entry })
+    })
+
+    it('a detail with far more keys than sections: only the sections\' keys are kept (the size cap, not this, bounds the parse)', async () => {
+      const huge: Record<string, unknown> = {}
+      for (let i = 0; i < 5_000; i += 1) huge[`tabs.w${i}`] = entry // ~240 K characters: under the cap, so it is parsed
+      huge.settings = { rev: 2, failures: 1, retryAt: 10 }
+      expect(await detailOf(huge)).toEqual({ settings: { rev: 2, failures: 1, retryAt: 10 } })
+    })
+  })
+
+  describe('MAX_PUBLISHED_STATUS_CHARS: a record over it is not even parsed', () => {
+    /** A valid record of exactly `chars` characters: the leader's window id is padded to fit. */
+    const recordOf = (chars: number): string => {
+      const bare = JSON.stringify({ at: 1, leader: '', master: TAG1, status: SYNCED, blocked: null, problems: [] })
+      return JSON.stringify({ at: 1, leader: 'w'.repeat(chars - bare.length), master: TAG1, status: SYNCED, blocked: null, problems: [] })
+    }
+
+    it('is 512 KiB', async () => {
+      const { MAX_PUBLISHED_STATUS_CHARS } = await import('./sync-status')
+      expect(MAX_PUBLISHED_STATUS_CHARS).toBe(512 * 1024)
+    })
+
+    it('exactly at the cap → read; one character over → no record, and JSON.parse is never asked', async () => {
+      const { MAX_PUBLISHED_STATUS_CHARS } = await import('./sync-status')
+      const at = recordOf(MAX_PUBLISHED_STATUS_CHARS)
+      expect(at).toHaveLength(MAX_PUBLISHED_STATUS_CHARS)
+      localStorage.setItem(STATUS, at)
+      const b = await openWindow('B')
+      expect(b.snapshot()).toMatchObject({ status: SYNCED, remote: true })
+      open.splice(0).forEach((c) => c.close(false))
+
+      localStorage.setItem(STATUS, recordOf(MAX_PUBLISHED_STATUS_CHARS + 1))
+      const parse = vi.spyOn(JSON, 'parse')
+      const c = await openWindow('C')
+      expect(c.snapshot()).toMatchObject({ status: null, remote: false })
+      expect(parse.mock.calls.filter(([raw]) => typeof raw === 'string' && raw.length > MAX_PUBLISHED_STATUS_CHARS)).toEqual([])
+    })
+
+    it('the worst record the leader can write is read: 203 sections each locked with a detail, 50 problems at PROBLEM_DETAIL_MAX', async () => {
+      const { MAX_PUBLISHED_STATUS_CHARS } = await import('./sync-status')
+      const hash = (i: number) => `sha256:${String(i).padStart(64, '0')}`
+      const keys = ['hosts', 'settings', 'workspaces', ...Array.from({ length: 200 }, (_, i) => `tabs.ws_${String(i).padStart(12, '0')}`)]
+      const big = 2 ** 31 - 1
+      const lockOf = (): SectionLock => ({ status: 'locked:conflict', currentHash: hash(1), sot: { rev: big, hash: hash(2) }, conflict: { localHash: hash(3), sot: { rev: big, hash: hash(2) } } })
+      const status = {
+        profile: 'locked:conflict',
+        schemaLock: { section: 'hosts', kind: 'hosts', verdict: 'shape-changed-without-ordinal', mine: { fingerprint: hash(4), ordinal: 99 }, sot: { fingerprint: hash(5), ordinal: 99 } },
+        sections: Object.fromEntries(keys.map((k) => [k, 'locked:conflict'])),
+        locks: Object.fromEntries(keys.map((k) => [k, lockOf()])),
+        profileGone: false,
+        detail: Object.fromEntries(keys.map((k) => [k, { rev: big, failures: 9999, retryAt: 1_790_000_000_000 }])),
+        indexFailures: 9999,
+        lastSuccessAt: 1_790_000_000_000,
+      }
+      // 1000 code points that JSON escapes to six characters each (control characters) — worse than any real text
+      const detail = `${'\u0001'.repeat(1000)}…`
+      const problems = Array.from({ length: 50 }, () => ({ kind: 'push-failed', section: keys.at(-1), detail, at: 1_790_000_000_000 }))
+      const raw = JSON.stringify({ at: 1, leader: `w-${'x'.repeat(36)}`, master: TAG1, status, blocked: null, problems })
+      expect(raw.length).toBeGreaterThan(400_000) // the measurement in the constant's comment
+      expect(raw.length).toBeLessThan(MAX_PUBLISHED_STATUS_CHARS)
+      localStorage.setItem(STATUS, raw)
+      const b = await openWindow('B')
+      expect(b.snapshot()).toMatchObject({ remote: true, status: { profile: 'locked:conflict' } })
+      expect(Object.keys(b.snapshot().status!.locks)).toHaveLength(203)
+      expect(b.snapshot().problems).toHaveLength(50)
+    })
+  })
+
+  it('the new fields, well-formed, are read as they were written', async () => {
+    const status = { ...SYNCED, profileGone: true, indexFailures: 3, lastSuccessAt: 999, detail: { hosts: { rev: 3, failures: 1, retryAt: 4000 } } }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot().status).toEqual(status)
   })
 
   it('storage that throws on read is no record', async () => {

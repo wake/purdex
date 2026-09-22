@@ -26,7 +26,7 @@ export const SYNC_DOT_CLASS: Record<SyncDot, string> = {
 export function syncDotOf(sync: ProfileSyncSnapshot): SyncDot | null {
   if (sync.master === null) return null
   if (sync.blocked === 'suspended') return 'syncing' // an attach is under way somewhere: transient
-  if (sync.blocked !== null) return 'problem'
+  if (sync.blocked !== null || profileIsGone(sync)) return 'problem'
   if (sync.status === null || (sync.remote && sync.stale)) return 'unknown'
   const { profile } = sync.status
   if (profile.startsWith('locked:')) return 'locked'
@@ -36,20 +36,32 @@ export function syncDotOf(sync: ProfileSyncSnapshot): SyncDot | null {
 }
 
 /**
- * `settings` is neither pulled nor pushed until `workspaces` is up to date (executor.ts, `SETTINGS_GATES`): a
- * scoped entry must not reach the SOT ahead of the `workspaces` that lists its workspace. While `workspaces` is
- * LOCKED that gate stays shut until the user decides — so a theme change sits on this device with no visible
- * reason. True exactly then: `settings` has something to send (`pending`) and `workspaces` is `locked:*`.
- *
- * WHAT THIS CANNOT SEE. The executor's gate is `upToDate('workspaces')`, which is also shut while `workspaces`
- * keeps FAILING (in back-off) — and the published status does not say so: a failing section reads `pending`,
- * exactly like one that will be through in a moment, and `problems` is a log with no "over". Saying "waiting"
- * for every `pending` would cry wolf on each edit; so the failing case is NOT said until the executor publishes
- * it (a per-section `backingOff` / `failing` in `ExecutorStatus` would do — scheduled with P3d-4, P3 plan).
+ * The profile is not on the host any more — said by two sources, read alike (P3 plan, P3d-4 decision 2): a 404 on
+ * the attachment (`blocked: 'profile-gone'`, start.ts) and the index no longer listing it (the executor's own
+ * `profileGone`, which leaves `blocked` null and reads `locked:reset`). Either way nothing syncs until the user
+ * chooses another profile.
  */
-export function settingsWaitForWorkspaces(status: ExecutorStatus | null): boolean {
-  if (status === null) return false
-  return status.sections.settings === 'pending' && (status.sections.workspaces?.startsWith('locked:') ?? false)
+export function profileIsGone(sync: ProfileSyncSnapshot): boolean {
+  return sync.blocked === 'profile-gone' || sync.status?.profileGone === true
+}
+
+/**
+ * `settings` is neither pulled nor pushed until `workspaces` is up to date (executor.ts, `SETTINGS_GATES`): a
+ * scoped entry must not reach the SOT ahead of the `workspaces` that lists its workspace. That gate stays shut
+ * while `workspaces` is LOCKED (until the user decides) and while it keeps FAILING — its own requests
+ * (`detail.workspaces.failures`) or the index read every section waits for (`indexFailures`) — so a theme change
+ * sits on this device. Answers why, when `settings` has something to send (`pending`, a push in flight included):
+ * `'locked'` (the one the user can act on; it wins when both hold) · `'failing'` · null = not waiting, or only for
+ * a moment (a `workspaces` that is merely pending opens the gate by itself: saying "waiting" then would cry wolf on
+ * every edit).
+ */
+export function settingsWaitForWorkspaces(status: ExecutorStatus | null): 'locked' | 'failing' | null {
+  // The profile gone: the executor has stopped for good (no pump, no reindex) and keeps its last sections — a
+  // "waiting" read from them would be a wait that never ends (review F2). The 404's status has no sections at all.
+  if (status === null || status.profileGone || status.sections.settings !== 'pending') return null
+  if (status.sections.workspaces?.startsWith('locked:') ?? false) return 'locked'
+  if ((status.detail.workspaces?.failures ?? 0) > 0 || status.indexFailures > 0) return 'failing'
+  return null
 }
 
 /**

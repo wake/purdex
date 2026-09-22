@@ -137,7 +137,7 @@
 // view is as old as the last publish (≤ 250 ms plus the event), which is exactly
 // what the binding is for.
 import { STORAGE_KEYS } from '../storage/keys'
-import type { SectionLock } from './executor'
+import type { ExecutorStatus, SectionDetail, SectionLock } from './executor'
 import type { ProfileSyncState } from './start'
 import type { SectionConflict } from './sync-state'
 
@@ -149,6 +149,46 @@ export const STATUS_STALE_MS = 10_000
 export const COMMAND_TTL_MS = 30_000
 /** … and so is one from further in the FUTURE than this: clocks of one machine's windows do not differ, a clock set back does. */
 export const COMMAND_FUTURE_SKEW_MS = 5_000
+
+/**
+ * A published record longer than this (in `raw.length`, UTF-16 units) is not parsed: it counts as absent, like any
+ * other bad record. It is read on every `storage` event, and a record is only as long as its leader makes it.
+ * THE ARITHMETIC (measured with `JSON.stringify`, P3d-4a review):
+ *   - 203 sections (hosts, settings, workspaces + 200 `tabs.*`), every one locked with a full conflict pair and a
+ *     detail entry at its widest numbers, a schema lock, no problems ........................ 116,983
+ *   - + 50 problems, each detail at `PROBLEM_DETAIL_MAX` (start.ts: 1000 code points + `…`):
+ *       plain text 171,382 · astral (2 units per code point) 221,382 · control characters, which JSON escapes
+ *       to 6 characters each — the worst any detail can be ............................... 421,382
+ *   Cap: 512 KiB = 524,288 — about 20 % over that pathological worst case, 2.4× the realistic one (~221 K).
+ * The cap is the FOLLOWER's guard against junk. What keeps a REAL record under it is the leader: nothing limits the
+ * number of workspaces (each is a `tabs.*` section), so `publish` degrades a record that would not fit — problems
+ * to the newest `PUBLISH_KEEP_PROBLEMS`, then none, then no `detail` — and never drops what a follower needs to
+ * resolve: `sections`, `locks`, `profile`, `schemaLock`, `blocked`.
+ */
+export const MAX_PUBLISHED_STATUS_CHARS = 512 * 1024
+/** A record that does not fit keeps this many of its newest problems first (`publish`, step a). */
+export const PUBLISH_KEEP_PROBLEMS = 10
+
+/**
+ * The record as it will be written: whole if it fits, else degraded step by step, the size checked again after
+ * each — (a) the newest `PUBLISH_KEEP_PROBLEMS` problems (the buffer is oldest first), (b) no problems, (c) no
+ * `detail` (followers then show no rev and no failing note: absent, as for an older build). Returns the text of
+ * the first that fits, or of the last step when none does.
+ */
+function serializeToFit(record: PublishedStatus): { text: string; fits: boolean } {
+  const steps: Array<() => PublishedStatus> = [
+    () => record,
+    () => ({ ...record, problems: record.problems.slice(-PUBLISH_KEEP_PROBLEMS) }),
+    () => ({ ...record, problems: [] }),
+    () => ({ ...record, problems: [], status: record.status === null ? null : { ...record.status, detail: {} } }),
+  ]
+  let text = ''
+  for (const step of steps) {
+    text = JSON.stringify(step())
+    if (text.length <= MAX_PUBLISHED_STATUS_CHARS) return { text, fits: true }
+  }
+  return { text, fits: false }
+}
 
 const STATUS_KEY = STORAGE_KEYS.PROFILE_STATUS
 const COMMAND_PREFIX = STORAGE_KEYS.PROFILE_COMMAND_PREFIX
@@ -272,7 +312,7 @@ export function __resetSyncStatusForTest(): void {
 const BLOCKED: ReadonlyArray<ProfileSyncState['blocked']> = ['master-endpoint-changed', 'profile-gone', 'suspended', null]
 
 function parsePublished(raw: string | null): PublishedStatus | null {
-  if (raw === null) return null
+  if (raw === null || raw.length > MAX_PUBLISHED_STATUS_CHARS) return null
   let value: unknown
   try {
     value = JSON.parse(raw)
@@ -287,7 +327,73 @@ function parsePublished(raw: string | null): PublishedStatus | null {
   if (status !== null && typeof status !== 'object') return null
   if (!BLOCKED.includes(blocked as ProfileSyncState['blocked'])) return null
   if (!Array.isArray(problems)) return null
-  return { at, leader, master, status: status as PublishedStatus['status'], blocked: blocked as PublishedStatus['blocked'], problems: problems as PublishedStatus['problems'] }
+  const parsed = status === null ? null : parseStatus(status)
+  if (parsed === undefined) return null
+  return { at, leader, master, status: parsed, blocked: blocked as PublishedStatus['blocked'], problems: problems as PublishedStatus['problems'] }
+}
+
+/** A JSON object — not an array, not null. What `JSON.parse` makes of `{…}` has exactly this prototype. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype
+}
+
+const PROFILE_STATUSES: ReadonlyArray<string> = ['idle', 'locked:schema', 'locked:conflict', 'locked:reset', 'locked:invalid', 'pending', 'synced']
+const SECTION_STATUSES: ReadonlyArray<string> = ['synced', 'pending', 'locked:conflict', 'locked:reset', 'locked:invalid']
+
+/**
+ * The status as the page reads it, or `undefined` = damaged (review F1): the page reads `profile`, `sections` and
+ * `locks` without asking, so a status that lacks one — or holds something else under its name — would take the
+ * Profile UI down with it. The fields every build published are checked here; the ones P3d-4 added are read in
+ * `withDetail`, where a damaged one is merely absent.
+ */
+function parseStatus(value: unknown): ExecutorStatus | undefined {
+  if (!isPlainObject(value)) return undefined
+  const { profile, schemaLock, sections, locks } = value
+  if (typeof profile !== 'string' || !PROFILE_STATUSES.includes(profile)) return undefined
+  if (schemaLock !== null && !isPlainObject(schemaLock)) return undefined
+  if (!isPlainObject(sections)) return undefined
+  for (const v of Object.values(sections)) if (typeof v !== 'string' || !SECTION_STATUSES.includes(v)) return undefined
+  if (!isPlainObject(locks)) return undefined
+  for (const v of Object.values(locks)) if (parseLock(v) === null) return undefined
+  return withDetail({ ...value, sections })
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+const isTime = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** One `detail` entry exactly in its shape, or `undefined`. */
+function parseDetail(value: unknown): SectionDetail | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const { rev, failures, retryAt } = value as Record<string, unknown>
+  if (rev !== null && !(typeof rev === 'number' && Number.isSafeInteger(rev))) return undefined
+  if (!isCount(failures)) return undefined
+  if (retryAt !== null && !isTime(retryAt)) return undefined
+  return { rev, failures, retryAt }
+}
+
+/**
+ * The fields P3d-4 added. A record from an OLDER build has none of them, and one that is damaged has them in
+ * another shape: either way they are read as ABSENT — no detail, no counter, not gone, never synced — which the
+ * page shows as nothing, never as "0" or "never". A damaged `detail` entry is left out on its own.
+ *
+ * `detail` is read FOR THE SECTIONS THE STATUS LISTS (review F4): what is kept is bounded by them, and a key
+ * nobody lists (`__proto__` included) is never taken. (What bounds the COST of a huge record is
+ * `MAX_PUBLISHED_STATUS_CHARS`, checked before `JSON.parse` — by here the whole record has been parsed.) Not a
+ * plain object (an array included) → no detail.
+ */
+function withDetail(status: Record<string, unknown> & { sections: Record<string, unknown> }): ExecutorStatus {
+  const { profileGone, detail, indexFailures, lastSuccessAt } = status
+  const source = isPlainObject(detail) ? detail : {}
+  return {
+    ...(status as unknown as ExecutorStatus),
+    profileGone: profileGone === true,
+    detail: Object.fromEntries(Object.keys(status.sections).flatMap((key) => {
+      const parsed = Object.hasOwn(source, key) ? parseDetail(source[key]) : undefined
+      return parsed === undefined ? [] : [[key, parsed]]
+    })),
+    indexFailures: isCount(indexFailures) ? indexFailures : 0,
+    lastSuccessAt: isTime(lastSuccessAt) ? lastSuccessAt : null,
+  }
 }
 
 /** `undefined` = damaged. `null` is a value: "the section had no pair". */
@@ -381,11 +487,14 @@ function readItem(key: string): string | null {
   }
 }
 
-function removeItem(key: string): void {
+/** `false` = storage refused (the caller may care: `publish` retries then). */
+function removeItem(key: string): boolean {
   try {
     localStorage.removeItem(key)
+    return true
   } catch {
     /* a status goes stale, a command expires */
+    return false
   }
 }
 
@@ -414,6 +523,8 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
   let wasLeader = false
   /** What the record in storage says, as far as THIS leader knows; null = publish whatever comes next. */
   let publishedSignature: string | null = null
+  /** An oversized status has been logged since the last record that fitted (`publish`). */
+  let oversizeLogged = false
   let publishTimer: ReturnType<typeof setTimeout> | null = null
   let staleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -436,8 +547,23 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     const local = deps.local()
     if (!local.leader) return // stood down inside the throttle window: the record is the next leader's
     const record: PublishedStatus = { at: deps.now(), leader: deps.windowId, master: tag, status: local.status, blocked: local.blocked, problems: local.problems }
+    const { text, fits } = serializeToFit(record)
+    if (!fits) {
+      // Not even without problems and detail. Writing nothing new would leave the LAST record standing — and while
+      // this leader holds the lease a follower never calls it stale: it would show an old state as the current
+      // one. So the record goes; followers then say "not known yet", which is true. Logged once per stretch, and
+      // the signature is taken, so the same content is not serialized again on every refresh.
+      // Taken only once the record IS gone; refused → null, so the next refresh tries again (as a refused write).
+      publishedSignature = removeItem(STATUS_KEY) ? publishable(local) : null
+      if (!oversizeLogged) {
+        oversizeLogged = true
+        console.warn(`[profile/sync-status] the status does not fit ${MAX_PUBLISHED_STATUS_CHARS} characters even without problems and detail (${text.length}); not published`)
+      }
+      return
+    }
+    oversizeLogged = false
     try {
-      localStorage.setItem(STATUS_KEY, JSON.stringify(record))
+      localStorage.setItem(STATUS_KEY, text)
       publishedSignature = publishable(local)
     } catch {
       publishedSignature = null // quota, blocked: the next change tries again

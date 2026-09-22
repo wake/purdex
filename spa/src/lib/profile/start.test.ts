@@ -61,7 +61,7 @@ vi.mock('./executor', () => ({
       onReconnected: vi.fn(() => h.order.push('onReconnected')),
       syncNow: vi.fn(),
       resolve: vi.fn(),
-      status: vi.fn(() => ({ profile: 'synced', schemaLock: null, sections: {}, locks: {} })),
+      status: vi.fn(() => ({ profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })),
       dispose: vi.fn(),
     }
     h.executors.push(e)
@@ -154,6 +154,7 @@ import { clearSectionStore } from './section-store'
 import {
   ATTACH_SUSPEND_MS,
   PROBLEM_BUFFER_SIZE,
+  PROBLEM_DETAIL_MAX,
   __resetProfileSyncForTest,
   attachMaster,
   detachMaster,
@@ -477,7 +478,10 @@ describe('the attachment answers 404: the profile is not there any more', () => 
     expect(profileSyncState()).toMatchObject({
       master: { hostId: 'h1', profileId: P1 },
       blocked: 'profile-gone',
-      status: { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} },
+    })
+    // R6: the synthetic status says the profile is gone in the executor's own words, and nothing else is claimed
+    expect(profileSyncState().status).toEqual({
+      profile: 'locked:reset', schemaLock: null, sections: {}, locks: {}, profileGone: true, detail: {}, indexFailures: 0, lastSuccessAt: null,
     })
     expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['profile-gone'])
 
@@ -511,7 +515,7 @@ describe('the attachment answers 404: the profile is not there any more', () => 
     expect(h.executors).toHaveLength(2)
     expect(h.executors[1].deps.profileId).toBe(P2)
     expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
-    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {}, locks: {} })
+    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })
   })
 
   it('detachMaster is the other', async () => {
@@ -1869,6 +1873,31 @@ describe('problems and status', () => {
     })
   })
 
+  it('cuts a detail to PROBLEM_DETAIL_MAX code points when it is recorded, never inside a surrogate pair, with a trailing …', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const { onProblem } = h.executors[0].deps
+    const detailOf = (detail: string): string => {
+      onProblem({ kind: 'k', section: 'hosts', detail })
+      return profileSyncState().problems.at(-1)!.detail
+    }
+    expect(PROBLEM_DETAIL_MAX).toBe(1000)
+    // short enough: kept exactly — at the limit too
+    expect(detailOf('a 502 page')).toBe('a 502 page')
+    const atMax = '😀'.repeat(PROBLEM_DETAIL_MAX) // 1000 code points, 2000 UTF-16 units
+    expect(detailOf(atMax)).toBe(atMax)
+    // one over: the first 1000 code points and a …
+    expect(detailOf('x'.repeat(PROBLEM_DETAIL_MAX + 1))).toBe(`${'x'.repeat(PROBLEM_DETAIL_MAX)}…`)
+    // counted in code points: an astral character is ONE, and is never split
+    const cut = detailOf(`${'a'.repeat(PROBLEM_DETAIL_MAX - 1)}😀😀tail`)
+    expect(cut).toBe(`${'a'.repeat(PROBLEM_DETAIL_MAX - 1)}😀…`)
+    expect([...cut]).toHaveLength(PROBLEM_DETAIL_MAX + 1)
+    expect(cut).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/) // no lone high surrogate
+    // a server's whole error page does not ride along
+    expect(detailOf('<html>'.repeat(20_000)).length).toBeLessThanOrEqual(2 * PROBLEM_DETAIL_MAX + 1)
+  })
+
   it('warns once per kind + section; the collector reports into the same buffer', async () => {
     stop = startProfileSync()
     useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
@@ -1894,7 +1923,7 @@ describe('problems and status', () => {
     h.leaderships[0].set(true)
     await flush()
     expect(profileSyncState().leader).toBe(true)
-    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {}, locks: {} })
+    expect(profileSyncState().status).toEqual({ profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })
     const pushed = { profile: 'pending', schemaLock: null, sections: { hosts: 'dirty' } }
     h.executors[0].deps.onStatus(pushed)
     expect(profileSyncState().status).toEqual(pushed)
@@ -2050,7 +2079,7 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
   const commandKeys = (): string[] => Object.keys(localStorage).filter((k) => k.startsWith(CMD))
   const PAIR = { localHash: 'L1', sot: { rev: 5, hash: 'S5' } }
   const lockOf = (pair: typeof PAIR) => ({ status: 'locked:conflict' as const, currentHash: pair.localHash, sot: pair.sot, conflict: pair })
-  const locked = (pair: typeof PAIR) => ({ profile: 'locked:conflict', schemaLock: null, sections: { hosts: 'locked:conflict' }, locks: { hosts: lockOf(pair) } })
+  const locked = (pair: typeof PAIR) => ({ profile: 'locked:conflict', schemaLock: null, sections: { hosts: 'locked:conflict' }, locks: { hosts: lockOf(pair) }, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })
   /** The master this window is on, as sync-status.ts scopes everything: `hostId|profileId|attachGeneration`, from the store. */
   const tag = (): string => {
     const { masterHostId, masterProfileId, attachGeneration } = useProfileStore.getState()
@@ -2069,7 +2098,7 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     expect(profileSyncSnapshot()).toBe(s0)
     expect(profileSyncState()).not.toBe(profileSyncState()) // the old accessor is what it was: a fresh object per call
 
-    const pushed = { profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {} }
+    const pushed = { profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null }
     h.executors[0].deps.onStatus(pushed)
     expect(heard).toHaveBeenCalledTimes(1)
     const s1 = profileSyncSnapshot()
@@ -2096,7 +2125,7 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     expect(localStorage.getItem(STATUS)).toBeNull()
     vi.advanceTimersByTime(250)
     expect(JSON.parse(localStorage.getItem(STATUS) ?? 'null')).toEqual({
-      at: expect.any(Number), leader: 'w-test', master: `h1|${P1}|${useProfileStore.getState().attachGeneration}`, status: { profile: 'synced', schemaLock: null, sections: {}, locks: {} }, blocked: null, problems: [],
+      at: expect.any(Number), leader: 'w-test', master: `h1|${P1}|${useProfileStore.getState().attachGeneration}`, status: { profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null }, blocked: null, problems: [],
     })
   })
 
@@ -2192,7 +2221,7 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     vi.advanceTimersByTime(250)
     expect(localStorage.getItem(STATUS)).not.toBeNull()
     localStorage.setItem(`${cmd()}left`, JSON.stringify({ kind: 'syncNow', master: tag(), at: 0 }))
-    h.executors.at(-1)?.deps.onStatus({ profile: 'pending', schemaLock: null, sections: {}, locks: {} }) // a publish is pending
+    h.executors.at(-1)?.deps.onStatus({ profile: 'pending', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null }) // a publish is pending
     const added = add.mock.calls.filter(([type]) => type === 'storage').map(([, fn]) => fn)
     expect(added.length).toBeGreaterThan(0)
 
