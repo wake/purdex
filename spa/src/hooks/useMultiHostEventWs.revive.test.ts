@@ -12,8 +12,11 @@ import { useRebuildStore } from '../stores/useRebuildStore'
 import { rebuildPane, type RebuildReport } from '../lib/rebuild/engine'
 import { runBatchRebuild, type BatchReport } from '../lib/rebuild/batch'
 import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
-import type { Session } from '../lib/host-api'
+import type { FreshSessions, Session } from '../lib/host-api'
 import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../types/tab'
+import { useWorkspaceStore } from '../features/workspace/store'
+import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
+import { __resetMasterWorldForTest } from '../lib/profile/master-world'
 
 vi.mock('../lib/host-connection', () => ({
   checkHealth: vi.fn(async () => ({ daemon: 'connected', latency: 3, ticket: 'tk' })),
@@ -29,13 +32,18 @@ vi.mock('../lib/rebuild/provenance-probe', () => ({
 }))
 // Only `listSessions` is faked: S17 needs the REAL `fetchHost` — the one that
 // overwrites the session store whenever its HTTP response lands.
-const { listSessions } = vi.hoisted(() => ({ listSessions: vi.fn<() => Promise<Session[]>>() }))
+const { listSessions, listSessionsFresh } = vi.hoisted(() => ({
+  listSessions: vi.fn<() => Promise<Session[]>>(),
+  listSessionsFresh: vi.fn<(hostId: string) => Promise<FreshSessions>>(),
+}))
 vi.mock('../lib/host-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/host-api')>()),
   listSessions: (...args: unknown[]) => (listSessions as (...a: unknown[]) => Promise<Session[]>)(...args),
+  listSessionsFresh: (hostId: string) => listSessionsFresh(hostId),
 }))
 
 const { useMultiHostEventWs } = await import('./useMultiHostEventWs')
+const { PROFILE_SWITCH_LOCK_OWNER, switchActiveProfile } = await import('../lib/profile/switch-active')
 
 const HOST = 'h1'
 
@@ -483,6 +491,70 @@ describe('useMultiHostEventWs revive — the lock-release trigger', () => {
 
     emit([NEW1], sockets[1])
     expect(paneContent('t1', 'p1')).toMatchObject(revived)
+    view.unmount()
+  })
+})
+
+// #1255 SPA spec §3.5 (codex plan review #1): a switch releases the operation
+// lock, and the lock-release trigger runs the pass for every host. The list it
+// would use was reconciled for the world that was on screen BEFORE the switch —
+// no evidence for the world that just came on. Real `switchActiveProfile`.
+describe('useMultiHostEventWs revive — a profile switch', () => {
+  const SLAVE = 's1'
+  function slaveWorld(): ParkedWorld {
+    const tab: Tab = { id: 'st', pinned: false, locked: false, createdAt: 0,
+      layout: { type: 'leaf', pane: { id: 'sp', content: content() } } }
+    return {
+      workspaces: [{ id: 'sws', name: 'slave', tabs: ['st'], activeTabId: 'st' }],
+      tabs: { st: tab }, activeWorkspaceId: 'sws', activeTabId: 'st',
+    }
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    __resetMasterWorldForTest()
+    listSessionsFresh.mockResolvedValue({ kind: 'unversioned' })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+    useLocalProfilesStore.setState({
+      slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, world: slaveWorld() } },
+      slaveOrder: [SLAVE], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, master: { name: null },
+    })
+  })
+
+  afterEach(() => {
+    listSessionsFresh.mockReset()
+    useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, master: { name: null } })
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+    useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+    __resetMasterWorldForTest()
+    localStorage.clear()
+  })
+
+  it('the switch\'s own lock release does not revive the new world from the pre-switch list', async () => {
+    const view = await mount()
+    emit([NEW1]) // reconciled for the master world; the gate is open
+    expect(attachReady()).toBe(true)
+
+    const released: (string | null)[] = []
+    const unsub = useRebuildStore.subscribe((s, prev) => { if (prev.lockedBy !== null && s.lockedBy === null) released.push(prev.lockedBy) })
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    unsub()
+    expect(released).toEqual([PROFILE_SWITCH_LOCK_OWNER]) // the trigger did fire
+
+    await new Promise((r) => setTimeout(r, 0))
+    expect(paneContent('st', 'sp')).toMatchObject(dead)
+    view.unmount()
+  })
+
+  it('after the post-switch reconcile it IS revived, from the new list', async () => {
+    const view = await mount()
+    emit([NEW1])
+    listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: '9f3c1a0b7d2e4c61', seq: 5, sessions: [NEW1] })
+
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    await waitFor(() => expect(paneContent('st', 'sp')).toMatchObject(revived))
+    expect(listSessionsFresh).toHaveBeenCalledWith(HOST)
     view.unmount()
   })
 })

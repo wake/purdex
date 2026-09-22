@@ -1,7 +1,8 @@
 // spa/src/lib/rebuild/revive.test.ts — decideRevive, reviveAllowed and the
 // pass that applies them (spec §3.1 / §3.2).
-import { describe, it, expect, beforeEach } from 'vitest'
-import { decideRevive, reviveAllowed, runRevivePass, noteReconciledSessions } from './revive'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { decideRevive, reviveAllowed, runRevivePass, runRevivePassAll, noteReconciledSessions } from './revive'
+import { STORAGE_KEYS } from '../storage/keys'
 import type { ReviveCandidate } from './revive'
 import type { Session } from '../host-api'
 import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
@@ -336,6 +337,45 @@ describe('runRevivePass', () => {
     }
     expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
     expect(paneContent('t2', 'p2')).toMatchObject(revivedContent)
+  })
+
+  // #1255 SPA spec §3.5 (codex plan review #1): the snapshot is bound to the
+  // world it was reconciled for — the world-epoch fence at that moment.
+  describe('bound to the world (G6)', () => {
+    const setFence = (n: number) => localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, String(n))
+    beforeEach(() => localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH))
+    afterEach(() => localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH))
+
+    it('a snapshot noted before the world changed is ignored by runRevivePassAll', () => {
+      noteReconciledSessions('h1', [live]) // no fence yet: a device that never switched
+      setFence(1_700_000_000_000_000)      // the first switch ever
+      seedPane('t1', 'p1')
+      runRevivePassAll()
+      expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+      runRevivePass('h1')
+      expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+    })
+
+    it('…and a list reconciled for the new world revives again', () => {
+      setFence(10)
+      noteReconciledSessions('h1', [live])
+      setFence(20)
+      seedPane('t1', 'p1')
+      runRevivePassAll()
+      expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+
+      noteReconciledSessions('h1', [live])
+      runRevivePassAll()
+      expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
+    })
+
+    it('same world: unchanged', () => {
+      setFence(10)
+      noteReconciledSessions('h1', [live])
+      seedPane('t1', 'p1')
+      runRevivePassAll()
+      expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
+    })
   })
 
   it('revives a pane that carries no rebuild record, and leaves it without one', () => {
