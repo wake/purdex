@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"sort"
 	"strconv"
@@ -179,13 +180,19 @@ type ordinalExecutor struct {
 	tmux.Executor
 	mu sync.Mutex
 	n  int
+	// onRead, if set, runs inside read k before it returns.
+	onRead func(k int)
 }
 
 func (e *ordinalExecutor) ListSessions() ([]tmux.TmuxSession, error) {
 	e.mu.Lock()
 	e.n++
 	k := e.n
+	hook := e.onRead
 	e.mu.Unlock()
+	if hook != nil {
+		hook(k)
+	}
 	return []tmux.TmuxSession{{ID: "$0", Name: fmt.Sprintf("r%d", k), Cwd: "/tmp"}}, nil
 }
 
@@ -332,6 +339,71 @@ func TestVersioned_WarmPlainCacheNeverLeaks(t *testing.T) {
 		assert.Greater(t, p.ordinal, k, "%s re-used the cached plain list r%d", p.via, k)
 		assert.Greater(t, p.seq, lastSeq, "%s: seq must keep increasing", p.via)
 		lastSeq = p.seq
+	}
+}
+
+// Spec §3.3 rules 1 and 5 under concurrency: while a push path is inside its
+// tmux read, a concurrent ?fresh=1 is given the chance to run to completion.
+// If the push took its seq separately from its read (e.g. read through the
+// plain cache, then stamped), the fetch would slip in between and the push
+// would pair an older list with a newer seq. With the read under snapMu the
+// fetch must wait, and so reads after the push.
+func TestVersioned_ConcurrentFetchCannotSplitReadFromSeq(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		push func(h *crossChannelHarness) versionedPayload
+	}{
+		{"broadcastSessions", (*crossChannelHarness).broadcast},
+		{"tickNormal", (*crossChannelHarness).tick},
+		{"subscribe", (*crossChannelHarness).snapshot},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCrossChannelHarness(t)
+			h.tick() // prime tickNormal's hash so the next tick broadcasts
+
+			var body []byte
+			fetchDone := make(chan struct{})
+			var once sync.Once
+			h.ex.mu.Lock()
+			h.ex.onRead = func(int) {
+				once.Do(func() {
+					go func() {
+						defer close(fetchDone)
+						// No require/t.Fatal off the test goroutine: decode below.
+						req := httptest.NewRequest(http.MethodGet, "/api/sessions?fresh=1", nil)
+						w := httptest.NewRecorder()
+						h.mux.ServeHTTP(w, req)
+						body = w.Body.Bytes()
+					}()
+					// Give the fetch every chance to finish inside this read.
+					select {
+					case <-fetchDone:
+					case <-time.After(200 * time.Millisecond):
+					}
+				})
+			}
+			h.ex.mu.Unlock()
+
+			pushed := tc.push(h)
+			select {
+			case <-fetchDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("concurrent fetch never finished")
+			}
+			var v VersionedSessions
+			require.NoError(t, json.Unmarshal(body, &v), string(body))
+			fetched := versionedPayload{via: "fresh", epoch: v.Epoch, seq: v.Seq, ordinal: ordinalOf(t, v.Sessions)}
+			require.NotZero(t, fetched.seq)
+			require.NotEqual(t, pushed.seq, fetched.seq)
+
+			if pushed.seq < fetched.seq {
+				assert.Less(t, pushed.ordinal, fetched.ordinal, "smaller seq must be the earlier read")
+			} else {
+				assert.Greater(t, pushed.ordinal, fetched.ordinal,
+					"%s: seq %d carries read r%d, but fetch seq %d carries newer read r%d",
+					pushed.via, pushed.seq, pushed.ordinal, fetched.seq, fetched.ordinal)
+			}
+		})
 	}
 }
 
