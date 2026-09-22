@@ -59,11 +59,14 @@ func (m *SessionModule) checkAndBroadcast() {
 }
 
 func (m *SessionModule) tickNormal() {
-	sessions, err := m.ListSessions()
+	// Versioned even when nothing is broadcast: the list pushed below must
+	// carry the seq of the very read that produced it (spec §3.3 rule 5).
+	v, err := m.versionedList()
 	if err != nil {
 		log.Printf("session: watcher list error: %v", err)
 		return
 	}
+	sessions := v.Sessions
 
 	if len(sessions) == 0 {
 		if !m.tmux.TmuxAlive() {
@@ -75,6 +78,8 @@ func (m *SessionModule) tickNormal() {
 		}
 	}
 
+	// The hash covers (instance, sessions) only, so a new seq alone never
+	// triggers a broadcast.
 	hash := hashSessions(payloadInstance(sessions), sessions)
 	if m.wstate.updateHash(hash) {
 		// Hash changed = session list mutated (possibly by external tmux
@@ -83,8 +88,7 @@ func (m *SessionModule) tickNormal() {
 		// refreshes from tmux.
 		m.invalidateNameCache()
 		if m.core.Events.HasSubscribers() {
-			data := mustMarshal(sessions)
-			m.core.Events.Broadcast("", "sessions", data)
+			m.core.Events.BroadcastEvent(v.hostEvent())
 		}
 	}
 }
@@ -126,16 +130,12 @@ func (m *SessionModule) broadcastSessions() {
 	m.wstate.lastBroadcast = time.Now()
 	m.wstate.mu.Unlock()
 
-	sessions, err := m.ListSessions()
+	v, err := m.versionedList()
 	if err != nil {
 		log.Printf("session: broadcast list error: %v", err)
 		return
 	}
-	if sessions == nil {
-		sessions = []SessionInfo{}
-	}
-	data := mustMarshal(sessions)
-	m.core.Events.Broadcast("", "sessions", data)
+	m.core.Events.BroadcastEvent(v.hostEvent())
 }
 
 func (m *SessionModule) watchSessions(ctx context.Context) {

@@ -3,9 +3,13 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/wake/purdex/internal/core"
@@ -417,4 +421,116 @@ func TestTmuxInstance_ProviderMethodSamplesEveryCall(t *testing.T) {
 	assert.Equal(t, "444:4000", mod.TmuxInstance())
 	assert.Equal(t, "444:4000", mod.TmuxInstance())
 	assert.Equal(t, 2, calls, "every call must re-sample rather than reuse a cached value")
+}
+
+// --- versioned sessions frames (spec 2026-09-23 §3.2) ---
+
+// sessionsFrame is a decoded WS `sessions` frame with its version keys.
+type sessionsFrame struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+	Epoch string `json:"epoch"`
+	Seq   uint64 `json:"seq"`
+}
+
+// drainSessionFrames collects every `sessions` frame currently queued on sub.
+func drainSessionFrames(t *testing.T, sub *core.EventSubscriber) []sessionsFrame {
+	t.Helper()
+	var out []sessionsFrame
+	timeout := time.After(100 * time.Millisecond)
+	for {
+		select {
+		case msg := <-sub.SendCh():
+			var f sessionsFrame
+			if err := json.Unmarshal(msg, &f); err != nil || f.Type != "sessions" {
+				continue
+			}
+			out = append(out, f)
+		case <-timeout:
+			return out
+		}
+	}
+}
+
+// expireDebounce backdates the broadcastSessions debounce stamp so the next
+// call goes through.
+func expireDebounce(mod *SessionModule) {
+	mod.wstate.mu.Lock()
+	mod.wstate.lastBroadcast = time.Time{}
+	mod.wstate.mu.Unlock()
+}
+
+func TestBroadcastSessions_FrameCarriesVersion(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	fake.AddSession("s1", "/tmp")
+
+	mod.broadcastSessions()
+	first := drainSessionFrames(t, sub)
+	require.Len(t, first, 1)
+	assert.Equal(t, mod.epoch, first[0].Epoch)
+	assert.GreaterOrEqual(t, first[0].Seq, uint64(1))
+
+	expireDebounce(mod)
+	mod.broadcastSessions()
+	second := drainSessionFrames(t, sub)
+	require.Len(t, second, 1)
+	assert.Equal(t, mod.epoch, second[0].Epoch)
+	assert.Greater(t, second[0].Seq, first[0].Seq)
+}
+
+func TestTickNormal_FrameCarriesVersion(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	fake.AddSession("s1", "/tmp")
+
+	mod.tickNormal()
+	first := drainSessionFrames(t, sub)
+	require.Len(t, first, 1)
+	assert.Equal(t, mod.epoch, first[0].Epoch)
+	assert.GreaterOrEqual(t, first[0].Seq, uint64(1))
+
+	// Unchanged list: a new seq alone must not trigger a broadcast.
+	mod.tickNormal()
+	assert.Empty(t, drainSessionFrames(t, sub), "only the seq differs — no broadcast")
+
+	fake.AddSession("s2", "/tmp")
+	mod.tickNormal()
+	next := drainSessionFrames(t, sub)
+	require.Len(t, next, 1)
+	assert.Equal(t, mod.epoch, next[0].Epoch)
+	assert.Greater(t, next[0].Seq, first[0].Seq)
+}
+
+// The on-subscribe snapshot goes through the real WS path: AddTestSubscriber
+// does not run OnSubscribe callbacks.
+func TestOnSubscribeSnapshot_CarriesVersion(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	fake.AddSession("s1", "/tmp")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, mod.Start(ctx))
+
+	srv := httptest.NewServer(http.HandlerFunc(events.HandleHostEvents))
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
+	for {
+		_, msg, err := conn.ReadMessage()
+		require.NoError(t, err, "no sessions frame arrived")
+		var f sessionsFrame
+		require.NoError(t, json.Unmarshal(msg, &f))
+		if f.Type != "sessions" {
+			continue
+		}
+		assert.Equal(t, mod.epoch, f.Epoch)
+		assert.GreaterOrEqual(t, f.Seq, uint64(1))
+		assert.Contains(t, f.Value, `"name":"s1"`)
+		return
+	}
 }

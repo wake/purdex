@@ -3,6 +3,8 @@ package session
 import (
 	"crypto/rand"
 	"encoding/hex"
+
+	"github.com/wake/purdex/internal/core"
 )
 
 // maxSeq is the largest seq a JSON client can hold exactly (2^53−1). Reaching
@@ -17,6 +19,16 @@ type VersionedSessions struct {
 	Epoch    string        `json:"epoch"`
 	Seq      uint64        `json:"seq"`
 	Sessions []SessionInfo `json:"sessions"`
+}
+
+// hostEvent renders v as a WS `sessions` frame carrying its version.
+func (v VersionedSessions) hostEvent() core.HostEvent {
+	return core.HostEvent{
+		Type:  "sessions",
+		Value: mustMarshal(v.Sessions),
+		Epoch: v.Epoch,
+		Seq:   v.Seq,
+	}
 }
 
 // newEpoch draws a random 64-bit process identity as 16 lowercase hex chars.

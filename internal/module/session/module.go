@@ -119,26 +119,23 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	m.watchSessions(watchCtx)
 
 	// Register OnSubscribe callback to send initial sessions snapshot.
-	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
-		sessions, err := m.ListSessions()
-		if err != nil {
-			log.Printf("session: OnSubscribe list error: %v", err)
-			return
-		}
-		if sessions == nil {
-			sessions = []SessionInfo{}
-		}
-		data, err := json.Marshal(core.HostEvent{
-			Type:  "sessions",
-			Value: mustMarshal(sessions),
-		})
-		if err != nil {
-			return
-		}
-		sub.Send(data)
-	})
+	m.core.Events.OnSubscribe(m.sendSessionsSnapshot)
 
 	return nil
+}
+
+// sendSessionsSnapshot pushes a versioned session list to one new subscriber.
+func (m *SessionModule) sendSessionsSnapshot(sub *core.EventSubscriber) {
+	v, err := m.versionedList()
+	if err != nil {
+		log.Printf("session: OnSubscribe list error: %v", err)
+		return
+	}
+	data, err := json.Marshal(v.hostEvent())
+	if err != nil {
+		return
+	}
+	sub.Send(data)
 }
 
 func (m *SessionModule) Stop(_ context.Context) error {
