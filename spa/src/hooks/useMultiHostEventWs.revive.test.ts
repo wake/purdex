@@ -521,6 +521,57 @@ describe('useMultiHostEventWs revive — the lock release reconciles from a fres
     view.unmount()
   })
 
+  // codex plan review #6: the post-release refresh + revive pass is async now;
+  // the per-pane guard and the rebuild's own outcome must still hold.
+  it('a rebuild that created a session but did not re-point: the post-release refresh does NOT revive that pane', async () => {
+    const view = await mount()
+    seedPane('tX', 'pX')
+    emitVersioned([], 1)
+    const run = rebuildPane(HOST, 'tX', 'pX', plan, {
+      createSession: async () => NEW1,
+      sendKeys: async () => { throw new Error('boom') },
+    })
+    listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: E, seq: 2, sessions: [NEW1] })
+    let report!: RebuildReport
+    await act(async () => { report = await run })
+
+    expect(report.repointed).toBe(false)
+    expect(lockedBy()).toBeNull()
+    await waitFor(() => expect(useSessionStore.getState().sessions[HOST]?.map((s) => s.code)).toEqual(['new1']))
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1) // the fresh list is in evidence…
+    expect(paneContent('tX', 'pX')).toMatchObject(dead) // …and the guard still refuses the revive
+    expect(useRebuildStore.getState().operations['pX']).toMatchObject({ status: 'done', createdSession: { code: 'new1' } })
+    view.unmount()
+  })
+
+  it('a batch: its report, its members and the operation panel are untouched by the post-release reconcile', async () => {
+    const view = await mount()
+    seedPane('t1', 'p1')
+    seedPane('t2', 'p2')
+    emitVersioned([], 1)
+    const resume = deferred()
+    const sendKeys = vi.fn(async () => { await resume.promise; throw new Error('boom') })
+    const run = runBatchRebuild({ createSession: async () => NEW1, sendKeys })
+    await waitFor(() => expect(sendKeys).toHaveBeenCalledTimes(1))
+    emitVersioned([NEW1], 2) // the create broadcast, during the hold: held back (barrier)
+    expect(paneContent('t2', 'p2')).toMatchObject(dead)
+
+    listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: E, seq: 3, sessions: [NEW1] })
+    let report!: BatchReport
+    await act(async () => { resume.resolve(); report = await run })
+    const reportCopy = JSON.parse(JSON.stringify(report))
+    const operations = useRebuildStore.getState().operations
+
+    await waitFor(() => expect(paneContent('t2', 'p2')).toMatchObject(revived)) // the member, from the fetched list
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(report).toEqual(reportCopy)
+    expect(report.groups[0].members[0]).toMatchObject({ paneId: 'p2', repointed: false })
+    expect(useRebuildStore.getState().operations).toBe(operations)
+    expect(operations['p1']).toMatchObject({ status: 'done', createdSession: { code: 'new1' } })
+    expect(paneContent('t1', 'p1')).toMatchObject(dead) // the source keeps its panel
+    view.unmount()
+  })
+
   it('an unversioned host: no fetch, the pass runs synchronously on the release', async () => {
     const view = await mount()
     seedPane('t1', 'p1')
