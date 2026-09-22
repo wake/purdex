@@ -75,7 +75,7 @@
 // with the tab.
 //   So a switch that went through asks every host with a live, reconciled
 // connection for its sessions AFTERWARDS (`refreshSessionsAfterSwitch`,
-// rebuild/refresh-after-switch.ts; #1255) — outside both locks, on the promise.
+// rebuild/refresh-sessions.ts; #1255) — outside both locks, on the promise.
 // Every verdict of the reconciliation changes a binding (`session-closed` is
 // irreversible, `tmux-restarted` and revive-by-name re-point the pane) and the
 // master pushes it to the SOT, so the list has to be EVIDENCE: `GET
@@ -111,7 +111,7 @@ import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
 import type { MasterWorldRead } from './master-world'
 import { withWorldLock } from '../storage/world-lock'
-import { refreshSessionsAfterSwitch } from '../rebuild/refresh-after-switch'
+import { refreshSessionsAfterSwitch } from '../rebuild/refresh-sessions'
 import { repairTabOwnership } from './sections'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
@@ -275,7 +275,7 @@ function underOperationLock<R>(block: () => R, busy: R): R {
  * has just come on screen is reconciled against a fresh, versioned session list
  * of every connected host (see WHAT A PARKED WORLD DOES NOT HEAR). Fire and
  * forget — the result does not wait for it; a host that cannot answer is retried
- * a few times (refresh-after-switch.ts) and otherwise reconciled by its next
+ * a few times (refresh-sessions.ts) and otherwise reconciled by its next
  * `sessions` payload.
  */
 export function switchActiveProfile(targetId: typeof MASTER_PROFILE_ID | string): Promise<SwitchResult> {

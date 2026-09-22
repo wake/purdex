@@ -88,7 +88,7 @@ export function decide(hostId: string, v: SessionVersion, origin: VersionOrigin)
  * `decide` said apply. The reconciliation is not transactional (it may write
  * part of a list, e.g. an irreversible `session-closed`, and then throw), so
  * an older list must never be decided newer after it; a failed reconciliation
- * is recovered by a fresh refresh instead (refresh-after-switch.ts).
+ * is recovered by a fresh refresh instead (refresh-sessions.ts).
  */
 export function note(hostId: string, v: SessionVersion): void {
   held.set(hostId, v)

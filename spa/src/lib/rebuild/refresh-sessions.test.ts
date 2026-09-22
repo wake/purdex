@@ -1,5 +1,6 @@
-// spa/src/lib/rebuild/refresh-after-switch.test.ts — the post-switch session
-// refresh (#1255 SPA spec §3.2). `listSessionsFresh` is faked; the
+// spa/src/lib/rebuild/refresh-sessions.test.ts — refreshing a host's sessions
+// from a fresh, versioned list: after a switch (#1255 SPA spec §3.2) and on every
+// operation-lock release (#1309/#1310 spec §3.1). `listSessionsFresh` is faked; the
 // reconciliation is the real one behind a spy, so "applied" / "dropped" can be
 // asserted both on the call and on what it wrote.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -28,9 +29,16 @@ vi.mock('./reconcile-host', async (importOriginal) => {
   return { ...real, reconcileHostSessions: vi.fn(real.reconcileHostSessions) }
 })
 
+vi.mock('./revive', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./revive')>()
+  return { ...real, runRevivePass: vi.fn(real.runRevivePass) }
+})
+
 const { reconcileHostSessions } = await import('./reconcile-host')
-const { refreshSessionsAfterSwitch, cancelSessionRefresh, __resetRefreshForTests } = await import('./refresh-after-switch')
+const { runRevivePass, noteReconciledSessions } = await import('./revive')
+const { refreshSessionsAfterSwitch, reconcileAfterLockRelease, operationLockAcquired, cancelSessionRefresh, __resetRefreshForTests } = await import('./refresh-sessions')
 const reconcile = vi.mocked(reconcileHostSessions)
+const revivePass = vi.mocked(runRevivePass)
 
 const H = 'h1'
 const H2 = 'h2'
@@ -73,6 +81,7 @@ beforeEach(() => {
   __resetRefreshForTests()
   listSessionsFresh.mockReset()
   reconcile.mockClear()
+  revivePass.mockClear()
   useHostStore.setState({
     hosts: {
       [H]: { id: H, name: 'Host', ip: '1.2.3.4', port: 7860, order: 0 },
@@ -423,5 +432,156 @@ describe('refreshSessionsAfterSwitch — retries', () => {
     await drain(first)
     expect(reconcile).toHaveBeenCalledTimes(1)
     expect(terminated()).toBeUndefined()
+  })
+})
+
+// #1309 + #1310 spec §3.1: every operation-lock release reconciles each host
+// from a list read AFTER the write the lock covered — or, where no such list
+// can be had (gate closed, an old daemon), runs today's revive pass.
+describe('reconcileAfterLockRelease', () => {
+  /** A dead pane of `hostId` that only a live session named `name` can revive. */
+  function seedRestartedPane(hostId: string, name: string): void {
+    const content: TmuxSessionContent = {
+      kind: 'tmux-session', hostId, sessionCode: 'old999', mode: 'terminal', cachedName: name,
+      tmuxInstance: '999:9000', terminated: 'tmux-restarted',
+    }
+    const id = `r-${hostId}`
+    const tab: Tab = { id, pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: `rp-${hostId}`, content } } }
+    const prev = useTabStore.getState()
+    useTabStore.setState({ tabs: { ...prev.tabs, [id]: tab }, tabOrder: [...prev.tabOrder, id] })
+  }
+  function restarted(hostId = H): TmuxSessionContent {
+    const layout = useTabStore.getState().tabs[`r-${hostId}`].layout
+    if (layout.type !== 'leaf' || layout.pane.content.kind !== 'tmux-session') throw new Error('fixture')
+    return layout.pane.content
+  }
+  const LATE: Session = { code: 'late01', name: 'late', cwd: '', mode: 'terminal', tmux_instance: '111:1000' }
+
+  it('gate open + a versioned list held: one fetch, reconciled with the FETCHED list, revive from it', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    noteReconciledSessions(H, [S]) // the old snapshot: no `late` in it
+    seedRestartedPane(H, 'late')
+    listSessionsFresh.mockResolvedValue(versioned(4, [S, LATE]))
+    await reconcileAfterLockRelease()
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledWith(H, [S, LATE])
+    expect(restarted()).toMatchObject({ sessionCode: 'late01', tmuxInstance: '111:1000' })
+    expect(restarted().terminated).toBeUndefined()
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 4 })
+  })
+
+  it('gate open + nothing versioned held (an old daemon): no fetch, today\'s revive pass', async () => {
+    noteReconciledSessions(H, [S, LATE])
+    seedRestartedPane(H, 'late')
+    await reconcileAfterLockRelease()
+    expect(listSessionsFresh).not.toHaveBeenCalled()
+    expect(revivePass).toHaveBeenCalledWith(H)
+    expect(restarted()).toMatchObject({ sessionCode: 'late01' }) // from the held snapshot
+  })
+
+  it('gate closed: no fetch, the revive pass is called (and is itself gated)', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    noteReconciledSessions(H, [S, LATE])
+    seedRestartedPane(H, 'late')
+    closeAttachGate(H)
+    await reconcileAfterLockRelease()
+    expect(listSessionsFresh).not.toHaveBeenCalled()
+    expect(revivePass).toHaveBeenCalledWith(H)
+    expect(restarted().terminated).toBe('tmux-restarted')
+  })
+
+  it('two hosts: one throws, the other still runs', async () => {
+    useHostStore.setState({ hostOrder: [H, H2] })
+    seedLivePane(H2)
+    openAttachGate(H2)
+    note(H2, { epoch: E1, seq: 3 })
+    revivePass.mockImplementationOnce(() => { throw new Error('boom') }) // H: the synchronous path
+    listSessionsFresh.mockResolvedValue(versioned(4, []))
+    await expect(reconcileAfterLockRelease()).resolves.toBeUndefined()
+    expect(revivePass).toHaveBeenCalledWith(H)
+    expect(listSessionsFresh).toHaveBeenCalledWith(H2)
+    expect(terminated(H2)).toBe('session-closed')
+  })
+
+  it('two releases back to back: the first refresh is replaced — one reconcile, from the second answer', async () => {
+    note(H, { epoch: E1, seq: 3 })
+    const first = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(first.promise)
+    const a = reconcileAfterLockRelease()
+    listSessionsFresh.mockResolvedValueOnce(versioned(5, [S]))
+    await reconcileAfterLockRelease()
+    first.resolve(versioned(4, [])) // would close S
+    await drain(a)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledWith(H, [S])
+    expect(terminated()).toBeUndefined()
+  })
+
+  // codex plan review #1: an answer to release A must not land while the next
+  // holder B is mid-write — B's own release fetches a list read after B's write.
+  describe('the lock fence', () => {
+    const B_SESSION: Session = { code: 'bbb222', name: 'b', cwd: '', mode: 'terminal', tmux_instance: '111:1000' }
+    function bWritesPane(): void {
+      const content: TmuxSessionContent = { kind: 'tmux-session', hostId: H, sessionCode: 'bbb222', mode: 'terminal', cachedName: 'b', tmuxInstance: '111:1000' }
+      const tab: Tab = { id: 'tb', pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: 'pb', content } } }
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, tb: tab }, tabOrder: [...useTabStore.getState().tabOrder, 'tb'] })
+    }
+    function bPane(): TmuxSessionContent {
+      const layout = useTabStore.getState().tabs.tb.layout
+      if (layout.type !== 'leaf' || layout.pane.content.kind !== 'tmux-session') throw new Error('fixture')
+      return layout.pane.content
+    }
+
+    it('release A → acquire B → B writes → A\'s answer is NOT reconciled; B\'s release applies a list read after B\'s write', async () => {
+      note(H, { epoch: E1, seq: 3 })
+      const answerA = deferred<FreshSessions>()
+      listSessionsFresh.mockReturnValueOnce(answerA.promise)
+      const a = reconcileAfterLockRelease()
+
+      const grant = useRebuildStore.getState().acquireOperationLock('profile-sync')
+      operationLockAcquired()
+      bWritesPane()
+      answerA.resolve(versioned(4, [S])) // read before B's write: no `bbb222`
+      await a
+      expect(reconcile).not.toHaveBeenCalled()
+      expect(bPane().terminated).toBeUndefined()
+
+      useRebuildStore.getState().releaseOperationLock(grant)
+      listSessionsFresh.mockResolvedValueOnce(versioned(5, [S, B_SESSION]))
+      await reconcileAfterLockRelease()
+      expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+      expect(reconcile).toHaveBeenCalledTimes(1)
+      expect(reconcile).toHaveBeenCalledWith(H, [S, B_SESSION])
+      expect(bPane().terminated).toBeUndefined()
+      expect(heldVersion(H)).toEqual({ epoch: E1, seq: 5 })
+    })
+
+    it('an acquire in between (lockGen moved) drops A\'s answer even once the lock is free again', async () => {
+      note(H, { epoch: E1, seq: 3 })
+      const answerA = deferred<FreshSessions>()
+      listSessionsFresh.mockReturnValueOnce(answerA.promise)
+      const a = reconcileAfterLockRelease()
+      const grant = useRebuildStore.getState().acquireOperationLock('profile-sync')
+      operationLockAcquired()
+      useRebuildStore.getState().releaseOperationLock(grant)
+      answerA.resolve(versioned(4, []))
+      await a
+      expect(reconcile).not.toHaveBeenCalled()
+      expect(terminated()).toBeUndefined()
+    })
+
+    it('the lock taken during the retry wait: no further attempt', async () => {
+      note(H, { epoch: E1, seq: 3 })
+      listSessionsFresh.mockRejectedValueOnce(new Error('offline')).mockResolvedValue(versioned(4, []))
+      const a = reconcileAfterLockRelease()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+      useRebuildStore.getState().acquireOperationLock('rebuild:batch')
+      operationLockAcquired()
+      await drain(a)
+      expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+      expect(reconcile).not.toHaveBeenCalled()
+    })
   })
 })

@@ -13,7 +13,7 @@
 // is not transactional — it may have written part of the list (a
 // `session-closed`, a re-pointed pane) before it throws — so an older list
 // must never be let in after it. A throw asks for a fresh refresh on this
-// connection instead (`recoverHostSessions`, refresh-after-switch.ts): with no
+// connection instead (`recoverHostSessions`, refresh-sessions.ts): with no
 // further session change, no further frame would come.
 //
 // An unversioned frame (old daemon) is reconciled exactly as before, and — once
@@ -25,7 +25,7 @@
 import type { HostEvent } from '../host-events'
 import type { Session } from '../host-api'
 import { reconcileHostSessions } from './reconcile-host'
-import { recoverHostSessions } from './refresh-after-switch'
+import { recoverHostSessions } from './refresh-sessions'
 import { clearHeld, decide, note, parseVersion } from './session-version'
 
 export function handleSessionsFrame(hostId: string, event: HostEvent): void {

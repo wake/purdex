@@ -1,33 +1,41 @@
-// spa/src/lib/rebuild/refresh-after-switch.ts — after a switch, reconcile the
-// world that just came on screen against a list read AFTER the switch (#1255 SPA
-// spec §3.2; daemon contract docs/specs/2026-09-23-session-list-fresh-spec.md).
+// spa/src/lib/rebuild/refresh-sessions.ts — reconcile a host against a list
+// read AFTER something changed the panes on screen (#1255 SPA spec §3.2; #1309 +
+// #1310 spec §3.1; daemon contract docs/specs/2026-09-23-session-list-fresh-spec.md).
 //
-// Session reconciliation only ever looks at the tabs on screen, so a world that
-// was parked while one of its sessions closed comes back un-reconciled, and with
-// no further session change its host never pushes again. The switching window
-// therefore asks every host with a live, reconciled connection for a fresh,
-// versioned list and reconciles it — the same `reconcileHostSessions` a WS frame
-// runs (session store, revive snapshot, revive pass, probes).
+// Session reconciliation only ever looks at the tabs on screen, and a host
+// pushes a `sessions` frame only when its sessions change. So panes that come on
+// screen — or are re-pointed — by a write of this window (a switch, a profile
+// apply of `workspaces` / `tabs.*`, a rebuild, a batch) stay un-reconciled until
+// that host's next frame, which may never come. Every such write runs under the
+// operation lock, so its release is the trigger (`reconcileAfterLockRelease`):
+// every host with a live, versioned connection is asked for a fresh list and
+// reconciled with it — the same `reconcileHostSessions` a WS frame runs (session
+// store, revive snapshot, revive pass, probes). The fetch is sent after the
+// write landed, so its list is evidence for the panes the write put there.
 //
 // A list is evidence only when the daemon vouches for it: an unversioned answer
 // (old daemon) is dropped, and a versioned one only applies when it is newer
 // than anything already reconciled for the host (`decide`, session-version.ts).
 // It is also dropped when, while it was on the way, the world changed again (the
 // world-epoch fence moved — a switch or promote in ANY window), the attach gate
-// closed, or the host left `hostOrder` / changed its endpoint.
+// closed, the host left `hostOrder` / changed its endpoint — or, for a refresh
+// started by a lock release, the operation lock was taken again (the next
+// holder may be mid-write; ITS release starts the next refresh).
 //
 // For the same reason — no further push is coming — a failed fetch or a
 // reconciliation that threw is retried a few times (`refreshHost`), each try
 // re-checking what the refresh was started for.
 //
-// Only the switching window fetches (spec §3.6): the tab tree it writes reaches
-// the other windows through the same rehydrate that brought them the new world.
+// Only the window that wrote fetches (#1255 spec §3.6): the tab tree it writes
+// reaches the other windows through the rehydrate that brought them the write.
 import { useHostStore } from '../../stores/useHostStore'
+import { useRebuildStore } from '../../stores/useRebuildStore'
 import { listSessionsFresh, type FreshSessions } from '../host-api'
 import { readWorldEpochFence } from '../storage/world-fence'
 import { canAttachTerminal } from './attach-gate'
 import { reconcileHostSessions } from './reconcile-host'
-import { currentConn, decide, note } from './session-version'
+import { runRevivePass } from './revive'
+import { currentConn, decide, heldVersion, note } from './session-version'
 
 /** `ip:port` of a host still in `hostOrder`; null otherwise. */
 function endpointOf(hostId: string): string | null {
@@ -57,6 +65,34 @@ export interface RefreshFences {
    * and is held to its connection instead (`conn` unchanged, answer included).
    */
   requireGate: boolean
+  /**
+   * `currentLockGen()` when a refresh started by a lock release started; null
+   * for the others. Every attempt and every answer then also needs the lock
+   * free and not taken since (codex plan review #1): an answer read before the
+   * next holder's write must not be reconciled against it.
+   */
+  lockGen: number | null
+}
+
+/**
+ * Bumped on every acquire of the operation lock (the hook's lock observer calls
+ * `operationLockAcquired`). A refresh started by a release carries the value of
+ * that moment: a different one means another holder came and maybe wrote.
+ */
+let lockGen = 0
+
+export function currentLockGen(): number {
+  return lockGen
+}
+
+/** The operation lock went from free to held. */
+export function operationLockAcquired(): void {
+  lockGen++
+}
+
+function lockFenceHolds(f: RefreshFences): boolean {
+  if (f.lockGen === null) return true
+  return useRebuildStore.getState().lockedBy === null && lockGen === f.lockGen
 }
 
 /** Waits before retry 1, 2 and 3. The first attempt is immediate. */
@@ -69,6 +105,7 @@ function fencesHold(hostId: string, f: RefreshFences): boolean {
   if (readWorldEpochFence() !== f.world) return false
   if (endpointOf(hostId) !== f.endpoint) return false
   if (currentConn(hostId) !== f.conn) return false
+  if (!lockFenceHolds(f)) return false
   return !f.requireGate || canAttachTerminal(hostId)
 }
 
@@ -86,6 +123,7 @@ async function attempt(hostId: string, f: RefreshFences, live: () => boolean): P
   if (readWorldEpochFence() !== f.world) return 'done'
   if (endpointOf(hostId) !== f.endpoint) return 'done'
   if (f.requireGate ? !canAttachTerminal(hostId) : currentConn(hostId) !== f.conn) return 'done'
+  if (!lockFenceHolds(f)) return 'done'
 
   const v = { epoch: fresh.epoch, seq: fresh.seq }
   if (decide(hostId, v, { kind: 'fetch', conn: f.conn }) === 'stale') return 'done'
@@ -170,10 +208,11 @@ export function recoverHostSessions(hostId: string): Promise<void> {
     conn: currentConn(hostId),
     endpoint,
     requireGate: false,
+    lockGen: null,
   })
 }
 
-function refreshAfterSwitch(hostId: string): Promise<void> {
+function refreshLive(hostId: string, lock: number | null): Promise<void> {
   // ONE synchronous step (spec §3.3, last paragraph): the gate and `conn` are
   // read together, so the fetch is sent only while the gate is open AND `conn`
   // names the connection that opened it — the hook moves `conn` before it
@@ -183,7 +222,7 @@ function refreshAfterSwitch(hostId: string): Promise<void> {
   const world = readWorldEpochFence()
   const endpoint = endpointOf(hostId)
   if (endpoint === null) return Promise.resolve()
-  return refreshHost(hostId, { world, conn, endpoint, requireGate: true })
+  return refreshHost(hostId, { world, conn, endpoint, requireGate: true, lockGen: lock })
 }
 
 /**
@@ -193,5 +232,31 @@ function refreshAfterSwitch(hostId: string): Promise<void> {
  */
 export function refreshSessionsAfterSwitch(): Promise<void> {
   const hosts = useHostStore.getState().hostOrder
-  return Promise.all(hosts.map((hostId) => refreshAfterSwitch(hostId).catch(() => {}))).then(() => {})
+  return Promise.all(hosts.map((hostId) => refreshLive(hostId, null).catch(() => {}))).then(() => {})
+}
+
+/**
+ * The operation lock was released (spec §3.1): per host, on its own — one
+ * host's failure costs no other its turn —
+ * - versioned & live (the attach gate open AND a versioned list reconciled on
+ *   this connection): refresh from a fresh list, fenced by the lock; the
+ *   reconciliation it ends in runs the revive pass over that list;
+ * - otherwise (gate closed, or an old daemon): today's revive pass over the
+ *   list last reconciled — a closed gate waits for its connection's own first
+ *   frame, and an old daemon offers nothing better.
+ *
+ * Called synchronously from the lock observer, i.e. inside
+ * `releaseOperationLock`'s `set`: nothing here may throw. The promise settles
+ * when every host's refresh is over; it exists for tests.
+ */
+export function reconcileAfterLockRelease(): Promise<void> {
+  const gen = lockGen
+  const hosts = useHostStore.getState().hostOrder
+  return Promise.all(hosts.map((hostId) => {
+    try {
+      if (canAttachTerminal(hostId) && heldVersion(hostId) !== null) return refreshLive(hostId, gen).catch(() => {})
+      runRevivePass(hostId)
+    } catch { /* ignore */ }
+    return Promise.resolve()
+  })).then(() => {})
 }

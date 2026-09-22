@@ -13,8 +13,8 @@ vi.mock('../lib/host-connection', () => ({
 }))
 
 const { cancelSessionRefresh } = vi.hoisted(() => ({ cancelSessionRefresh: vi.fn() }))
-vi.mock('../lib/rebuild/refresh-after-switch', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../lib/rebuild/refresh-after-switch')>()),
+vi.mock('../lib/rebuild/refresh-sessions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/rebuild/refresh-sessions')>()),
   cancelSessionRefresh,
 }))
 
