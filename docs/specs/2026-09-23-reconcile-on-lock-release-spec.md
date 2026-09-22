@@ -54,6 +54,24 @@ acquire (observed in the same `useRebuildStore` subscription, `lockedBy` null �
 Before each attempt AND before applying an answer: `lockedBy === null` and `lockGen` unchanged,
 else the refresh ends without a retry — B's release starts the next one, read after B's write.
 
+**The recovery refresh is lock-fenced too (codex adversarial on PR #1330).** A WS frame whose
+reconciliation threw asks for a recovery refresh (`recoverHostSessions`: no gate required, held
+to its connection). Unfenced, its GET could be read before holder B's write and applied while B
+still holds the lock — a pane B just put on screen, absent from that list, would be marked
+`session-closed` for good. So it carries the same `lockGen` fence. But the failed frame may have
+been the one meant to open the gate, and a release with the gate closed only runs the revive
+pass — the host would never be reconciled. So a recovery the lock stops is **owed**
+(`needsRecovery`):
+
+- marked when the recovery is asked for while the lock is held (nothing is fetched), when the
+  lock is acquired while a recovery is in flight or waiting to retry, and when a recovery's
+  attempt or answer is dropped by the lock fence;
+- on release, a marked host gets the recovery again (`recoverHostSessions`: gate open or not,
+  still fenced by world / endpoint / conn and the lock) instead of the two paths above — after
+  today's revive pass when the host is not versioned & live; its barrier ends when it settles;
+- cleared when a recovery starts for the host, when one ends by anything but the lock (applied,
+  another fence moved, stale / unversioned, retries exhausted), and on entry teardown.
+
 ### 3.1.1 The barrier: no WS verdict on panes a write just put on screen (codex plan review #2)
 
 A WS frame read by the daemon before a write landed but delivered after it would be reconciled

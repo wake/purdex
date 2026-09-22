@@ -14,7 +14,8 @@
 // `session-closed`, a re-pointed pane) before it throws — so an older list
 // must never be let in after it. A throw asks for a fresh refresh on this
 // connection instead (`recoverHostSessions`, refresh-sessions.ts): with no
-// further session change, no further frame would come.
+// further session change, no further frame would come. That refresh is fenced
+// by the operation lock; one the lock stops is re-sent by the release.
 //
 // An unversioned frame (old daemon) is reconciled exactly as before, and — once
 // that reconciliation returned — clears what is held: nothing versioned may be

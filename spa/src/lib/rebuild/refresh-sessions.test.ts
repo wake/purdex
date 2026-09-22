@@ -846,3 +846,165 @@ describe('the barrier', () => {
     })
   })
 })
+
+// codex adversarial (PR #1330): the recovery refresh — a WS frame whose
+// reconciliation threw — is lock-fenced too. An answer read before the next
+// holder's write must not judge the pane that write put on screen. But that
+// frame may have been the one meant to open the gate, so a recovery the lock
+// stopped is OWED: the release re-sends it (gate closed or not) instead of the
+// revive pass. Wired through the hook's own lock observer.
+describe('the recovery refresh and the operation lock', () => {
+  const B_SESSION: Session = { code: 'bbb222', name: 'b', cwd: '', mode: 'terminal', tmux_instance: '111:1000' }
+  let unsubscribe: () => void = () => {}
+  beforeEach(() => {
+    unsubscribe = useRebuildStore.subscribe(createOperationLockObserver())
+    closeAttachGate(H) // the failed frame was the one meant to open it
+  })
+  afterEach(() => unsubscribe())
+
+  const acquire = (owner = 'profile-sync') => {
+    const g = useRebuildStore.getState().acquireOperationLock(owner)
+    if (!g) throw new Error('lock held')
+    return g
+  }
+  const release = (g: ReturnType<typeof acquire>) => useRebuildStore.getState().releaseOperationLock(g)
+  const settle = () => vi.advanceTimersByTimeAsync(0)
+  const gateOpen = () => useHostStore.getState().runtime[H]?.attachReady === true
+  /** A WS frame on the closed gate whose reconciliation throws: it asks for a recovery refresh. */
+  function frameThatThrows(seq = 6): void {
+    reconcile.mockImplementationOnce(() => { throw new Error('quota') })
+    handleSessionsFrame(H, { type: 'sessions', session: '', value: JSON.stringify([S]), epoch: E1, seq })
+  }
+  /** The holder's write: a pane on `bbb222`, a session created just before it. */
+  function writePaneOnB(): void {
+    const content: TmuxSessionContent = { kind: 'tmux-session', hostId: H, sessionCode: 'bbb222', mode: 'terminal', cachedName: 'b', tmuxInstance: '111:1000' }
+    const tab: Tab = { id: 'tb', pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: 'pb', content } } }
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, tb: tab }, tabOrder: [...useTabStore.getState().tabOrder, 'tb'] })
+  }
+  function bPane(): TmuxSessionContent {
+    const layout = useTabStore.getState().tabs.tb.layout
+    if (layout.type !== 'leaf' || layout.pane.content.kind !== 'tmux-session') throw new Error('fixture')
+    return layout.pane.content
+  }
+
+  it('recovery GET in flight → acquire → write → its answer is NOT reconciled; the release re-sends it (gate still closed) and applies that answer', async () => {
+    const answer = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(answer.promise)
+    frameThatThrows()
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+
+    const g = acquire()
+    writePaneOnB()
+    answer.resolve(versioned(7, [S])) // read before the write: no `bbb222`
+    await settle()
+    expect(reconcile).toHaveBeenCalledTimes(1) // only the frame's own, which threw
+    expect(bPane().terminated).toBeUndefined()
+    expect(gateOpen()).toBe(false)
+
+    listSessionsFresh.mockResolvedValueOnce(versioned(8, [S, B_SESSION]))
+    release(g)
+    await settle()
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenLastCalledWith(H, [S, B_SESSION])
+    expect(bPane().terminated).toBeUndefined()
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 8 })
+    expect(gateOpen()).toBe(true)
+  })
+
+  it('acquire AND release both while the recovery GET is out: the release re-sends it at once, and the old answer is dropped', async () => {
+    const old = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(old.promise)
+    frameThatThrows()
+    const g = acquire()
+    writePaneOnB()
+    const resent = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(resent.promise)
+    release(g)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+    old.resolve(versioned(7, [S])) // read before the write
+    await settle()
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(bPane().terminated).toBeUndefined()
+    resent.resolve(versioned(8, [S, B_SESSION]))
+    await settle()
+    expect(reconcile).toHaveBeenLastCalledWith(H, [S, B_SESSION])
+    expect(bPane().terminated).toBeUndefined()
+    expect(gateOpen()).toBe(true)
+  })
+
+  it('the lock already held when the recovery is asked for: no fetch; the release sends it', async () => {
+    const g = acquire()
+    frameThatThrows()
+    await settle()
+    expect(listSessionsFresh).not.toHaveBeenCalled()
+
+    listSessionsFresh.mockResolvedValue(versioned(7, []))
+    release(g)
+    await settle()
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenLastCalledWith(H, [])
+    expect(terminated()).toBe('session-closed')
+    expect(gateOpen()).toBe(true)
+  })
+
+  it('the re-sent recovery is lock-fenced too: another acquire drops its answer, and the next release sends it again', async () => {
+    const a = acquire()
+    frameThatThrows()
+    const second = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(second.promise)
+    release(a)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    const b = acquire()
+    writePaneOnB()
+    second.resolve(versioned(7, [S]))
+    await settle()
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(bPane().terminated).toBeUndefined()
+
+    listSessionsFresh.mockResolvedValueOnce(versioned(8, [S, B_SESSION]))
+    release(b)
+    await settle()
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenLastCalledWith(H, [S, B_SESSION])
+    expect(gateOpen()).toBe(true)
+  })
+
+  it('entry teardown forgets the owed recovery: the release sends nothing', async () => {
+    const g = acquire()
+    frameThatThrows()
+    forgetHost(H)
+    cancelSessionRefresh(H)
+    release(g)
+    await drain(Promise.resolve())
+    expect(listSessionsFresh).not.toHaveBeenCalled()
+  })
+
+  it('a recovery ended by another fence (its connection moved) is not owed: the release sends nothing', async () => {
+    const answer = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(answer.promise)
+    frameThatThrows()
+    const g = acquire()
+    connectionClosed(H)
+    connectionOpened(H)
+    answer.resolve(versioned(7, [S]))
+    await settle()
+    release(g)
+    await drain(Promise.resolve())
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledTimes(1)
+  })
+
+  it('an applied recovery owes nothing: the next release takes today\'s path', async () => {
+    listSessionsFresh.mockResolvedValueOnce(versioned(7, [S]))
+    frameThatThrows()
+    await settle()
+    expect(gateOpen()).toBe(true)
+    closeAttachGate(H)
+    const g = acquire()
+    release(g)
+    await settle()
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(revivePass).toHaveBeenCalledWith(H)
+  })
+})
