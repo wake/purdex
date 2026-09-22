@@ -16,6 +16,9 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../storage'
 import { MAX_WORLD_EPOCH } from '../storage/world-fence'
+import { openAttachGate } from '../rebuild/attach-gate'
+import { __resetForTests as __resetSessionVersionsForTests } from '../rebuild/session-version'
+import { useSessionStore } from '../../stores/useSessionStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { readSettingsSources } from './apply-to-stores'
 import { startCollector, type Collector, type SectionReport } from './collector'
@@ -449,6 +452,68 @@ describe('switchActiveProfile', () => {
       expect(reports.map((r) => r.key)).toEqual(['workspaces'])
       expect(JSON.stringify(reports)).not.toContain(SLAVE_SENTINEL)
     })
+  })
+})
+
+// === A1b. The world that came on screen is reconciled against a list read after the switch (#1255) ===
+
+describe('switchActiveProfile — the post-switch session refresh (#1255)', () => {
+  const EPOCH = '9f3c1a0b7d2e4c61'
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  let answer: unknown
+  const freshCalls = () => fetchSpy.mock.calls.filter(([url]: unknown[]) => String(url).endsWith('/api/sessions?fresh=1'))
+  const slavePane = (tabId: string) => {
+    const layout = useTabStore.getState().tabs[tabId].layout
+    const leaf = layout.type === 'leaf' ? layout : layout.children[0]
+    if (leaf.type !== 'leaf' || leaf.pane.content.kind !== 'tmux-session') throw new Error('fixture')
+    return leaf.pane.content
+  }
+
+  beforeEach(() => {
+    __resetSessionVersionsForTests()
+    openAttachGate('h1') // h1's live connection has reconciled a payload
+    answer = { epoch: EPOCH, seq: 1, sessions: [] }
+    const locksAtCall: (string | null)[] = []
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      locksAtCall.push(useRebuildStore.getState().lockedBy)
+      return new Response(JSON.stringify(answer), { status: 200 })
+    })
+    ;(fetchSpy as unknown as { locksAtCall: (string | null)[] }).locksAtCall = locksAtCall
+  })
+
+  it('ok: one fresh fetch per switch, sent after the locks are released', async () => {
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    expect(freshCalls()).toHaveLength(1)
+    expect((fetchSpy as unknown as { locksAtCall: (string | null)[] }).locksAtCall).toEqual([null])
+
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+    expect(freshCalls()).toHaveLength(2)
+  })
+
+  it('refused: no refresh', async () => {
+    const grant = useRebuildStore.getState().acquireOperationLock('rebuild:batch')
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
+    useRebuildStore.getState().releaseOperationLock(grant)
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: false, reason: 'already-on-screen' })
+    expect(await switchActiveProfile('nope')).toMatchObject({ ok: false })
+    expect(freshCalls()).toHaveLength(0)
+  })
+
+  it('a slave whose sessions closed while it was parked comes on screen and its panes are marked session-closed', async () => {
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    await vi.waitFor(() => expect(slavePane('st1').terminated).toBe('session-closed'))
+    expect(slavePane('st2').terminated).toBe('session-closed')
+  })
+
+  it('a list that still has the sessions changes no binding (idempotent)', async () => {
+    const live = (id: string) => ({ code: `c-${id}`, name: `${SLAVE_SENTINEL}-${id}`, cwd: '', mode: 'terminal', tmux_instance: 'inst' })
+    answer = { epoch: EPOCH, seq: 1, sessions: [live('st1'), live('st2-l')] }
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    const onScreen = useTabStore.getState().tabs
+    await vi.waitFor(() => expect(useSessionStore.getState().sessions.h1).toHaveLength(2))
+    expect(slavePane('st1').terminated).toBeUndefined()
+    expect(slavePane('st2').terminated).toBeUndefined()
+    expect(useTabStore.getState().tabs).toBe(onScreen)
   })
 })
 
