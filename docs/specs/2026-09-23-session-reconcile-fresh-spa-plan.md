@@ -39,7 +39,19 @@ returns, conn has moved and the gate is closed (codex #5); teardown bumps conn.
 
 **T5 `lib/rebuild/refresh-after-switch.ts` (new) + call from `switchActiveProfile` (spec §3.2).**
 World generation: pin the accessor by reading `switch-active.ts` / `world-fence.ts` (the value
-raised on every exchange; must differ after a switch in ANY window). Call site: the `{ok:true}`
+raised on every exchange; must differ after a switch in ANY window).
+**Pinned: `readWorldEpochFence()` (`lib/storage/world-fence.ts`).** It reads the side key
+`STORAGE_KEYS.WORLD_EPOCH` straight from `localStorage` (no in-memory copy), so every window sees a
+switch the moment its fence is raised — the FIRST write of `exchange` (`openEpoch` →
+`raiseWorldEpochFence`), before any store is written. Each operation draws its own epoch
+(`nextWorldEpoch`: clock µs + random, above the fence), and a raise fails unless strictly above the
+current fence, so two switches never leave the same value. A device that never switched has no key →
+`0`, compared as `0` again (equal = same world); the first switch ever moves it to a positive epoch.
+A refused / rolled-back switch lowers it to its previous bytes: world unchanged, value unchanged.
+Also raised by `promoteToMaster` (restamp; the panes do not change) — a refresh or revive snapshot
+straddling a promote is conservatively dropped. The per-store `worldEpoch`s were not chosen: in
+another window they move store by store on rehydrate, the fence moves first and once.
+T6's revive snapshot records the same value. Call site: the `{ok:true}`
 path of `switchActiveProfile`, after `withWorldLock` resolves (a `.then` on its promise), never
 inside the locks.
 Tests (unit, mocked `listSessionsFresh` + `reconcileHostSessions` spy + real stores):
