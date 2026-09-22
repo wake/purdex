@@ -87,9 +87,10 @@ For each host in `hostOrder`, independently (one host's failure costs no other):
    next WS frame still reconciles as today).
 4. Drop if the world generation changed (G4), the gate closed, or the host left
    `hostOrder` / changed endpoint since step 2.
-5. `decide(…, {kind: 'fetch', conn})`; `stale` → drop. `apply` → `note`, then
+5. `decide(…, {kind: 'fetch', conn})`; `stale` → drop. `apply` →
    `reconcileHostSessions(hostId, sessions)` (which also refreshes `useSessionStore`,
-   the revive snapshot, and runs the revive pass and probes, exactly as a WS frame).
+   the revive snapshot, and runs the revive pass and probes, exactly as a WS frame),
+   then `note` (§3.1: only if it did not throw).
 
 "World generation" = the world-epoch fence value `switch-active.ts` raises on every
 exchange (`lib/storage/world-fence.ts`), read at step 2 and again at step 4 — it
