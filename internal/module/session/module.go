@@ -52,6 +52,13 @@ type SessionModule struct {
 	nameCacheMu   sync.Mutex
 	nameCacheData map[string]string
 	nameCacheAt   time.Time
+
+	// Versioned session lists (spec 2026-09-23 §3.3, versioned.go). epoch
+	// identifies this process's counter; snapMu serializes seq assignment
+	// together with the tmux read, and guards epoch (it rotates at maxSeq).
+	snapMu  sync.Mutex
+	snapSeq uint64
+	epoch   string
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
@@ -62,6 +69,7 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 		tmuxInstanceFn:  config.GetTmuxInstance,
 		shellProbe:      runShellProbe,
 		passwdShell:     passwdShellForCurrentUser,
+		epoch:           newEpoch(),
 	}
 }
 
