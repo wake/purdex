@@ -244,6 +244,39 @@ describe('a second client attaches', () => {
   })
 })
 
+describe('lastSuccessAt after the first reconciliation (P3d-4c F1: R4 — stamped when a host answer leaves the profile synced)', () => {
+  it('PULL — B is brand new: the reconciliation ends synced, and lastSuccessAt is set', async () => {
+    await clientAHasPushed()
+    world(H2, [], [])
+    await attach(B, 'pull')
+    expect(executor!.status().profile).toBe('synced')
+    expect(executor!.status().lastSuccessAt).not.toBeNull()
+  })
+
+  it('PULL — B had a workspace of its own (it goes when `workspaces` is pulled): lastSuccessAt is set', async () => {
+    await clientAHasPushed()
+    world(H2, [ws('wb1', ['tb1'])], [tab('tb1')])
+    await attach(B, 'pull')
+    expect(executor!.status().profile).toBe('synced')
+    expect(executor!.status().lastSuccessAt).not.toBeNull()
+  })
+
+  it('PUSH — into an empty profile: lastSuccessAt is set', async () => {
+    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
+    await attach(A, 'push')
+    expect(executor!.status().profile).toBe('synced')
+    expect(executor!.status().lastSuccessAt).not.toBeNull()
+  })
+
+  it('PUSH — over another world (orphans deleted): lastSuccessAt is set', async () => {
+    await clientAHasPushed()
+    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+    await attach(B, 'push')
+    expect(executor!.status().profile).toBe('synced')
+    expect(executor!.status().lastSuccessAt).not.toBeNull()
+  })
+})
+
 describe('a NEWER Purdex writes a section (spec §4.4: an old client must not write anything once any shape has moved)', () => {
   /** What curl did on the real machines: a legal CAS write with another fingerprint, ordinal 99 and a store this build does not know. */
   function newerWriterWritesSettings(): { rev: number; hash: string } {

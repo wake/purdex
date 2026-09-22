@@ -2522,6 +2522,23 @@ describe('executor — the published detail, the counters and lastSuccessAt (P3d
       expect(ex.status().lastSuccessAt).toBe(3_002_000)
     })
 
+    it('synced again by a LOCAL report (an edit undone before it went out): the last answer\'s time, not the report\'s (P3d-4c F1)', async () => {
+      vi.setSystemTime(1_000_000)
+      const { ex, env } = await synced({ hosts: 'H1' })
+      expect(ex.status().lastSuccessAt).toBe(1_000_000)
+      vi.setSystemTime(2_000_000)
+      env.autoSync = false // the edit is held: nothing is sent, nothing answers
+      ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
+      await flush()
+      expect(ex.status().profile).toBe('pending')
+      expect(api.putSection).not.toHaveBeenCalled()
+      vi.setSystemTime(3_000_000)
+      ex.onSection({ key: 'hosts', hash: 'H1', payload: {} })
+      await flush()
+      expect(ex.status().profile).toBe('synced')
+      expect(ex.status().lastSuccessAt).toBe(1_000_000)
+    })
+
     it('a converged push and a pull stamp it too', async () => {
       const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
       vi.setSystemTime(5_000_000)
