@@ -14,6 +14,9 @@ export interface HostEvent {
     | 'profile'
   session: string
   value: string
+  /** `sessions` frames of a new daemon only: the list's version (#1255 daemon contract §3.2). Absent: unversioned. */
+  epoch?: string
+  seq?: number
 }
 
 export interface EventConnection {
@@ -74,7 +77,14 @@ export function connectHostEvents(
       }
 
       ws = new WebSocket(wsUrl)
-      ws.onopen = () => { retryMs = 1000; onOpen?.() }
+      // A retired socket (closed or superseded) may still have its `open`
+      // event queued: it must not reach `onOpen`, or the hook would bump the
+      // connection generation and mark a gone / re-pointed host connected.
+      ws.onopen = () => {
+        if (myEpoch !== socketEpoch) return
+        retryMs = 1000
+        onOpen?.()
+      }
       ws.onmessage = (e) => {
         if (myEpoch !== socketEpoch) return // superseded socket's queued frames
         try {
@@ -112,7 +122,14 @@ export function connectHostEvents(
 
   if (!lazy) connect()
   return {
-    close: () => { closed = true; ws?.close() },
+    // Retires the socket like `supersede` does (#1255 SPA spec §3.4): a frame
+    // still queued on it — the hook has already torn the host's entry down, or
+    // replaced it under a new endpoint — must not reach `onEvent`.
+    close: () => {
+      closed = true
+      socketEpoch++
+      if (ws) { ws.onclose = null; ws.close() }
+    },
     reconnect: () => {
       if (!closed) {
         supersede()

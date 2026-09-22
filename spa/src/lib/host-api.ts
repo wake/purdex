@@ -1,5 +1,6 @@
 // spa/src/lib/host-api.ts — Host-aware API layer (unified)
 import { useHostStore, type HostInfo } from '../stores/useHostStore'
+import { parseVersion } from './rebuild/session-version'
 
 /* ─── Shared types ─── */
 
@@ -288,6 +289,28 @@ export async function listSessions(hostId: string): Promise<Session[]> {
   const res = await hostFetch(hostId, '/api/sessions')
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return res.json()
+}
+
+/**
+ * `listSessionsFresh`'s answer: a list read by the daemon for this request and
+ * stamped with its version, or `unversioned` — an old daemon (it ignores the
+ * query and answers the bare array) or a body that is not the envelope. An
+ * unversioned list is never evidence (#1255 daemon contract §3.1).
+ */
+export type FreshSessions =
+  | { kind: 'versioned'; epoch: string; seq: number; sessions: Session[] }
+  | { kind: 'unversioned' }
+
+/** `GET /api/sessions?fresh=1` — never served from the daemon's list cache. Throws on non-2xx like `listSessions`. */
+export async function listSessionsFresh(hostId: string): Promise<FreshSessions> {
+  const res = await hostFetch(hostId, '/api/sessions?fresh=1')
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  const body: unknown = await res.json()
+  if (Array.isArray(body)) return { kind: 'unversioned' }
+  const v = parseVersion(body)
+  const sessions = (body as { sessions?: unknown } | null)?.sessions
+  if (v === null || !Array.isArray(sessions)) return { kind: 'unversioned' }
+  return { kind: 'versioned', epoch: v.epoch, seq: v.seq, sessions: sessions as Session[] }
 }
 
 export async function createSession(

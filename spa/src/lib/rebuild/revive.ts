@@ -39,6 +39,15 @@
 // but the handler writes the snapshot, and the attach gate still ties it to
 // the current connection — the gate reopens only on that connection's own
 // payload, which is also when the snapshot is overwritten.
+//
+// The snapshot is also bound to the WORLD it was reconciled for (#1255 SPA spec
+// §3.5): it records the world-epoch fence (lib/storage/world-fence.ts) of that
+// moment, and the pass does nothing once the fence has moved — a switch or a
+// promote, in this window or another. Otherwise a switch's own lock release
+// would revive the world that just came on screen from the list reconciled for
+// the one that left it. After a switch no revive happens on a host until a list
+// has been reconciled for the new world (the post-switch fetch, or the host's
+// next `sessions` frame): no evidence, no action.
 import { bindingEquals } from './binding'
 import { canAttachTerminal } from './attach-gate'
 import { repointPane } from './engine'
@@ -47,12 +56,13 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import type { Session } from '../host-api'
+import { readWorldEpochFence } from '../storage/world-fence'
 
-const reconciledSessions = new Map<string, Session[]>()
+const reconciledSessions = new Map<string, { sessions: Session[]; world: number }>()
 
-/** The `sessions` handler's payload for `hostId`, exactly as it was reconciled. */
+/** The `sessions` handler's payload for `hostId`, exactly as it was reconciled — and for which world. */
 export function noteReconciledSessions(hostId: string, sessions: Session[]): void {
-  reconciledSessions.set(hostId, sessions)
+  reconciledSessions.set(hostId, { sessions, world: readWorldEpochFence() })
 }
 
 /** A terminated pane eligible for revive-by-name — the caller has already
@@ -159,8 +169,10 @@ export function collectCandidates(hostId: string): ReviveCandidate[] {
 export function runRevivePass(hostId: string): void {
   if (!canAttachTerminal(hostId)) return
   if (useRebuildStore.getState().lockedBy !== null) return
-  const sessions = reconciledSessions.get(hostId) ?? []
-  for (const d of decideRevive(hostId, sessions, collectCandidates(hostId))) {
+  const snapshot = reconciledSessions.get(hostId)
+  if (snapshot === undefined) return
+  if (snapshot.world !== readWorldEpochFence()) return // reconciled for another world: no evidence for this one
+  for (const d of decideRevive(hostId, snapshot.sessions, collectCandidates(hostId))) {
     if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
     try {
       repointPane(d.tabId, d.paneId, d.session)
