@@ -213,6 +213,7 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 		}
 
 		m.invalidateNameCache()
+		m.invalidateListCache()
 
 		return &SessionInfo{
 			Code:   code,

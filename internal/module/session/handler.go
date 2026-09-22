@@ -16,6 +16,20 @@ var nameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // --- HTTP Handlers ---
 
 func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
+	// ?fresh=1 (exactly) answers a versioned envelope from a new tmux read,
+	// never from the list cache (spec §3.1). Any other value keeps the bare
+	// array, so an old daemon's answer is structurally distinguishable.
+	if r.URL.Query().Get("fresh") == "1" {
+		v, err := m.versionedList()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(v)
+		return
+	}
+
 	sessions, err := m.cachedListSessions()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -42,6 +56,16 @@ func (m *SessionModule) cachedListSessions() ([]SessionInfo, error) {
 	m.listCacheData = sessions
 	m.listCacheAt = time.Now()
 	return sessions, nil
+}
+
+// invalidateListCache forces the next plain GET /api/sessions to re-read
+// tmux. Called next to every invalidateNameCache: create / rename / delete
+// success, broadcastSessions (tmux wait-for), and tickNormal's hash-changed
+// branch. This keeps the plain list fresher; the guarantee is ?fresh=1.
+func (m *SessionModule) invalidateListCache() {
+	m.listCacheMu.Lock()
+	m.listCacheAt = time.Time{}
+	m.listCacheMu.Unlock()
 }
 
 func (m *SessionModule) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +201,7 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.invalidateNameCache()
+	m.invalidateListCache()
 
 	// Return updated info with new name
 	info.Name = req.Name
@@ -207,6 +232,7 @@ func (m *SessionModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 	_ = m.meta.DeleteMeta(info.TmuxID)
 
 	m.invalidateNameCache()
+	m.invalidateListCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }
