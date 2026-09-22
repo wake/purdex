@@ -112,7 +112,14 @@ export function connectHostEvents(
 
   if (!lazy) connect()
   return {
-    close: () => { closed = true; ws?.close() },
+    // Retires the socket like `supersede` does (#1255 SPA spec §3.4): a frame
+    // still queued on it — the hook has already torn the host's entry down, or
+    // replaced it under a new endpoint — must not reach `onEvent`.
+    close: () => {
+      closed = true
+      socketEpoch++
+      if (ws) { ws.onclose = null; ws.close() }
+    },
     reconnect: () => {
       if (!closed) {
         supersede()
