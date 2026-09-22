@@ -10,10 +10,16 @@ import { resumeLookupFor } from '../../lib/resume-templates'
 import { StatusLine, useSnapshotActions, type HostLive, type Status } from '../settings/snapshot/shared'
 import { RebuildRecordsBlock } from '../settings/snapshot/RebuildRecordsBlock'
 
-/** One live-session lookup, tagged with what it was for so a stale one reads as loading. */
-interface LiveResult {
+/** What one live-session lookup is for. A fresh object per lookup: its identity is the token. */
+interface Lookup {
   hostId: string
   seq: number
+  active: boolean
+}
+
+/** One lookup's answer, tagged with the lookup it answers so a stale one reads as loading. */
+interface LiveResult {
+  lookup: Lookup
   live: HostLive
 }
 
@@ -39,16 +45,21 @@ export function SnapshotsSection({ hostId }: { hostId: string }) {
   // rebuild. A rejection means offline → every row ⚪ and nothing is ever
   // created here. setState only happens in the async callbacks; a result for
   // an older lookup / host is ignored by the derivation below and reads as loading.
+  // `lookup` is a new object whenever a new lookup starts — another host, a
+  // rebuild, or rows coming back for the same host — so an answer is matched on
+  // identity, never on the reusable host + count. (Were React to drop the memo,
+  // the cost is one extra lookup, never a stale answer.)
+  const lookup = useMemo<Lookup>(() => ({ hostId, seq: refreshSeq, active: hasHostData }), [hostId, refreshSeq, hasHostData])
   const [liveResult, setLiveResult] = useState<LiveResult | null>(null)
   useEffect(() => {
-    if (!hasHostData) return
+    if (!lookup.active) return
     let cancelled = false
-    listSessions(hostId)
-      .then((sessions) => { if (!cancelled) setLiveResult({ hostId, seq: refreshSeq, live: sessions }) })
-      .catch(() => { if (!cancelled) setLiveResult({ hostId, seq: refreshSeq, live: 'offline' }) })
+    listSessions(lookup.hostId)
+      .then((sessions) => { if (!cancelled) setLiveResult({ lookup, live: sessions }) })
+      .catch(() => { if (!cancelled) setLiveResult({ lookup, live: 'offline' }) })
     return () => { cancelled = true }
-  }, [hostId, refreshSeq, hasHostData])
-  const live: HostLive = liveResult && liveResult.hostId === hostId && liveResult.seq === refreshSeq ? liveResult.live : 'loading'
+  }, [lookup])
+  const live: HostLive = liveResult && liveResult.lookup === lookup ? liveResult.live : 'loading'
   const liveByHost = useMemo(() => ({ [hostId]: live }), [hostId, live])
 
   const handleRebuildAll = () => void run(BATCH_LOCK_OWNER, 'rebuild.batch_running', async (): Promise<Status> => {

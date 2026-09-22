@@ -329,6 +329,25 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
     expect(mockedListSessions.mock.calls.every(([h]) => h === 'h1')).toBe(true)
   })
 
+  // Same host, same refresh count — but the rows went away and came back, so a
+  // new lookup started and the old answer is not the answer to it.
+  it('rows that come back read as loading until their own lookup answers', async () => {
+    seedTabs(recordTab('t1', 'p1'))
+    mockedListSessions.mockRejectedValueOnce(new Error('offline'))
+    render(<SnapshotsSection hostId="h1" />)
+    await waitFor(() => {
+      expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('offline')
+    })
+
+    act(() => { seedTabs() })
+    expect(screen.queryByTestId('record-health-p1')).toBeNull()
+
+    mockedListSessions.mockReturnValue(new Promise<Session[]>(() => {}))
+    act(() => { seedTabs(recordTab('t1', 'p1')) })
+    await waitFor(() => expect(mockedListSessions).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('loading')
+  })
+
   it('another host\'s answer reads as loading until this host\'s own arrives', async () => {
     seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { hostId: 'h2' }))
     const { rerender } = render(<SnapshotsSection hostId="h1" />)
