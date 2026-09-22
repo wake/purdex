@@ -18,38 +18,38 @@ function wrap(ui: React.ReactElement) {
 }
 
 describe('NewTabCanvas', () => {
-  it('renders the correct number of columns for each profile', () => {
-    const { rerender } = render(wrap(<NewTabCanvas profileKey="3col" />))
+  it('renders the correct number of columns for each preset', () => {
+    const { rerender } = render(wrap(<NewTabCanvas presetKey="3col" />))
     expect(screen.getAllByTestId(/^canvas-column-3col-\d+$/)).toHaveLength(3)
-    rerender(wrap(<NewTabCanvas profileKey="2col" />))
+    rerender(wrap(<NewTabCanvas presetKey="2col" />))
     expect(screen.getAllByTestId(/^canvas-column-2col-\d+$/)).toHaveLength(2)
-    rerender(wrap(<NewTabCanvas profileKey="1col" />))
+    rerender(wrap(<NewTabCanvas presetKey="1col" />))
     expect(screen.getAllByTestId(/^canvas-column-1col-\d+$/)).toHaveLength(1)
   })
 
-  it('renders items placed in profile', () => {
+  it('renders items placed in preset', () => {
     useNewTabLayoutStore.getState().placeModule('1col', 'a', 0, 0)
     useNewTabLayoutStore.getState().placeModule('1col', 'b', 0, 1)
-    render(wrap(<NewTabCanvas profileKey="1col" />))
+    render(wrap(<NewTabCanvas presetKey="1col" />))
     expect(screen.getByTestId('canvas-item-1col-a')).toBeInTheDocument()
     expect(screen.getByTestId('canvas-item-1col-b')).toBeInTheDocument()
   })
 
   it('shows empty placeholder for columns with no items', () => {
-    render(wrap(<NewTabCanvas profileKey="3col" />))
+    render(wrap(<NewTabCanvas presetKey="3col" />))
     expect(screen.getAllByTestId(/^canvas-column-empty-3col-\d+$/)).toHaveLength(3)
   })
 
   it('remove button calls store.removeModule', () => {
     useNewTabLayoutStore.getState().placeModule('1col', 'a', 0, 0)
-    render(wrap(<NewTabCanvas profileKey="1col" />))
+    render(wrap(<NewTabCanvas presetKey="1col" />))
     fireEvent.click(screen.getByTestId('canvas-remove-1col-a'))
     expect(useNewTabLayoutStore.getState().profiles['1col'].columns[0]).not.toContain('a')
   })
 
   it('skips unknown provider ids silently (does not throw)', () => {
     useNewTabLayoutStore.getState().placeModule('1col', 'ghost', 0, 0)
-    expect(() => render(wrap(<NewTabCanvas profileKey="1col" />))).not.toThrow()
+    expect(() => render(wrap(<NewTabCanvas presetKey="1col" />))).not.toThrow()
     expect(screen.queryByTestId('canvas-item-1col-ghost')).not.toBeInTheDocument()
   })
 })

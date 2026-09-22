@@ -1,27 +1,27 @@
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
-import type { ProfileKey } from '../../../lib/resolve-profile'
+import type { PresetKey } from '../../../lib/resolve-preset'
 
 interface Props {
-  active: ProfileKey
-  onSelect: (k: ProfileKey) => void
-  onToggleEnabled: (k: ProfileKey, enabled: boolean) => void
-  renderMain: (k: ProfileKey) => React.ReactNode
-  renderThumb: (k: ProfileKey) => React.ReactNode
+  active: PresetKey
+  onSelect: (k: PresetKey) => void
+  onToggleEnabled: (k: PresetKey, enabled: boolean) => void
+  renderMain: (k: PresetKey) => React.ReactNode
+  renderThumb: (k: PresetKey) => React.ReactNode
 }
 
-const KEYS: ProfileKey[] = ['3col', '2col', '1col']
-const LABEL_KEY: Record<ProfileKey, string> = {
-  '3col': 'settings.interface.profile_3col',
-  '2col': 'settings.interface.profile_2col',
-  '1col': 'settings.interface.profile_1col',
+const KEYS: PresetKey[] = ['3col', '2col', '1col']
+const LABEL_KEY: Record<PresetKey, string> = {
+  '3col': 'settings.interface.preset_3col',
+  '2col': 'settings.interface.preset_2col',
+  '1col': 'settings.interface.preset_1col',
 }
 
-export function NewTabProfileSwitcher({ active, onSelect, onToggleEnabled, renderMain, renderThumb }: Props) {
+export function NewTabPresetSwitcher({ active, onSelect, onToggleEnabled, renderMain, renderThumb }: Props) {
   const t = useI18nStore((s) => s.t)
   const profiles = useNewTabLayoutStore((s) => s.profiles)
 
-  const meta = (k: ProfileKey) => {
+  const meta = (k: PresetKey) => {
     const p = profiles[k]
     return {
       enabled: p.enabled,
@@ -39,7 +39,7 @@ export function NewTabProfileSwitcher({ active, onSelect, onToggleEnabled, rende
             <div key={k} className="flex items-center gap-1">
               <button
                 type="button"
-                data-testid={`profile-tab-${k}`}
+                data-testid={`preset-tab-${k}`}
                 data-active={k === active ? 'true' : undefined}
                 onClick={() => onSelect(k)}
                 className={[
@@ -51,25 +51,25 @@ export function NewTabProfileSwitcher({ active, onSelect, onToggleEnabled, rende
               >
                 {t(LABEL_KEY[k])}
                 {m.isEmpty && (
-                  <span data-testid={`profile-empty-${k}`} className="ml-1 text-[10px] text-text-muted">
-                    {t('settings.interface.profile_empty')}
+                  <span data-testid={`preset-empty-${k}`} className="ml-1 text-[10px] text-text-muted">
+                    {t('settings.interface.preset_empty')}
                   </span>
                 )}
               </button>
               <label className="inline-flex items-center gap-1 text-[10px] text-text-secondary select-none">
                 <input
                   type="checkbox"
-                  data-testid={`profile-toggle-${k}`}
+                  data-testid={`preset-toggle-${k}`}
                   checked={m.enabled}
                   disabled={m.locked}
                   onChange={(e) => { if (!m.locked) onToggleEnabled(k, e.target.checked) }}
-                  title={m.locked ? t('settings.interface.profile_locked') : undefined}
+                  title={m.locked ? t('settings.interface.preset_locked') : undefined}
                 />
                 <span>{t('settings.interface.enabled')}</span>
               </label>
               {!m.enabled && !m.isEmpty && !m.locked && (
-                <span data-testid={`profile-hint-${k}`} className="text-[10px] text-text-muted">
-                  {t('settings.interface.profile_prefilled')}
+                <span data-testid={`preset-hint-${k}`} className="text-[10px] text-text-muted">
+                  {t('settings.interface.preset_prefilled')}
                 </span>
               )}
             </div>
@@ -84,7 +84,7 @@ export function NewTabProfileSwitcher({ active, onSelect, onToggleEnabled, rende
             type="button"
             className="border border-border-subtle rounded-md p-1 cursor-pointer hover:bg-white/5"
             onClick={() => onSelect(k)}
-            data-testid={`profile-thumb-${k}`}
+            data-testid={`preset-thumb-${k}`}
             title={t(LABEL_KEY[k])}
             aria-label={t(LABEL_KEY[k])}
           >

@@ -7,16 +7,16 @@ import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
 import { useNewTabProviders } from '../../../hooks/useNewTabProviders'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { colsClass } from '../../../lib/cols-class'
-import type { ProfileKey } from '../../../lib/resolve-profile'
+import type { PresetKey } from '../../../lib/resolve-preset'
 
-interface Props { profileKey: ProfileKey }
+interface Props { presetKey: PresetKey }
 
-function SortableItem({ profileKey, id, label, onRemove }: {
-  profileKey: ProfileKey; id: string; label: string; onRemove: () => void
+function SortableItem({ presetKey, id, label, onRemove }: {
+  presetKey: PresetKey; id: string; label: string; onRemove: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: `item:${profileKey}:${id}`,
-    data: { type: 'canvas-item', providerId: id, profileKey },
+    id: `item:${presetKey}:${id}`,
+    data: { type: 'canvas-item', providerId: id, presetKey },
   })
   const style = {
     transform: CSS.Translate.toString(transform),
@@ -27,7 +27,7 @@ function SortableItem({ profileKey, id, label, onRemove }: {
     <div
       ref={setNodeRef}
       style={style}
-      data-testid={`canvas-item-${profileKey}-${id}`}
+      data-testid={`canvas-item-${presetKey}-${id}`}
       className="flex items-center justify-between px-3 py-2 rounded-md bg-surface-elevated border border-border-subtle text-xs"
     >
       <button {...listeners} {...attributes} className="flex-1 text-left cursor-grab select-none" type="button" aria-label={label}>
@@ -36,7 +36,7 @@ function SortableItem({ profileKey, id, label, onRemove }: {
       <button
         type="button"
         onClick={onRemove}
-        data-testid={`canvas-remove-${profileKey}-${id}`}
+        data-testid={`canvas-remove-${presetKey}-${id}`}
         className="text-text-muted hover:text-text-primary cursor-pointer p-1"
         aria-label="remove"
       >
@@ -46,20 +46,20 @@ function SortableItem({ profileKey, id, label, onRemove }: {
   )
 }
 
-function Column({ profileKey, colIdx, ids }: { profileKey: ProfileKey; colIdx: number; ids: string[] }) {
+function Column({ presetKey, colIdx, ids }: { presetKey: PresetKey; colIdx: number; ids: string[] }) {
   const t = useI18nStore((s) => s.t)
   const removeModule = useNewTabLayoutStore((s) => s.removeModule)
   const providers = useNewTabProviders()
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
   const { setNodeRef, isOver } = useDroppable({
-    id: `col:${profileKey}:${colIdx}`,
-    data: { type: 'column', profileKey, colIdx },
+    id: `col:${presetKey}:${colIdx}`,
+    data: { type: 'column', presetKey, colIdx },
   })
-  const sortableIds = ids.map((id) => `item:${profileKey}:${id}`)
+  const sortableIds = ids.map((id) => `item:${presetKey}:${id}`)
   return (
     <div
       ref={setNodeRef}
-      data-testid={`canvas-column-${profileKey}-${colIdx}`}
+      data-testid={`canvas-column-${presetKey}-${colIdx}`}
       data-over={isOver ? 'true' : undefined}
       className={[
         'flex flex-col gap-2 p-2 rounded-md min-h-32 border',
@@ -73,17 +73,17 @@ function Column({ profileKey, colIdx, ids }: { profileKey: ProfileKey; colIdx: n
           return (
             <SortableItem
               key={id}
-              profileKey={profileKey}
+              presetKey={presetKey}
               id={id}
               label={t(p.label, p.labelParams)}
-              onRemove={() => removeModule(profileKey, id)}
+              onRemove={() => removeModule(presetKey, id)}
             />
           )
         })}
       </SortableContext>
       {ids.length === 0 && (
         <div
-          data-testid={`canvas-column-empty-${profileKey}-${colIdx}`}
+          data-testid={`canvas-column-empty-${presetKey}-${colIdx}`}
           className="flex-1 flex items-center justify-center text-[11px] text-text-muted"
         >
           {t('settings.interface.canvas_drop_here')}
@@ -93,13 +93,13 @@ function Column({ profileKey, colIdx, ids }: { profileKey: ProfileKey; colIdx: n
   )
 }
 
-export function NewTabCanvas({ profileKey }: Props) {
-  const profile = useNewTabLayoutStore((s) => s.profiles[profileKey])
-  const gridCols = colsClass(profile.columns.length)
+export function NewTabCanvas({ presetKey }: Props) {
+  const preset = useNewTabLayoutStore((s) => s.profiles[presetKey])
+  const gridCols = colsClass(preset.columns.length)
   return (
-    <div className={`grid gap-3 ${gridCols}`} data-testid={`canvas-${profileKey}`}>
-      {profile.columns.map((ids, i) => (
-        <Column key={i} profileKey={profileKey} colIdx={i} ids={ids} />
+    <div className={`grid gap-3 ${gridCols}`} data-testid={`canvas-${presetKey}`}>
+      {preset.columns.map((ids, i) => (
+        <Column key={i} presetKey={presetKey} colIdx={i} ids={ids} />
       ))}
     </div>
   )
