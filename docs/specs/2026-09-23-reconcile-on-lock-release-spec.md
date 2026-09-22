@@ -48,6 +48,45 @@ Replaces the `runRevivePassAll()` call in the lock-release subscription. For eac
 One refresh per host still holds (`refreshHost` replaces the running one): two releases in a
 row (apply #1, apply #2) leave only the second refresh, whose list is read after both writes.
 
+**Lock fence (codex plan review #1).** A refresh started by release A can answer while the
+next holder B is mid-write. `RefreshFences` gains `lockGen`: a counter bumped on every
+acquire (observed in the same `useRebuildStore` subscription, `lockedBy` null → non-null).
+Before each attempt AND before applying an answer: `lockedBy === null` and `lockGen` unchanged,
+else the refresh ends without a retry — B's release starts the next one, read after B's write.
+
+### 3.1.1 The barrier: no WS verdict on panes a write just put on screen (codex plan review #2)
+
+A WS frame read by the daemon before a write landed but delivered after it would be reconciled
+against the new panes (a session created just before the write, absent from that frame →
+`session-closed`, irreversible — the later fresh list cannot undo it). The version orders lists,
+not lists against local writes, so the SPA closes the window itself:
+
+- A host enters **barrier** when the operation lock is acquired, if at that moment its gate is
+  open and `heldVersion(hostId) !== null` (versioned & live).
+- While in barrier, a versioned `sessions` frame is not reconciled; the handler keeps only the
+  newest one (`stash`, by seq). Unversioned frames and frames on a closed gate are handled as today
+  (no barrier: nothing better to wait for / the gate must open).
+- The barrier ends when the release's refresh for that host settles:
+  - it applied a list (held = F, read after the write) → the stashed frame goes through `decide`:
+    `seq ≤ F` → dropped; newer → reconciled;
+  - it ended without applying (fence moved, stale, failed after retries, cancelled, gate closed,
+    or the host was not refreshable at release) → the stashed frame is reconciled as today
+    (through `decide`), exactly what would have happened without the barrier.
+- A new acquire while a barrier is up keeps it up (the next release's refresh ends it).
+- Entry teardown clears the host's barrier and stash.
+Cost: during a lock hold plus one fetch, WS reconciliation for versioned hosts is delayed —
+not lost (the newest frame is kept).
+
+### 3.1.2 Writes that do not go through the lock, and why they need nothing (codex #3, #4)
+
+- Host removal / undo (`host-lifecycle.ts`): the undo puts the host back into `hostOrder`
+  before it restores tabs; the hook creates a new connection for it, the gate starts closed, and
+  that connection's own first frame reconciles every pane of the host.
+- Session picker on a terminated pane, New Tab session choice: the binding is taken from the
+  current session list (a live session the user just picked), and terminal attach waits on the
+  gate — nothing arrives without evidence.
+- Pane move (`pane-move.ts`): moves content already on screen, already reconciled.
+
 ### 3.2 The switch no longer calls the refresh itself
 
 `switchActiveProfile` always runs under the operation lock, whose release now triggers §3.1
@@ -60,17 +99,19 @@ row (apply #1, apply #2) leave only the second refresh, whose list is read after
 The reconciliation after an apply can mark an arriving pane `session-closed`, adopt an
 instance, or revive it — and a master pushes those changes to the SOT. That is the point:
 the evidence is a versioned list read after the pane landed, the same evidence a WS frame
-gives for panes already on screen. Two devices that both reconcile the same pane compute
-the same result from the same host; identical content hashes identically.
+gives for panes already on screen.
 
-### 3.4 Not in scope (pre-existing, recorded)
+Two devices whose fresh reads straddle a tmux change can reach different verdicts (codex #5):
+A reads without `S` and pushes `session-closed`; B read with `S` and keeps the pane live. B's
+pane is unchanged from the base, so B's section is clean: B pulls A's push (and its own next WS
+frame says the same). B pushes "live" only if it had its own edit to that section — a conflict
+the user answers, the existing sync semantics. `session-closed` is irreversible on both sides,
+so no pull → reconcile → push cycle can flip it back. No new mechanism.
 
-- A WS frame read by the daemon BEFORE an apply landed, delivered after it, is reconciled
-  against the newly arrived panes (a session created just before the apply may be absent
-  from it → `session-closed`). The version cannot tell "read before the apply": it orders
-  lists, not lists against local writes. The post-release refresh is read later and wins
-  on `seq`, but a verdict already made is not undone (`session-closed` is irreversible).
-  Follow-up issue: e.g. hold `session-closed` for panes younger than the held seq.
+### 3.4 Not in scope
+
+- A WS frame delivered to a NON-versioned host (old daemon) or on a closed gate during a write:
+  handled as today (§3.1.1).
 - Other windows: they do not hold the lock. They receive the apply / switch result through
   the tab store's rehydrate; their own lock releases (their rebuilds) now refresh freshly.
 
