@@ -401,7 +401,7 @@ describe('a follower reads what the leader published', () => {
   it('the new fields are taken only in their shape: a damaged one is read as absent, a damaged detail entry is left out', async () => {
     const status = {
       ...SYNCED,
-      sections: { hosts: 'synced', settings: 'pending', workspaces: 'pending', 'tabs.w1': 'synced' },
+      sections: { hosts: 'synced', settings: 'pending', workspaces: 'pending', 'tabs.w1': 'synced', 'tabs.w2': 'synced', 'tabs.w3': 'synced', 'tabs.w4': 'synced' },
       profileGone: 'yes',
       indexFailures: -1,
       lastSuccessAt: '12:00',
@@ -424,6 +424,50 @@ describe('a follower reads what the leader published', () => {
       detail: { hosts: { rev: 3, failures: 0, retryAt: null }, settings: { rev: null, failures: 2, retryAt: 5000 } },
     })
     expect(Object.keys(b.snapshot().status!.detail).sort()).toEqual(['hosts', 'settings'])
+  })
+
+  describe('F4: `detail` is read for the sections the status lists, and nothing else', () => {
+    const detailOf = async (detail: unknown, sections: Record<string, string> = { hosts: 'synced', settings: 'pending' }) => {
+      // Written as text: `__proto__` as an OWN key is what a JSON record can carry, and a literal cannot express it.
+      const status = JSON.stringify({ ...SYNCED, sections }).replace(/}$/, `,"detail":${typeof detail === 'string' ? detail : JSON.stringify(detail)}}`)
+      localStorage.setItem(STATUS, `{"at":1,"leader":"A","master":${JSON.stringify(TAG1)},"status":${status},"blocked":null,"problems":[]}`)
+      const b = await openWindow('B')
+      return b.snapshot().status!.detail
+    }
+    const entry = { rev: 1, failures: 0, retryAt: null }
+
+    it('an array is no detail — even where its indices are section keys', async () => {
+      expect(await detailOf([entry, entry])).toEqual({})
+      open.splice(0).forEach((c) => c.close(false))
+      expect(await detailOf([entry], { '0': 'synced' })).toEqual({})
+    })
+
+    it('only OWN entries: one inherited from a prototype is not taken', async () => {
+      Object.defineProperty(Object.prototype, 'tabs.inherited', { value: entry, configurable: true })
+      try {
+        expect(await detailOf({}, { 'tabs.inherited': 'synced' })).toEqual({})
+      } finally {
+        delete (Object.prototype as Record<string, unknown>)['tabs.inherited']
+      }
+    })
+
+    it('keys the sections do not list are left out — `__proto__` included, and nothing lands on a prototype', async () => {
+      const detail = await detailOf(`{"hosts":${JSON.stringify(entry)},"__proto__":{"polluted":true},"tabs.zz":${JSON.stringify(entry)}}`)
+      expect(Object.keys(detail)).toEqual(['hosts'])
+      expect(Object.getPrototypeOf(detail)).toBe(Object.prototype)
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    })
+
+    it('a section the status lists but the detail does not → no entry for it', async () => {
+      expect(await detailOf({ hosts: entry })).toEqual({ hosts: entry })
+    })
+
+    it('a huge detail is reduced to the sections\' keys', async () => {
+      const huge: Record<string, unknown> = {}
+      for (let i = 0; i < 50_000; i += 1) huge[`tabs.w${i}`] = entry
+      huge.settings = { rev: 2, failures: 1, retryAt: 10 }
+      expect(await detailOf(huge)).toEqual({ settings: { rev: 2, failures: 1, retryAt: 10 } })
+    })
   })
 
   it('the new fields, well-formed, are read as they were written', async () => {

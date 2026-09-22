@@ -315,7 +315,7 @@ function parseStatus(value: unknown): ExecutorStatus | undefined {
   for (const v of Object.values(sections)) if (typeof v !== 'string' || !SECTION_STATUSES.includes(v)) return undefined
   if (!isPlainObject(locks)) return undefined
   for (const v of Object.values(locks)) if (parseLock(v) === null) return undefined
-  return withDetail(value)
+  return withDetail({ ...value, sections })
 }
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
@@ -335,15 +335,19 @@ function parseDetail(value: unknown): SectionDetail | undefined {
  * The fields P3d-4 added. A record from an OLDER build has none of them, and one that is damaged has them in
  * another shape: either way they are read as ABSENT — no detail, no counter, not gone, never synced — which the
  * page shows as nothing, never as "0" or "never". A damaged `detail` entry is left out on its own.
+ *
+ * `detail` is read FOR THE SECTIONS THE STATUS LISTS (review F4): its size is bounded by theirs, a key nobody
+ * lists (`__proto__` included) is never taken, and a huge record costs one lookup per section — this runs on
+ * every `storage` event. Not a plain object (an array included) → no detail.
  */
-function withDetail(status: Record<string, unknown>): ExecutorStatus {
+function withDetail(status: Record<string, unknown> & { sections: Record<string, unknown> }): ExecutorStatus {
   const { profileGone, detail, indexFailures, lastSuccessAt } = status
-  const entries = typeof detail === 'object' && detail !== null ? Object.entries(detail as Record<string, unknown>) : []
+  const source = isPlainObject(detail) ? detail : {}
   return {
     ...(status as unknown as ExecutorStatus),
     profileGone: profileGone === true,
-    detail: Object.fromEntries(entries.flatMap(([key, value]) => {
-      const parsed = parseDetail(value)
+    detail: Object.fromEntries(Object.keys(status.sections).flatMap((key) => {
+      const parsed = Object.hasOwn(source, key) ? parseDetail(source[key]) : undefined
       return parsed === undefined ? [] : [[key, parsed]]
     })),
     indexFailures: isCount(indexFailures) ? indexFailures : 0,
