@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.430] - 2026-09-23
+
+### Fix：冷啟動深連結與 persisted active tab 無限乒乓，renderer 當掉（#1326 後半，#1335）
+
+alpha.428（#1327）修好了 App 內導頁的迴圈，但**整頁載入**深連結時仍卡死（只剩 `useRouteSync.ts:41`）。
+
+- **根因**：`useRouteSync` 的兩個 effect 都等 `hydrated`；冷啟動 hydration 完成的那個 commit 裡兩個同時跑，各拿對方剛改掉的舊值——
+  Tab→URL 用 persisted 的 active tab 覆寫網址，URL→Tab 依（已被覆寫的）深連結切換分頁；下一輪兩邊互換，永不停止。
+  範圍比回報大：**所有**與 persisted active tab 不同的可解析深連結都會中（`/w/<ws>/settings`、`/t/<別的分頁>`、`/history`、`/hosts`、`/execution/…`）。
+- **修法**：URL→Tab 先宣告、先把深連結套進 store；Tab→URL 在 effect 當下讀 store，只校正 URL→Tab 無法處理的網址。沒有迴圈計數器。
+  另修冷啟動時多記一筆「沒造訪過的舊分頁」瀏覽紀錄。
+- 真機（整頁載入）：`/w/<ws>/settings`、`/history` 落點正確、零錯誤；換回舊版則 12 秒內 19 次 max depth。
+- 已知（既有、非本次引入）：`/w/<ws>/t/<tab>/…` 會被正規化成 `/t/<tab>/…`（#1336）。
+
+### Fix：英文介面出現寫死的中文（#1324，#1334）
+
+Sidebar 的 add-view／管理按鈕、空狀態、區塊標題、右鍵選單空狀態，以及「找不到檔案」彈窗的兩個按鈕（含可見文字與 aria-label）改走 i18n，
+zh-TW 字串不變。其餘元件的寫死中文追蹤於 #1337。
+
 ## [1.0.0-alpha.429] - 2026-09-23
 
 ### Feature：Profile Sync P3d-4 — 在 Settings › Profile 解鎖定的區段、看得到同步細節（#1295，#1311，#1328）
