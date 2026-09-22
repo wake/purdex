@@ -16,6 +16,10 @@
 // world-epoch fence moved — a switch or promote in ANY window), the attach gate
 // closed, or the host left `hostOrder` / changed its endpoint.
 //
+// For the same reason — no further push is coming — a failed fetch or a
+// reconciliation that threw is retried a few times (`refreshHost`), each try
+// re-checking what the refresh was started for.
+//
 // Only the switching window fetches (spec §3.6): the tab tree it writes reaches
 // the other windows through the same rehydrate that brought them the new world.
 import { useHostStore } from '../../stores/useHostStore'
@@ -33,37 +37,133 @@ function endpointOf(hostId: string): string | null {
   return `${host.ip}:${host.port}`
 }
 
-async function refreshHost(hostId: string): Promise<void> {
-  // ONE synchronous step (spec §3.3, last paragraph): the gate and `conn` are
-  // read together, so the fetch is sent only while the gate is open AND `conn`
-  // names the connection that opened it — the hook moves `conn` before it
-  // closes the gate.
-  if (!canAttachTerminal(hostId)) return
-  const conn = currentConn(hostId)
-  const world = readWorldEpochFence()
-  const endpoint = endpointOf(hostId)
-  if (endpoint === null) return
+/**
+ * What a refresh was started for. Every attempt re-checks all of it before it
+ * fetches, and the answer is checked again before it is applied: when any of
+ * it has moved, the refresh ends and nothing is retried — whatever moved it
+ * (another switch, a new connection, a removed host) brings its own evidence.
+ */
+export interface RefreshFences {
+  /** `readWorldEpochFence()` when the refresh started. */
+  world: number
+  /** `currentConn(hostId)` when the refresh started — the connection the fetches are sent on. */
+  conn: number
+  /** `ip:port` when the refresh started. */
+  endpoint: string
+  /**
+   * The post-switch refresh starts only while the attach gate is open and ends
+   * when it closes. A recovery refresh (a WS frame whose reconciliation threw)
+   * may start with the gate still closed — that frame was supposed to open it —
+   * and is held to its connection instead (`conn` unchanged, answer included).
+   */
+  requireGate: boolean
+}
 
+/** Waits before retry 1, 2 and 3. The first attempt is immediate. */
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000]
+
+/** The one refresh per host that may still act; a newer one replaces it (see `refreshHost`). */
+const runs = new Map<string, { cancel: () => void }>()
+
+function fencesHold(hostId: string, f: RefreshFences): boolean {
+  if (readWorldEpochFence() !== f.world) return false
+  if (endpointOf(hostId) !== f.endpoint) return false
+  if (currentConn(hostId) !== f.conn) return false
+  return !f.requireGate || canAttachTerminal(hostId)
+}
+
+/** One fetch + apply. `retry`: worth another try (the fetch or the reconciliation failed). */
+async function attempt(hostId: string, f: RefreshFences, live: () => boolean): Promise<'done' | 'retry'> {
   let fresh: FreshSessions
   try {
     fresh = await listSessionsFresh(hostId)
   } catch {
-    return // no retry: the host's next WS frame still reconciles, as ever
+    return 'retry'
   }
-  if (fresh.kind !== 'versioned') return
+  if (!live()) return 'done' // replaced or cancelled while the fetch was out
+  if (fresh.kind !== 'versioned') return 'done' // an old daemon: never evidence, retrying changes nothing
 
-  if (readWorldEpochFence() !== world) return
-  if (!canAttachTerminal(hostId)) return
-  if (endpointOf(hostId) !== endpoint) return
+  if (readWorldEpochFence() !== f.world) return 'done'
+  if (endpointOf(hostId) !== f.endpoint) return 'done'
+  if (f.requireGate ? !canAttachTerminal(hostId) : currentConn(hostId) !== f.conn) return 'done'
 
   const v = { epoch: fresh.epoch, seq: fresh.seq }
-  if (decide(hostId, v, { kind: 'fetch', conn }) === 'stale') return
+  if (decide(hostId, v, { kind: 'fetch', conn: f.conn }) === 'stale') return 'done'
   try {
     reconcileHostSessions(hostId, fresh.sessions)
   } catch {
-    return // nothing held moves on a failed reconciliation
+    return 'retry' // nothing held moves on a failed reconciliation
   }
   note(hostId, v)
+  return 'done'
+}
+
+/**
+ * Reconcile `hostId` against a fresh, versioned list, retrying a failed fetch
+ * or reconciliation up to 3 times (after 1 s, 2 s, 4 s) while `fences` hold.
+ * A stale or unversioned answer, or a moved fence, ends it without a retry.
+ *
+ * ONE refresh per host at a time: a new call REPLACES the running one — its
+ * pending retry is cancelled and its in-flight answer dropped. The newer call
+ * carries the newer fences and its fetch is read later, so the older answer
+ * can only be as new or older than the newer one's.
+ *
+ * The promise settles when this refresh is over; it exists for tests.
+ */
+export function refreshHost(hostId: string, fences: RefreshFences): Promise<void> {
+  runs.get(hostId)?.cancel()
+  let cancelled = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let wake: (() => void) | undefined
+  const run = {
+    cancel: () => {
+      cancelled = true
+      clearTimeout(timer)
+      wake?.()
+    },
+  }
+  runs.set(hostId, run)
+  const live = () => !cancelled
+
+  return (async () => {
+    try {
+      for (let i = 0; ; i++) {
+        if (!live() || !fencesHold(hostId, fences)) return
+        if ((await attempt(hostId, fences, live)) === 'done') return
+        if (i >= RETRY_DELAYS_MS.length) return
+        await new Promise<void>((resolve) => {
+          wake = resolve
+          timer = setTimeout(resolve, RETRY_DELAYS_MS[i])
+        })
+        wake = undefined
+      }
+    } finally {
+      if (runs.get(hostId) === run) runs.delete(hostId)
+    }
+  })()
+}
+
+/** Ends `hostId`'s refresh, if any: its pending retry never fires. Called on entry teardown. */
+export function cancelSessionRefresh(hostId: string): void {
+  runs.get(hostId)?.cancel()
+}
+
+export function __resetRefreshForTests(): void {
+  for (const run of [...runs.values()]) run.cancel()
+  runs.clear()
+}
+
+function refreshAfterSwitch(hostId: string): Promise<void> {
+  // ONE synchronous step (spec §3.3, last paragraph): the gate and `conn` are
+  // read together, so the fetch is sent only while the gate is open AND `conn`
+  // names the connection that opened it — the hook moves `conn` before it
+  // closes the gate.
+  if (!canAttachTerminal(hostId)) return Promise.resolve()
+  const conn = currentConn(hostId)
+  const world = readWorldEpochFence()
+  const endpoint = endpointOf(hostId)
+  if (endpoint === null) return Promise.resolve()
+  return refreshHost(hostId, { world, conn, endpoint, requireGate: true })
 }
 
 /**
@@ -73,5 +173,5 @@ async function refreshHost(hostId: string): Promise<void> {
  */
 export function refreshSessionsAfterSwitch(): Promise<void> {
   const hosts = useHostStore.getState().hostOrder
-  return Promise.all(hosts.map((hostId) => refreshHost(hostId).catch(() => {}))).then(() => {})
+  return Promise.all(hosts.map((hostId) => refreshAfterSwitch(hostId).catch(() => {}))).then(() => {})
 }

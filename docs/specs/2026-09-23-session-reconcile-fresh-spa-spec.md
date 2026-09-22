@@ -83,14 +83,34 @@ For each host in `hostOrder`, independently (one host's failure costs no other):
    daemon after the subscribe, so after the switch — will reconcile the new world.
 2. Capture `world = <current world generation>` and `conn`.
 3. `GET /api/sessions?fresh=1` (`listSessionsFresh` in `host-api.ts`).
-   Array body → unversioned → stop. Non-2xx / network error → stop (no retry; the
-   next WS frame still reconciles as today).
+   Array body → unversioned → stop. Non-2xx / network error → retry (§3.2.1).
 4. Drop if the world generation changed (G4), the gate closed, or the host left
    `hostOrder` / changed endpoint since step 2.
 5. `decide(…, {kind: 'fetch', conn})`; `stale` → drop. `apply` →
    `reconcileHostSessions(hostId, sessions)` (which also refreshes `useSessionStore`,
    the revive snapshot, and runs the revive pass and probes, exactly as a WS frame),
    then `note` (§3.1: only if it did not throw).
+
+#### 3.2.1 Retries, one refresh per host (codex adversarial F3)
+
+With no further session change the host never pushes again, so a refresh that gives up
+on one failure leaves the old bindings on screen for good. `refreshHost(hostId, fences)`
+therefore retries a failed fetch (network, non-2xx) or a reconciliation that threw up to
+3 times, after 1 s, 2 s and 4 s. `fences` = `{world, conn, endpoint, requireGate}`
+captured when the refresh starts; before EVERY attempt all of them are re-checked (world
+fence unchanged, host still in `hostOrder` at the same endpoint, `conn` unchanged, and —
+when `requireGate` — the gate open), and any mismatch ends the refresh without a retry:
+whatever moved the fence brings its own evidence. A stale or unversioned answer is never
+retried. The post-switch refresh uses `requireGate: true`; the WS recovery (§3.3, a frame
+whose reconciliation threw) uses `requireGate: false`, because that frame may have been the
+one meant to open the gate, and holds the answer to its connection instead (`conn`
+unchanged).
+
+One refresh per host at a time: a new `refreshHost` call **replaces** the running one — its
+pending retry is cancelled and its in-flight answer dropped. The newer call carries the newer
+fences and its fetch is read later, so the older answer cannot be newer than the newer one's.
+Entry teardown in the hook (host removed, endpoint changed, unmount) cancels the host's refresh
+(`cancelSessionRefresh`); the `conn` fence would also stop it at its next check.
 
 "World generation" = the world-epoch fence value `switch-active.ts` raises on every
 exchange (`lib/storage/world-fence.ts`), read at step 2 and again at step 4 — it

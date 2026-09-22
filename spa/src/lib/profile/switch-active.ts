@@ -274,8 +274,9 @@ function underOperationLock<R>(block: () => R, busy: R): R {
  * AFTERWARDS, on `{ok: true}` only and with both locks released: the world that
  * has just come on screen is reconciled against a fresh, versioned session list
  * of every connected host (see WHAT A PARKED WORLD DOES NOT HEAR). Fire and
- * forget — the result does not wait for it, and a host that cannot answer is
- * reconciled by its next `sessions` payload.
+ * forget — the result does not wait for it; a host that cannot answer is retried
+ * a few times (refresh-after-switch.ts) and otherwise reconciled by its next
+ * `sessions` payload.
  */
 export function switchActiveProfile(targetId: typeof MASTER_PROFILE_ID | string): Promise<SwitchResult> {
   return withWorldLock<SwitchResult>(

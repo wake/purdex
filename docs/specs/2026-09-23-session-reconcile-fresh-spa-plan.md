@@ -65,6 +65,12 @@ Tests (unit, mocked `listSessionsFresh` + `reconcileHostSessions` spy + real sto
 - conn bumped during the fetch with a different epoch → dropped; with the same epoch and newer seq → applied;
 - a WS frame with a higher seq lands during the fetch → fetch result dropped (stale);
 - two hosts: one fails, the other reconciles;
+- retries (spec §3.2.1, codex F3): fetch fails twice, third succeeds → one reconcile; every
+  attempt fails → 4 fetches (first + 3 retries), then no timer left; a reconcile that throws is
+  retried with a fresh fetch; world / conn / gate / hostOrder / endpoint moves during the retry
+  wait → no further attempt; unversioned / stale → not retried; `cancelSessionRefresh` (hook
+  teardown) → no further attempt; a newer refresh replaces the running one (its retry never
+  fires, its in-flight answer is dropped);
 - `switchActiveProfile` refused (`busy` etc.) → no refresh; ok → one refresh per switch.
 Integration (one test, real `reconcileHostSessions`): a slave world on screen with a pane on
 session `S`, fetched list without `S` → pane `terminated: 'session-closed'`; a list that still

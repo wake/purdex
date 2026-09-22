@@ -29,7 +29,7 @@ vi.mock('./reconcile-host', async (importOriginal) => {
 })
 
 const { reconcileHostSessions } = await import('./reconcile-host')
-const { refreshSessionsAfterSwitch } = await import('./refresh-after-switch')
+const { refreshSessionsAfterSwitch, cancelSessionRefresh, __resetRefreshForTests } = await import('./refresh-after-switch')
 const reconcile = vi.mocked(reconcileHostSessions)
 
 const H = 'h1'
@@ -66,8 +66,11 @@ function terminated(hostId = H): TmuxSessionContent['terminated'] {
 const setFence = (n: number) => localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, String(n))
 
 beforeEach(() => {
+  // Retries wait on timers (1 s, 2 s, 4 s): every test drives them itself.
+  vi.useFakeTimers()
   localStorage.clear()
   __resetForTests()
+  __resetRefreshForTests()
   listSessionsFresh.mockReset()
   reconcile.mockClear()
   useHostStore.setState({
@@ -85,9 +88,17 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  __resetRefreshForTests()
+  vi.useRealTimers()
   useHostStore.getState().reset()
   localStorage.clear()
 })
+
+/** Let every retry wait there could be (1 + 2 + 4 s) elapse, then settle `p`. */
+async function drain(p: Promise<void>): Promise<void> {
+  await vi.advanceTimersByTimeAsync(7_000)
+  await p
+}
 
 describe('refreshSessionsAfterSwitch', () => {
   it('gate closed: no fetch', async () => {
@@ -123,8 +134,10 @@ describe('refreshSessionsAfterSwitch', () => {
   it('a reconcile that throws leaves held where it was', async () => {
     note(H, { epoch: E1, seq: 3 })
     reconcile.mockImplementationOnce(() => { throw new Error('quota') })
-    listSessionsFresh.mockResolvedValue(versioned(4, []))
-    await expect(refreshSessionsAfterSwitch()).resolves.toBeUndefined()
+    listSessionsFresh.mockResolvedValueOnce(versioned(4, []))
+    listSessionsFresh.mockResolvedValue({ kind: 'unversioned' }) // the retry: not evidence
+    const p = refreshSessionsAfterSwitch()
+    await expect(drain(p)).resolves.toBeUndefined()
     expect(heldVersion(H)).toEqual({ epoch: E1, seq: 3 })
   })
 
@@ -250,7 +263,7 @@ describe('refreshSessionsAfterSwitch', () => {
       if (hostId === H) throw new Error('offline')
       return versioned(4, [])
     })
-    await refreshSessionsAfterSwitch()
+    await drain(refreshSessionsAfterSwitch())
     expect(reconcile).toHaveBeenCalledTimes(1)
     expect(reconcile).toHaveBeenCalledWith(H2, [])
     expect(terminated(H)).toBeUndefined()
@@ -263,5 +276,116 @@ describe('refreshSessionsAfterSwitch', () => {
     await refreshSessionsAfterSwitch()
     expect(reconcile).toHaveBeenCalledTimes(1)
     expect(useTabStore.getState().tabs).toBe(before)
+  })
+})
+
+// A host with no further session change never pushes again, so one failed
+// fetch / reconcile must not leave the world un-reconciled for good (codex
+// adversarial F3): a bounded number of retries, each re-checking its fences.
+describe('refreshSessionsAfterSwitch — retries', () => {
+  const offline = () => Promise.reject(new Error('offline'))
+
+  it('a fetch that fails twice and then succeeds is reconciled once', async () => {
+    listSessionsFresh.mockImplementationOnce(offline).mockImplementationOnce(offline)
+      .mockResolvedValueOnce(versioned(4, []))
+    const p = refreshSessionsAfterSwitch()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(3)
+    await p
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(terminated()).toBe('session-closed')
+  })
+
+  it('every attempt fails: it stops after the last retry and schedules nothing more', async () => {
+    listSessionsFresh.mockImplementation(offline)
+    await drain(refreshSessionsAfterSwitch())
+    expect(listSessionsFresh).toHaveBeenCalledTimes(4) // the first try + 3 retries (1 s, 2 s, 4 s)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(4)
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  it('a reconcile that throws is retried with a fresh fetch', async () => {
+    reconcile.mockImplementationOnce(() => { throw new Error('quota') })
+    listSessionsFresh.mockResolvedValueOnce(versioned(4, [])).mockResolvedValueOnce(versioned(5, []))
+    await drain(refreshSessionsAfterSwitch())
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(terminated()).toBe('session-closed')
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 5 })
+  })
+
+  it.each([
+    ['the world moves', () => setFence(200)],
+    ['the connection moves', () => { connectionClosed(H); connectionOpened(H) }],
+    ['the gate closes', () => closeAttachGate(H)],
+    ['the host leaves hostOrder', () => useHostStore.setState({ hostOrder: [] })],
+    ['the endpoint changes', () => {
+      const h = useHostStore.getState().hosts[H]
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, [H]: { ...h, port: 7861 } } })
+    }],
+  ])('%s during the retry wait: no further attempt', async (_label, move) => {
+    listSessionsFresh.mockImplementationOnce(offline).mockResolvedValue(versioned(4, []))
+    const p = refreshSessionsAfterSwitch()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    move()
+    await drain(p)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  it('an unversioned answer is not retried', async () => {
+    listSessionsFresh.mockResolvedValue({ kind: 'unversioned' })
+    await drain(refreshSessionsAfterSwitch())
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('a stale answer is not retried', async () => {
+    note(H, { epoch: E1, seq: 9 })
+    listSessionsFresh.mockResolvedValue(versioned(9, []))
+    await drain(refreshSessionsAfterSwitch())
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  it('teardown (cancelSessionRefresh) ends a pending retry: no further attempt, no timer left', async () => {
+    listSessionsFresh.mockImplementationOnce(offline).mockResolvedValue(versioned(4, []))
+    const p = refreshSessionsAfterSwitch()
+    await vi.advanceTimersByTimeAsync(0)
+    cancelSessionRefresh(H)
+    await p // settles without any timer firing
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('one refresh per host at a time: a newer one replaces the one waiting to retry', async () => {
+    listSessionsFresh.mockImplementationOnce(offline)
+    const first = refreshSessionsAfterSwitch()
+    await vi.advanceTimersByTimeAsync(0)
+    listSessionsFresh.mockResolvedValueOnce(versioned(4, []))
+    await refreshSessionsAfterSwitch()
+    await drain(first)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(2) // the replaced one never retried
+    expect(reconcile).toHaveBeenCalledTimes(1)
+  })
+
+  it('one refresh per host at a time: a replaced one\'s in-flight answer is dropped', async () => {
+    const d = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValueOnce(d.promise)
+    const first = refreshSessionsAfterSwitch()
+    listSessionsFresh.mockResolvedValueOnce(versioned(4, [S]))
+    await refreshSessionsAfterSwitch()
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    d.resolve(versioned(5, [])) // would close S if it were still the host's refresh
+    await drain(first)
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(terminated()).toBeUndefined()
   })
 })

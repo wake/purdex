@@ -12,6 +12,12 @@ vi.mock('../lib/host-connection', () => ({
   checkHealth: vi.fn(async () => ({ daemon: 'connected', latency: 3, ticket: 'tk' })),
 }))
 
+const { cancelSessionRefresh } = vi.hoisted(() => ({ cancelSessionRefresh: vi.fn() }))
+vi.mock('../lib/rebuild/refresh-after-switch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/rebuild/refresh-after-switch')>()),
+  cancelSessionRefresh,
+}))
+
 const { useMultiHostEventWs } = await import('./useMultiHostEventWs')
 
 const HOST = 'h1'
@@ -146,6 +152,28 @@ describe('useMultiHostEventWs attach gate', () => {
     const afterRemove = currentConn(HOST)
     view.unmount()
     expect(currentConn(HOST)).toBe(afterRemove) // entry already gone: nothing left to tear down
+  })
+
+  it('tearing an entry down cancels its pending session refresh (removed, endpoint changed, unmount)', async () => {
+    cancelSessionRefresh.mockClear()
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+
+    act(() => {
+      const h = useHostStore.getState().hosts[HOST]
+      useHostStore.setState({ hosts: { [HOST]: { ...h, port: 7861 } } })
+    })
+    expect(cancelSessionRefresh).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(sockets).toHaveLength(2))
+
+    act(() => { useHostStore.setState({ hostOrder: [] }) })
+    expect(cancelSessionRefresh).toHaveBeenCalledTimes(2)
+
+    act(() => { useHostStore.setState({ hostOrder: [HOST] }) })
+    await waitFor(() => expect(sockets).toHaveLength(3))
+    view.unmount()
+    expect(cancelSessionRefresh).toHaveBeenCalledTimes(3)
+    expect(cancelSessionRefresh).toHaveBeenCalledWith(HOST)
   })
 
   it('unmount tears down every live entry', async () => {

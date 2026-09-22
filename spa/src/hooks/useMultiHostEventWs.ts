@@ -12,6 +12,7 @@ import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { closeAttachGate } from '../lib/rebuild/attach-gate'
 import { provenanceBindings } from '../lib/rebuild/reconcile-host'
 import { connectionClosed, connectionOpened, forgetHost } from '../lib/rebuild/session-version'
+import { cancelSessionRefresh } from '../lib/rebuild/refresh-after-switch'
 import { handleSessionsFrame } from '../lib/rebuild/ws-sessions'
 import { runRevivePassAll } from '../lib/rebuild/revive'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
@@ -46,6 +47,7 @@ export function useMultiHostEventWs() {
         entry.conn.close()
         entry.sm.stop()
         forgetHost(hostId)
+        cancelSessionRefresh(hostId)
         entries.delete(hostId)
       }
     }
@@ -67,6 +69,7 @@ export function useMultiHostEventWs() {
         existing.conn.close()
         existing.sm.stop()
         forgetHost(hostId) // another endpoint may be another daemon: nothing held carries over
+        cancelSessionRefresh(hostId)
       }
 
       // Create new SM + WS for this host
@@ -219,6 +222,7 @@ export function useMultiHostEventWs() {
         entry.conn.close()
         entry.sm.stop()
         forgetHost(hostId)
+        cancelSessionRefresh(hostId)
       })
       entries.clear()
     }
