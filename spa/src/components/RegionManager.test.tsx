@@ -71,4 +71,23 @@ describe('RegionManager', () => {
       expect(screen.getByText('沒有可用的 views')).toBeInTheDocument()
     })
   })
+
+  describe('locale-aware section headings (#1327)', () => {
+    it('shows the English section headings for the en locale', () => {
+      useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a'])
+      render(<RegionManager region="primary-sidebar" />)
+      expect(screen.getByText('Enabled')).toBeInTheDocument()
+      expect(screen.getByText('Available')).toBeInTheDocument()
+      expect(screen.queryByText('已啟用')).not.toBeInTheDocument()
+      expect(screen.queryByText('可加入')).not.toBeInTheDocument()
+    })
+
+    it('shows the zh-TW section headings for the zh-TW locale', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a'])
+      render(<RegionManager region="primary-sidebar" />)
+      expect(screen.getByText('已啟用')).toBeInTheDocument()
+      expect(screen.getByText('可加入')).toBeInTheDocument()
+    })
+  })
 })

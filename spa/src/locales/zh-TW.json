@@ -293,6 +293,8 @@
   "sidebar.manage_views": "管理 views",
   "sidebar.add_views": "加入 views",
   "sidebar.no_views_available": "沒有可用的 views",
+  "sidebar.section_enabled": "已啟用",
+  "sidebar.section_available": "可加入",
 
   "page.newtab.title": "新增分頁",
   "page.newtab.empty": "尚未登錄任何內容提供者",
@@ -1591,5 +1593,7 @@
   "settings.profile.wizard.sot.maybe_yours": "可能是你剛才建立的",
 
   "file_not_found.search_session_cwd": "搜尋目前 session cwd",
-  "file_not_found.search_workspace_path": "搜尋 workspace projectPath"
+  "file_not_found.search_workspace_path": "搜尋 workspace projectPath",
+  "file_not_found.search_session_cwd_label": "搜尋目前 session（cwd: {{path}}）",
+  "file_not_found.search_workspace_path_label": "搜尋 workspace（projectPath: {{path}}）"
 }

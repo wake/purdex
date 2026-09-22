@@ -117,7 +117,7 @@ export function FileNotFoundPopup({
         {(spec.mode === 'ask-expand' || spec.mode === 'layer1-multi') && (
           <div className="space-y-2 mb-4">
             <CtaButton
-              label={`搜尋目前 session（cwd: ${sessionCwd ?? '—'}）`}
+              label={t('file_not_found.search_session_cwd_label', { path: sessionCwd ?? '—' })}
               ariaLabel={t('file_not_found.search_session_cwd')}
               disabled={!sessionCapable}
               tooltip={
@@ -128,7 +128,7 @@ export function FileNotFoundPopup({
               onClick={onSearchSessionCwd}
             />
             <CtaButton
-              label={`搜尋 workspace（projectPath: ${projectPath ?? '—'}）`}
+              label={t('file_not_found.search_workspace_path_label', { path: projectPath ?? '—' })}
               ariaLabel={t('file_not_found.search_workspace_path')}
               disabled={!workspaceCapable}
               tooltip={

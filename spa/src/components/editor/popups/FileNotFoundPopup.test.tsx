@@ -283,4 +283,72 @@ describe('FileNotFoundPopup', () => {
       expect(btn).toHaveAccessibleName('搜尋 workspace projectPath')
     })
   })
+
+  describe('locale-aware CTA visible labels (#1327)', () => {
+    const spec: PopupSpec = { mode: 'ask-expand', file: baseFile, source: baseSource, ctx: baseCtx }
+
+    it('session CTA visible label is English with the path interpolated, for the en locale', () => {
+      render(
+        <FileNotFoundPopup
+          spec={spec}
+          sessionCwd="/sess/cwd"
+          projectPath="/ws/project"
+          onClose={vi.fn()}
+          onOpenPath={vi.fn()}
+          onSearchSessionCwd={vi.fn()}
+          onSearchWorkspace={vi.fn()}
+        />,
+      )
+      expect(screen.getByText("Search the current session's cwd (/sess/cwd)")).toBeInTheDocument()
+      expect(screen.queryByText(/搜尋目前 session/)).not.toBeInTheDocument()
+    })
+
+    it('session CTA visible label is zh-TW with the path interpolated, for the zh-TW locale', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      render(
+        <FileNotFoundPopup
+          spec={spec}
+          sessionCwd="/sess/cwd"
+          projectPath="/ws/project"
+          onClose={vi.fn()}
+          onOpenPath={vi.fn()}
+          onSearchSessionCwd={vi.fn()}
+          onSearchWorkspace={vi.fn()}
+        />,
+      )
+      expect(screen.getByText('搜尋目前 session（cwd: /sess/cwd）')).toBeInTheDocument()
+    })
+
+    it('workspace CTA visible label is English with the path interpolated, for the en locale', () => {
+      render(
+        <FileNotFoundPopup
+          spec={spec}
+          sessionCwd="/sess/cwd"
+          projectPath="/ws/project"
+          onClose={vi.fn()}
+          onOpenPath={vi.fn()}
+          onSearchSessionCwd={vi.fn()}
+          onSearchWorkspace={vi.fn()}
+        />,
+      )
+      expect(screen.getByText('Search the workspace project path (/ws/project)')).toBeInTheDocument()
+      expect(screen.queryByText(/搜尋 workspace/)).not.toBeInTheDocument()
+    })
+
+    it('workspace CTA visible label is zh-TW with the path interpolated, for the zh-TW locale', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      render(
+        <FileNotFoundPopup
+          spec={spec}
+          sessionCwd="/sess/cwd"
+          projectPath="/ws/project"
+          onClose={vi.fn()}
+          onOpenPath={vi.fn()}
+          onSearchSessionCwd={vi.fn()}
+          onSearchWorkspace={vi.fn()}
+        />,
+      )
+      expect(screen.getByText('搜尋 workspace（projectPath: /ws/project）')).toBeInTheDocument()
+    })
+  })
 })

@@ -81,7 +81,7 @@ export function RegionManager({ region }: Props) {
     <div data-testid="region-manager" className="flex flex-col gap-3 p-2 text-xs">
       {views.length > 0 && (
         <div>
-          <div className="text-text-muted px-2 pb-1 font-medium">已啟用</div>
+          <div className="text-text-muted px-2 pb-1 font-medium">{t('sidebar.section_enabled')}</div>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={views} strategy={verticalListSortingStrategy}>
               {views.map((viewId) => {
@@ -104,7 +104,7 @@ export function RegionManager({ region }: Props) {
 
       {availableViews.length > 0 && (
         <div>
-          <div className="text-text-muted px-2 pb-1 font-medium">可加入</div>
+          <div className="text-text-muted px-2 pb-1 font-medium">{t('sidebar.section_available')}</div>
           {availableViews.map((viewDef) => (
             <div
               key={viewDef.id}

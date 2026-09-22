@@ -293,6 +293,8 @@
   "sidebar.manage_views": "Manage views",
   "sidebar.add_views": "Add views",
   "sidebar.no_views_available": "No views available",
+  "sidebar.section_enabled": "Enabled",
+  "sidebar.section_available": "Available",
 
   "page.newtab.title": "New Tab",
   "page.newtab.empty": "No content providers registered",
@@ -1591,5 +1593,7 @@
   "settings.profile.wizard.sot.maybe_yours": "may be the one you just created",
 
   "file_not_found.search_session_cwd": "Search the current session's cwd",
-  "file_not_found.search_workspace_path": "Search the workspace project path"
+  "file_not_found.search_workspace_path": "Search the workspace project path",
+  "file_not_found.search_session_cwd_label": "Search the current session's cwd ({{path}})",
+  "file_not_found.search_workspace_path_label": "Search the workspace project path ({{path}})"
 }
