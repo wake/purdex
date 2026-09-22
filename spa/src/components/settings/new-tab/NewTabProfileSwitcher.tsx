@@ -1,17 +1,17 @@
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
-import type { ProfileKey } from '../../../lib/resolve-profile'
+import type { PresetKey } from '../../../lib/resolve-preset'
 
 interface Props {
-  active: ProfileKey
-  onSelect: (k: ProfileKey) => void
-  onToggleEnabled: (k: ProfileKey, enabled: boolean) => void
-  renderMain: (k: ProfileKey) => React.ReactNode
-  renderThumb: (k: ProfileKey) => React.ReactNode
+  active: PresetKey
+  onSelect: (k: PresetKey) => void
+  onToggleEnabled: (k: PresetKey, enabled: boolean) => void
+  renderMain: (k: PresetKey) => React.ReactNode
+  renderThumb: (k: PresetKey) => React.ReactNode
 }
 
-const KEYS: ProfileKey[] = ['3col', '2col', '1col']
-const LABEL_KEY: Record<ProfileKey, string> = {
+const KEYS: PresetKey[] = ['3col', '2col', '1col']
+const LABEL_KEY: Record<PresetKey, string> = {
   '3col': 'settings.interface.profile_3col',
   '2col': 'settings.interface.profile_2col',
   '1col': 'settings.interface.profile_1col',
@@ -21,7 +21,7 @@ export function NewTabProfileSwitcher({ active, onSelect, onToggleEnabled, rende
   const t = useI18nStore((s) => s.t)
   const profiles = useNewTabLayoutStore((s) => s.profiles)
 
-  const meta = (k: ProfileKey) => {
+  const meta = (k: PresetKey) => {
     const p = profiles[k]
     return {
       enabled: p.enabled,

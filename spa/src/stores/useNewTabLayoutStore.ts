@@ -1,18 +1,18 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import type { Profile, ProfileKey } from '../lib/resolve-profile'
+import type { LayoutPreset, PresetKey } from '../lib/resolve-preset'
 
-export type { Profile, ProfileKey }
+export type { LayoutPreset, PresetKey }
 
-const COL_COUNT: Record<ProfileKey, number> = {
+const COL_COUNT: Record<PresetKey, number> = {
   '3col': 3,
   '2col': 2,
   '1col': 1,
 }
 
-/** Factory ensuring column-count invariant matches ProfileKey. */
-export function makeProfile(enabled: boolean, colCount: number): Profile {
+/** Factory ensuring column-count invariant matches PresetKey. */
+export function makeProfile(enabled: boolean, colCount: number): LayoutPreset {
   return { enabled, columns: Array.from({ length: colCount }, () => []) }
 }
 
@@ -23,15 +23,15 @@ interface ProviderInfo {
 }
 
 interface State {
-  profiles: Record<ProfileKey, Profile>
+  profiles: Record<PresetKey, LayoutPreset>
   knownIds: string[]
-  activeEditingProfile: ProfileKey
+  activeEditingProfile: PresetKey
 
-  setEnabled: (p: ProfileKey, enabled: boolean) => void
-  setEditing: (p: ProfileKey) => void
-  placeModule: (p: ProfileKey, providerId: string, colIdx: number, rowIdx: number) => void
-  placeModuleInShortest: (p: ProfileKey, providerId: string) => void
-  removeModule: (p: ProfileKey, providerId: string) => void
+  setEnabled: (p: PresetKey, enabled: boolean) => void
+  setEditing: (p: PresetKey) => void
+  placeModule: (p: PresetKey, providerId: string, colIdx: number, rowIdx: number) => void
+  placeModuleInShortest: (p: PresetKey, providerId: string) => void
+  removeModule: (p: PresetKey, providerId: string) => void
   ensureDefaults: (providers: ProviderInfo[]) => void
   /** Remove ids from every profile and from knownIds (e.g. a removed host's block). */
   pruneIds: (ids: string[]) => void
@@ -69,7 +69,7 @@ function shortestColIdx(cols: string[][]): number {
   return best
 }
 
-function cloneProfile(p: Profile): Profile {
+function cloneProfile(p: LayoutPreset): LayoutPreset {
   return { enabled: p.enabled, columns: p.columns.map((c) => [...c]) }
 }
 
@@ -85,7 +85,7 @@ export function healProfileState<
   if (!state.profiles || typeof state.profiles !== 'object') {
     state.profiles = initialState().profiles as T['profiles']
   } else {
-    const profiles = state.profiles as Record<string, Profile | undefined>
+    const profiles = state.profiles as Record<string, LayoutPreset | undefined>
     for (const key of ['3col', '2col', '1col'] as const) {
       const expectedLen = COL_COUNT[key]
       const p = profiles[key]
@@ -110,8 +110,8 @@ export function healProfileState<
       }
     }
     // 1col lock invariant
-    if ((state.profiles as Record<string, Profile>)['1col'].enabled !== true) {
-      ;(state.profiles as Record<string, Profile>)['1col'].enabled = true
+    if ((state.profiles as Record<string, LayoutPreset>)['1col'].enabled !== true) {
+      ;(state.profiles as Record<string, LayoutPreset>)['1col'].enabled = true
     }
   }
 
@@ -138,7 +138,7 @@ export function healProfileState<
  * - Compensate only when toRow is strictly before end (toRow < target.length)
  * - "Move to end" case: toRow equals target.length after clamp → no compensation
  */
-function placeIn(profile: Profile, id: string, colIdx: number, rowIdx: number): Profile {
+function placeIn(profile: LayoutPreset, id: string, colIdx: number, rowIdx: number): LayoutPreset {
   const next = cloneProfile(profile)
   if (!next.columns[colIdx]) return profile // defensive
 

@@ -6,7 +6,7 @@ import {
 } from '@dnd-kit/core'
 import { useNewTabProviders } from '../../../hooks/useNewTabProviders'
 import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
-import type { ProfileKey } from '../../../lib/resolve-profile'
+import type { PresetKey } from '../../../lib/resolve-preset'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { NewTabModulePalette, type PaletteItem } from './NewTabModulePalette'
 import { NewTabProfileSwitcher } from './NewTabProfileSwitcher'
@@ -59,8 +59,8 @@ export function NewTabSubsection() {
     setDragging(null)
     if (!over) return
 
-    const src = activeEvt.data.current as { type?: string; providerId?: string; profileKey?: ProfileKey } | undefined
-    const dst = over.data.current as { type?: string; profileKey?: ProfileKey; colIdx?: number; providerId?: string } | undefined
+    const src = activeEvt.data.current as { type?: string; providerId?: string; profileKey?: PresetKey } | undefined
+    const dst = over.data.current as { type?: string; profileKey?: PresetKey; colIdx?: number; providerId?: string } | undefined
     if (!src?.providerId) return
 
     // Drop into palette zone = remove from canvas

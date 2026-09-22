@@ -7,7 +7,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useBreakpoint } from '../hooks/useBreakpoint'
-import { resolveProfile } from '../lib/resolve-profile'
+import { resolvePreset } from '../lib/resolve-preset'
 import { colsClass } from '../lib/cols-class'
 import { countLeaves, getPrimaryPane } from '../lib/pane-tree'
 import { getPaneLabel } from '../lib/pane-labels'
@@ -39,7 +39,7 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
 
   const { isWide, isMid } = useBreakpoint()
   const profiles = useNewTabLayoutStore((s) => s.profiles)
-  const profileKey = resolveProfile(isWide, isMid, profiles)
+  const profileKey = resolvePreset(isWide, isMid, profiles)
   const profile = profiles[profileKey]
 
   // P1 reload-required contract (matches PaneLayoutRenderer + file-opener

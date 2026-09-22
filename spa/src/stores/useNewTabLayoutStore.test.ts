@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useNewTabLayoutStore, makeProfile, healProfileState } from './useNewTabLayoutStore'
-import type { Profile } from './useNewTabLayoutStore'
+import type { LayoutPreset } from './useNewTabLayoutStore'
 
 // helper for tests
 function initialStateProfiles() {
@@ -360,7 +360,7 @@ describe('healProfileState', () => {
       profiles: {
         '3col': makeProfile(false, 3),
         '2col': makeProfile(false, 2),
-      } as unknown as Record<string, Profile>,
+      } as unknown as Record<string, LayoutPreset>,
       knownIds: [],
       activeEditingProfile: '1col' as const,
     }

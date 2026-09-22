@@ -1,8 +1,8 @@
 import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
 import { colsClass } from '../../../lib/cols-class'
-import type { ProfileKey } from '../../../lib/resolve-profile'
+import type { PresetKey } from '../../../lib/resolve-preset'
 
-interface Props { profileKey: ProfileKey }
+interface Props { profileKey: PresetKey }
 
 export function NewTabThumbnail({ profileKey }: Props) {
   const profile = useNewTabLayoutStore((s) => s.profiles[profileKey])

@@ -7,12 +7,12 @@ import { useNewTabLayoutStore } from '../../../stores/useNewTabLayoutStore'
 import { useNewTabProviders } from '../../../hooks/useNewTabProviders'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { colsClass } from '../../../lib/cols-class'
-import type { ProfileKey } from '../../../lib/resolve-profile'
+import type { PresetKey } from '../../../lib/resolve-preset'
 
-interface Props { profileKey: ProfileKey }
+interface Props { profileKey: PresetKey }
 
 function SortableItem({ profileKey, id, label, onRemove }: {
-  profileKey: ProfileKey; id: string; label: string; onRemove: () => void
+  profileKey: PresetKey; id: string; label: string; onRemove: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `item:${profileKey}:${id}`,
@@ -46,7 +46,7 @@ function SortableItem({ profileKey, id, label, onRemove }: {
   )
 }
 
-function Column({ profileKey, colIdx, ids }: { profileKey: ProfileKey; colIdx: number; ids: string[] }) {
+function Column({ profileKey, colIdx, ids }: { profileKey: PresetKey; colIdx: number; ids: string[] }) {
   const t = useI18nStore((s) => s.t)
   const removeModule = useNewTabLayoutStore((s) => s.removeModule)
   const providers = useNewTabProviders()
