@@ -1,6 +1,6 @@
 # Fresh, versioned session list (#1255, daemon half) — spec
 
-Status: draft 1 (2026-09-23) · Owner: purdex-cleanup · Consumer: the SPA half of #1255 (purdex-3b)
+Status: final (2026-09-23; contract confirmed by coordinator, plan review task-mud3vtss-8uyikv applied) · Owner: purdex-cleanup · Consumer: the SPA half of #1255 (purdex-3b)
 
 ## 1. Problem
 
@@ -33,7 +33,7 @@ Goals
 Non-goals
 - Removing the 500 ms debounce or the 5 s ticker (latency of pushes is
   unchanged; the fresh fetch is the answer to lateness).
-- Making versions comparable across daemon restarts (see §4.3 — the rule is
+- Making versions comparable across daemon restarts (see §3.4 — the rule is
   "different epoch ⇒ not comparable", and the SPA has a clean way to act on it).
 - Any SPA change. `spa/` is not touched by this PR.
 
@@ -77,8 +77,12 @@ Two new top-level fields, next to the existing `type` / `session` / `value`:
 
 | field | type | meaning |
 |---|---|---|
-| `epoch` | string, 16 lowercase hex chars | Identity of the daemon **process**. Random (crypto/rand, 64 bit), fixed for the life of the process, different after every restart. Opaque: compare for equality only. |
-| `seq` | integer ≥ 1 (JSON number, < 2^53) | Position of this list in the process's read order. Starts at 1; 0 is never sent. |
+| `epoch` | string, 16 lowercase hex chars | Identity of the daemon **process**. Random (crypto/rand, 64 bit — Go ≥1.24 `rand.Read` cannot fail, so there is no fallback), fixed for the life of the process's counter (see rotation below), different after every restart with probability 1 − 2⁻⁶⁴ per pair (accepted risk). Opaque: compare for equality only. |
+| `seq` | integer ≥ 1 (JSON number, ≤ 2^53−1) | Position of this list in the process's read order. Starts at 1; 0 is never sent. |
+
+**Rotation.** If the counter would exceed 2^53−1 (never in practice), the
+daemon draws a new `epoch` and restarts `seq` at 1 — to a client this is
+indistinguishable from a daemon restart, which it already handles (§3.4).
 
 Ordering guarantee (the part the SPA relies on):
 
@@ -121,9 +125,12 @@ response always comes from the process that is running at that moment, so:
   SPA half must verify its `connectHostEvents` reconnect path guarantees this;
   not assumed here).
 - Recommended SPA pattern after a switch: `GET ?fresh=1`, then apply only if
-  `(epoch == held.epoch && seq > held.seq) || epoch != held.epoch`; the first
-  frame of every new WS connection (the subscribe snapshot) re-establishes the
-  held epoch.
+  `(epoch == held.epoch && seq > held.seq) || epoch != held.epoch`. Any
+  versioned frame on a new WS connection carries the current process's epoch
+  and so re-establishes the held epoch. (The subscribe snapshot is *not*
+  guaranteed to be the connection's first `sessions` frame: the subscriber
+  joins the broadcast set before the snapshot is sent, so a concurrent push
+  can precede it. Both carry the same epoch; `seq` orders them.)
 
 `tmuxInstance` (per entry, unchanged) remains the signal for a **tmux server**
 restart; `epoch` is only about the **daemon** process. They are independent.
@@ -159,8 +166,9 @@ In `internal/module/session`:
 
 `invalidateListCache()` (zero `listCacheAt`) is called wherever
 `invalidateNameCache()` is called today: `CreateSession` success, rename
-success, delete success, and `broadcastSessions` (tmux wait-for ⇒ any tmux
-change, including external ones). The plain `GET /api/sessions` then stays
+success, delete success, `broadcastSessions` (tmux wait-for ⇒ any tmux
+change, including external ones), and `tickNormal`'s hash-changed branch
+(external changes found by the 5 s ticker). The plain `GET /api/sessions` then stays
 cached only between changes. This is an improvement, not a guarantee — the
 guarantee is `?fresh=1`.
 

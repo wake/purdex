@@ -28,14 +28,20 @@ new `internal/module/session/versioned_test.go`.
   - two modules → different epochs.
   - tmux list error → error returned, next success still gets seq 1.
   - zero sessions → `Sessions` is non-nil empty slice (JSON `[]`).
-  - concurrency: N goroutines call `versionedList`; the fake executor records
-    the order of `ListSessions` calls (wrap the executor, append a counter under
-    a mutex); assert the seq sequence sorted by read order is strictly
-    increasing and all seqs distinct.
+  - serialization (deterministic, must go red if `snapMu` is removed): a
+    blocking executor wrapper whose first `ListSessions` call signals
+    "entered" and waits on a release channel. Goroutine A calls
+    `versionedList` and blocks inside the read; goroutine B then calls
+    `versionedList`; assert (with a short timeout) that B has **not** entered
+    `ListSessions` while A is blocked; release A; assert A.seq < B.seq and
+    reads happened in order A, B.
+  - rotation: set `snapSeq` to `maxSeq` (2^53−1) via the test's package
+    access; next call returns a different epoch and seq 1.
 - Implement: `type VersionedSessions struct { Epoch string \`json:"epoch"\`; Seq uint64 \`json:"seq"\`; Sessions []SessionInfo \`json:"sessions"\` }`;
-  `newEpoch()` via `crypto/rand` 8 bytes → hex (fallback on rand error:
-  `fmt.Sprintf("%016x", time.Now().UnixNano())` — never empty);
-  fields `epoch`, `snapMu`, `snapSeq`; `versionedList()` per spec §4.1.
+  `newEpoch()` via `crypto/rand.Read` 8 bytes → hex (no fallback; Go ≥1.24
+  cannot fail); fields `epoch`, `snapMu`, `snapSeq`; `const maxSeq = 1<<53 - 1`;
+  `versionedList()` per spec §4.1, rotating epoch when `snapSeq == maxSeq`
+  (epoch is read under `snapMu`, so callers never see a torn pair).
 
 ## Task 3 — `GET /api/sessions?fresh=1`
 
@@ -61,9 +67,12 @@ Files: `internal/module/session/module.go` (OnSubscribe),
     seq ≥ 1; a second call after the debounce window has a larger seq.
   - `tickNormal()` with a changed list broadcasts a frame with epoch/seq;
     unchanged list (only seq would differ) does **not** broadcast.
-  - OnSubscribe snapshot frame carries epoch/seq (invoke the registered
-    callback against a test subscriber; the subagent finds the existing
-    pattern in `module_test.go`).
+  - OnSubscribe snapshot frame carries epoch/seq. `AddTestSubscriber` does
+    **not** run OnSubscribe callbacks, so this test goes through the real path:
+    `httptest.NewServer(http.HandlerFunc(core.Events.HandleHostEvents))`,
+    dial with `gorilla/websocket`, read frames until a `sessions` frame
+    arrives, assert epoch/seq (look for an existing WS test harness in
+    `internal/core/events_test.go` first and reuse it).
 - Implement: the three sites call `versionedList()` and send via
   `BroadcastEvent` / a marshalled `HostEvent` with the version fields.
 
@@ -89,10 +98,15 @@ Files: `internal/module/session/handler.go`, `create.go`, `watcher.go`,
 - Tests first: for each of create / rename / delete: plain GET (warms cache) →
   mutation via handler → plain GET within TTL reflects it. And
   `broadcastSessions()` invalidates (warm → mutate fake tmux → broadcast →
-  plain GET reflects).
-- Also read-your-writes: DELETE then `?fresh=1` does not list the session.
+  plain GET reflects), and so does `tickNormal()` when its hash changes
+  (external mutation found by the ticker).
+- Read-your-writes on the versioned path for all three mutations: POST create
+  then `?fresh=1` lists it; PATCH rename then `?fresh=1` shows the new name and
+  not the old; DELETE then `?fresh=1` does not list it — each with the plain
+  cache warmed beforehand.
 - Implement `invalidateListCache()` (lock `listCacheMu`, zero `listCacheAt`)
-  next to each `invalidateNameCache()` call.
+  next to each `invalidateNameCache()` call (create, rename, delete,
+  `broadcastSessions`, `tickNormal` hash-changed branch).
 
 ## Verification before PR
 
