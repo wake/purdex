@@ -22,10 +22,16 @@ import { startCollector, type Collector } from './collector'
 import { createExecutor, type Executor } from './executor'
 import { hashSection } from './hash'
 import { buildWorkspacesSection } from './sections'
-import { clearSectionStore } from './section-store'
+import { clearSectionStore, saveConflict } from './section-store'
+import { PROJECTIONS, SECTION_SCHEMA_ORDINAL, fingerprintOf } from './projections'
+import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { FakeDaemon, type FakeRow as Row } from './test-fake-daemon'
 
-const h = vi.hoisted(() => ({ clientId: 'c_aaaaaaaaaaaa' }))
+const h = vi.hoisted(() => ({
+  clientId: 'c_aaaaaaaaaaaa',
+  /** This build's shape table as the executor reads it; `null` = the placeholder table below. */
+  shape: null as null | Record<'hosts' | 'settings' | 'workspaces' | 'tabs', [string, number]>,
+}))
 
 vi.mock('./hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hash')>()
@@ -46,7 +52,7 @@ vi.mock('./api', () => ({ listProfiles: vi.fn(), getSection: vi.fn(), putSection
 
 vi.mock('./projections', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./projections')>()
-  return { ...actual, shapeTable: vi.fn(async () => ({ hosts: ['fp-hosts', 1], settings: ['fp-settings', 3], workspaces: ['fp-workspaces', 1], tabs: ['fp-tabs', 1] })) }
+  return { ...actual, shapeTable: vi.fn(async () => h.shape ?? { hosts: ['fp-hosts', 1], settings: ['fp-settings', 3], workspaces: ['fp-workspaces', 1], tabs: ['fp-tabs', 1] }) }
 })
 
 vi.mock('../client-identity', () => ({ getClientId: () => h.clientId, isClientIdPersisted: () => true }))
@@ -131,6 +137,7 @@ function leave(): void {
 beforeEach(() => {
   vi.useFakeTimers()
   localStorage.clear()
+  h.shape = null
   problems.length = 0
   daemon = new FakeDaemon(PROFILE)
   vi.clearAllMocks()
@@ -433,5 +440,245 @@ describe('workspace-scoped settings wait for `workspaces` (the builder and the a
     expect(order.indexOf('workspaces')).toBeLessThan(order.indexOf('settings'))
     expect(scopedOnSot()).toEqual({ wb2: { files: { root: '/set-on-B' } } })
     expect(executor!.status().profile).toBe('synced')
+  })
+})
+
+/* ─── P3e: settings ordinal 3 → 4 (newtab `profiles` → `presets`) — coexistence, no ping-pong ─── */
+
+const NEWTAB = 'purdex-newtab-layout'
+type Layout = Record<'3col' | '2col' | '1col', { enabled: boolean; columns: string[][] }>
+const LAYOUT_A: Layout = { '3col': { enabled: true, columns: [['x'], ['y'], []] }, '2col': { enabled: true, columns: [['y'], ['x']] }, '1col': { enabled: true, columns: [['x', 'y']] } }
+const LAYOUT_C: Layout = { '3col': { enabled: false, columns: [[], [], ['z']] }, '2col': { enabled: true, columns: [['z'], []] }, '1col': { enabled: true, columns: [['z']] } }
+const LAYOUT_B: Layout = { '3col': { enabled: true, columns: [['b'], [], []] }, '2col': { enabled: false, columns: [['b'], []] }, '1col': { enabled: true, columns: [['b']] } }
+
+/** The two REAL settings shapes: this build's, and the ordinal-3 one (the same list with `presets` swapped back to `profiles`). */
+async function realSettingsShapes(): Promise<{ current: [string, number]; legacy: [string, number] }> {
+  const legacyList = PROJECTIONS.settings.map((p) => (p === `${NEWTAB}.presets` ? `${NEWTAB}.profiles` : p))
+  expect(legacyList).not.toEqual(PROJECTIONS.settings)
+  expect(SECTION_SCHEMA_ORDINAL.settings).toBe(4)
+  return { current: [await fingerprintOf(PROJECTIONS.settings), 4], legacy: [await fingerprintOf(legacyList), 3] }
+}
+
+function shapeWithSettings(settings: [string, number]): NonNullable<typeof h.shape> {
+  return { hosts: ['fp-hosts', 1], settings, workspaces: ['fp-workspaces', 1], tabs: ['fp-tabs', 1] }
+}
+
+const settingsPuts = (from: number, clientId?: string) =>
+  daemon.writes.slice(from).filter((w) => w.op === 'put' && w.key === 'settings' && (clientId === undefined || w.clientId === clientId))
+
+const settingsProblems = () => problems.filter((p) => p.section === 'settings')
+
+function resetNewTab(): void {
+  useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
+}
+
+describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordinal-3 client wrote (newtab `profiles`)', () => {
+  let shapes: Awaited<ReturnType<typeof realSettingsShapes>>
+
+  beforeEach(async () => {
+    shapes = await realSettingsShapes()
+    resetNewTab()
+  })
+  afterEach(resetNewTab)
+
+  /** What an ordinal-3 client writes: the same stores, the newtab layout under `profiles`, its fingerprint and ordinal 3. */
+  async function oldClientWritesSettings(layout: Layout, writer = 'c_cccccccccccc'): Promise<{ rev: number; hash: string }> {
+    const cur = daemon.rows.get('settings')!
+    const payload = JSON.parse(JSON.stringify({ ...(cur.payload as Record<string, unknown>), [NEWTAB]: { profiles: layout } })) as Record<string, unknown>
+    const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: shapes.legacy[0], ordinal: shapes.legacy[1], writer }
+    daemon.rows.set('settings', row)
+    return { rev: row.rev, hash: row.hash! }
+  }
+
+  /** The settings row the SOT ends with: ordinal 4, this build's fingerprint, the layout under `presets`. */
+  function expectSotUpgraded(layout: Layout, writer: string): void {
+    const row = daemon.rows.get('settings')!
+    expect(row).toMatchObject({ fingerprint: shapes.current[0], ordinal: 4, writer })
+    expect((row.payload as Record<string, unknown>)[NEWTAB]).toEqual({ presets: layout })
+  }
+
+  /** Over the next 60 s of fake time nothing more is written for settings and the profile is synced. */
+  async function expectQuiet(): Promise<void> {
+    const before = daemon.writes.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(settingsPuts(before)).toEqual([])
+    expect(daemon.writes.slice(before)).toEqual([])
+    expect(executor!.status().profile).toBe('synced')
+    expect(executor!.status().sections.settings).toBe('synced')
+  }
+
+  it('ATTACH (pull): the old row lands under presets, ONE settings PUT upgrades the SOT to ordinal 4, then silence', async () => {
+    // A — an old client — has pushed its world; its settings row is ordinal 3 with `profiles`
+    h.shape = shapeWithSettings(shapes.legacy)
+    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
+    await attach(A, 'push')
+    leave()
+    await oldClientWritesSettings(LAYOUT_A, A)
+    problems.length = 0
+    resetNewTab()
+    const writesBefore = daemon.writes.length
+
+    h.shape = shapeWithSettings(shapes.current)
+    world(H2, [], [])
+    await attach(B, 'pull')
+
+    expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_A)
+    expect(settingsProblems().map((p) => p.kind)).toEqual(['pull-hash-mismatch'])
+    expect(settingsPuts(writesBefore, B).map((w) => w.outcome)).toEqual(['applied'])
+    expect(daemon.writes.slice(writesBefore).filter((w) => w.key !== 'settings')).toEqual([])
+    expectSotUpgraded(LAYOUT_A, B)
+    await expectQuiet()
+    expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_A)
+  })
+
+  it('REMOTE EVENT while clean: pulled like any other (i-am-newer), ONE PUT, then silence', async () => {
+    h.shape = shapeWithSettings(shapes.current)
+    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+    await attach(B, 'push')
+    expect(executor!.status().profile).toBe('synced')
+    problems.length = 0
+    const writesBefore = daemon.writes.length
+
+    const written = await oldClientWritesSettings(LAYOUT_C)
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'settings', rev: written.rev, hash: written.hash, writerClientId: 'c_cccccccccccc' })
+    for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_C)
+    expect(executor!.status().profile).toBe('synced') // not locked:schema, not locked:invalid
+    expect(settingsProblems().map((p) => p.kind)).toEqual(['pull-hash-mismatch'])
+    expect(settingsPuts(writesBefore).map((w) => w.outcome)).toEqual(['applied'])
+    expectSotUpgraded(LAYOUT_C, B)
+    await expectQuiet()
+  })
+
+  it('CONFLICT answered keep-sot, the SOT side ordinal 3: the SOT layout lands under presets — never undefined, never the defaults', async () => {
+    h.shape = shapeWithSettings(shapes.current)
+    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+    await attach(B, 'push')
+    problems.length = 0
+
+    // the SOT moves (an old client) before B's own edit goes out
+    await oldClientWritesSettings(LAYOUT_C)
+    useNewTabLayoutStore.setState({ presets: LAYOUT_B })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(executor!.status().sections.settings).toBe('locked:conflict')
+
+    const writesBefore = daemon.writes.length
+    const seen: unknown[] = []
+    const unsubscribe = useNewTabLayoutStore.subscribe((s) => seen.push(s.presets))
+    executor!.resolve('settings', 'sot')
+    for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    unsubscribe()
+
+    expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_C)
+    const defaults = useNewTabLayoutStore.getInitialState().presets
+    expect(seen.filter((p) => p === undefined || JSON.stringify(p) === JSON.stringify(defaults))).toEqual([])
+    expect(settingsProblems().filter((p) => p.kind === 'pull-invalid')).toEqual([])
+    expect(settingsPuts(writesBefore).map((w) => w.outcome)).toEqual(['applied'])
+    expectSotUpgraded(LAYOUT_C, B)
+    await expectQuiet()
+  })
+
+  it('RESTART with a persisted conflict whose LOCAL side is an old build\'s payload (profiles), answered keep-local: restoreLocal lands it under presets', async () => {
+    h.shape = shapeWithSettings(shapes.current)
+    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+    await attach(B, 'push')
+    const base = daemon.rows.get('settings')!
+    // what the old build (before the upgrade, same storage) had stashed: its sent snapshot, `profiles` inside
+    const localPayload = JSON.parse(JSON.stringify({ ...(base.payload as Record<string, unknown>), [NEWTAB]: { profiles: LAYOUT_B } })) as Record<string, unknown>
+    const localHash = await hashSection(localPayload)
+    const sot = await oldClientWritesSettings(LAYOUT_C)
+    // the old build goes away (a restart into this build): executor and collector stop, storage stays
+    collector?.stop()
+    executor?.dispose()
+    collector = null
+    executor = null
+    expect(
+      saveConflict(PROFILE, 'settings', { base: { rev: base.rev, hash: base.hash }, currentHash: localHash, conflict: { localHash, sot: { rev: sot.rev, hash: sot.hash } } }, { [localHash]: localPayload }),
+    ).toBe('ok')
+    resetNewTab()
+    problems.length = 0
+    const writesBefore = daemon.writes.length
+    const putCallsBefore = api.putSection.mock.calls.length
+
+    // this build starts over the same storage — no attach direction, the conflict is restored
+    h.clientId = B
+    executor = createExecutor({
+      hostId: M, profileId: PROFILE, isLeader: () => true, isReachable: () => true, autoSync: () => true,
+      onProblem: (p) => problems.push(p), initialDirection: () => null, onInitialSettled: () => undefined,
+    })
+    const ex = executor
+    collector = startCollector({ onSection: (r) => ex.onSection(r) })
+    await collector.primeAll()
+    executor.onReconnected()
+    for (let i = 0; i < 3; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    expect(executor.status().sections.settings).toBe('locked:conflict')
+
+    executor.resolve('settings', 'local')
+    for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_B)
+    expect(settingsProblems()).toEqual([]) // no restore-invalid, no apply-threw
+    // Keep-local pushes the SENT snapshot itself (executor: "the push that follows sends this very
+    // payload") — here the old build's, `profiles` inside, under this build's ordinal 4 — and the
+    // collector's report of the restore then pushes the upcast stores: two PUTs, the SOT ends upgraded.
+    // (The transient row is harmless to an ordinal-4 reader: it is upcast on apply like any other.)
+    const puts = api.putSection.mock.calls.slice(putCallsBefore).filter((c) => c[2] === 'settings').map((c) => c[3] as { payload: Record<string, unknown>; ordinal: number; hash: string })
+    expect(puts.map((b) => [b.payload[NEWTAB], b.ordinal])).toEqual([[{ profiles: LAYOUT_B }, 4], [{ presets: LAYOUT_B }, 4]])
+    expect(puts[0].hash).toBe(localHash)
+    expect(settingsPuts(writesBefore).map((w) => w.outcome)).toEqual(['applied', 'applied'])
+    expectSotUpgraded(LAYOUT_B, B)
+    await expectQuiet()
+    expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_B)
+  })
+})
+
+describe('P3e OLD side: an ordinal-3 client (the real old pair) meets the settings row this build writes (ordinal 4)', () => {
+  let shapes: Awaited<ReturnType<typeof realSettingsShapes>>
+
+  beforeEach(async () => {
+    shapes = await realSettingsShapes()
+    resetNewTab()
+  })
+  afterEach(resetNewTab)
+
+  function renameFirstWorkspace(name: string): void {
+    const { workspaces } = useWorkspaceStore.getState()
+    useWorkspaceStore.setState({ workspaces: workspaces.map((w, i) => (i === 0 ? { ...w, name } : w)) })
+  }
+
+  it('locks the whole profile (locked:schema, sot-is-newer) and writes NOTHING — after the event, after onReconnected, after an edit of another section', async () => {
+    h.shape = shapeWithSettings(shapes.legacy) // the old client
+    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
+    await attach(A, 'push')
+    expect(executor!.status().profile).toBe('synced')
+    const writesBefore = daemon.writes.length
+
+    // this build (another machine) writes settings: its real pair, the layout under presets
+    const cur = daemon.rows.get('settings')!
+    const payload = JSON.parse(JSON.stringify({ ...(cur.payload as Record<string, unknown>), [NEWTAB]: { presets: LAYOUT_B } })) as Record<string, unknown>
+    const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: shapes.current[0], ordinal: shapes.current[1], writer: B }
+    daemon.rows.set('settings', row)
+    const revsAfterNewWrite = daemon.revs()
+
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'settings', rev: row.rev, hash: row.hash!, writerClientId: B })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(executor!.status()).toMatchObject({
+      profile: 'locked:schema',
+      schemaLock: { section: 'settings', verdict: 'sot-is-newer', mine: { fingerprint: shapes.legacy[0], ordinal: 3 }, sot: { fingerprint: shapes.current[0], ordinal: 4 } },
+    })
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+
+    executor!.onReconnected()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(executor!.status().profile).toBe('locked:schema')
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+
+    renameFirstWorkspace('renamed-under-the-lock')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(executor!.status().profile).toBe('locked:schema')
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+    expect(daemon.revs()).toEqual(revsAfterNewWrite)
+    expect(daemon.rows.get('settings')).toEqual(row) // the ordinal-4 row is left exactly as written
   })
 })
