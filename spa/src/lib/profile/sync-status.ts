@@ -520,6 +520,8 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
   let wasLeader = false
   /** What the record in storage says, as far as THIS leader knows; null = publish whatever comes next. */
   let publishedSignature: string | null = null
+  /** An oversized status has been logged since the last record that fitted (`publish`). */
+  let oversizeLogged = false
   let publishTimer: ReturnType<typeof setTimeout> | null = null
   let staleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -542,7 +544,21 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     const local = deps.local()
     if (!local.leader) return // stood down inside the throttle window: the record is the next leader's
     const record: PublishedStatus = { at: deps.now(), leader: deps.windowId, master: tag, status: local.status, blocked: local.blocked, problems: local.problems }
-    const { text } = serializeToFit(record)
+    const { text, fits } = serializeToFit(record)
+    if (!fits) {
+      // Not even without problems and detail. Writing nothing new would leave the LAST record standing — and while
+      // this leader holds the lease a follower never calls it stale: it would show an old state as the current
+      // one. So the record goes; followers then say "not known yet", which is true. Logged once per stretch, and
+      // the signature is taken, so the same content is not serialized again on every refresh.
+      removeItem(STATUS_KEY)
+      publishedSignature = publishable(local)
+      if (!oversizeLogged) {
+        oversizeLogged = true
+        console.warn(`[profile/sync-status] the status does not fit ${MAX_PUBLISHED_STATUS_CHARS} characters even without problems and detail (${text.length}); not published`)
+      }
+      return
+    }
+    oversizeLogged = false
     try {
       localStorage.setItem(STATUS_KEY, text)
       publishedSignature = publishable(local)

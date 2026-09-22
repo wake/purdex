@@ -342,6 +342,48 @@ describe('the leader keeps a real record under MAX_PUBLISHED_STATUS_CHARS: it de
     expect(b.snapshot().status!.locks).toEqual(status!.locks)
     expect(b.snapshot().status!.sections).toEqual(status!.sections)
   })
+
+  it('not even (c) fits: the record is REMOVED — followers say "not known yet", never an old record as current — logged once, not retried', async () => {
+    const MAX = await cap()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    vi.advanceTimersByTime(250)
+    const b = await openWindow('B')
+    deliver()
+    expect(b.snapshot()).toMatchObject({ remote: true, status: SYNCED }) // a record that fitted was there
+
+    const absurd = manyLocked(3000)
+    expect(size({ status: { ...absurd!, detail: {} }, problems: [] })).toBeGreaterThan(MAX)
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem')
+    a.set({ status: absurd })
+    vi.advanceTimersByTime(250)
+    expect(localStorage.getItem(STATUS)).toBeNull()
+    expect(setItem.mock.calls.filter(([k]) => k === STATUS)).toEqual([])
+    expect(removeItem.mock.calls.filter(([k]) => k === STATUS)).toHaveLength(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    // B hears of it (a real browser tells only the OTHER windows; here every channel shares one realm, so B is asked directly)
+    b.channel.refresh()
+    expect(b.snapshot()).toMatchObject({ status: null, remote: false, stale: false, leader: false })
+
+    // the same content again: nothing is tried again, nothing logged again
+    a.channel.refresh()
+    vi.advanceTimersByTime(1_000)
+    expect(removeItem.mock.calls.filter(([k]) => k === STATUS)).toHaveLength(1)
+    // another oversized change: removed again (still nothing there), but not logged again
+    a.set({ status: { ...absurd!, profile: 'locked:reset' } })
+    vi.advanceTimersByTime(250)
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    // it fits again: written as ever
+    a.set({ status: PENDING })
+    vi.advanceTimersByTime(250)
+    expect(published()).toMatchObject({ status: PENDING })
+    // and a new oversized stretch is logged again
+    a.set({ status: absurd })
+    vi.advanceTimersByTime(250)
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
 })
 
 /* ─── followers read ─── */
