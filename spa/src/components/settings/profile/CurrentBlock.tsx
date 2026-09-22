@@ -59,7 +59,7 @@ import { ProfileWizard } from './wizard/ProfileWizard'
 const BTN =
   'shrink-0 flex items-center gap-1.5 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
 const BADGE = 'rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-secondary'
-/** A state the user should know of, not a fault: the tone of `DeviceStateSection`'s "offline". */
+/** A state the user should know of, not a fault: yellow, never red — the tone of the Resolve rows' notices too. */
 const NOTICE = 'mt-2 text-xs text-yellow-500'
 const PROBLEMS_SHOWN = 5
 
