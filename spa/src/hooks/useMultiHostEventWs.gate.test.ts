@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
+import { __resetForTests, currentConn, heldVersion } from '../lib/rebuild/session-version'
 
 vi.mock('../lib/host-connection', () => ({
   checkHealth: vi.fn(async () => ({ daemon: 'connected', latency: 3, ticket: 'tk' })),
@@ -35,6 +36,7 @@ let sockets: FakeSocket[] = []
 const attachReady = () => useHostStore.getState().runtime[HOST]?.attachReady
 
 beforeEach(() => {
+  __resetForTests()
   sockets = []
   vi.stubGlobal('WebSocket', FakeSocket)
   useHostStore.setState({
@@ -81,6 +83,79 @@ describe('useMultiHostEventWs attach gate', () => {
     expect(attachReady()).toBe(false)
 
     view.unmount()
+  })
+
+  // #1255 SPA spec §3.3 (codex #5): a post-switch refresh reads the gate and
+  // captures `conn` in one step, so by the time anything can see the gate
+  // closed, `conn` must already name a different connection.
+  it('onClose moves conn BEFORE the gate closes', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    act(() => { sockets[0].onopen?.() })
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'sessions', session: '', value: '[]' })) })
+    const before = currentConn(HOST)
+    let connWhenGateClosed: number | undefined
+    const unsub = useHostStore.subscribe((s, prev) => {
+      if (prev.runtime[HOST]?.attachReady === true && s.runtime[HOST]?.attachReady === false) {
+        connWhenGateClosed = currentConn(HOST)
+      }
+    })
+
+    act(() => { sockets[0].onclose?.() })
+    unsub()
+    expect(connWhenGateClosed).toBeDefined()
+    expect(connWhenGateClosed).not.toBe(before)
+    expect(attachReady()).toBe(false)
+
+    view.unmount()
+  })
+
+  it('onOpen moves conn', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    const before = currentConn(HOST)
+    act(() => { sockets[0].onopen?.() })
+    expect(currentConn(HOST)).not.toBe(before)
+    view.unmount()
+  })
+
+  it('a stale versioned frame reaching the hook is not reconciled', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    const epoch = '9f3c1a0b7d2e4c61'
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'sessions', session: '', value: '[]', epoch, seq: 7 })) })
+    expect(heldVersion(HOST)).toEqual({ epoch, seq: 7 })
+    const replaceHost = useSessionStore.getState().replaceHost as ReturnType<typeof vi.fn>
+    replaceHost.mockClear()
+
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'sessions', session: '', value: '[]', epoch, seq: 6 })) })
+    expect(replaceHost).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it('tearing an entry down (host removed, unmount) forgets its held version and moves conn', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'sessions', session: '', value: '[]', epoch: '9f3c1a0b7d2e4c61', seq: 7 })) })
+    const before = currentConn(HOST)
+
+    act(() => { useHostStore.setState({ hostOrder: [] }) })
+    expect(heldVersion(HOST)).toBeNull()
+    expect(currentConn(HOST)).not.toBe(before)
+
+    const afterRemove = currentConn(HOST)
+    view.unmount()
+    expect(currentConn(HOST)).toBe(afterRemove) // entry already gone: nothing left to tear down
+  })
+
+  it('unmount tears down every live entry', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'sessions', session: '', value: '[]', epoch: '9f3c1a0b7d2e4c61', seq: 7 })) })
+    const before = currentConn(HOST)
+    view.unmount()
+    expect(heldVersion(HOST)).toBeNull()
+    expect(currentConn(HOST)).not.toBe(before)
   })
 
   it('leaves the gate closed when the payload cannot be parsed', async () => {

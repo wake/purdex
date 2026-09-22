@@ -10,10 +10,12 @@ import { dispatchBackupWsEvent } from '../lib/storage-backup/backup-ws-dispatch'
 import { dispatchProfileWsEvent } from '../lib/profile/profile-ws-dispatch'
 import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { closeAttachGate } from '../lib/rebuild/attach-gate'
-import { provenanceBindings, reconcileHostSessions } from '../lib/rebuild/reconcile-host'
+import { provenanceBindings } from '../lib/rebuild/reconcile-host'
+import { connectionClosed, connectionOpened, forgetHost } from '../lib/rebuild/session-version'
+import { handleSessionsFrame } from '../lib/rebuild/ws-sessions'
 import { runRevivePassAll } from '../lib/rebuild/revive'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
-import { hostWsUrl, fetchWsTicket, type Session } from '../lib/host-api'
+import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
 
@@ -43,6 +45,7 @@ export function useMultiHostEventWs() {
       if (!currentIds.has(hostId)) {
         entry.conn.close()
         entry.sm.stop()
+        forgetHost(hostId)
         entries.delete(hostId)
       }
     }
@@ -63,6 +66,7 @@ export function useMultiHostEventWs() {
       if (existing) {
         existing.conn.close()
         existing.sm.stop()
+        forgetHost(hostId) // another endpoint may be another daemon: nothing held carries over
       }
 
       // Create new SM + WS for this host
@@ -90,6 +94,9 @@ export function useMultiHostEventWs() {
           if (result.daemon === 'connected' && connRef.current) {
             // A new connection starts here; nothing it will say has arrived
             // yet, so the pane's binding is unverified again (spec §4.6).
+            // The old socket is retired without an `onClose`: move `conn`
+            // first, then close the gate (#1255 SPA spec §3.3).
+            connectionClosed(hostId)
             closeAttachGate(hostId)
             if (result.ticket) {
               connRef.current.reconnectWithTicket(result.ticket)
@@ -106,10 +113,8 @@ export function useMultiHostEventWs() {
         wsUrl,
         (event) => {
           if (event.type === 'sessions') {
-            try {
-              const data: Session[] = JSON.parse(event.value)
-              reconcileHostSessions(hostId, data)
-            } catch { /* ignore */ }
+            // Ordered by the list's version when the daemon sends one (#1255).
+            handleSessionsFrame(hostId, event)
             return
           }
           if (event.type === 'hook') {
@@ -169,6 +174,10 @@ export function useMultiHostEventWs() {
         },
         // onClose — trigger SM health check (no auto-reconnect)
         () => {
+          // `conn` moves BEFORE the gate closes, in this same synchronous
+          // callback (#1255 SPA spec §3.3, codex #5): whoever sees the gate
+          // closed also sees a connection generation no fetch was sent on.
+          connectionClosed(hostId)
           // Immediately, not on the next open: from here on nothing confirms
           // the panes' bindings (spec §4.6).
           useHostStore.getState().setRuntime(hostId, { status: 'reconnecting', attachReady: false })
@@ -176,6 +185,7 @@ export function useMultiHostEventWs() {
         },
         // onOpen
         () => {
+          connectionOpened(hostId)
           useHostStore.getState().setRuntime(hostId, {
             status: 'connected',
             daemonState: 'connected',
@@ -205,9 +215,10 @@ export function useMultiHostEventWs() {
   useEffect(() => {
     const entries = entriesRef.current
     return () => {
-      entries.forEach((entry) => {
+      entries.forEach((entry, hostId) => {
         entry.conn.close()
         entry.sm.stop()
+        forgetHost(hostId)
       })
       entries.clear()
     }
