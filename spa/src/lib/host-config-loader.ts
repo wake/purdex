@@ -1,5 +1,5 @@
 // spa/src/lib/host-config-loader.ts — load host config when a host connects
-// (spec §4.1). Same shape as `device-state/uploader.ts`: one module-level
+// (spec §4.1). One module-level
 // subscription for the app's lifetime, started from main.tsx.
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useHostConfigStore } from '../stores/useHostConfigStore'

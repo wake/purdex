@@ -2,7 +2,7 @@
 // standing invariant rather than a boot step (Profile Sync spec §4.3; P3 plan, P3c-1).
 //
 // `insertTab` (../store.ts) gives every tab it is asked about a workspace. This file is for the tabs nobody
-// asked it about: device-state's restore and merge write `tabOrder` wholesale (lib/device-state, until P4b), a
+// asked it about: a wholesale `tabOrder` write, a
 // pre-P3c device has them persisted, and there may be a producer nobody has found. Whenever the tab world
 // changes and a tab is in no workspace, it is moved into `Unsorted` (`UNSORTED_WORKSPACE_ID`), created only
 // then. It also re-points an `activeWorkspaceId` of `null` — the old "Home" view, which no longer exists — at

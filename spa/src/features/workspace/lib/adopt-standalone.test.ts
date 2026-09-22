@@ -1,6 +1,6 @@
 // spa/src/features/workspace/lib/adopt-standalone.test.ts — "every tab belongs to exactly one workspace" as a
 // STANDING invariant (Profile Sync spec §4.3; P3 plan, P3c-1): whatever puts a tab in `tabOrder` without a
-// workspace — device-state's restore and merge, a producer nobody found — the tab ends up in `Unsorted`.
+// workspace — a wholesale store write, a producer nobody found — the tab ends up in `Unsorted`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'

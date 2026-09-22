@@ -197,7 +197,7 @@ function restore(store: WritableStore, old: Record<string, unknown>): void {
 
 /**
  * Writes the tab store and the workspace store as one unit — either both hold the
- * new world or both hold the old one (`replaceTabSnapshot` is the precedent) —
+ * new world or both hold the old one —
  * keeping `useTabStore`'s four fields consistent: `tabOrder` re-derived,
  * `visitHistory` restricted to surviving tabs, the active tab re-pointed
  * (`repointActiveTab`: the world's own, else the one on screen, else the active

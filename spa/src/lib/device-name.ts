@@ -1,7 +1,6 @@
 // spa/src/lib/device-name.ts — this computer's device name: normalization, the
 // effective-name fallback chain, and the default name (Electron's hostname when
-// available, else "<Browser> · <OS>"). Lives outside `lib/device-state/` so it
-// survives that module's removal (Profile Sync P4b).
+// available, else "<Browser> · <OS>").
 
 export const DEVICE_NAME_MAX_CODE_POINTS = 64
 

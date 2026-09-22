@@ -183,8 +183,8 @@ describe('buildWorkspacesSection', () => {
     })
   })
 
-  // A workspace whose id cannot name a `tabs.<id>` section (importWorkspace /
-  // device-state merge accept any id) can never sync its tabs — and the guard on
+  // A workspace whose id cannot name a `tabs.<id>` section (importWorkspace
+  // accepts any id) can never sync its tabs — and the guard on
   // the receiving side refuses a `workspaces` payload that lists it. It is
   // device-local as a whole: the builder leaves it out.
   it('leaves out a workspace whose id cannot form a tabs.<id> key — from order AND record', () => {

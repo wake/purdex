@@ -251,6 +251,31 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
     })
   })
 
+  // Both clicks land inside one act, before the re-render that would disable the
+  // button, so only the single-flight guard (`busyRef`) can stop the second one.
+  it('busy guard: two synchronous clicks on "Rebuild all" run the batch once', async () => {
+    seedTabs(recordTab('t1', 'p1'))
+    mockedRunBatch.mockReturnValue(new Promise(() => {}))
+    render(<SnapshotsSection hostId="h1" />)
+    const btn = screen.getByTestId('record-rebuild-all-btn')
+    act(() => { btn.click(); btn.click() })
+    await waitFor(() => expect(mockedRunBatch).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    expect(mockedRunBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('busy guard: two synchronous clicks on a single-row Rebuild run it once', async () => {
+    seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { tmuxInstance: '' }))
+    const ensureLoaded = vi.fn(() => new Promise<void>(() => {}))
+    useHostConfigStore.setState({ ensureLoaded })
+    render(<SnapshotsSection hostId="h1" />)
+    const btn = screen.getByTestId('record-attention-rebuild-p2')
+    act(() => { btn.click(); btn.click() })
+    await waitFor(() => expect(ensureLoaded).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    expect(ensureLoaded).toHaveBeenCalledTimes(1)
+  })
+
   it('disables "Rebuild all" while another owner holds the operation lock', () => {
     seedTabs(recordTab('t1', 'p1'))
     useRebuildStore.getState().acquireOperationLock('rebuild:p9')

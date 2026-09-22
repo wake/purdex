@@ -53,15 +53,14 @@ export interface RebuildOperation {
  * `runBatchRebuild` calls both name themselves `rebuild:batch`, so admitting a
  * second acquire on a name match let them interleave — and the first to finish
  * then dropped the lock while the second was still awaiting, opening the door
- * to a legacy snapshot restore. So a grant is identified by an unforgeable
+ * to any other owner. So a grant is identified by an unforgeable
  * symbol minted at the moment the lock was taken, and both nesting and release
  * compare THAT.
  *
  * Nesting is asked for, never inferred: a caller that already holds a grant
  * passes it back in, and gets a grant sharing the holder's `id` with
- * `outermost: false`, whose release is a no-op. That is what lets
- * `undoLastRestore` → `restoreAll` nest without the inner call unlocking the
- * world underneath the caller still relying on it.
+ * `outermost: false`, whose release is a no-op. That is what lets a nested
+ * call run without unlocking the world underneath the caller still relying on it.
  */
 export interface OperationLockGrant {
   readonly owner: string
@@ -74,9 +73,8 @@ interface RebuildState {
   operations: Record<string, RebuildOperation>
   /**
    * The single global operation lock (spec §4.11). Everything that creates
-   * tmux sessions or rewrites the tab tree — the rebuild engine and all five
-   * legacy snapshot actions — passes through it, so a legacy restore can never
-   * replace the tab snapshot underneath an in-flight rebuild's re-point.
+   * tmux sessions or rewrites the tab tree passes through it, so nothing can
+   * replace the tab tree underneath an in-flight rebuild's re-point.
    */
   lockedBy: string | null
   /**

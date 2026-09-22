@@ -16,8 +16,7 @@
 // can be marked `tmux-restarted` merely because its lookup failed once).
 // `mode` is not consulted: it is not part of the binding, and since P-D.3
 // every live session is attached as a terminal whatever a pre-P-D.2 daemon
-// reports there (the same policy as device-state reattach and snapshot
-// restore — codex F1 on P-D.3a).
+// reports there (codex F1 on P-D.3a).
 //
 // `reviveAllowed` is the last check before a decision is applied: it refuses
 // a pane whose current-binding operation is still running (unreachable under

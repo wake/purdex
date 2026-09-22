@@ -24,10 +24,6 @@
 // So the host's liveness is a display-only overlay ({@link recordHealth}): it
 // can only mask a row as ⚪/⏳, never turn a 🟢 into a 🔴. What the batch acts
 // on is the row-intrinsic verdict, and nothing else.
-//
-// The legacy captured-snapshot table above keeps its own `computeHealth`: its
-// rows are `SessionMeta`, not panes, so they have no `terminated` flag and no
-// generation to compare — the live list is all the evidence it has.
 import { collectLeaves } from '../pane-tree'
 import type { PaneRebuildRecord, Tab, TerminatedReason } from '../../types/tab'
 

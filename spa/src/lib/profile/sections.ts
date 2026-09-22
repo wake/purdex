@@ -97,7 +97,7 @@ export function buildHostsSection(s: HostsSource): HostsPayload {
 /**
  * Can this workspace id name a `tabs.<id>` section? (The daemon's key charset;
  * `tabsSectionKey` throws on the same ids — this asks without throwing.)
- * `importWorkspace` and a device-state merge accept any id, so the answer can be no.
+ * `importWorkspace` accepts any id, so the answer can be no.
  */
 export function isSyncableWorkspaceId(id: string): boolean {
   return workspaceIdOf(`tabs.${id}`) !== null

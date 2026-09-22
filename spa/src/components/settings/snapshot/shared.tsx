@@ -33,7 +33,7 @@ export function errMessage(e: unknown): string {
 export type HostLive = 'loading' | 'offline' | Session[]
 
 /**
- * Four-state (plus loading) health, shared by both tables. The per-tab records
+ * Four-state (plus loading) health. The per-tab records
  * table gets its verdict from `lib/rebuild/eligibility`, which is also what
  * "Rebuild all" acts on, so a badge and a button can never disagree.
  */
@@ -63,8 +63,7 @@ const HEALTH_COLOR: Record<Health, string> = {
 }
 
 /**
- * The page's one health indicator, so the captured-snapshot table and the
- * per-tab records table cannot drift apart in icon, colour or wording.
+ * The page's one health indicator (icon, colour and wording).
  */
 export function HealthBadge({
   health,
@@ -117,15 +116,12 @@ export function StatusLine({ status }: { status: Status }) {
 }
 
 /**
- * The single-flight guard + global operation lock + status line every snapshot
+ * The single-flight guard + global operation lock + status line every rebuild
  * action on a page shares (spec §4.11 of the tab-rebuild work). Exactly ONE
- * instance per page: the host-scoped section owns it and hands it to the
- * client-scoped block, so capture and a host rebuild can never interleave
- * (host-launcher plan amendment A1).
+ * instance per page.
  *
  * `busyRef` (not state) is the guard, so two synchronous clicks — which share
- * one render's `busy` closure — still only fire one action. It also covers
- * Capture and the cwd edit, neither of which takes the global lock.
+ * one render's `busy` closure — still only fire one action.
  */
 export function useSnapshotActions(t: TFn) {
   const [busy, setBusy] = useState(false)

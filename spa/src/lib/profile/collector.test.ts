@@ -16,7 +16,7 @@ import { PROJECTIONS } from './projections'
 import { UNSYNCED_SETTINGS_KEYS, startCollector, watchUnsyncedStores, type Collector, type SectionReport } from './collector'
 
 // A `crypto.subtle` digest resolves off the microtask queue and fake timers
-// cannot flush it (device-state/uploader.test.ts:23-27): the structural key is
+// cannot flush it: the structural key is
 // an equivalent identity. `gate` lets one test hold a chosen hash back.
 const h = vi.hoisted(() => ({
   gate: null as ((payload: unknown) => Promise<void> | undefined) | null,
