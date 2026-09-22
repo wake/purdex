@@ -39,6 +39,13 @@ describe('Settings › Profile', () => {
     expect(screen.getByText(en['settings.profile.description'])).toBeInTheDocument()
   })
 
+  it('opens with this computer\'s name, before any block', () => {
+    render(<ProfileSection />)
+    const name = screen.getByRole('textbox', { name: en['settings.profile.device_name_aria'] })
+    expect(screen.getByText(en['settings.profile.device_name'])).toBeInTheDocument()
+    expect(name.compareDocumentPosition(screen.getByTestId('profile-current-block')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('lists the profiles of this device — with nothing set up, the master alone', () => {
     render(<ProfileSection />)
     expect(screen.getByTestId('profile-local-block')).toBeInTheDocument()

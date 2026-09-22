@@ -7,6 +7,7 @@
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useProfileStore } from '../../../stores/useProfileStore'
 import { CurrentBlock } from './CurrentBlock'
+import { DeviceNameField } from './DeviceNameField'
 import { LocalProfilesBlock } from './LocalProfilesBlock'
 import { SotProfilesBlock } from './SotProfilesBlock'
 import { useSotProfiles } from './useSotProfiles'
@@ -25,6 +26,7 @@ export function ProfileSection() {
     <div data-testid="profile-section">
       <h2 className="text-lg text-text-primary">{t('settings.section.profile')}</h2>
       <p className="text-xs text-text-secondary">{t('settings.profile.description')}</p>
+      <DeviceNameField />
       <CurrentBlock masterName={masterName} />
       <LocalProfilesBlock />
       {hostId !== null && profileId !== null && sot.view !== null && (
