@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.426] - 2026-09-23
+
+### Refactor：拆掉 device-state 與 workspace snapshot（Profile Sync P4b，#1314–#1320 SPA、#1321 daemon）
+
+device-state 備份（每台 client 上傳結構快照、可取代或合併）與 workspace snapshot（手動擷取／還原）都已被 Profile Sync 取代。
+依定案 14，Host › Snapshots 只留 rebuild 紀錄。
+
+- **SPA**（約 9,100 行）：`lib/device-state/`、`components/settings/device-state/`、`useDeviceStateStore`、`lib/snapshot/`，
+  Host › Snapshots 的 tmux／tabs／client snapshot 區塊，以及開機時的 device-state uploader；兩個語系檔各刪約 60 個 key。
+- **使用者看得到的變動**：裝置名稱欄位（Profile Sync 顯示的那個名稱唯一的編輯處）搬到 **Settings › Profile 最上方**，
+  原本在 dev host 的 Host › Snapshots 裡。
+- **保留**：開機時仍解析預設裝置名稱（原本是 uploader 的副作用；拿掉的話名稱欄位會一直顯示「Browser」、wizard 也可能把它寫進 profile——codex R1 抓到）；
+  `purdex-device-state` 這個 key 仍是 `useDeviceNameStore` 的存放處。
+- **修正**：Host › Snapshots 的 live-session 查詢改以 host 與每次查詢的身分比對——同一台 host 的分頁清空再出現時，不再沿用上一次的連線狀態。
+- **daemon**：`internal/module/devicestate/` 與四條 `/api/device-state` 路由（`TestRemovedRoutesAre404` 證明經過真正的 mux 都是 404）。
+- **刻意留下的**：localStorage `purdex-workspace-snapshot(-prev)`、daemon 的 `device_state.db`——都已無人讀寫，清理追蹤 #1303。
+- **部署**：daemon 與 alpha.424（P4a，#1305）的變更一起 deploy 到 mlab 與 air26。
+
 ## [1.0.0-alpha.425] - 2026-09-23
 
 ### Refactor：新分頁版面的「profile」改名為「preset」（Profile Sync P3e，#1291、#1297）
