@@ -6,7 +6,13 @@
 // switched the active tab. The still-mounted GlobalSettingsPage used to read
 // that foreign URL as "/settings with no section" and rewrite it back to
 // /settings/<section>, which route-sync then answered by re-activating the
-// global tab — "Maximum update depth exceeded".
+// global tab — "Maximum update depth exceeded". A kept-alive (inactive)
+// instance did the same on every switch to another tab.
+//
+// The shell below is the production wiring App uses — useRouteSync + the real
+// TabContent (useTabAlivePool + PaneLayoutRenderer + module registry) — with
+// the real SettingsPage registered as the settings pane renderer, so the
+// keep-alive cases depend on the production alive pool, not on the test.
 import { vi } from 'vitest'
 
 vi.mock('../features/workspace/lib/icon-path-cache', () => ({
@@ -21,15 +27,18 @@ vi.mock('../features/workspace/components/WorkspaceSettingsPage', () => ({
   ),
 }))
 
-import { describe, it, expect, beforeEach } from 'vitest'
-import { act, render } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
 import { useRouteSync } from './useRouteSync'
 import { useTabStore } from '../stores/useTabStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useWorkspaceStore } from '../features/workspace'
 import { getPrimaryPane } from '../lib/pane-tree'
+import { clearModuleRegistry, registerModule } from '../lib/module-registry'
+import { TabContent } from '../components/TabContent'
 import { SettingsPage, resetLastSection } from '../components/SettingsPage'
 import { registerSettingsSection, clearSettingsSectionRegistry } from '../lib/settings-section-registry'
 import { clearContributions } from '../lib/settings-contribution-registry'
@@ -51,35 +60,30 @@ function makeTab(id: string, content: PaneContent): Tab {
   }
 }
 
-const Appearance = () => <div>AppearanceBody</div>
+const Appearance = () => <div data-testid="global-settings-body">AppearanceBody</div>
 const Terminal = () => <div>TerminalBody</div>
 
-/**
- * Mirrors what TabContent + PaneLayoutRenderer mount: the active tab's
- * settings pane, plus (when `keepAlive`) every other settings tab as a hidden
- * inactive instance — the keepAliveCount > 0 pool.
- */
-function Harness({ keepAlive }: { keepAlive: boolean }) {
+/** App.tsx's routing shell: useRouteSync + TabContent over every tab. */
+function Shell() {
   useRouteSync()
   const tabs = useTabStore((s) => s.tabs)
+  const tabOrder = useTabStore((s) => s.tabOrder)
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const ids = keepAlive ? Object.keys(tabs) : activeTabId ? [activeTabId] : []
   return (
-    <>
-      {ids.map((id) => {
-        const tab = tabs[id]
-        if (!tab) return null
-        const pane = getPrimaryPane(tab.layout)
-        if (pane.content.kind !== 'settings') return null
-        return <SettingsPage key={id} pane={pane} isActive={id === activeTabId} />
-      })}
-    </>
+    <TabContent
+      activeTab={activeTabId ? tabs[activeTabId] ?? null : null}
+      allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
+    />
   )
 }
 
-function seed(extraTabs: Tab[] = []) {
+function seed() {
   const globalTab = makeTab(GLOBAL_TAB, { kind: 'settings', scope: 'global' })
-  const all = [globalTab, ...extraTabs]
+  // A heavy (tmux-session) tab: bound by keepAliveCount like settings.
+  const sessionTab = makeTab(SESSION_TAB, {
+    kind: 'tmux-session', hostId: 'h', sessionCode: 's', mode: 'terminal', cachedName: '', tmuxInstance: '',
+  })
+  const all = [globalTab, sessionTab]
   useTabStore.setState({
     tabs: Object.fromEntries(all.map((t) => [t.id, t])),
     tabOrder: all.map((t) => t.id),
@@ -95,14 +99,25 @@ function seed(extraTabs: Tab[] = []) {
   })
 }
 
-function mount(path: string, keepAlive = false) {
+/** Mounts the shell; every setLocation the app issues is recorded in `navs`. */
+function mount(path: string) {
   const mem = memoryLocation({ path, record: true })
+  const navs: { to: string; replace: boolean }[] = []
+  const hook = () => {
+    const [loc, nav] = mem.hook()
+    const recording = (to: string, opts?: { replace?: boolean }) => {
+      navs.push({ to, replace: !!opts?.replace })
+      nav(to, opts)
+    }
+    return [loc, recording] as ReturnType<typeof mem.hook>
+  }
   const view = render(
-    <Router hook={mem.hook}>
-      <Harness keepAlive={keepAlive} />
+    <Router hook={hook}>
+      <Shell />
     </Router>,
   )
-  return { ...view, mem, current: () => mem.history[mem.history.length - 1] }
+  const current = () => mem.history[mem.history.length - 1]
+  return { ...view, mem, navs, current }
 }
 
 function activeContent(): PaneContent | null {
@@ -111,22 +126,35 @@ function activeContent(): PaneContent | null {
   return tab ? getPrimaryPane(tab.layout).content : null
 }
 
-describe('useRouteSync × GlobalSettingsPage (#1326)', () => {
+describe('useRouteSync × GlobalSettingsPage in the real TabContent shell (#1326)', () => {
   beforeEach(() => {
     resetLastSection()
     clearSettingsSectionRegistry()
     clearContributions()
+    clearModuleRegistry()
+    registerModule({ id: 'settings', name: 'Settings', panes: [{ kind: 'settings', component: SettingsPage }] })
+    registerModule({
+      id: 'session',
+      name: 'Session',
+      panes: [{ kind: 'tmux-session', component: () => <div data-testid="terminal-stub" /> }],
+    })
     registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: Appearance })
     registerSettingsSection({ id: 'terminal', label: 'Terminal', order: 1, component: Terminal })
     dispatchSettingsContributions([])
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+    useUISettingsStore.setState({ keepAliveCount: 0, keepAlivePinned: false })
+    seed()
   })
 
-  it('navigating to /w/<ws>/settings while global Settings is active settles on the workspace settings tab', () => {
-    seed()
-    const { mem, current } = mount('/settings/appearance')
+  afterEach(() => {
+    clearModuleRegistry()
+    useUISettingsStore.setState({ keepAliveCount: 0 })
+  })
+
+  it('keepAliveCount=0: navigating to /w/<ws>/settings from global Settings settles with no replace', () => {
+    const { mem, navs, current } = mount('/settings/appearance')
     expect(current()).toBe('/settings/appearance')
-    const before = mem.history.length
+    navs.length = 0
 
     act(() => {
       mem.navigate(`/w/${WS_X}/settings`)
@@ -135,34 +163,47 @@ describe('useRouteSync × GlobalSettingsPage (#1326)', () => {
     expect(current()).toBe(`/w/${WS_X}/settings`)
     expect(activeContent()).toEqual({ kind: 'settings', scope: { workspaceId: WS_X } })
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(WS_X)
-    // No ping-pong: only the push itself landed in history.
-    expect(mem.history.length - before).toBeLessThanOrEqual(1)
+    expect(screen.getByTestId('workspace-settings-mock').textContent).toBe(`ws:${WS_X}`)
+    expect(navs).toEqual([])
   })
 
-  it('a kept-alive (inactive) global Settings pane does not pull the URL back when another tab is activated', () => {
-    seed([
-      makeTab(SESSION_TAB, {
-        kind: 'tmux-session', hostId: 'h', sessionCode: 's', mode: 'terminal', cachedName: '', tmuxInstance: '',
-      }),
-    ])
-    const { current } = mount('/settings/appearance', true)
+  it('keepAliveCount>0: navigating to /w/<ws>/settings settles while the global Settings pane stays mounted', () => {
+    useUISettingsStore.setState({ keepAliveCount: 1 })
+    const { mem, navs, current } = mount('/settings/appearance')
+    navs.length = 0
+
+    act(() => {
+      mem.navigate(`/w/${WS_X}/settings`)
+    })
+
+    expect(current()).toBe(`/w/${WS_X}/settings`)
+    expect(activeContent()).toEqual({ kind: 'settings', scope: { workspaceId: WS_X } })
+    // The previously-active global pane is kept alive (inactive) by the real pool.
+    expect(screen.getByTestId('global-settings-body')).toBeTruthy()
+    expect(navs).toEqual([])
+  })
+
+  it('keepAliveCount>0: switching from global Settings to a heavy tab settles on that tab with a single replace', () => {
+    useUISettingsStore.setState({ keepAliveCount: 1 })
+    const { navs, current } = mount('/settings/appearance')
     expect(current()).toBe('/settings/appearance')
+    navs.length = 0
 
     act(() => {
       useTabStore.getState().setActiveTab(SESSION_TAB)
     })
 
+    expect(screen.getByTestId('terminal-stub')).toBeTruthy()
+    // Inactive global Settings pane is still mounted by the production alive pool.
+    expect(screen.getByTestId('global-settings-body')).toBeTruthy()
     expect(useTabStore.getState().activeTabId).toBe(SESSION_TAB)
     expect(current()).toBe(`/t/${SESSION_TAB}/terminal`)
+    expect(navs).toEqual([{ to: `/t/${SESSION_TAB}/terminal`, replace: true }])
   })
 
-  it('re-activating a kept-alive global Settings pane restores its section URL', () => {
-    seed([
-      makeTab(SESSION_TAB, {
-        kind: 'tmux-session', hostId: 'h', sessionCode: 's', mode: 'terminal', cachedName: '', tmuxInstance: '',
-      }),
-    ])
-    const { current } = mount('/settings/appearance', true)
+  it('keepAliveCount>0: re-activating the kept-alive global Settings pane restores its section URL', () => {
+    useUISettingsStore.setState({ keepAliveCount: 1 })
+    const { current } = mount('/settings/appearance')
     act(() => {
       useTabStore.getState().setActiveTab(SESSION_TAB)
     })
