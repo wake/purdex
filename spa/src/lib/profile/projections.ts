@@ -90,7 +90,7 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
  */
 export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   hosts: 1,
-  settings: 4, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings); 4: newtab `profiles` → `presets`
+  settings: 4, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings); 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`)
   workspaces: 1,
   tabs: 1,
 }
