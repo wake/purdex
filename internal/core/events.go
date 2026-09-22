@@ -15,6 +15,10 @@ type HostEvent struct {
 	Type    string `json:"type"`
 	Session string `json:"session"`
 	Value   string `json:"value"`
+	// Epoch/Seq version a "sessions" frame (see the session module's
+	// versionedList). omitempty keeps every other frame byte-identical.
+	Epoch string `json:"epoch,omitempty"`
+	Seq   uint64 `json:"seq,omitempty"`
 }
 
 // EventSubscriber wraps a WebSocket connection with a buffered send channel.
@@ -110,11 +114,17 @@ func (eb *EventsBroadcaster) Remove(sub *EventSubscriber) {
 // Broadcast sends a JSON event to all subscribers.
 // Messages are sent non-blocking; slow subscribers that have a full buffer are dropped.
 func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
-	msg, err := json.Marshal(HostEvent{
+	eb.BroadcastEvent(HostEvent{
 		Type:    eventType,
 		Session: session,
 		Value:   value,
 	})
+}
+
+// BroadcastEvent sends a fully-formed HostEvent (including optional version
+// fields) to all subscribers, with the same non-blocking semantics as Broadcast.
+func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
+	msg, err := json.Marshal(ev)
 	if err != nil {
 		log.Printf("events: marshal error: %v", err)
 		return

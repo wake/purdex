@@ -323,3 +323,40 @@ func TestRegisterCoreRoutes(t *testing.T) {
 	// gorilla/websocket returns 400 for non-WS requests, not 404
 	assert.NotEqual(t, http.StatusNotFound, rec.Code)
 }
+
+// Broadcast frames must stay byte-identical to the pre-versioning wire
+// format: no epoch/seq keys on non-versioned events.
+func TestBroadcastFrameHasNoVersionKeys(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	sub := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(sub)
+
+	eb.Broadcast("s", "hook", "v")
+
+	select {
+	case msg := <-sub.SendCh():
+		assert.Equal(t, `{"type":"hook","session":"s","value":"v"}`, string(msg))
+	case <-time.After(time.Second):
+		t.Fatal("no frame")
+	}
+}
+
+func TestBroadcastEventCarriesVersion(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	sub := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(sub)
+
+	eb.BroadcastEvent(HostEvent{Type: "sessions", Value: "[]", Epoch: "e", Seq: 3})
+
+	select {
+	case msg := <-sub.SendCh():
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(msg, &raw))
+		assert.Equal(t, "sessions", raw["type"])
+		assert.Equal(t, "[]", raw["value"])
+		assert.Equal(t, "e", raw["epoch"])
+		assert.Equal(t, float64(3), raw["seq"])
+	case <-time.After(time.Second):
+		t.Fatal("no frame")
+	}
+}
