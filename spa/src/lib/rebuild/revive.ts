@@ -26,10 +26,13 @@
 //
 // `decideRevive` and `reviveAllowed` are pure: no store access, no side
 // effects. `runRevivePass` is the one place they meet the stores, and it has
-// two triggers with the same evidence: the host's reconciled `sessions`
-// payload, and the release of the operation lock — a rebuild in flight owns
-// the outcome for every pane it may re-point, and the pass may not act on any
-// of them until it is done.
+// two triggers: the host's reconciled `sessions` payload, and the release of
+// the operation lock — a rebuild in flight owns the outcome for every pane it
+// may re-point, and the pass may not act on any of them until it is done. On a
+// release a versioned, live host is first reconciled from a list fetched after
+// the release (refresh-sessions.ts, `reconcileAfterLockRelease`), which runs
+// the pass through the first trigger; any other host gets the pass directly,
+// over the list it last reconciled.
 //
 // That evidence is a per-host snapshot the handler hands over, NOT
 // `useSessionStore.sessions`: `fetchHost` overwrites the store unconditionally
@@ -52,7 +55,6 @@ import { bindingEquals } from './binding'
 import { canAttachTerminal } from './attach-gate'
 import { repointPane } from './engine'
 import { scanPaneTree } from '../pane-tree'
-import { useHostStore } from '../../stores/useHostStore'
 import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import type { Session } from '../host-api'
@@ -176,17 +178,6 @@ export function runRevivePass(hostId: string): void {
     if (!reviveAllowed(d.paneId, d.binding, useRebuildStore.getState().operations)) continue
     try {
       repointPane(d.tabId, d.paneId, d.session)
-    } catch { /* ignore */ }
-  }
-}
-
-/** The lock-release trigger: the lock is global, so every host gets a pass —
- * and one host's failure may not cost the others theirs, for the same reason
- * a pane's may not. */
-export function runRevivePassAll(): void {
-  for (const hostId of useHostStore.getState().hostOrder) {
-    try {
-      runRevivePass(hostId)
     } catch { /* ignore */ }
   }
 }

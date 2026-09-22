@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
-import { useRebuildStore } from '../stores/useRebuildStore'
+import { useRebuildStore, type OperationLockGrant } from '../stores/useRebuildStore'
 import { connectHostEvents, type EventConnection } from '../lib/host-events'
 import { dispatchAgentWsEvent, isAgentWsEvent } from '../lib/agent-ws'
 import { dispatchBackupWsEvent } from '../lib/storage-backup/backup-ws-dispatch'
@@ -12,13 +12,48 @@ import { debugStatuslineTest } from '../lib/statusline-test-debug'
 import { closeAttachGate } from '../lib/rebuild/attach-gate'
 import { provenanceBindings } from '../lib/rebuild/reconcile-host'
 import { connectionClosed, connectionOpened, forgetHost } from '../lib/rebuild/session-version'
-import { cancelSessionRefresh } from '../lib/rebuild/refresh-after-switch'
-import { handleSessionsFrame } from '../lib/rebuild/ws-sessions'
-import { runRevivePassAll } from '../lib/rebuild/revive'
+import { cancelSessionRefresh, currentLockGen, operationLockAcquired, reconcileAfterLockRelease } from '../lib/rebuild/refresh-sessions'
+import { endSessionsBarrier, handleSessionsFrame } from '../lib/rebuild/ws-sessions'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
+
+/**
+ * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
+ * a switch, a profile apply, a rebuild, a batch — writes under the lock and
+ * releases it after its write, so a RELEASE is when the panes on screen are
+ * reconciled from a list read after that write (`reconcileAfterLockRelease`,
+ * which also runs the revive pass a rebuild in flight held back, and then ends
+ * each host's barrier); an ACQUIRE moves the lock generation that fences a
+ * release's refresh, and puts the versioned, live hosts in barrier — no WS
+ * verdict on the panes the holder is about to write (ws-sessions.ts).
+ *
+ * Transitions are read off the store as it is NOW, by grant identity, not off
+ * the listener's `(state, prev)` pair: a listener that takes the lock inside a
+ * release notification makes zustand notify the acquire (nested) BEFORE the
+ * remaining listeners hear of the release, so the pair can describe a past
+ * that is already gone. Seen that way, a holder can also change without a free
+ * moment in between (X → Y); that is a release of X followed by an acquire of Y,
+ * in that order — the release's refresh then meets Y's lock and ends, and Y's
+ * own release starts the next one.
+ *
+ * Exported so integration tests wire the very subscription the hook does.
+ */
+export function createOperationLockObserver(): () => void {
+  let seen: OperationLockGrant | null = useRebuildStore.getState().lockGrant
+  return () => {
+    const now = useRebuildStore.getState().lockGrant
+    if (now === seen) return
+    const was = seen
+    seen = now
+    if (was !== null) {
+      const gen = currentLockGen()
+      void reconcileAfterLockRelease((hostId) => endSessionsBarrier(hostId, gen))
+    }
+    if (now !== null) operationLockAcquired()
+  }
+}
 
 interface HostEntry {
   conn: EventConnection
@@ -228,10 +263,9 @@ export function useMultiHostEventWs() {
     }
   }, [])
 
-  // The second revive trigger: a rebuild in flight holds the operation lock
-  // and the pass skips everything under it, so the lock's release is what
-  // turns "skipped" into "revived" — with the same evidence and gates.
-  useEffect(() => useRebuildStore.subscribe((s, prev) => {
-    if (prev.lockedBy !== null && s.lockedBy === null) runRevivePassAll()
-  }), [])
+  // The operation lock's acquire / release (see `createOperationLockObserver`).
+  // The release is also the second revive trigger: a rebuild in flight holds
+  // the lock and the pass skips everything under it, so the release is what
+  // turns "skipped" into "revived" — from a list read after the rebuild.
+  useEffect(() => useRebuildStore.subscribe(createOperationLockObserver()), [])
 }

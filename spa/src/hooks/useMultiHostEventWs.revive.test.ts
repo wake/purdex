@@ -1,7 +1,8 @@
 // spa/src/hooks/useMultiHostEventWs.revive.test.ts — the two revive triggers
 // (spec §3.2): a reconciled `sessions` payload revives the host's
 // `tmux-restarted` panes by name, and an operation-lock release re-runs the
-// pass for every host. Real stores and the real engine / batch throughout —
+// pass for every host (from a fresh list for a versioned host, #1309 — the
+// frames here are unversioned unless a test says otherwise). Real stores and the real engine / batch throughout —
 // the scenarios are about how the pass interleaves with them.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
@@ -495,6 +496,96 @@ describe('useMultiHostEventWs revive — the lock-release trigger', () => {
   })
 })
 
+// #1309 spec §3.1: a lock release reconciles a versioned, live host from a list
+// FETCHED after the release — the revive comes from that list, never from the
+// one reconciled before the write. An unversioned host keeps the synchronous pass.
+describe('useMultiHostEventWs revive — the lock release reconciles from a fresh list', () => {
+  const E = '9f3c1a0b7d2e4c61'
+  function emitVersioned(sessions: Session[], seq: number, socket: FakeSocket = sockets[0]) {
+    act(() => { socket.emit(JSON.stringify({ type: 'sessions', session: '', value: JSON.stringify(sessions), epoch: E, seq })) })
+  }
+  afterEach(() => listSessionsFresh.mockReset())
+
+  it('a versioned host: the release fetches, and the pane is revived from the FETCHED list', async () => {
+    const view = await mount()
+    seedPane('t1', 'p1')
+    emitVersioned([], 1) // gate open, a versioned list held — no `dev` in it
+    expect(attachReady()).toBe(true)
+    const grant = useRebuildStore.getState().acquireOperationLock('legacy:restore')
+    listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: E, seq: 2, sessions: [NEW1] })
+
+    act(() => { useRebuildStore.getState().releaseOperationLock(grant) })
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(listSessionsFresh).toHaveBeenCalledWith(HOST)
+    await waitFor(() => expect(paneContent('t1', 'p1')).toMatchObject(revived))
+    view.unmount()
+  })
+
+  // codex plan review #6: the post-release refresh + revive pass is async now;
+  // the per-pane guard and the rebuild's own outcome must still hold.
+  it('a rebuild that created a session but did not re-point: the post-release refresh does NOT revive that pane', async () => {
+    const view = await mount()
+    seedPane('tX', 'pX')
+    emitVersioned([], 1)
+    const run = rebuildPane(HOST, 'tX', 'pX', plan, {
+      createSession: async () => NEW1,
+      sendKeys: async () => { throw new Error('boom') },
+    })
+    listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: E, seq: 2, sessions: [NEW1] })
+    let report!: RebuildReport
+    await act(async () => { report = await run })
+
+    expect(report.repointed).toBe(false)
+    expect(lockedBy()).toBeNull()
+    await waitFor(() => expect(useSessionStore.getState().sessions[HOST]?.map((s) => s.code)).toEqual(['new1']))
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1) // the fresh list is in evidence…
+    expect(paneContent('tX', 'pX')).toMatchObject(dead) // …and the guard still refuses the revive
+    expect(useRebuildStore.getState().operations['pX']).toMatchObject({ status: 'done', createdSession: { code: 'new1' } })
+    view.unmount()
+  })
+
+  it('a batch: its report, its members and the operation panel are untouched by the post-release reconcile', async () => {
+    const view = await mount()
+    seedPane('t1', 'p1')
+    seedPane('t2', 'p2')
+    emitVersioned([], 1)
+    const resume = deferred()
+    const sendKeys = vi.fn(async () => { await resume.promise; throw new Error('boom') })
+    const run = runBatchRebuild({ createSession: async () => NEW1, sendKeys })
+    await waitFor(() => expect(sendKeys).toHaveBeenCalledTimes(1))
+    emitVersioned([NEW1], 2) // the create broadcast, during the hold: held back (barrier)
+    expect(paneContent('t2', 'p2')).toMatchObject(dead)
+
+    listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: E, seq: 3, sessions: [NEW1] })
+    let report!: BatchReport
+    await act(async () => { resume.resolve(); report = await run })
+    const reportCopy = JSON.parse(JSON.stringify(report))
+    const operations = useRebuildStore.getState().operations
+
+    await waitFor(() => expect(paneContent('t2', 'p2')).toMatchObject(revived)) // the member, from the fetched list
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(report).toEqual(reportCopy)
+    expect(report.groups[0].members[0]).toMatchObject({ paneId: 'p2', repointed: false })
+    expect(useRebuildStore.getState().operations).toBe(operations)
+    expect(operations['p1']).toMatchObject({ status: 'done', createdSession: { code: 'new1' } })
+    expect(paneContent('t1', 'p1')).toMatchObject(dead) // the source keeps its panel
+    view.unmount()
+  })
+
+  it('an unversioned host: no fetch, the pass runs synchronously on the release', async () => {
+    const view = await mount()
+    seedPane('t1', 'p1')
+    const grant = useRebuildStore.getState().acquireOperationLock('legacy:restore')
+    emit([NEW1])
+    expect(paneContent('t1', 'p1')).toMatchObject(dead)
+
+    act(() => { useRebuildStore.getState().releaseOperationLock(grant) })
+    expect(paneContent('t1', 'p1')).toMatchObject(revived)
+    expect(listSessionsFresh).not.toHaveBeenCalled()
+    view.unmount()
+  })
+})
+
 // #1255 SPA spec §3.5 (codex plan review #1): a switch releases the operation
 // lock, and the lock-release trigger runs the pass for every host. The list it
 // would use was reconciled for the world that was on screen BEFORE the switch —
@@ -549,7 +640,8 @@ describe('useMultiHostEventWs revive — a profile switch', () => {
 
   it('after the post-switch reconcile it IS revived, from the new list', async () => {
     const view = await mount()
-    emit([NEW1])
+    // A versioned frame: the lock release refreshes this host from a fresh list (#1309).
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'sessions', session: '', value: JSON.stringify([NEW1]), epoch: '9f3c1a0b7d2e4c61', seq: 4 })) })
     listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: '9f3c1a0b7d2e4c61', seq: 5, sessions: [NEW1] })
 
     expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })

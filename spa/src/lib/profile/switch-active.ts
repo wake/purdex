@@ -73,23 +73,27 @@
 // NOT HEAR OF A SESSION THAT CLOSED WHILE IT WAS PARKED. Rebuild works the same
 // for both kinds of world (decision 13): its inputs (`PaneRebuildRecord`) travel
 // with the tab.
-//   So a switch that went through asks every host with a live, reconciled
-// connection for its sessions AFTERWARDS (`refreshSessionsAfterSwitch`,
-// rebuild/refresh-after-switch.ts; #1255) — outside both locks, on the promise.
-// Every verdict of the reconciliation changes a binding (`session-closed` is
-// irreversible, `tmux-restarted` and revive-by-name re-point the pane) and the
-// master pushes it to the SOT, so the list has to be EVIDENCE: `GET
-// /api/sessions?fresh=1` is read by the daemon for that request and carries a
-// version (`{epoch, seq}`), and it is applied only when it is newer than
-// anything already reconciled for that host — by WS frame or fetch
-// (rebuild/session-version.ts) — and only while the world is still the one it
-// was fetched for (the epoch fence below has not moved, in any window). An old
-// daemon answers without a version: nothing is applied, and the world is
-// reconciled by its hosts' next `sessions` payload, as before. Revive-by-name
-// never acts on a list reconciled for a different world (rebuild/revive.ts):
-// the switch's own lock release no longer revives the new world from the old
-// list. Only this window fetches; the others receive the reconciled tab tree
-// through the same rehydrate that brought them the new world.
+//   So the world that has just come on screen is reconciled against a list read
+// AFTER the switch — and nothing here asks for it: the switch runs under the
+// operation lock, and every release of that lock reconciles each host with a
+// live, versioned connection from a fresh list (`reconcileAfterLockRelease`,
+// rebuild/refresh-sessions.ts; #1255, #1309). The release comes after the block,
+// so the epoch fence is already raised: the refresh is fenced by the NEW world,
+// and one switch costs one fetch per host. (A refused switch that took the lock
+// releases it too: one harmless fetch.) Every verdict of the reconciliation
+// changes a binding (`session-closed` is irreversible, `tmux-restarted` and
+// revive-by-name re-point the pane) and the master pushes it to the SOT, so the
+// list has to be EVIDENCE: `GET /api/sessions?fresh=1` is read by the daemon for
+// that request and carries a version (`{epoch, seq}`), and it is applied only
+// when it is newer than anything already reconciled for that host — by WS frame
+// or fetch (rebuild/session-version.ts) — and only while the world is still the
+// one it was fetched for (the epoch fence below has not moved, in any window) and
+// the lock has not been taken again. An old daemon answers without a version:
+// nothing is fetched, and the world is reconciled by its hosts' next `sessions`
+// payload, as before. Revive-by-name never acts on a list reconciled for a
+// different world (rebuild/revive.ts): the lock release does not revive the new
+// world from the old list. Only this window fetches; the others receive the
+// reconciled tab tree through the same rehydrate that brought them the new world.
 //
 // IDS. A copy gets a new id for everything the world MINTS — workspace, tab,
 // pane, split — and every reference to one follows (`copyWorld` lists them).
@@ -111,7 +115,6 @@ import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
 import type { MasterWorldRead } from './master-world'
 import { withWorldLock } from '../storage/world-lock'
-import { refreshSessionsAfterSwitch } from '../rebuild/refresh-after-switch'
 import { repairTabOwnership } from './sections'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
@@ -271,21 +274,16 @@ function underOperationLock<R>(block: () => R, busy: R): R {
  * RETURNS its promise; with Web Locks, once the cross-window lock is granted (or
  * `busy` after 3 s). Either way the exchange itself never waits.
  *
- * AFTERWARDS, on `{ok: true}` only and with both locks released: the world that
- * has just come on screen is reconciled against a fresh, versioned session list
- * of every connected host (see WHAT A PARKED WORLD DOES NOT HEAR). Fire and
- * forget — the result does not wait for it; a host that cannot answer is retried
- * a few times (refresh-after-switch.ts) and otherwise reconciled by its next
- * `sessions` payload.
+ * AFTERWARDS the world that has just come on screen is reconciled against a
+ * fresh, versioned session list of every connected host — started by the
+ * operation lock's release, not by this function (see WHAT A PARKED WORLD DOES
+ * NOT HEAR). The result does not wait for it.
  */
 export function switchActiveProfile(targetId: typeof MASTER_PROFILE_ID | string): Promise<SwitchResult> {
   return withWorldLock<SwitchResult>(
     () => underOperationLock<SwitchResult>(() => exchange(targetId), { ok: false, reason: 'busy' }),
     () => ({ ok: false, reason: 'busy' }),
-  ).then((result) => {
-    if (result.ok) void refreshSessionsAfterSwitch()
-    return result
-  })
+  )
 }
 
 // === Copying a world ===

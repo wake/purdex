@@ -15,9 +15,11 @@ import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../storage'
-import { MAX_WORLD_EPOCH } from '../storage/world-fence'
+import { MAX_WORLD_EPOCH, readWorldEpochFence } from '../storage/world-fence'
 import { openAttachGate } from '../rebuild/attach-gate'
-import { __resetForTests as __resetSessionVersionsForTests } from '../rebuild/session-version'
+import { __resetForTests as __resetSessionVersionsForTests, note } from '../rebuild/session-version'
+import { __resetRefreshForTests } from '../rebuild/refresh-sessions'
+import { createOperationLockObserver } from '../../hooks/useMultiHostEventWs'
 import { useSessionStore } from '../../stores/useSessionStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { readSettingsSources } from './apply-to-stores'
@@ -455,12 +457,18 @@ describe('switchActiveProfile', () => {
   })
 })
 
-// === A1b. The world that came on screen is reconciled against a list read after the switch (#1255) ===
+// === A1b. The world that came on screen is reconciled against a list read after the switch (#1255, #1309) ===
+//
+// The switch runs under the operation lock, and the lock's release is what reconciles (the hook's own observer,
+// wired here as the hook wires it): no explicit refresh after the switch — one fetch per live host, not two.
 
-describe('switchActiveProfile — the post-switch session refresh (#1255)', () => {
+describe('switchActiveProfile — the post-switch session refresh (#1255, via the lock release #1309)', () => {
   const EPOCH = '9f3c1a0b7d2e4c61'
   let fetchSpy: ReturnType<typeof vi.spyOn>
-  let answer: unknown
+  let sessions: unknown[]
+  let seq: number
+  let locksAtCall: (string | null)[]
+  let unsubscribe: () => void = () => {}
   const freshCalls = () => fetchSpy.mock.calls.filter(([url]: unknown[]) => String(url).endsWith('/api/sessions?fresh=1'))
   const slavePane = (tabId: string) => {
     const layout = useTabStore.getState().tabs[tabId].layout
@@ -471,43 +479,71 @@ describe('switchActiveProfile — the post-switch session refresh (#1255)', () =
 
   beforeEach(() => {
     __resetSessionVersionsForTests()
-    openAttachGate('h1') // h1's live connection has reconciled a payload
-    answer = { epoch: EPOCH, seq: 1, sessions: [] }
-    const locksAtCall: (string | null)[] = []
+    __resetRefreshForTests()
+    openAttachGate('h1') // h1's live connection has reconciled a payload…
+    note('h1', { epoch: EPOCH, seq: 1 }) // …a versioned one
+    unsubscribe = useRebuildStore.subscribe(createOperationLockObserver())
+    sessions = []
+    seq = 1
+    locksAtCall = []
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       locksAtCall.push(useRebuildStore.getState().lockedBy)
-      return new Response(JSON.stringify(answer), { status: 200 })
+      seq += 1 // every list read later is newer
+      return new Response(JSON.stringify({ epoch: EPOCH, seq, sessions }), { status: 200 })
     })
-    ;(fetchSpy as unknown as { locksAtCall: (string | null)[] }).locksAtCall = locksAtCall
   })
 
-  it('ok: one fresh fetch per switch, sent after the locks are released', async () => {
+  afterEach(() => {
+    unsubscribe()
+    __resetRefreshForTests()
+  })
+
+  it('ok: exactly one fresh fetch per live host per switch, sent after the lock is released', async () => {
     expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
     expect(freshCalls()).toHaveLength(1)
-    expect((fetchSpy as unknown as { locksAtCall: (string | null)[] }).locksAtCall).toEqual([null])
+    expect(locksAtCall).toEqual([null])
 
     expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
     expect(freshCalls()).toHaveLength(2)
   })
 
-  it('refused: no refresh', async () => {
+  it('the world fence is already raised when the lock is released: the refresh is fenced by the NEW world', async () => {
+    const atRelease: (number | null)[] = []
+    const probe = useRebuildStore.subscribe((s, prev) => {
+      if (prev.lockedBy === PROFILE_SWITCH_LOCK_OWNER && s.lockedBy === null) atRelease.push(readWorldEpochFence())
+    })
+    try {
+      expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
+    } finally {
+      probe()
+    }
+    const epoch = useTabStore.getState().worldEpoch
+    expect(epoch).toBeGreaterThan(0)
+    expect(atRelease).toEqual([epoch])
+    await vi.waitFor(() => expect(slavePane('st1').terminated).toBe('session-closed')) // …so its answer is applied
+  })
+
+  it('refused: the switch writes nothing; a release that happened costs one harmless fetch', async () => {
     const grant = useRebuildStore.getState().acquireOperationLock('rebuild:batch')
-    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' })
-    useRebuildStore.getState().releaseOperationLock(grant)
-    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: false, reason: 'already-on-screen' })
-    expect(await switchActiveProfile('nope')).toMatchObject({ ok: false })
+    expect(await switchActiveProfile(SLAVE)).toEqual({ ok: false, reason: 'busy' }) // never held the lock: no release
     expect(freshCalls()).toHaveLength(0)
+    useRebuildStore.getState().releaseOperationLock(grant) // the batch's own release
+    expect(freshCalls()).toHaveLength(1)
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: false, reason: 'already-on-screen' }) // took and released the lock
+    expect(freshCalls()).toHaveLength(2)
+    expect(useTabStore.getState().worldId).toBe(MASTER_PROFILE_ID)
   })
 
   it('a slave whose sessions closed while it was parked comes on screen and its panes are marked session-closed', async () => {
     expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
     await vi.waitFor(() => expect(slavePane('st1').terminated).toBe('session-closed'))
     expect(slavePane('st2').terminated).toBe('session-closed')
+    expect(freshCalls()).toHaveLength(1)
   })
 
   it('a list that still has the sessions changes no binding (idempotent)', async () => {
     const live = (id: string) => ({ code: `c-${id}`, name: `${SLAVE_SENTINEL}-${id}`, cwd: '', mode: 'terminal', tmux_instance: 'inst' })
-    answer = { epoch: EPOCH, seq: 1, sessions: [live('st1'), live('st2-l')] }
+    sessions = [live('st1'), live('st2-l')]
     expect(await switchActiveProfile(SLAVE)).toEqual({ ok: true })
     const onScreen = useTabStore.getState().tabs
     await vi.waitFor(() => expect(useSessionStore.getState().sessions.h1).toHaveLength(2))

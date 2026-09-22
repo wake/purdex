@@ -15,9 +15,9 @@ import { handleSessionsFrame } from './ws-sessions'
 
 vi.mock('./cwd-probe', () => ({ probeMissingCwds: vi.fn(), probeSessionCwd: vi.fn(), resetCwdProbes: vi.fn() }))
 vi.mock('./provenance-probe', () => ({ probeSessionProvenance: vi.fn(), resetProvenanceProbes: vi.fn() }))
-// The recovery path itself is refresh-after-switch.test.ts's; here only "was it asked for".
+// The recovery path itself is refresh-sessions.test.ts's; here only "was it asked for".
 const { recoverHostSessions } = vi.hoisted(() => ({ recoverHostSessions: vi.fn(async () => {}) }))
-vi.mock('./refresh-after-switch', () => ({ recoverHostSessions }))
+vi.mock('./refresh-sessions', () => ({ recoverHostSessions }))
 
 const H = 'h1'
 const E1 = '9f3c1a0b7d2e4c61'
