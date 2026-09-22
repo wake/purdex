@@ -462,11 +462,69 @@ describe('a follower reads what the leader published', () => {
       expect(await detailOf({ hosts: entry })).toEqual({ hosts: entry })
     })
 
-    it('a huge detail is reduced to the sections\' keys', async () => {
+    it('a detail with far more keys than sections: only the sections\' keys are kept (the size cap, not this, bounds the parse)', async () => {
       const huge: Record<string, unknown> = {}
-      for (let i = 0; i < 50_000; i += 1) huge[`tabs.w${i}`] = entry
+      for (let i = 0; i < 5_000; i += 1) huge[`tabs.w${i}`] = entry // ~240 K characters: under the cap, so it is parsed
       huge.settings = { rev: 2, failures: 1, retryAt: 10 }
       expect(await detailOf(huge)).toEqual({ settings: { rev: 2, failures: 1, retryAt: 10 } })
+    })
+  })
+
+  describe('MAX_PUBLISHED_STATUS_CHARS: a record over it is not even parsed', () => {
+    /** A valid record of exactly `chars` characters: the leader's window id is padded to fit. */
+    const recordOf = (chars: number): string => {
+      const bare = JSON.stringify({ at: 1, leader: '', master: TAG1, status: SYNCED, blocked: null, problems: [] })
+      return JSON.stringify({ at: 1, leader: 'w'.repeat(chars - bare.length), master: TAG1, status: SYNCED, blocked: null, problems: [] })
+    }
+
+    it('is 512 KiB', async () => {
+      const { MAX_PUBLISHED_STATUS_CHARS } = await import('./sync-status')
+      expect(MAX_PUBLISHED_STATUS_CHARS).toBe(512 * 1024)
+    })
+
+    it('exactly at the cap → read; one character over → no record, and JSON.parse is never asked', async () => {
+      const { MAX_PUBLISHED_STATUS_CHARS } = await import('./sync-status')
+      const at = recordOf(MAX_PUBLISHED_STATUS_CHARS)
+      expect(at).toHaveLength(MAX_PUBLISHED_STATUS_CHARS)
+      localStorage.setItem(STATUS, at)
+      const b = await openWindow('B')
+      expect(b.snapshot()).toMatchObject({ status: SYNCED, remote: true })
+      open.splice(0).forEach((c) => c.close(false))
+
+      localStorage.setItem(STATUS, recordOf(MAX_PUBLISHED_STATUS_CHARS + 1))
+      const parse = vi.spyOn(JSON, 'parse')
+      const c = await openWindow('C')
+      expect(c.snapshot()).toMatchObject({ status: null, remote: false })
+      expect(parse.mock.calls.filter(([raw]) => typeof raw === 'string' && raw.length > MAX_PUBLISHED_STATUS_CHARS)).toEqual([])
+    })
+
+    it('the worst record the leader can write is read: 203 sections each locked with a detail, 50 problems at PROBLEM_DETAIL_MAX', async () => {
+      const { MAX_PUBLISHED_STATUS_CHARS } = await import('./sync-status')
+      const hash = (i: number) => `sha256:${String(i).padStart(64, '0')}`
+      const keys = ['hosts', 'settings', 'workspaces', ...Array.from({ length: 200 }, (_, i) => `tabs.ws_${String(i).padStart(12, '0')}`)]
+      const big = 2 ** 31 - 1
+      const lockOf = (): SectionLock => ({ status: 'locked:conflict', currentHash: hash(1), sot: { rev: big, hash: hash(2) }, conflict: { localHash: hash(3), sot: { rev: big, hash: hash(2) } } })
+      const status = {
+        profile: 'locked:conflict',
+        schemaLock: { section: 'hosts', kind: 'hosts', verdict: 'shape-changed-without-ordinal', mine: { fingerprint: hash(4), ordinal: 99 }, sot: { fingerprint: hash(5), ordinal: 99 } },
+        sections: Object.fromEntries(keys.map((k) => [k, 'locked:conflict'])),
+        locks: Object.fromEntries(keys.map((k) => [k, lockOf()])),
+        profileGone: false,
+        detail: Object.fromEntries(keys.map((k) => [k, { rev: big, failures: 9999, retryAt: 1_790_000_000_000 }])),
+        indexFailures: 9999,
+        lastSuccessAt: 1_790_000_000_000,
+      }
+      // 1000 code points that JSON escapes to six characters each (control characters) — worse than any real text
+      const detail = `${'\u0001'.repeat(1000)}…`
+      const problems = Array.from({ length: 50 }, () => ({ kind: 'push-failed', section: keys.at(-1), detail, at: 1_790_000_000_000 }))
+      const raw = JSON.stringify({ at: 1, leader: `w-${'x'.repeat(36)}`, master: TAG1, status, blocked: null, problems })
+      expect(raw.length).toBeGreaterThan(400_000) // the measurement in the constant's comment
+      expect(raw.length).toBeLessThan(MAX_PUBLISHED_STATUS_CHARS)
+      localStorage.setItem(STATUS, raw)
+      const b = await openWindow('B')
+      expect(b.snapshot()).toMatchObject({ remote: true, status: { profile: 'locked:conflict' } })
+      expect(Object.keys(b.snapshot().status!.locks)).toHaveLength(203)
+      expect(b.snapshot().problems).toHaveLength(50)
     })
   })
 

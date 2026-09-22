@@ -150,6 +150,19 @@ export const COMMAND_TTL_MS = 30_000
 /** … and so is one from further in the FUTURE than this: clocks of one machine's windows do not differ, a clock set back does. */
 export const COMMAND_FUTURE_SKEW_MS = 5_000
 
+/**
+ * A published record longer than this (in `raw.length`, UTF-16 units) is not parsed: it counts as absent, like any
+ * other bad record. It is read on every `storage` event, and a record is only as long as its leader makes it.
+ * THE ARITHMETIC (measured with `JSON.stringify`, P3d-4a review):
+ *   - 203 sections (hosts, settings, workspaces + 200 `tabs.*`), every one locked with a full conflict pair and a
+ *     detail entry at its widest numbers, a schema lock, no problems ........................ 116,983
+ *   - + 50 problems, each detail at `PROBLEM_DETAIL_MAX` (start.ts: 1000 code points + `…`):
+ *       plain text 171,382 · astral (2 units per code point) 221,382 · control characters, which JSON escapes
+ *       to 6 characters each — the worst any detail can be ............................... 421,382
+ *   Cap: 512 KiB = 524,288 — about 20 % over that pathological worst case, 2.4× the realistic one (~221 K).
+ */
+export const MAX_PUBLISHED_STATUS_CHARS = 512 * 1024
+
 const STATUS_KEY = STORAGE_KEYS.PROFILE_STATUS
 const COMMAND_PREFIX = STORAGE_KEYS.PROFILE_COMMAND_PREFIX
 
@@ -272,7 +285,7 @@ export function __resetSyncStatusForTest(): void {
 const BLOCKED: ReadonlyArray<ProfileSyncState['blocked']> = ['master-endpoint-changed', 'profile-gone', 'suspended', null]
 
 function parsePublished(raw: string | null): PublishedStatus | null {
-  if (raw === null) return null
+  if (raw === null || raw.length > MAX_PUBLISHED_STATUS_CHARS) return null
   let value: unknown
   try {
     value = JSON.parse(raw)
@@ -336,9 +349,10 @@ function parseDetail(value: unknown): SectionDetail | undefined {
  * another shape: either way they are read as ABSENT — no detail, no counter, not gone, never synced — which the
  * page shows as nothing, never as "0" or "never". A damaged `detail` entry is left out on its own.
  *
- * `detail` is read FOR THE SECTIONS THE STATUS LISTS (review F4): its size is bounded by theirs, a key nobody
- * lists (`__proto__` included) is never taken, and a huge record costs one lookup per section — this runs on
- * every `storage` event. Not a plain object (an array included) → no detail.
+ * `detail` is read FOR THE SECTIONS THE STATUS LISTS (review F4): what is kept is bounded by them, and a key
+ * nobody lists (`__proto__` included) is never taken. (What bounds the COST of a huge record is
+ * `MAX_PUBLISHED_STATUS_CHARS`, checked before `JSON.parse` — by here the whole record has been parsed.) Not a
+ * plain object (an array included) → no detail.
  */
 function withDetail(status: Record<string, unknown> & { sections: Record<string, unknown> }): ExecutorStatus {
   const { profileGone, detail, indexFailures, lastSuccessAt } = status
