@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.424] - 2026-09-23
+
+### Refactor：拆掉舊的 Sync 模組（Profile Sync P4a，#1298–#1302 SPA、#1305 daemon）
+
+舊的 Sync（手動／檔案／daemon 三種 provider、三方合併、快照歷史）已被 Profile Sync 取代；P3d-3 起 `Settings › Sync`
+只在還有 pending conflicts 或 provider 開著時才出現。使用者 2026-09-23 確認 alpha.422 的側欄已看不到它，才開始拆。
+
+- **SPA**（純刪除，約 9,900 行、64 檔）：`lib/sync/`、`features/settings/`（同步歷史頁）、`SyncSection`、`SyncConflictBanner`、
+  TitleBar 的衝突圖示、`register-modules` 的 `sync` 註冊、App 開機時的 `ensureSessionPristine`、`SETTINGS_ORDER.MODULE_SYNC`，
+  以及兩個語系檔各 97 個 key（`settings.sync.time.*` 仍有人用，保留）。
+- **daemon**：`internal/module/sync/` 與九條 `/api/sync/*` 路由；`TestRemovedRoutesAre404` 證明它們經過真正的 mux 都是 404。
+- **驗證**：以反向驗證取代 mutation——每個被刪的 import、匯出符號與 i18n key 都零引用；編輯過的檔案只刪不加。
+- **刻意留下的**：localStorage `purdex-sync-state`（`client-identity` 仍靠它收養舊的 client id，刪了裝置會換身分）、
+  IndexedDB `purdex-sync`、daemon 的 `sync.db`——都已無人讀寫，清理追蹤 #1303。
+- **部署**：daemon 這次先不重啟，和 P4b（拆 device-state）的 daemon 變更一起 deploy。
+
 ## [1.0.0-alpha.423] - 2026-09-23
 
 ### Feature（daemon）：不經快取、帶版本的 session 清單（#1255 daemon 那一半，#1292）
