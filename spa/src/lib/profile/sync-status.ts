@@ -253,8 +253,12 @@ export interface StatusChannel {
   /** Something in `local()` may have changed. Cheap, and safe to call too often. */
   refresh(): void
   requestSyncNow(): void
-  /** `lock`: what the user was shown for this section — `snapshot.status.locks[section]`. */
-  requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): void
+  /**
+   * `lock`: what the user was shown for this section — `snapshot.status.locks[section]`. Answers whether the command
+   * was HANDED OVER: executed here (the leader), or its key written (a follower). Not whether it was carried out —
+   * the channel has no answer; the lock changing is the answer, and `COMMAND_TTL_MS` is how long to wait for it.
+   */
+  requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): boolean
   /**
    * `clear`: the master is gone or replaced — ITS status and ITS commands go with it, nobody else's. Otherwise they
    * are the other windows' business. `successor`, only with `clear`: the tag of the SAME master's next generation
@@ -480,8 +484,9 @@ function sameConflict(a: SectionConflict | null, b: SectionConflict | null): boo
   return a.localHash === b.localHash && a.sot.rev === b.sot.rev && a.sot.hash === b.sot.hash
 }
 
-/** Field by field; see the header for why each of the four is there. */
-function sameLock(a: SectionLock, b: SectionLock): boolean {
+/** Field by field; see the header for why each of the four is there. Exported for the page (P3d-4b): a confirmation is
+ *  bound to the lock it was opened with, by this very test. */
+export function sameLock(a: SectionLock, b: SectionLock): boolean {
   return a.status === b.status && a.currentHash === b.currentHash && a.sot.rev === b.sot.rev && a.sot.hash === b.sot.hash && sameConflict(a.conflict, b.conflict)
 }
 
@@ -659,11 +664,12 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     }
   }
 
-  const send = (command: Command): void => {
+  const send = (command: Command): boolean => {
     try {
       localStorage.setItem(`${ownPrefix}${newCommandId()}`, JSON.stringify(command))
+      return true
     } catch {
-      /* the user presses again */
+      return false // the user presses again
     }
   }
 
@@ -701,10 +707,11 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       else send(command)
     },
     requestResolve(section, keep, lock) {
-      if (closed) return
+      if (closed) return false
       const command: Command = { kind: 'resolve', section, keep, lock, master: tag, at: deps.now() }
-      if (deps.local().leader) execute(command)
-      else send(command)
+      if (!deps.local().leader) return send(command)
+      execute(command)
+      return true
     },
     close(clear, successor) {
       if (closed) return

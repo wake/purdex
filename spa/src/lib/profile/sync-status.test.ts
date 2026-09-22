@@ -1239,3 +1239,56 @@ describe('close', () => {
   })
 })
 
+/* ─── P3d-4b: what the page needs of the channel ─── */
+
+describe('requestResolve answers whether the command was handed over (P3d-4 R2)', () => {
+  it('in the leader window: true — executed there and then', async () => {
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    a.locks.hosts = LOCK
+    expect(a.channel.requestResolve('hosts', 'local', LOCK)).toBe(true)
+    expect(a.resolve.mock.calls).toEqual([['hosts', 'local']])
+  })
+
+  it('in a follower: true once its key is written', async () => {
+    await openWindow('A', { leader: true, status: SYNCED })
+    const b = await openWindow('B')
+    expect(b.channel.requestResolve('hosts', 'local', LOCK)).toBe(true)
+    expect(commandKeys()).toHaveLength(1)
+  })
+
+  it('in a follower whose write is refused (quota, blocked storage): false, and nothing is written', async () => {
+    await openWindow('A', { leader: true, status: SYNCED })
+    const b = await openWindow('B')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    expect(b.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+    vi.restoreAllMocks()
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('a closed channel: false', async () => {
+    const b = await openWindow('B')
+    b.channel.close(false)
+    expect(b.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+  })
+
+  it('COMMAND_TTL_MS is 30 s — the page\'s "sent" ends there (the only timer on it)', async () => {
+    const { COMMAND_TTL_MS } = await import('./sync-status')
+    expect(COMMAND_TTL_MS).toBe(30_000)
+  })
+})
+
+describe('sameLock — exported for the page, which freezes the lock a dialog was opened with', () => {
+  it('equal in every field → true; any one field moved → false', async () => {
+    const { sameLock } = await import('./sync-status')
+    expect(sameLock(LOCK, conflictLock({ ...PAIR, sot: { ...PAIR.sot } }))).toBe(true)
+    expect(sameLock(LOCK, { ...LOCK, currentHash: 'L2' })).toBe(false)
+    expect(sameLock(LOCK, { ...LOCK, sot: { rev: 6, hash: 'S5' } })).toBe(false)
+    expect(sameLock(LOCK, { ...LOCK, sot: { rev: 5, hash: 'S6' } })).toBe(false)
+    expect(sameLock(LOCK, { ...LOCK, conflict: { ...PAIR, localHash: 'L0' } })).toBe(false)
+    expect(sameLock(LOCK, { ...LOCK, status: 'locked:reset', conflict: null })).toBe(false)
+    expect(sameLock(INVALID, { ...INVALID })).toBe(true)
+    expect(sameLock(INVALID, { ...INVALID, sot: { rev: 6, hash: 'S5' } })).toBe(false)
+  })
+})

@@ -595,10 +595,10 @@ export function requestSyncNow(): void {
 /**
  * Answer a lock, from any window. `lock` is what the user was shown — `snapshot.status.locks[section]`: whoever
  * leads THIS master executes it only if the section's lock is still that one, field by field (sync-status.ts).
- * Without a master: nothing.
+ * Answers whether the command was handed over (P3d-4 R2); without a master: nothing, and `false`.
  */
-export function requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): void {
-  channel?.requestResolve(section, keep, lock)
+export function requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): boolean {
+  return channel?.requestResolve(section, keep, lock) ?? false
 }
 
 function sameMaster(a: Master | null, b: Master | null): boolean {
