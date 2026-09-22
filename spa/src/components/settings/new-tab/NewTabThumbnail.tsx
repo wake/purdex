@@ -5,7 +5,7 @@ import type { PresetKey } from '../../../lib/resolve-preset'
 interface Props { presetKey: PresetKey }
 
 export function NewTabThumbnail({ presetKey }: Props) {
-  const preset = useNewTabLayoutStore((s) => s.profiles[presetKey])
+  const preset = useNewTabLayoutStore((s) => s.presets[presetKey])
   const gridCols = colsClass(preset.columns.length)
   return (
     <div className={`grid gap-[2px] w-16 h-12 ${gridCols}`} aria-hidden="true">

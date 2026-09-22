@@ -19,10 +19,10 @@ const LABEL_KEY: Record<PresetKey, string> = {
 
 export function NewTabPresetSwitcher({ active, onSelect, onToggleEnabled, renderMain, renderThumb }: Props) {
   const t = useI18nStore((s) => s.t)
-  const profiles = useNewTabLayoutStore((s) => s.profiles)
+  const presets = useNewTabLayoutStore((s) => s.presets)
 
   const meta = (k: PresetKey) => {
-    const p = profiles[k]
+    const p = presets[k]
     return {
       enabled: p.enabled,
       isEmpty: p.columns.flat().length === 0,

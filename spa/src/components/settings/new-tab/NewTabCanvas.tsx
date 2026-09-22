@@ -94,7 +94,7 @@ function Column({ presetKey, colIdx, ids }: { presetKey: PresetKey; colIdx: numb
 }
 
 export function NewTabCanvas({ presetKey }: Props) {
-  const preset = useNewTabLayoutStore((s) => s.profiles[presetKey])
+  const preset = useNewTabLayoutStore((s) => s.presets[presetKey])
   const gridCols = colsClass(preset.columns.length)
   return (
     <div className={`grid gap-3 ${gridCols}`} data-testid={`canvas-${presetKey}`}>

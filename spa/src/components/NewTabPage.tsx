@@ -38,9 +38,9 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   }, [hydrated])
 
   const { isWide, isMid } = useBreakpoint()
-  const profiles = useNewTabLayoutStore((s) => s.profiles)
-  const presetKey = resolvePreset(isWide, isMid, profiles)
-  const preset = profiles[presetKey]
+  const presets = useNewTabLayoutStore((s) => s.presets)
+  const presetKey = resolvePreset(isWide, isMid, presets)
+  const preset = presets[presetKey]
 
   // P1 reload-required contract (matches PaneLayoutRenderer + file-opener
   // registry): module enable/disable does NOT flip the New Tab UI live —

@@ -16,8 +16,8 @@ import { NewTabThumbnail } from './NewTabThumbnail'
 export function NewTabSubsection() {
   const t = useI18nStore((s) => s.t)
   const providers = useNewTabProviders()
-  const profiles = useNewTabLayoutStore((s) => s.profiles)
-  const active = useNewTabLayoutStore((s) => s.activeEditingProfile)
+  const presets = useNewTabLayoutStore((s) => s.presets)
+  const active = useNewTabLayoutStore((s) => s.activeEditingPreset)
   const setEditing = useNewTabLayoutStore((s) => s.setEditing)
   const setEnabled = useNewTabLayoutStore((s) => s.setEnabled)
   const placeModule = useNewTabLayoutStore((s) => s.placeModule)
@@ -29,7 +29,7 @@ export function NewTabSubsection() {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const paletteItems: PaletteItem[] = useMemo(() => {
-    const activeIds = new Set(profiles[active].columns.flat())
+    const activeIds = new Set(presets[active].columns.flat())
     return providers.map((p) => ({
       id: p.id,
       label: p.label,
@@ -37,7 +37,7 @@ export function NewTabSubsection() {
       inUse: activeIds.has(p.id),
       unavailable: p.disabled,
     }))
-  }, [providers, profiles, active])
+  }, [providers, presets, active])
 
   const handleClickAdd = (id: string) => {
     placeModuleInShortest(active, id)
@@ -73,7 +73,7 @@ export function NewTabSubsection() {
 
     // Drop onto another canvas item = insert at its position
     if (dst?.type === 'canvas-item' && dst.presetKey && dst.providerId) {
-      const cols = useNewTabLayoutStore.getState().profiles[dst.presetKey].columns
+      const cols = useNewTabLayoutStore.getState().presets[dst.presetKey].columns
       const colIdx = cols.findIndex((c) => c.includes(dst.providerId!))
       if (colIdx < 0) return
       const rowIdx = cols[colIdx].indexOf(dst.providerId)
@@ -83,7 +83,7 @@ export function NewTabSubsection() {
 
     // Drop onto column empty area = append to that column
     if (dst?.type === 'column' && dst.presetKey && typeof dst.colIdx === 'number') {
-      const cols = useNewTabLayoutStore.getState().profiles[dst.presetKey].columns
+      const cols = useNewTabLayoutStore.getState().presets[dst.presetKey].columns
       placeModule(dst.presetKey, src.providerId, dst.colIdx, cols[dst.colIdx].length)
     }
   }

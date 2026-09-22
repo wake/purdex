@@ -44,13 +44,13 @@ function primeLayout(ids: string[]) {
   // Force 1col active and place every provider into the single column so the
   // rendering path doesn't depend on `ensureDefaults` timing.
   useNewTabLayoutStore.setState({
-    profiles: {
+    presets: {
       '3col': { enabled: false, columns: [[], [], []] },
       '2col': { enabled: false, columns: [[], []] },
       '1col': { enabled: true, columns: [[...ids]] },
     },
     knownIds: ids,
-    activeEditingProfile: '1col',
+    activeEditingPreset: '1col',
   })
 }
 
