@@ -20,7 +20,6 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	backupmod "github.com/wake/purdex/internal/module/backup"
 	"github.com/wake/purdex/internal/module/dev"
-	devicestatemod "github.com/wake/purdex/internal/module/devicestate"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	"github.com/wake/purdex/internal/module/logs"
@@ -279,7 +278,6 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(peersmod.New(audit, titles))
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
-	c.AddModule(devicestatemod.New())
 	c.AddModule(profilesmod.New())
 	c.AddModule(hostconfigmod.New())
 	c.AddModule(backupmod.New())

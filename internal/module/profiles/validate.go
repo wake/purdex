@@ -22,7 +22,7 @@ var ErrPayloadTooLarge = errors.New("payload exceeds 5 MiB")
 
 var (
 	profileIDPattern = regexp.MustCompile(`^p_[0-9a-f]{12}$`)
-	// clientIDPattern is the devicestate alphabet, so a client keeps one identity.
+	// clientIDPattern is the client-id alphabet the SPA mints, so a client keeps one identity.
 	clientIDPattern = regexp.MustCompile(`^c_[0-9a-f]{12}$`)
 	// sectionPattern checks tabs.<id> structurally only: the daemon never
 	// learns what a workspace is.
