@@ -5,17 +5,22 @@
 //   - the master's TAG, `masterTagOf(master, attachGeneration)` — the very tag the status channel is opened with.
 //     A lock is equal in every field on a copied or recreated profile, so the lock alone does not say WHICH profile
 //     the user looked at; the tag does, down to the attach generation (review A1);
+//   - the master's ENDPOINT, `masterEndpoint`: the daemon the attachment is on. The api layer resolves a host's
+//     address on every request, so a host whose address was edited meanwhile would answer from ANOTHER daemon with
+//     the same id (review A3). `api.ts` cannot pin a request to an endpoint, so the host's side is read only while
+//     the host is at that endpoint — checked before the read and again when the answer arrives;
 //   - the section's LOCK (`sameLock`, sync-status.ts).
-// WHAT GOES THROUGH IT: the counts and the send. The send hands `requestResolve` the frozen
+// WHAT GOES THROUGH IT: the counts (the host's read, above) and the send. The send hands `requestResolve` the frozen
 // lock AND the frozen tag, and the channel refuses a tag that is not its own — so even a handler that runs after the
 // master moved, before React took the dialog away, sends nothing.
-// WHEN IT STOPS BEING CURRENT (either), the confirmation closes itself and the row says "this changed while
+// WHEN IT STOPS BEING CURRENT (any of the three), the confirmation closes itself and the row says "this changed while
 // you were deciding"; an answer that arrives for it sets nothing.
 //
 // "SENT" ENDS (R2): a handed-over command is "sent" until the lock for this key — or the master — changes, or until
 // the command's own TTL has passed ("no answer"). That timer is the only one on the page.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { selectMaster, useProfileStore } from '../../../stores/useProfileStore'
+import { endpointOfHost, selectMaster, useProfileStore } from '../../../stores/useProfileStore'
+import { useHostStore } from '../../../stores/useHostStore'
 import type { SectionLock } from '../../../lib/profile/executor'
 import { requestResolve } from '../../../lib/profile/start'
 import { COMMAND_TTL_MS, masterTagOf, sameLock } from '../../../lib/profile/sync-status'
@@ -27,6 +32,8 @@ export interface ResolveContext {
   tag: string
   hostId: string
   profileId: string
+  /** `masterEndpoint` when the confirmation opened: the daemon the attachment is on. */
+  endpoint: string
   lock: SectionLock
 }
 
@@ -40,18 +47,26 @@ function liveTagOf(s: ProfileState): string | null {
   return master === null ? null : masterTagOf(master, s.attachGeneration)
 }
 
+/** Where the master host is RIGHT NOW (`"<ip>:<port>"`), or null when it is not in the store. */
+function hostEndpointOf(hostId: string | null): string | null {
+  const host = hostId === null ? undefined : useHostStore.getState().hosts[hostId]
+  return host === undefined ? null : endpointOfHost(host)
+}
+
 /** The context to freeze now, for `lock` — null without a master. */
 function contextNow(lock: SectionLock): ResolveContext | null {
   const s = useProfileStore.getState()
   const master = selectMaster(s)
   const tag = liveTagOf(s)
-  if (master === null || tag === null) return null
-  return { tag, hostId: master.hostId, profileId: master.profileId, lock }
+  if (master === null || tag === null || s.masterEndpoint === null) return null
+  return { tag, hostId: master.hostId, profileId: master.profileId, endpoint: s.masterEndpoint, lock }
 }
 
-/** Is the frozen context still the one on screen: same master tag, same lock. */
+/** Is the frozen context still the one on screen: same master tag, same attachment endpoint, the host at it, same lock. */
 export function stillCurrent(ctx: ResolveContext, liveLock: SectionLock | undefined): boolean {
-  if (liveTagOf(useProfileStore.getState()) !== ctx.tag) return false
+  const s = useProfileStore.getState()
+  if (liveTagOf(s) !== ctx.tag || s.masterEndpoint !== ctx.endpoint) return false
+  if (hostEndpointOf(ctx.hostId) !== ctx.endpoint) return false
   return liveLock !== undefined && sameLock(ctx.lock, liveLock)
 }
 
@@ -70,8 +85,14 @@ export interface ResolveState {
 }
 
 export function useResolveContext(sectionKey: string, lock: SectionLock): ResolveState {
-  // Subscribed so that a change re-renders — and the check below runs.
+  // Subscribed so that a change of any of them re-renders — and the check below runs. The values are re-read there.
   const liveTag = useProfileStore(liveTagOf)
+  useProfileStore((s) => s.masterEndpoint)
+  const masterHostId = useProfileStore((s) => s.masterHostId)
+  useHostStore((s) => {
+    const h = masterHostId === null ? undefined : s.hosts[masterHostId]
+    return h === undefined ? null : endpointOfHost(h)
+  })
 
   const [open, setOpen] = useState<{ keep: Keep; ctx: ResolveContext } | null>(null)
   const [local, setLocal] = useState<LocalSide | null>(null)
@@ -98,12 +119,23 @@ export function useResolveContext(sectionKey: string, lock: SectionLock): Resolv
     const { ctx } = open
     let live = true
     const abort = new AbortController()
+    const stale = (): boolean => !live || !stillCurrent(ctx, lockRef.current)
+    const lost = (): void => {
+      if (!live) return
+      setOpen((now) => (now === open ? null : now))
+      setChanged(true)
+    }
     void readLocalSide(ctx.profileId, sectionKey, ctx.lock).then((side) => {
       if (live) setLocal(side)
     })
-    void readHostSide(ctx.hostId, ctx.profileId, sectionKey, ctx.lock, abort.signal).then((side) => {
-      if (live) setHost(side)
-    })
+    if (stale()) lost() // before the host is asked: it must still be at the attachment's endpoint
+    else {
+      void readHostSide(ctx.hostId, ctx.profileId, sectionKey, ctx.lock, abort.signal).then((side) => {
+        // …and when it answers: an answer from an address that moved meanwhile may be another daemon's
+        if (stale()) lost()
+        else setHost(side)
+      })
+    }
     return () => {
       live = false
       abort.abort()

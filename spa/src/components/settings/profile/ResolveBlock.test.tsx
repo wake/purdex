@@ -314,7 +314,7 @@ describe('"sent" ends (R2)', () => {
   })
 })
 
-describe('the confirmation is bound to the master and the daemon it was opened under (review A1)', () => {
+describe('the confirmation is bound to the master and the daemon it was opened under (review A1 / A3)', () => {
   const moves: Array<[string, () => void]> = [
     ['another master (profile)', () => useProfileStore.setState({ masterProfileId: 'p_999999999999' })],
     ['the same master, attached again (a new attachGeneration)', () => useProfileStore.setState({ attachGeneration: 2 })],
@@ -355,5 +355,38 @@ describe('the confirmation is bound to the master and the daemon it was opened u
     expect(screen.getByTestId('profile-resolve-sent-hosts')).toBeInTheDocument()
     act(() => useProfileStore.setState({ attachGeneration: 2 }))
     expect(screen.queryByTestId('profile-resolve-sent-hosts')).toBeNull()
+  })
+
+  it('the master host is not at the attachment\'s endpoint when it opens → the host is NOT asked; it closes, no counts', () => {
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: { id: 'h1', name: 'mlab', ip: '10.9.9.9', port: 7860, order: 0 } } })
+    view(statusOf({ hosts: RESET }))
+    openKeepLocal('hosts')
+    expect(readHostSide).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
+    expect(screen.getByTestId('profile-resolve-changed-hosts')).toBeInTheDocument()
+  })
+
+  it('the host\'s address is edited while the read is out → the dialog closes, and the answer (maybe another daemon\'s) is not shown', async () => {
+    view(statusOf({ hosts: RESET }))
+    openKeepLocal('hosts')
+    expect(readHostSide).toHaveBeenCalledTimes(1)
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: { id: 'h1', name: 'mlab', ip: '10.9.9.9', port: 7860, order: 0 } } }))
+    expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
+    await act(async () => resolveHost({ count: { state: 'read', count: 42 }, movedOn: false }))
+    expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
+    expect(screen.queryByTestId('profile-resolve-count-sot')).toBeNull()
+    expect(requestResolve).not.toHaveBeenCalled()
+  })
+
+  it('the answer arrives AFTER the host moved, before any re-render → it is dropped and the dialog closes', async () => {
+    view(statusOf({ hosts: RESET }))
+    openKeepLocal('hosts')
+    await act(async () => {
+      // the store moves without anybody subscribed hearing first: the answer's own check is what catches it
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: { id: 'h1', name: 'mlab', ip: '10.9.9.9', port: 7860, order: 0 } } })
+      resolveHost({ count: { state: 'read', count: 42 }, movedOn: false })
+    })
+    expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
+    expect(screen.getByTestId('profile-resolve-changed-hosts')).toBeInTheDocument()
   })
 })
