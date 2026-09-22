@@ -22,6 +22,7 @@ import (
 //   - P-D.2 agent module: GET /api/sessions/{code}/history
 //   - P-D.1 execution module: GET /api/execution/{id}
 //   - P-D.1 dispatch module: POST /api/dispatch/reclaim
+//   - Profile Sync P4a, old sync module: the nine /api/sync/* routes
 //
 // The modules are registered with nil stores exactly as the other cmd/pdx
 // wiring tests do (nex_register_test.go, monitor_module_test.go); [nex] is
@@ -61,6 +62,15 @@ func TestRemovedRoutesAre404(t *testing.T) {
 		{http.MethodGet, "/ws/cli-bridge-sub/x"},
 		{http.MethodGet, "/api/execution/x"},
 		{http.MethodPost, "/api/dispatch/reclaim"},
+		{http.MethodPost, "/api/sync/push"},
+		{http.MethodGet, "/api/sync/pull"},
+		{http.MethodGet, "/api/sync/history"},
+		{http.MethodPost, "/api/sync/group/create"},
+		{http.MethodPost, "/api/sync/group/join"},
+		{http.MethodGet, "/api/sync/group/members"},
+		{http.MethodDelete, "/api/sync/group/member"},
+		{http.MethodPost, "/api/sync/pair/create"},
+		{http.MethodPost, "/api/sync/pair/verify"},
 	}
 	for _, rt := range removed {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
