@@ -140,4 +140,28 @@ describe('connectHostEvents socket epoch', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(sockets).toHaveLength(0)
   })
+
+  // A retired socket's `open` event may already be queued when it is retired:
+  // it must not reach `onOpen` — the hook would bump the connection generation,
+  // mark the host connected and fetch for an entry that is gone (codex R1 P2).
+  it('does not call onOpen for an open event queued on a socket retired by close()', () => {
+    const onOpen = vi.fn()
+    const conn = connectHostEvents('ws://h/events', vi.fn(), undefined, onOpen)
+    const socket = sockets[0]
+    conn.close()
+    socket.onopen?.()
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('does not call onOpen for an open event queued on a socket reconnect superseded; the new one still opens', () => {
+    const onOpen = vi.fn()
+    const conn = connectHostEvents('ws://h/events', vi.fn(), undefined, onOpen)
+    const old = sockets[0]
+    conn.reconnect()
+    old.onopen?.()
+    expect(onOpen).not.toHaveBeenCalled()
+    sockets[1].onopen?.()
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    conn.close()
+  })
 })

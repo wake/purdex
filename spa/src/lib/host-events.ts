@@ -77,7 +77,14 @@ export function connectHostEvents(
       }
 
       ws = new WebSocket(wsUrl)
-      ws.onopen = () => { retryMs = 1000; onOpen?.() }
+      // A retired socket (closed or superseded) may still have its `open`
+      // event queued: it must not reach `onOpen`, or the hook would bump the
+      // connection generation and mark a gone / re-pointed host connected.
+      ws.onopen = () => {
+        if (myEpoch !== socketEpoch) return
+        retryMs = 1000
+        onOpen?.()
+      }
       ws.onmessage = (e) => {
         if (myEpoch !== socketEpoch) return // superseded socket's queued frames
         try {
