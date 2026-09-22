@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useNewTabLayoutStore, makePreset, healPresetState } from './useNewTabLayoutStore'
 import type { LayoutPreset } from './useNewTabLayoutStore'
+import { buildSettingsSection } from '../lib/profile/sections'
 
 // helper for tests
 function initialStatePresets() {
@@ -435,5 +436,38 @@ describe('healPresetState', () => {
     }
     healPresetState(s)
     expect(s.activeEditingProfile).toBe('1col')
+  })
+})
+
+// Profile Sync P3e PR-A — zero-byte proof. Renaming the new-tab "profile"
+// concept to "preset" must not change a byte of what this store writes to
+// localStorage, nor of what the settings section sends for it. Both expected
+// strings were produced by main's code before the rename (fields still named
+// `profiles` / `activeEditingProfile`, persist version 1). PR-B changes them on
+// purpose and must update these strings in the same commit.
+describe('persisted and synced bytes (P3e PR-A zero-change proof)', () => {
+  const fixture = {
+    profiles: {
+      '3col': { enabled: true, columns: [['a'], ['b', 'c'], []] },
+      '2col': { enabled: false, columns: [['a', 'b'], ['c']] },
+      '1col': { enabled: true, columns: [['c', 'a', 'b']] },
+    },
+    knownIds: ['a', 'b', 'c'],
+    activeEditingProfile: '2col' as const,
+  }
+
+  it('localStorage JSON is byte-identical', () => {
+    useNewTabLayoutStore.setState(fixture)
+    expect(localStorage.getItem('purdex-newtab-layout')).toBe(
+      '{"state":{"profiles":{"3col":{"enabled":true,"columns":[["a"],["b","c"],[]]},"2col":{"enabled":false,"columns":[["a","b"],["c"]]},"1col":{"enabled":true,"columns":[["c","a","b"]]}},"knownIds":["a","b","c"],"activeEditingProfile":"2col"},"version":1}',
+    )
+  })
+
+  it('settings-section projection of purdex-newtab-layout is byte-identical', () => {
+    useNewTabLayoutStore.setState(fixture)
+    const payload = buildSettingsSection({ 'purdex-newtab-layout': useNewTabLayoutStore.getState() }, new Set())
+    expect(JSON.stringify(payload['purdex-newtab-layout'])).toBe(
+      '{"profiles":{"3col":{"enabled":true,"columns":[["a"],["b","c"],[]]},"2col":{"enabled":false,"columns":[["a","b"],["c"]]},"1col":{"enabled":true,"columns":[["c","a","b"]]}}}',
+    )
   })
 })
