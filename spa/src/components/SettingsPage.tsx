@@ -176,7 +176,17 @@ function GlobalSettingsPage() {
   // initial pick was not selectable (e.g. all contributions disabled
   // except one further down the order), advance the URL to match the
   // mounted section so route-sync round-trips correctly.
+  //
+  // `urlSection === null` also holds for any URL that is not a settings URL
+  // at all. Those belong to route-sync, never to this page (#1326): on a
+  // direct navigation away (e.g. `/w/<ws>/settings`) this page is still
+  // mounted for one commit before route-sync switches the active tab, and a
+  // kept-alive inactive instance stays mounted indefinitely — rewriting such
+  // a URL to `/settings/<section>` makes route-sync re-activate this tab and
+  // the two ping-pong until React aborts.
+  const onSettingsUrl = location === '/settings' || location.startsWith('/settings/')
   useEffect(() => {
+    if (!onSettingsUrl) return
     if (urlSection) return
     if (!activeSection) return
     if (location === `/settings/${activeSection}`) return
@@ -187,7 +197,7 @@ function GlobalSettingsPage() {
       setLocation(`/settings/${activeSection}`, { replace: true })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlSection, activeSection])
+  }, [onSettingsUrl, urlSection, activeSection])
 
   const handleSelectSection = (id: string) => {
     // Guard: the sidebar already suppresses clicks on disabled rows, but
