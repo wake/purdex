@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.431] - 2026-09-23
+
+### Fix：operation lock 一釋放，就用有版本的 session 清單重新對帳（#1309、#1310，#1330）
+
+切換 profile、profile apply、rebuild 這些改寫分頁的動作都在 operation lock 裡執行、寫完才釋放。以前釋放時只拿手上最後一份清單做 revive，
+那份清單可能已經過時；而 profile apply 換上畫面的 pane，要等該 host 下一次 `sessions` 推送才會對帳——host 上沒有其他變化時就永遠不會。
+
+- **單一觸發點** —— lock 釋放時，對「連線已對帳過、且是新版 daemon」的 host `GET /api/sessions?fresh=1` 重新對帳，revive 也用這份清單；
+  其他 host 維持以前的行為。#1309：lock 釋放後的 revive 改用釋放之後才讀的清單（`runRevivePassAll` 移除）。
+  #1310：profile apply（含 wizard 的「拉」）寫完就釋放 lock，剛換上畫面的 pane 立刻用 apply 之後讀的清單對帳，判定再推回 SOT。
+  `switchActiveProfile` 不再自己呼叫 refresh，一次切換每個 host 只抓一次。
+- **lock 世代** —— 某次釋放發出的 fetch，若回來時下一個動作已拿到 lock，就丟掉，交給下一次釋放。WS 對帳失敗後的 recovery 也套用；
+  被擋下的 host 在釋放時重發，gate 關著也不會永遠等不到對帳。
+- **暫存 WS 清單** —— 從拿到 lock 到釋放後那次 refresh 完成之間，新版 daemon 送來的 `sessions` frame 先暫存最新一份，
+  refresh 完成後再依版本判定。避免 apply 之前讀、之後才送達的清單把剛到的 pane 誤判成已結束（不可逆）；#1255 的切換也一併補上。
+- **驗證** —— 真機雙 client（:5176、自建測試 profile）：B 在線上時拉到一個綁已死 session 的 pane → 剛好一次 `fresh=1` → `session-closed` → 推回 SOT；
+  對照組維持 live。純 SPA，不用 deploy。
+- **追蹤** —— #1331（`refresh-sessions.ts` 拆分）。
+
 ## [1.0.0-alpha.430] - 2026-09-23
 
 ### Fix：冷啟動深連結與 persisted active tab 無限乒乓，renderer 當掉（#1326 後半，#1335）
