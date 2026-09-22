@@ -4,7 +4,6 @@ import {
   ensureDefaultDeviceName,
   useDeviceNameStore,
 } from './useDeviceNameStore'
-import * as legacyStore from './useDeviceStateStore'
 import { resolveDefaultDeviceName } from '../lib/device-name'
 
 vi.mock('../lib/device-name', async (importOriginal) => ({
@@ -69,18 +68,6 @@ describe('useDeviceNameStore — persistence is byte-identical to the old store'
     await useDeviceNameStore.persist.rehydrate()
     expect(store().deviceName).toBe('Old Name')
     expect(store().defaultDeviceName).toBe('Browser')
-  })
-})
-
-describe('legacy useDeviceStateStore', () => {
-  it('re-exports the same store instance and ensure function', () => {
-    expect(legacyStore.useDeviceNameStore).toBe(useDeviceNameStore)
-    expect(legacyStore.ensureDefaultDeviceName).toBe(ensureDefaultDeviceName)
-  })
-
-  it('is status-only and no longer persisted', () => {
-    expect(Object.keys(legacyStore.useDeviceStateStore.getState()).sort()).toEqual(['setStatus', 'status'])
-    expect('persist' in legacyStore.useDeviceStateStore).toBe(false)
   })
 })
 

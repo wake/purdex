@@ -3,11 +3,8 @@ import {
   DEVICE_NAME_MAX_CODE_POINTS,
   effectiveDeviceName,
   normalizeDeviceName,
-  parseUserAgentName,
   resolveDefaultDeviceName,
 } from './device-name'
-import * as legacyLib from './device-state/device-name'
-import * as legacyStore from '../stores/useDeviceStateStore'
 
 describe('normalizeDeviceName', () => {
   it('trims surrounding whitespace', () => {
@@ -87,18 +84,5 @@ describe('resolveDefaultDeviceName', () => {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0',
     )
     await expect(resolveDefaultDeviceName()).resolves.toBe('Firefox · Windows')
-  })
-})
-
-describe('legacy paths re-export the same functions', () => {
-  it('lib/device-state/device-name', () => {
-    expect(legacyLib.resolveDefaultDeviceName).toBe(resolveDefaultDeviceName)
-    expect(legacyLib.parseUserAgentName).toBe(parseUserAgentName)
-  })
-
-  it('stores/useDeviceStateStore', () => {
-    expect(legacyStore.normalizeDeviceName).toBe(normalizeDeviceName)
-    expect(legacyStore.effectiveDeviceName).toBe(effectiveDeviceName)
-    expect(legacyStore.DEVICE_NAME_MAX_CODE_POINTS).toBe(DEVICE_NAME_MAX_CODE_POINTS)
   })
 })
