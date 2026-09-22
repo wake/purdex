@@ -72,7 +72,7 @@ describe('RegionManager', () => {
     })
   })
 
-  describe('locale-aware section headings (#1327)', () => {
+  describe('locale-aware section headings (#1324)', () => {
     it('shows the English section headings for the en locale', () => {
       useLayoutStore.getState().setRegionViews('primary-sidebar', ['view-a'])
       render(<RegionManager region="primary-sidebar" />)

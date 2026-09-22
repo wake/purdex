@@ -284,7 +284,7 @@ describe('FileNotFoundPopup', () => {
     })
   })
 
-  describe('locale-aware CTA visible labels (#1327)', () => {
+  describe('locale-aware CTA visible labels (#1324)', () => {
     const spec: PopupSpec = { mode: 'ask-expand', file: baseFile, source: baseSource, ctx: baseCtx }
 
     it('session CTA visible label is English with the path interpolated, for the en locale', () => {

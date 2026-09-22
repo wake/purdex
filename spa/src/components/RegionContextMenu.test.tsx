@@ -54,7 +54,7 @@ describe('RegionContextMenu', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
-  describe('locale-aware empty state (#1327)', () => {
+  describe('locale-aware empty state (#1324)', () => {
     it('shows the English empty-state text for the en locale', () => {
       clearModuleRegistry()
       render(<RegionContextMenu region="primary-sidebar" position={{ x: 100, y: 100 }} onClose={() => {}} />)
