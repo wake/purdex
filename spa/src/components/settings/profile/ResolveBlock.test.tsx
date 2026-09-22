@@ -174,7 +174,7 @@ describe('the confirmation', () => {
     expect(readLocalSide).toHaveBeenCalledTimes(1)
     expect(readLocalSide).toHaveBeenCalledWith(MASTER.profileId, 'workspaces', CONFLICT)
     expect(readHostSide).toHaveBeenCalledTimes(1)
-    expect(readHostSide).toHaveBeenCalledWith(MASTER.hostId, MASTER.profileId, 'workspaces', CONFLICT, expect.any(AbortSignal))
+    expect(readHostSide).toHaveBeenCalledWith(MASTER.hostId, MASTER.profileId, 'workspaces', CONFLICT, { expectEndpoint: ENDPOINT, signal: expect.any(AbortSignal) })
     expect(screen.getByTestId('profile-resolve-count-local')).toHaveAttribute('data-state', 'loading')
     expect(screen.getByTestId('profile-resolve-count-sot')).toHaveAttribute('data-state', 'loading')
     expect(screen.getByTestId('profile-resolve-confirm')).not.toBeDisabled()

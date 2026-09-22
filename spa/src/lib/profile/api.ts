@@ -90,6 +90,7 @@
 // not the P2a pure core).
 
 import { useHostStore } from '../../stores/useHostStore'
+import { endpointOfHost } from '../../stores/useProfileStore'
 import { hostFetch } from '../host-api'
 
 /* ─── wire types ─── */
@@ -167,6 +168,7 @@ export type FailureReason =
   | 'server' //       any other 5xx
   | 'malformed' //    the answer is not what the protocol says it is
   | 'unknown-host' // the hostId is not in the host store; nothing was sent
+  | 'endpoint-changed' // `expectEndpoint` was given and the host is not at it any more; nothing was sent
 
 export interface Failure {
   kind: 'failed'
@@ -201,6 +203,13 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** Default 15 000. */
   timeoutMs?: number
+  /**
+   * `"<ip>:<port>"` (`endpointOfHost`) the request must go to. Compared with where the host is in the SAME
+   * synchronous step that resolves its address for the fetch; any other → nothing is sent, `endpoint-changed`.
+   * A caller that checked the endpoint earlier cannot close that gap itself: the address could move away and back
+   * between its check and the fetch (P3d-4b review A3).
+   */
+  expectEndpoint?: string
 }
 
 export const DEFAULT_TIMEOUT_MS = 15_000
@@ -387,6 +396,13 @@ async function request<T>(
     timer = setTimeout(() => stop('timeout'), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
     const exchange = async (): Promise<T | Failure> => {
+      // Synchronous up to `hostFetch`, which reads the address right here: the endpoint compared is the one used.
+      if (opts?.expectEndpoint !== undefined) {
+        const host = useHostStore.getState().hosts[hostId]
+        if (host === undefined || endpointOfHost(host) !== opts.expectEndpoint) {
+          return failure('endpoint-changed', 0, `host ${hostId} is not at ${opts.expectEndpoint} any more`)
+        }
+      }
       const res = await hostFetch(hostId, path, { ...init, signal: controller.signal })
       const claimed = others?.[res.status]
       if (claimed) return claimed()

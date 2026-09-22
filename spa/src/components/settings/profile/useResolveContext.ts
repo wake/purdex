@@ -7,8 +7,9 @@
 //     the user looked at; the tag does, down to the attach generation (review A1);
 //   - the master's ENDPOINT, `masterEndpoint`: the daemon the attachment is on. The api layer resolves a host's
 //     address on every request, so a host whose address was edited meanwhile would answer from ANOTHER daemon with
-//     the same id (review A3). `api.ts` cannot pin a request to an endpoint, so the host's side is read only while
-//     the host is at that endpoint — checked before the read and again when the answer arrives;
+//     the same id (review A3). The request itself is pinned (`expectEndpoint`: api.ts compares it where it resolves
+//     the address, so an address that moves away and back cannot slip a request to another daemon), and the answer
+//     is checked again when it arrives;
 //   - the section's LOCK (`sameLock`, sync-status.ts).
 // WHAT GOES THROUGH IT: the counts (the host's read, above) and the send. The send hands `requestResolve` the frozen
 // lock AND the frozen tag, and the channel refuses a tag that is not its own — so even a handler that runs after the
@@ -130,7 +131,7 @@ export function useResolveContext(sectionKey: string, lock: SectionLock): Resolv
     })
     if (stale()) lost() // before the host is asked: it must still be at the attachment's endpoint
     else {
-      void readHostSide(ctx.hostId, ctx.profileId, sectionKey, ctx.lock, abort.signal).then((side) => {
+      void readHostSide(ctx.hostId, ctx.profileId, sectionKey, ctx.lock, { expectEndpoint: ctx.endpoint, signal: abort.signal }).then((side) => {
         // …and when it answers: an answer from an address that moved meanwhile may be another daemon's
         if (stale()) lost()
         else setHost(side)

@@ -96,10 +96,11 @@ export async function readLocalSide(profileId: string, key: string, lock: Sectio
   return { count, changedSince: hash !== lock.currentHash }
 }
 
-/** What the host holds now — what "Take the host's" takes, and what "Keep this device's" replaces. */
-export async function readHostSide(hostId: string, profileId: string, key: string, lock: SectionLock, signal?: AbortSignal): Promise<HostSide> {
+/** What the host holds now — what "Take the host's" takes, and what "Keep this device's" replaces. `expectEndpoint`:
+ *  the daemon the attachment is on — the request is sent there or not at all (api.ts, review A3). */
+export async function readHostSide(hostId: string, profileId: string, key: string, lock: SectionLock, opts: { expectEndpoint: string; signal?: AbortSignal }): Promise<HostSide> {
   try {
-    const result = await getSection(hostId, profileId, key, { signal })
+    const result = await getSection(hostId, profileId, key, { signal: opts.signal, expectEndpoint: opts.expectEndpoint })
     if (result.kind !== 'ok') return { count: UNREADABLE, movedOn: false }
     if (result.value === null) return { count: { state: 'read', count: 0 }, movedOn: lock.sot.hash !== null }
     return { count: sideCount(key, result.value.payload), movedOn: result.value.rev !== lock.sot.rev }

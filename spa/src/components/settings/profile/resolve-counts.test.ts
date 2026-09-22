@@ -168,30 +168,79 @@ describe('readLocalSide — what "Keep this device\'s" keeps (R1)', () => {
 })
 
 describe('readHostSide — ONE read-only getSection, made when the confirmation opens', () => {
+  const AT = { expectEndpoint: '10.0.0.1:7860' }
   const section = (rev: number, payload: Record<string, unknown>) => ({ kind: 'ok' as const, value: { section: 'workspaces', rev, hash: 'e'.repeat(64), fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 0, payload } })
 
   it('the host\'s copy, counted; its rev is the frozen lock\'s → not "changed again"', async () => {
     api.getSection.mockResolvedValue(section(4, { order: ['a', 'b', 'c'], workspaces: { a: {}, b: {}, c: {} } }))
-    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}))).toEqual({ count: { state: 'read', count: 3 }, movedOn: false })
+    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}), AT)).toEqual({ count: { state: 'read', count: 3 }, movedOn: false })
     expect(api.getSection).toHaveBeenCalledTimes(1)
-    expect(api.getSection).toHaveBeenCalledWith(HOST, PROFILE, 'workspaces', expect.anything())
+    // pinned to the attachment's endpoint (review A3): the api checks it where it resolves the address
+    expect(api.getSection).toHaveBeenCalledWith(HOST, PROFILE, 'workspaces', { signal: undefined, expectEndpoint: '10.0.0.1:7860' })
   })
 
   it('another rev than the frozen lock\'s → the host changed again', async () => {
     api.getSection.mockResolvedValue(section(5, { order: [], workspaces: {} }))
-    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}))).toEqual({ count: { state: 'read', count: 0 }, movedOn: true })
+    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}), AT)).toEqual({ count: { state: 'read', count: 0 }, movedOn: true })
   })
 
   it('the host has no such section: 0; "changed again" only if the lock thought it had one', async () => {
     api.getSection.mockResolvedValue({ kind: 'ok', value: null })
-    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({ sot: { rev: 4, hash: null } }))).toEqual({ count: { state: 'read', count: 0 }, movedOn: false })
-    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}))).toEqual({ count: { state: 'read', count: 0 }, movedOn: true })
+    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({ sot: { rev: 4, hash: null } }), AT)).toEqual({ count: { state: 'read', count: 0 }, movedOn: false })
+    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}), AT)).toEqual({ count: { state: 'read', count: 0 }, movedOn: true })
   })
 
   it('a failed read, or one that throws → unreadable; never a guess', async () => {
     api.getSection.mockResolvedValueOnce({ kind: 'failed', reason: 'timeout', status: 0, message: 'x' })
-    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}))).toEqual({ count: { state: 'unreadable' }, movedOn: false })
+    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}), AT)).toEqual({ count: { state: 'unreadable' }, movedOn: false })
     api.getSection.mockRejectedValueOnce(new Error('boom'))
-    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}))).toEqual({ count: { state: 'unreadable' }, movedOn: false })
+    expect(await readHostSide(HOST, PROFILE, 'workspaces', lock({}), AT)).toEqual({ count: { state: 'unreadable' }, movedOn: false })
+  })
+})
+
+describe('readHostSide through the REAL getSection: the request is pinned to the attachment\'s endpoint (review A3, ABA)', () => {
+  const A = '10.0.0.1:7860'
+  const at = (ip: string): void => {
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, [HOST]: { ...host(HOST), ip } } })
+  }
+  let urls: string[]
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../../../lib/profile/api')>('../../../lib/profile/api')
+    api.getSection.mockImplementation(actual.getSection)
+    urls = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      urls.push(String(input))
+      const body = { section: 'workspaces', rev: 4, hash: 'e'.repeat(64), fingerprint: 'f'.repeat(64), ordinal: 1, writer: 'c_aaaaaaaaaaaa', updatedAt: 0, payload: { order: ['a'], workspaces: { a: {} } } }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('the host at the endpoint: read as usual, from there', async () => {
+    const side = await readHostSide(HOST, PROFILE, 'workspaces', lock({}), { expectEndpoint: A })
+    expect(side.count).toEqual({ state: 'read', count: 1 })
+    expect(urls).toHaveLength(1)
+    expect(urls[0].startsWith('http://10.0.0.1:7860/')).toBe(true)
+  })
+
+  it('A → B → A: the address is B when the request is built → NOTHING goes to B; back at A by the answer, still nothing is counted', async () => {
+    at('10.9.9.9') // B — after the hook's own check saw A
+    const pending = readHostSide(HOST, PROFILE, 'workspaces', lock({}), { expectEndpoint: A })
+    at('10.0.0.1') // back to A before the answer
+    expect(await pending).toEqual({ count: { state: 'unreadable' }, movedOn: false })
+    expect(urls.filter((u) => u.includes('10.9.9.9'))).toEqual([])
+    expect(urls).toEqual([])
+  })
+
+  it('the api answers `endpoint-changed` — a failure, never a throw', async () => {
+    at('10.9.9.9')
+    const actual = await vi.importActual<typeof import('../../../lib/profile/api')>('../../../lib/profile/api')
+    const result = await actual.getSection(HOST, PROFILE, 'workspaces', { expectEndpoint: A })
+    expect(result).toMatchObject({ kind: 'failed', reason: 'endpoint-changed', status: 0 })
+    expect(urls).toEqual([])
   })
 })
