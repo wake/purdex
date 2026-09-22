@@ -45,9 +45,12 @@ comment naming devicestate is reworded.
    3 keys move with it as `settings.profile.device_name{,_aria,_reset}` (same strings).
    This is the one user-visible change besides the deletions: the field used to live in the
    device-state block on the dev host's Host › Snapshots page.
-2. **No boot-time default name.** `startDeviceStateUploader` (called from `main.tsx`) was the
-   only boot caller of `ensureDefaultDeviceName()`; every consumer already calls it on demand
-   (`LocalProfilesBlock`, `ProfileWizard`, `profile/start.ts`). Nothing else changes at boot.
+2. **The boot-time default name is KEPT.** `startDeviceStateUploader` (called from `main.tsx`)
+   was the only boot caller of `ensureDefaultDeviceName()` — a side effect of the uploader.
+   `DeviceNameField` and the profile wizard read the store and rely on it (without it they show
+   the "Browser" fallback, and the wizard can persist it), so `main.tsx` calls
+   `void ensureDefaultDeviceName()` itself where the uploader used to start (SPA-6, codex R1;
+   `src/main.test.tsx`). Nothing else changes at boot.
 3. **Residue (same policy as P4a, #1303):**
 
 | residue | decision |

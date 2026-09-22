@@ -6,6 +6,7 @@ import { registerBuiltinLocales } from './lib/register-locales'
 import { registerBuiltinThemes } from './lib/register-themes'
 import { registerBuiltinModules } from './lib/register-modules'
 import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger'
+import { ensureDefaultDeviceName } from './stores/useDeviceNameStore'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
@@ -27,6 +28,9 @@ registerBuiltinModules()
 // pane closed still backs up (R1-C1). Module-scope so it persists for the
 // app's lifetime; never disposed.
 startBackupAutoTrigger()
+// Default device name (Electron hostname / UA) for Settings › Profile and the profile wizard.
+// Never rejects; a failure keeps the store's fallback name.
+void ensureDefaultDeviceName()
 // Host config (projects / commands / resume templates): fetch each host's copy when it connects.
 startHostConfigLoader()
 // Peer cache: drop a host's cached peer rows when its daemon identity changes
