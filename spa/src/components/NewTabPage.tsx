@@ -39,8 +39,8 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
 
   const { isWide, isMid } = useBreakpoint()
   const profiles = useNewTabLayoutStore((s) => s.profiles)
-  const profileKey = resolvePreset(isWide, isMid, profiles)
-  const profile = profiles[profileKey]
+  const presetKey = resolvePreset(isWide, isMid, profiles)
+  const preset = profiles[presetKey]
 
   // P1 reload-required contract (matches PaneLayoutRenderer + file-opener
   // registry): module enable/disable does NOT flip the New Tab UI live —
@@ -121,14 +121,14 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
     )
   }
 
-  // v1.4 §4.9.7 (F8): a user's pinned profile may reference only
+  // v1.4 §4.9.7 (F8): a user's pinned preset may reference only
   // providers that are currently filtered out (e.g. pinned `editor` +
   // `editor-buffers`, then disabled the Editor module). In that case
   // every column resolves to an empty list — the old code rendered
   // nothing but the grid, leaving the tab visually blank with no cue.
   // Fall back to the existing empty state when NO column has anything
   // visible; keep the grid otherwise.
-  const hasAnyVisibleEntry = profile.columns.some((col) => col.some((id) => byId[id]))
+  const hasAnyVisibleEntry = preset.columns.some((col) => col.some((id) => byId[id]))
   if (!hasAnyVisibleEntry) {
     return (
       <div className="h-full w-full flex items-center justify-center" data-testid="newtab-empty-state">
@@ -137,12 +137,12 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
     )
   }
 
-  const gridCols = colsClass(profile.columns.length)
+  const gridCols = colsClass(preset.columns.length)
 
   const grid = (
     <div className={`h-full w-full grid overflow-hidden gap-6 px-6 pt-8 ${gridCols}`}>
-      {profile.columns.map((col, i) => (
-        <div key={`${profileKey}-${i}`} className="flex flex-col gap-6 overflow-y-auto">
+      {preset.columns.map((col, i) => (
+        <div key={`${presetKey}-${i}`} className="flex flex-col gap-6 overflow-y-auto">
           {col.map((id) => {
             const p = byId[id]
             if (!p) return null

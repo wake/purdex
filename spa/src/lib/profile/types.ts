@@ -5,8 +5,8 @@
 // their stores, so the lib declares its own structural input types here and the
 // test files pin them against the real stores.
 //
-// There is deliberately no bare `Profile` type — `lib/resolve-profile.ts` owns
-// that name (new-tab layout presets).
+// There is deliberately no bare `Profile` type — the new-tab layout presets
+// (`lib/resolve-preset.ts`) used to own that name.
 import type { HostConfig } from '../../stores/useHostStore'
 import type { Pane, SplitLayout, Tab, Workspace } from '../../types/tab'
 
