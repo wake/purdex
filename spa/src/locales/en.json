@@ -1377,7 +1377,7 @@
   "settings.profile.current.section.pending": "Syncing…",
   "settings.profile.current.section.held": "Waiting — Auto-sync is off",
   "settings.profile.current.section.locked_conflict": "Locked: changed here and on the host",
-  "settings.profile.current.section.locked_reset": "Locked: the host's copy was replaced",
+  "settings.profile.current.section.locked_reset": "Locked: the host's copy was recreated",
   "settings.profile.current.section.locked_invalid": "Locked: the host's copy cannot be used here",
   "settings.profile.current.sot_rev": "host rev {{rev}}",
   "settings.profile.current.rev": "rev {{rev}}",

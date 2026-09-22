@@ -660,3 +660,12 @@ describe('every time the block shows is in the UI language, not the browser\'s (
     }
   })
 })
+
+describe('one word for a reset, in the section list and the Resolve row (P3d-4c F7)', () => {
+  it('"recreated" / 「被重建過」 in both', () => {
+    expect(en['settings.profile.current.section.locked_reset']).toMatch(/recreated/)
+    expect(en['settings.profile.resolve.why.reset']).toMatch(/recreated/)
+    expect(zhTW['settings.profile.current.section.locked_reset']).toMatch(/被重建過/)
+    expect(zhTW['settings.profile.resolve.why.reset']).toMatch(/被重建過/)
+  })
+})
