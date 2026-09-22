@@ -5,10 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { restoreDeviceStateMerge, restoreDeviceStateReplace } from '../../../lib/device-state/restore'
 import { replaceTabSnapshot } from '../../../lib/snapshot/restore'
 import { STORAGE_KEYS } from '../../../lib/storage/keys'
-import type { WorkspaceSnapshot } from '../../../lib/snapshot/types'
 import { createTab, type Tab, type Workspace } from '../../../types/tab'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../store'
 import { ADOPTION_MAX_WAIT_MS, ADOPTION_SETTLE_MS, __allPendingAgedForTest, __pendingRepairCountForTest, startStandaloneAdoption, tabOwnershipQuiet } from './adopt-standalone'
@@ -327,45 +325,6 @@ describe('only the world on screen, and only while it is settled', () => {
     boot()
     expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
     expect(useLocalProfilesStore.getState().parkedMaster?.workspaces.map((w) => w.id)).toEqual(['mmmmmm'])
-  })
-})
-
-describe('device state (lives until P4b): what it restores without a workspace is adopted', () => {
-  const snapshot = (tabs: Tab[], workspaces: Workspace[]): WorkspaceSnapshot => ({
-    version: 1, capturedAt: 1, sessionMeta: {},
-    tabs: Object.fromEntries(tabs.map((t) => [t.id, t])), tabOrder: tabs.map((t) => t.id), activeTabId: null,
-    workspaces, activeWorkspaceId: workspaces[0]?.id ?? null,
-  })
-  const deps = { now: 1, buildSnapshotFn: async () => snapshot([], []) }
-
-  it('replace', async () => {
-    useWorkspaceStore.getState().addWorkspace('Old')
-    stop = startStandaloneAdoption()
-    const owned = createTab({ kind: 'new-tab' })
-    const stray = createTab({ kind: 'new-tab' })
-
-    await restoreDeviceStateReplace(snapshot([owned, stray], [ws('wwwwww', 'W', [owned.id])]), deps)
-    expect(ownersOf(stray.id)).toEqual([])
-    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
-
-    expect(ownersOf(owned.id)).toEqual(['wwwwww'])
-    expect(ownersOf(stray.id)).toEqual([UNSORTED_WORKSPACE_ID])
-    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wwwwww', UNSORTED_WORKSPACE_ID])
-  })
-
-  it('merge (incoming tabs get fresh ids)', async () => {
-    const a = useWorkspaceStore.getState().addWorkspace('A')
-    stop = startStandaloneAdoption()
-    const stray = createTab({ kind: 'dashboard' }) // a merge skips tabs that are nothing but a new-tab page
-
-    const report = await restoreDeviceStateMerge(snapshot([stray], []), deps)
-    expect(report.addedTabs).toBe(1)
-    vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
-
-    const { tabOrder } = useTabStore.getState()
-    expect(tabOrder).toHaveLength(1)
-    expect(ownersOf(tabOrder[0])).toEqual([UNSORTED_WORKSPACE_ID])
-    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual([a.id, UNSORTED_WORKSPACE_ID])
   })
 })
 
