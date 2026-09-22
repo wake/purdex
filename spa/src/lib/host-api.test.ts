@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import {
-  listSessions, createSession, deleteSession,
+  listSessions, listSessionsFresh, createSession, deleteSession,
   fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
   fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers,
   type MonitorSnapshot, type Session,
@@ -53,6 +53,42 @@ describe('listSessions', () => {
       new Response('error', { status: 500, statusText: 'Internal Server Error' }),
     )
     await expect(listSessions(HOST_ID)).rejects.toThrow('500')
+  })
+})
+
+describe('listSessionsFresh', () => {
+  const EPOCH = '9f3c1a0b7d2e4c61'
+  const respond = (body: unknown, init: ResponseInit = { status: 200 }) =>
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(body), init))
+
+  it('asks for ?fresh=1 with auth and returns the versioned envelope', async () => {
+    respond({ epoch: EPOCH, seq: 42, sessions: [mockSession] })
+    const result = await listSessionsFresh(HOST_ID)
+    expect(result).toEqual({ kind: 'versioned', epoch: EPOCH, seq: 42, sessions: [mockSession] })
+    expectAuthFetch(`${BASE}/api/sessions?fresh=1`)
+  })
+
+  it('an array body is an old daemon: unversioned', async () => {
+    respond([mockSession])
+    expect(await listSessionsFresh(HOST_ID)).toEqual({ kind: 'unversioned' })
+  })
+
+  it.each([
+    ['a bad epoch', { epoch: 'nope', seq: 42, sessions: [] }],
+    ['seq 0', { epoch: EPOCH, seq: 0, sessions: [] }],
+    ['no sessions', { epoch: EPOCH, seq: 42 }],
+    ['sessions not an array', { epoch: EPOCH, seq: 42, sessions: null }],
+    ['null body', null],
+  ])('an object with %s is unversioned', async (_label, body) => {
+    respond(body)
+    expect(await listSessionsFresh(HOST_ID)).toEqual({ kind: 'unversioned' })
+  })
+
+  it('throws on error status', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('error', { status: 500, statusText: 'Internal Server Error' }),
+    )
+    await expect(listSessionsFresh(HOST_ID)).rejects.toThrow('500')
   })
 })
 
