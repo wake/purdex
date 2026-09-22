@@ -430,6 +430,31 @@ describe('settings waiting for workspaces', () => {
     expect(screen.queryByTestId('profile-current-section-failing-workspaces')).toBeNull()
   })
 
+  it('F3: a STALE follower (the leader is gone) makes no live claim: no "next try", no failure-based wait — a lock still counts', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 8, 23, 15, 0, 0))
+    const past = new Date(2026, 8, 23, 14, 2, 31).getTime()
+    const failingStatus = {
+      ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'),
+      detail: { workspaces: { rev: 1, failures: 3, retryAt: past } },
+      indexFailures: 1,
+    }
+    show(attached({ leader: false, remote: true, stale: true, status: failingStatus }))
+    expect(screen.getByTestId('profile-current-stale')).toBeInTheDocument()
+    expect(screen.queryByTestId('profile-current-section-failing-workspaces')).toBeNull()
+    expect(screen.getByTestId('profile-current-sections')).not.toHaveTextContent(new Date(past).toLocaleTimeString())
+    expect(screen.queryByTestId('profile-current-settings-waiting')).toBeNull()
+    cleanup()
+    // the control: the same figures from a leader that is there ARE said
+    show(attached({ leader: false, remote: true, stale: false, status: failingStatus }))
+    expect(screen.getByTestId('profile-current-section-failing-workspaces')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-current-settings-waiting')).toHaveAttribute('data-reason', 'failing')
+    cleanup()
+    // a lock is a fact, not a promise: said even when stale
+    show(attached({ leader: false, remote: true, stale: true, status: status({ workspaces: 'locked:conflict', settings: 'pending' }, 'locked:conflict', { workspaces: lock('locked:conflict', 9) }) }))
+    expect(screen.getByTestId('profile-current-settings-waiting')).toHaveAttribute('data-reason', 'locked')
+  })
+
   it('workspaces failing, or the index read failing → said, as "failing"', () => {
     show(attached({ status: { ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'), detail: { workspaces: { rev: 1, failures: 2, retryAt: null } } } }))
     const el = screen.getByTestId('profile-current-settings-waiting')

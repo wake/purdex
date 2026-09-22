@@ -159,7 +159,12 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const blocked = sync.blocked ?? (profileIsGone(sync) ? 'profile-gone' : null)
   // While `blocked` (the profile gone included) no driver runs: nothing is waited for and no retry is armed,
   // whatever the last figures say (review F2).
-  const waiting = blocked === null ? settingsWaitForWorkspaces(sync.status) : null
+  // A STALE follower's figures are the last ones a leader that is gone reported (review F3): a failure and its
+  // "next try" were promises of that leader's executor, so they are not shown at all — the simpler of the two
+  // choices, and the stale sentence says why. A lock is a fact, not a promise: a lock-based wait is still said.
+  const live = !(sync.remote && sync.stale)
+  const waitReason = blocked === null ? settingsWaitForWorkspaces(sync.status) : null
+  const waiting = waitReason === 'failing' && !live ? null : waitReason
   const lastSuccessAt = sync.status?.lastSuccessAt ?? null
 
   const sectionLabel = (view: SectionView): string => {
@@ -258,7 +263,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                   {/* The raw key is for whoever needs it (a bug report, the acceptance run): the tooltip. */}
                   <span title={key} className="text-text-primary">{sectionLabel(view)}</span>
                   <span className="flex flex-wrap items-center gap-2 text-text-secondary">
-                    {blocked === null && detail !== undefined && detail.failures > 0 && (
+                    {blocked === null && live && detail !== undefined && detail.failures > 0 && (
                       // A state that heals by itself (the retry is armed), not an error: the notice tone.
                       <span data-testid={`profile-current-section-failing-${key}`} className="text-yellow-500">
                         {detail.retryAt === null
