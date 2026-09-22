@@ -137,7 +137,7 @@
 // view is as old as the last publish (≤ 250 ms plus the event), which is exactly
 // what the binding is for.
 import { STORAGE_KEYS } from '../storage/keys'
-import type { SectionLock } from './executor'
+import type { ExecutorStatus, SectionDetail, SectionLock } from './executor'
 import type { ProfileSyncState } from './start'
 import type { SectionConflict } from './sync-state'
 
@@ -287,7 +287,40 @@ function parsePublished(raw: string | null): PublishedStatus | null {
   if (status !== null && typeof status !== 'object') return null
   if (!BLOCKED.includes(blocked as ProfileSyncState['blocked'])) return null
   if (!Array.isArray(problems)) return null
-  return { at, leader, master, status: status as PublishedStatus['status'], blocked: blocked as PublishedStatus['blocked'], problems: problems as PublishedStatus['problems'] }
+  return { at, leader, master, status: status === null ? null : withDetail(status as Record<string, unknown>), blocked: blocked as PublishedStatus['blocked'], problems: problems as PublishedStatus['problems'] }
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+const isTime = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** One `detail` entry exactly in its shape, or `undefined`. */
+function parseDetail(value: unknown): SectionDetail | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const { rev, failures, retryAt } = value as Record<string, unknown>
+  if (rev !== null && !(typeof rev === 'number' && Number.isSafeInteger(rev))) return undefined
+  if (!isCount(failures)) return undefined
+  if (retryAt !== null && !isTime(retryAt)) return undefined
+  return { rev, failures, retryAt }
+}
+
+/**
+ * The fields P3d-4 added. A record from an OLDER build has none of them, and one that is damaged has them in
+ * another shape: either way they are read as ABSENT — no detail, no counter, not gone, never synced — which the
+ * page shows as nothing, never as "0" or "never". A damaged `detail` entry is left out on its own.
+ */
+function withDetail(status: Record<string, unknown>): ExecutorStatus {
+  const { profileGone, detail, indexFailures, lastSuccessAt } = status
+  const entries = typeof detail === 'object' && detail !== null ? Object.entries(detail as Record<string, unknown>) : []
+  return {
+    ...(status as unknown as ExecutorStatus),
+    profileGone: profileGone === true,
+    detail: Object.fromEntries(entries.flatMap(([key, value]) => {
+      const parsed = parseDetail(value)
+      return parsed === undefined ? [] : [[key, parsed]]
+    })),
+    indexFailures: isCount(indexFailures) ? indexFailures : 0,
+    lastSuccessAt: isTime(lastSuccessAt) ? lastSuccessAt : null,
+  }
 }
 
 /** `undefined` = damaged. `null` is a value: "the section had no pair". */

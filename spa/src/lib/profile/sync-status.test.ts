@@ -351,6 +351,49 @@ describe('a follower reads what the leader published', () => {
     expect(b.snapshot()).toMatchObject({ status: SYNCED, remote: true })
   })
 
+  it('a record from an OLDER build (no detail, no counters, no profileGone) is one, with those read as absent', async () => {
+    const old = { profile: 'locked:reset', schemaLock: null, sections: { hosts: 'synced' }, locks: {} }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status: old, blocked: 'profile-gone', problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot()).toMatchObject({ blocked: 'profile-gone', remote: true })
+    expect(b.snapshot().status).toEqual({ ...old, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })
+  })
+
+  it('the new fields are taken only in their shape: a damaged one is read as absent, a damaged detail entry is left out', async () => {
+    const status = {
+      ...SYNCED,
+      sections: { hosts: 'synced', settings: 'pending', workspaces: 'pending', 'tabs.w1': 'synced' },
+      profileGone: 'yes',
+      indexFailures: -1,
+      lastSuccessAt: '12:00',
+      detail: {
+        hosts: { rev: 3, failures: 0, retryAt: null },
+        settings: { rev: null, failures: 2, retryAt: 5000 },
+        workspaces: { rev: '3', failures: 0, retryAt: null },
+        'tabs.w1': { rev: 1, failures: 1 },
+        'tabs.w2': { rev: 1, failures: 'many', retryAt: null },
+        'tabs.w3': 'rev 1',
+        'tabs.w4': null,
+      },
+    }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot().status).toMatchObject({
+      profileGone: false,
+      indexFailures: 0,
+      lastSuccessAt: null,
+      detail: { hosts: { rev: 3, failures: 0, retryAt: null }, settings: { rev: null, failures: 2, retryAt: 5000 } },
+    })
+    expect(Object.keys(b.snapshot().status!.detail).sort()).toEqual(['hosts', 'settings'])
+  })
+
+  it('the new fields, well-formed, are read as they were written', async () => {
+    const status = { ...SYNCED, profileGone: true, indexFailures: 3, lastSuccessAt: 999, detail: { hosts: { rev: 3, failures: 1, retryAt: 4000 } } }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot().status).toEqual(status)
+  })
+
   it('storage that throws on read is no record', async () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked')
