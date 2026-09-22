@@ -11,13 +11,11 @@ import {
 import { defaultResumeLookup } from '../resume-templates'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import type { BatchCandidate } from './eligibility'
-import { useRebuildStore } from '../../stores/useRebuildStore'
+import { useRebuildStore, withOperationLock } from '../../stores/useRebuildStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { rebuildPane } from './engine'
-import { restoreAll } from '../snapshot/restore'
-import type { WorkspaceSnapshot } from '../snapshot/types'
 import type { Session } from '../host-api'
 import type { ResumeTemplateOverrides } from '../host-config-api'
 import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../../types/tab'
@@ -210,13 +208,6 @@ function rebindPane(tabId: string, _paneId: string, sessionCode: string) {
       [tabId]: { ...tab, layout: { ...layout, pane: { ...layout.pane, content: { ...layout.pane.content, sessionCode } as never } } },
     },
   })
-}
-
-function emptySnapshot(): WorkspaceSnapshot {
-  return {
-    version: 1, capturedAt: 0, tabs: {}, tabOrder: [], activeTabId: null,
-    workspaces: [], activeWorkspaceId: null, sessionMeta: {},
-  }
 }
 
 function deferred<T = void>() {
@@ -434,7 +425,7 @@ describe('runBatchRebuild', () => {
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
-  it('keeps a legacy snapshot restore out for as long as a batch holds the lock', async () => {
+  it('keeps another lock owner out for as long as a batch holds the lock', async () => {
     seedPane('h1', 't1', 'p1', { sessionName: 'dev' })
     const creating = deferred<void>()
     const finishCreate = deferred<void>()
@@ -449,8 +440,8 @@ describe('runBatchRebuild', () => {
     await creating.promise
 
     await expect(
-      restoreAll(emptySnapshot(), { now: 1, buildSnapshotFn: async () => emptySnapshot() }),
-    ).rejects.toThrow(new RegExp(BATCH_LOCK_OWNER))
+      withOperationLock('other', async () => { useTabStore.setState({ tabs: {} }); return 'ran' }, (holder) => `refused:${holder}`),
+    ).resolves.toBe(`refused:${BATCH_LOCK_OWNER}`)
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
 
     finishCreate.resolve()
@@ -461,7 +452,7 @@ describe('runBatchRebuild', () => {
     // Two groups, and both batches run under the same owner name. Pre-fix the
     // second batch was admitted on owner equality, and the FIRST one's release
     // then freed the lock while the second was still awaiting its own create —
-    // at which point a legacy restore could replace the whole tab tree.
+    // at which point another lock owner could replace the whole tab tree.
     seedPane('h1', 't1', 'p1', { sessionName: 'dev' })
     seedPane('h1', 't2', 'p2', { sessionName: 'other' }, { sessionCode: 'old222' })
 
@@ -495,8 +486,8 @@ describe('runBatchRebuild', () => {
     expect(useRebuildStore.getState().lockedBy).toBeNull()
     // Nothing is in flight, so the lock really did hand over rather than leak.
     await expect(
-      restoreAll(emptySnapshot(), { now: 1, buildSnapshotFn: async () => emptySnapshot() }),
-    ).resolves.toBeTruthy()
+      withOperationLock('other', async () => 'ran', (holder) => `refused:${holder}`),
+    ).resolves.toBe('ran')
 
     releaseSecond.resolve()
     expect((await second).status).toBe('blocked')
