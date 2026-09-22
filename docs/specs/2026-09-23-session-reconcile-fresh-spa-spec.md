@@ -108,7 +108,10 @@ therefore retries a failed fetch (network, non-2xx) or a reconciliation that thr
 captured when the refresh starts; before EVERY attempt all of them are re-checked (world
 fence unchanged, host still in `hostOrder` at the same endpoint, `conn` unchanged, and —
 when `requireGate` — the gate open), and any mismatch ends the refresh without a retry:
-whatever moved the fence brings its own evidence. A stale or unversioned answer is never
+whatever moved the fence brings its own evidence. These checks gate SENDING an attempt; an
+answer that comes back after `conn` moved is still judged by `decide` (§3.1) — the same
+epoch with a newer seq is applied (one total order across channels, daemon contract §3.3
+rule 4), a different epoch is stale. A stale or unversioned answer is never
 retried. The post-switch refresh uses `requireGate: true`; the WS recovery (§3.3, a frame
 whose reconciliation threw) uses `requireGate: false`, because that frame may have been the
 one meant to open the gate, and holds the answer to its connection instead (`conn`
