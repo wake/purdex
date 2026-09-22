@@ -907,7 +907,8 @@ merge.
 - **R3 — every change of the published counters emits.** `emitStatus()` after `armRetry`, `clearBackoff`, the
   retry timer firing, `resetRetries`, and each reindex failure / success / retry firing. The signature includes
   the new fields, so an unchanged value still emits nothing. Tested: each of those seven points, alone, changes
-  the published status.
+  the published status. *(As built: the index retry firing changes no published field, so that point cannot
+  be observed — dropped; the emit after a successful index read coincides with `setSchemaLock`'s.)*
 - **R4 — `lastSuccessAt`, defined:** the time the leader last handled an answer FROM THE HOST (an index read, a
   pull, a push outcome incl. `push-converged`) after which `profileStatus` is `synced`. Shown as "in sync as of
   <time>" (`profile-current-last-sync`), not "last synced". A local edit does not move it; neither does a failure.
@@ -923,6 +924,8 @@ merge.
   both directions; invalid → no *Take the host's* button, and a forged `sot` command changes nothing; a pairless
   lock whose host rev moved on → the open dialog closes and the stale command is dropped; conflict with
   `currentHash !== conflict.localHash` → *Keep this device's* pushes the SENT snapshot, and the dialog said so.
+- **`invalidReason` moved to 4b** (4a as built): its closed code list is chosen there, from `ApplyOutcome`'s
+  cases in `apply-to-stores.ts` — the file 4b touches anyway, and the invalid row is 4b's.
 - **R8 — 4c is reviewed like the others:** its fixes are TDD'd, and codex R1 runs on 4c's diff (`--base` = 4b's
   merge); attack + critic only if R1 finds a critical.
 
