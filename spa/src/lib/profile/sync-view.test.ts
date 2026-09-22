@@ -68,6 +68,17 @@ describe('settingsWaitForWorkspaces — the executor\'s settings gate, as far as
     expect(settingsWaitForWorkspaces({ ...status({ workspaces: 'pending', settings: 'pending' }), detail: { hosts: failing, settings: failing } })).toBeNull()
   })
 
+  it('F2: the profile gone (the index no longer lists it) → not waiting: nothing will ever open that gate', () => {
+    const gone = {
+      ...status({ workspaces: 'locked:conflict', settings: 'pending' }, 'locked:reset'),
+      profileGone: true,
+      detail: { workspaces: failing },
+      indexFailures: 2,
+    }
+    expect(settingsWaitForWorkspaces(gone)).toBeNull()
+    expect(settingsWaitForWorkspaces({ ...gone, sections: { workspaces: 'pending', settings: 'pending' } })).toBeNull()
+  })
+
   it('settings itself locked → that is its own story, not a wait', () => {
     expect(settingsWaitForWorkspaces(status({ workspaces: 'locked:conflict', settings: 'locked:conflict' }))).toBeNull()
   })

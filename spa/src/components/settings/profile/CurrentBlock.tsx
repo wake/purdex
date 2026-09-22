@@ -157,7 +157,9 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const schemaLock = sync.status?.schemaLock ?? null
   // A gone profile has two sources (a 404; the index no longer listing it) and ONE sentence: read alike.
   const blocked = sync.blocked ?? (profileIsGone(sync) ? 'profile-gone' : null)
-  const waiting = settingsWaitForWorkspaces(sync.status)
+  // While `blocked` (the profile gone included) no driver runs: nothing is waited for and no retry is armed,
+  // whatever the last figures say (review F2).
+  const waiting = blocked === null ? settingsWaitForWorkspaces(sync.status) : null
   const lastSuccessAt = sync.status?.lastSuccessAt ?? null
 
   const sectionLabel = (view: SectionView): string => {
@@ -256,7 +258,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                   {/* The raw key is for whoever needs it (a bug report, the acceptance run): the tooltip. */}
                   <span title={key} className="text-text-primary">{sectionLabel(view)}</span>
                   <span className="flex flex-wrap items-center gap-2 text-text-secondary">
-                    {detail !== undefined && detail.failures > 0 && (
+                    {blocked === null && detail !== undefined && detail.failures > 0 && (
                       // A state that heals by itself (the retry is armed), not an error: the notice tone.
                       <span data-testid={`profile-current-section-failing-${key}`} className="text-yellow-500">
                         {detail.retryAt === null

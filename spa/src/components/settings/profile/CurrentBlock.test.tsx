@@ -412,6 +412,24 @@ describe('settings waiting for workspaces', () => {
     expect(el).toHaveTextContent(en['settings.profile.current.settings_waiting_locked'])
   })
 
+  it('F2: nothing is waited for while nothing syncs — the profile gone, or blocked: no waiting sentence, no "next try"', () => {
+    const failingStatus = {
+      ...status({ workspaces: 'locked:conflict', settings: 'pending' }, 'locked:reset', { workspaces: lock('locked:conflict', 9) }),
+      detail: { workspaces: { rev: 1, failures: 3, retryAt: 5000 }, settings: { rev: 1, failures: 1, retryAt: 6000 } },
+      indexFailures: 2,
+    }
+    show(attached({ status: { ...failingStatus, profileGone: true } }))
+    expect(screen.getByTestId('profile-current-blocked')).toHaveAttribute('data-reason', 'profile-gone')
+    expect(screen.queryByTestId('profile-current-settings-waiting')).toBeNull()
+    expect(screen.queryByTestId('profile-current-section-failing-workspaces')).toBeNull()
+    expect(screen.queryByTestId('profile-current-section-failing-settings')).toBeNull()
+    expect(screen.getByTestId('profile-current-section-sot-rev-workspaces')).toBeInTheDocument() // the lock is kept, and shown
+    cleanup()
+    show(attached({ blocked: 'master-endpoint-changed', status: { ...failingStatus, sections: { workspaces: 'pending', settings: 'pending' }, locks: {} } }))
+    expect(screen.queryByTestId('profile-current-settings-waiting')).toBeNull()
+    expect(screen.queryByTestId('profile-current-section-failing-workspaces')).toBeNull()
+  })
+
   it('workspaces failing, or the index read failing → said, as "failing"', () => {
     show(attached({ status: { ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'), detail: { workspaces: { rev: 1, failures: 2, retryAt: null } } } }))
     const el = screen.getByTestId('profile-current-settings-waiting')

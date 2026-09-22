@@ -56,7 +56,9 @@ export function profileIsGone(sync: ProfileSyncSnapshot): boolean {
  * every edit).
  */
 export function settingsWaitForWorkspaces(status: ExecutorStatus | null): 'locked' | 'failing' | null {
-  if (status === null || status.sections.settings !== 'pending') return null
+  // The profile gone: the executor has stopped for good (no pump, no reindex) and keeps its last sections — a
+  // "waiting" read from them would be a wait that never ends (review F2). The 404's status has no sections at all.
+  if (status === null || status.profileGone || status.sections.settings !== 'pending') return null
   if (status.sections.workspaces?.startsWith('locked:') ?? false) return 'locked'
   if ((status.detail.workspaces?.failures ?? 0) > 0 || status.indexFailures > 0) return 'failing'
   return null
