@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.425] - 2026-09-23
+
+### Refactor：新分頁版面的「profile」改名為「preset」（Profile Sync P3e，#1291、#1297）
+
+新分頁版面（三欄／兩欄／單欄）原本也叫 profile，跟 Profile Sync 的 profile 撞名。使用者 2026-09-23 定案現在就改，
+避免後續接手的 session 遇到語意混淆。Profile Sync 的 profile 與 Nexen 的 Sandbox profile 都沒動；中文介面文案不變。
+
+- **#1291（純改名，零 byte 變更）** —— `lib/resolve-preset.ts`（`PresetKey`／`LayoutPreset`／`resolvePreset`）、
+  `NewTabPresetSwitcher`、`presetKey` prop、`preset-*` testid、`settings.interface.preset_*` 六個 i18n key、
+  英文 "Fallback preset (cannot be disabled)"。以固定狀態釘住 localStorage 與同步 payload 的字串，證明一個 byte 都沒變。
+- **#1297（持久化欄位＋同步形狀，原子 PR）** —— store 欄位 `profiles` → `presets`、`activeEditingProfile` → `activeEditingPreset`，
+  persist `version: 2` 加 migrate（對 20 種壞資料與 v1 修復結果等價、跨視窗 rehydrate 不打迴圈）；
+  settings projection 改同步 `presets`，`SECTION_SCHEMA_ORDINAL.settings` 3 → 4（settings fingerprint 變動是預期）。
+- **新舊 client 共存** —— ordinal-3 client 寫的 settings（欄位仍叫 `profiles`）在 `applySettingsSection` 入口先 upcast，
+  clean pull、首次 attach pull、keep-sot、重啟後 keep-local 重放四條路徑都不會 `invalid` 也不會把版面清成預設；
+  新 client 推一次 ordinal-4 的 settings 後就安靜，舊 client 遇到 ordinal 4 進 `locked:schema`、零寫入。
+  review 抓到 keep-local 會先推一筆「舊形狀＋ordinal 4」的 row，已改成先 upcast、只推一次（`local-restored` 多帶 `localHash`）。
+- **使用者注意** —— 升級後第一次同步會把 SOT 的 settings 升到 ordinal 4，還沒升級的其他裝置會停在 `locked:schema` 直到升級；
+  自訂語系若翻譯過舊的六個 `settings.interface.profile_*` key，這六個會回到內建文字。
+- **驗證** —— 真機 :5176：main → branch 同 origin，v1 → v2 資料逐欄相等、設定頁與寬螢幕新分頁畫面一致。純 SPA，不用 deploy。
+- **追蹤** —— #1306（`executor.ts` 過大，拆分）。
+
 ## [1.0.0-alpha.424] - 2026-09-23
 
 ### Refactor：拆掉舊的 Sync 模組（Profile Sync P4a，#1298–#1302 SPA、#1305 daemon）
