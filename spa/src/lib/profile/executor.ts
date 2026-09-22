@@ -404,6 +404,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   let previousWorkspaceIds = localWorkspaceIds() ?? []
   let lastStatus = ''
   let lastSuccessAt: number | null = null
+  /** When the leader last handled an answer from the host — whatever the profile was then (see `successAt`). */
+  let lastAnswerAt: number | null = null
 
   /* ─── the one door every request goes through ─── */
 
@@ -474,14 +476,27 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       profileGone,
       detail: Object.fromEntries([...sections].map(([key, s]) => [key, detailOf(key, s)])),
       indexFailures: reindexFailures,
-      lastSuccessAt,
+      lastSuccessAt: successAt(),
     }
   }
 
-  /** An answer from the host has just been handled: if the profile is `synced` now, that is the time it was. */
+  /**
+   * R4: the time of the last host answer after which the profile is `synced`. The profile does not always become
+   * `synced` ON an answer: a pull that removes a workspace leaves that workspace's `tabs.*` dirty until the
+   * collector reports it gone (both sides absent — agreement, no request), so the first reconciliation of a pull
+   * can end on a LOCAL report (P3d-4c F1). What is agreed then is what the host said in its last answer, so that
+   * answer's time is the one latched, the moment the profile is seen `synced`. A local edit or a failure is no
+   * answer: it moves nothing (an edit undone falls back on the same answer).
+   */
+  function successAt(): number | null {
+    if (!disposed && lastAnswerAt !== null && profileNow() === 'synced') lastSuccessAt = lastAnswerAt
+    return lastSuccessAt
+  }
+
+  /** An answer from the host has just been handled (see `successAt`). */
   function answered(): void {
-    if (disposed || profileNow() !== 'synced') return
-    lastSuccessAt = now()
+    if (disposed) return
+    lastAnswerAt = now()
     emitStatus()
   }
 

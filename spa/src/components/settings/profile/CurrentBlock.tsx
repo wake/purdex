@@ -25,11 +25,12 @@
 // `profileGone` — is shown as it is: the AGREED rev on every row (a locked row keeps the host's beside it), a
 // failing row's next try, "in sync as of", why settings wait. A record from an older build has none of them and
 // the page then shows nothing for them — never "0" or "never" (sync-status.ts reads them as absent). Times are
-// absolute local times: no clock runs on this page — except a "sent" Resolve row's, bounded by the command's TTL
-// (ResolveRow.tsx).
+// absolute local times IN THE UI LANGUAGE (`dateLocale`; P3d-4c F5 — the browser's showed 「上午」 in an English UI):
+// no clock runs on this page — except a "sent" Resolve row's, bounded by the command's TTL (ResolveRow.tsx).
 import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { getLocale } from '../../../lib/locale-registry'
 import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
@@ -39,7 +40,16 @@ import { useProfileSync } from '../../../hooks/useProfileSync'
 import { requestSyncNow } from '../../../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 import { readMasterWorld, type UnsettledReason } from '../../../lib/profile/master-world'
-import { SYNC_DOT_CLASS, describeSections, profileIsGone, settingsWaitForWorkspaces, syncDotOf, type SectionView } from '../../../lib/profile/sync-view'
+import {
+  SYNC_DOT_CLASS,
+  describeSections,
+  heldByAutoSyncOff,
+  profileIsGone,
+  sectionHeldByAutoSyncOff,
+  settingsWaitForWorkspaces,
+  syncDotOf,
+  type SectionView,
+} from '../../../lib/profile/sync-view'
 import { SettingItem } from '../SettingItem'
 import { ToggleSwitch } from '../ToggleSwitch'
 import { ResolveBlock } from './ResolveBlock'
@@ -49,7 +59,7 @@ import { ProfileWizard } from './wizard/ProfileWizard'
 const BTN =
   'shrink-0 flex items-center gap-1.5 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
 const BADGE = 'rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-secondary'
-/** A state the user should know of, not a fault: the tone of `DeviceStateSection`'s "offline". */
+/** A state the user should know of, not a fault: yellow, never red — the tone of the Resolve rows' notices too. */
 const NOTICE = 'mt-2 text-xs text-yellow-500'
 const PROBLEMS_SHOWN = 5
 
@@ -83,6 +93,19 @@ const WORLD_KEY: Record<UnsettledReason, string> = {
   'no-parked-master': 'settings.profile.current.world.no_parked_master',
 }
 
+/**
+ * The UI language as a tag `Date#toLocale*` takes. A built-in locale's id IS one (`en`, `zh-TW`); a user-imported
+ * locale's id is random and names no language, and its missing keys fall back to English — so do its times. Never
+ * `undefined`: that is the browser's language, which is not the one the page is written in.
+ */
+function dateLocaleOf(localeId: string): string {
+  return getLocale(localeId)?.builtin === true ? localeId : 'en'
+}
+
+function useDateLocale(): string {
+  return dateLocaleOf(useI18nStore((s) => s.activeLocaleId))
+}
+
 interface Props {
   /** The SOT profile's name, from the host's list when it has answered; null → the id stands in. */
   masterName: string | null
@@ -90,6 +113,7 @@ interface Props {
 
 export function CurrentBlock({ masterName }: Props) {
   const t = useI18nStore((s) => s.t)
+  const dateLocale = useDateLocale()
   const sync = useProfileSync()
   const [wizardOpen, setWizardOpen] = useState(false)
   const problems = sync.master === null ? [] : sync.problems.slice(-PROBLEMS_SHOWN).reverse()
@@ -112,7 +136,7 @@ export function CurrentBlock({ masterName }: Props) {
           <Attached sync={sync} master={sync.master} masterName={masterName} />
           <SettingItem label={t('settings.profile.current.change')} description={t('settings.profile.current.change_desc')}>
             <button type="button" data-testid="profile-setup-change" onClick={() => setWizardOpen(true)} className={BTN}>
-              {t('settings.profile.current.setup')}
+              {t('settings.profile.current.change')}
             </button>
           </SettingItem>
         </>
@@ -125,7 +149,7 @@ export function CurrentBlock({ masterName }: Props) {
           <ul className="mt-1 flex flex-col gap-0.5">
             {problems.map((p, i) => (
               <li key={`${p.at}:${i}`} data-testid="profile-current-problem" className="text-xs text-text-muted">
-                <span className="font-mono">{new Date(p.at).toLocaleTimeString()}</span>{' '}
+                <span className="font-mono">{new Date(p.at).toLocaleTimeString(dateLocale)}</span>{' '}
                 <span className="font-mono text-text-secondary">{p.section === undefined ? p.kind : `${p.kind} · ${p.section}`}</span>{' '}
                 {p.detail}
               </li>
@@ -139,6 +163,7 @@ export function CurrentBlock({ masterName }: Props) {
 
 function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; master: NonNullable<ProfileSyncSnapshot['master']>; masterName: string | null }) {
   const t = useI18nStore((s) => s.t)
+  const dateLocale = useDateLocale()
   const autoSync = useProfileStore((s) => s.autoSync)
   const setAutoSync = useProfileStore((s) => s.setAutoSync)
   const attachedAt = useProfileStore((s) => s.masterEndpoint)
@@ -150,6 +175,8 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
 
   // `syncDotOf` cannot answer null here: there is a master.
   const dot = syncDotOf(sync) ?? 'unknown'
+  // Auto-sync off: `pending` waits for the user, it is not being synced (P3d-4c F2). The raw state stays in data-*.
+  const held = heldByAutoSyncOff(sync, autoSync)
   const source = sync.remote ? 'leader' : 'this-window'
   const fromLeader = sync.remote && (
     <span data-testid="profile-current-source" className={BADGE}>{t('settings.profile.current.from_leader')}</span>
@@ -205,15 +232,21 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
       <SettingItem label={t('settings.profile.current.state')}>
         <div className="flex items-center gap-2 text-xs">
           {fromLeader}
-          <span data-testid="profile-current-state" data-state={dot} data-source={source} className="flex items-center gap-1.5 text-text-primary">
+          <span
+            data-testid="profile-current-state"
+            data-state={dot}
+            data-held={held ? 'auto-sync-off' : undefined}
+            data-source={source}
+            className="flex items-center gap-1.5 text-text-primary"
+          >
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${SYNC_DOT_CLASS[dot]}`} />
-            {t(`profile.sync.${dot}`)}
+            {t(held ? 'profile.sync.held' : `profile.sync.${dot}`)}
           </span>
         </div>
       </SettingItem>
       {lastSuccessAt !== null && (
         <p data-testid="profile-current-last-sync" className="text-xs text-text-muted">
-          {t('settings.profile.current.last_sync', { time: new Date(lastSuccessAt).toLocaleString() })}
+          {t('settings.profile.current.last_sync', { time: new Date(lastSuccessAt).toLocaleString(dateLocale) })}
         </p>
       )}
 
@@ -252,12 +285,14 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
               const state = sync.status!.sections[key]
               const lock = sync.status!.locks[key]
               const detail = sync.status!.detail[key] // absent: a record from an older build — nothing is shown for it
+              const rowHeld = sectionHeldByAutoSyncOff(sync, state, autoSync)
               return (
                 <li
                   key={key}
                   data-testid={`profile-current-section-${key}`}
                   data-section={key}
                   data-status={state}
+                  data-held={rowHeld ? 'auto-sync-off' : undefined}
                   data-source={source}
                   className="flex flex-wrap items-center justify-between gap-2 border-t border-border-default py-1.5 text-xs"
                 >
@@ -269,7 +304,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                       <span data-testid={`profile-current-section-failing-${key}`} className="text-yellow-500">
                         {detail.retryAt === null
                           ? t('settings.profile.current.section_failing')
-                          : t('settings.profile.current.section_failing_at', { time: new Date(detail.retryAt).toLocaleTimeString() })}
+                          : t('settings.profile.current.section_failing_at', { time: new Date(detail.retryAt).toLocaleTimeString(dateLocale) })}
                       </span>
                     )}
                     {detail !== undefined && detail.rev !== null && (
@@ -282,7 +317,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                         {t('settings.profile.current.sot_rev', { rev: lock.sot.rev })}
                       </span>
                     )}
-                    <span className={state.startsWith('locked:') ? 'text-yellow-500' : undefined}>{t(`settings.profile.current.section.${state.replace(':', '_')}`)}</span>
+                    <span className={state.startsWith('locked:') ? 'text-yellow-500' : undefined}>{t(rowHeld ? 'settings.profile.current.section.held' : `settings.profile.current.section.${state.replace(':', '_')}`)}</span>
                   </span>
                 </li>
               )

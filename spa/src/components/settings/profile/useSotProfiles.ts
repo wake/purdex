@@ -1,7 +1,7 @@
 // spa/src/components/settings/profile/useSotProfiles.ts — the profiles a host's daemon holds (`GET
-// /api/profiles`), for Settings › Profile: fetched on mount, on a host change and on `reload()`. After
-// `useDeviceStateList`. Never polled: the list is as old as the last look, and every action that depends on it
-// is checked again by the daemon (a delete answers 409 `attached`).
+// /api/profiles`), for Settings › Profile (the host's profiles list and the wizard's host step): fetched on mount, on
+// a host change and on `reload()`. Never polled: the list is as old as the last look, and every action that
+// depends on it is checked again by the daemon (a delete answers 409 `attached`).
 import { useCallback, useEffect, useState } from 'react'
 import { listProfiles } from '../../../lib/profile/api'
 import type { FailureReason, ProfileIndexEntry } from '../../../lib/profile/api'

@@ -5,8 +5,9 @@ import { Menu, type MenuEntry, type MenuPlacement } from '../../../components/Me
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLocalProfilesStore, MASTER_PROFILE_ID, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
+import { useProfileStore } from '../../../stores/useProfileStore'
 import { useProfileSync } from '../../../hooks/useProfileSync'
-import { SYNC_DOT_CLASS, syncDotOf } from '../../../lib/profile/sync-view'
+import { SYNC_DOT_CLASS, heldByAutoSyncOff, syncDotOf } from '../../../lib/profile/sync-view'
 import { WorkspaceIcon } from './WorkspaceIcon'
 
 /**
@@ -65,8 +66,9 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
 
   const close = useCallback(() => setOpen(false), [setOpen])
 
+  const autoSync = useProfileStore((s) => s.autoSync)
   const dot = syncDotOf(sync)
-  const dotLabel = dot === null ? '' : t(`profile.sync.${dot}`)
+  const dotLabel = dot === null ? '' : t(heldByAutoSyncOff(sync, autoSync) ? 'profile.sync.held' : `profile.sync.${dot}`)
 
   const items = useMemo<MenuEntry[]>(() => {
     const entry = (id: string, label: string, look: ProfileAppearance, extra: Partial<Extract<MenuEntry, { id: string }>> = {}): MenuEntry => ({

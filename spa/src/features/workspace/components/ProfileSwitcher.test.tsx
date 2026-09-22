@@ -8,6 +8,7 @@ import { __resetProfileSwitcherForTest, BUSY_RETRY_MS, BUSY_RETRY_TOTAL_MS, useP
 import { useUndoToast } from '../../../stores/useUndoToast'
 import { switchActiveProfile, type SwitchResult } from '../../../lib/profile/switch-active'
 import { useProfileSync } from '../../../hooks/useProfileSync'
+import { useProfileStore } from '../../../stores/useProfileStore'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 
 vi.mock('../../../lib/profile/switch-active', () => ({ switchActiveProfile: vi.fn() }))
@@ -489,6 +490,20 @@ describe('the master\'s sync dot', () => {
     vi.mocked(useProfileSync).mockReturnValue(attached({ blocked }))
     renderHome()
     expect(dot()).toHaveAttribute('data-state', state)
+  })
+
+  it('pending with Auto-sync off: the dot is the same, its words say it waits (P3d-4c F2 — one reading with Settings › Profile)', () => {
+    vi.mocked(useProfileSync).mockReturnValue(attached({}, 'pending'))
+    useProfileStore.setState({ autoSync: false })
+    try {
+      renderHome()
+      const el = dot()!
+      expect(el).toHaveAttribute('data-state', 'syncing')
+      expect(el).toHaveAttribute('aria-label', en['profile.sync.held'])
+      expect(el).toHaveAttribute('title', en['profile.sync.held'])
+    } finally {
+      useProfileStore.setState({ autoSync: true })
+    }
   })
 
   it('a follower window shows what the leader published', () => {

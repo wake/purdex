@@ -104,6 +104,26 @@ Daemon 部署位置；infrastructure 資源層級。
 
 每個 region 三種模式：`pinned` / `default` / `collapsed`。
 
+### 3.9 Profile
+
+**一整份 Purdex 狀態** — 一組 host、settings、workspace 與它們的 tab（含 pane 的分割結構）。Home 按鈕顯示的就是畫面上那一份 profile 的名稱、圖示與配色。
+
+| 詞 | zh-TW UI | 是什麼 | 不是什麼 |
+|---|---|---|---|
+| **Profile** | profile | 上述那一整份狀態 | 不是 workspace（profile 裝著多個 workspace）；不是 Nexen 的 sandbox profile（權限等級，UI 用詞待改，#1290） |
+| **Master profile**（master） | 主要 | 每台裝置恰好一份；**唯一**提供 hosts 與 settings、也是唯一會同步的那份 | 不是「目前畫面上的」——master 不在畫面上時照樣同步 |
+| **Local profile**（slave） | 本機 profile | 只在這台裝置、只有 workspace 與 tab 的 profile；借用 master 的 hosts 與 settings，**永不同步** | 不是備份、不是 snapshot |
+| **Profile on screen**（active） | 畫面上的 profile | Home 按鈕切換的指標：現在看到的是哪一份的 workspace 與 tab | 不改變誰是 master |
+| **Sync host**（SOT） | 同步主機 | 存放同步用 profile 的那台 daemon（預設 dev host）；各 section 以 revision＋hash 做 compare-and-set | 不是唯讀的中央伺服器：它掛了＝暫停同步，本機照常使用 |
+| **Host profile** | 同步主機上的 profile | 同步主機上的一份 profile；master 透過「開始同步」精靈連到它 | — |
+| **Section** | 區段 | 同步的最小單位：`hosts`、`settings`、`workspaces`、每個 workspace 一個 `tabs.<id>` | 不是 settings 頁面的分類 |
+| **Locked** | 鎖定 | 某個區段兩邊都改過（衝突）、同步主機那份被重建或無法套用；**交給人選**保留哪一份，在 Settings › Profile 解 | 不是錯誤；不會自動覆寫任何一邊 |
+
+- **焦點本機、結構同步**：畫面上的 profile、目前的 workspace／tab、視窗幾何、sidebar 寬度、pane 分割比例、auto-sync 開關都是這台裝置自己的，不同步；pane 的分割結構會同步
+- **切換 master 全手動**：停止同步 → 選同步主機上的 profile（既有或新建）→ 選本機哪一份當 master → 方向（推：本機覆蓋同步主機；拉：同步主機覆蓋本機，拉之前把本機這份存成本機 profile）→ 開始同步。沒有「複製為 master」，只有「master 複製為本機 profile」
+- **tmux session 永遠屬於 host**，不屬於 profile；profile 裡的 tab 帶著重建所需的 cwd／agent／resume 資訊
+- 程式碼裡「profile」只指這個概念。新分頁的三欄／兩欄／單欄版面，程式碼名稱是 `preset`（P3e 由 `profile` 改名而來；UI 只顯示各自的名稱「三欄」「兩欄」「單欄」，沒有總稱）
+
 ---
 
 ## 4. Design Laws（設計憲法）

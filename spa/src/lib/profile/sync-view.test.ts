@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { describeSections, profileIsGone, settingsWaitForWorkspaces, syncDotOf } from './sync-view'
+import { describeSections, heldByAutoSyncOff, profileIsGone, sectionHeldByAutoSyncOff, settingsWaitForWorkspaces, syncDotOf } from './sync-view'
 import type { ProfileSyncSnapshot } from './start'
 import type { ExecutorStatus } from './executor'
 
@@ -33,6 +33,42 @@ describe('syncDotOf — one reading of the whole master, for the switcher\'s dot
     [{ status: status({}, 'idle') }, 'unknown'],
   ])('%j → %s', (over, dot) => {
     expect(syncDotOf(snapshot(over))).toBe(dot)
+  })
+})
+
+describe('held by Auto-sync being off (P3d-4c F2) — "pending" is not "syncing" when nothing goes out on its own', () => {
+  it('the whole profile: pending with Auto-sync off is held; on, it is syncing', () => {
+    expect(heldByAutoSyncOff(snapshot({ status: status({ hosts: 'pending' }, 'pending') }), false)).toBe(true)
+    expect(heldByAutoSyncOff(snapshot({ status: status({ hosts: 'pending' }, 'pending') }), true)).toBe(false)
+  })
+
+  it.each([
+    ['synced', { status: status({}, 'synced') }],
+    ['locked', { status: status({}, 'locked:conflict') }],
+    ['blocked (suspended: an attach is under way)', { blocked: 'suspended' as const, status: status({}, 'pending') }],
+    ['blocked (profile gone)', { blocked: 'profile-gone' as const, status: status({}, 'pending') }],
+    ['a stale follower', { remote: true, stale: true, status: status({}, 'pending') }],
+    ['no status', { status: null }],
+    ['no master', { master: null, status: null }],
+  ])('%s → not held', (_, over) => {
+    expect(heldByAutoSyncOff(snapshot(over), false)).toBe(false)
+  })
+
+  it('a section: pending with Auto-sync off, nothing blocking → held; any other state, or Auto-sync on, or blocked → not', () => {
+    const live = snapshot({ status: status({ hosts: 'pending' }, 'pending') })
+    expect(sectionHeldByAutoSyncOff(live, 'pending', false)).toBe(true)
+    expect(sectionHeldByAutoSyncOff(live, 'pending', true)).toBe(false)
+    for (const state of ['synced', 'locked:conflict', 'locked:reset', 'locked:invalid'] as const) {
+      expect(sectionHeldByAutoSyncOff(live, state, false)).toBe(false)
+    }
+    expect(sectionHeldByAutoSyncOff(snapshot({ blocked: 'profile-gone', status: status({ hosts: 'pending' }) }), 'pending', false)).toBe(false)
+  })
+
+  it('a stale follower (its leader is gone): its old pending rows are not read as held — the overall state says unknown', () => {
+    const stale = snapshot({ remote: true, stale: true, status: status({ hosts: 'pending' }, 'pending') })
+    expect(sectionHeldByAutoSyncOff(stale, 'pending', false)).toBe(false)
+    // a live follower is read like the leader
+    expect(sectionHeldByAutoSyncOff(snapshot({ remote: true, stale: false, status: status({ hosts: 'pending' }, 'pending') }), 'pending', false)).toBe(true)
   })
 })
 

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
+import zhTW from '../../../locales/zh-TW.json'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { CurrentBlock } from './CurrentBlock'
 import { useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -98,6 +100,9 @@ describe('the wizard\'s two ways in (P3d-3)', () => {
 
   it('a master attached: "another profile or host…" opens the same wizard in place of the state — and the plain Stop sync is not offered beside it', () => {
     show(attached())
+    // the button carries its row's words, like "Sync now" does (P3d-4c F6) — not the no-master "Set up sync…"
+    expect(screen.getByTestId('profile-setup-change')).toHaveTextContent(en['settings.profile.current.change'])
+    expect(screen.getByTestId('profile-setup-change')).not.toHaveTextContent(en['settings.profile.current.setup'])
     fireEvent.click(screen.getByTestId('profile-setup-change'))
     expect(screen.getByTestId('profile-wizard')).toBeInTheDocument()
     expect(screen.queryByTestId('profile-sync-now')).toBeNull()
@@ -293,7 +298,7 @@ describe('a master attached', () => {
       const at = new Date(2026, 8, 23, 14, 2, 31).getTime()
       show(attached({ status: { ...status({ hosts: 'synced' }), lastSuccessAt: at } }))
       const el = screen.getByTestId('profile-current-last-sync')
-      expect(el).toHaveTextContent(en['settings.profile.current.last_sync'].replace('{{time}}', new Date(at).toLocaleString()))
+      expect(el).toHaveTextContent(en['settings.profile.current.last_sync'].replace('{{time}}', new Date(at).toLocaleString('en')))
       cleanup()
       show(attached({ status: status({ hosts: 'synced' }) }))
       expect(screen.queryByTestId('profile-current-last-sync')).toBeNull()
@@ -308,7 +313,7 @@ describe('a master attached', () => {
         },
       }))
       const hosts = screen.getByTestId('profile-current-section-failing-hosts')
-      expect(hosts).toHaveTextContent(en['settings.profile.current.section_failing_at'].replace('{{time}}', new Date(at).toLocaleTimeString()))
+      expect(hosts).toHaveTextContent(en['settings.profile.current.section_failing_at'].replace('{{time}}', new Date(at).toLocaleTimeString('en')))
       expect(hosts.className).not.toMatch(/red/)
       expect(screen.getByTestId('profile-current-section-failing-workspaces')).toHaveTextContent(en['settings.profile.current.section_failing'])
       expect(screen.queryByTestId('profile-current-section-failing-settings')).toBeNull()
@@ -319,6 +324,51 @@ describe('a master attached', () => {
     const schemaLock = { section: 'hosts', kind: 'hosts', verdict: 'sot-is-newer', mine: { fingerprint: 'a', ordinal: 1 }, sot: { fingerprint: 'b', ordinal: 2 } } as unknown as ExecutorStatus['schemaLock']
     show(attached({ status: { ...status({}, 'locked:schema'), schemaLock } }))
     expect(screen.getByTestId('profile-current-schema')).toHaveTextContent(en['settings.profile.current.schema.sot-is-newer'])
+  })
+})
+
+describe('Auto-sync off — pending is waiting, not syncing (P3d-4c F2)', () => {
+  const pending = () => attached({ status: status({ hosts: 'pending', settings: 'synced' }, 'pending') })
+
+  it('the overall state and a pending row say "waiting — Auto-sync is off"; the raw status stays in data-status / data-state', () => {
+    useProfileStore.setState({ autoSync: false })
+    show(pending())
+    const state = screen.getByTestId('profile-current-state')
+    expect(state).toHaveAttribute('data-state', 'syncing')
+    expect(state).toHaveAttribute('data-held', 'auto-sync-off')
+    expect(state).toHaveTextContent(en['profile.sync.held'])
+    expect(state).not.toHaveTextContent(en['profile.sync.syncing'])
+    const hosts = screen.getByTestId('profile-current-section-hosts')
+    expect(hosts).toHaveAttribute('data-status', 'pending')
+    expect(hosts).toHaveAttribute('data-held', 'auto-sync-off')
+    expect(hosts).toHaveTextContent(en['settings.profile.current.section.held'])
+    expect(hosts).not.toHaveTextContent(en['settings.profile.current.section.pending'])
+    const settings = screen.getByTestId('profile-current-section-settings')
+    expect(settings).not.toHaveAttribute('data-held')
+    expect(settings).toHaveTextContent(en['settings.profile.current.section.synced'])
+  })
+
+  it('Auto-sync on: "Syncing…", no data-held', () => {
+    show(pending())
+    expect(screen.getByTestId('profile-current-state')).toHaveTextContent(en['profile.sync.syncing'])
+    expect(screen.getByTestId('profile-current-state')).not.toHaveAttribute('data-held')
+    expect(screen.getByTestId('profile-current-section-hosts')).toHaveTextContent(en['settings.profile.current.section.pending'])
+    expect(screen.getByTestId('profile-current-section-hosts')).not.toHaveAttribute('data-held')
+  })
+
+  it('a stale follower: the state is unknown and no row claims to be held', () => {
+    useProfileStore.setState({ autoSync: false })
+    show(attached({ leader: false, remote: true, stale: true, status: status({ hosts: 'pending' }, 'pending') }))
+    expect(screen.getByTestId('profile-current-state')).toHaveAttribute('data-state', 'unknown')
+    expect(screen.getByTestId('profile-current-state')).not.toHaveAttribute('data-held')
+    expect(screen.getByTestId('profile-current-section-hosts')).not.toHaveAttribute('data-held')
+    expect(screen.getByTestId('profile-current-section-hosts')).not.toHaveTextContent(en['settings.profile.current.section.held'])
+  })
+
+  it('turning Auto-sync off while the page is open changes the words at once', () => {
+    show(pending())
+    act(() => useProfileStore.setState({ autoSync: false }))
+    expect(screen.getByTestId('profile-current-state')).toHaveTextContent(en['profile.sync.held'])
   })
 })
 
@@ -560,5 +610,71 @@ describe('the problem log', () => {
     unmount()
     show(attached())
     expect(screen.queryByTestId('profile-current-problems')).toBeNull()
+  })
+})
+
+describe('every time the block shows is in the UI language, not the browser\'s (P3d-4c F5)', () => {
+  const at = new Date(2026, 8, 23, 14, 2, 31).getTime()
+  // `toHaveTextContent` collapses the received whitespace (ICU puts U+202F in times); the expected side likewise
+  const fmt = (d: number, locale: string, how: 'toLocaleString' | 'toLocaleTimeString') => new Date(d)[how](locale).replace(/\s+/g, ' ')
+
+  afterEach(() => {
+    useI18nStore.getState().setLocale('en')
+  })
+
+  it('zh-TW: "in sync as of", a failing row\'s next try and the problem log are formatted as zh-TW', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    show(attached({
+      status: {
+        ...status({ hosts: 'pending' }, 'pending'),
+        lastSuccessAt: at,
+        detail: { hosts: { rev: 1, failures: 2, retryAt: at, invalidReason: null } },
+      },
+      problems: [{ kind: 'k', detail: 'd', at }],
+    }))
+    expect(screen.getByTestId('profile-current-last-sync')).toHaveTextContent(zhTW['settings.profile.current.last_sync'].replace('{{time}}', fmt(at, 'zh-TW', 'toLocaleString')))
+    expect(screen.getByTestId('profile-current-section-failing-hosts')).toHaveTextContent(zhTW['settings.profile.current.section_failing_at'].replace('{{time}}', fmt(at, 'zh-TW', 'toLocaleTimeString')))
+    expect(screen.getByTestId('profile-current-problem')).toHaveTextContent(fmt(at, 'zh-TW', 'toLocaleTimeString'))
+  })
+
+  it('English UI: the times are asked for in "en", whatever the browser\'s locale is', () => {
+    const toLocaleString = vi.spyOn(Date.prototype, 'toLocaleString')
+    const toLocaleTimeString = vi.spyOn(Date.prototype, 'toLocaleTimeString')
+    try {
+      show(attached({
+        status: { ...status({ hosts: 'pending' }, 'pending'), lastSuccessAt: at, detail: { hosts: { rev: 1, failures: 2, retryAt: at, invalidReason: null } } },
+        problems: [{ kind: 'k', detail: 'd', at }],
+      }))
+      // what the page asked for, whatever the runner's default locale is
+      expect(toLocaleString.mock.calls.length).toBeGreaterThan(0)
+      for (const call of toLocaleString.mock.calls) expect(call[0]).toBe('en')
+      expect(toLocaleTimeString.mock.calls.length).toBeGreaterThan(0)
+      for (const call of toLocaleTimeString.mock.calls) expect(call[0]).toBe('en')
+    } finally {
+      toLocaleString.mockRestore()
+      toLocaleTimeString.mockRestore()
+    }
+  })
+
+  it('a user-imported locale (its id is no language tag): English times, never the browser\'s', () => {
+    const id = useI18nStore.getState().importLocale({ name: 'Mine', translations: {} })
+    useI18nStore.getState().setLocale(id)
+    const toLocaleString = vi.spyOn(Date.prototype, 'toLocaleString')
+    try {
+      show(attached({ status: { ...status({ hosts: 'synced' }), lastSuccessAt: at } }))
+      expect(toLocaleString.mock.calls.map((c) => c[0])).toEqual(['en'])
+    } finally {
+      toLocaleString.mockRestore()
+      useI18nStore.getState().deleteCustomLocale(id)
+    }
+  })
+})
+
+describe('one word for a reset, in the section list and the Resolve row (P3d-4c F7)', () => {
+  it('"recreated" / 「被重建過」 in both', () => {
+    expect(en['settings.profile.current.section.locked_reset']).toMatch(/recreated/)
+    expect(en['settings.profile.resolve.why.reset']).toMatch(/recreated/)
+    expect(zhTW['settings.profile.current.section.locked_reset']).toMatch(/被重建過/)
+    expect(zhTW['settings.profile.resolve.why.reset']).toMatch(/被重建過/)
   })
 })

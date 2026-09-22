@@ -12,6 +12,7 @@ import { selectMaster, useProfileStore } from '../../../../stores/useProfileStor
 import { useRebuildStore } from '../../../../stores/useRebuildStore'
 import { useTabStore } from '../../../../stores/useTabStore'
 import { useUndoToast } from '../../../../stores/useUndoToast'
+import en from '../../../../locales/en.json'
 import { useWorkspaceStore } from '../../../../features/workspace/store'
 import { __resetMasterWorldForTest } from '../../../../lib/profile/master-world'
 import { clearSectionStore } from '../../../../lib/profile/section-store'
@@ -141,6 +142,9 @@ describe('the wizard, through its controls, against a daemon', () => {
     expect(profileSyncState().status?.profile).toBe('synced')
     expect(onScreen()).toEqual(['SENTINEL-A']) // a push replaces nothing here
     expect(Object.keys(useLocalProfilesStore.getState().slaves)).toEqual([]) // and keeps no copy
+    // a push is said as a toast too, not only by the done line (P3d-3 "the result is a toast, too"; P3d-4c F9).
+    // The name is the one the host LISTS (the fake daemon lists every profile as "p"), as the run re-lists it.
+    expect(useUndoToast.getState().toast?.message).toBe(en['settings.profile.wizard.toast.done'].replace('{{profile}}', 'p').replace('{{host}}', 'mlab'))
   })
 
   it('EXISTING → PULL with the copy: this device takes the host\'s state, and what it held is a local profile named after it', async () => {
