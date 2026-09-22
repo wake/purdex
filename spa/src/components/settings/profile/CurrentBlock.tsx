@@ -25,7 +25,8 @@
 // `profileGone` — is shown as it is: the AGREED rev on every row (a locked row keeps the host's beside it), a
 // failing row's next try, "in sync as of", why settings wait. A record from an older build has none of them and
 // the page then shows nothing for them — never "0" or "never" (sync-status.ts reads them as absent). Times are
-// absolute local times: no clock runs on this page.
+// absolute local times: no clock runs on this page — except a "sent" Resolve row's, bounded by the command's TTL
+// (ResolveRow.tsx).
 import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -41,6 +42,7 @@ import { readMasterWorld, type UnsettledReason } from '../../../lib/profile/mast
 import { SYNC_DOT_CLASS, describeSections, profileIsGone, settingsWaitForWorkspaces, syncDotOf, type SectionView } from '../../../lib/profile/sync-view'
 import { SettingItem } from '../SettingItem'
 import { ToggleSwitch } from '../ToggleSwitch'
+import { ResolveBlock } from './ResolveBlock'
 import { StopSyncControl } from './StopSyncControl'
 import { ProfileWizard } from './wizard/ProfileWizard'
 
@@ -153,7 +155,6 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
     <span data-testid="profile-current-source" className={BADGE}>{t('settings.profile.current.from_leader')}</span>
   )
   const sections = sync.status === null ? [] : describeSections(Object.keys(sync.status.sections), workspaces)
-  const anyLocked = sync.status !== null && Object.keys(sync.status.locks).length > 0
   const schemaLock = sync.status?.schemaLock ?? null
   // A gone profile has two sources (a 404; the index no longer listing it) and ONE sentence: read alike.
   const blocked = sync.blocked ?? (profileIsGone(sync) ? 'profile-gone' : null)
@@ -288,10 +289,17 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
             })}
           </ul>
         )}
-        {anyLocked && (
-          // TODO(P3d-4): the Resolve block replaces this sentence — one row per `status.locks` entry, handing
-          // `requestResolve` the very `SectionLock` it rendered.
-          <p data-testid="profile-current-locked-note" className="mt-1 text-xs text-text-muted">{t('settings.profile.current.locked_note')}</p>
+        {sync.status !== null && (
+          // One row per `status.locks` entry (P3d-4b): each confirmation hands `requestResolve` the very lock it was
+          // opened with. A profile-level state (`locked:schema`, a gone profile) is a sentence above, not a row.
+          <ResolveBlock
+            master={master}
+            status={sync.status}
+            views={sections}
+            labelOf={sectionLabel}
+            fromLeader={sync.remote}
+            disabled={blocked !== null}
+          />
         )}
       </div>
 
