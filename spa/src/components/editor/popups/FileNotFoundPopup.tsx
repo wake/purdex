@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { PopupSpec } from '../../../lib/file-open/open-file'
+import { useI18nStore } from '../../../stores/useI18nStore'
 
 export interface FileNotFoundPopupProps {
   spec: PopupSpec
@@ -39,6 +40,7 @@ export function FileNotFoundPopup({
   onSearchSessionCwd,
   onSearchWorkspace,
 }: FileNotFoundPopupProps) {
+  const t = useI18nStore((s) => s.t)
   const dialogRef = useRef<HTMLDivElement>(null)
 
   // ESC closes; focus the dialog on mount so keyboard users land inside it.
@@ -116,7 +118,7 @@ export function FileNotFoundPopup({
           <div className="space-y-2 mb-4">
             <CtaButton
               label={`搜尋目前 session（cwd: ${sessionCwd ?? '—'}）`}
-              ariaLabel="搜尋目前 session cwd"
+              ariaLabel={t('file_not_found.search_session_cwd')}
               disabled={!sessionCapable}
               tooltip={
                 sessionCapable
@@ -127,7 +129,7 @@ export function FileNotFoundPopup({
             />
             <CtaButton
               label={`搜尋 workspace（projectPath: ${projectPath ?? '—'}）`}
-              ariaLabel="搜尋 workspace projectPath"
+              ariaLabel={t('file_not_found.search_workspace_path')}
               disabled={!workspaceCapable}
               tooltip={
                 workspaceCapable

@@ -166,7 +166,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
             <RegionManager region={region} />
           ) : views.length === 0 ? (
             <div className="flex items-center justify-center h-full text-text-muted text-xs p-4 text-center">
-              加入 views
+              {t('sidebar.add_views')}
             </div>
           ) : (
             ActiveComponent && (

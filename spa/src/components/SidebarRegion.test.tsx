@@ -112,12 +112,13 @@ describe('SidebarRegion', () => {
     expect(useLayoutStore.getState().regions['primary-sidebar'].mode).toBe('collapsed')
   })
 
-  it('renders empty pinned region with gear button', () => {
+  it('renders empty pinned region with gear button (zh-TW locale)', () => {
+    useI18nStore.getState().setLocale('zh-TW')
     useLayoutStore.getState().setRegionViews('primary-sidebar', [])
     useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
     render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
     expect(screen.getByTestId('manage-button')).toBeInTheDocument()
-    expect(screen.getByText(/加入 views/i)).toBeInTheDocument()
+    expect(screen.getByText('加入 views')).toBeInTheDocument()
   })
 
   it('renders collapsed empty region with plus button', () => {
@@ -220,6 +221,22 @@ describe('SidebarRegion', () => {
 
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
       expect(screen.getByTestId('manage-button')).toHaveAttribute('title', '管理 views')
+    })
+
+    it('empty pinned region shows the English empty-state text for the en locale', () => {
+      useLayoutStore.getState().setRegionViews('primary-sidebar', [])
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(screen.getByText('Add views')).toBeInTheDocument()
+      expect(screen.queryByText('加入 views')).not.toBeInTheDocument()
+    })
+
+    it('empty pinned region shows the zh-TW empty-state text for the zh-TW locale', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      useLayoutStore.getState().setRegionViews('primary-sidebar', [])
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(screen.getByText('加入 views')).toBeInTheDocument()
     })
   })
 })
