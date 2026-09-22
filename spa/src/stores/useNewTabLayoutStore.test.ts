@@ -467,7 +467,7 @@ describe('persisted and synced bytes (P3e: pinned, changed on purpose by PR-B)',
     useNewTabLayoutStore.setState(fixture)
     const payload = buildSettingsSection({ 'purdex-newtab-layout': useNewTabLayoutStore.getState() }, new Set())
     expect(JSON.stringify(payload['purdex-newtab-layout'])).toBe(
-      '{"profiles":{"3col":{"enabled":true,"columns":[["a"],["b","c"],[]]},"2col":{"enabled":false,"columns":[["a","b"],["c"]]},"1col":{"enabled":true,"columns":[["c","a","b"]]}}}',
+      '{"presets":{"3col":{"enabled":true,"columns":[["a"],["b","c"],[]]},"2col":{"enabled":false,"columns":[["a","b"],["c"]]},"1col":{"enabled":true,"columns":[["c","a","b"]]}}}',
     )
   })
 })

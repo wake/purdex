@@ -59,8 +59,8 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     ...settingsPaths('purdex-notification-settings', ['agents']),
     ...settingsPaths('purdex-workspace-settings', ['workspaces']),
     ...settingsPaths('purdex-host-settings', ['hosts']),
-    // NOT `knownIds` (derived registry), NOT `activeEditingProfile` (editor UI state).
-    ...settingsPaths('purdex-newtab-layout', ['profiles']),
+    // NOT `knownIds` (derived registry), NOT `activeEditingPreset` (editor UI state).
+    ...settingsPaths('purdex-newtab-layout', ['presets']),
     // The only field taken from useLayoutStore; the rest of it is device-local.
     ...settingsPaths('purdex-layout', ['tabPosition']),
     // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — eight
@@ -90,7 +90,7 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
  */
 export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   hosts: 1,
-  settings: 3, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings)
+  settings: 4, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings); 4: newtab `profiles` → `presets`
   workspaces: 1,
   tabs: 1,
 }

@@ -453,7 +453,7 @@ function settingsLocal(): SettingsBuildInput {
   return {
     'purdex-ui-settings': { terminalRenderer: 'webgl', keepAliveCount: 3, terminalSettingsVersion: S, setRenderer: () => undefined },
     'purdex-themes': { activeThemeId: 'dark', customThemes: { a: { name: 'A', colors: { bg: '#000' } } } },
-    'purdex-newtab-layout': { profiles: { p: { cols: 2 } }, activeEditingProfile: S, knownIds: [S] },
+    'purdex-newtab-layout': { presets: { p: { cols: 2 } }, activeEditingPreset: S, knownIds: [S] },
     'purdex-layout': { tabPosition: 'top', regions: S, activityBarWidth: S },
   }
 }
@@ -462,7 +462,7 @@ function settingsIncoming(): SettingsPayload {
   return {
     'purdex-ui-settings': { terminalRenderer: 'dom', keepAliveCount: 3 },
     'purdex-themes': { activeThemeId: 'dark', customThemes: { a: { colors: { bg: '#000' }, name: 'A' } } },
-    'purdex-newtab-layout': { profiles: { p: { cols: 3 } } },
+    'purdex-newtab-layout': { presets: { p: { cols: 3 } } },
     'purdex-layout': { tabPosition: 'left' },
   }
 }
@@ -478,7 +478,7 @@ describe('applySettings', () => {
     const { patches } = applySettings(deepFreeze(settingsLocal()), deepFreeze(settingsIncoming()), NO_WS)
     expect(patches).toEqual({
       'purdex-ui-settings': { terminalRenderer: 'dom' },
-      'purdex-newtab-layout': { profiles: { p: { cols: 3 } } },
+      'purdex-newtab-layout': { presets: { p: { cols: 3 } } },
       'purdex-layout': { tabPosition: 'left' },
     })
     // same value under a different key order is not a change
@@ -494,7 +494,7 @@ describe('applySettings', () => {
     const incoming = {
       ...settingsIncoming(),
       'purdex-ui-settings': { terminalRenderer: 'dom', keepAliveCount: 3, terminalSettingsVersion: 'INJECTED', somethingNew: 'INJECTED' },
-      'purdex-newtab-layout': { profiles: { p: { cols: 3 } }, activeEditingProfile: 'INJECTED', knownIds: ['INJECTED'] },
+      'purdex-newtab-layout': { presets: { p: { cols: 3 } }, activeEditingPreset: 'INJECTED', knownIds: ['INJECTED'] },
       'purdex-layout': { tabPosition: 'left', regions: 'INJECTED', activityBarWidth: 'INJECTED' },
     } as SettingsPayload
     const { patches } = applySettings(settingsLocal(), incoming, NO_WS)
@@ -675,7 +675,7 @@ describe('applySettings', () => {
   it('device-local fields of the local stores are still there after the merge', () => {
     const merged = mergePatches(settingsLocal(), applySettings(settingsLocal(), settingsIncoming(), NO_WS).patches) as Record<string, Record<string, unknown>>
     expect(merged['purdex-ui-settings'].terminalSettingsVersion).toBe(S)
-    expect(merged['purdex-newtab-layout'].activeEditingProfile).toBe(S)
+    expect(merged['purdex-newtab-layout'].activeEditingPreset).toBe(S)
     expect(merged['purdex-newtab-layout'].knownIds).toEqual([S])
     expect(merged['purdex-layout'].regions).toBe(S)
     expect(merged['purdex-layout'].activityBarWidth).toBe(S)
@@ -1011,7 +1011,10 @@ describe('isWellFormedSection', () => {
       // a listed field next to it does not redeem the payload
       expect(isWellFormedSection('settings', { 'purdex-ui-settings': { keepAliveCount: 3, terminalSettingsVersion: 1 } })).toBe(false)
       expect(isWellFormedSection('settings', { 'purdex-layout': { tabPosition: 'left', regions: {} } })).toBe(false)
-      expect(isWellFormedSection('settings', { 'purdex-newtab-layout': { profiles: {}, knownIds: [] } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-newtab-layout': { presets: {}, knownIds: [] } })).toBe(false)
+      // the ordinal-3 name is not listed any more (P3e): refused HERE — apply-to-stores upcasts it first
+      expect(isWellFormedSection('settings', { 'purdex-newtab-layout': { profiles: {} } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-newtab-layout': { presets: {} } })).toBe(true)
       // a field listed for ANOTHER store is not listed for this one
       expect(isWellFormedSection('settings', { 'purdex-layout': { keepAliveCount: 3 } })).toBe(false)
       // one bad store refuses the whole payload

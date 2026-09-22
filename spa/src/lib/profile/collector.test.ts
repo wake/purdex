@@ -198,7 +198,7 @@ describe('startCollector — changes that schedule nothing', () => {
   it('visitHistory', () => expectIgnored(() => useTabStore.setState({ visitHistory: ['t1', 't2'] })))
   it('tabOrder', () => expectIgnored(() => useTabStore.setState({ tabOrder: ['t3', 't2', 't1'] })))
   it('terminalSettingsVersion', () => expectIgnored(() => useUISettingsStore.getState().bumpTerminalSettingsVersion()))
-  it('activeEditingProfile', () => expectIgnored(() => useNewTabLayoutStore.setState({ activeEditingProfile: '2col' } as never)))
+  it('activeEditingPreset', () => expectIgnored(() => useNewTabLayoutStore.setState({ activeEditingPreset: '2col' })))
   it('knownIds', () => expectIgnored(() => useNewTabLayoutStore.setState({ knownIds: ['x'] })))
   it('layout regions', () =>
     expectIgnored(() => useLayoutStore.setState({ regions: { ...useLayoutStore.getState().regions } })))
@@ -318,7 +318,7 @@ describe('startCollector — settings', () => {
       () => useNotificationSettingsStore.setState({ agents: {} }),
       () => useWorkspaceSettingsStore.setState({ workspaces: {} }),
       () => useHostSettingsStore.setState({ hosts: {} }),
-      () => useNewTabLayoutStore.setState({ profiles: { ...useNewTabLayoutStore.getState().profiles } }),
+      () => useNewTabLayoutStore.setState({ presets: { ...useNewTabLayoutStore.getState().presets } }),
       () => useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' }),
     ]
     start()

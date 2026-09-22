@@ -120,7 +120,7 @@ function baseInput(): CollectInput {
     settings: {
       'purdex-ui-settings': { terminalRenderer: 'webgl', keepAliveCount: 3 },
       'purdex-layout': { tabPosition: 'top' },
-      'purdex-newtab-layout': { profiles: { default: { columns: [] } } },
+      'purdex-newtab-layout': { presets: { default: { columns: [] } } },
     },
   }
 }
@@ -335,7 +335,7 @@ describe('buildSettingsSection', () => {
     const scoped = (): SettingsBuildInput => ({
       'purdex-workspace-settings': { workspaces: { m1: { files: { root: '/m1' } }, m2: { files: { root: '/m2' } }, slave: { files: { root: S } }, orphan: { files: { root: S } } } },
       'purdex-host-settings': { hosts: { slave: { x: 1 }, h1: { x: 2 } } },
-      'purdex-newtab-layout': { profiles: { slave: { cols: 2 } } },
+      'purdex-newtab-layout': { presets: { slave: { cols: 2 } } },
     })
 
     it('carries an entry iff its key is a master workspace id', () => {
@@ -347,7 +347,7 @@ describe('buildSettingsSection', () => {
     it('filters NOTHING else: a record of another store that happens to use the same key is untouched', () => {
       const out = buildSettingsSection(scoped(), new Set(['m1']))
       expect(out['purdex-host-settings']).toEqual({ hosts: { slave: { x: 1 }, h1: { x: 2 } } })
-      expect(out['purdex-newtab-layout']).toEqual({ profiles: { slave: { cols: 2 } } })
+      expect(out['purdex-newtab-layout']).toEqual({ presets: { slave: { cols: 2 } } })
     })
 
     it('with no master entry left the field is `{}`, not absent — what a store with no entry builds', () => {
@@ -443,7 +443,7 @@ describe('buildProfileDocument', () => {
       },
       settings: {
         'purdex-ui-settings': { terminalRenderer: 'webgl', terminalSettingsVersion: N },
-        'purdex-newtab-layout': { profiles: {}, activeEditingProfile: S, knownIds: [S] },
+        'purdex-newtab-layout': { presets: {}, activeEditingPreset: S, knownIds: [S] },
         'purdex-layout': { tabPosition: 'top', regions: { primary: S }, activityBarWidth: N, activityBarWideSize: N, workspaceExpanded: { wsA: S } },
         'purdex-device-state': { baseline: S },
         // the WHOLE store is device-local — `enabled` as much as the in-memory `baseline`
