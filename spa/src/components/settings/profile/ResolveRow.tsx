@@ -5,25 +5,16 @@
 //   locked:reset     the host's copy was recreated            Keep this device's / Take the host's
 //   locked:invalid   why this device refuses the host's copy  Keep this device's ONLY (the reducer refuses the other)
 //
-// THE CONFIRMATION IS BOUND TO THE LOCK IT WAS OPENED WITH. The row's `SectionLock` is frozen at the click; the
-// counts are read for it once (resolve-counts.ts); confirming hands `requestResolve` that very lock — which whoever
-// leads executes only if its lock is still that one (sync-status.ts). When the live lock stops being `sameLock` with
-// the frozen one, the dialog closes ITSELF and the row says "this changed while you were deciding": the leader would
-// drop the stale command anyway, and this makes that visible instead of silent.
-//
-// "SENT" ENDS (R2). The channel has no answer: `requestResolve` says only whether the command was handed over. A
-// command that was not → "could not be sent". One that was → "sent" until the lock for this key changes (the answer),
-// or until the command's own TTL (`COMMAND_TTL_MS`) has passed → "no answer; try again". That is the only timer on
-// the page: one per sent row, cleared when the lock changes or the row goes.
-import { useEffect, useState } from 'react'
+// WHAT IS FROZEN AND CHECKED — the master's tag, its endpoint, the lock — and everything that must go through that
+// check (the counts' host read, the send, "sent" and its TTL) is `useResolveContext`'s (review A4). This file only
+// displays what the hook answers.
 import { useI18nStore } from '../../../stores/useI18nStore'
 import type { InvalidReason } from '../../../lib/profile/apply-to-stores'
 import type { SectionLock } from '../../../lib/profile/executor'
-import { requestResolve } from '../../../lib/profile/start'
-import { COMMAND_TTL_MS, sameLock } from '../../../lib/profile/sync-status'
 import type { SectionView } from '../../../lib/profile/sync-view'
 import { ConfirmDialog } from '../../ConfirmDialog'
-import { readHostSide, readLocalSide, type HostSide, type LocalSide, type SideCount } from './resolve-counts'
+import type { HostSide, LocalSide, SideCount } from './resolve-counts'
+import { useResolveContext } from './useResolveContext'
 
 const BTN =
   'shrink-0 flex items-center gap-1.5 rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
@@ -31,10 +22,7 @@ const BADGE = 'rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-
 /** A state the user should know of, not a fault: the tone of the Current block's notices. */
 const NOTICE = 'text-xs text-yellow-500'
 
-type Keep = 'local' | 'sot'
-
 interface Props {
-  master: { hostId: string; profileId: string }
   sectionKey: string
   kind: SectionView['kind']
   label: string
@@ -44,63 +32,9 @@ interface Props {
   disabled: boolean
 }
 
-type Outcome = { state: 'sent' | 'no-answer' | 'not-sent'; lock: SectionLock }
-
-export function ResolveRow({ master, sectionKey, kind, label, lock, invalidReason, fromLeader, disabled }: Props) {
+export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromLeader, disabled }: Props) {
   const t = useI18nStore((s) => s.t)
-  /** The confirmation, and the lock it was opened with — frozen. */
-  const [open, setOpen] = useState<{ keep: Keep; lock: SectionLock } | null>(null)
-  const [local, setLocal] = useState<LocalSide | null>(null)
-  const [host, setHost] = useState<HostSide | null>(null)
-  const [changed, setChanged] = useState(false)
-  const [outcome, setOutcome] = useState<Outcome | null>(null)
-
-  // The live lock moved: a confirmation of the old one closes itself, and a "sent" for it is over (it was answered —
-  // or overtaken; either way the row now shows the lock as it is). Adjusted during render: no frame shows the old one.
-  if (open !== null && !sameLock(open.lock, lock)) {
-    setOpen(null)
-    setChanged(true)
-  }
-  if (outcome !== null && !sameLock(outcome.lock, lock)) setOutcome(null)
-
-  // Each side read ONCE per confirmation, for its frozen lock. An answer after it closed sets nothing.
-  useEffect(() => {
-    if (open === null) return
-    let live = true
-    const abort = new AbortController()
-    void readLocalSide(master.profileId, sectionKey, open.lock).then((side) => {
-      if (live) setLocal(side)
-    })
-    void readHostSide(master.hostId, master.profileId, sectionKey, open.lock, abort.signal).then((side) => {
-      if (live) setHost(side)
-    })
-    return () => {
-      live = false
-      abort.abort()
-    }
-  }, [open, master.hostId, master.profileId, sectionKey])
-
-  // The one timer: a "sent" that nothing answered by the command's TTL.
-  useEffect(() => {
-    if (outcome === null || outcome.state !== 'sent') return
-    const sent = outcome
-    const timer = setTimeout(() => setOutcome((now) => (now === sent ? { ...sent, state: 'no-answer' } : now)), COMMAND_TTL_MS)
-    return () => clearTimeout(timer)
-  }, [outcome])
-
-  const ask = (keep: Keep): void => {
-    setChanged(false)
-    setLocal(null)
-    setHost(null)
-    setOpen({ keep, lock })
-  }
-
-  const confirm = (): void => {
-    if (open === null) return
-    const handed = requestResolve(sectionKey, open.keep, open.lock)
-    setOutcome({ state: handed ? 'sent' : 'not-sent', lock: open.lock })
-    setOpen(null)
-  }
+  const { open, local, host, changed, outcome, ask, cancel, confirm } = useResolveContext(sectionKey, lock)
 
   const why = (): { reason?: string; text: string } => {
     if (lock.status === 'locked:conflict') return { text: t('settings.profile.resolve.why.conflict') }
@@ -164,7 +98,7 @@ export function ResolveRow({ master, sectionKey, kind, label, lock, invalidReaso
           title={t(open.keep === 'local' ? 'settings.profile.resolve.keep_local_title' : 'settings.profile.resolve.take_sot_title', { section: label })}
           body={t(open.keep === 'local' ? 'settings.profile.resolve.keep_local_body' : 'settings.profile.resolve.take_sot_body')}
           confirmLabel={t(open.keep === 'local' ? 'settings.profile.resolve.keep_local' : 'settings.profile.resolve.take_sot')}
-          onCancel={() => setOpen(null)}
+          onCancel={cancel}
           onConfirm={confirm}
         >
           <ul className="mt-2 flex flex-col gap-0.5 text-xs text-text-secondary">
@@ -175,7 +109,7 @@ export function ResolveRow({ master, sectionKey, kind, label, lock, invalidReaso
               {t('settings.profile.resolve.count_sot', { what: hostCount.text })}
             </li>
           </ul>
-          {open.keep === 'local' && undoesOf(open.lock) && (
+          {open.keep === 'local' && undoesOf(open.ctx.lock) && (
             <p data-testid="profile-resolve-dialog-undoes" className={`mt-2 ${NOTICE}`}>{t('settings.profile.resolve.dialog_undoes')}</p>
           )}
           {local !== null && local.changedSince && (

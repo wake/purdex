@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
 import { requestResolve } from '../../../lib/profile/start'
+import { useHostStore } from '../../../stores/useHostStore'
+import { useProfileStore } from '../../../stores/useProfileStore'
 import { INVALID_REASONS, type InvalidReason } from '../../../lib/profile/apply-to-stores'
 import type { ExecutorStatus, SectionLock } from '../../../lib/profile/executor'
 import { COMMAND_TTL_MS } from '../../../lib/profile/sync-status'
@@ -20,6 +22,9 @@ vi.mock('../../../lib/profile/apply-to-stores', async (importOriginal) => ({
 }))
 
 const MASTER = { hostId: 'h1', profileId: 'p_0123456789ab' }
+const ENDPOINT = '10.0.0.1:7860'
+/** `masterTagOf(MASTER, 1)`: what the status channel is on. */
+const TAG = 'h1|p_0123456789ab|1'
 const H = (c: string) => c.repeat(64)
 const CONFLICT: SectionLock = { status: 'locked:conflict', currentHash: H('a'), sot: { rev: 7, hash: H('b') }, conflict: { localHash: H('a'), sot: { rev: 7, hash: H('b') } } }
 const RESET: SectionLock = { status: 'locked:reset', currentHash: H('c'), sot: { rev: 2, hash: H('d') }, conflict: null }
@@ -60,6 +65,11 @@ let resolveLocal: (v: LocalSide) => void
 let resolveHost: (v: HostSide) => void
 
 beforeEach(() => {
+  useProfileStore.setState({ masterHostId: MASTER.hostId, masterProfileId: MASTER.profileId, masterEndpoint: ENDPOINT, attachGeneration: 1, pendingDirection: null, suspension: null })
+  useHostStore.setState({
+    hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 }, h2: { id: 'h2', name: 'other', ip: '10.0.0.2', port: 7860, order: 1 } },
+    hostOrder: ['h1', 'h2'],
+  })
   vi.mocked(requestResolve).mockReset()
   vi.mocked(requestResolve).mockReturnValue(true)
   vi.mocked(readLocalSide).mockReset()
@@ -210,7 +220,7 @@ describe('the confirmation', () => {
     view(statusOf({ hosts: RESET }))
     openTakeSot('hosts')
     fireEvent.click(screen.getByTestId('profile-resolve-confirm'))
-    expect(requestResolve).toHaveBeenCalledWith('hosts', 'sot', RESET)
+    expect(requestResolve).toHaveBeenCalledWith('hosts', 'sot', RESET, TAG)
     expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
     expect(screen.getByTestId('profile-resolve-sent-hosts')).toHaveAttribute('data-state', 'sent')
     expect(screen.getByTestId('profile-resolve-sent-hosts')).toHaveTextContent(en['settings.profile.resolve.sent'])
@@ -301,5 +311,49 @@ describe('"sent" ends (R2)', () => {
     update(statusOf({ workspaces: CONFLICT }, { hosts: 'pending' }))
     expect(screen.queryByTestId('profile-resolve-row-hosts')).toBeNull()
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('the confirmation is bound to the master and the daemon it was opened under (review A1)', () => {
+  const moves: Array<[string, () => void]> = [
+    ['another master (profile)', () => useProfileStore.setState({ masterProfileId: 'p_999999999999' })],
+    ['the same master, attached again (a new attachGeneration)', () => useProfileStore.setState({ attachGeneration: 2 })],
+    ['another host', () => useProfileStore.setState({ masterHostId: 'h2', masterEndpoint: '10.0.0.2:7860' })],
+  ]
+
+  it.each(moves)('%s while it is open → it closes itself, the row says so, nothing is sent', (_name, move) => {
+    view(statusOf({ hosts: RESET }))
+    openKeepLocal('hosts')
+    act(move)
+    expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
+    expect(screen.getByTestId('profile-resolve-changed-hosts')).toHaveTextContent(en['settings.profile.resolve.changed'])
+    expect(requestResolve).not.toHaveBeenCalled()
+  })
+
+  it.each(moves)('%s, and the OLD dialog\'s confirm runs before React removed it → nothing is sent', (_name, move) => {
+    view(statusOf({ hosts: RESET }))
+    openKeepLocal('hosts')
+    const confirm = screen.getByTestId('profile-resolve-confirm')
+    act(() => {
+      move()
+      fireEvent.click(confirm) // the handler of the dialog as it was rendered
+    })
+    expect(requestResolve).not.toHaveBeenCalled()
+  })
+
+  it('the send carries the tag frozen at open, not the one current at the click', () => {
+    view(statusOf({ hosts: RESET }))
+    openKeepLocal('hosts')
+    fireEvent.click(screen.getByTestId('profile-resolve-confirm'))
+    expect(vi.mocked(requestResolve).mock.calls).toEqual([['hosts', 'local', RESET, TAG]])
+  })
+
+  it('a "sent" of another master is over when the master changes', () => {
+    view(statusOf({ hosts: RESET }))
+    openKeepLocal('hosts')
+    fireEvent.click(screen.getByTestId('profile-resolve-confirm'))
+    expect(screen.getByTestId('profile-resolve-sent-hosts')).toBeInTheDocument()
+    act(() => useProfileStore.setState({ attachGeneration: 2 }))
+    expect(screen.queryByTestId('profile-resolve-sent-hosts')).toBeNull()
   })
 })

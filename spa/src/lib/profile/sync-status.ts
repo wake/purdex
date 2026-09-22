@@ -258,8 +258,11 @@ export interface StatusChannel {
    * was HANDED OVER: in the leader, CARRIED OUT (false when the binding dropped it); in a follower, its key written —
    * whether the leader then carries it out has no answer but the lock changing, and `COMMAND_TTL_MS` is how long
    * to wait for it.
+   * `masterTag`: the master (and attach generation) the user was looking at when the lock was shown — `masterTagOf`.
+   * Not this channel's → false, and nothing is sent (review A1): a copied or recreated profile can hold a lock equal
+   * in every field, and the choice would land on a profile nobody looked at.
    */
-  requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): boolean
+  requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock, masterTag: string): boolean
   /**
    * `clear`: the master is gone or replaced — ITS status and ITS commands go with it, nobody else's. Otherwise they
    * are the other windows' business. `successor`, only with `clear`: the tag of the SAME master's next generation
@@ -713,8 +716,8 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       if (deps.local().leader) execute(command)
       else send(command)
     },
-    requestResolve(section, keep, lock) {
-      if (closed) return false
+    requestResolve(section, keep, lock, masterTag) {
+      if (closed || masterTag !== tag) return false
       const command: Command = { kind: 'resolve', section, keep, lock, master: tag, at: deps.now() }
       if (!deps.local().leader) return send(command)
       return execute(command) // here: carried out, or dropped by the binding (review A2)

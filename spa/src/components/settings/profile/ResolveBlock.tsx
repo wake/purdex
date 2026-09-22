@@ -34,7 +34,6 @@ export function ResolveBlock({ master, status, views, labelOf, fromLeader, disab
         {locked.map((view) => (
           <ResolveRow
             key={JSON.stringify([master.hostId, master.profileId, view.key])}
-            master={master}
             sectionKey={view.key}
             kind={view.kind}
             label={labelOf(view)}

@@ -23,6 +23,7 @@ import { hashSection } from '../../../lib/profile/hash'
 import { __resetMasterWorldForTest } from '../../../lib/profile/master-world'
 import { clearSectionStore } from '../../../lib/profile/section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, requestResolve, startProfileSync } from '../../../lib/profile/start'
+import { masterTagOf } from '../../../lib/profile/sync-status'
 import { FakeDaemon } from '../../../lib/profile/test-fake-daemon'
 import type { HostsPayload } from '../../../lib/profile/types'
 import { CurrentBlock } from './CurrentBlock'
@@ -87,6 +88,7 @@ function renameH2(name: string): void {
 }
 const h2Name = (): string => useHostStore.getState().hosts[H2].name
 const hostsLock = (): SectionLock | undefined => profileSyncState().status?.locks.hosts
+const tagNow = (): string => masterTagOf({ hostId: M, profileId: PROFILE }, useProfileStore.getState().attachGeneration)
 
 /** The master host goes away and comes back: the executor reindexes (start.ts: `onReconnected`). */
 async function reconnect(): Promise<void> {
@@ -213,7 +215,7 @@ describe('Resolve, end to end (R7)', () => {
     const lock = hostsLock()!
     const reads = api.getSection.mock.calls.length
     const problems = profileSyncState().problems.length
-    expect(requestResolve('hosts', 'sot', lock)).toBe(true)
+    expect(requestResolve('hosts', 'sot', lock, tagNow())).toBe(true)
     await settle()
     expect(profileSyncState().status?.sections.hosts).toBe('locked:invalid')
     // not even asked for again: no pull of the refused copy, no new verdict
@@ -250,7 +252,7 @@ describe('Resolve, end to end (R7)', () => {
 
     // what a late click would have sent: dropped by the channel's binding, nothing written
     const writes = daemon.writes.length
-    requestResolve('hosts', 'local', frozen)
+    expect(requestResolve('hosts', 'local', frozen, tagNow())).toBe(false) // dropped by the lock binding (review A2)
     await settle()
     expect(hostsLock()?.sot.rev).toBe(2)
     expect(daemon.writes.length).toBe(writes)
@@ -289,5 +291,22 @@ describe('Resolve, end to end (R7)', () => {
     expect((row.payload as unknown as HostsPayload).hosts[H2].name).toBe('sent-here')
     expect(Object.keys((row.payload as unknown as HostsPayload).hosts)).toEqual([M, H2])
     expect(row.writer).toBe('c_aaaaaaaaaaaa')
+  })
+
+  it('the same master is attached AGAIN while the confirmation is open (review A1): it closes itself; the old tag is refused, nothing written', async () => {
+    await attachedAt(2)
+    await hostWrites(1, (p) => void (p.hosts[H2].name = 'recreated'))
+    await reconnect()
+    await click('profile-resolve-keep-local-hosts')
+    const frozen = hostsLock()!
+    const shownUnder = tagNow()
+    expect(await attachMaster(M, PROFILE, 'pull')).toEqual({ ok: true })
+    expect(tagNow()).not.toBe(shownUnder)
+    await act(async () => {})
+    expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
+    const writes = daemon.writes.length
+    expect(requestResolve('hosts', 'local', frozen, shownUnder)).toBe(false)
+    await settle()
+    expect(daemon.writes.length).toBe(writes)
   })
 })

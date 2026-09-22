@@ -94,7 +94,7 @@ describe('no master → the app is exactly what it was', () => {
     const leave = subscribeProfileSync(heard)
     const snapshot = profileSyncSnapshot()
     requestSyncNow()
-    requestResolve('hosts', 'sot', { status: 'locked:reset', currentHash: null, sot: { rev: 0, hash: null }, conflict: null })
+    requestResolve('hosts', 'sot', { status: 'locked:reset', currentHash: null, sot: { rev: 0, hash: null }, conflict: null }, 'h1|p|0')
     useHostStore.getState().setRuntime('h1', { status: 'connected' })
     await vi.advanceTimersByTimeAsync(60_000)
     leave()

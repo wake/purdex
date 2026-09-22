@@ -595,10 +595,11 @@ export function requestSyncNow(): void {
 /**
  * Answer a lock, from any window. `lock` is what the user was shown — `snapshot.status.locks[section]`: whoever
  * leads THIS master executes it only if the section's lock is still that one, field by field (sync-status.ts).
- * Answers whether the command was handed over (P3d-4 R2); without a master: nothing, and `false`.
+ * `masterTag` (`masterTagOf(master, attachGeneration)`) is the master the lock was shown under: another one than the
+ * channel's → refused (review A1). Answers whether the command was handed over (P3d-4 R2); without a master: `false`.
  */
-export function requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): boolean {
-  return channel?.requestResolve(section, keep, lock) ?? false
+export function requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock, masterTag: string): boolean {
+  return channel?.requestResolve(section, keep, lock, masterTag) ?? false
 }
 
 function sameMaster(a: Master | null, b: Master | null): boolean {

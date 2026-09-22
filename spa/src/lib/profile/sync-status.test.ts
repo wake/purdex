@@ -55,6 +55,8 @@ interface Win {
   /** Edit what this window believes, then tell the channel — as start.ts does. */
   set(patch: Partial<ProfileSyncState>): void
   snapshot(): ReturnType<Mod['profileSyncSnapshot']>
+  /** The master tag this window's channel is on. */
+  tag: string
 }
 
 const open: StatusChannel[] = []
@@ -94,6 +96,7 @@ async function openWindow(windowId: string, init: Partial<ProfileSyncState> = {}
       channel.refresh()
     },
     snapshot: () => mod.profileSyncSnapshot(),
+    tag: masterTag,
   }
 }
 
@@ -741,7 +744,7 @@ describe('commands reach the leader, one key each', () => {
     const b = await openWindow('B')
     const c = await openWindow('C')
     b.channel.requestSyncNow()
-    c.channel.requestResolve('hosts', 'sot', LOCK)
+    c.channel.requestResolve('hosts', 'sot', LOCK, c.tag)
     expect(commandKeys()).toHaveLength(2)
     deliver()
     expect(a.syncNow).toHaveBeenCalledTimes(1)
@@ -784,7 +787,7 @@ describe('commands reach the leader, one key each', () => {
     b.locks.hosts = LOCK
     const c = await openWindow('C')
     c.channel.requestSyncNow()
-    c.channel.requestResolve('hosts', 'local', LOCK)
+    c.channel.requestResolve('hosts', 'local', LOCK, c.tag)
     localStorage.setItem(`${CMD1}old`, syncNowCmd(TAG1, Date.now() - 30_001))
     expect(commandKeys()).toHaveLength(3)
     b.set({ leader: true, status: SYNCED }) // no storage event is delivered in this test
@@ -875,7 +878,7 @@ describe('a resolve is bound to the lock the user was looking at', () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.hosts = current
     const b = await openWindow('B')
-    b.channel.requestResolve('hosts', 'local', LOCK)
+    b.channel.requestResolve('hosts', 'local', LOCK, b.tag)
     deliver()
     expect(a.resolve).not.toHaveBeenCalled()
     expect(commandKeys()).toEqual([]) // dropped, not kept for later
@@ -884,7 +887,7 @@ describe('a resolve is bound to the lock the user was looking at', () => {
   it.each(cases)('refused, in the leader window itself: %s', async (_name, current) => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.hosts = current
-    a.channel.requestResolve('hosts', 'local', LOCK)
+    a.channel.requestResolve('hosts', 'local', LOCK, a.tag)
     expect(a.resolve).not.toHaveBeenCalled()
   })
 
@@ -892,8 +895,8 @@ describe('a resolve is bound to the lock the user was looking at', () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.hosts = conflictLock({ localHash: 'L1', sot: { rev: 5, hash: 'S5' } })
     const b = await openWindow('B')
-    b.channel.requestResolve('hosts', 'local', LOCK)
-    a.channel.requestResolve('hosts', 'sot', conflictLock({ ...PAIR, sot: { ...PAIR.sot } }))
+    b.channel.requestResolve('hosts', 'local', LOCK, b.tag)
+    a.channel.requestResolve('hosts', 'sot', conflictLock({ ...PAIR, sot: { ...PAIR.sot } }), a.tag)
     deliver()
     expect(a.resolve.mock.calls).toEqual([['hosts', 'sot'], ['hosts', 'local']])
   })
@@ -901,10 +904,10 @@ describe('a resolve is bound to the lock the user was looking at', () => {
   it('a null localHash, a null currentHash and a null sot.hash are values like any other', async () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks['tabs.w1'] = conflictLock({ localHash: null, sot: { rev: 3, hash: 'S3' } })
-    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: null, sot: { rev: 3, hash: 'S3' } }))
-    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: 'L1', sot: { rev: 3, hash: 'S3' } }, null))
-    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: null, sot: { rev: 3, hash: null } }))
-    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: null, sot: { rev: 3, hash: 'S3' } }, 'L1'))
+    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: null, sot: { rev: 3, hash: 'S3' } }), a.tag)
+    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: 'L1', sot: { rev: 3, hash: 'S3' } }, null), a.tag)
+    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: null, sot: { rev: 3, hash: null } }), a.tag)
+    a.channel.requestResolve('tabs.w1', 'sot', conflictLock({ localHash: null, sot: { rev: 3, hash: 'S3' } }, 'L1'), a.tag)
     expect(a.resolve).toHaveBeenCalledTimes(1)
   })
 
@@ -921,7 +924,7 @@ describe('a resolve is bound to the lock the user was looking at', () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.settings = INVALID
     const b = await openWindow('B')
-    b.channel.requestResolve('settings', 'local', INVALID) // what the user was shown
+    b.channel.requestResolve('settings', 'local', INVALID, b.tag) // what the user was shown
     a.locks.settings = current // … and what the executor holds by the time the leader looks
     deliver()
     expect(a.resolve).not.toHaveBeenCalled()
@@ -931,7 +934,7 @@ describe('a resolve is bound to the lock the user was looking at', () => {
   it.each(pairless)('Keep local under locked:invalid, refused in the leader window itself: %s', async (_name, current) => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.settings = current
-    a.channel.requestResolve('settings', 'local', INVALID)
+    a.channel.requestResolve('settings', 'local', INVALID, a.tag)
     expect(a.resolve).not.toHaveBeenCalled()
   })
 
@@ -939,16 +942,16 @@ describe('a resolve is bound to the lock the user was looking at', () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.settings = INVALID
     const b = await openWindow('B')
-    b.channel.requestResolve('settings', 'local', { ...INVALID, sot: { ...INVALID.sot } })
+    b.channel.requestResolve('settings', 'local', { ...INVALID, sot: { ...INVALID.sot } }, b.tag)
     deliver()
-    a.channel.requestResolve('settings', 'local', INVALID)
+    a.channel.requestResolve('settings', 'local', INVALID, a.tag)
     expect(a.resolve.mock.calls).toEqual([['settings', 'local'], ['settings', 'local']])
   })
 
   it('the pair the user saw is gone (the lock is a pairless one now) → refused', async () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.settings = { status: 'locked:reset', currentHash: 'L1', sot: { rev: 5, hash: 'S5' }, conflict: null }
-    a.channel.requestResolve('settings', 'local', LOCK)
+    a.channel.requestResolve('settings', 'local', LOCK, a.tag)
     expect(a.resolve).not.toHaveBeenCalled()
   })
 })
@@ -987,7 +990,7 @@ describe('everything is scoped to the master it was made for (hostId|profileId|a
     a.locks.hosts = LOCK
     const b = await openWindow('B') // still P1
     b.channel.requestSyncNow()
-    b.channel.requestResolve('hosts', 'local', LOCK)
+    b.channel.requestResolve('hosts', 'local', LOCK, b.tag)
     const keys = commandKeys()
     expect(keys).toHaveLength(2)
     expect(keys.every((k) => k.startsWith(CMD1))).toBe(true)
@@ -1118,7 +1121,7 @@ describe('the SAME master attached again: a `syncNow` sent to the old generation
     const a = await openWindow('A', { leader: true, status: SYNCED }, TAG1B)
     a.locks.hosts = LOCK // even if the new driver happens to hold that very lock
     const b = await openWindow('B')
-    b.channel.requestResolve('hosts', 'local', LOCK)
+    b.channel.requestResolve('hosts', 'local', LOCK, b.tag)
     expect(commandKeys()).toHaveLength(1)
     b.channel.close(true, TAG1B)
     deliver()
@@ -1205,7 +1208,7 @@ describe('close', () => {
     fire(`${CMD1}late`)
     a.channel.refresh()
     a.channel.requestSyncNow()
-    a.channel.requestResolve('hosts', 'sot', LOCK)
+    a.channel.requestResolve('hosts', 'sot', LOCK, a.tag)
     a.channel.close(true) // twice: harmless, and does not clear what came later
     vi.advanceTimersByTime(60_000)
     expect(a.syncNow).not.toHaveBeenCalled()
@@ -1245,27 +1248,27 @@ describe('requestResolve answers whether the command was handed over (P3d-4 R2)'
   it('in the leader window: true — executed there and then', async () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.hosts = LOCK
-    expect(a.channel.requestResolve('hosts', 'local', LOCK)).toBe(true)
+    expect(a.channel.requestResolve('hosts', 'local', LOCK, a.tag)).toBe(true)
     expect(a.resolve.mock.calls).toEqual([['hosts', 'local']])
   })
 
   it('in the leader window, the lock GONE: false — dropped, not executed (review A2)', async () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
-    expect(a.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+    expect(a.channel.requestResolve('hosts', 'local', LOCK, a.tag)).toBe(false)
     expect(a.resolve).not.toHaveBeenCalled()
   })
 
   it('in the leader window, the lock CHANGED: false — dropped, not executed (review A2)', async () => {
     const a = await openWindow('A', { leader: true, status: SYNCED })
     a.locks.hosts = conflictLock(PAIR, 'L2')
-    expect(a.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+    expect(a.channel.requestResolve('hosts', 'local', LOCK, a.tag)).toBe(false)
     expect(a.resolve).not.toHaveBeenCalled()
   })
 
   it('in a follower: true once its key is written', async () => {
     await openWindow('A', { leader: true, status: SYNCED })
     const b = await openWindow('B')
-    expect(b.channel.requestResolve('hosts', 'local', LOCK)).toBe(true)
+    expect(b.channel.requestResolve('hosts', 'local', LOCK, b.tag)).toBe(true)
     expect(commandKeys()).toHaveLength(1)
   })
 
@@ -1275,15 +1278,28 @@ describe('requestResolve answers whether the command was handed over (P3d-4 R2)'
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError')
     })
-    expect(b.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+    expect(b.channel.requestResolve('hosts', 'local', LOCK, b.tag)).toBe(false)
     vi.restoreAllMocks()
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('bound to the master the user was looking at (review A1): another tag → false, nothing executed, nothing written', async () => {
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    a.locks.hosts = LOCK
+    // same host and profile, another attach generation — and another master altogether
+    for (const stale of ['h1|p_000000000001|0', TAG2]) {
+      expect(a.channel.requestResolve('hosts', 'local', LOCK, stale)).toBe(false)
+    }
+    expect(a.resolve).not.toHaveBeenCalled()
+    const b = await openWindow('B')
+    expect(b.channel.requestResolve('hosts', 'local', LOCK, TAG2)).toBe(false)
     expect(commandKeys()).toEqual([])
   })
 
   it('a closed channel: false', async () => {
     const b = await openWindow('B')
     b.channel.close(false)
-    expect(b.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+    expect(b.channel.requestResolve('hosts', 'local', LOCK, b.tag)).toBe(false)
   })
 
   it('COMMAND_TTL_MS is 30 s — the page\'s "sent" ends there (the only timer on it)', async () => {
