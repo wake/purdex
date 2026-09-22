@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.427] - 2026-09-23
+
+### Fix：切換 profile 後，剛換上畫面的世界立刻用有版本的 session 清單對帳（#1255 SPA 那一半，#1312）
+
+以前一個世界停放期間若有 session 關掉，切回來時它的 pane 仍綁著那個 session，要等該 host 下一次 `sessions` 推送才會更正——
+host 上沒有其他變化時就永遠不會。原因是手上的清單都沒有版本、不能當「session 已關」的證據（`session-closed` 不可逆、
+依名稱 revive 會綁錯 instance，master 還會推上 SOT）。daemon 在 alpha.423（#1292）提供了不經快取、帶版本的清單。
+
+- **切換後重新對帳** —— `switchActiveProfile` 成功（兩把鎖都放開）後，對每個連線已對帳過的 host `GET /api/sessions?fresh=1`；
+  世界又換了、連線斷了、host 被移除或換位址、或清單不比已知的新，就丟掉。舊 daemon 回陣列 ＝ 沒有版本 → 維持以前的行為。
+  失敗有限重試（1、2、4 秒），每次重試前重新確認上面的條件。只有發起切換的視窗抓（tab store 共用，結果經 rehydrate 傳到其他視窗）。
+- **WS `sessions` frame 依版本排序** —— 每個 host 記住已對帳清單的 `{epoch, seq}` 與連線世代；比它舊的 frame 一律不對帳。
+  版本在套用**之前**就記下（對帳不是交易式的，寫到一半丟例外時也不能讓較舊的清單進來），失敗改走重試。
+- **revive 快照綁定世界** —— 修掉一個既有 bug：切換本身釋放 operation lock 時，會拿切換前的清單去 revive 新世界的 pane。
+  現在畫面換過世界就不 revive，等拿到新世界的清單再說（promote 也會觸發，屬保守方向）。
+- **已關閉的 host-events socket** —— `close()` 讓連線世代失效，佇列裡還沒處理的 frame 與排入的 open 事件都不再送進 handler
+  （host 被移除或換位址時，舊 daemon 的清單可能被拿去對帳）。
+- **驗證** —— 真機 :5176：slave 停放期間砍掉它綁的 session，切回 slave 後恰好一次 `fresh=1`、pane 變成 `session-closed`；
+  來回切換四次 binding 完全不變。純 SPA，不用 deploy。
+- **追蹤** —— #1309（lock 釋放時的 revive 改抓新清單）、#1310（profile apply 換上畫面的 pane 同樣沒有對帳證據）、#1313（WS hook 拆分）。
+
 ## [1.0.0-alpha.426] - 2026-09-23
 
 ### Refactor：拆掉 device-state 與 workspace snapshot（Profile Sync P4b，#1314–#1320 SPA、#1321 daemon）
