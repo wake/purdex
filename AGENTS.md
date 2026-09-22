@@ -7,7 +7,7 @@
 ## 專案邊界
 
 - 這是 `pnpm` workspace；workspace package 只有 `spa/` 與 `electron/`。根目錄 `package.json` 負責 Electron dev/build，Go 走 `Makefile`。
-- Go 入口在 `cmd/pdx/main.go`。`serve` 會建立 `internal/core`，再掛 `session`、`stream`、`agent`、`fs`、`logs`、`sync` 模組；`dev` module 只有 `config.Dev.Update=true` 時才會載入。
+- Go 入口在 `cmd/pdx/main.go`。`serve` 會建立 `internal/core`，再掛 `session`、`stream`、`agent`、`fs`、`logs` 模組；`dev` module 只有 `config.Dev.Update=true` 時才會載入。
 - Electron 真正的 build wiring 在根目錄 `electron.vite.config.ts`：它同時編 `electron/main.ts`、`electron/preload.ts`、`electron/browser-view-preload.ts`，以及 `spa/` renderer 到 `out/`。
 
 ## 常用指令

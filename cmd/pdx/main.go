@@ -29,7 +29,6 @@ import (
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
 	"github.com/wake/purdex/internal/module/session"
-	syncmod "github.com/wake/purdex/internal/module/sync"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 	"github.com/wake/purdex/internal/tmuxenv"
@@ -280,7 +279,6 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(peersmod.New(audit, titles))
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
-	c.AddModule(syncmod.New())
 	c.AddModule(devicestatemod.New())
 	c.AddModule(profilesmod.New())
 	c.AddModule(hostconfigmod.New())
