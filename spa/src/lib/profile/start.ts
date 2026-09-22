@@ -131,7 +131,8 @@ export interface ProfileSyncState {
    *  an `attachMaster` is in progress somewhere (transient: lifted by its outcome, or by its expiry). */
   blocked: 'master-endpoint-changed' | 'profile-gone' | 'suspended' | null
   /** Null in a follower and without a master: only the leader knows. With `blocked: 'profile-gone'` there is
-   *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections. */
+   *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections,
+   *  `profileGone: true`. */
   status: ExecutorStatus | null
   /** The latest `PROBLEM_BUFFER_SIZE`, oldest first. */
   problems: ProfileSyncProblem[]
@@ -590,13 +591,18 @@ function sameMaster(a: Master | null, b: Master | null): boolean {
   return a.hostId === b.hostId && a.profileId === b.profileId
 }
 
+/** What the executor's own `profileGone` publishes, for the 404 there is no executor to ask about (P3d-4 R6). */
+function profileGoneStatus(): ExecutorStatus {
+  return { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {}, profileGone: true, detail: {}, indexFailures: 0, lastSuccessAt: null }
+}
+
 export function profileSyncState(): ProfileSyncState {
   const blocked = mode?.blocked() ?? null
   return {
     master: selectMaster(useProfileStore.getState()),
     leader: mode?.isLeader() ?? false,
     blocked,
-    status: blocked === 'profile-gone' ? { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} } : (mode?.leader()?.status() ?? null),
+    status: blocked === 'profile-gone' ? profileGoneStatus() : (mode?.leader()?.status() ?? null),
     problems: problems.map((p) => ({ ...p })),
   }
 }

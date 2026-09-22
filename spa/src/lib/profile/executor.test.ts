@@ -194,7 +194,7 @@ describe('executor — state and persistence', () => {
     h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H1' }, settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S2' } }
     const { ex } = make()
     expect(store.loadSectionStore).toHaveBeenCalledWith(PROFILE)
-    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' } , locks: {} })
+    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 4 }, settings: { failures: 0, retryAt: null, rev: 2 } }, indexFailures: 0, lastSuccessAt: null })
   })
 
   it('restores a persisted conflict as locked:conflict', () => {
@@ -277,7 +277,7 @@ describe('executor — state and persistence', () => {
     api.putSection.mockReturnValue(deferred<PutOutcome>().promise)
     ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
     expect(statuses).toHaveLength(1)
-    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' } , locks: {} })
+    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1 } }, indexFailures: 0, lastSuccessAt: expect.any(Number) })
     ex.onSection({ key: 'hosts', hash: 'H3', payload: {} }) // still pending: no second call
     expect(statuses).toHaveLength(1)
   })
@@ -869,7 +869,7 @@ describe('executor — pull', () => {
     ex.onSection({ key: 'tabs.w1', hash: null, payload: null })
     await vi.advanceTimersByTimeAsync(120_000)
 
-    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' } , locks: {} }) // forgotten
+    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1 }, workspaces: { failures: 0, retryAt: null, rev: 2 } }, indexFailures: 0, lastSuccessAt: expect.any(Number) }) // forgotten
     expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'tabs.w1')
     expect(applySectionToStores.mock.calls.map((c) => c[0])).toEqual(['workspaces']) // never the deletion
     expect(api.putSection).not.toHaveBeenCalled() // no orphan re-created
@@ -2359,5 +2359,155 @@ describe('executor — `isReachable()` is asked again where the request is MADE,
     await vi.advanceTimersByTimeAsync(600_000)
     expect(api.listProfiles).toHaveBeenCalledTimes(lists)
     never(again)
+  })
+})
+
+/* ─── P3d-4a: what the page is told beyond the status strings ─── */
+
+describe('executor — the published detail, the counters and lastSuccessAt (P3d-4a)', () => {
+  const remote = (section: string, rev: number, hash: string | null) => ({ hostId: HOST, profileId: PROFILE, section, rev, hash, writerClientId: OTHER_CLIENT })
+  const NONE = { failures: 0, retryAt: null }
+
+  it('every section has a detail: `rev` is the AGREED rev (base), null while nothing was ever agreed', () => {
+    h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H1' }, settings: { base: { rev: 0, hash: null }, currentHash: 'S2' } }
+    const { ex } = make()
+    expect(ex.status()).toEqual({
+      profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' }, locks: {},
+      profileGone: false,
+      detail: { hosts: { rev: 4, ...NONE }, settings: { rev: null, ...NONE } },
+      indexFailures: 0,
+      lastSuccessAt: null,
+    })
+  })
+
+  it('R3 · armRetry: a failed push publishes the failure count and when the next try is armed', async () => {
+    const { ex, statuses } = await synced({ hosts: 'H1' })
+    api.putSection.mockResolvedValue(failure('server', { status: 500 }))
+    const t0 = Date.now()
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
+    await flush()
+    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 1, failures: 1, retryAt: t0 + 2000 })
+  })
+
+  it('R3 · the retry timer firing publishes that nothing is armed any more (even when the retry itself does nothing)', async () => {
+    const { ex, statuses, env } = await synced({ hosts: 'H1' })
+    api.putSection.mockResolvedValue(failure('server', { status: 500 }))
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
+    await flush()
+    env.reachable = false // the retry decides nothing: only the timer itself can say so
+    const before = statuses.length
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(statuses.length).toBe(before + 1)
+    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 1, failures: 1, retryAt: null })
+  })
+
+  it('R3 · clearBackoff: a pull that got through after a failure publishes failures 0', async () => {
+    const { ex, statuses } = await synced({ hosts: 'H1' })
+    api.getSection.mockResolvedValueOnce(failure('network'))
+    ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+    await flush()
+    expect(statuses.at(-1)?.detail.hosts).toMatchObject({ failures: 1 })
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2' })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(ex.status().sections.hosts).toBe('synced')
+    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 2, ...NONE })
+  })
+
+  it('R3 · resetRetries: Sync now clears the counters and says so, even when nothing is sent', async () => {
+    const { ex, statuses, env } = await synced({ hosts: 'H1' })
+    api.putSection.mockResolvedValue(failure('server', { status: 500 }))
+    ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
+    await flush()
+    expect(statuses.at(-1)?.detail.hosts).toMatchObject({ failures: 1 })
+    env.reachable = false
+    const before = statuses.length
+    ex.syncNow()
+    expect(statuses.length).toBe(before + 1)
+    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 1, ...NONE })
+  })
+
+  it('R3 · a failed index read publishes indexFailures; a good one publishes 0', async () => {
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+    api.listProfiles.mockResolvedValue(failure('server', { status: 500 }))
+    const { ex, statuses } = make()
+    ex.onReconnected()
+    await flush()
+    expect(statuses.at(-1)?.indexFailures).toBe(1)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(statuses.at(-1)?.indexFailures).toBe(2)
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(statuses.at(-1)?.indexFailures).toBe(0)
+  })
+
+  it('R6 · the index no longer listing the profile publishes profileGone', async () => {
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')], 'p_ffffffffffff'))
+    const { ex, statuses } = make()
+    expect(ex.status().profileGone).toBe(false)
+    ex.onReconnected()
+    await flush()
+    expect(statuses.at(-1)).toMatchObject({ profile: 'locked:reset', profileGone: true })
+  })
+
+  describe('R4 · lastSuccessAt: an answer from the host after which the profile is synced', () => {
+    it('an index read that leaves everything synced stamps it', async () => {
+      h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+      vi.setSystemTime(1_000_000)
+      const { ex } = make()
+      ex.onReconnected()
+      await flush()
+      expect(ex.status()).toMatchObject({ profile: 'synced', lastSuccessAt: 1_000_000 })
+    })
+
+    it('an answer that leaves the profile pending does not stamp it', async () => {
+      h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H2' } } // dirty: a push is owed
+      api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1')]))
+      api.putSection.mockResolvedValue(failure('server', { status: 500 }))
+      const { ex } = make()
+      ex.onReconnected()
+      await flush()
+      expect(api.listProfiles).toHaveBeenCalled()
+      expect(ex.status().profile).toBe('pending')
+      expect(ex.status().lastSuccessAt).toBeNull()
+    })
+
+    it('an acknowledged push stamps it; a local edit and a failure do not move it', async () => {
+      vi.setSystemTime(1_000_000)
+      const { ex } = await synced({ hosts: 'H1' })
+      const stamped = ex.status().lastSuccessAt
+      expect(stamped).toBe(1_000_000)
+
+      vi.setSystemTime(2_000_000)
+      api.putSection.mockResolvedValueOnce(failure('server', { status: 500 }))
+      ex.onSection({ key: 'hosts', hash: 'H2', payload: {} }) // a local edit, then a failure
+      await flush()
+      expect(ex.status().profile).toBe('pending')
+      expect(ex.status().lastSuccessAt).toBe(stamped)
+
+      vi.setSystemTime(3_000_000)
+      api.putSection.mockResolvedValueOnce({ kind: 'applied', rev: 2 })
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(ex.status().profile).toBe('synced')
+      expect(ex.status().lastSuccessAt).toBe(3_002_000)
+    })
+
+    it('a converged push and a pull stamp it too', async () => {
+      const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
+      vi.setSystemTime(5_000_000)
+      api.putSection.mockResolvedValueOnce({ kind: 'converged', rev: 2 })
+      ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
+      await flush()
+      expect(ex.status()).toMatchObject({ profile: 'synced', lastSuccessAt: 5_000_000 })
+
+      vi.setSystemTime(6_000_000)
+      api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2'), { v: 2 }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
+      ex.onRemoteEvent(remote('settings', 2, 'S2'))
+      await flush()
+      expect(ex.status()).toMatchObject({ profile: 'synced', lastSuccessAt: 6_000_000 })
+    })
   })
 })

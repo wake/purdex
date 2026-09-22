@@ -15,7 +15,7 @@ vi.mock('../../../lib/profile/api', () => ({ listProfiles: vi.fn(), renameProfil
 const NO_MASTER: ProfileSyncSnapshot = { master: null, leader: false, blocked: null, status: null, problems: [], remote: false, stale: false }
 const attach = () => {
   useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860' })
-  vi.mocked(useProfileSync).mockReturnValue({ ...NO_MASTER, master: { hostId: 'h1', profileId: 'p1' }, leader: true, status: { profile: 'synced', schemaLock: null, sections: {}, locks: {} } })
+  vi.mocked(useProfileSync).mockReturnValue({ ...NO_MASTER, master: { hostId: 'h1', profileId: 'p1' }, leader: true, status: { profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null } })
 }
 
 beforeEach(() => {

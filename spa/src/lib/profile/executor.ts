@@ -234,6 +234,16 @@ export interface SectionLock {
   conflict: SectionConflict | null
 }
 
+/** What the page shows of one section beyond its status string (P3d-4a). Every field is there for every section. */
+export interface SectionDetail {
+  /** `base.rev`: the rev this device and the host last AGREED on. null = nothing was ever agreed. */
+  rev: number | null
+  /** Consecutive failed requests for this section; 0 = none. */
+  failures: number
+  /** When the next attempt is armed (the executor's clock, ms); null = none is armed. */
+  retryAt: number | null
+}
+
 export interface ExecutorStatus {
   profile: ProfileStatus
   schemaLock: SchemaLock | null
@@ -243,6 +253,15 @@ export interface ExecutorStatus {
    * window's UI sends back the lock it rendered (P3 plan Task 2), so it has to hear when one moves.
    */
   locks: Record<string, SectionLock>
+  /** The index answered without this profile (then `profile` is `locked:reset`). start.ts's 404 status says so too. */
+  profileGone: boolean
+  /** One per key of `sections`. Every change of a counter in it emits (P3 plan, P3d-4 R3). */
+  detail: Record<string, SectionDetail>
+  /** Consecutive failed index reads; 0 = none. */
+  indexFailures: number
+  /** The last time an answer FROM THE HOST (an index read, a pull, a push outcome) left the profile `synced`. A
+   *  local edit does not move it, nor does a failure. null = not since this executor started. */
+  lastSuccessAt: number | null
 }
 
 export interface Executor {
@@ -379,6 +398,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   let shapesPromise: Promise<Shapes> | null = null
   let previousWorkspaceIds = localWorkspaceIds() ?? []
   let lastStatus = ''
+  let lastSuccessAt: number | null = null
 
   /* ─── the one door every request goes through ─── */
 
@@ -424,10 +444,19 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
   }
 
+  function profileNow(): ProfileStatus {
+    return profileGone ? 'locked:reset' : profileStatus({ hasMaster: true, sections: Object.fromEntries(sections), lock: schemaLock })
+  }
+
+  function detailOf(key: string, s: SectionSyncState): SectionDetail {
+    // `{0, null}` is "nothing yet" (sync-state): not a rev anybody agreed on.
+    const rev = s.base.rev === 0 && s.base.hash === null ? null : s.base.rev
+    return { rev, failures: failures.get(key) ?? 0, retryAt: notBefore.get(key) ?? null }
+  }
+
   function status(): ExecutorStatus {
-    const states = Object.fromEntries(sections)
     return {
-      profile: profileGone ? 'locked:reset' : profileStatus({ hasMaster: true, sections: states, lock: schemaLock }),
+      profile: profileNow(),
       schemaLock,
       sections: Object.fromEntries([...sections].map(([key, s]) => [key, s.status])),
       locks: Object.fromEntries(
@@ -436,7 +465,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           return lock === null ? [] : [[key, lock]]
         }),
       ),
+      profileGone,
+      detail: Object.fromEntries([...sections].map(([key, s]) => [key, detailOf(key, s)])),
+      indexFailures: reindexFailures,
+      lastSuccessAt,
     }
+  }
+
+  /** An answer from the host has just been handled: if the profile is `synced` now, that is the time it was. */
+  function answered(): void {
+    if (disposed || profileNow() !== 'synced') return
+    lastSuccessAt = now()
+    emitStatus()
   }
 
   function emitStatus(): void {
@@ -651,11 +691,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       orphanDeferred.delete(key)
       // Our own delete: the WS echo is `own` and ignored, so observe it here.
       dispatch(key, { type: 'remote-event', rev: outcome.rev, hash: null, own: false }, false)
+      answered()
       return WAIT
     }
     if (outcome.kind === 'conflict') {
       orphanTried.add(key)
       problem('orphan-delete-conflict', `someone wrote it meanwhile (now rev ${outcome.rev}); left to the ordinary rules`, key)
+      answered()
       return WAIT
     }
     // nothing was decided: the next index may try again
@@ -723,6 +765,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const timer = retryTimers.get(key)
     if (timer !== undefined) clearTimeout(timer)
     retryTimers.delete(key)
+    emitStatus()
   }
 
   /** The next backoff step of `key`. */
@@ -741,9 +784,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       setTimeout(() => {
         retryTimers.delete(key)
         notBefore.delete(key)
+        emitStatus()
         pump(key)
       }, ms),
     )
+    emitStatus()
   }
 
   function settleManual(): void {
@@ -881,13 +926,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       reindexTimer = setTimeout(() => {
         reindexTimer = null
         reindexNotBefore = 0
+        emitStatus()
         if (reindexForced) requestReindex()
         pumpAll()
       }, ms)
       problem('reindex-failed', `${result.reason} (${result.status}); retry in ${ms} ms`)
+      emitStatus()
       return
     }
     reindexFailures = 0
+    emitStatus()
 
     const entry = result.value.find((p) => p.id === profileId)
     if (entry === undefined) {
@@ -916,6 +964,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     orphanDeferred.clear()
     settleHeldPlaceholders()
     reportSectionSet(entry.sections.map((m) => m.section))
+    answered()
   }
 
   /* ─── collector reports ─── */
@@ -1079,16 +1128,19 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       case 'applied':
         clearBackoff(key)
         dispatch(key, { type: 'push-applied', rev: outcome.rev }, false)
+        answered()
         return AGAIN
       case 'converged':
         clearBackoff(key)
         dispatch(key, { type: 'push-converged', rev: outcome.rev }, false)
+        answered()
         return AGAIN
       case 'conflict':
         clearBackoff(key)
         // before the event: if it locks, `retainedHashes` keeps this payload
         if (outcome.hash !== null && outcome.payload !== null) stash.set(outcome.hash, outcome.payload)
         dispatch(key, { type: 'push-conflict', rev: outcome.rev, hash: outcome.hash }, false)
+        answered()
         return AGAIN
       case 'schema': {
         // Set before this function returns, i.e. before the next write is dequeued.
@@ -1221,6 +1273,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (!dispatch(key, { type: 'pull-applied', rev, hash: sotHash, localHash: outcome.hash }, false)) {
       problem('pull-applied-refused', 'the section changed while the payload was being applied', key)
     }
+    answered()
     // The push that follows needs the payload of what the stores hold, and only
     // the collector has it: its report of this very apply pumps the section.
     if (mismatch && outcome.hash !== null && !stash.has(outcome.hash)) {
@@ -1316,6 +1369,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     clearTimers()
     failures.clear()
     reindexFailures = 0
+    emitStatus()
   }
 
   // Startup: what the section store holds, conflicts included (sync-state driver contract).

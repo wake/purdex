@@ -25,7 +25,7 @@ vi.mock('../../../lib/profile/master-world', async (importOriginal) => ({
 }))
 
 const NO_MASTER: ProfileSyncSnapshot = { master: null, leader: false, blocked: null, status: null, problems: [], remote: false, stale: false }
-const status = (sections: ExecutorStatus['sections'] = {}, profile: ExecutorStatus['profile'] = 'synced', locks: ExecutorStatus['locks'] = {}): ExecutorStatus => ({ profile, schemaLock: null, sections, locks })
+const status = (sections: ExecutorStatus['sections'] = {}, profile: ExecutorStatus['profile'] = 'synced', locks: ExecutorStatus['locks'] = {}): ExecutorStatus => ({ profile, schemaLock: null, sections, locks, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })
 const attached = (over: Partial<ProfileSyncSnapshot> = {}): ProfileSyncSnapshot => ({
   master: { hostId: 'h1', profileId: 'p1' },
   leader: true,

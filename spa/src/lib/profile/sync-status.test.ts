@@ -33,8 +33,8 @@ const TAG2 = 'h2|p_000000000002|2'
 const cmdOf = (tag: string): string => `${CMD}${encodeURIComponent(tag)}:`
 const CMD1 = cmdOf(TAG1)
 const CMD2 = cmdOf(TAG2)
-const SYNCED = { profile: 'synced', schemaLock: null, sections: { hosts: 'synced' }, locks: {} } as const
-const PENDING = { profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {} } as const
+const SYNCED = { profile: 'synced', schemaLock: null, sections: { hosts: 'synced' }, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null } as const
+const PENDING = { profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null } as const
 const PAIR: SectionConflict = { localHash: 'L1', sot: { rev: 5, hash: 'S5' } }
 /** A `locked:conflict` section as the executor publishes it: the pair, the live hash, the SOT (which moves with the pair's). */
 const conflictLock = (pair: SectionConflict, currentHash: string | null = pair.localHash): SectionLock => ({ status: 'locked:conflict', currentHash, sot: { ...pair.sot }, conflict: pair })
@@ -289,7 +289,7 @@ describe('a follower reads what the leader published', () => {
   })
 
   it('the published `blocked` wins over nothing of its own: profile-gone is something only the leader knows', async () => {
-    await openWindow('A', { leader: true, blocked: 'profile-gone', status: { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {} } })
+    await openWindow('A', { leader: true, blocked: 'profile-gone', status: { profile: 'locked:reset', schemaLock: null, sections: {}, locks: {}, profileGone: true, detail: {}, indexFailures: 0, lastSuccessAt: null } })
     const b = await openWindow('B')
     vi.advanceTimersByTime(250)
     deliver()

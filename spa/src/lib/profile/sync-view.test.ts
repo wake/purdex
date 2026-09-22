@@ -3,7 +3,7 @@ import { describeSections, settingsWaitForWorkspaces, syncDotOf } from './sync-v
 import type { ProfileSyncSnapshot } from './start'
 import type { ExecutorStatus } from './executor'
 
-const status = (sections: ExecutorStatus['sections'], profile: ExecutorStatus['profile'] = 'pending'): ExecutorStatus => ({ profile, schemaLock: null, sections, locks: {} })
+const status = (sections: ExecutorStatus['sections'], profile: ExecutorStatus['profile'] = 'pending'): ExecutorStatus => ({ profile, schemaLock: null, sections, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null })
 const snapshot = (over: Partial<ProfileSyncSnapshot> = {}): ProfileSyncSnapshot => ({
   master: { hostId: 'h1', profileId: 'p1' },
   leader: true,
