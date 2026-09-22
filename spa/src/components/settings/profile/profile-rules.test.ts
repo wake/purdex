@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { canTintProfile, defaultSlaveName, COLOR_NEEDS_ICON, sotActionStillValid, sotScopeOf } from './profile-rules'
+import { canTintProfile, defaultSlaveName, COLOR_NEEDS_ICON, sotActionStillValid, sotDeleteBlocked, sotScopeOf, wizardSotScopeOf } from './profile-rules'
 
 describe('canTintProfile — the colour tints an icon, and the logo is a bitmap', () => {
   it('no icon chosen (the logo) → the colour has nothing to tint', () => {
@@ -65,5 +65,40 @@ describe('sotActionStillValid — an action on a SOT profile belongs to the mast
 
   it('a host id with the separator in it cannot pass for another pair', () => {
     expect(sotScopeOf('a|b', 'c')).not.toBe(sotScopeOf('a', 'b|c'))
+  })
+})
+
+describe('sotDeleteBlocked — delete is offered only where the FETCHED index shows nobody attached', () => {
+  const row = (id: string, attached: number) => ({ id, attachments: Array.from({ length: attached }, () => ({})) })
+
+  it('nobody attached, not the one this device syncs with → offered', () => {
+    expect(sotDeleteBlocked(row('p2', 0), 'p1')).toBeNull()
+    expect(sotDeleteBlocked(row('p2', 0), null)).toBeNull()
+  })
+
+  it('anybody attached → blocked as attached', () => {
+    expect(sotDeleteBlocked(row('p2', 1), 'p1')).toBe('attached')
+    expect(sotDeleteBlocked(row('p2', 2), null)).toBe('attached')
+  })
+
+  it('the one this device syncs with → blocked as current, even when the index lists nobody', () => {
+    expect(sotDeleteBlocked(row('p1', 0), 'p1')).toBe('current')
+    expect(sotDeleteBlocked(row('p1', 3), 'p1')).toBe('current')
+  })
+})
+
+describe('wizardSotScopeOf — a delete in the wizard belongs to the host AND the step it was opened on', () => {
+  it('the same host on the profile step → the same scope', () => {
+    expect(wizardSotScopeOf('h1', 'sot')).toBe(wizardSotScopeOf('h1', 'sot'))
+  })
+
+  it('another host, another step, or no host → another scope', () => {
+    expect(wizardSotScopeOf('h2', 'sot')).not.toBe(wizardSotScopeOf('h1', 'sot'))
+    expect(wizardSotScopeOf('h1', 'local')).not.toBe(wizardSotScopeOf('h1', 'sot'))
+    expect(wizardSotScopeOf(null, 'sot')).not.toBe(wizardSotScopeOf('h1', 'sot'))
+  })
+
+  it('is never a Settings scope', () => {
+    expect(wizardSotScopeOf('h1', 'sot')).not.toBe(sotScopeOf('h1', 'sot'))
   })
 })

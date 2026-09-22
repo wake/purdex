@@ -14,13 +14,15 @@
 //   - what is sent is checked once more against the page as it is NOW: the scope it was opened under, and that the
 //     profile is still in the fetched list. Otherwise nothing is sent, and that is said;
 //   - an answer that arrives after the scope moved is for a page that is gone: it sets nothing.
-import { useRef, useState } from 'react'
+// The delete's half of this lives in useSotDelete.ts, shared with the wizard's step 2 (#1325).
+import { useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { deleteProfile, renameProfile } from '../../../lib/profile/api'
+import { renameProfile } from '../../../lib/profile/api'
 import type { Attachment, ProfileIndexEntry } from '../../../lib/profile/api'
 import { ConfirmDialog } from '../../ConfirmDialog'
-import { sotActionStillValid, sotScopeOf } from './profile-rules'
+import { sotScopeOf } from './profile-rules'
+import { useSotDelete } from './useSotDelete'
 import type { SotProfilesView } from './useSotProfiles'
 
 const BTN =
@@ -40,37 +42,20 @@ export interface SotProfilesBlockProps {
 
 export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: SotProfilesBlockProps) {
   const t = useI18nStore((s) => s.t)
-  const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<{ under: string; id: string; name: string } | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<{ under: string; row: ProfileIndexEntry } | null>(null)
-  /** A delete the daemon refused: who it says is still attached. */
-  const [refused, setRefused] = useState<{ id: string; attachments: Attachment[] } | null>(null)
-
-  // Everything above was opened under ONE scope. A render under another drops it all (render-phase adjust, as
-  // `HostColorLayerEditor` does for an outside colour change): no frame shows host A's confirmation over host B.
+  // The delete — its confirmation, refusal, the scope guard — is `useSotDelete`'s; `busy`, `status` and the scope
+  // checks are shared with the rename, and a scope change or a stale send drops the rename editor with the rest.
   const scope = sotScopeOf(hostId, attachedProfileId)
-  const [openedUnder, setOpenedUnder] = useState(scope)
-  if (openedUnder !== scope) {
-    setOpenedUnder(scope)
-    setBusy(false)
-    setStatus(null)
-    setRenaming(null)
-    setConfirmDelete(null)
-    setRefused(null)
-  }
-  /** The scope and the list as of the LAST render: what an `await` comes back to, and what a send is checked against. */
-  const live = useRef({ scope, view })
-  live.current = { scope, view }
-  /** May an action opened under `under` for profile `id` still be sent? If not, it is dropped and said. */
-  const stillValid = (under: string, id: string): boolean => {
-    const now = live.current
-    if (sotActionStillValid(under, now.scope, id, now.view.kind === 'rows' ? now.view.rows : null)) return true
-    setRenaming(null)
-    setConfirmDelete(null)
-    setStatus(t('settings.profile.sot.stale_action'))
-    return false
-  }
+  const del = useSotDelete({
+    hostId,
+    attachedProfileId,
+    scope,
+    view,
+    reload,
+    failedText: (f) => t('settings.profile.sot.delete_failed', { message: f.message }),
+    onDrop: () => setRenaming(null),
+  })
+  const { busy, setBusy, status, setStatus, stillValid, isLive } = del
 
   const state = view.kind === 'rows' && view.rows.length === 0 ? 'empty' : view.kind
 
@@ -84,39 +69,15 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
     setStatus(null)
     try {
       const r = await renameProfile(hostId, row.id, name)
-      if (live.current.scope !== under) return
+      if (!isLive(under)) return
       if (r.kind === 'ok') {
         setRenaming(null)
         reload()
       } else setStatus(t('settings.profile.sot.rename_failed', { message: r.message }))
     } catch (e) {
-      if (live.current.scope === under) setStatus(t('settings.profile.sot.rename_failed', { message: message(e) }))
+      if (isLive(under)) setStatus(t('settings.profile.sot.rename_failed', { message: message(e) }))
     } finally {
-      if (live.current.scope === under) setBusy(false)
-    }
-  }
-
-  const remove = async () => {
-    if (confirmDelete === null || busy) return
-    const { under, row } = confirmDelete
-    if (!stillValid(under, row.id)) return
-    setBusy(true)
-    setStatus(null)
-    setRefused(null)
-    try {
-      const r = await deleteProfile(hostId, row.id)
-      if (live.current.scope !== under) return
-      if (r.kind === 'attached') setRefused({ id: row.id, attachments: r.attachments })
-      else if (r.kind === 'failed') setStatus(t('settings.profile.sot.delete_failed', { message: r.message }))
-      // Deleted, or refused because the index was out of date: either way it is asked again.
-      if (r.kind !== 'failed') reload()
-    } catch (e) {
-      if (live.current.scope === under) setStatus(t('settings.profile.sot.delete_failed', { message: message(e) }))
-    } finally {
-      if (live.current.scope === under) {
-        setBusy(false)
-        setConfirmDelete(null)
-      }
+      if (isLive(under)) setBusy(false)
     }
   }
 
@@ -157,7 +118,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
         <ul className="flex flex-col">
           {view.rows.map((row) => {
             const isCurrent = row.id === attachedProfileId
-            const blocked = isCurrent ? 'current' : row.attachments.length > 0 ? 'attached' : null
+            const blocked = del.blocked(row)
             const draft = renaming?.id === row.id ? renaming.name : null
             return (
               <li key={row.id} data-testid={`profile-sot-row-${row.id}`} className="border-t border-border-default py-2 text-xs">
@@ -180,7 +141,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       type="button"
                       data-testid={`profile-sot-delete-${row.id}`}
                       disabled={busy || blocked !== null}
-                      onClick={() => setConfirmDelete({ under: scope, row })}
+                      onClick={() => del.ask(row)}
                       className={BTN}
                     >
                       {t('common.delete')}
@@ -198,10 +159,10 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                     {t(`settings.profile.sot.delete_blocked_${blocked}`)}
                   </p>
                 )}
-                {refused?.id === row.id && (
+                {del.refused?.id === row.id && (
                   <p data-testid={`profile-sot-attached-${row.id}`} className="mt-0.5 text-status-warning">
-                    {refused.attachments.length > 0
-                      ? t('settings.profile.sot.attached', { names: deviceNames(refused.attachments) })
+                    {del.refused.attachments.length > 0
+                      ? t('settings.profile.sot.attached', { names: deviceNames(del.refused.attachments) })
                       : t('settings.profile.sot.attached_none')}
                   </p>
                 )}
@@ -247,15 +208,15 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
         <p data-testid="profile-sot-status" className="mt-2 text-xs text-red-500">{status}</p>
       )}
 
-      {confirmDelete && (
+      {del.confirm && (
         <ConfirmDialog
           testIdPrefix="profile-sot-delete"
           busy={busy}
-          title={t('settings.profile.sot.delete_title', { name: confirmDelete.row.name })}
+          title={t('settings.profile.sot.delete_title', { name: del.confirm.row.name })}
           body={t('settings.profile.sot.delete_body')}
           confirmLabel={t('common.delete')}
-          onCancel={() => setConfirmDelete(null)}
-          onConfirm={() => void remove()}
+          onCancel={del.cancel}
+          onConfirm={() => void del.remove()}
         />
       )}
     </section>
