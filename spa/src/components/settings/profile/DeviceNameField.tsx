@@ -1,9 +1,9 @@
-// spa/src/components/settings/device-state/DeviceNameField.tsx — this
-// computer's name editor for the device state block (spec §3.7).
+// spa/src/components/settings/profile/DeviceNameField.tsx — this
+// computer's name editor, at the top of Settings › Profile (spec §3.7).
 //
 // While the user has an uncommitted edit (`dirty`), the input shows the local
-// draft and ignores store updates — e.g. the uploader resolving
-// `defaultDeviceName` asynchronously at startup, or a sync from another
+// draft and ignores store updates — e.g. `ensureDefaultDeviceName` resolving
+// `defaultDeviceName` asynchronously, or a sync from another
 // window — so typing is never overwritten. When not dirty, the input simply
 // mirrors the stored (effective) name; no render-phase or effect resync needed.
 import { useState } from 'react'
@@ -38,11 +38,11 @@ export function DeviceNameField() {
   }
 
   return (
-    <SettingItem label={t('settings.device_state.device_name')}>
+    <SettingItem label={t('settings.profile.device_name')}>
       <div className="flex items-center gap-2">
         <input
           type="text"
-          aria-label={t('settings.device_state.device_name_aria')}
+          aria-label={t('settings.profile.device_name_aria')}
           data-testid="device-state-name"
           placeholder={defaultDeviceName}
           spellCheck={false}
@@ -66,7 +66,7 @@ export function DeviceNameField() {
             onClick={reset}
             className="px-2.5 py-1 rounded-md border border-border-default text-text-secondary text-xs hover:text-text-primary hover:border-border-active"
           >
-            {t('settings.device_state.device_name_reset')}
+            {t('settings.profile.device_name_reset')}
           </button>
         )}
       </div>

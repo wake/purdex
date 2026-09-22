@@ -2,9 +2,8 @@
 //
 // Task 16 — the per-tab rebuild records table and "Rebuild all" (spec §4.11).
 //
-// The records block reads `useTabStore` directly rather than the captured
-// snapshot: it is a view over the live per-tab records, so it renders with or
-// without a snapshot. `runBatchRebuild` / `rebuildPane` are stubbed through
+// The records block reads `useTabStore` directly: it is a view over the live
+// per-tab records. `runBatchRebuild` / `rebuildPane` are stubbed through
 // partial mocks so the grouping and the conflict rendering stay real.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
@@ -13,24 +12,13 @@ import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useTabStore } from '../../stores/useTabStore'
-import * as storageModule from '../../lib/snapshot/storage'
 import * as hostApiModule from '../../lib/host-api'
 import * as batchModule from '../../lib/rebuild/batch'
 import * as engineModule from '../../lib/rebuild/engine'
 import type { Session } from '../../lib/host-api'
-import type { WorkspaceSnapshot } from '../../lib/snapshot/types'
 import type { Tab, TmuxSessionContent } from '../../types/tab'
 
-vi.mock('../../lib/snapshot/storage', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../lib/snapshot/storage')>()),
-  readSnapshot: vi.fn(),
-  writeSnapshot: vi.fn(),
-  readPrevSnapshot: vi.fn(),
-  writePrevSnapshot: vi.fn(),
-}))
 vi.mock('../../lib/host-api')
-vi.mock('../../lib/snapshot/capture')
-vi.mock('../../lib/snapshot/restore')
 // Partial mocks: only the two actions that talk to a daemon are replaced.
 vi.mock('../../lib/rebuild/batch', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/rebuild/batch')>()),
@@ -40,12 +28,7 @@ vi.mock('../../lib/rebuild/engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/rebuild/engine')>()),
   rebuildPane: vi.fn(),
 }))
-vi.mock('../settings/device-state/DeviceStateSection', () => ({
-  DeviceStateSection: () => <div data-testid="device-state-section" />,
-}))
 
-const mockedReadSnapshot = vi.mocked(storageModule.readSnapshot)
-const mockedReadPrev = vi.mocked(storageModule.readPrevSnapshot)
 const mockedListSessions = vi.mocked(hostApiModule.listSessions)
 const mockedRunBatch = vi.mocked(batchModule.runBatchRebuild)
 const mockedRebuildPane = vi.mocked(engineModule.rebuildPane)
@@ -79,15 +62,6 @@ function seedTabs(...tabs: Tab[]) {
   })
 }
 
-/** A captured snapshot, only needed by the legacy-labelling case. */
-function snapWithData(): WorkspaceSnapshot {
-  return {
-    version: 1, capturedAt: Date.now(), tabs: {}, tabOrder: [], activeTabId: null,
-    workspaces: [], activeWorkspaceId: null,
-    sessionMeta: { h1: { s1: { hostId: 'h1', sessionCode: 's1', name: 'work', mode: 'terminal', restorable: true, cwd: '/x' } } },
-  }
-}
-
 describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -100,8 +74,6 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
       },
       hostOrder: ['h1', 'h2'], devHostId: 'h1', runtime: {},
     })
-    mockedReadSnapshot.mockReturnValue(null)
-    mockedReadPrev.mockReturnValue(null)
     mockedListSessions.mockResolvedValue([])
     mockedRunBatch.mockResolvedValue({ status: 'ok', groups: [], excluded: [] })
     mockedRebuildPane.mockResolvedValue({
@@ -125,7 +97,6 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
       expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('dead')
     })
     expect(screen.getByTestId('record-health-p2').getAttribute('data-health')).toBe('live')
-    // The same labels the captured-snapshot table above it uses.
     expect(screen.getByTestId('record-health-p1').textContent).toBe('Rebuildable')
   })
 
@@ -154,7 +125,7 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
     expect(screen.queryByText('claude --resume S1')).toBeNull()
   })
 
-  it('an unreachable host greys every record row out, exactly as the snapshot table does', async () => {
+  it('an unreachable host greys every record row out', async () => {
     seedTabs(recordTab('t1', 'p1'))
     mockedListSessions.mockRejectedValue(new Error('offline'))
 
@@ -280,12 +251,6 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
     })
   })
 
-  it('labels the legacy snapshot actions shell-only', () => {
-    mockedReadSnapshot.mockReturnValue(snapWithData())
-    render(<SnapshotsSection hostId="h1" />)
-    expect(screen.getByTestId('snapshot-legacy-shell-only').textContent).toMatch(/shell/i)
-  })
-
   it('disables "Rebuild all" while another owner holds the operation lock', () => {
     seedTabs(recordTab('t1', 'p1'))
     useRebuildStore.getState().acquireOperationLock('rebuild:p9')
@@ -316,5 +281,38 @@ describe('SnapshotsSection — per-tab rebuild records (T16)', () => {
     render(<SnapshotsSection hostId="h1" />)
     await waitFor(() => expect(mockedListSessions).toHaveBeenCalledTimes(1))
     expect(mockedListSessions).toHaveBeenCalledWith('h1')
+  })
+
+  // The lookup is keyed on the host plus a counter a rebuild bumps: a rebuild
+  // creates sessions, so the health it showed before is stale once it ends.
+  it('looks the host\'s sessions up again once a rebuild has run', async () => {
+    seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { tmuxInstance: '' }))
+    // `beforeEach` resets `byHost` only; a case above leaves a never-settling `ensureLoaded`.
+    useHostConfigStore.setState({ ensureLoaded: vi.fn(async () => {}) })
+    render(<SnapshotsSection hostId="h1" />)
+    await waitFor(() => expect(mockedListSessions).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByTestId('record-rebuild-all-btn'))
+    await waitFor(() => expect(mockedListSessions).toHaveBeenCalledTimes(2))
+    // Rows read as loading until the new answer lands, and act only after it.
+    await waitFor(() => {
+      expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('dead')
+    })
+
+    fireEvent.click(screen.getByTestId('record-attention-rebuild-p2'))
+    await waitFor(() => expect(mockedListSessions).toHaveBeenCalledTimes(3))
+    expect(mockedListSessions.mock.calls.every(([h]) => h === 'h1')).toBe(true)
+  })
+
+  it('another host\'s answer reads as loading until this host\'s own arrives', async () => {
+    seedTabs(recordTab('t1', 'p1'), recordTab('t2', 'p2', { hostId: 'h2' }))
+    const { rerender } = render(<SnapshotsSection hostId="h1" />)
+    await waitFor(() => {
+      expect(screen.getByTestId('record-health-p1').getAttribute('data-health')).toBe('dead')
+    })
+
+    mockedListSessions.mockReturnValue(new Promise<Session[]>(() => {}))
+    rerender(<SnapshotsSection hostId="h2" />)
+    expect(screen.getByTestId('record-health-p2').getAttribute('data-health')).toBe('loading')
   })
 })
