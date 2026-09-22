@@ -95,7 +95,16 @@ Ordering guarantee (the part the SPA relies on):
 3. **Delivery order is not read order.** A push with `seq` 41 may arrive after
    a fetch response with `seq` 42. The SPA orders by `seq`, not by arrival,
    and discards anything older than what it already holds for that host.
-4. `seq` gaps are normal (other readers — the ticker, other clients' fresh
+4. **One counter for all channels.** `?fresh=1` responses and every WS
+   `sessions` frame draw from the same per-process counter, so within an epoch
+   a fetch result and a push are directly comparable by `seq`.
+5. **A `seq` belongs to exactly one read.** Every `seq` sent is the number
+   taken by the very tmux read that produced that list. A cached or re-used
+   list is never paired with a newer `seq`; a path that re-uses a list must
+   carry the `seq` it was read with, or send no `seq`. (Rules 1–2 depend on
+   this.) In this design no versioned path re-uses a list: all of them call
+   `versionedList()`.
+6. `seq` gaps are normal (other readers — the ticker, other clients' fresh
    fetches, subscribe snapshots — consume numbers). Only order is meaningful.
 
 ### 3.4 Across daemon restarts (different `epoch`)
@@ -182,6 +191,15 @@ A fresh fetch is on-demand (after a switch), not polled.
 - Cache invalidation: plain GET after create / rename / delete within the TTL
   reflects the mutation.
 - Read-your-writes: DELETE then `?fresh=1` never lists the killed session.
+- Shared counter (§3.3 rule 4): interleave `?fresh=1` fetches with triggered
+  WS pushes (`broadcastSessions`, `tickNormal`, subscribe snapshot); all seqs
+  obtained, ordered by the fake executor's recorded read order, are strictly
+  increasing.
+- Seq-belongs-to-read (§3.3 rule 5): the fake executor stamps each read with
+  its own ordinal and injects it into the list (e.g. a session name carrying
+  the ordinal); every versioned payload's list must be the one read under the
+  same seq (seq ↔ read ordinal is a bijection, monotone). A warm plain-GET
+  cache never leaks into a versioned payload.
 
 ## 7. Rollout
 
