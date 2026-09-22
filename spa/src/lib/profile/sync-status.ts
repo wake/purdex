@@ -160,8 +160,35 @@ export const COMMAND_FUTURE_SKEW_MS = 5_000
  *       plain text 171,382 · astral (2 units per code point) 221,382 · control characters, which JSON escapes
  *       to 6 characters each — the worst any detail can be ............................... 421,382
  *   Cap: 512 KiB = 524,288 — about 20 % over that pathological worst case, 2.4× the realistic one (~221 K).
+ * The cap is the FOLLOWER's guard against junk. What keeps a REAL record under it is the leader: nothing limits the
+ * number of workspaces (each is a `tabs.*` section), so `publish` degrades a record that would not fit — problems
+ * to the newest `PUBLISH_KEEP_PROBLEMS`, then none, then no `detail` — and never drops what a follower needs to
+ * resolve: `sections`, `locks`, `profile`, `schemaLock`, `blocked`.
  */
 export const MAX_PUBLISHED_STATUS_CHARS = 512 * 1024
+/** A record that does not fit keeps this many of its newest problems first (`publish`, step a). */
+export const PUBLISH_KEEP_PROBLEMS = 10
+
+/**
+ * The record as it will be written: whole if it fits, else degraded step by step, the size checked again after
+ * each — (a) the newest `PUBLISH_KEEP_PROBLEMS` problems (the buffer is oldest first), (b) no problems, (c) no
+ * `detail` (followers then show no rev and no failing note: absent, as for an older build). Returns the text of
+ * the first that fits, or of the last step when none does.
+ */
+function serializeToFit(record: PublishedStatus): { text: string; fits: boolean } {
+  const steps: Array<() => PublishedStatus> = [
+    () => record,
+    () => ({ ...record, problems: record.problems.slice(-PUBLISH_KEEP_PROBLEMS) }),
+    () => ({ ...record, problems: [] }),
+    () => ({ ...record, problems: [], status: record.status === null ? null : { ...record.status, detail: {} } }),
+  ]
+  let text = ''
+  for (const step of steps) {
+    text = JSON.stringify(step())
+    if (text.length <= MAX_PUBLISHED_STATUS_CHARS) return { text, fits: true }
+  }
+  return { text, fits: false }
+}
 
 const STATUS_KEY = STORAGE_KEYS.PROFILE_STATUS
 const COMMAND_PREFIX = STORAGE_KEYS.PROFILE_COMMAND_PREFIX
@@ -515,8 +542,9 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     const local = deps.local()
     if (!local.leader) return // stood down inside the throttle window: the record is the next leader's
     const record: PublishedStatus = { at: deps.now(), leader: deps.windowId, master: tag, status: local.status, blocked: local.blocked, problems: local.problems }
+    const { text } = serializeToFit(record)
     try {
-      localStorage.setItem(STATUS_KEY, JSON.stringify(record))
+      localStorage.setItem(STATUS_KEY, text)
       publishedSignature = publishable(local)
     } catch {
       publishedSignature = null // quota, blocked: the next change tries again

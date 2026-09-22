@@ -267,6 +267,83 @@ describe('the leader publishes', () => {
   })
 })
 
+describe('the leader keeps a real record under MAX_PUBLISHED_STATUS_CHARS: it degrades, never the locks', () => {
+  const hash = (i: number) => `sha256:${String(i).padStart(64, '0')}`
+  const lockOf = (): SectionLock => ({ status: 'locked:conflict', currentHash: hash(1), sot: { rev: 7, hash: hash(2) }, conflict: { localHash: hash(3), sot: { rev: 7, hash: hash(2) } } })
+  /** `n` locked `tabs.*` sections, each with a lock and a detail entry: what a leader with many workspaces publishes. */
+  const manyLocked = (n: number) => {
+    const keys = Array.from({ length: n }, (_, i) => `tabs.ws_${String(i).padStart(12, '0')}`)
+    return {
+      ...SYNCED,
+      profile: 'locked:conflict',
+      sections: Object.fromEntries(keys.map((k) => [k, 'locked:conflict'])),
+      locks: Object.fromEntries(keys.map((k) => [k, lockOf()])),
+      detail: Object.fromEntries(keys.map((k) => [k, { rev: 7, failures: 0, retryAt: null }])),
+    } as unknown as ProfileSyncState['status']
+  }
+  const problemsOf = (n: number, chars: number) => Array.from({ length: n }, (_, i) => ({ kind: 'k', detail: `${i}:${'x'.repeat(chars)}`, at: i }))
+  const size = (local: Partial<ProfileSyncState>) =>
+    JSON.stringify({ at: 1_000_250, leader: 'A', master: TAG1, status: local.status ?? null, blocked: local.blocked ?? null, problems: local.problems ?? [] }).length
+  const cap = async () => (await import('./sync-status')).MAX_PUBLISHED_STATUS_CHARS
+
+  it('a record that fits — even one character under the cap — is written whole, as ever', async () => {
+    const MAX = await cap()
+    const problems = problemsOf(50, 10_000)
+    const pad = MAX - size({ status: SYNCED, problems })
+    problems[0] = { ...problems[0], detail: problems[0].detail + 'y'.repeat(pad) }
+    expect(size({ status: SYNCED, problems })).toBe(MAX)
+    await openWindow('A', { leader: true, status: SYNCED, problems })
+    vi.advanceTimersByTime(250)
+    expect(localStorage.getItem(STATUS)).toHaveLength(MAX)
+    expect(published()!.problems).toHaveLength(50)
+  })
+
+  it('(a) first: the newest 10 problems are kept when that is enough — the status whole', async () => {
+    const MAX = await cap()
+    const problems = problemsOf(50, 20_000)
+    expect(size({ status: SYNCED, problems })).toBeGreaterThan(MAX)
+    expect(size({ status: SYNCED, problems: problems.slice(-10) })).toBeLessThanOrEqual(MAX)
+    await openWindow('A', { leader: true, status: SYNCED, problems })
+    vi.advanceTimersByTime(250)
+    const record = published()!
+    expect((record.problems as Array<{ detail: string }>).map((p) => p.detail.split(':')[0])).toEqual(['40', '41', '42', '43', '44', '45', '46', '47', '48', '49'])
+    expect(record.status).toEqual(SYNCED)
+  })
+
+  it('(b) then: no problems at all — `detail` still there', async () => {
+    const MAX = await cap()
+    const status = manyLocked(20)
+    const problems = problemsOf(50, 60_000)
+    expect(size({ status, problems: problems.slice(-10) })).toBeGreaterThan(MAX)
+    await openWindow('A', { leader: true, status, problems })
+    vi.advanceTimersByTime(250)
+    const record = published()!
+    expect(record.problems).toEqual([])
+    expect(record.status).toEqual(status)
+  })
+
+  it('(c) last: no detail — and a follower still gets every lock, the profile, the schema lock and blocked', async () => {
+    const MAX = await cap()
+    const status = manyLocked(1050)
+    const problems = problemsOf(3, 10)
+    expect(size({ status, problems: [] })).toBeGreaterThan(MAX) // just over the cap even without problems
+    expect(size({ status: { ...status!, detail: {} }, problems: [] })).toBeLessThanOrEqual(MAX)
+    await openWindow('A', { leader: true, status, problems, blocked: 'suspended' })
+    vi.advanceTimersByTime(250)
+    const record = published()!
+    expect(JSON.stringify(record).length).toBeLessThanOrEqual(MAX)
+    expect(record.problems).toEqual([])
+    expect(record).toMatchObject({ blocked: 'suspended' })
+    expect(record.status).toEqual({ ...status, detail: {} })
+
+    const b = await openWindow('B')
+    deliver()
+    expect(b.snapshot()).toMatchObject({ remote: true, blocked: 'suspended', status: { profile: 'locked:conflict', schemaLock: null, detail: {} } })
+    expect(b.snapshot().status!.locks).toEqual(status!.locks)
+    expect(b.snapshot().status!.sections).toEqual(status!.sections)
+  })
+})
+
 /* ─── followers read ─── */
 
 describe('a follower reads what the leader published', () => {
