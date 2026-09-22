@@ -25,11 +25,12 @@
 // `profileGone` — is shown as it is: the AGREED rev on every row (a locked row keeps the host's beside it), a
 // failing row's next try, "in sync as of", why settings wait. A record from an older build has none of them and
 // the page then shows nothing for them — never "0" or "never" (sync-status.ts reads them as absent). Times are
-// absolute local times: no clock runs on this page — except a "sent" Resolve row's, bounded by the command's TTL
-// (ResolveRow.tsx).
+// absolute local times IN THE UI LANGUAGE (`dateLocale`; P3d-4c F5 — the browser's showed 「上午」 in an English UI):
+// no clock runs on this page — except a "sent" Resolve row's, bounded by the command's TTL (ResolveRow.tsx).
 import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { getLocale } from '../../../lib/locale-registry'
 import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
@@ -92,6 +93,19 @@ const WORLD_KEY: Record<UnsettledReason, string> = {
   'no-parked-master': 'settings.profile.current.world.no_parked_master',
 }
 
+/**
+ * The UI language as a tag `Date#toLocale*` takes. A built-in locale's id IS one (`en`, `zh-TW`); a user-imported
+ * locale's id is random and names no language, and its missing keys fall back to English — so do its times. Never
+ * `undefined`: that is the browser's language, which is not the one the page is written in.
+ */
+function dateLocaleOf(localeId: string): string {
+  return getLocale(localeId)?.builtin === true ? localeId : 'en'
+}
+
+function useDateLocale(): string {
+  return dateLocaleOf(useI18nStore((s) => s.activeLocaleId))
+}
+
 interface Props {
   /** The SOT profile's name, from the host's list when it has answered; null → the id stands in. */
   masterName: string | null
@@ -99,6 +113,7 @@ interface Props {
 
 export function CurrentBlock({ masterName }: Props) {
   const t = useI18nStore((s) => s.t)
+  const dateLocale = useDateLocale()
   const sync = useProfileSync()
   const [wizardOpen, setWizardOpen] = useState(false)
   const problems = sync.master === null ? [] : sync.problems.slice(-PROBLEMS_SHOWN).reverse()
@@ -134,7 +149,7 @@ export function CurrentBlock({ masterName }: Props) {
           <ul className="mt-1 flex flex-col gap-0.5">
             {problems.map((p, i) => (
               <li key={`${p.at}:${i}`} data-testid="profile-current-problem" className="text-xs text-text-muted">
-                <span className="font-mono">{new Date(p.at).toLocaleTimeString()}</span>{' '}
+                <span className="font-mono">{new Date(p.at).toLocaleTimeString(dateLocale)}</span>{' '}
                 <span className="font-mono text-text-secondary">{p.section === undefined ? p.kind : `${p.kind} · ${p.section}`}</span>{' '}
                 {p.detail}
               </li>
@@ -148,6 +163,7 @@ export function CurrentBlock({ masterName }: Props) {
 
 function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; master: NonNullable<ProfileSyncSnapshot['master']>; masterName: string | null }) {
   const t = useI18nStore((s) => s.t)
+  const dateLocale = useDateLocale()
   const autoSync = useProfileStore((s) => s.autoSync)
   const setAutoSync = useProfileStore((s) => s.setAutoSync)
   const attachedAt = useProfileStore((s) => s.masterEndpoint)
@@ -230,7 +246,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
       </SettingItem>
       {lastSuccessAt !== null && (
         <p data-testid="profile-current-last-sync" className="text-xs text-text-muted">
-          {t('settings.profile.current.last_sync', { time: new Date(lastSuccessAt).toLocaleString() })}
+          {t('settings.profile.current.last_sync', { time: new Date(lastSuccessAt).toLocaleString(dateLocale) })}
         </p>
       )}
 
@@ -288,7 +304,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                       <span data-testid={`profile-current-section-failing-${key}`} className="text-yellow-500">
                         {detail.retryAt === null
                           ? t('settings.profile.current.section_failing')
-                          : t('settings.profile.current.section_failing_at', { time: new Date(detail.retryAt).toLocaleTimeString() })}
+                          : t('settings.profile.current.section_failing_at', { time: new Date(detail.retryAt).toLocaleTimeString(dateLocale) })}
                       </span>
                     )}
                     {detail !== undefined && detail.rev !== null && (

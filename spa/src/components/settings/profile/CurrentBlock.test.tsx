@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
+import zhTW from '../../../locales/zh-TW.json'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { CurrentBlock } from './CurrentBlock'
 import { useProfileStore } from '../../../stores/useProfileStore'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -293,7 +295,7 @@ describe('a master attached', () => {
       const at = new Date(2026, 8, 23, 14, 2, 31).getTime()
       show(attached({ status: { ...status({ hosts: 'synced' }), lastSuccessAt: at } }))
       const el = screen.getByTestId('profile-current-last-sync')
-      expect(el).toHaveTextContent(en['settings.profile.current.last_sync'].replace('{{time}}', new Date(at).toLocaleString()))
+      expect(el).toHaveTextContent(en['settings.profile.current.last_sync'].replace('{{time}}', new Date(at).toLocaleString('en')))
       cleanup()
       show(attached({ status: status({ hosts: 'synced' }) }))
       expect(screen.queryByTestId('profile-current-last-sync')).toBeNull()
@@ -308,7 +310,7 @@ describe('a master attached', () => {
         },
       }))
       const hosts = screen.getByTestId('profile-current-section-failing-hosts')
-      expect(hosts).toHaveTextContent(en['settings.profile.current.section_failing_at'].replace('{{time}}', new Date(at).toLocaleTimeString()))
+      expect(hosts).toHaveTextContent(en['settings.profile.current.section_failing_at'].replace('{{time}}', new Date(at).toLocaleTimeString('en')))
       expect(hosts.className).not.toMatch(/red/)
       expect(screen.getByTestId('profile-current-section-failing-workspaces')).toHaveTextContent(en['settings.profile.current.section_failing'])
       expect(screen.queryByTestId('profile-current-section-failing-settings')).toBeNull()
@@ -596,5 +598,62 @@ describe('the problem log', () => {
     unmount()
     show(attached())
     expect(screen.queryByTestId('profile-current-problems')).toBeNull()
+  })
+})
+
+describe('every time the block shows is in the UI language, not the browser\'s (P3d-4c F5)', () => {
+  const at = new Date(2026, 8, 23, 14, 2, 31).getTime()
+  // `toHaveTextContent` collapses the received whitespace (ICU puts U+202F in times); the expected side likewise
+  const fmt = (d: number, locale: string, how: 'toLocaleString' | 'toLocaleTimeString') => new Date(d)[how](locale).replace(/\s+/g, ' ')
+
+  afterEach(() => {
+    useI18nStore.getState().setLocale('en')
+  })
+
+  it('zh-TW: "in sync as of", a failing row\'s next try and the problem log are formatted as zh-TW', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    show(attached({
+      status: {
+        ...status({ hosts: 'pending' }, 'pending'),
+        lastSuccessAt: at,
+        detail: { hosts: { rev: 1, failures: 2, retryAt: at, invalidReason: null } },
+      },
+      problems: [{ kind: 'k', detail: 'd', at }],
+    }))
+    expect(screen.getByTestId('profile-current-last-sync')).toHaveTextContent(zhTW['settings.profile.current.last_sync'].replace('{{time}}', fmt(at, 'zh-TW', 'toLocaleString')))
+    expect(screen.getByTestId('profile-current-section-failing-hosts')).toHaveTextContent(zhTW['settings.profile.current.section_failing_at'].replace('{{time}}', fmt(at, 'zh-TW', 'toLocaleTimeString')))
+    expect(screen.getByTestId('profile-current-problem')).toHaveTextContent(fmt(at, 'zh-TW', 'toLocaleTimeString'))
+  })
+
+  it('English UI: the times are asked for in "en", whatever the browser\'s locale is', () => {
+    const toLocaleString = vi.spyOn(Date.prototype, 'toLocaleString')
+    const toLocaleTimeString = vi.spyOn(Date.prototype, 'toLocaleTimeString')
+    try {
+      show(attached({
+        status: { ...status({ hosts: 'pending' }, 'pending'), lastSuccessAt: at, detail: { hosts: { rev: 1, failures: 2, retryAt: at, invalidReason: null } } },
+        problems: [{ kind: 'k', detail: 'd', at }],
+      }))
+      // what the page asked for, whatever the runner's default locale is
+      expect(toLocaleString.mock.calls.length).toBeGreaterThan(0)
+      for (const call of toLocaleString.mock.calls) expect(call[0]).toBe('en')
+      expect(toLocaleTimeString.mock.calls.length).toBeGreaterThan(0)
+      for (const call of toLocaleTimeString.mock.calls) expect(call[0]).toBe('en')
+    } finally {
+      toLocaleString.mockRestore()
+      toLocaleTimeString.mockRestore()
+    }
+  })
+
+  it('a user-imported locale (its id is no language tag): English times, never the browser\'s', () => {
+    const id = useI18nStore.getState().importLocale({ name: 'Mine', translations: {} })
+    useI18nStore.getState().setLocale(id)
+    const toLocaleString = vi.spyOn(Date.prototype, 'toLocaleString')
+    try {
+      show(attached({ status: { ...status({ hosts: 'synced' }), lastSuccessAt: at } }))
+      expect(toLocaleString.mock.calls.map((c) => c[0])).toEqual(['en'])
+    } finally {
+      toLocaleString.mockRestore()
+      useI18nStore.getState().deleteCustomLocale(id)
+    }
   })
 })
