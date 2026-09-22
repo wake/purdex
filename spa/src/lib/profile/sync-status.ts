@@ -137,6 +137,7 @@
 // view is as old as the last publish (≤ 250 ms plus the event), which is exactly
 // what the binding is for.
 import { STORAGE_KEYS } from '../storage/keys'
+import type { InvalidReason } from './apply-to-stores'
 import type { ExecutorStatus, SectionDetail, SectionLock } from './executor'
 import type { ProfileSyncState } from './start'
 import type { SectionConflict } from './sync-state'
@@ -252,8 +253,16 @@ export interface StatusChannel {
   /** Something in `local()` may have changed. Cheap, and safe to call too often. */
   refresh(): void
   requestSyncNow(): void
-  /** `lock`: what the user was shown for this section — `snapshot.status.locks[section]`. */
-  requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): void
+  /**
+   * `lock`: what the user was shown for this section — `snapshot.status.locks[section]`. Answers whether the command
+   * was HANDED OVER: in the leader, CARRIED OUT (false when the binding dropped it); in a follower, its key written —
+   * whether the leader then carries it out has no answer but the lock changing, and `COMMAND_TTL_MS` is how long
+   * to wait for it.
+   * `masterTag`: the master (and attach generation) the user was looking at when the lock was shown — `masterTagOf`.
+   * Not this channel's → false, and nothing is sent (review A1): a copied or recreated profile can hold a lock equal
+   * in every field, and the choice would land on a profile nobody looked at.
+   */
+  requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock, masterTag: string): boolean
   /**
    * `clear`: the master is gone or replaced — ITS status and ITS commands go with it, nobody else's. Otherwise they
    * are the other windows' business. `successor`, only with `clear`: the tag of the SAME master's next generation
@@ -361,14 +370,31 @@ function parseStatus(value: unknown): ExecutorStatus | undefined {
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 const isTime = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
-/** One `detail` entry exactly in its shape, or `undefined`. */
+/** The codes this build can say in words. A `Record` over the type, so a code added to apply-to-stores.ts's list is a
+ *  compile error here until it is added. */
+const KNOWN_INVALID_REASONS: Record<InvalidReason, true> = {
+  deleted: true,
+  malformed: true,
+  'no-host': true,
+  'removes-master-host': true,
+  'changes-master-host': true,
+  'rejected-settings': true,
+  'unknown-section': true,
+}
+
+/** A code this build knows, or null: absent (an older build, P3d-4a), a newer build's code, or anything else. */
+function parseInvalidReason(value: unknown): InvalidReason | null {
+  return typeof value === 'string' && Object.hasOwn(KNOWN_INVALID_REASONS, value) ? (value as InvalidReason) : null
+}
+
+/** One `detail` entry exactly in its shape, or `undefined`. `invalidReason` (P3d-4b) is read leniently: see above. */
 function parseDetail(value: unknown): SectionDetail | undefined {
   if (typeof value !== 'object' || value === null) return undefined
-  const { rev, failures, retryAt } = value as Record<string, unknown>
+  const { rev, failures, retryAt, invalidReason } = value as Record<string, unknown>
   if (rev !== null && !(typeof rev === 'number' && Number.isSafeInteger(rev))) return undefined
   if (!isCount(failures)) return undefined
   if (retryAt !== null && !isTime(retryAt)) return undefined
-  return { rev, failures, retryAt }
+  return { rev, failures, retryAt, invalidReason: parseInvalidReason(invalidReason) }
 }
 
 /**
@@ -462,8 +488,9 @@ function sameConflict(a: SectionConflict | null, b: SectionConflict | null): boo
   return a.localHash === b.localHash && a.sot.rev === b.sot.rev && a.sot.hash === b.sot.hash
 }
 
-/** Field by field; see the header for why each of the four is there. */
-function sameLock(a: SectionLock, b: SectionLock): boolean {
+/** Field by field; see the header for why each of the four is there. Exported for the page (P3d-4b): a confirmation is
+ *  bound to the lock it was opened with, by this very test. */
+export function sameLock(a: SectionLock, b: SectionLock): boolean {
   return a.status === b.status && a.currentHash === b.currentHash && a.sot.rev === b.sot.rev && a.sot.hash === b.sot.hash && sameConflict(a.conflict, b.conflict)
 }
 
@@ -576,10 +603,16 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     return held !== null && sameLock(held, shown)
   }
 
-  const execute = (command: Command): void => {
-    if (command.master !== tag) return // under this master's key, for another master: a key is a name, not a proof
-    if (command.kind === 'syncNow') deps.syncNow()
-    else if (accepts(command.section, command.lock)) deps.resolve(command.section, command.keep)
+  /** Whether the command was CARRIED OUT: another master's, or a resolve whose lock is not the one held, is not. */
+  const execute = (command: Command): boolean => {
+    if (command.master !== tag) return false // under this master's key, for another master: a key is a name, not a proof
+    if (command.kind === 'syncNow') {
+      deps.syncNow()
+      return true
+    }
+    if (!accepts(command.section, command.lock)) return false
+    deps.resolve(command.section, command.keep)
+    return true
   }
 
   /** Leader only. Reads the key NOW: an event about a key that has been dealt with finds nothing. */
@@ -641,11 +674,12 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     }
   }
 
-  const send = (command: Command): void => {
+  const send = (command: Command): boolean => {
     try {
       localStorage.setItem(`${ownPrefix}${newCommandId()}`, JSON.stringify(command))
+      return true
     } catch {
-      /* the user presses again */
+      return false // the user presses again
     }
   }
 
@@ -682,11 +716,11 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       if (deps.local().leader) execute(command)
       else send(command)
     },
-    requestResolve(section, keep, lock) {
-      if (closed) return
+    requestResolve(section, keep, lock, masterTag) {
+      if (closed || masterTag !== tag) return false
       const command: Command = { kind: 'resolve', section, keep, lock, master: tag, at: deps.now() }
-      if (deps.local().leader) execute(command)
-      else send(command)
+      if (!deps.local().leader) return send(command)
+      return execute(command) // here: carried out, or dropped by the binding (review A2)
     },
     close(clear, successor) {
       if (closed) return

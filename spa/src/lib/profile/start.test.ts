@@ -2159,13 +2159,13 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     requestSyncNow()
     expect(h.executors[0].syncNow).toHaveBeenCalledTimes(1)
     h.executors[0].status.mockReturnValue(locked(PAIR))
-    requestResolve('hosts', 'sot', lockOf({ ...PAIR }))
+    requestResolve('hosts', 'sot', lockOf({ ...PAIR }), tag())
     expect(h.executors[0].resolve.mock.calls).toEqual([['hosts', 'sot']])
     expect(commandKeys()).toEqual([])
 
     h.leaderships[0].set(false)
     requestSyncNow()
-    requestResolve('hosts', 'local', lockOf(PAIR))
+    requestResolve('hosts', 'local', lockOf(PAIR), tag())
     expect(commandKeys()).toHaveLength(2)
     expect(commandKeys().every((k) => k.startsWith(cmd()))).toBe(true)
     expect(h.executors[0].syncNow).toHaveBeenCalledTimes(1)
@@ -2177,15 +2177,34 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     expect(commandKeys()).toEqual([])
   })
 
+  it('a resolve is bound to the master it was shown under (review A1): a stale tag is refused — false, nothing executed or written', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    h.executors[0].status.mockReturnValue(locked(PAIR))
+    const shownUnder = tag()
+    useProfileStore.setState({ attachGeneration: useProfileStore.getState().attachGeneration + 1 }) // attached again
+    await flush()
+    const executor = h.executors.at(-1)!
+    executor.status.mockReturnValue(locked(PAIR)) // an identical lock under the new generation
+    expect(requestResolve('hosts', 'local', lockOf(PAIR), shownUnder)).toBe(false)
+    expect(h.executors.every((e) => e.resolve.mock.calls.length === 0)).toBe(true)
+    expect(commandKeys()).toEqual([])
+  })
+
+  it('without a master: false', () => {
+    expect(requestResolve('hosts', 'local', lockOf(PAIR), 'h1|p|0')).toBe(false)
+  })
+
   it('a resolve is checked against what the EXECUTOR holds now, not against the last status it announced', async () => {
     stop = startProfileSync()
     useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     h.executors[0].deps.onStatus(locked(PAIR)) // what the UI rendered
     h.executors[0].status.mockReturnValue(locked({ ...PAIR, localHash: 'L2' })) // edited since
-    requestResolve('hosts', 'local', lockOf(PAIR))
+    requestResolve('hosts', 'local', lockOf(PAIR), tag())
     expect(h.executors[0].resolve).not.toHaveBeenCalled()
-    requestResolve('hosts', 'local', lockOf({ ...PAIR, localHash: 'L2' }))
+    requestResolve('hosts', 'local', lockOf({ ...PAIR, localHash: 'L2' }), tag())
     expect(h.executors[0].resolve).toHaveBeenCalledTimes(1)
   })
 
@@ -2283,7 +2302,7 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
     await flush()
     requestSyncNow() // a follower: written under generation N
-    requestResolve('hosts', 'local', lockOf(PAIR))
+    requestResolve('hosts', 'local', lockOf(PAIR), tag())
     const oldPrefix = cmd()
     expect(commandKeys().filter((k) => k.startsWith(oldPrefix))).toHaveLength(2)
 
@@ -2329,7 +2348,7 @@ describe('the status, subscribable and across windows (P3 plan Task 2)', () => {
     stop = startProfileSync()
     const leave = subscribeProfileSync(() => {})
     requestSyncNow()
-    requestResolve('hosts', 'sot', lockOf(PAIR))
+    requestResolve('hosts', 'sot', lockOf(PAIR), tag())
     vi.advanceTimersByTime(60_000)
     expect(add).not.toHaveBeenCalled()
     expect(setItem.mock.calls.filter(([k]) => String(k).startsWith('purdex-profile-'))).toEqual([])

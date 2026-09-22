@@ -135,14 +135,42 @@ function byId(workspaces: readonly Workspace[]): Map<string, Workspace> {
   return map
 }
 
-// === Collector ===
-
-/** A timer slot: one per section. */
-type Slot = ProfileSectionKey
+// === One section, built ===
 
 const ABSENT = Symbol('absent')
 /** Nobody can say where the master's world is (master-world.ts): nothing is built, hashed or reported. */
 const UNSETTLED = Symbol('unsettled')
+
+/** THE builder: what the collector reports and what `buildSectionPayload` answers are this one function's result.
+ *  Never `buildProfileDocument`: it throws as a whole on one bad workspace id. Each section is built alone. */
+function buildSection(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED {
+  if (key === 'hosts') return buildHostsSection(useHostStore.getState())
+  const read = readMasterWorld()
+  if (!read.settled) return UNSETTLED
+  const { workspaces, tabs } = read.world
+  if (key === 'settings') return buildSettingsSection(allSettings(), new Set(syncableIds(read.world)))
+  if (key === 'workspaces') return buildWorkspacesSection(workspaces)
+  const id = workspaceIdOf(key)
+  const ws = id === null ? undefined : byId(workspaces).get(id)
+  return ws === undefined ? ABSENT : buildTabsSection(ws, tabs)
+}
+
+/**
+ * One section as the collector would build it NOW — the same builders, over `readMasterWorld()` (the parked master
+ * while a local profile is on screen, never the screen's): `{ payload }`, `payload: null` when the section does not
+ * exist in the master world; `null` while that world is unsettled — nobody can say what it holds. May throw, as a
+ * builder may. For the page (P3d-4 R5: what "Keep this device's" keeps on a reset / invalid lock); it reports nothing.
+ */
+export function buildSectionPayload(key: ProfileSectionKey): { payload: unknown | null } | null {
+  const built = buildSection(key)
+  if (built === UNSETTLED) return null
+  return { payload: built === ABSENT ? null : built }
+}
+
+// === Collector ===
+
+/** A timer slot: one per section. */
+type Slot = ProfileSectionKey
 
 export function startCollector(opts: CollectorOptions): Collector {
   const debounceMs = opts.debounceMs ?? 500
@@ -189,21 +217,14 @@ export function startCollector(opts: CollectorOptions): Collector {
     }
   }
 
-  /** Never `buildProfileDocument`: it throws as a whole on one bad workspace id. Each section is built alone. */
+  /** `buildSection`, plus what only the collector says: a workspace the builder leaves out. */
   function build(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED {
-    if (key === 'hosts') return buildHostsSection(useHostStore.getState())
-    const read = readMasterWorld()
-    if (!read.settled) return UNSETTLED
-    const { workspaces, tabs } = read.world
-    if (key === 'settings') return buildSettingsSection(allSettings(), new Set(syncableIds(read.world)))
     if (key === 'workspaces') {
+      const read = readMasterWorld()
       // Left out of the payload by the builder (device-local); said once per id, like their `tabs.*`.
-      for (const id of unsyncableWorkspaceIds(workspaces)) problemOnce('invalid-workspace-id', id)
-      return buildWorkspacesSection(workspaces)
+      if (read.settled) for (const id of unsyncableWorkspaceIds(read.world.workspaces)) problemOnce('invalid-workspace-id', id)
     }
-    const id = workspaceIdOf(key)
-    const ws = id === null ? undefined : byId(workspaces).get(id)
-    return ws === undefined ? ABSENT : buildTabsSection(ws, tabs)
+    return buildSection(key)
   }
 
   async function run(key: ProfileSectionKey, force: boolean): Promise<void> {

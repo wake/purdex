@@ -107,7 +107,7 @@ async function attach(): Promise<void> {
   await flush()
   expect(executor.status()).toEqual({
     profile: 'synced', schemaLock: null, sections: { hosts: 'synced', settings: 'synced', workspaces: 'synced' }, locks: {},
-    profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1 }, settings: { failures: 0, retryAt: null, rev: 1 }, workspaces: { failures: 0, retryAt: null, rev: 1 } }, indexFailures: 0, lastSuccessAt: expect.any(Number),
+    profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1, invalidReason: null }, settings: { failures: 0, retryAt: null, rev: 1, invalidReason: null }, workspaces: { failures: 0, retryAt: null, rev: 1, invalidReason: null } }, indexFailures: 0, lastSuccessAt: expect.any(Number),
   })
   api.putSection.mockClear()
 }

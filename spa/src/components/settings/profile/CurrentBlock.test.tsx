@@ -14,7 +14,7 @@ import type { MasterWorldRead, UnsettledReason } from '../../../lib/profile/mast
 import type { ExecutorStatus, SectionLock } from '../../../lib/profile/executor'
 
 vi.mock('../../../hooks/useProfileSync', () => ({ useProfileSync: vi.fn() }))
-vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn(), retryPendingDetach: vi.fn() }))
+vi.mock('../../../lib/profile/start', () => ({ requestSyncNow: vi.fn(), detachMaster: vi.fn(), retryPendingDetach: vi.fn(), requestResolve: vi.fn() }))
 // The wizard is its own file with its own tests; here it is a box that says it is open and can be closed.
 vi.mock('./wizard/ProfileWizard', () => ({
   ProfileWizard: ({ onClose }: { onClose: () => void }) => <div data-testid="profile-wizard"><button data-testid="profile-wizard-close" onClick={onClose} /></div>,
@@ -220,7 +220,7 @@ describe('a master attached', () => {
     expect(screen.queryByTestId(/^profile-current-section-/)).toBeNull()
   })
 
-  it('a locked section shows its kind and the SOT revision — and NO button: the panel is the next version\'s', () => {
+  it('a locked section shows its kind and the SOT revision — and a Resolve row, in the section list\'s order, with its ways out (P3d-4b)', () => {
     show(attached({ status: status({ workspaces: 'locked:conflict', hosts: 'locked:reset', settings: 'locked:invalid' }, 'locked:reset', { workspaces: lock('locked:conflict', 9), hosts: lock('locked:reset', 3), settings: lock('locked:invalid', 41) }) }))
     const row = screen.getByTestId('profile-current-section-workspaces')
     expect(row).toHaveTextContent(en['settings.profile.current.section.locked_conflict'])
@@ -228,18 +228,45 @@ describe('a master attached', () => {
     expect(screen.getByTestId('profile-current-section-sot-rev-workspaces')).toHaveTextContent(en['settings.profile.current.sot_rev'].replace('{{rev}}', '9'))
     expect(screen.getByTestId('profile-current-section-hosts')).toHaveTextContent(en['settings.profile.current.section.locked_reset'])
     expect(screen.getByTestId('profile-current-section-settings')).toHaveTextContent(en['settings.profile.current.section.locked_invalid'])
-    expect(screen.getByTestId('profile-current-locked-note')).toHaveTextContent(en['settings.profile.current.locked_note'])
-    expect(within(screen.getByTestId('profile-current-sections')).queryAllByRole('button')).toHaveLength(0)
+    // the sentence that promised this panel is gone, and so is its key
+    expect(screen.queryByTestId('profile-current-locked-note')).toBeNull()
+    expect(Object.keys(en)).not.toContain('settings.profile.current.locked_note')
+    const rows = within(screen.getByTestId('profile-resolve-block')).getAllByTestId(/^profile-resolve-row-/)
+    expect(rows.map((r) => r.getAttribute('data-section'))).toEqual(['hosts', 'settings', 'workspaces'])
+    // labelled like the section list
+    expect(rows[0]).toHaveTextContent(en['settings.profile.current.label.hosts'])
+    expect(screen.getByTestId('profile-resolve-take-sot-hosts')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-resolve-take-sot-workspaces')).toBeInTheDocument()
+    expect(screen.queryByTestId('profile-resolve-take-sot-settings')).toBeNull()
+    expect(screen.getByTestId('profile-resolve-keep-local-settings')).not.toBeDisabled()
   })
 
-  it('nothing locked: no note about the panel, no host revision', () => {
+  it('a follower\'s Resolve rows carry the "reported by the window that is syncing" badge', () => {
+    show(attached({ leader: false, remote: true, status: status({ hosts: 'locked:reset' }, 'locked:reset', { hosts: lock('locked:reset', 3) }) }))
+    expect(screen.getByTestId('profile-resolve-source-hosts')).toHaveTextContent(en['settings.profile.current.from_leader'])
+  })
+
+  it('blocked (no driver runs): the Resolve buttons are disabled, as Sync now is', () => {
+    show(attached({ blocked: 'suspended', status: status({ hosts: 'locked:reset' }, 'locked:reset', { hosts: lock('locked:reset', 3) }) }))
+    expect(screen.getByTestId('profile-resolve-keep-local-hosts')).toBeDisabled()
+    expect(screen.getByTestId('profile-resolve-take-sot-hosts')).toBeDisabled()
+  })
+
+  it('locked:schema is a sentence, not a row', () => {
+    const schemaLock = { section: 'hosts', kind: 'hosts' as const, verdict: 'sot-is-newer' as const, mine: { fingerprint: 'a', ordinal: 1 }, sot: { fingerprint: 'b', ordinal: 2 } }
+    show(attached({ status: { ...status({ hosts: 'synced' }, 'locked:schema'), schemaLock } }))
+    expect(screen.getByTestId('profile-current-schema')).toBeInTheDocument()
+    expect(screen.queryByTestId('profile-resolve-block')).toBeNull()
+  })
+
+  it('nothing locked: no Resolve block, no host revision', () => {
     show(attached({ status: status({ workspaces: 'synced' }) }))
-    expect(screen.queryByTestId('profile-current-locked-note')).toBeNull()
+    expect(screen.queryByTestId('profile-resolve-block')).toBeNull()
     expect(screen.queryByTestId('profile-current-section-sot-rev-workspaces')).toBeNull()
   })
 
   describe('what the executor publishes beyond the status (P3d-4a)', () => {
-    const fine = (rev: number | null) => ({ rev, failures: 0, retryAt: null })
+    const fine = (rev: number | null) => ({ rev, failures: 0, retryAt: null, invalidReason: null })
 
     it('every row shows the AGREED rev; a locked one keeps the host rev beside it', () => {
       show(attached({
@@ -277,7 +304,7 @@ describe('a master attached', () => {
       show(attached({
         status: {
           ...status({ hosts: 'pending', workspaces: 'pending', settings: 'synced' }, 'pending'),
-          detail: { hosts: { rev: 1, failures: 3, retryAt: at }, workspaces: { rev: 1, failures: 1, retryAt: null }, settings: fine(1) },
+          detail: { hosts: { rev: 1, failures: 3, retryAt: at, invalidReason: null }, workspaces: { rev: 1, failures: 1, retryAt: null, invalidReason: null }, settings: fine(1) },
         },
       }))
       const hosts = screen.getByTestId('profile-current-section-failing-hosts')
@@ -415,7 +442,7 @@ describe('settings waiting for workspaces', () => {
   it('F2: nothing is waited for while nothing syncs — the profile gone, or blocked: no waiting sentence, no "next try"', () => {
     const failingStatus = {
       ...status({ workspaces: 'locked:conflict', settings: 'pending' }, 'locked:reset', { workspaces: lock('locked:conflict', 9) }),
-      detail: { workspaces: { rev: 1, failures: 3, retryAt: 5000 }, settings: { rev: 1, failures: 1, retryAt: 6000 } },
+      detail: { workspaces: { rev: 1, failures: 3, retryAt: 5000, invalidReason: null }, settings: { rev: 1, failures: 1, retryAt: 6000, invalidReason: null } },
       indexFailures: 2,
     }
     show(attached({ status: { ...failingStatus, profileGone: true } }))
@@ -436,7 +463,7 @@ describe('settings waiting for workspaces', () => {
     const past = new Date(2026, 8, 23, 14, 2, 31).getTime()
     const failingStatus = {
       ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'),
-      detail: { workspaces: { rev: 1, failures: 3, retryAt: past } },
+      detail: { workspaces: { rev: 1, failures: 3, retryAt: past, invalidReason: null } },
       indexFailures: 1,
     }
     show(attached({ leader: false, remote: true, stale: true, status: failingStatus }))
@@ -456,7 +483,7 @@ describe('settings waiting for workspaces', () => {
   })
 
   it('workspaces failing, or the index read failing → said, as "failing"', () => {
-    show(attached({ status: { ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'), detail: { workspaces: { rev: 1, failures: 2, retryAt: null } } } }))
+    show(attached({ status: { ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'), detail: { workspaces: { rev: 1, failures: 2, retryAt: null, invalidReason: null } } } }))
     const el = screen.getByTestId('profile-current-settings-waiting')
     expect(el).toHaveAttribute('data-reason', 'failing')
     expect(el).toHaveTextContent(en['settings.profile.current.settings_waiting_failing'])
