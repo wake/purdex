@@ -89,12 +89,15 @@ async function attempt(hostId: string, f: RefreshFences, live: () => boolean): P
 
   const v = { epoch: fresh.epoch, seq: fresh.seq }
   if (decide(hostId, v, { kind: 'fetch', conn: f.conn }) === 'stale') return 'done'
+  // Claim before apply (session-version.ts `note`): the reconciliation is not
+  // transactional, so a list older than this one must never get in after it —
+  // even if it throws half-way. The retry fetches a newer one.
+  note(hostId, v)
   try {
     reconcileHostSessions(hostId, fresh.sessions)
   } catch {
-    return 'retry' // nothing held moves on a failed reconciliation
+    return 'retry'
   }
-  note(hostId, v)
   return 'done'
 }
 
@@ -151,6 +154,23 @@ export function cancelSessionRefresh(hostId: string): void {
 export function __resetRefreshForTests(): void {
   for (const run of [...runs.values()]) run.cancel()
   runs.clear()
+}
+
+/**
+ * A WS `sessions` frame of the current socket failed to reconcile
+ * (ws-sessions.ts): refresh from a fresh list on the same connection. The gate
+ * is not required — that frame may have been the one meant to open it — but
+ * the answer must come back on the connection that is live now.
+ */
+export function recoverHostSessions(hostId: string): Promise<void> {
+  const endpoint = endpointOf(hostId)
+  if (endpoint === null) return Promise.resolve()
+  return refreshHost(hostId, {
+    world: readWorldEpochFence(),
+    conn: currentConn(hostId),
+    endpoint,
+    requireGate: false,
+  })
 }
 
 function refreshAfterSwitch(hostId: string): Promise<void> {

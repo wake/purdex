@@ -31,10 +31,12 @@ an object failing `parseVersion`, or `sessions` not an array); throws on non-2xx
 **T4 `hooks/useMultiHostEventWs.ts` + `HostEvent` type (spec §3.3).**
 Tests (existing hook test harness; if none reaches the handler, extract the `sessions` branch
 into `lib/rebuild/ws-sessions.ts` `handleSessionsFrame(hostId, event)` and test that):
-versioned frame reconciles then notes; an older-seq frame after a newer one is NOT reconciled
+versioned frame is claimed (`note`) then reconciled; an older-seq frame after a newer one is NOT reconciled
 (no `markTerminatedForGeneration`, session store unchanged) — with the gate open AND with it
-closed (codex #2; the gate stays closed); reconcile throwing → `held` unchanged, gate not opened
-(codex #4); an unversioned frame reconciles and clears `held`; after the `onClose` callback
+closed (codex #2; the gate stays closed); reconcile throwing → `held` = the frame's version
+(claim before apply — the reconciliation is not transactional, codex adversarial F2, replacing
+codex #4's "note after success"), gate not opened, one `recoverHostSessions`; seq 6 throws
+mid-way → a late seq 5 is not reconciled, seq 7 is; an unversioned frame reconciles and clears `held`; after the `onClose` callback
 returns, conn has moved and the gate is closed (codex #5); teardown bumps conn.
 
 **T5 `lib/rebuild/refresh-after-switch.ts` (new) + call from `switchActiveProfile` (spec §3.2).**
@@ -57,7 +59,10 @@ inside the locks.
 Tests (unit, mocked `listSessionsFresh` + `reconcileHostSessions` spy + real stores):
 - gate closed → no fetch;
 - unversioned → no reconcile; fetch throws → no reconcile, other hosts still run;
-- versioned newer → reconcile with the fetched list, then `note`; reconcile throws → `held` unchanged;
+- versioned newer → `note` (claim), then reconcile with the fetched list; reconcile throws →
+  `held` stays the fetched version (an older WS frame afterwards is not reconciled) and a retry
+  follows; a WS frame whose reconcile threw → recovery refresh on its connection (gate closed
+  allowed), dropped if the connection moved during the fetch;
 - gate + conn captured in one synchronous step (a test that closes the connection right after
   the refresh starts sees no fetch or a dropped result, never an applied one);
 - world generation changes during the fetch → dropped;

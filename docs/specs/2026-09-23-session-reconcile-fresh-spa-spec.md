@@ -66,8 +66,15 @@ persisted, not synced — it describes this window's connections).
   - different epoch → WS: apply (the current socket speaks for the running process);
     fetch: apply iff `origin.conn === current conn` (sent on the current connection,
     daemon contract §3.4), else stale.
-- `note(hostId, v)`: `held = v` — only after `reconcileHostSessions` returned without
-  throwing (codex #4). A throw leaves `held` where it was.
+- `note(hostId, v)`: `held = v` — **claim before apply**: called right after `decide` said
+  `apply` and BEFORE `reconcileHostSessions` runs, on both channels (codex adversarial F2,
+  replacing codex #4's "note only after success"). Reason: the reconciliation is not
+  transactional — it may already have written part of the list (an irreversible
+  `session-closed`, a re-pointed pane, the session store) when it throws. Leaving `held` at
+  the old value would let a later-arriving OLDER list be judged newer and applied on top of
+  that partial state. With the claim, `held` stays `v` after a throw: nothing older can get
+  in, and the failure is recovered by a fresh refresh (§3.2.1) — whose list is read later,
+  so newer than `v`.
 - A WS frame without a version sets `held = null` (the host is — again — an old
   daemon; nothing versioned may be compared against a list from before it).
 
@@ -86,10 +93,10 @@ For each host in `hostOrder`, independently (one host's failure costs no other):
    Array body → unversioned → stop. Non-2xx / network error → retry (§3.2.1).
 4. Drop if the world generation changed (G4), the gate closed, or the host left
    `hostOrder` / changed endpoint since step 2.
-5. `decide(…, {kind: 'fetch', conn})`; `stale` → drop. `apply` →
-   `reconcileHostSessions(hostId, sessions)` (which also refreshes `useSessionStore`,
-   the revive snapshot, and runs the revive pass and probes, exactly as a WS frame),
-   then `note` (§3.1: only if it did not throw).
+5. `decide(…, {kind: 'fetch', conn})`; `stale` → drop. `apply` → `note` (claim, §3.1),
+   then `reconcileHostSessions(hostId, sessions)` (which also refreshes `useSessionStore`,
+   the revive snapshot, and runs the revive pass and probes, exactly as a WS frame). A
+   throw keeps the claim and retries (§3.2.1).
 
 #### 3.2.1 Retries, one refresh per host (codex adversarial F3)
 
@@ -122,7 +129,9 @@ changes on a switch in any window. The plan pins the exact accessor.
 - `sessions` frame: `v = parseVersion(event)`.
   - `v === null` → today's behaviour (reconcile), and `held = null`.
   - `decide(hostId, v, {kind: 'ws'})`:
-    - `apply` → reconcile, then `note`.
+    - `apply` → `note` (claim, §3.1), then reconcile. A throw keeps the claim and starts a
+      recovery refresh on this connection (`recoverHostSessions`, §3.2.1: world / endpoint /
+      conn fences, gate not required — this frame may have been the one to open it).
     - `stale` → **never** reconciled (codex #2). Under the contract a new connection
       cannot legitimately deliver one while its gate is closed: `held` can only come from
       this window's earlier connection (read before the new subscribe → smaller seq) or

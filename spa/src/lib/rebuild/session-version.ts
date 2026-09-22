@@ -5,11 +5,12 @@
 // `sessions` frames and `GET /api/sessions?fresh=1` — with `{epoch, seq}`: the
 // daemon process, and the list's place in that process's read order. Delivery
 // order is not read order (a push can land after a fetch read later), so a list
-// is applied only when it is NEWER than the one last reconciled for its host.
+// is applied only when it is NEWER than the one last applied for its host.
 //
 // Per host this window holds:
-//   `held` — the version last reconciled (null: none, or the host is an old,
-//            unversioned daemon again);
+//   `held` — the version of the list last handed to the reconciliation —
+//            claimed before it runs, kept even if it threw (see `note`) —
+//            null: none, or the host is an old, unversioned daemon again;
 //   `conn` — a connection generation, bumped on every open and close of the
 //            host-events socket and on entry teardown. A fetch records the
 //            `conn` it was sent on: a list from a DIFFERENT daemon process is
@@ -82,7 +83,13 @@ export function decide(hostId: string, v: SessionVersion, origin: VersionOrigin)
   return origin.conn === currentConn(hostId) ? 'apply' : 'stale'
 }
 
-/** `v` has been reconciled — call only after `reconcileHostSessions` returned without throwing. */
+/**
+ * Claim `v` for `hostId` — call right BEFORE `reconcileHostSessions`, after
+ * `decide` said apply. The reconciliation is not transactional (it may write
+ * part of a list, e.g. an irreversible `session-closed`, and then throw), so
+ * an older list must never be decided newer after it; a failed reconciliation
+ * is recovered by a fresh refresh instead (refresh-after-switch.ts).
+ */
 export function note(hostId: string, v: SessionVersion): void {
   held.set(hostId, v)
 }

@@ -15,6 +15,9 @@ import { handleSessionsFrame } from './ws-sessions'
 
 vi.mock('./cwd-probe', () => ({ probeMissingCwds: vi.fn(), probeSessionCwd: vi.fn(), resetCwdProbes: vi.fn() }))
 vi.mock('./provenance-probe', () => ({ probeSessionProvenance: vi.fn(), resetProvenanceProbes: vi.fn() }))
+// The recovery path itself is refresh-after-switch.test.ts's; here only "was it asked for".
+const { recoverHostSessions } = vi.hoisted(() => ({ recoverHostSessions: vi.fn(async () => {}) }))
+vi.mock('./refresh-after-switch', () => ({ recoverHostSessions }))
 
 const H = 'h1'
 const E1 = '9f3c1a0b7d2e4c61'
@@ -47,6 +50,7 @@ const attachReady = () => useHostStore.getState().runtime[H]?.attachReady
 
 beforeEach(() => {
   __resetForTests()
+  recoverHostSessions.mockClear()
   useHostStore.setState({
     hosts: { [H]: { id: H, name: 'Host', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [H], runtime: {}, activeHostId: H,
@@ -107,14 +111,39 @@ describe('handleSessionsFrame', () => {
     expect(heldVersion(H)).toEqual({ epoch: E2, seq: 1 })
   })
 
-  it('a reconcile that throws leaves held where it was and the gate closed (codex #4)', () => {
+  // Claim before apply (codex adversarial F2): the reconciliation is not
+  // transactional — it may have written part of the list before it threw — so
+  // an older list must never get in after it, and a fresh refresh recovers.
+  it('a reconcile that throws still holds its version, leaves the gate closed and asks for a recovery refresh', () => {
     note(H, { epoch: E1, seq: 4 })
     closeAttachGate(H)
     useSessionStore.setState({ replaceHost: () => { throw new Error('quota') } } as never)
 
     expect(() => handleSessionsFrame(H, frame([S], { epoch: E1, seq: 5 }))).not.toThrow()
-    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 4 })
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 5 })
     expect(attachReady()).toBe(false)
+    expect(recoverHostSessions).toHaveBeenCalledTimes(1)
+    expect(recoverHostSessions).toHaveBeenCalledWith(H)
+  })
+
+  it('after seq 6 threw mid-way, a late seq 5 is not reconciled; seq 7 is', () => {
+    handleSessionsFrame(H, frame([S], { epoch: E1, seq: 4 }))
+    useSessionStore.setState({ replaceHost: () => { throw new Error('quota') } } as never)
+    handleSessionsFrame(H, frame([S], { epoch: E1, seq: 6 }))
+    useSessionStore.setState({ replaceHost: realReplaceHost })
+
+    handleSessionsFrame(H, frame([], { epoch: E1, seq: 5 })) // older than the claimed 6: would close S
+    expect(pane().terminated).toBeUndefined()
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 6 })
+
+    handleSessionsFrame(H, frame([], { epoch: E1, seq: 7 }))
+    expect(pane().terminated).toBe('session-closed')
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 7 })
+  })
+
+  it('a reconcile that succeeds asks for no recovery', () => {
+    handleSessionsFrame(H, frame([S], { epoch: E1, seq: 4 }))
+    expect(recoverHostSessions).not.toHaveBeenCalled()
   })
 
   it('an unversioned frame is reconciled as today and clears held', () => {

@@ -131,14 +131,50 @@ describe('refreshSessionsAfterSwitch', () => {
     expect(terminated()).toBeUndefined()
   })
 
-  it('a reconcile that throws leaves held where it was', async () => {
+  // Claim before apply (codex adversarial F2): a half-applied list must never
+  // be followed by an older one.
+  it('a reconcile that throws still holds the fetched version: an older WS frame after it is not reconciled', async () => {
     note(H, { epoch: E1, seq: 3 })
     reconcile.mockImplementationOnce(() => { throw new Error('quota') })
-    listSessionsFresh.mockResolvedValueOnce(versioned(4, []))
+    listSessionsFresh.mockResolvedValueOnce(versioned(5, [S]))
     listSessionsFresh.mockResolvedValue({ kind: 'unversioned' }) // the retry: not evidence
     const p = refreshSessionsAfterSwitch()
     await expect(drain(p)).resolves.toBeUndefined()
-    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 3 })
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 5 })
+
+    reconcile.mockClear()
+    handleSessionsFrame(H, { type: 'sessions', session: '', value: '[]', epoch: E1, seq: 4 })
+    expect(reconcile).not.toHaveBeenCalled()
+    expect(terminated()).toBeUndefined()
+  })
+
+  it('a WS frame whose reconcile threw is recovered by a fresh refresh on its connection (gate closed)', async () => {
+    closeAttachGate(H)
+    reconcile.mockImplementationOnce(() => { throw new Error('quota') })
+    listSessionsFresh.mockResolvedValue(versioned(7, []))
+    handleSessionsFrame(H, { type: 'sessions', session: '', value: JSON.stringify([S]), epoch: E1, seq: 6 })
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 6 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenLastCalledWith(H, [])
+    expect(terminated()).toBe('session-closed')
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 7 })
+    expect(useHostStore.getState().runtime[H]?.attachReady).toBe(true)
+  })
+
+  it('a recovery refresh is dropped when its connection moved during the fetch', async () => {
+    closeAttachGate(H)
+    reconcile.mockImplementationOnce(() => { throw new Error('quota') })
+    const d = deferred<FreshSessions>()
+    listSessionsFresh.mockReturnValue(d.promise)
+    handleSessionsFrame(H, { type: 'sessions', session: '', value: JSON.stringify([S]), epoch: E1, seq: 6 })
+    connectionClosed(H)
+    connectionOpened(H)
+    d.resolve(versioned(7, []))
+    await drain(Promise.resolve())
+    expect(reconcile).toHaveBeenCalledTimes(1) // the frame's own, which threw
+    expect(terminated()).toBeUndefined()
   })
 
   it('reads the gate and captures conn in ONE step: a connection closing right after the start never gets its result applied', async () => {
