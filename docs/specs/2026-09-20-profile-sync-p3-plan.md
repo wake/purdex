@@ -891,6 +891,41 @@ concept only (P3e renamed the new-tab layout's internal `profile` to `preset`; N
 "sandbox profile" is #1290). The zh-TW words are the user's call — proposed in the PR, confirmed before
 merge.
 
+**Plan review (codex `task-mud3tew0-uehg5m`, 8 findings, all taken) — these override the text above:**
+- **R1 (critical) — the counts must be of what the choice KEEPS.** *Keep this device's* on a `locked:conflict`
+  restores `conflict.localHash` (the snapshot that was sent), not what is built now. So this device's side is
+  counted from: conflict → the stash payload of `conflict.localHash` (`section-store.getStash`, any window);
+  reset / invalid → the payload built now (`restoreLocal` is not set; the current state is pushed). A payload
+  that cannot be read (not persisted — `conflict-not-persisted`; world unsettled) → "could not be read", never a
+  guess. When the side built now hashes differently from `lock.currentHash`, the dialog says this device changed
+  since the lock was taken.
+- **R2 — "sent" must end.** The command channel has no answer, so: `requestResolve` returns whether the command
+  was WRITTEN (`boolean`; a failed `setItem` → the row says it could not be sent). A written command's row says
+  "sent" until the lock for that key changes, or until the command's own TTL (30 s, `COMMAND_TTL_MS`, exported)
+  has passed — one `setTimeout` per sent row, cleared on unmount / lock change — then "no answer from the window
+  that is syncing; try again". The only timer on the page, and it is bounded by the TTL.
+- **R3 — every change of the published counters emits.** `emitStatus()` after `armRetry`, `clearBackoff`, the
+  retry timer firing, `resetRetries`, and each reindex failure / success / retry firing. The signature includes
+  the new fields, so an unchanged value still emits nothing. Tested: each of those seven points, alone, changes
+  the published status.
+- **R4 — `lastSuccessAt`, defined:** the time the leader last handled an answer FROM THE HOST (an index read, a
+  pull, a push outcome incl. `push-converged`) after which `profileStatus` is `synced`. Shown as "in sync as of
+  <time>" (`profile-current-last-sync`), not "last synced". A local edit does not move it; neither does a failure.
+- **R5 — one builder, not two.** `collector.ts` exports `buildSectionPayload(key): payload | null` — the SAME
+  builders the leader's collector runs, over `readMasterWorld()` and the same projections; `null` while the world
+  is unsettled. The counts helper uses it. Tested: in a follower window with a slave on screen, the counts are the
+  parked master's, never the slave's.
+- **R6 — `profileGone` from both sources, tested each:** the executor's index-missing path publishes
+  `profileGone: true`; start.ts's synthetic 404 status is `{…, profileGone: true, detail: {}, indexFailures: 0,
+  lastSuccessAt: null}`; a published record from an older build (no new fields) parses to the defaults; the page
+  shows the gone sentence for both.
+- **R7 — the reducer's edges are pinned end to end** (component → channel → executor, real reducer): reset →
+  both directions; invalid → no *Take the host's* button, and a forged `sot` command changes nothing; a pairless
+  lock whose host rev moved on → the open dialog closes and the stale command is dropped; conflict with
+  `currentHash !== conflict.localHash` → *Keep this device's* pushes the SENT snapshot, and the dialog said so.
+- **R8 — 4c is reviewed like the others:** its fixes are TDD'd, and codex R1 runs on 4c's diff (`--base` = 4b's
+  merge); attack + critic only if R1 finds a critical.
+
 **Cut** (each ≤ 20 files, merged in order):
 - **P3d-4a — status**: executor / start / sync-status / sync-view (+ tests) and the Current block's three
   additions. Includes the eight test files whose `ExecutorStatus` literals gain fields.
