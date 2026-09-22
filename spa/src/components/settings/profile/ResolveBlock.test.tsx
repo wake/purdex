@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
+import zhTW from '../../../locales/zh-TW.json'
 import { requestResolve } from '../../../lib/profile/start'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useProfileStore } from '../../../stores/useProfileStore'
@@ -207,6 +208,12 @@ describe('the confirmation', () => {
     view(statusOf({ workspaces: { ...CONFLICT, currentHash: H('9') } }))
     openKeepLocal('workspaces')
     expect(screen.getByTestId('profile-resolve-dialog-undoes')).toHaveTextContent(en['settings.profile.resolve.dialog_undoes'])
+  })
+
+  it('…and does not claim that copy was SENT: with Auto-sync off it never was (P3d-4c F4)', () => {
+    expect(en['settings.profile.resolve.dialog_undoes']).toMatch(/had when the conflict was found/)
+    expect(en['settings.profile.resolve.dialog_undoes']).not.toMatch(/\bsent\b/)
+    expect(zhTW['settings.profile.resolve.dialog_undoes']).not.toMatch(/送出/)
   })
 
   it('"Take the host\'s" has its own words, and no "undoes" line', () => {

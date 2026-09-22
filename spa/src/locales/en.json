@@ -1417,7 +1417,7 @@
   "settings.profile.resolve.unit.workspaces": "{{count}} workspace(s)",
   "settings.profile.resolve.unit.tabs": "{{count}} tab(s)",
   "settings.profile.resolve.unit.settings": "{{count}} setting(s)",
-  "settings.profile.resolve.dialog_undoes": "What is kept is the copy this device sent when the conflict arose — what you changed here since is undone.",
+  "settings.profile.resolve.dialog_undoes": "What is kept is the copy this device had when the conflict was found — what you changed here since is undone.",
   "settings.profile.resolve.local_moved": "This device's copy changed since the lock was taken; what is here now is what is kept.",
   "settings.profile.resolve.sot_moved": "The sync host's copy has changed again since this was shown.",
   "settings.profile.current.auto_sync": "Auto-sync",

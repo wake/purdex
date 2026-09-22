@@ -1417,7 +1417,7 @@
   "settings.profile.resolve.unit.workspaces": "{{count}} 個工作區",
   "settings.profile.resolve.unit.tabs": "{{count}} 個分頁",
   "settings.profile.resolve.unit.settings": "{{count}} 項設定",
-  "settings.profile.resolve.dialog_undoes": "保留的是衝突發生時這台裝置送出的那一份——之後你在這裡做的變更會被復原。",
+  "settings.profile.resolve.dialog_undoes": "保留的是發現衝突時這台裝置上的那一份——之後你在這裡做的變更會被復原。",
   "settings.profile.resolve.local_moved": "鎖定之後這台裝置上的這一份又變了；保留的會是現在這一份。",
   "settings.profile.resolve.sot_moved": "顯示這一份之後，同步主機上的這一份又變了。",
   "settings.profile.current.auto_sync": "自動同步",
