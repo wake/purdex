@@ -15,7 +15,7 @@
  *   | Top built-in (core)         | 0 – 4  | Appearance / Terminal / Interface / Profile |
  *   | Top conditional built-in    | 5 – 9  | Electron (gated by canSystemTray)         |
  *   | Modules switchboard         | 10     | `module-config` (single header row)       |
- *   | Module-owned (alphabetical) | 11–19  | Browser / Editor / Files / Monitor / Sync |
+ *   | Module-owned (alphabetical) | 11–19  | Browser / Editor / Files / Monitor        |
  *   | Tail built-in               | 20–29  | Dev Environment                           |
  *
  * The "Module-owned" band sorts by **English (default) sidebar short label**,
@@ -59,13 +59,12 @@ export const SETTINGS_ORDER = {
   // Modules switchboard — single row, header of the modules group.
   MODULE_CONFIG: 10,
   // Module-owned (alphabetical by English sidebar short label —
-  // Browser / Editor / Files / Monitor / Sync). Constant name
+  // Browser / Editor / Files / Monitor). Constant name
   // tracks module identity, value tracks display order (spec §I3).
   MODULE_BROWSER: 11,             // sidebar: "Browser"
   MODULE_EDITOR: 13,              // sidebar: "Editor"
   MODULE_FILES: 14,               // sidebar: "Files"
   MODULE_PERFORMANCE_MONITOR: 15, // sidebar: "Monitor"
-  MODULE_SYNC: 16,                // sidebar: "Sync"
   // Tail built-in — dev / debug surfaces.
   DEV_ENVIRONMENT: 20,
   // ---- workspace scope ------------------------------------------------
