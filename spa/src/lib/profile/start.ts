@@ -174,6 +174,12 @@ declare global {
 }
 
 export const PROBLEM_BUFFER_SIZE = 50
+/**
+ * A problem's `detail` is kept to this many code points (plus a trailing `…` when something was cut). Some details
+ * carry text of any length — a failed request's whole response body, an exception's message, a list of keys — and
+ * the buffer is published to every window (sync-status.ts, `MAX_PUBLISHED_STATUS_CHARS` is sized from this).
+ */
+export const PROBLEM_DETAIL_MAX = 1000
 export const ATTACH_RETRY_BASE_MS = 2_000
 export const ATTACH_RETRY_CAP_MS = 30_000
 /**
@@ -241,8 +247,17 @@ const problems: ProfileSyncProblem[] = []
 /** `kind` + section already warned about; forgotten when the master changes. */
 const warned = new Set<string>()
 
+/** The first `PROBLEM_DETAIL_MAX` code points, never half a surrogate pair; `…` appended iff something was cut. */
+function cutDetail(detail: string): string {
+  if (detail.length <= PROBLEM_DETAIL_MAX) return detail // UTF-16 units ≥ code points: short enough as it is
+  let end = 0
+  for (let n = 0; n < PROBLEM_DETAIL_MAX && end < detail.length; n += 1) end += detail.codePointAt(end)! > 0xffff ? 2 : 1
+  return end >= detail.length ? detail : `${detail.slice(0, end)}…`
+}
+
 function reportProblem(p: { kind: string; section?: string; detail: string }): void {
-  problems.push({ kind: p.kind, ...(p.section !== undefined ? { section: p.section } : {}), detail: p.detail, at: Date.now() })
+  // The console gets the whole detail (this window, not persisted); the buffer — published — gets it cut.
+  problems.push({ kind: p.kind, ...(p.section !== undefined ? { section: p.section } : {}), detail: cutDetail(p.detail), at: Date.now() })
   if (problems.length > PROBLEM_BUFFER_SIZE) problems.splice(0, problems.length - PROBLEM_BUFFER_SIZE)
   changed()
   const id = `${p.kind}\u0000${p.section ?? ''}`

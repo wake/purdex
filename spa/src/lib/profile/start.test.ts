@@ -154,6 +154,7 @@ import { clearSectionStore } from './section-store'
 import {
   ATTACH_SUSPEND_MS,
   PROBLEM_BUFFER_SIZE,
+  PROBLEM_DETAIL_MAX,
   __resetProfileSyncForTest,
   attachMaster,
   detachMaster,
@@ -1870,6 +1871,31 @@ describe('problems and status', () => {
       detail: `#${PROBLEM_BUFFER_SIZE + 6}`,
       at: 5_000,
     })
+  })
+
+  it('cuts a detail to PROBLEM_DETAIL_MAX code points when it is recorded, never inside a surrogate pair, with a trailing …', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const { onProblem } = h.executors[0].deps
+    const detailOf = (detail: string): string => {
+      onProblem({ kind: 'k', section: 'hosts', detail })
+      return profileSyncState().problems.at(-1)!.detail
+    }
+    expect(PROBLEM_DETAIL_MAX).toBe(1000)
+    // short enough: kept exactly — at the limit too
+    expect(detailOf('a 502 page')).toBe('a 502 page')
+    const atMax = '😀'.repeat(PROBLEM_DETAIL_MAX) // 1000 code points, 2000 UTF-16 units
+    expect(detailOf(atMax)).toBe(atMax)
+    // one over: the first 1000 code points and a …
+    expect(detailOf('x'.repeat(PROBLEM_DETAIL_MAX + 1))).toBe(`${'x'.repeat(PROBLEM_DETAIL_MAX)}…`)
+    // counted in code points: an astral character is ONE, and is never split
+    const cut = detailOf(`${'a'.repeat(PROBLEM_DETAIL_MAX - 1)}😀😀tail`)
+    expect(cut).toBe(`${'a'.repeat(PROBLEM_DETAIL_MAX - 1)}😀…`)
+    expect([...cut]).toHaveLength(PROBLEM_DETAIL_MAX + 1)
+    expect(cut).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/) // no lone high surrogate
+    // a server's whole error page does not ride along
+    expect(detailOf('<html>'.repeat(20_000)).length).toBeLessThanOrEqual(2 * PROBLEM_DETAIL_MAX + 1)
   })
 
   it('warns once per kind + section; the collector reports into the same buffer', async () => {
