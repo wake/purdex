@@ -4,7 +4,7 @@ import { triggerDownload } from './download-file'
 // jsdom implements neither URL.createObjectURL nor revokeObjectURL, so we stub
 // them and assert the full anchor-download dance: create an object URL for the
 // blob, build an <a download> pointing at it, click it, then revoke the URL.
-describe('triggerDownload — anchor object-URL download (lifted from SyncSection)', () => {
+describe('triggerDownload — anchor object-URL download', () => {
   let createObjectURL: ReturnType<typeof vi.fn>
   let revokeObjectURL: ReturnType<typeof vi.fn>
   let clickSpy: ReturnType<typeof vi.spyOn>

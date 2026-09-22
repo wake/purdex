@@ -10,9 +10,8 @@ import { runRestore } from '../../../lib/storage-backup/restore-wiring'
 
 /**
  * Relative "time ago" for a past epoch-ms timestamp, reusing the same i18n keys
- * (`settings.sync.time.*`) as the Sync section. Inlined here (rather than
- * importing SyncSection's private helper) so the backup sidebar stays
- * self-contained and Sync remains untouched.
+ * (`settings.sync.time.*`) as the old Sync section. Inlined here so the
+ * backup sidebar stays self-contained.
  */
 function formatRelativeTime(
   t: ReturnType<typeof useI18nStore.getState>['t'],

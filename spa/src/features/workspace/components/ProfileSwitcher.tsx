@@ -101,7 +101,7 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
       // A name is the user's own text: shown as is, never through t().
       ...slaveOrder.filter((id) => slaves[id]).map((id) => entry(id, slaves[id].name, slaves[id])),
       // Settings › Profile (spec §4.9). Reached the way every settings section is: by its route, which
-      // `useRouteSync` turns into the Settings tab (as TitleBar does for `/settings/sync`). A plain item, not one
+      // `useRouteSync` turns into the Settings tab. A plain item, not one
       // of the radio group, and never disabled by a switch under way. The MENU still exists only where there is
       // a slave (`useProfileSwitcherTrigger`); with none, the page is reached from the Settings sidebar.
       { divider: true },

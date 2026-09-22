@@ -2,9 +2,9 @@
  * download-file — the single source of truth for triggering a browser "save as"
  * download from an in-memory `Blob`.
  *
- * Lifted verbatim out of `settings/SyncSection.tsx` (Phase 1c decision 6) so the
- * sync export, the Storage download/export action, and the binary
- * open-disposition all share one implementation. The anchor + object-URL dance
+ * Lifted verbatim out of the old Sync settings section (Phase 1c decision 6) so
+ * the Storage download/export action and the binary
+ * open-disposition share one implementation. The anchor + object-URL dance
  * works inside the Electron WebContents too, so no daemon/IPC save dialog is
  * needed.
  */

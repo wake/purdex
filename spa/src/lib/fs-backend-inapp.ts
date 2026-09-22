@@ -81,7 +81,7 @@ export class InAppBackend
   private db(): Promise<IDBPDatabase> {
     return openIDB(DB_NAME, DB_VERSION, (db) => {
       // Guard with contains() to match the repo's existing IDB upgrade style
-      // (snapshot-store.ts) and stay safe across future schema version bumps.
+      // and stay safe across future schema version bumps.
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: 'path' })
       }

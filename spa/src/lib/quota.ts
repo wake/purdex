@@ -1,8 +1,8 @@
 /**
  * isQuotaError — true when `err` is a storage-quota exhaustion thrown by
- * IndexedDB / the Storage API. Lifted out of `sync/snapshot-store.ts` (T1c-4)
- * into this shared leaf so both the Sync snapshot store and the Storage upload
- * path detect a full quota through ONE implementation (no second copy).
+ * IndexedDB / the Storage API. Lifted out of the old Sync snapshot store (T1c-4,
+ * since deleted) into this shared leaf, which the Storage upload path uses to
+ * detect a full quota.
  *
  * Matches the standard `DOMException` name `QuotaExceededError` plus the historic
  * numeric codes 22 (standard) and 1014 (Firefox). A non-`DOMException` value
