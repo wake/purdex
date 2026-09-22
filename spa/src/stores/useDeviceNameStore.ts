@@ -2,8 +2,8 @@
 //
 // Only `deviceName` (the user's override) is persisted; `defaultDeviceName` is
 // resolved on demand by `ensureDefaultDeviceName()` and should not survive a
-// reload. The storage key, version and persisted shape are those of the old
-// `useDeviceStateStore`, so an existing name carries over without a migration.
+// reload. The storage key (`purdex-device-state`), version and persisted shape
+// are those of the removed device-state store, so an existing name carries over.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'

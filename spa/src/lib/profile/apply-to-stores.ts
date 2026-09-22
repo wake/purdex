@@ -148,8 +148,6 @@ const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
  * `layout` with every live `tmux-session` pane whose host is not in
  * `knownHostIds` marked `terminated: 'host-removed'`. Pure; returns the same
  * object when nothing changed. A pane that is already terminated keeps its reason.
- * (`markMissingHosts` in device-state/reattach.ts does this for a whole
- * `WorkspaceSnapshot`; an apply has one tab's layout.)
  */
 export function markHostRemovedPanes(layout: PaneLayout, knownHostIds: ReadonlySet<string>): PaneLayout {
   if (layout.type === 'leaf') {

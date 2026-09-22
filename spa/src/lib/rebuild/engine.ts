@@ -433,8 +433,8 @@ function publish(paneId: string, report: RebuildReport, created?: Session): void
  * Never throws: every failure lands in the returned report, which is also
  * written into `useRebuildStore` under `paneId`.
  *
- * Serialized against every other rebuild and against the legacy snapshot
- * actions by the shared operation lock (spec §4.11).
+ * Serialized against every other rebuild by the shared operation lock
+ * (spec §4.11).
  */
 export async function rebuildPane(
   hostId: string,

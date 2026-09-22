@@ -6,9 +6,8 @@
 // independent `runBatchRebuild` calls share the name `rebuild:batch` and must
 // NOT be allowed to interleave — it has to be asked for, by passing the grant
 // the caller is already holding. Releasing a nested grant is a no-op, and only
-// the grant that actually took the lock can drop it. That is what lets
-// `undoLastRestore` → `restoreAll` nest without the inner call unlocking the
-// world underneath its caller.
+// the grant that actually took the lock can drop it. That is what lets a
+// nested call run without unlocking the world underneath its caller.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useRebuildStore, withOperationLock, type OperationLockGrant } from './useRebuildStore'
 

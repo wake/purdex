@@ -5,7 +5,7 @@ import { STORAGE_KEYS } from './storage/keys'
 // Client identity
 //
 // The stable id of this browser profile: "c_" + 12 lowercase hex chars. The
-// daemon keys device-state records, storage backups and profile writes on it.
+// daemon keys storage backups and profile writes on it.
 //
 // It used to live in `useSyncStore` (persisted under `purdex-sync-state`). The
 // Sync module is going away, so the id has its own key here — and, on first

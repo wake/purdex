@@ -1,5 +1,5 @@
-// `getClientId()` — the id daemon-side records (device-state, storage backups,
-// profile writes) hang off. Storage is the truth: every call reads the key, so
+// `getClientId()` — the id daemon-side records (storage backups, profile
+// writes) hang off. Storage is the truth: every call reads the key, so
 // these tests drive it through `localStorage` rather than through module state.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { STORAGE_KEYS } from './storage'
