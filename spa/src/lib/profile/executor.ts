@@ -186,7 +186,7 @@ import { getClientId } from '../client-identity'
 import { deleteSection, getSection, listProfiles, putSection } from './api'
 import type { DeleteOutcome, Failure, PutOutcome } from './api'
 import { applySectionToStores } from './apply-to-stores'
-import type { ApplyOutcome } from './apply-to-stores'
+import type { ApplyOutcome, InvalidReason } from './apply-to-stores'
 import { upcastLegacySettings } from './applier'
 import type { SectionReport } from './collector'
 import { hashSection } from './hash'
@@ -242,6 +242,9 @@ export interface SectionDetail {
   failures: number
   /** When the next attempt is armed (the executor's clock, ms); null = none is armed. */
   retryAt: number | null
+  /** WHY this device refuses the host's copy — the apply's code (apply-to-stores.ts), never its text. Non-null only
+   *  while the section is `locked:invalid` (P3d-4b). */
+  invalidReason: InvalidReason | null
 }
 
 export interface ExecutorStatus {
@@ -361,6 +364,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   const repump = new Set<string>()
   const failures = new Map<string, number>()
   const notBefore = new Map<string, number>()
+  /** The code of the last `invalid` verdict per section; read only while that section IS `locked:invalid`. */
+  const invalidReasons = new Map<string, InvalidReason>()
   const retryTimers = new Map<string, Timer>()
   /** `restore-local` whose payload is in neither stash, by the hash that is missing. */
   const parkedRestore = new Map<string, string>()
@@ -451,7 +456,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   function detailOf(key: string, s: SectionSyncState): SectionDetail {
     // `{0, null}` is "nothing yet" (sync-state): not a rev anybody agreed on.
     const rev = s.base.rev === 0 && s.base.hash === null ? null : s.base.rev
-    return { rev, failures: failures.get(key) ?? 0, retryAt: notBefore.get(key) ?? null }
+    const invalidReason = s.status === 'locked:invalid' ? (invalidReasons.get(key) ?? null) : null
+    return { rev, failures: failures.get(key) ?? 0, retryAt: notBefore.get(key) ?? null, invalidReason }
   }
 
   function status(): ExecutorStatus {
@@ -566,6 +572,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     attempted.delete(key)
     clearBackoff(key)
     parkedRestore.delete(key)
+    invalidReasons.delete(key)
     reportedOnce.delete(`stuck-deletion:${key}`)
   }
 
@@ -1250,6 +1257,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (!outcome.ok) {
       if (outcome.reason === 'busy') return { how: 'retry', ms: BUSY_RETRY_MS }
       problem('pull-invalid', outcome.detail, key)
+      // Before the event: the status it emits carries the reason. A refused verdict leaves it unread (see `detailOf`).
+      invalidReasons.set(key, outcome.code)
       // Refused (same reference back) = the verdict was stale: decide again.
       dispatch(key, { type: 'locked', reason: 'invalid', rev }, false)
       return afterPull(key)

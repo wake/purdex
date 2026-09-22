@@ -37,8 +37,8 @@ describe('syncDotOf — one reading of the whole master, for the switcher\'s dot
 })
 
 describe('settingsWaitForWorkspaces — the executor\'s settings gate, as far as the published status shows it', () => {
-  const failing = { rev: 1, failures: 2, retryAt: 5000 }
-  const fine = { rev: 1, failures: 0, retryAt: null }
+  const failing = { rev: 1, failures: 2, retryAt: 5000, invalidReason: null }
+  const fine = { rev: 1, failures: 0, retryAt: null, invalidReason: null }
 
   it.each(['locked:conflict', 'locked:reset', 'locked:invalid'] as const)('workspaces %s and settings with something to send → waiting: locked', (lock) => {
     expect(settingsWaitForWorkspaces(status({ workspaces: lock, settings: 'pending' }))).toBe('locked')

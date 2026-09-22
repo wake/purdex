@@ -40,7 +40,7 @@ import { hashSection } from './hash'
 import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
-import { applySectionToStores, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
+import { INVALID_REASONS, applySectionToStores, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
 
 // === fixtures ===
 
@@ -261,14 +261,16 @@ describe('applySectionToStores — guards', () => {
       const writes = await countWrites(async () => {
         outcome = await applySectionToStores(key, payload, ctx)
       })
-      expect(outcome, key).toMatchObject({ ok: false, reason: 'invalid' })
+      expect(outcome, key).toMatchObject({ ok: false, reason: 'invalid', code: 'malformed' })
       expect(writes, key).toBe(0)
     }
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
   it('an unknown section key is invalid', async () => {
-    expect(await applySectionToStores('bogus' as never, {}, ctx)).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(await applySectionToStores('bogus' as never, {}, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'unknown-section' })
+    // a `tabs.` key whose workspace id does not parse is no section either (applyTabsSection's own guard is unreachable)
+    expect(await applySectionToStores('tabs.' as never, { order: [], tabs: {} }, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'unknown-section' })
   })
 
   it('a null payload is invalid for hosts, settings and workspaces, and writes nothing', async () => {
@@ -277,9 +279,13 @@ describe('applySectionToStores — guards', () => {
       const writes = await countWrites(async () => {
         outcome = await applySectionToStores(key, null, ctx)
       })
-      expect(outcome, key).toMatchObject({ ok: false, reason: 'invalid' })
+      expect(outcome, key).toMatchObject({ ok: false, reason: 'invalid', code: 'deleted' })
       expect(writes, key).toBe(0)
     }
+  })
+
+  it('every invalid outcome carries a code from the closed list, and INVALID_REASONS is that list', async () => {
+    expect([...INVALID_REASONS].sort()).toEqual(['changes-master-host', 'deleted', 'malformed', 'no-host', 'rejected-settings', 'removes-master-host', 'unknown-section'])
   })
 })
 
@@ -308,7 +314,7 @@ describe('applySectionToStores — hosts', () => {
   it('refuses a payload that removes the master host', async () => {
     const before = useHostStore.getState().hosts
     const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(H2)]), ctx)
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'removes-master-host' })
     expect(useHostStore.getState().hosts).toBe(before)
   })
 
@@ -320,13 +326,13 @@ describe('applySectionToStores — hosts', () => {
   ])("refuses a payload that changes the master host's %s", async (_name, over) => {
     const before = useHostStore.getState().hosts
     const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, over as Partial<HostConfig>), host(H2)]), ctx)
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
     expect(useHostStore.getState().hosts).toBe(before)
   })
 
   it('refuses a payload that leaves zero hosts', async () => {
     const outcome = await applySectionToStores('hosts', { hosts: {}, hostOrder: [] }, ctx)
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'no-host' })
     expect(Object.keys(useHostStore.getState().hosts)).toHaveLength(2)
   })
 
@@ -740,7 +746,7 @@ describe('applySectionToStores — settings', () => {
     const writes = await countWrites(async () => {
       outcome = await applySectionToStores('settings', payload, ctx)
     })
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'malformed' })
     expect(writes).toBe(0)
     expect(useEditorSettingsStore.getState().fontSize).toBe(EDITOR_DEFAULTS.fontSize)
   })
@@ -753,7 +759,7 @@ describe('applySectionToStores — settings', () => {
     const writes = await countWrites(async () => {
       outcome = await applySectionToStores('settings', payload, ctx)
     })
-    expect(outcome).toEqual({ ok: false, reason: 'invalid', detail: expect.stringContaining('purdex-layout.tabPosition') })
+    expect(outcome).toEqual({ ok: false, reason: 'invalid', code: 'rejected-settings', detail: expect.stringContaining('purdex-layout.tabPosition') })
     expect(writes).toBe(0)
   })
 

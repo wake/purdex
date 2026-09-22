@@ -137,6 +137,7 @@
 // view is as old as the last publish (≤ 250 ms plus the event), which is exactly
 // what the binding is for.
 import { STORAGE_KEYS } from '../storage/keys'
+import type { InvalidReason } from './apply-to-stores'
 import type { ExecutorStatus, SectionDetail, SectionLock } from './executor'
 import type { ProfileSyncState } from './start'
 import type { SectionConflict } from './sync-state'
@@ -361,14 +362,31 @@ function parseStatus(value: unknown): ExecutorStatus | undefined {
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 const isTime = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
-/** One `detail` entry exactly in its shape, or `undefined`. */
+/** The codes this build can say in words. A `Record` over the type, so a code added to apply-to-stores.ts's list is a
+ *  compile error here until it is added. */
+const KNOWN_INVALID_REASONS: Record<InvalidReason, true> = {
+  deleted: true,
+  malformed: true,
+  'no-host': true,
+  'removes-master-host': true,
+  'changes-master-host': true,
+  'rejected-settings': true,
+  'unknown-section': true,
+}
+
+/** A code this build knows, or null: absent (an older build, P3d-4a), a newer build's code, or anything else. */
+function parseInvalidReason(value: unknown): InvalidReason | null {
+  return typeof value === 'string' && Object.hasOwn(KNOWN_INVALID_REASONS, value) ? (value as InvalidReason) : null
+}
+
+/** One `detail` entry exactly in its shape, or `undefined`. `invalidReason` (P3d-4b) is read leniently: see above. */
 function parseDetail(value: unknown): SectionDetail | undefined {
   if (typeof value !== 'object' || value === null) return undefined
-  const { rev, failures, retryAt } = value as Record<string, unknown>
+  const { rev, failures, retryAt, invalidReason } = value as Record<string, unknown>
   if (rev !== null && !(typeof rev === 'number' && Number.isSafeInteger(rev))) return undefined
   if (!isCount(failures)) return undefined
   if (retryAt !== null && !isTime(retryAt)) return undefined
-  return { rev, failures, retryAt }
+  return { rev, failures, retryAt, invalidReason: parseInvalidReason(invalidReason) }
 }
 
 /**

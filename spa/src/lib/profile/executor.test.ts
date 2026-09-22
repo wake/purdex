@@ -5,6 +5,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import type { Workspace } from '../../types/tab'
 import type { Failure, ProfileIndexEntry, PutOutcome, Result, Section, SectionMeta } from './api'
 import type { ApplyOutcome } from './apply-to-stores'
+import { INVALID_REASONS } from './apply-to-stores'
 import type { PersistedSection } from './section-store'
 import type { SectionEvent } from './sync-state'
 import { createExecutor, type Executor, type ExecutorDeps, type ExecutorStatus } from './executor'
@@ -33,7 +34,7 @@ vi.mock('./api', () => ({
   deleteSection: vi.fn(),
 }))
 
-vi.mock('./apply-to-stores', () => ({ applySectionToStores: vi.fn() }))
+vi.mock('./apply-to-stores', async (importOriginal) => ({ INVALID_REASONS: (await importOriginal<typeof import('./apply-to-stores')>()).INVALID_REASONS, applySectionToStores: vi.fn() }))
 
 vi.mock('./section-store', () => ({
   loadSectionStore: vi.fn((profileId: string) => ({ profileId, sections: h.stored })),
@@ -194,7 +195,7 @@ describe('executor — state and persistence', () => {
     h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H1' }, settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S2' } }
     const { ex } = make()
     expect(store.loadSectionStore).toHaveBeenCalledWith(PROFILE)
-    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 4 }, settings: { failures: 0, retryAt: null, rev: 2 } }, indexFailures: 0, lastSuccessAt: null })
+    expect(ex.status()).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'synced', settings: 'pending' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 4, invalidReason: null }, settings: { failures: 0, retryAt: null, rev: 2, invalidReason: null } }, indexFailures: 0, lastSuccessAt: null })
   })
 
   it('restores a persisted conflict as locked:conflict', () => {
@@ -277,7 +278,7 @@ describe('executor — state and persistence', () => {
     api.putSection.mockReturnValue(deferred<PutOutcome>().promise)
     ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
     expect(statuses).toHaveLength(1)
-    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1 } }, indexFailures: 0, lastSuccessAt: expect.any(Number) })
+    expect(statuses[0]).toEqual({ profile: 'pending', schemaLock: null, sections: { hosts: 'pending' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1, invalidReason: null } }, indexFailures: 0, lastSuccessAt: expect.any(Number) })
     ex.onSection({ key: 'hosts', hash: 'H3', payload: {} }) // still pending: no second call
     expect(statuses).toHaveLength(1)
   })
@@ -869,7 +870,7 @@ describe('executor — pull', () => {
     ex.onSection({ key: 'tabs.w1', hash: null, payload: null })
     await vi.advanceTimersByTimeAsync(120_000)
 
-    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1 }, workspaces: { failures: 0, retryAt: null, rev: 2 } }, indexFailures: 0, lastSuccessAt: expect.any(Number) }) // forgotten
+    expect(ex.status()).toEqual({ profile: 'synced', schemaLock: null, sections: { hosts: 'synced', workspaces: 'synced' }, locks: {}, profileGone: false, detail: { hosts: { failures: 0, retryAt: null, rev: 1, invalidReason: null }, workspaces: { failures: 0, retryAt: null, rev: 2, invalidReason: null } }, indexFailures: 0, lastSuccessAt: expect.any(Number) }) // forgotten
     expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'tabs.w1')
     expect(applySectionToStores.mock.calls.map((c) => c[0])).toEqual(['workspaces']) // never the deletion
     expect(api.putSection).not.toHaveBeenCalled() // no orphan re-created
@@ -968,7 +969,7 @@ describe('executor — pull', () => {
   it('invalid: the section locks on the FETCHED rev, is reported, and is never fetched again on a timer', async () => {
     const { ex, problems } = await synced({ hosts: 'H1' })
     api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', detail: 'removes the master host' })
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'removes-master-host', detail: 'removes the master host' })
     ex.onRemoteEvent(remote('hosts', 2, 'H2'))
     await flush()
     expect(eventsOf('locked')).toEqual([{ type: 'locked', reason: 'invalid', rev: 2 }])
@@ -976,17 +977,44 @@ describe('executor — pull', () => {
     // a lock WITHOUT a pair has a fingerprint too: what a resolve from the UI is checked against (sync-status.ts)
     expect(ex.status().locks).toEqual({ hosts: { status: 'locked:invalid', currentHash: 'H1', sot: { rev: 2, hash: 'H2' }, conflict: null } })
     expect(problems).toEqual([{ kind: 'pull-invalid', section: 'hosts', detail: 'removes the master host' }])
+    // WHY is published as the apply's code, never its text (P3d-4b)
+    expect(ex.status().detail.hosts.invalidReason).toBe('removes-master-host')
     await vi.advanceTimersByTimeAsync(600_000)
     expect(api.getSection).toHaveBeenCalledTimes(1)
     // resolve('sot') is refused by the reducer on locked:invalid — nothing to handle
     ex.resolve('hosts', 'sot')
     expect(ex.status().sections.hosts).toBe('locked:invalid')
+    expect(ex.status().detail.hosts.invalidReason).toBe('removes-master-host')
+    // unlocked → the reason goes with the lock
+    ex.resolve('hosts', 'local')
+    expect(ex.status().sections.hosts).not.toBe('locked:invalid')
+    expect(ex.status().detail.hosts.invalidReason).toBeNull()
+  })
+
+  it.each(INVALID_REASONS)('invalidReason: the apply\'s code %s is what is published, as it is', async (code) => {
+    const { ex } = await synced({ hosts: 'H1' })
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code, detail: 'the text is not what is published' })
+    ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+    await flush()
+    expect(ex.status().sections.hosts).toBe('locked:invalid')
+    expect(ex.status().detail.hosts.invalidReason).toBe(code)
+  })
+
+  it('invalidReason: a verdict the reducer refused (stale rev) publishes no reason', async () => {
+    const { ex } = await synced({ hosts: 'H1' })
+    api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'malformed', detail: 'nope' })
+    ex.onRemoteEvent(remote('hosts', 3, 'H3'))
+    await flush()
+    expect(ex.status().sections.hosts).not.toBe('locked:invalid')
+    expect(ex.status().detail.hosts.invalidReason).toBeNull()
   })
 
   it('an invalid verdict on a rev OLDER than the known SOT is refused by the reducer — and does not spin', async () => {
     const { ex } = await synced({ hosts: 'H1' })
     api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', detail: 'nope' })
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'malformed', detail: 'nope' })
     ex.onRemoteEvent(remote('hosts', 3, 'H3'))
     await flush()
     expect(h.events.filter((e) => e.event.type === 'locked')).toEqual([{ event: { type: 'locked', reason: 'invalid', rev: 2 }, changed: false }])
@@ -1141,7 +1169,7 @@ describe('executor — a pulled section carries its shape, and a newer one locks
     const { ex, problems, statuses } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
     // what a newer Purdex wrote: another fingerprint, and a store this build does not know
     api.getSection.mockResolvedValue(sectionOf(meta('settings', 2, 'S2', shape), { 'purdex-from-the-future': { x: 1 } }))
-    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', detail: 'unknown store' })
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'malformed', detail: 'unknown store' })
     api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
     ex.onRemoteEvent(remote('settings', 2, 'S2'))
     await flush()
@@ -1803,7 +1831,7 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
     api.listProfiles.mockResolvedValue(index([meta('hosts', 2, 'H9')]))
     api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H9'), { theirs: true }))
-    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', detail: 'removes the master host' })
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'removes-master-host', detail: 'removes the master host' })
     const { ex, settled } = first(direction)
     ex.onSection({ key: 'hosts', hash: 'H1', payload: { mine: true } })
     ex.onReconnected()
@@ -2366,7 +2394,7 @@ describe('executor — `isReachable()` is asked again where the request is MADE,
 
 describe('executor — the published detail, the counters and lastSuccessAt (P3d-4a)', () => {
   const remote = (section: string, rev: number, hash: string | null) => ({ hostId: HOST, profileId: PROFILE, section, rev, hash, writerClientId: OTHER_CLIENT })
-  const NONE = { failures: 0, retryAt: null }
+  const NONE = { failures: 0, retryAt: null, invalidReason: null }
 
   it('every section has a detail: `rev` is the AGREED rev (base), null while nothing was ever agreed', () => {
     h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H1' }, settings: { base: { rev: 0, hash: null }, currentHash: 'S2' } }
@@ -2386,7 +2414,7 @@ describe('executor — the published detail, the counters and lastSuccessAt (P3d
     const t0 = Date.now()
     ex.onSection({ key: 'hosts', hash: 'H2', payload: {} })
     await flush()
-    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 1, failures: 1, retryAt: t0 + 2000 })
+    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 1, failures: 1, retryAt: t0 + 2000, invalidReason: null })
   })
 
   it('R3 · the retry timer firing publishes that nothing is armed any more (even when the retry itself does nothing)', async () => {
@@ -2398,7 +2426,7 @@ describe('executor — the published detail, the counters and lastSuccessAt (P3d
     const before = statuses.length
     await vi.advanceTimersByTimeAsync(2000)
     expect(statuses.length).toBe(before + 1)
-    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 1, failures: 1, retryAt: null })
+    expect(statuses.at(-1)?.detail.hosts).toEqual({ rev: 1, failures: 1, retryAt: null, invalidReason: null })
   })
 
   it('R3 · clearBackoff: a pull that got through after a failure publishes failures 0', async () => {

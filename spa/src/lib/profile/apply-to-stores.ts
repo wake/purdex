@@ -62,8 +62,24 @@ export type ApplyOutcome =
    *  tab world is unsettled (master-world.ts: a switch is half-way through this window's rehydrates), so there is
    *  nowhere to write `workspaces` / `tabs.*` and no master workspace set to scope `settings` by. */
   | { ok: false; reason: 'busy' }
-  /** This payload must not be applied: the caller locks the section (`locked:invalid`). No store was written. */
-  | { ok: false; reason: 'invalid'; detail: string }
+  /** This payload must not be applied: the caller locks the section (`locked:invalid`). No store was written.
+   *  `code` is WHY, from a closed list (the page says it in words); `detail` is for the problem log. */
+  | { ok: false; reason: 'invalid'; code: InvalidReason; detail: string }
+
+/**
+ * Why a payload is refused — one code per refusal below, and nothing else (P3d-4b). It is published per section
+ * (`SectionDetail.invalidReason`) and shown in words, so it never carries the payload's or the transport's text.
+ *   deleted              the host deleted `hosts` / `settings` / `workspaces` — sections this device cannot be without
+ *   malformed            not a payload the builders could have produced (`isWellFormedSection`)
+ *   no-host              a `hosts` payload that leaves no host at all
+ *   removes-master-host  a `hosts` payload without the host this device syncs through
+ *   changes-master-host  … that changes that host's address, port or token (the credentials known to work)
+ *   rejected-settings    `settings` entries this build refuses (`applySettings`' `rejected`)
+ *   unknown-section      a key this build does not know as a section
+ */
+export type InvalidReason = 'deleted' | 'malformed' | 'no-host' | 'removes-master-host' | 'changes-master-host' | 'rejected-settings' | 'unknown-section'
+
+export const INVALID_REASONS: readonly InvalidReason[] = ['deleted', 'malformed', 'no-host', 'removes-master-host', 'changes-master-host', 'rejected-settings', 'unknown-section']
 
 export interface ApplyContext {
   /** The host whose daemon served this payload. Its credentials are the ones known to work. */
@@ -122,7 +138,7 @@ function restore(store: PersistedStore, old: Record<string, unknown>): void {
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-const invalid = (detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid', detail })
+const invalid = (code: InvalidReason, detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid', code, detail })
 
 const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
 
@@ -155,15 +171,15 @@ export function markHostRemovedPanes(layout: PaneLayout, knownHostIds: ReadonlyS
 const tokenOf = (h: HostConfig): string | null => h.token ?? null
 
 /** Why this payload must not replace the host list, or `null`. */
-function hostsRefusal(local: Record<string, HostConfig>, incoming: HostsPayload, masterHostId: string): string | null {
-  if (Object.keys(incoming.hosts).length === 0) return 'payload leaves no host'
-  if (!Object.hasOwn(incoming.hosts, masterHostId)) return `payload removes the master host ${masterHostId}`
+function hostsRefusal(local: Record<string, HostConfig>, incoming: HostsPayload, masterHostId: string): ApplyOutcome | null {
+  if (Object.keys(incoming.hosts).length === 0) return invalid('no-host', 'payload leaves no host')
+  if (!Object.hasOwn(incoming.hosts, masterHostId)) return invalid('removes-master-host', `payload removes the master host ${masterHostId}`)
   if (!Object.hasOwn(local, masterHostId)) return null // nothing to compare with
   const mine = local[masterHostId]
   const theirs = incoming.hosts[masterHostId]
   // The credentials in hand are the ones that just fetched this payload, so they are known to work.
   const changed = [mine.ip !== theirs.ip && 'ip', mine.port !== theirs.port && 'port', tokenOf(mine) !== tokenOf(theirs) && 'token'].filter(Boolean)
-  return changed.length > 0 ? `payload changes the master host's ${changed.join(', ')}` : null
+  return changed.length > 0 ? invalid('changes-master-host', `payload changes the master host's ${changed.join(', ')}`) : null
 }
 
 /** What `deleteHostCascade` clears for a host and its undo does not bring back — exactly the scope of the three `clearHost`s. */
@@ -250,11 +266,11 @@ function restoreHostCaches(snap: HostCaches): string[] {
  * `next` exactly. All synchronous — no other writer sees the staging.
  */
 async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<ApplyOutcome> {
-  if (payload === null) return invalid('the hosts section cannot be deleted')
-  if (!isWellFormedSection('hosts', payload)) return invalid('malformed hosts payload')
+  if (payload === null) return invalid('deleted', 'the hosts section cannot be deleted')
+  if (!isWellFormedSection('hosts', payload)) return invalid('malformed', 'malformed hosts payload')
   const incoming = payload as HostsPayload
   const refusal = hostsRefusal(useHostStore.getState().hosts, incoming, ctx.masterHostId)
-  if (refusal !== null) return invalid(refusal)
+  if (refusal !== null) return refusal
 
   const store = asPersisted(useHostStore)
   // ROLLBACK, and its edges. When a host-store write throws after the cascade ran
@@ -402,17 +418,17 @@ const sameIds = (a: ReadonlySet<string> | null, b: ReadonlySet<string>): boolean
  * of one set comparison per store.
  */
 async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
-  if (incoming === null) return invalid('the settings section cannot be deleted')
+  if (incoming === null) return invalid('deleted', 'the settings section cannot be deleted')
   // An ordinal-3 payload (newtab `profiles`, P3e) — from a pull, the attach, keep-sot or a persisted stash
   // replayed by restoreLocal: all of them come through here. The hash returned below is rebuilt from the
   // stores, so it is the ordinal-4 shape's; the executor sees `pull-hash-mismatch` once and pushes it.
   const payload = upcastLegacySettings(incoming)
-  if (!isWellFormedSection('settings', payload)) return invalid('malformed settings payload')
+  if (!isWellFormedSection('settings', payload)) return invalid('malformed', 'malformed settings payload')
   // Unsettled → no master set: scoping by an empty one would DROP every scoped entry the payload carries.
   const masterIds = masterWorkspaceIds()
   if (masterIds === null) return BUSY
   const { patches, rejected } = applySettings(readSettingsSources(), payload as SettingsPayload, masterIds)
-  if (rejected.length > 0) return invalid(`rejected: ${rejected.join(', ')}`)
+  if (rejected.length > 0) return invalid('rejected-settings', `rejected: ${rejected.join(', ')}`)
 
   const rendererBefore = useUISettingsStore.getState().terminalRenderer
   const written: Array<{ key: SettingsStorageKey; store: PersistedStore; old: Record<string, unknown> }> = []
@@ -468,8 +484,8 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
 export { commitTabWorld } from './master-world'
 
 async function applyWorkspacesSection(payload: unknown): Promise<ApplyOutcome> {
-  if (payload === null) return invalid('the workspaces section cannot be deleted')
-  if (!isWellFormedSection('workspaces', payload)) return invalid('malformed workspaces payload')
+  if (payload === null) return invalid('deleted', 'the workspaces section cannot be deleted')
+  if (!isWellFormedSection('workspaces', payload)) return invalid('malformed', 'malformed workspaces payload')
   return withOperationLock<ApplyOutcome>(
     PROFILE_SYNC_LOCK_OWNER,
     async () => {
@@ -510,8 +526,8 @@ const EMPTY_TABS: TabsPayload = { order: [], tabs: {} }
  */
 async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promise<ApplyOutcome> {
   const workspaceId = workspaceIdOf(key)
-  if (workspaceId === null) return invalid(`not a tabs section key: ${key}`)
-  if (payload !== null && !isWellFormedSection('tabs', payload)) return invalid('malformed tabs payload')
+  if (workspaceId === null) return invalid('unknown-section', `not a tabs section key: ${key}`)
+  if (payload !== null && !isWellFormedSection('tabs', payload)) return invalid('malformed', 'malformed tabs payload')
   const incoming = payload === null ? EMPTY_TABS : (payload as TabsPayload)
   return withOperationLock<ApplyOutcome>(
     PROFILE_SYNC_LOCK_OWNER,
@@ -579,6 +595,6 @@ export async function applySectionToStores(key: ProfileSectionKey, payload: unkn
     case 'tabs':
       return applyTabsSection(key, payload)
     default:
-      return invalid(`unknown section key: ${String(key)}`)
+      return invalid('unknown-section', `unknown section key: ${String(key)}`)
   }
 }

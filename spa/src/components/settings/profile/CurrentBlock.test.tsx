@@ -239,7 +239,7 @@ describe('a master attached', () => {
   })
 
   describe('what the executor publishes beyond the status (P3d-4a)', () => {
-    const fine = (rev: number | null) => ({ rev, failures: 0, retryAt: null })
+    const fine = (rev: number | null) => ({ rev, failures: 0, retryAt: null, invalidReason: null })
 
     it('every row shows the AGREED rev; a locked one keeps the host rev beside it', () => {
       show(attached({
@@ -277,7 +277,7 @@ describe('a master attached', () => {
       show(attached({
         status: {
           ...status({ hosts: 'pending', workspaces: 'pending', settings: 'synced' }, 'pending'),
-          detail: { hosts: { rev: 1, failures: 3, retryAt: at }, workspaces: { rev: 1, failures: 1, retryAt: null }, settings: fine(1) },
+          detail: { hosts: { rev: 1, failures: 3, retryAt: at, invalidReason: null }, workspaces: { rev: 1, failures: 1, retryAt: null, invalidReason: null }, settings: fine(1) },
         },
       }))
       const hosts = screen.getByTestId('profile-current-section-failing-hosts')
@@ -415,7 +415,7 @@ describe('settings waiting for workspaces', () => {
   it('F2: nothing is waited for while nothing syncs — the profile gone, or blocked: no waiting sentence, no "next try"', () => {
     const failingStatus = {
       ...status({ workspaces: 'locked:conflict', settings: 'pending' }, 'locked:reset', { workspaces: lock('locked:conflict', 9) }),
-      detail: { workspaces: { rev: 1, failures: 3, retryAt: 5000 }, settings: { rev: 1, failures: 1, retryAt: 6000 } },
+      detail: { workspaces: { rev: 1, failures: 3, retryAt: 5000, invalidReason: null }, settings: { rev: 1, failures: 1, retryAt: 6000, invalidReason: null } },
       indexFailures: 2,
     }
     show(attached({ status: { ...failingStatus, profileGone: true } }))
@@ -436,7 +436,7 @@ describe('settings waiting for workspaces', () => {
     const past = new Date(2026, 8, 23, 14, 2, 31).getTime()
     const failingStatus = {
       ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'),
-      detail: { workspaces: { rev: 1, failures: 3, retryAt: past } },
+      detail: { workspaces: { rev: 1, failures: 3, retryAt: past, invalidReason: null } },
       indexFailures: 1,
     }
     show(attached({ leader: false, remote: true, stale: true, status: failingStatus }))
@@ -456,7 +456,7 @@ describe('settings waiting for workspaces', () => {
   })
 
   it('workspaces failing, or the index read failing → said, as "failing"', () => {
-    show(attached({ status: { ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'), detail: { workspaces: { rev: 1, failures: 2, retryAt: null } } } }))
+    show(attached({ status: { ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'), detail: { workspaces: { rev: 1, failures: 2, retryAt: null, invalidReason: null } } } }))
     const el = screen.getByTestId('profile-current-settings-waiting')
     expect(el).toHaveAttribute('data-reason', 'failing')
     expect(el).toHaveTextContent(en['settings.profile.current.settings_waiting_failing'])

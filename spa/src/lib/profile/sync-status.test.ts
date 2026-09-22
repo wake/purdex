@@ -17,6 +17,7 @@
 // a window opened with another tag: `openWindow(id, init, TAG2)`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { STORAGE_KEYS } from '../storage/keys'
+import { INVALID_REASONS } from './apply-to-stores'
 import type { SectionLock } from './executor'
 import type { SectionConflict } from './sync-state'
 import type { ProfileSyncState } from './start'
@@ -596,14 +597,14 @@ describe('a follower reads what the leader published', () => {
     })
 
     it('a section the status lists but the detail does not → no entry for it', async () => {
-      expect(await detailOf({ hosts: entry })).toEqual({ hosts: entry })
+      expect(await detailOf({ hosts: entry })).toEqual({ hosts: { ...entry, invalidReason: null } })
     })
 
     it('a detail with far more keys than sections: only the sections\' keys are kept (the size cap, not this, bounds the parse)', async () => {
       const huge: Record<string, unknown> = {}
       for (let i = 0; i < 5_000; i += 1) huge[`tabs.w${i}`] = entry // ~240 K characters: under the cap, so it is parsed
       huge.settings = { rev: 2, failures: 1, retryAt: 10 }
-      expect(await detailOf(huge)).toEqual({ settings: { rev: 2, failures: 1, retryAt: 10 } })
+      expect(await detailOf(huge)).toEqual({ settings: { rev: 2, failures: 1, retryAt: 10, invalidReason: null } })
     })
   })
 
@@ -666,10 +667,38 @@ describe('a follower reads what the leader published', () => {
   })
 
   it('the new fields, well-formed, are read as they were written', async () => {
-    const status = { ...SYNCED, profileGone: true, indexFailures: 3, lastSuccessAt: 999, detail: { hosts: { rev: 3, failures: 1, retryAt: 4000 } } }
+    const status = { ...SYNCED, profileGone: true, indexFailures: 3, lastSuccessAt: 999, detail: { hosts: { rev: 3, failures: 1, retryAt: 4000, invalidReason: 'removes-master-host' } } }
     localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
     const b = await openWindow('B')
     expect(b.snapshot().status).toEqual(status)
+  })
+
+  it('invalidReason (P3d-4b): a known code is read as it is; absent (an older build), unknown (a newer one) or of another type → null, and the entry is kept', async () => {
+    const status = {
+      ...SYNCED,
+      sections: { hosts: 'locked:invalid', settings: 'locked:invalid', workspaces: 'locked:invalid', 'tabs.w1': 'locked:invalid' },
+      locks: {},
+      detail: {
+        hosts: { rev: 3, failures: 0, retryAt: null, invalidReason: 'changes-master-host' },
+        settings: { rev: 3, failures: 0, retryAt: null },
+        workspaces: { rev: 3, failures: 0, retryAt: null, invalidReason: 'a-code-of-a-newer-build' },
+        'tabs.w1': { rev: 3, failures: 0, retryAt: null, invalidReason: 7 },
+      },
+    }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
+    const b = await openWindow('B')
+    const detail = b.snapshot().status!.detail
+    expect(detail.hosts.invalidReason).toBe('changes-master-host')
+    expect(detail.settings).toEqual({ rev: 3, failures: 0, retryAt: null, invalidReason: null })
+    expect(detail.workspaces.invalidReason).toBeNull()
+    expect(detail['tabs.w1'].invalidReason).toBeNull()
+  })
+
+  it.each(INVALID_REASONS)('invalidReason: %s is a code the parser knows', async (code) => {
+    const status = { ...SYNCED, detail: { hosts: { rev: 1, failures: 0, retryAt: null, invalidReason: code } } }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot().status!.detail.hosts.invalidReason).toBe(code)
   })
 
   it('storage that throws on read is no record', async () => {
@@ -1209,3 +1238,4 @@ describe('close', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 })
+
