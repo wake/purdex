@@ -23,6 +23,7 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
+import { compareShape } from './profile-state'
 
 const KINDS: SectionKind[] = ['hosts', 'settings', 'workspaces', 'tabs']
 
@@ -299,7 +300,7 @@ describe('PROJECTIONS', () => {
   it('never lists the three persisted non-preference fields', () => {
     const fields = settingsFieldsByStore()
     expect(fields[STORAGE_KEYS.UI_SETTINGS]).not.toContain('terminalSettingsVersion')
-    expect(fields[STORAGE_KEYS.NEW_TAB_LAYOUT]).toEqual(['profiles'])
+    expect(fields[STORAGE_KEYS.NEW_TAB_LAYOUT]).toEqual(['presets'])
     expect(fields[STORAGE_KEYS.LAYOUT]).toEqual(['tabPosition'])
   })
 
@@ -419,6 +420,19 @@ describe('shape: fingerprint and ordinal', () => {
     expect(paths).toEqual(['b', 'a'])
   })
 
+  // P3e: settings ordinal 3 → 4 (`purdex-newtab-layout.profiles` → `.presets`).
+  // An ordinal-3 client and this build, judged by shape alone: the old one
+  // locks on a row of ours (`sot-is-newer` → locked:schema), we pull its rows.
+  it('coexistence by shape: the ordinal-3 settings shape (newtab `profiles`) and this one order, never lock this build', async () => {
+    const legacyList = PROJECTIONS.settings.map((p) => (p === 'purdex-newtab-layout.presets' ? 'purdex-newtab-layout.profiles' : p))
+    expect(legacyList).not.toEqual(PROJECTIONS.settings) // the swap happened
+    const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+    const old = { fingerprint: await fingerprintOf(legacyList), ordinal: 3 }
+    expect(old.fingerprint).not.toBe(mine.fingerprint)
+    expect(compareShape(mine, old)).toBe('i-am-newer')
+    expect(compareShape(old, mine)).toBe('sot-is-newer')
+  })
+
   // GUARD (spec §4.5). If this fails: a projection changed — bump
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
@@ -431,8 +445,8 @@ describe('shape: fingerprint and ordinal', () => {
           1,
         ],
         "settings": [
-          "86a2fce1b6e8da4f50e2f5ffeb7aaf6ddf0b87db2198c740d941f7ad8c28d50e",
-          3,
+          "185ca6f39458c8ce645ee2b5e1548ffe99ab3cd26afbdc653722e2a113f1c0bc",
+          4,
         ],
         "tabs": [
           "e8d2e6e42bdd9037c505f57bfd79e023aaf9746549d0e33f8a40a9848155debd",

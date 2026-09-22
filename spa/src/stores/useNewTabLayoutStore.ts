@@ -23,9 +23,9 @@ interface ProviderInfo {
 }
 
 interface State {
-  profiles: Record<PresetKey, LayoutPreset>
+  presets: Record<PresetKey, LayoutPreset>
   knownIds: string[]
-  activeEditingProfile: PresetKey
+  activeEditingPreset: PresetKey
 
   setEnabled: (preset: PresetKey, enabled: boolean) => void
   setEditing: (preset: PresetKey) => void
@@ -45,15 +45,15 @@ interface State {
   reset: () => void
 }
 
-function initialState(): Pick<State, 'profiles' | 'knownIds' | 'activeEditingProfile'> {
+function initialState(): Pick<State, 'presets' | 'knownIds' | 'activeEditingPreset'> {
   return {
-    profiles: {
+    presets: {
       '3col': makePreset(false, 3),
       '2col': makePreset(false, 2),
       '1col': makePreset(true, 1),
     },
     knownIds: [],
-    activeEditingProfile: '1col',
+    activeEditingPreset: '1col',
   }
 }
 
@@ -79,23 +79,23 @@ function clonePreset(p: LayoutPreset): LayoutPreset {
  * Called from `onRehydrateStorage` and exported for direct testing.
  */
 export function healPresetState<
-  T extends Partial<Pick<State, 'profiles' | 'knownIds' | 'activeEditingProfile'>>,
+  T extends Partial<Pick<State, 'presets' | 'knownIds' | 'activeEditingPreset'>>,
 >(state: T): void {
-  // profiles: reset entirely if not an object
-  if (!state.profiles || typeof state.profiles !== 'object') {
-    state.profiles = initialState().profiles as T['profiles']
+  // presets: reset entirely if not an object
+  if (!state.presets || typeof state.presets !== 'object') {
+    state.presets = initialState().presets as T['presets']
   } else {
-    const profiles = state.profiles as Record<string, LayoutPreset | undefined>
+    const presets = state.presets as Record<string, LayoutPreset | undefined>
     for (const key of ['3col', '2col', '1col'] as const) {
       const expectedLen = COL_COUNT[key]
-      const p = profiles[key]
+      const p = presets[key]
       if (
         !p ||
         typeof p !== 'object' ||
         !Array.isArray(p.columns) ||
         p.columns.length !== expectedLen
       ) {
-        profiles[key] = makePreset(key === '1col', expectedLen)
+        presets[key] = makePreset(key === '1col', expectedLen)
         continue
       }
       for (let i = 0; i < p.columns.length; i++) {
@@ -110,8 +110,8 @@ export function healPresetState<
       }
     }
     // 1col lock invariant
-    if ((state.profiles as Record<string, LayoutPreset>)['1col'].enabled !== true) {
-      ;(state.profiles as Record<string, LayoutPreset>)['1col'].enabled = true
+    if ((state.presets as Record<string, LayoutPreset>)['1col'].enabled !== true) {
+      ;(state.presets as Record<string, LayoutPreset>)['1col'].enabled = true
     }
   }
 
@@ -123,9 +123,26 @@ export function healPresetState<
     ) as T['knownIds']
   }
 
-  if (!['3col', '2col', '1col'].includes(state.activeEditingProfile as string)) {
-    state.activeEditingProfile = '1col' as T['activeEditingProfile']
+  if (!['3col', '2col', '1col'].includes(state.activeEditingPreset as string)) {
+    state.activeEditingPreset = '1col' as T['activeEditingPreset']
   }
+}
+
+/**
+ * persist migrate. v1 → v2 renames the two fields (`profiles` → `presets`,
+ * `activeEditingProfile` → `activeEditingPreset`) and drops the old keys. Only
+ * keys the blob has are carried: a missing one stays missing (zustand's merge
+ * keeps the in-memory value, `healPresetState` defaults it — as for a v1 blob
+ * before). A `presets` already in a v1 blob wins. No healing here: it runs
+ * after the merge (`onRehydrateStorage`), on the new names.
+ */
+function migratePersisted(persisted: unknown, from: number): unknown {
+  if (from >= 2 || !persisted || typeof persisted !== 'object') return persisted
+  const { profiles, activeEditingProfile, ...rest } = persisted as Record<string, unknown>
+  const out: Record<string, unknown> = { ...rest }
+  if (!('presets' in out) && profiles !== undefined) out.presets = profiles
+  if (!('activeEditingPreset' in out) && activeEditingProfile !== undefined) out.activeEditingPreset = activeEditingProfile
+  return out
 }
 
 /**
@@ -176,38 +193,38 @@ export const useNewTabLayoutStore = create<State>()(
         set((state) => {
           if (preset === '1col' && !enabled) return state
           return {
-            profiles: {
-              ...state.profiles,
-              [preset]: { ...state.profiles[preset], enabled },
+            presets: {
+              ...state.presets,
+              [preset]: { ...state.presets[preset], enabled },
             },
           }
         }),
 
-      setEditing: (preset) => set({ activeEditingProfile: preset }),
+      setEditing: (preset) => set({ activeEditingPreset: preset }),
 
       placeModule: (preset, providerId, colIdx, rowIdx) =>
         set((state) => ({
-          profiles: {
-            ...state.profiles,
-            [preset]: placeIn(state.profiles[preset], providerId, colIdx, rowIdx),
+          presets: {
+            ...state.presets,
+            [preset]: placeIn(state.presets[preset], providerId, colIdx, rowIdx),
           },
         })),
 
       placeModuleInShortest: (preset, providerId) =>
         set((state) => {
-          const cols = state.profiles[preset].columns
+          const cols = state.presets[preset].columns
           const target = shortestColIdx(cols)
           return {
-            profiles: {
-              ...state.profiles,
-              [preset]: placeIn(state.profiles[preset], providerId, target, cols[target].length),
+            presets: {
+              ...state.presets,
+              [preset]: placeIn(state.presets[preset], providerId, target, cols[target].length),
             },
           }
         }),
 
       removeModule: (preset, providerId) =>
         set((state) => {
-          const next = clonePreset(state.profiles[preset])
+          const next = clonePreset(state.presets[preset])
           let changed = false
           for (const col of next.columns) {
             const i = col.indexOf(providerId)
@@ -217,7 +234,7 @@ export const useNewTabLayoutStore = create<State>()(
             }
           }
           if (!changed) return state
-          return { profiles: { ...state.profiles, [preset]: next } }
+          return { presets: { ...state.presets, [preset]: next } }
         }),
 
       ensureDefaults: (providers) =>
@@ -228,21 +245,21 @@ export const useNewTabLayoutStore = create<State>()(
             .sort((a, b) => a.order - b.order)
           if (newcomers.length === 0) return state
 
-          const profiles = { ...state.profiles }
+          const presets = { ...state.presets }
           for (const key of ['3col', '2col', '1col'] as const) {
-            profiles[key] = clonePreset(profiles[key])
+            presets[key] = clonePreset(presets[key])
           }
           const knownIds = [...state.knownIds]
 
           for (const p of newcomers) {
             for (const key of ['3col', '2col', '1col'] as const) {
-              const cols = profiles[key].columns
+              const cols = presets[key].columns
               cols[shortestColIdx(cols)].push(p.id)
             }
             knownIds.push(p.id)
           }
 
-          return { profiles, knownIds }
+          return { presets, knownIds }
         }),
 
       pruneIds: (ids) =>
@@ -251,32 +268,32 @@ export const useNewTabLayoutStore = create<State>()(
           const present =
             state.knownIds.some((id) => drop.has(id)) ||
             (['3col', '2col', '1col'] as const).some((k) =>
-              state.profiles[k].columns.some((col) => col.some((id) => drop.has(id))),
+              state.presets[k].columns.some((col) => col.some((id) => drop.has(id))),
             )
           if (!present) return state
-          const profiles = { ...state.profiles }
+          const presets = { ...state.presets }
           for (const key of ['3col', '2col', '1col'] as const) {
-            profiles[key] = {
-              enabled: state.profiles[key].enabled,
-              columns: state.profiles[key].columns.map((col) => col.filter((id) => !drop.has(id))),
+            presets[key] = {
+              enabled: state.presets[key].enabled,
+              columns: state.presets[key].columns.map((col) => col.filter((id) => !drop.has(id))),
             }
           }
-          return { profiles, knownIds: state.knownIds.filter((id) => !drop.has(id)) }
+          return { presets, knownIds: state.knownIds.filter((id) => !drop.has(id)) }
         }),
 
       migrateId: (from, to) =>
         set((state) => {
           const keys = ['3col', '2col', '1col'] as const
-          const isPlaced = keys.some((k) => state.profiles[k].columns.some((col) => col.includes(from)))
+          const isPlaced = keys.some((k) => state.presets[k].columns.some((col) => col.includes(from)))
           if (!isPlaced && !state.knownIds.includes(from)) return state
 
-          const profiles = { ...state.profiles }
+          const presets = { ...state.presets }
           for (const key of keys) {
-            const src = state.profiles[key]
+            const src = state.presets[key]
             if (!src.columns.some((col) => col.includes(from))) continue
             const already = new Set(src.columns.flat())
             const insert = to.filter((id) => !already.has(id))
-            profiles[key] = {
+            presets[key] = {
               enabled: src.enabled,
               columns: src.columns.map((col) => col.flatMap((id) => (id === from ? insert : [id]))),
             }
@@ -284,7 +301,7 @@ export const useNewTabLayoutStore = create<State>()(
 
           const knownIds = state.knownIds.filter((id) => id !== from)
           for (const id of to) if (!knownIds.includes(id)) knownIds.push(id)
-          return { profiles, knownIds }
+          return { presets, knownIds }
         }),
 
       reset: () => set({ ...initialState() }),
@@ -292,11 +309,13 @@ export const useNewTabLayoutStore = create<State>()(
     {
       name: STORAGE_KEYS.NEW_TAB_LAYOUT,
       storage: purdexStorage,
-      version: 1,
+      // v2 (Profile Sync P3e): the fields were `profiles` / `activeEditingProfile`.
+      version: 2,
+      migrate: (persisted, from) => migratePersisted(persisted, from),
       partialize: (state) => ({
-        profiles: state.profiles,
+        presets: state.presets,
         knownIds: state.knownIds,
-        activeEditingProfile: state.activeEditingProfile,
+        activeEditingPreset: state.activeEditingPreset,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) healPresetState(state)

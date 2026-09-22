@@ -27,6 +27,7 @@ import type { HostListCache } from '../../stores/useExecutionListStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import type { NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
+import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
@@ -704,6 +705,31 @@ describe('applySectionToStores — settings', () => {
     unsub()
     expect(seen.at(-1)).toBe('wide')
     expect(persistedOf(STORAGE_KEYS.LAYOUT).activityBarWidth).toBe('wide')
+  })
+
+  // P3e: settings ordinal 3 → 4. Every door into this function (pull, attach
+  // pull, keep-sot, restoreLocal of a persisted stash) may carry an ordinal-3
+  // payload whose newtab field is still `profiles`.
+  it('an ordinal-3 payload (newtab `profiles`) is upcast: the layout lands under presets, never wiped; device-local fields kept', async () => {
+    useNewTabLayoutStore.setState({ ...useNewTabLayoutStore.getInitialState(), knownIds: ['a', 'b'], activeEditingPreset: '2col' })
+    const layout = {
+      '3col': { enabled: true, columns: [['b'], ['a'], []] },
+      '2col': { enabled: true, columns: [['a'], ['b']] },
+      '1col': { enabled: true, columns: [['b', 'a']] },
+    }
+    const current = settingsNow()
+    const legacy = { ...current, 'purdex-newtab-layout': { profiles: layout } } as unknown as SettingsPayload
+    const outcome = await applySectionToStores('settings', legacy, ctx)
+
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useNewTabLayoutStore.getState().presets).toEqual(layout)
+    expect(useNewTabLayoutStore.getState().knownIds).toEqual(['a', 'b'])
+    expect(useNewTabLayoutStore.getState().activeEditingPreset).toBe('2col')
+    expect(persistedOf(STORAGE_KEYS.NEW_TAB_LAYOUT).presets).toEqual(layout)
+    // the rebuilt hash is the ordinal-4 shape's: it differs from the row's, so the executor pushes the upgrade
+    const upcast = { ...current, 'purdex-newtab-layout': { presets: layout } }
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(upcast) })
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(legacy) })
   })
 
   it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {

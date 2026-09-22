@@ -187,7 +187,9 @@ import { deleteSection, getSection, listProfiles, putSection } from './api'
 import type { DeleteOutcome, Failure, PutOutcome } from './api'
 import { applySectionToStores } from './apply-to-stores'
 import type { ApplyOutcome } from './apply-to-stores'
+import { upcastLegacySettings } from './applier'
 import type { SectionReport } from './collector'
+import { hashSection } from './hash'
 import { readMasterWorld } from './master-world'
 import { compareShape, profileLock, profileStatus, reconcileSectionSet } from './profile-state'
 import type { ProfileStatus, SchemaLock } from './profile-state'
@@ -1251,7 +1253,26 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         problem('restore-payload-missing', `the snapshot ${hash} chosen with keep-local is in neither stash; edit the section to move on`, key)
         return WAIT
       }
-      stash.set(hash, payload) // the push that follows sends this very payload
+      stash.set(hash, payload) // the push that follows sends this very payload — or its upcast, below
+    }
+    // P3e: a persisted conflict can hold, as its LOCAL side, a settings payload an
+    // ordinal-3 build sent (newtab `profiles`). Pushed as-is it would reach the SOT
+    // under THIS build's ordinal / fingerprint — a row whose payload does not match
+    // its shape, until (and unless) a second PUT from the collector fixed it. So the
+    // snapshot is brought to this build's shape here, once: it is what gets applied,
+    // what `currentHash` becomes (`local-restored.localHash`) and what the one push sends.
+    let restoredHash = hash
+    if (key === 'settings' && payload !== null) {
+      const upcast = upcastLegacySettings(payload)
+      if (upcast !== payload) {
+        try {
+          restoredHash = await hashSection(upcast)
+          payload = upcast
+        } catch {
+          restoredHash = hash // unhashable: the apply below refuses it anyway
+        }
+        if (disposed) return WAIT
+      }
     }
     const s = sections.get(key)
     if (s === undefined || !canRestoreLocal(s, hash)) return AGAIN
@@ -1272,7 +1293,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     clearBackoff(key)
     if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds() ?? previousWorkspaceIds
-    dispatch(key, { type: 'local-restored', hash }, false)
+    // Only now: before the event nothing retains `restoredHash`, and a prune while the apply was awaited would have dropped it.
+    if (restoredHash !== hash && restoredHash !== null) stash.set(restoredHash, payload)
+    dispatch(key, restoredHash === hash ? { type: 'local-restored', hash } : { type: 'local-restored', hash, localHash: restoredHash }, false)
     return AGAIN
   }
 

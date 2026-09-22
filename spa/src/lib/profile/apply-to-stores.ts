@@ -45,7 +45,7 @@ import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
 import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
-import { applyHosts, applySettings, applyTabs, applyWorkspaces, isWellFormedSection } from './applier'
+import { applyHosts, applySettings, applyTabs, applyWorkspaces, isWellFormedSection, upcastLegacySettings } from './applier'
 import { hashSection } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
 import { sectionKind, workspaceIdOf } from './projections'
@@ -401,8 +401,12 @@ const sameIds = (a: ReadonlySet<string> | null, b: ReadonlySet<string>): boolean
  * switch, and still not see a user's edit. The re-read sees both, for the price
  * of one set comparison per store.
  */
-async function applySettingsSection(payload: unknown): Promise<ApplyOutcome> {
-  if (payload === null) return invalid('the settings section cannot be deleted')
+async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
+  if (incoming === null) return invalid('the settings section cannot be deleted')
+  // An ordinal-3 payload (newtab `profiles`, P3e) — from a pull, the attach, keep-sot or a persisted stash
+  // replayed by restoreLocal: all of them come through here. The hash returned below is rebuilt from the
+  // stores, so it is the ordinal-4 shape's; the executor sees `pull-hash-mismatch` once and pushes it.
+  const payload = upcastLegacySettings(incoming)
   if (!isWellFormedSection('settings', payload)) return invalid('malformed settings payload')
   // Unsettled → no master set: scoping by an empty one would DROP every scoped entry the payload carries.
   const masterIds = masterWorkspaceIds()

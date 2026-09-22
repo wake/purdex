@@ -553,6 +553,31 @@ function isSettingsPayload(p: Rec): boolean {
 }
 
 /**
+ * Settings ordinal 3 → 4 (Profile Sync P3e) renamed one synced field:
+ * `purdex-newtab-layout.profiles` → `.presets`. A payload an ordinal-3 client
+ * wrote (a row on the SOT, or its local side in a persisted conflict stash)
+ * still says `profiles`; the guard would refuse it (unlisted field) and, past
+ * the guard, the listed-but-absent `presets` would read as "cleared over
+ * there". So `apply-to-stores` runs this first: when the newtab store is a
+ * plain object that has `profiles` and no `presets`, the result is a copy with
+ * that one field renamed — the other stores are the same objects, and the
+ * input is never mutated. Anything else (current shape, both names, no newtab
+ * store, not a payload) comes back as the same reference. Never throws: the
+ * guard that follows is what refuses a hostile input.
+ */
+export function upcastLegacySettings(payload: unknown): unknown {
+  try {
+    if (!isPlainObject(payload)) return payload
+    const store = payload['purdex-newtab-layout']
+    if (!isPlainObject(store) || !Object.hasOwn(store, 'profiles') || Object.hasOwn(store, 'presets')) return payload
+    const { profiles, ...rest } = store
+    return { ...payload, 'purdex-newtab-layout': { ...rest, presets: profiles } }
+  } catch {
+    return payload
+  }
+}
+
+/**
  * The structural guard run on a payload from the daemon BEFORE any apply. It
  * accepts what the builders can produce and nothing else, and never throws —
  * whatever it is handed. A payload that fails is not applied at all; the caller

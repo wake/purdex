@@ -44,7 +44,7 @@ describe('NewTabCanvas', () => {
     useNewTabLayoutStore.getState().placeModule('1col', 'a', 0, 0)
     render(wrap(<NewTabCanvas presetKey="1col" />))
     fireEvent.click(screen.getByTestId('canvas-remove-1col-a'))
-    expect(useNewTabLayoutStore.getState().profiles['1col'].columns[0]).not.toContain('a')
+    expect(useNewTabLayoutStore.getState().presets['1col'].columns[0]).not.toContain('a')
   })
 
   it('skips unknown provider ids silently (does not throw)', () => {

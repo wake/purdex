@@ -180,7 +180,10 @@
 //     restored); then dispatch `local-restored`. If that event is ignored (same
 //     state reference back) the restore had been cancelled in between: the
 //     driver must NOT write the snapshot. `local-restored` is accepted only
-//     for the pending hash; anything else never touches `currentHash`.
+//     for the pending hash; anything else never touches `currentHash`. When
+//     the snapshot was rewritten on the way back (an ordinal-3 settings
+//     payload upcast), the event carries the rewritten payload's hash as
+//     `localHash`: that is what `currentHash` becomes and what gets pushed.
 
 /** What one side holds. `hash === null` ⇔ the section does not exist there
  *  (never created, or a P1 tombstone — the client cannot and need not tell them apart). */
@@ -260,7 +263,13 @@ export type SectionEvent =
    *  is honestly dirty against the base it has just agreed on, and the table
    *  pushes the local version over the pulled rev. */
   | { type: 'pull-applied'; rev: number; hash: string | null; localHash: string | null }
-  | { type: 'local-restored'; hash: string | null } // the driver put the snapshot back
+  /** The driver put the snapshot `hash` back. `hash` is what is checked against
+   *  the pending restore (`canRestoreLocal`); `localHash`, when given, is the
+   *  hash of what was actually written — the snapshot brought to this build's
+   *  shape on the way back (P3e: an ordinal-3 settings payload upcast) — and
+   *  goes into `currentHash`, so the push that follows sends that, not the
+   *  stale shape. Absent ⇒ `hash`. */
+  | { type: 'local-restored'; hash: string | null; localHash?: string | null }
   | { type: 'resolved'; keep: 'local' | 'sot' }
   | LockedEvent
 
@@ -572,7 +581,7 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       // Only the snapshot that is pending right now. A late restore — cancelled
       // by an edit, or for another hash — must not touch `currentHash`.
       if (!canRestoreLocal(s, e.hash)) return s
-      return { ...s, currentHash: e.hash, restoreLocal: null }
+      return { ...s, currentHash: e.localHash === undefined ? e.hash : e.localHash, restoreLocal: null }
 
     case 'locked': {
       const want = decideSection(s, { reachable: true, autoSync: true })

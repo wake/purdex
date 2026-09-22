@@ -24,10 +24,10 @@ export function useNewTabBootstrap(): void {
       }
 
       // 2. Prune ids a ready source no longer produces.
-      const { knownIds, profiles, pruneIds } = useNewTabLayoutStore.getState()
+      const { knownIds, presets, pruneIds } = useNewTabLayoutStore.getState()
       const referenced = new Set<string>(knownIds)
       for (const key of ['3col', '2col', '1col'] as const) {
-        for (const col of profiles[key].columns) col.forEach((id) => referenced.add(id))
+        for (const col of presets[key].columns) col.forEach((id) => referenced.add(id))
       }
       const stale = getStaleNewTabProviderIds([...referenced])
       if (stale.length > 0) pruneIds(stale)
