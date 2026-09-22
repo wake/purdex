@@ -322,6 +322,42 @@ describe('a master attached', () => {
   })
 })
 
+describe('Auto-sync off — pending is waiting, not syncing (P3d-4c F2)', () => {
+  const pending = () => attached({ status: status({ hosts: 'pending', settings: 'synced' }, 'pending') })
+
+  it('the overall state and a pending row say "waiting — Auto-sync is off"; the raw status stays in data-status / data-state', () => {
+    useProfileStore.setState({ autoSync: false })
+    show(pending())
+    const state = screen.getByTestId('profile-current-state')
+    expect(state).toHaveAttribute('data-state', 'syncing')
+    expect(state).toHaveAttribute('data-held', 'auto-sync-off')
+    expect(state).toHaveTextContent(en['profile.sync.held'])
+    expect(state).not.toHaveTextContent(en['profile.sync.syncing'])
+    const hosts = screen.getByTestId('profile-current-section-hosts')
+    expect(hosts).toHaveAttribute('data-status', 'pending')
+    expect(hosts).toHaveAttribute('data-held', 'auto-sync-off')
+    expect(hosts).toHaveTextContent(en['settings.profile.current.section.held'])
+    expect(hosts).not.toHaveTextContent(en['settings.profile.current.section.pending'])
+    const settings = screen.getByTestId('profile-current-section-settings')
+    expect(settings).not.toHaveAttribute('data-held')
+    expect(settings).toHaveTextContent(en['settings.profile.current.section.synced'])
+  })
+
+  it('Auto-sync on: "Syncing…", no data-held', () => {
+    show(pending())
+    expect(screen.getByTestId('profile-current-state')).toHaveTextContent(en['profile.sync.syncing'])
+    expect(screen.getByTestId('profile-current-state')).not.toHaveAttribute('data-held')
+    expect(screen.getByTestId('profile-current-section-hosts')).toHaveTextContent(en['settings.profile.current.section.pending'])
+    expect(screen.getByTestId('profile-current-section-hosts')).not.toHaveAttribute('data-held')
+  })
+
+  it('turning Auto-sync off while the page is open changes the words at once', () => {
+    show(pending())
+    act(() => useProfileStore.setState({ autoSync: false }))
+    expect(screen.getByTestId('profile-current-state')).toHaveTextContent(en['profile.sync.held'])
+  })
+})
+
 describe('a follower window', () => {
   it('the figures are the leader\'s, and say so', () => {
     show(attached({ leader: false, remote: true, status: status({ hosts: 'synced' }) }))

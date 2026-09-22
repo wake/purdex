@@ -2,6 +2,7 @@
 // dot on the master's item in the Home menu (ProfileSwitcher) and Settings › Profile. One reading, so the two
 // can never disagree about the same snapshot. Pure functions of what `useProfileSync()` hands over.
 import type { ExecutorStatus } from './executor'
+import type { SectionStatus } from './sync-state'
 import { sectionKind, workspaceIdOf } from './projections'
 import type { ProfileSyncSnapshot } from './sync-status'
 
@@ -33,6 +34,23 @@ export function syncDotOf(sync: ProfileSyncSnapshot): SyncDot | null {
   if (profile === 'synced') return 'synced'
   if (profile === 'pending') return 'syncing'
   return 'unknown'
+}
+
+/**
+ * `pending` while Auto-sync is off is NOT "syncing" (P3d-4c F2): with Auto-sync off the executor sends and pulls
+ * nothing on its own (`decideSection`: `online` needs `autoSync`) — only *Sync now* does, and only until it is done.
+ * The published status cannot tell a section in the middle of such a *Sync now* from one that is simply held (it
+ * carries no "in flight"), so this says only what is certain — "waiting, Auto-sync is off" — never "not sent".
+ * `autoSync` is the device preference (`useProfileStore`), which every window reads alike. Not while `blocked`
+ * (nothing runs then, and the reason is said) nor when the dot does not vouch for the figures (a stale follower).
+ */
+export function heldByAutoSyncOff(sync: ProfileSyncSnapshot, autoSync: boolean): boolean {
+  return !autoSync && sync.blocked === null && syncDotOf(sync) === 'syncing'
+}
+
+/** One section of the same reading: `pending`, Auto-sync off, nothing blocking. */
+export function sectionHeldByAutoSyncOff(sync: ProfileSyncSnapshot, state: SectionStatus, autoSync: boolean): boolean {
+  return !autoSync && state === 'pending' && sync.blocked === null && !profileIsGone(sync)
 }
 
 /**

@@ -39,7 +39,16 @@ import { useProfileSync } from '../../../hooks/useProfileSync'
 import { requestSyncNow } from '../../../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 import { readMasterWorld, type UnsettledReason } from '../../../lib/profile/master-world'
-import { SYNC_DOT_CLASS, describeSections, profileIsGone, settingsWaitForWorkspaces, syncDotOf, type SectionView } from '../../../lib/profile/sync-view'
+import {
+  SYNC_DOT_CLASS,
+  describeSections,
+  heldByAutoSyncOff,
+  profileIsGone,
+  sectionHeldByAutoSyncOff,
+  settingsWaitForWorkspaces,
+  syncDotOf,
+  type SectionView,
+} from '../../../lib/profile/sync-view'
 import { SettingItem } from '../SettingItem'
 import { ToggleSwitch } from '../ToggleSwitch'
 import { ResolveBlock } from './ResolveBlock'
@@ -150,6 +159,8 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
 
   // `syncDotOf` cannot answer null here: there is a master.
   const dot = syncDotOf(sync) ?? 'unknown'
+  // Auto-sync off: `pending` waits for the user, it is not being synced (P3d-4c F2). The raw state stays in data-*.
+  const held = heldByAutoSyncOff(sync, autoSync)
   const source = sync.remote ? 'leader' : 'this-window'
   const fromLeader = sync.remote && (
     <span data-testid="profile-current-source" className={BADGE}>{t('settings.profile.current.from_leader')}</span>
@@ -205,9 +216,15 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
       <SettingItem label={t('settings.profile.current.state')}>
         <div className="flex items-center gap-2 text-xs">
           {fromLeader}
-          <span data-testid="profile-current-state" data-state={dot} data-source={source} className="flex items-center gap-1.5 text-text-primary">
+          <span
+            data-testid="profile-current-state"
+            data-state={dot}
+            data-held={held ? 'auto-sync-off' : undefined}
+            data-source={source}
+            className="flex items-center gap-1.5 text-text-primary"
+          >
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${SYNC_DOT_CLASS[dot]}`} />
-            {t(`profile.sync.${dot}`)}
+            {t(held ? 'profile.sync.held' : `profile.sync.${dot}`)}
           </span>
         </div>
       </SettingItem>
@@ -252,12 +269,14 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
               const state = sync.status!.sections[key]
               const lock = sync.status!.locks[key]
               const detail = sync.status!.detail[key] // absent: a record from an older build — nothing is shown for it
+              const rowHeld = sectionHeldByAutoSyncOff(sync, state, autoSync)
               return (
                 <li
                   key={key}
                   data-testid={`profile-current-section-${key}`}
                   data-section={key}
                   data-status={state}
+                  data-held={rowHeld ? 'auto-sync-off' : undefined}
                   data-source={source}
                   className="flex flex-wrap items-center justify-between gap-2 border-t border-border-default py-1.5 text-xs"
                 >
@@ -282,7 +301,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                         {t('settings.profile.current.sot_rev', { rev: lock.sot.rev })}
                       </span>
                     )}
-                    <span className={state.startsWith('locked:') ? 'text-yellow-500' : undefined}>{t(`settings.profile.current.section.${state.replace(':', '_')}`)}</span>
+                    <span className={state.startsWith('locked:') ? 'text-yellow-500' : undefined}>{t(rowHeld ? 'settings.profile.current.section.held' : `settings.profile.current.section.${state.replace(':', '_')}`)}</span>
                   </span>
                 </li>
               )
