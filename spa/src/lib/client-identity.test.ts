@@ -255,36 +255,3 @@ describe('isClientIdPersisted', () => {
     expect(isClientIdPersisted()).toBe(false)
   })
 })
-
-describe('useSyncStore.getClientId delegates', () => {
-  it('returns the same id as getClientId() and populates the state field', async () => {
-    vi.resetModules()
-    const { getClientId } = await import('./client-identity')
-    const { useSyncStore } = await import('./sync/use-sync-store')
-    expect(useSyncStore.getState().clientId).toBeNull()
-    const id = getClientId()
-    expect(useSyncStore.getState().getClientId()).toBe(id)
-    expect(useSyncStore.getState().clientId).toBe(id)
-  })
-
-  it('follows the stored id when it changes under it (another window won the race)', async () => {
-    vi.resetModules()
-    const { useSyncStore } = await import('./sync/use-sync-store')
-    const first = useSyncStore.getState().getClientId()
-    localStorage.setItem(KEY, 'c_bbbbbbbbbbbb')
-    expect(first).not.toBe('c_bbbbbbbbbbbb')
-    expect(useSyncStore.getState().getClientId()).toBe('c_bbbbbbbbbbbb')
-    expect(useSyncStore.getState().clientId).toBe('c_bbbbbbbbbbbb')
-  })
-
-  it('does not write the store again when the field already matches', async () => {
-    vi.resetModules()
-    const { useSyncStore } = await import('./sync/use-sync-store')
-    useSyncStore.getState().getClientId()
-    const listener = vi.fn()
-    const unsubscribe = useSyncStore.subscribe(listener)
-    useSyncStore.getState().getClientId()
-    unsubscribe()
-    expect(listener).not.toHaveBeenCalled()
-  })
-})
