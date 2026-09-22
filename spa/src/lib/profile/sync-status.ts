@@ -255,8 +255,9 @@ export interface StatusChannel {
   requestSyncNow(): void
   /**
    * `lock`: what the user was shown for this section — `snapshot.status.locks[section]`. Answers whether the command
-   * was HANDED OVER: executed here (the leader), or its key written (a follower). Not whether it was carried out —
-   * the channel has no answer; the lock changing is the answer, and `COMMAND_TTL_MS` is how long to wait for it.
+   * was HANDED OVER: in the leader, CARRIED OUT (false when the binding dropped it); in a follower, its key written —
+   * whether the leader then carries it out has no answer but the lock changing, and `COMMAND_TTL_MS` is how long
+   * to wait for it.
    */
   requestResolve(section: string, keep: 'local' | 'sot', lock: SectionLock): boolean
   /**
@@ -599,10 +600,16 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     return held !== null && sameLock(held, shown)
   }
 
-  const execute = (command: Command): void => {
-    if (command.master !== tag) return // under this master's key, for another master: a key is a name, not a proof
-    if (command.kind === 'syncNow') deps.syncNow()
-    else if (accepts(command.section, command.lock)) deps.resolve(command.section, command.keep)
+  /** Whether the command was CARRIED OUT: another master's, or a resolve whose lock is not the one held, is not. */
+  const execute = (command: Command): boolean => {
+    if (command.master !== tag) return false // under this master's key, for another master: a key is a name, not a proof
+    if (command.kind === 'syncNow') {
+      deps.syncNow()
+      return true
+    }
+    if (!accepts(command.section, command.lock)) return false
+    deps.resolve(command.section, command.keep)
+    return true
   }
 
   /** Leader only. Reads the key NOW: an event about a key that has been dealt with finds nothing. */
@@ -710,8 +717,7 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       if (closed) return false
       const command: Command = { kind: 'resolve', section, keep, lock, master: tag, at: deps.now() }
       if (!deps.local().leader) return send(command)
-      execute(command)
-      return true
+      return execute(command) // here: carried out, or dropped by the binding (review A2)
     },
     close(clear, successor) {
       if (closed) return

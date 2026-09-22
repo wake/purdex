@@ -1249,6 +1249,19 @@ describe('requestResolve answers whether the command was handed over (P3d-4 R2)'
     expect(a.resolve.mock.calls).toEqual([['hosts', 'local']])
   })
 
+  it('in the leader window, the lock GONE: false — dropped, not executed (review A2)', async () => {
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    expect(a.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+    expect(a.resolve).not.toHaveBeenCalled()
+  })
+
+  it('in the leader window, the lock CHANGED: false — dropped, not executed (review A2)', async () => {
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    a.locks.hosts = conflictLock(PAIR, 'L2')
+    expect(a.channel.requestResolve('hosts', 'local', LOCK)).toBe(false)
+    expect(a.resolve).not.toHaveBeenCalled()
+  })
+
   it('in a follower: true once its key is written', async () => {
     await openWindow('A', { leader: true, status: SYNCED })
     const b = await openWindow('B')
