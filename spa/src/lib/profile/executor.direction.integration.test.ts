@@ -475,11 +475,22 @@ function resetNewTab(): void {
 describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordinal-3 client wrote (newtab `profiles`)', () => {
   let shapes: Awaited<ReturnType<typeof realSettingsShapes>>
 
+  let putCallsAtStart = 0
+
   beforeEach(async () => {
     shapes = await realSettingsShapes()
     resetNewTab()
+    putCallsAtStart = api.putSection.mock.calls.length
   })
-  afterEach(resetNewTab)
+  afterEach(() => {
+    // Whatever path got it there, a settings PUT at this build's ordinal is in this build's shape:
+    // an ordinal-4 row whose payload still says `profiles` would be a fingerprint/payload mismatch on the SOT.
+    const bodies = api.putSection.mock.calls.slice(putCallsAtStart).filter((c) => c[2] === 'settings').map((c) => c[3] as { payload: Record<string, unknown>; ordinal: number })
+    for (const b of bodies.filter((x) => x.ordinal === 4)) {
+      expect(Object.hasOwn((b.payload[NEWTAB] ?? {}) as object, 'profiles')).toBe(false)
+    }
+    resetNewTab()
+  })
 
   /** What an ordinal-3 client writes: the same stores, the newtab layout under `profiles`, its fingerprint and ordinal 3. */
   async function oldClientWritesSettings(layout: Layout, writer = 'c_cccccccccccc'): Promise<{ rev: number; hash: string }> {
@@ -579,7 +590,7 @@ describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordina
     await expectQuiet()
   })
 
-  it('RESTART with a persisted conflict whose LOCAL side is an old build\'s payload (profiles), answered keep-local: restoreLocal lands it under presets', async () => {
+  it('RESTART with a persisted conflict whose LOCAL side is an old build\'s payload (profiles), answered keep-local: restoreLocal lands it under presets and ONE canonical PUT goes out', async () => {
     h.shape = shapeWithSettings(shapes.current)
     world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
     await attach(B, 'push')
@@ -619,14 +630,14 @@ describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordina
 
     expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_B)
     expect(settingsProblems()).toEqual([]) // no restore-invalid, no apply-threw
-    // Keep-local pushes the SENT snapshot itself (executor: "the push that follows sends this very
-    // payload") — here the old build's, `profiles` inside, under this build's ordinal 4 — and the
-    // collector's report of the restore then pushes the upcast stores: two PUTs, the SOT ends upgraded.
-    // (The transient row is harmless to an ordinal-4 reader: it is upcast on apply like any other.)
+    // Keep-local pushes the restored snapshot — upcast first: the old build's `profiles` never goes out
+    // under this build's ordinal 4 / fingerprint, not even transiently. ONE PUT, canonical shape.
     const puts = api.putSection.mock.calls.slice(putCallsBefore).filter((c) => c[2] === 'settings').map((c) => c[3] as { payload: Record<string, unknown>; ordinal: number; hash: string })
-    expect(puts.map((b) => [b.payload[NEWTAB], b.ordinal])).toEqual([[{ profiles: LAYOUT_B }, 4], [{ presets: LAYOUT_B }, 4]])
-    expect(puts[0].hash).toBe(localHash)
-    expect(settingsPuts(writesBefore).map((w) => w.outcome)).toEqual(['applied', 'applied'])
+    expect(puts.map((b) => [b.payload[NEWTAB], b.ordinal])).toEqual([[{ presets: LAYOUT_B }, 4]])
+    expect(Object.hasOwn(puts[0].payload[NEWTAB] as object, 'profiles')).toBe(false)
+    expect(puts[0].hash).not.toBe(localHash)
+    expect(puts[0].hash).toBe(await hashSection(puts[0].payload))
+    expect(settingsPuts(writesBefore).map((w) => w.outcome)).toEqual(['applied'])
     expectSotUpgraded(LAYOUT_B, B)
     await expectQuiet()
     expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_B)
@@ -636,11 +647,22 @@ describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordina
 describe('P3e OLD side: an ordinal-3 client (the real old pair) meets the settings row this build writes (ordinal 4)', () => {
   let shapes: Awaited<ReturnType<typeof realSettingsShapes>>
 
+  let putCallsAtStart = 0
+
   beforeEach(async () => {
     shapes = await realSettingsShapes()
     resetNewTab()
+    putCallsAtStart = api.putSection.mock.calls.length
   })
-  afterEach(resetNewTab)
+  afterEach(() => {
+    // Whatever path got it there, a settings PUT at this build's ordinal is in this build's shape:
+    // an ordinal-4 row whose payload still says `profiles` would be a fingerprint/payload mismatch on the SOT.
+    const bodies = api.putSection.mock.calls.slice(putCallsAtStart).filter((c) => c[2] === 'settings').map((c) => c[3] as { payload: Record<string, unknown>; ordinal: number })
+    for (const b of bodies.filter((x) => x.ordinal === 4)) {
+      expect(Object.hasOwn((b.payload[NEWTAB] ?? {}) as object, 'profiles')).toBe(false)
+    }
+    resetNewTab()
+  })
 
   function renameFirstWorkspace(name: string): void {
     const { workspaces } = useWorkspaceStore.getState()

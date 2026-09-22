@@ -1472,6 +1472,41 @@ describe('executor — resolve and restore-local', () => {
     expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'H2', payload: { sent: true } })
   })
 
+  it('P3e: a persisted settings snapshot in the ordinal-3 shape (newtab `profiles`) is upcast before it is applied and pushed: ONE canonical PUT', async () => {
+    const legacy = { 'purdex-newtab-layout': { profiles: { '1col': { enabled: true, columns: [['a']] } } }, other: { k: 1 } }
+    const canonical = { 'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['a']] } } }, other: { k: 1 } }
+    const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash')
+    const canonicalHash = structuralKey(canonical)
+    h.stored = { workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
+    h.persistedStash.set('S2', legacy)
+    api.listProfiles.mockResolvedValue(index([meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: canonicalHash })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
+    const { ex, problems } = make()
+    ex.resolve('settings', 'local')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(applySectionToStores).toHaveBeenCalledWith('settings', canonical, { masterHostId: HOST })
+    expect(eventsOf('local-restored')).toEqual([{ type: 'local-restored', hash: 'S2', localHash: canonicalHash }])
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: canonicalHash, payload: canonical })
+    expect(problems).toEqual([])
+    expect(ex.status().sections.settings).toBe('synced')
+  })
+
+  it('P3e: a settings snapshot already in this build\'s shape is restored as-is (same hash, no localHash)', async () => {
+    const current = { 'purdex-newtab-layout': { presets: {} } }
+    h.stored = { workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
+    h.persistedStash.set('S2', current)
+    api.listProfiles.mockResolvedValue(index([meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
+    const { ex } = make()
+    ex.resolve('settings', 'local')
+    await flush()
+    expect(eventsOf('local-restored')).toEqual([{ type: 'local-restored', hash: 'S2' }])
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'S2', payload: current })
+  })
+
   it('resolve on an unknown section is a no-op', () => {
     const { ex } = make()
     ex.resolve('settings', 'local')

@@ -1046,6 +1046,22 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
       expect(r.restoreLocal).toBeNull()
     })
 
+    it('local-restored with a localHash: accepted by the pending hash, currentHash takes localHash (the snapshot was upcast on the way back)', () => {
+      const s = awaitingRestore()
+      // the check is on `hash` — a localHash alone never makes a stale restore acceptable
+      expect(reduceSection(s, { type: 'local-restored', hash: H2, localHash: H3 })).toBe(s)
+      const r = reduceSection(deepFreeze(s), { type: 'local-restored', hash: H1, localHash: H3 })
+      expect(r.currentHash).toBe(H3)
+      expect(r.restoreLocal).toBeNull()
+      // the push that follows is the canonical snapshot, against the SOT the user overrode
+      const token = tokenOf(decideSection(r, ON))
+      expect(token).toMatchObject({ kind: 'put', hash: H3, baseRev: 6 })
+      const [f] = startFlight(r)
+      const done = reduceSection(f, { type: 'push-applied', rev: 7 })
+      expect(done.base).toEqual({ rev: 7, hash: H3 })
+      expect(done.status).toBe('synced')
+    })
+
     it('a local-changed that changes nothing (same hash) does not cancel the restore', () => {
       const s = awaitingRestore()
       const same = reduceSection(s, { type: 'local-changed', hash: H2 })
