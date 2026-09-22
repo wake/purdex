@@ -1,7 +1,7 @@
 // spa/src/lib/rebuild/revive.test.ts — decideRevive, reviveAllowed and the
 // pass that applies them (spec §3.1 / §3.2).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { decideRevive, reviveAllowed, runRevivePass, runRevivePassAll, noteReconciledSessions } from './revive'
+import { decideRevive, reviveAllowed, runRevivePass, noteReconciledSessions } from './revive'
 import { STORAGE_KEYS } from '../storage/keys'
 import type { ReviveCandidate } from './revive'
 import type { Session } from '../host-api'
@@ -346,11 +346,11 @@ describe('runRevivePass', () => {
     beforeEach(() => localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH))
     afterEach(() => localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH))
 
-    it('a snapshot noted before the world changed is ignored by runRevivePassAll', () => {
+    it('a snapshot noted before the world changed is ignored by runRevivePass', () => {
       noteReconciledSessions('h1', [live]) // no fence yet: a device that never switched
       setFence(1_700_000_000_000_000)      // the first switch ever
       seedPane('t1', 'p1')
-      runRevivePassAll()
+      runRevivePass('h1')
       expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
       runRevivePass('h1')
       expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
@@ -361,11 +361,11 @@ describe('runRevivePass', () => {
       noteReconciledSessions('h1', [live])
       setFence(20)
       seedPane('t1', 'p1')
-      runRevivePassAll()
+      runRevivePass('h1')
       expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
 
       noteReconciledSessions('h1', [live])
-      runRevivePassAll()
+      runRevivePass('h1')
       expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
     })
 
@@ -373,7 +373,7 @@ describe('runRevivePass', () => {
       setFence(10)
       noteReconciledSessions('h1', [live])
       seedPane('t1', 'p1')
-      runRevivePassAll()
+      runRevivePass('h1')
       expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
     })
   })

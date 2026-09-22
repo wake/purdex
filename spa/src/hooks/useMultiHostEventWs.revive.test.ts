@@ -495,6 +495,45 @@ describe('useMultiHostEventWs revive — the lock-release trigger', () => {
   })
 })
 
+// #1309 spec §3.1: a lock release reconciles a versioned, live host from a list
+// FETCHED after the release — the revive comes from that list, never from the
+// one reconciled before the write. An unversioned host keeps the synchronous pass.
+describe('useMultiHostEventWs revive — the lock release reconciles from a fresh list', () => {
+  const E = '9f3c1a0b7d2e4c61'
+  function emitVersioned(sessions: Session[], seq: number, socket: FakeSocket = sockets[0]) {
+    act(() => { socket.emit(JSON.stringify({ type: 'sessions', session: '', value: JSON.stringify(sessions), epoch: E, seq })) })
+  }
+  afterEach(() => listSessionsFresh.mockReset())
+
+  it('a versioned host: the release fetches, and the pane is revived from the FETCHED list', async () => {
+    const view = await mount()
+    seedPane('t1', 'p1')
+    emitVersioned([], 1) // gate open, a versioned list held — no `dev` in it
+    expect(attachReady()).toBe(true)
+    const grant = useRebuildStore.getState().acquireOperationLock('legacy:restore')
+    listSessionsFresh.mockResolvedValue({ kind: 'versioned', epoch: E, seq: 2, sessions: [NEW1] })
+
+    act(() => { useRebuildStore.getState().releaseOperationLock(grant) })
+    expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(listSessionsFresh).toHaveBeenCalledWith(HOST)
+    await waitFor(() => expect(paneContent('t1', 'p1')).toMatchObject(revived))
+    view.unmount()
+  })
+
+  it('an unversioned host: no fetch, the pass runs synchronously on the release', async () => {
+    const view = await mount()
+    seedPane('t1', 'p1')
+    const grant = useRebuildStore.getState().acquireOperationLock('legacy:restore')
+    emit([NEW1])
+    expect(paneContent('t1', 'p1')).toMatchObject(dead)
+
+    act(() => { useRebuildStore.getState().releaseOperationLock(grant) })
+    expect(paneContent('t1', 'p1')).toMatchObject(revived)
+    expect(listSessionsFresh).not.toHaveBeenCalled()
+    view.unmount()
+  })
+})
+
 // #1255 SPA spec §3.5 (codex plan review #1): a switch releases the operation
 // lock, and the lock-release trigger runs the pass for every host. The list it
 // would use was reconciled for the world that was on screen BEFORE the switch —
