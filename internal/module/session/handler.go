@@ -58,6 +58,16 @@ func (m *SessionModule) cachedListSessions() ([]SessionInfo, error) {
 	return sessions, nil
 }
 
+// invalidateListCache forces the next plain GET /api/sessions to re-read
+// tmux. Called next to every invalidateNameCache: create / rename / delete
+// success, broadcastSessions (tmux wait-for), and tickNormal's hash-changed
+// branch. This keeps the plain list fresher; the guarantee is ?fresh=1.
+func (m *SessionModule) invalidateListCache() {
+	m.listCacheMu.Lock()
+	m.listCacheAt = time.Time{}
+	m.listCacheMu.Unlock()
+}
+
 func (m *SessionModule) handleGet(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 	info, err := m.GetSession(code)
@@ -191,6 +201,7 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.invalidateNameCache()
+	m.invalidateListCache()
 
 	// Return updated info with new name
 	info.Name = req.Name
@@ -221,6 +232,7 @@ func (m *SessionModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 	_ = m.meta.DeleteMeta(info.TmuxID)
 
 	m.invalidateNameCache()
+	m.invalidateListCache()
 
 	w.WriteHeader(http.StatusNoContent)
 }

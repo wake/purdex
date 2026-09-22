@@ -85,8 +85,9 @@ func (m *SessionModule) tickNormal() {
 		// Hash changed = session list mutated (possibly by external tmux
 		// commands that bypass the HTTP handlers' invalidation). Bust the
 		// name cache before broadcasting so the next LookupCodeByName
-		// refreshes from tmux.
+		// refreshes from tmux; same for the plain GET list cache.
 		m.invalidateNameCache()
+		m.invalidateListCache()
 		if m.core.Events.HasSubscribers() {
 			m.core.Events.BroadcastEvent(v.hostEvent())
 		}
@@ -112,8 +113,10 @@ func (m *SessionModule) broadcastSessions() {
 	// Goroutine A's wait-for unblocks here whenever tmux signals a
 	// session/window/pane change — including external `tmux rename-session`
 	// that bypasses the HTTP handlers' explicit invalidation. Bust the name
-	// cache up front so stale name→code mappings can't survive the 1s TTL.
+	// cache up front so stale name→code mappings can't survive the 1s TTL,
+	// and the plain GET list cache with it.
 	m.invalidateNameCache()
+	m.invalidateListCache()
 
 	if !m.core.Events.HasSubscribers() {
 		return

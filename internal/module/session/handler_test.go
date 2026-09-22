@@ -306,7 +306,7 @@ func TestHandlerListSessionsFresh_BypassesWarmCache(t *testing.T) {
 	fake.AddSession("alpha", "/tmp")
 
 	require.Equal(t, http.StatusOK, getList(t, mux, "/api/sessions").Code) // warm
-	fake.AddSession("beta", "/tmp")                                         // inside the TTL
+	fake.AddSession("beta", "/tmp")                                        // inside the TTL
 
 	v := getFresh(t, mux)
 	assert.Equal(t, []string{"alpha", "beta"}, sessionNames(v.Sessions))
@@ -1193,4 +1193,141 @@ func TestHandlerCreateSessionRejectsMissingCwd(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "invalid cwd")
 	assert.False(t, fake.HasSession("missing-cwd"), "nothing may be created")
+}
+
+// --- list-cache invalidation + read-your-writes (spec 2026-09-23 §3.3 rule 2, §4.3) ---
+
+// mutationHarness is a module with a warm plain-GET list cache and a
+// registered agent.module, so create / rename / delete can all run through
+// the real handlers.
+type mutationHarness struct {
+	t    *testing.T
+	mod  *SessionModule
+	fake *tmux.FakeExecutor
+	mux  *http.ServeMux
+}
+
+func newMutationHarness(t *testing.T, names ...string) *mutationHarness {
+	mod, _, fake := newTestModule(t)
+	mod.core.Registry.Register("agent.module", stubAtomicRenamer{})
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	for _, n := range names {
+		fake.AddSession(n, "/tmp")
+	}
+	return &mutationHarness{t: t, mod: mod, fake: fake, mux: mux}
+}
+
+// plainNames runs a plain (cached) GET /api/sessions.
+func (h *mutationHarness) plainNames() []string {
+	w := getList(h.t, h.mux, "/api/sessions")
+	require.Equal(h.t, http.StatusOK, w.Code)
+	var list []SessionInfo
+	require.NoError(h.t, json.Unmarshal(w.Body.Bytes(), &list))
+	return sessionNames(list)
+}
+
+func (h *mutationHarness) freshNames() []string {
+	return sessionNames(getFresh(h.t, h.mux).Sessions)
+}
+
+func (h *mutationHarness) codeOf(name string) string {
+	sessions, err := h.mod.ListSessions()
+	require.NoError(h.t, err)
+	for _, s := range sessions {
+		if s.Name == name {
+			return s.Code
+		}
+	}
+	h.t.Fatalf("no session %q", name)
+	return ""
+}
+
+func (h *mutationHarness) do(method, path, body string, want int) {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.mux.ServeHTTP(w, req)
+	require.Equal(h.t, want, w.Code, w.Body.String())
+}
+
+func (h *mutationHarness) create(name string) {
+	body := fmt.Sprintf(`{"name":%q,"cwd":%q}`, name, h.t.TempDir())
+	h.do(http.MethodPost, "/api/sessions", body, http.StatusCreated)
+}
+
+func (h *mutationHarness) rename(from, to string) {
+	h.do(http.MethodPatch, "/api/sessions/"+h.codeOf(from), fmt.Sprintf(`{"name":%q}`, to), http.StatusOK)
+}
+
+func (h *mutationHarness) delete(name string) {
+	h.do(http.MethodDelete, "/api/sessions/"+h.codeOf(name), "", http.StatusNoContent)
+}
+
+// A plain GET inside the TTL reflects each handler mutation: the handlers
+// bust the list cache on success.
+func TestListCache_InvalidatedByHandlerMutations(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		h := newMutationHarness(t, "alpha")
+		require.Equal(t, []string{"alpha"}, h.plainNames())
+		h.create("beta")
+		assert.Equal(t, []string{"alpha", "beta"}, h.plainNames())
+	})
+	t.Run("rename", func(t *testing.T) {
+		h := newMutationHarness(t, "alpha")
+		require.Equal(t, []string{"alpha"}, h.plainNames())
+		h.rename("alpha", "gamma")
+		assert.Equal(t, []string{"gamma"}, h.plainNames())
+	})
+	t.Run("delete", func(t *testing.T) {
+		h := newMutationHarness(t, "alpha", "doomed")
+		require.Equal(t, []string{"alpha", "doomed"}, h.plainNames())
+		h.delete("doomed")
+		assert.Equal(t, []string{"alpha"}, h.plainNames())
+	})
+}
+
+// The wait-for path (tmux told us something changed, possibly an external
+// command) busts the list cache, with or without subscribers.
+func TestListCache_InvalidatedByBroadcastSessions(t *testing.T) {
+	h := newMutationHarness(t, "alpha")
+	require.Equal(t, []string{"alpha"}, h.plainNames())
+	h.fake.AddSession("external", "/tmp")
+	h.mod.broadcastSessions()
+	assert.Equal(t, []string{"alpha", "external"}, h.plainNames())
+}
+
+// The ticker busts the list cache when it finds a changed list.
+func TestListCache_InvalidatedByTickNormalOnChange(t *testing.T) {
+	h := newMutationHarness(t, "alpha")
+	h.mod.tickNormal() // prime the hash
+	require.Equal(t, []string{"alpha"}, h.plainNames())
+	h.fake.AddSession("external", "/tmp")
+	h.mod.tickNormal()
+	assert.Equal(t, []string{"alpha", "external"}, h.plainNames())
+}
+
+// Read-your-writes on the versioned path: once a mutation's HTTP response is
+// in, ?fresh=1 reflects it — even with the plain cache warm from before.
+func TestFreshList_ReadYourWrites(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		h := newMutationHarness(t, "alpha")
+		h.plainNames()
+		h.create("beta")
+		assert.Equal(t, []string{"alpha", "beta"}, h.freshNames())
+	})
+	t.Run("rename", func(t *testing.T) {
+		h := newMutationHarness(t, "alpha")
+		h.plainNames()
+		h.rename("alpha", "gamma")
+		names := h.freshNames()
+		assert.Contains(t, names, "gamma")
+		assert.NotContains(t, names, "alpha")
+	})
+	t.Run("delete", func(t *testing.T) {
+		h := newMutationHarness(t, "alpha", "doomed")
+		h.plainNames()
+		h.delete("doomed")
+		assert.Equal(t, []string{"alpha"}, h.freshNames())
+	})
 }
