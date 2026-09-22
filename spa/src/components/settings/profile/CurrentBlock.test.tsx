@@ -224,17 +224,68 @@ describe('a master attached', () => {
     show(attached({ status: status({ workspaces: 'locked:conflict', hosts: 'locked:reset', settings: 'locked:invalid' }, 'locked:reset', { workspaces: lock('locked:conflict', 9), hosts: lock('locked:reset', 3), settings: lock('locked:invalid', 41) }) }))
     const row = screen.getByTestId('profile-current-section-workspaces')
     expect(row).toHaveTextContent(en['settings.profile.current.section.locked_conflict'])
-    expect(screen.getByTestId('profile-current-section-rev-workspaces')).toHaveTextContent('9')
+    // the HOST's rev beside the lock: the one a decision would overwrite (the agreed one is `-rev-`)
+    expect(screen.getByTestId('profile-current-section-sot-rev-workspaces')).toHaveTextContent(en['settings.profile.current.sot_rev'].replace('{{rev}}', '9'))
     expect(screen.getByTestId('profile-current-section-hosts')).toHaveTextContent(en['settings.profile.current.section.locked_reset'])
     expect(screen.getByTestId('profile-current-section-settings')).toHaveTextContent(en['settings.profile.current.section.locked_invalid'])
     expect(screen.getByTestId('profile-current-locked-note')).toHaveTextContent(en['settings.profile.current.locked_note'])
     expect(within(screen.getByTestId('profile-current-sections')).queryAllByRole('button')).toHaveLength(0)
   })
 
-  it('nothing locked: no note about the panel, no revision', () => {
+  it('nothing locked: no note about the panel, no host revision', () => {
     show(attached({ status: status({ workspaces: 'synced' }) }))
     expect(screen.queryByTestId('profile-current-locked-note')).toBeNull()
-    expect(screen.queryByTestId('profile-current-section-rev-workspaces')).toBeNull()
+    expect(screen.queryByTestId('profile-current-section-sot-rev-workspaces')).toBeNull()
+  })
+
+  describe('what the executor publishes beyond the status (P3d-4a)', () => {
+    const fine = (rev: number | null) => ({ rev, failures: 0, retryAt: null })
+
+    it('every row shows the AGREED rev; a locked one keeps the host rev beside it', () => {
+      show(attached({
+        status: {
+          ...status({ hosts: 'synced', workspaces: 'locked:conflict' }, 'locked:conflict', { workspaces: lock('locked:conflict', 9) }),
+          detail: { hosts: fine(4), workspaces: fine(7) },
+        },
+      }))
+      expect(screen.getByTestId('profile-current-section-rev-hosts')).toHaveTextContent(en['settings.profile.current.rev'].replace('{{rev}}', '4'))
+      expect(screen.getByTestId('profile-current-section-rev-workspaces')).toHaveTextContent(en['settings.profile.current.rev'].replace('{{rev}}', '7'))
+      expect(screen.getByTestId('profile-current-section-sot-rev-workspaces')).toHaveTextContent('9')
+      expect(screen.queryByTestId('profile-current-section-sot-rev-hosts')).toBeNull()
+    })
+
+    it('never agreed (null), or a record from an older build (no detail): no rev at all — never "0"', () => {
+      show(attached({ status: { ...status({ hosts: 'pending', settings: 'synced' }), detail: { hosts: fine(null) } } }))
+      expect(screen.getByTestId('profile-current-section-hosts')).toBeInTheDocument()
+      expect(screen.queryByTestId('profile-current-section-rev-hosts')).toBeNull()
+      expect(screen.queryByTestId('profile-current-section-rev-settings')).toBeNull()
+      expect(screen.getByTestId('profile-current-sections')).not.toHaveTextContent(/rev 0/)
+    })
+
+    it('"in sync as of" the last answer that left the profile synced, in absolute local time; nothing while there is none', () => {
+      const at = new Date(2026, 8, 23, 14, 2, 31).getTime()
+      show(attached({ status: { ...status({ hosts: 'synced' }), lastSuccessAt: at } }))
+      const el = screen.getByTestId('profile-current-last-sync')
+      expect(el).toHaveTextContent(en['settings.profile.current.last_sync'].replace('{{time}}', new Date(at).toLocaleString()))
+      cleanup()
+      show(attached({ status: status({ hosts: 'synced' }) }))
+      expect(screen.queryByTestId('profile-current-last-sync')).toBeNull()
+    })
+
+    it('a failing section says so, and when the next try is — not in red; without an armed retry it says only "failing"', () => {
+      const at = new Date(2026, 8, 23, 14, 2, 31).getTime()
+      show(attached({
+        status: {
+          ...status({ hosts: 'pending', workspaces: 'pending', settings: 'synced' }, 'pending'),
+          detail: { hosts: { rev: 1, failures: 3, retryAt: at }, workspaces: { rev: 1, failures: 1, retryAt: null }, settings: fine(1) },
+        },
+      }))
+      const hosts = screen.getByTestId('profile-current-section-failing-hosts')
+      expect(hosts).toHaveTextContent(en['settings.profile.current.section_failing_at'].replace('{{time}}', new Date(at).toLocaleTimeString()))
+      expect(hosts.className).not.toMatch(/red/)
+      expect(screen.getByTestId('profile-current-section-failing-workspaces')).toHaveTextContent(en['settings.profile.current.section_failing'])
+      expect(screen.queryByTestId('profile-current-section-failing-settings')).toBeNull()
+    })
   })
 
   it('a schema lock is said in words', () => {
@@ -293,6 +344,17 @@ describe('blocked — each reason its own sentence', () => {
     expect(screen.getByTestId('profile-current-blocked')).toHaveTextContent(en[key])
   })
 
+  it('the profile gone by the INDEX (the executor\'s profileGone, `blocked` null) is said exactly as the 404 is', () => {
+    show(attached({ status: { ...status({ hosts: 'synced' }, 'locked:reset'), profileGone: true } }))
+    const el = screen.getByTestId('profile-current-blocked')
+    expect(el).toHaveAttribute('data-reason', 'profile-gone')
+    expect(el).toHaveTextContent(en['settings.profile.current.blocked.profile_gone'])
+    expect(screen.getByTestId('profile-current-state')).toHaveAttribute('data-state', 'problem')
+    expect(screen.getByTestId('profile-sync-now')).toBeDisabled()
+    // the one way out the sentence points at is there
+    expect(screen.getByTestId('profile-setup-change')).toBeEnabled()
+  })
+
   it('while blocked nothing syncs: Sync now would do nothing, so it cannot be pressed', () => {
     show(attached({ blocked: 'profile-gone' }))
     expect(screen.getByTestId('profile-sync-now')).toBeDisabled()
@@ -343,9 +405,21 @@ describe('the master world, unsettled — a STATE, never an error', () => {
 })
 
 describe('settings waiting for workspaces', () => {
-  it('workspaces locked and settings with something to send → said', () => {
+  it('workspaces locked and settings with something to send → said, as "locked"', () => {
     show(attached({ status: status({ workspaces: 'locked:conflict', settings: 'pending' }, 'locked:conflict', { workspaces: lock('locked:conflict', 9) }) }))
-    expect(screen.getByTestId('profile-current-settings-waiting')).toHaveTextContent(en['settings.profile.current.settings_waiting'])
+    const el = screen.getByTestId('profile-current-settings-waiting')
+    expect(el).toHaveAttribute('data-reason', 'locked')
+    expect(el).toHaveTextContent(en['settings.profile.current.settings_waiting_locked'])
+  })
+
+  it('workspaces failing, or the index read failing → said, as "failing"', () => {
+    show(attached({ status: { ...status({ workspaces: 'pending', settings: 'pending' }, 'pending'), detail: { workspaces: { rev: 1, failures: 2, retryAt: null } } } }))
+    const el = screen.getByTestId('profile-current-settings-waiting')
+    expect(el).toHaveAttribute('data-reason', 'failing')
+    expect(el).toHaveTextContent(en['settings.profile.current.settings_waiting_failing'])
+    cleanup()
+    show(attached({ status: { ...status({ workspaces: 'synced', settings: 'pending' }, 'pending'), indexFailures: 1 } }))
+    expect(screen.getByTestId('profile-current-settings-waiting')).toHaveAttribute('data-reason', 'failing')
   })
 
   it.each([

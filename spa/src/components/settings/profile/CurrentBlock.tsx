@@ -21,9 +21,11 @@
 // offered beside it (the wizard's first step is that very call); `StopSyncControl` stays mounted, because the
 // notice of a host that was not told is its to show — the wizard must not hide that outcome.
 //
-// WHAT THE SNAPSHOT DOES NOT CARRY, and this block therefore does not show: a revision per section (only a
-// LOCKED section has one, `locks[key].sot.rev`) and the time of the last sync. Both would have to be published
-// by the executor; neither is guessed from anything else.
+// WHAT THE EXECUTOR PUBLISHES BEYOND THE STATUS (P3d-4a) — `detail`, `indexFailures`, `lastSuccessAt`,
+// `profileGone` — is shown as it is: the AGREED rev on every row (a locked row keeps the host's beside it), a
+// failing row's next try, "in sync as of", why settings wait. A record from an older build has none of them and
+// the page then shows nothing for them — never "0" or "never" (sync-status.ts reads them as absent). Times are
+// absolute local times: no clock runs on this page.
 import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -36,7 +38,7 @@ import { useProfileSync } from '../../../hooks/useProfileSync'
 import { requestSyncNow } from '../../../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 import { readMasterWorld, type UnsettledReason } from '../../../lib/profile/master-world'
-import { SYNC_DOT_CLASS, describeSections, settingsWaitForWorkspaces, syncDotOf, type SectionView } from '../../../lib/profile/sync-view'
+import { SYNC_DOT_CLASS, describeSections, profileIsGone, settingsWaitForWorkspaces, syncDotOf, type SectionView } from '../../../lib/profile/sync-view'
 import { SettingItem } from '../SettingItem'
 import { ToggleSwitch } from '../ToggleSwitch'
 import { StopSyncControl } from './StopSyncControl'
@@ -153,6 +155,10 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const sections = sync.status === null ? [] : describeSections(Object.keys(sync.status.sections), workspaces)
   const anyLocked = sync.status !== null && Object.keys(sync.status.locks).length > 0
   const schemaLock = sync.status?.schemaLock ?? null
+  // A gone profile has two sources (a 404; the index no longer listing it) and ONE sentence: read alike.
+  const blocked = sync.blocked ?? (profileIsGone(sync) ? 'profile-gone' : null)
+  const waiting = settingsWaitForWorkspaces(sync.status)
+  const lastSuccessAt = sync.status?.lastSuccessAt ?? null
 
   const sectionLabel = (view: SectionView): string => {
     if (view.kind === 'other') return view.key // a kind this build does not know: nothing better to call it
@@ -163,7 +169,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   }
 
   const blockedText = (): string => {
-    switch (sync.blocked) {
+    switch (blocked) {
       case 'master-endpoint-changed':
         return t('settings.profile.current.blocked.endpoint_changed', { was: attachedAt ?? '', now: host ? endpointOfHost(host) : '' })
       case 'profile-gone':
@@ -197,12 +203,17 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
           </span>
         </div>
       </SettingItem>
+      {lastSuccessAt !== null && (
+        <p data-testid="profile-current-last-sync" className="text-xs text-text-muted">
+          {t('settings.profile.current.last_sync', { time: new Date(lastSuccessAt).toLocaleString() })}
+        </p>
+      )}
 
       {sync.remote && sync.stale && (
         <p data-testid="profile-current-stale" className={NOTICE}>{t('settings.profile.current.stale')}</p>
       )}
-      {sync.blocked !== null && (
-        <p data-testid="profile-current-blocked" data-reason={sync.blocked} className={NOTICE}>{blockedText()}</p>
+      {blocked !== null && (
+        <p data-testid="profile-current-blocked" data-reason={blocked} className={NOTICE}>{blockedText()}</p>
       )}
       {world !== null && (
         // A state, not an error (P3 plan, "What the UI must say"). NOT linked to the wizard (P3d-3 looked): for
@@ -213,8 +224,8 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
       {schemaLock !== null && (
         <p data-testid="profile-current-schema" className={NOTICE}>{t(`settings.profile.current.schema.${schemaLock.verdict}`)}</p>
       )}
-      {settingsWaitForWorkspaces(sync.status) && (
-        <p data-testid="profile-current-settings-waiting" className={NOTICE}>{t('settings.profile.current.settings_waiting')}</p>
+      {waiting !== null && (
+        <p data-testid="profile-current-settings-waiting" data-reason={waiting} className={NOTICE}>{t(`settings.profile.current.settings_waiting_${waiting}`)}</p>
       )}
 
       <div data-testid="profile-current-sections" className="mt-4">
@@ -232,6 +243,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
               const { key } = view
               const state = sync.status!.sections[key]
               const lock = sync.status!.locks[key]
+              const detail = sync.status!.detail[key] // absent: a record from an older build — nothing is shown for it
               return (
                 <li
                   key={key}
@@ -243,9 +255,22 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
                 >
                   {/* The raw key is for whoever needs it (a bug report, the acceptance run): the tooltip. */}
                   <span title={key} className="text-text-primary">{sectionLabel(view)}</span>
-                  <span className="flex items-center gap-2 text-text-secondary">
-                    {lock !== undefined && (
+                  <span className="flex flex-wrap items-center gap-2 text-text-secondary">
+                    {detail !== undefined && detail.failures > 0 && (
+                      // A state that heals by itself (the retry is armed), not an error: the notice tone.
+                      <span data-testid={`profile-current-section-failing-${key}`} className="text-yellow-500">
+                        {detail.retryAt === null
+                          ? t('settings.profile.current.section_failing')
+                          : t('settings.profile.current.section_failing_at', { time: new Date(detail.retryAt).toLocaleTimeString() })}
+                      </span>
+                    )}
+                    {detail !== undefined && detail.rev !== null && (
                       <span data-testid={`profile-current-section-rev-${key}`} className="text-text-muted">
+                        {t('settings.profile.current.rev', { rev: detail.rev })}
+                      </span>
+                    )}
+                    {lock !== undefined && (
+                      <span data-testid={`profile-current-section-sot-rev-${key}`} className="text-text-muted">
                         {t('settings.profile.current.sot_rev', { rev: lock.sot.rev })}
                       </span>
                     )}
@@ -272,7 +297,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
           type="button"
           data-testid="profile-sync-now"
           // While blocked no window runs a driver: the press would do nothing, and the reason is said above.
-          disabled={sync.blocked !== null}
+          disabled={blocked !== null}
           onClick={() => {
             requestSyncNow()
             setAskedUnder(sync)
