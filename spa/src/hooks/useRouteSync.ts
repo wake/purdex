@@ -8,6 +8,23 @@ import { getPrimaryPane } from '../lib/pane-tree'
 import { useWorkspaceStore } from '../features/workspace'
 import { resolveExecutionHostId } from '../lib/nex/resolve-host'
 
+type TabStoreState = ReturnType<typeof useTabStore.getState>
+
+/** URL of the active tab's primary pane, or null when there is none. */
+function activeTabUrl(s: TabStoreState): string | null {
+  if (!s.activeTabId) return null
+  const tab = s.tabs[s.activeTabId]
+  if (!tab) return null
+  const primary = getPrimaryPane(tab.layout)
+  if (!primary) return null
+  return tabToUrl(s.activeTabId, primary.content)
+}
+
+/** Does `location` show the tab at `tabUrl` (exactly, or one of its sub-paths)? */
+function urlShowsTab(location: string, tabUrl: string): boolean {
+  return location === tabUrl || location.startsWith(tabUrl + '/')
+}
+
 export function useRouteSync() {
   const [location, setLocation] = useLocation()
   const tabs = useTabStore((s) => s.tabs)
@@ -23,25 +40,8 @@ export function useRouteSync() {
     return useTabStore.persist.onFinishHydration(() => setHydrated(true))
   }, [hydrated])
 
-  // Tab → URL: derived activeUrl selector (idempotent — only sets if URL differs)
-  const activeUrl = useTabStore((s) => {
-    if (!s.activeTabId) return null
-    const tab = s.tabs[s.activeTabId]
-    if (!tab) return null
-    const primary = getPrimaryPane(tab.layout)
-    if (!primary) return null
-    return tabToUrl(s.activeTabId, primary.content)
-  })
-
-  // location excluded: including it would create navigate→location→navigate loop.
-  // setLocation excluded: stable function from wouter.
-  useEffect(() => {
-    if (!hydrated) return
-    if (activeUrl && location !== activeUrl && !location.startsWith(activeUrl + '/')) {
-      setLocation(activeUrl, { replace: true })
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeUrl, hydrated])
+  // The active tab's URL — Tab → URL's trigger (re-renders only when it changes).
+  const activeUrl = useTabStore(activeTabUrl)
 
   // Record visit when activeTab changes.
   // tabs excluded: only activeTabId change should trigger a visit record; tabs object changes frequently.
@@ -56,7 +56,11 @@ export function useRouteSync() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId, hydrated])
 
-  // URL → Tab: when URL changes (back/forward/direct), find or create tab
+  // URL → Tab: when URL changes (back/forward/direct), find or create tab.
+  // Declared BEFORE Tab → URL on purpose: when both effects run in the same
+  // commit — the first hydrated pass of a cold start always does — the URL is
+  // the source of truth, so it is applied to the store before Tab → URL decides
+  // whether the URL needs correcting (#1326).
   useEffect(() => {
     if (!hydrated) return
 
@@ -64,17 +68,8 @@ export function useRouteSync() {
     if (!parsed) return
 
     // Check if URL already matches the current active tab — avoid redundant state changes
-    const currentTabId = useTabStore.getState().activeTabId
-    if (currentTabId) {
-      const currentTab = useTabStore.getState().tabs[currentTabId]
-      if (currentTab) {
-        const primary = getPrimaryPane(currentTab.layout)
-        if (primary) {
-          const currentUrl = tabToUrl(currentTabId, primary.content)
-          if (currentUrl === location || location.startsWith(currentUrl + '/')) return // already in sync (includes sub-paths)
-        }
-      }
-    }
+    const currentUrl = activeTabUrl(useTabStore.getState())
+    if (currentUrl && urlShowsTab(location, currentUrl)) return // already in sync (includes sub-paths)
 
     switch (parsed.kind) {
       case 'history':
@@ -125,4 +120,23 @@ export function useRouteSync() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openSingletonTab, setActiveTab: stable Zustand selectors
   }, [location, hydrated])
+
+  // Tab → URL: replace the URL when it doesn't show the active tab.
+  // Reads the store NOW, not this render's `activeUrl`: URL → Tab (above) may
+  // have just switched the active tab in this same commit, and the render's
+  // value is then stale. Acting on it replaced a cold-start deep link with the
+  // persisted tab's URL while URL → Tab applied the deep link — the next commit
+  // each undid the other, forever (#1326). So what gets corrected here is a URL
+  // URL → Tab had nothing to apply for (unparseable, `/w/<ws>`, …) or one left
+  // behind by a tab switch made from the UI.
+  // location excluded: including it would create navigate→location→navigate loop.
+  // setLocation excluded: stable function from wouter.
+  useEffect(() => {
+    if (!hydrated) return
+    const url = activeTabUrl(useTabStore.getState())
+    if (url && !urlShowsTab(location, url)) {
+      setLocation(url, { replace: true })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeUrl, hydrated])
 }

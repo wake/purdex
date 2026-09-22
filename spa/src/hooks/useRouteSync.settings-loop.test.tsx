@@ -217,3 +217,114 @@ describe('useRouteSync × GlobalSettingsPage in the real TabContent shell (#1326
     expect(current()).toBe('/settings/appearance')
   })
 })
+
+// #1326 (cold start): a full page load whose initial URL is a deep link that
+// differs from the PERSISTED active tab. On the first hydrated commit both
+// useRouteSync effects run: Tab→URL used to replace the URL with the stale
+// persisted tab's URL while URL→Tab (same commit, old location in its
+// closure) switched the store to the deep link — next commit each undid the
+// other, forever ("Maximum update depth exceeded" at the Tab→URL replace).
+// The URL is the source of truth on a cold start: the deep link wins, and
+// Tab→URL only corrects a URL that URL→Tab had nothing to apply for.
+describe('useRouteSync cold start: deep link vs persisted active tab (#1326)', () => {
+  beforeEach(() => {
+    resetLastSection()
+    clearSettingsSectionRegistry()
+    clearContributions()
+    clearModuleRegistry()
+    registerModule({ id: 'settings', name: 'Settings', panes: [{ kind: 'settings', component: SettingsPage }] })
+    registerModule({
+      id: 'session',
+      name: 'Session',
+      panes: [{ kind: 'tmux-session', component: () => <div data-testid="terminal-stub" /> }],
+    })
+    registerSettingsSection({ id: 'appearance', label: 'Appearance', order: 0, component: Appearance })
+    dispatchSettingsContributions([])
+    useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+    useUISettingsStore.setState({ keepAliveCount: 0, keepAlivePinned: false })
+    seed() // persisted: global Settings is the active tab
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearModuleRegistry()
+  })
+
+  /** Mounts with persist NOT yet hydrated, then fires onFinishHydration — the real gate. */
+  function coldMount(path: string) {
+    let finish: (() => void) | null = null
+    vi.spyOn(useTabStore.persist, 'hasHydrated').mockReturnValue(false)
+    vi.spyOn(useTabStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useTabStore.getState())
+      return () => { finish = null }
+    })
+    const m = mount(path)
+    expect(m.navs).toEqual([]) // nothing happens before hydration
+    act(() => finish!())
+    return m
+  }
+
+  it('/w/<ws>/settings through the hydration gate: the deep link wins, no replace', () => {
+    const { navs, current } = coldMount(`/w/${WS_X}/settings`)
+    expect(current()).toBe(`/w/${WS_X}/settings`)
+    expect(activeContent()).toEqual({ kind: 'settings', scope: { workspaceId: WS_X } })
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(WS_X)
+    expect(navs).toEqual([])
+  })
+
+  it('/w/<ws>/settings already hydrated at mount: the deep link wins, no replace', () => {
+    const { navs, current } = mount(`/w/${WS_X}/settings`)
+    expect(current()).toBe(`/w/${WS_X}/settings`)
+    expect(activeContent()).toEqual({ kind: 'settings', scope: { workspaceId: WS_X } })
+    expect(navs).toEqual([])
+  })
+
+  it('/t/<other tab>/terminal: activates that tab, no replace', () => {
+    const { navs, current } = coldMount(`/t/${SESSION_TAB}/terminal`)
+    expect(current()).toBe(`/t/${SESSION_TAB}/terminal`)
+    expect(useTabStore.getState().activeTabId).toBe(SESSION_TAB)
+    expect(navs).toEqual([])
+  })
+
+  it('/history: opens the history tab, no replace', () => {
+    const { navs, current } = coldMount('/history')
+    expect(current()).toBe('/history')
+    expect(activeContent()).toEqual({ kind: 'history' })
+    expect(navs).toEqual([])
+  })
+
+  it('/hosts: opens the hosts tab, no replace', () => {
+    const { navs, current } = coldMount('/hosts')
+    expect(current()).toBe('/hosts')
+    expect(activeContent()?.kind).toBe('hosts')
+    expect(navs).toEqual([])
+  })
+
+  it('/execution/<host>/<id>: opens the execution tab, no replace', () => {
+    const { navs, current } = coldMount('/execution/h1/ex1')
+    expect(current()).toBe('/execution/h1/ex1')
+    expect(activeContent()).toMatchObject({ kind: 'execution', executionId: 'ex1', host: 'h1' })
+    expect(navs).toEqual([])
+  })
+
+  it('unparseable URL: corrected to the persisted active tab with one replace', () => {
+    const { navs, current } = coldMount('/no/such/route')
+    expect(useTabStore.getState().activeTabId).toBe(GLOBAL_TAB)
+    expect(current()).toBe('/settings/appearance')
+    expect(navs[0]).toEqual({ to: '/settings', replace: true })
+  })
+
+  it('workspace URL (/w/<ws>): corrected to the persisted active tab', () => {
+    const { navs, current } = coldMount(`/w/${WS_X}`)
+    expect(useTabStore.getState().activeTabId).toBe(GLOBAL_TAB)
+    expect(current()).toBe('/settings/appearance')
+    expect(navs[0]).toEqual({ to: '/settings', replace: true })
+  })
+
+  it('URL already matches the persisted active tab: nothing happens', () => {
+    const { navs, current } = coldMount('/settings/appearance')
+    expect(useTabStore.getState().activeTabId).toBe(GLOBAL_TAB)
+    expect(current()).toBe('/settings/appearance')
+    expect(navs).toEqual([])
+  })
+})
