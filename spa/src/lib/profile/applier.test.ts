@@ -9,6 +9,7 @@ import {
   deriveTabOrder,
   isWellFormedSection,
   restoreSizes,
+  upcastLegacySettings,
 } from './applier'
 import { hashSection } from './hash'
 import { PROJECTIONS, project } from './projections'
@@ -1086,5 +1087,57 @@ describe('no function mutates its input', () => {
       applySettings(deepFreeze(settingsLocal()), deepFreeze(settingsIncoming()), NO_WS)
       isWellFormedSection('tabs', deepFreeze(tabsPayload()))
     }).not.toThrow()
+  })
+})
+
+// --- upcastLegacySettings (P3e) ------------------------------------------------
+
+describe('upcastLegacySettings — an ordinal-3 settings payload (newtab `profiles`) reads as ordinal 4', () => {
+  const layout = { '3col': { enabled: true, columns: [['a'], [], []] }, '2col': { enabled: false, columns: [[], []] }, '1col': { enabled: true, columns: [['a']] } }
+
+  it('renames purdex-newtab-layout.profiles to .presets, touching nothing else, never mutating', () => {
+    const legacy = deepFreeze({
+      'purdex-ui-settings': { keepAliveCount: 3 },
+      'purdex-newtab-layout': { profiles: copy(layout) },
+      'purdex-layout': { tabPosition: 'left' },
+    })
+    const out = upcastLegacySettings(legacy) as Record<string, unknown>
+    expect(out).toEqual({
+      'purdex-ui-settings': { keepAliveCount: 3 },
+      'purdex-newtab-layout': { presets: layout },
+      'purdex-layout': { tabPosition: 'left' },
+    })
+    expect(out).not.toBe(legacy)
+    expect(out['purdex-ui-settings']).toBe(legacy['purdex-ui-settings']) // untouched stores are the same objects
+    expect(legacy['purdex-newtab-layout']).toEqual({ profiles: layout }) // input intact
+    expect(isWellFormedSection('settings', out)).toBe(true)
+    expect(isWellFormedSection('settings', legacy)).toBe(false)
+  })
+
+  it('both profiles and presets present → untouched (same reference)', () => {
+    const both = deepFreeze({ 'purdex-newtab-layout': { profiles: copy(layout), presets: copy(layout) } })
+    expect(upcastLegacySettings(both)).toBe(both)
+  })
+
+  it('an ordinal-4 payload is returned as is (same reference)', () => {
+    const current = deepFreeze({ 'purdex-newtab-layout': { presets: copy(layout) }, 'purdex-layout': { tabPosition: 'top' } })
+    expect(upcastLegacySettings(current)).toBe(current)
+  })
+
+  it('no newtab store, or not a plain object, or not a payload at all → same reference', () => {
+    const noStore = deepFreeze({ 'purdex-layout': { tabPosition: 'top' } })
+    expect(upcastLegacySettings(noStore)).toBe(noStore)
+    for (const odd of [null, undefined, 5, 'x', [], [{ 'purdex-newtab-layout': { profiles: {} } }]] as unknown[]) {
+      expect(upcastLegacySettings(odd)).toBe(odd)
+    }
+    for (const store of [null, 7, 'profiles', [{ profiles: {} }]] as unknown[]) {
+      const p = deepFreeze({ 'purdex-newtab-layout': store })
+      expect(upcastLegacySettings(p)).toBe(p)
+    }
+  })
+
+  it('carries the other fields of the newtab store along (the guard then judges them, as before)', () => {
+    const legacy = deepFreeze({ 'purdex-newtab-layout': { profiles: copy(layout), knownIds: ['x'] } })
+    expect(upcastLegacySettings(legacy)).toEqual({ 'purdex-newtab-layout': { presets: layout, knownIds: ['x'] } })
   })
 })
