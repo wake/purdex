@@ -33,10 +33,18 @@ was a 1 s cache. The daemon now offers a fresh, versioned list (`?fresh=1` →
   or another window) is dropped.
 - G5. Frames of a closed or superseded host-events socket never reach the handler.
 
+- G6. Revive-by-name never acts on a list reconciled for a DIFFERENT world than the one
+  on screen (codex plan review #1: today the switch's own operation-lock release runs
+  `runRevivePassAll` over the pre-switch list against the new world).
+
 Non-goals: changing the reconciliation itself (`reconcile.ts`, `reconcile-host.ts`
-body); fetching on anything but a switch; the wizard's attach-pull and profile
-applies (they rewrite the tab tree through the sync path, not a switch — noted as a
-follow-up); PRODUCT.md.
+body); fetching on anything but a switch; PRODUCT.md.
+- **Profile applies** (`apply-to-stores.ts` `workspaces` / `tabs.*`, and the wizard's
+  pull, which ends there) also put panes on screen with no post-apply session evidence.
+  Out of scope: that file is the coordinator's (P3d-4b), and reconciling panes that just
+  arrived from the SOT — then pushing the verdicts back — is a sync-semantics decision.
+  Follow-up issue.
+- `promoteToMaster` relabels and restamps; the panes on screen do not change → nothing to do.
 
 ## 3. Design
 
@@ -58,7 +66,8 @@ persisted, not synced — it describes this window's connections).
   - different epoch → WS: apply (the current socket speaks for the running process);
     fetch: apply iff `origin.conn === current conn` (sent on the current connection,
     daemon contract §3.4), else stale.
-- `note(hostId, v)`: `held = v` (after a successful apply only).
+- `note(hostId, v)`: `held = v` — only after `reconcileHostSessions` returned without
+  throwing (codex #4). A throw leaves `held` where it was.
 - A WS frame without a version sets `held = null` (the host is — again — an old
   daemon; nothing versioned may be compared against a list from before it).
 
@@ -92,13 +101,17 @@ changes on a switch in any window. The plan pins the exact accessor.
 - `sessions` frame: `v = parseVersion(event)`.
   - `v === null` → today's behaviour (reconcile), and `held = null`.
   - `decide(hostId, v, {kind: 'ws'})`:
-    - `apply` → `note` + reconcile.
-    - `stale` → do not reconcile — **except** when the attach gate is closed: a new
-      connection's gate may only open on its own payload, so a stale frame there is
-      reconciled as today (not dropped) rather than leaving terminals blocked. (By the
-      contract a new connection's frames are read after anything this window holds, so
-      this branch is a safety valve, not a normal path.)
-- `onOpen` → `connectionOpened`; `onClose` and entry teardown → `connectionClosed`.
+    - `apply` → reconcile, then `note`.
+    - `stale` → **never** reconciled (codex #2). Under the contract a new connection
+      cannot legitimately deliver one while its gate is closed: `held` can only come from
+      this window's earlier connection (read before the new subscribe → smaller seq) or
+      from a fetch, which is applied only while the gate is open (§3.2). A stale frame with
+      the gate closed is a contract violation; it is dropped and the gate stays closed until
+      the connection's next frame.
+- Ordering inside callbacks (codex #5): `onClose` first `connectionClosed(hostId)` (conn
+  bump) then closes the gate, in the same synchronous callback; `onOpen` bumps conn. §3.2
+  reads the gate and captures `conn` in one synchronous step, so a fetch can only be sent
+  while the gate is open AND `conn` names the connection that opened it.
 
 ### 3.4 Closed sockets (`lib/host-events.ts`) — G5
 
@@ -110,14 +123,25 @@ same `hostId`) — are still delivered to `onEvent`. Fix: `close()` bumps `socke
 (and clears `onclose` like `supersede()` does) so no frame of that socket is handled
 after `close()` returns.
 
-### 3.5 `runRevivePassAll` (the operation-lock release trigger)
+### 3.5 Revive snapshots are bound to a world (G6)
 
-It revives from `reconciledSessions` — the last list *reconciled*, which after this
-change is always the newest held versioned list for the host (fetch or WS), never an
-older one. Its remaining staleness is the daemon's push latency (500 ms debounce),
-not an out-of-order list. Making it fetch on lock release would turn a synchronous
-trigger inside `releaseOperationLock` into an async one — a behaviour change of the
-rebuild path, out of scope. **Follow-up issue** records it.
+`noteReconciledSessions(hostId, sessions)` also records the world-fence value at that
+moment; `runRevivePass(hostId)` (both triggers: inside `reconcileHostSessions`, and the
+lock-release `runRevivePassAll`) does nothing when the current fence differs. So:
+- the switch's own lock release no longer revives the new world from the old list;
+- after a switch no revive happens on a host until a list is reconciled for the new world
+  (the post-switch fetch, or the host's next WS frame) — "no evidence, no action";
+- in OTHER windows the same holds: their snapshot carries the old fence.
+The lock-release trigger still uses the newest list held for the current world; making it
+fetch would turn a synchronous trigger inside `releaseOperationLock` into an async one —
+out of scope, follow-up issue.
+
+### 3.6 Only the switching window fetches (codex #3)
+
+The tab tree is one persisted store shared by every window: the reconciled bindings the
+switching window writes reach the others through the same rehydrate that brought them the
+new world. The other windows' session lists stay maintained by their own WS; their revive
+is fenced by §3.5. A second fetch per window would only duplicate the same writes.
 
 ## 4. Compatibility
 
