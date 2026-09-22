@@ -8,7 +8,14 @@
 // WHAT IS FROZEN AND CHECKED — the master's tag, its endpoint, the lock — and everything that must go through that
 // check (the counts' host read, the send, "sent" and its TTL) is `useResolveContext`'s (review A4). This file only
 // displays what the hook answers.
+//
+// AUTO-SYNC OFF (P3d-4c F3): the leader lifts the lock at once, but what the choice then does — *Take the host's* is
+// a pull (`forcePull`), *Keep this device's* a push — is network work, which Auto-sync off holds until it is turned
+// back on or *Sync now* is pressed. The dialog says so before the choice, and the row beside "sent" after it; once
+// the lock is lifted the row is gone and the section list's "waiting — Auto-sync is off" (sync-view.ts) takes over:
+// the published status cannot tell a section a choice was made for from any other pending one.
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { useProfileStore } from '../../../stores/useProfileStore'
 import type { InvalidReason } from '../../../lib/profile/apply-to-stores'
 import type { SectionLock } from '../../../lib/profile/executor'
 import type { SectionView } from '../../../lib/profile/sync-view'
@@ -34,6 +41,7 @@ interface Props {
 
 export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromLeader, disabled }: Props) {
   const t = useI18nStore((s) => s.t)
+  const autoSync = useProfileStore((s) => s.autoSync)
   const { open, local, host, changed, outcome, ask, cancel, confirm } = useResolveContext(sectionKey, lock)
 
   const why = (): { reason?: string; text: string } => {
@@ -92,6 +100,9 @@ export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromL
           {t(`settings.profile.resolve.${outcome.state.replace('-', '_')}`)}
         </p>
       )}
+      {pending && !autoSync && (
+        <p data-testid={`profile-resolve-auto-sync-off-${sectionKey}`} className={NOTICE}>{t('settings.profile.resolve.auto_sync_off')}</p>
+      )}
       {open !== null && (
         <ConfirmDialog
           testIdPrefix="profile-resolve"
@@ -114,6 +125,9 @@ export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromL
           )}
           {local !== null && local.changedSince && (
             <p data-testid="profile-resolve-local-moved" className={`mt-2 ${NOTICE}`}>{t('settings.profile.resolve.local_moved')}</p>
+          )}
+          {!autoSync && (
+            <p data-testid="profile-resolve-dialog-auto-sync-off" className={`mt-2 ${NOTICE}`}>{t('settings.profile.resolve.auto_sync_off')}</p>
           )}
           {host !== null && host.movedOn && (
             <p data-testid="profile-resolve-sot-moved" className={`mt-2 ${NOTICE}`}>{t('settings.profile.resolve.sot_moved')}</p>

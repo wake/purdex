@@ -65,7 +65,7 @@ let resolveLocal: (v: LocalSide) => void
 let resolveHost: (v: HostSide) => void
 
 beforeEach(() => {
-  useProfileStore.setState({ masterHostId: MASTER.hostId, masterProfileId: MASTER.profileId, masterEndpoint: ENDPOINT, attachGeneration: 1, pendingDirection: null, suspension: null })
+  useProfileStore.setState({ masterHostId: MASTER.hostId, masterProfileId: MASTER.profileId, masterEndpoint: ENDPOINT, attachGeneration: 1, pendingDirection: null, suspension: null, autoSync: true })
   useHostStore.setState({
     hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 }, h2: { id: 'h2', name: 'other', ip: '10.0.0.2', port: 7860, order: 1 } },
     hostOrder: ['h1', 'h2'],
@@ -263,6 +263,37 @@ describe('the confirmation', () => {
     await act(async () => firstHost({ count: { state: 'read', count: 99 }, movedOn: true }))
     expect(screen.getByTestId('profile-resolve-count-sot')).toHaveAttribute('data-state', 'loading')
     expect(screen.queryByTestId('profile-resolve-sot-moved')).toBeNull()
+  })
+})
+
+describe('Auto-sync off: a choice takes effect only when sync runs (P3d-4c F3)', () => {
+  it.each([['keep-local', openKeepLocal], ['take-sot', openTakeSot]] as const)('the %s dialog says so', (_, open) => {
+    useProfileStore.setState({ autoSync: false })
+    view(statusOf({ hosts: RESET }))
+    open('hosts')
+    expect(within(screen.getByTestId('profile-resolve-dialog')).getByTestId('profile-resolve-dialog-auto-sync-off')).toHaveTextContent(en['settings.profile.resolve.auto_sync_off'])
+  })
+
+  it('Auto-sync on: not said', () => {
+    view(statusOf({ hosts: RESET }))
+    openTakeSot('hosts')
+    expect(screen.queryByTestId('profile-resolve-dialog-auto-sync-off')).toBeNull()
+  })
+
+  it('after the confirm the row says it too, beside "sent"', () => {
+    useProfileStore.setState({ autoSync: false })
+    view(statusOf({ hosts: RESET }))
+    openTakeSot('hosts')
+    fireEvent.click(screen.getByTestId('profile-resolve-confirm'))
+    expect(screen.getByTestId('profile-resolve-sent-hosts')).toHaveAttribute('data-state', 'sent')
+    expect(screen.getByTestId('profile-resolve-auto-sync-off-hosts')).toHaveTextContent(en['settings.profile.resolve.auto_sync_off'])
+  })
+
+  it('after the confirm with Auto-sync on: only "sent"', () => {
+    view(statusOf({ hosts: RESET }))
+    openTakeSot('hosts')
+    fireEvent.click(screen.getByTestId('profile-resolve-confirm'))
+    expect(screen.queryByTestId('profile-resolve-auto-sync-off-hosts')).toBeNull()
   })
 })
 

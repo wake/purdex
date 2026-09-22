@@ -1404,6 +1404,7 @@
   "settings.profile.resolve.sent": "已送出，正在等負責同步的視窗處理。",
   "settings.profile.resolve.no_answer": "負責同步的視窗沒有回應，請再試一次。",
   "settings.profile.resolve.not_sent": "無法送出，請再試一次。",
+  "settings.profile.resolve.auto_sync_off": "自動同步已關閉：要等你重新開啟自動同步，或按「立即同步」，這個選擇才會生效。",
   "settings.profile.resolve.keep_local_title": "保留這台裝置的「{{section}}」？",
   "settings.profile.resolve.keep_local_body": "同步主機上的這一份會被這台裝置的取代，其他同步這份 profile 的裝置也會收到它。",
   "settings.profile.resolve.take_sot_title": "採用同步主機的「{{section}}」？",

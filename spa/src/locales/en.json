@@ -1404,6 +1404,7 @@
   "settings.profile.resolve.sent": "Sent. Waiting for the window that is syncing.",
   "settings.profile.resolve.no_answer": "No answer from the window that is syncing. Try again.",
   "settings.profile.resolve.not_sent": "Could not be sent. Try again.",
+  "settings.profile.resolve.auto_sync_off": "Auto-sync is off: this takes effect when you turn it back on or press Sync now.",
   "settings.profile.resolve.keep_local_title": "Keep this device's “{{section}}”?",
   "settings.profile.resolve.keep_local_body": "The sync host's copy is replaced by this device's, and every other device syncing this profile receives it.",
   "settings.profile.resolve.take_sot_title": "Take the sync host's “{{section}}”?",
