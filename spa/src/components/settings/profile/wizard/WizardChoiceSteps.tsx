@@ -8,12 +8,16 @@ import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../../../stores/use
 import type { SyncDirection } from '../../../../stores/useProfileStore'
 import type { UnsettledReason } from '../../../../lib/profile/master-world'
 import type { SotProfilesView } from '../useSotProfiles'
+import type { SotDelete } from '../useSotDelete'
+import type { Attachment } from '../../../../lib/profile/api'
 import { countWorld, worldToBeMaster } from './wizard-run'
 import { BTN, INPUT, NOTICE, requestKey } from './wizard-shared'
 
 const BADGE = 'rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-secondary'
 const CHOICE = 'flex items-center gap-2 py-1 text-xs text-text-primary cursor-pointer'
 const RADIO = 'accent-border-active'
+
+const deviceNames = (attachments: Attachment[]): string => attachments.map((a) => a.deviceName).join(', ')
 
 /** `name` of an existing choice: what the wizard calls a profile it has just created, until the list has it. */
 export type SotChoice = { kind: 'existing'; id: string; name?: string } | { kind: 'new' }
@@ -34,10 +38,12 @@ interface SotStepProps {
   createError: { outcome: 'failed' | 'not-created' | 'unknown' | 'same-name'; request: string } | null
   /** The profile that MAY be the one a create of unknown outcome made: marked, never chosen for the user. */
   maybeId: string | null
+  /** Deleting a profile nobody is attached to (useSotDelete.ts; its dialog is the wizard's). */
+  del: SotDelete
   disabled: boolean
 }
 
-export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newName, onNewName, createError, maybeId, disabled }: SotStepProps) {
+export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newName, onNewName, createError, maybeId, del, disabled }: SotStepProps) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -77,7 +83,15 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
 
       {hostId !== null && (
         <div data-testid="profile-wizard-profiles" data-state={state} role="radiogroup" aria-label={t('settings.profile.wizard.sot.profiles')} className="mt-3">
-          <p className="text-text-secondary">{t('settings.profile.wizard.sot.profiles')}</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-text-secondary">{t('settings.profile.wizard.sot.profiles')}</p>
+            {view?.kind === 'rows' && (
+              <button type="button" data-testid="profile-wizard-profiles-refresh" disabled={disabled} onClick={reload} className={BTN}>
+                <ArrowsClockwise size={14} />
+                {t('settings.profile.sot.refresh')}
+              </button>
+            )}
+          </div>
           {view?.kind === 'loading' && <p data-testid="profile-wizard-profiles-loading" className="text-text-muted">{t('settings.profile.wizard.sot.loading')}</p>}
           {view?.kind === 'error' && (
             <div className="flex flex-wrap items-center gap-2">
@@ -90,23 +104,47 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
           )}
           {state === 'empty' && <p data-testid="profile-wizard-profiles-empty" className="text-text-muted">{t('settings.profile.wizard.sot.empty')}</p>}
           {view?.kind === 'rows' &&
-            view.rows.map((row) => (
-              <label key={row.id} className={CHOICE}>
-                <input
-                  type="radio"
-                  name="profile-wizard-profile"
-                  data-testid={`profile-wizard-profile-${row.id}`}
-                  className={RADIO}
-                  disabled={disabled}
-                  checked={choice?.kind === 'existing' && choice.id === row.id}
-                  onChange={() => onChoice({ kind: 'existing', id: row.id })}
-                />
-                {/* A profile's name is its owner's text: shown as it is. */}
-                <span>{row.name}</span>
-                <span className="text-text-muted">{t('settings.profile.wizard.sot.devices', { count: row.attachments.length })}</span>
-                {row.id === maybeId && <span data-testid={`profile-wizard-profile-maybe-${row.id}`} className={BADGE}>{t('settings.profile.wizard.sot.maybe_yours')}</span>}
-              </label>
-            ))}
+            view.rows.map((row) => {
+              const blocked = del.blocked(row)
+              return (
+                <div key={row.id} data-testid={`profile-wizard-profile-row-${row.id}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className={CHOICE}>
+                      <input
+                        type="radio"
+                        name="profile-wizard-profile"
+                        data-testid={`profile-wizard-profile-${row.id}`}
+                        className={RADIO}
+                        disabled={disabled}
+                        checked={choice?.kind === 'existing' && choice.id === row.id}
+                        onChange={() => onChoice({ kind: 'existing', id: row.id })}
+                      />
+                      {/* A profile's name is its owner's text: shown as it is. */}
+                      <span>{row.name}</span>
+                      <span className="text-text-muted">{t('settings.profile.wizard.sot.devices', { count: row.attachments.length })}</span>
+                      {row.id === maybeId && <span data-testid={`profile-wizard-profile-maybe-${row.id}`} className={BADGE}>{t('settings.profile.wizard.sot.maybe_yours')}</span>}
+                    </label>
+                    {blocked === null && (
+                      <button type="button" data-testid={`profile-wizard-profile-delete-${row.id}`} disabled={disabled} onClick={() => del.ask(row)} className={BTN}>
+                        {t('common.delete')}
+                      </button>
+                    )}
+                  </div>
+                  {blocked !== null && (
+                    <p data-testid={`profile-wizard-profile-delete-blocked-${row.id}`} className="ml-5 text-text-muted">
+                      {t(`settings.profile.sot.delete_blocked_${blocked}`)}
+                    </p>
+                  )}
+                  {del.refused?.id === row.id && (
+                    <p data-testid={`profile-wizard-profile-attached-${row.id}`} className="ml-5 text-status-warning">
+                      {del.refused.attachments.length > 0
+                        ? t('settings.profile.sot.attached', { names: deviceNames(del.refused.attachments) })
+                        : t('settings.profile.sot.attached_none')}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
           {/* A new one can be made whatever the list says — also when it could not be read. */}
           <label className={CHOICE}>
             <input
@@ -134,6 +172,9 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
               />
               <span className="text-text-muted">{t('settings.profile.wizard.sot.new_hint')}</span>
             </div>
+          )}
+          {del.status !== null && (
+            <p data-testid="profile-wizard-delete-status" role="alert" className="mt-1 text-red-500">{del.status}</p>
           )}
           {createError !== null && (
             <p data-testid="profile-wizard-create-error" data-outcome={createError.outcome} data-reason={createError.request} role="alert" className="mt-1 text-red-500">

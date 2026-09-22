@@ -1499,6 +1499,7 @@
   "settings.profile.wizard.sot.new_hint": "按下下面的按鈕時才會在主機上建立，一開始是空的。",
   "settings.profile.wizard.sot.create_next": "建立並繼續",
   "settings.profile.wizard.sot.create_failed": "沒有建立 profile。",
+  "settings.profile.wizard.sot.delete_failed": "沒有刪除 profile。",
   "settings.profile.wizard.request.network": "連不上主機。",
   "settings.profile.wizard.request.timeout": "主機沒有在時限內回應。",
   "settings.profile.wizard.request.aborted": "請求在主機回應前被取消了。",
