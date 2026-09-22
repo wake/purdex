@@ -43,19 +43,6 @@ export function useRouteSync() {
   // The active tab's URL — Tab → URL's trigger (re-renders only when it changes).
   const activeUrl = useTabStore(activeTabUrl)
 
-  // Record visit when activeTab changes.
-  // tabs excluded: only activeTabId change should trigger a visit record; tabs object changes frequently.
-  useEffect(() => {
-    if (!hydrated) return
-    if (!activeTabId) return
-    const tab = tabs[activeTabId]
-    if (!tab) return
-    const primary = getPrimaryPane(tab.layout)
-    if (!primary) return
-    useHistoryStore.getState().recordVisit(activeTabId, primary.content)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId, hydrated])
-
   // URL → Tab: when URL changes (back/forward/direct), find or create tab.
   // Declared BEFORE Tab → URL on purpose: when both effects run in the same
   // commit — the first hydrated pass of a cold start always does — the URL is
@@ -120,6 +107,24 @@ export function useRouteSync() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openSingletonTab, setActiveTab: stable Zustand selectors
   }, [location, hydrated])
+
+  // Record visit when activeTab changes.
+  // Declared AFTER URL → Tab and skipped when this render's activeTabId is no
+  // longer the store's: on a deep-link cold start URL → Tab switches the tab in
+  // the same commit, and recording the render's (stale, persisted) tab would
+  // log a phantom visit — the switch re-renders and records the real one.
+  // tabs excluded: only activeTabId change should trigger a visit record; tabs object changes frequently.
+  useEffect(() => {
+    if (!hydrated) return
+    if (!activeTabId) return
+    if (activeTabId !== useTabStore.getState().activeTabId) return
+    const tab = tabs[activeTabId]
+    if (!tab) return
+    const primary = getPrimaryPane(tab.layout)
+    if (!primary) return
+    useHistoryStore.getState().recordVisit(activeTabId, primary.content)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId, hydrated])
 
   // Tab → URL: replace the URL when it doesn't show the active tab.
   // Reads the store NOW, not this render's `activeUrl`: URL → Tab (above) may

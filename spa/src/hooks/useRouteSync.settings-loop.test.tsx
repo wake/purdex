@@ -201,6 +201,24 @@ describe('useRouteSync × GlobalSettingsPage in the real TabContent shell (#1326
     expect(navs).toEqual([{ to: `/t/${SESSION_TAB}/terminal`, replace: true }])
   })
 
+  // Pins pre-existing behaviour (same on origin/main before #1326's cold-start
+  // fix): tabToUrl is never given a workspaceId, so no code emits
+  // /w/<ws>/t/<tab>/... — a typed one activates the tab and is then normalised
+  // to /t/<tab>/<mode> by one Tab→URL replace. The cold-start test below must
+  // behave the same.
+  it('in-app navigation to /w/<ws>/t/<tab>/terminal activates the tab and normalises the URL to /t/<tab>/terminal', () => {
+    const { mem, navs, current } = mount('/settings/appearance')
+    navs.length = 0
+
+    act(() => {
+      mem.navigate(`/w/${UNSORTED}/t/${SESSION_TAB}/terminal`)
+    })
+
+    expect(useTabStore.getState().activeTabId).toBe(SESSION_TAB)
+    expect(current()).toBe(`/t/${SESSION_TAB}/terminal`)
+    expect(navs).toEqual([{ to: `/t/${SESSION_TAB}/terminal`, replace: true }])
+  })
+
   it('keepAliveCount>0: re-activating the kept-alive global Settings pane restores its section URL', () => {
     useUISettingsStore.setState({ keepAliveCount: 1 })
     const { current } = mount('/settings/appearance')
@@ -286,6 +304,13 @@ describe('useRouteSync cold start: deep link vs persisted active tab (#1326)', (
     expect(navs).toEqual([])
   })
 
+  it('/w/<ws>/t/<tab>/terminal: activates the tab and normalises to /t/<tab>/terminal like in-app navigation', () => {
+    const { navs, current } = coldMount(`/w/${UNSORTED}/t/${SESSION_TAB}/terminal`)
+    expect(useTabStore.getState().activeTabId).toBe(SESSION_TAB)
+    expect(current()).toBe(`/t/${SESSION_TAB}/terminal`)
+    expect(navs).toEqual([{ to: `/t/${SESSION_TAB}/terminal`, replace: true }])
+  })
+
   it('/history: opens the history tab, no replace', () => {
     const { navs, current } = coldMount('/history')
     expect(current()).toBe('/history')
@@ -326,5 +351,24 @@ describe('useRouteSync cold start: deep link vs persisted active tab (#1326)', (
     expect(useTabStore.getState().activeTabId).toBe(GLOBAL_TAB)
     expect(current()).toBe('/settings/appearance')
     expect(navs).toEqual([])
+  })
+
+  const visitedTabIds = () => useHistoryStore.getState().browseHistory.map((r) => r.tabId)
+
+  it('deep link: records exactly one visit, for the deep-linked tab — none for the stale persisted tab', () => {
+    coldMount(`/t/${SESSION_TAB}/terminal`)
+    expect(visitedTabIds()).toEqual([SESSION_TAB])
+  })
+
+  it('deep link that opens a new tab (/w/<ws>/settings): one visit, for that tab', () => {
+    coldMount(`/w/${WS_X}/settings`)
+    const active = useTabStore.getState().activeTabId
+    expect(active).not.toBe(GLOBAL_TAB)
+    expect(visitedTabIds()).toEqual([active])
+  })
+
+  it('URL matching the persisted active tab: one visit, for that tab', () => {
+    coldMount('/settings/appearance')
+    expect(visitedTabIds()).toEqual([GLOBAL_TAB])
   })
 })
