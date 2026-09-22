@@ -136,7 +136,7 @@ export function CurrentBlock({ masterName }: Props) {
           <Attached sync={sync} master={sync.master} masterName={masterName} />
           <SettingItem label={t('settings.profile.current.change')} description={t('settings.profile.current.change_desc')}>
             <button type="button" data-testid="profile-setup-change" onClick={() => setWizardOpen(true)} className={BTN}>
-              {t('settings.profile.current.setup')}
+              {t('settings.profile.current.change')}
             </button>
           </SettingItem>
         </>

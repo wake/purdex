@@ -100,6 +100,9 @@ describe('the wizard\'s two ways in (P3d-3)', () => {
 
   it('a master attached: "another profile or host…" opens the same wizard in place of the state — and the plain Stop sync is not offered beside it', () => {
     show(attached())
+    // the button carries its row's words, like "Sync now" does (P3d-4c F6) — not the no-master "Set up sync…"
+    expect(screen.getByTestId('profile-setup-change')).toHaveTextContent(en['settings.profile.current.change'])
+    expect(screen.getByTestId('profile-setup-change')).not.toHaveTextContent(en['settings.profile.current.setup'])
     fireEvent.click(screen.getByTestId('profile-setup-change'))
     expect(screen.getByTestId('profile-wizard')).toBeInTheDocument()
     expect(screen.queryByTestId('profile-sync-now')).toBeNull()
