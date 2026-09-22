@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { replaceTabSnapshot } from '../../../lib/snapshot/restore'
 import { STORAGE_KEYS } from '../../../lib/storage/keys'
 import { createTab, type Tab, type Workspace } from '../../../types/tab'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../store'
@@ -439,14 +438,12 @@ describe('a tab in more than one workspace', () => {
     expect(useWorkspaceStore.getState().workspaces[0]).toMatchObject({ tabs: [t.id, 'a1'], activeTabId: t.id })
   })
 
-  it('after a rehydrate / a snapshot restore: converges after the settle delay, with one log line that has the count and no tab id', () => {
+  it('after a rehydrate / a wholesale store write: converges after the settle delay, with one log line that has the count and no tab id', () => {
     useWorkspaceStore.getState().addWorkspace('Old')
     stop = startStandaloneAdoption()
     const t = createTab({ kind: 'new-tab' })
-    replaceTabSnapshot({
-      version: 1, capturedAt: 1, sessionMeta: {}, tabs: { [t.id]: t }, tabOrder: [t.id], activeTabId: null,
-      workspaces: [ws('aaaaaa', 'A', [t.id]), ws('bbbbbb', 'B', [t.id])], activeWorkspaceId: 'aaaaaa',
-    })
+    useTabStore.setState({ tabs: { [t.id]: t }, tabOrder: [t.id], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [ws('aaaaaa', 'A', [t.id]), ws('bbbbbb', 'B', [t.id])], activeWorkspaceId: 'aaaaaa' })
     expect(ownersOf(t.id)).toEqual(['aaaaaa', 'bbbbbb'])
     vi.advanceTimersByTime(ADOPTION_SETTLE_MS)
     expect(ownersOf(t.id)).toEqual(['aaaaaa'])

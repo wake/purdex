@@ -11,7 +11,6 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../storage'
 import type { Tab, Workspace } from '../../types/tab'
-import { replaceTabSnapshot } from '../snapshot/restore'
 import { commitTabWorld as commitViaApply } from './apply-to-stores'
 import {
   MASTER_WORLD_STUCK_MS,
@@ -273,17 +272,6 @@ describe('repointActiveTab', () => {
   it('keeps the preferred tab while it survives', () => expect(repointActiveTab(w, 'm-t2')).toBe('m-t2'))
   it('else the active workspace\'s', () => expect(repointActiveTab(w, 'gone')).toBe('m-t1'))
   it('else null', () => expect(repointActiveTab({ ...w, activeWorkspaceId: null }, 'gone')).toBeNull())
-})
-
-describe('replaceTabSnapshot (lib/snapshot/restore.ts) does not change worlds', () => {
-  it('leaves the tag alone: still settled afterwards', () => {
-    putSlaveOnScreen(5)
-    const s = slaveWorld()
-    replaceTabSnapshot({ tabs: s.tabs, tabOrder: Object.keys(s.tabs), activeTabId: 's-t2', workspaces: s.workspaces, activeWorkspaceId: s.activeWorkspaceId } as Parameters<typeof replaceTabSnapshot>[0])
-    expect(useTabStore.getState()).toMatchObject({ activeTabId: 's-t2', worldId: 's1', worldEpoch: 5 })
-    expect(useWorkspaceStore.getState()).toMatchObject({ worldId: 's1', worldEpoch: 5 })
-    expect(readMasterWorld().settled).toBe(true)
-  })
 })
 
 // === C. writeMasterWorld ===
