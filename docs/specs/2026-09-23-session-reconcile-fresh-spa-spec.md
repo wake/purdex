@@ -75,8 +75,9 @@ persisted, not synced — it describes this window's connections).
   that partial state. With the claim, `held` stays `v` after a throw: nothing older can get
   in, and the failure is recovered by a fresh refresh (§3.2.1) — whose list is read later,
   so newer than `v`.
-- A WS frame without a version sets `held = null` (the host is — again — an old
-  daemon; nothing versioned may be compared against a list from before it).
+- A WS frame without a version sets `held = null` once it has been reconciled (the host is —
+  again — an old daemon; nothing versioned may be compared against a list from before it).
+  A frame that is not a list, or whose reconciliation threw, leaves `held` alone (§3.3).
 
 ### 3.2 The post-switch refresh — `lib/rebuild/refresh-after-switch.ts` (new)
 
@@ -126,8 +127,11 @@ changes on a switch in any window. The plan pins the exact accessor.
 ### 3.3 The WS handler (`hooks/useMultiHostEventWs.ts`)
 
 - `HostEvent` gains optional `epoch?: string; seq?: number`.
-- `sessions` frame: `v = parseVersion(event)`.
-  - `v === null` → today's behaviour (reconcile), and `held = null`.
+- `sessions` frame: `value` must parse to a JSON **array**; anything else (bad JSON, an
+  object, `null`, a scalar) → the whole frame is ignored, `held` untouched (codex adversarial
+  F4). Then `v = parseVersion(event)`.
+  - `v === null` → today's behaviour (reconcile), and — only after the reconciliation
+    returned — `held = null`. A throw keeps `held` and starts the recovery refresh (§3.2.1).
   - `decide(hostId, v, {kind: 'ws'})`:
     - `apply` → `note` (claim, §3.1), then reconcile. A throw keeps the claim and starts a
       recovery refresh on this connection (`recoverHostSessions`, §3.2.1: world / endpoint /

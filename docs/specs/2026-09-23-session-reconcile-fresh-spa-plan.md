@@ -36,7 +36,10 @@ versioned frame is claimed (`note`) then reconciled; an older-seq frame after a 
 closed (codex #2; the gate stays closed); reconcile throwing → `held` = the frame's version
 (claim before apply — the reconciliation is not transactional, codex adversarial F2, replacing
 codex #4's "note after success"), gate not opened, one `recoverHostSessions`; seq 6 throws
-mid-way → a late seq 5 is not reconciled, seq 7 is; an unversioned frame reconciles and clears `held`; after the `onClose` callback
+mid-way → a late seq 5 is not reconciled, seq 7 is; an unversioned frame reconciles and clears `held`
+(only after the reconciliation returned; a throw keeps `held` + `recoverHostSessions`); a value
+that is not a JSON array (object, `null`, scalar), versioned or not → frame ignored, `held` kept
+(codex adversarial F4); after the `onClose` callback
 returns, conn has moved and the gate is closed (codex #5); teardown bumps conn.
 
 **T5 `lib/rebuild/refresh-after-switch.ts` (new) + call from `switchActiveProfile` (spec §3.2).**

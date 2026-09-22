@@ -16,8 +16,12 @@
 // connection instead (`recoverHostSessions`, refresh-after-switch.ts): with no
 // further session change, no further frame would come.
 //
-// An unversioned frame (old daemon) is reconciled exactly as before, and clears
-// what is held: nothing versioned may be compared against a list from before it.
+// An unversioned frame (old daemon) is reconciled exactly as before, and — once
+// that reconciliation returned — clears what is held: nothing versioned may be
+// compared against a list from before it. A value that is not a JSON array is
+// no list at all: the whole frame is ignored, versioned or not, and `held` is
+// left alone (codex adversarial F4). An unversioned reconcile that throws keeps
+// `held` and asks for the same recovery refresh as a versioned one.
 import type { HostEvent } from '../host-events'
 import type { Session } from '../host-api'
 import { reconcileHostSessions } from './reconcile-host'
@@ -25,18 +29,23 @@ import { recoverHostSessions } from './refresh-after-switch'
 import { clearHeld, decide, note, parseVersion } from './session-version'
 
 export function handleSessionsFrame(hostId: string, event: HostEvent): void {
-  let data: Session[]
+  let parsed: unknown
   try {
-    data = JSON.parse(event.value)
+    parsed = JSON.parse(event.value)
   } catch {
     return // no list, no evidence
   }
+  if (!Array.isArray(parsed)) return // not a list either
+  const data = parsed as Session[]
   const v = parseVersion(event)
   if (v === null) {
-    clearHeld(hostId)
     try {
       reconcileHostSessions(hostId, data)
-    } catch { /* ignore */ }
+    } catch {
+      void recoverHostSessions(hostId)
+      return // held stays: this list was not applied, so nothing is known to be older than it
+    }
+    clearHeld(hostId)
     return
   }
   if (decide(hostId, v, { kind: 'ws' }) === 'stale') return

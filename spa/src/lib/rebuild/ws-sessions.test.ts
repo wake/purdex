@@ -153,6 +153,35 @@ describe('handleSessionsFrame', () => {
     expect(heldVersion(H)).toBeNull()
   })
 
+  // codex adversarial F4: an unversioned frame clears `held` only once it has
+  // proved to be a list AND been reconciled.
+  it.each([['{}'], ['null'], ['"x"'], ['42'], ['{"sessions":[]}']])(
+    'an unversioned frame whose value is not an array (%s) is ignored: held kept, nothing reconciled',
+    (value) => {
+      note(H, { epoch: E1, seq: 4 })
+      handleSessionsFrame(H, { type: 'sessions', session: '', value })
+      expect(heldVersion(H)).toEqual({ epoch: E1, seq: 4 })
+      expect(useSessionStore.getState().sessions[H]).toBeUndefined()
+      expect(attachReady()).toBeUndefined()
+      expect(recoverHostSessions).not.toHaveBeenCalled()
+    },
+  )
+
+  it('a versioned frame whose value is not an array is ignored: nothing claimed, nothing reconciled', () => {
+    note(H, { epoch: E1, seq: 4 })
+    handleSessionsFrame(H, { type: 'sessions', session: '', value: '{}', epoch: E1, seq: 5 })
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 4 })
+    expect(useSessionStore.getState().sessions[H]).toBeUndefined()
+  })
+
+  it('an unversioned frame whose reconcile throws keeps held and asks for a recovery refresh', () => {
+    note(H, { epoch: E1, seq: 40 })
+    useSessionStore.setState({ replaceHost: () => { throw new Error('quota') } } as never)
+    expect(() => handleSessionsFrame(H, frame([]))).not.toThrow()
+    expect(heldVersion(H)).toEqual({ epoch: E1, seq: 40 })
+    expect(recoverHostSessions).toHaveBeenCalledWith(H)
+  })
+
   it('a frame whose value cannot be parsed changes nothing', () => {
     openAttachGate(H)
     note(H, { epoch: E1, seq: 4 })
