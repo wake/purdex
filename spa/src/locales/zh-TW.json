@@ -290,6 +290,11 @@
   "settings.appearance.tab_position.both": "上方與左側",
   "settings.appearance.tab_position.left_hint": "左側／都顯示會讓側邊欄維持寬版",
   "nav.collapse_locked_tooltip": "當分頁顯示在左側時，側邊欄會維持寬版",
+  "sidebar.manage_views": "管理 views",
+  "sidebar.add_views": "加入 views",
+  "sidebar.no_views_available": "沒有可用的 views",
+  "sidebar.section_enabled": "已啟用",
+  "sidebar.section_available": "可加入",
 
   "page.newtab.title": "新增分頁",
   "page.newtab.empty": "尚未登錄任何內容提供者",
@@ -1588,5 +1593,10 @@
   "settings.profile.wizard.sot.create_not_created": "之後向主機查過，上面沒有這份 profile。再按一次按鈕就會建立。",
   "settings.profile.wizard.sot.create_same_name": "不確定 profile 有沒有建立成功，而主機上現在有一份同名的空 profile，可能是、也可能不是剛才那一份。如果是你的，請從上面的清單選它；不然請替新的換一個名稱。",
   "settings.profile.wizard.notice.create_maybe": "不確定你的 profile 有沒有建立成功——主機沒有回應。主機上現在有一份同名、全新的空 profile，已在清單中標示：可能就是它，也可能是另一台裝置在同一時間建立的。如果是你的就選它，不然請替新的 profile 換一個名稱。",
-  "settings.profile.wizard.sot.maybe_yours": "可能是你剛才建立的"
+  "settings.profile.wizard.sot.maybe_yours": "可能是你剛才建立的",
+
+  "file_not_found.search_session_cwd": "搜尋目前 session cwd",
+  "file_not_found.search_workspace_path": "搜尋 workspace projectPath",
+  "file_not_found.search_session_cwd_label": "搜尋目前 session（cwd: {{path}}）",
+  "file_not_found.search_workspace_path_label": "搜尋 workspace（projectPath: {{path}}）"
 }

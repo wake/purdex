@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { CheckSquare, Square } from '@phosphor-icons/react'
 import { useLayoutStore } from '../stores/useLayoutStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import { getAllViews } from '../lib/module-registry'
 import type { SidebarRegion } from '../types/layout'
 
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function RegionContextMenu({ region, position, onClose }: Props) {
+  const t = useI18nStore((s) => s.t)
   const views = useLayoutStore((s) => s.regions[region].views)
   const addView = useLayoutStore((s) => s.addView)
   const removeView = useLayoutStore((s) => s.removeView)
@@ -93,7 +95,7 @@ export function RegionContextMenu({ region, position, onClose }: Props) {
         )
       })}
       {orderedViews.length === 0 && (
-        <div className="px-3 py-1.5 text-text-muted">沒有可用的 views</div>
+        <div className="px-3 py-1.5 text-text-muted">{t('sidebar.no_views_available')}</div>
       )}
     </div>
   )

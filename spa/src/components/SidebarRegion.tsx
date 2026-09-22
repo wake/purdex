@@ -9,6 +9,7 @@ import type { SidebarRegion as SidebarRegionType } from '../types/layout'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useI18nStore } from '../stores/useI18nStore'
 
 interface Props {
   region: SidebarRegionType
@@ -20,6 +21,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
   const setRegionWidth = useLayoutStore((s) => s.setRegionWidth)
   const toggleRegion = useLayoutStore((s) => s.toggleRegion)
   const setActiveView = useLayoutStore((s) => s.setActiveView)
+  const t = useI18nStore((s) => s.t)
 
   const { views, activeViewId, width, mode } = regionState
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
@@ -76,7 +78,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
           <button
             data-testid="add-view-button"
             className="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors mt-auto mb-1"
-            title="管理 views"
+            title={t('sidebar.manage_views')}
             onClick={(e) => {
               e.stopPropagation()
               openManageMode()
@@ -140,7 +142,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
                 : 'text-text-muted hover:text-text-primary hover:bg-surface-hover'
             }`}
             onClick={() => setManaging((m) => !m)}
-            title="管理 views"
+            title={t('sidebar.manage_views')}
           >
             <GearSix size={12} />
           </button>
@@ -164,7 +166,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
             <RegionManager region={region} />
           ) : views.length === 0 ? (
             <div className="flex items-center justify-center h-full text-text-muted text-xs p-4 text-center">
-              加入 views
+              {t('sidebar.add_views')}
             </div>
           ) : (
             ActiveComponent && (

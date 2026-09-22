@@ -2,6 +2,7 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type D
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable'
 import { DotsSixVertical, X, Plus } from '@phosphor-icons/react'
 import { useLayoutStore } from '../stores/useLayoutStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import { getAllViews } from '../lib/module-registry'
 import type { SidebarRegion } from '../types/layout'
 
@@ -55,6 +56,7 @@ function SortableViewRow({ viewId, label, icon: Icon, onRemove }: SortableViewRo
 }
 
 export function RegionManager({ region }: Props) {
+  const t = useI18nStore((s) => s.t)
   const views = useLayoutStore((s) => s.regions[region].views)
   const addView = useLayoutStore((s) => s.addView)
   const removeView = useLayoutStore((s) => s.removeView)
@@ -79,7 +81,7 @@ export function RegionManager({ region }: Props) {
     <div data-testid="region-manager" className="flex flex-col gap-3 p-2 text-xs">
       {views.length > 0 && (
         <div>
-          <div className="text-text-muted px-2 pb-1 font-medium">已啟用</div>
+          <div className="text-text-muted px-2 pb-1 font-medium">{t('sidebar.section_enabled')}</div>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={views} strategy={verticalListSortingStrategy}>
               {views.map((viewId) => {
@@ -102,7 +104,7 @@ export function RegionManager({ region }: Props) {
 
       {availableViews.length > 0 && (
         <div>
-          <div className="text-text-muted px-2 pb-1 font-medium">可加入</div>
+          <div className="text-text-muted px-2 pb-1 font-medium">{t('sidebar.section_available')}</div>
           {availableViews.map((viewDef) => (
             <div
               key={viewDef.id}
@@ -124,7 +126,7 @@ export function RegionManager({ region }: Props) {
       )}
 
       {views.length === 0 && availableViews.length === 0 && (
-        <div className="text-text-muted px-2 py-2">沒有可用的 views</div>
+        <div className="text-text-muted px-2 py-2">{t('sidebar.no_views_available')}</div>
       )}
     </div>
   )
