@@ -54,8 +54,8 @@ export interface SettingsContributionDeclaration<S extends SettingsScope = Setti
   disabledReasonKey?: string
   /**
    * Is this section LISTED at all right now? Absent = always. Asked by `listContributions` on every call, with
-   * no context: it is for a section that exists only while some state of the app's needs it (the old Sync page,
-   * kept for whoever still has conflicts to resolve). Unlike `disabled` — a greyed-out row — a section that is
+   * no context: it is for a section that exists only while some state of the app's needs it (no section uses it
+   * since the old Sync page was deleted). Unlike `disabled` — a greyed-out row — a section that is
    * not visible has no row and no route. The answer is read at the shell's render; `subscribeVisibility` is
    * how a section says that it is time to render again.
    */
