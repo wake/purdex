@@ -12,7 +12,7 @@ const COL_COUNT: Record<PresetKey, number> = {
 }
 
 /** Factory ensuring column-count invariant matches PresetKey. */
-export function makeProfile(enabled: boolean, colCount: number): LayoutPreset {
+export function makePreset(enabled: boolean, colCount: number): LayoutPreset {
   return { enabled, columns: Array.from({ length: colCount }, () => []) }
 }
 
@@ -27,17 +27,17 @@ interface State {
   knownIds: string[]
   activeEditingProfile: PresetKey
 
-  setEnabled: (p: PresetKey, enabled: boolean) => void
-  setEditing: (p: PresetKey) => void
-  placeModule: (p: PresetKey, providerId: string, colIdx: number, rowIdx: number) => void
-  placeModuleInShortest: (p: PresetKey, providerId: string) => void
-  removeModule: (p: PresetKey, providerId: string) => void
+  setEnabled: (preset: PresetKey, enabled: boolean) => void
+  setEditing: (preset: PresetKey) => void
+  placeModule: (preset: PresetKey, providerId: string, colIdx: number, rowIdx: number) => void
+  placeModuleInShortest: (preset: PresetKey, providerId: string) => void
+  removeModule: (preset: PresetKey, providerId: string) => void
   ensureDefaults: (providers: ProviderInfo[]) => void
-  /** Remove ids from every profile and from knownIds (e.g. a removed host's block). */
+  /** Remove ids from every preset and from knownIds (e.g. a removed host's block). */
   pruneIds: (ids: string[]) => void
   /**
    * Replace a retired id with its successors. Where `from` is placed, the
-   * successors take its exact slot (same column/row) in that profile; if
+   * successors take its exact slot (same column/row) in that preset; if
    * `from` was only known (user removed it), successors become known but
    * unplaced, preserving the removal. Targets already present are not duplicated.
    */
@@ -48,9 +48,9 @@ interface State {
 function initialState(): Pick<State, 'profiles' | 'knownIds' | 'activeEditingProfile'> {
   return {
     profiles: {
-      '3col': makeProfile(false, 3),
-      '2col': makeProfile(false, 2),
-      '1col': makeProfile(true, 1),
+      '3col': makePreset(false, 3),
+      '2col': makePreset(false, 2),
+      '1col': makePreset(true, 1),
     },
     knownIds: [],
     activeEditingProfile: '1col',
@@ -69,7 +69,7 @@ function shortestColIdx(cols: string[][]): number {
   return best
 }
 
-function cloneProfile(p: LayoutPreset): LayoutPreset {
+function clonePreset(p: LayoutPreset): LayoutPreset {
   return { enabled: p.enabled, columns: p.columns.map((c) => [...c]) }
 }
 
@@ -78,7 +78,7 @@ function cloneProfile(p: LayoutPreset): LayoutPreset {
  * count, non-array values). Mutates state in place (Zustand persist convention).
  * Called from `onRehydrateStorage` and exported for direct testing.
  */
-export function healProfileState<
+export function healPresetState<
   T extends Partial<Pick<State, 'profiles' | 'knownIds' | 'activeEditingProfile'>>,
 >(state: T): void {
   // profiles: reset entirely if not an object
@@ -95,7 +95,7 @@ export function healProfileState<
         !Array.isArray(p.columns) ||
         p.columns.length !== expectedLen
       ) {
-        profiles[key] = makeProfile(key === '1col', expectedLen)
+        profiles[key] = makePreset(key === '1col', expectedLen)
         continue
       }
       for (let i = 0; i < p.columns.length; i++) {
@@ -129,8 +129,8 @@ export function healProfileState<
 }
 
 /**
- * Insert `id` into `profile` at (colIdx, rowIdx). If `id` already exists
- * anywhere in the profile, remove it first. Handles same-column downward
+ * Insert `id` into `preset` at (colIdx, rowIdx). If `id` already exists
+ * anywhere in the preset, remove it first. Handles same-column downward
  * moves via index compensation (caller passes pre-removal index).
  *
  * Compensation logic for same-column downward moves:
@@ -138,9 +138,9 @@ export function healProfileState<
  * - Compensate only when toRow is strictly before end (toRow < target.length)
  * - "Move to end" case: toRow equals target.length after clamp → no compensation
  */
-function placeIn(profile: LayoutPreset, id: string, colIdx: number, rowIdx: number): LayoutPreset {
-  const next = cloneProfile(profile)
-  if (!next.columns[colIdx]) return profile // defensive
+function placeIn(preset: LayoutPreset, id: string, colIdx: number, rowIdx: number): LayoutPreset {
+  const next = clonePreset(preset)
+  if (!next.columns[colIdx]) return preset // defensive
 
   let fromCol = -1
   let fromRow = -1
@@ -172,42 +172,42 @@ export const useNewTabLayoutStore = create<State>()(
     (set) => ({
       ...initialState(),
 
-      setEnabled: (p, enabled) =>
+      setEnabled: (preset, enabled) =>
         set((state) => {
-          if (p === '1col' && !enabled) return state
+          if (preset === '1col' && !enabled) return state
           return {
             profiles: {
               ...state.profiles,
-              [p]: { ...state.profiles[p], enabled },
+              [preset]: { ...state.profiles[preset], enabled },
             },
           }
         }),
 
-      setEditing: (p) => set({ activeEditingProfile: p }),
+      setEditing: (preset) => set({ activeEditingProfile: preset }),
 
-      placeModule: (p, providerId, colIdx, rowIdx) =>
+      placeModule: (preset, providerId, colIdx, rowIdx) =>
         set((state) => ({
           profiles: {
             ...state.profiles,
-            [p]: placeIn(state.profiles[p], providerId, colIdx, rowIdx),
+            [preset]: placeIn(state.profiles[preset], providerId, colIdx, rowIdx),
           },
         })),
 
-      placeModuleInShortest: (p, providerId) =>
+      placeModuleInShortest: (preset, providerId) =>
         set((state) => {
-          const cols = state.profiles[p].columns
+          const cols = state.profiles[preset].columns
           const target = shortestColIdx(cols)
           return {
             profiles: {
               ...state.profiles,
-              [p]: placeIn(state.profiles[p], providerId, target, cols[target].length),
+              [preset]: placeIn(state.profiles[preset], providerId, target, cols[target].length),
             },
           }
         }),
 
-      removeModule: (p, providerId) =>
+      removeModule: (preset, providerId) =>
         set((state) => {
-          const next = cloneProfile(state.profiles[p])
+          const next = clonePreset(state.profiles[preset])
           let changed = false
           for (const col of next.columns) {
             const i = col.indexOf(providerId)
@@ -217,7 +217,7 @@ export const useNewTabLayoutStore = create<State>()(
             }
           }
           if (!changed) return state
-          return { profiles: { ...state.profiles, [p]: next } }
+          return { profiles: { ...state.profiles, [preset]: next } }
         }),
 
       ensureDefaults: (providers) =>
@@ -230,7 +230,7 @@ export const useNewTabLayoutStore = create<State>()(
 
           const profiles = { ...state.profiles }
           for (const key of ['3col', '2col', '1col'] as const) {
-            profiles[key] = cloneProfile(profiles[key])
+            profiles[key] = clonePreset(profiles[key])
           }
           const knownIds = [...state.knownIds]
 
@@ -299,7 +299,7 @@ export const useNewTabLayoutStore = create<State>()(
         activeEditingProfile: state.activeEditingProfile,
       }),
       onRehydrateStorage: () => (state) => {
-        if (state) healProfileState(state)
+        if (state) healPresetState(state)
       },
     },
   ),

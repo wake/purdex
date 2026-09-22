@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useNewTabLayoutStore, makeProfile, healProfileState } from './useNewTabLayoutStore'
+import { useNewTabLayoutStore, makePreset, healPresetState } from './useNewTabLayoutStore'
 import type { LayoutPreset } from './useNewTabLayoutStore'
 
 // helper for tests
-function initialStateProfiles() {
+function initialStatePresets() {
   return {
-    '3col': makeProfile(false, 3),
-    '2col': makeProfile(false, 2),
-    '1col': makeProfile(true, 1),
+    '3col': makePreset(false, 3),
+    '2col': makePreset(false, 2),
+    '1col': makePreset(true, 1),
   }
 }
 
@@ -17,7 +17,7 @@ beforeEach(() => {
 
 describe('useNewTabLayoutStore', () => {
   describe('initial state', () => {
-    it('profiles have correct column counts', () => {
+    it('presets have correct column counts', () => {
       const { profiles } = useNewTabLayoutStore.getState()
       expect(profiles['3col'].columns).toHaveLength(3)
       expect(profiles['2col'].columns).toHaveLength(2)
@@ -53,7 +53,7 @@ describe('useNewTabLayoutStore', () => {
   })
 
   describe('setEditing', () => {
-    it('switches active editing profile', () => {
+    it('switches active editing preset', () => {
       useNewTabLayoutStore.getState().setEditing('3col')
       expect(useNewTabLayoutStore.getState().activeEditingProfile).toBe('3col')
     })
@@ -106,7 +106,7 @@ describe('useNewTabLayoutStore', () => {
       expect(cols[2]).toEqual(['a'])
     })
 
-    it('cross-profile placement is independent', () => {
+    it('cross-preset placement is independent', () => {
       useNewTabLayoutStore.getState().placeModule('1col', 'x', 0, 0)
       useNewTabLayoutStore.getState().placeModule('2col', 'x', 0, 0)
       const s = useNewTabLayoutStore.getState()
@@ -146,7 +146,7 @@ describe('useNewTabLayoutStore', () => {
   })
 
   describe('removeModule', () => {
-    it('removes from all occurrences in a profile', () => {
+    it('removes from all occurrences in a preset', () => {
       useNewTabLayoutStore.setState((state) => ({
         profiles: {
           ...state.profiles,
@@ -165,7 +165,7 @@ describe('useNewTabLayoutStore', () => {
   })
 
   describe('ensureDefaults', () => {
-    it('populates shortest column of EVERY profile on first call', () => {
+    it('populates shortest column of EVERY preset on first call', () => {
       useNewTabLayoutStore.getState().ensureDefaults([
         { id: 'a', order: 0 },
         { id: 'b', order: 1 },
@@ -217,7 +217,7 @@ describe('useNewTabLayoutStore', () => {
   })
 
   describe('pruneIds', () => {
-    it('removes ids from every profile and from knownIds', () => {
+    it('removes ids from every preset and from knownIds', () => {
       const s = useNewTabLayoutStore.getState()
       s.ensureDefaults([{ id: 'a', order: 0 }, { id: 'b', order: 1 }, { id: 'c', order: 2 }])
       s.setEnabled('3col', true)
@@ -247,7 +247,7 @@ describe('useNewTabLayoutStore', () => {
   })
 
   describe('migrateId', () => {
-    it('replaces a placed id in place with the targets, in every profile', () => {
+    it('replaces a placed id in place with the targets, in every preset', () => {
       useNewTabLayoutStore.setState({
         profiles: {
           '3col': { enabled: true, columns: [['x'], ['old', 'y'], []] },
@@ -317,68 +317,68 @@ describe('useNewTabLayoutStore', () => {
   })
 })
 
-describe('makeProfile', () => {
-  it('creates a profile with N empty columns', () => {
-    const p = makeProfile(true, 3)
+describe('makePreset', () => {
+  it('creates a preset with N empty columns', () => {
+    const p = makePreset(true, 3)
     expect(p).toEqual({ enabled: true, columns: [[], [], []] })
     expect(p.columns).toHaveLength(3)
   })
 })
 
-describe('healProfileState', () => {
+describe('healPresetState', () => {
   it('is a no-op on well-formed state', () => {
     const s = {
       profiles: {
-        '3col': makeProfile(false, 3),
-        '2col': makeProfile(false, 2),
-        '1col': makeProfile(true, 1),
+        '3col': makePreset(false, 3),
+        '2col': makePreset(false, 2),
+        '1col': makePreset(true, 1),
       },
       knownIds: ['x'],
       activeEditingProfile: '1col' as const,
     }
     const before = JSON.parse(JSON.stringify(s))
-    healProfileState(s)
+    healPresetState(s)
     expect(s).toEqual(before)
   })
 
   it('restores 1col.enabled=true if corrupted', () => {
     const s = {
       profiles: {
-        '3col': makeProfile(true, 3),
-        '2col': makeProfile(false, 2),
-        '1col': makeProfile(false, 1),
+        '3col': makePreset(true, 3),
+        '2col': makePreset(false, 2),
+        '1col': makePreset(false, 1),
       },
       knownIds: [],
       activeEditingProfile: '1col' as const,
     }
-    healProfileState(s)
+    healPresetState(s)
     expect(s.profiles['1col'].enabled).toBe(true)
   })
 
-  it('resets missing profile key to defaults', () => {
+  it('resets missing preset key to defaults', () => {
     const s = {
       profiles: {
-        '3col': makeProfile(false, 3),
-        '2col': makeProfile(false, 2),
+        '3col': makePreset(false, 3),
+        '2col': makePreset(false, 2),
       } as unknown as Record<string, LayoutPreset>,
       knownIds: [],
       activeEditingProfile: '1col' as const,
     }
-    healProfileState(s)
+    healPresetState(s)
     expect(s.profiles['1col']).toEqual({ enabled: true, columns: [[]] })
   })
 
-  it('resets profile with wrong columns length', () => {
+  it('resets preset with wrong columns length', () => {
     const s = {
       profiles: {
         '3col': { enabled: true, columns: [[], []] },
-        '2col': makeProfile(false, 2),
-        '1col': makeProfile(true, 1),
+        '2col': makePreset(false, 2),
+        '1col': makePreset(true, 1),
       },
       knownIds: [],
       activeEditingProfile: '1col' as const,
     }
-    healProfileState(s)
+    healPresetState(s)
     expect(s.profiles['3col'].columns).toHaveLength(3)
     expect(s.profiles['3col'].enabled).toBe(false) // reset to default
   })
@@ -390,13 +390,13 @@ describe('healProfileState', () => {
           enabled: false,
           columns: ['not an array', [], []] as unknown as string[][],
         },
-        '2col': makeProfile(false, 2),
-        '1col': makeProfile(true, 1),
+        '2col': makePreset(false, 2),
+        '1col': makePreset(true, 1),
       },
       knownIds: [],
       activeEditingProfile: '1col' as const,
     }
-    healProfileState(s)
+    healPresetState(s)
     expect(s.profiles['3col'].columns[0]).toEqual([])
   })
 
@@ -407,33 +407,33 @@ describe('healProfileState', () => {
           enabled: false,
           columns: [['a', 42, null, 'b'] as unknown as string[], [], []],
         },
-        '2col': makeProfile(false, 2),
-        '1col': makeProfile(true, 1),
+        '2col': makePreset(false, 2),
+        '1col': makePreset(true, 1),
       },
       knownIds: [],
       activeEditingProfile: '1col' as const,
     }
-    healProfileState(s)
+    healPresetState(s)
     expect(s.profiles['3col'].columns[0]).toEqual(['a', 'b'])
   })
 
   it('resets knownIds to [] if not an array', () => {
     const s = {
-      profiles: initialStateProfiles(),
+      profiles: initialStatePresets(),
       knownIds: 'bad' as unknown as string[],
       activeEditingProfile: '1col' as const,
     }
-    healProfileState(s)
+    healPresetState(s)
     expect(s.knownIds).toEqual([])
   })
 
   it('resets invalid activeEditingProfile to 1col', () => {
     const s = {
-      profiles: initialStateProfiles(),
+      profiles: initialStatePresets(),
       knownIds: [],
       activeEditingProfile: 'bogus' as unknown as '1col',
     }
-    healProfileState(s)
+    healPresetState(s)
     expect(s.activeEditingProfile).toBe('1col')
   })
 })
