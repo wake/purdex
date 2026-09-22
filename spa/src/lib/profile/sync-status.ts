@@ -487,11 +487,14 @@ function readItem(key: string): string | null {
   }
 }
 
-function removeItem(key: string): void {
+/** `false` = storage refused (the caller may care: `publish` retries then). */
+function removeItem(key: string): boolean {
   try {
     localStorage.removeItem(key)
+    return true
   } catch {
     /* a status goes stale, a command expires */
+    return false
   }
 }
 
@@ -550,8 +553,8 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       // this leader holds the lease a follower never calls it stale: it would show an old state as the current
       // one. So the record goes; followers then say "not known yet", which is true. Logged once per stretch, and
       // the signature is taken, so the same content is not serialized again on every refresh.
-      removeItem(STATUS_KEY)
-      publishedSignature = publishable(local)
+      // Taken only once the record IS gone; refused → null, so the next refresh tries again (as a refused write).
+      publishedSignature = removeItem(STATUS_KEY) ? publishable(local) : null
       if (!oversizeLogged) {
         oversizeLogged = true
         console.warn(`[profile/sync-status] the status does not fit ${MAX_PUBLISHED_STATUS_CHARS} characters even without problems and detail (${text.length}); not published`)

@@ -384,6 +384,24 @@ describe('the leader keeps a real record under MAX_PUBLISHED_STATUS_CHARS: it de
     vi.advanceTimersByTime(250)
     expect(warn).toHaveBeenCalledTimes(2)
   })
+
+  it('a removal that storage refuses is tried again at the next refresh — the same status included', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const a = await openWindow('A', { leader: true, status: SYNCED })
+    vi.advanceTimersByTime(250)
+    expect(published()).not.toBeNull()
+    const absurd = manyLocked(3000)
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => {
+      throw new Error('blocked')
+    })
+    a.set({ status: absurd })
+    vi.advanceTimersByTime(250)
+    expect(published()).not.toBeNull() // still the old record: the removal failed
+    a.channel.refresh() // nothing changed — but nothing was done either
+    vi.advanceTimersByTime(250)
+    expect(removeItem.mock.calls.filter(([k]) => k === STATUS)).toHaveLength(2)
+    expect(localStorage.getItem(STATUS)).toBeNull()
+  })
 })
 
 /* ─── followers read ─── */
