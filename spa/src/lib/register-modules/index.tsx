@@ -35,9 +35,6 @@ import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
 import type { PaneContent } from '../../types/tab'
 import type { PaneRendererProps } from '../module-registry'
-import { registerSyncContributors } from '../sync/register-sync'
-import { useSyncStore } from '../sync/use-sync-store'
-import { SyncSection } from '../../components/settings/SyncSection'
 import {
   registerInterfaceSubsection,
   getInterfaceSubsections,
@@ -169,9 +166,6 @@ if (import.meta.hot) {
 export function registerBuiltinModules(): void {
   const caps = getPlatformCapabilities()
 
-  // Sync contributors
-  registerSyncContributors()
-
   // Modules with pane renderers
   registerModule({
     id: 'new-tab',
@@ -257,37 +251,6 @@ export function registerBuiltinModules(): void {
   // Editor module
   registerModule(editorModuleDefinition)
 
-  // Sync — a structural module whose settings section is listed ONLY WHILE THE OLD SYNC STILL NEEDS IT (Profile
-  // Sync P3d-3, review F4). Settings › Profile replaces Settings › Sync, and for nearly everyone the entry is
-  // gone. But `pendingConflicts` / `pendingRemoteBundle` are persisted, and `SyncSection` is the only place that
-  // resolves or dismisses them; and a provider other than off means the user is using it (every sync is a button
-  // on that page — nothing runs by itself), so that page is also where it is switched off. Turn it off with
-  // nothing pending and the entry goes. The module, its engine, its contributors
-  // (`registerSyncContributors` above) and `SnapshotHistoryPage` stay until P4a deletes them.
-  registerModule({
-    id: 'sync',
-    name: 'Sync',
-    settings: [
-      {
-        localId: 'sync',
-        scope: 'purdex',
-        order: SETTINGS_ORDER.MODULE_SYNC,
-        labelKey: 'settings.section.sync',
-        component: SyncSection,
-        visible: () => {
-          const sync = useSyncStore.getState()
-          return sync.activeProviderId !== null || sync.pendingConflicts.length > 0 || sync.pendingRemoteBundle !== null
-        },
-        // Another window's write (conflicts found there) reaches this store as a rehydrate, and nothing else
-        // would re-render an open Settings page. The three conditions above, and nothing else of the store.
-        subscribeVisibility: (onChange) =>
-          useSyncStore.subscribe((next, prev) => {
-            if (next.activeProviderId !== prev.activeProviderId || next.pendingConflicts.length !== prev.pendingConflicts.length || (next.pendingRemoteBundle !== null) !== (prev.pendingRemoteBundle !== null)) onChange()
-          }),
-      },
-    ],
-  })
-
   // FS backends
   registerBuiltinFsBackends(caps)
 
@@ -343,9 +306,6 @@ export function registerBuiltinModules(): void {
     component: InterfaceSectionHost,
   })
   registerSettingsSection({ id: 'profile', label: 'settings.section.profile', order: SETTINGS_ORDER.PROFILE, component: ProfileSection })
-  // Sync was promoted to a structural module above (spec §4.3, PR-2);
-  // its `registerSettingsSection({ id: 'sync', ... })` call lived here
-  // and is intentionally removed.
   // Modules Switchboard — replaces the long-dormant `globalConfig` UI with a
   // module enable/disable panel. Keeps the id `module-config` for URL
   // stability (`/settings/module-config`).
