@@ -345,6 +345,45 @@ describe('a follower reads what the leader published', () => {
     expect(b.snapshot()).toMatchObject({ status: null, remote: false, stale: false })
   })
 
+  // F1 (P3d-4a review): the page reads `profile`, `sections`, `locks` without asking — a record that lacks them
+  // would take the Profile UI down with it. So the fields that were always there are checked too.
+  const rec = (status: unknown) => JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] })
+  const { sections: _s, ...noSections } = SYNCED
+  const { locks: _l, ...noLocks } = SYNCED
+  const { profile: _p, ...noProfile } = SYNCED
+  const { schemaLock: _k, ...noSchemaLock } = SYNCED
+  it.each([
+    ['`status` an array', rec([])],
+    ['`status` only a detail', rec({ detail: {} })],
+    ['no `sections`', rec(noSections)],
+    ['no `locks`', rec(noLocks)],
+    ['no `profile`', rec(noProfile)],
+    ['no `schemaLock`', rec(noSchemaLock)],
+    ['an unknown `profile`', rec({ ...SYNCED, profile: 'dirty' })],
+    ['`profile` not a string', rec({ ...SYNCED, profile: 3 })],
+    ['`sections` an array', rec({ ...SYNCED, sections: ['synced'] })],
+    ['a section with an unknown status', rec({ ...SYNCED, sections: { hosts: 'dirty' } })],
+    ['a section status not a string', rec({ ...SYNCED, sections: { hosts: null } })],
+    ['`locks` an array', rec({ ...SYNCED, locks: [] })],
+    ['`locks` not an object', rec({ ...SYNCED, locks: 'none' })],
+    ['a lock not in the lock\'s shape', rec({ ...SYNCED, locks: { hosts: { status: 'locked:conflict' } } })],
+    ['a lock of an unknown kind', rec({ ...SYNCED, locks: { hosts: { ...INVALID, status: 'locked:schema' } } })],
+    ['`schemaLock` a string', rec({ ...SYNCED, schemaLock: 'sot-is-newer' })],
+    ['`schemaLock` an array', rec({ ...SYNCED, schemaLock: [] })],
+  ])('a status that is not an ExecutorStatus (%s) makes the WHOLE record no record', async (_name, raw) => {
+    localStorage.setItem(STATUS, raw)
+    const b = await openWindow('B')
+    expect(b.snapshot()).toMatchObject({ status: null, remote: false, stale: false })
+  })
+
+  it('the control: locks and a schema lock in their shape are taken', async () => {
+    const schemaLock = { section: 'hosts', kind: 'hosts', verdict: 'sot-is-newer', mine: { fingerprint: 'a', ordinal: 1 }, sot: { fingerprint: 'b', ordinal: 2 } }
+    const status = { ...SYNCED, profile: 'locked:schema', schemaLock, sections: { hosts: 'locked:conflict', settings: 'locked:invalid' }, locks: { hosts: LOCK, settings: INVALID } }
+    localStorage.setItem(STATUS, rec(status))
+    const b = await openWindow('B')
+    expect(b.snapshot().status).toEqual(status)
+  })
+
   it('the control: the same record, undamaged, IS one', async () => {
     localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status: SYNCED, blocked: null, problems: [] }))
     const b = await openWindow('B')

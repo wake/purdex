@@ -287,7 +287,35 @@ function parsePublished(raw: string | null): PublishedStatus | null {
   if (status !== null && typeof status !== 'object') return null
   if (!BLOCKED.includes(blocked as ProfileSyncState['blocked'])) return null
   if (!Array.isArray(problems)) return null
-  return { at, leader, master, status: status === null ? null : withDetail(status as Record<string, unknown>), blocked: blocked as PublishedStatus['blocked'], problems: problems as PublishedStatus['problems'] }
+  const parsed = status === null ? null : parseStatus(status)
+  if (parsed === undefined) return null
+  return { at, leader, master, status: parsed, blocked: blocked as PublishedStatus['blocked'], problems: problems as PublishedStatus['problems'] }
+}
+
+/** A JSON object — not an array, not null. What `JSON.parse` makes of `{…}` has exactly this prototype. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && Object.getPrototypeOf(v) === Object.prototype
+}
+
+const PROFILE_STATUSES: ReadonlyArray<string> = ['idle', 'locked:schema', 'locked:conflict', 'locked:reset', 'locked:invalid', 'pending', 'synced']
+const SECTION_STATUSES: ReadonlyArray<string> = ['synced', 'pending', 'locked:conflict', 'locked:reset', 'locked:invalid']
+
+/**
+ * The status as the page reads it, or `undefined` = damaged (review F1): the page reads `profile`, `sections` and
+ * `locks` without asking, so a status that lacks one — or holds something else under its name — would take the
+ * Profile UI down with it. The fields every build published are checked here; the ones P3d-4 added are read in
+ * `withDetail`, where a damaged one is merely absent.
+ */
+function parseStatus(value: unknown): ExecutorStatus | undefined {
+  if (!isPlainObject(value)) return undefined
+  const { profile, schemaLock, sections, locks } = value
+  if (typeof profile !== 'string' || !PROFILE_STATUSES.includes(profile)) return undefined
+  if (schemaLock !== null && !isPlainObject(schemaLock)) return undefined
+  if (!isPlainObject(sections)) return undefined
+  for (const v of Object.values(sections)) if (typeof v !== 'string' || !SECTION_STATUSES.includes(v)) return undefined
+  if (!isPlainObject(locks)) return undefined
+  for (const v of Object.values(locks)) if (parseLock(v) === null) return undefined
+  return withDetail(value)
 }
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
