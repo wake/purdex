@@ -7,6 +7,7 @@ import { Lightning, List } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import { ExecutionsView } from './executions/ExecutionsView'
 
 vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn().mockResolvedValue({ items: [], next_cursor: '' }) }))
@@ -34,6 +35,7 @@ beforeEach(() => {
   useLayoutStore.setState(useLayoutStore.getInitialState())
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   clearModuleRegistry()
+  useI18nStore.getState().setLocale('en')
 })
 
 describe('SidebarRegion', () => {
@@ -182,6 +184,42 @@ describe('SidebarRegion', () => {
       expect(screen.getByTestId('executions-view')).toBeInTheDocument()
       expect(within(screen.getByTestId('executions-header')).getByText('Air')).toBeInTheDocument()
       expect(useNexHostStore.getState().ensure).toHaveBeenCalledWith('host-b')
+    })
+  })
+
+  describe('locale-aware labels (#1324)', () => {
+    it('collapsed add-view button title is English for the en locale', () => {
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      const btn = screen.getByTestId('add-view-button')
+      expect(btn).toHaveAttribute('title', 'Manage views')
+      expect(btn.getAttribute('title')).not.toBe('管理 views')
+    })
+
+    it('collapsed add-view button title is zh-TW for the zh-TW locale', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(screen.getByTestId('add-view-button')).toHaveAttribute('title', '管理 views')
+    })
+
+    it('expanded manage button title is English for the en locale', () => {
+      registerTestModule()
+      useLayoutStore.getState().setRegionViews('primary-sidebar', ['test-view'])
+      useLayoutStore.getState().setActiveView('primary-sidebar', 'test-view')
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(screen.getByTestId('manage-button')).toHaveAttribute('title', 'Manage views')
+    })
+
+    it('expanded manage button title is zh-TW for the zh-TW locale', () => {
+      registerTestModule()
+      useLayoutStore.getState().setRegionViews('primary-sidebar', ['test-view'])
+      useLayoutStore.getState().setActiveView('primary-sidebar', 'test-view')
+      useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
+      useI18nStore.getState().setLocale('zh-TW')
+
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(screen.getByTestId('manage-button')).toHaveAttribute('title', '管理 views')
     })
   })
 })

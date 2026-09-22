@@ -290,6 +290,7 @@
   "settings.appearance.tab_position.both": "上方與左側",
   "settings.appearance.tab_position.left_hint": "左側／都顯示會讓側邊欄維持寬版",
   "nav.collapse_locked_tooltip": "當分頁顯示在左側時，側邊欄會維持寬版",
+  "sidebar.manage_views": "管理 views",
 
   "page.newtab.title": "新增分頁",
   "page.newtab.empty": "尚未登錄任何內容提供者",
