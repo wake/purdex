@@ -35,18 +35,26 @@ Known, accepted loss: a user's *custom locale* that translated the six old
 `settings.interface.profile_*` keys falls back to the builtin text for them
 (alpha: no migration, per `feedback_no_alpha_migration`).
 
-## PR split (≤ 20 files each; subagents list files before committing)
+## PR split (subagents list files before committing)
 
-~25 files in total, so three PRs, merged in order. B and C may be one PR if
-together they stay ≤ 20 files.
+~25 files in total, so **two** PRs, merged in order: PR-A (pure rename) and PR-BC
+(the persisted/synced change). **B and C are one atomic PR** (codex plan review #1):
+PR-B alone declares settings ordinal 4 but cannot read an ordinal-3 payload, so a
+merged B-without-C would pull `i-am-newer` rows into the guard and lock `invalid`.
+PR-BC will be ~22 files; the project rule is "≤ 800 lines **or** ≤ 20 files" and a
+rename PR is far under 800 lines, so it ships as one PR — atomicity beats the file
+count (stated in the PR body). B and C stay separate commits inside it.
 
 ### PR-A — identifiers, file names, i18n, copy (no persisted / synced change)
 Everything in the table **except** the two store state fields. `git mv` for the
 two file renames. Store action parameter names and helpers rename here too; the
 state fields `profiles` / `activeEditingProfile` keep their names until PR-B, so
 this PR changes no byte in localStorage and no byte on the wire (the settings
-fingerprint snapshot in `projections.test.ts` must NOT change — that is the
-proof). Expected files (~15): resolve-preset(+test), NewTabPresetSwitcher(+test),
+fingerprint snapshot in `projections.test.ts` must NOT change). The snapshot alone
+does not prove zero bytes (codex #6), so PR-A's first commit — written on `main`'s
+behaviour and green before any rename — pins, for one fixed non-default state, the
+exact persisted JSON string and the exact `purdex-newtab-layout` part of the built
+settings payload; the rest of PR-A must leave it green. Expected files (~15): resolve-preset(+test), NewTabPresetSwitcher(+test),
 NewTabCanvas(+test), NewTabThumbnail, NewTabSubsection, NewTabPage, store(+test),
 en.json, zh-TW.json, lib/profile/types.ts (comment names `resolve-profile.ts`).
 
@@ -65,7 +73,17 @@ Tasks
   Tests (TDD, written first):
   - v1 blob with `profiles` + `activeEditingProfile: '3col'` → state deep-equals the same data under the new names;
   - v1 blob **without** `activeEditingProfile` → `activeEditingPreset === '1col'`, presets equal;
-  - v1 blob with a corrupt `profiles` (wrong column count) → heals exactly as v1 healing did;
+  - **healing equivalence, table-driven** (codex #3): one fixture list of malformed v1
+    blobs — `profiles` not an object, a missing preset, wrong column count, columns not
+    an array / holding non-strings, `enabled` not boolean, `1col` disabled, `knownIds`
+    not an array / holding non-strings, an illegal `activeEditingProfile` — and for each,
+    `migrate`+`healPresetState` equals "v1 healing (the old `healProfileState` logic,
+    frozen as a local helper in the test) then rename";
+  - **cross-window** (codex #2): another window writes a v1 blob and the `syncManager`
+    path (storage event / BroadcastChannel → rehydrate) runs → same data under the new
+    names, the v2 write-back does not trigger a second rehydrate / notification loop
+    (count rehydrates and subscriber calls). Kept in the store test file (no new file);
+    `lib/storage/__tests__/sync.test.ts` only if the store test cannot reach the path;
   - the written-back blob is `{ state: { presets, knownIds, activeEditingPreset }, version: 2 }` and contains no `profiles` key;
   - a v2 blob round-trips unchanged.
   (Use the real `purdexStorage` + `persist.rehydrate()`, like the existing heal tests.)
@@ -86,14 +104,17 @@ Tasks
   (an ordinal-3 client meeting an ordinal-4 row locks `locked:schema`; this build meeting
   an ordinal-3 row does not lock).
 
-### PR-C — an ordinal-3 settings payload is upcast on apply (no `invalid`, no wipe)
+### (PR-BC, second half) C — an ordinal-3 settings payload is upcast on apply (no `invalid`, no wipe)
 Why: after PR-B, a settings payload written by an ordinal-3 client carries
 `purdex-newtab-layout.profiles`. This build's guard refuses unlisted fields
 (`isWellFormedSection` → `invalid`), and even past the guard the listed-but-absent
 `presets` would be patched to `undefined` → healed to defaults → a wiped layout
 pushed to the SOT. Such a payload reaches `applySettingsSection` through (a) a pull
 while clean (`i-am-newer` is pulled like any other — executor header), (b) the
-first attach in `pull` direction, (c) a conflict answered keep-sot.
+first attach in `pull` direction, (c) a conflict answered keep-sot (`resolve(…, 'sot')`),
+(d) after a restart, a persisted conflict stash replayed by `restoreLocal()` → the same
+`applySectionToStores` (an old build's LOCAL payload, `profiles` inside). All four enter
+through `applySettingsSection`, which is why the upcast sits there and nowhere else.
 - C1 pure `upcastLegacySettings(payload)` in `lib/profile/applier.ts`: when
   `payload['purdex-newtab-layout']` is a plain object that has `profiles` and no
   `presets`, return a copy with the field renamed; otherwise return the input as is
@@ -109,9 +130,17 @@ first attach in `pull` direction, (c) a conflict answered keep-sot.
   event while clean) → the stores hold that layout under `presets` (deep-equal),
   exactly **one** settings PUT goes out with ordinal 4, and over the next 60 s of fake
   time no further settings write is sent and the profile is `synced`.
-  The old client's side (ordinal-3 build meeting the ordinal-4 row → `locked:schema`,
-  writes nothing) is the mechanism the existing "a NEWER Purdex writes a section"
-  test already proves; PR-B's shape test ties it to the real fingerprints.
+  Plus (codex #4): (c) a real conflict on settings answered keep-sot with an ordinal-3
+  row → layout lands under `presets`, never `undefined`/defaults; (d) a persisted
+  conflict stash holding an old-shape local payload, replayed after restart via
+  `restoreLocal()` → same guarantee. If (d) is only reachable in `executor.test.ts`
+  (mocked stores) it is asserted there against the real `applySettingsSection`
+  boundary or as an `apply-to-stores` unit case — whichever reaches the real code.
+  **Old side** (codex #5): the same file, with the settings shape mocked to the
+  *real* old pair (fingerprint of the list with `profiles`, ordinal 3) and a daemon
+  row carrying the real new pair (ordinal 4) → `locked:schema`, and zero writes after
+  the remote event, after `onReconnected()`, and after a local edit of another section.
+  Together with the new side above that is the coexistence proof.
 
 ### Fingerprint note
 The settings fingerprint changes in PR-B — expected (spec §4.5); the ordinal bump is
@@ -122,8 +151,9 @@ what keeps clients from `shape-changed-without-ordinal`.
 - Every PR: lint, `tsc -p tsconfig.app.json`, full vitest, build.
 - Mutation checks (delivered, per `feedback_tests_that_verify_nothing`) — run with **no
   browser / dev server open on this worktree**: remove the migrate → B1 tests red;
-  revert ordinal to 3 → guard red; drop the upcast call → C3 red.
-- **Real machine** (PR-B/C, `:5176` from this worktree): the `:5176` origin has its own
+  revert ordinal to 3 → guard red; drop the upcast call → C3 red; in PR-A, rename a
+  persisted field → the byte-equivalence test red.
+- **Real machine** (PR-BC, `:5176` from this worktree): the `:5176` origin has its own
   localStorage. First run `main`'s code on `:5176`, set a non-default layout (enable
   3-col, move blocks, select 2-col for editing), screenshot Settings › Interface › New Tab
   and a new tab at each width; then switch the worktree to the branch, reload, and
@@ -141,5 +171,5 @@ what keeps clients from `shape-changed-without-ordinal`.
 
 ## Flow
 plan → codex (plan + spec, one round) → subagent TDD per task → PR-A → R1 + attacker
-(parallel) → critic → merge; PR-B, PR-C likewise → **one** bump PR after PR-C (coordinator
+(parallel) → critic → merge; PR-BC likewise → **one** bump PR after PR-BC (coordinator
 notified first). Pure SPA, no deploy.
