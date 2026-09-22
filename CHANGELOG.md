@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.428] - 2026-09-23
+
+### Fix：全域 Settings 在前景時進入 `/w/<wsId>/settings`，renderer 無限迴圈當掉（#1326，#1327）
+
+Profile Sync P3 真機驗收時兩台 client 都重現：`Maximum update depth exceeded`，CPU 衝破 100%、記憶體數 GB 後 renderer 死掉。
+
+- **根因**：`GlobalSettingsPage` 的自我修正 effect 把「網址沒有 section」當成「網址是 `/settings`」，對任何不在 `/settings` 底下的網址也
+  `replace` 成 `/settings/<section>`。網址變更後，舊的全域 Settings 頁還會掛一個 commit（子元件的 effect 先於 `useRouteSync`），
+  於是和 `useRouteSync` 的 Tab→URL 互相 `replace`，永不停止。同一個原因也會讓保持存活（keepAliveCount > 0）的全域 Settings
+  把切走的分頁拉回來。
+- **修法**：這個 effect 只在網址是 `/settings` 或其子路徑時動作；`useRouteSync` 不動、沒有加迴圈計數器。
+- **測試**：走真正的 `TabContent`＋keepAliveCount 的四個回歸測試；拿掉修正四個全紅。真機：修正版落在 workspace 設定分頁、零錯誤；
+  換回舊版則頁面卡死、1,273 次 max depth。
+
 ## [1.0.0-alpha.427] - 2026-09-23
 
 ### Fix：切換 profile 後，剛換上畫面的世界立刻用有版本的 session 清單對帳（#1255 SPA 那一半，#1312）
