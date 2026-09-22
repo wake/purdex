@@ -356,6 +356,15 @@ describe('Auto-sync off — pending is waiting, not syncing (P3d-4c F2)', () => 
     expect(screen.getByTestId('profile-current-section-hosts')).not.toHaveAttribute('data-held')
   })
 
+  it('a stale follower: the state is unknown and no row claims to be held', () => {
+    useProfileStore.setState({ autoSync: false })
+    show(attached({ leader: false, remote: true, stale: true, status: status({ hosts: 'pending' }, 'pending') }))
+    expect(screen.getByTestId('profile-current-state')).toHaveAttribute('data-state', 'unknown')
+    expect(screen.getByTestId('profile-current-state')).not.toHaveAttribute('data-held')
+    expect(screen.getByTestId('profile-current-section-hosts')).not.toHaveAttribute('data-held')
+    expect(screen.getByTestId('profile-current-section-hosts')).not.toHaveTextContent(en['settings.profile.current.section.held'])
+  })
+
   it('turning Auto-sync off while the page is open changes the words at once', () => {
     show(pending())
     act(() => useProfileStore.setState({ autoSync: false }))

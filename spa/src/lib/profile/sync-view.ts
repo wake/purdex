@@ -48,9 +48,10 @@ export function heldByAutoSyncOff(sync: ProfileSyncSnapshot, autoSync: boolean):
   return !autoSync && sync.blocked === null && syncDotOf(sync) === 'syncing'
 }
 
-/** One section of the same reading: `pending`, Auto-sync off, nothing blocking. */
+/** One section of the same reading: `pending`, Auto-sync off, nothing blocking — and figures somebody still vouches
+ *  for: a stale follower's rows are its gone leader's last word, which the overall state already reads as unknown. */
 export function sectionHeldByAutoSyncOff(sync: ProfileSyncSnapshot, state: SectionStatus, autoSync: boolean): boolean {
-  return !autoSync && state === 'pending' && sync.blocked === null && !profileIsGone(sync)
+  return !autoSync && state === 'pending' && sync.blocked === null && !profileIsGone(sync) && !(sync.remote && sync.stale)
 }
 
 /**

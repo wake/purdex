@@ -63,6 +63,13 @@ describe('held by Auto-sync being off (P3d-4c F2) — "pending" is not "syncing"
     }
     expect(sectionHeldByAutoSyncOff(snapshot({ blocked: 'profile-gone', status: status({ hosts: 'pending' }) }), 'pending', false)).toBe(false)
   })
+
+  it('a stale follower (its leader is gone): its old pending rows are not read as held — the overall state says unknown', () => {
+    const stale = snapshot({ remote: true, stale: true, status: status({ hosts: 'pending' }, 'pending') })
+    expect(sectionHeldByAutoSyncOff(stale, 'pending', false)).toBe(false)
+    // a live follower is read like the leader
+    expect(sectionHeldByAutoSyncOff(snapshot({ remote: true, stale: false, status: status({ hosts: 'pending' }, 'pending') }), 'pending', false)).toBe(true)
+  })
 })
 
 describe('settingsWaitForWorkspaces — the executor\'s settings gate, as far as the published status shows it', () => {
