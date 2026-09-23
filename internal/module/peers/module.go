@@ -419,6 +419,31 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), snap.hostID, snap.alias, snap.hosts))
 }
 
+// contextSessionLister is the context-aware session list the production
+// provider (*session.SessionModule) offers alongside SessionProvider. It is an
+// optional interface — asserted, as the agent module does for
+// LookupCodeByName — so the SessionProvider contract (and its many fakes)
+// stays unchanged.
+type contextSessionLister interface {
+	ListSessionsContext(ctx context.Context) ([]session.SessionInfo, error)
+}
+
+// listSessionsWithinBudget reads the session list under the inventory's
+// budget (#1293 §3.2): a hung tmux read ends at m.budget with an error, and
+// the inventory answers ok:false instead of holding the request. The budget
+// is wall-clock (context.WithTimeout), not m.now: m.now is the owner-loop's
+// clock and may be a test clock. A provider without ListSessionsContext is
+// read unbounded here (the session module still caps its own read).
+func (m *Module) listSessionsWithinBudget(ctx context.Context) ([]session.SessionInfo, error) {
+	lister, ok := m.sessions.(contextSessionLister)
+	if !ok {
+		return m.sessions.ListSessions()
+	}
+	listCtx, cancel := context.WithTimeout(ctx, m.budget)
+	defer cancel()
+	return lister.ListSessionsContext(listCtx)
+}
+
 // localEnvelope builds this host's own inventory from a caller-supplied
 // hostID/alias: the response body for scope unset/"local", and the local
 // row's peers/ok/partial/error for scope=all. It never touches CfgMu itself
@@ -443,7 +468,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	instance := m.sessions.TmuxInstance()
 
-	sessions, err := m.sessions.ListSessions()
+	sessions, err := m.listSessionsWithinBudget(ctx)
 	if err != nil {
 		return writeError(err.Error())
 	}

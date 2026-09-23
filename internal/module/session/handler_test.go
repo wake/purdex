@@ -411,7 +411,7 @@ func TestHandlerCreateSession(t *testing.T) {
 // unknown generation until the next sessions broadcast.
 func TestHandlerCreateSession_StampsTmuxInstance(t *testing.T) {
 	mod, _, _ := newTestModule(t)
-	mod.tmuxInstanceFn = func() string { return "4471:1788740000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "4471:1788740000" }
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
 
@@ -992,7 +992,7 @@ func TestHandlerSendKeys_ExpectedInstanceMatches_Sends(t *testing.T) {
 	// The generation lives on the server that would receive the keys — that is
 	// the only place a check about it can be authoritative — so the fake holds
 	// it and the daemon reads the same value.
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	fake.SetInstance("111:1000")
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
@@ -1015,7 +1015,7 @@ func TestHandlerSendKeys_ExpectedInstanceMatches_Sends(t *testing.T) {
 // daemon refuses and sends NOTHING.
 func TestHandlerSendKeys_ExpectedInstanceMismatch_Refuses409(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	fake.SetInstance("222:2000")
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
@@ -1035,7 +1035,7 @@ func TestHandlerSendKeys_ExpectedInstanceMismatch_Refuses409(t *testing.T) {
 // read its own generation cannot confirm the caller's expectation either.
 func TestHandlerSendKeys_ExpectedInstanceAgainstUnknown_Refuses409(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	fake.SetInstance("")
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
@@ -1055,7 +1055,7 @@ func TestHandlerSendKeys_ExpectedInstanceAgainstUnknown_Refuses409(t *testing.T)
 // which post `{"keys":…}` and nothing else — are unaffected.
 func TestHandlerSendKeys_NoExpectation_SendsWhateverTheGeneration(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = func() string { return "999:9000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "999:9000" }
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
 
@@ -1074,7 +1074,7 @@ func TestHandlerSendKeys_NoExpectation_SendsWhateverTheGeneration(t *testing.T) 
 // value, and a caller cannot assert that a session's generation is unknown.
 func TestHandlerSendKeys_EmptyExpectation_IsNoExpectation(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = func() string { return "999:9000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "999:9000" }
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
 

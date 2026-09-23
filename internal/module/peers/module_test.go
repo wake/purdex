@@ -475,6 +475,39 @@ func TestHandlePeers_TmuxRestartedDuringInventory(t *testing.T) {
 	}
 }
 
+// #1293 §3.2: the session list is read under the inventory's own budget, so a
+// hung tmux read cannot hold GET /api/peers past it — the answer is an
+// ok:false envelope at (about) the budget, not a request that never returns.
+func TestLocalEnvelope_SessionListBoundedByBudget(t *testing.T) {
+	sessions := &fakeSessions{blockList: true}
+	owners := &fakeOwners{}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	done := make(chan ipeers.Envelope, 1)
+	start := time.Now()
+	go func() { done <- m.localEnvelope(context.Background(), "mlab:abc123", "mlab") }()
+	select {
+	case env := <-done:
+		if elapsed := time.Since(start); elapsed > budget+time.Second {
+			t.Errorf("localEnvelope took %v, want about the %v budget", elapsed, budget)
+		}
+		if env.OK {
+			t.Errorf("ok = true, want false for a list that hit the budget")
+		}
+		if !strings.Contains(env.Error, context.DeadlineExceeded.Error()) {
+			t.Errorf("error = %q, want the list's deadline error", env.Error)
+		}
+		if sessions.listCalls.Load() != 1 {
+			t.Errorf("list calls = %d, want 1", sessions.listCalls.Load())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("localEnvelope never returned: the session list is not bounded by the budget")
+	}
+}
+
 // TestHandlePeers_TmuxInstanceUnknown_ProceedsNormally is the companion case:
 // when either sample is "" (unknown), the mismatch check cannot fire — the
 // handler proceeds exactly as before this change.

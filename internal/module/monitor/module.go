@@ -28,8 +28,11 @@ type ProcessTableCollector interface {
 	ListProcesses(context.Context) ([]Process, error)
 }
 
+// sessionProvider is the slice of *session.SessionModule monitor needs. It
+// lists under the snapshot's context so the read is bounded by it as well as
+// by the session module's own listReadTimeout (#1293).
 type sessionProvider interface {
-	ListSessions() ([]session.SessionInfo, error)
+	ListSessionsContext(ctx context.Context) ([]session.SessionInfo, error)
 }
 
 const (
@@ -249,7 +252,7 @@ func (m *Module) collectSessionMetrics(ctx context.Context, topProcessLimit int)
 	if m.sessionProvider == nil {
 		return []SessionMetrics{}, nil
 	}
-	sessions, err := m.sessionProvider.ListSessions()
+	sessions, err := m.sessionProvider.ListSessionsContext(ctx)
 	if err != nil {
 		return nil, err
 	}

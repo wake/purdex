@@ -590,7 +590,7 @@ type fakeSessionProvider struct {
 	mu       sync.Mutex
 }
 
-func (p *fakeSessionProvider) ListSessions() ([]session.SessionInfo, error) {
+func (p *fakeSessionProvider) ListSessionsContext(_ context.Context) ([]session.SessionInfo, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
@@ -619,7 +619,7 @@ func newBlockingFirstSessionProvider(sessions []session.SessionInfo) *blockingFi
 	}
 }
 
-func (p *blockingFirstSessionProvider) ListSessions() ([]session.SessionInfo, error) {
+func (p *blockingFirstSessionProvider) ListSessionsContext(_ context.Context) ([]session.SessionInfo, error) {
 	p.mu.Lock()
 	p.calls++
 	call := p.calls
@@ -777,4 +777,33 @@ func (c *blockingHostCollector) WaitForCPUCall(t *testing.T, calls int) {
 
 func (c *blockingHostCollector) ReleaseOne() {
 	c.releaseCPU <- struct{}{}
+}
+
+// ctxBlockingSessionProvider models a session list whose tmux read hangs:
+// it returns only when its context ends.
+type ctxBlockingSessionProvider struct{}
+
+func (ctxBlockingSessionProvider) ListSessionsContext(ctx context.Context) ([]session.SessionInfo, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// #1293 §3.2: monitor lists sessions under its own context, so ending that
+// context ends a hung session-list read instead of waiting it out.
+func TestCollectSessionMetrics_ContextEndsHungSessionList(t *testing.T) {
+	m := New(withSessionProvider(ctxBlockingSessionProvider{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.collectSessionMetrics(ctx, 5)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("collectSessionMetrics did not return after its context ended")
+	}
 }

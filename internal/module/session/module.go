@@ -29,7 +29,7 @@ type SessionModule struct {
 	core            *core.Core
 	shellHomeReader func(pid string) (string, error)
 	// tmuxInstanceFn reads the tmux server identity; swapped in tests.
-	tmuxInstanceFn func() string
+	tmuxInstanceFn func(context.Context) string
 	// shellProbe runs the command-word probe (spec §4.4). A field, not a
 	// package global, so a test can prove a rejected token never reached a
 	// shell without mutating shared state.
@@ -72,7 +72,7 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 	return &SessionModule{
 		meta:            meta,
 		shellHomeReader: readShellHomeFromProc,
-		tmuxInstanceFn:  config.GetTmuxInstance,
+		tmuxInstanceFn:  config.GetTmuxInstanceContext,
 		shellProbe:      runShellProbe,
 		passwdShell:     passwdShellForCurrentUser,
 		epoch:           newEpoch(),

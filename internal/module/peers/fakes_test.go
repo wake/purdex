@@ -36,6 +36,8 @@ type fakeSessions struct {
 	// listCalls counts ListSessions calls — the first thing localEnvelope
 	// does — so a test can assert an inventory was (not) built.
 	listCalls atomic.Int32
+	// blockList makes ListSessionsContext hang until its context ends.
+	blockList bool
 }
 
 // setSessions replaces the live tmux inventory this fake reports — a tmux
@@ -44,6 +46,17 @@ func (f *fakeSessions) setSessions(sessions []session.SessionInfo) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sessions = sessions
+}
+
+// ListSessionsContext is what localEnvelope calls (#1293): with blockList set
+// it models a hung tmux read that only the context ends.
+func (f *fakeSessions) ListSessionsContext(ctx context.Context) ([]session.SessionInfo, error) {
+	if f.blockList {
+		f.listCalls.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return f.ListSessions()
 }
 
 func (f *fakeSessions) ListSessions() ([]session.SessionInfo, error) {

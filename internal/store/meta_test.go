@@ -2,6 +2,7 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -202,4 +203,29 @@ func TestMetaStore_OldSchemaWithExtraColumns(t *testing.T) {
 	require.NoError(t, raw.QueryRow(`SELECT cc_session_id, cc_model FROM session_meta WHERE tmux_id = '$7'`).Scan(&ccID, &ccModel))
 	assert.Equal(t, "old-cc-session", ccID)
 	assert.Equal(t, "opus", ccModel)
+}
+
+// #1293: the session-list chain reads the meta DB under the list's deadline.
+// A context that has ended fails the read with an error wrapping ctx.Err()
+// and changes nothing.
+func TestMetaStoreContextReadsHonourContext(t *testing.T) {
+	ms, err := store.OpenMeta(":memory:")
+	require.NoError(t, err)
+	defer ms.Close()
+	require.NoError(t, ms.SetMeta("$1", store.SessionMeta{Mode: "terminal"}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = ms.GetMetaContext(ctx, "$1")
+	assert.ErrorIs(t, err, context.Canceled)
+	_, err = ms.CleanOrphansContext(ctx, []string{"$2"})
+	assert.ErrorIs(t, err, context.Canceled)
+
+	got, err := ms.GetMetaContext(context.Background(), "$1")
+	require.NoError(t, err)
+	require.NotNil(t, got, "a cancelled CleanOrphans must not have deleted anything")
+	n, err := ms.CleanOrphansContext(context.Background(), []string{"$2"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
 }

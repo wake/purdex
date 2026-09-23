@@ -335,12 +335,12 @@ func TestTickNormal_TmuxRestartWithIdenticalList_Broadcasts(t *testing.T) {
 	defer events.RemoveTestSubscriber(sub)
 
 	fake.AddSession("dev", "/w")
-	mod.tmuxInstanceFn = func() string { return "111:1000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "111:1000" }
 	mod.tickNormal()
 	require.Len(t, drainSessions(t, sub), 1, "first tick must broadcast")
 
 	// Same session list, new tmux server.
-	mod.tmuxInstanceFn = func() string { return "222:2000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "222:2000" }
 	mod.tickNormal()
 	got := drainSessions(t, sub)
 	require.Len(t, got, 1, "restart with an identical list must still broadcast")
@@ -353,7 +353,7 @@ func TestTickNormal_UnchangedInstanceAndList_DoesNotBroadcast(t *testing.T) {
 	defer events.RemoveTestSubscriber(sub)
 
 	fake.AddSession("dev", "/w")
-	mod.tmuxInstanceFn = func() string { return "111:1000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "111:1000" }
 	mod.tickNormal()
 	drainSessions(t, sub)
 
@@ -366,10 +366,10 @@ func TestListSessions_SamplesInstanceOutsideTheTick(t *testing.T) {
 	// generation by the list path.
 	mod, fake, _ := newWatcherTestModule(t)
 	fake.AddSession("dev", "/w")
-	mod.tmuxInstanceFn = func() string { return "111:1000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "111:1000" }
 	mod.tickNormal()
 
-	mod.tmuxInstanceFn = func() string { return "222:2000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "222:2000" }
 	sessions, err := mod.ListSessions()
 	require.NoError(t, err)
 	require.NotEmpty(t, sessions)
@@ -387,7 +387,7 @@ func TestSessionInfo_TmuxInstanceKeyAlwaysPresent(t *testing.T) {
 func TestTickNormal_InstanceProbeFailure_PropagatesEmpty(t *testing.T) {
 	mod, fake, _ := newWatcherTestModule(t)
 	fake.AddSession("dev", "/w")
-	mod.tmuxInstanceFn = func() string { return "" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "" }
 	mod.tickNormal()
 
 	sessions, err := mod.ListSessions()
@@ -399,7 +399,7 @@ func TestTickNormal_InstanceProbeFailure_PropagatesEmpty(t *testing.T) {
 func TestGetSession_StampsTmuxInstance(t *testing.T) {
 	mod, fake, _ := newWatcherTestModule(t)
 	fake.AddSession("dev", "/w")
-	mod.tmuxInstanceFn = func() string { return "333:3000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "333:3000" }
 
 	sessions, err := mod.ListSessions()
 	require.NoError(t, err)
@@ -414,7 +414,7 @@ func TestGetSession_StampsTmuxInstance(t *testing.T) {
 func TestTmuxInstance_ProviderMethodSamplesEveryCall(t *testing.T) {
 	mod, _, _ := newWatcherTestModule(t)
 	calls := 0
-	mod.tmuxInstanceFn = func() string {
+	mod.tmuxInstanceFn = func(context.Context) string {
 		calls++
 		return "444:4000"
 	}

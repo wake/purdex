@@ -30,7 +30,7 @@ func (e *listFailingExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSess
 
 func TestCreateSession_ReturnsInfo(t *testing.T) {
 	mod, meta, fake := newTestModule(t)
-	mod.tmuxInstanceFn = func() string { return "4471:1788740000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "4471:1788740000" }
 	dir := t.TempDir()
 
 	info, err := mod.CreateSession("proj-1", dir)
@@ -208,7 +208,7 @@ func (e *listHookExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession
 func TestCreateSession_GenerationChangedDuringCreate(t *testing.T) {
 	mod, meta, fake := newTestModule(t)
 	fake.SetInstance("111:1000")
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	mod.tmux = &listHookExecutor{Executor: fake, hook: func() { fake.SetInstance("222:2000") }}
 
 	info, err := mod.CreateSession("proj-4", t.TempDir())
@@ -236,7 +236,7 @@ func TestCreateSession_GenerationChangedDuringCreate(t *testing.T) {
 func TestCreateSession_TmuxInstanceIsTheOneSampledBeforeCreate(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	calls := 0
-	mod.tmuxInstanceFn = func() string {
+	mod.tmuxInstanceFn = func(context.Context) string {
 		calls++
 		if calls <= 2 {
 			return "111:1000"
@@ -257,7 +257,7 @@ func TestCreateSession_TmuxInstanceIsTheOneSampledBeforeCreate(t *testing.T) {
 func TestCreateSession_NoServerBeforeCreateStampsTheNewServer(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	calls := 0
-	mod.tmuxInstanceFn = func() string {
+	mod.tmuxInstanceFn = func(context.Context) string {
 		calls++
 		if calls == 1 {
 			return "" // no server running yet

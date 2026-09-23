@@ -1,10 +1,13 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"net/http/httptest"
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -114,4 +117,128 @@ func TestHandleTerminalWS_NoConfigRace(t *testing.T) {
 	readerWg.Wait()
 	closeStop()
 	writerWg.Wait()
+}
+
+// instanceOf adapts a context-free generation reader (FakeExecutor.Instance)
+// to the tmuxInstanceFn seam.
+func instanceOf(f func() string) func(context.Context) string {
+	return func(context.Context) string { return f() }
+}
+
+// #1293 §3.2: a pane-metadata read ended by the list's context aborts the
+// whole list with that error — it is not "skip the fields" — and no later
+// session is read. The error names the step, so a regression that swallows
+// it (and fails later, at the meta DB) is told apart.
+func TestListSessionsContext_MetadataTimeoutAbortsList(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
+	for _, n := range []string{"a", "b", "c"} {
+		fake.AddSession(n, "/tmp")
+		fake.SetActivePaneMetadata(n, tmux.TmuxPaneMetadata{PaneTitle: n})
+	}
+	var mu sync.Mutex
+	var asked []string
+	never := make(chan struct{})
+	block := tmux.BlockReadsUntil(never, func(op tmux.ReadOp, target string) bool {
+		return op == tmux.ReadPaneMetadata && target == "b"
+	})
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, target string) error {
+		if op == tmux.ReadPaneMetadata {
+			mu.Lock()
+			asked = append(asked, target)
+			mu.Unlock()
+		}
+		return block(ctx, op, target)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	list, err := mod.ListSessionsContext(ctx)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, list, "a timed-out read never returns a partial list")
+	assert.Contains(t, err.Error(), "pane metadata", "the error must come from the metadata step")
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"a", "b"}, asked, "no session after the timed-out one may be read")
+}
+
+// A metadata error that is NOT the context ending keeps today's behaviour:
+// the fields are skipped and the list succeeds.
+func TestListSessionsContext_OtherMetadataErrorStillSkipsFields(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
+	fake.AddSession("a", "/tmp")
+	fake.SetActivePaneMetadataError("a", errors.New("display-message failed"))
+
+	list, err := mod.ListSessionsContext(context.Background())
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Empty(t, list[0].PaneTitle)
+}
+
+// The tmux-instance probe runs under the list's budget: it sees a deadline
+// no later than the caller's, and never later than listReadTimeout.
+func TestListSessionsContext_InstanceProbeRunsUnderListDeadline(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	fake.SetActivePaneMetadata("a", tmux.TmuxPaneMetadata{})
+	var probeDeadline time.Time
+	var hasDeadline bool
+	mod.tmuxInstanceFn = func(ctx context.Context) string {
+		probeDeadline, hasDeadline = ctx.Deadline()
+		return "1:1"
+	}
+
+	before := time.Now()
+	_, err := mod.ListSessionsContext(context.Background())
+	require.NoError(t, err)
+	require.True(t, hasDeadline, "an uncapped caller context must still be capped at listReadTimeout")
+	assert.False(t, probeDeadline.After(before.Add(listReadTimeout).Add(50*time.Millisecond)))
+
+	callerDeadline := time.Now().Add(time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), callerDeadline)
+	defer cancel()
+	_, err = mod.ListSessionsContext(ctx)
+	require.NoError(t, err)
+	assert.False(t, probeDeadline.After(callerDeadline), "the probe must not outlive the caller's deadline")
+}
+
+// The budget covers the whole chain: a deadline hit in the instance probe
+// (which reports failure as "" rather than an error) still fails the list,
+// even when there is nothing after it to notice — an empty session list.
+func TestListSessionsContext_TimeoutInInstanceProbeIsError(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	mod.tmuxInstanceFn = func(ctx context.Context) string {
+		<-ctx.Done()
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	list, err := mod.ListSessionsContext(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, list)
+}
+
+// The tmux list itself runs with the caller's context (a cancelled request
+// ends the read).
+func TestListSessionsContext_CancelledCallerEndsTmuxList(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
+	never := make(chan struct{})
+	fake.SetReadHook(tmux.BlockReadsUntil(never, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := mod.ListSessionsContext(ctx)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListSessionsContext did not return after its context was cancelled")
+	}
 }
