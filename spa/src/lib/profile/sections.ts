@@ -18,7 +18,7 @@
 // takes it from the host store AT BUILD TIME (collector, apply-to-stores). An
 // identity with a `conflict` builds nothing: the builders throw. The apply side
 // resolves back through `wireResolverOf`.
-import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import {
   hostSettingsToWire,
   hostsToWire,
@@ -87,6 +87,36 @@ function uniqueKnown(ids: readonly string[], has: (id: string) => boolean): stri
     out.push(id)
   }
   return out
+}
+
+// === Device-local tabs ===
+
+/**
+ * Pane kinds that only show this app's own interface (tabs-local-only spec §2.1). They carry no state worth
+ * sharing, so a tab made only of them stays on the device: one device's Settings tab must not appear — or be
+ * closed — everywhere. Every kind NOT listed syncs: a kind added later travels until someone decides otherwise,
+ * the safe default for data (sections.test.ts pins every kind to exactly one side, so the decision is forced).
+ */
+export const DEVICE_LOCAL_PANE_KINDS: ReadonlySet<PaneContent['kind']> = new Set<PaneContent['kind']>([
+  'new-tab', 'settings', 'dashboard', 'hosts', 'history', 'memory-monitor', 'editor-buffers',
+])
+
+/**
+ * Does this tab travel? Yes when at least ONE leaf is of a syncing kind: a split carries its `new-tab` leaves
+ * along as empty panes (spec §2.2). No leaf at all (a malformed or missing layout) → no. It reads only
+ * `pane.content.kind`, so a local `Tab` and a wire `TabEntry` (whose layout only differs in host ids and sizes)
+ * give the same answer — the builder asks it of the one, the applier and the upcast of the other.
+ */
+export function isSyncableTab(tab: { layout?: PaneLayout | StrippedLayout }): boolean {
+  const walk = (node: PaneLayout | StrippedLayout | undefined): boolean => {
+    if (!isRecord(node)) return false
+    if (node.type === 'leaf') {
+      const kind = isRecord(node.pane) && isRecord(node.pane.content) ? node.pane.content.kind : undefined
+      return typeof kind === 'string' && !DEVICE_LOCAL_PANE_KINDS.has(kind as PaneContent['kind'])
+    }
+    return node.type === 'split' && Array.isArray(node.children) && node.children.some(walk)
+  }
+  return walk(tab.layout)
 }
 
 // === Layout ===

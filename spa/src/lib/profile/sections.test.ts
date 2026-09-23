@@ -12,6 +12,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import type { FileSource } from '../../types/fs'
 import type { PaneContent, PaneLayout, PaneRebuildRecord, Tab, Workspace } from '../../types/tab'
 import { isWellFormedSection } from './applier'
 import { hashSection, structuralKey } from './hash'
@@ -23,6 +24,8 @@ import {
   buildSettingsSection,
   buildTabsSection,
   buildWorkspacesSection,
+  DEVICE_LOCAL_PANE_KINDS,
+  isSyncableTab,
   stripSizes,
   unsyncableWorkspaceIds,
   wireResolverOf,
@@ -209,6 +212,73 @@ describe('buildWorkspacesSection', () => {
   it('a duplicated workspace id is kept once, first occurrence', () => {
     const out = buildWorkspacesSection([ws('a', 'First', []), ws('a', 'Second', [])])
     expect(out).toEqual({ order: ['a'], workspaces: { a: { name: 'First' } } })
+  })
+})
+
+// --- isSyncableTab -----------------------------------------------------------
+
+/**
+ * Every pane kind, decided. A `Record` over the union is exhaustive at compile time: a new kind in
+ * `PaneContent` fails `tsc` here until someone chooses whether it travels (tabs-local-only spec §3.1).
+ */
+const KIND_DECISION: Record<PaneContent['kind'], 'device-local' | 'syncs'> = {
+  'new-tab': 'device-local',
+  settings: 'device-local',
+  dashboard: 'device-local',
+  hosts: 'device-local',
+  history: 'device-local',
+  'memory-monitor': 'device-local',
+  'editor-buffers': 'device-local',
+  'tmux-session': 'syncs',
+  browser: 'syncs',
+  editor: 'syncs',
+  'image-preview': 'syncs',
+  'pdf-preview': 'syncs',
+  execution: 'syncs',
+}
+
+const FS: FileSource = { type: 'daemon', hostId: 'h1' }
+function contentOf(kind: PaneContent['kind']): PaneContent {
+  switch (kind) {
+    case 'tmux-session': return tmux('x')
+    case 'settings': return { kind, scope: 'global' }
+    case 'browser': return { kind, url: 'https://a.test' }
+    case 'editor': case 'image-preview': case 'pdf-preview': return { kind, source: FS, filePath: '/f' }
+    case 'execution': return { kind, executionId: 'e1' }
+    default: return { kind } as PaneContent
+  }
+}
+
+describe('isSyncableTab', () => {
+  it('the device-local set is exactly the kinds decided device-local (exhaustiveness)', () => {
+    for (const [kind, decision] of Object.entries(KIND_DECISION)) {
+      expect({ kind, local: DEVICE_LOCAL_PANE_KINDS.has(kind as PaneContent['kind']) }).toEqual({ kind, local: decision === 'device-local' })
+    }
+    expect(DEVICE_LOCAL_PANE_KINDS.size).toBe(7)
+  })
+
+  it('a tab whose single pane is of a kind: syncable iff the kind syncs', () => {
+    for (const [kind, decision] of Object.entries(KIND_DECISION)) {
+      const t = tab('t', leaf('p', contentOf(kind as PaneContent['kind'])))
+      expect({ kind, syncable: isSyncableTab(t) }).toEqual({ kind, syncable: decision === 'syncs' })
+    }
+  })
+
+  it('a split syncs when one leaf syncs; not when every leaf is device-local — at any depth', () => {
+    expect(isSyncableTab(tab('t', split('s', [leaf('a', { kind: 'new-tab' }), leaf('b', tmux('x'))], [50, 50])))).toBe(true)
+    expect(isSyncableTab(tab('t', split('s', [leaf('a', { kind: 'settings', scope: 'global' }), leaf('b', { kind: 'hosts' }), leaf('c', { kind: 'new-tab' })], [30, 30, 40])))).toBe(false)
+    const deepLocal = split('s', [leaf('a', { kind: 'new-tab' }), split('s2', [leaf('b', { kind: 'history' }), leaf('c', { kind: 'dashboard' })], [50, 50], 'v')], [50, 50])
+    expect(isSyncableTab(tab('t', deepLocal))).toBe(false)
+    const deepSync = split('s', [leaf('a', { kind: 'new-tab' }), split('s2', [leaf('b', { kind: 'history' }), leaf('c', { kind: 'browser', url: 'u' })], [50, 50], 'v')], [50, 50])
+    expect(isSyncableTab(tab('t', deepSync))).toBe(true)
+  })
+
+  it('reads a wire tab entry (stripped layout) the same way; no layout → not syncable', () => {
+    const entry = buildTabsSection(ws('w', 'W', ['t1']), { t1: tab('t1', split('s', [leaf('a', { kind: 'new-tab' }), leaf('b', tmux('x'))], [50, 50])) }).tabs.t1
+    expect(isSyncableTab(entry)).toBe(true)
+    expect(isSyncableTab({ layout: { type: 'split', id: 's', direction: 'h', children: [leaf('a', { kind: 'settings', scope: 'global' })] } })).toBe(false)
+    expect(isSyncableTab({} as Tab)).toBe(false)
+    expect(isSyncableTab({ layout: { type: 'split', id: 's', direction: 'h', children: [] } })).toBe(false)
   })
 })
 
