@@ -57,6 +57,14 @@ export interface HostConfig {
    * `daemonIdMismatch`, never this field.
    */
   daemonId?: string
+  /**
+   * Profile Sync's memory of the legacy wire keys (another device's local ids)
+   * this host's canonical `hosts` row was matched from (host-sync-identity spec
+   * §11.2). Written by the hosts apply, read back by the hosts builder as the
+   * row's wire `aliases` — never shown, never edited. Absent when empty;
+   * canonical per `mergeAliases` (sanitised on rehydrate).
+   */
+  syncAliases?: string[]
 }
 
 /** This device's verification of `HostConfig.daemonId` failed (spec D2/D3). Runtime only. */
@@ -257,6 +265,7 @@ export const useHostStore = create<HostState>()(
         const { id: _discardId, ...restOpts } = opts
         const host: HostConfig = { id, ...restOpts, order }
         delete host.daemonId
+        delete host.syncAliases
         set((state) => ({
           hosts: { ...state.hosts, [id]: host },
           hostOrder: [...state.hostOrder, id],
