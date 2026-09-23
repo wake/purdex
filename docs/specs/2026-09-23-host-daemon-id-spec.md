@@ -33,7 +33,15 @@ part 2 can match hosts across devices by daemon, not by SPA id.
 ## 3. Decisions
 
 ### D1. Field
-`HostConfig.daemonId?: string` — present only when non-empty. Never set to `""`. Only
+`HostConfig.daemonId?: string` — present only when **valid**: `isValidDaemonId`
+(`spa/src/lib/daemon-id.ts`, the one shared validator) — a non-empty string of at most 512 UTF-16 code
+units with no control (`\p{Cc}`) or format (`\p{Cf}`: bidi overrides/isolates, zero-width chars)
+character. Never `""`. The contract mirrors the daemon — `EnsureHostID` keeps any non-empty `host_id`
+already in `config.toml` and only lowercases a generated hostname label, so upper case, extra colons,
+spaces and Unicode are real identities — and excludes only what is unsafe to store or render (review
+on #1351). The validator guards all three ways in: `observeDaemonId` (D3), `isHostsPayload` and the
+persisted-state sanitizer (`sanitizeHostConfig`, run by the persist merge on rehydrate — an invalid
+stored value is dropped) (D6). Only
 `observeDaemonId` writes it locally (sync applies through its own setState path): `addHost` and
 `updateHost` do not accept it and strip it if passed (PR review #4).
 
@@ -52,7 +60,8 @@ wins + local flag" the stored value converges and each device knows whether it h
 `observeDaemonId(hostId, observed, atRequest)` — one entry point for every `/api/info` answer;
 `atRequest = requestAtOf(host) = { endpoint: ip:port, token }` captured before the request:
 - drop the answer if the host is gone, or its endpoint or token is no longer the one in `atRequest`
-  (PR review #2), or `observed === ""` (daemon has no stable id — nothing learned, nothing flagged);
+  (PR review #2), or `observed` fails `isValidDaemonId` (D1) — `""` (daemon has no stable id) and a
+  hostile/unsafe string alike: nothing learned, flagged or verified, no warning;
 - stored absent → **write** `daemonId = observed` (a local write → synced like any edit);
 - stored === observed → clear any `daemonIdMismatch`;
 - stored ≠ observed → **do not write**; set `daemonIdMismatch = { stored, observed, endpoint }` and
@@ -61,8 +70,10 @@ wins + local flag" the stored value converges and each device knows whether it h
 - A mismatch flag whose `endpoint` or `stored` no longer matches the host is ignored/cleared (so a
   re-point — local `updateHost` or one arriving by sync — never inherits an old flag).
 Local re-point (`updateHost` changing `ip` or `port`) clears `daemonId` in the same write,
-unconditionally (it is then learned for the new endpoint). A re-point arriving by sync carries its own `daemonId` (learned by the
-device that re-pointed).
+unconditionally (it is then learned for the new endpoint). A re-point arriving by sync carries a
+`daemonId` only if the re-pointing device has already re-learned it at the new endpoint; until then
+it arrives **without** one, and the address rule of the upcast (D6) keeps it cleared here rather than
+putting this device's old claim back.
 
 ### D4. When `/api/info` is asked (verification triggers)
 One request per trigger, per host, only while connected:
@@ -117,14 +128,27 @@ In `AddHostDialog`, after learning the new daemon's `host_id` `X`:
       and it is the one choice that keeps both `H` and the new token.
     Never silently rewrite an unverified `H`'s token — `H`'s own endpoint may reach a different
     daemon (plan review #5).
-- `H` flagged with a mismatch, `/api/info` failed, or `host_id` empty → cannot tell → added as today.
+- `H` flagged with a mismatch, `/api/info` failed, or `host_id` empty or invalid (D1: no stored value
+  can equal an invalid one) → cannot tell → added as today.
 
 ### D6. Sync (`hosts` section)
 - `PROJECTIONS.hosts` gains `hosts.*.daemonId`; `SECTION_SCHEMA_ORDINAL.hosts` 1 → 2 (projection
   guard test updated).
-- `isHostsPayload`: `isOptional(h.daemonId, isNonEmptyString)` — an ordinal-1 payload is well-formed.
-- **Upcast on pull**: an incoming host without `daemonId` keeps the local one (in `applier.applyHosts`);
-  an incoming host with one wins (D2). The upgraded state then pushes once.
+- `isHostsPayload`: `isOptional(h.daemonId, isValidDaemonId)` — an ordinal-1 payload (field absent)
+  is well-formed; an invalid value (D1) makes the payload malformed. The persisted-state sanitizer
+  applies the same validator on rehydrate.
+- **Upcast on pull** (`applier.applyHosts`): an incoming host keeps the local `daemonId` **only when
+  it lacks one AND its ip + port equal the local host's** (same id, same incarnation as far as the
+  address can tell); an incoming host with one wins (D2). The upgraded state then pushes once.
+  Why the address rule (codex R1 P1 on #1351): an ordinal-2 client clears `daemonId` only by
+  re-pointing (D3), and an old client re-points without knowing the field; both arrive at a new
+  address, where keeping the old claim would graft another daemon's id onto the host — and a host
+  deleted and recreated under the same id at another address is caught the same way. Restricting
+  the upcast to ordinal-1 rows instead is not possible here: the applier receives no row ordinal
+  without changing `apply-to-stores.ts`, and the address rule covers both writers.
+  **Known residual risk**: a host deleted and recreated under the same id AND the same address keeps
+  the old claim. Only the runtime `daemonIdMismatch` / `daemonIdVerified` flags catch it, once this
+  device verifies — so part 2 must pair only **verified** hosts.
 - Two new clients upcasting different local values at the same time (possible only for a
   device-relative address) conflict like any concurrent edit; after it resolves, the stored value is
   one of them and the other device carries `daemonIdMismatch` — no loop (pinned by a test).
