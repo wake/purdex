@@ -104,8 +104,11 @@ ordinal-2 SOT profile written by an alpha.434 client pulls cleanly and is rewrit
    `lib/headless-new-tab-providers.tsx`). The translator takes the list of host-bearing prefixes from ONE constant;
    PR 1's task 0 greps for any other `<prefix>:<hostId>` producer and adds it.
 2. **Legacy ids stay resolvable after the hosts row went canonical.** A canonical `hosts` row carries
-   `aliases: string[]` — the legacy wire keys (foreign local ids) it was matched from, deduplicated, ≤ 16, oldest
-   dropped. `fromWire` for tabs / settings resolves: sync id → local; else an alias of some row → that row's daemon →
+   `aliases: string[]` — the legacy wire keys (foreign local ids) it was matched from plus the host's own local id,
+   as ONE list every client computes the same way: the unique union, sorted ascending, first 16 kept (PR #1365 A1 —
+   "oldest dropped" ping-ponged forever from the 17th device). A device whose own id sorts past the 16th is not listed;
+   its legacy keys then stay unresolved during a transition (accepted). Input is accepted in any order and normalised;
+   an alias on two rows, or equal to another row's key, refuses the payload (`duplicate-host-alias`). `fromWire` for tabs / settings resolves: sync id → local; else an alias of some row → that row's daemon →
    local; else unknown (as today). This covers an interrupted transition (hosts canonical, tabs still legacy) on
    any device, not only the one that did the matching. `aliases` is in the hosts projection (ordinal 3 already).
 3. **No "collector pass".** The identity is computed SYNCHRONOUSLY (`syncIdOfSync`) from the host store at every
