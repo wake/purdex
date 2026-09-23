@@ -1258,10 +1258,23 @@ func TestFrames_ClaimDelete(t *testing.T) {
 			t.Fatalf("claimed=%v err=%v, want true", claimed, err)
 		}
 	})
-	t.Run("a row with no recorded session id is claimed by any session id", func(t *testing.T) {
+	// #1381 critic C1: a SessionStart writes the frame BEFORE its identity, so
+	// a row whose session_id is still '' may already be a NEWER run's. A
+	// session-scoped claim needs an exact, recorded match.
+	t.Run("a row with no recorded session id is NOT claimed by a session id", func(t *testing.T) {
 		s := openTestFramesStore(t)
 		f := seed(t, s, "")
-		if claimed, err := s.ClaimDelete(f.FrameID, "S1"); err != nil || !claimed {
+		if claimed, err := s.ClaimDelete(f.FrameID, "S1"); err != nil || claimed {
+			t.Fatalf("claimed=%v err=%v, want false", claimed, err)
+		}
+		if gone(t, s) {
+			t.Fatal("the row was deleted")
+		}
+	})
+	t.Run("the sweep's claim (no session id) takes a row with no recorded session id", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		f := seed(t, s, "")
+		if claimed, err := s.ClaimDelete(f.FrameID, ""); err != nil || !claimed {
 			t.Fatalf("claimed=%v err=%v, want true", claimed, err)
 		}
 	})

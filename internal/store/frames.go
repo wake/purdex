@@ -359,13 +359,16 @@ func (s *FramesStore) Delete(frameID string) error {
 // ending the same frame — the SessionEnd hook and the pid sweep — exactly one
 // sees true. Delete returns nil either way and cannot tell them apart.
 //
-// A non-empty sessionID narrows the claim to the run it names: the row is
-// deleted only while its session_id is that id or still unrecorded (empty). A
-// late SessionEnd of an older run on a frame a newer run's SessionStart has
-// already taken over (same pid/start) then claims and deletes nothing.
+// sessionID "" is the sweep's claim: whatever run the row holds, its process
+// is gone. A non-empty sessionID is a SessionEnd's claim and needs an EXACT
+// recorded match — the row's session_id equal to it. A row whose session_id
+// is still empty is not claimed: SessionStart writes the frame BEFORE it
+// records the new identity, so that row may already be a newer run's (#1381
+// critic C1). A late SessionEnd of an older run therefore claims and deletes
+// nothing, whether the newer run's identity is written yet or not.
 func (s *FramesStore) ClaimDelete(frameID, sessionID string) (bool, error) {
 	res, err := s.db.Exec(
-		`DELETE FROM agent_frames WHERE frame_id = ? AND (? = '' OR session_id = '' OR session_id = ?)`,
+		`DELETE FROM agent_frames WHERE frame_id = ? AND (? = '' OR session_id = ?)`,
 		frameID, sessionID, sessionID,
 	)
 	if err != nil {

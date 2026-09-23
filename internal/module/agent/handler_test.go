@@ -574,10 +574,13 @@ func TestHandleEvent_OpenCodeSessionEndClearsErrorState(t *testing.T) {
 
 	for _, body := range []string{
 		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"opencode"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{},"agent_type":"opencode"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"ses_1"},"agent_type":"opencode"}`,
 	} {
 		if strings.Contains(body, `"PdxSessionEnd"`) {
 			m.currentStatus["work"] = agentpkg.StatusError
+			// A SessionEnd only ends a frame whose recorded id it matches
+			// (#1381 critic C1); the fake provider records none itself.
+			recordIdentity(t, m, "%5", 200, "Sun Apr 20 01:30:00 2026", "ses_1")
 		}
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")

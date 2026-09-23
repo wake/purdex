@@ -56,6 +56,21 @@ func seedRootWithIdentity(t *testing.T, m *Module, paneID, agentType string, pid
 	return seedIdentityFrame(t, m, paneID, agentType, pid, startTime, 10, sessionID, "/w/p")
 }
 
+// recordIdentity writes a session id onto the frame a sender owns, the way a
+// real provider's SessionStart would. The fake providers carry no
+// SessionIdentifier, so a SessionEnd in a test only ends a frame this has
+// given an identity (a SessionEnd claims on an exact match, #1381 critic C1).
+func recordIdentity(t *testing.T, m *Module, paneID string, pid int, startTime, sessionID string) {
+	t.Helper()
+	f, err := m.frames.GetByIdentity(paneID, pid, startTime)
+	if err != nil || f == nil {
+		t.Fatalf("recordIdentity: frame %s/%d: %v", paneID, pid, err)
+	}
+	if err := m.frames.UpdateSessionIdentity(f.FrameID, sessionID, "", 1<<40); err != nil {
+		t.Fatalf("recordIdentity: %v", err)
+	}
+}
+
 // seedChildFrame stores a frame under parent — a native same-type subagent
 // frame, never a root.
 func seedChildFrame(t *testing.T, m *Module, paneID, agentType string, pid int, startTime, parentFrameID string) store.Frame {
@@ -143,11 +158,11 @@ func TestExit_LateSessionEndOfAnOlderRun_ClaimsNothing(t *testing.T) {
 	}
 }
 
-// The exit's session id is the payload's: a frame that never recorded one is
-// still ended, and named by what the SessionEnd says.
+// The exit's session id is the payload's — on the one case that claims: a
+// recorded identity that the payload matches exactly.
 func TestExit_SessionEnd_SessionIDComesFromThePayload(t *testing.T) {
 	m := newProvenanceTestModule(t, exitTestInstance)
-	root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "")
+	root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S-old")
 	req := EventRequest{
 		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
 		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
@@ -162,21 +177,63 @@ func TestExit_SessionEnd_SessionIDComesFromThePayload(t *testing.T) {
 	}
 }
 
-// A payload without a session id sends "" — never the frame's id, which may
-// already name a newer run.
-func TestExit_SessionEnd_PayloadWithoutSessionID_SendsEmpty(t *testing.T) {
-	m := newProvenanceTestModule(t, exitTestInstance)
-	seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S-frame")
-	req := EventRequest{
-		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
-		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+// #1381 critic C1: a SessionEnd claims ONLY on an exact match — the frame's
+// recorded session id non-empty and equal to the payload's. SessionStart
+// updates the frame before it writes the new identity, so a frame whose id is
+// still ” may already be a NEWER run's: an old SessionEnd landing in that
+// window must end nothing. The same goes for a payload without an id.
+func TestExit_SessionEndWithoutAnExactIdentityMatch_ClaimsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name, frameSID, payload string
+	}{
+		{"frame identity not yet written", "", `{"session_id":"S-old"}`},
+		{"payload without a session id", "S1", `{}`},
+		{"neither has one", "", `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newProvenanceTestModule(t, exitTestInstance)
+			root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", tc.frameSID)
+			req := EventRequest{
+				TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
+				SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+				RawEvent: []byte(tc.payload),
+			}
+			if e, ok := exitOf(t, m.buildNormalizedForTest(t, req)); ok {
+				t.Fatalf("sent %+v, want nothing", e)
+			}
+			if frames, _ := m.frames.ListByPane("%5"); len(frames) != 1 || frames[0].FrameID != root.FrameID {
+				t.Fatalf("frames = %+v, want the frame kept for the sweep", frames)
+			}
+		})
 	}
-	e, ok := exitOf(t, m.buildNormalizedForTest(t, req))
-	if !ok {
-		t.Fatalf("no pdx_exit")
+}
+
+// A frame whose identity was never recorded is not ended by its SessionEnd;
+// the sweep ends it when the process dies — as process-dead, about 2 s later.
+// That label on what was a normal exit is the accepted cost of never letting
+// an unmatched SessionEnd end a run.
+func TestExit_NoRecordedIdentity_TheSweepEndsItAsProcessDead(t *testing.T) {
+	m, sub := newExitSweepModule(t)
+	m.registry.Register(&fakeAgentProvider{typeName: "cc", derive: deriveWithSessionDetail})
+	root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "")
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"S1"},"agent_type":"cc"}`
+	w := httptest.NewRecorder()
+	m.handleEvent(w, httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
 	}
-	if e.SessionID != "" {
-		t.Fatalf("SessionID = %q, want empty (no fallback to the frame's id)", e.SessionID)
+	if e, ok := exitOf(t, readSweepNormalizedEvent(t, sub)); ok {
+		t.Fatalf("the hook sent %+v, want no exit", e)
+	}
+
+	withLivePids(t, map[int]string{}) // the process is gone
+	if err := m.sweepOnce(); err != nil {
+		t.Fatalf("sweepOnce: %v", err)
+	}
+	e, ok := exitOf(t, readSweepNormalizedEvent(t, sub))
+	if !ok || e.Reason != ExitReasonProcessDead || e.FrameID != root.FrameID {
+		t.Fatalf("sweep exit = %+v ok=%v, want process-dead for %s", e, ok, root.FrameID)
 	}
 }
 
@@ -187,6 +244,7 @@ func TestExit_NativeChildSessionEnd_NoEnvelope(t *testing.T) {
 	req := EventRequest{
 		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
 		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+		RawEvent: []byte(`{"session_id":"child-session"}`),
 	}
 
 	ev := m.buildNormalizedForTest(t, req)

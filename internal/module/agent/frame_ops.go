@@ -223,17 +223,25 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// the frame id and overwrites the frame's session id, so only the
 			// SessionEnd itself names the run that is ending.
 			payloadSID := m.payloadSessionID(req)
-			// A late SessionEnd of an OLDER run (#1381): the frame already
-			// carries a newer run's session id, so this event ends nothing —
-			// no detach, no delete, no exit. The claim below re-checks the
-			// same condition atomically for a SessionStart racing this one.
-			if payloadSID != "" && frame.SessionID != "" && frame.SessionID != payloadSID {
+			// A SessionEnd ends a frame ONLY on an exact identity match: the
+			// frame's recorded session id non-empty and equal to the
+			// payload's (#1381 critic C1). Anything else — a newer run's id
+			// on the frame, an id not written yet (SessionStart updates the
+			// frame before it records the new identity, so an empty id may
+			// already be a newer run's), a payload without one — ends
+			// nothing here: no detach, no delete, no exit. The frame is left
+			// to the sweep, which ends it as process-dead when the process
+			// actually dies; a normal exit of a frame whose identity was
+			// never recorded is therefore labelled process-dead ~2 s later.
+			// That is accepted: a wrong "exited" on a live run is not.
+			// The claim below re-checks the match atomically.
+			if payloadSID == "" || frame.SessionID != payloadSID {
 				projection, err := m.projectPane(req.TmuxPaneID)
 				return projection, FrameTraceMeta{
 					FrameID:       frame.FrameID,
 					ParentFrameID: frame.ParentFrameID,
 					Decision:      "skipped",
-					Reason:        "session_end_of_older_run",
+					Reason:        "session_end_unmatched",
 					Before:        before,
 					After:         before,
 				}, err
