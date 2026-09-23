@@ -10,6 +10,9 @@ export type ParsedRoute =
   | { kind: 'session-tab'; tabId: string; mode: 'terminal' }
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'workspace-settings'; workspaceId: string }
+  // Legacy alias (#1336): /w/<ws>/t/<tab>/<mode> is not a canonical route —
+  // `workspaceId` is parsed but the consumer (useRouteSync) ignores it and
+  // only activates the tab; tabToUrl never emits this form.
   | { kind: 'workspace-session-tab'; workspaceId: string; tabId: string; mode: 'terminal' }
   | { kind: 'execution'; executionId: string; host?: string }
 
@@ -118,7 +121,7 @@ export function parseRoute(path: string): ParsedRoute | null {
   return null
 }
 
-export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: string): string {
+export function tabToUrl(tabId: string, content: PaneContent): string {
   switch (content.kind) {
     case 'new-tab': return '/'
     case 'dashboard': return '/'
@@ -127,7 +130,6 @@ export function tabToUrl(tabId: string, content: PaneContent, workspaceId?: stri
       if (content.scope === 'global') return '/settings'
       return `/w/${content.scope.workspaceId}/settings`
     case 'tmux-session':
-      if (workspaceId) return `/w/${workspaceId}/t/${tabId}/${content.mode}`
       return `/t/${tabId}/${content.mode}`
     case 'hosts':
       return '/hosts'

@@ -89,6 +89,11 @@ export function useRouteSync() {
         break
       }
       case 'workspace-session-tab': {
+        // Legacy alias (#1336): /w/<ws>/t/<tab>/<mode> is not a canonical
+        // route. Every tab has exactly one owner since P3c (from the
+        // workspace store, not the URL), so `parsed.workspaceId` is ignored
+        // here — this only activates the tab. Tab→URL then normalises the
+        // location to the canonical /t/<tab>/<mode>.
         const tab = useTabStore.getState().tabs[parsed.tabId]
         if (tab) {
           setActiveTab(parsed.tabId)

@@ -209,11 +209,6 @@ describe('tabToUrl', () => {
       .toBe('/w/ws0001/settings')
   })
 
-  it('generates session tab URL within workspace', () => {
-    expect(tabToUrl('abc123', { kind: 'tmux-session', hostId: 'test-host', sessionCode: 'x', mode: 'terminal', cachedName: '', tmuxInstance: '' }, 'ws0001'))
-      .toBe('/w/ws0001/t/abc123/terminal')
-  })
-
   it('generates hosts URL', () => {
     expect(tabToUrl('abc123', { kind: 'hosts' })).toBe('/hosts')
   })
