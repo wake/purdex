@@ -310,8 +310,8 @@ describe('applySectionToStores — hosts', () => {
     expect(s.activeHostId).toBe(M)
     expect(s.devHostId).toBeNull() // its host is gone
     expect(s.runtime).toEqual({ [M]: { status: 'connected' } })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildHostsSection(s)) })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildHostsSection(s)) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
     expect(persistedOf(STORAGE_KEYS.HOSTS).hostOrder).toEqual([M, 'host-three'])
   })
 
@@ -344,8 +344,8 @@ describe('applySectionToStores — hosts', () => {
     const payload = hostsPayloadOf([host(M, { icon: 'NotARealIcon' }), host(H2)])
     const outcome = await applySectionToStores('hosts', payload, ctx)
     expect(useHostStore.getState().hosts[M].icon).toBeUndefined()
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) })
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
     // and the sanitised value is what got persisted
     expect((persistedOf(STORAGE_KEYS.HOSTS).hosts as Record<string, HostConfig>)[M].icon).toBeUndefined()
   })
@@ -605,8 +605,8 @@ describe('applySectionToStores — settings', () => {
     expect(useI18nStore.getState().t('common.cancel')).toBe('取消')
     expect(document.documentElement.dataset.theme).toBe('nord')
     expect(touched).toEqual([])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds())) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds())) })
   })
 
   it('workspace-scoped settings: the payload decides the master workspaces only — a foreign local entry survives, a foreign incoming one is not written', async () => {
@@ -623,8 +623,8 @@ describe('applySectionToStores — settings', () => {
     expect(persistedOf(STORAGE_KEYS.WORKSPACE_SETTINGS).workspaces).toEqual({ m1: { files: { root: '/new' } }, slave: foreign, 'bad id!': foreign })
     // the rebuilt hash is the FILTERED payload's: the orphan makes this section honestly dirty
     const filtered = { ...payload, 'purdex-workspace-settings': { workspaces: { m1: { files: { root: '/new' } } } } }
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(filtered) })
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(filtered) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   describe('the master\'s workspace set moves WHILE the apply is awaiting (a `workspaces` apply, a user edit)', () => {
@@ -676,7 +676,7 @@ describe('applySectionToStores — settings', () => {
 
       const outcome = await applySectionToStores('settings', payload, ctx)
       expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({ m1: { files: { root: '/sot-m1' } }, m3: { files: { root: '/sot-m3' } } })
-      expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+      expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
     })
 
     it('the world going UNSETTLED mid-apply is the same: nobody can say what the set is', async () => {
@@ -738,8 +738,8 @@ describe('applySectionToStores — settings', () => {
     expect(persistedOf(STORAGE_KEYS.NEW_TAB_LAYOUT).presets).toEqual(layout)
     // the rebuilt hash is the ordinal-4 shape's: it differs from the row's, so the executor pushes the upgrade
     const upcast = { ...current, 'purdex-newtab-layout': { presets: layout } }
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(upcast) })
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(legacy) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(upcast) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
   })
 
   it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {
@@ -793,7 +793,7 @@ describe('applySectionToStores — settings', () => {
     const outcome = await applySectionToStores('settings', dropped, ctx)
     expect(getTheme('custom-1')).toBeUndefined()
     expect(useThemeStore.getState().activeThemeId).toBe('dark')
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(dropped) }) // honestly dirty
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(dropped) }) // honestly dirty
   })
 })
 
@@ -874,8 +874,8 @@ describe('applySectionToStores — workspaces', () => {
     expect(s.activeWorkspaceId).toBe('wb')
     expect(useTabStore.getState().tabOrder).toEqual(['b1', 'a1', 'a2', 'solo'])
     expect(useTabStore.getState().activeTabId).toBe('a2')
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildWorkspacesSection(s.workspaces)) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildWorkspacesSection(s.workspaces)) })
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
@@ -910,7 +910,7 @@ describe('applySectionToStores — workspaces', () => {
     expect(t.activeTabId).toBe('x1')
     expect(t.visitHistory).toEqual(['x1', 'b1'])
     expect(Object.keys(useWorkspaceSettingsStore.getState().workspaces)).toEqual(['bad id!'])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) }) // converged: the builder leaves it out again
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) }) // converged: the builder leaves it out again
   })
 
   it('the global active tab becomes null when neither it nor the active workspace\'s tab survives', async () => {
@@ -1031,8 +1031,8 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(t.tabOrder).toEqual(['a3', 'a1', 'b1', 'solo'])
     expect(t.visitHistory).toEqual(['b1', 'a1'])
     expect(t.activeTabId).toBe('b1') // 'a2' gone → active workspace (wb)'s active tab
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildTabsSection(w.workspaces[0], t.tabs)) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildTabsSection(w.workspaces[0], t.tabs)) })
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
@@ -1060,7 +1060,7 @@ describe('applySectionToStores — tabs.<id>', () => {
     const layout = useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>
     expect(layout.children[0]).toMatchObject({ pane: { content: { hostId: 'host-gone', terminated: 'host-removed' } } })
     expect((layout.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   it('null payload: a workspace still known has its tabs emptied; an unknown one is a no-op', async () => {
@@ -1068,7 +1068,7 @@ describe('applySectionToStores — tabs.<id>', () => {
     const outcome = await applySectionToStores('tabs.wa', null, ctx)
     expect(useWorkspaceStore.getState().workspaces[0]).toMatchObject({ id: 'wa', tabs: [], activeTabId: null })
     expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual(['b1', 'solo'])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection({ order: [], tabs: {} }) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ order: [], tabs: {} }) })
 
     let second: unknown
     const writes = await countWrites(async () => {
@@ -1130,7 +1130,7 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(Object.keys(parked.tabs).sort()).toEqual(['b1', 'solo']) // wa's tabs went with it
     expect(parked.activeTabId).toBe('b1') // 'a2' is gone → re-pointed by the rule the live path uses
     expect(Object.keys(useWorkspaceSettingsStore.getState().workspaces).sort()).toEqual(['SLAVE-ONLY-ws', 'wb'])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
     expect(useTabStore.getState()).toBe(liveTabs)
     expect(useWorkspaceStore.getState()).toBe(liveWs)
     expect(screen()).toBe(before)
@@ -1147,7 +1147,7 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     const parked = useLocalProfilesStore.getState().parkedMaster!
     expect(parked.workspaces.find((w) => w.id === 'wa')?.tabs).toEqual(['a2'])
     expect(Object.hasOwn(parked.tabs, 'a1')).toBe(false)
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildTabsSection(parked.workspaces.find((w) => w.id === 'wa')!, parked.tabs)) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildTabsSection(parked.workspaces.find((w) => w.id === 'wa')!, parked.tabs)) })
     expect(screen()).toBe(before)
     expect(JSON.stringify(parked)).not.toContain('SLAVE-ONLY')
   })
@@ -1168,7 +1168,7 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     const outcome = await applySectionToStores('settings', payload, ctx)
 
     expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({ wa: { files: { x: 9 } }, 'SLAVE-ONLY-ws': { files: { x: 3 } } })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   it('hosts: a removed host is marked host-removed in the PARKED master too (and on screen), through the app\'s own cascade', async () => {
@@ -1226,8 +1226,8 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     // the wire build: A's row plus THIS device's own id as an alias (its ordinal-2-era key) — one push, then agreed
     const rebuilt = buildHostsSection(s)
     expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) })
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(rebuilt) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   it('hosts: a canonical row nobody matches is created under a NEW random local id (never its sync id); its aliases land in syncAliases', async () => {
@@ -1239,7 +1239,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(created).toMatch(/^[0-9a-z]{6}$/)
     expect(created).not.toBe('xxxxxx')
     expect(s.hosts[created]).toMatchObject({ daemonId: OTHER, syncAliases: ['legacy1', 'xxxxxx'] })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildHostsSection(s)) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildHostsSection(s)) })
   })
 
   it('hosts: an ORDINAL-2 row (A\'s local id as key, with daemonId) is matched by daemonId; its key becomes an alias; the rebuilt hash is canonical (one push)', async () => {
@@ -1251,8 +1251,8 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     const rebuilt = buildHostsSection(s)
     expect(Object.keys(rebuilt.hosts)).toEqual([WIRE])
     expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) })
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(legacy) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(rebuilt) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
   })
 
   it('master by IDENTITY: a payload without the master daemon\'s row → removes-master-host; its row at another ip → changes-master-host; nothing written', async () => {
@@ -1309,7 +1309,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(JSON.stringify(layout)).not.toContain('host-removed')
     // the canonical form of what the stores hold: both panes now name the master's sync id
     const wire = buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', { ...split, children: [tmuxLeaf('canon', WIRE), tmuxLeaf('legacy', WIRE)] }) })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(wire) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(wire) })
   })
 
   it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is left out (the hash says so)', async () => {
@@ -1325,9 +1325,9 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } } })
     expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [], []])
     expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([[`sessions:${M}`]])
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) }) // the unknown column: pushed back without it, once
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) }) // the unknown column: pushed back without it, once
     const identity = identityOfSync(useHostStore.getState().hosts)
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)) })
   })
 
   // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part
@@ -1403,10 +1403,10 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(useHostStore.getState().hosts[M].syncAliases).toEqual(['aaaaaa', 'bbbbbb'])
     const rebuilt = buildHostsSection(useHostStore.getState())
     expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', 'bbbbbb', M])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) }) // ≠ the payload's: the one write
-    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(rebuilt) }) // ≠ the payload's: the one write
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
     // the sorted row applied back: the stores hold exactly it — nothing more to write
-    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(rebuilt)), ctx)).toEqual({ ok: true, hash: await hashSection(rebuilt) })
+    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(rebuilt)), ctx)).toMatchObject({ ok: true, hash: await hashSection(rebuilt) })
   })
 
   it('tabs: a daemonId learned while the operation lock is taken is the one the panes resolve through', async () => {
@@ -1426,7 +1426,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
       const content = (useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content
       expect(content).toMatchObject({ hostId: 'h2' })
       expect(content).not.toHaveProperty('terminated')
-      expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+      expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
     } finally {
       useRebuildStore.setState({ acquireOperationLock: real })
     }
@@ -1439,5 +1439,48 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(await applySectionToStores('tabs.wa', buildTabsSection(ws('wa', ['a1']), { a1: tab('a1') }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' })
     expect(useTabStore.getState().tabs).toBe(tabsBefore)
     expect(await applySectionToStores('settings', { 'purdex-layout': { tabPosition: 'bottom' } }, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' })
+  })
+})
+
+// #1369: the outcome carries the very payload its `hash` was taken of, so the executor can stash it and push the
+// write-back without waiting for the collector (which reports a hash once — a pruned repeat never comes again).
+describe('applySectionToStores — an ok outcome hands back the payload it hashed (#1369)', () => {
+  async function expectOwnPayload(outcome: unknown, built: unknown): Promise<void> {
+    const o = outcome as { ok: true; hash: string | null; payload?: unknown }
+    expect(o.ok).toBe(true)
+    expect(o.payload).toEqual(built)
+    expect(o.hash).toBe(await hashSection(o.payload))
+  }
+
+  it('hosts: the rebuilt section', async () => {
+    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' }), host(H2)]), ctx)
+    await expectOwnPayload(outcome, buildHostsSection(useHostStore.getState()))
+  })
+
+  it('settings: the rebuilt section', async () => {
+    const payload = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
+    payload['purdex-layout'] = { ...payload['purdex-layout'], tabPosition: 'bottom' }
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    await expectOwnPayload(outcome, buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))
+  })
+
+  it('workspaces: the rebuilt section', async () => {
+    seedTabWorld()
+    const outcome = await applySectionToStores('workspaces', { order: ['wb', 'wa'], workspaces: { wa: { name: 'Alpha' }, wb: { name: 'WB' } } }, ctx)
+    await expectOwnPayload(outcome, buildWorkspacesSection(useWorkspaceStore.getState().workspaces))
+  })
+
+  it('tabs.<id>: the rebuilt section', async () => {
+    seedTabWorld()
+    const outcome = await applySectionToStores('tabs.wa', buildTabsSection(ws('wa', ['a3']), { a3: tab('a3') }), ctx)
+    const wa = useWorkspaceStore.getState().workspaces.find((w) => w.id === 'wa')!
+    await expectOwnPayload(outcome, buildTabsSection(wa, useTabStore.getState().tabs))
+  })
+
+  it('a null hash carries no payload', async () => {
+    seedTabWorld()
+    const outcome = await applySectionToStores('tabs.nowhere', buildTabsSection(ws('nowhere', ['z1']), { z1: tab('z1') }), ctx)
+    expect(outcome).toEqual({ ok: true, hash: null })
+    expect(outcome).not.toHaveProperty('payload')
   })
 })

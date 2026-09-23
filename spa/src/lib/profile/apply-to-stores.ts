@@ -66,8 +66,10 @@ import type { HostsPayload, ProfileSectionKey, SettingsPayload, SettingsStorageK
 // === Contract ===
 
 export type ApplyOutcome =
-  /** Written. `hash` is rebuilt from the stores afterwards; `null` = the section does not exist locally (nothing was written). */
-  | { ok: true; hash: string | null }
+  /** Written. `hash` is rebuilt from the stores afterwards; `null` = the section does not exist locally (nothing was written).
+   *  `payload` is the section `hash` was computed from (absent with a `null` hash): when it differs from the SOT's,
+   *  the executor pushes it back without waiting for the collector to report it (#1369). */
+  | { ok: true; hash: string | null; payload?: unknown }
   /** Not now, retry later, never lock the section: the operation lock is held by someone else — or the master's
    *  tab world is unsettled (master-world.ts: a switch is half-way through this window's rehydrates), so there is
    *  nowhere to write `workspaces` / `tabs.*` and no master workspace set to scope `settings` by. */
@@ -167,6 +169,9 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const invalid = (code: InvalidReason, detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid', code, detail })
 
 const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
+
+/** An ok outcome for a section rebuilt from the stores: its hash, and the very payload that hash was taken of. */
+const rebuilt = async (payload: unknown): Promise<ApplyOutcome> => ({ ok: true, hash: await hashSection(payload), payload })
 
 // === host-removed ===
 
@@ -418,7 +423,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
       throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
     await hooks
-    return { ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) }
+    return rebuilt(buildHostsSection(useHostStore.getState()))
   }
 
   // Decided on the state as it is now; `write` re-reads under the lock, and nothing can run in between (no await).
@@ -562,7 +567,7 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
   // No await since the last re-read either: the identity is the one this apply resolved through (checked above), and
   // with no patch at all nothing was awaited — the resolve and this hash read the same host store.
   const identity = identityOfSync(useHostStore.getState().hosts)
-  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterIds, identity)) }
+  return rebuilt(buildSettingsSection(readSettingsSources(), masterIds, identity))
 }
 
 // === workspaces / tabs.<id> ===
@@ -596,7 +601,7 @@ async function applyWorkspacesSection(payload: unknown): Promise<ApplyOutcome> {
       // anything is awaited. Synchronous since the write, so "unsettled" here is for the type only.
       const after = readMasterWorld()
       if (written === 'unsettled' || !after.settled) return BUSY
-      return { ok: true, hash: await hashSection(buildWorkspacesSection(after.world.workspaces)) }
+      return rebuilt(buildWorkspacesSection(after.world.workspaces))
     },
     () => ({ ok: false, reason: 'busy' }),
   )
@@ -649,7 +654,7 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       if (!ws) return { ok: true, hash: null }
       // The identity the resolve above used: nothing was awaited since.
       const identity = identityOfSync(useHostStore.getState().hosts)
-      return { ok: true, hash: await hashSection(buildTabsSection(ws, after.world.tabs, identity)) }
+      return rebuilt(buildTabsSection(ws, after.world.tabs, identity))
     },
     () => ({ ok: false, reason: 'busy' }),
   )
