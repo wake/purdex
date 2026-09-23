@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.0-alpha.434] - 2026-09-23
+
+### Fix（daemon）：session 清單的 tmux 讀取有期限（#1293，#1344／#1345／#1350／#1354／#1346）
+
+組 session 清單時會跑 `tmux list-sessions`，再對每個 session 讀 pane metadata，以前全都沒有期限。帶版本清單的四條路徑
+（`?fresh=1`、WS 訂閱快照、wait-for 推送、ticker 推送）都在同一把鎖裡讀，一次卡住的讀取就會讓它們一起停擺——
+包括 SPA 開 attach gate 所依賴的新連線第一個 frame。
+
+- **整條鏈一個期限** —— tmux 清單、每個 session 的 pane metadata、tmux instance 探測、meta DB 讀取共用 5 秒；
+  逾時的 tmux client 會被砍掉，清單回錯誤（不會交出不完整的清單、不消耗 seq、不旋轉 epoch）。`?fresh=1` 逾時照契約回 500。
+- **每個 pane 一次 `display-message`** —— 原本 7 次（mlab 實測 15 個 session 約 44 ms／session，100 個 session 會逼近 5 秒），
+  合併成一次約 10 ms。自由文字欄位由 tmux 先把 TAB 換成空白，解析端要求剛好 7 欄＋固定 id 驗證，不符就退回逐欄查詢。
+- **排隊可以放棄** —— 版本清單與一般清單的快取重新填充都改成可放棄等待的 slot，請求的 context 結束就離開，
+  不必卡在壞掉的讀取後面；invalidation 不會等讀取。
+- **HTTP 跟著 request 走** —— session module 的 handler、fs search（含 `timeoutMs`）、nex handoff／take-back、agent upload
+  都把 request context 傳進讀取；客戶端一斷線，卡住的讀取就結束。agent hook 的讀取刻意用獨立的限時 context：
+  hook 事件要完整處理，送出端斷線不能讓狀態更新只做一半。
+- **建立 session 全程有上限** —— 建立前取消什麼都不建；`new-session` 用獨立的限時 context（不綁 request，避免留下
+  「建好了卻以為沒建」的 session），成功後一定跑完、不會留下沒有 meta 的 session；結果無法確認時 `session_alive` 回 false。
+- **訂閱快照失敗會恢復** —— 背景重試 1／2／4 秒（每次用新的完整期限），全部失敗或 frame 排不進佇列就關閉該 WS 讓 SPA 重連；
+  tmux 長時間卡住時約 27 秒重連一輪。其他推送維持記錄後略過。
+- **peers inventory** —— 兩次 tmux instance 探測與清單共用同一個 2 秒 budget；預算用完回 partial。
+- **驗證** —— 五支 PR 各自 R1＋攻擊方＋critic；合併後 main 上 `go vet`／`go build`／`go test ./...` 全過。
+  追蹤：#1348、#1352、#1353、#1356、#1357（大檔拆分）、#1355（既有的 flaky 測試）。
+
+### Feature（SPA）：Profile Sync 跨裝置 host 身分・第一塊（#1349、#1351）
+
+- **記下 daemon 身分** —— 每個 host 記住 daemon 的身分（`/api/info` 的 `host_id`，存成 `daemonId`）；連線、換位址或換 token 時
+  重新驗證。本機驗到的身分與記錄不同時只標記（不寫入、不同步），例如 daemon 重裝或同一位址在不同裝置連到不同 daemon。
+- **新增主機依身分去重** —— 同一個 daemon 換個位址也會被擋下；配對流程若 token 已輪替，會依情況自動更新既有主機的 token，
+  或讓使用者選「把這個位址用在 X」／「另外新增」，新 token 絕不遺失。
+- **daemonId 隨 hosts section 同步** —— `SECTION_SCHEMA_ORDINAL.hosts` 1 → 2：還沒升級的舊版 client 同步這份 profile 會進
+  `locked:schema`，直到升級為止；新版 client 拉到舊形狀的 hosts 不會鎖。
+- **尚未完成的第二塊** —— 跨裝置 pull 的修正還沒做：兩台裝置各自加入同一個 daemon 時，第二台用 wizard 拉資料仍會
+  `locked:invalid`（「payload removes the master host」）。
+
 ## [1.0.0-alpha.433] - 2026-09-23
 
 ### Fix：英文介面其餘寫死的中文（#1337，#1342）
