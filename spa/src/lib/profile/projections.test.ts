@@ -494,12 +494,49 @@ describe('shape: fingerprint and ordinal', () => {
   // that leaves out its own interface tabs — and delete them. A marker moves the fingerprint, so it locks instead.
   it('coexistence by shape: the ordinal-2 tabs shape (host-id marker only) and this one order — the old client locks, this one pulls', async () => {
     expect(WIRE_MARKERS.tabs).toContain('@tabs:device-local=v1')
-    expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(3)
+    expect(SECTION_SCHEMA_ORDINAL.tabs).toBeGreaterThanOrEqual(3)
     const mine = { fingerprint: await sectionFingerprint('tabs'), ordinal: SECTION_SCHEMA_ORDINAL.tabs }
     const old = { fingerprint: await fingerprintOf([...PROJECTIONS.tabs, '@wire:host-id=d1']), ordinal: 2 }
     expect(old.fingerprint).not.toBe(mine.fingerprint)
     expect(compareShape(mine, old)).toBe('i-am-newer')
     expect(compareShape(old, mine)).toBe('sot-is-newer')
+  })
+
+  // agent-last-state (review decision 1): `tabs.*.layout` gained a value domain — a rebuild record's
+  // `agent.frameId` and `agentExited` — with no path change, so the fingerprint moves through a second tabs
+  // marker and the ordinal goes 3 → 4. The ordinal-3 client (host-id + device-local markers) and this build, by shape:
+  // the old one locks on a row of ours, and we pull its rows without locking — never a ping-pong.
+  describe('agent-last-state: the ordinal-3 tabs client and this build coexist', () => {
+    const oldTabs = async (): Promise<Shape> => ({
+      fingerprint: await fingerprintOf([...PROJECTIONS.tabs, ...WIRE_MARKERS.tabs.filter((m) => m !== '@wire:rebuild-agent-state=1')]),
+      ordinal: 3,
+    })
+
+    it('the marker is there, and it is the only thing between the two shapes', async () => {
+      expect(WIRE_MARKERS.tabs).toEqual(['@wire:host-id=d1', '@tabs:device-local=v1', '@wire:rebuild-agent-state=1'])
+      expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(4)
+      expect((await oldTabs()).fingerprint).toBe(await fingerprintOf([...PROJECTIONS.tabs, '@wire:host-id=d1', '@tabs:device-local=v1']))
+      expect((await oldTabs()).fingerprint).not.toBe(await sectionFingerprint('tabs'))
+    })
+
+    it('an index holding a new tabs row → sot-is-newer (locked:schema) for the old client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'tabs.w1', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('tabs'), ordinal: SECTION_SCHEMA_ORDINAL.tabs,
+      }
+      const old: Record<SectionKind, Shape> = {
+        hosts: { fingerprint: await sectionFingerprint('hosts'), ordinal: SECTION_SCHEMA_ORDINAL.hosts },
+        settings: { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings },
+        workspaces: { fingerprint: await sectionFingerprint('workspaces'), ordinal: SECTION_SCHEMA_ORDINAL.workspaces },
+        tabs: await oldTabs(),
+      }
+      expect(profileLock([entry], old)).toMatchObject({ section: 'tabs.w1', kind: 'tabs', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an old tabs row as i-am-newer (pulls it, no lock), and the old one meets ours as newer', async () => {
+      const mine = { fingerprint: await sectionFingerprint('tabs'), ordinal: SECTION_SCHEMA_ORDINAL.tabs }
+      expect(compareShape(mine, await oldTabs())).toBe('i-am-newer')
+      expect(compareShape(await oldTabs(), mine)).toBe('sot-is-newer')
+    })
   })
 
   // GUARD (spec §4.5). If this fails: a projection changed — bump
@@ -518,8 +555,8 @@ describe('shape: fingerprint and ordinal', () => {
           5,
         ],
         "tabs": [
-          "710acf363361f894695def7c47aace4930c2b94fae623d710d4ee19761830f47",
-          3,
+          "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",
+          4,
         ],
         "workspaces": [
           "7986550194df9cf330ec521be44e68989a703ac1e90d433f73e9aab00410c87e",
