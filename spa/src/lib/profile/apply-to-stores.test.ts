@@ -32,7 +32,7 @@ import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalP
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
 import { renderHook } from '@testing-library/react'
-import { HOST_RERESOLVE_RETRY_MS, __resetHostReresolveForTest, requestHostReresolve } from '../host-reresolve'
+import { HOST_RERESOLVE_LOCK_OWNER, HOST_RERESOLVE_RETRY_MS, __resetHostReresolveForTest, requestHostReresolve } from '../host-reresolve'
 import { useNewTabBootstrap } from '../../hooks/useNewTabBootstrap'
 import { clearNewTabRegistry, registerNewTabProviderSource } from '../new-tab-registry'
 import { createHostSessionProviderSource } from '../session-new-tab-providers'
@@ -1494,6 +1494,44 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
       }
     })
 
+    // PR #1406 attacker high #3: the pass runs after the apply has settled, never inside its `finally` — a pass that
+    // throws must not replace the apply's own outcome or error.
+    describe('the pass itself throws', () => {
+      function passThrows(): void {
+        // On the store API (restorable), not on a state object — zustand copies a state's own props into the next one.
+        const realGetState = useRebuildStore.getState
+        vi.spyOn(useRebuildStore, 'getState').mockImplementation(() => {
+          const st = realGetState()
+          return {
+            ...st,
+            acquireOperationLock: (owner, parent) => {
+              if (owner === HOST_RERESOLVE_LOCK_OWNER) throw new Error('pass exploded')
+              return st.acquireOperationLock(owner, parent)
+            },
+          }
+        })
+        vi.spyOn(console, 'error').mockImplementation(() => {})
+      }
+
+      it('a resolved outcome is returned as it was', async () => {
+        useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/w' } } } }) // something to move
+        passThrows()
+        const payload = buildWorkspacesSection(useWorkspaceStore.getState().workspaces)
+        await expect(applySectionToStores('workspaces', payload, ctx)).resolves.toMatchObject({ ok: true, hash: await hashSection(payload) })
+        await new Promise((r) => setTimeout(r, 0)) // the scheduled pass has run — and thrown, caught
+      })
+
+      it('the apply\'s own error is the one the caller gets', async () => {
+        useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/old' } } } })
+        const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+        const payload: SettingsPayload = { ...now, 'purdex-layout': { ...(now['purdex-layout'] as object), tabPosition: 'left' } }
+        passThrows()
+        vi.spyOn(useLayoutStore, 'setState').mockImplementationOnce(() => { throw new Error('layout write failed') })
+        await expect(applySectionToStores('settings', payload, ctx)).rejects.toThrow(/^layout write failed$/)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+    })
+
     it('a settings apply that THROWS after its rollback restored a wire id still ends with it resolved', async () => {
       // Another window's write landed `WIRE` here and the pass has not run yet; the apply rewrites the key, a later
       // store fails, and the rollback puts `WIRE` back — whatever pass ran between the awaits is undone by it.
@@ -1512,7 +1550,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
       vi.spyOn(useLayoutStore, 'setState').mockImplementationOnce(() => { throw new Error('layout write failed') })
       await expect(applySectionToStores('settings', payload, ctx)).rejects.toThrow('layout write failed')
       vi.restoreAllMocks()
-      expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { editor: { homePath: '/old' } } })
+      await vi.waitFor(() => expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { editor: { homePath: '/old' } } }))
     })
   })
 

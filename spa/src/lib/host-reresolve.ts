@@ -253,6 +253,25 @@ export function requestHostReresolve(): void {
   }
 }
 
+/**
+ * A request for a pass that cannot throw and runs nothing now: the pass itself runs in a microtask, and whatever it
+ * throws is caught and reported there. For callers that must not have their own outcome or error replaced — the
+ * profile applies' `finally` (`applySectionToStores`).
+ */
+export function scheduleHostReresolve(): void {
+  try {
+    queueMicrotask(() => {
+      try {
+        requestHostReresolve()
+      } catch (err) {
+        console.error(`[host-reresolve] the pass threw: ${messageOf(err)}`)
+      }
+    })
+  } catch {
+    // no microtask queue: nothing to schedule on, and nothing here may throw
+  }
+}
+
 /** Every persisted store the pass reads or rewrites: it runs only once ALL of them hold their real state. */
 const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore] as const
 

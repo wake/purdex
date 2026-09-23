@@ -48,7 +48,7 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { Tab } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
-import { requestHostReresolve } from '../host-reresolve'
+import { scheduleHostReresolve } from '../host-reresolve'
 import { generateId } from '../id'
 import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
@@ -720,7 +720,9 @@ export async function applySectionToStores(key: ProfileSectionKey, payload: unkn
   } finally {
     // At the SETTLEMENT boundary, whatever the outcome — a throw included (host ownership plan §0.2): a rollback
     // (`setState(old)`) may have put back a wire id the re-resolve pass had already resolved, and an applied payload
-    // may carry one this device can resolve. The pass is idempotent and writes nothing when nothing moves.
-    requestHostReresolve()
+    // may carry one this device can resolve. The pass is idempotent and writes nothing when nothing moves. Only
+    // SCHEDULED here — it runs in a microtask and cannot throw into this `finally`, so the outcome or error the
+    // caller gets is always the apply's own.
+    scheduleHostReresolve()
   }
 }
