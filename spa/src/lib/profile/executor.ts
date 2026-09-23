@@ -773,11 +773,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     else halt()
   }
 
-  function releaseBarrier(): void {
+  /** `awaitingPayload`: a section the release must NOT pump — the guarded `hosts`, when its apply left it dirty on a
+   *  hash whose payload only the collector holds (`pull()`'s own rule: that report pumps it). */
+  function releaseBarrier(awaitingPayload?: string): void {
     if (disposed || halted || guardReleased) return
     guardReleased = true
     answerStandingLocks()
-    pumpAll()
+    for (const key of [...sections.keys()]) if (key !== awaitingPayload) pump(key)
+    checkSettled()
   }
 
   /** The mismatch: terminal (see the header). */
@@ -1460,11 +1463,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const taken = dispatch(key, { type: 'pull-applied', rev, hash: sotHash, localHash: outcome.hash }, false)
     if (!taken) problem('pull-applied-refused', 'the section changed while the payload was being applied', key)
     answered()
-    // `hosts` is applied, on the confirmed row: only now may anything else move (see the header).
-    if (guarded && taken) releaseBarrier()
     // The push that follows needs the payload of what the stores hold, and only
     // the collector has it: its report of this very apply pumps the section.
-    if (mismatch && outcome.hash !== null && !stash.has(outcome.hash)) {
+    const awaitsCollector = mismatch && outcome.hash !== null && !stash.has(outcome.hash)
+    // `hosts` is applied, on the confirmed row: only now may anything else move (see the header). Not `hosts` itself
+    // ahead of that report, though: pumped now (it is still running), `run()` would repump it into a payload-less push.
+    if (guarded && taken) releaseBarrier(awaitsCollector ? key : undefined)
+    if (awaitsCollector) {
       clearBackoff(key)
       return WAIT
     }

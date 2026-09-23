@@ -66,7 +66,10 @@ After every index (`checkConfirmedHosts()`, the index-level part):
 - **released** only when `hosts` IS APPLIED — `applySectionToStores` succeeded and `pull-applied` was taken for the
   matching row — or, with nothing to apply, when `hosts` is up to date on the guard's hash (this device already
   held exactly that; the index folds the agreement; up to date on another hash → mismatch). Then everything
-  proceeds as today (first reconciliation, forcePull etc.); the guard is not consulted again.
+  proceeds as today (first reconciliation, forcePull etc.); the guard is not consulted again. The release pumps
+  every section but one: a `hosts` the apply left dirty on a hash whose payload only the collector holds
+  (`pull-hash-mismatch`, no stash) waits for that report, exactly as it does without a guard — pumped by the
+  release it went out as `push-payload-missing` (real machine, #1366).
 - a failed read, an apply that answers busy, is refused (`locked:invalid`) or throws → the ordinary backoff /
   lock handling of `pull()`, with the barrier still up: no other section moves.
 - **mismatch** → the executor enters a terminal **halted** state at once (synchronously: the barrier never lifts,

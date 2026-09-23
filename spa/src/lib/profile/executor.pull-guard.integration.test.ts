@@ -347,6 +347,49 @@ describe('THE PULL GUARD — nothing but `hosts` moves until `hosts` has been AP
     expect(run.settled).toHaveBeenCalledTimes(1)
   })
 
+  // #1366 real machine: the stores keep something else than the confirmed row (a normalisation — here the payload is
+  // altered on its way in, as a sanitiser would). `hosts` is dirty and its payload is the collector's to report; the
+  // release must not pump it ahead of that report (it went out as `push-payload-missing`, then the retry sent it).
+  it('released on a `hosts` apply whose stores hash differs: the others go, but `hosts` waits for its collector payload — no push-payload-missing', async () => {
+    const confirmed = await clientAHasPushed()
+    worldOfB()
+    applied.mockImplementation(async (key, payload, ctx) => {
+      log.push(`start:${key}`)
+      const kept = key === 'hosts' && payload !== null ? (JSON.parse(JSON.stringify(payload).split('named-by-A').join('kept-by-B')) as typeof payload) : payload
+      const r = await realApply(key, kept, ctx)
+      log.push(`end:${key}`)
+      return r
+    })
+    const run = await start(B, 'pull', confirmed)
+    // what the collector reports of `hosts` from now on (its closure calls `executor.onSection` at call time)
+    const reports: string[] = []
+    const onSection = executor!.onSection.bind(executor)
+    executor!.onSection = (r) => {
+      if (r.key === 'hosts') reports.push(r.hash ?? 'null')
+      onSection(r)
+    }
+    const hostsPuts = () => api.putSection.mock.calls.filter((c) => c[2] === 'hosts' && c[3].clientId === B)
+    // the `hosts` PUT, when it goes, carries a payload the collector reported after the apply
+    api.putSection.mockImplementation(async (_h, _p, key, body) => {
+      if (key === 'hosts') expect(reports).toContain(body.hash)
+      return daemon.put(key, body)
+    })
+    executor!.onReconnected()
+    await play(10)
+
+    expect(run.unconfirmed).not.toHaveBeenCalled()
+    expect(problems.filter((p) => p.section === 'hosts').map((p) => p.kind)).toEqual(['pull-hash-mismatch'])
+    expect(problems.map((p) => p.kind)).not.toContain('push-payload-missing')
+    expect(useHostStore.getState().hosts[H2].name).toBe('kept-by-B')
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1', 'wa2']) // the others went
+    expect(hostsPuts()).toHaveLength(1)
+    const body = hostsPuts()[0][3]
+    expect(body.hash).not.toBe(confirmed.hash)
+    expect(JSON.stringify(body.payload)).toContain('kept-by-B')
+    expect(hostsRow().hash).toBe(body.hash)
+    expect(run.settled).toHaveBeenCalledTimes(1)
+  })
+
   it('this device already holds exactly the confirmed `hosts` (nothing to apply): released on the agreement', async () => {
     const confirmed = await clientAHasPushed()
     world('named-by-A', [ws('wb1', ['tb1'])], [tab('tb1')])
