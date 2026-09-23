@@ -15,6 +15,13 @@ interface Props {
   hostId: string
 }
 
+const STATUS_LABEL_KEYS: Record<HostRuntime['status'], string> = {
+  connected: 'hosts.status_value.connected',
+  disconnected: 'hosts.status_value.disconnected',
+  reconnecting: 'hosts.status_value.reconnecting',
+  'auth-error': 'hosts.status_value.auth_error',
+}
+
 /* ─── Main component ─── */
 
 export function OverviewSection({ hostId }: Props) {
@@ -97,8 +104,10 @@ export function OverviewSection({ hostId }: Props) {
   }
 
   const statusLabel = (r?: HostRuntime) => {
-    if (!r) return 'unknown'
-    return r.status
+    const key = r ? STATUS_LABEL_KEYS[r.status] : undefined
+    // A status the map does not know (a runtime value outside the type) shows raw.
+    if (r && !key) return r.status
+    return t(key ?? 'hosts.status_value.unknown')
   }
 
   const handleConfigSave = async (updates: Partial<ConfigData>) => {
@@ -254,9 +263,9 @@ export function OverviewSection({ hostId }: Props) {
                 onChange={(e) => handleConfigSave({ terminal: { sizing_mode: e.target.value } })}
                 className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary"
               >
-                <option value="auto">auto</option>
-                <option value="terminal-first">terminal-first</option>
-                <option value="minimal-first">minimal-first</option>
+                <option value="auto">{t('hosts.sizing_mode_option.auto')}</option>
+                <option value="terminal-first">{t('hosts.sizing_mode_option.terminal_first')}</option>
+                <option value="minimal-first">{t('hosts.sizing_mode_option.minimal_first')}</option>
               </select>
             </Field>
             <Field label={t('hosts.detect_commands')}>

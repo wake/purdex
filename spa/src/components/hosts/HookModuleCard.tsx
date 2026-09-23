@@ -105,7 +105,7 @@ export function HookModuleCard({ module, hostId, refreshKey }: Props) {
                 {isToleratedFutureOnly ? (
                   <span className="inline-flex items-center gap-1 text-text-muted">
                     <WarningCircle size={12} />
-                    FutureOnly
+                    {t('hosts.hook_future_only')}
                   </span>
                 ) : (
                   <span className={`inline-flex items-center gap-1 ${detail.installed ? 'text-green-400' : 'text-text-muted'}`}>

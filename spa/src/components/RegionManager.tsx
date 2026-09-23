@@ -3,7 +3,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { DotsSixVertical, X, Plus } from '@phosphor-icons/react'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import { useI18nStore } from '../stores/useI18nStore'
-import { getAllViews } from '../lib/module-registry'
+import { getAllViews, viewLabel } from '../lib/module-registry'
 import type { SidebarRegion } from '../types/layout'
 
 interface Props {
@@ -91,7 +91,7 @@ export function RegionManager({ region }: Props) {
                   <SortableViewRow
                     key={viewId}
                     viewId={viewId}
-                    label={viewDef.label}
+                    label={viewLabel(viewDef, t)}
                     icon={viewDef.icon}
                     onRemove={() => removeView(region, viewId)}
                   />
@@ -111,12 +111,12 @@ export function RegionManager({ region }: Props) {
               className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-hover"
             >
               <viewDef.icon size={14} className="text-text-muted shrink-0" />
-              <span className="flex-1 text-xs text-text-muted truncate">{viewDef.label}</span>
+              <span className="flex-1 text-xs text-text-muted truncate">{viewLabel(viewDef, t)}</span>
               <button
                 data-testid="add-view-btn"
                 className="text-text-muted hover:text-text-primary shrink-0"
                 onClick={() => addView(region, viewDef.id)}
-                aria-label={`Add ${viewDef.label}`}
+                aria-label={`Add ${viewLabel(viewDef, t)}`}
               >
                 <Plus size={12} />
               </button>

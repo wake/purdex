@@ -5,7 +5,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useAgentStore } from '../../stores/useAgentStore'
+import { useAgentStore, type AgentStatus } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
 import { connectionErrorMessage } from '../../lib/host-utils'
@@ -19,6 +19,15 @@ interface Props {
 // Shared fallback so the selector returns a stable reference when the host has
 // no sessions entry yet — a fresh `[]` per call makes useSyncExternalStore loop.
 const EMPTY_SESSIONS: Session[] = []
+
+// The store casts the wire value to AgentStatus, so an unknown one can still
+// arrive; the badge falls back to showing it raw.
+const AGENT_STATUS_LABEL_KEYS: Record<AgentStatus, string> = {
+  running: 'hosts.agent_status.running',
+  waiting: 'hosts.agent_status.waiting',
+  idle: 'hosts.agent_status.idle',
+  error: 'hosts.agent_status.error',
+}
 
 /* ─── Inline Rename ─── */
 
@@ -153,7 +162,7 @@ export function SessionsSection({ hostId }: Props) {
                             : agent === 'error' ? 'bg-red-500/20 text-red-400'
                             : 'bg-surface-tertiary text-text-muted'
                         }`}>
-                          {agent}
+                          {AGENT_STATUS_LABEL_KEYS[agent] ? t(AGENT_STATUS_LABEL_KEYS[agent]) : agent}
                         </span>
                       ) : (
                         <span className="text-text-muted">—</span>

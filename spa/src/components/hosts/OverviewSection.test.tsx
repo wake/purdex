@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { OverviewSection } from './OverviewSection'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 
 // HostIconField renders a Phosphor icon whose weight loader fetches
 // /icons/<weight>.json — that would consume this suite's fetch mocks.
@@ -227,6 +228,42 @@ describe('OverviewSection', () => {
 
     // Success pill should still be visible
     expect(screen.getByText(/Connected/)).toBeInTheDocument()
+  })
+})
+
+describe('OverviewSection — locale-aware status values', () => {
+  afterEach(() => { useI18nStore.getState().setLocale('en') })
+
+  const setStatus = (status: HostRuntime['status'] | undefined) =>
+    useHostStore.setState({ runtime: status ? { [HOST_ID]: { status } } : {} })
+
+  it.each([
+    ['connected', 'connected', '已連線'],
+    ['disconnected', 'disconnected', '未連線'],
+    ['reconnecting', 'reconnecting', '重新連線中'],
+    ['auth-error', 'auth-error', '驗證失敗'],
+    [undefined, 'unknown', '未知'],
+  ] as const)('connection status %s renders %s in en and %s in zh-TW', (status, en, zh) => {
+    setStatus(status)
+    const { unmount } = render(<OverviewSection hostId={HOST_ID} />)
+    expect(screen.getByText(en)).toBeInTheDocument()
+    unmount()
+
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<OverviewSection hostId={HOST_ID} />)
+    expect(screen.getByText(zh)).toBeInTheDocument()
+    expect(screen.queryByText(en)).not.toBeInTheDocument()
+  })
+
+  it('sizing mode options are labelled in zh-TW but keep their daemon values', async () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<OverviewSection hostId={HOST_ID} />)
+    const select = (await screen.findByDisplayValue('自動')) as HTMLSelectElement
+    expect(Array.from(select.options).map((o) => [o.value, o.text])).toEqual([
+      ['auto', '自動'],
+      ['terminal-first', '終端機優先'],
+      ['minimal-first', '最小優先'],
+    ])
   })
 })
 

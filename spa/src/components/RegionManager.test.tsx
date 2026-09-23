@@ -60,7 +60,7 @@ describe('RegionManager', () => {
       useLayoutStore.getState().setRegionViews('primary-sidebar', [])
       render(<RegionManager region="primary-sidebar" />)
       expect(screen.getByText('No views available')).toBeInTheDocument()
-      expect(screen.queryByText('沒有可用的 views')).not.toBeInTheDocument()
+      expect(screen.queryByText('沒有可用的檢視')).not.toBeInTheDocument()
     })
 
     it('shows the zh-TW empty-state text for the zh-TW locale', () => {
@@ -68,7 +68,7 @@ describe('RegionManager', () => {
       useI18nStore.getState().setLocale('zh-TW')
       useLayoutStore.getState().setRegionViews('primary-sidebar', [])
       render(<RegionManager region="primary-sidebar" />)
-      expect(screen.getByText('沒有可用的 views')).toBeInTheDocument()
+      expect(screen.getByText('沒有可用的檢視')).toBeInTheDocument()
     })
   })
 
