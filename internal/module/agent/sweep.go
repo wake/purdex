@@ -476,21 +476,33 @@ func (m *Module) broadcastProxyPruned(reference store.Frame) {
 
 // clearFrame is the eager delete path used for pid_dead / pid_reused sweeps
 // (and any other call site that wants an unconditional frame removal).
+//
+// The exit envelope (agent-last-state spec, review decision 7) is taken from
+// the frame BEFORE the delete — afterwards there is no row to read the session
+// id or frame id from — and only for a root frame: a child frame's process
+// ending is not the pane's agent ending. Both sweep reasons mean the process
+// is gone without a SessionEnd: a quit with no hook (opencode), a crash, a
+// kill.
 func (m *Module) clearFrame(frame store.Frame, reason string) error {
 	if m.frames == nil {
 		return nil
 	}
+	exit := exitForFrame(frame, m.sessionTmuxInstance(), ExitReasonProcessDead, nowFn().UnixMilli())
 	if err := m.frames.Delete(frame.FrameID); err != nil {
 		return err
 	}
-	return m.afterFrameCleared(frame, reason)
+	return m.afterFrameCleared(frame, reason, exit)
 }
 
 // afterFrameCleared handles the post-delete side effects shared by every
 // sweep reason: legacy agent_events cleanup, in-memory projection sync,
 // orphan Activity watcher stop (bug fix: previously only pid_dead/pid_reused
 // paths forgot to call StopWatch; now centralized), and WS broadcast.
-func (m *Module) afterFrameCleared(frame store.Frame, reason string) error {
+//
+// exit is the envelope clearFrame took before the delete (nil for a non-root
+// frame). It rides on the one broadcast below, so a pane whose session cannot
+// be resolved sends nothing at all — as before.
+func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit) error {
 	sessionName, code := m.resolvePaneSession(frame.PaneID)
 	if sessionName != "" && m.events != nil {
 		if err := m.events.Delete(sessionName); err != nil {
@@ -536,6 +548,7 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string) error {
 		return ferr
 	}
 	normalized := buildProjectionNormalized(freshProjection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{Status: agentpkg.StatusClear})
+	attachExit(&normalized, exit)
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
 	return nil
