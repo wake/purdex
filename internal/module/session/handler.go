@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -20,8 +21,14 @@ func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
 	// ?fresh=1 (exactly) answers a versioned envelope from a new tmux read,
 	// never from the list cache (spec §3.1). Any other value keeps the bare
 	// array, so an old daemon's answer is structurally distinguishable.
+	//
+	// Both forms are bounded by the request: its context, capped at the list
+	// read budget, covers the wait for a busy read slot and the read itself,
+	// so a hung tmux read answers 500 instead of holding the request (#1293).
+	ctx, cancel := context.WithTimeout(r.Context(), m.readTimeout())
+	defer cancel()
 	if r.URL.Query().Get("fresh") == "1" {
-		v, err := m.versionedList(context.Background())
+		v, err := m.versionedList(ctx)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -31,7 +38,7 @@ func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions, err := m.cachedListSessions()
+	sessions, err := m.cachedListSessions(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -44,18 +51,40 @@ func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(sessions)
 }
 
-func (m *SessionModule) cachedListSessions() ([]SessionInfo, error) {
-	m.listCacheMu.Lock()
-	defer m.listCacheMu.Unlock()
-	if time.Since(m.listCacheAt) < listCacheTTL && m.listCacheData != nil {
-		return m.listCacheData, nil
+// cachedListSessions serves the plain GET: the cached list while it is
+// younger than listCacheTTL, else one refill at a time through listCacheSlot.
+// A request waiting for the slot gives up with ctx.Err() when its context
+// ends; when a holder's refill fails (e.g. times out), each waiter that still
+// wants the list performs its own bounded read — no unbounded chain, since
+// every waiter is bounded by its own context (#1293 §3.2).
+func (m *SessionModule) cachedListSessions(ctx context.Context) ([]SessionInfo, error) {
+	if err := m.listCacheSlot.acquire(ctx); err != nil {
+		return nil, fmt.Errorf("session list: %w", err)
 	}
-	sessions, err := m.ListSessions()
+	defer m.listCacheSlot.release()
+
+	m.listCacheMu.Lock()
+	if time.Since(m.listCacheAt) < listCacheTTL && m.listCacheData != nil {
+		data := m.listCacheData
+		m.listCacheMu.Unlock()
+		return data, nil
+	}
+	gen := m.listCacheGen
+	m.listCacheMu.Unlock()
+
+	sessions, err := m.ListSessionsContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	m.listCacheData = sessions
-	m.listCacheAt = time.Now()
+
+	m.listCacheMu.Lock()
+	// An invalidation that landed during the read may describe a mutation
+	// the read missed: answer this caller, but do not cache the list as fresh.
+	if m.listCacheGen == gen {
+		m.listCacheData = sessions
+		m.listCacheAt = time.Now()
+	}
+	m.listCacheMu.Unlock()
 	return sessions, nil
 }
 
@@ -66,6 +95,7 @@ func (m *SessionModule) cachedListSessions() ([]SessionInfo, error) {
 func (m *SessionModule) invalidateListCache() {
 	m.listCacheMu.Lock()
 	m.listCacheAt = time.Time{}
+	m.listCacheGen++
 	m.listCacheMu.Unlock()
 }
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -339,6 +340,197 @@ func TestHandlerListSessionsFresh_TmuxErrorIs500(t *testing.T) {
 	w := getList(t, mux, "/api/sessions?fresh=1")
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "tmux list exploded")
+}
+
+// --- #1293 T4: request contexts bound list reads and slot waits ---
+
+// serveWithContext runs one request under ctx in the background and reports
+// its recorder when ServeHTTP returns.
+func serveWithContext(mux *http.ServeMux, ctx context.Context, path string) <-chan *httptest.ResponseRecorder {
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		done <- w
+	}()
+	return done
+}
+
+// holdListRead installs a read hook that parks tmux list-sessions reads until
+// release is closed (or their context ends), signalling entered as each
+// starts, and returns release.
+func holdListRead(fake *tmux.FakeExecutor, entered chan<- struct{}) chan struct{} {
+	release := make(chan struct{})
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		if op != tmux.ReadListSessions {
+			return nil
+		}
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	return release
+}
+
+// ?fresh=1 waiting behind a stuck versioned read returns as soon as its
+// request is cancelled — it does not queue behind the holder.
+func TestHandlerListSessionsFresh_CancelledWaiterReturns(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	entered := make(chan struct{}, 4)
+	release := holdListRead(fake, entered)
+	holder := serveWithContext(mux, context.Background(), "/api/sessions?fresh=1")
+	<-entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	waiter := serveWithContext(mux, ctx, "/api/sessions?fresh=1")
+	time.AfterFunc(50*time.Millisecond, cancel)
+	select {
+	case w := <-waiter:
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled ?fresh=1 kept waiting behind the stuck read")
+	}
+	select {
+	case <-entered:
+		t.Fatal("the cancelled request started a tmux read")
+	default:
+	}
+	close(release)
+	assert.Equal(t, http.StatusOK, (<-holder).Code, "the holder's read completes once released")
+}
+
+// A ?fresh=1 whose read runs out of time is a tmux read error: 500 with a
+// text body, as today (spec G4) — never a partial envelope.
+func TestHandlerListSessionsFresh_TimedOutReadIs500(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	mod.listTimeout = 100 * time.Millisecond
+	fake.SetReadHook(tmux.BlockReadsUntil(make(chan struct{}), nil))
+
+	select {
+	case w := <-serveWithContext(mux, context.Background(), "/api/sessions?fresh=1"):
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Contains(t, w.Body.String(), context.DeadlineExceeded.Error())
+		assert.NotContains(t, w.Body.String(), `"seq"`)
+	case <-time.After(2 * time.Second):
+		t.Fatal("?fresh=1 was not bounded by the list read timeout")
+	}
+}
+
+// Plain GET: a request waiting for the cache slot behind a stuck refill
+// returns as soon as it is cancelled.
+func TestHandlerListSessionsPlain_CancelledWaiterReturns(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	entered := make(chan struct{}, 4)
+	release := holdListRead(fake, entered)
+	holder := serveWithContext(mux, context.Background(), "/api/sessions")
+	<-entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	waiter := serveWithContext(mux, ctx, "/api/sessions")
+	time.AfterFunc(50*time.Millisecond, cancel)
+	select {
+	case w := <-waiter:
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled plain GET kept waiting behind the stuck refill")
+	}
+	select {
+	case <-entered:
+		t.Fatal("the cancelled request started a tmux read")
+	default:
+	}
+	close(release)
+	assert.Equal(t, http.StatusOK, (<-holder).Code, "the holder's refill completes once released")
+}
+
+// Plain GET: when the holder's refill times out, a waiter that still wants
+// the list performs its own bounded read and succeeds.
+func TestHandlerListSessionsPlain_WaiterReadsAfterHolderTimesOut(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+
+	var mu sync.Mutex
+	reads := 0
+	entered := make(chan struct{}, 4)
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		if op != tmux.ReadListSessions {
+			return nil
+		}
+		mu.Lock()
+		reads++
+		first := reads == 1
+		mu.Unlock()
+		if !first {
+			return nil
+		}
+		entered <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	holderCtx, cancelHolder := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelHolder()
+	holder := serveWithContext(mux, holderCtx, "/api/sessions")
+	<-entered
+	waiter := serveWithContext(mux, context.Background(), "/api/sessions")
+
+	w := <-holder
+	assert.Equal(t, http.StatusInternalServerError, w.Code, "the holder's read timed out")
+	select {
+	case w := <-waiter:
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var list []SessionInfo
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
+		assert.Equal(t, []string{"a"}, sessionNames(list))
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiter never got its own read")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 2, reads, "the waiter reads for itself; the failed read is not cached")
+}
+
+// A list-cache invalidation that lands while a refill is in flight is not
+// lost: the refill's (possibly pre-mutation) list is not cached as fresh.
+func TestCachedListSessions_InvalidationDuringRefillWins(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	entered := make(chan struct{}, 4)
+	release := holdListRead(fake, entered)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := mod.cachedListSessions(context.Background())
+		done <- err
+	}()
+	<-entered
+	mod.invalidateListCache() // must not wait for the refill
+	close(release)
+	require.NoError(t, <-done)
+
+	fake.SetReadHook(nil)
+	before := fake.ListCallCount()
+	_, err := mod.cachedListSessions(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, before+1, fake.ListCallCount(), "a refill raced by an invalidation must not be served from cache")
 }
 
 func TestHandlerGetSession(t *testing.T) {

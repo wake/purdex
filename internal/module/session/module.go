@@ -54,9 +54,16 @@ type SessionModule struct {
 	createMu ctxMutex
 
 	// listCache debounces rapid ListSessions calls (1s TTL). See #128.
+	// listCacheSlot serializes refills (one tmux read at a time) and, being
+	// an abandonable slot, lets a waiting request give up when its context
+	// ends (#1293). listCacheMu guards only the cached data and is never
+	// held across a tmux read, so invalidateListCache never waits on one;
+	// listCacheGen lets it win over a refill already in flight.
+	listCacheSlot slot
 	listCacheMu   sync.Mutex
 	listCacheData []SessionInfo
 	listCacheAt   time.Time
+	listCacheGen  uint64
 
 	// nameCache backs LookupCodeByName: a name→code map plus a TTL stamp.
 	// Separate from listCache because the lookup fast path runs only one
@@ -73,6 +80,26 @@ type SessionModule struct {
 	snapSlot slot
 	snapSeq  uint64
 	epoch    string
+
+	// listTimeout overrides listReadTimeout (tests only; 0 = the constant).
+	listTimeout time.Duration
+}
+
+// readTimeout is the session-list budget: listReadTimeout unless a test
+// shortened it.
+func (m *SessionModule) readTimeout() time.Duration {
+	if m.listTimeout > 0 {
+		return m.listTimeout
+	}
+	return listReadTimeout
+}
+
+// listReadContext is the context for a session-list read by a caller with no
+// context of its own (the WS subscribe snapshot, the wait-for and ticker
+// pushes): one fresh listReadTimeout budget, covering both the wait for the
+// versioned-read slot and the read.
+func (m *SessionModule) listReadContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), m.readTimeout())
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
@@ -85,6 +112,7 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 		passwdShell:     passwdShellForCurrentUser,
 		epoch:           newEpoch(),
 		snapSlot:        newSlot(),
+		listCacheSlot:   newSlot(),
 	}
 }
 
@@ -141,7 +169,9 @@ func (m *SessionModule) Start(ctx context.Context) error {
 
 // sendSessionsSnapshot pushes a versioned session list to one new subscriber.
 func (m *SessionModule) sendSessionsSnapshot(sub *core.EventSubscriber) {
-	v, err := m.versionedList(context.Background())
+	ctx, cancel := m.listReadContext()
+	defer cancel()
+	v, err := m.versionedList(ctx)
 	if err != nil {
 		log.Printf("session: OnSubscribe list error: %v", err)
 		return
