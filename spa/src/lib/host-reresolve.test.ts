@@ -245,19 +245,102 @@ describe('a store write fails half-way', () => {
     expect(runHostReresolve()).toBe('write-failed')
   })
 
-  it('a rollback that fails too is reported, not thrown', () => {
-    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // tabs is written (and persisted) first; the host-settings write then fails, and so does putting tabs back
-    const real = Storage.prototype.setItem
-    let tabsWrites = 0
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
-      if (k === STORAGE_KEYS.HOST_SETTINGS) throw new DOMException('quota', 'QuotaExceededError')
-      if (k === STORAGE_KEYS.TABS && ++tabsWrites > 1) throw new DOMException('quota', 'QuotaExceededError')
-      real.call(this, k, v)
+  // PR #1406 critic: a rollback that fails too leaves the stores partly rewritten — memory put back, storage not.
+  // Not claimed atomic: the pass recomputes its targets from what is there and is idempotent, so running it again
+  // rolls the state FORWARD to the target (and a reload's hydration pass does the same).
+  describe('the rollback fails too', () => {
+    let failing = true
+    /** Host settings never write; any other write carrying `WIRE` back — an undo — fails too. */
+    function failRollbacks(): void {
+      failing = true
+      const real = Storage.prototype.setItem
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+        if (failing && k === STORAGE_KEYS.HOST_SETTINGS) throw new DOMException('quota', 'QuotaExceededError')
+        if (failing && v.includes(WIRE)) throw new DOMException('quota', 'QuotaExceededError')
+        real.call(this, k, v)
+      })
+    }
+
+    /** Every store's memory is what its storage holds, and neither names `WIRE` any more. */
+    function expectConverged(): void {
+      for (const store of [useTabStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore] as const) {
+        const { name, version, partialize } = store.persist.getOptions() as { name: string; version: number; partialize?: (st: unknown) => unknown }
+        const mine = JSON.stringify({ state: partialize ? partialize(store.getState()) : store.getState(), version })
+        expect(localStorage.getItem(name)).toBe(mine)
+        expect(mine).not.toContain(WIRE)
+      }
+    }
+
+    let runs = 0
+    let unsubRuns: () => void = () => {}
+    beforeEach(() => {
+      runs = 0
+      unsubRuns = useRebuildStore.subscribe((st, prev) => { if (st.lockedBy === HOST_RERESOLVE_LOCK_OWNER && prev.lockedBy !== HOST_RERESOLVE_LOCK_OWNER) runs++ })
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
     })
-    expect(runHostReresolve()).toBe('write-failed')
-    expect(report).toHaveBeenCalled()
-    expect(String(report.mock.calls[0][0])).toMatch(/rollback incomplete/)
+    afterEach(() => { unsubRuns() })
+
+    it('is its own outcome, rollback-failed — reported, never thrown', () => {
+      failRollbacks()
+      expect(runHostReresolve()).toBe('rollback-failed')
+      expect(String(vi.mocked(console.error).mock.calls[0][0])).toMatch(/rollback incomplete/)
+    })
+
+    it('the pass is rescheduled at once — no backoff; a failure after that backs off as usual', () => {
+      vi.useFakeTimers()
+      failRollbacks()
+      requestHostReresolve()
+      expect(runs).toBe(1)
+      vi.advanceTimersByTime(0)
+      expect(runs).toBe(2) // at once
+      vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS - 1)
+      expect(runs).toBe(2) // the second one failed as a plain write → backoff
+      vi.advanceTimersByTime(1)
+      expect(runs).toBe(3)
+    })
+
+    it('once writes work again, the rerun rolls forward: memory and storage agree, at the target', () => {
+      vi.useFakeTimers()
+      failRollbacks()
+      requestHostReresolve()
+      failing = false
+      vi.advanceTimersByTime(0)
+      expectConverged()
+    })
+
+    it('the identity is not marked handled: a host-store change before the rerun asks again', () => {
+      vi.useFakeTimers() // the at-once rerun stays pending
+      useHostStore.setState({ hosts: { other: host('other') }, hostOrder: ['other'] }) // X not here yet: nothing moves
+      const stop = startHostReresolve() // the signature without X settles
+      try {
+        failRollbacks()
+        useHostStore.setState((st) => ({ hosts: { ...st.hosts, [LOCAL]: host(LOCAL, { daemonId: DAEMON, order: 1 }) }, hostOrder: [...st.hostOrder, LOCAL] }))
+        expect(runs).toBe(1) // that pass: rollback-failed
+        failing = false
+        useHostStore.setState((st) => ({ hosts: { ...st.hosts, [LOCAL]: { ...st.hosts[LOCAL], name: 'renamed' } } }))
+        expect(runs).toBe(2)
+        expectConverged()
+      } finally {
+        stop()
+      }
+    })
+
+    it('a reload over the partly rewritten storage: the hydration pass converges', () => {
+      failRollbacks()
+      expect(runHostReresolve()).toBe('rollback-failed')
+      failing = false
+      __resetHostReresolveForTest()
+      // restart: memory comes back from what storage holds — part rewritten, part not
+      for (const store of [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore]) void store.persist.rehydrate()
+      expect(JSON.stringify([useHostSettingsStore.getState().hosts, useLocalProfilesStore.getState().parkedMaster])).toContain(WIRE)
+      const stop = startHostReresolve()
+      try {
+        expectConverged()
+      } finally {
+        stop()
+      }
+    })
   })
 
   it('a write that keeps failing is retried with backoff, never tighter than every 500 ms, capped', () => {

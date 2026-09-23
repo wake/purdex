@@ -21,9 +21,16 @@
 // #1256 accepts for the world switch: another renderer's write this one does not see yet — a moment late — can still
 // be overwritten by the pass's whole-store write. Closing it needs a commit point off localStorage, not this pass.
 //
-// All or nothing: the next state of every store is computed first, then written store by store; a write that throws
-// (the persist's `setItem` — quota, SecurityError — after zustand already changed memory) puts back every store
-// written so far, the failing one included, and the pass answers `write-failed` and is retried with backoff.
+// A failed write is put back — not claimed atomic. The next state of every store is computed first, then written
+// store by store; a write that throws (the persist's `setItem` — quota, SecurityError — after zustand already
+// changed memory) puts back every store begun, the failing one included, newest first: `write-failed`, retried with
+// backoff. When putting back fails too, the stores are left PARTLY rewritten — some at the target, some not, a
+// store's memory possibly put back while its storage keeps the new value: `rollback-failed`, and the pass is run again
+// at once (then backs off like any failure). That is how it converges: the pass recomputes its targets from what the
+// stores hold (re-read from storage first) and is idempotent, so every run that gets its writes through rolls the
+// state FORWARD to the target — and after a reload, the hydration pass does the same from whatever storage holds.
+// No journal is kept: nothing but the rerun is needed to finish.
+
 import { useHostStore } from '../stores/useHostStore'
 import { rewriteTabsHosts, useTabStore } from '../stores/useTabStore'
 import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
@@ -43,10 +50,11 @@ export const HOST_RERESOLVE_RETRY_MS = 500
 export const HOST_RERESOLVE_MAX_RETRY_MS = 30_000
 
 /**
- * `done` — ran, or had nothing to move; `conflict` — identity conflict, nothing done; `busy` — lock held elsewhere;
- * `write-failed` — a store write threw, every store is back as it was.
+ * `done` — ran, or had nothing to move; `conflict` — identity conflict, nothing done; `busy` — lock held elsewhere
+ * (or the world unsettled); `write-failed` — a store write threw and every store begun was put back;
+ * `rollback-failed` — putting back threw too: the stores may be partly rewritten until a rerun rolls them forward.
  */
-export type HostReresolveOutcome = 'done' | 'conflict' | 'busy' | 'write-failed'
+export type HostReresolveOutcome = 'done' | 'conflict' | 'busy' | 'write-failed' | 'rollback-failed'
 
 type HostMap = (hostId: string) => string
 
@@ -113,14 +121,14 @@ function planRewrite(map: HostMap): StoreWrite[] {
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** Writes every step; on a throw, undoes every step begun — the failing one too — newest first. Never throws. */
-function commitAll(writes: readonly StoreWrite[]): boolean {
+function commitAll(writes: readonly StoreWrite[]): 'ok' | 'write-failed' | 'rollback-failed' {
   const begun: StoreWrite[] = []
   try {
     for (const write of writes) {
       begun.push(write)
       write.commit()
     }
-    return true
+    return 'ok'
   } catch (err) {
     const unfinished: string[] = []
     for (const write of begun.reverse()) {
@@ -131,11 +139,11 @@ function commitAll(writes: readonly StoreWrite[]): boolean {
       }
     }
     if (unfinished.length > 0) {
-      console.error(`[host-reresolve] rollback incomplete after a failed write (${messageOf(err)}) — ${unfinished.join('; ')}`)
-    } else {
-      console.warn(`[host-reresolve] a store write failed and was rolled back: ${messageOf(err)}`)
+      console.error(`[host-reresolve] rollback incomplete after a failed write (${messageOf(err)}) — ${unfinished.join('; ')}; rerunning to roll forward`)
+      return 'rollback-failed'
     }
-    return false
+    console.warn(`[host-reresolve] a store write failed and was rolled back: ${messageOf(err)}`)
+    return 'write-failed'
   }
 }
 
@@ -214,7 +222,8 @@ function passBody(): HostReresolveOutcome {
     const grant = useRebuildStore.getState().acquireOperationLock(HOST_RERESOLVE_LOCK_OWNER)
     if (grant === null) return 'busy'
     try {
-      if (!commitAll(writes)) return 'write-failed'
+      const committed = commitAll(writes)
+      if (committed !== 'ok') return committed
     } finally {
       useRebuildStore.getState().releaseOperationLock(grant)
     }
@@ -225,6 +234,8 @@ function passBody(): HostReresolveOutcome {
 
 let retry: ReturnType<typeof setTimeout> | null = null
 let failedWrites = 0
+/** A `rollback-failed` pass has had its immediate rerun; until a pass succeeds, the next failure backs off. */
+let rerunAtOnceUsed = false
 
 function scheduleRetry(ms: number): void {
   retry = setTimeout(() => {
@@ -236,7 +247,7 @@ function scheduleRetry(ms: number): void {
 /**
  * Ask for a pass: it runs now. While the lock is held elsewhere it is retried every `HOST_RERESOLVE_RETRY_MS`; after
  * a failed write it is retried with a doubling backoff from `HOST_RERESOLVE_RETRY_MS` up to
- * `HOST_RERESOLVE_MAX_RETRY_MS`. A newer request supersedes a pending retry. Under a conflict nothing is scheduled:
+ * `HOST_RERESOLVE_MAX_RETRY_MS` — except a first `rollback-failed`, rerun at once to roll the stores forward. A newer request supersedes a pending retry. Under a conflict nothing is scheduled:
  * the conflict clearing changes the identity, which requests again. Never throws.
  */
 export function requestHostReresolve(): void {
@@ -245,11 +256,16 @@ export function requestHostReresolve(): void {
   const outcome = runHostReresolve()
   if (outcome === 'busy') {
     scheduleRetry(HOST_RERESOLVE_RETRY_MS)
-  } else if (outcome === 'write-failed') {
+  } else if (outcome === 'rollback-failed' && !rerunAtOnceUsed) {
+    // Partly rewritten: roll forward at once rather than leave it for a backoff.
+    rerunAtOnceUsed = true
+    scheduleRetry(0)
+  } else if (outcome === 'write-failed' || outcome === 'rollback-failed') {
     failedWrites++
     scheduleRetry(Math.min(HOST_RERESOLVE_RETRY_MS * 2 ** (failedWrites - 1), HOST_RERESOLVE_MAX_RETRY_MS))
   } else {
     failedWrites = 0
+    rerunAtOnceUsed = false
   }
 }
 
@@ -310,5 +326,6 @@ function cancelRetry(): void {
 export function __resetHostReresolveForTest(): void {
   cancelRetry()
   failedWrites = 0
+  rerunAtOnceUsed = false
   settledSignature = null
 }
