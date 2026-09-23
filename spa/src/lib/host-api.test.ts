@@ -4,7 +4,7 @@ import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, listSessionsFresh, createSession, deleteSession,
   fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
-  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers, fetchInfoAt,
+  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers, fetchInfoAt, INFO_AT_TIMEOUT_MS,
   type MonitorSnapshot, type Session,
 } from './host-api'
 import { indexPeerRows } from '../stores/usePeerStore'
@@ -539,5 +539,34 @@ describe('fetchInfoAt (raw base + Bearer, spec 2026-09-23 D4.1)', () => {
   it('rejects on a non-2xx answer', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('no', { status: 401 }))
     await expect(fetchInfoAt(BASE, 'bad')).rejects.toThrow()
+  })
+
+  // A fetch that only ends when its signal aborts.
+  const hangUntilAborted = () =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise<Response>((_res, rej) => {
+      (init as RequestInit | undefined)?.signal?.addEventListener('abort', () => rej(new Error('aborted')))
+    }))
+
+  it('gives up after a bounded timeout (review #3)', async () => {
+    vi.useFakeTimers()
+    try {
+      hangUntilAborted()
+      const p = fetchInfoAt(BASE, 'tok')
+      const settled = expect(p).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(INFO_AT_TIMEOUT_MS)
+      await settled
+      expect(INFO_AT_TIMEOUT_MS).toBeLessThanOrEqual(5000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts when the caller signal aborts (review #3)', async () => {
+    hangUntilAborted()
+    const ctl = new AbortController()
+    const p = fetchInfoAt(BASE, 'tok', ctl.signal)
+    ctl.abort()
+    const stillPending = new Promise((_res, rej) => setTimeout(() => rej(new Error('still pending')), 50))
+    await expect(Promise.race([p, stillPending])).rejects.toThrow('aborted')
   })
 })

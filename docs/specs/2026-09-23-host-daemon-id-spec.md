@@ -66,8 +66,13 @@ device that re-pointed).
 
 ### D4. When `/api/info` is asked (verification triggers)
 One request per trigger, per host, only while connected:
-1. **Add host (dialog)**: after the confirm succeeds, `fetchInfoAt(base, token)` (raw, Bearer) — the
-   host does not exist in the store yet. Failure never blocks the add.
+1. **Add host (dialog)**: after the confirm succeeds, `fetchInfoAt(base, token, signal)` (raw, Bearer,
+   bounded by a 5 s timeout and aborted when the dialog unmounts — PR review #3) — the host does not
+   exist in the store yet. Failure never blocks the add. **Pairing route**: once `fetchPairSetup`
+   succeeded the daemon's token is rotated, so the host (with the new token, no `daemonId`) is
+   persisted however the dialog ends — probe timeout/failure, or dismissal mid-probe (saved exactly
+   once; the subscription learns the id later). **Token route** (nothing rotated): dismissal mid-probe
+   simply cancels.
 2. **Verification subscription** (`lib/host-daemon-id.ts`, modelled on `host-config-loader.ts`):
    a host's transition to `connected`, a change of its endpoint or token, or a change of its stored
    `daemonId` (e.g. by sync) while connected → one `fetchHostInfo(hostId)`; endpoint + token are

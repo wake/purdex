@@ -242,6 +242,11 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
   }
 
   async function confirmPairingRoute() {
+    await pairOnly()
+    fireEvent.click(screen.getByText('Confirm'))
+  }
+
+  async function pairOnly() {
     vi.spyOn(hostApi, 'fetchPairVerify').mockResolvedValue({ setupSecret: 'secret123' })
     vi.spyOn(hostApi, 'fetchPairSetup').mockResolvedValue({ ok: true })
     vi.spyOn(pairingCodec, 'generatePurdexToken').mockReturnValue(TOKEN)
@@ -250,7 +255,6 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
     fireEvent.change(screen.getByPlaceholderText('XXXX-XXXX-XXXXX'), { target: { value: 'ABCD-EFGH-IJKLM' } })
     fireEvent.click(screen.getByText('Pair'))
     await waitFor(() => expect(screen.getByText('Paired successfully')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Confirm'))
   }
 
   beforeEach(() => {
@@ -263,7 +267,7 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
     render(<AddHostDialog onClose={onClose} />)
     confirmTokenRoute()
     await waitFor(() => expect(onClose).toHaveBeenCalled())
-    expect(hostApi.fetchInfoAt).toHaveBeenCalledWith('http://10.0.0.1:7860', TOKEN)
+    expect(hostApi.fetchInfoAt).toHaveBeenCalledWith('http://10.0.0.1:7860', TOKEN, expect.any(AbortSignal))
     const hosts = Object.values(useHostStore.getState().hosts)
     expect(hosts).toHaveLength(1)
     expect(hosts[0].daemonId).toBe(X)
@@ -334,6 +338,58 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
     confirmTokenRoute()
     await waitFor(() => expect(onClose).toHaveBeenCalled())
     expect(Object.keys(useHostStore.getState().hosts)).toHaveLength(2)
+  })
+
+  // A probe that only ends when the dialog aborts it.
+  const probeUntilAborted = () =>
+    vi.mocked(hostApi.fetchInfoAt).mockImplementation((_b, _t, signal) => new Promise((_res, rej) => {
+      signal?.addEventListener('abort', () => rej(new Error('aborted')))
+    }))
+
+  it('pairing route: a probe that hangs times out and the host is still added (review #3)', async () => {
+    vi.mocked(hostApi.fetchInfoAt).mockRestore()
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise<Response>((_res, rej) => {
+      (init as RequestInit).signal?.addEventListener('abort', () => rej(new Error('aborted')))
+    }))
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+    await pairOnly()
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(screen.getByText('Confirm'))
+      await vi.advanceTimersByTimeAsync(hostApi.INFO_AT_TIMEOUT_MS)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(onClose).toHaveBeenCalled()
+    const hosts = Object.values(useHostStore.getState().hosts)
+    expect(hosts).toHaveLength(1)
+    expect(hosts[0]).toMatchObject({ ip: '10.0.0.1', token: TOKEN })
+  })
+
+  it('pairing route: dismissed mid-probe → the host (new token) is still added, exactly once (review #3)', async () => {
+    probeUntilAborted()
+    const { unmount } = render(<AddHostDialog onClose={vi.fn()} />)
+    await confirmPairingRoute()
+    await waitFor(() => expect(hostApi.fetchInfoAt).toHaveBeenCalled())
+    unmount()
+    await new Promise((r) => setTimeout(r, 0))
+    const hosts = Object.values(useHostStore.getState().hosts)
+    expect(hosts).toHaveLength(1)
+    expect(hosts[0]).toMatchObject({ ip: '10.0.0.1', token: TOKEN })
+    expect('daemonId' in hosts[0]).toBe(false)
+  })
+
+  it('token route: dismissed mid-probe → the probe is aborted and nothing is added (review #3)', async () => {
+    probeUntilAborted()
+    const { unmount } = render(<AddHostDialog onClose={vi.fn()} />)
+    confirmTokenRoute()
+    await waitFor(() => expect(hostApi.fetchInfoAt).toHaveBeenCalled())
+    const signal = vi.mocked(hostApi.fetchInfoAt).mock.calls[0][2]!
+    unmount()
+    expect(signal.aborted).toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(Object.keys(useHostStore.getState().hosts)).toHaveLength(0)
   })
 
   it('an empty host_id cannot tell → added as today', async () => {

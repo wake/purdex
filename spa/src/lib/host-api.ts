@@ -496,11 +496,24 @@ export function fetchHostInfo(hostId: string): Promise<HostInfo> {
 /**
  * Typed `/api/info` against a raw base URL with an explicit token — for a daemon
  * that is not (yet) a host in the store, e.g. the Add Host dialog learning the
- * new daemon's `host_id` (spec 2026-09-23 D4.1).
+ * new daemon's `host_id` (spec 2026-09-23 D4.1). Bounded by `INFO_AT_TIMEOUT_MS` and by the
+ * caller's `signal` (PR review #3).
  */
-export async function fetchInfoAt(base: string, token: string): Promise<HostInfo> {
-  const res = await fetch(`${base}/api/info`, { headers: { Authorization: `Bearer ${token}` } })
-  return peerHostJson<HostInfo>(res)
+export const INFO_AT_TIMEOUT_MS = 5000
+
+export async function fetchInfoAt(base: string, token: string, signal?: AbortSignal): Promise<HostInfo> {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(new Error('/api/info: timed out')), INFO_AT_TIMEOUT_MS)
+  const onAbort = () => ctl.abort(signal?.reason)
+  if (signal?.aborted) onAbort()
+  else signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    const res = await fetch(`${base}/api/info`, { headers: { Authorization: `Bearer ${token}` }, signal: ctl.signal })
+    return await peerHostJson<HostInfo>(res)
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
 }
 
 /**

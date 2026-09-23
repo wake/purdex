@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   X, LinkSimple, ArrowsClockwise, CheckCircle, Warning, ArrowCounterClockwise,
 } from '@phosphor-icons/react'
@@ -45,6 +45,19 @@ export function AddHostDialog({ onClose }: Props) {
   const [setupSecret, setSetupSecret] = useState('')
   const [healthMode, setHealthMode] = useState<'pairing' | 'pending' | 'normal' | null>(null)
   const [duplicate, setDuplicate] = useState<DuplicateDaemon | null>(null)
+  // The identity probe in flight; aborted when the dialog goes away (PR review #3).
+  const probeRef = useRef<AbortController | null>(null)
+  // Pairing route: once `fetchPairSetup` succeeded the daemon's token is rotated, so the new
+  // token must end up in a host however the dialog ends. This is that save, pending until the
+  // dialog decides; running it clears it, so it happens at most once.
+  const commitRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => {
+    probeRef.current?.abort()
+    const commit = commitRef.current
+    commitRef.current = null
+    commit?.()
+  }, [])
 
   // Debounced health check in manual (token) mode
   useEffect(() => {
@@ -139,23 +152,35 @@ export function AddHostDialog({ onClose }: Props) {
         // Update existing host's token instead of creating a duplicate
         useHostStore.getState().updateHost(existingId, { token: trimmedToken || undefined })
       } else {
+        const addNew = () => {
+          commitRef.current = null
+          return addHost({
+            name: trimmedIp,
+            ip: trimmedIp,
+            port: portNum,
+            token: trimmedToken || undefined,
+          })
+        }
+        // Pairing route: from here on the rotated token is saved even if the dialog is dismissed.
+        if (!useToken) commitRef.current = addNew
         // Learn the new daemon's identity (spec D4.1). Any failure → cannot tell → add as today.
         const base = `http://${trimmedIp}:${trimmedPort || '7860'}`
-        const observed = await fetchInfoAt(base, trimmedToken)
+        const probe = new AbortController()
+        probeRef.current = probe
+        const observed = await fetchInfoAt(base, trimmedToken, probe.signal)
           .then((info) => (typeof info?.host_id === 'string' ? info.host_id : ''))
           .catch(() => '')
+        probeRef.current = null
+        // Dismissed mid-probe: the pairing route already saved the host (commit ran on
+        // unmount); the token route simply cancels.
+        if (probe.signal.aborted) return
         const same = observed ? findHostByDaemon(observed) : undefined
         if (same) {
           setDuplicate({ hostId: same.id, name: same.name, ip: trimmedIp, port: portNum, token: trimmedToken || undefined })
           setStage('duplicate')
           return
         }
-        const newId = addHost({
-          name: trimmedIp,
-          ip: trimmedIp,
-          port: portNum,
-          token: trimmedToken || undefined,
-        })
+        const newId = addNew()
         const added = useHostStore.getState().hosts[newId]
         if (added) useHostStore.getState().observeDaemonId(newId, observed, requestAtOf(added))
       }
