@@ -108,7 +108,11 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.
-  tabs: 2,
+  // 3: interface-only tabs (sections.ts `DEVICE_LOCAL_PANE_KINDS`) are left out of the build and kept on apply
+  //    (tabs-local-only). The projection is unchanged; `@tabs:device-local=v1` moves the fingerprint so an ordinal-2
+  //    client locks instead of applying a payload without its own interface tabs — and deleting them. An ordinal-2
+  //    payload is upcast on pull and on restore-local (applier.ts `upcastLegacyTabs`).
+  tabs: 3,
 }
 
 // === Section keys ===
@@ -155,11 +159,12 @@ export async function fingerprintOf(paths: readonly string[]): Promise<string> {
  *
  * host-sync-identity: host ids on the wire are sync ids (`d1_…`) — `hosts` keys, `tabs.*` pane host fields,
  * `settings` host-settings keys and New Tab columns. `workspaces` names no host: no marker, fingerprint unchanged.
+ * tabs-local-only: `tabs.*` no longer holds the interface-only tabs of its workspace — same paths, new meaning.
  * A marker is only ever ADDED with an ordinal bump (the guard test's snapshot enforces it).
  */
 export const WIRE_MARKERS: Record<SectionKind, readonly string[]> = {
   hosts: ['@wire:host-id=d1'],
-  tabs: ['@wire:host-id=d1'],
+  tabs: ['@wire:host-id=d1', '@tabs:device-local=v1'],
   settings: ['@wire:host-id=d1'],
   workspaces: [],
 }

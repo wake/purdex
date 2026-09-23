@@ -14,6 +14,7 @@ import {
   settingsFromWire,
   tabsFromWire,
   upcastLegacySettings,
+  upcastLegacyTabs,
 } from './applier'
 import { hashSection } from './hash'
 import { NEW_HOST, identityOfSync, makeWireResolver, syncIdOfSync } from './host-identity'
@@ -23,6 +24,7 @@ import {
   buildSettingsSection,
   buildTabsSection,
   buildWorkspacesSection,
+  repairTabOwnership,
   stripSizes,
   type SettingsBuildInput,
 } from './sections'
@@ -43,7 +45,7 @@ const S = '__DEVICE_LOCAL__'
 /** No master workspace: for the tests that are not about workspace-scoped settings. */
 const NO_WS: ReadonlySet<string> = new Set()
 
-function leaf(id: string, content: PaneContent = { kind: 'dashboard' }): PaneLayout {
+function leaf(id: string, content: PaneContent = { kind: 'browser', url: 'https://x.test' }): PaneLayout {
   return { type: 'leaf', pane: { id, content } }
 }
 
@@ -464,6 +466,191 @@ describe('applyTabs', () => {
     const { next } = applyTabs(local, 'wsA', tabsPayload())
     expect(next.workspaces[1]).toMatchObject({ tabs: ['k'], activeTabId: 'k' })
     expect(next.workspaces[2]).toMatchObject({ tabs: [], activeTabId: null })
+  })
+})
+
+// --- tabs: device-local tabs (tabs-local-only spec §3.3) --------------------
+
+describe('applyTabs — a device-local tab is kept where it was (tabs-local-only §3.3)', () => {
+  const local = (id: string): Tab => tab(id, leaf(`p-${id}`, { kind: 'settings', scope: 'global' }))
+  const synced = (id: string): Tab => tab(id)
+  const payloadOf = (...ids: string[]): TabsPayload => buildTabsSection(ws('wsA', 'Alpha', ids), tabRecord(...ids.map(synced)))
+  const slice = (wsA: string[], tabs: Tab[], extra: Partial<Workspace> = {}, others: Workspace[] = []): TabsSlice =>
+    ({ tabs: tabRecord(...tabs), workspaces: [ws('wsA', 'Alpha', wsA, extra), ...others] })
+
+  it('(a) [s1, L1, s2, L2] + incoming [s2, s3, s1] → [s2, L2, s3, s1, L1]; nothing removed; L records untouched', () => {
+    const before = slice(['s1', 'L1', 's2', 'L2'], [synced('s1'), local('L1'), synced('s2'), local('L2')])
+    const { next, removedTabIds } = applyTabs(deepFreeze(before), 'wsA', payloadOf('s2', 's3', 's1'))
+    expect(next.workspaces[0].tabs).toEqual(['s2', 'L2', 's3', 's1', 'L1'])
+    expect(removedTabIds).toEqual([])
+    expect(next.tabs.L1).toBe(before.tabs.L1)
+    expect(next.tabs.L2).toBe(before.tabs.L2)
+  })
+
+  it('(b) a device-local tab before every synced one stays first; a removed anchor falls back to the nearest earlier survivor', () => {
+    const first = slice(['L0', 's1', 's2'], [local('L0'), synced('s1'), synced('s2')])
+    expect(applyTabs(first, 'wsA', payloadOf('s2', 's1')).next.workspaces[0].tabs).toEqual(['L0', 's2', 's1'])
+    const fallback = slice(['s1', 's2', 'L', 's3'], [synced('s1'), synced('s2'), local('L'), synced('s3')])
+    const r = applyTabs(fallback, 'wsA', payloadOf('s1', 's3'))
+    expect(r.next.workspaces[0].tabs).toEqual(['s1', 'L', 's3'])
+    expect(r.removedTabIds).toEqual(['s2'])
+    const noSurvivor = slice(['s1', 'L', 's2'], [synced('s1'), local('L'), synced('s2')])
+    expect(applyTabs(noSurvivor, 'wsA', payloadOf('s2')).next.workspaces[0].tabs).toEqual(['L', 's2'])
+  })
+
+  it('(c) Workspace.activeTabId on a kept device-local tab stays; on a removed synced tab → the first of the new list', () => {
+    // L1 is NOT the first of the new list, so "stays" cannot pass by falling back to it.
+    const onLocal = slice(['s1', 'L1', 's2'], [synced('s1'), local('L1'), synced('s2')], { activeTabId: 'L1' })
+    const kept = applyTabs(onLocal, 'wsA', payloadOf('s1', 's2')).next.workspaces[0]
+    expect(kept.tabs).toEqual(['s1', 'L1', 's2'])
+    expect(kept.activeTabId).toBe('L1')
+    const onRemoved = slice(['L0', 's1', 's2'], [local('L0'), synced('s1'), synced('s2')], { activeTabId: 's2' })
+    const r = applyTabs(onRemoved, 'wsA', payloadOf('s1'))
+    expect(r.next.workspaces[0].tabs).toEqual(['L0', 's1'])
+    expect(r.next.workspaces[0].activeTabId).toBe('L0')
+  })
+
+  it('(d) a duplicated listing is kept once; one also listed by another workspace stays in both, no new duplicate', () => {
+    const dup = slice(['s1', 'L', 'L', 's2'], [synced('s1'), local('L'), synced('s2')])
+    expect(applyTabs(dup, 'wsA', payloadOf('s1', 's2')).next.workspaces[0].tabs).toEqual(['s1', 'L', 's2'])
+    const shared = slice(['s1', 'L'], [synced('s1'), local('L'), synced('k')], {}, [ws('wsB', 'Beta', ['L', 'k'])])
+    const r = applyTabs(shared, 'wsA', payloadOf('s1'))
+    expect(r.next.workspaces[0].tabs).toEqual(['s1', 'L'])
+    expect(r.next.workspaces[1]).toBe(shared.workspaces[1])
+    expect(r.removedTabIds).toEqual([])
+  })
+
+  it('(e) an own `__proto__` device-local record is neither listed nor in the record (as before)', () => {
+    const tabs = tabRecord(synced('s1'))
+    Object.defineProperty(tabs, '__proto__', { value: local('__proto__'), enumerable: true, writable: true, configurable: true })
+    const { next } = applyTabs({ tabs, workspaces: [ws('wsA', 'Alpha', ['__proto__', 's1'])] }, 'wsA', payloadOf('s1'))
+    expect(next.workspaces[0].tabs).toEqual(['s1'])
+    expect(Object.hasOwn(next.tabs, '__proto__')).toBe(false)
+  })
+
+  it('(f) the empty payload removes only the synced tabs', () => {
+    const before = slice(['s1', 'L1', 's2', 'L2'], [synced('s1'), local('L1'), synced('s2'), local('L2')], { activeTabId: 's1' })
+    const r = applyTabs(before, 'wsA', { order: [], tabs: {} })
+    expect(r.next.workspaces[0].tabs).toEqual(['L1', 'L2'])
+    expect(r.next.workspaces[0].activeTabId).toBe('L1')
+    expect(r.removedTabIds).toEqual(['s1', 's2'])
+    expect(Object.keys(r.next.tabs).sort()).toEqual(['L1', 'L2'])
+  })
+
+  it('(f2) a malformed tab (no layout / empty split / leaf without content) is NOT kept: the empty payload removes it, as on main', () => {
+    const broken = (id: string, layout: unknown): Tab => ({ ...tab(id), layout: layout as PaneLayout })
+    const before = slice(['L1', 'x1', 'x2', 'x3'], [
+      local('L1'),
+      broken('x1', undefined),
+      broken('x2', { type: 'split', id: 'sp', direction: 'h', children: [], sizes: [] }),
+      broken('x3', { type: 'leaf', pane: { id: 'p' } }),
+    ], { activeTabId: 'x2' })
+    const r = applyTabs(before, 'wsA', { order: [], tabs: {} })
+    expect(r.next.workspaces[0].tabs).toEqual(['L1'])
+    expect(r.next.workspaces[0].activeTabId).toBe('L1')
+    expect(r.removedTabIds).toEqual(['x1', 'x2', 'x3'])
+    expect(Object.keys(r.next.tabs)).toEqual(['L1'])
+  })
+
+  // ID CONFLICT (attacker R2, finding B; spec §3.3 "id conflict"): an id this device holds as a device-local tab
+  // but the SOT carries as a SYNCABLE tab is not this device's to keep — the remote, stateful version wins.
+  const TMUX_X: PaneContent = { kind: 'tmux-session', hostId: 'h1', sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i' }
+  it('(i) id conflict, same workspace: a device-local x that the incoming order carries as syncable is applied as arriving', async () => {
+    const before = slice(['s1', 'x'], [synced('s1'), local('x')], { activeTabId: 'x' })
+    const p = deepFreeze(buildTabsSection(ws('wsA', 'Alpha', ['x', 's1']), tabRecord(tab('x', leaf('p-x', TMUX_X)), synced('s1'))))
+    const { next, removedTabIds } = applyTabs(deepFreeze(before), 'wsA', p)
+    expect(next.tabs.x.layout).toEqual(leaf('p-x', TMUX_X))
+    expect(next.workspaces[0].tabs).toEqual(['x', 's1'])
+    expect(next.workspaces[0].activeTabId).toBe('x')
+    expect(removedTabIds).toEqual([])
+    expect(await hashSection(buildBack(next, 'wsA'))).toBe(await hashSection(p))
+  })
+
+  it('(j) id conflict, across workspaces: device-local x in wsA, incoming tabs.wsB carries a syncable x → the remote wins', async () => {
+    const before: TabsSlice = {
+      tabs: tabRecord(synced('s1'), local('x'), synced('k')),
+      workspaces: [ws('wsA', 'Alpha', ['s1', 'x'], { activeTabId: 'x' }), ws('wsB', 'Beta', ['k'], { activeTabId: 'k' })],
+    }
+    const incomingX = tab('x', leaf('p-x', { kind: 'browser', url: 'https://remote.test' }))
+    const p = deepFreeze(buildTabsSection(ws('wsB', 'Beta', ['k', 'x']), tabRecord(synced('k'), incomingX)))
+    const { next, removedTabIds } = applyTabs(deepFreeze(before), 'wsB', p)
+    // the record is the incoming one, not the local interface tab
+    expect(next.tabs.x).toEqual(incomingX)
+    // x left wsA; wsA's focus on x moved as withoutTabs does (the first remaining tab)
+    expect(next.workspaces[0].tabs).toEqual(['s1'])
+    expect(next.workspaces[0].activeTabId).toBe('s1')
+    // x is in wsB, in the incoming order
+    expect(next.workspaces[1].tabs).toEqual(['k', 'x'])
+    expect(removedTabIds).toEqual([])
+    // exactly one owner
+    expect(next.workspaces.flatMap((w) => w.tabs).filter((id) => id === 'x')).toEqual(['x'])
+    // the round trip for wsB's canonical payload holds
+    expect(await hashSection(buildBack(next, 'wsB'))).toBe(await hashSection(p))
+  })
+
+  it('(g) round trip over canonical payloads, locals holding device-local tabs anywhere (seeded)', async () => {
+    let x = 0x2545f491
+    const rnd = (n: number): number => { x = (Math.imul(x, 1103515245) + 12345) >>> 0; return (x >>> 8) % n }
+    for (let round = 0; round < 40; round += 1) {
+      const pool = ['a', 'b', 'c', 'd', 'e', 'f']
+      const pick = (): string[] => pool.filter(() => rnd(2) === 0)
+      const make = (id: string): Tab => (rnd(3) === 0 ? local(id) : rnd(2) === 0 ? synced(id) : tab(id, split(`sp-${id}`, [leaf(`n-${id}`, { kind: 'new-tab' }), leaf(`b-${id}`)], [50, 50])))
+      const localIds = pick().sort(() => rnd(3) - 1)
+      const world: TabsSlice = { tabs: tabRecord(...localIds.map(make)), workspaces: [ws('wsA', 'Alpha', [...localIds, ...(rnd(2) ? [localIds[0] ?? 'ghost'] : [])]), ws('wsB', 'Beta', [])] }
+      const incomingIds = pick().sort(() => rnd(3) - 1)
+      const p = deepFreeze(payloadOf(...incomingIds))
+      const { next } = applyTabs(deepFreeze(world), 'wsA', p)
+      expect(await hashSection(buildBack(next, 'wsA'))).toBe(await hashSection(p))
+      const listed = next.workspaces[0].tabs
+      expect(new Set(listed).size).toBe(listed.length)
+      // every device-local tab wsA had is still listed and still in the record
+      for (const id of new Set(world.workspaces[0].tabs)) {
+        if (Object.hasOwn(world.tabs, id) && world.tabs[id].layout.type === 'leaf' && (world.tabs[id].layout as { pane: { content: PaneContent } }).pane.content.kind === 'settings' && !incomingIds.includes(id)) {
+          expect(listed).toContain(id)
+          expect(next.tabs[id]).toBe(world.tabs[id])
+        }
+      }
+    }
+  })
+
+  it('(h) repairTabOwnership after the apply adopts and drops nothing', () => {
+    const before = slice(['s1', 'L1', 's2', 'L2'], [synced('s1'), local('L1'), synced('s2'), local('L2'), synced('k')], { activeTabId: 'L1' }, [ws('wsB', 'Beta', ['k'])])
+    const { next } = applyTabs(before, 'wsA', payloadOf('s3', 's1'))
+    const repaired = repairTabOwnership({ ...next, tabOrder: [], activeTabId: 'L1', activeWorkspaceId: 'wsA' }, { unsortedName: 'Unsorted', newWorkspaceId: 'unsorted' })
+    expect(repaired.adopted).toEqual([])
+    expect(repaired.dropped).toBe(0)
+    expect(repaired.membershipChanged).toBe(false)
+  })
+})
+
+describe('upcastLegacyTabs — an ordinal-2 tabs payload (device-local tabs in it) reads as ordinal 3', () => {
+  const entryOf = (t: Tab): TabsPayload['tabs'][string] => ({ ...t, layout: stripSizes(t.layout) })
+  const settingsTab = tab('s1', leaf('ps', { kind: 'settings', scope: 'global' }))
+  const legacy = (): TabsPayload => ({
+    order: ['a', 's1', 'b'],
+    tabs: { a: entryOf(tab('a')), s1: entryOf(settingsTab), b: entryOf(tab('b', split('sp', [leaf('n', { kind: 'new-tab' }), leaf('x')], [50, 50]))) },
+  })
+
+  it('drops the device-local tabs from order and record, keeps the rest (a mixed split included), never mutates', () => {
+    const p = deepFreeze(legacy())
+    const out = upcastLegacyTabs(p)
+    expect(out.order).toEqual(['a', 'b'])
+    expect(Object.keys(out.tabs)).toEqual(['a', 'b'])
+    expect(out.tabs.a).toBe(p.tabs.a)
+    expect(isWellFormedSection('tabs', out)).toBe(true)
+  })
+
+  it('a canonical payload comes back as the SAME object', () => {
+    const p = buildTabsSection(ws('w', 'W', ['a']), tabRecord(tab('a')))
+    expect(upcastLegacyTabs(p)).toBe(p)
+    const empty: TabsPayload = { order: [], tabs: {} }
+    expect(upcastLegacyTabs(empty)).toBe(empty)
+  })
+
+  it('an entry that is not a well-formed layout is left for the guard to refuse, and garbage never throws', () => {
+    const broken = { order: ['z'], tabs: { z: { id: 'z', pinned: false, locked: false, createdAt: 1 } } } as unknown as TabsPayload
+    expect(upcastLegacyTabs(broken)).toBe(broken)
+    for (const junk of [null, 1, 'x', [], { order: 'x' }, { tabs: 1, order: [] }]) expect(upcastLegacyTabs(junk as never)).toBe(junk)
   })
 })
 

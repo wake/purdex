@@ -490,6 +490,18 @@ describe('shape: fingerprint and ordinal', () => {
     })
   })
 
+  // tabs-local-only §3.5: tabs ordinal 2 → 3. The projection is unchanged, but an ordinal-2 client would apply a payload
+  // that leaves out its own interface tabs — and delete them. A marker moves the fingerprint, so it locks instead.
+  it('coexistence by shape: the ordinal-2 tabs shape (host-id marker only) and this one order — the old client locks, this one pulls', async () => {
+    expect(WIRE_MARKERS.tabs).toContain('@tabs:device-local=v1')
+    expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(3)
+    const mine = { fingerprint: await sectionFingerprint('tabs'), ordinal: SECTION_SCHEMA_ORDINAL.tabs }
+    const old = { fingerprint: await fingerprintOf([...PROJECTIONS.tabs, '@wire:host-id=d1']), ordinal: 2 }
+    expect(old.fingerprint).not.toBe(mine.fingerprint)
+    expect(compareShape(mine, old)).toBe('i-am-newer')
+    expect(compareShape(old, mine)).toBe('sot-is-newer')
+  })
+
   // GUARD (spec §4.5). If this fails: a projection changed — bump
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
@@ -506,8 +518,8 @@ describe('shape: fingerprint and ordinal', () => {
           5,
         ],
         "tabs": [
-          "c14fe14a3e27bb16cb13f2a8b4e406373a3c5bd2d13142c506edc237c2c57605",
-          2,
+          "710acf363361f894695def7c47aace4930c2b94fae623d710d4ee19761830f47",
+          3,
         ],
         "workspaces": [
           "7986550194df9cf330ec521be44e68989a703ac1e90d433f73e9aab00410c87e",

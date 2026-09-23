@@ -239,7 +239,7 @@ import { deleteSection, getSection, listProfiles, putSection } from './api'
 import type { DeleteOutcome, Failure, PutOutcome } from './api'
 import { applySectionToStores } from './apply-to-stores'
 import type { ApplyOutcome, InvalidReason } from './apply-to-stores'
-import { upcastLegacySettings } from './applier'
+import { upcastLegacySettings, upcastLegacyTabs } from './applier'
 import type { SectionReport } from './collector'
 import { hashSection, structuralKey } from './hash'
 import { readMasterWorld } from './master-world'
@@ -251,7 +251,7 @@ import { isSyncableWorkspaceId } from './sections'
 import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
 import type { FlightToken, SectionConflict, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
-import type { ProfileSectionKey, SectionKind, Shape } from './types'
+import type { ProfileSectionKey, SectionKind, Shape, TabsPayload } from './types'
 import type { ConfirmedHosts } from '../../stores/useProfileStore'
 
 export interface ExecutorDeps {
@@ -1463,9 +1463,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // one rebuilt from the stores into `currentHash`.
     const sotHash = fetched === null ? null : fetched.hash
     const mismatch = outcome.hash !== sotHash
-    // #1369: `aliasesOnly` = the only difference is this device's own id on a canonical `hosts` row — the designed
-    // write-back after a pull (one push, then every build agrees). Pushed like any mismatch, but not a problem.
-    if (mismatch && !outcome.aliasesOnly) {
+    // `rewrite` = the only difference is a designed write-back after a pull (one push, then every build agrees):
+    // this device's own id on a canonical `hosts` row (#1369), or an ordinal-2 `tabs.*` without its interface-only
+    // tabs (tabs-local-only §3.5). Pushed like any mismatch, but not a problem.
+    if (mismatch && outcome.rewrite === undefined) {
       problem('pull-hash-mismatch', `the stores did not keep what arrived (fetched ${String(sotHash)}, they hold ${String(outcome.hash)}): the section is dirty and will be pushed back`, key)
     }
     if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds() ?? previousWorkspaceIds
@@ -1540,9 +1541,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // its shape, until (and unless) a second PUT from the collector fixed it. So the
     // snapshot is brought to this build's shape here, once: it is what gets applied,
     // what `currentHash` becomes (`local-restored.localHash`) and what the one push sends.
+    // tabs-local-only §3.5, the same for `tabs.*`: a snapshot an ordinal-2 build took holds this device's own
+    // interface-only tabs; pushed as-is under ordinal 3 they would travel again. `upcastLegacyTabs` drops them.
     let restoredHash = hash
-    if (key === 'settings' && payload !== null) {
-      const upcast = upcastLegacySettings(payload)
+    const kind = sectionKind(key)
+    if ((kind === 'settings' || kind === 'tabs') && payload !== null) {
+      const upcast = kind === 'settings' ? upcastLegacySettings(payload) : upcastLegacyTabs(payload as TabsPayload)
       if (upcast !== payload) {
         try {
           restoredHash = await hashSection(upcast)

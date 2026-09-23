@@ -18,7 +18,7 @@
 // takes it from the host store AT BUILD TIME (collector, apply-to-stores). An
 // identity with a `conflict` builds nothing: the builders throw. The apply side
 // resolves back through `wireResolverOf`.
-import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import {
   hostSettingsToWire,
   hostsToWire,
@@ -87,6 +87,93 @@ function uniqueKnown(ids: readonly string[], has: (id: string) => boolean): stri
     out.push(id)
   }
   return out
+}
+
+// === Device-local tabs ===
+
+/**
+ * Pane kinds that only show this app's own interface (tabs-local-only spec §2.1). They carry no state worth
+ * sharing, so a tab made only of them stays on the device: one device's Settings tab must not appear — or be
+ * closed — everywhere. Every kind NOT listed syncs: a kind added later travels until someone decides otherwise,
+ * the safe default for data (sections.test.ts pins every kind to exactly one side, so the decision is forced).
+ */
+export const DEVICE_LOCAL_PANE_KINDS: ReadonlySet<PaneContent['kind']> = new Set<PaneContent['kind']>([
+  'new-tab', 'settings', 'dashboard', 'hosts', 'history', 'memory-monitor', 'editor-buffers',
+])
+
+/**
+ * Does this tab stay on the device? Only when its layout is COMPLETE — the very shape the tabs guard accepts
+ * (`isLayoutShape`; a local split's `sizes` allowed, the builder strips them) — AND every leaf is of a
+ * device-local kind. A split carrying one syncing leaf travels whole, its `new-tab` leaves as empty panes
+ * (spec §2.2).
+ *
+ * WHY "complete" is part of it (R2 finding A): a device-local tab is never sent and never removed by an apply.
+ * A malformed tab (no layout, an unknown node, an empty split, a leaf without pane or content) judged
+ * device-local would be exactly that — a ghost no payload can delete while the section reads as converged. So
+ * it is NOT device-local: it goes to the build as it did before this feature, and the other clients' guard
+ * deals with it as it always has.
+ *
+ * It reads only the shape and `pane.content.kind`, so a local `Tab` and a wire `TabEntry` (whose layout only
+ * differs in host ids and sizes) give the same answer — the builder asks it of the one, the applier and the
+ * upcast of the other.
+ */
+export function isDeviceLocalTab(tab: { layout?: PaneLayout | StrippedLayout }): boolean {
+  if (!isRecord(tab) || !isLayoutShape(tab.layout, { sizes: true })) return false
+  const allLocal = (node: PaneLayout | StrippedLayout): boolean =>
+    node.type === 'leaf' ? DEVICE_LOCAL_PANE_KINDS.has(node.pane.content.kind) : node.children.every(allLocal)
+  return allLocal(tab.layout as PaneLayout | StrippedLayout)
+}
+
+/** Does this tab travel? Everything that is not device-local does — a malformed tab included (see `isDeviceLocalTab`). */
+export function isSyncableTab(tab: { layout?: PaneLayout | StrippedLayout }): boolean {
+  return !isDeviceLocalTab(tab)
+}
+
+// === Layout shape (shared with the guard) ===
+
+const MAX_LAYOUT_DEPTH = 64
+
+/** A plain JSON object: not an array, not a class instance. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const proto: unknown = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+export function definedKeys(node: Record<string, unknown>): string[] {
+  return Object.keys(node).filter((k) => node[k] !== undefined)
+}
+
+export function hasOnlyKeys(node: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return definedKeys(node).every((k) => allowed.includes(k))
+}
+
+const SPLIT_KEYS = ['type', 'id', 'direction', 'children'] as const
+const LOCAL_SPLIT_KEYS = [...SPLIT_KEYS, 'sizes'] as const
+
+/**
+ * THE structural rule for a tab layout — the tabs guard (`isWellFormedSection`) and `isDeviceLocalTab` both ask
+ * it, so "complete" means one thing. A leaf is `{type, pane: {id: string, content: {kind: string}}}`; a split is
+ * `{type, id: string, direction: 'h'|'v', children}` with at least one child, every child a layout; depth bounded.
+ * On the wire a split carries no `sizes` (ratios never travel); `sizes: true` admits them — a LOCAL layout, which
+ * the builder strips before sending.
+ */
+export function isLayoutShape(node: unknown, opts: { sizes?: boolean } = {}, depth = 0): boolean {
+  if (depth > MAX_LAYOUT_DEPTH || !isPlainObject(node)) return false
+  if (node.type === 'leaf') {
+    const pane = node.pane
+    return hasOnlyKeys(node, ['type', 'pane']) && isPlainObject(pane) && typeof pane.id === 'string' && isPlainObject(pane.content) && typeof pane.content.kind === 'string'
+  }
+  if (node.type !== 'split') return false
+  const children = node.children
+  return (
+    hasOnlyKeys(node, opts.sizes === true ? LOCAL_SPLIT_KEYS : SPLIT_KEYS) &&
+    typeof node.id === 'string' &&
+    (node.direction === 'h' || node.direction === 'v') &&
+    Array.isArray(children) &&
+    children.length > 0 &&
+    children.every((child) => isLayoutShape(child, opts, depth + 1))
+  )
 }
 
 // === Layout ===
@@ -215,10 +302,15 @@ export function buildWorkspacesSection(workspaces: readonly Workspace[]): Worksp
  * no `Tab` is dropped, never invented; a repeat is kept once), and the record
  * holds exactly those — so `order` has no duplicates and equals the record's key
  * set, which is what the applier's well-formedness guard demands.
+ *
+ * A tab `isSyncableTab` rejects is LEFT OUT — device-local, like an unsyncable
+ * workspace in `buildWorkspacesSection`; `applyTabs` is the other half and keeps
+ * it (tabs-local-only spec §3.2). The collector, the document and the post-apply
+ * hash all come through here, so they agree on what the section holds.
  */
 export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>, identity?: HostIdentity): TabsPayload {
   refuseConflict(identity)
-  const order = uniqueKnown(ws.tabs, (id) => Object.hasOwn(tabs, id))
+  const order = uniqueKnown(ws.tabs, (id) => Object.hasOwn(tabs, id) && isSyncableTab(tabs[id]))
   const record: Record<string, unknown> = {}
   for (const id of order) {
     const stripped = stripSizes(tabs[id].layout)

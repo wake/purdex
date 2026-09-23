@@ -12,6 +12,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import type { FileSource } from '../../types/fs'
 import type { PaneContent, PaneLayout, PaneRebuildRecord, Tab, Workspace } from '../../types/tab'
 import { isWellFormedSection } from './applier'
 import { hashSection, structuralKey } from './hash'
@@ -23,6 +24,8 @@ import {
   buildSettingsSection,
   buildTabsSection,
   buildWorkspacesSection,
+  DEVICE_LOCAL_PANE_KINDS,
+  isSyncableTab,
   stripSizes,
   unsyncableWorkspaceIds,
   wireResolverOf,
@@ -114,7 +117,7 @@ function baseInput(): CollectInput {
     tabs: {
       tabs: {
         t1: tab('t1', split('sp1', [leaf('p1', tmux('one')), leaf('p2', { kind: 'browser', url: 'https://a.test' })], [30, 70])),
-        t2: tab('t2', leaf('p3', { kind: 'dashboard' }), { pinned: true }),
+        t2: tab('t2', leaf('p3', { kind: 'browser', url: 'https://b.test' }), { pinned: true }),
         t3: tab('t3', leaf('p4', tmux('three'))),
       },
       tabOrder: ['t1', 't2', 't3'],
@@ -212,15 +215,130 @@ describe('buildWorkspacesSection', () => {
   })
 })
 
+// --- isSyncableTab -----------------------------------------------------------
+
+/**
+ * Every pane kind, decided. A `Record` over the union is exhaustive at compile time: a new kind in
+ * `PaneContent` fails `tsc` here until someone chooses whether it travels (tabs-local-only spec §3.1).
+ */
+const KIND_DECISION: Record<PaneContent['kind'], 'device-local' | 'syncs'> = {
+  'new-tab': 'device-local',
+  settings: 'device-local',
+  dashboard: 'device-local',
+  hosts: 'device-local',
+  history: 'device-local',
+  'memory-monitor': 'device-local',
+  'editor-buffers': 'device-local',
+  'tmux-session': 'syncs',
+  browser: 'syncs',
+  editor: 'syncs',
+  'image-preview': 'syncs',
+  'pdf-preview': 'syncs',
+  execution: 'syncs',
+}
+
+const FS: FileSource = { type: 'daemon', hostId: 'h1' }
+function contentOf(kind: PaneContent['kind']): PaneContent {
+  switch (kind) {
+    case 'tmux-session': return tmux('x')
+    case 'settings': return { kind, scope: 'global' }
+    case 'browser': return { kind, url: 'https://a.test' }
+    case 'editor': case 'image-preview': case 'pdf-preview': return { kind, source: FS, filePath: '/f' }
+    case 'execution': return { kind, executionId: 'e1' }
+    default: return { kind } as PaneContent
+  }
+}
+
+describe('isSyncableTab', () => {
+  it('the device-local set is exactly the kinds decided device-local (exhaustiveness)', () => {
+    for (const [kind, decision] of Object.entries(KIND_DECISION)) {
+      expect({ kind, local: DEVICE_LOCAL_PANE_KINDS.has(kind as PaneContent['kind']) }).toEqual({ kind, local: decision === 'device-local' })
+    }
+    expect(DEVICE_LOCAL_PANE_KINDS.size).toBe(7)
+  })
+
+  it('a tab whose single pane is of a kind: syncable iff the kind syncs', () => {
+    for (const [kind, decision] of Object.entries(KIND_DECISION)) {
+      const t = tab('t', leaf('p', contentOf(kind as PaneContent['kind'])))
+      expect({ kind, syncable: isSyncableTab(t) }).toEqual({ kind, syncable: decision === 'syncs' })
+    }
+  })
+
+  it('a split syncs when one leaf syncs; not when every leaf is device-local — at any depth', () => {
+    expect(isSyncableTab(tab('t', split('s', [leaf('a', { kind: 'new-tab' }), leaf('b', tmux('x'))], [50, 50])))).toBe(true)
+    expect(isSyncableTab(tab('t', split('s', [leaf('a', { kind: 'settings', scope: 'global' }), leaf('b', { kind: 'hosts' }), leaf('c', { kind: 'new-tab' })], [30, 30, 40])))).toBe(false)
+    const deepLocal = split('s', [leaf('a', { kind: 'new-tab' }), split('s2', [leaf('b', { kind: 'history' }), leaf('c', { kind: 'dashboard' })], [50, 50], 'v')], [50, 50])
+    expect(isSyncableTab(tab('t', deepLocal))).toBe(false)
+    const deepSync = split('s', [leaf('a', { kind: 'new-tab' }), split('s2', [leaf('b', { kind: 'history' }), leaf('c', { kind: 'browser', url: 'u' })], [50, 50], 'v')], [50, 50])
+    expect(isSyncableTab(tab('t', deepSync))).toBe(true)
+  })
+
+  it('reads a wire tab entry (stripped layout) the same way', () => {
+    const entry = buildTabsSection(ws('w', 'W', ['t1']), { t1: tab('t1', split('s', [leaf('a', { kind: 'new-tab' }), leaf('b', tmux('x'))], [50, 50])) }).tabs.t1
+    expect(isSyncableTab(entry)).toBe(true)
+    expect(isSyncableTab({ layout: { type: 'split', id: 's', direction: 'h', children: [leaf('a', { kind: 'settings', scope: 'global' })] } })).toBe(false)
+  })
+
+  // T1 (R2 finding A): device-local ⇔ a COMPLETE layout (the guard's shape) whose every leaf is device-local.
+  // A malformed tab is not device-local: it goes to the build exactly as on main, never kept as a ghost.
+  describe('a malformed layout is NOT device-local (it syncs, as on main)', () => {
+    const settingsLeaf = leaf('a', { kind: 'settings', scope: 'global' })
+    const cases: Array<[string, unknown]> = [
+      ['no layout', undefined],
+      ['an unknown node type', { type: 'grid', pane: { id: 'p', content: { kind: 'settings' } } }],
+      ['an empty split', { type: 'split', id: 's', direction: 'h', children: [], sizes: [] }],
+      ['a split with a device-local leaf and an empty split', { type: 'split', id: 's', direction: 'h', children: [settingsLeaf, { type: 'split', id: 's2', direction: 'v', children: [], sizes: [] }], sizes: [50, 50] }],
+      ['a leaf without a pane', { type: 'leaf' }],
+      ['a leaf without content', { type: 'leaf', pane: { id: 'p' } }],
+      ['a leaf whose pane has no id', { type: 'leaf', pane: { content: { kind: 'settings', scope: 'global' } } }],
+      ['a split with a bad direction', { type: 'split', id: 's', direction: 'x', children: [settingsLeaf], sizes: [100] }],
+    ]
+    for (const [name, layout] of cases) {
+      it(name, () => {
+        expect(isSyncableTab({ layout } as unknown as Tab)).toBe(true)
+      })
+    }
+
+    it('a local split carrying `sizes` is complete (the builder strips them): all device-local → device-local', () => {
+      expect(isSyncableTab(tab('t', split('s', [settingsLeaf, leaf('b', { kind: 'hosts' })], [50, 50])))).toBe(false)
+    })
+  })
+})
+
 // --- buildTabsSection --------------------------------------------------------
 
 describe('buildTabsSection', () => {
   it('order follows ws.tabs; ids with no Tab are dropped, duplicates kept once; record = order', () => {
-    const tabs = { t1: tab('t1', leaf('p1', { kind: 'dashboard' })), t2: tab('t2', leaf('p2', { kind: 'hosts' })), other: tab('other', leaf('p9', { kind: 'history' })) }
+    const tabs = { t1: tab('t1', leaf('p1', { kind: 'browser', url: 'u1' })), t2: tab('t2', leaf('p2', { kind: 'browser', url: 'u2' })), other: tab('other', leaf('p9', { kind: 'browser', url: 'u9' })) }
     const out = buildTabsSection(ws('w', 'W', ['t2', 'ghost', 't1', 't2']), tabs)
     expect(out.order).toEqual(['t2', 't1'])
     expect(Object.keys(out.tabs).sort()).toEqual(['t1', 't2'])
     expect(new Set(out.order).size).toBe(out.order.length)
+  })
+
+  it('leaves out interface-only tabs: [tmux, settings, new-tab, browser] → [tmux, browser], record exactly those', () => {
+    const tabs = {
+      a: tab('a', leaf('p1', tmux('one'))),
+      s: tab('s', leaf('p2', { kind: 'settings', scope: 'global' })),
+      n: tab('n', leaf('p3', { kind: 'new-tab' })),
+      b: tab('b', leaf('p4', { kind: 'browser', url: 'https://a.test' })),
+    }
+    const out = buildTabsSection(ws('w', 'W', ['a', 's', 'n', 'b']), tabs)
+    expect(out.order).toEqual(['a', 'b'])
+    expect(Object.keys(out.tabs).sort()).toEqual(['a', 'b'])
+    expect(isWellFormedSection('tabs', out)).toBe(true)
+  })
+
+  it('a workspace of device-local tabs only builds the empty payload', () => {
+    const tabs = { s: tab('s', leaf('p1', { kind: 'settings', scope: 'global' })), h: tab('h', leaf('p2', { kind: 'hosts' })) }
+    expect(buildTabsSection(ws('w', 'W', ['s', 'h']), tabs)).toEqual({ order: [], tabs: {} })
+  })
+
+  it('a split new-tab + tmux is sent whole, its new-tab leaf included', () => {
+    const layout = split('sp', [leaf('p1', { kind: 'new-tab' }), leaf('p2', tmux('x'))], [50, 50])
+    const out = buildTabsSection(ws('w', 'W', ['t']), { t: tab('t', layout) })
+    expect(out.order).toEqual(['t'])
+    expect(out.tabs.t.layout).toEqual(stripSizes(layout))
   })
 
   it('a workspace with no tabs yields {order: [], tabs: {}}', () => {
@@ -228,7 +346,7 @@ describe('buildTabsSection', () => {
   })
 
   it('carries the tab fields and the split structure, and no sizes at any depth', () => {
-    const layout = split('s1', [leaf('p1', { kind: 'dashboard' }), split('s2', [leaf('p2', { kind: 'hosts' }), leaf('p3', { kind: 'history' })], [20, 80], 'v')], [40, 60])
+    const layout = split('s1', [leaf('p1', { kind: 'browser', url: 'u1' }), split('s2', [leaf('p2', { kind: 'hosts' }), leaf('p3', { kind: 'history' })], [20, 80], 'v')], [40, 60])
     const out = buildTabsSection(ws('w', 'W', ['t1']), { t1: tab('t1', layout, { pinned: true, locked: true, createdAt: 42 }) })
     expect(out.tabs.t1).toMatchObject({ id: 't1', pinned: true, locked: true, createdAt: 42 })
     expect(out.tabs.t1.layout).toEqual(stripSizes(layout))
@@ -435,7 +553,7 @@ describe('buildProfileDocument', () => {
       tabs: {
         tabs: {
           t1: { ...tab('t1', split('sp1', [leaf('p1', tmux('one')), split('sp2', [leaf('p2', { kind: 'hosts' }), leaf('p3', { kind: 'history' })], [N, N])], [N, N])), scrollTop: S },
-          t2: tab('t2', leaf('p4', { kind: 'dashboard' })),
+          t2: tab('t2', leaf('p4', { kind: 'browser', url: 'u4' })),
           // standalone — its content must not travel either
           [S]: tab(S, leaf('p5', { kind: 'browser', url: S })),
         },
@@ -570,7 +688,7 @@ describe('adoptStandaloneTabs', () => {
 
   it('after adoption nothing is left to adopt, and the document carries the tab', () => {
     const input = baseInput()
-    input.tabs = { tabs: { ...input.tabs.tabs, loose: tab('loose', leaf('px', { kind: 'hosts' })) }, tabOrder: ['loose', 't1', 't2', 't3'] }
+    input.tabs = { tabs: { ...input.tabs.tabs, loose: tab('loose', leaf('px', { kind: 'browser', url: 'ux' })) }, tabOrder: ['loose', 't1', 't2', 't3'] }
     const adopted = adoptStandaloneTabs({ workspaces: input.workspaces.workspaces, ...input.tabs }, opts)
     const { document } = buildProfileDocument({ ...input, workspaces: { workspaces: adopted.workspaces } })
     expect(adoptStandaloneTabs({ workspaces: adopted.workspaces, ...input.tabs }, opts).adopted).toEqual([])

@@ -6,10 +6,14 @@
 //
 //     hash(build(apply(local, p))) === hash(p)     for every well-formed p
 //
+// (for `tabs.*`: every CANONICAL p — one with no device-local tab in it, which is
+// every p the current builder can produce; an older build's payload is made
+// canonical first by `upcastLegacyTabs`.)
+//
 // Without it a section could never be "converged": every apply would leave the
 // client dirty again. So an apply REPLACES the synced fields with the incoming
 // ones (never merges them), keeps what is device-local (focus, split ratios,
-// unlisted settings fields), and `isWellFormedSection` refuses any payload the
+// unlisted settings fields, interface-only tabs), and `isWellFormedSection` refuses any payload the
 // builders could not have produced — unknown fields included, since a field
 // that does not survive the next build can never hash back to `p`.
 //
@@ -37,7 +41,16 @@ import {
   type WireResolver,
 } from './host-identity'
 import { PROJECTIONS, workspaceIdOf } from './projections'
-import { WORKSPACE_SCOPED_SETTINGS, isSyncableWorkspaceId, normaliseAliases } from './sections'
+import {
+  WORKSPACE_SCOPED_SETTINGS,
+  definedKeys,
+  hasOnlyKeys,
+  isLayoutShape,
+  isPlainObject,
+  isSyncableTab,
+  isSyncableWorkspaceId,
+  normaliseAliases,
+} from './sections'
 import type { SettingsBuildInput } from './sections'
 import type {
   HostsPayload,
@@ -379,6 +392,27 @@ function withoutTabs(ws: Workspace, taken: ReadonlySet<string>): Workspace {
  * exactly one workspace (§4.3), and that workspace's own section may not have
  * been applied yet. Everything else of the other workspaces is returned by
  * reference.
+ *
+ * DEVICE-LOCAL TABS (tabs-local-only spec §3.3). A tab of this workspace that
+ * `isSyncableTab` rejects is never sent (`buildTabsSection` leaves it out), so no
+ * payload can mean "delete it" — the precedent is `applyWorkspaces`' unsyncable
+ * workspaces. It is kept: not removed, its `Tab` untouched, and still listed in
+ * `ws.tabs` (dropped from there, `repairTabOwnership` would adopt it into
+ * Unsorted) at its relative place — see `anchorKeptTabs`. The round trip holds
+ * for every canonical payload because the builder filters these out again; a
+ * legacy payload that carries such tabs is made canonical before it gets here
+ * (`upcastLegacyTabs`).
+ *
+ * ID CONFLICT (spec §3.3, attacker R2 finding B). An id is only this device's
+ * to keep while the SOT does not carry it: when the incoming payload holds the
+ * same id as a (necessarily syncable — the payload is canonical) tab, the remote
+ * version wins, whichever workspace the local device-local one sits in. In THIS
+ * workspace it is simply arriving (`keptLocal` excludes arriving ids); in
+ * ANOTHER workspace `withoutTabs` takes it out like any arriving tab, and the
+ * record is overwritten. It happens when a tab once synced everywhere was turned
+ * into an interface tab here while another device moved or edited it: the
+ * version kept is the one with state (session, URL, file), not the stateless
+ * interface page — and only this way does the round trip hold for the payload.
  */
 export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsPayload): ApplyTabsResult {
   const target = local.workspaces.find((w) => w.id === workspaceId)
@@ -386,7 +420,11 @@ export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsP
 
   const order = unique(incoming.order).filter((id) => id !== PROTO_KEY && Object.hasOwn(incoming.tabs, id))
   const arriving = new Set(order)
-  const removedTabIds = unique(target.tabs).filter((id) => !arriving.has(id) && Object.hasOwn(local.tabs, id))
+  const listed = unique(target.tabs)
+  const keptLocal = new Set(
+    listed.filter((id) => id !== PROTO_KEY && Object.hasOwn(local.tabs, id) && !isSyncableTab(local.tabs[id]) && !arriving.has(id)),
+  )
+  const removedTabIds = listed.filter((id) => !arriving.has(id) && !keptLocal.has(id) && Object.hasOwn(local.tabs, id))
   const removed = new Set(removedTabIds)
 
   const tabs: Record<string, Tab> = {}
@@ -405,9 +443,37 @@ export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsP
     }
   }
 
-  const activeTabId = target.activeTabId !== null && arriving.has(target.activeTabId) ? target.activeTabId : (order[0] ?? null)
-  const workspaces = local.workspaces.map((w) => (w === target ? { ...w, tabs: order, activeTabId } : withoutTabs(w, arriving)))
+  const wsTabs = anchorKeptTabs(listed, order, keptLocal)
+  const stays = (id: string): boolean => arriving.has(id) || keptLocal.has(id)
+  const activeTabId = target.activeTabId !== null && stays(target.activeTabId) ? target.activeTabId : (wsTabs[0] ?? null)
+  const workspaces = local.workspaces.map((w) => (w === target ? { ...w, tabs: wsTabs, activeTabId } : withoutTabs(w, arriving)))
   return { next: { tabs, workspaces }, unrendered: false, removedTabIds }
+}
+
+/**
+ * The workspace's new tab list: the incoming `order`, with each kept device-local
+ * tab put back after its ANCHOR — the nearest id before it in the local listing
+ * that the incoming order holds (a synced neighbour that was removed is skipped,
+ * so the tab falls back to the next earlier survivor). With no anchor it goes to
+ * the front. Tabs sharing an anchor keep their local order. The position is only
+ * ever relative to synced tabs: those are the only ones both sides see, and
+ * where other devices put THEIR local tabs is none of this device's business.
+ * `listed` and `order` are duplicate-free and `kept` is disjoint from `order`, so
+ * no id comes out twice.
+ */
+function anchorKeptTabs(listed: readonly string[], order: readonly string[], kept: ReadonlySet<string>): string[] {
+  const arriving = new Set(order)
+  const front: string[] = []
+  const after = new Map<string, string[]>()
+  let anchor: string | null = null
+  for (const id of listed) {
+    if (arriving.has(id)) anchor = id
+    else if (kept.has(id)) {
+      if (anchor === null) front.push(id)
+      else after.set(anchor, [...(after.get(anchor) ?? []), id])
+    }
+  }
+  return [...front, ...order.flatMap((id) => [id, ...(after.get(id) ?? [])])]
 }
 
 /**
@@ -544,14 +610,7 @@ export function applySettings(local: SettingsBuildInput, incoming: SettingsPaylo
 // === Well-formedness ===
 
 const MAX_JSON_DEPTH = 256
-const MAX_LAYOUT_DEPTH = 64
 const POLLUTING_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
-
-function isPlainObject(value: unknown): value is Rec {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const proto: unknown = Object.getPrototypeOf(value)
-  return proto === Object.prototype || proto === null
-}
 
 /**
  * Plain JSON data all the way down: no cycle, no polluting key, no non-finite
@@ -592,14 +651,6 @@ function isSafeJson(value: unknown, depth: number, ancestors: Set<object>, done:
   return ok
 }
 
-function definedKeys(node: Rec): string[] {
-  return Object.keys(node).filter((k) => node[k] !== undefined)
-}
-
-function hasOnlyKeys(node: Rec, allowed: readonly string[]): boolean {
-  return definedKeys(node).every((k) => allowed.includes(k))
-}
-
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string')
 }
@@ -631,24 +682,6 @@ function hasKeyDeep(node: unknown, name: string): boolean {
   return Object.hasOwn(node, name) || Object.keys(node).some((k) => hasKeyDeep(node[k], name))
 }
 
-function isLayout(node: unknown, depth: number): boolean {
-  if (depth > MAX_LAYOUT_DEPTH || !isPlainObject(node)) return false
-  if (node.type === 'leaf') {
-    const pane = node.pane
-    return hasOnlyKeys(node, ['type', 'pane']) && isPlainObject(pane) && typeof pane.id === 'string' && isPlainObject(pane.content) && typeof pane.content.kind === 'string'
-  }
-  if (node.type !== 'split') return false
-  const children = node.children
-  return (
-    hasOnlyKeys(node, ['type', 'id', 'direction', 'children']) && // `sizes` included: ratios never travel
-    typeof node.id === 'string' &&
-    (node.direction === 'h' || node.direction === 'v') &&
-    Array.isArray(children) &&
-    children.length > 0 &&
-    children.every((child) => isLayout(child, depth + 1))
-  )
-}
-
 function isTabsPayload(p: Rec): boolean {
   const record = p.tabs
   if (!hasOnlyKeys(p, ['order', 'tabs']) || !isPlainObject(record) || !orderMatchesRecord(p.order, record)) return false
@@ -662,7 +695,7 @@ function isTabsPayload(p: Rec): boolean {
       typeof t.pinned === 'boolean' &&
       typeof t.locked === 'boolean' &&
       isFiniteNumber(t.createdAt) &&
-      isLayout(t.layout, 0) &&
+      isLayoutShape(t.layout) &&
       // The projection strips `sizes` at ANY depth under `layout`, pane contents
       // included — a payload carrying one could never hash back to itself.
       !hasKeyDeep(t.layout, 'sizes')
@@ -786,6 +819,41 @@ export function upcastLegacySettings(payload: unknown): unknown {
     if (!isPlainObject(store) || !Object.hasOwn(store, 'profiles') || Object.hasOwn(store, 'presets')) return payload
     const { profiles, ...rest } = store
     return { ...payload, 'purdex-newtab-layout': { ...rest, presets: profiles } }
+  } catch {
+    return payload
+  }
+}
+
+/**
+ * Tabs ordinal 2 → 3 (tabs-local-only spec §3.5): an ordinal-2 build sent every
+ * tab of a workspace, its own interface-only tabs included. Such a payload is not
+ * canonical — no current build produces it — and applied as-is it would CREATE
+ * the sender's Settings / New Tab tabs on this device. So each place a payload of
+ * an older build can reach the stores (the pull in apply-to-stores, and a
+ * persisted keep-local snapshot in the executor's `restoreLocal`) runs this first:
+ * the payload without its device-local tabs, order and record alike. A device
+ * that already has such a tab keeps its own copy (`applyTabs` never removes one).
+ *
+ * The SAME object when there is nothing to drop — the caller tells "upcast" from
+ * "unchanged" by reference. Only an entry whose layout the guard would accept is
+ * judged: a malformed one stays, so the guard that follows still refuses the
+ * payload (dropping it here would launder a malformed payload into a valid one).
+ * Never throws, never mutates.
+ */
+export function upcastLegacyTabs(payload: TabsPayload): TabsPayload {
+  try {
+    if (!isPlainObject(payload) || !Array.isArray(payload.order) || !isPlainObject(payload.tabs)) return payload
+    const record = payload.tabs as Rec
+    const drop = new Set(
+      Object.keys(record).filter((id) => {
+        const entry = record[id]
+        return isPlainObject(entry) && isLayoutShape(entry.layout) && !isSyncableTab(entry as { layout: StrippedLayout })
+      }),
+    )
+    if (drop.size === 0) return payload
+    const tabs: Record<string, TabsPayload['tabs'][string]> = {}
+    for (const id of Object.keys(record)) if (!drop.has(id)) setOwn(tabs, id, record[id] as TabsPayload['tabs'][string])
+    return { ...payload, order: payload.order.filter((id) => !drop.has(id)), tabs }
   } catch {
     return payload
   }

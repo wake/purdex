@@ -11,12 +11,13 @@
 // Whatever cannot be read (no stash entry, an unsettled world, a failed request, a shape this build does not know) is
 // `unreadable` — "could not be read", never a guess. The counts inform; they never gate the action.
 import { getSection } from '../../../lib/profile/api'
+import { upcastLegacyTabs } from '../../../lib/profile/applier'
 import { buildSectionPayload } from '../../../lib/profile/collector'
 import type { SectionLock } from '../../../lib/profile/executor'
 import { hashSection } from '../../../lib/profile/hash'
 import { sectionKind } from '../../../lib/profile/projections'
 import { getStash } from '../../../lib/profile/section-store'
-import type { ProfileSectionKey } from '../../../lib/profile/types'
+import type { ProfileSectionKey, TabsPayload } from '../../../lib/profile/types'
 
 export type SideCount = { state: 'read'; count: number } | { state: 'unreadable' }
 
@@ -51,7 +52,10 @@ export function countPayload(key: string, payload: unknown): number | null {
     case 'workspaces':
       return keysOf(payload.workspaces)
     case 'tabs':
-      return keysOf(payload.tabs)
+      // tabs-local-only §3.8: an ordinal-2 payload (the SOT's row, a stash an older build took) still lists the
+      // sender's interface-only tabs, which this build neither applies nor sends. Counted raw, the two sides would
+      // differ by tabs that no choice moves. Both go through here, so both are counted as this build sees them.
+      return keysOf(upcastLegacyTabs(payload as unknown as TabsPayload).tabs)
     case 'settings': {
       let total = 0
       for (const fields of Object.values(payload)) {

@@ -1255,10 +1255,10 @@ describe('executor — pull', () => {
     /** The stores, read at the stash, still build exactly what the apply hashed (a copy: compared by canonical form). */
     const stillOwn: Partial<ExecutorDeps> = { buildNow: () => ({ payload: structuredClone(OWN) }) }
 
-    it('(a) aliasesOnly: no problem, the section is dirty, the push sends THAT payload without any collector report', async () => {
+    it('(a) rewrite: aliases — no problem, the section is dirty, the push sends THAT payload without any collector report', async () => {
       const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
       api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
       api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
       ex.onRemoteEvent(remote('hosts', 2, 'H2'))
       await flush()
@@ -1275,7 +1275,25 @@ describe('executor — pull', () => {
       expect(problems).toEqual([])
     })
 
-    it('(b) without aliasesOnly the mismatch is still a problem (and the payload is pushed all the same)', async () => {
+    // tabs-local-only §3.5: a legacy `tabs.*` (an ordinal-2 client's interface tabs in it) is upcast on the pull; the
+    // rebuild is the upcast payload, not the SOT's — the migration, pushed once, not a problem.
+    it('(a2) rewrite: \'device-local-tabs\' on a tabs pull: no problem, ONE push of the payload without the device-local tab', async () => {
+      const entry = (id: string, kind: string): Record<string, unknown> => ({ id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content: kind === 'settings' ? { kind, scope: 'global' } : { kind, url: 'u' } } } })
+      const CANON = { order: ['a1'], tabs: { a1: entry('a1', 'browser') } }
+      useWorkspaceStore.setState({ workspaces: [ws('wa')] }) // a `tabs.*` is pulled only when its workspace is here
+      const { ex, problems } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.wa': 'T1' }, { buildNow: () => ({ payload: structuredClone(CANON) }) })
+      api.getSection.mockResolvedValue(sectionOf(meta('tabs.wa', 2, 'T2'), { order: ['a1', 'sX'], tabs: { a1: entry('a1', 'browser'), sX: entry('sX', 'settings') } }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'T2-canon', payload: CANON, rewrite: 'device-local-tabs' })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('tabs.wa', 2, 'T2'))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(problems).toEqual([])
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'T2-canon', payload: CANON })
+      expect(JSON.stringify(api.putSection.mock.calls[0][3])).not.toContain('sX')
+    })
+
+    it('(b) without a rewrite the mismatch is still a problem (and the payload is pushed all the same)', async () => {
       const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
       api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
       applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN })
@@ -1297,7 +1315,7 @@ describe('executor — pull', () => {
       await flush()
       expect(applySectionToStores).toHaveBeenCalledTimes(1)
       ex.syncNow() // pumps `hosts` while its pull is still running → `repump`
-      applying.resolve({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+      applying.resolve({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
       await vi.advanceTimersByTimeAsync(60_000)
       expect(problems).toEqual([])
       expect(api.putSection).toHaveBeenCalledTimes(1)
@@ -1308,7 +1326,7 @@ describe('executor — pull', () => {
     it('(d) an outcome without a payload (a test double, a future branch) pushes nothing of its own — the collector’s report is what goes out', async () => {
       const { ex, problems } = await synced({ hosts: 'H1' })
       api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', aliasesOnly: true })
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', rewrite: 'aliases' })
       api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
       ex.onRemoteEvent(remote('hosts', 2, 'H2'))
       await vi.advanceTimersByTimeAsync(60_000)
@@ -1329,7 +1347,7 @@ describe('executor — pull', () => {
       async function expectWaitsForTheCollector(over: Partial<ExecutorDeps>): Promise<void> {
         const { ex, problems } = await synced({ hosts: 'H1' }, over)
         api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
         api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
         ex.onRemoteEvent(remote('hosts', 2, 'H2'))
         await vi.advanceTimersByTimeAsync(60_000)
@@ -1368,7 +1386,7 @@ describe('executor — pull', () => {
       it('the stores still build it → pushed at once, no collector report needed (T3)', async () => {
         const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
         api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
         api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
         ex.onRemoteEvent(remote('hosts', 2, 'H2'))
         await flush()
@@ -1742,6 +1760,30 @@ describe('executor — resolve and restore-local', () => {
     expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: canonicalHash, payload: canonical })
     expect(problems).toEqual([])
     expect(ex.status().sections.settings).toBe('synced')
+  })
+
+  // tabs-local-only §3.5 (codex critical): a keep-local choice persisted before the upgrade holds an ordinal-2 tabs
+  // payload with this device's interface tabs in it. Pushed as-is it would reach the SOT under ordinal 3.
+  it('tabs-local-only: a persisted ordinal-2 tabs snapshot with a Settings tab is upcast before it is applied and pushed', async () => {
+    const entry = (id: string, content: Record<string, unknown>): Record<string, unknown> => ({ id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content } } })
+    const legacy = { order: ['a1', 's1'], tabs: { a1: entry('a1', { kind: 'browser', url: 'u' }), s1: entry('s1', { kind: 'settings', scope: 'global' }) } }
+    const canonical = { order: ['a1'], tabs: { a1: entry('a1', { kind: 'browser', url: 'u' }) } }
+    const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash')
+    const canonicalHash = structuralKey(canonical)
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, 'tabs.wa': { base: { rev: 1, hash: 'T1' }, currentHash: 'T3', conflict: { localHash: 'T2', sot: { rev: 5, hash: 'T9' } } } }
+    h.persistedStash.set('T2', legacy)
+    useWorkspaceStore.setState({ workspaces: [ws('wa')] })
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.wa', 5, 'T9')]))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: canonicalHash })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
+    const { ex, problems } = make()
+    ex.resolve('tabs.wa', 'local')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(applySectionToStores).toHaveBeenCalledWith('tabs.wa', canonical, { masterHostId: HOST })
+    expect(eventsOf('local-restored')).toEqual([{ type: 'local-restored', hash: 'T2', localHash: canonicalHash }])
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: canonicalHash, payload: canonical })
+    expect(problems).toEqual([])
   })
 
   it('P3e: a settings snapshot already in this build\'s shape is restored as-is (same hash, no localHash)', async () => {

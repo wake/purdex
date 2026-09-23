@@ -35,7 +35,7 @@ function host(id: string): HostConfig {
 }
 
 function tab(id: string): Tab {
-  return { id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'new-tab' } } } } as Tab
+  return { id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'browser', url: 'https://x.test' } } } } as Tab
 }
 
 function world(prefix: string, workspaceCount: number, tabsPerWorkspace: number): ParkedWorld {
@@ -94,6 +94,25 @@ describe('countPayload — counts, not a diff', () => {
     expect(countPayload('tabs.w1', { order: [] })).toBeNull()
     expect(countPayload('settings', { 'purdex-layout': 3 })).toBeNull()
     expect(countPayload('bogus', {})).toBeNull()
+  })
+})
+
+// tabs-local-only §3.8: an ordinal-2 payload (the SOT's, or a stash an older build took) still lists interface-only
+// tabs, which this build never sends and never applies. Both sides are counted after `upcastLegacyTabs`.
+describe('countPayload — tabs are counted as this build would apply them (tabs-local-only §3.8)', () => {
+  const entry = (id: string, content: Record<string, unknown>) => ({ id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content } } })
+  const legacy = { order: ['a', 's', 'n'], tabs: { a: entry('a', { kind: 'browser', url: 'u' }), s: entry('s', { kind: 'settings', scope: 'global' }), n: entry('n', { kind: 'new-tab' }) } }
+
+  it('a legacy payload listing interface tabs counts only the ones that travel', () => {
+    expect(countPayload('tabs.w1', legacy)).toBe(1)
+  })
+
+  it('the host side of a legacy row, and a legacy local stash, are both counted that way', async () => {
+    api.getSection.mockResolvedValue({ kind: 'ok', value: { section: 'tabs.mws0', rev: 4, hash: 'e'.repeat(64), fingerprint: 'f', ordinal: 2, writer: 'c', updatedAt: 0, payload: legacy } })
+    expect((await readHostSide(HOST, PROFILE, 'tabs.mws0', lock({}), { expectEndpoint: '10.0.0.1:7860' })).count).toEqual({ state: 'read', count: 1 })
+    putStash(PROFILE, HASH, legacy)
+    const side = await readLocalSide(PROFILE, 'tabs.mws0', lock({ status: 'locked:conflict', currentHash: 'c'.repeat(64), conflict: { localHash: HASH, sot: { rev: 4, hash: 'b'.repeat(64) } } }))
+    expect(side.count).toEqual({ state: 'read', count: 1 })
   })
 })
 

@@ -65,7 +65,7 @@ function host(id: string, name = id) {
 }
 
 function leaf(id: string): PaneLayout {
-  return { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'new-tab' } } } as PaneLayout
+  return { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'browser', url: 'https://x.test' } } } as PaneLayout
 }
 
 function tab(id: string, layout: PaneLayout = leaf(id)): Tab {
@@ -235,6 +235,44 @@ describe('startCollector — tabs and workspaces', () => {
     expect(await pendingTimers()).toBeGreaterThan(0)
     await vi.advanceTimersByTimeAsync(5000)
     expect(reports).toEqual([])
+  })
+
+  // tabs-local-only (spec §2, T6): an interface-only tab is not in the section, so it moves no hash.
+  describe('device-local tabs', () => {
+    const settingsTab = (id: string): Tab => tab(id, { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'settings', scope: 'global' } } } as PaneLayout)
+    const newTab = (id: string): Tab => tab(id, { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'new-tab' } } } as PaneLayout)
+    function addToA(t: Tab): void {
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, [t.id]: t }, tabOrder: [...useTabStore.getState().tabOrder, t.id] })
+      setWorkspaces((l) => l.map((w) => (w.id === 'A' ? { ...w, tabs: [...w.tabs, t.id] } : w)))
+    }
+
+    it('opening or closing only a device-local tab reports nothing', async () => {
+      addToA(settingsTab('sL'))
+      const c = start()
+      await c.primeAll()
+      reports = []
+      useTabStore.getState().closeTab('sL')
+      setWorkspaces((l) => l.map((w) => ({ ...w, tabs: w.tabs.filter((id) => id !== 'sL') })))
+      await vi.advanceTimersByTimeAsync(5000)
+      addToA(newTab('n1'))
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(reports).toEqual([])
+    })
+
+    it('setPaneContent on a New Tab (it is launched in place, same tab id) reports tabs.<id> with the new hash', async () => {
+      addToA(newTab('n1'))
+      const c = start()
+      await c.primeAll()
+      const before = buildSectionPayload('tabs.A')!.payload
+      reports = []
+      useTabStore.getState().setPaneContent('n1', 'p-n1', { kind: 'browser', url: 'https://launched.test' })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(keys()).toEqual(['tabs.A'])
+      const payload = reports[0].payload as { order: string[] }
+      expect(payload.order).toEqual(['t1', 't3', 'n1'])
+      expect(reports[0].hash).toBe(structuralKey(payload))
+      expect(reports[0].hash).not.toBe(structuralKey(before))
+    })
   })
 
   it('a changed tab reports only its own tabs.<id>', async () => {
