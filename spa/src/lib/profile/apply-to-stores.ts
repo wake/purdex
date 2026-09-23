@@ -55,11 +55,11 @@ import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
 import { applyHosts, applySettings, applyTabs, applyWorkspaces, duplicateHostAlias, isWellFormedSection, planHostsApply, settingsFromWire, tabsFromWire, upcastLegacySettings } from './applier'
 import type { HostsPlan } from './applier'
-import { identityOfSync } from './host-identity'
-import { hashSection } from './hash'
+import { identityOfSync, MAX_HOST_ALIASES } from './host-identity'
+import { hashSection, structuralKey } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
 import { sectionKind, workspaceIdOf } from './projections'
-import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, wireResolverOf } from './sections'
+import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, normaliseAliases, wireResolverOf } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type { HostsPayload, ProfileSectionKey, SettingsPayload, SettingsStorageKey, TabsPayload, WorkspacesPayload } from './types'
 
@@ -68,8 +68,10 @@ import type { HostsPayload, ProfileSectionKey, SettingsPayload, SettingsStorageK
 export type ApplyOutcome =
   /** Written. `hash` is rebuilt from the stores afterwards; `null` = the section does not exist locally (nothing was written).
    *  `payload` is the section `hash` was computed from (absent with a `null` hash): when it differs from the SOT's,
-   *  the executor pushes it back without waiting for the collector to report it (#1369). */
-  | { ok: true; hash: string | null; payload?: unknown }
+   *  the executor pushes it back without waiting for the collector to report it (#1369).
+   *  `aliasesOnly` (hosts only): the hash differs from the payload's, and ONLY by the own-alias write-back every
+   *  canonical build makes (`isAliasWriteBackOnly`) — a designed write, not a problem (#1369). */
+  | { ok: true; hash: string | null; payload?: unknown; aliasesOnly?: true }
   /** Not now, retry later, never lock the section: the operation lock is held by someone else — or the master's
    *  tab world is unsettled (master-world.ts: a switch is half-way through this window's rehydrates), so there is
    *  nowhere to write `workspaces` / `tabs.*` and no master workspace set to scope `settings` by. */
@@ -171,7 +173,7 @@ const invalid = (code: InvalidReason, detail: string): ApplyOutcome => ({ ok: fa
 const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
 
 /** An ok outcome for a section rebuilt from the stores: its hash, and the very payload that hash was taken of. */
-const rebuilt = async (payload: unknown): Promise<ApplyOutcome> => ({ ok: true, hash: await hashSection(payload), payload })
+const rebuilt = async (payload: unknown): Promise<Extract<ApplyOutcome, { ok: true }>> => ({ ok: true, hash: await hashSection(payload), payload })
 
 // === host-removed ===
 
@@ -231,6 +233,43 @@ function hostsRefusal(local: Record<string, HostConfig>, plan: HostsPlan, master
   // The credentials in hand are the ones that just fetched this payload, so they are known to work.
   const changed = [mine.ip !== theirs.ip && 'ip', mine.port !== theirs.port && 'port', tokenOf(mine) !== tokenOf(theirs) && 'token'].filter(Boolean)
   return changed.length > 0 ? invalid('changes-master-host', `payload changes the master host's ${changed.join(', ')}`) : null
+}
+
+const aliasListOf = (row: unknown): unknown[] => {
+  const a = (row as { aliases?: unknown } | undefined)?.aliases
+  return Array.isArray(a) ? a : []
+}
+
+const withoutAliases = (p: HostsPayload): HostsPayload => ({
+  ...p,
+  hosts: Object.fromEntries(Object.entries(p.hosts).map(([key, row]) => {
+    const { aliases: _aliases, ...rest } = row as HostConfig & { aliases?: unknown }
+    return [key, rest as HostConfig]
+  })),
+})
+
+/**
+ * Does `built` (rebuilt from the stores after applying `incoming`) differ from `incoming` ONLY by the own-alias
+ * write-back a canonical build makes (#1369)? Strict — erring costs a problem line, never data:
+ *   1. with `aliases` removed from every row of both, the two are equal (row keys, every other field, `hostOrder`);
+ *   2. per row, `aliases` changed only the way `withOwnAlias` changes them: an alias gained is the local id that
+ *      row was applied to (`byRow`), an alias lost was displaced by the cap (the built list is full and every
+ *      entry sorts before it). The incoming list is normalised first (order and repeats are not a difference).
+ * Equal payloads are `false`: no mismatch, nothing to say.
+ */
+export function isAliasWriteBackOnly(incoming: HostsPayload, built: HostsPayload, byRow: ReadonlyMap<string, string>): boolean {
+  if (structuralKey(incoming) === structuralKey(built)) return false
+  if (structuralKey(withoutAliases(incoming)) !== structuralKey(withoutAliases(built))) return false
+  for (const [key, row] of Object.entries(built.hosts)) {
+    const local = byRow.get(key)
+    if (local === undefined) return false
+    const inn = normaliseAliases(aliasListOf(incoming.hosts[key]))
+    const out = aliasListOf(row)
+    if (!out.every((a) => inn.includes(a as string) || a === local)) return false
+    const full = out.length === MAX_HOST_ALIASES
+    if (!inn.every((a) => out.includes(a) || (full && out.every((o) => typeof o === 'string' && o < a)))) return false
+  }
+  return true
 }
 
 /** Each host with exactly the `syncAliases` the plan gives it (none → the field absent). */
@@ -423,7 +462,11 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
       throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
     await hooks
-    return rebuilt(buildHostsSection(useHostStore.getState()))
+    const built = buildHostsSection(useHostStore.getState())
+    const outcome = await rebuilt(built)
+    // #1369: a canonical row arriving without this device's own id comes back with it (withOwnAlias) — the one
+    // designed write-back after a pull. Said so, so the executor pushes it without calling it a problem.
+    return isAliasWriteBackOnly(incoming, built, plan.byRow) ? { ...outcome, aliasesOnly: true } : outcome
   }
 
   // Decided on the state as it is now; `write` re-reads under the lock, and nothing can run in between (no await).
