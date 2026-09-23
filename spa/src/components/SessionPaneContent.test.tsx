@@ -369,6 +369,18 @@ describe('SessionPaneContent', () => {
       expect(probeSessionProvenance).not.toHaveBeenCalled()
     })
 
+    // R1 (PR #1400): an `in`-style lookup would take a prototype member for a host.
+    it.each(['toString', 'constructor', '__proto__', 'hasOwnProperty'])('a pane naming the prototype member %s is a missing host, not a known one', (name) => {
+      const pane = makePane({
+        content: { kind: 'tmux-session', hostId: name, sessionCode: 'dev001', mode: 'terminal', cachedName: 'dev', tmuxInstance: '' },
+      })
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(screen.getByTestId('missing-host-pane')).toBeInTheDocument()
+      expect(screen.queryByTestId('terminal-view')).not.toBeInTheDocument()
+      expect(fetchWsTicket).not.toHaveBeenCalled()
+    })
+
     it('an existing host-removed mark still renders as today', () => {
       const pane = makePane({
         content: {

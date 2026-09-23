@@ -23,7 +23,8 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   // verbatim and rendered as missing. It must be checked before anything that
   // reaches the network: `getWsBase` falls back to the active host for an
   // unknown id, so attaching would open a terminal on the WRONG host.
-  const hostKnown = useHostStore((s) => hostId !== '' && s.hosts[hostId] !== undefined)
+  // `Object.hasOwn`, not a lookup: `toString` / `__proto__` & co. are not hosts.
+  const hostKnown = useHostStore((s) => hostId !== '' && Object.hasOwn(s.hosts, hostId))
 
   // Second of the two cwd-probe triggers (spec §4.4): a pane opened after the
   // session list has settled gets no further `sessions` broadcast, so it would
