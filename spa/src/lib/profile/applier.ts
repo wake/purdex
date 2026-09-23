@@ -41,7 +41,16 @@ import {
   type WireResolver,
 } from './host-identity'
 import { PROJECTIONS, workspaceIdOf } from './projections'
-import { WORKSPACE_SCOPED_SETTINGS, isSyncableTab, isSyncableWorkspaceId, normaliseAliases } from './sections'
+import {
+  WORKSPACE_SCOPED_SETTINGS,
+  definedKeys,
+  hasOnlyKeys,
+  isLayoutShape,
+  isPlainObject,
+  isSyncableTab,
+  isSyncableWorkspaceId,
+  normaliseAliases,
+} from './sections'
 import type { SettingsBuildInput } from './sections'
 import type {
   HostsPayload,
@@ -590,14 +599,7 @@ export function applySettings(local: SettingsBuildInput, incoming: SettingsPaylo
 // === Well-formedness ===
 
 const MAX_JSON_DEPTH = 256
-const MAX_LAYOUT_DEPTH = 64
 const POLLUTING_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype'])
-
-function isPlainObject(value: unknown): value is Rec {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const proto: unknown = Object.getPrototypeOf(value)
-  return proto === Object.prototype || proto === null
-}
 
 /**
  * Plain JSON data all the way down: no cycle, no polluting key, no non-finite
@@ -638,14 +640,6 @@ function isSafeJson(value: unknown, depth: number, ancestors: Set<object>, done:
   return ok
 }
 
-function definedKeys(node: Rec): string[] {
-  return Object.keys(node).filter((k) => node[k] !== undefined)
-}
-
-function hasOnlyKeys(node: Rec, allowed: readonly string[]): boolean {
-  return definedKeys(node).every((k) => allowed.includes(k))
-}
-
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string')
 }
@@ -677,24 +671,6 @@ function hasKeyDeep(node: unknown, name: string): boolean {
   return Object.hasOwn(node, name) || Object.keys(node).some((k) => hasKeyDeep(node[k], name))
 }
 
-function isLayout(node: unknown, depth: number): boolean {
-  if (depth > MAX_LAYOUT_DEPTH || !isPlainObject(node)) return false
-  if (node.type === 'leaf') {
-    const pane = node.pane
-    return hasOnlyKeys(node, ['type', 'pane']) && isPlainObject(pane) && typeof pane.id === 'string' && isPlainObject(pane.content) && typeof pane.content.kind === 'string'
-  }
-  if (node.type !== 'split') return false
-  const children = node.children
-  return (
-    hasOnlyKeys(node, ['type', 'id', 'direction', 'children']) && // `sizes` included: ratios never travel
-    typeof node.id === 'string' &&
-    (node.direction === 'h' || node.direction === 'v') &&
-    Array.isArray(children) &&
-    children.length > 0 &&
-    children.every((child) => isLayout(child, depth + 1))
-  )
-}
-
 function isTabsPayload(p: Rec): boolean {
   const record = p.tabs
   if (!hasOnlyKeys(p, ['order', 'tabs']) || !isPlainObject(record) || !orderMatchesRecord(p.order, record)) return false
@@ -708,7 +684,7 @@ function isTabsPayload(p: Rec): boolean {
       typeof t.pinned === 'boolean' &&
       typeof t.locked === 'boolean' &&
       isFiniteNumber(t.createdAt) &&
-      isLayout(t.layout, 0) &&
+      isLayoutShape(t.layout) &&
       // The projection strips `sizes` at ANY depth under `layout`, pane contents
       // included — a payload carrying one could never hash back to itself.
       !hasKeyDeep(t.layout, 'sizes')
@@ -860,7 +836,7 @@ export function upcastLegacyTabs(payload: TabsPayload): TabsPayload {
     const drop = new Set(
       Object.keys(record).filter((id) => {
         const entry = record[id]
-        return isPlainObject(entry) && isLayout(entry.layout, 0) && !isSyncableTab(entry as { layout: StrippedLayout })
+        return isPlainObject(entry) && isLayoutShape(entry.layout) && !isSyncableTab(entry as { layout: StrippedLayout })
       }),
     )
     if (drop.size === 0) return payload

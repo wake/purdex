@@ -27,8 +27,11 @@ everywhere. They carry no state worth sharing; each device should keep its own.
 ### 3.1 One predicate (sections.ts)
 
 `DEVICE_LOCAL_PANE_KINDS: ReadonlySet<PaneContent['kind']>` — the seven kinds of §2.1 — and
-`isSyncableTab(tab)` = some leaf of `tab.layout` has a kind outside that set (a leaf walk; no leaf / no layout → not
-syncable). It reads only `pane.content.kind`, so it works on a local `Tab` and on a wire tab entry alike (the wire
+`isDeviceLocalTab(tab)` = `tab.layout` is COMPLETE — the tabs guard's own shape rule, `isLayoutShape` (a local
+split's `sizes` admitted, the builder strips them) — AND every leaf's kind is in that set; `isSyncableTab = !isDeviceLocalTab`.
+A malformed tab (no layout, unknown node, empty split, leaf without pane / content) is therefore NOT device-local:
+it goes to the build exactly as before this feature, instead of becoming a ghost no payload can delete while the
+section reads as converged (attacker R2, finding A). It reads only `pane.content.kind`, so it works on a local `Tab` and on a wire tab entry alike (the wire
 layout only rewrites host ids). A kind added later syncs unless it is listed — the safe default for data — and a
 type-level test puts every `PaneContent['kind']` in exactly one of two lists, so a new kind needs a decision.
 

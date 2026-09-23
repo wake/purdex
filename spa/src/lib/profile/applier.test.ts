@@ -537,6 +537,21 @@ describe('applyTabs — a device-local tab is kept where it was (tabs-local-only
     expect(Object.keys(r.next.tabs).sort()).toEqual(['L1', 'L2'])
   })
 
+  it('(f2) a malformed tab (no layout / empty split / leaf without content) is NOT kept: the empty payload removes it, as on main', () => {
+    const broken = (id: string, layout: unknown): Tab => ({ ...tab(id), layout: layout as PaneLayout })
+    const before = slice(['L1', 'x1', 'x2', 'x3'], [
+      local('L1'),
+      broken('x1', undefined),
+      broken('x2', { type: 'split', id: 'sp', direction: 'h', children: [], sizes: [] }),
+      broken('x3', { type: 'leaf', pane: { id: 'p' } }),
+    ], { activeTabId: 'x2' })
+    const r = applyTabs(before, 'wsA', { order: [], tabs: {} })
+    expect(r.next.workspaces[0].tabs).toEqual(['L1'])
+    expect(r.next.workspaces[0].activeTabId).toBe('L1')
+    expect(r.removedTabIds).toEqual(['x1', 'x2', 'x3'])
+    expect(Object.keys(r.next.tabs)).toEqual(['L1'])
+  })
+
   it('(g) round trip over canonical payloads, locals holding device-local tabs anywhere (seeded)', async () => {
     let x = 0x2545f491
     const rnd = (n: number): number => { x = (Math.imul(x, 1103515245) + 12345) >>> 0; return (x >>> 8) % n }

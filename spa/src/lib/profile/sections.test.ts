@@ -273,12 +273,35 @@ describe('isSyncableTab', () => {
     expect(isSyncableTab(tab('t', deepSync))).toBe(true)
   })
 
-  it('reads a wire tab entry (stripped layout) the same way; no layout → not syncable', () => {
+  it('reads a wire tab entry (stripped layout) the same way', () => {
     const entry = buildTabsSection(ws('w', 'W', ['t1']), { t1: tab('t1', split('s', [leaf('a', { kind: 'new-tab' }), leaf('b', tmux('x'))], [50, 50])) }).tabs.t1
     expect(isSyncableTab(entry)).toBe(true)
     expect(isSyncableTab({ layout: { type: 'split', id: 's', direction: 'h', children: [leaf('a', { kind: 'settings', scope: 'global' })] } })).toBe(false)
-    expect(isSyncableTab({} as Tab)).toBe(false)
-    expect(isSyncableTab({ layout: { type: 'split', id: 's', direction: 'h', children: [] } })).toBe(false)
+  })
+
+  // T1 (R2 finding A): device-local ⇔ a COMPLETE layout (the guard's shape) whose every leaf is device-local.
+  // A malformed tab is not device-local: it goes to the build exactly as on main, never kept as a ghost.
+  describe('a malformed layout is NOT device-local (it syncs, as on main)', () => {
+    const settingsLeaf = leaf('a', { kind: 'settings', scope: 'global' })
+    const cases: Array<[string, unknown]> = [
+      ['no layout', undefined],
+      ['an unknown node type', { type: 'grid', pane: { id: 'p', content: { kind: 'settings' } } }],
+      ['an empty split', { type: 'split', id: 's', direction: 'h', children: [], sizes: [] }],
+      ['a split with a device-local leaf and an empty split', { type: 'split', id: 's', direction: 'h', children: [settingsLeaf, { type: 'split', id: 's2', direction: 'v', children: [], sizes: [] }], sizes: [50, 50] }],
+      ['a leaf without a pane', { type: 'leaf' }],
+      ['a leaf without content', { type: 'leaf', pane: { id: 'p' } }],
+      ['a leaf whose pane has no id', { type: 'leaf', pane: { content: { kind: 'settings', scope: 'global' } } }],
+      ['a split with a bad direction', { type: 'split', id: 's', direction: 'x', children: [settingsLeaf], sizes: [100] }],
+    ]
+    for (const [name, layout] of cases) {
+      it(name, () => {
+        expect(isSyncableTab({ layout } as unknown as Tab)).toBe(true)
+      })
+    }
+
+    it('a local split carrying `sizes` is complete (the builder strips them): all device-local → device-local', () => {
+      expect(isSyncableTab(tab('t', split('s', [settingsLeaf, leaf('b', { kind: 'hosts' })], [50, 50])))).toBe(false)
+    })
   })
 })
 

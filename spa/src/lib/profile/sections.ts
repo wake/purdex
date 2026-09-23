@@ -102,21 +102,78 @@ export const DEVICE_LOCAL_PANE_KINDS: ReadonlySet<PaneContent['kind']> = new Set
 ])
 
 /**
- * Does this tab travel? Yes when at least ONE leaf is of a syncing kind: a split carries its `new-tab` leaves
- * along as empty panes (spec §2.2). No leaf at all (a malformed or missing layout) → no. It reads only
- * `pane.content.kind`, so a local `Tab` and a wire `TabEntry` (whose layout only differs in host ids and sizes)
- * give the same answer — the builder asks it of the one, the applier and the upcast of the other.
+ * Does this tab stay on the device? Only when its layout is COMPLETE — the very shape the tabs guard accepts
+ * (`isLayoutShape`; a local split's `sizes` allowed, the builder strips them) — AND every leaf is of a
+ * device-local kind. A split carrying one syncing leaf travels whole, its `new-tab` leaves as empty panes
+ * (spec §2.2).
+ *
+ * WHY "complete" is part of it (R2 finding A): a device-local tab is never sent and never removed by an apply.
+ * A malformed tab (no layout, an unknown node, an empty split, a leaf without pane or content) judged
+ * device-local would be exactly that — a ghost no payload can delete while the section reads as converged. So
+ * it is NOT device-local: it goes to the build as it did before this feature, and the other clients' guard
+ * deals with it as it always has.
+ *
+ * It reads only the shape and `pane.content.kind`, so a local `Tab` and a wire `TabEntry` (whose layout only
+ * differs in host ids and sizes) give the same answer — the builder asks it of the one, the applier and the
+ * upcast of the other.
  */
+export function isDeviceLocalTab(tab: { layout?: PaneLayout | StrippedLayout }): boolean {
+  if (!isRecord(tab) || !isLayoutShape(tab.layout, { sizes: true })) return false
+  const allLocal = (node: PaneLayout | StrippedLayout): boolean =>
+    node.type === 'leaf' ? DEVICE_LOCAL_PANE_KINDS.has(node.pane.content.kind) : node.children.every(allLocal)
+  return allLocal(tab.layout as PaneLayout | StrippedLayout)
+}
+
+/** Does this tab travel? Everything that is not device-local does — a malformed tab included (see `isDeviceLocalTab`). */
 export function isSyncableTab(tab: { layout?: PaneLayout | StrippedLayout }): boolean {
-  const walk = (node: PaneLayout | StrippedLayout | undefined): boolean => {
-    if (!isRecord(node)) return false
-    if (node.type === 'leaf') {
-      const kind = isRecord(node.pane) && isRecord(node.pane.content) ? node.pane.content.kind : undefined
-      return typeof kind === 'string' && !DEVICE_LOCAL_PANE_KINDS.has(kind as PaneContent['kind'])
-    }
-    return node.type === 'split' && Array.isArray(node.children) && node.children.some(walk)
+  return !isDeviceLocalTab(tab)
+}
+
+// === Layout shape (shared with the guard) ===
+
+const MAX_LAYOUT_DEPTH = 64
+
+/** A plain JSON object: not an array, not a class instance. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const proto: unknown = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+export function definedKeys(node: Record<string, unknown>): string[] {
+  return Object.keys(node).filter((k) => node[k] !== undefined)
+}
+
+export function hasOnlyKeys(node: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return definedKeys(node).every((k) => allowed.includes(k))
+}
+
+const SPLIT_KEYS = ['type', 'id', 'direction', 'children'] as const
+const LOCAL_SPLIT_KEYS = [...SPLIT_KEYS, 'sizes'] as const
+
+/**
+ * THE structural rule for a tab layout — the tabs guard (`isWellFormedSection`) and `isDeviceLocalTab` both ask
+ * it, so "complete" means one thing. A leaf is `{type, pane: {id: string, content: {kind: string}}}`; a split is
+ * `{type, id: string, direction: 'h'|'v', children}` with at least one child, every child a layout; depth bounded.
+ * On the wire a split carries no `sizes` (ratios never travel); `sizes: true` admits them — a LOCAL layout, which
+ * the builder strips before sending.
+ */
+export function isLayoutShape(node: unknown, opts: { sizes?: boolean } = {}, depth = 0): boolean {
+  if (depth > MAX_LAYOUT_DEPTH || !isPlainObject(node)) return false
+  if (node.type === 'leaf') {
+    const pane = node.pane
+    return hasOnlyKeys(node, ['type', 'pane']) && isPlainObject(pane) && typeof pane.id === 'string' && isPlainObject(pane.content) && typeof pane.content.kind === 'string'
   }
-  return walk(tab.layout)
+  if (node.type !== 'split') return false
+  const children = node.children
+  return (
+    hasOnlyKeys(node, opts.sizes === true ? LOCAL_SPLIT_KEYS : SPLIT_KEYS) &&
+    typeof node.id === 'string' &&
+    (node.direction === 'h' || node.direction === 'v') &&
+    Array.isArray(children) &&
+    children.length > 0 &&
+    children.every((child) => isLayoutShape(child, opts, depth + 1))
+  )
 }
 
 // === Layout ===
