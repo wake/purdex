@@ -201,6 +201,29 @@ export function hostEndpoint(h: Pick<HostConfig, 'ip' | 'port'>): string {
   return `${h.ip}:${h.port}`
 }
 
+/**
+ * The host part of `ip` in the form two spellings of one address share, for endpoint equality checks: a bracketed
+ * IPv6 literal becomes the URL parser's form (`[0:0:0:0:0:0:0:1]` → `[::1]`, `[::ffff:100.64.0.2]` →
+ * `[::ffff:6440:2]`, lowercase), anything else is lowercased (DNS names are case-insensitive). Host transfer only
+ * (H4b PR #1397 critic): `hostEndpoint` and the add-host dialog keep comparing the stored string as is.
+ */
+export function canonicalHostPart(ip: string): string {
+  if (ip.startsWith('[')) {
+    try {
+      const hostname = new URL(`http://${ip}:1`).hostname
+      if (hostname.startsWith('[')) return hostname
+    } catch {
+      // not an IPv6 literal a URL parser accepts: fall through to the plain form
+    }
+  }
+  return ip.toLowerCase()
+}
+
+/** `hostEndpoint` over `canonicalHostPart` — equal for two spellings of one endpoint. */
+export function canonicalEndpoint(h: Pick<HostConfig, 'ip' | 'port'>): string {
+  return `${canonicalHostPart(h.ip)}:${h.port}`
+}
+
 /** What an `/api/info` request went to: endpoint + token, captured before the request (spec D3). */
 export interface HostRequestAt {
   endpoint: string
@@ -338,8 +361,9 @@ function transferPatch(
   const all = Object.values(working.hosts)
   for (const [id, daemonId] of observe) {
     if (!selectDaemonIdVerified(working, id)) return null
-    const endpoint = hostEndpoint(working.hosts[id])
-    if (all.some((h) => h.id !== id && (hostEndpoint(h) === endpoint || h.daemonId === daemonId))) return null
+    // Canonical on both sides: a local row may hold another spelling of the same address (H4b PR #1397 critic).
+    const endpoint = canonicalEndpoint(working.hosts[id])
+    if (all.some((h) => h.id !== id && (canonicalEndpoint(h) === endpoint || h.daemonId === daemonId))) return null
   }
   return { patch: { hosts: working.hosts, hostOrder, runtime: working.runtime }, created, overwritten }
 }

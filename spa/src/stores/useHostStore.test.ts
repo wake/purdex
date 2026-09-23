@@ -848,6 +848,20 @@ describe('applyHostTransfer (host transfer H4b, spec §6.4.5, plan R2/R4)', () =
     expect(after.runtime).toBe(before.runtime)
   })
 
+  // H4b PR #1397 critic: a created row's ip is canonical (parseTransferRows), a local row's may be any spelling the
+  // add-host dialog stored — the uniqueness check compares canonical endpoints.
+  it.each([
+    ['[0:0:0:0:0:0:0:1]', '[::1]'],
+    ['[::ffff:100.64.0.2]', '[::ffff:6440:2]'],
+    ['MLAB.example', 'mlab.example'],
+  ])('a new row at %s-equivalent %s is refused whole', (localIp, newIp) => {
+    useHostStore.getState().addHost({ name: 'x', ip: localIp, port: 7860 })
+    const before = useHostStore.getState()
+    const res = useHostStore.getState().applyHostTransfer(change({ create: [{ ...change().create[0], ip: newIp }], overwrite: [] }))
+    expect(res).toEqual({ kind: 'stale' })
+    expect(useHostStore.getState().hosts).toBe(before.hosts)
+  })
+
   it('two new rows at one endpoint are refused', () => {
     const one = change().create[0]
     const res = useHostStore.getState().applyHostTransfer({ create: [one, { ...one, daemonId: 'd1_twin' }], overwrite: [] })

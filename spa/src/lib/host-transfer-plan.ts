@@ -2,7 +2,7 @@
 // what the sharer sends, how the receiver reads it, which status each received row gets, and the change the
 // receiver commits. No store access: callers pass the local hosts in.
 
-import { hostEndpoint, requestAtOf, type HostConfig } from '../stores/useHostStore'
+import { canonicalEndpoint, canonicalHostPart, requestAtOf, type HostConfig } from '../stores/useHostStore'
 import { isValidDaemonId } from './daemon-id'
 import { sanitizeHostConfig } from './host-color'
 import type { TransferLook, TransferRow } from './host-transfer-api'
@@ -69,8 +69,11 @@ export function isTransferHost(ip: string): boolean {
 
 function parseRow(raw: unknown): TransferRow | null {
   if (!isPlainObject(raw)) return null
-  const { ip, port, token, name, daemonId, look } = raw
-  if (typeof ip !== 'string' || !isTransferHost(ip)) return null
+  const { ip: rawIp, port, token, name, daemonId, look } = raw
+  if (typeof rawIp !== 'string' || !isTransferHost(rawIp)) return null
+  // A bracketed IPv6 is kept in the URL parser's form, so two spellings of one address are one endpoint for the
+  // probe, the plan and the stored host (H4b PR #1397 critic). An IPv4 or a hostname stays as sent.
+  const ip = rawIp.startsWith('[') ? canonicalHostPart(rawIp) : rawIp
   if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) return null
   if (typeof token !== 'string' || token === '') return null
   const row: TransferRow = { name: typeof name === 'string' && name.trim() !== '' ? name : ip, ip, port, token }
@@ -82,7 +85,8 @@ function parseRow(raw: unknown): TransferRow | null {
 
 /**
  * Reads a redeemed `hosts` array (spec §6.4.1, plan R5). A row survives only with `ip` (`isTransferHost`),
- * `port` (integer 1–65535) and `token` (non-empty); `name` falls back to `ip`; an invalid `daemonId` or look
+ * `port` (integer 1–65535) and `token` (non-empty); a bracketed IPv6 `ip` is kept in canonical form
+ * (`canonicalHostPart`); `name` falls back to `ip`; an invalid `daemonId` or look
  * field is dropped while the row stays. Unknown fields are ignored. `dropped` counts the rows that did not survive.
  */
 export function parseTransferRows(hosts: unknown): { rows: TransferRow[]; dropped: number } {
@@ -140,7 +144,7 @@ export interface PreviewRow {
 /**
  * Spec §6.4.3, in this order: `unverified` (no answer, or no valid id) → `mismatch` (payload id ≠ observed) →
  * `duplicate` (an earlier row that passed both checks observed the same id; the first wins) → `local-conflict` (two local rows claim the
- * id, or a local row at the same endpoint claims another id — or none yet) → `existing` (one local row claims it)
+ * id, or a local row at the same endpoint — by `canonicalEndpoint` — claims another id, or none yet) → `existing` (one local row claims it)
  * → `new`.
  */
 export function planReceive(
@@ -160,8 +164,9 @@ export function planReceive(
     if (seen.has(observed)) return { index, row, status: 'duplicate', observed }
     seen.add(observed)
     const claims = localHosts.filter((h) => h.daemonId === observed)
-    const endpoint = hostEndpoint(row)
-    const squatter = localHosts.some((h) => hostEndpoint(h) === endpoint && h.daemonId !== observed)
+    // Canonical on both sides: a local row may hold another spelling of the same address (H4b PR #1397 critic).
+    const endpoint = canonicalEndpoint(row)
+    const squatter = localHosts.some((h) => canonicalEndpoint(h) === endpoint && h.daemonId !== observed)
     if (claims.length > 1 || squatter) return { index, row, status: 'local-conflict', observed }
     if (claims.length === 1) {
       const h = claims[0]

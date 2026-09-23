@@ -96,8 +96,26 @@ describe('parseTransferRows (R5)', () => {
 
   // PR #1397 critic: the add-host dialog stores whatever the user typed (trimmed) and builds `http://${ip}:${port}`,
   // so a bracketed IPv6 is a working host there — the receive side must not silently drop it.
-  it.each(['[::1]', '[fe80::1]', '[2001:db8::1]', '[::ffff:100.64.0.2]'])('keeps a row whose ip is the bracketed IPv6 %s', (ip) => {
+  it.each(['[::1]', '[fe80::1]', '[2001:db8::1]', '[::ffff:6440:2]'])('keeps a row whose ip is the bracketed IPv6 %s', (ip) => {
     expect(parseTransferRows([{ ip, port: 1, token: 't' }])).toEqual({ rows: [{ name: ip, ip, port: 1, token: 't' }], dropped: 0 })
+  })
+
+  // H4b PR #1397 critic: two spellings of one IPv6 address are one daemon, so the row keeps the URL parser's canonical
+  // form (lowercase, compressed) — the probe, the plan's endpoint check and the stored host all see that one value.
+  it.each([
+    ['[0:0:0:0:0:0:0:1]', '[::1]'],
+    ['[FE80::1]', '[fe80::1]'],
+    ['[::ffff:100.64.0.2]', '[::ffff:6440:2]'],
+  ])('stores the bracketed IPv6 %s in canonical form %s', (ip, canonical) => {
+    expect(parseTransferRows([{ ip, port: 1, token: 't', name: 'n' }]).rows[0].ip).toBe(canonical)
+  })
+
+  it('leaves an IPv4 or a hostname ip as sent (no case folding)', () => {
+    const { rows } = parseTransferRows([
+      { ip: '100.64.0.2', port: 1, token: 't' },
+      { ip: 'MLAB.example', port: 1, token: 't' },
+    ])
+    expect(rows.map((r) => r.ip)).toEqual(['100.64.0.2', 'MLAB.example'])
   })
 
   it('counts every bad-ip row as dropped, keeping the good ones', () => {
@@ -234,6 +252,21 @@ describe('planReceive (§6.4.3)', () => {
   it('local-conflict: the endpoint equals a local row that has no daemonId yet', () => {
     const local = hostsOf(host('a', { ip: '100.64.0.4', port: 7860 }))
     expect(planReceive([row()], [ok('d1_air')], local)[0].status).toBe('local-conflict')
+  })
+
+  // H4b PR #1397 critic: the endpoint check compares canonical forms, so another spelling of a local endpoint is the
+  // same endpoint — not a second host for one daemon.
+  it.each([
+    ['a compressed local IPv6 vs an expanded payload one', '[::1]', '[0:0:0:0:0:0:0:1]'],
+    ['an IPv4-mapped local IPv6 in dotted form vs the hex form', '[::ffff:100.64.0.2]', '[::ffff:6440:2]'],
+    ['an uppercase local IPv6 vs a lowercase one', '[FE80::1]', '[fe80::1]'],
+    ['hostnames differing only in case', 'MLAB.example', 'mlab.example'],
+  ])('local-conflict: %s at the same port', (_label, localIp, payloadIp) => {
+    const received = parseTransferRows([{ ip: payloadIp, port: 7860, token: 't' }]).rows
+    const local = hostsOf(host('a', { ip: localIp, port: 7860 }))
+    expect(planReceive(received, [ok('d1_air')], local)[0].status).toBe('local-conflict')
+    const other = hostsOf(host('a', { ip: localIp, port: 7860, daemonId: 'd1_other' }))
+    expect(planReceive(received, [ok('d1_air')], other)[0].status).toBe('local-conflict')
   })
 
   it('a payload without daemonId but verified is new / existing by the observed id', () => {
