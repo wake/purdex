@@ -529,6 +529,19 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
     expect(flag()).toBeUndefined()
   })
 
+  it('an observed id that fails isValidDaemonId is ignored like "" — never written, never flagged, never verified (codex attacker)', () => {
+    const evil = [`${'a'.repeat(200)}:abc123`, 'mini:abc123\n', 'mini:abc\u0000123', 'mini‮:abc123', 'mini lab:abc123', 'no-colon']
+    for (const bad of evil) useHostStore.getState().observeDaemonId(hostId, bad, at())
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    expect(useHostStore.getState().runtime[hostId]?.daemonIdVerified).toBeUndefined()
+    seed(ID)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const bad of evil) useHostStore.getState().observeDaemonId(hostId, bad, at())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
   it('updateHost never writes daemonId — only observeDaemonId does (review #4)', () => {
     const update = useHostStore.getState().updateHost as (id: string, u: Record<string, unknown>) => void
     update(hostId, { daemonId: ID })
