@@ -48,3 +48,43 @@ A pane runs claude → Rebuild panel (after killing the session) shows "running 
 Quit claude with `/exit`, kill the session → "exited (normal exit)", resume unticked, ticking it still resumes.
 Kill the claude process (`kill -9`) → within ~2 s "exited (process gone)". Two panes in one tmux session, quit
 the agent in one → only that pane's record changes. codex and opencode (quit → process gone) once each.
+
+## Review decisions (codex `task-mue3j3jb-8rzorx`, 8 findings, all taken) — these override the text above
+
+1. **Sync: bump the tabs ordinal and add a tabs wire marker** (a new value domain inside `layout`; the rule in
+   `projections.ts` asks for it, and `compareShape` ignores ordinals on equal fingerprints). Another PR (purdex-d4,
+   local-only tabs) is bumping tabs 2→3 concurrently — whichever merges second takes the next number; test old/new
+   coexistence (old locks `schema`, new does not ping-pong).
+2. **An exit applies to exactly one agent run: match by FRAME ID, not by type + sessionId + paneId.** The SessionStart
+   provenance envelope and the exit envelope both carry the daemon's frame id (add it where missing); the record
+   stores it (`agent.frameId`); an exit applies only when `exit.frameId === record.agent.frameId`. A late exit of an
+   old run with the same session id (`/resume`, restart) can then never mark the new run exited — no clock ordering
+   needed. Records written before this change have no frameId → exits never apply to them (they stay "running when
+   last seen") until their next SessionStart.
+3. **Exit while the SPA is disconnected: accepted limitation, stated in the UI copy.** The envelope is broadcast once;
+   the snapshot replays only live frames. The record keeps "running when last seen" — which is literally true. No
+   negative inference from the snapshot.
+4. **An exit may update a TERMINATED pane's record** (only `agentExited`, only on frame-id match): termination can
+   arrive before the SessionEnd / sweep broadcast. Every other session-scoped write still skips terminated panes.
+5. **`at` is Unix milliseconds on the daemon's clock**, used for display only (never for ordering — 2. makes ordering
+   unnecessary). Formatted in the UI language.
+6. **A live agent answer clears it:** backfill must treat an `agentExited` record as probe-eligible, and every backfill
+   mode that confirms a live frame (incl. the same identity) clears `agentExited` and adopts the answer's frameId.
+7. **Sweep: build the envelope BEFORE the frame is deleted** (`clearFrame` snapshots the frame, passes the envelope to
+   `afterFrameCleared`); tests prove it survives the delete; root only (child / proxy frames send none), `pid_dead`
+   and `pid_reused`.
+8. **Batch:** the `agent-exit` patch re-stamps `capturedAt`, so the batch's newest-record winner sees the exit.
+
+## Plan (two PRs, one branch; daemon first)
+
+PR A — daemon (Go): (a) frame id in the SessionStart provenance envelope (if absent); (b) `pdx_exit` on the root
+SessionEnd path in `frame_ops.go` (`ParentFrameID == ""`, not a proxy detach); (c) the same from the sweep for
+`pid_dead` / `pid_reused`, built before `Delete`. Tests per agent (cc / codex / opencode sweep path) × root / proxy /
+native subagent; old SPA ignores the new detail (additive).
+PR B — SPA: (a) `PaneRebuildRecord.agent.frameId`, `agentExited?: {at, reason}`, patch `agent-exit` with frame-id
+match, allowed on terminated panes, re-stamps `capturedAt`; `agent-group` and backfill clear it; backfill eligibility;
+(b) `useAgentStore` parses `pdx_exit` before the `clear` early return; (c) `RebuildActionSet` state line + default,
+`batch.ts` default; i18n en + zh-TW; (d) tabs WIRE_MARKER + ordinal bump + coexistence test. Tests: frame-id match
+vs another pane / older run / missing frameId; exit→terminate and terminate→exit; `/clear` sequence; UI default and
+manual override; batch mixed running/exited.
+Real machine: the acceptance above, after PR A is deployed on mlab.
