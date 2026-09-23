@@ -402,6 +402,17 @@ function withoutTabs(ws: Workspace, taken: ReadonlySet<string>): Workspace {
  * for every canonical payload because the builder filters these out again; a
  * legacy payload that carries such tabs is made canonical before it gets here
  * (`upcastLegacyTabs`).
+ *
+ * ID CONFLICT (spec §3.3, attacker R2 finding B). An id is only this device's
+ * to keep while the SOT does not carry it: when the incoming payload holds the
+ * same id as a (necessarily syncable — the payload is canonical) tab, the remote
+ * version wins, whichever workspace the local device-local one sits in. In THIS
+ * workspace it is simply arriving (`keptLocal` excludes arriving ids); in
+ * ANOTHER workspace `withoutTabs` takes it out like any arriving tab, and the
+ * record is overwritten. It happens when a tab once synced everywhere was turned
+ * into an interface tab here while another device moved or edited it: the
+ * version kept is the one with state (session, URL, file), not the stateless
+ * interface page — and only this way does the round trip hold for the payload.
  */
 export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsPayload): ApplyTabsResult {
   const target = local.workspaces.find((w) => w.id === workspaceId)

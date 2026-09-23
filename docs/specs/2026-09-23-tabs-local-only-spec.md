@@ -2,7 +2,7 @@
 
 Status: rev 2 (codex plan review task-mue2c375-akwp64: 1 critical + 5 important + 2 minor, all adopted — §3.3
 duplicates / `__proto__`, §3.5 legacy upcast on pull AND restore-local, §3.6 global active tab, §3.7 executor
-placeholder, §3.8 resolve counts, T6 collector) · 2026-09-23 · branch `worktree-tabs-local-only` · base `dd9f401e`
+placeholder, §3.8 resolve counts, T6 collector) · attacker R2 (A: a malformed tab is not device-local, §3.1; B: id conflict → the remote wins, §3.3) · 2026-09-23 · branch `worktree-tabs-local-only` · base `dd9f401e`
 (alpha.437)
 
 ## 1. Problem
@@ -59,6 +59,19 @@ order. Then:
 - Other workspaces are untouched as today (`withoutTabs` removes only ARRIVING ids). A device-local id that is
   listed by two workspaces locally is a pre-existing ownership violation: each workspace's apply keeps its own
   listing, and `repairTabOwnership` resolves it exactly as it does today — this apply adds no adoption and no drop.
+
+**Id conflict** (attacker R2, finding B). An id is this device's to keep only while the SOT does not carry it.
+When the incoming payload holds the same id as a device-local tab here, that entry is necessarily syncable (the
+payload is canonical, §3.5), and the remote version wins wherever the local one sits:
+
+- same workspace → it is simply arriving (`keptLocal` excludes arriving ids): the record is the incoming one;
+- another workspace → `withoutTabs` takes it out like any arriving tab (that workspace's `activeTabId` moves by
+  `withoutTabs`' rule) and the record is overwritten.
+
+It happens when a tab once synced everywhere was turned into an interface tab on this device while another device
+moved it to another workspace or kept editing it. The version kept is the one with state (session, URL, file), not
+the stateless interface page, and only this way does the round trip hold for the incoming payload. Pinned by
+applier.test.ts `applyTabs — a device-local tab is kept where it was` (i) same workspace and (j) across workspaces.
 
 **Round trip.** `hash(build(apply(local, p))) === hash(p)` for every `p` the NEW builder can produce — i.e. every
 canonical payload (no device-local tab in it). A legacy payload is made canonical first (§3.5).

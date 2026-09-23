@@ -552,6 +552,42 @@ describe('applyTabs — a device-local tab is kept where it was (tabs-local-only
     expect(Object.keys(r.next.tabs)).toEqual(['L1'])
   })
 
+  // ID CONFLICT (attacker R2, finding B; spec §3.3 "id conflict"): an id this device holds as a device-local tab
+  // but the SOT carries as a SYNCABLE tab is not this device's to keep — the remote, stateful version wins.
+  const TMUX_X: PaneContent = { kind: 'tmux-session', hostId: 'h1', sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i' }
+  it('(i) id conflict, same workspace: a device-local x that the incoming order carries as syncable is applied as arriving', async () => {
+    const before = slice(['s1', 'x'], [synced('s1'), local('x')], { activeTabId: 'x' })
+    const p = deepFreeze(buildTabsSection(ws('wsA', 'Alpha', ['x', 's1']), tabRecord(tab('x', leaf('p-x', TMUX_X)), synced('s1'))))
+    const { next, removedTabIds } = applyTabs(deepFreeze(before), 'wsA', p)
+    expect(next.tabs.x.layout).toEqual(leaf('p-x', TMUX_X))
+    expect(next.workspaces[0].tabs).toEqual(['x', 's1'])
+    expect(next.workspaces[0].activeTabId).toBe('x')
+    expect(removedTabIds).toEqual([])
+    expect(await hashSection(buildBack(next, 'wsA'))).toBe(await hashSection(p))
+  })
+
+  it('(j) id conflict, across workspaces: device-local x in wsA, incoming tabs.wsB carries a syncable x → the remote wins', async () => {
+    const before: TabsSlice = {
+      tabs: tabRecord(synced('s1'), local('x'), synced('k')),
+      workspaces: [ws('wsA', 'Alpha', ['s1', 'x'], { activeTabId: 'x' }), ws('wsB', 'Beta', ['k'], { activeTabId: 'k' })],
+    }
+    const incomingX = tab('x', leaf('p-x', { kind: 'browser', url: 'https://remote.test' }))
+    const p = deepFreeze(buildTabsSection(ws('wsB', 'Beta', ['k', 'x']), tabRecord(synced('k'), incomingX)))
+    const { next, removedTabIds } = applyTabs(deepFreeze(before), 'wsB', p)
+    // the record is the incoming one, not the local interface tab
+    expect(next.tabs.x).toEqual(incomingX)
+    // x left wsA; wsA's focus on x moved as withoutTabs does (the first remaining tab)
+    expect(next.workspaces[0].tabs).toEqual(['s1'])
+    expect(next.workspaces[0].activeTabId).toBe('s1')
+    // x is in wsB, in the incoming order
+    expect(next.workspaces[1].tabs).toEqual(['k', 'x'])
+    expect(removedTabIds).toEqual([])
+    // exactly one owner
+    expect(next.workspaces.flatMap((w) => w.tabs).filter((id) => id === 'x')).toEqual(['x'])
+    // the round trip for wsB's canonical payload holds
+    expect(await hashSection(buildBack(next, 'wsB'))).toBe(await hashSection(p))
+  })
+
   it('(g) round trip over canonical payloads, locals holding device-local tabs anywhere (seeded)', async () => {
     let x = 0x2545f491
     const rnd = (n: number): number => { x = (Math.imul(x, 1103515245) + 12345) >>> 0; return (x >>> 8) % n }
