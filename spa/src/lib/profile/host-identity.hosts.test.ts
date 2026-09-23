@@ -10,6 +10,7 @@ import {
   mergeAliases,
   NEW_HOST,
   syncIdOfSync,
+  type WireHostsPayload,
 } from './host-identity'
 
 const MLAB = 'mini-lab:278cbm'
@@ -89,6 +90,11 @@ describe('hostsToWire / hostsFromWire', () => {
     expect(wire.hosts.loc002).not.toHaveProperty('aliases')
   })
 
+  it('ignores an aliasesOf result that is not an array (e.g. a string is not iterated as characters)', () => {
+    const wire = hostsToWire(local, identity, () => 'abc' as unknown as string[])
+    expect(wire.hosts[MLAB_WIRE]).not.toHaveProperty('aliases')
+  })
+
   it('omits an empty aliases list', () => {
     const wire = hostsToWire(local, identity, () => [])
     expect(wire.hosts[MLAB_WIRE]).not.toHaveProperty('aliases')
@@ -96,20 +102,43 @@ describe('hostsToWire / hostsFromWire', () => {
 
   it('round-trips: fromWire(toWire(x)) equals x', () => {
     const resolve = makeWireResolver({ identity })
-    expect(hostsFromWire(hostsToWire(local, identity), resolve)).toEqual(local)
+    expect(hostsFromWire(hostsToWire(local, identity), resolve)).toEqual({ hosts: local, aliasesByLocal: {} })
   })
 
-  it('fromWire drops `aliases` (not a HostConfig field)', () => {
+  it('fromWire keeps `aliases` out of the payload and hands them back per local id', () => {
     const resolve = makeWireResolver({ identity })
-    const back = hostsFromWire(hostsToWire(local, identity, () => ['frgn01']), resolve)
-    expect(back).toEqual(local)
+    const back = hostsFromWire(hostsToWire(local, identity, (id) => (id === 'loc001' ? ['frgn01'] : undefined)), resolve)
+    expect(back.hosts).toEqual(local)
+    expect(back.aliasesByLocal).toEqual({ loc001: ['frgn01'] })
+  })
+
+  it('fromWire sanitises aliases like mergeAliases and omits an empty list', () => {
+    const resolve = makeWireResolver({ identity })
+    const wire = {
+      hosts: {
+        [MLAB_WIRE]: { ...host(MLAB_WIRE, { daemonId: MLAB }), aliases: ['a1', 'a1', 'd1_x', 3, ''] },
+        [AIR_WIRE]: { ...host(AIR_WIRE, { daemonId: AIR }), aliases: 'nope' },
+        loc002: { ...host('loc002'), aliases: [] },
+      },
+      hostOrder: [MLAB_WIRE, AIR_WIRE, 'loc002'],
+    } as unknown as WireHostsPayload
+    const back = hostsFromWire(wire, resolve)
+    expect(back.aliasesByLocal).toEqual({ loc001: ['a1'] })
+    for (const row of Object.values(back.hosts)) expect(row).not.toHaveProperty('aliases')
+  })
+
+  it('round-trips aliases: aliasesOf fed from aliasesByLocal reproduces the same wire rows', () => {
+    const resolve = makeWireResolver({ identity })
+    const wire = hostsToWire(local, identity, (id) => (id === 'loc003' ? ['frgn01', 'frgn02'] : undefined))
+    const back = hostsFromWire(wire, resolve)
+    expect(hostsToWire(back.hosts, identity, (id) => back.aliasesByLocal[id])).toEqual(wire)
   })
 
   it('fromWire is total on garbage', () => {
     const resolve = makeWireResolver({ identity })
-    expect(hostsFromWire({ hosts: { a: null, b: 7 }, hostOrder: [1, 'a'] } as unknown as HostsPayload, resolve)).toEqual({
-      hosts: { a: null, b: 7 },
-      hostOrder: [1, 'a'],
+    expect(hostsFromWire({ hosts: { a: null, b: 7 }, hostOrder: [1, 'a'] } as unknown as WireHostsPayload, resolve)).toEqual({
+      hosts: { hosts: { a: null, b: 7 }, hostOrder: [1, 'a'] },
+      aliasesByLocal: {},
     })
   })
 })
@@ -165,6 +194,26 @@ describe('makeWireResolver (spec §11.2)', () => {
   it('a NEW_HOST entry in `matched` is not a local id', () => {
     const matched = new Map([['frgn02', NEW_HOST]])
     expect(makeWireResolver({ identity, matched })('frgn02')).toBe('frgn02')
+  })
+
+  it('an exact legacy row created as a NEW host resolves through its daemonId (no aliases, matched says NEW_HOST)', () => {
+    const rows = { frgn01: { id: 'frgn01', daemonId: MLAB } }
+    const matched = new Map([['frgn01', NEW_HOST]])
+    const postApply = identityOfSync({ loc999: { id: 'loc999', daemonId: MLAB } })
+    expect(makeWireResolver({ identity: postApply, rows, matched })('frgn01')).toBe('loc999')
+    expect(makeWireResolver({ identity: postApply, rows })('frgn01')).toBe('loc999')
+  })
+
+  it('an exact legacy row with an invalid or unknown daemonId stays unchanged', () => {
+    const postApply = identityOfSync({ loc999: { id: 'loc999', daemonId: MLAB } })
+    expect(makeWireResolver({ identity: postApply, rows: { frgn01: { daemonId: '' } } })('frgn01')).toBe('frgn01')
+    expect(makeWireResolver({ identity: postApply, rows: { frgn01: { daemonId: AIR } } })('frgn01')).toBe('frgn01')
+  })
+
+  it('an exact legacy row\'s daemonId wins over an alias naming the same key', () => {
+    const two = identityOfSync({ loc001: { id: 'loc001', daemonId: MLAB }, loc003: { id: 'loc003', daemonId: AIR } })
+    const rows = { frgn01: { daemonId: AIR }, [MLAB_WIRE]: { daemonId: MLAB, aliases: ['frgn01'] } }
+    expect(makeWireResolver({ identity: two, rows })('frgn01')).toBe('loc003')
   })
 
   it('an exact row match wins over an alias', () => {
