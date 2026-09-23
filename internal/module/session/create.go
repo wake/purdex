@@ -291,7 +291,14 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 		return fail(CreateStageList, err)
 	}
 
-	after := m.TmuxInstance()
+	// Same deadline as the list: the chain has one budget, not one per step.
+	after := m.TmuxInstanceContext(postCtx)
+	// The probe reports a ctx that ended as "", which would read as a
+	// generation change below; it is a failed follow-up read instead, with
+	// the session still alive.
+	if err := postCtx.Err(); err != nil {
+		return fail(CreateStageList, fmt.Errorf("tmux instance probe after create: %w", err))
+	}
 	if before != "" && after != before {
 		return fail(CreateStageGenerationChanged, fmt.Errorf("tmux server restarted during create (generation %s → %s)", before, after))
 	}

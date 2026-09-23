@@ -258,3 +258,75 @@ func TestCreateSessionContext_NewSessionTimedOutUnconfirmed(t *testing.T) {
 	assert.Empty(t, metas)
 	requireCreateMuFree(t, mod)
 }
+
+// #1293 codex R1-P2: the post-create chain (list-sessions, generation probe,
+// meta write) runs under ONE deadline. The probe used to open a fresh
+// Background budget of its own, so a list that used up most of the cap
+// followed by a hung probe held createMu past it.
+
+// The post-create probe runs under the same deadline as the post-create list.
+func TestCreateSessionContext_PostCreateProbeSharesListDeadline(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	var listDeadline, postProbeDeadline time.Time
+	var probes atomic.Int32
+	mod.tmuxInstanceFn = func(ctx context.Context) string {
+		if probes.Add(1) == 2 {
+			postProbeDeadline, _ = ctx.Deadline()
+		}
+		return "1:1"
+	}
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		if op == tmux.ReadListSessions {
+			listDeadline, _ = ctx.Deadline()
+		}
+		return nil
+	})
+	_, err := mod.CreateSession("one-deadline", t.TempDir())
+	require.NoError(t, err)
+	require.EqualValues(t, 2, probes.Load(), "want the pre- and post-create probes")
+	require.False(t, listDeadline.IsZero())
+	require.False(t, postProbeDeadline.IsZero(), "the post-create probe ran without a deadline")
+	assert.Equal(t, listDeadline, postProbeDeadline, "the post-create probe runs on a budget of its own")
+}
+
+// A list that eats nearly the whole budget, then a probe that hangs: the
+// chain still ends at the one deadline. The session exists, so the failure is
+// list-stage (SessionAlive) — not a generation change read off an empty probe.
+func TestCreateSessionContext_HungPostCreateProbeEndsAtChainDeadline(t *testing.T) {
+	t.Parallel()
+	mod, meta, fake := newTestModule(t)
+	var probes atomic.Int32
+	mod.tmuxInstanceFn = func(ctx context.Context) string {
+		if probes.Add(1) == 1 {
+			return "1:1" // pre-create sample
+		}
+		<-ctx.Done()
+		return ""
+	}
+	var chainStart atomic.Value
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		chainStart.Store(time.Now())
+		d, _ := ctx.Deadline()
+		select {
+		case <-time.After(time.Until(d) - 300*time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
+	info, err := runCreate(t, mod, context.Background(), "probe-hangs", createBound(2))
+	start, _ := chainStart.Load().(time.Time)
+	require.False(t, start.IsZero())
+	assert.Less(t, time.Since(start), listReadTimeout+500*time.Millisecond, "the post-create chain outlived its one deadline")
+	assert.Nil(t, info)
+	var ce *CreateError
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, CreateStageList, ce.Stage)
+	assert.True(t, ce.SessionAlive())
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	metas, err := meta.ListMeta()
+	require.NoError(t, err)
+	assert.Empty(t, metas)
+	requireCreateMuFree(t, mod)
+}
