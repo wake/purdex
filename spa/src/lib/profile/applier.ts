@@ -417,6 +417,7 @@ function isOptional(value: unknown, test: (v: unknown) => boolean): boolean {
 }
 
 const isString = (v: unknown): boolean => typeof v === 'string'
+const isNonEmptyString = (v: unknown): boolean => typeof v === 'string' && v !== ''
 const isFiniteNumber = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
 
 /** `order` is a duplicate-free string array and exactly the key set of `record`. */
@@ -518,7 +519,9 @@ function isHostsPayload(p: Rec): boolean {
       isOptional(h.color, isString) &&
       isOptional(h.colors, isPlainObject) &&
       isOptional(h.icon, isString) &&
-      isOptional(h.iconWeight, isString)
+      isOptional(h.iconWeight, isString) &&
+      // hosts ordinal 2 (host-daemon-id D6); absent in an ordinal-1 payload. Never "" (D1).
+      isOptional(h.daemonId, isNonEmptyString)
     )
   })
 }

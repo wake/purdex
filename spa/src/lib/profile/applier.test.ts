@@ -993,6 +993,16 @@ describe('isWellFormedSection', () => {
       expect(bad((p) => { p.hosts.h1.token = null })).toBe(true)
       expect(bad((p) => { delete p.hosts.h1.token })).toBe(true)
     })
+
+    it('daemonId (hosts ordinal 2) is optional — an ordinal-1 payload without it is well-formed — and a non-empty string when present', () => {
+      expect(Object.hasOwn(hostsPayload().hosts.h1, 'daemonId')).toBe(false) // the fixture IS an ordinal-1-shaped payload
+      expect(isWellFormedSection('hosts', copy(hostsPayload()))).toBe(true)
+      expect(bad((p) => { p.hosts.h1.daemonId = 'mini-lab:abc123' })).toBe(true)
+      expect(bad((p) => { p.hosts.h1.daemonId = '' })).toBe(false)
+      expect(bad((p) => { p.hosts.h1.daemonId = 5 })).toBe(false)
+      expect(bad((p) => { p.hosts.h1.daemonId = null })).toBe(false)
+      expect(bad((p) => { p.hosts.h1.daemonId = { id: 'x' } })).toBe(false)
+    })
   })
 
   describe('settings', () => {
