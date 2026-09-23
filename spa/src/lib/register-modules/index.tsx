@@ -241,6 +241,7 @@ export function registerBuiltinModules(): void {
       {
         id: 'executions',
         label: 'Executions',
+        labelKey: 'sidebar.view.executions',
         icon: Lightning,
         scope: 'system',
         component: ExecutionsView,
@@ -282,6 +283,7 @@ export function registerBuiltinModules(): void {
       {
         id: 'file-tree-workspace',
         label: 'Files (Workspace)',
+        labelKey: 'sidebar.view.files_workspace',
         icon: FolderOpen,
         scope: 'workspace',
         component: FileTreeWorkspaceView,
@@ -289,6 +291,7 @@ export function registerBuiltinModules(): void {
       {
         id: 'file-tree-session',
         label: 'Files (Session)',
+        labelKey: 'sidebar.view.files_session',
         icon: FolderOpen,
         scope: 'tab',
         component: FileTreeSessionView,

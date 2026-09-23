@@ -297,6 +297,9 @@
   "sidebar.no_views_available": "No views available",
   "sidebar.section_enabled": "Enabled",
   "sidebar.section_available": "Available",
+  "sidebar.view.executions": "Executions",
+  "sidebar.view.files_workspace": "Files (Workspace)",
+  "sidebar.view.files_session": "Files (Session)",
 
   "page.newtab.title": "New Tab",
   "page.newtab.empty": "No content providers registered",
@@ -871,6 +874,7 @@
   "hosts.hook_agent_version": "Agent Version",
   "hosts.hook_supported_version": "Hook Support Through",
   "hosts.hook_version_warning": "Agent version is newer than the currently supported hook version",
+  "hosts.hook_future_only": "FutureOnly",
   "hosts.hook_events": "Hook Events",
   "hosts.check_status": "Check Status",
   "hosts.install": "Install",

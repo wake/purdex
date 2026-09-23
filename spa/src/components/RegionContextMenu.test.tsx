@@ -59,14 +59,14 @@ describe('RegionContextMenu', () => {
       clearModuleRegistry()
       render(<RegionContextMenu region="primary-sidebar" position={{ x: 100, y: 100 }} onClose={() => {}} />)
       expect(screen.getByText('No views available')).toBeInTheDocument()
-      expect(screen.queryByText('沒有可用的 views')).not.toBeInTheDocument()
+      expect(screen.queryByText('沒有可用的檢視')).not.toBeInTheDocument()
     })
 
     it('shows the zh-TW empty-state text for the zh-TW locale', () => {
       clearModuleRegistry()
       useI18nStore.getState().setLocale('zh-TW')
       render(<RegionContextMenu region="primary-sidebar" position={{ x: 100, y: 100 }} onClose={() => {}} />)
-      expect(screen.getByText('沒有可用的 views')).toBeInTheDocument()
+      expect(screen.getByText('沒有可用的檢視')).toBeInTheDocument()
     })
   })
 })
