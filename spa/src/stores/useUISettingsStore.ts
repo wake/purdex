@@ -197,63 +197,71 @@ interface UISettings {
   setHostBadgeTabBarRadius: (px: number) => void
 }
 
+// persist hydrates synchronously INSIDE `create()` (purdexStorage is synchronous),
+// while `useUISettingsStore` is still in its TDZ — so `onRehydrateStorage` repairs
+// through the creator's captured `set`, never the store constant (#1385).
+let setUISettingsState: (partial: Partial<UISettings>) => void = () => {}
+
 export const useUISettingsStore = create<UISettings>()(
   persist(
-    (set) => ({
-      terminalRevealDelay: 300,
-      setTerminalRevealDelay: (ms) => set({ terminalRevealDelay: ms }),
-      terminalRenderer: 'webgl' as TerminalRenderer,
-      setTerminalRenderer: (renderer) => set({ terminalRenderer: renderer }),
+    (set) => {
+      setUISettingsState = set
+      return {
+        terminalRevealDelay: 300,
+        setTerminalRevealDelay: (ms) => set({ terminalRevealDelay: ms }),
+        terminalRenderer: 'webgl' as TerminalRenderer,
+        setTerminalRenderer: (renderer) => set({ terminalRenderer: renderer }),
 
-      keepAliveCount: 0,
-      setKeepAliveCount: (n) => set({ keepAliveCount: n }),
-      keepAlivePinned: false,
-      setKeepAlivePinned: (v) => set({ keepAlivePinned: v }),
-      terminalSettingsVersion: 0,
-      bumpTerminalSettingsVersion: () => set((s) => ({ terminalSettingsVersion: s.terminalSettingsVersion + 1 })),
+        keepAliveCount: 0,
+        setKeepAliveCount: (n) => set({ keepAliveCount: n }),
+        keepAlivePinned: false,
+        setKeepAlivePinned: (v) => set({ keepAlivePinned: v }),
+        terminalSettingsVersion: 0,
+        bumpTerminalSettingsVersion: () => set((s) => ({ terminalSettingsVersion: s.terminalSettingsVersion + 1 })),
 
-      linkDetectAbsolute: true,
-      setLinkDetectAbsolute: (v) => set({ linkDetectAbsolute: v }),
-      linkDetectTilde: true,
-      setLinkDetectTilde: (v) => set({ linkDetectTilde: v }),
-      linkDetectRelativeSlash: true,
-      setLinkDetectRelativeSlash: (v) => set({ linkDetectRelativeSlash: v }),
-      linkDetectBareFilename: false,
-      setLinkDetectBareFilename: (v) => set({ linkDetectBareFilename: v }),
+        linkDetectAbsolute: true,
+        setLinkDetectAbsolute: (v) => set({ linkDetectAbsolute: v }),
+        linkDetectTilde: true,
+        setLinkDetectTilde: (v) => set({ linkDetectTilde: v }),
+        linkDetectRelativeSlash: true,
+        setLinkDetectRelativeSlash: (v) => set({ linkDetectRelativeSlash: v }),
+        linkDetectBareFilename: false,
+        setLinkDetectBareFilename: (v) => set({ linkDetectBareFilename: v }),
 
-      tabIndicatorStyle: 'badge' as TabIndicatorStyle,
-      setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
-      ccIconVariant: 'bot' as CcIconVariant,
-      setCcIconVariant: (variant) => set({ ccIconVariant: variant }),
-      codexIconVariant: 'openai' as CodexIconVariant,
-      setCodexIconVariant: (variant) => set({ codexIconVariant: variant }),
-      dynamicTabName: false,
-      setDynamicTabName: (show) => set({ dynamicTabName: show }),
-      tabNameTooltipMode: 'both' as TabNameTooltipMode,
-      setTabNameTooltipMode: (mode) => set({ tabNameTooltipMode: mode }),
-      showAgentTitleInStatusBar: false,
-      setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
-      stripAgentTitleMarker: true,
-      setStripAgentTitleMarker: (v) => set({ stripAgentTitleMarker: v }),
+        tabIndicatorStyle: 'badge' as TabIndicatorStyle,
+        setTabIndicatorStyle: (style) => set({ tabIndicatorStyle: style }),
+        ccIconVariant: 'bot' as CcIconVariant,
+        setCcIconVariant: (variant) => set({ ccIconVariant: variant }),
+        codexIconVariant: 'openai' as CodexIconVariant,
+        setCodexIconVariant: (variant) => set({ codexIconVariant: variant }),
+        dynamicTabName: false,
+        setDynamicTabName: (show) => set({ dynamicTabName: show }),
+        tabNameTooltipMode: 'both' as TabNameTooltipMode,
+        setTabNameTooltipMode: (mode) => set({ tabNameTooltipMode: mode }),
+        showAgentTitleInStatusBar: false,
+        setShowAgentTitleInStatusBar: (show) => set({ showAgentTitleInStatusBar: show }),
+        stripAgentTitleMarker: true,
+        setStripAgentTitleMarker: (v) => set({ stripAgentTitleMarker: v }),
 
 
-      ...HOST_BADGE_DEFAULTS,
-      setHostBadgeSidebarEnabled: (v) => set({ hostBadgeSidebarEnabled: v }),
-      setHostBadgeSidebarLineColor: (v) => {
-        if (isHostBadgeLineColor(v)) set({ hostBadgeSidebarLineColor: v })
-      },
-      setHostBadgeSidebarBox: (px) => set({ hostBadgeSidebarBox: clampHostBadgeBox(px) }),
-      setHostBadgeSidebarInset: (px) => set({ hostBadgeSidebarInset: clampHostBadgeInset(px) }),
-      setHostBadgeSidebarRadius: (px) => set({ hostBadgeSidebarRadius: clampHostBadgeRadius(px) }),
+        ...HOST_BADGE_DEFAULTS,
+        setHostBadgeSidebarEnabled: (v) => set({ hostBadgeSidebarEnabled: v }),
+        setHostBadgeSidebarLineColor: (v) => {
+          if (isHostBadgeLineColor(v)) set({ hostBadgeSidebarLineColor: v })
+        },
+        setHostBadgeSidebarBox: (px) => set({ hostBadgeSidebarBox: clampHostBadgeBox(px) }),
+        setHostBadgeSidebarInset: (px) => set({ hostBadgeSidebarInset: clampHostBadgeInset(px) }),
+        setHostBadgeSidebarRadius: (px) => set({ hostBadgeSidebarRadius: clampHostBadgeRadius(px) }),
 
-      setHostBadgeTabBarEnabled: (v) => set({ hostBadgeTabBarEnabled: v }),
-      setHostBadgeTabBarLineColor: (v) => {
-        if (isHostBadgeLineColor(v)) set({ hostBadgeTabBarLineColor: v })
-      },
-      setHostBadgeTabBarBox: (px) => set({ hostBadgeTabBarBox: clampHostBadgeBox(px) }),
-      setHostBadgeTabBarInset: (px) => set({ hostBadgeTabBarInset: clampHostBadgeInset(px) }),
-      setHostBadgeTabBarRadius: (px) => set({ hostBadgeTabBarRadius: clampHostBadgeRadius(px) }),
-    }),
+        setHostBadgeTabBarEnabled: (v) => set({ hostBadgeTabBarEnabled: v }),
+        setHostBadgeTabBarLineColor: (v) => {
+          if (isHostBadgeLineColor(v)) set({ hostBadgeTabBarLineColor: v })
+        },
+        setHostBadgeTabBarBox: (px) => set({ hostBadgeTabBarBox: clampHostBadgeBox(px) }),
+        setHostBadgeTabBarInset: (px) => set({ hostBadgeTabBarInset: clampHostBadgeInset(px) }),
+        setHostBadgeTabBarRadius: (px) => set({ hostBadgeTabBarRadius: clampHostBadgeRadius(px) }),
+      }
+    },
     {
       name: STORAGE_KEYS.UI_SETTINGS,
       storage: purdexStorage,
@@ -310,7 +318,7 @@ export const useUISettingsStore = create<UISettings>()(
         if (!state) return
         const clamped = clampKeepAlive(state.terminalRenderer, state.keepAliveCount)
         if (clamped !== state.keepAliveCount) {
-          useUISettingsStore.setState({ keepAliveCount: clamped })
+          setUISettingsState({ keepAliveCount: clamped })
         }
 
         // migrate() passes v3 data through untouched, so corrupt local host badge
@@ -325,7 +333,7 @@ export const useUISettingsStore = create<UISettings>()(
           ...sanitizeHostBadgePrefs(badgeCurrent),
         }
         const badgeChanged = badgeKeys.some((k) => badgeSanitized[k] !== badgeCurrent[k])
-        if (badgeChanged) useUISettingsStore.setState(badgeSanitized as Partial<UISettings>)
+        if (badgeChanged) setUISettingsState(badgeSanitized as Partial<UISettings>)
       },
     },
   ),
