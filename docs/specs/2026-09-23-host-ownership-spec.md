@@ -132,9 +132,13 @@ every deletion path (Hosts page, H4 replace-all; before H3 also a `hosts` apply 
 - **Not done any more:** no `terminated` mark (on screen or parked), no tab close — the delete dialog loses its
   "close tabs" choice and says the tabs stay, shown as "no host here" on this device, and other devices are
   unaffected; no host-settings deletion; no look deletion.
-- **Hostless execution panes** (`execution.host === ''`) are NOT pinned any more: pinning is a synced write. Such a
-  pane follows this device's first host, like every hostless pane (for deletion, this supersedes the no-rebind rule
-  of the Nexen spec §4.3.2 step 5 that `host-lifecycle.ts` cites).
+- **No hostless special case.** Every path that creates an execution pane writes `host`
+  (`useHeadlessLaunchSubmit.ts`, `ExecutionsView.tsx`, `nex/handoff.ts` `executionContentFor`, `useRouteSync.ts` via
+  `resolveExecutionHostId`); `host === ''` exists only in legacy data from early versions. Deletion therefore pins
+  nothing and writes nothing synced for it. Known behaviour: a legacy hostless pane afterwards looks up the same
+  `executionId` on this device's new first host, and when that host does not have it the pane shows "not found" — a
+  visible failure, never a silent attach to a different execution, which is the intent of the Nexen spec §4.3.2
+  step 5 no-rebind rule.
 - **No-push invariant (tested):** every section hash is identical before and after the deletion — the build mapped
   `localId` to `wireId` before; the stored `wireId` passes through unchanged after.
 - **Undo** restores the host row (same local id, config, order, `activeHostId`) and the device-local stores it
@@ -357,7 +361,7 @@ through a host you trust." The payload is never logged or written to disk; a dae
   `apply-to-stores.test.ts`, `OverviewSection` test). Tests: deleting a host with panes on screen, in a parked master
   and in a parked slave rewrites them to the wire id, writes no `terminated`, closes no tab, keeps host settings /
   columns / look, and every section hash is unchanged (nothing pushed); a no-daemonId host's references stay its local
-  id; a hostless execution pane is not pinned; undo re-adds the host and the pass brings every reference back to the
+  id; a legacy hostless execution pane is not pinned and nothing synced changes for it; undo re-adds the host and the pass brings every reference back to the
   local id (also after a relabel); a `hosts` apply dropping a host (pre-H3) follows the same rule; the dialog has no
   "close tabs" choice.
 - **H2a — the look selector, colour/icon surfaces** (§4.2; pure refactor, selector reads `HostConfig` only; ~14
@@ -422,3 +426,6 @@ propagating to other devices — decided by the user as option (b), "only this d
 replace-all uses it (§6.4 step 6). (2) H4b / H2c merge order, agreed with d4: before H2c a received look goes to
 `HostConfig` and H2c's migration moves it; whichever merges second makes the receiver write the look store (§4.3,
 §6.4 step 7, H2c / H4b).
+(3) Hostless execution panes (coordinator, 2026-09-24): no special case on deletion — creation always writes `host`,
+`''` is legacy only; such a pane then looks up its `executionId` on the new first host and shows "not found" when
+absent, a visible failure rather than a silent rebind (§3.4).
