@@ -166,6 +166,14 @@ describe('startCollector — debounce', () => {
     expect((reports[0].payload as { hosts: Record<string, { name: string }> }).hosts.h1.name).toBe('b')
   })
 
+  it('a learned daemonId schedules `hosts` and travels in its payload (host-daemon-id D6)', async () => {
+    start()
+    useHostStore.getState().observeDaemonId('h1', 'mini:abc123', '10.0.0.1:7860')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['hosts'])
+    expect((reports[0].payload as { hosts: Record<string, { daemonId?: string }> }).hosts.h1.daemonId).toBe('mini:abc123')
+  })
+
   it('honours debounceMs', async () => {
     collector = startCollector({ onSection: (r) => reports.push(r), debounceMs: 50 })
     useHostStore.setState({ hostOrder: [] })
@@ -189,6 +197,16 @@ describe('startCollector — debounce', () => {
 
 describe('startCollector — changes that schedule nothing', () => {
   it('host runtime', () => expectIgnored(() => useHostStore.setState({ runtime: { h1: { status: 'connected' } } })))
+  it('a daemonId mismatch flag — runtime only, never in `hosts` (host-daemon-id D2)', async () => {
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: 'mini:stored' } } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const hostsBefore = useHostStore.getState().hosts
+    await expectIgnored(() => useHostStore.getState().observeDaemonId('h1', 'mini:other', '10.0.0.1:7860'))
+    // not vacuous: the flag WAS raised, and `hosts` kept its reference
+    expect(useHostStore.getState().runtime.h1?.daemonIdMismatch).toEqual({ stored: 'mini:stored', observed: 'mini:other', endpoint: '10.0.0.1:7860' })
+    expect(useHostStore.getState().hosts).toBe(hostsBefore)
+    warn.mockRestore()
+  })
   it('activeHostId', () => expectIgnored(() => useHostStore.setState({ activeHostId: null })))
   it('devHostId', () => expectIgnored(() => useHostStore.setState({ devHostId: 'h1' })))
   it('activeWorkspaceId', () => expectIgnored(() => useWorkspaceStore.setState({ activeWorkspaceId: 'B' })))

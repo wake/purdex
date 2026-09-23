@@ -241,8 +241,8 @@ describe('project — purity', () => {
 describe('PROJECTIONS', () => {
   it('hosts, workspaces and tabs are the corrected §4.2 lists', () => {
     expect([...PROJECTIONS.hosts].sort()).toEqual([
-      'hostOrder', 'hosts.*.color', 'hosts.*.colors', 'hosts.*.icon', 'hosts.*.iconWeight', 'hosts.*.id',
-      'hosts.*.ip', 'hosts.*.name', 'hosts.*.order', 'hosts.*.port', 'hosts.*.token',
+      'hostOrder', 'hosts.*.color', 'hosts.*.colors', 'hosts.*.daemonId', 'hosts.*.icon', 'hosts.*.iconWeight',
+      'hosts.*.id', 'hosts.*.ip', 'hosts.*.name', 'hosts.*.order', 'hosts.*.port', 'hosts.*.token',
     ])
     expect([...PROJECTIONS.workspaces].sort()).toEqual([
       'order', 'workspaces.*.icon', 'workspaces.*.iconWeight', 'workspaces.*.moduleConfig', 'workspaces.*.name',
@@ -433,6 +433,20 @@ describe('shape: fingerprint and ordinal', () => {
     expect(compareShape(old, mine)).toBe('sot-is-newer')
   })
 
+  // host-daemon-id D6: hosts ordinal 1 → 2 (`hosts.*.daemonId` added). An
+  // ordinal-1 client and this build, judged by shape alone: the old one locks on
+  // a row of ours (`sot-is-newer` → locked:schema), we pull its rows (and upcast
+  // them: applier.ts `applyHosts` keeps the local daemonId).
+  it('coexistence by shape: the ordinal-1 hosts shape (no `daemonId`) and this one order, never lock this build', async () => {
+    const legacyList = PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.daemonId')
+    expect(legacyList).not.toEqual(PROJECTIONS.hosts) // the field was there to drop
+    const mine = { fingerprint: await sectionFingerprint('hosts'), ordinal: SECTION_SCHEMA_ORDINAL.hosts }
+    const old = { fingerprint: await fingerprintOf(legacyList), ordinal: 1 }
+    expect(old.fingerprint).not.toBe(mine.fingerprint)
+    expect(compareShape(mine, old)).toBe('i-am-newer')
+    expect(compareShape(old, mine)).toBe('sot-is-newer')
+  })
+
   // GUARD (spec §4.5). If this fails: a projection changed — bump
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
@@ -441,8 +455,8 @@ describe('shape: fingerprint and ordinal', () => {
     expect(await shapeTable()).toMatchInlineSnapshot(`
       {
         "hosts": [
-          "0393018d7f91cbe3aedd6f4db84f5ab84fc751be53f35e7ed45819d9c1a68460",
-          1,
+          "7e399902532d0b0553bc57ef2b561344a5bf45f48e05cd5dde9c785666dc11c9",
+          2,
         ],
         "settings": [
           "185ca6f39458c8ce645ee2b5e1548ffe99ab3cd26afbdc653722e2a113f1c0bc",

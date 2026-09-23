@@ -33,6 +33,10 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
   hosts: [
     'hostOrder', 'hosts.*.id', 'hosts.*.name', 'hosts.*.ip', 'hosts.*.port', 'hosts.*.token',
     'hosts.*.order', 'hosts.*.color', 'hosts.*.colors', 'hosts.*.icon', 'hosts.*.iconWeight',
+    // The CLAIMED daemon identity (host-daemon-id spec D2) — SOT wins on pull.
+    // NOT `runtime.*.daemonIdMismatch`: this device's verification lives in
+    // `runtime`, outside `hosts`, and never travels.
+    'hosts.*.daemonId',
   ],
   workspaces: [
     'order', 'workspaces.*.name', 'workspaces.*.icon', 'workspaces.*.iconWeight', 'workspaces.*.moduleConfig',
@@ -89,7 +93,7 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
  * re-interpreted field) — the case the fingerprint cannot see.
  */
 export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
-  hosts: 1,
+  hosts: 2, // 2: `hosts.*.daemonId` added (an ordinal-1 payload lacks it and is upcast on apply: applier.ts `applyHosts` keeps the local daemonId)
   settings: 4, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings); 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`)
   workspaces: 1,
   tabs: 1,
