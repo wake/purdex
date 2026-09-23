@@ -18,14 +18,32 @@ var legacyDataFiles = []string{
 
 // removeLegacyDataFiles deletes legacyDataFiles from dataDir at startup.
 //
+// The directory is listed and only an entry whose Name() is byte-equal to a
+// listed name is touched: on a case-insensitive volume (the macOS default) a
+// path lookup of <dataDir>/sync.db would also resolve to a user's SYNC.DB.
 // Missing files are not errors (the common case after the first run, so it is
-// idempotent and quiet). Only regular files are removed: the entry is checked
-// with Lstat, so a symlink (which could point outside dataDir) or a directory
-// with one of these names is left alone and logged. One log line per removed
-// file; failures are logged and never stop the daemon.
+// idempotent and quiet). Only regular files are removed: both the DirEntry type
+// and an Lstat of the same name must say so, so a symlink (which could point
+// outside dataDir) or a directory with one of these names is left alone and
+// logged. One log line per removed file; failures never stop the daemon.
 func removeLegacyDataFiles(dataDir string, logf func(format string, args ...any)) {
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			logf("legacy data: list %s: %v", dataDir, err)
+		}
+		return
+	}
+	present := make(map[string]fs.DirEntry, len(entries))
+	for _, e := range entries {
+		present[e.Name()] = e
+	}
 	for _, name := range legacyDataFiles {
-		path := filepath.Join(dataDir, name)
+		entry, ok := present[name] // byte-equal names only
+		if !ok {
+			continue
+		}
+		path := filepath.Join(dataDir, entry.Name())
 		info, err := os.Lstat(path)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -34,7 +52,7 @@ func removeLegacyDataFiles(dataDir string, logf func(format string, args ...any)
 			logf("legacy data: stat %s: %v", path, err)
 			continue
 		}
-		if !info.Mode().IsRegular() {
+		if !entry.Type().IsRegular() || !info.Mode().IsRegular() {
 			logf("legacy data: left %s alone (not a regular file: %s)", path, info.Mode().Type())
 			continue
 		}

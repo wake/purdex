@@ -138,3 +138,33 @@ func TestRemoveLegacyDataFiles_OnlyRegularFiles(t *testing.T) {
 		}
 	}
 }
+
+// On a case-insensitive volume (the macOS default) <dataDir>/sync.db also resolves
+// to a user's SYNC.DB; only an entry whose name is byte-equal may be removed.
+func TestRemoveLegacyDataFiles_CaseVariantsSurvive(t *testing.T) {
+	userDir := t.TempDir()
+	variants := map[string]string{"SYNC.DB": "user data 1", "Device_State.db": "user data 2"}
+	for name, body := range variants {
+		if err := os.WriteFile(filepath.Join(userDir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := &residueLog{}
+	removeLegacyDataFiles(userDir, rec.logf)
+	for name, body := range variants {
+		got, err := os.ReadFile(filepath.Join(userDir, name))
+		if err != nil || string(got) != body {
+			t.Errorf("%s: got %q, %v — want it kept with %q", name, got, err, body)
+		}
+	}
+	if len(rec.lines) != 0 {
+		t.Errorf("logged %q, want nothing", rec.lines)
+	}
+
+	exactDir := t.TempDir()
+	writeResidueFile(t, filepath.Join(exactDir, "sync.db"))
+	removeLegacyDataFiles(exactDir, (&residueLog{}).logf)
+	if residueExists(filepath.Join(exactDir, "sync.db")) {
+		t.Error("exact-named sync.db was not removed")
+	}
+}
