@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostLook } from '../../lib/host-look'
 import {
   HOST_COLOR_ALPHA_DEFAULTS,
   HOST_COLOR_MODES,
@@ -34,8 +35,9 @@ export function HostColorField({
   onModeChange?: (mode: HostColorMode) => void
 }) {
   const t = useI18nStore((s) => s.t)
-  const colors = useHostStore((s) => s.hosts[hostId]?.colors)
-  const legacy = useHostStore((s) => s.hosts[hostId]?.color)
+  const look = useHostLook(hostId)
+  const colors = look.colors
+  const legacy = look.color
   const setHostColorLayer = useHostStore((s) => s.setHostColorLayer)
   const clearHostColorMode = useHostStore((s) => s.clearHostColorMode)
 
