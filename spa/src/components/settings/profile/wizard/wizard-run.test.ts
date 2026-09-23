@@ -54,7 +54,12 @@ function slaveOnScreen(): void {
   putOnScreen(world('a', S1), 's1', 1)
 }
 
-const plan = (over: Partial<WizardPlan>): WizardPlan => ({ hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: [], ...over })
+/** The daemon h1 is recorded as, and confirmed at its address: a pull through it may be made. */
+const H1_DAEMON = 'mini-lab:278cbm'
+const H1_AT = '10.0.0.1:7860'
+/** An empty profile P, as `plan` says it was seen (`seen`) — so that the re-check before the attach passes. */
+const EMPTY_SEEN = JSON.stringify([])
+const plan = (over: Partial<WizardPlan>): WizardPlan => ({ hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: [], at: H1_AT, seen: EMPTY_SEEN, ...over })
 const textOf = (w: unknown): string => JSON.stringify(w)
 const sentinelsIn = (text: string): string[] => [MASTER, S1, S2].filter((s) => text.includes(s))
 const slaveNamed = (name: string) => Object.values(useLocalProfilesStore.getState().slaves).find((s) => s.name === name)
@@ -69,16 +74,17 @@ beforeEach(() => {
   localStorage.clear()
   __resetMasterWorldForTest()
   atAttach = null
-  vi.mocked(listProfiles).mockReset()
+  // P is on h1, empty, with no `hosts` section: what `plan` was prepared against (the re-check before the attach)
+  vi.mocked(listProfiles).mockReset().mockResolvedValue({ kind: 'ok', value: [{ id: P, name: 'default', createdAt: 1, updatedAt: 1, sections: [], attachments: [] }] })
   vi.mocked(createProfile).mockReset()
-  vi.mocked(getSection).mockReset()
+  vi.mocked(getSection).mockReset().mockResolvedValue({ kind: 'ok', value: null })
   vi.mocked(attachMaster).mockReset().mockImplementation(async () => {
     const read = readMasterWorld()
     const kept = slaveNamed('Kept')
     atAttach = { master: read.settled ? sentinelsIn(textOf(read.world)) : ['UNSETTLED'], kept: kept === undefined ? null : sentinelsIn(textOf(kept.world)) }
     return { ok: true }
   })
-  useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'], activeHostId: 'h1', devHostId: null, runtime: {} })
+  useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, order: 0, daemonId: H1_DAEMON } }, hostOrder: ['h1'], activeHostId: 'h1', devHostId: null, runtime: { h1: { status: 'connected', daemonIdVerified: { endpoint: H1_AT, daemonId: H1_DAEMON } } } })
   useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
   useDeviceNameStore.setState({ deviceName: 'Laptop' })
   useWorkspaceSettingsStore.setState({ workspaces: {} })
@@ -232,7 +238,7 @@ describe('prepareRun — the ONE door before the run: this device\'s premises AN
 
   it('nothing moved: a plan — frozen, and exactly what was asked for', async () => {
     const r = await prepareRun(draft({ direction: 'push', saveAs: 'Kept', localId: 's1' }))
-    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: 's1', direction: 'push', saveAs: null, removesHosts: [] } })
+    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: 's1', direction: 'push', saveAs: null, removesHosts: [], at: '10.0.0.1:7860', seen: sotFingerprint(indexEntry(P, 'default', SEEN)) } })
     expect(r.ok && Object.isFrozen(r.plan)).toBe(true)
     // pinned to where the host is (host-sync-identity §8): a host re-pointed during the ask is not listed elsewhere
     expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: '10.0.0.1:7860' })
@@ -329,7 +335,7 @@ describe('prepareRun — a PULL: the host verified, and the hosts it removes are
 
   it('the host is verified, the list shown is the list now: a plan that carries it; both reads pinned to the host\'s address', async () => {
     const r = await prepareRun(draft({ removesSeen: ['h2'] }))
-    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: ['h2'] } })
+    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: ['h2'], at: AT, seen: sotFingerprint(indexEntry(P, 'default', SEEN)) } })
     expect(r.ok && Object.isFrozen(r.plan.removesHosts)).toBe(true)
     expect(getSection).toHaveBeenCalledWith('h1', P, 'hosts', { expectEndpoint: AT })
     expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: AT })
@@ -440,6 +446,81 @@ describe('prepareRun — a PULL: the host verified, and the hosts it removes are
     useHostStore.setState({ runtime: { h1: verified } })
     vi.mocked(getSection).mockResolvedValue(transportFailure('timeout'))
     expect(await previewPull('h1', P)).toEqual({ ok: false, reason: 'list-failed', request: 'timeout' })
+  })
+})
+
+describe('THE ATTACH ASKS AGAIN: promote and copy take time, and what the pull was prepared against may move meanwhile', () => {
+  const HOSTS_META = meta('hosts', 3)
+  const SEEN = [HOSTS_META, meta('workspaces', 7)]
+  const h = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ id, name, ip: '10.0.0.1', port: 7860, order: 0, ...extra })
+  const sotHosts = (rows: Record<string, unknown>, m = HOSTS_META) =>
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...m, payload: { hosts: rows, hostOrder: Object.keys(rows) } } })
+  /** As `prepareRun` froze it: s1 promoted, a copy kept, h2 (matched by no row) shown as removed. */
+  const prepared = (over: Partial<WizardPlan> = {}) => plan({ localId: 's1', saveAs: 'Kept', removesHosts: ['h2'], seen: sotFingerprint(indexEntry(P, 'default', SEEN)), ...over })
+  /** `runPlan`, with `move` made while sub-step `during` runs. */
+  const runMoving = (p: WizardPlan, during: 'promote' | 'save', move: () => void) =>
+    runPlan(p, 0, (i, state) => {
+      if (state === 'running' && subStepsOf(p)[i] === during) move()
+    })
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { h1: h('h1', 'mlab', { daemonId: H1_DAEMON }), h2: { ...h('h2', 'old box'), ip: '10.0.0.2' } }, hostOrder: ['h1', 'h2'], runtime: { h1: { status: 'connected', daemonIdVerified: { endpoint: H1_AT, daemonId: H1_DAEMON } } } })
+    listed(indexEntry(P, 'default', SEEN))
+    sotHosts({ d1: { name: 'mlab', daemonId: H1_DAEMON } })
+  })
+
+  it('nothing moved: the attach is made — after the host was asked again, at the address the plan was made for', async () => {
+    expect(await runPlan(prepared(), 0, () => {})).toEqual({ done: true })
+    expect(attachMaster).toHaveBeenCalledTimes(1)
+    expect(getSection).toHaveBeenCalledWith('h1', P, 'hosts', { expectEndpoint: H1_AT })
+    expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: H1_AT })
+  })
+
+  it.each(['promote', 'save'] as const)('during the %s, the SOT\'s hosts section moves: no attach — the profile changed, with what is there now', async (during) => {
+    const moved = [meta('hosts', 4), meta('workspaces', 7)]
+    const r = await runMoving(prepared(), during, () => {
+      listed(indexEntry(P, 'default', moved))
+      sotHosts({ d1: { name: 'mlab', daemonId: H1_DAEMON } }, meta('hosts', 4))
+    })
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(r).toEqual({ done: false, failedAt: 2, reason: 'profile-changed', recheck: { ok: false, reason: 'profile-changed', now: { fingerprint: sotFingerprint(indexEntry(P, 'x', moved)), empty: false } } })
+  })
+
+  it.each(['promote', 'save'] as const)('during the %s, a host is added here that no row names: no attach — the hosts removed are not the ones shown', async (during) => {
+    const r = await runMoving(prepared(), during, () =>
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h3: { ...h('h3', 'new'), ip: '10.0.0.3' } }, hostOrder: ['h1', 'h2', 'h3'] }),
+    )
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(r).toEqual({ done: false, failedAt: 2, reason: 'removes-changed', recheck: { ok: false, reason: 'removes-changed', removes: ['h2', 'h3'] } })
+  })
+
+  it.each(['promote', 'save'] as const)('during the %s, the attach host turns out to be at another daemon: no attach — master-mismatch', async (during) => {
+    const r = await runMoving(prepared(), during, () =>
+      useHostStore.getState().setRuntime('h1', { daemonIdMismatch: { stored: H1_DAEMON, observed: 'other:zzzzzz', endpoint: H1_AT } }),
+    )
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(r).toMatchObject({ done: false, failedAt: 2, reason: 'master-mismatch' })
+  })
+
+  it('the host was re-pointed meanwhile (another address): no attach — said as the request class, and retryable', async () => {
+    const r = await runMoving(prepared(), 'save', () => {
+      const { hosts } = useHostStore.getState()
+      useHostStore.setState({ hosts: { ...hosts, h1: { ...hosts.h1, ip: '10.0.0.9' } } })
+    })
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(r).toEqual({ done: false, failedAt: 2, reason: 'list-failed', recheck: { ok: false, reason: 'list-failed', request: 'endpoint-changed' } })
+  })
+
+  it('the attach host lost its row meanwhile: master-unmatched', async () => {
+    const r = await runMoving(prepared(), 'promote', () => sotHosts({ z: { name: 'box', daemonId: 'box:111111' } }))
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(r).toMatchObject({ done: false, failedAt: 2, reason: 'master-unmatched' })
+  })
+
+  it('a push asks again too: the profile filled meanwhile → no attach', async () => {
+    const r = await runMoving(prepared({ direction: 'push', saveAs: null, removesHosts: [] }), 'promote', () => listed(indexEntry(P, 'default', [meta('workspaces', 8)])))
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(r).toMatchObject({ done: false, failedAt: 1, reason: 'profile-changed' })
   })
 })
 

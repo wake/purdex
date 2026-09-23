@@ -557,6 +557,41 @@ describe('step 4 — a pull\'s hosts: the host verified, and the hosts it remove
     expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unverified')
   })
 
+  it('A HOST ADDED WHILE THE COPY IS MADE (after the door said yes): the attach is not made — back to the direction step, the list as it is now; the copy stays', async () => {
+    vi.mocked(copyMasterAsSlave).mockImplementationOnce(() => {
+      calls.push('copy-master')
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] })
+      return { ok: true, id: 'c1' }
+    })
+    await toDirection()
+    await choosePull()
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['copy-master'])
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
+  })
+
+  it('THE HOST CANNOT BE ASKED RIGHT BEFORE THE ATTACH: the attach step fails with the request\'s class; Try again asks again and attaches — no second copy', async () => {
+    await toDirection()
+    await choosePull()
+    next()
+    // the door's two reads pass; the ask before the attach cannot list
+    vi.mocked(listProfiles).mockResolvedValueOnce({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META] }] }).mockResolvedValueOnce(failed('timeout'))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['copy-master'])
+    expect(screen.getByTestId('profile-wizard-failure')).toHaveAttribute('data-step', 'attach')
+    expect(screen.getByTestId('profile-wizard-check-failed')).toHaveTextContent(en['settings.profile.wizard.request.timeout'])
+    click('profile-wizard-retry')
+    await flush()
+    expect(calls).toEqual(['copy-master', 'attach'])
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+  })
+
   it('ANOTHER host at a daemon other than its record: not in the way, but said — the sync will pause on it', async () => {
     const hosts = useHostStore.getState().hosts
     useHostStore.setState({ hosts: { ...hosts, h2: { ...hosts.h2, daemonId: 'air:111111' } }, runtime: { ...useHostStore.getState().runtime, h2: { status: 'connected', daemonIdMismatch: { stored: 'air:111111', observed: 'else:222222', endpoint: '10.0.0.2:7860' } } } })

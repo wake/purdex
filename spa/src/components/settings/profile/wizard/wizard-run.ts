@@ -47,7 +47,7 @@
 // every conflict of the first reconciliation with keep-local — each PUT is a CAS on the rev ITS OWN index read
 // gave, rebased and sent again on a 409 (executor.ts, THE FIRST RECONCILIATION). So a push is an unconditional
 // overwrite for as long as that reconciliation lasts, and nothing this file knows can be handed down to narrow
-// it. The window that remains is from this re-list to the end of the first reconciliation: a device that writes
+// it. The window that remains is from the LAST re-list — the one right before the attach (`recheckBeforeAttach`) — to the end of the first reconciliation: a device that writes
 // into the profile in those seconds is overwritten, as the user was told a push does.
 //
 // A CREATE WHOSE OUTCOME IS NOT KNOWN IS NEVER SIMPLY SENT AGAIN (`createSotProfile`, review F2). The daemon
@@ -103,11 +103,20 @@ export interface WizardPlan {
   /** Pull only (`[]` for a push): the local hosts this pull removes — no row of the SOT's `hosts` section matches
    *  them (`matchIncomingHosts`; host-sync-identity spec §6, §11.10). Exactly the list the user was shown. */
   removesHosts: readonly string[]
+  /** The host's address when the plan was made: every request of the run goes there, and the attach is not made
+   *  if the host has been re-pointed since. */
+  at: string
+  /** The SOT profile's `sotFingerprint` the plan was made against — what the user saw. */
+  seen: string
 }
 
 export type SubStepId = 'promote' | 'save' | 'attach'
 export type SubStepState = 'pending' | 'running' | 'done' | 'failed'
-export type RunResult = { done: true } | { done: false; failedAt: number; reason: string }
+export type RunResult =
+  | { done: true }
+  /** `recheck`: the attach was not made because the ask before it (`recheckBeforeAttach`) found the premises moved —
+   *  `reason` is that refusal's reason, and the wizard handles it as it handles `prepareRun`'s. */
+  | { done: false; failedAt: number; reason: string; recheck?: PrepareRefusal }
 
 /** Every reason `attachMaster` can answer that is NOT a thrown error's message: its own refusals, `superseded`,
  *  and the api layer's `FailureReason` (start.ts, `attachHeld`: `asYouWere(put.reason)`). */
@@ -149,7 +158,7 @@ export function offeredProfileName(also: readonly string[] = []): string {
   return defaultSlaveName(effectiveDeviceName(useDeviceNameStore.getState()), [...takenNames(), ...also])
 }
 
-async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true } | { ok: false; reason: string }> {
+async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true } | { ok: false; reason: string; recheck?: PrepareRefusal }> {
   try {
     if (id === 'promote') {
       // Names the demoted master only if nobody named it; never like the copy that is made next.
@@ -161,6 +170,9 @@ async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true }
       const r = copyMasterAsSlave(plan.saveAs ?? '')
       return r.ok ? { ok: true } : { ok: false, reason: r.reason }
     }
+    // The promote and the copy took time: ask again what the plan was made against (review, attacker H1).
+    const again = await recheckBeforeAttach(plan)
+    if (!again.ok) return { ok: false, reason: again.reason, recheck: again }
     const r = await attachMaster(plan.hostId, plan.profileId, plan.direction)
     if (r.ok) return { ok: true }
     return { ok: false, reason: KNOWN_ATTACH.has(r.reason) ? r.reason : 'other' }
@@ -177,7 +189,7 @@ export async function runPlan(plan: WizardPlan, from: number, report: (index: nu
     const r = await runSubStep(steps[i], plan)
     if (!r.ok) {
       report(i, 'failed')
-      return { done: false, failedAt: i, reason: r.reason }
+      return { done: false, failedAt: i, reason: r.reason, ...(r.recheck === undefined ? {} : { recheck: r.recheck }) }
     }
     report(i, 'done')
   }
@@ -246,8 +258,9 @@ export type PullMatchReason = HostMatchError
  *  listed as removed and stop nothing; this one does. */
 export type PullUnmatchedReason = 'master-unmatched'
 
-export type PrepareResult =
-  | { ok: true; plan: Readonly<WizardPlan> }
+export type PrepareResult = { ok: true; plan: Readonly<WizardPlan> } | PrepareRefusal
+
+export type PrepareRefusal =
   | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason | PullUnmatchedReason | 'incomplete' | 'profile-gone' }
   /** The hosts this pull removes are not the ones the user was shown (or none were shown): `removes` is the list now. */
   | { ok: false; reason: 'removes-changed'; removes: string[] }
@@ -400,7 +413,35 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
     removesHosts = Object.freeze([...removal.removes])
   }
 
-  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: pulling ? draft.saveAs : null, removesHosts }) }
+  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: pulling ? draft.saveAs : null, removesHosts, at, seen }) }
+}
+
+/**
+ * THE ASK BEFORE THE ATTACH (review, attacker H1). `prepareRun` answered before the promote and the copy; those are
+ * asynchronous, and meanwhile the SOT may have moved, a host may have been added here, or the attach host may have
+ * turned out to be at another daemon. So right before `attachMaster` everything `prepareRun` checks is checked
+ * again, against the PLAN — the address it was made for (`at`), the fingerprint it was made against (`seen`), and
+ * the hosts it removes (`removesHosts`, the list the user was shown). Anything moved → no attach, and the refusal
+ * is `prepareRun`'s own (the wizard sends the user back as it does for those):
+ *   the host re-pointed           `list-failed` / `endpoint-changed`   (retryable: the next door reads the new address)
+ *   hosts section / fingerprint   `profile-changed`, with what is there now
+ *   a host added / one matched    `removes-changed`, with the list now
+ *   attach host verified no more  `master-unverified` / `master-mismatch`
+ *   attach host lost its row      `master-unmatched`
+ *   match errors, profile gone, this device's premises — as `prepareRun`.
+ * The chosen local profile is not looked for: by now it has been promoted (or was the master all along).
+ * NOT CLOSED: the window from this ask to the first reconciliation. `attachMaster` takes no rev, so the executor's
+ * first reconciliation cannot be told to accept only the version asked here (executor.ts; out of this PR's scope).
+ */
+export async function recheckBeforeAttach(plan: WizardPlan): Promise<PrepareResult> {
+  const moved = (): boolean => {
+    const host = useHostStore.getState().hosts[plan.hostId]
+    return host !== undefined && endpointOfHost(host) !== plan.at
+  }
+  if (moved()) return { ok: false, reason: 'list-failed', request: 'endpoint-changed' }
+  const again = await prepareRun({ hostId: plan.hostId, profileId: plan.profileId, seen: plan.seen, localId: MASTER_PROFILE_ID, direction: plan.direction, saveAs: plan.saveAs, removesSeen: plan.removesHosts }, true)
+  if (again.ok && (again.plan.at !== plan.at || moved())) return { ok: false, reason: 'list-failed', request: 'endpoint-changed' }
+  return again
 }
 
 // === Creating the SOT profile ===
