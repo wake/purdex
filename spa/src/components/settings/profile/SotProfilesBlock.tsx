@@ -43,7 +43,7 @@ export interface SotProfilesBlockProps {
 
 export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: SotProfilesBlockProps) {
   const t = useI18nStore((s) => s.t)
-  const [renaming, setRenaming] = useState<{ under: string; at: string | null; id: string; name: string } | null>(null)
+  const [renaming, setRenaming] = useState<{ under: string; at: string; id: string; name: string } | null>(null)
   // The delete — its confirmation, refusal, the scope guard — is `useSotDelete`'s; `busy`, `status` and the scope
   // checks are shared with the rename, and a scope change or a stale send drops the rename editor with the rest.
   const scope = sotScopeOf(hostId, attachedProfileId)
@@ -71,7 +71,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
     setBusy(true)
     setStatus(null)
     try {
-      const r = await renameProfile(hostId, row.id, name, ...pinnedTo(at))
+      const r = await renameProfile(hostId, row.id, name, pinnedTo(at))
       if (!isLive(under)) return
       if (r.kind === 'ok') {
         setRenaming(null)
@@ -136,7 +136,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       type="button"
                       data-testid={`profile-sot-rename-${row.id}`}
                       disabled={busy}
-                      onClick={() => setRenaming(draft === null ? { under: del.scope, at: del.listedAt, id: row.id, name: row.name } : null)}
+                      onClick={() => setRenaming(draft === null && del.listedAt !== null ? { under: del.scope, at: del.listedAt, id: row.id, name: row.name } : null)}
                       className={BTN}
                     >
                       {t('settings.profile.sot.rename')}
@@ -180,7 +180,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       data-testid="profile-sot-rename-input"
                       spellCheck={false}
                       value={draft}
-                      onChange={(e) => setRenaming({ under: renaming?.under ?? del.scope, at: renaming?.at ?? del.listedAt, id: row.id, name: e.target.value })}
+                      onChange={(e) => setRenaming((r) => (r === null ? r : { ...r, name: e.target.value }))}
                       onKeyDown={(e) => {
                         if (e.nativeEvent.isComposing) return
                         if (e.key === 'Enter') void rename(row)

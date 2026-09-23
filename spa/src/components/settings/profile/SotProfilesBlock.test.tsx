@@ -51,8 +51,12 @@ function Harness({ hostId = 'h1', attached = 'p1' }: { hostId?: string; attached
 
 const ready = () => waitFor(() => expect(screen.getByTestId('profile-sot-block')).not.toHaveAttribute('data-state', 'loading'))
 
+/** Where h1 is: every request to it is pinned to this (useSotProfiles / useSotDelete never send unpinned). */
+const H1 = { expectEndpoint: '10.0.0.1:7860' }
+
 beforeEach(() => {
   for (const fn of [listProfiles, renameProfile, deleteProfile]) vi.mocked(fn).mockReset()
+  useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 }, h2: { id: 'h2', name: 'air', ip: '10.0.0.2', port: 7860, order: 1 } }, hostOrder: ['h1', 'h2'] })
 })
 
 afterEach(cleanup)
@@ -62,7 +66,7 @@ describe('the list: loading, failed, empty, rows', () => {
     let answer: (v: { kind: 'ok'; value: ProfileIndexEntry[] }) => void = () => {}
     vi.mocked(listProfiles).mockReturnValue(new Promise((resolve) => { answer = resolve }))
     render(<Harness />)
-    expect(listProfiles).toHaveBeenCalledWith('h1')
+    expect(listProfiles).toHaveBeenCalledWith('h1', H1)
     expect(screen.getByTestId('profile-sot-block')).toHaveAttribute('data-state', 'loading')
     expect(screen.getByTestId('profile-sot-loading')).toBeInTheDocument()
     await act(async () => { answer({ kind: 'ok', value: [profile('p1', 'default')] }) })
@@ -148,7 +152,7 @@ describe('delete — only what the FETCHED index shows nobody attached to', () =
     await ready()
     fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
     fireEvent.click(screen.getByTestId('profile-sot-delete-confirm'))
-    expect(deleteProfile).toHaveBeenCalledWith('h1', 'p2')
+    expect(deleteProfile).toHaveBeenCalledWith('h1', 'p2', H1)
     expect(screen.getByTestId('profile-sot-delete-confirm')).toBeDisabled()
     rows()
     await act(async () => { answer({ kind: 'deleted' }) })
@@ -203,7 +207,7 @@ describe('rename', () => {
     fireEvent.change(input, { target: { value: '  work  ' } })
     rows(profile('p1', 'work'))
     fireEvent.click(screen.getByTestId('profile-sot-rename-save'))
-    expect(renameProfile).toHaveBeenCalledWith('h1', 'p1', 'work')
+    expect(renameProfile).toHaveBeenCalledWith('h1', 'p1', 'work', H1)
     await waitFor(() => expect(screen.getByTestId('profile-sot-name-p1')).toHaveTextContent('work'))
     expect(screen.queryByTestId('profile-sot-rename-input')).toBeNull()
   })
@@ -251,6 +255,33 @@ describe('Refresh', () => {
     render(<NoHost />)
     expect(screen.getByTestId('view')).toHaveTextContent('null')
     expect(listProfiles).not.toHaveBeenCalled()
+  })
+
+  it('a host that is in no store has no address to pin to: nothing is asked, nothing is offered — until it appears, then it is asked PINNED (PR #1340 re-review)', async () => {
+    rows(profile('p2', 'experiment'))
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+    render(<Harness />)
+    await act(async () => {})
+    expect(listProfiles).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('profile-sot-block')).toBeNull()
+    expect(screen.queryByTestId('profile-sot-delete-p2')).toBeNull()
+    expect(screen.queryByTestId('profile-sot-rename-p2')).toBeNull()
+    act(() => useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] }))
+    await ready()
+    expect(listProfiles).toHaveBeenCalledTimes(1)
+    expect(listProfiles).toHaveBeenCalledWith('h1', H1)
+    expect(screen.getByTestId('profile-sot-delete-p2')).toBeEnabled()
+  })
+
+  it('… and when it leaves the store again, what was listed goes with it: nothing left to act on', async () => {
+    rows(profile('p2', 'experiment'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+    act(() => useHostStore.setState({ hosts: {}, hostOrder: [] }))
+    expect(screen.queryByTestId('profile-sot-delete-dialog')).toBeNull()
+    expect(screen.queryByTestId('profile-sot-block')).toBeNull()
+    expect(deleteProfile).not.toHaveBeenCalled()
   })
 })
 

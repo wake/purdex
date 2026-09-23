@@ -50,8 +50,8 @@ export interface SotDeleteOptions {
   onDeleted?: (id: string) => void
 }
 
-/** The options that pin a request to `at` (null: the host is in no store — nothing to reach, nothing to pin). */
-export const pinnedTo = (at: string | null): [RequestOptions] | [] => (at === null ? [] : [{ expectEndpoint: at }])
+/** The options that pin a request to `at`. There is no unpinned send: an action is only opened on a listed address. */
+export const pinnedTo = (at: string): RequestOptions => ({ expectEndpoint: at })
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -69,7 +69,7 @@ export function useSotDelete({ hostId, attachedProfileId, scope: callerScope, vi
 
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
-  const [confirm, setConfirm] = useState<{ under: string; at: string | null; row: ProfileIndexEntry } | null>(null)
+  const [confirm, setConfirm] = useState<{ under: string; at: string; row: ProfileIndexEntry } | null>(null)
   /** A delete the daemon refused: who it says is still attached. */
   const [refused, setRefused] = useState<{ id: string; attachments: Attachment[] } | null>(null)
 
@@ -112,7 +112,7 @@ export function useSotDelete({ hostId, attachedProfileId, scope: callerScope, vi
   const blocked = (row: ProfileIndexEntry) => sotDeleteBlocked(row, attachedProfileId)
 
   const ask = (row: ProfileIndexEntry): void => {
-    if (busy || blocked(row) !== null || listedAt !== endpoint) return
+    if (busy || blocked(row) !== null || listedAt === null || listedAt !== endpoint) return
     setConfirm({ under: scope, at: listedAt, row })
   }
 
@@ -126,7 +126,7 @@ export function useSotDelete({ hostId, attachedProfileId, scope: callerScope, vi
     setStatus(null)
     setRefused(null)
     try {
-      const r = await deleteProfile(hostId, row.id, ...pinnedTo(at))
+      const r = await deleteProfile(hostId, row.id, pinnedTo(at))
       if (!isLive(under)) return
       if (r.kind === 'attached') setRefused({ id: row.id, attachments: r.attachments })
       else if (r.kind === 'failed' && r.reason === 'endpoint-changed') endpointChanged()
