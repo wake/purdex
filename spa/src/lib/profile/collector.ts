@@ -25,6 +25,15 @@
 // `hosts` is live whatever is on screen (a slave borrows them, decision 9).
 // (The two live tab stores are still SUBSCRIBED to, for one thing only: a moment
 // at which to ask whether an unsettled stretch is stuck. Their content is not read.)
+//
+// HOST IDS ARE BUILT AS WIRE IDS (host-sync-identity §5, §11.3). `hosts`, `settings`
+// and every `tabs.*` name hosts; each build takes the identity of the host store AT
+// THAT MOMENT (`identityOfSync`, memoised per `hosts` object). What keeps the sections
+// agreeing with each other is invalidation, not a shared pass: the host-store
+// subscriber compares the identity's `signature` and, when it moved (a daemonId
+// learned, a host added / removed), schedules EVERY host-bearing section. Under an
+// identity `conflict` none of them is built (problem `host-identity-conflict`, once
+// per conflict) — the profile-level pause is start.ts's business.
 import { useHostStore } from '../../stores/useHostStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useTabStore } from '../../stores/useTabStore'
@@ -38,6 +47,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { Workspace } from '../../types/tab'
 import { hashSection } from './hash'
+import { identityOfSync, type HostIdentity } from './host-identity'
 import { masterWorldStuck, readMasterWorld, subscribeMasterWorld } from './master-world'
 import type { MasterWorld } from './master-world'
 import { PROJECTIONS, tabsSectionKey, workspaceIdOf } from './projections'
@@ -135,24 +145,43 @@ function byId(workspaces: readonly Workspace[]): Map<string, Workspace> {
   return map
 }
 
+// === Host identity ===
+
+let memoHosts: object | null = null
+let memoIdentity: HostIdentity | null = null
+
+/** The identity of the host store NOW (§11.3). Memoised on the `hosts` object: hashing every daemonId per build is not free. */
+function currentIdentity(): HostIdentity {
+  const { hosts } = useHostStore.getState()
+  if (memoHosts !== hosts || memoIdentity === null) {
+    memoIdentity = identityOfSync(hosts)
+    memoHosts = hosts
+  }
+  return memoIdentity
+}
+
 // === One section, built ===
 
 const ABSENT = Symbol('absent')
 /** Nobody can say where the master's world is (master-world.ts): nothing is built, hashed or reported. */
 const UNSETTLED = Symbol('unsettled')
+/** Two local hosts claim one daemon: a section that names hosts would be ambiguous — none is built. */
+const CONFLICT = Symbol('host-identity-conflict')
 
 /** THE builder: what the collector reports and what `buildSectionPayload` answers are this one function's result.
  *  Never `buildProfileDocument`: it throws as a whole on one bad workspace id. Each section is built alone. */
-function buildSection(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED {
-  if (key === 'hosts') return buildHostsSection(useHostStore.getState())
+function buildSection(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED | typeof CONFLICT {
+  const identity = key === 'workspaces' ? null : currentIdentity()
+  if (identity !== null && identity.conflict !== null) return CONFLICT
+  if (key === 'hosts') return buildHostsSection(useHostStore.getState(), identity as HostIdentity)
   const read = readMasterWorld()
   if (!read.settled) return UNSETTLED
   const { workspaces, tabs } = read.world
-  if (key === 'settings') return buildSettingsSection(allSettings(), new Set(syncableIds(read.world)))
+  if (key === 'settings') return buildSettingsSection(allSettings(), new Set(syncableIds(read.world)), identity as HostIdentity)
   if (key === 'workspaces') return buildWorkspacesSection(workspaces)
   const id = workspaceIdOf(key)
   const ws = id === null ? undefined : byId(workspaces).get(id)
-  return ws === undefined ? ABSENT : buildTabsSection(ws, tabs)
+  return ws === undefined ? ABSENT : buildTabsSection(ws, tabs, identity as HostIdentity)
 }
 
 /**
@@ -160,10 +189,11 @@ function buildSection(key: ProfileSectionKey): unknown | typeof ABSENT | typeof 
  * while a local profile is on screen, never the screen's): `{ payload }`, `payload: null` when the section does not
  * exist in the master world; `null` while that world is unsettled — nobody can say what it holds. May throw, as a
  * builder may. For the page (P3d-4 R5: what "Keep this device's" keeps on a reset / invalid lock); it reports nothing.
+ * `null` too for a section that names hosts while the host identity is in conflict: nobody can say what it holds.
  */
 export function buildSectionPayload(key: ProfileSectionKey): { payload: unknown | null } | null {
   const built = buildSection(key)
-  if (built === UNSETTLED) return null
+  if (built === UNSETTLED || built === CONFLICT) return null
   return { payload: built === ABSENT ? null : built }
 }
 
@@ -199,6 +229,8 @@ export function startCollector(opts: CollectorOptions): Collector {
   }
   const clock = opts.now ?? Date.now
   let stuckReported = false
+  /** The identity signature the host-bearing sections were last scheduled for (§11.3). */
+  let identitySignature = currentIdentity().signature
 
   function problemOnce(kind: string, detail: string): void {
     const id = `${kind}\n${detail}`
@@ -218,7 +250,7 @@ export function startCollector(opts: CollectorOptions): Collector {
   }
 
   /** `buildSection`, plus what only the collector says: a workspace the builder leaves out. */
-  function build(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED {
+  function build(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED | typeof CONFLICT {
     if (key === 'workspaces') {
       const read = readMasterWorld()
       // Left out of the payload by the builder (device-local); said once per id, like their `tabs.*`.
@@ -231,12 +263,16 @@ export function startCollector(opts: CollectorOptions): Collector {
     if (stopped) return
     const mine = (seq.get(key) ?? 0) + 1
     seq.set(key, mine)
-    let payload: unknown | typeof ABSENT | typeof UNSETTLED
+    let payload: unknown | typeof ABSENT | typeof UNSETTLED | typeof CONFLICT
     let hash: string | null = null
     try {
       // Payload first, then the hash OF THAT payload: the stores may move during the await.
       payload = build(key)
       if (payload === UNSETTLED) return
+      if (payload === CONFLICT) {
+        problemOnce('host-identity-conflict', (currentIdentity().conflict ?? []).join(', '))
+        return
+      }
       if (payload !== ABSENT) hash = await hashSection(payload)
     } catch (err) {
       // Only build/hash failures land here — never an exception thrown by `onSection`.
@@ -276,6 +312,20 @@ export function startCollector(opts: CollectorOptions): Collector {
   function clearTimers(): void {
     for (const t of timers.values()) clearTimeout(t)
     timers.clear()
+  }
+
+  /**
+   * The identity moved: every section that names hosts is rebuilt — `hosts` always, `settings` and every `tabs.*`
+   * of the master world when it is settled (unsettled: settling schedules the whole world anyway), plus every
+   * `tabs.*` reported earlier. Layer 2 then reports only what really changed.
+   */
+  function scheduleHostBearing(): void {
+    schedule('hosts')
+    const read = readMasterWorld()
+    if (!read.settled) return
+    schedule('settings')
+    for (const id of byId(read.world.workspaces).keys()) scheduleTabs(id)
+    for (const [key, hash] of lastHash) if (hash !== null && workspaceIdOf(key) !== null) schedule(key)
   }
 
   /** The slots that are made of the master's tab world (everything but `hosts`). */
@@ -369,6 +419,14 @@ export function startCollector(opts: CollectorOptions): Collector {
 
   const unsubscribers: (() => void)[] = [
     useHostStore.subscribe((next, prev) => {
+      if (next.hosts !== prev.hosts) {
+        const signature = currentIdentity().signature
+        if (signature !== identitySignature) {
+          identitySignature = signature
+          scheduleHostBearing()
+          return
+        }
+      }
       if (next.hosts !== prev.hosts || next.hostOrder !== prev.hostOrder) schedule('hosts')
     }),
 

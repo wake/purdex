@@ -14,7 +14,7 @@ import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { PROJECTIONS } from './projections'
 import { syncIdOfSync } from './host-identity'
-import { UNSYNCED_SETTINGS_KEYS, startCollector, watchUnsyncedStores, type Collector, type SectionReport } from './collector'
+import { UNSYNCED_SETTINGS_KEYS, buildSectionPayload, startCollector, watchUnsyncedStores, type Collector, type SectionReport } from './collector'
 
 // A `crypto.subtle` digest resolves off the microtask queue and fake timers
 // cannot flush it: the structural key is
@@ -171,7 +171,8 @@ describe('startCollector — debounce', () => {
     start()
     useHostStore.getState().observeDaemonId('h1', 'mini:abc123', requestAtOf(useHostStore.getState().hosts.h1))
     await vi.advanceTimersByTimeAsync(500)
-    expect(keys()).toEqual(['hosts'])
+    // …and, the identity having moved, every other section that names hosts (host-sync-identity §11.3)
+    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B'])
     // …keyed by its wire id from then on (host-sync-identity)
     const wire = syncIdOfSync('mini:abc123')
     expect((reports[0].payload as { hosts: Record<string, { daemonId?: string }> }).hosts[wire].daemonId).toBe('mini:abc123')
@@ -546,5 +547,63 @@ describe('watchUnsyncedStores', () => {
     const listener = add.mock.calls.find(([type]) => type === 'storage')?.[1]
     expect(listener).toBeDefined()
     expect(remove).toHaveBeenCalledWith('storage', listener)
+  })
+})
+
+// === host-sync-identity PR 2 (§11.3, §11.4): the identity is taken at every build and watched ===
+
+describe('startCollector — host identity', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const WIRE = syncIdOfSync(DAEMON)
+  const tmuxTab = (id: string, hostId: string): Tab =>
+    tab(id, { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'tmux-session', hostId, sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i' } } })
+
+  beforeEach(() => {
+    useTabStore.setState({ tabs: { t1: tmuxTab('t1', 'h1'), t2: tab('t2'), t3: tab('t3') }, tabOrder: ['t1', 't2', 't3'] })
+    useNewTabLayoutStore.setState({ presets: { '3col': { enabled: true, columns: [['sessions:h1'], [], []] }, '2col': { enabled: true, columns: [[], []] }, '1col': { enabled: true, columns: [[]] } } })
+  })
+
+  const payloadOf = (key: string): string => JSON.stringify(reports.filter((r) => r.key === key).at(-1)?.payload)
+
+  it('a learned daemonId changes the identity: hosts, settings and EVERY tabs.* are rebuilt with the wire id — workspaces is not', async () => {
+    start()
+    useHostStore.getState().observeDaemonId('h1', DAEMON, requestAtOf(useHostStore.getState().hosts.h1))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B'])
+    expect(payloadOf('tabs.A')).toContain(`"hostId":"${WIRE}"`)
+    expect(payloadOf('settings')).toContain(`sessions:${WIRE}`)
+    expect(payloadOf('hosts')).toContain(`"${WIRE}":`)
+  })
+
+  it('a host-store change that does not move the identity (a rename) schedules `hosts` only', async () => {
+    start()
+    useHostStore.setState({ hosts: { h1: host('h1', 'renamed') } })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['hosts'])
+  })
+
+  it('primeAll builds every host-bearing section through the identity of the moment', async () => {
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: DAEMON } } })
+    await start().primeAll()
+    expect(payloadOf('tabs.A')).toContain(WIRE)
+    expect(payloadOf('tabs.A')).not.toContain('"hostId":"h1"')
+    expect(payloadOf('settings')).toContain(`sessions:${WIRE}`)
+  })
+
+  it('an identity CONFLICT builds nothing that names hosts (problem host-identity-conflict, once); workspaces still goes; clearing it rebuilds them all', async () => {
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: DAEMON }, h2: { ...host('h2'), daemonId: DAEMON } }, hostOrder: ['h1', 'h2'] })
+    await start().primeAll()
+    expect(keys()).toEqual(['workspaces'])
+    expect(problems).toEqual([{ kind: 'host-identity-conflict', detail: 'h1, h2' }])
+    expect(buildSectionPayload('hosts')).toBeNull()
+    expect(buildSectionPayload('settings')).toBeNull()
+    expect(buildSectionPayload('tabs.A')).toBeNull()
+    expect(buildSectionPayload('workspaces')).not.toBeNull()
+
+    reports = []
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: DAEMON } }, hostOrder: ['h1'] })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B'])
+    expect(problems).toHaveLength(1)
   })
 })
