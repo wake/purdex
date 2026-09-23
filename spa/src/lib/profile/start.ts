@@ -25,6 +25,9 @@
 //                edited in place → BLOCKED, no driver in any window, until the
 //                old value is back, or `attachMaster` / `detachMaster`; a new
 //                `token` alone → the same daemon, the driver is rebuilt.
+//                And it watches EVERY host's identity (`hostIdentityBlockOf`): a host at a daemon other
+//                than its record, or two hosts of one daemon → BLOCKED the same way, until it is mended;
+//                judged on entering and on every host-store change, runtime-only ones included.
 //   leading      this window holds the lease (and the mode is not blocked). ONLY here: executor, WS
 //                subscription, collector, host watcher. Losing the lease
 //                disposes all four and the window is a follower again.
@@ -87,7 +90,7 @@
 import { getClientId, isClientIdPersisted } from '../client-identity'
 import { effectiveDeviceName } from '../device-name'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } from '../../stores/useLocalProfilesStore'
 import { endpointOfHost, isMasterPair, isSyncDirection, pendingDetachKey, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
@@ -95,6 +98,7 @@ import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
+import { identityOfSync } from './host-identity'
 import type { Executor, ExecutorStatus, SectionLock } from './executor'
 import { contendForLeadership, leaderWindowId, readLeaderLease } from './leader'
 import type { Leadership } from './leader'
@@ -128,8 +132,10 @@ export interface ProfileSyncState {
   leader: boolean
   /** Nothing syncs, in any window (see `enterMasterMode`): the master host's ip / port is not the one the
    *  profile was attached at · the attachment answered 404, i.e. the profile is not on the daemon any more ·
-   *  an `attachMaster` is in progress somewhere (transient: lifted by its outcome, or by its expiry). */
-  blocked: 'master-endpoint-changed' | 'profile-gone' | 'suspended' | null
+   *  a host of this device is at a daemon other than its record (`host-identity-mismatch`) · two hosts claim
+   *  one daemon (`host-identity-conflict`) — see `hostIdentityBlock` · an `attachMaster` is in progress
+   *  somewhere (transient: lifted by its outcome, or by its expiry). */
+  blocked: 'master-endpoint-changed' | 'profile-gone' | HostIdentityBlock | 'suspended' | null
   /** Null in a follower and without a master: only the leader knows. With `blocked: 'profile-gone'` there is
    *  no executor to ask, and it reads what the executor's own `profileGone` reads: `locked:reset`, no sections,
    *  `profileGone: true`. */
@@ -439,6 +445,41 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
   }
 }
 
+// === Host identity (host-sync-identity spec §4, §11.4, §11.9) ===
+
+export type HostIdentityBlock = 'host-identity-mismatch' | 'host-identity-conflict'
+
+type HostsView = Parameters<typeof selectDaemonIdMismatch>[0]
+
+let conflictMemo: { hosts: HostsView['hosts']; conflict: string[] | null } | null = null
+
+/** `identityOfSync(hosts).conflict`, computed once per `hosts` object: runtime-only updates (latency, status…) are
+ *  frequent, and they cannot change it. */
+function conflictOf(hosts: HostsView['hosts']): string[] | null {
+  if (conflictMemo === null || conflictMemo.hosts !== hosts) conflictMemo = { hosts, conflict: identityOfSync(hosts).conflict }
+  return conflictMemo.conflict
+}
+
+/**
+ * Whether this device's hosts PAUSE the profile, and which hosts are the reason (sorted). Null = they do not.
+ *   `host-identity-conflict`  two hosts claim one daemon (or two claims share a sync id): no wire id is certain,
+ *                             so nothing that names hosts can be built or applied.
+ *   `host-identity-mismatch`  a host — ANY host, not only the master's — is at a daemon other than the one its
+ *                             record claims (`selectDaemonIdMismatch`, this window's runtime): its wire id names a
+ *                             daemon this device is not talking to.
+ * The conflict is said first when both hold: it is read off the synced config, so every window says the same;
+ * a mismatch is this window's runtime, and removing a duplicate host often ends it as well.
+ */
+export function hostIdentityBlockOf(state: HostsView): { block: HostIdentityBlock; hostIds: string[] } | null {
+  const conflict = conflictOf(state.hosts)
+  if (conflict !== null) return { block: 'host-identity-conflict', hostIds: conflict }
+  const mismatched = Object.keys(state.hosts).filter((id) => selectDaemonIdMismatch(state, id) !== undefined).sort()
+  return mismatched.length > 0 ? { block: 'host-identity-mismatch', hostIds: mismatched } : null
+}
+
+const sameIdentityBlock = (a: ReturnType<typeof hostIdentityBlockOf>, b: ReturnType<typeof hostIdentityBlockOf>): boolean =>
+  a === null || b === null ? a === b : a.block === b.block && a.hostIds.join('\u0000') === b.hostIds.join('\u0000')
+
 // === Master mode ===
 
 interface MasterMode {
@@ -483,6 +524,19 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
       detail: `host ${master.hostId} points at ${at}, the profile was attached at ${String(useProfileStore.getState().masterEndpoint)}; nothing syncs until it is attached again, detached, or the address is put back`,
     })
   if (blocked && here !== null) blockedProblem(here.at)
+  // PAUSED BY THE HOSTS (`hostIdentityBlockOf`): judged on entering, and again on EVERY host-store change —
+  // runtime-only ones included (a verification lands through `setRuntime`). The window that holds the lease judges
+  // by its own runtime and publishes the result; a follower shows what was published (sync-status.ts).
+  let identity = hostIdentityBlockOf(useHostStore.getState())
+  const identityProblem = (b: NonNullable<typeof identity>): void =>
+    reportProblem({
+      kind: b.block,
+      detail:
+        b.block === 'host-identity-conflict'
+          ? `hosts ${b.hostIds.join(', ')} claim one daemon; nothing syncs until one of them is removed`
+          : `host ${b.hostIds.join(', ')} reaches a daemon other than the one it is recorded as; nothing syncs until its address is fixed or it is removed`,
+    })
+  if (identity !== null) identityProblem(identity)
   const unwatchUnsynced = watchUnsyncedStores()
   const leadership = contendForLeadership()
 
@@ -492,7 +546,7 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   }
   const apply = (isLeader: boolean): void => {
     if (ended) return
-    if (!isLeader || blocked || gone || isSuspended()) follow()
+    if (!isLeader || blocked || gone || identity !== null || isSuspended()) follow()
     else if (leader === null) leader = lead(master, leadership, profileGone)
     changed() // the lease, a block or a suspension moved — or a driver now exists to be asked
   }
@@ -504,6 +558,20 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     reportProblem({ kind: 'profile-gone', detail: `profile ${master.profileId} is not on host ${master.hostId} any more (${detail}); nothing was applied and nothing was dropped` })
   }
   const unsubscribe = leadership.onChange(apply)
+
+  // Subscribed BEFORE the endpoint watcher below, so that when one change moves both, `identity` is already
+  // current when that watcher calls `apply`: a driver is never built on a change that also pauses the profile.
+  const unwatchIdentity = useHostStore.subscribe((next, prev) => {
+    if (ended || (next.hosts === prev.hosts && next.runtime === prev.runtime)) return
+    const now = hostIdentityBlockOf(next)
+    if (sameIdentityBlock(now, identity)) return
+    identity = now
+    if (now !== null) {
+      follow() // at once: nothing built, pushed or applied from here on
+      identityProblem(now)
+    }
+    apply(leadership.isLeader()) // cleared → a new driver on the bases there are, like a reconnect
+  })
 
   // Only a LOCAL edit can do this: a `hosts` payload from the SOT that re-points
   // the master's own host is refused by apply-to-stores.
@@ -553,13 +621,14 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
     master,
     generation,
     isLeader: () => !ended && leadership.isLeader(),
-    blocked: () => (ended ? null : gone ? 'profile-gone' : blocked ? 'master-endpoint-changed' : isSuspended() ? 'suspended' : null),
+    blocked: () => (ended ? null : gone ? 'profile-gone' : blocked ? 'master-endpoint-changed' : (identity?.block ?? (isSuspended() ? 'suspended' : null))),
     reapply,
     leader: () => leader,
     end() {
       if (ended) return
       ended = true
       unsubscribe()
+      unwatchIdentity()
       unwatchEndpoint()
       if (wake !== null) clearTimeout(wake)
       wake = null

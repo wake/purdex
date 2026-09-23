@@ -1062,6 +1062,161 @@ describe('the master host is edited in place', () => {
   })
 })
 
+describe('a host whose daemon is not its record, or two hosts of one daemon: the profile PAUSES (host-sync-identity §4, §11.4, §11.9)', () => {
+  const D1 = 'mlab:278cbm'
+  const D2 = 'air:111111'
+  const claim = (id: string, daemonId: string): void => {
+    const { hosts } = useHostStore.getState()
+    useHostStore.setState({ hosts: { ...hosts, [id]: { ...hosts[id], daemonId } } })
+  }
+  /** Runtime only: this window reached another daemon at the host's address. The config is not touched. */
+  const mismatch = (id: string): void => {
+    const daemonId = useHostStore.getState().hosts[id].daemonId ?? ''
+    useHostStore.getState().setRuntime(id, { daemonIdMismatch: { stored: daemonId, observed: 'else:zzzzzz', endpoint: EP } })
+  }
+  const clearMismatch = (id: string): void => {
+    const { runtime } = useHostStore.getState()
+    const { daemonIdMismatch: _gone, ...rest } = runtime[id]
+    useHostStore.setState({ runtime: { ...runtime, [id]: rest } })
+  }
+
+  beforeEach(() => {
+    claim('h1', D1)
+    claim('h2', D2)
+  })
+
+  async function leading(): Promise<void> {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    vi.mocked(putAttachment).mockClear()
+  }
+
+  it('a mismatch on ANY host when master mode is entered — not only the master\'s: nothing is built, nothing asked', async () => {
+    connect('h1')
+    mismatch('h2')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.executors).toHaveLength(0)
+    expect(h.collectors).toHaveLength(0)
+    expect(putAttachment).not.toHaveBeenCalled()
+    expect(profileSyncState().blocked).toBe('host-identity-mismatch')
+    expect(profileSyncState().problems.map((p) => p.kind)).toEqual(['host-identity-mismatch'])
+    expect(profileSyncState().problems[0].detail).toContain('h2')
+    // not a detach, not a wipe
+    expect(useProfileStore.getState().masterHostId).toBe('h1')
+    expect(clearSectionStore).not.toHaveBeenCalled()
+  })
+
+  it('appears WHILE LEADING, from a runtime-only update: the driver is disposed at once — and nothing is sent or applied after', async () => {
+    await leading()
+    mismatch('h2') // setRuntime: `hosts` untouched
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.collectors[0].stop).toHaveBeenCalledTimes(1)
+    expect(h.wsListeners.size).toBe(0)
+    expect(profileSyncState()).toMatchObject({ blocked: 'host-identity-mismatch', status: null })
+
+    // it stays down: reconnects, the lease moving, time
+    disconnect('h1')
+    connect('h1')
+    h.leaderships[0].set(false)
+    h.leaderships[0].set(true)
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(h.executors).toHaveLength(1)
+    expect(putAttachment).not.toHaveBeenCalled()
+    // a remote event that turns up has nobody to apply it
+    expect(h.executors[0].onRemoteEvent).not.toHaveBeenCalled()
+  })
+
+  it('cleared (the address fixed, or the host removed): the driver is built again and syncs — the bases kept', async () => {
+    await leading()
+    mismatch('h2')
+    clearMismatch('h2')
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(2)
+    expect(h.executors[1].onReconnected).toHaveBeenCalledTimes(1)
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    expect(clearSectionStore).not.toHaveBeenCalled()
+
+    // removing the host is the other way out
+    mismatch('h2')
+    expect(h.executors[1].dispose).toHaveBeenCalledTimes(1)
+    useHostStore.getState().removeHost('h2')
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(3)
+  })
+
+  it('a host-store change that changes nothing of it does not rebuild the driver', async () => {
+    await leading()
+    useHostStore.getState().setRuntime('h2', { latency: 12 })
+    useHostStore.getState().setRuntime('h1', { latency: 5 })
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    expect(h.executors[0].dispose).not.toHaveBeenCalled()
+  })
+
+  it('two hosts claiming one daemon: host-identity-conflict — on entering, and when it appears', async () => {
+    await leading()
+    claim('h2', D1)
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(profileSyncState().blocked).toBe('host-identity-conflict')
+    expect(profileSyncState().problems.at(-1)?.detail).toMatch(/h1.*h2/)
+    claim('h2', D2)
+    await flush()
+    expect(profileSyncState().blocked).toBeNull()
+    expect(h.executors).toHaveLength(2)
+  })
+
+  it('both at once: the conflict is said — it is the same in every window, and removing a duplicate may well end the mismatch too', async () => {
+    connect('h1')
+    claim('h2', D1)
+    mismatch('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    expect(profileSyncState().blocked).toBe('host-identity-conflict')
+    claim('h2', D2) // the conflict gone, the mismatch still there
+    expect(profileSyncState().blocked).toBe('host-identity-mismatch')
+    expect(h.executors).toHaveLength(0)
+  })
+
+  it('what blocks the master itself comes first: the endpoint edited in place, the profile gone', async () => {
+    await leading()
+    mismatch('h2')
+    const { hosts } = useHostStore.getState()
+    useHostStore.setState({ hosts: { ...hosts, h1: { ...hosts.h1, port: 7999 } } })
+    expect(profileSyncState().blocked).toBe('master-endpoint-changed')
+  })
+
+  it('the leader publishes it; a follower shows what the leader published', async () => {
+    await leading()
+    mismatch('h2')
+    vi.advanceTimersByTime(250)
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE_STATUS) ?? 'null')).toMatchObject({ blocked: 'host-identity-mismatch', status: null })
+  })
+
+  it.each(['host-identity-mismatch', 'host-identity-conflict'] as const)('a follower reads a published %s — its own runtime is not what decides', async (blocked) => {
+    h.initialLeader = false
+    h.lease = { windowId: 'other', expiresAt: Date.now() + 6_000 }
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const { masterHostId, masterProfileId, attachGeneration } = useProfileStore.getState()
+    const record = { at: Date.now(), leader: 'other', master: `${masterHostId}|${masterProfileId}|${attachGeneration}`, status: null, blocked, problems: [] }
+    localStorage.setItem(STORAGE_KEYS.PROFILE_STATUS, JSON.stringify(record))
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEYS.PROFILE_STATUS, newValue: JSON.stringify(record) }))
+    expect(profileSyncSnapshot()).toMatchObject({ leader: false, remote: true, blocked })
+  })
+})
+
 describe('leader and follower', () => {
   it('a follower runs watchUnsyncedStores only', async () => {
     h.initialLeader = false

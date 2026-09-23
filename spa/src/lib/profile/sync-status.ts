@@ -318,7 +318,7 @@ export function __resetSyncStatusForTest(): void {
 
 // === Parsing: anything that is not exactly the shape is "not there" ===
 
-const BLOCKED: ReadonlyArray<ProfileSyncState['blocked']> = ['master-endpoint-changed', 'profile-gone', 'suspended', null]
+const BLOCKED: ReadonlyArray<ProfileSyncState['blocked']> = ['master-endpoint-changed', 'profile-gone', 'host-identity-mismatch', 'host-identity-conflict', 'suspended', null]
 
 function parsePublished(raw: string | null): PublishedStatus | null {
   if (raw === null || raw.length > MAX_PUBLISHED_STATUS_CHARS) return null
