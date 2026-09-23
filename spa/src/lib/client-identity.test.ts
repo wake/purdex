@@ -255,3 +255,37 @@ describe('isClientIdPersisted', () => {
     expect(isClientIdPersisted()).toBe(false)
   })
 })
+
+// A pure read for the residue cleanup: the legacy `purdex-sync-state` may be dropped only once the id has its own
+// key. Unlike `isClientIdPersisted()` it must never create or adopt an id.
+describe('hasPersistedClientId', () => {
+  it('is false when nothing is stored, and stays a pure read (no id is created)', async () => {
+    localStorage.setItem(LEGACY_KEY, legacyEnvelope(LEGACY_ID))
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const { hasPersistedClientId } = await openRealm()
+    expect(hasPersistedClientId()).toBe(false)
+    expect(setItem).not.toHaveBeenCalled()
+    expect(localStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('is true when the key holds a well-formed id', async () => {
+    localStorage.setItem(KEY, 'c_aaaaaaaaaaaa')
+    const { hasPersistedClientId } = await openRealm()
+    expect(hasPersistedClientId()).toBe(true)
+  })
+
+  it('is false when the key holds something that is not an id', async () => {
+    localStorage.setItem(KEY, 'not-an-id')
+    const { hasPersistedClientId } = await openRealm()
+    expect(hasPersistedClientId()).toBe(false)
+  })
+
+  it('is false when storage cannot be read', async () => {
+    localStorage.setItem(KEY, 'c_aaaaaaaaaaaa')
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError')
+    })
+    const { hasPersistedClientId } = await openRealm()
+    expect(hasPersistedClientId()).toBe(false)
+  })
+})

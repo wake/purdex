@@ -51,7 +51,23 @@ function readStored(): string | null {
   }
 }
 
-/** `state.clientId` out of zustand persist's `{state, version}` envelope for the Sync store. */
+/**
+ * Whether the id already has its own key — a pure read: unlike `isClientIdPersisted()` it never creates or adopts
+ * an id. The boot residue cleanup (lib/legacy-residue-cleanup.ts) drops `purdex-sync-state` only when this is true,
+ * because until then that key is the adoption source below.
+ */
+export function hasPersistedClientId(): boolean {
+  return readStored() !== null
+}
+
+/**
+ * `state.clientId` out of zustand persist's `{state, version}` envelope for the Sync store.
+ *
+ * Kept (#1303): `purdex-client-identity` only exists since 2026-09-20 and is written on first use (a backup, a
+ * profile attach), not at boot, so an install may still hold its id only here. Dropping this adoption would silently give such a device a new identity
+ * (its backups and profile writes on the daemon are filed under the old one). It can go once a release has shipped
+ * in which every install is known to have written its own key.
+ */
 function readLegacySyncClientId(): string | null {
   try {
     const raw = browserStorage.getItem(STORAGE_KEYS.SYNC_STATE)
