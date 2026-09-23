@@ -226,8 +226,8 @@ func (r *RealExecutor) ActivePaneMetadata(ctx context.Context, sessionName strin
 	if md, ok := parseActivePaneMetadata(string(out)); ok {
 		return md, nil
 	}
-	// The field boundaries of the combined answer cannot be trusted (a raw
-	// TAB in pane_title or window_name, or a short answer): ask field by
+	// The field boundaries of the combined answer cannot be trusted (a TAB
+	// the substitution did not remove, or a short answer): ask field by
 	// field, as before #1293, rather than return misaligned values.
 	return r.activePaneMetadataPerField(ctx, sessionName)
 }
@@ -236,14 +236,25 @@ func (r *RealExecutor) ActivePaneMetadata(ctx context.Context, sessionName strin
 // display-message (#1293 §3.1/§3.4: seven execs per session made a large
 // host's list read approach its deadline), TAB-joined.
 //
-// The order is chosen so the answer can be split safely. pane_title and
-// window_name are text a user or a program in the pane controls and may
-// carry a raw TAB, so each sits between two ids of a fixed shape
-// ($N, @N, %N) that can never contain one; a TAB inside either shifts the
-// ids out of their slots, which parseActivePaneMetadata detects. session_name
-// cannot hold a raw TAB (tmux vis-encodes it). pane_current_command is last
-// and absorbs any TABs of its own.
-const activePaneMetadataFormat = "#{session_id}\t#{pane_title}\t#{window_id}\t#{window_name}\t#{pane_id}\t#{session_name}\t#{pane_current_command}"
+// pane_title and window_name are text a user or a program in the pane
+// controls, and session_name / pane_current_command are free text too, so
+// each goes through tmux's substitution modifier #{s/<TAB>/ /:…}: tmux
+// replaces every TAB in the value with a space before printing, and the six
+// separators are the only TABs in the answer. That is the same value the
+// per-field read yields, since sanitizeTmuxMetadata maps TAB to a space
+// anyway. The ids ($N, @N, %N) cannot contain a TAB and need no modifier.
+//
+// parseActivePaneMetadata is the second line for a tmux that does not apply
+// the modifier: it demands exactly seven fields and each id in its slot
+// ($N, @N, %N fence the free-text fields), else the read falls back.
+const activePaneMetadataFormat = "#{session_id}\t" + tabsToSpace + "pane_title}" +
+	"\t#{window_id}\t" + tabsToSpace + "window_name}" +
+	"\t#{pane_id}\t" + tabsToSpace + "session_name}" +
+	"\t" + tabsToSpace + "pane_current_command}"
+
+// tabsToSpace opens a format whose value has every TAB replaced by a space:
+// tabsToSpace + "field}" is #{s/<TAB>/ /:field} (the pattern is a literal TAB).
+const tabsToSpace = "#{s/\t/ /:"
 
 const activePaneMetadataFieldCount = 7
 
@@ -257,13 +268,15 @@ var (
 // FIRST and only then sanitises each field — sanitizeTmuxMetadata maps TAB to
 // a space, so the separator cannot survive into a field value.
 //
-// SplitN, so the last field (pane_current_command) absorbs the rest of the
-// line. ok is false — and the caller must fall back to per-field reads —
-// when the answer is short of fields or any fenced id is not in its slot:
-// that is what a raw TAB in pane_title or window_name looks like, and the
-// fields around it would be misaligned. Never a half-filled struct.
+// ok is false — and the caller must fall back to per-field reads — when the
+// answer does not have exactly seven fields or any fenced id is not in its
+// slot. With the substitution modifier applied neither can happen; a tmux
+// that ignored it and printed a raw TAB inside a field yields extra fields,
+// and even a field that forges an id in every slot it shifts (codex critic
+// on dfafdf1a: pane_title "x<TAB>@9<TAB>y<TAB>%9") is caught by the count.
+// Never a half-filled struct.
 func parseActivePaneMetadata(out string) (md TmuxPaneMetadata, ok bool) {
-	parts := strings.SplitN(strings.TrimSuffix(out, "\n"), "\t", activePaneMetadataFieldCount)
+	parts := strings.Split(strings.TrimSuffix(out, "\n"), "\t")
 	if len(parts) != activePaneMetadataFieldCount ||
 		!tmuxSessionIDRe.MatchString(parts[0]) ||
 		!tmuxWindowIDRe.MatchString(parts[2]) ||

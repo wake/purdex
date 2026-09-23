@@ -23,14 +23,20 @@ import (
 // TestHelperProcessTmux, which answers `display-message -p -t <t> <format>`
 // by expanding every #{name} in the format from a JSON value map — so the
 // per-field and the combined invocation see exactly the same raw tmux output.
+//
+// It also understands tmux's substitution modifier #{s/<pat>/<rep>/:name}
+// (pat taken literally, which is all the combined format needs). With
+// PDX_HELPER_TMUX_NO_SUBST=1 it models a tmux that ignores the modifier and
+// prints the raw value, TABs and all.
 const (
-	helperEnv       = "PDX_HELPER_TMUX"
-	helperValuesEnv = "PDX_HELPER_TMUX_VALUES"
-	helperFailEnv   = "PDX_HELPER_TMUX_FAIL"
-	helperLogEnv    = "PDX_HELPER_TMUX_LOG"
+	helperEnv        = "PDX_HELPER_TMUX"
+	helperValuesEnv  = "PDX_HELPER_TMUX_VALUES"
+	helperFailEnv    = "PDX_HELPER_TMUX_FAIL"
+	helperLogEnv     = "PDX_HELPER_TMUX_LOG"
+	helperNoSubstEnv = "PDX_HELPER_TMUX_NO_SUBST"
 )
 
-var formatVarRe = regexp.MustCompile(`#\{([a-z_]+)\}`)
+var formatVarRe = regexp.MustCompile(`#\{(?:s/([^/]*)/([^/]*)/:)?([a-z_]+)\}`)
 
 func TestHelperProcessTmux(t *testing.T) {
 	if os.Getenv(helperEnv) != "1" {
@@ -63,8 +69,14 @@ func TestHelperProcessTmux(t *testing.T) {
 		fmt.Fprintf(os.Stderr, "bad values: %v\n", err)
 		os.Exit(2)
 	}
+	noSubst := os.Getenv(helperNoSubstEnv) == "1"
 	out := formatVarRe.ReplaceAllStringFunc(args[4], func(m string) string {
-		return values[formatVarRe.FindStringSubmatch(m)[1]]
+		sm := formatVarRe.FindStringSubmatch(m)
+		v := values[sm[3]]
+		if strings.HasPrefix(m, "#{s/") && !noSubst {
+			v = strings.ReplaceAll(v, sm[1], sm[2])
+		}
+		return v
 	})
 	fmt.Fprint(os.Stdout, out+"\n")
 	os.Exit(0)
@@ -74,6 +86,7 @@ func TestHelperProcessTmux(t *testing.T) {
 // returns the path of its invocation log (one line per tmux exec).
 func installHelperTmux(t *testing.T, values map[string]string, fail bool) string {
 	t.Helper()
+	t.Setenv(helperNoSubstEnv, "")
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "calls.log")
 	script := fmt.Sprintf("#!/bin/sh\nexec %q -test.run='^TestHelperProcessTmux$' -- \"$@\"\n", os.Args[0])
@@ -116,9 +129,12 @@ func helperCalls(t *testing.T, logPath string) []string {
 //
 // pane_title and window_name are text a user or a program in the pane can set,
 // so they may carry a raw TAB (the combined read's separator). The combined
-// format fences each of them between two fixed-shape ids; when a TAB shifts
-// the ids out of place the read falls back to per-field queries (wantCalls 8 =
-// 1 combined + 7 per-field) instead of returning misaligned fields.
+// format has tmux replace every TAB in the free-text fields with a space
+// (#{s/<TAB>/ /:…}), so a tmux that honours the modifier answers in ONE exec
+// whatever the fields hold. noSubst models a tmux that ignores the modifier:
+// then any TAB beyond the six separators makes the read fall back to
+// per-field queries (wantCalls 8 = 1 combined + 7 per-field) instead of
+// returning misaligned fields.
 func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 	base := map[string]string{
 		"session_id":           "$3",
@@ -148,6 +164,7 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 	cases := []struct {
 		name      string
 		values    map[string]string
+		noSubst   bool
 		fail      bool
 		want      tmux.TmuxPaneMetadata
 		wantErr   bool
@@ -160,14 +177,70 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 			wantCalls: 1,
 		},
 		{
-			name:      "TAB in pane_title falls back to per-field",
+			name:      "TAB in pane_title: tmux substitutes it, one exec",
 			values:    with("pane_title", "my\ttitle"),
+			want:      baseWant,
+			wantCalls: 1,
+		},
+		{
+			name:   "TAB in window_name: tmux substitutes it, one exec",
+			values: with("window_name", "z\tsh"),
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "my title", WindowName: "z sh", PaneCurrentCommand: "vim",
+			},
+			wantCalls: 1,
+		},
+		{
+			name:   "TABs in pane_title and window_name: one exec",
+			values: with("pane_title", "a\tb\tc", "window_name", "\tw\t"),
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "a b c", WindowName: "w", PaneCurrentCommand: "vim",
+			},
+			wantCalls: 1,
+		},
+		{
+			// codex critic on dfafdf1a: this title puts a well-shaped id in
+			// every fence it shifts, so the shape checks alone would accept
+			// @9 / %9 as the window / pane ids. Substituted, it is one field.
+			name:   "pane_title forging both fenced ids: substituted, real ids kept",
+			values: with("pane_title", "x\t@9\ty\t%9"),
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "x @9 y %9", WindowName: "zsh", PaneCurrentCommand: "vim",
+			},
+			wantCalls: 1,
+		},
+		{
+			name:   "window_name forging the pane id and session name: substituted",
+			values: with("window_name", "w\t%9\tevil"),
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "my title", WindowName: "w %9 evil", PaneCurrentCommand: "vim",
+			},
+			wantCalls: 1,
+		},
+		{
+			name:   "TAB in session_name: substituted",
+			values: with("session_name", "d\tev"),
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "d ev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "my title", WindowName: "zsh", PaneCurrentCommand: "vim",
+			},
+			wantCalls: 1,
+		},
+		{
+			name:      "tmux ignoring the modifier: TAB in pane_title falls back",
+			values:    with("pane_title", "my\ttitle"),
+			noSubst:   true,
 			want:      baseWant,
 			wantCalls: 8,
 		},
 		{
-			name:   "TAB in window_name falls back to per-field",
-			values: with("window_name", "z\tsh"),
+			name:    "tmux ignoring the modifier: TAB in window_name falls back",
+			values:  with("window_name", "z\tsh"),
+			noSubst: true,
 			want: tmux.TmuxPaneMetadata{
 				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
 				PaneTitle: "my title", WindowName: "z sh", PaneCurrentCommand: "vim",
@@ -175,20 +248,35 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 			wantCalls: 8,
 		},
 		{
-			name:   "TABs in pane_title and window_name fall back to per-field",
-			values: with("pane_title", "a\tb\tc", "window_name", "\tw\t"),
+			name:    "tmux ignoring the modifier: pane_title mimicking one id falls back",
+			values:  with("pane_title", "x\t@9\ty"),
+			noSubst: true,
 			want: tmux.TmuxPaneMetadata{
 				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
-				PaneTitle: "a b c", WindowName: "w", PaneCurrentCommand: "vim",
+				PaneTitle: "x @9 y", WindowName: "zsh", PaneCurrentCommand: "vim",
 			},
 			wantCalls: 8,
 		},
 		{
-			// A title that forges the id shapes on its own still cannot pass:
-			// every fence it shifts lands on a field of the wrong shape.
-			name:      "TAB-laden pane_title that mimics ids falls back",
-			values:    with("pane_title", "x\t@9\ty"),
-			want:      tmux.TmuxPaneMetadata{SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7", PaneTitle: "x @9 y", WindowName: "zsh", PaneCurrentCommand: "vim"},
+			// Every fence holds a well-shaped (forged) id here; only the TAB
+			// count gives the forgery away.
+			name:    "tmux ignoring the modifier: pane_title forging both ids falls back",
+			values:  with("pane_title", "x\t@9\ty\t%9"),
+			noSubst: true,
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "x @9 y %9", WindowName: "zsh", PaneCurrentCommand: "vim",
+			},
+			wantCalls: 8,
+		},
+		{
+			name:    "tmux ignoring the modifier: TAB in pane_current_command falls back",
+			values:  with("pane_current_command", "cmd\twith\ttabs"),
+			noSubst: true,
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "my title", WindowName: "zsh", PaneCurrentCommand: "cmd with tabs",
+			},
 			wantCalls: 8,
 		},
 		{
@@ -202,7 +290,7 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
 				PaneTitle: "a b c [31m", WindowName: "win dow", PaneCurrentCommand: "cmd with tabs",
 			},
-			wantCalls: 1, // the last field absorbs its own TABs: no fallback
+			wantCalls: 1,
 		},
 		{
 			name:   "embedded newline inside a field",
@@ -232,6 +320,9 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			logPath := installHelperTmux(t, tc.values, tc.fail)
+			if tc.noSubst {
+				t.Setenv(helperNoSubstEnv, "1")
+			}
 			got, err := (&tmux.RealExecutor{}).ActivePaneMetadata(context.Background(), "dev")
 			if calls := helperCalls(t, logPath); len(calls) != tc.wantCalls {
 				t.Fatalf("want %d tmux exec(s), got %d: %v", tc.wantCalls, len(calls), calls)
@@ -259,6 +350,111 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 				t.Fatalf("combined read differs from the per-field read:\n %+v\n %+v", got, perField)
 			}
 		})
+	}
+}
+
+// The free-text fields — pane_title, window_name, session_name and
+// pane_current_command — each go through tmux's substitution modifier so a
+// TAB inside them reaches the parser as a space, and the six separators are
+// the only TABs in the answer. The fixed-shape ids need no modifier.
+func TestActivePaneMetadataFormat_SubstitutesTabsInFreeTextFields(t *testing.T) {
+	sub := func(field string) string { return "#{s/\t/ /:" + field + "}" }
+	want := strings.Join([]string{
+		"#{session_id}",
+		sub("pane_title"),
+		"#{window_id}",
+		sub("window_name"),
+		"#{pane_id}",
+		sub("session_name"),
+		sub("pane_current_command"),
+	}, "\t")
+	if tmux.ActivePaneMetadataFormat != want {
+		t.Fatalf("combined format =\n %q\nwant\n %q", tmux.ActivePaneMetadataFormat, want)
+	}
+}
+
+// Against a real tmux: a program in the pane tries to set a title that forges
+// both fenced ids (OSC 2 with raw TABs, the codex critic's input). Whether or
+// not this tmux lets the TABs into the title, the combined read must equal
+// the per-field read and carry the pane's real window and pane ids.
+func TestRealExecutorActivePaneMetadata_RealTmuxForgedTitle(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	name := fmt.Sprintf("pdx1293-forged-title-%d", os.Getpid())
+	tm := func(args ...string) (string, error) {
+		out, err := exec.Command("tmux", args...).Output()
+		return strings.TrimSuffix(string(out), "\n"), err
+	}
+	if _, err := tm("new-session", "-d", "-s", name, "-x", "80", "-y", "24", "/bin/sh"); err != nil {
+		t.Skipf("cannot start a tmux session: %v", err)
+	}
+	t.Cleanup(func() { _, _ = tm("kill-session", "-t", "="+name) })
+	target := "=" + name + ":"
+	title := func() string {
+		out, err := tm("display-message", "-p", "-t", target, "#{pane_title}")
+		if err != nil {
+			t.Fatalf("read pane_title: %v", err)
+		}
+		return out
+	}
+	waitTitle := func(pred func(string) bool, d time.Duration) (string, bool) {
+		deadline := time.Now().Add(d)
+		for {
+			got := title()
+			if pred(got) || time.Now().After(deadline) {
+				return got, pred(got)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	// A TAB-free title first, so a rejected forgery is told apart from an
+	// OSC 2 that never reached tmux.
+	const marker = "pdx1293-marker"
+	if _, err := tm("send-keys", "-t", target, `printf '\033]2;`+marker+`\033\\'`, "Enter"); err != nil {
+		t.Fatalf("send-keys: %v", err)
+	}
+	if got, ok := waitTitle(func(s string) bool { return s == marker }, 3*time.Second); !ok {
+		t.Fatalf("OSC 2 did not set the pane title: %q", got)
+	}
+	// %% so printf emits a literal %9 rather than failing on a bad conversion.
+	if _, err := tm("send-keys", "-t", target, `printf '\033]2;x\t@9\ty\t%%9\033\\'`, "Enter"); err != nil {
+		t.Fatalf("send-keys: %v", err)
+	}
+	raw, _ := waitTitle(func(s string) bool { return s != marker }, time.Second)
+	tabEntered := strings.Contains(raw, "\t")
+	if !tabEntered {
+		v, _ := tm("-V")
+		t.Logf("%s kept the TAB out of the pane title (title now %q): the forged-title assertion does not apply, only equivalence is checked", v, raw)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := (&tmux.RealExecutor{}).ActivePaneMetadata(ctx, name)
+	if err != nil {
+		t.Fatalf("ActivePaneMetadata: %v", err)
+	}
+	perField, err := (&tmux.RealExecutor{}).ActivePaneMetadataPerField(ctx, name)
+	if err != nil {
+		t.Fatalf("per-field read: %v", err)
+	}
+	if got != perField {
+		t.Fatalf("combined read differs from the per-field read:\n %+v\n %+v", got, perField)
+	}
+	windowID, err := tm("list-windows", "-t", "="+name, "-F", "#{window_id}")
+	if err != nil {
+		t.Fatalf("list-windows: %v", err)
+	}
+	paneID, err := tm("list-panes", "-t", target, "-F", "#{pane_id}")
+	if err != nil {
+		t.Fatalf("list-panes: %v", err)
+	}
+	if got.WindowID != windowID || got.PaneID != paneID {
+		t.Fatalf("ids = %s/%s, want the real %s/%s", got.WindowID, got.PaneID, windowID, paneID)
+	}
+	if tabEntered && got.PaneTitle != "x @9 y %9" {
+		t.Fatalf("PaneTitle = %q, want the forged title as one sanitised field", got.PaneTitle)
 	}
 }
 
