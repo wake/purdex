@@ -318,6 +318,29 @@ func TestGetSession_NotFoundDeleteFailureIsError(t *testing.T) {
 	assert.Nil(t, info)
 }
 
+// The public, caller-context entry point keeps the same answer: a list that
+// came back past the caller's deadline without the target is the deadline,
+// not (nil, nil), and the target's meta row is left alone.
+func TestGetSessionContext_ListAtCallerDeadlineWithoutTargetIsCtxError(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
+	fake.AddSessionWithID("$1", "other", "/tmp")
+	require.NoError(t, meta.SetMeta("$9", store.SessionMeta{Mode: "terminal"}))
+	code, err := EncodeSessionID("$9")
+	require.NoError(t, err)
+	fake.SetReadHook(listReturnsAtDeadline)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	info, err := mod.GetSessionContext(ctx, code)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, info)
+	got, err := meta.GetMeta("$9")
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+}
+
 // TmuxInstanceContext probes under the caller's context (the peers
 // inventory's budget, #1293).
 func TestTmuxInstanceContext_ProbesUnderCallerContext(t *testing.T) {
