@@ -57,7 +57,8 @@ func newProvenanceTestModule(t *testing.T, tmuxInstance string) *Module {
 }
 
 // buildNormalizedForTest runs the production pair the hook handler runs —
-// applyFrameEvent then buildProjectionNormalized then attachProvenance — so
+// applyFrameEvent then buildProjectionNormalized then attachProvenance and
+// attachExit — so
 // the tests exercise the real attachment condition instead of a re-implemented
 // copy of it. Mirrors handler.go's derive → apply → normalize sequence for a
 // request with no tmux session name (pane projection only).
@@ -76,6 +77,7 @@ func (m *Module) buildNormalizedForTest(t *testing.T, req EventRequest) agentpkg
 	}
 	normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 	attachProvenance(&normalized, frameMeta)
+	attachExit(&normalized, frameMeta.Exit)
 	return normalized
 }
 

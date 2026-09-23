@@ -607,6 +607,9 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// existing meaning (the session projection winner) — the two identities
 	// coexist and never mix.
 	attachProvenance(&normalized, frameMeta)
+	// Exit envelope (agent-last-state spec §1): granted only when a
+	// SessionEnd deleted the sender's own root frame.
+	attachExit(&normalized, frameMeta.Exit)
 	m.mu.Lock()
 	syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 	m.mu.Unlock()

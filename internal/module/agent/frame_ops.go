@@ -79,6 +79,12 @@ type FrameTraceMeta struct {
 	// return path leaves it nil by zero value, which is the fail-safe: no
 	// field set, no envelope emitted. See spec §4.3.1.
 	Provenance *Provenance
+
+	// Exit is non-nil only when this event was a SessionEnd that deleted the
+	// sender's own ROOT frame. It is built from the frame before the delete
+	// (agent-last-state spec §1); a proxy detach, a child frame and an orphan
+	// SessionEnd leave it nil.
+	Exit *Exit
 }
 
 // recordSessionIdentity stores the sender's own agent session id and cwd on
@@ -190,6 +196,11 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// the DB in a recoverable state (child row + parent ref
 			// both still present; sweep canonicalize / next
 			// SessionEnd retry can fix it).
+			//
+			// The exit envelope is taken from the frame BEFORE anything is
+			// deleted: after the delete there is no row left to read the
+			// session id or frame id from. nil for a child frame.
+			exit := exitForFrame(*frame, m.sessionTmuxInstance(), ExitReasonSessionEnd, broadcastTs/int64(time.Millisecond))
 			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
 				return nil, FrameTraceMeta{}, derr
 			}
@@ -204,6 +215,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				Reason:        "session_end",
 				Before:        before,
 				After:         map[string]any{},
+				Exit:          exit,
 			}, err
 		}
 		// frame == nil: sender has no frame of its own. This is either a
