@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.436] - 2026-09-23
+
+### Fix：wizard「拉取」只套用你確認過的主機清單版本（#1366，#1370）
+
+wizard 的確認到第一次拉取之間，另一台裝置若改了主機清單（例如又拿掉一台主機），以前會直接套用、你不會被告知。
+現在連上同步時帶著你在 wizard 看過的主機清單版本；在它以相符的版本真正套用完成之前，其他區段一律不動作
+（拉、推、還原本機、刪除、自動解鎖都等）。版本不符 → 什麼都不套用、停止同步（等同 Stop sync），並在
+Settings › Profile 留一則通知請你重跑 wizard。本機主機清單早已等於確認版本時直接放行。
+
+### Chore：清除已移除功能留下的資料（#1303，#1373）
+
+- **App 開機時**（一次性、可重跑、不阻塞開機）：刪 IndexedDB `purdex-sync`、localStorage
+  `purdex-workspace-snapshot`／`-prev`；`purdex-sync-state` 只在新的 client 身分已存下時才刪（避免裝置換身分，
+  舊 id 的收養流程保留）。
+- **daemon 啟動時**：刪 data dir 裡的 `sync.db`、`device_state.db`（含 `-wal`／`-shm`）——只刪檔名逐位元組相符的
+  一般檔案（大小寫不同的 `SYNC.DB` 等使用者檔案保留），找不到不報錯，每刪一個記一行 log。**需要重新部署 daemon。**
+
 ## [1.0.0-alpha.435] - 2026-09-23
 
 ### Fix：Profile Sync 終於能跨兩台真實裝置同步——主機以 daemon 身分對應，不再靠各裝置亂數的 host id（#1359，#1365，#1362）
