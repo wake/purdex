@@ -108,7 +108,9 @@ import { masterAttachedInStorage, useProfileStore } from '../../stores/useProfil
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import { createWorkspace } from '../../types/tab'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import { nextWorkspaceName } from '../../features/workspace/lib/workspace-naming'
 import { generateId } from '../id'
 import { STORAGE_KEYS } from '../storage/keys'
 import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
@@ -337,17 +339,20 @@ interface WorldCopy {
  * is kept as it is — it was dangling before. `Workspace.moduleConfig` is opaque
  * to this file and holds no id today (files: a project path).
  */
+/** A new id that is in `taken` nowhere — and is from now on. */
+function freshId(taken: Set<string>): string {
+  for (;;) {
+    const id = generateId()
+    if (taken.has(id)) continue
+    taken.add(id)
+    return id
+  }
+}
+
 function copyWorld(source: ParkedWorld): WorldCopy {
   const clone = structuredClone(source)
   const taken = idsInUse()
-  const fresh = (): string => {
-    for (;;) {
-      const id = generateId()
-      if (taken.has(id)) continue
-      taken.add(id)
-      return id
-    }
-  }
+  const fresh = (): string => freshId(taken)
 
   const workspaceIds = new Map(clone.workspaces.map((ws) => [ws.id, fresh()]))
   const tabIds = new Map(Object.keys(clone.tabs).map((id) => [id, fresh()]))
@@ -440,6 +445,25 @@ export function copyMasterAsSlave(name: string): CopyResult {
  */
 export function saveScreenAsSlave(name: string): CopyResult {
   return addCopyAsSlave(name, readScreen(), useTabStore.getState().tabOrder)
+}
+
+/**
+ * A new parked slave whose world is ONE empty workspace — no tab, nothing
+ * active in it — named as a workspace the user adds is (`nextWorkspaceName`,
+ * App.tsx's `handleAddWorkspace`; the world has no other name to avoid). The
+ * screen does not move. Hosts and settings are the device's, as for every
+ * slave: a world holds only workspaces and tabs.
+ */
+export function createBlankSlave(name: string): CopyResult {
+  if (normalizeLocalProfileName(name) === null) return { ok: false, reason: 'bad-name' } // before anything is built
+  const old = captureLocal()
+  try {
+    const workspace: Workspace = { ...createWorkspace(nextWorkspaceName([])), id: freshId(idsInUse()) }
+    return useLocalProfilesStore.getState().addSlave(name, { workspaces: [workspace], tabs: {}, activeWorkspaceId: workspace.id, activeTabId: null })
+  } catch (err) {
+    restoreLocal(old)
+    return writeFailed(err)
+  }
 }
 
 // === The move ===

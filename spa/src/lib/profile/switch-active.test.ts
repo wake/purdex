@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ADOPTION_SETTLE_MS, startStandaloneAdoption } from '../../features/workspace/lib/adopt-standalone'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../../features/workspace/store'
+import { nextWorkspaceName } from '../../features/workspace/lib/workspace-naming'
 import { useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
@@ -29,6 +30,7 @@ import { buildSettingsSection, repairTabOwnership } from './sections'
 import {
   PROFILE_SWITCH_LOCK_OWNER,
   copyMasterAsSlave,
+  createBlankSlave,
   deleteSlave,
   promoteToMaster,
   renameSlave,
@@ -901,6 +903,64 @@ describe('saveScreenAsSlave', () => {
 
   it('a blank name: refused', () => {
     expect(saveScreenAsSlave('')).toEqual({ ok: false, reason: 'bad-name' })
+  })
+})
+
+// === C2. createBlankSlave ===
+
+describe('createBlankSlave', () => {
+  it('adds one parked slave, under the name given, whose world is ONE empty workspace named as a new workspace is (`nextWorkspaceName`)', () => {
+    const before = useLocalProfilesStore.getState().slaveOrder.length
+    const result = createBlankSlave('Blank')
+    if (!result.ok) throw new Error(result.reason)
+    const local = useLocalProfilesStore.getState()
+    expect(local.slaveOrder).toHaveLength(before + 1)
+    expect(local.slaveOrder.at(-1)).toBe(result.id)
+    expect(local.slaves[result.id].name).toBe('Blank')
+
+    const w = local.slaves[result.id].world
+    if (w === null) throw new Error('not parked')
+    expect(w.workspaces).toHaveLength(1)
+    const [ws] = w.workspaces
+    expect(ws.name).toBe(nextWorkspaceName([]))
+    expect(ws.name).toBe('Workspace 1')
+    expect(ws).toMatchObject({ tabs: [], activeTabId: null, moduleConfig: {} })
+    expect(w.tabs).toEqual({})
+    expect(w).toMatchObject({ activeWorkspaceId: ws.id, activeTabId: null })
+    // a fresh id: no world on this device holds it
+    for (const other of [masterWorld(), slaveWorld(), otherWorld()]) expect(mintedIds(other).workspaces).not.toContain(ws.id)
+    expect(JSON.stringify(w)).not.toContain('SENTINEL')
+  })
+
+  it('the screen does not move: tabs, workspaces and the active profile are untouched', () => {
+    slaveOnScreen()
+    const before = threeStores().slice(LOCAL_FIELDS.length)
+    expect(createBlankSlave('Blank').ok).toBe(true)
+    threeStores().slice(LOCAL_FIELDS.length).forEach((v, i) => expect(v).toBe(before[i]))
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: 1 })
+    expect(screen()).toEqual(slaveWorld())
+  })
+
+  it('a blank name: refused, nothing added', () => {
+    const before = threeStores()
+    expect(createBlankSlave('')).toEqual({ ok: false, reason: 'bad-name' })
+    threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+  })
+
+  it('switched to, the screen is that one empty workspace; switched back, the master is whole again', async () => {
+    const result = createBlankSlave('Blank')
+    if (!result.ok) throw new Error(result.reason)
+    const parked = useLocalProfilesStore.getState().slaves[result.id].world
+
+    expect(await switchActiveProfile(result.id)).toEqual({ ok: true })
+    expect(screen()).toEqual(parked)
+    expect(useWorkspaceStore.getState().workspaces).toHaveLength(1)
+    expect(useTabStore.getState().tabs).toEqual({})
+    expect(useTabStore.getState().tabOrder).toEqual([])
+
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+    expect(screen()).toEqual(masterWorld())
+    expect(useLocalProfilesStore.getState().slaves[result.id].world).toEqual(parked)
   })
 })
 
