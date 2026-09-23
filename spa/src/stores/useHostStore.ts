@@ -16,6 +16,7 @@ import {
 // host-api.ts imports useHostStore at runtime, so this must stay a type-only
 // import to avoid a require cycle.
 import type { NexInfo } from '../lib/host-api'
+import type { TransferChange } from '../lib/host-transfer-plan'
 import type { IconWeight } from '../types/tab'
 import type { HostColorLayer, HostColorLayerName, HostColorMode, HostColorSet } from '../lib/host-color'
 
@@ -107,6 +108,8 @@ export interface HostInfo {
   nex?: NexInfo
 }
 
+export type TransferApplyResult = { kind: 'applied'; created: string[]; overwritten: string[] } | { kind: 'stale' }
+
 /* ─── Store ─── */
 
 interface HostState {
@@ -130,6 +133,14 @@ interface HostState {
    * has moved or changed token since is dropped, as is an `observed` that fails `isValidDaemonId` (`""` included).
    */
   observeDaemonId: (hostId: string, observed: string, atRequest: HostRequestAt) => void
+  /**
+   * Commits a received host transfer (spec §6.4.5, plan R2/R4) in ONE `set()`: every overwrite target must still be
+   * at the planned `{endpoint, token, daemonId}`, and no touched row may share an endpoint or a daemonId with another
+   * row afterwards — any difference (or a throw) refuses the whole change and writes nothing (`stale`). Created rows
+   * and overwritten rows learn their daemonId through `applyObservedDaemonId` with their own `{endpoint, token}`, so
+   * each ends verified. The payload's name and look are written to both (before H2c, spec §6.4.7).
+   */
+  applyHostTransfer: (change: TransferChange) => TransferApplyResult
   /** Legacy entry point kept for the current color UI: writes `colors.console.main` (alpha preserved, default 100); `null` clears the console set. */
   setHostColor: (hostId: string, color: string | null) => void
   /**
@@ -237,6 +248,92 @@ function withVerified(runtime: Record<string, HostRuntime>, hostId: string, endp
   return { ...runtime, [hostId]: { ...rest, daemonIdVerified: { endpoint, daemonId } } as HostRuntime }
 }
 
+/**
+ * The body of `observeDaemonId` (spec D3), pure over `{hosts, runtime}` so one `set()` can apply it to rows it has
+ * just written (`applyHostTransfer`, plan R2). Returns the next `{hosts, runtime}`, or null when the answer is
+ * dropped: the host is gone, `observed` fails `isValidDaemonId` ("" included), or the host has moved or changed
+ * token since `atRequest`. Its only side effect is the one-time console.warn per (host, observed) mismatch.
+ */
+export function applyObservedDaemonId(
+  state: Pick<HostState, 'hosts' | 'runtime'>,
+  hostId: string,
+  observed: string,
+  atRequest: HostRequestAt,
+): Pick<HostState, 'hosts' | 'runtime'> | null {
+  const host = state.hosts[hostId]
+  // An invalid id ("" included) is "no stable id": nothing learned, flagged or verified.
+  if (!host || !isValidDaemonId(observed)) return null
+  const now = requestAtOf(host)
+  if (now.endpoint !== atRequest.endpoint || now.token !== atRequest.token) return null
+  const endpointAtRequest = atRequest.endpoint
+  if (!host.daemonId) {
+    return {
+      hosts: { ...state.hosts, [hostId]: { ...host, daemonId: observed } },
+      runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed),
+    }
+  }
+  if (host.daemonId === observed) {
+    return { hosts: state.hosts, runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed) }
+  }
+  const key = `${hostId}\u0000${observed}`
+  if (!warnedMismatch.has(key)) {
+    warnedMismatch.add(key)
+    console.warn(
+      `[purdex] host ${hostId}: daemon at ${endpointAtRequest} reports host_id ${observed}, stored ${host.daemonId}`,
+    )
+  }
+  const daemonIdMismatch: DaemonIdMismatch = { stored: host.daemonId, observed, endpoint: endpointAtRequest }
+  const { daemonIdVerified: _v, ...rest } = state.runtime[hostId] ?? ({} as HostRuntime)
+  return {
+    hosts: state.hosts,
+    runtime: { ...state.runtime, [hostId]: { ...rest, daemonIdMismatch } as HostRuntime },
+  }
+}
+
+/** `applyHostTransfer`'s updater body: the next state, or null when the change no longer fits `state`. */
+function transferPatch(
+  state: Pick<HostState, 'hosts' | 'hostOrder' | 'runtime'>,
+  change: TransferChange,
+): { patch: Pick<HostState, 'hosts' | 'hostOrder' | 'runtime'>; created: string[]; overwritten: string[] } | null {
+  const hosts: Record<string, HostConfig> = { ...state.hosts }
+  const hostOrder = [...state.hostOrder]
+  // [hostId, the daemonId it must end verified with, the endpoint + token it was observed at]
+  const observe: [string, string, HostRequestAt][] = []
+  const overwritten: string[] = []
+  for (const o of change.overwrite) {
+    const h = hosts[o.hostId]
+    if (!h || overwritten.includes(o.hostId)) return null
+    const at = requestAtOf(h)
+    if (at.endpoint !== o.expect.endpoint || at.token !== o.expect.token || h.daemonId !== o.expect.daemonId) return null
+    const next = sanitizeHostConfig({ ...h, ...o.look, name: o.name, ip: o.ip, port: o.port, token: o.token })
+    hosts[o.hostId] = next
+    overwritten.push(o.hostId)
+    observe.push([o.hostId, o.expect.daemonId, requestAtOf(next)])
+  }
+  const created: string[] = []
+  for (const c of change.create) {
+    const id = generateId()
+    const host = sanitizeHostConfig({ id, name: c.name, ip: c.ip, port: c.port, token: c.token, order: hostOrder.length, ...c.look })
+    hosts[id] = host
+    hostOrder.push(id)
+    created.push(id)
+    observe.push([id, c.daemonId, requestAtOf(host)])
+  }
+  let working: Pick<HostState, 'hosts' | 'runtime'> = { hosts, runtime: state.runtime }
+  for (const [id, daemonId, at] of observe) {
+    const next = applyObservedDaemonId(working, id, daemonId, at)
+    if (!next) return null
+    working = next
+  }
+  const all = Object.values(working.hosts)
+  for (const [id, daemonId] of observe) {
+    if (!selectDaemonIdVerified(working, id)) return null
+    const endpoint = hostEndpoint(working.hosts[id])
+    if (all.some((h) => h.id !== id && (hostEndpoint(h) === endpoint || h.daemonId === daemonId))) return null
+  }
+  return { patch: { hosts: working.hosts, hostOrder, runtime: working.runtime }, created, overwritten }
+}
+
 /** Exact-endpoint lookup shared by registerLocalHost and the Local daemon UI
  *  (spec §3.3). Strict ip+port equality — 127.0.0.1 and a Tailscale IP are
  *  two endpoints, never merged. */
@@ -289,35 +386,23 @@ export const useHostStore = create<HostState>()(
         }),
 
       observeDaemonId: (hostId, observed, atRequest) =>
+        set((state) => applyObservedDaemonId(state, hostId, observed, atRequest) ?? state),
+
+      applyHostTransfer: (change) => {
+        let result: TransferApplyResult = { kind: 'stale' }
         set((state) => {
-          const host = state.hosts[hostId]
-          // An invalid id ("" included) is "no stable id": nothing learned, flagged or verified.
-          if (!host || !isValidDaemonId(observed)) return state
-          const now = requestAtOf(host)
-          if (now.endpoint !== atRequest.endpoint || now.token !== atRequest.token) return state
-          const endpointAtRequest = atRequest.endpoint
-          if (!host.daemonId) {
-            return {
-              hosts: { ...state.hosts, [hostId]: { ...host, daemonId: observed } },
-              runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed),
-            }
+          try {
+            const next = transferPatch(state, change)
+            if (!next) return state
+            result = { kind: 'applied', created: next.created, overwritten: next.overwritten }
+            return next.patch
+          } catch {
+            result = { kind: 'stale' }
+            return state
           }
-          if (host.daemonId === observed) {
-            return { runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed) }
-          }
-          const key = `${hostId}\u0000${observed}`
-          if (!warnedMismatch.has(key)) {
-            warnedMismatch.add(key)
-            console.warn(
-              `[purdex] host ${hostId}: daemon at ${endpointAtRequest} reports host_id ${observed}, stored ${host.daemonId}`,
-            )
-          }
-          const daemonIdMismatch: DaemonIdMismatch = { stored: host.daemonId, observed, endpoint: endpointAtRequest }
-          const { daemonIdVerified: _v, ...rest } = state.runtime[hostId] ?? ({} as HostRuntime)
-          return {
-            runtime: { ...state.runtime, [hostId]: { ...rest, daemonIdMismatch } as HostRuntime },
-          }
-        }),
+        })
+        return result
+      },
 
       setHostColor: (hostId, color) => {
         const { setHostColorLayer, clearHostColorMode, hosts } = get()
