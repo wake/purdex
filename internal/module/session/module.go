@@ -22,6 +22,12 @@ const listCacheTTL = time.Second
 // the list call fails; it never returns a partial list.
 const listReadTimeout = 5 * time.Second
 
+// ListReadTimeout is listReadTimeout for callers outside this package that
+// deliberately open their own detached read budget instead of following a
+// request (the agent hook handler, which must finish an event even if its
+// sender hangs up). The read itself stays capped by the session module.
+const ListReadTimeout = listReadTimeout
+
 // SessionModule manages tmux sessions, meta cache, and HTTP API.
 type SessionModule struct {
 	meta            *store.MetaStore
