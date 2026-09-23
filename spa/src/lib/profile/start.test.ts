@@ -147,6 +147,8 @@ import { useTabStore } from '../../stores/useTabStore'
 import { pendingDetachKey, selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { STORAGE_KEYS } from '../storage/keys'
+import { useUndoToast } from '../../stores/useUndoToast'
+import en from '../../locales/en.json'
 import { deleteAttachment, listProfiles, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
@@ -1742,6 +1744,8 @@ describe('the pull guard (#1366): the confirmed `hosts` row goes with the direct
     expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
     expect(clearSectionStore).toHaveBeenLastCalledWith(P1)
     expect(useProfileStore.getState().pendingDetaches).toEqual([])
+    // said at the moment it happens, whatever page is open
+    expect(useUndoToast.getState().toast?.message).toBe(en['settings.profile.current.pull_unconfirmed_toast'])
   })
 
   it('the DELETE fails: the local detach stands, the notice stays, and the ghost attachment is remembered', async () => {

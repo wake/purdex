@@ -99,6 +99,8 @@ import { getClientId, isClientIdPersisted } from '../client-identity'
 import { effectiveDeviceName } from '../device-name'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } from '../../stores/useLocalProfilesStore'
 import { endpointOfHost, isMasterPair, isSyncDirection, pendingDetachKey, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
@@ -1179,6 +1181,8 @@ async function detachNow(): Promise<DetachResult> {
 function stopUnconfirmedPull(master: Master): void {
   const generation = storedGeneration()
   useProfileStore.getState().setPullUnconfirmed({ hostId: master.hostId, profileId: master.profileId, at: clock() })
+  // Said at the moment it happens, whatever page is open (the Current block says it for as long as it stands).
+  useUndoToast.getState().show(useI18nStore.getState().t('settings.profile.current.pull_unconfirmed_toast'))
   void serial(async (): Promise<DetachResult> => {
     if (storedGeneration() !== generation || !isCurrentMaster(master)) return { ok: true }
     return detachNow()

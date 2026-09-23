@@ -51,7 +51,7 @@ beforeEach(() => {
   vi.mocked(detachMaster).mockReset()
   vi.mocked(detachMaster).mockResolvedValue({ ok: true })
   vi.mocked(readMasterWorld).mockReturnValue(SETTLED)
-  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true, pendingDetaches: [] })
+  useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true, pendingDetaches: [], pullUnconfirmed: null })
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 })
@@ -632,6 +632,46 @@ describe('the three controls', () => {
     expect(screen.getByTestId('profile-current-block')).toHaveAttribute('data-state', 'none')
     expect(screen.getByTestId('profile-detach-leftover')).toHaveTextContent('mlab')
     expect(screen.getByTestId('profile-detach-retry')).toBeInTheDocument()
+  })
+})
+
+describe('a pull stopped because the hosts moved after it was confirmed (#1366)', () => {
+  const NOTICE = { hostId: 'h1', profileId: 'p_000000000001', at: 1 }
+
+  it('one sentence, with Dismiss — beside the existing "Set up sync…", and beside a pending-detach notice', () => {
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pullUnconfirmed: NOTICE, pendingDetaches: [{ hostId: 'h1', profileId: 'p_000000000001', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 }] })
+    show(NO_MASTER)
+    expect(screen.getByTestId('profile-pull-unconfirmed')).toHaveTextContent(en['settings.profile.current.pull_unconfirmed'])
+    expect(screen.getByTestId('profile-setup-start')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-detach-leftover')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('profile-pull-unconfirmed-dismiss'))
+    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
+    expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
+    expect(screen.getByTestId('profile-detach-leftover')).toBeInTheDocument() // the other notice is not dismissed with it
+  })
+
+  it('in the UI language', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    try {
+      useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pullUnconfirmed: NOTICE })
+      show(NO_MASTER)
+      expect(screen.getByTestId('profile-pull-unconfirmed')).toHaveTextContent(zhTW['settings.profile.current.pull_unconfirmed'])
+    } finally {
+      useI18nStore.getState().setLocale('en')
+    }
+  })
+
+  it('nothing is said without the notice', () => {
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
+    show(NO_MASTER)
+    expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
+  })
+
+  it('opening the wizard (setting sync up again) puts the sentence away', () => {
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pullUnconfirmed: NOTICE })
+    show(NO_MASTER)
+    fireEvent.click(screen.getByTestId('profile-setup-start'))
+    expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
   })
 })
 
