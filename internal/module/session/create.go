@@ -9,6 +9,7 @@ package session
 // left behind (SessionAlive), so it can report or kill it.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -151,8 +152,12 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 		return fail(CreateStageNewSession, err)
 	}
 
-	// Find the newly created session to get its tmux ID.
-	sessions, err := m.tmux.ListSessions()
+	// Find the newly created session to get its tmux ID. The read is bounded
+	// like every session-list read (#1293): a hung tmux must not hold the
+	// create critical section (createMu) forever.
+	listCtx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	sessions, err := m.tmux.ListSessions(listCtx)
+	cancel()
 	if err != nil {
 		return fail(CreateStageList, err)
 	}

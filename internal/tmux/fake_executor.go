@@ -52,6 +52,9 @@ type FakeExecutor struct {
 	// lock. It is the seam for "the world moved while the daemon was reading
 	// metadata" — a tmux server restart being the case that matters.
 	activePaneMetaHook func(sessionName string)
+	// readHook runs at the start of every ListSessions / ActivePaneMetadata
+	// call with the caller's context; see SetReadHook.
+	readHook ReadHook
 	// instance is the fake server's generation, the value SendKeysIfInstance
 	// compares against. Tests move it to model a restart.
 	instance             string
@@ -138,7 +141,10 @@ func (f *FakeExecutor) AddSessionWithID(id, name, cwd string) {
 	f.sessionOrder = append(f.sessionOrder, name)
 }
 
-func (f *FakeExecutor) ListSessions() ([]TmuxSession, error) {
+func (f *FakeExecutor) ListSessions(ctx context.Context) ([]TmuxSession, error) {
+	if err := f.beginRead(ctx, ReadListSessions, ""); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCallCount++
@@ -192,12 +198,70 @@ func (f *FakeExecutor) Instance() string {
 	return f.instance
 }
 
-func (f *FakeExecutor) ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error) {
+func (f *FakeExecutor) ActivePaneMetadata(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
+	if err := f.beginRead(ctx, ReadPaneMetadata, sessionName); err != nil {
+		return TmuxPaneMetadata{}, err
+	}
 	metadata, err := f.readActivePaneMetadata(sessionName)
 	if hook := f.metadataHook(); hook != nil {
 		hook(sessionName)
 	}
 	return metadata, err
+}
+
+// ReadOp names the bounded read a ReadHook is called for.
+type ReadOp string
+
+const (
+	ReadListSessions ReadOp = "list-sessions"
+	ReadPaneMetadata ReadOp = "pane-metadata"
+)
+
+// ReadHook runs at the start of every FakeExecutor ListSessions /
+// ActivePaneMetadata call, outside the fake's lock, with the caller's
+// context. target is the session name for ReadPaneMetadata and "" for
+// ReadListSessions. A non-nil error is what the read returns — the seam for
+// "this tmux read hangs until its deadline" (#1293).
+type ReadHook func(ctx context.Context, op ReadOp, target string) error
+
+// SetReadHook installs (or, with nil, removes) the read hook.
+func (f *FakeExecutor) SetReadHook(fn ReadHook) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readHook = fn
+}
+
+// BlockReadsUntil returns a ReadHook that parks every matching read until
+// release is closed or the read's context ends — in which case the read
+// fails with ctx.Err(), as the real executor's killed read does. A nil match
+// blocks every read.
+func BlockReadsUntil(release <-chan struct{}, match func(op ReadOp, target string) bool) ReadHook {
+	return func(ctx context.Context, op ReadOp, target string) error {
+		if match != nil && !match(op, target) {
+			return nil
+		}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// beginRead models the real executor's context handling: a read whose
+// context has already ended never runs, and the hook sees the context.
+func (f *FakeExecutor) beginRead(ctx context.Context, op ReadOp, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	hook := f.readHook
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(ctx, op, target)
+	}
+	return nil
 }
 
 func (f *FakeExecutor) metadataHook() func(string) {

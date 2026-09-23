@@ -6,6 +6,7 @@ package session
 // that says which stage failed and whether a tmux session was left behind.
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -23,7 +24,9 @@ type listFailingExecutor struct {
 	err error
 }
 
-func (e *listFailingExecutor) ListSessions() ([]tmux.TmuxSession, error) { return nil, e.err }
+func (e *listFailingExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession, error) {
+	return nil, e.err
+}
 
 func TestCreateSession_ReturnsInfo(t *testing.T) {
 	mod, meta, fake := newTestModule(t)
@@ -72,7 +75,7 @@ func TestCreateSession_Exists(t *testing.T) {
 	assert.Equal(t, CreateStageExists, ce.Stage)
 	assert.Equal(t, "taken", ce.Name)
 	assert.False(t, ce.SessionAlive(), "nothing was created by us")
-	sessions, _ := fake.ListSessions()
+	sessions, _ := fake.ListSessions(context.Background())
 	assert.Len(t, sessions, 1, "the existing session is untouched, no second one")
 }
 
@@ -88,7 +91,7 @@ func TestCreateSession_BadName(t *testing.T) {
 		assert.Equal(t, CreateStageInvalidName, ce.Stage)
 		assert.False(t, ce.SessionAlive())
 	}
-	sessions, _ := fake.ListSessions()
+	sessions, _ := fake.ListSessions(context.Background())
 	assert.Empty(t, sessions, "nothing created")
 }
 
@@ -192,11 +195,11 @@ type listHookExecutor struct {
 	hook func()
 }
 
-func (e *listHookExecutor) ListSessions() ([]tmux.TmuxSession, error) {
+func (e *listHookExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession, error) {
 	if e.hook != nil {
 		e.hook()
 	}
-	return e.Executor.ListSessions()
+	return e.Executor.ListSessions(ctx)
 }
 
 // The generation is sampled before new-session and again after the list;

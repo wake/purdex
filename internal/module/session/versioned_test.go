@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,14 +36,14 @@ func (e *toggleFailExecutor) setFail(v bool) {
 	e.mu.Unlock()
 }
 
-func (e *toggleFailExecutor) ListSessions() ([]tmux.TmuxSession, error) {
+func (e *toggleFailExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession, error) {
 	e.mu.Lock()
 	fail := e.fail
 	e.mu.Unlock()
 	if fail {
 		return nil, errors.New("tmux list exploded")
 	}
-	return e.Executor.ListSessions()
+	return e.Executor.ListSessions(ctx)
 }
 
 // blockingExecutor numbers every ListSessions call (the read ordinal) and
@@ -65,7 +66,7 @@ func newBlockingExecutor(inner tmux.Executor) *blockingExecutor {
 	}
 }
 
-func (e *blockingExecutor) ListSessions() ([]tmux.TmuxSession, error) {
+func (e *blockingExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession, error) {
 	e.mu.Lock()
 	e.n++
 	k := e.n
@@ -76,7 +77,7 @@ func (e *blockingExecutor) ListSessions() ([]tmux.TmuxSession, error) {
 	if k == 1 {
 		<-e.release
 	}
-	return e.Executor.ListSessions()
+	return e.Executor.ListSessions(ctx)
 }
 
 func TestVersionedList_SeqIncreasesEpochStable(t *testing.T) {
@@ -184,7 +185,7 @@ type ordinalExecutor struct {
 	onRead func(k int)
 }
 
-func (e *ordinalExecutor) ListSessions() ([]tmux.TmuxSession, error) {
+func (e *ordinalExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession, error) {
 	e.mu.Lock()
 	e.n++
 	k := e.n

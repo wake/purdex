@@ -31,8 +31,12 @@ type TmuxPaneMetadata struct {
 
 // Executor abstracts tmux CLI for testability.
 type Executor interface {
-	ListSessions() ([]TmuxSession, error)
-	ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error)
+	// ListSessions and ActivePaneMetadata are the reads a session list is
+	// built from (#1293). They take a context and are bounded by it: when it
+	// ends the tmux child is killed and the returned error wraps ctx.Err(),
+	// so errors.Is(err, context.DeadlineExceeded|Canceled) holds.
+	ListSessions(ctx context.Context) ([]TmuxSession, error)
+	ActivePaneMetadata(ctx context.Context, sessionName string) (TmuxPaneMetadata, error)
 	NewSession(name, cwd string) error
 	KillSession(name string) error
 	RenameSession(oldName, newName string) error
@@ -125,9 +129,37 @@ type RealExecutor struct{}
 
 func NewRealExecutor() *RealExecutor { return &RealExecutor{} }
 
-func (r *RealExecutor) ListSessions() ([]TmuxSession, error) {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_path}").Output()
+// readWaitDelay bounds how long a bounded read waits for the child's pipes
+// after its context ended and the child was killed. Without it, a grandchild
+// that inherited stdout would keep Output() waiting past the deadline.
+const readWaitDelay = 500 * time.Millisecond
+
+// boundedRead builds a tmux read that is killed when ctx ends.
+func boundedRead(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.WaitDelay = readWaitDelay
+	return cmd
+}
+
+// readCtxErr reports a bounded read that failed because its context ended as
+// an error wrapping ctx.Err() — not the bare "signal: killed" the killed
+// child produces — so callers can errors.Is it against
+// context.DeadlineExceeded / context.Canceled. Returns nil when the context
+// is still live (the failure is tmux's own).
+func readCtxErr(ctx context.Context, op string, err error) error {
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w (%v)", op, ctxErr, err)
+}
+
+func (r *RealExecutor) ListSessions(ctx context.Context) ([]TmuxSession, error) {
+	out, err := boundedRead(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_path}").Output()
 	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux list-sessions", err); cerr != nil {
+			return nil, cerr
+		}
 		if strings.Contains(err.Error(), "no server running") ||
 			strings.Contains(string(out), "no server running") {
 			return nil, nil
@@ -181,53 +213,59 @@ func parseListSessionsOutput(out string) []TmuxSession {
 	return sessions
 }
 
-func (r *RealExecutor) ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error) {
-	target := activePaneTarget(sessionName)
-	query := func(format string) (string, error) {
-		out, err := exec.Command("tmux", "display-message", "-p", "-t", target, format).Output()
-		if err != nil {
-			return "", fmt.Errorf("tmux display-message %s: %w", format, err)
+func (r *RealExecutor) ActivePaneMetadata(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
+	out, err := boundedRead(ctx, "display-message", "-p", "-t", activePaneTarget(sessionName), activePaneMetadataFormat).Output()
+	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux display-message", err); cerr != nil {
+			return TmuxPaneMetadata{}, cerr
 		}
-		return sanitizeTmuxMetadata(strings.TrimSuffix(string(out), "\n")), nil
+		return TmuxPaneMetadata{}, fmt.Errorf("tmux display-message: %w", err)
 	}
+	return parseActivePaneMetadata(string(out))
+}
 
-	sessionID, err := query("#{session_id}")
-	if err != nil {
-		return TmuxPaneMetadata{}, err
-	}
-	resolvedSessionName, err := query("#{session_name}")
-	if err != nil {
-		return TmuxPaneMetadata{}, err
-	}
-	windowID, err := query("#{window_id}")
-	if err != nil {
-		return TmuxPaneMetadata{}, err
-	}
-	paneID, err := query("#{pane_id}")
-	if err != nil {
-		return TmuxPaneMetadata{}, err
-	}
-	paneTitle, err := query("#{pane_title}")
-	if err != nil {
-		return TmuxPaneMetadata{}, err
-	}
-	windowName, err := query("#{window_name}")
-	if err != nil {
-		return TmuxPaneMetadata{}, err
-	}
-	paneCurrentCommand, err := query("#{pane_current_command}")
-	if err != nil {
-		return TmuxPaneMetadata{}, err
-	}
+// activePaneMetadataFields are the formats ActivePaneMetadata reads, in
+// TmuxPaneMetadata field order. They are fetched with ONE display-message,
+// TAB-joined (#1293 §3.1/§3.4: seven execs per session made a large host's
+// list read approach its deadline).
+var activePaneMetadataFields = []string{
+	"#{session_id}",
+	"#{session_name}",
+	"#{window_id}",
+	"#{pane_id}",
+	"#{pane_title}",
+	"#{window_name}",
+	"#{pane_current_command}",
+}
 
+var activePaneMetadataFormat = strings.Join(activePaneMetadataFields, "\t")
+
+// parseActivePaneMetadata splits the combined display-message answer on TAB
+// FIRST and only then sanitises each field — sanitizeTmuxMetadata maps TAB to
+// a space, so the separator cannot survive into a field value.
+//
+// SplitN on purpose, like parseListSessionsOutput: tmux vis-encodes TAB in
+// session names, window names and pane titles, and ids never contain one,
+// so the only field that can carry a raw TAB is the last one,
+// pane_current_command (a process name), which absorbs the rest of the line
+// and is then sanitised exactly as the per-field read sanitised it.
+// Fewer fields than asked for is an error, never a half-filled struct.
+func parseActivePaneMetadata(out string) (TmuxPaneMetadata, error) {
+	parts := strings.SplitN(strings.TrimSuffix(out, "\n"), "\t", len(activePaneMetadataFields))
+	if len(parts) != len(activePaneMetadataFields) {
+		return TmuxPaneMetadata{}, fmt.Errorf("tmux display-message: expected %d tab-separated fields, got %d", len(activePaneMetadataFields), len(parts))
+	}
+	for i := range parts {
+		parts[i] = sanitizeTmuxMetadata(parts[i])
+	}
 	return TmuxPaneMetadata{
-		SessionID:          sessionID,
-		SessionName:        resolvedSessionName,
-		WindowID:           windowID,
-		PaneID:             paneID,
-		PaneTitle:          paneTitle,
-		WindowName:         windowName,
-		PaneCurrentCommand: paneCurrentCommand,
+		SessionID:          parts[0],
+		SessionName:        parts[1],
+		WindowID:           parts[2],
+		PaneID:             parts[3],
+		PaneTitle:          parts[4],
+		WindowName:         parts[5],
+		PaneCurrentCommand: parts[6],
 	}, nil
 }
 

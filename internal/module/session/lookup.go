@@ -1,6 +1,9 @@
 package session
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // nameCacheTTL bounds how long a stale name→code mapping can be observed
 // after an external mutation (tmux rename / kill / new outside the daemon's
@@ -25,7 +28,11 @@ func (m *SessionModule) LookupCodeByName(name string) (string, bool) {
 		return code, ok
 	}
 
-	sessions, err := m.tmux.ListSessions()
+	// Bounded like every session-list read (#1293): this runs under
+	// nameCacheMu on the hook hot path.
+	ctx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	defer cancel()
+	sessions, err := m.tmux.ListSessions(ctx)
 	if err != nil {
 		return "", false
 	}

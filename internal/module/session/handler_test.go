@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1164,7 +1165,7 @@ func TestHandlerCreateSessionExpandsTildeCwd(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&info))
 	assert.Equal(t, want, info.Cwd, "response must carry the resolved path")
 
-	sessions, err := fake.ListSessions()
+	sessions, err := fake.ListSessions(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, want, sessions[0].Cwd, "tmux must receive the expanded path")
