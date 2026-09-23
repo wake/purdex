@@ -1,6 +1,6 @@
 # A wizard pull applies only the `hosts` the user confirmed (#1366) — spec + plan
 
-Status: draft (2026-09-23) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
+Status: draft rev 2 (2026-09-23, codex plan review folded in) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
 Follows #1362 (wizard: pull needs a verified host, lists the hosts it removes, re-checks before attach) and
 #1365 (host sync identity wire). Files: `executor.ts`, `start.ts`, `useProfileStore.ts`, `wizard-run.ts`, the
 Profile settings UI, locales.
@@ -31,32 +31,57 @@ life: set by `setMaster` together with the direction, cleared by `clearPendingDi
 new `setMaster` (persisted and synced like `pendingDirection`, for the same reason — the first reconciliation may
 continue in another window after a reload). Well-formedness on rehydrate: anything else → null.
 
-### 2.3 The executor
+### 2.3 The executor — a pre-step barrier (rev 2, codex plan review #1–#4)
+Gating individual pulls is not enough: `restore-local` bypasses `mayPull` (sync-state.ts:390, executor.ts:886),
+and a section that is absent on the SOT is PUSHED straight away by the decision table (sync-state.ts:405) — with
+guard `'absent'` the local `hosts` itself would be pushed and `pull('hosts')` never run. So:
+
 New dep `confirmedPullHosts?: () => { rev, hash } | 'absent' | null`, read live like `initialDirection()`.
-While the first reconciliation is open with direction `pull` AND a guard is present ("guarded pull"):
-- **Every pull except `hosts` waits for `hosts`** (it joins `pullGatesOf` for `workspaces` too), and `hosts` itself
-  may only reach the stores after the check below. Pushes are already held back under `pull` for tabs; nothing new
-  there (a push under `pull` for `hosts` / `workspaces` / `settings` is what the first reconciliation already
-  answers via forcePull).
-- **The check** (in `pull('hosts')`, after the fetch, before `applySectionToStores`): the fetched row matches the
-  guard when `hash` equals (rev may be higher — same content re-written is still what the user saw); `'absent'`
-  matches only a 404 / no section. Match → apply as today; the guard has done its job (it stays stored until the
-  period ends, harmless).
-- **Mismatch** → nothing is applied; the executor reports problem `pull-hosts-unconfirmed` and calls
-  `deps.onPullUnconfirmed?.()` once. No section state changes (no new lock kind).
+When the executor starts (or first sees the guard) with direction `pull` AND a guard present, it raises a
+**barrier**: `pump()` does nothing for ANY section — no pull, push, restore-local, delete, lock answer — until the
+barrier is resolved. The one thing that runs is **`checkConfirmedHosts()`**, after the first index:
+- the index lists `hosts` → `getSection('hosts')` (same request options / endpoint pin as every read); **match**
+  when the fetched row's `hash` equals the guard's (rev may be higher: same wire payload re-written is still what the
+  user saw — the hash is of the canonical wire payload, hash.ts:101). A 404 while the index lists `hosts` →
+  not decided: re-index once and check again (as `pull()` does for a listed-but-404 section), never "absent".
+- the index does NOT list `hosts` → matches only the guard `'absent'` (the index is the authority on liveness;
+  a GET 404 alone is not, since it also means tombstone / unknown profile — codex #3). `profileGone` → the
+  existing profile-gone handling, not a match.
+- **match** → barrier released; everything proceeds as today (first reconciliation, forcePull etc.).
+- **mismatch** → the executor enters a terminal **halted** state at once (synchronously: the barrier never lifts,
+  no action is started afterwards even if one was queued — codex #4), reports problem `pull-hosts-unconfirmed` and
+  calls `deps.onPullUnconfirmed?.()` once.
+- a failed request (network / 5xx) → retried with the ordinary backoff, barrier still up.
+No guard (null) or direction `push` → no barrier, today's behaviour. The guard is ignored once the first
+reconciliation period has ended (an executor born without a direction never has one).
 
 ### 2.4 The start layer
-`onPullUnconfirmed` → the start layer **stops sync** exactly like the user's Stop sync (detach: attachment
-removed, master cleared, executor disposed) and records a device-local notice
-`useProfileStore.pullUnconfirmed = { hostId, profileId, at }` (not synced; cleared by the next attach or by
-dismissing it). Nothing of this machine's world was replaced — every pull waited for `hosts` — so stopping is
-safe, and the user starts the wizard again, which lists the new removal set.
+`onPullUnconfirmed` → the start layer records the device-local notice
+`useProfileStore.pullUnconfirmed = { hostId, profileId, at }` FIRST (so it survives whatever follows), then stops
+sync exactly like the user's Stop sync (`detachMaster`: master cleared, executor disposed, daemon DELETE of the
+attachment). The DELETE is best effort as today: if it fails, the local detach still stands and the ghost
+attachment is recorded in `pendingDetaches` (existing mechanism, codex #5); the notice is kept either way.
+Nothing of this machine's world was replaced and nothing was pushed — the barrier held every action — so
+stopping is safe; the wizard's promote / save happened BEFORE the attach and are the user's own choices (a saved
+copy stays a local profile).
+
+### 2.2a Pairing (codex #6)
+`pendingPullHosts` and `pendingDirection` are one pair of the same attach generation: set together by `setMaster`,
+cleared together by `clearPendingDirection` / detach / the next `setMaster`; rehydrate sanitises the pair (a guard
+without direction `pull` → null). Tests: storage rehydrate; a leader handoff where another window continues the
+first reconciliation with the guard; the other window calling `onInitialSettled` clears both at once.
 
 ### 2.5 UI
 Settings › Profile Current block: when `pullUnconfirmed` is set, one sentence — "The hosts on the sync host
 changed after you confirmed the pull, so nothing was pulled and sync was stopped. Set it up again to see what the
-pull would remove now." (+ zh-TW) with a Dismiss and the existing "Set up sync" entry. A toast at the moment it
-happens (the wizard may still be open; if it is, its run shows the attach step as done and the toast explains).
+pull would remove now." (+ zh-TW) with a Dismiss and the existing "Set up sync" entry; it coexists with the
+existing pending-detach notice. A toast at the moment it happens.
+
+### 2.6 Considered, not done (codex #8, #9)
+- A conditional GET (`If-Match` / `baseRev`) on the daemon would make the check atomic and remove the index-vs-404
+  reasoning, but still needs the barrier (other actions could run first) and turns #1366 into a Go/API change.
+- A daemon/API contract test that a stored `hash` equals the payload's canonical hash: the daemon stores the hash
+  the writer sends (PUT computes and verifies it client-side); recorded as a follow-up if wanted.
 
 ## 3. Not in scope
 - Guarding sections other than `hosts` (the user confirmed only the host removals; replacing workspaces/tabs is
@@ -66,17 +91,24 @@ happens (the wizard may still be open; if it is, its run shows the attach step a
 
 ## 4. Tasks (TDD, one commit each)
 - T1 store: `pendingPullHosts` (+ rehydrate guard) and `pullUnconfirmed`; `setMaster` signature; tests.
-- T2 executor: dep, guarded-pull gating (all pulls wait for `hosts`), the check, mismatch → problem + callback
-  once. Tests: match by hash (rev higher) applies; `'absent'` vs 404; mismatch applies NOTHING (workspaces pull
-  that would have come first also waits — assert no `applySectionToStores` call for any section), callback once;
-  no guard (null) → today's behaviour; push direction unaffected; guard ignored after the period ends.
-- T3 start layer: `attachMaster(…, { confirmedHosts })` stores it with the direction; `onPullUnconfirmed` → detach +
-  notice; integration test through the fake daemon (`executor.direction.integration.test.ts` style): B attaches
+- T2 executor: dep, the barrier, `checkConfirmedHosts`, halted state, problem + callback once. Tests: match by hash
+  (rev higher) → released, proceeds; mismatch → NO `applySectionToStores`, NO `putSection`, NO `deleteSection`,
+  NO restore for ANY section (including a section restored from the section store in `restoreLocal`, and sections
+  absent on the SOT that would otherwise be pushed); guard `'absent'` + index without `hosts` → match; guard
+  `'absent'` + index lists `hosts` → mismatch; index lists `hosts` + GET 404 → re-index, not absent; unknown
+  profile → profile-gone path; an action queued before the verdict never starts after a mismatch; network failure
+  → retried with the barrier up; no guard / push → today's behaviour.
+- T3 start layer: `attachMaster(…, { confirmedHosts })` stores it with the direction; `onPullUnconfirmed` → notice
+  first, then detach; tests incl. the DELETE failing (notice kept, ghost in `pendingDetaches`) and the
+  attach/detach queue busy at the moment of the mismatch (the executor is already halted); integration test through the fake daemon (`executor.direction.integration.test.ts` style): B attaches
   pull with guard rev 7, the daemon holds rev 8 → no store change, attachment removed, notice set.
-- T4 wizard: pass `confirmedHosts` from the last check (`recheckBeforeAttach`'s section read); test.
+- T4 wizard: `WizardPlan` gains the `hosts` row it was computed from (`{rev, hash} | 'absent'`); the attach step uses
+  the plan RETURNED by `recheckBeforeAttach` (today it checks `again.ok` and discards `again.plan` — codex #7) and
+  passes its `confirmedHosts`. Test: first prepare and last recheck return different markers → the attach gets the
+  latter.
 - T5 UI: Current block sentence + Dismiss; toast; locales.
-- Gates: lint, tsc (`-p tsconfig.app.json`), full vitest, build. Mutations: no gate on workspaces (T2 red: a
-  workspaces apply before the refused hosts); compare rev instead of hash (T2 red on rev-higher-same-hash); no
+- Gates: lint, tsc (`-p tsconfig.app.json`), full vitest, build. Mutations: barrier lets `restore-local` through (T2 red); barrier lets
+  a push through (T2 red); compare rev instead of hash (T2 red on rev-higher-same-hash); no
   detach on mismatch (T3 red); wizard passes nothing (T4 red).
 
 ## 5. Real machine
