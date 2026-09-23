@@ -120,13 +120,33 @@ func TestExit_RootSessionEnd_CarriesEnvelopeBuiltBeforeDelete(t *testing.T) {
 	}
 }
 
-// R1 P1 (#1381): a SessionStart landing on the SAME frame (same pid and start
-// time — cc /clear delivered out of order, an in-process /resume) keeps the
-// frame id and overwrites the frame's session id. The exit must name the run
-// that is ENDING, which only the SessionEnd payload knows — not the frame.
-func TestExit_SessionEnd_SessionIDComesFromThePayload(t *testing.T) {
+// R1 P1 + attacker #2 (#1381): a SessionStart landing on the SAME frame (same
+// pid and start time — cc /clear delivered out of order, an in-process
+// /resume) keeps the frame id and overwrites the frame's session id. A late
+// SessionEnd of the OLD run then claims nothing: the frame — the newer run's —
+// survives, and no exit is sent.
+func TestExit_LateSessionEndOfAnOlderRun_ClaimsNothing(t *testing.T) {
 	m := newProvenanceTestModule(t, exitTestInstance)
 	root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S-new") // SessionStart(new) already landed
+	req := EventRequest{
+		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
+		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+		RawEvent: []byte(`{"session_id":"S-old"}`),
+	}
+	if e, ok := exitOf(t, m.buildNormalizedForTest(t, req)); ok {
+		t.Fatalf("a late SessionEnd of an older run sent %+v", e)
+	}
+	frames, _ := m.frames.ListByPane("%5")
+	if len(frames) != 1 || frames[0].FrameID != root.FrameID || frames[0].SessionID != "S-new" {
+		t.Fatalf("frames = %+v, want the newer run's frame untouched", frames)
+	}
+}
+
+// The exit's session id is the payload's: a frame that never recorded one is
+// still ended, and named by what the SessionEnd says.
+func TestExit_SessionEnd_SessionIDComesFromThePayload(t *testing.T) {
+	m := newProvenanceTestModule(t, exitTestInstance)
+	root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "")
 	req := EventRequest{
 		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
 		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
@@ -137,7 +157,7 @@ func TestExit_SessionEnd_SessionIDComesFromThePayload(t *testing.T) {
 		t.Fatalf("no pdx_exit")
 	}
 	if e.SessionID != "S-old" || e.FrameID != root.FrameID {
-		t.Fatalf("envelope = %+v, want the ENDING run's session id S-old on frame %s", e, root.FrameID)
+		t.Fatalf("envelope = %+v, want session id S-old on frame %s", e, root.FrameID)
 	}
 }
 
@@ -281,5 +301,27 @@ func TestExit_HandlerBroadcastsEnvelopeOnTheWire(t *testing.T) {
 	}
 	if len(raw) != len(want)+1 {
 		t.Fatalf("pdx_exit keys = %v, want exactly the seven fields", keys)
+	}
+}
+
+// The claim is atomic, not just the pre-check: a SessionStart that takes the
+// frame over AFTER the SessionEnd read its snapshot (the snapshot still says
+// the old run, or nothing) must still win. claimFrameEnd re-checks the row.
+func TestClaimFrameEnd_NewerRunTookTheFrameAfterTheSnapshot(t *testing.T) {
+	m := newProvenanceTestModule(t, exitTestInstance)
+	snapshot := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "")
+	if err := m.frames.UpdateSessionIdentity(snapshot.FrameID, "S-new", "/w/p", 1); err != nil {
+		t.Fatalf("UpdateSessionIdentity: %v", err)
+	}
+	exit := exitForFrame(snapshot, exitTestInstance, ExitReasonSessionEnd, 1)
+	got, claimed, err := m.claimFrameEnd(snapshot, "S-old", exit)
+	if err != nil || claimed || got != nil {
+		t.Fatalf("claimFrameEnd = (%v, %v, %v), want no claim", got, claimed, err)
+	}
+	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 1 {
+		t.Fatalf("the newer run's frame was deleted: %+v", frames)
+	}
+	if got, claimed, err := m.claimFrameEnd(snapshot, "S-new", exit); err != nil || !claimed || got != exit {
+		t.Fatalf("the current run's end = (%v, %v, %v), want claimed with the exit", got, claimed, err)
 	}
 }

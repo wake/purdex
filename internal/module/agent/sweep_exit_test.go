@@ -1,6 +1,10 @@
 package agent
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,5 +122,74 @@ func TestExit_SweepUnresolvedSession_NoBroadcast(t *testing.T) {
 	case msg := <-sub.SendCh():
 		t.Fatalf("an unresolved pane must broadcast nothing, got %s", msg)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// Attacker #2 (#1381): one owner per exit. The SessionEnd hook ended the frame;
+// a sweep still holding the pre-delete snapshot must claim nothing and send
+// nothing — before the claim it broadcast a second "exit" that could overwrite
+// session-end with process-dead.
+func TestExit_SweepAfterSessionEnd_SendsNothing(t *testing.T) {
+	m, sub := newExitSweepModule(t)
+	m.registry.Register(&fakeAgentProvider{typeName: "cc", derive: deriveWithSessionDetail})
+	root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S1")
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"S1"},"agent_type":"cc"}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	m.handleEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if e, ok := exitOf(t, readSweepNormalizedEvent(t, sub)); !ok || e.Reason != ExitReasonSessionEnd {
+		t.Fatalf("SessionEnd broadcast exit = %+v ok=%v", e, ok)
+	}
+
+	if err := m.clearFrame(root, "pid_dead"); err != nil { // the stale snapshot
+		t.Fatalf("clearFrame: %v", err)
+	}
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("the losing sweep broadcast %s", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// The race itself, under -race: SessionEnd and the sweep end one frame at the
+// same time, many times over — exactly one envelope each time.
+func TestExit_SessionEndAndSweepRace_ExactlyOneEnvelope(t *testing.T) {
+	for i := 0; i < 40; i++ {
+		m, sub := newExitSweepModule(t)
+		m.registry.Register(&fakeAgentProvider{typeName: "cc", derive: deriveWithSessionDetail})
+		root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S1")
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"S1"},"agent_type":"cc"}`
+			m.handleEvent(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body)))
+		}()
+		go func() {
+			defer wg.Done()
+			_ = m.clearFrame(root, "pid_dead")
+		}()
+		wg.Wait()
+
+		exits := 0
+	drain:
+		for {
+			select {
+			case raw := <-sub.SendCh():
+				if strings.Contains(string(raw), "pdx_exit") {
+					exits++
+				}
+			case <-time.After(30 * time.Millisecond):
+				break drain
+			}
+		}
+		if exits != 1 {
+			t.Fatalf("iteration %d: %d exit envelopes, want exactly 1", i, exits)
+		}
 	}
 }

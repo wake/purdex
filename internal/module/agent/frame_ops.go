@@ -222,15 +222,45 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// (same pid/start — /clear delivered out of order, /resume) keeps
 			// the frame id and overwrites the frame's session id, so only the
 			// SessionEnd itself names the run that is ending.
+			payloadSID := m.payloadSessionID(req)
+			// A late SessionEnd of an OLDER run (#1381): the frame already
+			// carries a newer run's session id, so this event ends nothing —
+			// no detach, no delete, no exit. The claim below re-checks the
+			// same condition atomically for a SessionStart racing this one.
+			if payloadSID != "" && frame.SessionID != "" && frame.SessionID != payloadSID {
+				projection, err := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       frame.FrameID,
+					ParentFrameID: frame.ParentFrameID,
+					Decision:      "skipped",
+					Reason:        "session_end_of_older_run",
+					Before:        before,
+					After:         before,
+				}, err
+			}
 			exit := exitForFrame(*frame, m.sessionTmuxInstance(), ExitReasonSessionEnd, broadcastTs/int64(time.Millisecond))
 			if exit != nil {
-				exit.SessionID = m.payloadSessionID(req)
+				exit.SessionID = payloadSID
 			}
 			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
 				return nil, FrameTraceMeta{}, derr
 			}
-			if err := m.frames.Delete(frame.FrameID); err != nil {
-				return nil, FrameTraceMeta{}, err
+			exit, claimed, cerr := m.claimFrameEnd(*frame, payloadSID, exit)
+			if cerr != nil {
+				return nil, FrameTraceMeta{}, cerr
+			}
+			if !claimed {
+				// The sweep (or a newer run's SessionStart) got there first:
+				// it owns the end, and its broadcast is the one that counts.
+				projection, err := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       frame.FrameID,
+					ParentFrameID: frame.ParentFrameID,
+					Decision:      "skipped",
+					Reason:        "session_end_claim_lost",
+					Before:        before,
+					After:         map[string]any{},
+				}, err
 			}
 			projection, err := m.projectPane(req.TmuxPaneID)
 			return projection, FrameTraceMeta{

@@ -488,8 +488,14 @@ func (m *Module) clearFrame(frame store.Frame, reason string) error {
 		return nil
 	}
 	exit := exitForFrame(frame, m.sessionTmuxInstance(), ExitReasonProcessDead, nowFn().UnixMilli())
-	if err := m.frames.Delete(frame.FrameID); err != nil {
+	exit, claimed, err := m.claimFrameEnd(frame, "", exit)
+	if err != nil {
 		return err
+	}
+	if !claimed {
+		// Someone else (the SessionEnd hook) ended this frame between the
+		// sweep's read and now; that caller owns the end and its broadcast.
+		return nil
 	}
 	return m.afterFrameCleared(frame, reason, exit)
 }
