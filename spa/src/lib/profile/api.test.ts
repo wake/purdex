@@ -154,6 +154,28 @@ describe('unknown host', () => {
   })
 })
 
+/* ─── the endpoint pin: the wizard's reads go to the daemon it checked, or nowhere (host-sync-identity §8) ─── */
+
+describe('expectEndpoint on the reads the wizard makes (listProfiles, getSection)', () => {
+  const AT = '100.64.0.9:7860'
+  const reads: Array<[string, (opts: { expectEndpoint: string }) => Promise<unknown>, unknown, unknown]> = [
+    ['listProfiles', (opts) => listProfiles(HOST, opts), { profiles: [entry] }, { kind: 'ok', value: [entry] }],
+    ['getSection', (opts) => getSection(HOST, PID, 'settings', opts), section, { kind: 'ok', value: section }],
+  ]
+
+  it.each(reads)('%s: the host is at the pinned endpoint → sent, answered as usual', async (_name, call, body, expected) => {
+    hostFetch.mockResolvedValue(jsonResponse(body))
+    expect(await call({ expectEndpoint: AT })).toEqual(expected)
+    expect(hostFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(reads)('%s: the host is somewhere else → failed/endpoint-changed, nothing sent', async (_name, call, body) => {
+    hostFetch.mockResolvedValue(jsonResponse(body))
+    expect(await call({ expectEndpoint: '100.64.0.9:7999' })).toMatchObject({ kind: 'failed', reason: 'endpoint-changed', status: 0 })
+    expect(hostFetch).not.toHaveBeenCalled()
+  })
+})
+
 /* ─── a request that cannot be built is a Failure, not a throw ─── */
 
 describe('unbuildable request', () => {
