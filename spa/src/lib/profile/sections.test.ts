@@ -117,7 +117,7 @@ function baseInput(): CollectInput {
     tabs: {
       tabs: {
         t1: tab('t1', split('sp1', [leaf('p1', tmux('one')), leaf('p2', { kind: 'browser', url: 'https://a.test' })], [30, 70])),
-        t2: tab('t2', leaf('p3', { kind: 'dashboard' }), { pinned: true }),
+        t2: tab('t2', leaf('p3', { kind: 'browser', url: 'https://b.test' }), { pinned: true }),
         t3: tab('t3', leaf('p4', tmux('three'))),
       },
       tabOrder: ['t1', 't2', 't3'],
@@ -286,11 +286,36 @@ describe('isSyncableTab', () => {
 
 describe('buildTabsSection', () => {
   it('order follows ws.tabs; ids with no Tab are dropped, duplicates kept once; record = order', () => {
-    const tabs = { t1: tab('t1', leaf('p1', { kind: 'dashboard' })), t2: tab('t2', leaf('p2', { kind: 'hosts' })), other: tab('other', leaf('p9', { kind: 'history' })) }
+    const tabs = { t1: tab('t1', leaf('p1', { kind: 'browser', url: 'u1' })), t2: tab('t2', leaf('p2', { kind: 'browser', url: 'u2' })), other: tab('other', leaf('p9', { kind: 'browser', url: 'u9' })) }
     const out = buildTabsSection(ws('w', 'W', ['t2', 'ghost', 't1', 't2']), tabs)
     expect(out.order).toEqual(['t2', 't1'])
     expect(Object.keys(out.tabs).sort()).toEqual(['t1', 't2'])
     expect(new Set(out.order).size).toBe(out.order.length)
+  })
+
+  it('leaves out interface-only tabs: [tmux, settings, new-tab, browser] → [tmux, browser], record exactly those', () => {
+    const tabs = {
+      a: tab('a', leaf('p1', tmux('one'))),
+      s: tab('s', leaf('p2', { kind: 'settings', scope: 'global' })),
+      n: tab('n', leaf('p3', { kind: 'new-tab' })),
+      b: tab('b', leaf('p4', { kind: 'browser', url: 'https://a.test' })),
+    }
+    const out = buildTabsSection(ws('w', 'W', ['a', 's', 'n', 'b']), tabs)
+    expect(out.order).toEqual(['a', 'b'])
+    expect(Object.keys(out.tabs).sort()).toEqual(['a', 'b'])
+    expect(isWellFormedSection('tabs', out)).toBe(true)
+  })
+
+  it('a workspace of device-local tabs only builds the empty payload', () => {
+    const tabs = { s: tab('s', leaf('p1', { kind: 'settings', scope: 'global' })), h: tab('h', leaf('p2', { kind: 'hosts' })) }
+    expect(buildTabsSection(ws('w', 'W', ['s', 'h']), tabs)).toEqual({ order: [], tabs: {} })
+  })
+
+  it('a split new-tab + tmux is sent whole, its new-tab leaf included', () => {
+    const layout = split('sp', [leaf('p1', { kind: 'new-tab' }), leaf('p2', tmux('x'))], [50, 50])
+    const out = buildTabsSection(ws('w', 'W', ['t']), { t: tab('t', layout) })
+    expect(out.order).toEqual(['t'])
+    expect(out.tabs.t.layout).toEqual(stripSizes(layout))
   })
 
   it('a workspace with no tabs yields {order: [], tabs: {}}', () => {
@@ -298,7 +323,7 @@ describe('buildTabsSection', () => {
   })
 
   it('carries the tab fields and the split structure, and no sizes at any depth', () => {
-    const layout = split('s1', [leaf('p1', { kind: 'dashboard' }), split('s2', [leaf('p2', { kind: 'hosts' }), leaf('p3', { kind: 'history' })], [20, 80], 'v')], [40, 60])
+    const layout = split('s1', [leaf('p1', { kind: 'browser', url: 'u1' }), split('s2', [leaf('p2', { kind: 'hosts' }), leaf('p3', { kind: 'history' })], [20, 80], 'v')], [40, 60])
     const out = buildTabsSection(ws('w', 'W', ['t1']), { t1: tab('t1', layout, { pinned: true, locked: true, createdAt: 42 }) })
     expect(out.tabs.t1).toMatchObject({ id: 't1', pinned: true, locked: true, createdAt: 42 })
     expect(out.tabs.t1.layout).toEqual(stripSizes(layout))
@@ -505,7 +530,7 @@ describe('buildProfileDocument', () => {
       tabs: {
         tabs: {
           t1: { ...tab('t1', split('sp1', [leaf('p1', tmux('one')), split('sp2', [leaf('p2', { kind: 'hosts' }), leaf('p3', { kind: 'history' })], [N, N])], [N, N])), scrollTop: S },
-          t2: tab('t2', leaf('p4', { kind: 'dashboard' })),
+          t2: tab('t2', leaf('p4', { kind: 'browser', url: 'u4' })),
           // standalone — its content must not travel either
           [S]: tab(S, leaf('p5', { kind: 'browser', url: S })),
         },
@@ -640,7 +665,7 @@ describe('adoptStandaloneTabs', () => {
 
   it('after adoption nothing is left to adopt, and the document carries the tab', () => {
     const input = baseInput()
-    input.tabs = { tabs: { ...input.tabs.tabs, loose: tab('loose', leaf('px', { kind: 'hosts' })) }, tabOrder: ['loose', 't1', 't2', 't3'] }
+    input.tabs = { tabs: { ...input.tabs.tabs, loose: tab('loose', leaf('px', { kind: 'browser', url: 'ux' })) }, tabOrder: ['loose', 't1', 't2', 't3'] }
     const adopted = adoptStandaloneTabs({ workspaces: input.workspaces.workspaces, ...input.tabs }, opts)
     const { document } = buildProfileDocument({ ...input, workspaces: { workspaces: adopted.workspaces } })
     expect(adoptStandaloneTabs({ workspaces: adopted.workspaces, ...input.tabs }, opts).adopted).toEqual([])

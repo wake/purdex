@@ -35,7 +35,7 @@ function host(id: string): HostConfig {
 }
 
 function tab(id: string): Tab {
-  return { id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'new-tab' } } } } as Tab
+  return { id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'browser', url: 'https://x.test' } } } } as Tab
 }
 
 function world(prefix: string, workspaceCount: number, tabsPerWorkspace: number): ParkedWorld {

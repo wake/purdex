@@ -65,7 +65,7 @@ function host(id: string, name = id) {
 }
 
 function leaf(id: string): PaneLayout {
-  return { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'new-tab' } } } as PaneLayout
+  return { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'browser', url: 'https://x.test' } } } as PaneLayout
 }
 
 function tab(id: string, layout: PaneLayout = leaf(id)): Tab {

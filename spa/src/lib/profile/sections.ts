@@ -245,10 +245,15 @@ export function buildWorkspacesSection(workspaces: readonly Workspace[]): Worksp
  * no `Tab` is dropped, never invented; a repeat is kept once), and the record
  * holds exactly those — so `order` has no duplicates and equals the record's key
  * set, which is what the applier's well-formedness guard demands.
+ *
+ * A tab `isSyncableTab` rejects is LEFT OUT — device-local, like an unsyncable
+ * workspace in `buildWorkspacesSection`; `applyTabs` is the other half and keeps
+ * it (tabs-local-only spec §3.2). The collector, the document and the post-apply
+ * hash all come through here, so they agree on what the section holds.
  */
 export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>, identity?: HostIdentity): TabsPayload {
   refuseConflict(identity)
-  const order = uniqueKnown(ws.tabs, (id) => Object.hasOwn(tabs, id))
+  const order = uniqueKnown(ws.tabs, (id) => Object.hasOwn(tabs, id) && isSyncableTab(tabs[id]))
   const record: Record<string, unknown> = {}
   for (const id of order) {
     const stripped = stripSizes(tabs[id].layout)

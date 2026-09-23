@@ -43,7 +43,7 @@ const S = '__DEVICE_LOCAL__'
 /** No master workspace: for the tests that are not about workspace-scoped settings. */
 const NO_WS: ReadonlySet<string> = new Set()
 
-function leaf(id: string, content: PaneContent = { kind: 'dashboard' }): PaneLayout {
+function leaf(id: string, content: PaneContent = { kind: 'browser', url: 'https://x.test' }): PaneLayout {
   return { type: 'leaf', pane: { id, content } }
 }
 
