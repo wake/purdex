@@ -50,6 +50,10 @@ vi.mock('../client-identity', () => ({ getClientId: () => h.clientId, isClientId
 
 const api = vi.mocked(await import('./api'))
 const applied = vi.mocked((await import('./apply-to-stores')).applySectionToStores)
+/** The real apply, as the mock wraps it: put back before every test (a test may wrap it once more). */
+const realApply = applied.getMockImplementation()!
+/** `start:<key>` / `end:<key>` / `busy:<key>` of every apply, in order. */
+const log: string[] = []
 
 const M = 'host-master'
 const H2 = 'host-two'
@@ -159,6 +163,13 @@ beforeEach(() => {
   problems.length = 0
   daemon = new FakeDaemon(PROFILE)
   vi.clearAllMocks()
+  log.length = 0
+  applied.mockImplementation(async (key, payload, ctx) => {
+    log.push(`start:${key}`)
+    const r = await realApply(key, payload, ctx)
+    log.push(`end:${key}`)
+    return r
+  })
   api.listProfiles.mockImplementation(async () => daemon.list())
   api.getSection.mockImplementation(async (_h, _p, key) => daemon.get(key))
   api.putSection.mockImplementation(async (_h, _p, key, body) => daemon.put(key, body))
@@ -282,10 +293,67 @@ describe('THE PULL GUARD — a match', () => {
     expect(applied).not.toHaveBeenCalled()
     expect(writesBy(B)).toEqual([])
     expect(snapshot()).toBe(before)
-    expect(problems.filter((p) => p.kind === 'pull-hosts-check-failed').length).toBeGreaterThanOrEqual(1)
+    expect(problems.filter((p) => p.kind === 'pull-failed' && p.section === 'hosts').length).toBeGreaterThanOrEqual(1)
     await play(12)
     expect(run.unconfirmed).not.toHaveBeenCalled()
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1', 'wa2'])
+    expect(run.settled).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('THE PULL GUARD — nothing but `hosts` moves until `hosts` has been APPLIED', () => {
+  const others = () => log.filter((e) => !e.endsWith(':hosts'))
+
+  it('while the `hosts` pull is out, no other section is applied; the others start only after `hosts` has landed', async () => {
+    const confirmed = await clientAHasPushed()
+    worldOfB()
+    api.getSection.mockImplementation(async (_h, _p, key) => {
+      if (key === 'hosts') await new Promise((r) => setTimeout(r, 3_000))
+      return daemon.get(key)
+    })
+    const run = await start(B, 'pull', confirmed)
+    executor!.onReconnected()
+    await play(2)
+    expect(log).toEqual([])
+    expect(api.getSection.mock.calls.map((c) => c[2])).toEqual(['hosts']) // not even read
+    await play(10)
+    expect(log.slice(0, 2)).toEqual(['start:hosts', 'end:hosts'])
+    expect(others().length).toBeGreaterThan(0)
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1', 'wa2'])
+    expect(run.settled).toHaveBeenCalledTimes(1)
+  })
+
+  it('the `hosts` apply answers busy: the others still wait; the retry lands it, and only then do they go', async () => {
+    const confirmed = await clientAHasPushed()
+    worldOfB()
+    let busy = true
+    applied.mockImplementation(async (key, payload, ctx) => {
+      if (key === 'hosts' && busy) {
+        busy = false
+        log.push('busy:hosts')
+        return { ok: false, reason: 'busy' }
+      }
+      log.push(`start:${key}`)
+      const r = await realApply(key, payload, ctx)
+      log.push(`end:${key}`)
+      return r
+    })
+    const run = await attach(B, 'pull', confirmed)
+    await play(6)
+    expect(log.slice(0, 3)).toEqual(['busy:hosts', 'start:hosts', 'end:hosts'])
+    expect(others().length).toBeGreaterThan(0)
+    expect(useHostStore.getState().hosts[H2].name).toBe('named-by-A')
+    expect(run.unconfirmed).not.toHaveBeenCalled()
+    expect(run.settled).toHaveBeenCalledTimes(1)
+  })
+
+  it('this device already holds exactly the confirmed `hosts` (nothing to apply): released on the agreement', async () => {
+    const confirmed = await clientAHasPushed()
+    world('named-by-A', [ws('wb1', ['tb1'])], [tab('tb1')])
+    const run = await attach(B, 'pull', confirmed)
+    expect(applied.mock.calls.filter((c) => c[0] === 'hosts')).toEqual([])
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1', 'wa2'])
+    expect(run.unconfirmed).not.toHaveBeenCalled()
     expect(run.settled).toHaveBeenCalledTimes(1)
   })
 })
@@ -359,27 +427,22 @@ describe('THE PULL GUARD — a mismatch halts everything', () => {
     expectHalted(run, before)
   })
 
-  it('a write that lands between the verdict and the `hosts` pull: that pull is not applied either — halted', async () => {
+  it('the index still lists the confirmed row, the `hosts` pull reads another: halted there — and `workspaces` was never applied', async () => {
     const confirmed = await clientAHasPushed()
-    const seen = daemon.get('hosts')
+    const indexBefore = daemon.list() // read before the other device's write lands
     await hostsMovedOn()
     worldOfB()
     let first = true
-    // the verdict reads what the user saw; the pull right after it reads what is there now
-    api.getSection.mockImplementation(async (_h, _p, key) => {
-      if (key === 'hosts' && first) {
-        first = false
-        return seen
-      }
-      return daemon.get(key)
+    api.listProfiles.mockImplementation(async () => {
+      if (!first) return daemon.list()
+      first = false
+      return indexBefore
     })
+    const before = snapshot()
     const run = await attach(B, 'pull', confirmed)
     await play(5)
-    expect(applied.mock.calls.filter((c) => c[0] === 'hosts')).toEqual([])
-    expect(useHostStore.getState().hosts[H2].name).toBe(H2)
-    expect(writesBy(B)).toEqual([])
-    expect(run.unconfirmed).toHaveBeenCalledTimes(1)
-    expect(problems.filter((p) => p.kind === 'pull-hosts-unconfirmed')).toHaveLength(1)
+    expect(applied.mock.calls.map((c) => c[0])).toEqual([])
+    expectHalted(run, before)
   })
 
   it('the profile is not on the host: the profile-gone path, not a match and not a mismatch', async () => {

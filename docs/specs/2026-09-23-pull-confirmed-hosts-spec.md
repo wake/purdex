@@ -1,6 +1,6 @@
 # A wizard pull applies only the `hosts` the user confirmed (#1366) — spec + plan
 
-Status: draft rev 2 (2026-09-23, codex plan review folded in) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
+Status: draft rev 3 (2026-09-23, codex plan review folded in; rev 3: the barrier holds until `hosts` is applied) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
 Follows #1362 (wizard: pull needs a verified host, lists the hosts it removes, re-checks before attach) and
 #1365 (host sync identity wire). Files: `executor.ts`, `start.ts`, `useProfileStore.ts`, `wizard-run.ts`, the
 Profile settings UI, locales.
@@ -38,20 +38,28 @@ guard `'absent'` the local `hosts` itself would be pushed and `pull('hosts')` ne
 
 New dep `confirmedPullHosts?: () => { rev, hash } | 'absent' | null`, read live like `initialDirection()`.
 When the executor starts (or first sees the guard) with direction `pull` AND a guard present, it raises a
-**barrier**: `pump()` does nothing for ANY section — no pull, push, restore-local, delete, lock answer — until the
-barrier is resolved. The one thing that runs is **`checkConfirmedHosts()`**, after the first index:
-- the index lists `hosts` → `getSection('hosts')` (same request options / endpoint pin as every read); **match**
-  when the fetched row's `hash` equals the guard's (rev may be higher: same wire payload re-written is still what the
-  user saw — the hash is of the canonical wire payload, hash.ts:101). A 404 while the index lists `hosts` →
-  not decided: re-index once and check again (as `pull()` does for a listed-but-404 section), never "absent".
-- the index does NOT list `hosts` → matches only the guard `'absent'` (the index is the authority on liveness;
-  a GET 404 alone is not, since it also means tombstone / unknown profile — codex #3). `profileGone` → the
-  existing profile-gone handling, not a match.
-- **match** → barrier released; everything proceeds as today (first reconciliation, forcePull etc.).
+**barrier**: `pump()` does nothing for ANY section but `hosts` — no pull, push, restore-local, delete, lock answer —
+until the barrier is released. **The check and the apply of `hosts` are one step** (rev 3, coordinator): there is
+no separate read that compares and then a pull that reads again, so no write can land between the two.
+After every index (`checkConfirmedHosts()`, the index-level part):
+- the index does NOT list `hosts` → the guard `'absent'` matches and there is nothing to apply: **released**. A row
+  guard → **mismatch** (the index is the authority on liveness; a GET 404 alone is not, since it also means
+  tombstone / unknown profile — codex #3). `profileGone` → the existing profile-gone handling, not a verdict.
+- the index lists `hosts` → the guard `'absent'` is a **mismatch**; a row guard leaves the verdict to **the guarded
+  pull**, the only action the barrier lets through: `hosts`' own lock (answered `sot` by the direction) and its
+  `pull()`. That pull fetches `hosts` (same request options / endpoint pin as every read), compares the fetched
+  row's `hash` with the guard's (rev may be higher: the same wire payload re-written is still what the user saw —
+  the hash is of the canonical wire payload, hash.ts:101), and applies only on a match; a mismatch halts before
+  anything is written. A 404 while listed → `pull-absent-but-listed`, re-index, never "absent".
+- **released** only when `hosts` IS APPLIED — `applySectionToStores` succeeded and `pull-applied` was taken for the
+  matching row — or, with nothing to apply, when `hosts` is up to date on the guard's hash (this device already
+  held exactly that; the index folds the agreement; up to date on another hash → mismatch). Then everything
+  proceeds as today (first reconciliation, forcePull etc.); the guard is not consulted again.
+- a failed read, an apply that answers busy, is refused (`locked:invalid`) or throws → the ordinary backoff /
+  lock handling of `pull()`, with the barrier still up: no other section moves.
 - **mismatch** → the executor enters a terminal **halted** state at once (synchronously: the barrier never lifts,
   no action is started afterwards even if one was queued — codex #4), reports problem `pull-hosts-unconfirmed` and
   calls `deps.onPullUnconfirmed?.()` once.
-- a failed request (network / 5xx) → retried with the ordinary backoff, barrier still up.
 No guard (null) or direction `push` → no barrier, today's behaviour. The guard is ignored once the first
 reconciliation period has ended (an executor born without a direction never has one).
 
@@ -97,7 +105,11 @@ existing pending-detach notice. A toast at the moment it happens.
   absent on the SOT that would otherwise be pushed); guard `'absent'` + index without `hosts` → match; guard
   `'absent'` + index lists `hosts` → mismatch; index lists `hosts` + GET 404 → re-index, not absent; unknown
   profile → profile-gone path; an action queued before the verdict never starts after a mismatch; network failure
-  → retried with the barrier up; no guard / push → today's behaviour.
+  → retried with the barrier up; no guard / push → today's behaviour. (rev 3) No other section's
+  `applySectionToStores` before `hosts` is applied, `workspaces` included, while the `hosts` pull is out too; the
+  `hosts` pull reads a non-matching row → halted, `workspaces` never applied; the `hosts` apply answers busy → the
+  others still wait, the retry lands it and only then do they go; this device already holds the confirmed `hosts`
+  → released on the agreement.
 - T3 start layer: `attachMaster(…, { confirmedHosts })` stores it with the direction; `onPullUnconfirmed` → notice
   first, then detach; tests incl. the DELETE failing (notice kept, ghost in `pendingDetaches`) and the
   attach/detach queue busy at the moment of the mismatch (the executor is already halted); integration test through the fake daemon (`executor.direction.integration.test.ts` style): B attaches
@@ -109,7 +121,8 @@ existing pending-detach notice. A toast at the moment it happens.
 - T5 UI: Current block sentence + Dismiss; toast; locales.
 - Gates: lint, tsc (`-p tsconfig.app.json`), full vitest, build. Mutations: barrier lets `restore-local` through (T2 red); barrier lets
   a push through (T2 red); compare rev instead of hash (T2 red on rev-higher-same-hash); no
-  detach on mismatch (T3 red); wizard passes nothing (T4 red).
+  detach on mismatch (T3 red); wizard passes nothing (T4 red); (rev 3) release as soon as the fetched `hosts`
+  matches, before it is applied (T2 red on the in-flight and busy tests).
 
 ## 5. Real machine
 With my own profile name only (purdex-38 is running cross-device acceptance on mlab — never touch his profiles).

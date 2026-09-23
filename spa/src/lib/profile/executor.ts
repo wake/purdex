@@ -174,22 +174,27 @@
 //   SOT, and re-checked that row right before the attach. The guard is that row (`'absent'`: there was none).
 //   Another device may write `hosts` between that check and the first pull — and the pull would then remove
 //   hosts nobody announced. So the guard is checked FIRST, before anything else of this period happens:
-//   - A BARRIER, NOT A GATE PER PULL. While it is up, `pump()` starts NOTHING for ANY section — no pull, push,
-//     delete, restore-local — and no lock is answered by the direction. Only the index is read (the verdict needs
-//     it). Gating the `hosts` pull alone is not enough: `workspaces` has no pull gate and can land first (the
-//     refusal would then come after a half-pulled world); a restore-local needs no network and comes before the
-//     index; a section the SOT does not hold is PUSHED by the decision table — with the guard `'absent'` the local
-//     `hosts` itself would go out, and `pull('hosts')` would never run.
-//   - THE VERDICT (`checkConfirmedHosts`), after every index while the barrier is up:
-//       the index lists `hosts` → it is read (`getSection`, like every read) and matches iff its HASH is the
-//         guard's; a higher rev with the same hash is the same wire payload written again — what the user saw.
-//         A 404 while the index lists it is NOT "absent" (a 404 is also a tombstone, or an unknown profile): the
-//         index is asked again. A failed read is retried with the backoff, the barrier up meanwhile.
-//       the index does not list `hosts` → a match iff the guard is `'absent'` (the index is the authority on
-//         liveness). The profile not on the list at all → `profileGone`, as ever: not a verdict.
-//   - MATCH → the barrier is lifted for good: standing locks are answered, every section decides again, and the
-//     period goes on exactly as without a guard. The first `hosts` apply of the period is compared once more
-//     (a write may land between the verdict and that pull): not the guard's hash → halted, as below.
+//   - A BARRIER, NOT A GATE PER PULL. While it is up, `pump()` starts NOTHING for any section but `hosts` — no
+//     pull, push, delete, restore-local — and the direction answers no lock but `hosts`'. Gating the `hosts` pull
+//     alone is not enough: `workspaces` has no pull gate and could land first (a refusal would then come after a
+//     half-pulled world); a restore-local needs no network and comes before the index; a section the SOT does not
+//     hold is PUSHED by the decision table — with the guard `'absent'` the local `hosts` itself would go out.
+//   - THE CHECK AND THE APPLY ARE ONE STEP. There is no separate read to compare and then a pull that reads again
+//     (a write could land between the two). After each index (`checkConfirmedHosts`):
+//       the index does not list `hosts` → the guard `'absent'` matches, and there is nothing to apply: RELEASED.
+//         Any row guard → MISMATCH. (The index is the authority on liveness; a GET 404 alone is not.) The profile
+//         not on the list at all → `profileGone`, as ever: not a verdict.
+//       the index lists `hosts` → the guard `'absent'` is a MISMATCH; a row guard leaves the verdict to THE
+//         GUARDED PULL: the one action the barrier lets through is `hosts`' own — its lock, answered `sot` by the
+//         direction, and its pull. `pull('hosts')` fetches, compares the fetched HASH with the guard's (a higher
+//         rev with the same hash is the same wire payload written again — what the user saw) and applies only on
+//         a match; a mismatch halts before anything is written. A 404 while listed is not "absent" (`pull()`'s
+//         `pull-absent-but-listed`: the index is asked again); a failed read, an apply that is busy, refused or
+//         throws, go the ordinary ways (backoff / `locked:invalid`) — with the barrier up.
+//   - RELEASED only once `hosts` IS APPLIED — `pull-applied` taken for the matching row — or, when there is nothing
+//     to apply, once `hosts` is up to date on the guard's hash (this device already held exactly that: the index
+//     folds the agreement). Then standing locks are answered, every section decides again, and the period goes
+//     on exactly as without a guard; the guard is not consulted again.
 //   - MISMATCH → HALTED, at once and for good: no action starts afterwards (a queued one is dropped, a pump does
 //     nothing, no timer is left), `pull-hosts-unconfirmed` is reported and `onPullUnconfirmed()` called ONCE. The
 //     start layer stops the sync. Nothing of this machine was replaced and nothing was sent.
@@ -449,14 +454,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /** Not sent, or sent and failed without an answer: not again before the next index (a sweep runs every round). */
   const orphanDeferred = new Set<string>()
 
-  /** THE PULL GUARD (see the header). Released: the verdict was a match. Halted: a mismatch — terminal. */
+  /** THE PULL GUARD (see the header). Released: `hosts` is applied (or agreed) on the guard's hash. Halted: a mismatch — terminal. */
   let guardReleased = false
   let halted = false
-  let guardChecking = false
-  let guardFailures = 0
-  let guardTimer: Timer | null = null
-  /** The first `hosts` apply of the period has been compared with the guard (and matched). */
-  let hostsGuardSpent = false
 
   let shapesPromise: Promise<Shapes> | null = null
   let previousWorkspaceIds = localWorkspaceIds() ?? []
@@ -662,7 +662,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     pruneMemoryStash()
     forgetIfGone(key, next)
     emitStatus()
-    const keep = answerFor(next)
+    const keep = answerFor(key, next)
     if (keep !== null) {
       dispatch(key, { type: 'resolved', keep }, pumpAfter)
       return true
@@ -690,9 +690,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   /** What the direction answers to this lock, or null: not locked, not its to answer, or no direction. */
-  function answerFor(s: SectionSyncState): 'local' | 'sot' | null {
+  function answerFor(key: string, s: SectionSyncState): 'local' | 'sot' | null {
     if (s.status !== 'locked:conflict' && s.status !== 'locked:reset') return null
-    if (barrierUp()) return null // not before the guard's verdict (see the header)
+    if (barrierUp() && !guardedHosts(key)) return null // nothing but the guarded `hosts` before the release (see the header)
     const d = direction()
     if (d === null) return null
     if (d === 'pull') return 'sot'
@@ -704,7 +704,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /** Locks that were not made under this direction: restored from the store, or older than the attach. */
   function answerStandingLocks(): void {
     for (const [key, s] of [...sections]) {
-      const keep = answerFor(s)
+      const keep = answerFor(key, s)
       if (keep !== null) dispatch(key, { type: 'resolved', keep }, false)
     }
   }
@@ -721,62 +721,38 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     return halted || (!guardReleased && direction() === 'pull' && guard() !== null)
   }
 
-  /** After an index, while the barrier is up: match → release · mismatch → halt · otherwise ask again later. */
+  /** `key` is the one section the barrier lets through: `hosts`, while a row guard waits for its guarded pull. */
+  function guardedHosts(key: string): boolean {
+    if (key !== 'hosts' || halted || guardReleased || !indexSeen) return false
+    const g = guard()
+    return g !== null && g !== 'absent'
+  }
+
+  /** After an index, while the barrier is up: what the index alone decides (see the header). The rest is the
+   *  guarded pull's (`pull('hosts')`), and the agreement's (`judgeAgreedHosts`). */
   function checkConfirmedHosts(listsHosts: boolean): void {
-    if (disposed || halted || guardReleased || guardChecking || !barrierUp()) return
+    if (disposed || halted || guardReleased || !barrierUp()) return
     const g = guard()
     if (g === null) return
     if (!listsHosts) return g === 'absent' ? releaseBarrier() : halt()
     if (g === 'absent') return halt()
-    if (guardTimer !== null) clearTimeout(guardTimer) // this index is newer than the one the retry waits for
-    guardTimer = null
-    guardChecking = true
-    void readConfirmedHosts()
-      .catch((err: unknown) => {
-        if (!disposed) problem('executor-error', message(err), 'hosts')
-        retryGuard()
-      })
-      .finally(() => {
-        guardChecking = false
-      })
+    judgeAgreedHosts()
   }
 
-  async function readConfirmedHosts(): Promise<void> {
-    const fetching = request(() => getSection(hostId, profileId, 'hosts', requestOptions))
-    if (fetching === null) return // not reachable: the next connect indexes, and asks again
-    const result = await fetching
-    if (disposed || halted || guardReleased) return
-    if (result.kind === 'failed') {
-      if (blocks(result)) return
-      problem('pull-hosts-check-failed', `${result.reason} (${result.status}): ${result.message}; nothing runs until the confirmed \`hosts\` has been compared`, 'hosts')
-      return retryGuard()
-    }
-    if (result.value === null) {
-      // 404 is "tombstone" AND "unknown profile" alike, and the index said LIVE: not "absent" — ask the list again.
-      problem('pull-absent-but-listed', 'the section answered 404 while the index lists it; asking the index again', 'hosts')
-      return retryGuard()
-    }
+  /** Nothing to apply: this device already agrees with the SOT on `hosts`. On the guard's hash → released; on any
+   *  other → the SOT is not what the user confirmed: halted. Asked at the end of every round while the barrier is up. */
+  function judgeAgreedHosts(): void {
+    if (!guardedHosts('hosts') || !upToDate('hosts')) return
     const g = guard()
-    if (g === null || matchesGuard(g, result.value)) releaseBarrier()
+    const agreed = sections.get('hosts')!.base
+    if (g === null || g === 'absent') return
+    if (matchesGuard(g, agreed)) releaseBarrier()
     else halt()
-  }
-
-  /** A verdict that could not be reached: the index is asked again after the backoff, and the check follows it. */
-  function retryGuard(): void {
-    if (disposed || halted) return
-    const ms = backoffMs(guardFailures)
-    guardFailures += 1
-    if (guardTimer !== null) clearTimeout(guardTimer)
-    guardTimer = setTimeout(() => {
-      guardTimer = null
-      requestReindex(true)
-    }, ms)
   }
 
   function releaseBarrier(): void {
     if (disposed || halted || guardReleased) return
     guardReleased = true
-    guardFailures = 0
     answerStandingLocks()
     pumpAll()
   }
@@ -896,7 +872,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       return
     }
     // Ending the period here would drop the direction, and the barrier with it, without a verdict.
-    if (barrierUp()) return
+    if (barrierUp()) {
+      judgeAgreedHosts()
+      if (barrierUp()) return
+    }
     if (!indexSeen || profileGone || schemaLock !== null || blocked) return
     sweepOrphans() // `push`: what it queues keeps the period open (`orphanPending`)
     if (reindexing || draining || queue.length > 0 || orphanPending.size > 0 || orphanDeferred.size > 0 || heldPlaceholders.size > 0) return
@@ -1013,7 +992,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const action = decideSection(s, { reachable: deps.isReachable(), autoSync: manual || deps.autoSync() })
     // THE PULL GUARD: only the index, until the verdict (see the header). A lock is not even taken — the direction
     // answers it once released, and a lock taken now would sit unanswered in the UI.
-    if (action.do !== 'reindex' && action.do !== 'nothing' && barrierUp()) return
+    if (action.do !== 'reindex' && action.do !== 'nothing' && barrierUp() && !(guardedHosts(key) && (action.do === 'pull' || action.do === 'lock-conflict' || action.do === 'lock-reset'))) return
     if (action.do !== 'restore-local') parkedRestore.delete(key)
     switch (action.do) {
       case 'nothing':
@@ -1360,7 +1339,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
     // Decided on the CURRENT state, not on the one that asked.
     const s = sections.get(key)
-    if (s === undefined || profileGone || schemaLock !== null || barrierUp() || !canApplyPull(s)) return AGAIN
+    if (s === undefined || profileGone || schemaLock !== null || halted || (barrierUp() && !guardedHosts(key)) || !canApplyPull(s)) return AGAIN
     if (!mayPull(key)) return WAIT
 
     const fetched = result.value
@@ -1408,8 +1387,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       }
       // 'i-am-newer' is applied like 'ok' — see "AN OLDER SHAPE ON THE SOT" in the header.
     }
-    // THE PULL GUARD, once more for the first `hosts` apply: a write may have landed since the verdict.
-    if (key === 'hosts' && !hostsGuardSpent && direction() === 'pull') {
+    // THE GUARDED PULL: the fetched row IS the verdict, and nothing is written unless it is the confirmed one.
+    const guarded = guardedHosts(key)
+    if (guarded) {
       const g = guard()
       if (g !== null && !matchesGuard(g, fetched)) {
         halt()
@@ -1454,11 +1434,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       problem('pull-hash-mismatch', `the stores did not keep what arrived (fetched ${String(sotHash)}, they hold ${String(outcome.hash)}): the section is dirty and will be pushed back`, key)
     }
     if (key === 'workspaces') previousWorkspaceIds = localWorkspaceIds() ?? previousWorkspaceIds
-    if (key === 'hosts') hostsGuardSpent = true
-    if (!dispatch(key, { type: 'pull-applied', rev, hash: sotHash, localHash: outcome.hash }, false)) {
-      problem('pull-applied-refused', 'the section changed while the payload was being applied', key)
-    }
+    const taken = dispatch(key, { type: 'pull-applied', rev, hash: sotHash, localHash: outcome.hash }, false)
+    if (!taken) problem('pull-applied-refused', 'the section changed while the payload was being applied', key)
     answered()
+    // `hosts` is applied, on the confirmed row: only now may anything else move (see the header).
+    if (guarded && taken) releaseBarrier()
     // The push that follows needs the payload of what the stores hold, and only
     // the collector has it: its report of this very apply pumps the section.
     if (mismatch && outcome.hash !== null && !stash.has(outcome.hash)) {
@@ -1546,8 +1526,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (reindexTimer !== null) clearTimeout(reindexTimer)
     reindexTimer = null
     reindexNotBefore = 0
-    if (guardTimer !== null) clearTimeout(guardTimer)
-    guardTimer = null
   }
 
   /** A fresh start for every retry: the connection is new, or the user asked. */
@@ -1556,7 +1534,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     clearTimers()
     failures.clear()
     reindexFailures = 0
-    guardFailures = 0
     emitStatus()
   }
 
@@ -1588,15 +1565,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       for (const key of [...sections.keys()]) dispatch(key, { type: 'reconnected' }, false)
       answerStandingLocks()
       pumpAll()
-      // THE PULL GUARD: a verdict still owed is asked for even if no section is stale (a retry was just cancelled).
-      if ((heldPlaceholders.size > 0 || barrierUp()) && online()) requestReindex()
+      if (heldPlaceholders.size > 0 && online()) requestReindex()
     },
     syncNow() {
       if (disposed) return
       resetRetries()
       manual = true
       pumpAll()
-      if ((heldPlaceholders.size > 0 || barrierUp()) && online()) requestReindex()
+      if (heldPlaceholders.size > 0 && online()) requestReindex()
       settleManual()
     },
     resolve(section, keep) {
