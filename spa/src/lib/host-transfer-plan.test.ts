@@ -188,6 +188,17 @@ describe('planReceive (§6.4.3)', () => {
     expect(plan.map((p) => p.status)).toEqual(['new', 'duplicate'])
   })
 
+  it('a mismatch row does not claim its observed id: a later row that verifies as that id is new, not duplicate', () => {
+    const plan = planReceive([row({ daemonId: 'd1_fake' }), row({ ip: 'other', daemonId: 'd1_real' })], [ok('d1_real'), ok('d1_real')], {})
+    expect(plan.map((p) => p.status)).toEqual(['mismatch', 'new'])
+  })
+
+  it('a mismatch row does not claim its observed id: the later row is existing when a local row has that id', () => {
+    const local = hostsOf(host('m', { daemonId: 'd1_real' }))
+    const plan = planReceive([row({ daemonId: 'd1_fake' }), row({ ip: 'other' })], [ok('d1_real'), ok('d1_real')], local)
+    expect(plan.map((p) => p.status)).toEqual(['mismatch', 'existing'])
+  })
+
   it('local-conflict: two local rows claim the daemonId', () => {
     const local = hostsOf(host('a', { daemonId: 'd1_air' }), host('bb', { daemonId: 'd1_air' }))
     expect(planReceive([row()], [ok('d1_air')], local)[0].status).toBe('local-conflict')

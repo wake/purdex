@@ -125,7 +125,7 @@ export interface PreviewRow {
 
 /**
  * Spec §6.4.3, in this order: `unverified` (no answer, or no valid id) → `mismatch` (payload id ≠ observed) →
- * `duplicate` (an earlier row observed the same id; the first wins) → `local-conflict` (two local rows claim the
+ * `duplicate` (an earlier row that passed both checks observed the same id; the first wins) → `local-conflict` (two local rows claim the
  * id, or a local row at the same endpoint claims another id — or none yet) → `existing` (one local row claims it)
  * → `new`.
  */
@@ -140,10 +140,11 @@ export function planReceive(
     const obs = observations[index]
     if (!obs || obs.kind !== 'ok' || !isValidDaemonId(obs.hostId)) return { index, row, status: 'unverified' }
     const observed = obs.hostId
-    const first = !seen.has(observed)
-    seen.add(observed)
     if (row.daemonId !== undefined && row.daemonId !== observed) return { index, row, status: 'mismatch', observed }
-    if (!first) return { index, row, status: 'duplicate', observed }
+    // Only a row that passed the identity checks claims its id: a mismatch row before it must not turn a later,
+    // consistent row for the same daemon into a duplicate.
+    if (seen.has(observed)) return { index, row, status: 'duplicate', observed }
+    seen.add(observed)
     const claims = localHosts.filter((h) => h.daemonId === observed)
     const endpoint = hostEndpoint(row)
     const squatter = localHosts.some((h) => hostEndpoint(h) === endpoint && h.daemonId !== observed)
