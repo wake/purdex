@@ -122,19 +122,28 @@ func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error)
 	return result, nil
 }
 
-// GetSession returns a single session by its code, or nil if not found,
-// under a fresh listReadTimeout budget.
+// GetSession returns a single session by its code, or nil if not found, under
+// a fresh listReadTimeout budget. Callers that hold a request or operation
+// context use GetSessionContext.
 func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	return m.GetSessionContext(context.Background(), code)
+}
+
+// GetSessionContext is GetSession bounded by ctx, capped at listReadTimeout
+// (#1293): the tmux list, the instance probe, the pane metadata and the meta
+// read all end when the caller's context does — an HTTP handler passes
+// r.Context(), so a client that gives up ends a stuck read at once.
+func (m *SessionModule) GetSessionContext(ctx context.Context, code string) (*SessionInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, listReadTimeout)
 	defer cancel()
 	return m.getSession(ctx, code)
 }
 
-// getSession is GetSession under ctx. A (nil, nil) answer is a reliable "not
-// found" only when ctx was still live when the list came back and when the
-// orphan meta row was dropped: once ctx has ended the answer is an error
-// wrapping ctx.Err() (#1293) — a list read past its deadline is not evidence
-// that a session is gone, and is not acted on.
+// getSession is GetSessionContext under an already-capped ctx. A (nil, nil)
+// answer is a reliable "not found" only when ctx was still live when the list
+// came back and when the orphan meta row was dropped: once ctx has ended the
+// answer is an error wrapping ctx.Err() (#1293) — a list read past its
+// deadline is not evidence that a session is gone, and is not acted on.
 func (m *SessionModule) getSession(ctx context.Context, code string) (*SessionInfo, error) {
 	tmuxID, err := DecodeSessionID(code)
 	if err != nil {
@@ -229,7 +238,7 @@ func (m *SessionModule) UpdateMeta(code string, update MetaUpdate) error {
 
 // HandleTerminalWS attaches a WebSocket connection to the tmux session PTY relay.
 func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request, code string) {
-	info, err := m.GetSession(code)
+	info, err := m.GetSessionContext(r.Context(), code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

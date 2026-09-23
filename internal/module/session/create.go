@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/wake/purdex/internal/store"
 )
@@ -25,8 +26,22 @@ const (
 	CreateStageInvalidName CreateStage = "invalid_name" // name fails ValidSessionName
 	CreateStageInvalidCwd  CreateStage = "invalid_cwd"  // resolveCwd refused the directory
 	CreateStageExists      CreateStage = "exists"       // HasSession(name) was already true
-	CreateStageNewSession  CreateStage = "new_session"  // tmux new-session failed; nothing exists
-	CreateStageList        CreateStage = "list"         // tmux list-sessions failed, or the new session was not in it
+	// The caller's context ended — or the pre-create reads (has-session, the
+	// generation probe) ran out of their listReadTimeout cap — before `tmux
+	// new-session` ran (typically while waiting for another create to
+	// finish). Nothing was created.
+	CreateStageCancelled CreateStage = "cancelled"
+	// tmux new-session failed; nothing exists. This includes a new-session
+	// killed at its cap when a has-session afterwards confirmed the session
+	// is not there.
+	CreateStageNewSession CreateStage = "new_session"
+	// tmux new-session was killed at its cap and the has-session asked
+	// afterwards could not answer either: the server may or may not have made
+	// the session. SessionAlive reports false: unknown is not announced as
+	// existing (session_alive means the session is there); a caller that
+	// refreshes its session list sees it if it really was made.
+	CreateStageNewSessionUnconfirmed CreateStage = "new_session_unconfirmed"
+	CreateStageList                  CreateStage = "list" // tmux list-sessions failed, or the new session was not in it
 	// The tmux generation read after list-sessions differs from the one read
 	// before new-session: the server the session was created on has been
 	// replaced, and the session died with it. Nothing of ours exists.
@@ -77,13 +92,57 @@ func (e *CreateError) Is(target error) bool {
 // failure AND the session is still there: it exists but has no meta row
 // and no code was returned. A caller that wanted an atomic create decides
 // what to do with it. generation_changed is false: new-session succeeded,
-// but on a server that has since been replaced.
+// but on a server that has since been replaced. new_session_unconfirmed is
+// false too: whether the session exists is unknown, and unknown is not
+// announced as alive — the caller's refreshed session list shows it if it
+// really exists.
 func (e *CreateError) SessionAlive() bool {
 	switch e.Stage {
 	case CreateStageList, CreateStageEncode, CreateStageMeta:
 		return true
 	}
 	return false
+}
+
+// ctxMutex is a mutex whose Lock can be abandoned when a context ends. The
+// zero value is unlocked and ready to use.
+type ctxMutex struct {
+	once sync.Once
+	ch   chan struct{}
+}
+
+func (l *ctxMutex) sem() chan struct{} {
+	l.once.Do(func() { l.ch = make(chan struct{}, 1) })
+	return l.ch
+}
+
+// LockContext takes the lock, or returns ctx.Err() if ctx ends first.
+func (l *ctxMutex) LockContext(ctx context.Context) error {
+	select {
+	case l.sem() <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TryLock takes the lock if it is free and reports whether it did.
+func (l *ctxMutex) TryLock() bool {
+	select {
+	case l.sem() <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// Unlock releases the lock; unlocking an unlocked ctxMutex panics.
+func (l *ctxMutex) Unlock() {
+	select {
+	case <-l.sem():
+	default:
+		panic("session: unlock of unlocked ctxMutex")
+	}
 }
 
 // ValidSessionName reports whether name is one POST /api/sessions accepts.
@@ -110,7 +169,35 @@ func (m *SessionModule) ValidateCwd(cwd string) error {
 // cwd and records its meta (mode `terminal`), returning the same
 // SessionInfo POST /api/sessions answers with. On failure the error is a
 // *CreateError; see SessionAlive for what may have been left behind.
+//
+// It runs under a fresh listReadTimeout budget; callers that hold a request
+// or operation context use CreateSessionContext.
 func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
+	return m.CreateSessionContext(context.Background(), name, cwd)
+}
+
+// CreateSessionContext is CreateSession whose caller context governs only
+// the part before `tmux new-session` (#1293): a caller that gives up while
+// waiting for createMu, during the has-session check or the generation
+// probe — or at any point before new-session runs — gets
+// CreateStageCancelled and nothing is created. Those pre-create reads are
+// also capped at listReadTimeout, so a hung tmux cannot hold createMu for a
+// caller with no deadline of its own.
+//
+// new-session itself is never bound to the caller: killing the tmux client
+// when the request goes away says nothing about the server, which may have
+// made the session anyway — a create that reports "nothing" for a session
+// that exists. It runs on its own listReadTimeout cap; when that cap kills
+// it, a has-session decides between "not created" (CreateStageNewSession),
+// "created" (the create is finished as usual) and "unknown"
+// (CreateStageNewSessionUnconfirmed).
+//
+// Once the session exists the rest (list-sessions, generation check, meta
+// write) runs to completion under ONE further context, detached from the
+// caller's cancellation but capped at listReadTimeout: abandoning it would
+// leave a tmux session without a meta row, and a hung tmux still cannot hold
+// createMu forever.
+func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd string) (*SessionInfo, error) {
 	fail := func(stage CreateStage, err error) (*SessionInfo, error) {
 		return nil, &CreateError{Stage: stage, Name: name, Err: err}
 	}
@@ -131,10 +218,26 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 	// Serialize the HasSession→NewSession→SetMeta critical section so two
 	// concurrent creates with the same name can't both slip past the
 	// duplicate check. Input validation stays outside the lock.
-	m.createMu.Lock()
+	if err := m.createMu.LockContext(ctx); err != nil {
+		return fail(CreateStageCancelled, err)
+	}
 	defer m.createMu.Unlock()
+	// Both select arms can be ready at once; a caller already gone when the
+	// lock came free must still not create.
+	if err := ctx.Err(); err != nil {
+		return fail(CreateStageCancelled, err)
+	}
 
-	if m.tmux.HasSession(name) {
+	// The reads before new-session follow the caller, capped like every
+	// session read: createMu is held from here on.
+	preCtx, cancelPre := context.WithTimeout(ctx, listReadTimeout)
+	defer cancelPre()
+
+	exists, err := m.tmux.HasSessionContext(preCtx, name)
+	if err != nil {
+		return fail(CreateStageCancelled, err)
+	}
+	if exists {
 		return fail(CreateStageExists, ErrSessionExists)
 	}
 
@@ -146,23 +249,58 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 	// before the create is "no server running": new-session starts one, and
 	// the sample read after it is that server's, which is the one the
 	// session lives on.
-	before := m.TmuxInstance()
+	before := m.TmuxInstanceContext(preCtx)
 
-	if err := m.tmux.NewSession(name, cwd); err != nil {
-		return fail(CreateStageNewSession, err)
+	// The last point a caller that has gone away can still leave nothing
+	// behind. The probe reports a ctx that ended as "", not as an error, so
+	// this is also what keeps a timed-out probe from passing as "no server".
+	if err := preCtx.Err(); err != nil {
+		return fail(CreateStageCancelled, err)
 	}
 
-	// Find the newly created session to get its tmux ID. The read is bounded
-	// like every session-list read (#1293): a hung tmux must not hold the
-	// create critical section (createMu) forever.
-	listCtx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
-	sessions, err := m.tmux.ListSessions(listCtx)
-	cancel()
+	// new-session runs on its own cap, never the caller's (see
+	// CreateSessionContext).
+	newCtx, cancelNew := context.WithTimeout(context.Background(), listReadTimeout)
+	newErr := m.tmux.NewSessionContext(newCtx, name, cwd)
+	cancelNew()
+
+	// From here on the session exists (or may): finish the create regardless
+	// of the caller (see CreateSessionContext), under one bounded context
+	// (#1293) — a hung tmux must not hold the create critical section
+	// (createMu) forever.
+	postCtx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	defer cancel()
+
+	if newErr != nil {
+		if !errors.Is(newErr, context.DeadlineExceeded) {
+			return fail(CreateStageNewSession, newErr)
+		}
+		// Killed at the cap: the client is gone, but the server may have
+		// made the session. Ask before reporting either way.
+		created, err := m.tmux.HasSessionContext(postCtx, name)
+		switch {
+		case err != nil:
+			return fail(CreateStageNewSessionUnconfirmed, fmt.Errorf("%w; has-session afterwards: %v", newErr, err))
+		case !created:
+			return fail(CreateStageNewSession, newErr)
+		}
+		log.Printf("session: tmux new-session %q timed out but the session exists; finishing the create", name)
+	}
+
+	// Find the newly created session to get its tmux ID.
+	sessions, err := m.tmux.ListSessions(postCtx)
 	if err != nil {
 		return fail(CreateStageList, err)
 	}
 
-	after := m.TmuxInstance()
+	// Same deadline as the list: the chain has one budget, not one per step.
+	after := m.TmuxInstanceContext(postCtx)
+	// The probe reports a ctx that ended as "", which would read as a
+	// generation change below; it is a failed follow-up read instead, with
+	// the session still alive.
+	if err := postCtx.Err(); err != nil {
+		return fail(CreateStageList, fmt.Errorf("tmux instance probe after create: %w", err))
+	}
 	if before != "" && after != before {
 		return fail(CreateStageGenerationChanged, fmt.Errorf("tmux server restarted during create (generation %s → %s)", before, after))
 	}

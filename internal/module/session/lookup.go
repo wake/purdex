@@ -19,7 +19,19 @@ const nameCacheTTL = 250 * time.Millisecond
 // deliberately avoids the meta merge / pane metadata fan-out that
 // ListSessions performs, because the hook hot path only needs name→code
 // resolution and was paying 1+7×S tmux subprocesses per event.
+//
+// A refresh runs under a fresh listReadTimeout budget; callers that hold a
+// context use LookupCodeByNameContext.
 func (m *SessionModule) LookupCodeByName(name string) (string, bool) {
+	return m.LookupCodeByNameContext(context.Background(), name)
+}
+
+// LookupCodeByNameContext is LookupCodeByName whose cache refresh is bounded
+// by ctx, capped at listReadTimeout (#1293). The refresh runs under
+// nameCacheMu, so ending it with the caller's context also frees the lock.
+// A refresh ended that way is a miss ("", false) and leaves the cache as it
+// was.
+func (m *SessionModule) LookupCodeByNameContext(ctx context.Context, name string) (string, bool) {
 	m.nameCacheMu.Lock()
 	defer m.nameCacheMu.Unlock()
 
@@ -30,7 +42,7 @@ func (m *SessionModule) LookupCodeByName(name string) (string, bool) {
 
 	// Bounded like every session-list read (#1293): this runs under
 	// nameCacheMu on the hook hot path.
-	ctx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, listReadTimeout)
 	defer cancel()
 	sessions, err := m.tmux.ListSessions(ctx)
 	if err != nil {

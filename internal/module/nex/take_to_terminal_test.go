@@ -422,6 +422,22 @@ func TestTakeToTerminal500CreateFailedBeforeNewSession(t *testing.T) {
 	env.assertNoArchive(t)
 }
 
+// new-session timed out and has-session could not answer: whether the
+// session exists is unknown, and unknown is not announced as alive — the
+// spec's session_alive means the tmux session exists (the SPA refreshes its
+// list and would show a real orphan there anyway).
+func TestTakeToTerminal500CreateUnconfirmedIsNotAlive(t *testing.T) {
+	env := newTTEnv(t)
+	env.sessions.createErr = &session.CreateError{Stage: session.CreateStageNewSessionUnconfirmed, Name: ttName,
+		Err: errors.New("new-session: context deadline exceeded; has-session afterwards: context deadline exceeded")}
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "session_create_failed", body["code"])
+	assert.Equal(t, ttName, body["session_name"])
+	assert.Equal(t, false, body["session_alive"])
+	env.assertNoArchive(t)
+}
+
 // --- resume in the new session (step 8): keys go by id to window 0 ---
 
 func TestTakeToTerminalKeysGoToNewSessionWindow0(t *testing.T) {
