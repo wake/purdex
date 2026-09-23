@@ -70,7 +70,7 @@ import type {
 
 export interface ApplyHostsResult {
   next: HostsSlice
-  /** Hosts that existed locally and are not in the payload — P2b marks their panes (`markHostRemovedPanes`). */
+  /** Hosts that existed locally and are not in the payload — the hosts apply removes each through `deleteHostCascade`. */
   removedHostIds: string[]
 }
 

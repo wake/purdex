@@ -46,7 +46,7 @@ import { withOperationLock } from '../../stores/useRebuildStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
-import type { PaneLayout, Tab } from '../../types/tab'
+import type { Tab } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
 import { generateId } from '../id'
 import { registerLocale, unregisterLocale } from '../locale-registry'
@@ -180,28 +180,6 @@ const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
  * it is still what they hold is the executor's check, made where it stashes the payload (#1369 critic).
  */
 const rebuilt = async (payload: unknown): Promise<Extract<ApplyOutcome, { ok: true }>> => ({ ok: true, hash: await hashSection(payload), payload })
-
-// === host-removed ===
-
-/**
- * `layout` with every live `tmux-session` pane whose host is not in
- * `knownHostIds` marked `terminated: 'host-removed'`. Pure; returns the same
- * object when nothing changed. A pane that is already terminated keeps its reason.
- */
-export function markHostRemovedPanes(layout: PaneLayout, knownHostIds: ReadonlySet<string>): PaneLayout {
-  if (layout.type === 'leaf') {
-    const c = layout.pane.content
-    if (c.kind !== 'tmux-session' || c.terminated !== undefined || knownHostIds.has(c.hostId)) return layout
-    return { ...layout, pane: { ...layout.pane, content: { ...c, terminated: 'host-removed' } } }
-  }
-  let changed = false
-  const children = layout.children.map((child) => {
-    const next = markHostRemovedPanes(child, knownHostIds)
-    if (next !== child) changed = true
-    return next
-  })
-  return changed ? { ...layout, children } : layout
-}
 
 // === hosts ===
 
@@ -689,16 +667,10 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       const applied = applyTabs({ tabs: local.tabs, workspaces: local.workspaces }, workspaceId, incoming)
       if (applied.unrendered) return { ok: true, hash: null }
 
-      // Session codes are host-scoped and every client talks to the same hosts,
-      // so an arriving pane needs no reattach — unless its host is not known here.
-      // (Hosts are live whichever world is on screen: a slave borrows them.)
-      const knownHosts = new Set(Object.keys(useHostStore.getState().hosts))
-      const tabs = { ...applied.next.tabs }
-      for (const id of incoming.order) {
-        const layout = markHostRemovedPanes(tabs[id].layout, knownHosts)
-        if (layout !== tabs[id].layout) tabs[id] = { ...tabs[id], layout }
-      }
-      if (writeMasterWorld({ tabs, workspaces: applied.next.workspaces, activeWorkspaceId: local.activeWorkspaceId }) === 'unsettled') return BUSY
+      // A pane whose host this device does not have is kept exactly as it arrived (host ownership spec §3.2): its
+      // wire id is stored verbatim and rendered as "no host here" on this device only. Nothing is marked — a mark is a
+      // synced field, and one device lacking a host must not brand that host's panes on every device.
+      if (writeMasterWorld({ tabs: applied.next.tabs, workspaces: applied.next.workspaces, activeWorkspaceId: local.activeWorkspaceId }) === 'unsettled') return BUSY
 
       // Read back from wherever it landed, before anything is awaited.
       const after = readMasterWorld()
@@ -728,14 +700,12 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
  * `busy` can come from `workspaces`, `tabs.<id>`, and a `hosts` apply that removes
  * a host.
  *
- * CALLER CONTRACT: when a `tabs.<id>` section is applied, the `hosts` section
- * must already be synced. An arriving pane whose host is unknown here is marked
- * `host-removed` — and that mark is a synced field that gets pushed back. Applied
- * while `hosts` is behind, it would brand the live pane of a host the other
- * device has just ADDED, on both devices. This layer does not defend against
- * that; the executor orders the pulls (no `tabs.*` before `hosts` is synced).
+ * An arriving pane whose host is unknown here is kept verbatim, unmarked (host
+ * ownership spec §3.2): applying a `tabs.<id>` while `hosts` is behind writes
+ * nothing synced about it. The executor still orders the pulls (no `tabs.*`
+ * before `hosts` is synced) until H3 retires `hosts`.
  *
- * Likewise, when `settings` is applied the `workspaces` section must already be
+ * When `settings` is applied the `workspaces` section must already be
  * synced. A workspace-scoped entry is written for a master workspace only
  * (`masterWorkspaceIds()`); the entry of a workspace that has not arrived yet is
  * NOT written, the returned hash says so, and the section — now dirty — is

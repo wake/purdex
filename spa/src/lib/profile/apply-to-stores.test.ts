@@ -40,7 +40,7 @@ import { hashSection } from './hash'
 import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, stripSizes } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
-import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
+import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, readSettingsSources } from './apply-to-stores'
 import { identityOfSync, syncIdOfSync } from './host-identity'
 
 // === fixtures ===
@@ -1071,15 +1071,19 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(writes).toBe(0)
   })
 
-  it('marks an arriving pane of a host unknown here as host-removed, and reports the honest hash', async () => {
+  // Host ownership §3.1.1 / §3.2: a pane naming a host this device lacks is kept verbatim — never marked — so the
+  // stores hold exactly what arrived and nothing is pushed back.
+  it('keeps an arriving pane of a host unknown here byte-for-byte, unmarked, and reports the incoming payload\'s hash', async () => {
     seedTabWorld()
-    const split: PaneLayout = { type: 'split', id: 's9', direction: 'v', children: [tmuxLeaf('gone-pane', 'host-gone'), tmuxLeaf('ok-pane', M)], sizes: [50, 50] }
+    const unknown = syncIdOfSync('air-lab:0unkn0')
+    const split: PaneLayout = { type: 'split', id: 's9', direction: 'v', children: [tmuxLeaf('gone-pane', unknown), tmuxLeaf('ok-pane', M)], sizes: [50, 50] }
     const payload = incomingFor([tab('a5', split)])
     const outcome = await applySectionToStores('tabs.wa', payload, ctx)
     const layout = useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>
-    expect(layout.children[0]).toMatchObject({ pane: { content: { hostId: 'host-gone', terminated: 'host-removed' } } })
-    expect((layout.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
+    const wired = (payload.tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>).children[0] as Extract<PaneLayout, { type: 'leaf' }>
+    expect((layout.children[0] as Extract<PaneLayout, { type: 'leaf' }>).pane).toEqual(wired.pane)
+    expect(JSON.stringify(useTabStore.getState().tabs.a5)).not.toContain('terminated')
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   describe('an ordinal-2 payload listing device-local tabs (tabs-local-only §3.5)', () => {
@@ -1135,17 +1139,6 @@ describe('applySectionToStores — tabs.<id>', () => {
     })
     expect(second).toEqual({ ok: true, hash: null })
     expect(writes).toBe(0)
-  })
-})
-
-describe('markHostRemovedPanes', () => {
-  it('returns the same object when every host is known, and never overwrites an existing reason', () => {
-    const live = tmuxLeaf('p1', M)
-    expect(markHostRemovedPanes(live, new Set([M]))).toBe(live)
-    const dead: PaneLayout = { type: 'leaf', pane: { id: 'p2', content: { kind: 'tmux-session', hostId: 'x', sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i', terminated: 'session-closed' } } }
-    expect(markHostRemovedPanes(dead, new Set())).toBe(dead)
-    const other: PaneLayout = { type: 'leaf', pane: { id: 'p3', content: { kind: 'new-tab' } as never } }
-    expect(markHostRemovedPanes(other, new Set())).toBe(other)
   })
 })
 
@@ -1209,6 +1202,17 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildTabsSection(parked.workspaces.find((w) => w.id === 'wa')!, parked.tabs)) })
     expect(screen()).toBe(before)
     expect(JSON.stringify(parked)).not.toContain('SLAVE-ONLY')
+  })
+
+  it('tabs.<id> naming a host unknown here marks nothing in the PARKED master (host ownership §3.2)', async () => {
+    parkMasterShowSlave()
+    const unknown = syncIdOfSync('air-lab:0unkn0')
+    const payload = JSON.parse(JSON.stringify(buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', tmuxLeaf('gone-pane', unknown)) }))) as TabsPayload
+    const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+    const parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(parked.tabs.a5.layout).toEqual(payload.tabs.a5.layout)
+    expect(JSON.stringify(parked.tabs.a5)).not.toContain('terminated')
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   // tabs-local-only §3.6 on the parked path: `writeMasterWorld` re-points the parked world's active tab by the same rule.
