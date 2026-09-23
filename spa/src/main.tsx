@@ -8,6 +8,7 @@ import { registerBuiltinModules } from './lib/register-modules'
 import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger'
 import { ensureDefaultDeviceName } from './stores/useDeviceNameStore'
 import { startHostConfigLoader } from './lib/host-config-loader'
+import { startHostDaemonIdVerification } from './lib/host-daemon-id'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { startExecutionListInvalidation } from './stores/useExecutionListStore'
@@ -33,6 +34,8 @@ startBackupAutoTrigger()
 void ensureDefaultDeviceName()
 // Host config (projects / commands / resume templates): fetch each host's copy when it connects.
 startHostConfigLoader()
+// Daemon identity: one /api/info per (re)connect / endpoint / token / stored-daemonId change → observeDaemonId.
+startHostDaemonIdVerification()
 // Peer cache: drop a host's cached peer rows when its daemon identity changes
 // (removed, re-pointed, token rotated) — a cached address belongs to a daemon.
 startPeerCacheInvalidation()
