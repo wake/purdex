@@ -65,6 +65,8 @@ export function createHeadlessProviderSource(): NewTabProviderSource {
       return () => { unsubState(); unsubHydration() }
     },
     ownsId: (id) => id.startsWith(PREFIX),
+    // A block of a host this device lacks is kept, never pruned (host ownership §3.2).
+    retainsId: (id) => id.startsWith(PREFIX),
     // Until the persisted host list is loaded, hostOrder is a transient
     // default — never prune or place per-host blocks from it.
     isReady: () => useHostStore.persist.hasHydrated(),

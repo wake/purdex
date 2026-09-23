@@ -31,6 +31,11 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
+import { renderHook } from '@testing-library/react'
+import { useNewTabBootstrap } from '../../hooks/useNewTabBootstrap'
+import { clearNewTabRegistry, registerNewTabProviderSource } from '../new-tab-registry'
+import { createHostSessionProviderSource } from '../session-new-tab-providers'
+import { createHeadlessProviderSource } from '../headless-new-tab-providers'
 import { getTheme, unregisterTheme } from '../theme-registry'
 import { registerBuiltinThemes } from '../register-themes'
 import { getLocale, unregisterLocale } from '../locale-registry'
@@ -1435,6 +1440,27 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     const identity = identityOfSync(useHostStore.getState().hosts)
     expect(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)).toEqual(payload)
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('settings: an unknown column survives the New Tab bootstrap too — apply → bootstrap → build is byte-for-byte', async () => {
+    const unknown = syncIdOfSync(OTHER)
+    clearNewTabRegistry()
+    registerNewTabProviderSource(createHostSessionProviderSource())
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    try {
+      expect(useHostStore.persist.hasHydrated()).toBe(true)
+      renderHook(() => useNewTabBootstrap()).unmount() // the local host's own blocks placed: the steady state
+      const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+      const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+      for (const preset of Object.values(layout.presets)) preset.columns[0] = [...preset.columns[0], `sessions:${unknown}`, `headless:${unknown}`]
+      const payload: SettingsPayload = { ...now, 'purdex-host-settings': { hosts: { [unknown]: { editor: { homePath: '/srv' } } } } }
+      expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+
+      renderHook(() => useNewTabBootstrap()).unmount()
+      expect(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts))).toEqual(payload)
+    } finally {
+      clearNewTabRegistry()
+    }
   })
 
   // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part
