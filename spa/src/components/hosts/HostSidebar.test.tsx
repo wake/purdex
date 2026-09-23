@@ -134,6 +134,13 @@ describe('HostSidebar', () => {
     expect(defaultProps.onAddHost).toHaveBeenCalledTimes(1)
   })
 
+  it('"Share hosts" calls onShareHosts (host transfer H4b)', () => {
+    const onShareHosts = vi.fn()
+    render(<HostSidebar {...defaultProps} onShareHosts={onShareHosts} />)
+    fireEvent.click(screen.getByText('Share hosts'))
+    expect(onShareHosts).toHaveBeenCalledTimes(1)
+  })
+
   it('sub-page items are clickable and call onSelect', () => {
     render(<HostSidebar {...defaultProps} />)
     // The selected host is expanded by default, so sub-pages are visible

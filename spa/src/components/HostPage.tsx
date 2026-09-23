@@ -9,6 +9,7 @@ import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { HostSidebar } from './hosts/HostSidebar'
 import { AddHostDialog } from './hosts/AddHostDialog'
+import { ShareHostsDialog } from './hosts/ShareHostsDialog'
 
 export type { HostSubPage } from '../lib/host-routes'
 
@@ -260,6 +261,7 @@ export function HostPage({ isActive }: PaneRendererProps) {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const activeHostId = useHostStore((s) => s.activeHostId)
   const [showAddHost, setShowAddHost] = useState(false)
+  const [showShare, setShowShare] = useState(false)
   const t = useI18nStore((s) => s.t)
 
   // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
@@ -364,11 +366,13 @@ export function HostPage({ isActive }: PaneRendererProps) {
         selectedSubPage={sidebarSubPage}
         onSelect={(hostId, subPage) => setLocation(buildHostPath({ hostId, subPage }), { replace: true })}
         onAddHost={() => setShowAddHost(true)}
+        onShareHosts={() => setShowShare(true)}
       />
       <div className="flex-1 overflow-y-auto p-6">
         {renderContent()}
       </div>
       {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
+      {showShare && <ShareHostsDialog onClose={() => setShowShare(false)} />}
     </div>
   )
 }

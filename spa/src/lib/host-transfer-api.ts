@@ -173,6 +173,20 @@ export function redeemTransfer(relayHostId: string, code: string): Promise<Redee
   )
 }
 
+/** A failure in words (`hosts.transfer.error.*`); `relay` is the relay's name. */
+export function transferFailureText(
+  t: (key: string, params?: Record<string, string | number>) => string,
+  failure: TransferFailure,
+  relay: string,
+): string {
+  if (failure.reason === 'rate_limited') {
+    return failure.retryAfterS !== undefined
+      ? t('hosts.transfer.error.rate_limited', { relay, seconds: failure.retryAfterS })
+      : t('hosts.transfer.error.rate_limited_later', { relay })
+  }
+  return t(`hosts.transfer.error.${failure.reason}`, { relay })
+}
+
 /** `ABCD2345` → `ABCD-2345`; anything that is not eight characters is shown as is. */
 export function formatTransferCode(code: string): string {
   return code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code

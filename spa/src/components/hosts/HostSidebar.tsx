@@ -1,4 +1,4 @@
-import { Plus, CaretDown, CaretRight, Circle, LockSimple, PuzzlePiece, Spinner, Warning } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, Circle, LockSimple, PuzzlePiece, ShareNetwork, Spinner, Warning } from '@phosphor-icons/react'
 import { useState } from 'react'
 import { listContributions } from '../../lib/settings-contribution-registry'
 import { isModuleOwnedContribution } from '../../lib/settings-contribution-types'
@@ -10,6 +10,7 @@ interface Props {
   selectedSubPage: string
   onSelect: (hostId: string, subPage: string) => void
   onAddHost?: () => void
+  onShareHosts?: () => void
 }
 
 function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
@@ -23,7 +24,7 @@ function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
-export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost }: Props) {
+export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts }: Props) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -145,6 +146,15 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           <Plus size={14} />
           <span>{t('hosts.add')}</span>
         </button>
+        {onShareHosts && (
+          <button
+            onClick={onShareHosts}
+            className="w-full text-left px-2 py-1.5 mt-1 rounded text-sm cursor-pointer flex items-center gap-2 text-text-muted hover:text-text-secondary"
+          >
+            <ShareNetwork size={14} />
+            <span>{t('hosts.transfer.share_button')}</span>
+          </button>
+        )}
       </div>
     </div>
   )
