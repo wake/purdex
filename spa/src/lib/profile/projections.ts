@@ -37,6 +37,10 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     // NOT `runtime.*.daemonIdMismatch`: this device's verification lives in
     // `runtime`, outside `hosts`, and never travels.
     'hosts.*.daemonId',
+    // The legacy wire keys (other devices' local ids) a CANONICAL row was matched
+    // from (host-sync-identity §11.2). Never a local field of that name: the
+    // builder adds it from `HostConfig.syncAliases` (host-identity.ts `hostsToWire`).
+    'hosts.*.aliases',
   ],
   workspaces: [
     'order', 'workspaces.*.name', 'workspaces.*.icon', 'workspaces.*.iconWeight', 'workspaces.*.moduleConfig',
@@ -93,10 +97,18 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
  * re-interpreted field) — the case the fingerprint cannot see.
  */
 export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
-  hosts: 2, // 2: `hosts.*.daemonId` added (an ordinal-1 payload lacks it and is upcast on apply: applier.ts `applyHosts` keeps the local daemonId)
-  settings: 4, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings); 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`)
+  // 2: `hosts.*.daemonId` added (an ordinal-1 payload lacks it and is upcast on apply: apply-to-stores keeps the local daemonId)
+  // 3: keys are WIRE ids (host-sync-identity: `d1_…` per daemon, else the local id) + `hosts.*.aliases` (an ordinal-2 payload's
+  //    local-id keys are matched on apply — daemonId first — and the next build is canonical)
+  hosts: 3,
+  // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings);
+  // 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`);
+  // 5: host ids in `purdex-host-settings.hosts` keys and `sessions:` / `headless:` preset columns are WIRE ids (host-sync-identity)
+  settings: 5,
   workspaces: 1,
-  tabs: 1,
+  // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
+  //    unchanged, so the fingerprint is too: see the note on `compareShape` in the host-sync-identity PR 2 report.
+  tabs: 2,
 }
 
 // === Section keys ===

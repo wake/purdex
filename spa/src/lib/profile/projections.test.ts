@@ -241,7 +241,7 @@ describe('project — purity', () => {
 describe('PROJECTIONS', () => {
   it('hosts, workspaces and tabs are the corrected §4.2 lists', () => {
     expect([...PROJECTIONS.hosts].sort()).toEqual([
-      'hostOrder', 'hosts.*.color', 'hosts.*.colors', 'hosts.*.daemonId', 'hosts.*.icon', 'hosts.*.iconWeight',
+      'hostOrder', 'hosts.*.aliases', 'hosts.*.color', 'hosts.*.colors', 'hosts.*.daemonId', 'hosts.*.icon', 'hosts.*.iconWeight',
       'hosts.*.id', 'hosts.*.ip', 'hosts.*.name', 'hosts.*.order', 'hosts.*.port', 'hosts.*.token',
     ])
     expect([...PROJECTIONS.workspaces].sort()).toEqual([
@@ -433,18 +433,33 @@ describe('shape: fingerprint and ordinal', () => {
     expect(compareShape(old, mine)).toBe('sot-is-newer')
   })
 
-  // host-daemon-id D6: hosts ordinal 1 → 2 (`hosts.*.daemonId` added). An
-  // ordinal-1 client and this build, judged by shape alone: the old one locks on
-  // a row of ours (`sot-is-newer` → locked:schema), we pull its rows (and upcast
-  // them: applier.ts `applyHosts` keeps the local daemonId).
-  it('coexistence by shape: the ordinal-1 hosts shape (no `daemonId`) and this one order, never lock this build', async () => {
-    const legacyList = PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.daemonId')
-    expect(legacyList).not.toEqual(PROJECTIONS.hosts) // the field was there to drop
+  // host-daemon-id D6: hosts ordinal 1 → 2 (`hosts.*.daemonId` added); host-sync-identity: 2 → 3 (wire ids,
+  // `hosts.*.aliases` added). Each older client and this build, judged by shape alone: the old one locks on a row of
+  // ours (`sot-is-newer` → locked:schema), we pull its rows (and match / upcast them on apply).
+  it.each([
+    ['ordinal-2 (no `aliases`)', ['hosts.*.aliases'], 2],
+    ['ordinal-1 (no `daemonId`, no `aliases`)', ['hosts.*.aliases', 'hosts.*.daemonId'], 1],
+  ])('coexistence by shape: the %s hosts shape and this one order, never lock this build', async (_name, dropped, ordinal) => {
+    const legacyList = PROJECTIONS.hosts.filter((p) => !dropped.includes(p))
+    expect(legacyList).toHaveLength(PROJECTIONS.hosts.length - dropped.length) // the fields were there to drop
     const mine = { fingerprint: await sectionFingerprint('hosts'), ordinal: SECTION_SCHEMA_ORDINAL.hosts }
-    const old = { fingerprint: await fingerprintOf(legacyList), ordinal: 1 }
+    const old = { fingerprint: await fingerprintOf(legacyList), ordinal }
     expect(old.fingerprint).not.toBe(mine.fingerprint)
     expect(compareShape(mine, old)).toBe('i-am-newer')
     expect(compareShape(old, mine)).toBe('sot-is-newer')
+  })
+
+  // host-sync-identity: tabs 1 → 2 and settings 4 → 5 re-interpret host ids WITHOUT changing a path, so the
+  // fingerprint is the same — and `compareShape` (§4.5 row 1) calls equal fingerprints 'ok' whatever the ordinals.
+  // An old client is kept out by the HOSTS row (profileLock locks the whole profile on any offender), not by these.
+  it('host-sync-identity: tabs and settings bumped their ordinal only — same fingerprint, so the shape alone does not order them', async () => {
+    expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(2)
+    expect(SECTION_SCHEMA_ORDINAL.settings).toBe(5)
+    for (const kind of ['tabs', 'settings'] as const) {
+      const mine = { fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] }
+      const old = { fingerprint: mine.fingerprint, ordinal: SECTION_SCHEMA_ORDINAL[kind] - 1 }
+      expect(compareShape(old, mine)).toBe('ok')
+    }
   })
 
   // GUARD (spec §4.5). If this fails: a projection changed — bump
@@ -455,16 +470,16 @@ describe('shape: fingerprint and ordinal', () => {
     expect(await shapeTable()).toMatchInlineSnapshot(`
       {
         "hosts": [
-          "7e399902532d0b0553bc57ef2b561344a5bf45f48e05cd5dde9c785666dc11c9",
-          2,
+          "aa5c845bc5aa692e9e549bd5f144b53499f9cc4c69ba210c0c8b9556a54e97f9",
+          3,
         ],
         "settings": [
           "185ca6f39458c8ce645ee2b5e1548ffe99ab3cd26afbdc653722e2a113f1c0bc",
-          4,
+          5,
         ],
         "tabs": [
           "e8d2e6e42bdd9037c505f57bfd79e023aaf9746549d0e33f8a40a9848155debd",
-          1,
+          2,
         ],
         "workspaces": [
           "7986550194df9cf330ec521be44e68989a703ac1e90d433f73e9aab00410c87e",
