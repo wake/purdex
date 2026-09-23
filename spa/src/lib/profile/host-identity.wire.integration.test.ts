@@ -329,3 +329,40 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
     })
   })
 })
+
+// A1 (PR #1365): every canonical row lists its own id, but only 16 fit. The rule must have a fixed point whatever
+// the number of devices: the SORTED unique union, first 16 — every client computes the same list.
+describe('many devices with independent ids for one daemon: the aliases converge (A1)', () => {
+  /** `n` device ids, not in sorted order (a shuffle by a fixed stride). */
+  const deviceIds = (n: number): string[] => Array.from({ length: n }, (_, i) => `h${((i * 7) % n).toString(36).padStart(4, '0')}x`)
+
+  async function round(ids: string[], sot: { payload: unknown; hash: string }, remembered: Map<string, string[] | undefined>): Promise<{ sot: { payload: unknown; hash: string }; puts: number }> {
+    let puts = 0
+    for (const id of ids) {
+      load({ ...deviceB(), hosts: { [id]: mlab(id, { syncAliases: remembered.get(id) }) }, hostOrder: [id], presets: presetsOn(id) })
+      const outcome = await applySectionToStores('hosts', JSON.parse(JSON.stringify(sot.payload)), { masterHostId: id })
+      expect(outcome, id).toMatchObject({ ok: true })
+      remembered.set(id, useHostStore.getState().hosts[id].syncAliases)
+      const built = (await buildAll(['hosts'])).hosts
+      if (built.hash !== sot.hash) {
+        puts += 1
+        sot = built
+      }
+    }
+    return { sot, puts }
+  }
+
+  it.each([17, 20])('%i devices, each applying and building in turn: at most one PUT each in the first round, NONE in the second', async (n) => {
+    const ids = deviceIds(n)
+    const remembered = new Map<string, string[] | undefined>()
+    load({ ...deviceB(), hosts: { [ids[0]]: mlab(ids[0]) }, hostOrder: [ids[0]] })
+    let sot = (await buildAll(['hosts'])).hosts
+    const first = await round(ids, sot, remembered)
+    expect(first.puts).toBeLessThanOrEqual(n)
+    sot = first.sot
+    const second = await round(ids, sot, remembered)
+    expect(second.puts).toBe(0)
+    const aliases = (second.sot.payload as { hosts: Record<string, { aliases: string[] }> }).hosts[WIRE].aliases
+    expect(aliases).toEqual([...ids].sort().slice(0, 16)) // the 16 smallest ids: the same list on every device
+  })
+})

@@ -1270,7 +1270,8 @@ describe('isWellFormedSection(hosts) — wire ids and aliases (host-sync-identit
     expect(ok((p) => { p.hosts[WIRE].aliases = [WIRE] })).toBe(false)
     expect(ok((p) => { p.hosts[WIRE].aliases = 'aaaaaa' })).toBe(false)
     expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 17 }, (_, i) => `a${i}`) })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 16 }, (_, i) => `a${i}`) })).toBe(true)
+    expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 16 }, (_, i) => `a${i.toString(36).padStart(2, '0')}`) })).toBe(true)
+    expect(ok((p) => { p.hosts[WIRE].aliases = ['b', 'a'] })).toBe(false) // A1: sorted, as every builder writes it
   })
 
   it('a legacy (local-id) key carrying a daemonId — an ordinal-2 row — stays well-formed', () => {
@@ -1305,7 +1306,7 @@ describe('planHostsApply — incoming wire rows onto local hosts (spec §6, §11
     const p = plan({ h1: host('h1') }, incoming, ids('newid1'))
     expect(p.created).toEqual(['newid1'])
     expect(p.payload.hosts.newid1).toEqual({ ...host('aaaaaa', { daemonId: DAEMON }), id: 'newid1' })
-    expect(p.aliases).toEqual({ newid1: ['old1', 'aaaaaa'] }) // the row's aliases (A's own id among them)
+    expect(p.aliases).toEqual({ newid1: ['aaaaaa', 'old1'] }) // the row's aliases, sorted (A's own id among them)
   })
 
   it('a LEGACY row (ordinal 2: another device\'s local id) with a daemonId matches by daemonId, and its key becomes an alias', () => {

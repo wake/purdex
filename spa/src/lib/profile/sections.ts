@@ -149,20 +149,21 @@ export function buildHostsSection(s: HostsSource, identity: HostIdentity = ident
 }
 
 /**
- * A canonical row's `aliases`: the remembered ones (`syncAliases`, in `mergeAliases`' form) plus the host's OWN
+ * A canonical row's `aliases`: the SORTED unique union of the remembered ones (`syncAliases`) and the host's OWN
  * local id — its wire key in the ordinal-2 era, so a legacy `tabs.*` / `settings` this device wrote resolves on
- * every other device even when this device went canonical by PUSHING (spec §11.7; it never matched a legacy row).
- * Order-preserving: an own id already listed stays where it is (every device then builds the same list); else it
- * is appended. Over MAX_HOST_ALIASES the oldest OTHER alias is dropped — never the own id.
- * `hostsToWire` only adds this on a canonical row (a no-claim host's own id IS its key).
+ * every other device even when this device went canonical by PUSHING (spec §11.7; it never matched a legacy row) —
+ * the first MAX_HOST_ALIASES kept.
+ *
+ * Sorted, not "most recent": a rule every client computes identically has a fixed point however many devices
+ * share the daemon (A1, PR #1365 — with "own id in, oldest out" 17 devices would displace each other for ever).
+ * The price: a device whose own id sorts past the 16th is simply not listed — its build then equals the row it
+ * received and nothing is pushed — and during a transition its legacy keys stay unresolved on the others
+ * (their panes read as a removed host there), which is accepted. A stale id (a device gone) holds its place
+ * until 16 smaller ids exist. `hostsToWire` only adds this on a canonical row (a no-claim host's own id IS its key).
  */
 function withOwnAlias(syncAliases: unknown, own: string): string[] {
-  const list = mergeAliases(syncAliases, []) // ≤ MAX_HOST_ALIASES already
-  if (list.includes(own)) return list
-  // Full: the oldest goes. It is never the own id — that one is not in the list yet, and goes in last.
-  if (list.length === MAX_HOST_ALIASES) list.shift()
-  list.push(own)
-  return list
+  const union = new Set([...mergeAliases(syncAliases, []), ...mergeAliases([], [own])])
+  return [...union].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, MAX_HOST_ALIASES)
 }
 
 /**

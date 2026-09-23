@@ -650,21 +650,23 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(Object.keys(p.hosts)).toEqual([WIRE, 'legacy'])
     expect(p.hostOrder).toEqual([WIRE, 'legacy'])
     // aliases: the legacy keys it was matched from, AND its own local id (its wire key in the ordinal-2 era)
-    expect(p.hosts[WIRE]).toEqual({ id: WIRE, name: 'N-bbbbbb', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON, aliases: ['aaaaaa', 'bbbbbb'] })
+    expect(p.hosts[WIRE]).toEqual({ id: WIRE, name: 'N-bbbbbb', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON, aliases: ['aaaaaa', 'bbbbbb'] }) // sorted
     expect(p.hosts.legacy).toEqual({ id: 'legacy', name: 'N-legacy', ip: '10.0.0.1', port: 7860, order: 0 })
     expect(JSON.stringify(p)).not.toContain('syncAliases')
     expect(isWellFormedSection('hosts', p)).toBe(true)
   })
 
-  it('hosts: a canonical row ALWAYS carries its own local id as an alias — kept where it already is, else appended; never the one the cap drops', () => {
-    const at = (syncAliases?: string[]) =>
-      (buildHostsSection({ hosts: { bbbbbb: hostCfg('bbbbbb', { daemonId: DAEMON, syncAliases }) }, hostOrder: ['bbbbbb'] }).hosts[WIRE] as { aliases?: string[] }).aliases
-    expect(at(undefined)).toEqual(['bbbbbb'])
-    expect(at(['bbbbbb', 'aaaaaa'])).toEqual(['bbbbbb', 'aaaaaa']) // its place is kept: another device's build is the same list
-    const sixteen = Array.from({ length: 16 }, (_, i) => `x${i}`)
-    expect(at(sixteen)).toEqual([...sixteen.slice(1), 'bbbbbb']) // full: the oldest OTHER alias goes
-    expect(at(['bbbbbb', ...sixteen.slice(1)])).toEqual(['bbbbbb', ...sixteen.slice(1)]) // own id first of 16: kept
-    const s = { hosts: { bbbbbb: hostCfg('bbbbbb', { daemonId: DAEMON, syncAliases: ['bbbbbb', ...sixteen.slice(1)] }) }, hostOrder: ['bbbbbb'] }
+  it('hosts: a canonical row\'s aliases are the SORTED unique union of the remembered ones and its own id, the first 16 (A1: one list every client computes)', () => {
+    const at = (own: string, syncAliases?: string[]) =>
+      (buildHostsSection({ hosts: { [own]: hostCfg(own, { daemonId: DAEMON, syncAliases }) }, hostOrder: [own] }).hosts[WIRE] as { aliases?: string[] }).aliases
+    expect(at('bbbbbb')).toEqual(['bbbbbb'])
+    expect(at('bbbbbb', ['zzzzzz', 'aaaaaa'])).toEqual(['aaaaaa', 'bbbbbb', 'zzzzzz'])
+    const sixteen = Array.from({ length: 16 }, (_, i) => `x${i.toString(36).padStart(2, '0')}`)
+    // full, own id sorts last: it is simply not listed — the build equals the row it came from
+    expect(at('zzzzzz', sixteen)).toEqual(sixteen)
+    // full, own id sorts first: it goes in, the LARGEST goes out
+    expect(at('aaaaaa', sixteen)).toEqual(['aaaaaa', ...sixteen.slice(0, 15)])
+    const s = { hosts: { aaaaaa: hostCfg('aaaaaa', { daemonId: DAEMON, syncAliases: sixteen }) }, hostOrder: ['aaaaaa'] }
     expect(isWellFormedSection('hosts', buildHostsSection(s))).toBe(true)
   })
 

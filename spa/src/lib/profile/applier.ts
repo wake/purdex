@@ -682,7 +682,8 @@ function isWireKeyOf(id: string, h: Rec): boolean {
   const a = h.aliases
   if (!isSyncId(id) || !Array.isArray(a) || a.length === 0 || a.length > MAX_HOST_ALIASES) return false
   const canonical = mergeAliases(a, [])
-  return canonical.length === a.length && canonical.every((alias, i) => alias === a[i])
+  // …and sorted (the builder's rule, sections.ts `withOwnAlias`): one list for every client.
+  return canonical.length === a.length && canonical.every((alias, i) => alias === a[i] && (i === 0 || a[i - 1] < alias))
 }
 
 function isHostsPayload(p: Rec): boolean {
