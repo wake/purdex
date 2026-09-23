@@ -1,4 +1,4 @@
-# Bounded tmux reads for the session list (#1293) — spec + plan
+# Bounded tmux reads for the session list (#1293) — spec + plan (rev 2: codex plan review folded in)
 
 Status: draft (2026-09-23) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
 Context: daemon contract `docs/specs/2026-09-23-session-list-fresh-spec.md` (#1292, alpha.423).
@@ -20,61 +20,99 @@ needs to open its attach gate. The plain `GET /api/sessions` does the same under
 
 ## 2. Goals
 
-- G1. Every session-list read has a bounded deadline; a read that exceeds it is killed and
-  returns an error.
-- G2. `snapMu` is released when the read ends (success, error, or deadline) and a failed read
-  never consumes a seq (already true for errors; must hold for deadlines).
-- G3. A caller waiting to enter `versionedList` can give up when its own context ends (an
-  HTTP client that went away, a subscribe that timed out) instead of queueing behind a stuck
-  read.
+- G1. Every session-list read has ONE bounded deadline covering the whole chain — tmux list,
+  per-session pane metadata, the tmux-instance probe, and the meta-DB reads. A read that
+  exceeds it is killed and the list call returns an error (never a partial list).
+- G2. `snapMu` is released when the read ends (success, error, or deadline) and a failed or
+  timed-out read never consumes a seq and never rotates the epoch (contract §3.3 rules 1, 5).
+- G3. A caller waiting to enter a list read — `versionedList` AND the plain cached list — can
+  give up when its own context ends instead of queueing behind a stuck read.
 - G4. No wire change: success responses are byte-identical; a timed-out read on `?fresh=1`
-  is a tmux read error → `500` with a text body, as the contract says today. WS paths keep
+  (and the plain GET) is a tmux read error → `500` with a text body, as today. WS paths keep
   their "log and skip" behaviour on error.
+- G5. A HEALTHY host with many sessions stays well inside the bound (measured, §3.4).
 
-Non-goals: deadlines for tmux mutations (`new-session`, `kill-session`, …) and for reads
-outside the session-list chain (capture-pane, etc.) — follow-up issue if wanted.
+Non-goals: deadlines for tmux mutations (`new-session`, `kill-session`, send-keys, …) and for
+reads outside `ListSessions` / `ActivePaneMetadata` (capture-pane etc.).
 
 ## 3. Design
 
 ### 3.1 Executor (`internal/tmux`)
-- `Executor.ListSessions(ctx context.Context)` and `Executor.ActivePaneMetadata(ctx, sessionName)`
-  take a context; `RealExecutor` uses `exec.CommandContext` for every tmux call they make, so a
-  context deadline kills the tmux client process. `FakeExecutor` and the test fakes follow
-  (ctx accepted; the fake gains an optional blocking hook for tests).
-- A context error is returned wrapped so callers can tell (`errors.Is(err, context.DeadlineExceeded)`).
+- `Executor.ListSessions(ctx)` and `Executor.ActivePaneMetadata(ctx, sessionName)` take a
+  context; `RealExecutor` runs them with `exec.CommandContext` and `cmd.WaitDelay` (so a child
+  holding the pipes cannot keep `Output` waiting). When the context ended, the returned error
+  wraps `ctx.Err()` — never a bare `signal: killed` — so `errors.Is(err,
+  context.DeadlineExceeded|Canceled)` holds (codex #6).
+- `ActivePaneMetadata` makes ONE `tmux display-message` with the seven formats joined by a
+  separator that cannot survive `sanitizeTmuxMetadata` (TAB — the per-field sanitiser maps TAB to
+  space, so split on TAB first, then sanitise each field). Same fields, same sanitising, same
+  error when any field is missing (codex #5; §3.4).
+- Every caller of the two changed methods passes a context (codex #4): the session-list chain
+  (§3.2), `GetSession`, the create-then-lookup in `create.go`, the name-cache lookup in
+  `lookup.go` — each passes the request/operation context it has, else
+  `context.WithTimeout(background, listReadTimeout)`. Fakes (`fake_executor.go`, the custom fakes
+  in `create_test.go` / `versioned_test.go`, any other) accept the context; the shared fake gains
+  an optional blocking hook that honours it.
 
 ### 3.2 Module (`internal/module/session`)
-- `ListSessionsContext(ctx)` does the whole chain under `ctx`; `ListSessions()` (still used by
-  monitor / agent / peers / the plain cache) becomes `ListSessionsContext` with a default
-  deadline `listReadTimeout` (5 s — a healthy list with dozens of sessions takes well under 1 s).
-- `snapMu` becomes a one-slot semaphore (`chan struct{}`): `versionedList(ctx)` acquires it
-  with `select { case sem <- struct{}{}: … case <-ctx.Done(): return ctx.Err() }`, reads with
-  `ctx` capped by `listReadTimeout`, releases in `defer`. Seq assignment and the epoch rotation
-  stay exactly as today, inside the slot.
-- Callers:
-  - `?fresh=1` → `r.Context()` (the read is also capped by `listReadTimeout`);
-  - subscribe snapshot, wait-for push, ticker push → `context.WithTimeout(background, listReadTimeout)`.
-- Plain `GET /api/sessions` (`cachedListSessions`) → reads with `r.Context()` capped the same way.
+- `ListSessionsContext(ctx)` runs the whole chain under `ctx` (capped by `listReadTimeout`):
+  - executor calls with `ctx`;
+  - `applyActivePaneMetadata(ctx, …)`: a metadata error caused by the context ending (`ctx.Err()
+    != nil`) aborts the list with that error; other metadata errors keep today's "skip the fields"
+    behaviour (codex #1);
+  - `TmuxInstance(ctx)`: `tmuxInstanceFn` takes a context; `config.GetTmuxInstance` gains a
+    context variant that uses `min(parent deadline, its own 3 s)` (codex #3);
+  - meta DB: `CleanOrphansContext` / `GetMetaContext` on the store using `ExecContext` /
+    `QueryRowContext` (codex #3).
+- `ListSessions()` stays for callers without a context = `ListSessionsContext` under a fresh
+  `listReadTimeout`. Callers that already hold a context/budget switch to `ListSessionsContext`:
+  monitor (its `ctx`), peers (its owner-resolution budget) (codex #7). Agent snapshot and hook
+  fallback keep `ListSessions()`; a timeout is an error there exactly like today's tmux error
+  (skip / fail the lookup) — covered by a test each.
+- `snapMu` becomes a one-slot semaphore (`chan struct{}`), acquired with a `select` on
+  `ctx.Done()`; seq assignment and epoch rotation stay inside the slot and happen only after a
+  successful read (codex #8).
+- `listCacheMu` becomes the same kind of context-aware slot for the plain cache: a waiting
+  request whose context ends returns `ctx.Err()`; after a holder's read times out, each waiter
+  that still wants it performs its own bounded read (no unbounded chain because each waiter is
+  bounded by its own request context and the cap) (codex #2).
+- Callers: `?fresh=1` and plain GET → `r.Context()` capped; subscribe snapshot, wait-for push,
+  ticker push → `context.WithTimeout(background, listReadTimeout)`.
+
+### 3.3 Timeout value
+`listReadTimeout = 5 s`, one budget for the whole chain.
+
+### 3.4 Measured (mlab, 2026-09-23, 15 sessions)
+Seven separate `display-message` calls ≈ 44 ms per session (≈ 0.66 s for 15; ≈ 4.4 s projected
+for 100 — too close to 5 s). One combined call ≈ 10 ms per session (≈ 1 s for 100). Hence the
+merge in §3.1 is part of this change, not an optimisation for later.
 
 ## 4. Tasks (TDD, one commit each)
 
-- T1 executor: ctx signatures + `CommandContext` in `ListSessions` / `ActivePaneMetadata`; fakes
-  updated; unit test with a fake command runner or a context already cancelled → returns a
-  context error without running forever.
-- T2 module: `ListSessionsContext`, default deadline for `ListSessions()`.
-- T3 `versionedList(ctx)` with the semaphore. Tests (blocking fake executor that waits on ctx):
-  - a stuck read hits the deadline → error, the slot is free again, the next call gets seq N+1
-    where N is the last successful seq (no seq consumed by the timeout);
-  - a second caller waiting for the slot whose ctx is cancelled returns `ctx.Err()` promptly
-    and consumes nothing;
-  - concurrency invariants of versioned_test.go (strict order, seq ↔ read bijection) still hold.
-- T4 callers: `?fresh=1` passes the request context (test: a cancelled request while a stuck
-  read holds the slot returns without waiting for the read); snapshot / wait-for / ticker use
-  bounded contexts (test: a stuck ticker read times out, then a fresh GET and a new subscribe
-  snapshot succeed within the bound; a timed-out read on `?fresh=1` → 500).
-- Gates: `go test ./...` (with `-race` for the session package), `go vet`, `make`/build of `bin/pdx`.
-  Mutations: remove the ctx select on acquire (T3 cancel case red); use `exec.Command` again in
-  ListSessions (T1 red); drop the cap on the request context (T4 red).
+- T1 executor: ctx signatures, `CommandContext` + `WaitDelay`, ctx-error wrapping, single
+  combined `display-message` (field order/sanitising unchanged — table test against the old
+  per-field output). All callers + fakes updated (compiles, all tests green). Helper-process
+  test (`TestHelperProcess` pattern: a fake `tmux` on `PATH` that sleeps): an in-flight read hits
+  the deadline → `errors.Is(err, context.DeadlineExceeded)`, returns within deadline+WaitDelay,
+  the next read with a working fake succeeds.
+- T2 module chain: `ListSessionsContext`, ctx through `applyActivePaneMetadata` (a metadata read
+  that times out mid-list → the list returns an error, no payload), `TmuxInstance(ctx)`, meta-DB
+  context methods; monitor and peers pass their contexts (tests: peers' budget is not exceeded by
+  the list; monitor cancellation stops the list); agent snapshot / hook fallback treat a timeout
+  like an error (tests).
+- T3 `versionedList(ctx)` semaphore. Tests: stuck read → deadline error, slot free, next success
+  is seq N+1; waiter cancelled → `ctx.Err()`, nothing consumed; at `snapSeq == maxSeq` a timed-out
+  read does NOT rotate the epoch and the next success is the new epoch with seq 1; a cancelled
+  waiter at maxSeq does not rotate; seq ↔ read bijection after a timeout; rewrite the existing
+  rotation test that locks `snapMu` directly; the existing concurrency tests stay green.
+- T4 callers + plain cache. Tests: `?fresh=1` with a cancelled request while a stuck read holds
+  the slot returns without waiting; a timed-out `?fresh=1` → 500; plain GET: holder stuck, a
+  waiting request that is cancelled returns immediately; a stuck ticker read times out, then a
+  fresh GET and a new subscribe snapshot succeed within the bound.
+- Gates: `go test ./...` (`-race` for `internal/module/session`, `internal/tmux`), `go vet ./...`,
+  build `bin/pdx`. Mutations: acquire without the ctx select (T3 red); `exec.Command` again in
+  ListSessions (T1 red); metadata ctx error swallowed again (T2 red); `listCacheMu` back to a mutex
+  (T4 red); rotate before the read (T3 red).
 
 ## 5. Rollout
 Daemon PR → merge → bump → deploy mlab and air26 (**ask the coordinator first**; `bin/pdx`
