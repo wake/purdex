@@ -348,9 +348,9 @@ describe('THE PULL GUARD — nothing but `hosts` moves until `hosts` has been AP
   })
 
   // #1366 real machine: the stores keep something else than the confirmed row (a normalisation — here the payload is
-  // altered on its way in, as a sanitiser would). `hosts` is dirty and its payload is the collector's to report; the
-  // release must not pump it ahead of that report (it went out as `push-payload-missing`, then the retry sent it).
-  it('released on a `hosts` apply whose stores hash differs: the others go, but `hosts` waits for its collector payload — no push-payload-missing', async () => {
+  // altered on its way in, as a sanitiser would). `hosts` is dirty (it went out as `push-payload-missing` once, then
+  // the retry sent it). Since #1369 the apply hands back the payload it rebuilt, so the push needs no collector report.
+  it('released on a `hosts` apply whose stores hash differs: the others go, and `hosts` pushes what the apply rebuilt — no push-payload-missing', async () => {
     const confirmed = await clientAHasPushed()
     worldOfB()
     applied.mockImplementation(async (key, payload, ctx) => {
@@ -358,22 +358,12 @@ describe('THE PULL GUARD — nothing but `hosts` moves until `hosts` has been AP
       const kept = key === 'hosts' && payload !== null ? (JSON.parse(JSON.stringify(payload).split('named-by-A').join('kept-by-B')) as typeof payload) : payload
       const r = await realApply(key, kept, ctx)
       log.push(`end:${key}`)
+      if (key === 'hosts' && r.ok) handedBack.push(r.payload)
       return r
     })
+    const handedBack: unknown[] = []
     const run = await start(B, 'pull', confirmed)
-    // what the collector reports of `hosts` from now on (its closure calls `executor.onSection` at call time)
-    const reports: string[] = []
-    const onSection = executor!.onSection.bind(executor)
-    executor!.onSection = (r) => {
-      if (r.key === 'hosts') reports.push(r.hash ?? 'null')
-      onSection(r)
-    }
     const hostsPuts = () => api.putSection.mock.calls.filter((c) => c[2] === 'hosts' && c[3].clientId === B)
-    // the `hosts` PUT, when it goes, carries a payload the collector reported after the apply
-    api.putSection.mockImplementation(async (_h, _p, key, body) => {
-      if (key === 'hosts') expect(reports).toContain(body.hash)
-      return daemon.put(key, body)
-    })
     executor!.onReconnected()
     await play(10)
 
@@ -386,6 +376,7 @@ describe('THE PULL GUARD — nothing but `hosts` moves until `hosts` has been AP
     const body = hostsPuts()[0][3]
     expect(body.hash).not.toBe(confirmed.hash)
     expect(JSON.stringify(body.payload)).toContain('kept-by-B')
+    expect(body.payload).toEqual(handedBack.at(-1)) // the very payload the apply handed back
     expect(hostsRow().hash).toBe(body.hash)
     expect(run.settled).toHaveBeenCalledTimes(1)
   })

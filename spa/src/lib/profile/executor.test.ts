@@ -1247,6 +1247,62 @@ describe('executor — pull', () => {
     expect(api.putSection).toHaveBeenCalledTimes(1)
     expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-clean', payload: { v: 2 } })
   })
+
+  // #1369: a `hosts` pull comes back with this device's own id added to a canonical row's aliases — the designed
+  // write-back. Not a problem; and the apply hands back the payload, so the push needs no collector report.
+  describe('#1369 — the own-alias write-back after a pull', () => {
+    const OWN = { v: 2, aliases: ['aaaaaa', 'bbbbbb'] }
+
+    it('(a) aliasesOnly: no problem, the section is dirty, the push sends THAT payload without any collector report', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' })
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await flush()
+      expect(problems).toEqual([])
+      expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: 'H2', localHash: 'H2-own' }])
+      expect(store.saveSection).toHaveBeenCalledWith(PROFILE, 'hosts', { base: { rev: 2, hash: 'H2' }, currentHash: 'H2-own' })
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
+      expect(ex.status().profile).toBe('synced')
+      // the collector's later report of the same content is harmless: nothing more is sent
+      ex.onSection({ key: 'hosts', hash: 'H2-own', payload: OWN })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(problems).toEqual([])
+    })
+
+    it('(b) without aliasesOnly the mismatch is still a problem (and the payload is pushed all the same)', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' })
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await flush()
+      expect(problems).toEqual([{ kind: 'pull-hash-mismatch', section: 'hosts', detail: expect.stringContaining('pushed back') }])
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
+    })
+
+    it('(c) pumped again while the pull runs, the collector never reporting (dedup): one push, no push-payload-missing, settled', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' })
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      const applying = deferred<ApplyOutcome>()
+      applySectionToStores.mockReturnValue(applying.promise)
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await flush()
+      expect(applySectionToStores).toHaveBeenCalledTimes(1)
+      ex.syncNow() // pumps `hosts` while its pull is still running → `repump`
+      applying.resolve({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(problems).toEqual([])
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
+      expect(ex.status().profile).toBe('synced')
+    })
+  })
 })
 
 /* ─── the shape of what a pull fetched (spec §4.4 / §4.5) ─── */
