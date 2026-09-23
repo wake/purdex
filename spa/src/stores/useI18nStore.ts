@@ -5,6 +5,7 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { registerLocale, unregisterLocale, getLocale, getAllLocales } from '../lib/locale-registry'
 import type { LocaleDef } from '../lib/locale-registry'
 import { detectLocale } from '../lib/detect-locale'
+import { registerBuiltinLocales } from '../lib/register-locales'
 import type { LocaleImportPayload } from '../lib/locale-import'
 
 interface I18nState {
@@ -51,58 +52,74 @@ function makeT(activeLocaleId: string, customLocales: Record<string, LocaleDef>)
   }
 }
 
+// WHY (#1385): purdexStorage is synchronous, so persist hydrates INSIDE `create()`
+// below — before `useI18nStore` is initialised (TDZ) and before main.tsx's body runs.
+// Two consequences, both handled here:
+//   1. `onRehydrateStorage` must not reference `useI18nStore`: the ReferenceError is
+//      swallowed by persist, which re-invokes the callback with `undefined`, so `t`
+//      stays `makeT('en')` and `hasHydrated()` stays false. It uses `setI18nState`, the
+//      store's `set` captured by the creator (which runs before hydration).
+//   2. The built-in locales must already be registered, or `getLocale('zh-TW')`
+//      misses and the persisted locale falls back to `detectLocale(…, [])` = 'en'.
+//      Registering is an idempotent Map set.
+registerBuiltinLocales()
+let setI18nState: (partial: Partial<I18nState>) => void = () => {}
+
 export const useI18nStore = create<I18nState>()(
   persist(
-    (set, get) => ({
-      activeLocaleId: 'en',
-      customLocales: {},
-      t: makeT('en', {}),
+    (set, get) => {
+      setI18nState = set
+      return {
+        activeLocaleId: 'en',
+        customLocales: {},
+        t: makeT('en', {}),
 
-      setLocale: (id) => {
-        if (!getLocale(id) && !get().customLocales[id]) return
-        set({ activeLocaleId: id, t: makeT(id, get().customLocales) })
-        applyLocaleToDom(id)
-      },
+        setLocale: (id) => {
+          if (!getLocale(id) && !get().customLocales[id]) return
+          set({ activeLocaleId: id, t: makeT(id, get().customLocales) })
+          applyLocaleToDom(id)
+        },
 
-      importLocale: (payload) => {
-        const builtinIds = new Set(getAllLocales().map((l) => l.id))
-        const customIds = new Set(Object.keys(get().customLocales))
-        const allIds = new Set([...builtinIds, ...customIds])
-        const id = generateUniqueId(allIds)
-        const existingNames = new Set([
-          ...getAllLocales().map((l) => l.name),
-          ...Object.values(get().customLocales).map((l) => l.name),
-        ])
-        const name = deduplicateName(payload.name, existingNames)
-        const def: LocaleDef = { id, name, translations: payload.translations, builtin: false }
-        registerLocale(def)
-        const newCustom = { ...get().customLocales, [id]: def }
-        set({ customLocales: newCustom, t: makeT(get().activeLocaleId, newCustom) })
-        return id
-      },
+        importLocale: (payload) => {
+          const builtinIds = new Set(getAllLocales().map((l) => l.id))
+          const customIds = new Set(Object.keys(get().customLocales))
+          const allIds = new Set([...builtinIds, ...customIds])
+          const id = generateUniqueId(allIds)
+          const existingNames = new Set([
+            ...getAllLocales().map((l) => l.name),
+            ...Object.values(get().customLocales).map((l) => l.name),
+          ])
+          const name = deduplicateName(payload.name, existingNames)
+          const def: LocaleDef = { id, name, translations: payload.translations, builtin: false }
+          registerLocale(def)
+          const newCustom = { ...get().customLocales, [id]: def }
+          set({ customLocales: newCustom, t: makeT(get().activeLocaleId, newCustom) })
+          return id
+        },
 
-      updateCustomLocale: (id, patch) => {
-        const existing = get().customLocales[id]
-        if (!existing) return
-        const updated: LocaleDef = {
-          ...existing,
-          ...(patch.name !== undefined ? { name: patch.name } : {}),
-          ...(patch.translations !== undefined ? { translations: patch.translations } : {}),
-        }
-        registerLocale(updated)
-        const newCustom = { ...get().customLocales, [id]: updated }
-        set({ customLocales: newCustom, t: makeT(get().activeLocaleId, newCustom) })
-      },
+        updateCustomLocale: (id, patch) => {
+          const existing = get().customLocales[id]
+          if (!existing) return
+          const updated: LocaleDef = {
+            ...existing,
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.translations !== undefined ? { translations: patch.translations } : {}),
+          }
+          registerLocale(updated)
+          const newCustom = { ...get().customLocales, [id]: updated }
+          set({ customLocales: newCustom, t: makeT(get().activeLocaleId, newCustom) })
+        },
 
-      deleteCustomLocale: (id) => {
-        unregisterLocale(id)
+        deleteCustomLocale: (id) => {
+          unregisterLocale(id)
          
-        const { [id]: _removed, ...rest } = get().customLocales
-        const newActiveId = get().activeLocaleId === id ? 'en' : get().activeLocaleId
-        if (get().activeLocaleId === id) applyLocaleToDom('en')
-        set({ customLocales: rest, activeLocaleId: newActiveId, t: makeT(newActiveId, rest) })
-      },
-    }),
+          const { [id]: _removed, ...rest } = get().customLocales
+          const newActiveId = get().activeLocaleId === id ? 'en' : get().activeLocaleId
+          if (get().activeLocaleId === id) applyLocaleToDom('en')
+          set({ customLocales: rest, activeLocaleId: newActiveId, t: makeT(newActiveId, rest) })
+        },
+      }
+    },
     {
       name: STORAGE_KEYS.I18N,
       storage: purdexStorage,
@@ -121,9 +138,9 @@ export const useI18nStore = create<I18nState>()(
           : detectLocale(navigator.languages, getAllLocales().map((l) => l.id))
         applyLocaleToDom(localeId)
         if (localeId !== state.activeLocaleId) {
-          useI18nStore.setState({ activeLocaleId: localeId, t: makeT(localeId, state.customLocales) })
+          setI18nState({ activeLocaleId: localeId, t: makeT(localeId, state.customLocales) })
         } else {
-          useI18nStore.setState({ t: makeT(localeId, state.customLocales) })
+          setI18nState({ t: makeT(localeId, state.customLocales) })
         }
       },
     },

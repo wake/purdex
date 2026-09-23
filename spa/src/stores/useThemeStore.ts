@@ -4,6 +4,7 @@ import { generateId } from '../lib/id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { registerTheme, unregisterTheme, getTheme, getAllThemes } from '../lib/theme-registry'
 import type { ThemeDefinition } from '../lib/theme-registry'
+import { registerBuiltinThemes } from '../lib/register-themes'
 import type { ThemeTokens } from '../lib/theme-tokens'
 
 export interface ThemeImportPayload {
@@ -41,68 +42,84 @@ function deduplicateName(name: string, existingNames: Set<string>): string {
   return `${name} (${i})`
 }
 
+// WHY (#1385): purdexStorage is synchronous, so persist hydrates INSIDE `create()`
+// below — before `useThemeStore` is initialised (TDZ) and before main.tsx's body runs.
+// Two consequences, both handled here:
+//   1. `onRehydrateStorage` must not reference `useThemeStore`: the ReferenceError is
+//      swallowed by persist, which re-invokes the callback with `undefined`, so
+//      `data-theme` is never applied and `hasHydrated()` stays false. It uses
+//      `setThemeState`, the store's `set` captured by the creator (which runs before
+//      hydration).
+//   2. The built-in themes must already be registered, or `getTheme('light')` misses
+//      and the persisted theme falls back to 'dark'. Registering is an idempotent Map set.
+registerBuiltinThemes()
+let setThemeState: (partial: Partial<ThemeState>) => void = () => {}
+
 export const useThemeStore = create<ThemeState>()(
   persist(
-    (set, get) => ({
-      activeThemeId: 'dark',
-      customThemes: {},
+    (set, get) => {
+      setThemeState = set
+      return {
+        activeThemeId: 'dark',
+        customThemes: {},
 
-      setActiveTheme: (id) => {
-        if (!getTheme(id)) return
-        set({ activeThemeId: id })
-        applyThemeToDom(id)
-      },
+        setActiveTheme: (id) => {
+          if (!getTheme(id)) return
+          set({ activeThemeId: id })
+          applyThemeToDom(id)
+        },
 
-      createCustomTheme: (name, baseId, overrides) => {
-        const base = getTheme(baseId)
-        if (!base) throw new Error(`Base theme "${baseId}" not found`)
+        createCustomTheme: (name, baseId, overrides) => {
+          const base = getTheme(baseId)
+          if (!base) throw new Error(`Base theme "${baseId}" not found`)
 
-        const builtinIds = new Set(getAllThemes().map((t) => t.id))
-        const customIds = new Set(Object.keys(get().customThemes))
-        const allIds = new Set([...builtinIds, ...customIds])
-        const id = generateUniqueId(allIds)
+          const builtinIds = new Set(getAllThemes().map((t) => t.id))
+          const customIds = new Set(Object.keys(get().customThemes))
+          const allIds = new Set([...builtinIds, ...customIds])
+          const id = generateUniqueId(allIds)
 
-        const tokens: ThemeTokens = { ...base.tokens, ...overrides }
-        const def: ThemeDefinition = { id, name, tokens, builtin: false }
-        registerTheme(def)
-        set((s) => ({ customThemes: { ...s.customThemes, [id]: def } }))
-        return id
-      },
+          const tokens: ThemeTokens = { ...base.tokens, ...overrides }
+          const def: ThemeDefinition = { id, name, tokens, builtin: false }
+          registerTheme(def)
+          set((s) => ({ customThemes: { ...s.customThemes, [id]: def } }))
+          return id
+        },
 
-      updateCustomTheme: (id, patch) => {
-        const state = get()
-        const existing = state.customThemes[id]
-        if (!existing) return
+        updateCustomTheme: (id, patch) => {
+          const state = get()
+          const existing = state.customThemes[id]
+          if (!existing) return
 
-        const updated: ThemeDefinition = {
-          ...existing,
-          ...(patch.name !== undefined ? { name: patch.name } : {}),
-          ...(patch.tokens !== undefined ? { tokens: patch.tokens } : {}),
-        }
-        registerTheme(updated)
-        set((s) => ({ customThemes: { ...s.customThemes, [id]: updated } }))
-      },
+          const updated: ThemeDefinition = {
+            ...existing,
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.tokens !== undefined ? { tokens: patch.tokens } : {}),
+          }
+          registerTheme(updated)
+          set((s) => ({ customThemes: { ...s.customThemes, [id]: updated } }))
+        },
 
-      deleteCustomTheme: (id) => {
-        unregisterTheme(id)
-        set((s) => {
+        deleteCustomTheme: (id) => {
+          unregisterTheme(id)
+          set((s) => {
            
-          const { [id]: _removed, ...rest } = s.customThemes
-          const newActiveId = s.activeThemeId === id ? 'dark' : s.activeThemeId
-          if (s.activeThemeId === id) applyThemeToDom('dark')
-          return { customThemes: rest, activeThemeId: newActiveId }
-        })
-      },
+            const { [id]: _removed, ...rest } = s.customThemes
+            const newActiveId = s.activeThemeId === id ? 'dark' : s.activeThemeId
+            if (s.activeThemeId === id) applyThemeToDom('dark')
+            return { customThemes: rest, activeThemeId: newActiveId }
+          })
+        },
 
-      importTheme: (payload) => {
-        if (!getTheme('dark')) throw new Error('Dark theme not registered')
-        const existingNames = new Set(
-          [...getAllThemes().map((t) => t.name), ...Object.values(get().customThemes).map((t) => t.name)]
-        )
-        const name = deduplicateName(payload.name, existingNames)
-        return get().createCustomTheme(name, 'dark', payload.tokens)
-      },
-    }),
+        importTheme: (payload) => {
+          if (!getTheme('dark')) throw new Error('Dark theme not registered')
+          const existingNames = new Set(
+            [...getAllThemes().map((t) => t.name), ...Object.values(get().customThemes).map((t) => t.name)]
+          )
+          const name = deduplicateName(payload.name, existingNames)
+          return get().createCustomTheme(name, 'dark', payload.tokens)
+        },
+      }
+    },
     {
       name: STORAGE_KEYS.THEMES,
       storage: purdexStorage,
@@ -119,7 +136,7 @@ export const useThemeStore = create<ThemeState>()(
         const themeId = getTheme(state.activeThemeId) ? state.activeThemeId : 'dark'
         applyThemeToDom(themeId)
         if (themeId !== state.activeThemeId) {
-          useThemeStore.setState({ activeThemeId: themeId })
+          setThemeState({ activeThemeId: themeId })
         }
       },
     },
