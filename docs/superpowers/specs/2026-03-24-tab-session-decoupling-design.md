@@ -310,6 +310,8 @@ pnpm add wouter
 | `/w/:workspaceId/settings` | 工作區設定 | 每 workspace |
 | `/w/:workspaceId/t/:tabId/:mode` | Workspace 內 session tab | 否 |
 
+> **2026-09-23 更新（#1336）**：standalone tab 已於 P3c-1/P3c-2 移除，每個 tab 自 P3c 起恰有一個 owner（workspace 歸屬來自 workspace store，不再來自 URL）。`/t/:tabId/:mode` 才是唯一的 canonical session-tab URL；`/w/:workspaceId/t/:tabId/:mode` 保留為**legacy alias**——只用來 activate 該 tab，`:workspaceId` segment 會被忽略，Tab→URL 隨即正規化回 `/t/:tabId/:mode`。
+
 ### 路由分類
 
 Singleton tab types（dashboard、history、settings）使用**命名路由**，不走 `/t/:tabId` 形式。只有 session tab 使用 `/t/:tabId/:mode`。

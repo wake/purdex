@@ -304,11 +304,39 @@ describe('useRouteSync cold start: deep link vs persisted active tab (#1326)', (
     expect(navs).toEqual([])
   })
 
-  it('/w/<ws>/t/<tab>/terminal: activates the tab and normalises to /t/<tab>/terminal like in-app navigation', () => {
+  it('/w/<ws>/t/<tab>/terminal: activates the tab and normalises to /t/<tab>/terminal like in-app navigation (ws matches the tab\'s owner)', () => {
     const { navs, current } = coldMount(`/w/${UNSORTED}/t/${SESSION_TAB}/terminal`)
     expect(useTabStore.getState().activeTabId).toBe(SESSION_TAB)
     expect(current()).toBe(`/t/${SESSION_TAB}/terminal`)
     expect(navs).toEqual([{ to: `/t/${SESSION_TAB}/terminal`, replace: true }])
+  })
+
+  // #1336: /w/<ws>/t/<tab>/<mode> is a legacy alias, not a canonical route.
+  // Since P3c every tab has exactly one owner (from the workspace store, not
+  // the URL), so a `ws` segment that is NOT the tab's owner — or names no
+  // known workspace at all — still just activates the tab: it never changes
+  // which workspace owns it or which workspace is active. Tab→URL then
+  // normalises the location to the canonical /t/<tab>/<mode>, dropping the
+  // (ignored) ws segment.
+  it('/w/<ws>/t/<tab>/terminal: still just activates the tab when ws is NOT the tab\'s owner, with no workspace change', () => {
+    expect(WS_X).not.toBe(UNSORTED) // sanity: WS_X does not own SESSION_TAB (seed() puts it under UNSORTED)
+    const { navs, current } = coldMount(`/w/${WS_X}/t/${SESSION_TAB}/terminal`)
+    expect(useTabStore.getState().activeTabId).toBe(SESSION_TAB)
+    expect(current()).toBe(`/t/${SESSION_TAB}/terminal`)
+    expect(navs).toEqual([{ to: `/t/${SESSION_TAB}/terminal`, replace: true }])
+    // the ws segment is ignored — no workspace change caused by the URL
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED)
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === WS_X)?.tabs).toEqual([])
+  })
+
+  it('/w/<ws>/t/<tab>/terminal: still just activates the tab when ws names no known workspace, with no workspace change', () => {
+    const UNKNOWN_WS = 'unknwn'
+    expect(useWorkspaceStore.getState().workspaces.some((w) => w.id === UNKNOWN_WS)).toBe(false)
+    const { navs, current } = coldMount(`/w/${UNKNOWN_WS}/t/${SESSION_TAB}/terminal`)
+    expect(useTabStore.getState().activeTabId).toBe(SESSION_TAB)
+    expect(current()).toBe(`/t/${SESSION_TAB}/terminal`)
+    expect(navs).toEqual([{ to: `/t/${SESSION_TAB}/terminal`, replace: true }])
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(UNSORTED)
   })
 
   it('/history: opens the history tab, no replace', () => {
