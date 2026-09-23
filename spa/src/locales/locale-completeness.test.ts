@@ -54,6 +54,43 @@ describe('locale completeness', () => {
     })
   })
 
+  // The host transfer namespace (host ownership spec §6.1 / §6.4; H4b). The trust sentence is the one piece of copy
+  // the spec fixes word for word, in both locales, and a dropped `{{relay}}` would hide WHICH host holds the tokens.
+  describe('the hosts.transfer namespace', () => {
+    const transferKeys = (o: Record<string, string>) => Object.keys(o).filter((k) => k.startsWith('hosts.transfer.')).sort()
+    const enT = transferKeys(en as Record<string, string>)
+    const zhT = transferKeys(zhTW as Record<string, string>)
+
+    it('exists with identical key sets', () => {
+      expect(enT.length).toBeGreaterThan(0)
+      expect(zhT).toEqual(enT)
+    })
+
+    it('keeps every placeholder in the translation', () => {
+      const placeholders = (v: string) => (v.match(/\{\{\w+\}\}/g) ?? []).sort()
+      for (const key of enT) {
+        expect(placeholders((zhTW as Record<string, string>)[key]), key).toEqual(placeholders((en as Record<string, string>)[key]))
+      }
+    })
+
+    it('has an error text for every failure reason', () => {
+      const reasons = [
+        'bad_payload', 'bad_request', 'too_large', 'capacity', 'rate_limited', 'rate_limited_later', 'invalid_code',
+        'unavailable', 'unauthorized', 'no_token', 'unsupported', 'network', 'timeout', 'malformed', 'unknown_host',
+      ]
+      for (const r of reasons) expect(enT, r).toContain(`hosts.transfer.error.${r}`)
+    })
+
+    it('carries the spec §6.1 trust sentence in both locales', () => {
+      expect((en as Record<string, string>)['hosts.transfer.trust']).toBe(
+        '{{relay}} will hold the access tokens of the hosts you share, readable by that host, until the code is used or expires (10 min). Only relay through a host you trust.',
+      )
+      expect((zhTW as Record<string, string>)['hosts.transfer.trust']).toBe(
+        '{{relay}} 會保存你分享的主機的存取 token，直到代碼被使用或過期（10 分鐘）；這段期間這台主機讀得到它們。只透過你信任的主機中轉。',
+      )
+    })
+  })
+
   // The Live Mode gate explains to the user why their file opened raw, so it is
   // the one place a half-translated string is actively confusing. Capitalised
   // terms (HTML, Live Mode) are product/UI names this file keeps in English by

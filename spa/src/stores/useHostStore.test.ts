@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import type { TransferChange } from '../lib/host-transfer-plan'
 import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch, selectDaemonIdVerified, requestAtOf } from './useHostStore'
 
 describe('useHostStore', () => {
@@ -712,5 +713,158 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
       const partialize = useHostStore.persist.getOptions().partialize!
       expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain('daemonIdVerified')
     })
+  })
+})
+
+describe('applyHostTransfer (host transfer H4b, spec §6.4.5, plan R2/R4)', () => {
+  let m: string
+  let defaultId: string
+
+  beforeEach(() => {
+    useHostStore.getState().reset()
+    defaultId = useHostStore.getState().hostOrder[0]
+    m = useHostStore.getState().addHost({ name: 'm', ip: '1.1.1.1', port: 1, token: 'old' })
+    const s = useHostStore.getState()
+    s.observeDaemonId(m, 'd1_m', requestAtOf(s.hosts[m]))
+    s.setRuntime(m, { status: 'connected' })
+    s.setDevHost(m)
+  })
+
+  function change(over: Partial<TransferChange> = {}): TransferChange {
+    return {
+      create: [{ name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', look: { icon: 'Laptop', color: '#ff0000' } }],
+      overwrite: [
+        {
+          hostId: m,
+          expect: { endpoint: '1.1.1.1:1', token: 'old', daemonId: 'd1_m' },
+          name: 'mm',
+          ip: '2.2.2.2',
+          port: 7860,
+          token: 'new',
+          look: { icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } },
+        },
+      ],
+      ...over,
+    }
+  }
+
+  it('adds and overwrites in ONE set (a subscriber sees one change)', () => {
+    const seen = vi.fn()
+    const unsub = useHostStore.subscribe(seen)
+    const res = useHostStore.getState().applyHostTransfer(change())
+    unsub()
+    expect(seen).toHaveBeenCalledTimes(1)
+    expect(res.kind).toBe('applied')
+  })
+
+  it('a created row carries the observed daemonId, is verified, and gets the look', () => {
+    const res = useHostStore.getState().applyHostTransfer(change({ overwrite: [] }))
+    if (res.kind !== 'applied') throw new Error('not applied')
+    const [id] = res.created
+    const s = useHostStore.getState()
+    expect(s.hosts[id]).toMatchObject({
+      name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', icon: 'Laptop', color: '#ff0000', order: 2,
+    })
+    expect(s.hostOrder).toEqual([defaultId, m, id])
+    expect(selectDaemonIdVerified(s, id)).toBe(true)
+  })
+
+  it('an overwrite keeps the local id, replaces ip / port / token, writes name and look, and is verified at the new endpoint', () => {
+    useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    const s = useHostStore.getState()
+    expect(s.hosts[m]).toMatchObject({
+      id: m,
+      name: 'mm',
+      ip: '2.2.2.2',
+      port: 7860,
+      token: 'new',
+      daemonId: 'd1_m',
+      icon: 'Desktop',
+      colors: { console: { main: { color: '#00ff00', alpha: 80 } } },
+    })
+    expect(s.hostOrder).toEqual([defaultId, m])
+    expect(selectDaemonIdVerified(s, m)).toBe(true)
+  })
+
+  it('an overwrite to a new endpoint starts the runtime over: nothing of the old connection, only daemonIdVerified', () => {
+    const retry = vi.fn()
+    useHostStore.getState().setRuntime(m, {
+      status: 'connected', latency: 12, attachReady: true, daemonState: 'connected', tmuxState: 'ok', manualRetry: retry,
+    })
+    useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    const rt = useHostStore.getState().runtime[m]
+    expect(rt.status).not.toBe('connected')
+    expect(rt.attachReady).toBeUndefined()
+    expect(rt).toEqual({ daemonIdVerified: { endpoint: '2.2.2.2:7860', daemonId: 'd1_m' } })
+  })
+
+  it('an overwrite that only changes the token also starts the runtime over', () => {
+    useHostStore.getState().setRuntime(m, { status: 'connected', attachReady: true })
+    const [o] = change().overwrite
+    useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ ...o, ip: '1.1.1.1', port: 1, token: 'rotated' }] })
+    expect(useHostStore.getState().runtime[m]).toEqual({ daemonIdVerified: { endpoint: '1.1.1.1:1', daemonId: 'd1_m' } })
+  })
+
+  it('an overwrite that keeps endpoint and token (look / name only) leaves the runtime as it was', () => {
+    useHostStore.getState().setRuntime(m, { status: 'connected', attachReady: true, latency: 12 })
+    const before = useHostStore.getState().runtime[m]
+    const [o] = change().overwrite
+    const res = useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ ...o, ip: '1.1.1.1', port: 1, token: 'old' }] })
+    expect(res.kind).toBe('applied')
+    const s = useHostStore.getState()
+    expect(s.hosts[m]).toMatchObject({ name: 'mm', icon: 'Desktop' })
+    expect(s.runtime[m]).toEqual(before)
+    expect(s.runtime[m]).toMatchObject({ status: 'connected', attachReady: true, latency: 12 })
+  })
+
+  it.each<[string, () => void]>([
+    ['the overwrite target was deleted', () => useHostStore.getState().removeHost(m)],
+    [
+      "the target's daemonId changed",
+      () => useHostStore.setState((st) => ({ hosts: { ...st.hosts, [m]: { ...st.hosts[m], daemonId: 'd1_other' } } })),
+    ],
+    ["the target's token changed", () => useHostStore.getState().updateHost(m, { token: 'rotated' })],
+    ["the target's endpoint changed", () => useHostStore.getState().updateHost(m, { port: 2 })],
+    ["a new row's endpoint is now taken", () => { useHostStore.getState().addHost({ name: 'x', ip: '100.64.0.4', port: 7860 }) }],
+    ["the overwrite's new endpoint is now taken", () => { useHostStore.getState().addHost({ name: 'x', ip: '2.2.2.2', port: 7860 }) }],
+    [
+      "a new row's daemonId is now claimed locally",
+      () => useHostStore.setState((st) => ({ hosts: { ...st.hosts, [defaultId]: { ...st.hosts[defaultId], daemonId: 'd1_air' } } })),
+    ],
+  ])('a stale plan (%s) is refused whole: the store is untouched', (_label, drift) => {
+    drift()
+    const before = useHostStore.getState()
+    const seen = vi.fn()
+    const unsub = useHostStore.subscribe(seen)
+    const res = useHostStore.getState().applyHostTransfer(change())
+    unsub()
+    const after = useHostStore.getState()
+    expect(res).toEqual({ kind: 'stale' })
+    expect(seen).not.toHaveBeenCalled()
+    expect(after.hosts).toBe(before.hosts)
+    expect(after.hostOrder).toBe(before.hostOrder)
+    expect(after.activeHostId).toBe(before.activeHostId)
+    expect(after.devHostId).toBe(before.devHostId)
+    expect(after.runtime).toBe(before.runtime)
+  })
+
+  // H4b PR #1397 critic: a created row's ip is canonical (parseTransferRows), a local row's may be any spelling the
+  // add-host dialog stored — the uniqueness check compares canonical endpoints.
+  it.each([
+    ['[0:0:0:0:0:0:0:1]', '[::1]'],
+    ['[::ffff:100.64.0.2]', '[::ffff:6440:2]'],
+    ['MLAB.example', 'mlab.example'],
+  ])('a new row at %s-equivalent %s is refused whole', (localIp, newIp) => {
+    useHostStore.getState().addHost({ name: 'x', ip: localIp, port: 7860 })
+    const before = useHostStore.getState()
+    const res = useHostStore.getState().applyHostTransfer(change({ create: [{ ...change().create[0], ip: newIp }], overwrite: [] }))
+    expect(res).toEqual({ kind: 'stale' })
+    expect(useHostStore.getState().hosts).toBe(before.hosts)
+  })
+
+  it('two new rows at one endpoint are refused', () => {
+    const one = change().create[0]
+    const res = useHostStore.getState().applyHostTransfer({ create: [one, { ...one, daemonId: 'd1_twin' }], overwrite: [] })
+    expect(res).toEqual({ kind: 'stale' })
   })
 })
