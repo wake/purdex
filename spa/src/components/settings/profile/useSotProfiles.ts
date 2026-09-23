@@ -6,6 +6,9 @@
 // A LIST IS OF AN ADDRESS, not only of a host id: the same id may be moved to another machine in another window
 // (PR #1340 review). So the list carries the endpoint it was asked at (`endpointOfHost`; null while the host is
 // not in the store), a move is a new fetch, and until it answers the old address's list is not shown as this one's.
+// THE REQUEST ITSELF IS PINNED to that endpoint (`expectEndpoint`, PR #1340 re-review): the address can move A→B
+// between the render and the effect and back to A before anything renders again — unpinned, B's list would be
+// labelled A. A refusal (`endpoint-changed`) is no answer about the list: it is dropped, and the list asked again.
 import { useCallback, useEffect, useState } from 'react'
 import { useHostStore } from '../../../stores/useHostStore'
 import { endpointOfHost } from '../../../stores/useProfileStore'
@@ -35,9 +38,11 @@ export function useSotProfiles(hostId: string | null): { view: SotProfilesView |
     if (hostId === null) return
     // `cancelled` drops an answer that lands after the host or its address changed (or the page closed).
     let cancelled = false
-    listProfiles(hostId).then(
+    listProfiles(hostId, ...(endpoint === null ? [] : [{ expectEndpoint: endpoint }])).then(
       (r) => {
         if (cancelled) return
+        // The host was not at `endpoint` when the request left: nothing was asked. Not an error of the list — ask again.
+        if (r.kind === 'failed' && r.reason === 'endpoint-changed') return setNonce((n) => n + 1)
         setResult(r.kind === 'ok' ? { hostId, at: endpoint, kind: 'rows', rows: r.value, endpoint } : { hostId, at: endpoint, kind: 'error', message: r.message, reason: r.reason })
       },
       (e: unknown) => {

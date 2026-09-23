@@ -2,6 +2,7 @@
 // the wizard's step 2 (#1325): after every device has stopped syncing there is no master, so Settings' host block is
 // gone — this is the only place left. The rules are useSotDelete.ts's, shared with SotProfilesBlock. The stores are
 // the real ones; `start`, `api`, the client identity and `readMasterWorld` are replaced (as ProfileWizard.test.tsx).
+import { useLayoutEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import en from '../../../../locales/en.json'
@@ -35,6 +36,34 @@ const host = (id: string, name: string, ip: string) => ({ id, name, ip, port: 78
 const byHost = (map: Record<string, ProfileIndexEntry[]>) =>
   vi.mocked(listProfiles).mockImplementation((hostId: string) => Promise.resolve({ kind: 'ok', value: map[hostId] ?? [] }))
 const listsOf = (hostId: string) => vi.mocked(listProfiles).mock.calls.filter(([h]) => h === hostId).length
+
+/**
+ * THE A→B→A RACE (PR #1340 re-review): the list is rendered at A, the host is moved to B before the fetch leaves (a
+ * layout effect stands in for "another window, between the render and the effect"), and back to A before React
+ * renders again — so no render ever sees B. `listProfiles` answers as the machine at the address it would really
+ * reach: the one the host is at WHEN IT IS CALLED, and — like api.ts — refuses when `expectEndpoint` is not that.
+ */
+function raceAtoBtoA(machines: Record<string, ProfileIndexEntry[]>, a: string, b: string) {
+  const at = (ip: string) => useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, ip } } }))
+  const where = () => `${useHostStore.getState().hosts.h1.ip}:${useHostStore.getState().hosts.h1.port}`
+  let moved = false
+  vi.mocked(listProfiles).mockImplementation(async (hostId: string, opts?: { expectEndpoint?: string }) => {
+    const reached = where()
+    if (moved && reached === `${b}:7860`) at(a) // …and back, before anything renders again
+    if (opts?.expectEndpoint !== undefined && opts.expectEndpoint !== reached) return { kind: 'failed', reason: 'endpoint-changed', status: 0, message: 'moved' }
+    return { kind: 'ok', value: hostId === 'h1' ? (machines[reached] ?? []) : [] }
+  })
+  /** Rendered after the component under test: its layout effect runs after that component's render, before its effects. */
+  function MoveToB() {
+    useLayoutEffect(() => {
+      if (moved) return
+      moved = true
+      at(b)
+    }, [])
+    return null
+  }
+  return MoveToB
+}
 
 const open = () => render(<ProfileWizard onClose={() => {}} />)
 const wizard = () => screen.getByTestId('profile-wizard')
@@ -238,5 +267,21 @@ describe('a confirmation belongs to the ADDRESS the list was fetched from, too �
     expect(wizard().textContent).not.toMatch(/any more/)
     expect(listsOf('h1')).toBe(2)
     expect(screen.getByTestId(`profile-wizard-profile-${P2}`)).toBeChecked() // not deleted: still chosen
+  })
+})
+
+describe('the list itself is pinned to the address it is labelled with (PR #1340 re-review)', () => {
+  it('A→B→A between the render and the fetch: B\'s list is NEVER shown as A\'s — what is shown, and deleted from, is A\'s', async () => {
+    const MoveToB = raceAtoBtoA({ '10.0.0.1:7860': [entry(P2, 'on A')], '10.0.0.66:7860': [entry(P2, 'on B')] }, '10.0.0.1', '10.0.0.66')
+    render(<><ProfileWizard onClose={() => {}} /><MoveToB /></>)
+    await flush()
+    await flush()
+    expect(vi.mocked(listProfiles).mock.calls.every(([h, o]) => h !== 'h1' || o?.expectEndpoint !== undefined)).toBe(true)
+    expect(wizard().textContent).not.toMatch(/on B/)
+    expect(wizard().textContent).toMatch(/on A/)
+    click(`profile-wizard-profile-delete-${P2}`)
+    click('profile-wizard-delete-confirm')
+    await flush()
+    expect(deleteProfile).toHaveBeenCalledWith('h1', P2, { expectEndpoint: A })
   })
 })

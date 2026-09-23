@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import en from '../../../locales/en.json'
@@ -13,6 +14,34 @@ const attachment = (clientId: string, deviceName: string): Attachment => ({ clie
 const profile = (id: string, name: string, attachments: Attachment[] = []): ProfileIndexEntry => ({ id, name, createdAt: 1, updatedAt: 2, sections: [], attachments })
 const failure = (message: string, reason: Failure['reason'] = 'network'): Failure => ({ kind: 'failed', reason, status: 0, message })
 const rows = (...list: ProfileIndexEntry[]) => vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: list })
+
+/**
+ * THE A→B→A RACE (PR #1340 re-review): the list is rendered at A, the host is moved to B before the fetch leaves (a
+ * layout effect stands in for "another window, between the render and the effect"), and back to A before React
+ * renders again — so no render ever sees B. `listProfiles` answers as the machine at the address it would really
+ * reach: the one the host is at WHEN IT IS CALLED, and — like api.ts — refuses when `expectEndpoint` is not that.
+ */
+function raceAtoBtoA(machines: Record<string, ProfileIndexEntry[]>, a: string, b: string) {
+  const at = (ip: string) => useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, ip } } }))
+  const where = () => `${useHostStore.getState().hosts.h1.ip}:${useHostStore.getState().hosts.h1.port}`
+  let moved = false
+  vi.mocked(listProfiles).mockImplementation(async (hostId: string, opts?: { expectEndpoint?: string }) => {
+    const reached = where()
+    if (moved && reached === `${b}:7860`) at(a) // …and back, before anything renders again
+    if (opts?.expectEndpoint !== undefined && opts.expectEndpoint !== reached) return { kind: 'failed', reason: 'endpoint-changed', status: 0, message: 'moved' }
+    return { kind: 'ok', value: hostId === 'h1' ? (machines[reached] ?? []) : [] }
+  })
+  /** Rendered after the component under test: its layout effect runs after that component's render, before its effects. */
+  function MoveToB() {
+    useLayoutEffect(() => {
+      if (moved) return
+      moved = true
+      at(b)
+    }, [])
+    return null
+  }
+  return MoveToB
+}
 
 /** The section's wiring: one fetch, handed to the block. */
 function Harness({ hostId = 'h1', attached = 'p1' }: { hostId?: string; attached?: string }) {
@@ -391,6 +420,14 @@ describe('an action belongs to the ADDRESS the list was fetched from, too — th
     expect(deleteProfile).toHaveBeenCalledWith('h1', 'p2', { expectEndpoint: A })
     expect(await screen.findByTestId('profile-sot-status')).toHaveTextContent(en['settings.profile.sot.endpoint_changed'])
     await waitFor(() => expect(listProfiles).toHaveBeenCalledTimes(2))
+  })
+
+  it('A→B→A between the render and the fetch: B\'s list is NEVER shown as A\'s (the list call is pinned too)', async () => {
+    const MoveToB = raceAtoBtoA({ '10.0.0.1:7860': [profile('p2', 'on A')], '10.0.0.66:7860': [profile('p2', 'on B')] }, '10.0.0.1', '10.0.0.66')
+    render(<><Harness /><MoveToB /></>)
+    await waitFor(() => expect(screen.getByTestId('profile-sot-block')).toHaveTextContent('on A'))
+    expect(screen.getByTestId('profile-sot-block')).not.toHaveTextContent('on B')
+    expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: A })
   })
 
   it('the rename is pinned to the address too; refused likewise', async () => {
