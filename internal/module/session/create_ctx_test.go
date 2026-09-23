@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,11 +16,14 @@ import (
 // The pre-create reads (has-session, the generation probe) follow the caller;
 // new-session runs on a cap of its own, never the caller's cancellation.
 
-// createBound is how long a create stuck in one bounded tmux step may take to
-// return: the step's cap plus scheduling slack.
-func createBound(steps int) time.Duration {
-	return time.Duration(steps)*listReadTimeout + time.Second
+// createBound is how long a create stuck in `steps` bounded tmux steps may
+// take to return: the module's cap per step plus scheduling slack.
+func createBound(mod *SessionModule, steps int) time.Duration {
+	return time.Duration(steps)*mod.readTimeout() + time.Second
 }
+
+// shortCap shortens m.readTimeout() for the tests that wait a cap out.
+const shortCap = 300 * time.Millisecond
 
 // runCreate runs CreateSessionContext on its own goroutine and fails the test
 // if it outlives bound.
@@ -104,7 +108,7 @@ func TestCreateSessionContext_CancelDuringHasSessionEndsIt(t *testing.T) {
 	time.AfterFunc(50*time.Millisecond, cancel)
 	start := time.Now()
 
-	_, err := runCreate(t, mod, ctx, "stuck", createBound(1))
+	_, err := runCreate(t, mod, ctx, "stuck", createBound(mod, 1))
 	assert.Less(t, time.Since(start), 50*time.Millisecond+cancelledWell, "has-session kept running after the caller cancelled")
 	var ce *CreateError
 	require.ErrorAs(t, err, &ce)
@@ -175,6 +179,7 @@ func TestCreateSessionContext_CancelDuringNewSessionDoesNotAbortIt(t *testing.T)
 func TestCreateSessionContext_HungNewSessionReleasesCreateMu(t *testing.T) {
 	t.Parallel()
 	mod, _, fake := newTestModule(t)
+	mod.listTimeout = shortCap
 	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
 	var newDeadline atomic.Value
 	fake.SetCreateHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
@@ -188,7 +193,7 @@ func TestCreateSessionContext_HungNewSessionReleasesCreateMu(t *testing.T) {
 	})
 
 	start := time.Now()
-	info, err := runCreate(t, mod, context.Background(), "hung", createBound(2))
+	info, err := runCreate(t, mod, context.Background(), "hung", createBound(mod, 2))
 	assert.Nil(t, info)
 	var ce *CreateError
 	require.ErrorAs(t, err, &ce)
@@ -197,7 +202,7 @@ func TestCreateSessionContext_HungNewSessionReleasesCreateMu(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	d, _ := newDeadline.Load().(time.Time)
 	require.False(t, d.IsZero(), "new-session ran without a deadline")
-	assert.WithinDuration(t, start.Add(listReadTimeout), d, time.Second)
+	assert.WithinDuration(t, start.Add(shortCap), d, 150*time.Millisecond)
 	requireCreateMuFree(t, mod)
 
 	fake.SetCreateHook(nil)
@@ -211,6 +216,7 @@ func TestCreateSessionContext_HungNewSessionReleasesCreateMu(t *testing.T) {
 func TestCreateSessionContext_NewSessionTimedOutButCreated(t *testing.T) {
 	t.Parallel()
 	mod, meta, fake := newTestModule(t)
+	mod.listTimeout = shortCap
 	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
 	fake.SetCreateHook(func(ctx context.Context, op tmux.ReadOp, target string) error {
 		if op != tmux.OpNewSession {
@@ -221,7 +227,7 @@ func TestCreateSessionContext_NewSessionTimedOutButCreated(t *testing.T) {
 		return ctx.Err()
 	})
 
-	info, err := runCreate(t, mod, context.Background(), "late-answer", createBound(2))
+	info, err := runCreate(t, mod, context.Background(), "late-answer", createBound(mod, 2))
 	require.NoError(t, err)
 	require.NotNil(t, info)
 	assert.Equal(t, "late-answer", info.Name)
@@ -237,6 +243,7 @@ func TestCreateSessionContext_NewSessionTimedOutButCreated(t *testing.T) {
 func TestCreateSessionContext_NewSessionTimedOutUnconfirmed(t *testing.T) {
 	t.Parallel()
 	mod, meta, fake := newTestModule(t)
+	mod.listTimeout = shortCap
 	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
 	var hasCalls atomic.Int32
 	fake.SetCreateHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
@@ -247,7 +254,7 @@ func TestCreateSessionContext_NewSessionTimedOutUnconfirmed(t *testing.T) {
 		return ctx.Err()
 	})
 
-	info, err := runCreate(t, mod, context.Background(), "unknown", createBound(3))
+	info, err := runCreate(t, mod, context.Background(), "unknown", createBound(mod, 3))
 	assert.Nil(t, info)
 	var ce *CreateError
 	require.ErrorAs(t, err, &ce)
@@ -296,6 +303,7 @@ func TestCreateSessionContext_PostCreateProbeSharesListDeadline(t *testing.T) {
 func TestCreateSessionContext_HungPostCreateProbeEndsAtChainDeadline(t *testing.T) {
 	t.Parallel()
 	mod, meta, fake := newTestModule(t)
+	mod.listTimeout = shortCap
 	var probes atomic.Int32
 	mod.tmuxInstanceFn = func(ctx context.Context) string {
 		if probes.Add(1) == 1 {
@@ -309,17 +317,17 @@ func TestCreateSessionContext_HungPostCreateProbeEndsAtChainDeadline(t *testing.
 		chainStart.Store(time.Now())
 		d, _ := ctx.Deadline()
 		select {
-		case <-time.After(time.Until(d) - 300*time.Millisecond):
+		case <-time.After(time.Until(d) * 3 / 4):
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	})
 
-	info, err := runCreate(t, mod, context.Background(), "probe-hangs", createBound(2))
+	info, err := runCreate(t, mod, context.Background(), "probe-hangs", createBound(mod, 2))
 	start, _ := chainStart.Load().(time.Time)
 	require.False(t, start.IsZero())
-	assert.Less(t, time.Since(start), listReadTimeout+500*time.Millisecond, "the post-create chain outlived its one deadline")
+	assert.Less(t, time.Since(start), shortCap+200*time.Millisecond, "the post-create chain outlived its one deadline")
 	assert.Nil(t, info)
 	var ce *CreateError
 	require.ErrorAs(t, err, &ce)
@@ -330,4 +338,45 @@ func TestCreateSessionContext_HungPostCreateProbeEndsAtChainDeadline(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, metas)
 	requireCreateMuFree(t, mod)
+}
+
+// Every cap a create sets — the pre-create reads, new-session's own, the
+// post-create chain's — comes from m.readTimeout(), so a test override
+// reaches all of them.
+func TestReadTimeoutOverride_CreateCaps(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mod.listTimeout = shortCap
+	var mu sync.Mutex
+	deadlines := map[string]time.Time{}
+	record := func(step string, ctx context.Context) {
+		d, _ := ctx.Deadline()
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := deadlines[step]; !ok {
+			deadlines[step] = d
+		}
+	}
+	var probes atomic.Int32
+	mod.tmuxInstanceFn = func(ctx context.Context) string {
+		if probes.Add(1) == 1 {
+			record("pre-create probe", ctx)
+		}
+		return "1:1"
+	}
+	fake.SetCreateHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		record(string(op), ctx)
+		return nil
+	})
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		record(string(op), ctx)
+		return nil
+	})
+	start := time.Now()
+	_, err := mod.CreateSession("override", t.TempDir())
+	require.NoError(t, err)
+	for _, step := range []string{string(tmux.OpHasSession), "pre-create probe", string(tmux.OpNewSession), string(tmux.ReadListSessions)} {
+		d := deadlines[step]
+		require.False(t, d.IsZero(), "%s ran without a deadline", step)
+		assert.WithinDuration(t, start.Add(shortCap), d, 150*time.Millisecond, "%s is not capped by m.readTimeout()", step)
+	}
 }
