@@ -84,7 +84,10 @@ store_test.go (injected `now` and `gen`):
    toward capacity.
 3. Normalisation: `abcd-2345`, `ABCD 2345`, lower-case, `I`/`L`/`O` substitutions all hit; a `U` misses.
 4. Identical error for unknown / expired / used (same sentinel).
-5. Concurrent redeem: 64 goroutines redeem one code → exactly one payload, 63 `ErrInvalidCode` (run with `-race`).
+5. Concurrent redeem (codex plan review #2): 64 goroutines redeem one code → EXACTLY ONE payload; of the other 63,
+   at most 10 `ErrInvalidCode` and the rest `ErrRateLimited` (the losers are wrong guesses by §6.3); the counts add
+   up to 64 (run with `-race`). A second test with 11 goroutines and a fresh store pins it exactly: 1 payload +
+   10 `ErrInvalidCode`.
 6. Brute force: 9 wrong → 10th wrong still `ErrInvalidCode`; 11th (even the RIGHT code) → `ErrRateLimited` with
    `retryAfter` = window end − now; at window end the right code succeeds; a success does not reset the counter
    (5 wrong, 1 right, 5 wrong → the next is rate-limited); the window is fixed from the FIRST failure.
@@ -97,7 +100,8 @@ store_test.go (injected `now` and `gen`):
 handler_test.go:
 11. Status and body mapping for every branch above (200 / 400 bad_payload / 413 / 429 capacity / 503 / 404
     invalid_code / 429 rate_limited + `Retry-After` / 400 bad_request), and `bad_request` does not count as a failure.
-12. 32 rows ok, 33 → 400; a body just over 64 KiB → 413; a row that is a string / array → 400.
+12. 32 rows ok, 33 → 400; a body of EXACTLY 64 KiB (65 536 bytes, valid JSON padded inside a row) → accepted; one
+    byte more → 413 (codex #8); a row that is a string / array → 400.
 13. `Cache-Control: no-store` on every response.
 14. Payload never logged: capture `log` output across create, redeem, a wrong redeem and a rate-limited redeem; the
     token string placed in the payload never appears.
@@ -115,6 +119,42 @@ H4a needs the daemon on the relay host. Deploying mlab / air26 is the coordinato
 unilaterally). H4b's real-machine test needs it deployed on at least the relay.
 
 ## H4b — SPA share / receive (§6.1, §6.4)
+
+### Revisions (spec `b13512ed` + codex plan review `task-muedvbqs-3tv9xx`) — these override the text below
+
+- **R1 — replace-all (codex critical #1; spec §6.4.5 vs §6.4.6 conflict, raised to the coordinator).** The spec asks
+  both for ONE `set()` with "any throw → untouched" (§6.4.5) and for replace-all's removals to go through the normal
+  delete path, each undoable (§6.4.6, now decision 9 / §3.4, i.e. H1c). A cascade touches many stores and cannot be
+  inside the host store's one `set()`, so the two cannot both hold as written; and before H1c the normal delete path
+  still writes synced `host-removed` marks, which §6.4.6 now forbids. **Pending the coordinator's decision, H4b ships
+  add-only and overwrite; replace-all is shown disabled with "available after an update" and is not wired.** The PR
+  that turns it on (H1c or later) owns: a full pre-check before anything is written (kept set non-empty, every
+  removal target exists), the atomicity design, and the undo tests below.
+- **R2 — `daemonId` inside the one `set()` (codex #3).** Extract the body of `observeDaemonId`'s updater into a pure
+  `applyObservedDaemonId(state, hostId, observed, atRequest) → state | null` in `useHostStore.ts`; `observeDaemonId`
+  keeps calling it (behaviour unchanged, its tests stay green), and `applyHostTransfer` calls it inside its own single
+  updater for every created row, with `atRequest = { endpoint, token }` of that row — which is exactly what the
+  receiver verified. So a created row is verified by the same rule, in the same `set()`. The change carries, per
+  overwrite target, the `{ endpoint, token, daemonId }` the plan was built against; the updater re-checks all three
+  (codex: token was missing) and refuses the whole change on any difference. An overwrite changes ip/port/token and
+  therefore re-points the row: its `daemonId` is re-observed with the new `atRequest` in the same updater.
+- **R3 — undo loses `daemonId` (codex #4).** Only replace-all removes hosts; with R1 it is off, so H4b has no undo
+  path. Recorded for the PR that enables replace-all: `deleteHostCascade`'s undo re-adds through `addHost`, which
+  strips `daemonId` (useHostStore.ts:259-272, host-lifecycle.ts:345-365); the host re-learns it on reconnect
+  (host-daemon-id.ts), but a test must assert the restored row's identity.
+- **R4 — the look and the merge order (codex #5, spec §6.4.7).** Explicit task T0 in H4b: before implementing, check
+  whether H2c is on main. Not merged → received looks go to the new host's `HostConfig` name / colors / color / icon /
+  iconWeight, and — per spec §6.4.7 — ALSO to an existing host's in OVERWRITE mode (replacing the earlier text "overwrite
+  keeps the local look"). Merged → look store only, only where no entry exists for that `d1_…`; `HostConfig` gets the
+  name. The PR description states which path it took; tests cover the path taken.
+- **R5 — payload validation (codex #6).** `parseTransferRows(json)`: a row is kept only if it is a plain object with
+  `ip` a non-empty string without `/`, `port` an integer 1–65535, `token` a non-empty string; `name` a string (else
+  derived from ip); `daemonId` kept only if `isValidDaemonId`; `look` fields kept only if they pass the same guards the
+  `hosts` section applier uses for `colors` / `color` / `icon` / `iconWeight` (reuse, no new validator). Dropped rows
+  are counted and shown. Tests: wrong types for each field, out-of-range port, invalid daemonId, a malformed `look`
+  field dropped while the row stays.
+- **R6 — API reasons (codex #7).** The failure union adds `bad_request` (redeem's 400); the API test lists redeem's
+  and create's 400s separately.
 
 ### Decided by the coordinator (2026-09-24): the look before H2c — option (b)
 
