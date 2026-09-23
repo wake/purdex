@@ -34,8 +34,11 @@ export function ShareHostsDialog({ onClose }: Props) {
   const [relayPick, setRelayPick] = useState<string | null>(null)
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const mounted = useRef(true)
-  useEffect(() => () => {
-    mounted.current = false
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
   }, [])
 
   useEffect(() => {
