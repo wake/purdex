@@ -406,6 +406,50 @@ func TestRemoveClosesTheClientConnection(t *testing.T) {
 	assert.False(t, eb.HasSubscribers())
 }
 
+// TrySend reports whether the frame was actually queued: a caller that must
+// know (the session module's subscribe snapshot, #1293) cannot use Send,
+// which drops silently on a full buffer.
+func TestTrySendQueues(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	sub := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(sub)
+
+	assert.True(t, sub.TrySend([]byte(`{"type":"a"}`)))
+	select {
+	case msg := <-sub.SendCh():
+		assert.Equal(t, `{"type":"a"}`, string(msg))
+	default:
+		t.Fatal("TrySend reported true but queued nothing")
+	}
+}
+
+func TestTrySendReportsFullBuffer(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	sub := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(sub)
+	for i := 0; i < cap(sub.send); i++ {
+		require.True(t, sub.TrySend([]byte(`{"type":"fill"}`)))
+	}
+
+	done := make(chan bool, 1)
+	go func() { done <- sub.TrySend([]byte(`{"type":"overflow"}`)) }()
+	select {
+	case ok := <-done:
+		assert.False(t, ok, "a full buffer queues nothing")
+	case <-time.After(time.Second):
+		t.Fatal("TrySend blocked on a full buffer")
+	}
+	assert.Len(t, sub.send, cap(sub.send))
+}
+
+func TestTrySendAfterRemoveReportsFalse(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	sub := eb.AddTestSubscriber()
+	eb.Remove(sub)
+	<-sub.Done()
+	assert.False(t, sub.TrySend([]byte(`{"type":"late"}`)))
+}
+
 // Remove works on a test subscriber (no connection) too.
 func TestRemoveTestSubscriberViaRemove(t *testing.T) {
 	eb := NewEventsBroadcaster()

@@ -10,8 +10,86 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/tmux"
 )
+
+// fillSendBuffer queues filler frames until sub's send buffer is full.
+func fillSendBuffer(t *testing.T, sub *core.EventSubscriber) {
+	t.Helper()
+	for i := 0; i < 1000; i++ {
+		if !sub.TrySend([]byte(`{"type":"filler"}`)) {
+			return
+		}
+	}
+	t.Fatal("the send buffer never filled")
+}
+
+// #1293 critic: the snapshot read succeeds but the frame cannot be queued
+// (the client is too slow to drain its buffer). Dropping it silently would
+// leave the SPA's attach gate shut for good, and re-reading would not help:
+// the connection is closed so the client reconnects, and no retry is left.
+func TestSubscribeSnapshot_FullBufferClosesTheConnection(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	fake.AddSession("s1", "/tmp")
+	mod.snapshotRetryDelays = []time.Duration{10 * time.Millisecond}
+
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	fillSendBuffer(t, sub)
+	mod.sendSessionsSnapshot(sub)
+
+	select {
+	case <-sub.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("a snapshot that could not be queued left the connection open")
+	}
+	assert.False(t, events.HasSubscribers())
+	assert.Equal(t, int32(0), mod.snapshotRetriesLive.Load(), "no retry: the read was not the problem")
+}
+
+// Same, on the retry path: the first read fails, the retry's read succeeds
+// but the buffer has filled meanwhile — the connection is closed and the
+// retry goroutine exits instead of calling that a success.
+func TestSubscribeSnapshot_RetryIntoFullBufferClosesTheConnection(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	fake.AddSession("s1", "/tmp")
+	mod.snapshotRetryDelays = []time.Duration{20 * time.Millisecond, time.Hour}
+	var reads atomic.Int32
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, target string) error {
+		if op == tmux.ReadListSessions && reads.Add(1) == 1 {
+			return errors.New("first read: tmux timed out")
+		}
+		return nil
+	})
+
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	mod.sendSessionsSnapshot(sub)
+	require.Equal(t, int32(1), mod.snapshotRetriesLive.Load(), "a retry is pending")
+	fillSendBuffer(t, sub)
+
+	select {
+	case <-sub.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("a retried snapshot that could not be queued left the connection open")
+	}
+	assert.False(t, events.HasSubscribers())
+	waitRetriesDone(t, mod)
+}
+
+// The subscriber is already gone when the frame is sent: nothing to close,
+// nothing to retry.
+func TestSubscribeSnapshot_RemovedSubscriberEndsQuietly(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	fake.AddSession("s1", "/tmp")
+	mod.snapshotRetryDelays = []time.Duration{10 * time.Millisecond}
+
+	sub := events.AddTestSubscriber()
+	events.RemoveTestSubscriber(sub)
+	assert.NotPanics(t, func() { mod.sendSessionsSnapshot(sub) })
+	assert.Equal(t, int32(0), mod.snapshotRetriesLive.Load())
+}
 
 // waitRetriesDone waits for every background snapshot retry to have exited.
 func waitRetriesDone(t *testing.T, mod *SessionModule) {

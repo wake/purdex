@@ -47,14 +47,23 @@ func newEventSubscriber(conn *websocket.Conn) *EventSubscriber {
 // Send pushes data to the subscriber's write pump. Non-blocking — if the
 // buffer is full the message is silently dropped; after Remove it is a no-op.
 func (sub *EventSubscriber) Send(data []byte) {
+	sub.TrySend(data)
+}
+
+// TrySend is Send that reports whether data was actually queued: false when
+// the buffer is full (data dropped) or the subscriber has been removed.
+// Non-blocking.
+func (sub *EventSubscriber) TrySend(data []byte) bool {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	if sub.closed {
-		return
+		return false
 	}
 	select {
 	case sub.send <- data:
+		return true
 	default: // drop if full
+		return false
 	}
 }
 

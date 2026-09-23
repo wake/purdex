@@ -188,7 +188,8 @@ func (m *SessionModule) Start(ctx context.Context) error {
 // a first sessions frame, and with an unchanged list no push will ever come,
 // so a failed snapshot is not the end of it (#1293): it is retried in the
 // background (retrySessionsSnapshot), and if every retry fails too the
-// connection is closed so the client reconnects and asks again. A retried
+// connection is closed so the client reconnects and asks again — as it is at
+// once when a snapshot is read but cannot be queued. A retried
 // snapshot may land after a push on the same connection; each carries its own
 // seq and the client orders by it (spec 2026-09-23 §3.3/§3.4).
 func (m *SessionModule) sendSessionsSnapshot(sub *core.EventSubscriber) {
@@ -201,8 +202,12 @@ func (m *SessionModule) sendSessionsSnapshot(sub *core.EventSubscriber) {
 	}
 }
 
-// trySessionsSnapshot reads a versioned list under ctx and sends it to sub.
-// Only a failed read is an error; Send is a no-op on a closed subscriber.
+// trySessionsSnapshot reads a versioned list under ctx and queues it for sub.
+// Only a failed read is an error, the one outcome worth a retry. nil means
+// the attempt is over: the frame was queued, or it could not be — a
+// subscriber already removed is left alone, and a full send buffer means the
+// client is too slow to drain it, so the connection is closed for the client
+// to reconnect (re-reading would not help: the read was not the problem).
 func (m *SessionModule) trySessionsSnapshot(ctx context.Context, sub *core.EventSubscriber) error {
 	v, err := m.versionedList(ctx)
 	if err != nil {
@@ -213,7 +218,15 @@ func (m *SessionModule) trySessionsSnapshot(ctx context.Context, sub *core.Event
 		log.Printf("session: OnSubscribe marshal error: %v", err)
 		return nil
 	}
-	sub.Send(data)
+	if sub.TrySend(data) {
+		return nil
+	}
+	select {
+	case <-sub.Done(): // already removed: nothing to close
+	default:
+		log.Printf("session: OnSubscribe snapshot could not be queued (send buffer full); closing the connection so the client reconnects")
+		m.core.Events.Remove(sub)
+	}
 	return nil
 }
 
