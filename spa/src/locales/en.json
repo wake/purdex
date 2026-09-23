@@ -1005,6 +1005,8 @@
   "hosts.invalid_pairing_code": "Invalid pairing code",
   "hosts.token_too_short": "Token must be at least 20 characters",
   "hosts.confirm": "Confirm",
+  "hosts.duplicate_daemon": "This daemon is already added as “{{name}}”.",
+  "hosts.duplicate_daemon_use_address": "Use this address for “{{name}}”",
   "hosts.mode_pairing_hint": "Daemon is waiting for pairing",
   "hosts.mode_pending_hint": "Enter the token shown in the daemon terminal",
   "hosts.mode_normal_hint": "Daemon is running — enter the configured token",
