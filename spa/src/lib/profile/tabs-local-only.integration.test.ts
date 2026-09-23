@@ -242,3 +242,94 @@ describe('a workspace whose tabs are all device-local builds the empty placehold
     expect(executor!.status().sections['tabs.wa1']).toBe('synced')
   })
 })
+
+/* ─── T6: two devices end to end ─── */
+
+describe('two devices: interface-only tabs stay on the device that opened them', () => {
+  /** A's world, kept as data after its session: A's later edits are made here and built with the real builder. */
+  const aTabs: Record<string, Tab> = {}
+  let aOrder: string[] = []
+  const aPushesWa1 = (): Promise<void> => aWrites('tabs.wa1', buildTabsSection(ws('wa1', aOrder), aTabs))
+
+  /** A: wa1 = [tmux ta1, Settings sA, New Tab nA], pushed by a real session; then B attaches by pulling. */
+  async function aThenB(): Promise<void> {
+    for (const k of Object.keys(aTabs)) delete aTabs[k]
+    Object.assign(aTabs, { ta1: tab('ta1'), sA: tab('sA', SETTINGS), nA: tab('nA', NEW_TAB) })
+    aOrder = ['ta1', 'sA', 'nA']
+    world([ws('wa1', aOrder)], Object.values(aTabs))
+    await attach(A, 'push')
+    expect(sotOrder('tabs.wa1')).toEqual(['ta1']) // what A's own build sent
+    leave()
+    world([], [])
+    await attach(B, 'pull')
+    problems.length = 0
+  }
+
+  /** B never had to push `tabs.wa1` back: every payload A sent was already canonical. */
+  const bRewroteNothing = (): void => expect(daemon.writes.filter((w) => w.clientId === B && w.key === 'tabs.wa1')).toEqual([])
+
+  it('A pushes [tmux, Settings, New Tab]: the SOT and B hold the tmux tab only', async () => {
+    await aThenB()
+    expect(sotOrder('tabs.wa1')).toEqual(['ta1'])
+    expect(listed('wa1')).toEqual(['ta1'])
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(['ta1'])
+    expect(executor!.status().profile).toBe('synced')
+    bRewroteNothing()
+  })
+
+  it('A launches its New Tab (same tab id) → B gets that tab', async () => {
+    await aThenB()
+    aTabs.nA = tab('nA', TMUX('launched'))
+    await aPushesWa1()
+    expect(listed('wa1')).toEqual(['ta1', 'nA'])
+    expect(useTabStore.getState().tabs.nA.layout).toEqual(leaf('p-nA', TMUX('launched')))
+    expect(problems).toEqual([])
+    bRewroteNothing()
+  })
+
+  it('B\'s own Settings tab between two synced tabs survives A\'s next push, at the same place; B writes nothing', async () => {
+    await aThenB()
+    aTabs.nA = tab('nA', TMUX('launched'))
+    await aPushesWa1()
+    const mine = tab('sB', SETTINGS)
+    putTab('wa1', mine, 1)
+    await settle()
+    expect(listed('wa1')).toEqual(['ta1', 'sB', 'nA'])
+    const bWrites = daemon.writes.filter((w) => w.clientId === B).length
+
+    aTabs.ta1 = { ...aTabs.ta1, pinned: true }
+    await aPushesWa1()
+    expect(listed('wa1')).toEqual(['ta1', 'sB', 'nA'])
+    expect(useTabStore.getState().tabs.ta1.pinned).toBe(true)
+    expect(useTabStore.getState().tabs.sB).toBe(mine)
+    expect(daemon.writes.filter((w) => w.clientId === B)).toHaveLength(bWrites)
+    expect(sotOrder('tabs.wa1')).toEqual(['ta1', 'nA'])
+    expect(executor!.status().sections['tabs.wa1']).toBe('synced')
+  })
+
+  it('a split [New Tab, tmux] reaches B whole; A closes the tmux leaf → B\'s copy is deleted', async () => {
+    await aThenB()
+    const splitLayout: PaneLayout = { type: 'split', id: 'sp', direction: 'h', sizes: [50, 50], children: [leaf('p-new', NEW_TAB), leaf('p-tmux', TMUX('split'))] }
+    aTabs.sp = { id: 'sp', pinned: false, locked: false, createdAt: 1, layout: splitLayout }
+    aOrder = [...aOrder, 'sp']
+    await aPushesWa1()
+    expect(listed('wa1')).toEqual(['ta1', 'sp'])
+    const got = useTabStore.getState().tabs.sp.layout as Extract<PaneLayout, { type: 'split' }>
+    expect(got.children.map((c) => (c as Extract<PaneLayout, { type: 'leaf' }>).pane.content.kind)).toEqual(['new-tab', 'tmux-session'])
+
+    aTabs.sp = { ...aTabs.sp, layout: leaf('p-new', NEW_TAB) } // only the New Tab leaf is left: device-local now
+    await aPushesWa1()
+    expect(listed('wa1')).toEqual(['ta1'])
+    expect(Object.hasOwn(useTabStore.getState().tabs, 'sp')).toBe(false)
+    bRewroteNothing()
+  })
+
+  it('each device\'s Settings singleton is its own: B finds B\'s, never A\'s', async () => {
+    await aThenB()
+    putTab('wa1', tab('sB', SETTINGS))
+    await settle()
+    expect(useTabStore.getState().openSingletonTab(SETTINGS)).toBe('sB')
+    expect(Object.hasOwn(useTabStore.getState().tabs, 'sA')).toBe(false)
+    expect(sotOrder('tabs.wa1')).toEqual(['ta1'])
+  })
+})
