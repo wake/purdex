@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useHostStore } from '../../stores/useHostStore'
+import { requestAtOf, useHostStore } from '../../stores/useHostStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useTabStore } from '../../stores/useTabStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
@@ -168,7 +168,7 @@ describe('startCollector — debounce', () => {
 
   it('a learned daemonId schedules `hosts` and travels in its payload (host-daemon-id D6)', async () => {
     start()
-    useHostStore.getState().observeDaemonId('h1', 'mini:abc123', '10.0.0.1:7860')
+    useHostStore.getState().observeDaemonId('h1', 'mini:abc123', requestAtOf(useHostStore.getState().hosts.h1))
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['hosts'])
     expect((reports[0].payload as { hosts: Record<string, { daemonId?: string }> }).hosts.h1.daemonId).toBe('mini:abc123')
@@ -201,7 +201,7 @@ describe('startCollector — changes that schedule nothing', () => {
     useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: 'mini:stored' } } })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const hostsBefore = useHostStore.getState().hosts
-    await expectIgnored(() => useHostStore.getState().observeDaemonId('h1', 'mini:other', '10.0.0.1:7860'))
+    await expectIgnored(() => useHostStore.getState().observeDaemonId('h1', 'mini:other', requestAtOf(useHostStore.getState().hosts.h1)))
     // not vacuous: the flag WAS raised, and `hosts` kept its reference
     expect(useHostStore.getState().runtime.h1?.daemonIdMismatch).toEqual({ stored: 'mini:stored', observed: 'mini:other', endpoint: '10.0.0.1:7860' })
     expect(useHostStore.getState().hosts).toBe(hostsBefore)
