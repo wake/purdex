@@ -494,6 +494,16 @@ export function fetchHostInfo(hostId: string): Promise<HostInfo> {
 }
 
 /**
+ * Typed `/api/info` against a raw base URL with an explicit token — for a daemon
+ * that is not (yet) a host in the store, e.g. the Add Host dialog learning the
+ * new daemon's `host_id` (spec 2026-09-23 D4.1).
+ */
+export async function fetchInfoAt(base: string, token: string): Promise<HostInfo> {
+  const res = await fetch(`${base}/api/info`, { headers: { Authorization: `Bearer ${token}` } })
+  return peerHostJson<HostInfo>(res)
+}
+
+/**
  * A cwd reading and the tmux generation it was sampled in (spec §4.6.2).
  *
  * The pair travels together because a bare string cannot be attributed: a

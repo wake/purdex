@@ -4,7 +4,7 @@ import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, listSessionsFresh, createSession, deleteSession,
   fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
-  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers,
+  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers, fetchInfoAt,
   type MonitorSnapshot, type Session,
 } from './host-api'
 import { indexPeerRows } from '../stores/usePeerStore'
@@ -517,5 +517,27 @@ describe('fetchPeers', () => {
       new Response('nope', { status: 503 }),
     )
     await expect(fetchPeers(HOST_ID)).rejects.toThrow('fetchPeers failed: 503')
+  })
+})
+
+describe('fetchInfoAt (raw base + Bearer, spec 2026-09-23 D4.1)', () => {
+  it('GETs <base>/api/info with the given token and returns the typed body', async () => {
+    const info = { host_id: 'mini-lab:abc123', tmux_instance: '', purdex_version: '', tmux_version: '', os: '', arch: '' }
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(info), { status: 200 }))
+    await expect(fetchInfoAt('http://10.0.0.7:7860', 'tok-x')).resolves.toEqual(info)
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toBe('http://10.0.0.7:7860/api/info')
+    expect(new Headers((init as RequestInit).headers).get('Authorization')).toBe('Bearer tok-x')
+  })
+
+  it('does not use any stored host token', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+    await fetchInfoAt(BASE, 'other')
+    expect(new Headers((spy.mock.calls[0][1] as RequestInit).headers).get('Authorization')).toBe('Bearer other')
+  })
+
+  it('rejects on a non-2xx answer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('no', { status: 401 }))
+    await expect(fetchInfoAt(BASE, 'bad')).rejects.toThrow()
   })
 })
