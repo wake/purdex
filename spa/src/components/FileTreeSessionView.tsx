@@ -1,4 +1,5 @@
 import type { ViewProps } from '../lib/module-registry'
+import { useI18nStore } from '../stores/useI18nStore'
 
 /**
  * Session-scoped file tree — uses active terminal's cwd as root.
@@ -6,9 +7,10 @@ import type { ViewProps } from '../lib/module-registry'
  */
 export function FileTreeSessionView({ isActive }: ViewProps) {
   void isActive
+  const t = useI18nStore((s) => s.t)
   return (
     <div className="flex-1 flex items-center justify-center p-4 text-xs text-text-muted text-center">
-      Session file tree 尚未實作（需 daemon cwd API）
+      {t('file_tree.session_not_implemented')}
     </div>
   )
 }

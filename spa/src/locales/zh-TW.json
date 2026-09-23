@@ -9,6 +9,7 @@
   "common.open": "開啟",
   "common.closed": "已關閉",
   "common.remove": "移除",
+  "common.confirm": "確認",
 
   "settings.title": "設定",
   "settings.coming_soon": "即將推出",
@@ -267,6 +268,7 @@
   "tab.rename_session": "重新命名 Session",
   "tab.rename_placeholder": "Session 名稱",
   "tab.rename_invalid_format": "僅允許字母、數字、連字號和底線",
+  "tab.merge_to_tab": "加入 {{kind}} tab 成為 pane",
   "pane.split_horizontal": "水平分割",
   "pane.split_vertical": "垂直分割",
   "pane.close": "關閉分割區",
@@ -1600,5 +1602,9 @@
   "file_not_found.search_session_cwd": "搜尋目前 session cwd",
   "file_not_found.search_workspace_path": "搜尋 workspace projectPath",
   "file_not_found.search_session_cwd_label": "搜尋目前 session（cwd: {{path}}）",
-  "file_not_found.search_workspace_path_label": "搜尋 workspace（projectPath: {{path}}）"
+  "file_not_found.search_workspace_path_label": "搜尋 workspace（projectPath: {{path}}）",
+
+  "file_tree.select_workspace_first": "請先選擇 Workspace",
+  "file_tree.set_project_path": "設定專案路徑以顯示檔案樹",
+  "file_tree.session_not_implemented": "Session file tree 尚未實作（需 daemon cwd API）"
 }

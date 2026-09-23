@@ -77,7 +77,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     ...(targetTabs && targetTabs.length > 0 ? [
       'separator' as const,
       ...targetTabs.map((targetTab) => ({
-        label: `加入 ${getPrimaryPane(targetTab.layout).content.kind} tab 成為 pane`,
+        label: t('tab.merge_to_tab', { kind: getPrimaryPane(targetTab.layout).content.kind }),
         action: 'mergeToTab' as const,
         show: true,
         payload: targetTab.id,
