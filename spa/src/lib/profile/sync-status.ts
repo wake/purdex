@@ -380,6 +380,8 @@ const KNOWN_INVALID_REASONS: Record<InvalidReason, true> = {
   'changes-master-host': true,
   'rejected-settings': true,
   'unknown-section': true,
+  'duplicate-host-identity': true,
+  'host-identity-conflict': true,
 }
 
 /** A code this build knows, or null: absent (an older build, P3d-4a), a newer build's code, or anything else. */

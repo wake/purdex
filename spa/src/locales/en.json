@@ -1412,6 +1412,8 @@
   "settings.profile.resolve.why.invalid.changes_master_host": "The sync host's copy would change the address, port or token of the host this device syncs through.",
   "settings.profile.resolve.why.invalid.rejected_settings": "The sync host's copy holds settings this version of Purdex refuses.",
   "settings.profile.resolve.why.invalid.unknown_section": "This version of Purdex does not know this section.",
+  "settings.profile.resolve.why.invalid.duplicate_host_identity": "The sync host's copy lists the same host twice.",
+  "settings.profile.resolve.why.invalid.host_identity_conflict": "Two hosts on this device are the same daemon, so this device cannot tell which one the sync host's copy means. Remove one of them.",
   "settings.profile.resolve.why.invalid.unknown": "This device cannot apply the sync host's copy.",
   "settings.profile.resolve.invalid_only": "Only this device's copy can be kept.",
   "settings.profile.resolve.undoes": "“Keep this device's” also undoes what you changed here since.",

@@ -22,6 +22,13 @@
 //
 // The returned hash is rebuilt from the stores, never copied from the SOT: when a
 // sanitiser changed what arrived, the section is honestly dirty.
+//
+// HOST IDS ARRIVE AS WIRE IDS (host-sync-identity spec §6, §11). `hosts` is matched
+// onto the local hosts (`planHostsApply`: updated in place under their local id,
+// created, or cascaded away); `tabs.*` and `settings` are translated wire → local
+// through `wireResolverOf` over the host store as it is when they land — after the
+// `hosts` apply, which the executor orders. The hash reported back is of the WIRE
+// build (the builders translate), so it compares with the SOT's.
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useHostStore } from '../../stores/useHostStore'
 import type { HostConfig } from '../../stores/useHostStore'
@@ -41,15 +48,18 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
+import { generateId } from '../id'
 import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
 import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
-import { applyHosts, applySettings, applyTabs, applyWorkspaces, isWellFormedSection, upcastLegacySettings } from './applier'
+import { applyHosts, applySettings, applyTabs, applyWorkspaces, isWellFormedSection, planHostsApply, settingsFromWire, tabsFromWire, upcastLegacySettings } from './applier'
+import type { HostsPlan } from './applier'
+import { identityOfSync } from './host-identity'
 import { hashSection } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
 import { sectionKind, workspaceIdOf } from './projections'
-import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
+import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, wireResolverOf } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type { HostsPayload, ProfileSectionKey, SettingsPayload, SettingsStorageKey, TabsPayload, WorkspacesPayload } from './types'
 
@@ -76,10 +86,24 @@ export type ApplyOutcome =
  *   changes-master-host  … that changes that host's address, port or token (the credentials known to work)
  *   rejected-settings    `settings` entries this build refuses (`applySettings`' `rejected`)
  *   unknown-section      a key this build does not know as a section
+ *   duplicate-host-identity   a `hosts` payload with two rows for one daemon (host-sync-identity §11.5)
+ *   host-identity-conflict    two local hosts claim one daemon, so which one a row / an id means is ambiguous (§11.4)
  */
-export type InvalidReason = 'deleted' | 'malformed' | 'no-host' | 'removes-master-host' | 'changes-master-host' | 'rejected-settings' | 'unknown-section'
+export type InvalidReason =
+  | 'deleted'
+  | 'malformed'
+  | 'no-host'
+  | 'removes-master-host'
+  | 'changes-master-host'
+  | 'rejected-settings'
+  | 'unknown-section'
+  | 'duplicate-host-identity'
+  | 'host-identity-conflict'
 
-export const INVALID_REASONS: readonly InvalidReason[] = ['deleted', 'malformed', 'no-host', 'removes-master-host', 'changes-master-host', 'rejected-settings', 'unknown-section']
+export const INVALID_REASONS: readonly InvalidReason[] = [
+  'deleted', 'malformed', 'no-host', 'removes-master-host', 'changes-master-host', 'rejected-settings', 'unknown-section',
+  'duplicate-host-identity', 'host-identity-conflict',
+]
 
 export interface ApplyContext {
   /** The host whose daemon served this payload. Its credentials are the ones known to work. */
@@ -168,16 +192,46 @@ export function markHostRemovedPanes(layout: PaneLayout, knownHostIds: ReadonlyS
 
 const tokenOf = (h: HostConfig): string | null => h.token ?? null
 
-/** Why this payload must not replace the host list, or `null`. */
-function hostsRefusal(local: Record<string, HostConfig>, incoming: HostsPayload, masterHostId: string): ApplyOutcome | null {
-  if (Object.keys(incoming.hosts).length === 0) return invalid('no-host', 'payload leaves no host')
-  if (!Object.hasOwn(incoming.hosts, masterHostId)) return invalid('removes-master-host', `payload removes the master host ${masterHostId}`)
+const IDENTITY_CONFLICT = (): ApplyOutcome => invalid('host-identity-conflict', 'two local hosts claim one daemon: which one a host id means is ambiguous')
+
+/**
+ * The plan for this payload on these local hosts, or why it must not replace the host list. The master is compared
+ * BY IDENTITY (spec §6): the row that lands on the master's local id must exist, and its address / port / token are
+ * the ones known to work.
+ */
+function planOrRefuse(local: Record<string, HostConfig>, incoming: HostsPayload, masterHostId: string): { plan: HostsPlan } | { outcome: ApplyOutcome } {
+  if (Object.keys(incoming.hosts).length === 0) return { outcome: invalid('no-host', 'payload leaves no host') }
+  const planned = planHostsApply(local, incoming, generateId)
+  if ('error' in planned) {
+    return { outcome: planned.error === 'duplicate-host-identity' ? invalid('duplicate-host-identity', 'payload has two rows for one daemon') : IDENTITY_CONFLICT() }
+  }
+  const { plan } = planned
+  // Hosts nobody here claims twice after the apply — a row's daemon and a created one's cannot collide past the matcher,
+  // but the identity is what every later build and apply goes by, so it is checked, not assumed.
+  if (identityOfSync(plan.payload.hosts).conflict !== null) return { outcome: IDENTITY_CONFLICT() }
+  const refusal = hostsRefusal(local, plan, masterHostId)
+  return refusal === null ? { plan } : { outcome: refusal }
+}
+
+/** Why this plan must not replace the host list, or `null`. */
+function hostsRefusal(local: Record<string, HostConfig>, plan: HostsPlan, masterHostId: string): ApplyOutcome | null {
+  if (![...plan.byRow.values()].includes(masterHostId)) return invalid('removes-master-host', `payload removes the master host ${masterHostId}`)
   if (!Object.hasOwn(local, masterHostId)) return null // nothing to compare with
   const mine = local[masterHostId]
-  const theirs = incoming.hosts[masterHostId]
+  const theirs = plan.payload.hosts[masterHostId]
   // The credentials in hand are the ones that just fetched this payload, so they are known to work.
   const changed = [mine.ip !== theirs.ip && 'ip', mine.port !== theirs.port && 'port', tokenOf(mine) !== tokenOf(theirs) && 'token'].filter(Boolean)
   return changed.length > 0 ? invalid('changes-master-host', `payload changes the master host's ${changed.join(', ')}`) : null
+}
+
+/** Each host with exactly the `syncAliases` the plan gives it (none → the field absent). */
+function withSyncAliases(hosts: Record<string, HostConfig>, aliases: Record<string, string[]>): Record<string, HostConfig> {
+  const out: Record<string, HostConfig> = {}
+  for (const [id, h] of Object.entries(hosts)) {
+    const { syncAliases: _dropped, ...rest } = h
+    out[id] = Object.hasOwn(aliases, id) && aliases[id].length > 0 ? { ...rest, syncAliases: aliases[id] } : rest
+  }
+  return out
 }
 
 /** What `deleteHostCascade` clears for a host and its undo does not bring back — exactly the scope of the three `clearHost`s. */
@@ -267,8 +321,8 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   if (payload === null) return invalid('deleted', 'the hosts section cannot be deleted')
   if (!isWellFormedSection('hosts', payload)) return invalid('malformed', 'malformed hosts payload')
   const incoming = payload as HostsPayload
-  const refusal = hostsRefusal(useHostStore.getState().hosts, incoming, ctx.masterHostId)
-  if (refusal !== null) return refusal
+  const decided = planOrRefuse(useHostStore.getState().hosts, incoming, ctx.masterHostId)
+  if ('outcome' in decided) return decided.outcome
 
   const store = asPersisted(useHostStore)
   // ROLLBACK, and its edges. When a host-store write throws after the cascade ran
@@ -321,8 +375,14 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   // awaited after the last fallible step, for the day it is not).
   const write = async (): Promise<ApplyOutcome> => {
     const state = useHostStore.getState()
+    // Planned again on the state under the lock (new local ids are drawn here, for good).
+    const replanned = planOrRefuse(state.hosts, incoming, ctx.masterHostId)
+    if ('outcome' in replanned) return replanned.outcome
+    const { plan } = replanned
     const old = { hosts: state.hosts, hostOrder: state.hostOrder, activeHostId: state.activeHostId, devHostId: state.devHostId, runtime: state.runtime }
-    const { next, removedHostIds } = applyHosts(old, incoming)
+    const applied = applyHosts(old, plan.payload)
+    const { removedHostIds } = applied
+    const next = { ...applied.next, hosts: withSyncAliases(applied.next.hosts, plan.aliases) }
     const undos: Array<() => void> = []
     const caches = snapshotHostCaches(removedHostIds) // BEFORE the cascade clears them
     let hooks: void | Promise<void>
@@ -358,7 +418,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   }
 
   // Decided on the state as it is now; `write` re-reads under the lock, and nothing can run in between (no await).
-  const removesAHost = Object.keys(useHostStore.getState().hosts).some((id) => !Object.hasOwn(incoming.hosts, id))
+  const removesAHost = Object.keys(useHostStore.getState().hosts).some((id) => !Object.hasOwn(decided.plan.payload.hosts, id))
   if (!removesAHost) return write()
   return withOperationLock<ApplyOutcome>(PROFILE_SYNC_LOCK_OWNER, write, () => ({ ok: false, reason: 'busy' }))
 }
@@ -420,12 +480,18 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
   // An ordinal-3 payload (newtab `profiles`, P3e) — from a pull, the attach, keep-sot or a persisted stash
   // replayed by restoreLocal: all of them come through here. The hash returned below is rebuilt from the
   // stores, so it is the ordinal-4 shape's; the executor sees `pull-hash-mismatch` once and pushes it.
-  const payload = upcastLegacySettings(incoming)
-  if (!isWellFormedSection('settings', payload)) return invalid('malformed', 'malformed settings payload')
+  const upcast = upcastLegacySettings(incoming)
+  if (!isWellFormedSection('settings', upcast)) return invalid('malformed', 'malformed settings payload')
+  // wire → local, through the hosts as they are now (the executor pulls `settings` only once `hosts` is up to date).
+  const hostState = useHostStore.getState()
+  const resolve = wireResolverOf(hostState)
+  if (resolve === null) return IDENTITY_CONFLICT()
+  const live = new Set(hostState.hostOrder.filter((id) => Object.hasOwn(hostState.hosts, id)))
+  const payload = settingsFromWire(upcast as SettingsPayload, resolve, live)
   // Unsettled → no master set: scoping by an empty one would DROP every scoped entry the payload carries.
   const masterIds = masterWorkspaceIds()
   if (masterIds === null) return BUSY
-  const { patches, rejected } = applySettings(readSettingsSources(), payload as SettingsPayload, masterIds)
+  const { patches, rejected } = applySettings(readSettingsSources(), payload, masterIds)
   if (rejected.length > 0) return invalid('rejected-settings', `rejected: ${rejected.join(', ')}`)
 
   const rendererBefore = useUISettingsStore.getState().terminalRenderer
@@ -472,7 +538,10 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
   // Terminals read the renderer on (re)connect only; the bump is what makes them reconnect.
   if (useUISettingsStore.getState().terminalRenderer !== rendererBefore) useUISettingsStore.getState().bumpTerminalSettingsVersion()
   // No await since the last re-read: the set is still the one this apply was scoped by — which is what the collector will hash.
-  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterIds)) }
+  // The identity is the host store's NOW, as the collector's would be (a conflict that appeared meanwhile: retried).
+  const identity = identityOfSync(useHostStore.getState().hosts)
+  if (identity.conflict !== null) return BUSY
+  return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterIds, identity)) }
 }
 
 // === workspaces / tabs.<id> ===
@@ -526,7 +595,10 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
   const workspaceId = workspaceIdOf(key)
   if (workspaceId === null) return invalid('unknown-section', `not a tabs section key: ${key}`)
   if (payload !== null && !isWellFormedSection('tabs', payload)) return invalid('malformed', 'malformed tabs payload')
-  const incoming = payload === null ? EMPTY_TABS : (payload as TabsPayload)
+  // wire → local through the hosts as they are now (the executor pulls a `tabs.*` only once `hosts` is up to date).
+  const resolve = wireResolverOf(useHostStore.getState())
+  if (resolve === null) return IDENTITY_CONFLICT()
+  const incoming = payload === null ? EMPTY_TABS : tabsFromWire(payload as TabsPayload, resolve)
   return withOperationLock<ApplyOutcome>(
     PROFILE_SYNC_LOCK_OWNER,
     async () => {
@@ -551,7 +623,10 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       const after = readMasterWorld()
       if (!after.settled) return BUSY
       const ws = after.world.workspaces.find((w) => w.id === workspaceId)
-      return { ok: true, hash: ws ? await hashSection(buildTabsSection(ws, after.world.tabs)) : null }
+      if (!ws) return { ok: true, hash: null }
+      const identity = identityOfSync(useHostStore.getState().hosts)
+      if (identity.conflict !== null) return BUSY // appeared since the resolve: nothing names hosts until it is gone
+      return { ok: true, hash: await hashSection(buildTabsSection(ws, after.world.tabs, identity)) }
     },
     () => ({ ok: false, reason: 'busy' }),
   )

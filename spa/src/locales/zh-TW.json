@@ -1412,6 +1412,8 @@
   "settings.profile.resolve.why.invalid.changes_master_host": "同步主機上的這一份會改掉這台裝置用來同步的那台主機的位址、連接埠或 token。",
   "settings.profile.resolve.why.invalid.rejected_settings": "同步主機上的這一份含有這個版本的 Purdex 不接受的設定。",
   "settings.profile.resolve.why.invalid.unknown_section": "這個版本的 Purdex 不認得這個區段。",
+  "settings.profile.resolve.why.invalid.duplicate_host_identity": "同步主機上的這一份把同一台主機列了兩次。",
+  "settings.profile.resolve.why.invalid.host_identity_conflict": "這台裝置上有兩台主機其實是同一個 daemon，無法判斷同步主機上的這一份指的是哪一台。請移除其中一台。",
   "settings.profile.resolve.why.invalid.unknown": "這台裝置無法套用同步主機上的這一份。",
   "settings.profile.resolve.invalid_only": "只能保留這台裝置的這一份。",
   "settings.profile.resolve.undoes": "「保留這台裝置的」也會復原你之後在這裡做的變更。",
