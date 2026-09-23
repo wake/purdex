@@ -381,6 +381,30 @@ describe('SessionPaneContent', () => {
       expect(fetchWsTicket).not.toHaveBeenCalled()
     })
 
+    // PR #1400 (attacker, high): the host goes away after the pane rendered its terminal, while the terminal's
+    // ticket request is still to come (a pending effect, a retry). The request must not fall back to another host.
+    it('host deleted after render: the terminal\'s ticket request fetches nothing', async () => {
+      const actual = await vi.importActual<typeof import('../lib/host-api')>('../lib/host-api')
+      vi.mocked(fetchWsTicket).mockImplementation((id) => actual.fetchWsTicket(id))
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ticket: 't' }), { status: 200 }))
+      try {
+        const pane = makePane()
+        setupTabStore(pane)
+        render(<SessionPaneContent pane={pane} isActive={true} />)
+        const getTicket = terminalViewProps.last?.getTicket as () => Promise<string>
+        await act(async () => {})
+        fetchSpy.mockClear()
+        useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
+        // a second host is active now: the fallback would pick it
+        useHostStore.setState({ hosts: { other: { id: 'other', name: 'o', ip: '100.64.0.9', port: 7860, order: 0 } }, hostOrder: ['other'], activeHostId: 'other' })
+        await expect(getTicket()).rejects.toThrow(/not configured/)
+        expect(fetchSpy).not.toHaveBeenCalled()
+      } finally {
+        fetchSpy.mockRestore()
+        vi.mocked(fetchWsTicket).mockImplementation(async () => 'ticket')
+      }
+    })
+
     it('an existing host-removed mark still renders as today', () => {
       const pane = makePane({
         content: {
