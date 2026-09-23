@@ -257,7 +257,7 @@ describe('master set → contend → lead', () => {
 
     expect(h.order).toEqual(['executor', 'ws', 'collector', 'primeAll', 'primed', 'onReconnected'])
     expect(putAttachment).toHaveBeenCalledTimes(1)
-    expect(putAttachment).toHaveBeenCalledWith('h1', P1, { clientId: 'client-1', deviceName: 'Test device' })
+    expect(putAttachment).toHaveBeenCalledWith('h1', P1, { clientId: 'client-1', deviceName: 'Test device' }, { signal: expect.any(AbortSignal) })
     expect(h.executors[0].onReconnected).toHaveBeenCalledTimes(1)
   })
 
@@ -1131,6 +1131,29 @@ describe('a host whose daemon is not its record, or two hosts of one daemon: the
     expect(putAttachment).not.toHaveBeenCalled()
     // a remote event that turns up has nobody to apply it
     expect(h.executors[0].onRemoteEvent).not.toHaveBeenCalled()
+  })
+
+  it('appears while the attachment PUT is OUT: the PUT is aborted, and its answer — whatever it is — goes nowhere', async () => {
+    let release: (v: typeof okAttach) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValue(new Promise((r) => (release = r)))
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    expect(putAttachment).toHaveBeenCalledTimes(1)
+    const signal = vi.mocked(putAttachment).mock.calls[0][3]?.signal
+    expect(signal).toBeInstanceOf(AbortSignal)
+    expect(signal?.aborted).toBe(false)
+
+    mismatch('h2') // runtime only
+    expect(signal?.aborted).toBe(true)
+
+    release(okAttach) // a transport that answered anyway
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(h.executors[0].onReconnected).not.toHaveBeenCalled()
+    expect(h.executors[0].deps.isReachable()).toBe(false)
+    expect(putAttachment).toHaveBeenCalledTimes(1)
   })
 
   it('cleared (the address fixed, or the host removed): the driver is built again and syncs — the bases kept', async () => {

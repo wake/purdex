@@ -304,6 +304,9 @@ interface Leader {
 function lead(master: Master, leadership: Leadership, onProfileGone: (detail: string) => void): Leader {
   const { hostId, profileId } = master
   let disposed = false
+  /** Aborted FIRST by `dispose`: an attachment PUT still out when the driver is taken down (a host identity block,
+   *  a lost lease, a detach) is cancelled, not merely ignored when it answers. */
+  const aborter = new AbortController()
   let lastStatus: ExecutorStatus | null = null
   let unwatchHost: (() => void) | null = null
   /** The daemon has confirmed this client's attachment on the CURRENT connection. */
@@ -370,7 +373,7 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     try {
       const body = await attachmentBody()
       if (disposed || mine !== round || !connected()) return // the name took a moment: nothing goes out for a round that is over
-      const r = await putAttachment(hostId, profileId, body)
+      const r = await putAttachment(hostId, profileId, body, { signal: aborter.signal })
       if (r.kind === 'failed') {
         failure = `${r.reason}: ${r.message}`
         notFound = r.reason === 'not-found'
@@ -435,6 +438,7 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     dispose() {
       if (disposed) return
       disposed = true
+      aborter.abort()
       cancelRetry()
       unwatchHost?.()
       unwatchHost = null
