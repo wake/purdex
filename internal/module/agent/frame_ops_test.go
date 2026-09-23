@@ -97,8 +97,13 @@ func TestHandleEvent_SessionEndPopsFrame(t *testing.T) {
 
 	for _, body := range []string{
 		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc"}`,
-		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{},"agent_type":"cc"}`,
+		`{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"S1"},"agent_type":"cc"}`,
 	} {
+		if strings.Contains(body, `"PdxSessionEnd"`) {
+			// The fake provider records no identity; a SessionEnd only ends a
+			// frame whose recorded id it matches (#1381 critic C1).
+			recordIdentity(t, m, "%5", 200, "Sun Apr 20 01:30:00 2026", "S1")
+		}
 		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -1727,8 +1732,9 @@ func TestSessionEnd_OwnFrameDeletePreservesOtherProxyRefs(t *testing.T) {
 		t.Fatalf("proxy attach: %v", err)
 	}
 
-	// Now SessionEnd on cc itself (the owning frame).
-	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionEnd", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100"}
+	// Now SessionEnd on cc itself (the owning frame), naming its run.
+	recordIdentity(t, m, "%5", 100, "t100", "S-cc")
+	endReq := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionEnd", AgentType: "cc", SenderPID: 100, SenderStartTime: "t100", RawEvent: []byte(`{"session_id":"S-cc"}`)}
 	_, meta, err := m.applyFrameEvent(endReq, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 300)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)
@@ -3977,9 +3983,10 @@ func TestPhase35_IT12_SessionEndClearsParentProxyRef(t *testing.T) {
 		t.Fatalf("seed cc + proxy: %v", err)
 	}
 	codexStandalone := seedFrame(t, m, "%5", "codex", 200, "t200", 60)
+	recordIdentity(t, m, "%5", 200, "t200", "S-codex")
 
 	// codex SessionEnd: own-frame delete path + new §2.3 proxy cleanup.
-	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200"}
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxSessionEnd", AgentType: "codex", SenderPID: 200, SenderStartTime: "t200", RawEvent: []byte(`{"session_id":"S-codex"}`)}
 	_, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusClear}, 100)
 	if err != nil {
 		t.Fatalf("applyFrameEvent: %v", err)

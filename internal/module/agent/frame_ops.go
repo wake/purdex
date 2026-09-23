@@ -79,6 +79,12 @@ type FrameTraceMeta struct {
 	// return path leaves it nil by zero value, which is the fail-safe: no
 	// field set, no envelope emitted. See spec §4.3.1.
 	Provenance *Provenance
+
+	// Exit is non-nil only when this event was a SessionEnd that deleted the
+	// sender's own ROOT frame. It is built from the frame before the delete
+	// (agent-last-state spec §1); a proxy detach, a child frame and an orphan
+	// SessionEnd leave it nil.
+	Exit *Exit
 }
 
 // recordSessionIdentity stores the sender's own agent session id and cwd on
@@ -146,6 +152,24 @@ func (m *Module) recordSessionIdentity(req EventRequest, frameID string) {
 	}
 }
 
+// payloadSessionID is the session id the hook payload itself carries — the
+// agent run that SENT this event — or "" when it carries none. It never falls
+// back to a frame's stored id, which may already belong to a newer run. The
+// provider's SessionIdentifier answers when it has one; otherwise the shared
+// top-level extractor (what every built-in provider's IdentifyEvent uses).
+func (m *Module) payloadSessionID(req EventRequest) string {
+	if m != nil && m.registry != nil {
+		if provider, ok := m.registry.Get(req.AgentType); ok {
+			if identifier, ok := provider.(agentpkg.SessionIdentifier); ok {
+				sessionID, _ := identifier.IdentifyEvent(req.PurdexName, req.RawEvent)
+				return sessionID
+			}
+		}
+	}
+	sessionID, _ := agentpkg.ExtractSessionIdentity(req.RawEvent)
+	return sessionID
+}
+
 func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64) (*SessionProjection, FrameTraceMeta, error) {
 	if m.frames == nil {
 		return nil, FrameTraceMeta{Decision: "skipped", Reason: "frame_store_unavailable", Before: map[string]any{}, After: map[string]any{}}, nil
@@ -178,25 +202,85 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	switch lifecycle {
 	case agentpkg.LifecycleSessionEnd:
 		if frame != nil {
-			// Phase 3.5 §2.3 (v8 L1 fix, codex round PR-2 attack):
-			// detach-first ordering. The previous delete-first +
-			// best-effort detach left a permanent orphan whenever
-			// removeProxyRefForSender failed (storage error, retry
-			// exhaustion, daemon crash mid-handler) — the child row
-			// was gone so projection_dedup could no longer hide the
-			// ancestor's stale proxy ref, and PR-3.5a ships without
-			// pruneDeadProxyRefs. By detaching first and propagating
-			// the error before Delete, a hook handler failure leaves
-			// the DB in a recoverable state (child row + parent ref
-			// both still present; sweep canonicalize / next
-			// SessionEnd retry can fix it).
+			// Order: identity match → claim → proxy detach (#1381). Phase
+			// 3.5 §2.3 used to detach FIRST so a failed detach left the
+			// child row for a retry, because PR-3.5a had no
+			// pruneDeadProxyRefs. The sweep now has it, and a detach
+			// before the claim would let a SessionEnd that loses the claim
+			// strip a ref belonging to the run that won (critic C2).
+			//
+			// The exit envelope is taken from the frame BEFORE anything is
+			// deleted: after the delete there is no row left to read the
+			// frame id from. nil for a child frame. Its session id is the
+			// PAYLOAD's (#1381 R1 P1): a SessionStart on the same frame
+			// (same pid/start — /clear delivered out of order, /resume) keeps
+			// the frame id and overwrites the frame's session id, so only the
+			// SessionEnd itself names the run that is ending.
+			payloadSID := m.payloadSessionID(req)
+			// A SessionEnd ends a frame ONLY on an exact identity match: the
+			// frame's recorded session id non-empty and equal to the
+			// payload's (#1381 critic C1). Anything else — a newer run's id
+			// on the frame, an id not written yet (SessionStart updates the
+			// frame before it records the new identity, so an empty id may
+			// already be a newer run's), a payload without one — ends
+			// nothing here: no detach, no delete, no exit. The frame is left
+			// to the sweep, which ends it as process-dead when the process
+			// actually dies; a normal exit of a frame whose identity was
+			// never recorded is therefore labelled process-dead ~2 s later.
+			// That is accepted: a wrong "exited" on a live run is not.
+			// The claim below re-checks the match atomically.
+			if payloadSID == "" || frame.SessionID != payloadSID {
+				projection, err := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       frame.FrameID,
+					ParentFrameID: frame.ParentFrameID,
+					Decision:      "skipped",
+					Reason:        "session_end_unmatched",
+					Before:        before,
+					After:         before,
+				}, err
+			}
+			exit := exitForFrame(*frame, m.sessionTmuxInstance(), ExitReasonSessionEnd, broadcastTs/int64(time.Millisecond))
+			if exit != nil {
+				exit.SessionID = payloadSID
+			}
+			exit, claimed, cerr := m.claimFrameEnd(*frame, payloadSID, exit)
+			if cerr != nil {
+				return nil, FrameTraceMeta{}, cerr
+			}
+			if !claimed {
+				// The sweep (or a newer run's SessionStart) got there first:
+				// it owns the end, and its broadcast is the one that counts.
+				projection, err := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					FrameID:       frame.FrameID,
+					ParentFrameID: frame.ParentFrameID,
+					Decision:      "skipped",
+					Reason:        "session_end_claim_lost",
+					Before:        before,
+					After:         map[string]any{},
+				}, err
+			}
+			// Detach only AFTER the claim (#1381 critic C2): a SessionEnd
+			// that lost its claim must not touch proxy refs that may belong
+			// to the run that won. This reverses the old detach-first order;
+			// its orphan concern is covered by the sweep — a detach that
+			// fails here leaves a ref whose source process is exiting, and
+			// pruneDeadProxyRefs reaps it once that process is gone. The
+			// failure is logged, not returned: the claim is done, and a
+			// retry would find no frame and lose the exit (attacker #4).
 			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
-				return nil, FrameTraceMeta{}, derr
+				logAfterClaim("removeProxyRefForSender", frame.FrameID, derr)
 			}
-			if err := m.frames.Delete(frame.FrameID); err != nil {
-				return nil, FrameTraceMeta{}, err
+			projection, err := projectPaneFn(m, req.TmuxPaneID)
+			if err != nil {
+				// Claimed: the row is gone, so a hook retry would find no
+				// frame and the exit would be lost (#1381 attacker #4).
+				// Nothing is left to retry — log it and let the handler
+				// broadcast the exit with a degraded (clear) projection.
+				logAfterClaim("projectPane", frame.FrameID, err)
+				projection, err = nil, nil
 			}
-			projection, err := m.projectPane(req.TmuxPaneID)
 			return projection, FrameTraceMeta{
 				FrameID:       frame.FrameID,
 				ParentFrameID: frame.ParentFrameID,
@@ -204,6 +288,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 				Reason:        "session_end",
 				Before:        before,
 				After:         map[string]any{},
+				Exit:          exit,
 			}, err
 		}
 		// frame == nil: sender has no frame of its own. This is either a
@@ -1031,7 +1116,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	var prov *Provenance
 	if lifecycle == agentpkg.LifecycleSessionStart && !req.SenderUncertain &&
 		verdict == VerdictRoot && stored.ParentFrameID == "" {
-		p := buildProvenance(req, result, m.sessionTmuxInstance())
+		p := buildProvenance(req, result, m.sessionTmuxInstance(), stored.FrameID)
 		prov = &p
 	}
 	return projection, FrameTraceMeta{

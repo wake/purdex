@@ -107,6 +107,7 @@ type provenanceBody struct {
 	TmuxPaneID   string `json:"tmux_pane_id"`
 	TmuxInstance string `json:"tmux_instance"`
 	LastSeenAt   int64  `json:"last_seen_at"`
+	FrameID      string `json:"frame_id"`
 }
 
 // getProvenance drives the endpoint through the module's own route table, so a
@@ -149,7 +150,7 @@ func TestHandleSessionProvenance_OneRoot(t *testing.T) {
 	m, fake, _ := newProvenanceQueryModule(t)
 	fake.AddSession("work", "/w")
 	attachPane(fake, "%5", "$0", "200")
-	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w/purdex")
+	seeded := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w/purdex")
 	withProcessTree(t, map[int]int{100: 200, 200: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
@@ -165,6 +166,9 @@ func TestHandleSessionProvenance_OneRoot(t *testing.T) {
 		TmuxPaneID:   "%5",
 		TmuxInstance: "4465:1788754497",
 		LastSeenAt:   42,
+		// The backfill adopts it: a live answer names the run an exit envelope
+		// will later name (agent-last-state spec, review decision 6).
+		FrameID: seeded.FrameID,
 	}
 	if body != want {
 		t.Fatalf("body = %+v, want %+v", body, want)

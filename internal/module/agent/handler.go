@@ -483,8 +483,18 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projection := paneProjection
+	// A SessionEnd that CLAIMED its frame (frameMeta.Exit != nil) has deleted
+	// the row: a failure below must not abort, since a hook retry would find
+	// no frame and the exit would be lost (#1381 attacker #4). It is logged,
+	// and the broadcast degrades to status clear with in-memory state left
+	// alone. Every other event keeps the old abort-and-retry behaviour.
+	degraded := false
 	if req.TmuxSession != "" {
-		projection, err = m.projectionForSession(req.TmuxSession)
+		projection, err = projectionForSessionFn(m, req.TmuxSession)
+		if err != nil && frameMeta.Exit != nil {
+			logAfterClaim("projectionForSession", frameMeta.FrameID, err)
+			projection, err, degraded = nil, nil, true
+		}
 		if err != nil {
 			log.Printf("[agent] session projection: %v", err)
 			trace.Finish("aborted", "projection_failed")
@@ -509,7 +519,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.TmuxSession != "" && m.frames != nil && m.events != nil {
-		if err := m.events.Delete(req.TmuxSession); err != nil {
+		if err := eventsDeleteFn(m, req.TmuxSession); err != nil && frameMeta.Exit != nil {
+			logAfterClaim("events.Delete", frameMeta.FrameID, err)
+			degraded = true
+		} else if err != nil {
 			log.Printf("[agent] clear legacy event: %v", err)
 			trace.Finish("aborted", "legacy_delete_failed")
 			traceFinished = true
@@ -607,9 +620,17 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// existing meaning (the session projection winner) — the two identities
 	// coexist and never mix.
 	attachProvenance(&normalized, frameMeta)
-	m.mu.Lock()
-	syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
-	m.mu.Unlock()
+	// Exit envelope (agent-last-state spec §1): granted only when a
+	// SessionEnd deleted the sender's own root frame.
+	attachExit(&normalized, frameMeta.Exit)
+	if degraded {
+		normalized.Status = string(agentpkg.StatusClear)
+	}
+	if !degraded {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+		m.mu.Unlock()
+	}
 	emitDecision, emitReason := m.emitHookToSession(req, normalized)
 	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 	if isDevMode() {

@@ -354,6 +354,33 @@ func (s *FramesStore) Delete(frameID string) error {
 	return err
 }
 
+// ClaimDelete is the one-owner termination primitive: it deletes the frame and
+// reports whether THIS call removed the row (RowsAffected), so of two callers
+// ending the same frame — the SessionEnd hook and the pid sweep — exactly one
+// sees true. Delete returns nil either way and cannot tell them apart.
+//
+// sessionID "" is the sweep's claim: whatever run the row holds, its process
+// is gone. A non-empty sessionID is a SessionEnd's claim and needs an EXACT
+// recorded match — the row's session_id equal to it. A row whose session_id
+// is still empty is not claimed: SessionStart writes the frame BEFORE it
+// records the new identity, so that row may already be a newer run's (#1381
+// critic C1). A late SessionEnd of an older run therefore claims and deletes
+// nothing, whether the newer run's identity is written yet or not.
+func (s *FramesStore) ClaimDelete(frameID, sessionID string) (bool, error) {
+	res, err := s.db.Exec(
+		`DELETE FROM agent_frames WHERE frame_id = ? AND (? = '' OR session_id = ?)`,
+		frameID, sessionID, sessionID,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 // DeleteIfUnchanged removes the frame only if its last_seen_at matches the
 // provided value — a concurrent Upsert that refreshed the row will bump
 // last_seen_at and cause this DELETE to match 0 rows, returning (false, nil).

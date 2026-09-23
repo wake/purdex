@@ -1213,3 +1213,79 @@ func TestFrames_NextIdentitySeq_IsMonotonicAndNotTheClock(t *testing.T) {
 		}
 	}
 }
+
+// ClaimDelete is the one-owner termination primitive (agent-last-state, #1381):
+// exactly one caller's delete removes the row, and a caller naming a session id
+// never deletes a row that already belongs to a different run.
+func TestFrames_ClaimDelete(t *testing.T) {
+	seed := func(t *testing.T, s *FramesStore, sessionID string) Frame {
+		t.Helper()
+		f, err := s.Upsert(Frame{
+			PaneID: "%5", AgentType: "cc", PID: 200, PPID: 100, ProcessStartTime: "A",
+			Status: agentpkg.StatusIdle, StartedAt: 10, LastSeenAt: 10, Verified: true, SessionID: sessionID,
+		})
+		if err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		return f
+	}
+	gone := func(t *testing.T, s *FramesStore) bool {
+		t.Helper()
+		got, err := s.GetByIdentity("%5", 200, "A")
+		if err != nil {
+			t.Fatalf("GetByIdentity: %v", err)
+		}
+		return got == nil
+	}
+
+	t.Run("the first caller claims, the second does not", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		f := seed(t, s, "S1")
+		for i, want := range []bool{true, false} {
+			claimed, err := s.ClaimDelete(f.FrameID, "")
+			if err != nil || claimed != want {
+				t.Fatalf("call %d: claimed=%v err=%v, want %v", i+1, claimed, err, want)
+			}
+		}
+		if !gone(t, s) {
+			t.Fatal("row survived the claim")
+		}
+	})
+	t.Run("a matching session id claims", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		f := seed(t, s, "S1")
+		if claimed, err := s.ClaimDelete(f.FrameID, "S1"); err != nil || !claimed {
+			t.Fatalf("claimed=%v err=%v, want true", claimed, err)
+		}
+	})
+	// #1381 critic C1: a SessionStart writes the frame BEFORE its identity, so
+	// a row whose session_id is still '' may already be a NEWER run's. A
+	// session-scoped claim needs an exact, recorded match.
+	t.Run("a row with no recorded session id is NOT claimed by a session id", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		f := seed(t, s, "")
+		if claimed, err := s.ClaimDelete(f.FrameID, "S1"); err != nil || claimed {
+			t.Fatalf("claimed=%v err=%v, want false", claimed, err)
+		}
+		if gone(t, s) {
+			t.Fatal("the row was deleted")
+		}
+	})
+	t.Run("the sweep's claim (no session id) takes a row with no recorded session id", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		f := seed(t, s, "")
+		if claimed, err := s.ClaimDelete(f.FrameID, ""); err != nil || !claimed {
+			t.Fatalf("claimed=%v err=%v, want true", claimed, err)
+		}
+	})
+	t.Run("a row now owned by ANOTHER run is neither claimed nor deleted", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		f := seed(t, s, "S-new")
+		if claimed, err := s.ClaimDelete(f.FrameID, "S-old"); err != nil || claimed {
+			t.Fatalf("claimed=%v err=%v, want false", claimed, err)
+		}
+		if gone(t, s) {
+			t.Fatal("the newer run's row was deleted")
+		}
+	})
+}

@@ -57,7 +57,8 @@ func newProvenanceTestModule(t *testing.T, tmuxInstance string) *Module {
 }
 
 // buildNormalizedForTest runs the production pair the hook handler runs —
-// applyFrameEvent then buildProjectionNormalized then attachProvenance — so
+// applyFrameEvent then buildProjectionNormalized then attachProvenance and
+// attachExit — so
 // the tests exercise the real attachment condition instead of a re-implemented
 // copy of it. Mirrors handler.go's derive → apply → normalize sequence for a
 // request with no tmux session name (pane projection only).
@@ -76,6 +77,7 @@ func (m *Module) buildNormalizedForTest(t *testing.T, req EventRequest) agentpkg
 	}
 	normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 	attachProvenance(&normalized, frameMeta)
+	attachExit(&normalized, frameMeta.Exit)
 	return normalized
 }
 
@@ -105,13 +107,23 @@ func TestProvenance_RootSessionStart_EmitsEnvelope(t *testing.T) {
 		p.Cwd != "/w/p" || p.TmuxPaneID != "%5" || p.TmuxInstance != "4471:1788740000" {
 		t.Fatalf("envelope = %+v", p)
 	}
+	// The frame id names this one agent run (agent-last-state spec, review
+	// decision 2): an exit envelope carries the same id, and the SPA applies
+	// the exit only on an exact match.
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil || len(frames) != 1 {
+		t.Fatalf("frames = %+v err=%v, want the one created frame", frames, err)
+	}
+	if p.FrameID == "" || p.FrameID != frames[0].FrameID {
+		t.Fatalf("FrameID = %q, want the stored frame's %q", p.FrameID, frames[0].FrameID)
+	}
 }
 
 // A SessionStart landing on an existing frame (a /clear, say) is how a new
 // session id replaces the recorded one, so it must be granted provenance too.
 func TestProvenance_SessionStartOnExistingFrame_EmitsEnvelope(t *testing.T) {
 	m := newProvenanceTestModule(t, "4471:1788740000")
-	seedFrame(t, m, "%5", "codex", 200, "t200", 10)
+	seeded := seedFrame(t, m, "%5", "codex", 200, "t200", 10)
 	withProcessTree(t, map[int]int{200: 999})
 	req := EventRequest{
 		TmuxPaneID: "%5", AgentType: "codex", SenderPID: 200,
@@ -124,8 +136,8 @@ func TestProvenance_SessionStartOnExistingFrame_EmitsEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("SessionStart on an existing frame carried no provenance: detail=%+v", ev.Detail)
 	}
-	if p := raw.(Provenance); p.SessionID != "S9" || !p.OwnerSessionStart {
-		t.Fatalf("envelope = %+v, want session_id S9", p)
+	if p := raw.(Provenance); p.SessionID != "S9" || !p.OwnerSessionStart || p.FrameID != seeded.FrameID {
+		t.Fatalf("envelope = %+v, want session_id S9 on frame %q", p, seeded.FrameID)
 	}
 }
 
