@@ -1,6 +1,28 @@
 package agent
 
-import "github.com/wake/purdex/internal/store"
+import (
+	"log"
+
+	"github.com/wake/purdex/internal/store"
+)
+
+// The reads and cleanup that follow a successful claim, as seams so tests can
+// fail them AFTER the delete. Production never reassigns them.
+var (
+	eventsDeleteFn         = func(m *Module, sessionName string) error { return m.events.Delete(sessionName) }
+	projectionForSessionFn = func(m *Module, sessionName string) (*SessionProjection, error) {
+		return m.projectionForSession(sessionName)
+	}
+	projectPaneFn = func(m *Module, paneID string) (*SessionProjection, error) { return m.projectPane(paneID) }
+)
+
+// logAfterClaim records a failure that happened after an exit was claimed. The
+// exit is still sent (degraded) — see afterFrameCleared and the SessionEnd
+// path — so this is the only trace the failure leaves besides the error the
+// caller returns.
+func logAfterClaim(where string, frameID string, err error) {
+	log.Printf("[agent] exit_cleanup_failed: where=%s frame=%s err=%v", where, frameID, err)
+}
 
 // claimFrameEnd is the ONE place a frame's run is ended, shared by the
 // SessionEnd hook and the pid sweep (agent-last-state, #1381).

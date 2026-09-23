@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -509,20 +510,41 @@ func (m *Module) clearFrame(frame store.Frame, reason string) error {
 // frame). It rides on the one broadcast below, so a pane whose session cannot
 // be resolved sends nothing at all — as before.
 func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit) error {
-	sessionName, code := m.resolvePaneSession(frame.PaneID)
-	if sessionName != "" && m.events != nil {
-		if err := m.events.Delete(sessionName); err != nil {
+	// With an exit in hand (a claimed root frame) a failure below must not
+	// lose it: the row is gone, so nothing will ever end this run again
+	// (#1381 attacker #3). The cleanup error is logged and still returned,
+	// and the broadcast degrades to status clear. Without an exit the old
+	// behaviour stands — return before broadcasting anything on a guess.
+	var cleanupErr error
+	degrade := func(where string, err error) error {
+		if exit == nil {
 			return err
 		}
+		logAfterClaim(where, frame.FrameID, err)
+		cleanupErr = errors.Join(cleanupErr, err)
+		return nil
 	}
-	projection, err := m.projectionForSession(sessionName)
+
+	sessionName, code := m.resolvePaneSession(frame.PaneID)
+	if sessionName != "" && m.events != nil {
+		if err := eventsDeleteFn(m, sessionName); err != nil {
+			if err := degrade("events.Delete", err); err != nil {
+				return err
+			}
+		}
+	}
+	projection, err := projectionForSessionFn(m, sessionName)
+	projectionKnown := err == nil
 	if err != nil {
-		return err
+		if err := degrade("projectionForSession", err); err != nil {
+			return err
+		}
 	}
 
 	var hadWatcher bool
 	m.mu.Lock()
-	if sessionName != "" {
+	// An unknown projection must not overwrite in-memory state with a guess.
+	if sessionName != "" && projectionKnown {
 		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)
 		if projection == nil || projection.TopFrame == nil {
 			_, hadWatcher = m.activeWatchers[sessionName]
@@ -535,7 +557,7 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 	}
 
 	if code == "" || m.core == nil {
-		return nil
+		return cleanupErr
 	}
 	// Issue #717 round-2 race fix: re-resolve projection right before
 	// broadcasting. A hook handler may have created a new frame for
@@ -549,13 +571,16 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 	// separately. Empty result.Status carries StatusClear via the
 	// projection==nil branch in buildProjectionNormalized; passing
 	// it explicitly documents intent at the callsite.
-	freshProjection, ferr := m.projectionForSession(sessionName)
+	freshProjection, ferr := projectionForSessionFn(m, sessionName)
 	if ferr != nil {
-		return ferr
+		if err := degrade("projectionForSession (re-resolve)", ferr); err != nil {
+			return err
+		}
+		freshProjection = nil // degraded: a nil projection broadcasts status clear
 	}
 	normalized := buildProjectionNormalized(freshProjection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{Status: agentpkg.StatusClear})
 	attachExit(&normalized, exit)
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
-	return nil
+	return cleanupErr
 }

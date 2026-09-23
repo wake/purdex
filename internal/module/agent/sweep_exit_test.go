@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -191,5 +192,80 @@ func TestExit_SessionEndAndSweepRace_ExactlyOneEnvelope(t *testing.T) {
 		if exits != 1 {
 			t.Fatalf("iteration %d: %d exit envelopes, want exactly 1", i, exits)
 		}
+	}
+}
+
+// Attacker #3 (#1381): once the sweep has claimed a root frame, its exit is
+// sent even when the cleanup after the delete fails — the frame is gone, so
+// nothing will ever end it again. The broadcast degrades to status clear and
+// the error is still returned (logged by the caller).
+func TestExit_SweepCleanupFailsAfterClaim_ExitStillSent(t *testing.T) {
+	boom := errors.New("boom")
+	cases := []struct {
+		name   string
+		inject func(t *testing.T)
+	}{
+		{"events.Delete", func(t *testing.T) {
+			orig := eventsDeleteFn
+			eventsDeleteFn = func(*Module, string) error { return boom }
+			t.Cleanup(func() { eventsDeleteFn = orig })
+		}},
+		{"projectionForSession (every call)", func(t *testing.T) {
+			orig := projectionForSessionFn
+			projectionForSessionFn = func(*Module, string) (*SessionProjection, error) { return nil, boom }
+			t.Cleanup(func() { projectionForSessionFn = orig })
+		}},
+		{"projectionForSession (the re-resolve only)", func(t *testing.T) {
+			orig := projectionForSessionFn
+			calls := 0
+			projectionForSessionFn = func(m *Module, s string) (*SessionProjection, error) {
+				calls++
+				if calls == 2 {
+					return nil, boom
+				}
+				return orig(m, s)
+			}
+			t.Cleanup(func() { projectionForSessionFn = orig })
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, sub := newExitSweepModule(t)
+			root := seedRootWithIdentity(t, m, "%5", "cc", 99999, "t-dead", "S1")
+			withLivePids(t, map[int]string{})
+			tc.inject(t)
+
+			if err := m.clearFrame(root, "pid_dead"); !errors.Is(err, boom) {
+				t.Fatalf("clearFrame err = %v, want the cleanup error reported", err)
+			}
+			ev := readSweepNormalizedEvent(t, sub)
+			e, ok := exitOf(t, ev)
+			if !ok || e.FrameID != root.FrameID || e.Reason != ExitReasonProcessDead {
+				t.Fatalf("exit = %+v ok=%v, want the claimed frame's process-dead exit", e, ok)
+			}
+			if ev.Status != "clear" {
+				t.Fatalf("status = %q, want the degraded clear", ev.Status)
+			}
+		})
+	}
+}
+
+// Without an exit (a child frame) a failing cleanup keeps the old behaviour:
+// nothing is broadcast on a guess.
+func TestExit_SweepCleanupFails_ChildFrame_NoDegradedBroadcast(t *testing.T) {
+	m, sub := newExitSweepModule(t)
+	parent := seedRootWithIdentity(t, m, "%5", "cc", 100, "t100", "P1")
+	child := seedChildFrame(t, m, "%5", "cc", 99999, "t-dead", parent.FrameID)
+	orig := eventsDeleteFn
+	eventsDeleteFn = func(*Module, string) error { return errors.New("boom") }
+	t.Cleanup(func() { eventsDeleteFn = orig })
+
+	if err := m.clearFrame(child, "pid_dead"); err == nil {
+		t.Fatal("want the cleanup error")
+	}
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("a child frame's failed cleanup broadcast %s", msg)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
