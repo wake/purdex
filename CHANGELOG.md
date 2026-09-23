@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.437] - 2026-09-23
+
+### Fix：第一次拉取後，Settings › Profile 不再出現嚇人的 `pull-hash-mismatch`（#1369，#1376）
+
+兩台裝置對同一 daemon 用不同 host id 時，拉取後這台會把自己的 id 補進主機的舊 id 紀錄（`aliases`）再推一次——這是
+設計好的一次回寫，但以前會被記成 problem、一直掛到 Stop sync。現在只有「多出的只是這台自己的 id、少掉的只是
+16 個上限擠掉的」這種差異時照推、不記；其他差異照舊記。順帶修掉一個同類問題：沒有 guard 時，主機清單可能在
+collector 備好資料前就被推出去而多一條 `push-payload-missing`。
+
 ## [1.0.0-alpha.436] - 2026-09-23
 
 ### Fix：wizard「拉取」只套用你確認過的主機清單版本（#1366，#1370）
