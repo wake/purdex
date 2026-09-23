@@ -285,6 +285,27 @@ describe('sanitizeHostConfig', () => {
     expect(out.iconWeight).toBe('bold')
   })
 
+  it.each([
+    'a'.repeat(513),
+    'mini:abc123\n',
+    'mini:abc\u0000123',
+    'mini:abc123\t',
+    'mini\u202e:abc123',
+    'mini:abc\u200b',
+    '',
+    42,
+    null,
+  ])('removes an invalid daemonId %j (isValidDaemonId, codex attacker)', (bad) => {
+    const out = sanitizeHostConfig({ ...base, token: 'T', daemonId: bad as never })
+    expect('daemonId' in out).toBe(false)
+    expect(out).toEqual({ ...base, token: 'T' })
+  })
+
+  it.each(['mini-lab:278cbm', 'unknown:abc123', 'Mini-Lab:278cbm', 'host name:abc123', 'm\u00fcnchen:abc123'])('keeps a valid daemonId %j (same object reference)', (id) => {
+    const h: HostConfig = { ...base, daemonId: id }
+    expect(sanitizeHostConfig(h)).toBe(h)
+  })
+
   it('removes an explicit undefined icon key', () => {
     const out = sanitizeHostConfig({ ...base, icon: undefined })
     expect('icon' in out).toBe(false)

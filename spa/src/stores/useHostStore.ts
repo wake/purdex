@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
+import { isValidDaemonId } from '../lib/daemon-id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import {
   clampHostAlpha,
@@ -118,7 +119,7 @@ interface HostState {
   /**
    * The single entry point for every `/api/info` answer (spec D3). `atRequest` is
    * `requestAtOf(host)` captured before the request; an answer for a host that is gone,
-   * has moved or changed token since is dropped, as is an empty `observed`.
+   * has moved or changed token since is dropped, as is an `observed` that fails `isValidDaemonId` (`""` included).
    */
   observeDaemonId: (hostId: string, observed: string, atRequest: HostRequestAt) => void
   /** Legacy entry point kept for the current color UI: writes `colors.console.main` (alpha preserved, default 100); `null` clears the console set. */
@@ -281,7 +282,8 @@ export const useHostStore = create<HostState>()(
       observeDaemonId: (hostId, observed, atRequest) =>
         set((state) => {
           const host = state.hosts[hostId]
-          if (!host || !observed) return state
+          // An invalid id ("" included) is "no stable id": nothing learned, flagged or verified.
+          if (!host || !isValidDaemonId(observed)) return state
           const now = requestAtOf(host)
           if (now.endpoint !== atRequest.endpoint || now.token !== atRequest.token) return state
           const endpointAtRequest = atRequest.endpoint

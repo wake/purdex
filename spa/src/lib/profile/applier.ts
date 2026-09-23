@@ -16,6 +16,7 @@
 // No fetching, no clocks, no stores, no id generation. Nothing is mutated;
 // results may share structure with `local` and `incoming`.
 import type { HostConfig } from '../../stores/useHostStore'
+import { isValidDaemonId } from '../daemon-id'
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
 import { PROJECTIONS, workspaceIdOf } from './projections'
@@ -82,11 +83,32 @@ function unique(ids: readonly string[]): string[] {
 
 // === hosts ===
 
-/** Replaces `hosts` + `hostOrder`; the device's `activeHostId` / `devHostId` survive while their host does. */
+/**
+ * Replaces `hosts` + `hostOrder`; the device's `activeHostId` / `devHostId` survive while their host does.
+ *
+ * Hosts ordinal 1 → 2 added `daemonId` (host-daemon-id D6). An incoming host
+ * WITHOUT one (an ordinal-1 writer, or a host nobody has verified yet) keeps the
+ * local host's `daemonId` — the only local field that does — but ONLY for the
+ * same incarnation as far as the address can tell: same id AND same ip + port.
+ * Another address is a re-point (an ordinal-2 client clears `daemonId` exactly
+ * by re-pointing; an ordinal-1 client re-points without knowing the field) or a
+ * host deleted and recreated under the same id: the local claim belongs to
+ * another daemon and is dropped. (The row's ordinal is not an input here — the
+ * address rule covers both writers.) One that carries `daemonId` wins (SOT
+ * wins, D2). The upcast state then builds a
+ * payload that differs from the one pulled, and that difference is the one
+ * upgrade push. The runtime `daemonIdMismatch` lives outside `hosts` and is
+ * never touched here.
+ */
 export function applyHosts(local: HostsSlice, incoming: HostsPayload): ApplyHostsResult {
   const hosts: Record<string, HostConfig> = {}
   for (const id of Object.keys(incoming.hosts)) {
-    if (id !== PROTO_KEY) hosts[id] = incoming.hosts[id]
+    if (id === PROTO_KEY) continue
+    const h = incoming.hosts[id]
+    const mine = Object.hasOwn(local.hosts, id) ? local.hosts[id] : undefined
+    const sameIncarnation = mine !== undefined && mine.ip === h.ip && mine.port === h.port
+    const kept = h.daemonId === undefined && sameIncarnation ? mine.daemonId : undefined
+    hosts[id] = kept ? { ...h, daemonId: kept } : h
   }
   const survives = (id: string | null): string | null => (id !== null && Object.hasOwn(hosts, id) ? id : null)
   return {
@@ -518,7 +540,9 @@ function isHostsPayload(p: Rec): boolean {
       isOptional(h.color, isString) &&
       isOptional(h.colors, isPlainObject) &&
       isOptional(h.icon, isString) &&
-      isOptional(h.iconWeight, isString)
+      isOptional(h.iconWeight, isString) &&
+      // hosts ordinal 2 (host-daemon-id D6); absent in an ordinal-1 payload. The shared validator: never "", never hostile text.
+      isOptional(h.daemonId, isValidDaemonId)
     )
   })
 }

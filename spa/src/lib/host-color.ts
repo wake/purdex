@@ -1,6 +1,7 @@
 import type { IconWeight, PaneContent, PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
 import { rgbaString } from './color-space'
+import { isValidDaemonId } from './daemon-id'
 // Static import on purpose: `CommandIconPicker` already pulls icon-meta into the
 // main chunk, so the catalog costs nothing extra here.
 import iconMetaData from '../features/workspace/generated/icon-meta.json'
@@ -95,9 +96,10 @@ function sanitizeHostColors(v: unknown): { value: HostConfig['colors']; same: bo
 }
 
 /**
- * Drops present-but-invalid identity keys (`color`, `colors`, `icon`, `iconWeight`)
- * from an untrusted host config (sync payload, persisted state). Returns the same
- * object when every present key is valid.
+ * Drops present-but-invalid identity keys (`color`, `colors`, `icon`, `iconWeight`,
+ * and `daemonId` — judged by the shared `isValidDaemonId`) from an untrusted host
+ * config (sync payload, persisted state). Returns the same object when every
+ * present key is valid.
  */
 export function sanitizeHostConfig(host: HostConfig): HostConfig {
   const badColor = 'color' in host && !isValidHostColor(host.color)
@@ -105,12 +107,14 @@ export function sanitizeHostConfig(host: HostConfig): HostConfig {
   const badWeight = 'iconWeight' in host && !isIconWeight(host.iconWeight)
   const colors = 'colors' in host ? sanitizeHostColors(host.colors) : null
   const badColors = colors !== null && !colors.same
-  if (!badColor && !badIcon && !badWeight && !badColors) return host
+  const badDaemonId = 'daemonId' in host && !isValidDaemonId(host.daemonId)
+  if (!badColor && !badIcon && !badWeight && !badColors && !badDaemonId) return host
 
   const cleaned = { ...host }
   if (badColor) delete cleaned.color
   if (badIcon) delete cleaned.icon
   if (badWeight) delete cleaned.iconWeight
+  if (badDaemonId) delete cleaned.daemonId
   if (badColors) {
     if (colors.value === undefined) delete cleaned.colors
     else cleaned.colors = colors.value

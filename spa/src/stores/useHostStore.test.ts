@@ -480,6 +480,24 @@ describe('persist rehydrate (host color sanitize)', () => {
       useHostStore.getState().reset()
     }
   })
+
+  it('drops a stored daemonId that fails isValidDaemonId and keeps a valid one (codex attacker)', async () => {
+    const hosts = {
+      evil: { id: 'evil', name: 'evil', ip: '10.0.0.1', port: 7860, order: 0, daemonId: 'mini\u202e:abc123' },
+      good: { id: 'good', name: 'good', ip: '10.0.0.2', port: 7860, order: 1, daemonId: 'mini-lab:278cbm' },
+    }
+    localStorage.setItem('purdex-hosts', JSON.stringify({ state: { hosts, hostOrder: ['evil', 'good'], activeHostId: 'good', devHostId: null }, version: 1 }))
+    try {
+      await useHostStore.persist.rehydrate()
+      const s = useHostStore.getState()
+      expect('daemonId' in s.hosts.evil).toBe(false)
+      expect(s.hosts.evil.name).toBe('evil')
+      expect(s.hosts.good.daemonId).toBe('mini-lab:278cbm')
+    } finally {
+      localStorage.removeItem('purdex-hosts')
+      useHostStore.getState().reset()
+    }
+  })
 })
 
 describe('findHostByEndpoint', () => {
@@ -527,6 +545,19 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
     useHostStore.getState().observeDaemonId(hostId, '', at())
     expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
     expect(flag()).toBeUndefined()
+  })
+
+  it('an observed id that fails isValidDaemonId is ignored like "" — never written, never flagged, never verified (codex attacker)', () => {
+    const evil = ['a'.repeat(513), 'mini:abc123\n', 'mini:abc\u0000123', 'mini:abc123\t', 'mini\u202e:abc123', 'mini:abc\u200b']
+    for (const bad of evil) useHostStore.getState().observeDaemonId(hostId, bad, at())
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    expect(useHostStore.getState().runtime[hostId]?.daemonIdVerified).toBeUndefined()
+    seed(ID)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const bad of evil) useHostStore.getState().observeDaemonId(hostId, bad, at())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('updateHost never writes daemonId — only observeDaemonId does (review #4)', () => {
