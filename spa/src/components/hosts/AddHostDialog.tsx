@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   X, LinkSimple, ArrowsClockwise, CheckCircle, Warning, ArrowCounterClockwise,
 } from '@phosphor-icons/react'
-import { hostEndpoint, selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
+import { requestAtOf, selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { decodePairingCode, cleanPairingInput, generatePurdexToken } from '../../lib/pairing-codec'
 import { fetchInfoAt, fetchPairVerify, fetchPairSetup, fetchTokenAuth, PairingError } from '../../lib/host-api'
@@ -157,7 +157,7 @@ export function AddHostDialog({ onClose }: Props) {
           token: trimmedToken || undefined,
         })
         const added = useHostStore.getState().hosts[newId]
-        if (added) useHostStore.getState().observeDaemonId(newId, observed, hostEndpoint(added))
+        if (added) useHostStore.getState().observeDaemonId(newId, observed, requestAtOf(added))
       }
       setStage('done')
       onClose()

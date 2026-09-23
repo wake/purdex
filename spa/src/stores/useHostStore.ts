@@ -111,11 +111,11 @@ interface HostState {
    */
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
   /**
-   * The single entry point for every `/api/info` answer (spec D3). `endpointAtRequest`
-   * is the host's `ip:port` captured before the request; an answer for a host that is
-   * gone or has moved since is dropped, as is an empty `observed`.
+   * The single entry point for every `/api/info` answer (spec D3). `atRequest` is
+   * `requestAtOf(host)` captured before the request; an answer for a host that is gone,
+   * has moved or changed token since is dropped, as is an empty `observed`.
    */
-  observeDaemonId: (hostId: string, observed: string, endpointAtRequest: string) => void
+  observeDaemonId: (hostId: string, observed: string, atRequest: HostRequestAt) => void
   /** Legacy entry point kept for the current color UI: writes `colors.console.main` (alpha preserved, default 100); `null` clears the console set. */
   setHostColor: (hostId: string, color: string | null) => void
   /**
@@ -171,9 +171,19 @@ function createDefaultState() {
   }
 }
 
-/** `ip:port` — the endpoint key `observeDaemonId` guards on. */
+/** `ip:port` — the endpoint part of what `observeDaemonId` guards on. */
 export function hostEndpoint(h: Pick<HostConfig, 'ip' | 'port'>): string {
   return `${h.ip}:${h.port}`
+}
+
+/** What an `/api/info` request went to: endpoint + token, captured before the request (spec D3). */
+export interface HostRequestAt {
+  endpoint: string
+  token: string
+}
+
+export function requestAtOf(h: Pick<HostConfig, 'ip' | 'port' | 'token'>): HostRequestAt {
+  return { endpoint: hostEndpoint(h), token: h.token ?? '' }
 }
 
 /** The host's mismatch flag, only while it still describes the host as it is now
@@ -250,10 +260,13 @@ export const useHostStore = create<HostState>()(
           }
         }),
 
-      observeDaemonId: (hostId, observed, endpointAtRequest) =>
+      observeDaemonId: (hostId, observed, atRequest) =>
         set((state) => {
           const host = state.hosts[hostId]
-          if (!host || !observed || hostEndpoint(host) !== endpointAtRequest) return state
+          if (!host || !observed) return state
+          const now = requestAtOf(host)
+          if (now.endpoint !== atRequest.endpoint || now.token !== atRequest.token) return state
+          const endpointAtRequest = atRequest.endpoint
           if (!host.daemonId) {
             return {
               hosts: { ...state.hosts, [hostId]: { ...host, daemonId: observed } },

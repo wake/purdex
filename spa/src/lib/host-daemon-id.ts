@@ -4,31 +4,45 @@
 //
 // Triggers, per host and only while connected: the transition to `connected`,
 // a change of its endpoint or token, or a change of its stored `daemonId`
-// (e.g. arriving by sync). Each trigger is one `/api/info`; the endpoint is
-// captured before the request and handed to `observeDaemonId`, which drops an
-// answer for a host that has since moved or gone. A failed request is not
-// retried until the next trigger — nothing here polls.
+// (e.g. arriving by sync). Each trigger is one `/api/info`; a failed request is
+// not retried until the next trigger — nothing here polls.
+//
+// Freshness (PR review #2): every request takes the host's next generation, and
+// a newer trigger or the host's deletion invalidates every older one, so only
+// the newest answer can apply — and only for the host incarnation it was asked
+// for (deleted and re-added under the same id → dropped). The endpoint + token
+// captured before the request go to `observeDaemonId`, which re-checks them.
 import { fetchHostInfo } from './host-api'
-import { hostEndpoint, useHostStore, type HostConfig } from '../stores/useHostStore'
+import { hostEndpoint, requestAtOf, useHostStore, type HostConfig } from '../stores/useHostStore'
 
 function identity(h: HostConfig): string {
   return `${hostEndpoint(h)}:${h.token ?? ''}`
 }
 
 export function startHostDaemonIdVerification(): () => void {
-  // Last answer per host (endpoint it came from + host_id). A stored-daemonId change
-  // to exactly that value is our own learning write landing — already verified.
-  const lastObserved = new Map<string, { endpoint: string; observed: string }>()
+  let counter = 0
+  // Generation of the newest request per host; absent = none may apply.
+  const current = new Map<string, number>()
+  // Host whose answer is being applied right now: the stored-daemonId change that
+  // write causes is our own learning, already verified — not a new trigger.
+  let applying: string | null = null
 
   const verify = (hostId: string) => {
     const host = useHostStore.getState().hosts[hostId]
     if (!host) return
-    const endpoint = hostEndpoint(host)
+    const at = requestAtOf(host)
+    const generation = ++counter
+    current.set(hostId, generation)
     fetchHostInfo(hostId).then(
       (info) => {
+        if (current.get(hostId) !== generation) return
         const observed = typeof info?.host_id === 'string' ? info.host_id : ''
-        lastObserved.set(hostId, { endpoint, observed })
-        useHostStore.getState().observeDaemonId(hostId, observed, endpoint)
+        applying = hostId
+        try {
+          useHostStore.getState().observeDaemonId(hostId, observed, at)
+        } finally {
+          applying = null
+        }
       },
       () => { /* not retried until the next trigger (spec D4.2) */ },
     )
@@ -40,8 +54,8 @@ export function startHostDaemonIdVerification(): () => void {
   }
 
   return useHostStore.subscribe((next, prev) => {
-    for (const hostId of lastObserved.keys()) {
-      if (!next.hosts[hostId]) lastObserved.delete(hostId)
+    for (const hostId of [...current.keys()]) {
+      if (!next.hosts[hostId]) current.delete(hostId)
     }
     for (const [hostId, host] of Object.entries(next.hosts)) {
       if (next.runtime[hostId]?.status !== 'connected') continue
@@ -51,11 +65,7 @@ export function startHostDaemonIdVerification(): () => void {
         verify(hostId)
         continue
       }
-      if (before.daemonId !== host.daemonId) {
-        const last = lastObserved.get(hostId)
-        const ownWrite = !!last && last.endpoint === hostEndpoint(host) && last.observed === host.daemonId
-        if (!ownWrite) verify(hostId)
-      }
+      if (before.daemonId !== host.daemonId && applying !== hostId) verify(hostId)
     }
   })
 }

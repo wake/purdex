@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch } from './useHostStore'
+import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch, requestAtOf } from './useHostStore'
 
 describe('useHostStore', () => {
   beforeEach(() => {
@@ -502,6 +502,7 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   const OTHER = 'mini-lab:zzz999'
   let hostId: string
   const ep = () => { const h = useHostStore.getState().hosts[hostId]; return `${h.ip}:${h.port}` }
+  const at = () => requestAtOf(useHostStore.getState().hosts[hostId])
   const flag = () => selectDaemonIdMismatch(useHostStore.getState(), hostId)
   // A stored claim as sync would write it (updateHost no longer accepts daemonId).
   const seed = (daemonId: string) =>
@@ -514,16 +515,16 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
   it('absent stored value → observe writes it', () => {
-    useHostStore.getState().observeDaemonId(hostId, ID, ep())
+    useHostStore.getState().observeDaemonId(hostId, ID, at())
     expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
     expect(flag()).toBeUndefined()
   })
 
   it('an empty observed id is never written and flags nothing', () => {
-    useHostStore.getState().observeDaemonId(hostId, '', ep())
+    useHostStore.getState().observeDaemonId(hostId, '', at())
     expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
-    useHostStore.getState().observeDaemonId(hostId, ID, ep())
-    useHostStore.getState().observeDaemonId(hostId, '', ep())
+    useHostStore.getState().observeDaemonId(hostId, ID, at())
+    useHostStore.getState().observeDaemonId(hostId, '', at())
     expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
     expect(flag()).toBeUndefined()
   })
@@ -553,8 +554,8 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   it('different observed value → no write, mismatch flag, one warn per (host, observed)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     seed(ID)
-    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
-    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
     expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
     expect(flag()).toEqual({ stored: ID, observed: OTHER, endpoint: ep() })
     expect(warn).toHaveBeenCalledTimes(1)
@@ -563,24 +564,31 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   it('equal observed value clears the mismatch flag', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     seed(ID)
-    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
     expect(flag()).toBeDefined()
-    useHostStore.getState().observeDaemonId(hostId, ID, ep())
+    useHostStore.getState().observeDaemonId(hostId, ID, at())
     expect(flag()).toBeUndefined()
     expect(useHostStore.getState().runtime[hostId]?.daemonIdMismatch).toBeUndefined()
   })
 
   it('an answer for a stale endpoint is dropped', () => {
-    useHostStore.getState().observeDaemonId(hostId, ID, '10.0.0.9:7860')
+    useHostStore.getState().observeDaemonId(hostId, ID, { endpoint: '10.0.0.9:7860', token: 't' })
     expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
     seed(ID)
-    useHostStore.getState().observeDaemonId(hostId, OTHER, '10.0.0.9:7860')
+    useHostStore.getState().observeDaemonId(hostId, OTHER, { endpoint: '10.0.0.9:7860', token: 't' })
     expect(flag()).toBeUndefined()
+  })
+
+  it('an answer for a token that has since changed is dropped (review #2)', () => {
+    const before = at()
+    useHostStore.getState().updateHost(hostId, { token: 'rotated' })
+    useHostStore.getState().observeDaemonId(hostId, ID, before)
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
   })
 
   it('an answer for a deleted host is dropped', () => {
     useHostStore.getState().removeHost(hostId)
-    useHostStore.getState().observeDaemonId(hostId, ID, '10.0.0.1:7860')
+    useHostStore.getState().observeDaemonId(hostId, ID, { endpoint: '10.0.0.1:7860', token: 't' })
     expect(useHostStore.getState().hosts[hostId]).toBeUndefined()
     expect(useHostStore.getState().runtime[hostId]).toBeUndefined()
   })
@@ -588,7 +596,7 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   it('a local re-point clears daemonId and the flag', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     seed(ID)
-    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
     useHostStore.getState().updateHost(hostId, { port: 7861 })
     expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
     expect(flag()).toBeUndefined()
@@ -604,7 +612,7 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   it('a flag is ignored after a store replace re-points the host or changes its stored value (sync)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     seed(ID)
-    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
     const h = useHostStore.getState().hosts[hostId]
     useHostStore.setState({ hosts: { [hostId]: { ...h, ip: '10.0.0.5' } } })
     expect(flag()).toBeUndefined()
@@ -617,7 +625,7 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   it('the mismatch flag is not persisted', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     seed(ID)
-    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
     const partialize = useHostStore.persist.getOptions().partialize!
     expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain(OTHER)
   })

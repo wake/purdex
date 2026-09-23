@@ -9,7 +9,7 @@ import { fetchInfo } from '../host-api'
 import type { HostInfo } from '../../stores/useHostStore'
 import { fetchNexCapabilities } from './nex-api'
 import { isNexReady } from '../../components/hosts/nex/nex-ready'
-import { hostEndpoint, useHostStore } from '../../stores/useHostStore'
+import { requestAtOf, useHostStore } from '../../stores/useHostStore'
 import {
   commitLoaded,
   emptyEntry,
@@ -105,11 +105,11 @@ export function createNexHostEffects(sink: EntrySink): NexHostEffects {
 
   async function fetchAndCommit(hostId: string, token: RequestToken): Promise<void> {
     const host = useHostStore.getState().hosts[hostId]
-    const endpoint = host ? hostEndpoint(host) : ''
+    const atRequest = host ? requestAtOf(host) : { endpoint: '', token: '' }
     const { loaded, observed } = await load(hostId)
     if (!stillCurrent(hostId, token)) return
     // The same answer is also this device's daemon-identity check (spec 2026-09-23 D4.3).
-    useHostStore.getState().observeDaemonId(hostId, observed, endpoint)
+    useHostStore.getState().observeDaemonId(hostId, observed, atRequest)
     sink.set((byHost) => ({ ...byHost, [hostId]: commitLoaded(loaded, token, Date.now()) }))
   }
 

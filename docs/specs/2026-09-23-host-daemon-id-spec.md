@@ -49,9 +49,10 @@ Why not "local wins": a synced address that reaches a different daemon per devic
 wins + local flag" the stored value converges and each device knows whether it holds for itself.
 
 ### D3. Learning and verification
-`observeDaemonId(hostId, observed, endpointAtRequest)` — one entry point for every `/api/info` answer:
-- drop the answer if the host is gone, or its endpoint (`ip:port`) is no longer `endpointAtRequest`,
-  or `observed === ""` (daemon has no stable id — nothing learned, nothing flagged);
+`observeDaemonId(hostId, observed, atRequest)` — one entry point for every `/api/info` answer;
+`atRequest = requestAtOf(host) = { endpoint: ip:port, token }` captured before the request:
+- drop the answer if the host is gone, or its endpoint or token is no longer the one in `atRequest`
+  (PR review #2), or `observed === ""` (daemon has no stable id — nothing learned, nothing flagged);
 - stored absent → **write** `daemonId = observed` (a local write → synced like any edit);
 - stored === observed → clear any `daemonIdMismatch`;
 - stored ≠ observed → **do not write**; set `daemonIdMismatch = { stored, observed, endpoint }` and
@@ -69,8 +70,14 @@ One request per trigger, per host, only while connected:
    host does not exist in the store yet. Failure never blocks the add.
 2. **Verification subscription** (`lib/host-daemon-id.ts`, modelled on `host-config-loader.ts`):
    a host's transition to `connected`, a change of its endpoint or token, or a change of its stored
-   `daemonId` (e.g. by sync) while connected → one `fetchHostInfo(hostId)`; the endpoint is captured
-   before the request and passed to `observeDaemonId`. A failed request (network, 401, 5xx) is not
+   `daemonId` (e.g. by sync) while connected → one `fetchHostInfo(hostId)`; endpoint + token are
+   captured before the request and passed to `observeDaemonId`. **Freshness** (PR review #2): each
+   request takes the host's next generation; a newer trigger or the host's deletion invalidates older
+   ones, so only the newest answer applies, and never to a host deleted and re-added under the same
+   id. The stored-`daemonId` change caused by the subscription applying its own answer is recognised
+   synchronously (not by remembering past answers), so a stale answer can never make a later sync
+   change skip re-verification. A learn by another path (Nex, Overview, dialog) costs one extra
+   verification request. A failed request (network, 401, 5xx) is not
    retried until the next trigger. Cost: one `/api/info` per (re)connect or change — not per render,
    not polled. (No connect-time `/api/info` exists today to piggyback on — inventory §2.)
 3. **Opportunistic**: `nex-host-effects.load()` and `OverviewSection` already fetch `/api/info`; each
