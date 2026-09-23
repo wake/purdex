@@ -1007,6 +1007,8 @@
   "hosts.confirm": "Confirm",
   "hosts.duplicate_daemon": "This daemon is already added as “{{name}}”.",
   "hosts.duplicate_daemon_use_address": "Use this address for “{{name}}”",
+  "hosts.duplicate_daemon_token_updated": "This daemon is already added as “{{name}}”; its token was updated.",
+  "hosts.duplicate_daemon_add_separate": "Add as a separate host",
   "hosts.mode_pairing_hint": "Daemon is waiting for pairing",
   "hosts.mode_pending_hint": "Enter the token shown in the daemon terminal",
   "hosts.mode_normal_hint": "Daemon is running — enter the configured token",

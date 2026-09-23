@@ -326,6 +326,106 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
     expect('daemonId' in hosts.H).toBe(false) // re-point: re-verified on connect
   })
 
+  describe('pairing route duplicate: the rotated token is never lost (PR review #1)', () => {
+    const verifiedRuntime = { H: { status: 'connected' as const, daemonIdVerified: { endpoint: '100.64.0.2:7860', daemonId: X } } }
+
+    it('H verified here → its token is updated automatically; message + Close only', async () => {
+      vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+      useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'], runtime: verifiedRuntime })
+      const onClose = vi.fn()
+      render(<AddHostDialog onClose={onClose} />)
+      await confirmPairingRoute()
+      await waitFor(() => expect(screen.getByText('This daemon is already added as “mlab”; its token was updated.')).toBeInTheDocument())
+      expect(useHostStore.getState().hosts.H).toEqual(existing({ token: TOKEN }))
+      expect(screen.queryByText('Use this address for “mlab”')).toBeNull()
+      expect(screen.queryByText('Add as a separate host')).toBeNull()
+      fireEvent.click(screen.getByText('Close'))
+      expect(onClose).toHaveBeenCalled()
+      expect(Object.keys(useHostStore.getState().hosts)).toEqual(['H'])
+    })
+
+    it('H not verified → exactly two actions, no plain Close', async () => {
+      vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+      useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'] })
+      render(<AddHostDialog onClose={vi.fn()} />)
+      await confirmPairingRoute()
+      await waitFor(() => expect(screen.getByText('Add as a separate host')).toBeInTheDocument())
+      expect(screen.getByText('Use this address for “mlab”')).toBeInTheDocument()
+      expect(screen.queryByText('Close')).toBeNull()
+      expect(screen.queryByText('Cancel')).toBeNull()
+      expect(useHostStore.getState().hosts.H).toEqual(existing())
+    })
+
+    it('H not verified → "Add as a separate host" adds a new host with the new token', async () => {
+      vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+      useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'] })
+      const onClose = vi.fn()
+      const { unmount } = render(<AddHostDialog onClose={onClose} />)
+      await confirmPairingRoute()
+      await waitFor(() => expect(screen.getByText('Add as a separate host')).toBeInTheDocument())
+      fireEvent.click(screen.getByText('Add as a separate host'))
+      expect(onClose).toHaveBeenCalled()
+      unmount()
+      const hosts = useHostStore.getState().hosts
+      expect(Object.keys(hosts)).toHaveLength(2)
+      expect(hosts.H).toEqual(existing())
+      const added = Object.values(hosts).find((h) => h.id !== 'H')!
+      expect(added).toMatchObject({ ip: '10.0.0.1', port: 7860, token: TOKEN, daemonId: X }) // as if no duplicate
+    })
+
+    it.each([
+      ['Escape', () => fireEvent.keyDown(document, { key: 'Escape' })],
+      ['the X button', () => fireEvent.click(screen.getByRole('heading', { name: 'Add Host' }).nextElementSibling!)],
+      ['the backdrop', () => fireEvent.click(screen.getByRole('dialog'))],
+    ])('H not verified → dismissing with %s counts as "Add as a separate host"', async (_label, dismiss) => {
+      vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+      useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'] })
+      const onClose = vi.fn()
+      const { unmount } = render(<AddHostDialog onClose={onClose} />)
+      await confirmPairingRoute()
+      await waitFor(() => expect(screen.getByText('Add as a separate host')).toBeInTheDocument())
+      dismiss()
+      expect(onClose).toHaveBeenCalled()
+      unmount()
+      const hosts = useHostStore.getState().hosts
+      expect(Object.keys(hosts)).toHaveLength(2)
+      expect(Object.values(hosts).find((h) => h.id !== 'H')).toMatchObject({ ip: '10.0.0.1', token: TOKEN })
+    })
+
+    it('H not verified → unmounted without a choice still adds the separate host, once', async () => {
+      vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+      useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'] })
+      const { unmount } = render(<AddHostDialog onClose={vi.fn()} />)
+      await confirmPairingRoute()
+      await waitFor(() => expect(screen.getByText('Add as a separate host')).toBeInTheDocument())
+      unmount()
+      expect(Object.keys(useHostStore.getState().hosts)).toHaveLength(2)
+    })
+
+    it('"Use this address" then unmount → no extra host', async () => {
+      vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+      useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'] })
+      const { unmount } = render(<AddHostDialog onClose={vi.fn()} />)
+      await confirmPairingRoute()
+      await waitFor(() => expect(screen.getByText('Use this address for “mlab”')).toBeInTheDocument())
+      fireEvent.click(screen.getByText('Use this address for “mlab”'))
+      unmount()
+      expect(Object.keys(useHostStore.getState().hosts)).toEqual(['H'])
+    })
+  })
+
+  it('token route duplicate: Escape adds nothing', async () => {
+    vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+    useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'] })
+    const { unmount } = render(<AddHostDialog onClose={vi.fn()} />)
+    confirmTokenRoute()
+    await waitFor(() => expect(screen.getByText('This daemon is already added as “mlab”.')).toBeInTheDocument())
+    fireEvent.keyDown(document, { key: 'Escape' })
+    unmount()
+    expect(Object.keys(useHostStore.getState().hosts)).toEqual(['H'])
+    expect(useHostStore.getState().hosts.H).toEqual(existing())
+  })
+
   it('an existing host flagged with a mismatch is not treated as a duplicate', async () => {
     vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
     useHostStore.setState({

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch, requestAtOf } from './useHostStore'
+import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch, selectDaemonIdVerified, requestAtOf } from './useHostStore'
 
 describe('useHostStore', () => {
   beforeEach(() => {
@@ -628,5 +628,58 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
     useHostStore.getState().observeDaemonId(hostId, OTHER, at())
     const partialize = useHostStore.persist.getOptions().partialize!
     expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain(OTHER)
+  })
+
+  describe('verified marker (PR review #1)', () => {
+    const verified = () => selectDaemonIdVerified(useHostStore.getState(), hostId)
+
+    it('is false until an answer is observed', () => {
+      seed(ID)
+      expect(verified()).toBe(false)
+    })
+
+    it('is set by a learned answer and by an equal answer', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      expect(verified()).toBe(true)
+      useHostStore.getState().reset()
+      hostId = useHostStore.getState().addHost({ name: 'h', ip: '10.0.0.1', port: 7860, token: 't' })
+      seed(ID)
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      expect(verified()).toBe(true)
+    })
+
+    it('is cleared by a mismatching answer', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+      expect(verified()).toBe(false)
+    })
+
+    it('is token-agnostic', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      useHostStore.getState().updateHost(hostId, { token: 'rotated' })
+      expect(verified()).toBe(true)
+    })
+
+    it('is dropped by a local re-point and ignored after a store replace changes endpoint or stored value', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      const h = useHostStore.getState().hosts[hostId]
+      useHostStore.setState({ hosts: { [hostId]: { ...h, daemonId: OTHER } } })
+      expect(verified()).toBe(false)
+      useHostStore.setState({ hosts: { [hostId]: { ...h, ip: '10.0.0.5' } } })
+      expect(verified()).toBe(false)
+      useHostStore.setState({ hosts: { [hostId]: h } })
+      expect(verified()).toBe(true)
+      useHostStore.getState().updateHost(hostId, { port: 7861 })
+      useHostStore.getState().updateHost(hostId, { port: 7860 })
+      seed(ID)
+      expect(verified()).toBe(false)
+    })
+
+    it('is not persisted', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      const partialize = useHostStore.persist.getOptions().partialize!
+      expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain('daemonIdVerified')
+    })
   })
 })

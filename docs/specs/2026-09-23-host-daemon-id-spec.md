@@ -94,13 +94,26 @@ One request per trigger, per host, only while connected:
 In `AddHostDialog`, after learning the new daemon's `host_id` `X`:
 - same ip+port as an existing host → today's behaviour (update that host's token). Unchanged.
 - different endpoint, and an existing host `H` with `daemonId === X` **and no `daemonIdMismatch`**
-  → do not add a second host; the dialog shows "This daemon is already added as “{name}”."
-  (`hosts.duplicate_daemon`) with Close.
-  - **Pairing route only** (the daemon's token was just replaced, so `H`'s saved token is now stale):
-    the message adds an explicit action "Use this address for “{name}”" → re-points `H` to the
-    endpoint just paired, with the new token (an `updateHost` re-point: `daemonId` cleared and
-    re-verified on connect). Never silently rewrite `H`'s token — `H`'s own endpoint may reach a
-    different daemon (plan review #5).
+  → do not add a second host.
+  - **Token route** (nothing rotated, nothing to lose): "This daemon is already added as “{name}”."
+    (`hosts.duplicate_daemon`) with Close.
+  - **Pairing route** (PR review #1 — `fetchPairSetup` already rotated the daemon's token, so the
+    new token must never be dropped):
+    - `H` **verified here** (`selectDaemonIdVerified`: this session's `observeDaemonId` saw
+      `daemonId` at `H`'s current endpoint — runtime `daemonIdVerified = { endpoint, daemonId }`,
+      token-agnostic, set by a learned/equal answer, cleared by a mismatch or a local re-point,
+      ignored once endpoint or stored value differ, never persisted) → `H`'s token is updated to the
+      new one automatically: "This daemon is already added as “{name}”; its token was updated."
+      (`hosts.duplicate_daemon_token_updated`) with Close.
+    - `H` **not verified** → no plain Close; exactly two actions: "Use this address for “{name}”"
+      (`hosts.duplicate_daemon_use_address` — re-points `H` to the endpoint just paired with the new
+      token; an `updateHost` re-point clears `daemonId`, re-verified on connect) and "Add as a
+      separate host" (`hosts.duplicate_daemon_add_separate` — adds the new endpoint with the new
+      token as if there were no duplicate). **Dismissal** (Escape, X, backdrop, unmount) counts as
+      "Add as a separate host" — chosen over blocking dismissal because an unmount cannot be blocked
+      and it is the one choice that keeps both `H` and the new token.
+    Never silently rewrite an unverified `H`'s token — `H`'s own endpoint may reach a different
+    daemon (plan review #5).
 - `H` flagged with a mismatch, `/api/info` failed, or `host_id` empty → cannot tell → added as today.
 
 ### D6. Sync (`hosts` section)

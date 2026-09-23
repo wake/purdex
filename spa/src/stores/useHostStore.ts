@@ -81,6 +81,11 @@ export interface HostRuntime {
   manualRetry?: () => Promise<void> | void  // safe: runtime excluded from persist partialize
   /** Read through `selectDaemonIdMismatch` — a raw flag may be stale after a re-point. */
   daemonIdMismatch?: DaemonIdMismatch
+  /**
+   * This session observed `daemonId` at `endpoint` (a learned or equal answer; token-agnostic).
+   * Read through `selectDaemonIdVerified` (PR review #1).
+   */
+  daemonIdVerified?: { endpoint: string; daemonId: string }
 }
 
 export interface HostInfo {
@@ -200,14 +205,27 @@ export function selectDaemonIdMismatch(
   return flag
 }
 
+/** True only while this session verified the host's current stored `daemonId` at its current
+ *  endpoint (PR review #1). Stale after a re-point or a change of the stored value, local or by sync. */
+export function selectDaemonIdVerified(state: Pick<HostState, 'hosts' | 'runtime'>, hostId: string): boolean {
+  const host = state.hosts[hostId]
+  const mark = state.runtime[hostId]?.daemonIdVerified
+  return !!host && !!mark && !!host.daemonId && mark.endpoint === hostEndpoint(host) && mark.daemonId === host.daemonId
+}
+
 // (host, observed) pairs already warned about — one console.warn each (spec D3).
 const warnedMismatch = new Set<string>()
 
-function withoutMismatch(runtime: Record<string, HostRuntime>, hostId: string): Record<string, HostRuntime> {
+function withoutVerification(runtime: Record<string, HostRuntime>, hostId: string): Record<string, HostRuntime> {
   const rt = runtime[hostId]
-  if (!rt || !('daemonIdMismatch' in rt)) return runtime
-  const { daemonIdMismatch: _m, ...rest } = rt
+  if (!rt || (!('daemonIdMismatch' in rt) && !('daemonIdVerified' in rt))) return runtime
+  const { daemonIdMismatch: _m, daemonIdVerified: _v, ...rest } = rt
   return { ...runtime, [hostId]: rest as HostRuntime }
+}
+
+function withVerified(runtime: Record<string, HostRuntime>, hostId: string, endpoint: string, daemonId: string): Record<string, HostRuntime> {
+  const { daemonIdMismatch: _m, ...rest } = runtime[hostId] ?? ({} as HostRuntime)
+  return { ...runtime, [hostId]: { ...rest, daemonIdVerified: { endpoint, daemonId } } as HostRuntime }
 }
 
 /** Exact-endpoint lookup shared by registerLocalHost and the Local daemon UI
@@ -256,7 +274,7 @@ export const useHostStore = create<HostState>()(
           if (repoint) delete next.daemonId
           return {
             hosts: { ...state.hosts, [hostId]: next },
-            ...(repoint ? { runtime: withoutMismatch(state.runtime, hostId) } : {}),
+            ...(repoint ? { runtime: withoutVerification(state.runtime, hostId) } : {}),
           }
         }),
 
@@ -270,12 +288,11 @@ export const useHostStore = create<HostState>()(
           if (!host.daemonId) {
             return {
               hosts: { ...state.hosts, [hostId]: { ...host, daemonId: observed } },
-              runtime: withoutMismatch(state.runtime, hostId),
+              runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed),
             }
           }
           if (host.daemonId === observed) {
-            const runtime = withoutMismatch(state.runtime, hostId)
-            return runtime === state.runtime ? state : { runtime }
+            return { runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed) }
           }
           const key = `${hostId}\u0000${observed}`
           if (!warnedMismatch.has(key)) {
@@ -285,8 +302,9 @@ export const useHostStore = create<HostState>()(
             )
           }
           const daemonIdMismatch: DaemonIdMismatch = { stored: host.daemonId, observed, endpoint: endpointAtRequest }
+          const { daemonIdVerified: _v, ...rest } = state.runtime[hostId] ?? ({} as HostRuntime)
           return {
-            runtime: { ...state.runtime, [hostId]: { ...state.runtime[hostId], daemonIdMismatch } as HostRuntime },
+            runtime: { ...state.runtime, [hostId]: { ...rest, daemonIdMismatch } as HostRuntime },
           }
         }),
 
