@@ -3,6 +3,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TabContextMenu } from './TabContextMenu'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
+import { useI18nStore } from '../stores/useI18nStore'
 
 vi.mock('../lib/platform', () => ({
   getPlatformCapabilities: vi.fn(() => ({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, canNotification: false, isElectron: false, devUpdateEnabled: false })),
@@ -20,7 +21,7 @@ function makeNonSessionTab(): Tab {
   return createTab({ kind: 'new-tab' })
 }
 
-function renderMenu(overrides?: { tab?: Tab; hasOtherUnlocked?: boolean; hasRightUnlocked?: boolean }) {
+function renderMenu(overrides?: { tab?: Tab; hasOtherUnlocked?: boolean; hasRightUnlocked?: boolean; targetTabs?: Tab[] }) {
   const props = {
     tab: overrides?.tab ?? makeSessionTab(),
     position: { x: 100, y: 100 },
@@ -28,13 +29,14 @@ function renderMenu(overrides?: { tab?: Tab; hasOtherUnlocked?: boolean; hasRigh
     onAction: vi.fn(),
     hasOtherUnlocked: overrides?.hasOtherUnlocked ?? true,
     hasRightUnlocked: overrides?.hasRightUnlocked ?? true,
+    targetTabs: overrides?.targetTabs,
   }
   render(<TabContextMenu {...props} />)
   return props
 }
 
 describe('TabContextMenu', () => {
-  beforeEach(() => { cleanup(); vi.clearAllMocks() })
+  beforeEach(() => { cleanup(); vi.clearAllMocks(); useI18nStore.getState().setLocale('en') })
   afterEach(() => {
     delete (window as unknown as Record<string, unknown>).electronAPI
   })
@@ -175,5 +177,29 @@ describe('TabContextMenu', () => {
     renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
     const tearOffBtn = screen.getByText('Move to New Window').closest('button')!
     expect(tearOffBtn).toBeDisabled()
+  })
+
+  // --- mergeToTab section locale (#1337) ---
+  describe('mergeToTab menu item locale (#1337)', () => {
+    it('shows the English merge-to-tab label for the en locale', () => {
+      const targetTab = makeNonSessionTab()
+      renderMenu({ targetTabs: [targetTab] })
+      expect(screen.getByText('Add new-tab tab as pane')).toBeInTheDocument()
+      expect(screen.queryByText('加入 new-tab tab 成為 pane')).not.toBeInTheDocument()
+    })
+
+    it('shows the zh-TW merge-to-tab label for the zh-TW locale', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      const targetTab = makeNonSessionTab()
+      renderMenu({ targetTabs: [targetTab] })
+      expect(screen.getByText('加入 new-tab tab 成為 pane')).toBeInTheDocument()
+    })
+
+    it('calls onAction with mergeToTab and the target tab id when clicked', () => {
+      const targetTab = makeNonSessionTab()
+      const props = renderMenu({ targetTabs: [targetTab] })
+      fireEvent.click(screen.getByText('Add new-tab tab as pane'))
+      expect(props.onAction).toHaveBeenCalledWith('mergeToTab', targetTab.id)
+    })
   })
 })

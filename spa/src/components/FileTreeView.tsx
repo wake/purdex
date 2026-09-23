@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FolderSimple, File, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useI18nStore } from '../stores/useI18nStore'
 import { getFsBackend } from '../lib/fs-backend'
 import { tryOpenFileForFileTree } from '../lib/register-modules/file-open-bootstrap'
 import { FileNotFoundError } from '../lib/file-open'
@@ -16,6 +17,7 @@ interface DirState {
 
 export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
   void isActive
+  const t = useI18nStore((s) => s.t)
   const activeHostId = useHostStore((s) => s.activeHostId ?? s.hostOrder[0] ?? '')
 
   const source: FileSource = useMemo(() => ({ type: 'daemon' as const, hostId: activeHostId }), [activeHostId])
@@ -70,7 +72,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
   }, [expandedDirs, fetchDir])
 
   if (!activeHostId) return <div className="p-3 text-xs text-text-muted">No host connected</div>
-  if (!workspaceId) return <div className="p-3 text-xs text-text-muted">請先選擇 Workspace</div>
+  if (!workspaceId) return <div className="p-3 text-xs text-text-muted">{t('file_tree.select_workspace_first')}</div>
 
   if (!projectPath) {
     const handleSubmit = (e: React.FormEvent) => {
@@ -81,7 +83,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
     }
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-4 gap-2">
-        <p className="text-xs text-text-muted text-center">設定專案路徑以顯示檔案樹</p>
+        <p className="text-xs text-text-muted text-center">{t('file_tree.set_project_path')}</p>
         <form onSubmit={handleSubmit} className="flex flex-col gap-2 w-full max-w-48">
           <input
             type="text"
@@ -95,7 +97,7 @@ export function FileTreeWorkspaceView({ isActive, workspaceId }: ViewProps) {
             disabled={!inputValue.trim()}
             className="px-2 py-1 text-xs bg-accent text-white rounded disabled:opacity-40"
           >
-            確認
+            {t('common.confirm')}
           </button>
         </form>
       </div>

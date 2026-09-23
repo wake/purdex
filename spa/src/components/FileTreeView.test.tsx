@@ -4,6 +4,7 @@ import { FileTreeWorkspaceView } from './FileTreeView'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
+import { useI18nStore } from '../stores/useI18nStore'
 import * as FsBackend from '../lib/fs-backend'
 import * as FileOpenerRegistry from '../lib/file-opener-registry'
 import * as FileOpenBootstrap from '../lib/register-modules/file-open-bootstrap'
@@ -47,6 +48,7 @@ const mockBackend = {
 beforeEach(() => {
   vi.restoreAllMocks()
   mockBackend.list.mockReset()
+  useI18nStore.getState().setLocale('en')
   // Stub getFsBackend to return mock backend
   vi.spyOn(FsBackend, 'getFsBackend').mockReturnValue(mockBackend)
   // MUST set host state — FileTreeWorkspaceView reads activeHostId from useHostStore
@@ -117,7 +119,8 @@ describe('FileTreeWorkspaceView', () => {
     expect(screen.getByText(/No host connected/)).toBeTruthy()
   })
 
-  it('shows workspace required message when workspaceId is undefined', () => {
+  it('shows workspace required message when workspaceId is undefined (zh-TW locale)', () => {
+    useI18nStore.getState().setLocale('zh-TW')
     render(<FileTreeWorkspaceView isActive={true} workspaceId={undefined} />)
     expect(screen.getByText('請先選擇 Workspace')).toBeTruthy()
     expect(screen.queryByPlaceholderText('/home/user/project')).toBeNull()
@@ -210,7 +213,8 @@ describe('FileTreeWorkspaceView', () => {
     }
   })
 
-  it('shows setup prompt when projectPath is not configured', () => {
+  it('shows setup prompt when projectPath is not configured (zh-TW locale)', () => {
+    useI18nStore.getState().setLocale('zh-TW')
     useWorkspaceStore.setState({
       workspaces: [{
         id: TEST_WORKSPACE_ID,
@@ -223,5 +227,32 @@ describe('FileTreeWorkspaceView', () => {
     })
     render(<FileTreeWorkspaceView isActive={true} workspaceId={TEST_WORKSPACE_ID} />)
     expect(screen.getByText(/設定專案路徑/)).toBeTruthy()
+    expect(screen.getByText('確認')).toBeTruthy()
+  })
+
+  describe('locale-aware text (#1337)', () => {
+    it('shows the English workspace-required message for the en locale', () => {
+      render(<FileTreeWorkspaceView isActive={true} workspaceId={undefined} />)
+      expect(screen.getByText('Select a workspace first')).toBeTruthy()
+      expect(screen.queryByText('請先選擇 Workspace')).toBeNull()
+    })
+
+    it('shows the English setup prompt and confirm button for the en locale', () => {
+      useWorkspaceStore.setState({
+        workspaces: [{
+          id: TEST_WORKSPACE_ID,
+          name: 'Test Workspace',
+          tabs: [],
+          activeTabId: null,
+          moduleConfig: {},
+        }],
+        activeWorkspaceId: TEST_WORKSPACE_ID,
+      })
+      render(<FileTreeWorkspaceView isActive={true} workspaceId={TEST_WORKSPACE_ID} />)
+      expect(screen.getByText('Set the project path to show the file tree')).toBeTruthy()
+      expect(screen.getByText('Confirm')).toBeTruthy()
+      expect(screen.queryByText('設定專案路徑以顯示檔案樹')).toBeNull()
+      expect(screen.queryByText('確認')).toBeNull()
+    })
   })
 })

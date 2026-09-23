@@ -9,6 +9,7 @@
   "common.open": "Open",
   "common.closed": "Closed",
   "common.remove": "remove",
+  "common.confirm": "Confirm",
 
   "settings.title": "Settings",
   "settings.coming_soon": "coming soon",
@@ -267,6 +268,7 @@
   "tab.rename_session": "Rename Session",
   "tab.rename_placeholder": "Session name",
   "tab.rename_invalid_format": "Only letters, numbers, hyphens, and underscores",
+  "tab.merge_to_tab": "Add {{kind}} tab as pane",
   "pane.split_horizontal": "Split Horizontal",
   "pane.split_vertical": "Split Vertical",
   "pane.close": "Close pane",
@@ -1600,5 +1602,9 @@
   "file_not_found.search_session_cwd": "Search the current session's cwd",
   "file_not_found.search_workspace_path": "Search the workspace project path",
   "file_not_found.search_session_cwd_label": "Search the current session's cwd ({{path}})",
-  "file_not_found.search_workspace_path_label": "Search the workspace project path ({{path}})"
+  "file_not_found.search_workspace_path_label": "Search the workspace project path ({{path}})",
+
+  "file_tree.select_workspace_first": "Select a workspace first",
+  "file_tree.set_project_path": "Set the project path to show the file tree",
+  "file_tree.session_not_implemented": "Session file tree not yet implemented (needs daemon cwd API)"
 }
