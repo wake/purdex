@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/wake/purdex/internal/store"
 )
@@ -25,8 +26,11 @@ const (
 	CreateStageInvalidName CreateStage = "invalid_name" // name fails ValidSessionName
 	CreateStageInvalidCwd  CreateStage = "invalid_cwd"  // resolveCwd refused the directory
 	CreateStageExists      CreateStage = "exists"       // HasSession(name) was already true
-	CreateStageNewSession  CreateStage = "new_session"  // tmux new-session failed; nothing exists
-	CreateStageList        CreateStage = "list"         // tmux list-sessions failed, or the new session was not in it
+	// The caller's context ended before `tmux new-session` ran (typically
+	// while waiting for another create to finish). Nothing was created.
+	CreateStageCancelled  CreateStage = "cancelled"
+	CreateStageNewSession CreateStage = "new_session" // tmux new-session failed; nothing exists
+	CreateStageList       CreateStage = "list"        // tmux list-sessions failed, or the new session was not in it
 	// The tmux generation read after list-sessions differs from the one read
 	// before new-session: the server the session was created on has been
 	// replaced, and the session died with it. Nothing of ours exists.
@@ -86,6 +90,47 @@ func (e *CreateError) SessionAlive() bool {
 	return false
 }
 
+// ctxMutex is a mutex whose Lock can be abandoned when a context ends. The
+// zero value is unlocked and ready to use.
+type ctxMutex struct {
+	once sync.Once
+	ch   chan struct{}
+}
+
+func (l *ctxMutex) sem() chan struct{} {
+	l.once.Do(func() { l.ch = make(chan struct{}, 1) })
+	return l.ch
+}
+
+// LockContext takes the lock, or returns ctx.Err() if ctx ends first.
+func (l *ctxMutex) LockContext(ctx context.Context) error {
+	select {
+	case l.sem() <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TryLock takes the lock if it is free and reports whether it did.
+func (l *ctxMutex) TryLock() bool {
+	select {
+	case l.sem() <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// Unlock releases the lock; unlocking an unlocked ctxMutex panics.
+func (l *ctxMutex) Unlock() {
+	select {
+	case <-l.sem():
+	default:
+		panic("session: unlock of unlocked ctxMutex")
+	}
+}
+
 // ValidSessionName reports whether name is one POST /api/sessions accepts.
 func ValidSessionName(name string) bool {
 	return name != "" && nameRegex.MatchString(name)
@@ -117,12 +162,15 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 	return m.CreateSessionContext(context.Background(), name, cwd)
 }
 
-// CreateSessionContext is CreateSession whose post-create tmux list is
-// bounded by ctx, capped at listReadTimeout (#1293). That read runs inside
-// the createMu critical section, so ending it when the caller's context ends
-// (POST /api/sessions passes r.Context()) also frees createMu for the next
-// create. A read ended that way reports CreateStageList like any other list
-// failure: the tmux session may already exist (see SessionAlive).
+// CreateSessionContext is CreateSession whose caller context governs only
+// the part before `tmux new-session` (#1293): a caller that gives up while
+// waiting for createMu — or before new-session runs — gets
+// CreateStageCancelled and nothing is created. Once new-session has
+// succeeded the session exists, so the rest (list-sessions, generation check,
+// meta write) runs to completion on its own context, detached from the
+// caller's cancellation but still capped at listReadTimeout: abandoning it
+// would leave a tmux session without a meta row, and a hung tmux still cannot
+// hold createMu forever.
 func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd string) (*SessionInfo, error) {
 	fail := func(stage CreateStage, err error) (*SessionInfo, error) {
 		return nil, &CreateError{Stage: stage, Name: name, Err: err}
@@ -144,8 +192,15 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 	// Serialize the HasSession→NewSession→SetMeta critical section so two
 	// concurrent creates with the same name can't both slip past the
 	// duplicate check. Input validation stays outside the lock.
-	m.createMu.Lock()
+	if err := m.createMu.LockContext(ctx); err != nil {
+		return fail(CreateStageCancelled, err)
+	}
 	defer m.createMu.Unlock()
+	// Both select arms can be ready at once; a caller already gone when the
+	// lock came free must still not create.
+	if err := ctx.Err(); err != nil {
+		return fail(CreateStageCancelled, err)
+	}
 
 	if m.tmux.HasSession(name) {
 		return fail(CreateStageExists, ErrSessionExists)
@@ -165,12 +220,15 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 		return fail(CreateStageNewSession, err)
 	}
 
-	// Find the newly created session to get its tmux ID. The read is bounded
-	// like every session-list read (#1293): a hung tmux must not hold the
-	// create critical section (createMu) forever.
-	listCtx, cancel := context.WithTimeout(ctx, listReadTimeout)
-	sessions, err := m.tmux.ListSessions(listCtx)
-	cancel()
+	// From here on the session exists: finish the create regardless of the
+	// caller (see CreateSessionContext). The read is still bounded like every
+	// session-list read (#1293): a hung tmux must not hold the create
+	// critical section (createMu) forever.
+	postCtx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	defer cancel()
+
+	// Find the newly created session to get its tmux ID.
+	sessions, err := m.tmux.ListSessions(postCtx)
 	if err != nil {
 		return fail(CreateStageList, err)
 	}

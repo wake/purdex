@@ -43,8 +43,9 @@ type SessionModule struct {
 	waitForGate chan bool
 	// createMu serializes handleCreate's HasSession→NewSession→SetMeta
 	// critical section so two concurrent POSTs with the same name can't
-	// both slip past the duplicate check. See #61.
-	createMu sync.Mutex
+	// both slip past the duplicate check. See #61. A ctxMutex so a caller
+	// that gives up while waiting for it returns at once (#1293).
+	createMu ctxMutex
 
 	// listCache debounces rapid ListSessions calls (1s TTL). See #128.
 	listCacheMu   sync.Mutex
