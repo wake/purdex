@@ -14,13 +14,18 @@ type Provenance struct {
 	Cwd               string `json:"cwd,omitempty"`
 	TmuxPaneID        string `json:"tmux_pane_id"`
 	TmuxInstance      string `json:"tmux_instance"`
+	// FrameID names this one agent run. The exit envelope (pdx_exit) carries
+	// the same id, and the SPA applies an exit only on an exact match — so a
+	// late exit of an older run that shares the session id (/resume, a
+	// restart) can never mark the new run exited.
+	FrameID string `json:"frame_id"`
 }
 
 // buildProvenance assembles the envelope from the request that produced the
 // frame mutation plus the derive result that carries session_id / cwd. The
 // caller is responsible for the ownership gate; reaching here means the
 // mutation outcome already confirmed the sender kept its own top-level frame.
-func buildProvenance(req EventRequest, result agentpkg.DeriveResult, tmuxInstance string) Provenance {
+func buildProvenance(req EventRequest, result agentpkg.DeriveResult, tmuxInstance, frameID string) Provenance {
 	return Provenance{
 		OwnerSessionStart: true,
 		AgentType:         req.AgentType,
@@ -28,6 +33,7 @@ func buildProvenance(req EventRequest, result agentpkg.DeriveResult, tmuxInstanc
 		Cwd:               strFromDetail(result.Detail, "cwd"),
 		TmuxPaneID:        req.TmuxPaneID,
 		TmuxInstance:      tmuxInstance,
+		FrameID:           frameID,
 	}
 }
 

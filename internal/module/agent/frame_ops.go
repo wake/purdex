@@ -1031,7 +1031,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	var prov *Provenance
 	if lifecycle == agentpkg.LifecycleSessionStart && !req.SenderUncertain &&
 		verdict == VerdictRoot && stored.ParentFrameID == "" {
-		p := buildProvenance(req, result, m.sessionTmuxInstance())
+		p := buildProvenance(req, result, m.sessionTmuxInstance(), stored.FrameID)
 		prov = &p
 	}
 	return projection, FrameTraceMeta{

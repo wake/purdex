@@ -29,6 +29,9 @@ type provenanceResponse struct {
 	TmuxPaneID   string `json:"tmux_pane_id,omitempty"`
 	TmuxInstance string `json:"tmux_instance"`
 	LastSeenAt   int64  `json:"last_seen_at,omitempty"`
+	// FrameID names the answering run, so a backfill that confirms a live
+	// agent can adopt it and a later exit envelope can match it.
+	FrameID string `json:"frame_id,omitempty"`
 }
 
 // handleSessionProvenance answers which agent owns the tmux session behind
@@ -63,6 +66,7 @@ func (m *Module) handleSessionProvenance(w http.ResponseWriter, r *http.Request)
 		resp.Cwd = owner.Cwd
 		resp.TmuxPaneID = owner.TmuxPaneID
 		resp.LastSeenAt = owner.LastSeenAt
+		resp.FrameID = owner.FrameID
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
