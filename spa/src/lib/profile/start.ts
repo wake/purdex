@@ -70,7 +70,7 @@
 //
 // THE PULL GUARD (#1366). A wizard pull attaches with the SOT `hosts` row the user confirmed
 // (`attachMaster(…, 'pull', { confirmedHosts })`); it is stored as one pair with the direction
-// (`useProfileStore.pendingPullHosts`) and read live by the executor (`confirmedPullHosts`), which holds every
+// (`useProfileStore.pendingPullHosts`) and read by the executor ONCE, when it is built (`confirmedPullHosts`, a snapshot), which holds every
 // action until it has compared the SOT with it (executor.ts, THE PULL GUARD). On a mismatch the executor halts
 // and calls `onPullUnconfirmed`: the notice is written FIRST, so that it survives whatever follows (under its own
 // key, pull-unconfirmed.ts — never through `useProfileStore`, whose persist would write this window's possibly

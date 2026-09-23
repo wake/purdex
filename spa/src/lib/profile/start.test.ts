@@ -1682,7 +1682,7 @@ describe('the direction of an attach', () => {
 describe('the pull guard (#1366): the confirmed `hosts` row goes with the direction, and a mismatch stops the sync', () => {
   const ROW = { rev: 7, hash: 'a'.repeat(64) }
 
-  it('attachMaster(pull, { confirmedHosts }) stores it with the direction; the executor reads it live', async () => {
+  it('attachMaster(pull, { confirmedHosts }) stores it with the direction; the dep answers it (the executor snapshots it when built)', async () => {
     connect('h1')
     stop = startProfileSync()
     expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toEqual({ ok: true })

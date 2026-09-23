@@ -169,7 +169,7 @@
 //     here: a conflict that arises while the period is still open (another
 //     client writing meanwhile) is settled by the direction, not by the user.
 //
-// THE PULL GUARD (#1366) — while the period is open, the direction is `pull` and `confirmedPullHosts()` is set
+// THE PULL GUARD (#1366) — built with the direction `pull` and a `confirmedPullHosts()` (a snapshot: see A SNAPSHOT)
 //   Before a pull the wizard showed the user which local hosts it removes, computed from ONE `hosts` row of the
 //   SOT, and re-checked that row right before the attach. The guard is that row (`'absent'`: there was none).
 //   Another device may write `hosts` between that check and the first pull — and the pull would then remove
@@ -200,6 +200,17 @@
 //     start layer stops the sync. Nothing of this machine was replaced and nothing was sent.
 //   - The period cannot end while the barrier is up (`checkSettled`). An executor born without a direction has no
 //     period, so no barrier; `push` has none either (it removes nothing here).
+//   - A SNAPSHOT (codex R2 #2). `{direction, confirmedHosts}` is read ONCE, when the executor is built, and every
+//     guard judgement — the barrier, the guarded `hosts`, the index verdict, the agreement, the guarded pull's
+//     compare — asks that copy until released / halted / disposed. Read live, another window clearing the pair
+//     while the guarded GET is out (same master, `onInitialSettled` of a stale driver, a junk rehydrate) lowered
+//     the barrier and the GET's answer was applied unconfirmed; replacing it made the compare use a row the user
+//     never saw. A live value cleared or changed is therefore neither a downgrade nor a halt: the snapshot is
+//     what the user confirmed for THIS attach, and a real new attach (master or `attachGeneration` moved) gets a
+//     new executor from the start layer anyway. A guard that turns up after the build raises nothing (like a
+//     direction: no period of this executor). What still reads the direction LIVE is unchanged — the answer to a
+//     lock (`answerFor`) and the stale-direction check; so with the live direction gone the `hosts` lock is left
+//     to the user, the barrier still up: nothing moves unconfirmed either way.
 //
 // WHAT THE START LAYER (Task 11) OWES THIS FILE
 //   - `onReconnected()` whenever the master host's event stream (re)connects —
@@ -259,7 +270,8 @@ export interface ExecutorDeps {
   initialDirection?: () => 'push' | 'pull' | null
   /** The first reconciliation has settled. Once per period; the callee clears the direction. */
   onInitialSettled?: () => void
-  /** THE PULL GUARD (see the header): the SOT `hosts` row a `pull` was confirmed against. Absent / null = none. Read live. */
+  /** THE PULL GUARD (see the header): the SOT `hosts` row a `pull` was confirmed against. Absent / null = none. Read
+   *  ONCE, when the executor is built, together with `initialDirection()` — a snapshot, not a live value. */
   confirmedPullHosts?: () => ConfirmedHosts | null
   /** The guard did not match: this executor has halted. Called once. */
   onPullUnconfirmed?: () => void
@@ -456,6 +468,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /** THE PULL GUARD (see the header). Released: `hosts` is applied (or agreed) on the guard's hash. Halted: a mismatch — terminal. */
   let guardReleased = false
+  /** The snapshot `{direction: pull, confirmedHosts}` taken at startup (below) and never read again; null = no barrier. */
+  let pullGuard: Readonly<ConfirmedHosts> | null = null
   let halted = false
 
   let shapesPromise: Promise<Shapes> | null = null
@@ -711,14 +725,23 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /* ─── the pull guard ─── */
 
-  function guard(): ConfirmedHosts | null {
+  /** The guard as `deps.confirmedPullHosts()` answers NOW: a well-formed one, copied and frozen, or null. Read ONCE,
+   *  when the executor is built (`pullGuard`). */
+  function readGuard(): Readonly<ConfirmedHosts> | null {
     const g = deps.confirmedPullHosts?.() ?? null
-    return g === 'absent' || (typeof g === 'object' && g !== null && typeof g.hash === 'string') ? g : null
+    if (g === 'absent') return 'absent'
+    return typeof g === 'object' && g !== null && typeof g.hash === 'string' && typeof g.rev === 'number' ? Object.freeze({ rev: g.rev, hash: g.hash }) : null
   }
 
-  /** Nothing but the index may happen: the verdict is pending — or it was a mismatch. */
+  /** THE snapshot: every guard judgement asks this, never the live dep (see the header, A SNAPSHOT). */
+  function guard(): Readonly<ConfirmedHosts> | null {
+    return pullGuard
+  }
+
+  /** Nothing but the index may happen: the verdict is pending — or it was a mismatch. On the snapshot alone: a live
+   *  direction or guard that is cleared or changed meanwhile does not lower it. */
   function barrierUp(): boolean {
-    return halted || (!guardReleased && direction() === 'pull' && guard() !== null)
+    return halted || (!guardReleased && pullGuard !== null)
   }
 
   /** `key` is the one section the barrier lets through: `hosts`, while a row guard waits for its guarded pull. */
@@ -1547,6 +1570,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   lastStatus = JSON.stringify(status())
   // Born without a direction = an ordinary run (a reload after the period): there is no period to open later.
   periodOver = storedDirection() === null
+  // THE PULL GUARD's snapshot (see the header): the direction and the guard of THIS attach, read once. A guard that
+  // turns up later belongs to no period of this executor, like a direction (the start layer rebuilds on every attach).
+  pullGuard = !periodOver && storedDirection() === 'pull' ? readGuard() : null
 
   return {
     onSection(r) {

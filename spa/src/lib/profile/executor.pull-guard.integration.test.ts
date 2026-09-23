@@ -457,6 +457,73 @@ describe('THE PULL GUARD — a mismatch halts everything', () => {
   })
 })
 
+describe('THE PULL GUARD — a snapshot, taken when the executor is built (codex R2 #2)', () => {
+  /** B attached with `confirmed`; its guarded `hosts` GET is held until `answer` is called. */
+  async function guardedGetOut(confirmed: { rev: number; hash: string }): Promise<{ run: Run; answer: () => void }> {
+    let release: (() => void) | null = null
+    api.getSection.mockImplementation((_h, _p, key) =>
+      key === 'hosts' ? new Promise((r) => (release = () => r(daemon.get('hosts')))) : Promise.resolve(daemon.get(key)),
+    )
+    const run = await start(B, 'pull', confirmed)
+    executor!.onReconnected()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(release).not.toBeNull() // the verdict is out
+    return { run, answer: () => release!() }
+  }
+
+  it('another window CLEARS the direction and the guard while the GET is out (same master): not downgraded — a mismatch still halts, nothing applied or written', async () => {
+    const confirmed = await clientAHasPushed()
+    await hostsMovedOn()
+    worldOfB()
+    const before = snapshot()
+    const { run, answer } = await guardedGetOut(confirmed)
+    run.direction.value = null
+    run.guard.value = null
+    answer()
+    await play(10)
+    expectHalted(run, before)
+  })
+
+  it('…and when the row it reads IS the confirmed one, `hosts` is applied on the snapshot — and only then does anything else move', async () => {
+    const confirmed = await clientAHasPushed()
+    worldOfB()
+    const { run, answer } = await guardedGetOut(confirmed)
+    run.direction.value = null
+    run.guard.value = null
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(applied).not.toHaveBeenCalled()
+    answer()
+    await play(10)
+    expect(log.slice(0, 2)).toEqual(['start:hosts', 'end:hosts'])
+    expect(useHostStore.getState().hosts[H2].name).toBe('named-by-A')
+    expect(run.unconfirmed).not.toHaveBeenCalled()
+  })
+
+  it('another window REPLACES the guard with another row while the GET is out: judged on the ORIGINAL one — halted', async () => {
+    const confirmed = await clientAHasPushed()
+    await hostsMovedOn()
+    worldOfB()
+    const before = snapshot()
+    const { run, answer } = await guardedGetOut(confirmed)
+    run.guard.value = hostsRow() // the row the SOT holds NOW: a live read would match it
+    answer()
+    await play(10)
+    expectHalted(run, before)
+  })
+
+  it('a guard that turns up AFTER the executor was built raises no barrier (it was born without one)', async () => {
+    await clientAHasPushed()
+    await hostsMovedOn()
+    worldOfB()
+    const run = await start(B, 'pull', null)
+    run.guard.value = { rev: 1, hash: 'f'.repeat(64) }
+    executor!.onReconnected()
+    await play()
+    expect(run.unconfirmed).not.toHaveBeenCalled()
+    expect(useHostStore.getState().hosts[H2].name).toBe('renamed-again')
+  })
+})
+
 describe('THE PULL GUARD — who has none', () => {
   it('no guard: today\'s pull, whatever `hosts` holds', async () => {
     await clientAHasPushed()

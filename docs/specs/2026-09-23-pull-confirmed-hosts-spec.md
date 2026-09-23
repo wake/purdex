@@ -1,6 +1,6 @@
 # A wizard pull applies only the `hosts` the user confirmed (#1366) — spec + plan
 
-Status: draft rev 4 (2026-09-23, codex plan review folded in; rev 3: the barrier holds until `hosts` is applied; rev 4: codex PR R2 — the notice under its own key) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
+Status: draft rev 4 (2026-09-23, codex plan review folded in; rev 3: the barrier holds until `hosts` is applied; rev 4: codex PR R2 — the notice under its own key, the guard snapshotted) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
 Follows #1362 (wizard: pull needs a verified host, lists the hosts it removes, re-checks before attach) and
 #1365 (host sync identity wire). Files: `executor.ts`, `start.ts`, `useProfileStore.ts`, `wizard-run.ts`, the
 Profile settings UI, locales.
@@ -36,9 +36,9 @@ Gating individual pulls is not enough: `restore-local` bypasses `mayPull` (sync-
 and a section that is absent on the SOT is PUSHED straight away by the decision table (sync-state.ts:405) — with
 guard `'absent'` the local `hosts` itself would be pushed and `pull('hosts')` never run. So:
 
-New dep `confirmedPullHosts?: () => { rev, hash } | 'absent' | null`, read live like `initialDirection()`.
-When the executor starts (or first sees the guard) with direction `pull` AND a guard present, it raises a
-**barrier**: `pump()` does nothing for ANY section but `hosts` — no pull, push, restore-local, delete, lock answer —
+New dep `confirmedPullHosts?: () => { rev, hash } | 'absent' | null`, **read ONCE when the executor is built**
+(rev 4, codex PR R2 #2): `{direction, confirmedHosts}` is snapshotted then (copied, frozen). When it is built with
+direction `pull` AND a guard present, it raises a **barrier**: `pump()` does nothing for ANY section but `hosts` — no pull, push, restore-local, delete, lock answer —
 until the barrier is released. **The check and the apply of `hosts` are one step** (rev 3, coordinator): there is
 no separate read that compares and then a pull that reads again, so no write can land between the two.
 After every index (`checkConfirmedHosts()`, the index-level part):
@@ -62,6 +62,19 @@ After every index (`checkConfirmedHosts()`, the index-level part):
   calls `deps.onPullUnconfirmed?.()` once.
 No guard (null) or direction `push` → no barrier, today's behaviour. The guard is ignored once the first
 reconciliation period has ended (an executor born without a direction never has one).
+
+**The snapshot (rev 4)**. Every guard judgement — the barrier, the guarded `hosts`, the index verdict, the
+agreement, the guarded pull's hash compare — uses the build-time snapshot until released / halted / disposed; the
+live store is not consulted for the guard again. Read live, another window clearing the pair while the guarded GET
+was out (same master and generation) lowered the barrier and the answer was applied unconfirmed; replacing it made
+the compare use a row the user never saw. A live value that is cleared or changed is neither a downgrade nor a halt
+— the executor keeps judging on the snapshot — because the snapshot is what the user confirmed for THIS attach,
+and a real new attach moves the master or `attachGeneration`, on which the start layer disposes the executor and
+builds a new one (start.ts: the `useProfileStore` subscription → `sync()` returns early only for the same master
+AND generation → `mode.end()` → `leader.dispose()` → `executor.dispose()`; then `enterMasterMode` → `lead`). A
+guard that appears after the build raises nothing (like a direction: no period of this executor). Unchanged, still
+LIVE: the direction's answer to a lock and the stale-direction check — so with the live direction gone the `hosts`
+lock waits for the user while the barrier stays up; nothing moves unconfirmed either way.
 
 ### 2.4 The start layer
 `onPullUnconfirmed` → the start layer records the device-local notice `{ hostId, profileId, at }` FIRST (so it
