@@ -1074,8 +1074,8 @@ describe('isWellFormedSection', () => {
     })
 
     it('daemonId must pass isValidDaemonId — a hostile row is not well-formed (codex attacker)', () => {
-      for (const good of ['mini-lab:278cbm', 'unknown:abc123']) expect(bad((p) => { p.hosts.h1.daemonId = good }), good).toBe(true)
-      for (const evil of [`${'a'.repeat(200)}:abc123`, 'mini:abc123\n', 'mini:abc\u0000123', 'mini‮:abc123', 'mini :abc123', 'no-colon']) {
+      for (const good of ['mini-lab:278cbm', 'unknown:abc123', 'Mini-Lab:278cbm', 'host name:abc123', 'a:b:c']) expect(bad((p) => { p.hosts.h1.daemonId = good }), good).toBe(true)
+      for (const evil of ['a'.repeat(513), 'mini:abc123\n', 'mini:abc\u0000123', 'mini:abc123\t', 'mini\u202e:abc123', 'mini:abc\u200b']) {
         expect(bad((p) => { p.hosts.h1.daemonId = evil }), JSON.stringify(evil)).toBe(false)
       }
     })

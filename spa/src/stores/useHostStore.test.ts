@@ -483,7 +483,7 @@ describe('persist rehydrate (host color sanitize)', () => {
 
   it('drops a stored daemonId that fails isValidDaemonId and keeps a valid one (codex attacker)', async () => {
     const hosts = {
-      evil: { id: 'evil', name: 'evil', ip: '10.0.0.1', port: 7860, order: 0, daemonId: 'mini‮:abc123' },
+      evil: { id: 'evil', name: 'evil', ip: '10.0.0.1', port: 7860, order: 0, daemonId: 'mini\u202e:abc123' },
       good: { id: 'good', name: 'good', ip: '10.0.0.2', port: 7860, order: 1, daemonId: 'mini-lab:278cbm' },
     }
     localStorage.setItem('purdex-hosts', JSON.stringify({ state: { hosts, hostOrder: ['evil', 'good'], activeHostId: 'good', devHostId: null }, version: 1 }))
@@ -548,7 +548,7 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
   })
 
   it('an observed id that fails isValidDaemonId is ignored like "" — never written, never flagged, never verified (codex attacker)', () => {
-    const evil = [`${'a'.repeat(200)}:abc123`, 'mini:abc123\n', 'mini:abc\u0000123', 'mini‮:abc123', 'mini lab:abc123', 'no-colon']
+    const evil = ['a'.repeat(513), 'mini:abc123\n', 'mini:abc\u0000123', 'mini:abc123\t', 'mini\u202e:abc123', 'mini:abc\u200b']
     for (const bad of evil) useHostStore.getState().observeDaemonId(hostId, bad, at())
     expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
     expect(useHostStore.getState().runtime[hostId]?.daemonIdVerified).toBeUndefined()

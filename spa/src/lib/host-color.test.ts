@@ -286,13 +286,13 @@ describe('sanitizeHostConfig', () => {
   })
 
   it.each([
-    'a'.repeat(200) + ':abc123',
+    'a'.repeat(513),
     'mini:abc123\n',
     'mini:abc\u0000123',
-    'mini‮:abc123',
-    'mini lab:abc123',
+    'mini:abc123\t',
+    'mini\u202e:abc123',
+    'mini:abc\u200b',
     '',
-    'no-colon',
     42,
     null,
   ])('removes an invalid daemonId %j (isValidDaemonId, codex attacker)', (bad) => {
@@ -301,7 +301,7 @@ describe('sanitizeHostConfig', () => {
     expect(out).toEqual({ ...base, token: 'T' })
   })
 
-  it.each(['mini-lab:278cbm', 'unknown:abc123'])('keeps a valid daemonId %j (same object reference)', (id) => {
+  it.each(['mini-lab:278cbm', 'unknown:abc123', 'Mini-Lab:278cbm', 'host name:abc123', 'm\u00fcnchen:abc123'])('keeps a valid daemonId %j (same object reference)', (id) => {
     const h: HostConfig = { ...base, daemonId: id }
     expect(sanitizeHostConfig(h)).toBe(h)
   })
