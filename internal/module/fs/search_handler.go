@@ -78,7 +78,17 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roots, status, err := m.resolveCapabilityRoots(r.Context(), body.Roots)
+	// One budget for the whole search: limits.timeoutMs (when given) bounds
+	// the session-cwd root lookup as well as the walk, so a stuck tmux read
+	// cannot hold a 50ms search for the full session-list timeout (#1293).
+	ctx := r.Context()
+	if body.Limits != nil && body.Limits.TimeoutMs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(body.Limits.TimeoutMs)*time.Millisecond)
+		defer cancel()
+	}
+
+	roots, status, err := m.resolveCapabilityRoots(ctx, body.Roots)
 	if err != nil {
 		jsonError(w, err.Error(), status)
 		return
@@ -98,13 +108,6 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 			ExcludeBasenameGlobs: body.Filters.ExcludeBasenameGlobs,
 			RespectGitignore:     body.Filters.RespectGitignore,
 		}
-	}
-
-	ctx := r.Context()
-	if body.Limits != nil && body.Limits.TimeoutMs > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(body.Limits.TimeoutMs)*time.Millisecond)
-		defer cancel()
 	}
 
 	resp, err := Search(ctx, req)

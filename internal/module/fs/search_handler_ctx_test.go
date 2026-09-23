@@ -61,3 +61,48 @@ func TestHandleSearch_CancelledRequestEndsStuckSessionRead(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "session lookup failed")
 }
+
+// #1293: limits.timeoutMs is the whole search's budget — it bounds the
+// session-cwd root lookup too, not only the walk. With the lookup stuck in
+// tmux, a 50ms search answers in about 50ms (400 "session lookup failed", the
+// handler's existing answer to a root it could not resolve) instead of waiting
+// out the session-list timeout (5s) before its own deadline even starts.
+func TestHandleSearch_TimeoutMsBoundsStuckSessionRead(t *testing.T) {
+	meta, err := store.OpenMeta(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { meta.Close() })
+	fake := tmux.NewFakeExecutor()
+	fake.AddSession("dev", t.TempDir())
+	sessions := session.NewSessionModule(meta)
+	require.NoError(t, sessions.Init(core.New(core.CoreDeps{Tmux: fake, Registry: core.NewServiceRegistry()})))
+	never := make(chan struct{})
+	fake.SetReadHook(tmux.BlockReadsUntil(never, nil))
+
+	m := newTestFsModule(t, sessions)
+	code, err := session.EncodeSessionID("$0")
+	require.NoError(t, err)
+	const timeoutMs = 50
+	body := httpSearchBodyT{
+		Mode:   "basename",
+		Query:  map[string]string{"basename": "foo"},
+		Roots:  []map[string]any{{"kind": "session-cwd", "sessionCode": code}},
+		Limits: map[string]int{"timeoutMs": timeoutMs},
+	}
+	req := newHTTPReq(t, body) // request context never ends on its own
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(done)
+		m.handleSearch(w, req)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("search did not return")
+	}
+	assert.Less(t, time.Since(start), timeoutMs*time.Millisecond+500*time.Millisecond,
+		"the session-cwd root lookup ran outside limits.timeoutMs")
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "session lookup failed")
+}
