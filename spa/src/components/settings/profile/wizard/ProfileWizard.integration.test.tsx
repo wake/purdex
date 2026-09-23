@@ -150,6 +150,8 @@ describe('the wizard, through its controls, against a daemon', () => {
   it('EXISTING → PULL with the copy: this device takes the host\'s state, and what it held is a local profile named after it', async () => {
     // another day: this device pushed SENTINEL-A, stopped, and has worked on as SENTINEL-B since
     exists = true
+    // a pull needs the host verified this session (host-sync-identity §8)
+    useHostStore.setState({ hosts: { [M]: { ...useHostStore.getState().hosts[M], daemonId: 'mlab:278cbm' } }, runtime: { [M]: { status: 'connected', daemonIdVerified: { endpoint: '10.0.0.1:7860', daemonId: 'mlab:278cbm' } } } })
     expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
     await settle()
     expect(await detachMaster()).toEqual({ ok: true })
@@ -163,6 +165,9 @@ describe('the wizard, through its controls, against a daemon', () => {
     await click('profile-wizard-next')
     await click('profile-wizard-next')
     await click('profile-wizard-direction-pull')
+    // the host list on the daemon is this device's own: the pull removes no host, and says none
+    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
+    expect(screen.queryByTestId('profile-wizard-pull-refused')).toBeNull()
     expect((screen.getByTestId('profile-wizard-save-first') as HTMLInputElement).checked).toBe(true)
     expect((screen.getByTestId('profile-wizard-save-name') as HTMLInputElement).value).toBe('Laptop')
     await click('profile-wizard-next')

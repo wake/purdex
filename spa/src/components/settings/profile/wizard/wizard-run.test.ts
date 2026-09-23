@@ -16,13 +16,13 @@ import type { Tab, Workspace } from '../../../../types/tab'
 import { __resetMasterWorldForTest, readMasterWorld } from '../../../../lib/profile/master-world'
 import { attachMaster } from '../../../../lib/profile/start'
 import en from '../../../../locales/en.json'
-import { createProfile, listProfiles } from '../../../../lib/profile/api'
+import { createProfile, getSection, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { useUndoToast } from '../../../../stores/useUndoToast'
-import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, runPlan, sotFingerprint, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, previewPull, runPlan, sotFingerprint, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
 vi.mock('../../../../lib/profile/start', () => ({ attachMaster: vi.fn() }))
-vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn() }))
+vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn(), getSection: vi.fn() }))
 
 const MASTER = 'SENTINEL-MASTER'
 const S1 = 'SENTINEL-ONE'
@@ -54,7 +54,7 @@ function slaveOnScreen(): void {
   putOnScreen(world('a', S1), 's1', 1)
 }
 
-const plan = (over: Partial<WizardPlan>): WizardPlan => ({ hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', ...over })
+const plan = (over: Partial<WizardPlan>): WizardPlan => ({ hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: [], ...over })
 const textOf = (w: unknown): string => JSON.stringify(w)
 const sentinelsIn = (text: string): string[] => [MASTER, S1, S2].filter((s) => text.includes(s))
 const slaveNamed = (name: string) => Object.values(useLocalProfilesStore.getState().slaves).find((s) => s.name === name)
@@ -71,6 +71,7 @@ beforeEach(() => {
   atAttach = null
   vi.mocked(listProfiles).mockReset()
   vi.mocked(createProfile).mockReset()
+  vi.mocked(getSection).mockReset()
   vi.mocked(attachMaster).mockReset().mockImplementation(async () => {
     const read = readMasterWorld()
     const kept = slaveNamed('Kept')
@@ -230,10 +231,13 @@ describe('prepareRun — the ONE door before the run: this device\'s premises AN
   })
 
   it('nothing moved: a plan — frozen, and exactly what was asked for', async () => {
-    const r = await prepareRun(draft({ direction: 'pull', saveAs: 'Kept', localId: 's1' }))
-    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: 's1', direction: 'pull', saveAs: 'Kept' } })
+    const r = await prepareRun(draft({ direction: 'push', saveAs: 'Kept', localId: 's1' }))
+    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: 's1', direction: 'push', saveAs: null, removesHosts: [] } })
     expect(r.ok && Object.isFrozen(r.plan)).toBe(true)
-    expect(listProfiles).toHaveBeenCalledWith('h1')
+    // pinned to where the host is (host-sync-identity §8): a host re-pointed during the ask is not listed elsewhere
+    expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: '10.0.0.1:7860' })
+    // a push reads nothing but the list: the host's verification is a pull's premise only
+    expect(getSection).not.toHaveBeenCalled()
   })
 
   it('the fingerprint is the live sections\' name, rev and hash — in any order; never a payload', () => {
@@ -301,6 +305,126 @@ describe('prepareRun — the ONE door before the run: this device\'s premises AN
     ['never seen', { seen: null }],
   ])('a draft with %s is no plan', async (_label, over) => {
     expect(await prepareRun(draft(over as Partial<WizardDraft>))).toMatchObject({ ok: false, reason: 'incomplete' })
+  })
+})
+
+describe('prepareRun — a PULL: the host verified, and the hosts it removes are the ones the user was shown (host-sync-identity §8)', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const AT = '10.0.0.1:7860'
+  const HOSTS_META = meta('hosts', 3)
+  const SEEN = [HOSTS_META, meta('workspaces', 7)]
+  const draft = (over: Partial<WizardDraft> = {}): WizardDraft => ({ hostId: 'h1', profileId: P, seen: sotFingerprint(indexEntry(P, 'default', SEEN)), localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesSeen: [], ...over })
+  const h = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ id, name, ip: '10.0.0.1', port: 7860, order: 0, ...extra })
+  /** The SOT's `hosts` section: one row per daemon, keyed by whatever the writer used. */
+  const sotHosts = (rows: Record<string, unknown>, m = HOSTS_META) =>
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...m, payload: { hosts: rows, hostOrder: Object.keys(rows) } } })
+  const verified = { status: 'connected' as const, daemonIdVerified: { endpoint: AT, daemonId: DAEMON } }
+
+  beforeEach(() => {
+    // h1 is the attach host (verified); h2 is a host only this device has, with no claim — no row can match it
+    useHostStore.setState({ hosts: { h1: h('h1', 'mlab', { daemonId: DAEMON }), h2: { ...h('h2', 'old box'), ip: '10.0.0.2' } }, hostOrder: ['h1', 'h2'], runtime: { h1: verified } })
+    listed(indexEntry(P, 'default', SEEN))
+    sotHosts({ d1_whatever: { id: 'd1_whatever', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON } })
+  })
+
+  it('the host is verified, the list shown is the list now: a plan that carries it; both reads pinned to the host\'s address', async () => {
+    const r = await prepareRun(draft({ removesSeen: ['h2'] }))
+    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: ['h2'] } })
+    expect(r.ok && Object.isFrozen(r.plan.removesHosts)).toBe(true)
+    expect(getSection).toHaveBeenCalledWith('h1', P, 'hosts', { expectEndpoint: AT })
+    expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: AT })
+  })
+
+  it('NOT VERIFIED — no claim, or confirmed at another address, or of another claim: refused before the host is asked', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'master-unverified' })
+    useHostStore.setState({ runtime: { h1: { ...verified, daemonIdVerified: { endpoint: '10.0.0.9:7860', daemonId: DAEMON } } } })
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'master-unverified' })
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: h('h1', 'mlab') }, runtime: { h1: verified } })
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'master-unverified' })
+    expect(getSection).not.toHaveBeenCalled()
+    expect(listProfiles).not.toHaveBeenCalled()
+  })
+
+  it('A MISMATCH — the daemon at that address is another one: refused as such, before the host is asked', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected', daemonIdMismatch: { stored: DAEMON, observed: 'other:zzzzzz', endpoint: AT } } } })
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'master-mismatch' })
+    expect(getSection).not.toHaveBeenCalled()
+  })
+
+  it('… and AGAIN after the host has answered: a mismatch found meanwhile is caught', async () => {
+    vi.mocked(listProfiles).mockImplementation(async () => {
+      useHostStore.setState({ runtime: { h1: { status: 'connected', daemonIdMismatch: { stored: DAEMON, observed: 'other:zzzzzz', endpoint: AT } } } })
+      return { kind: 'ok', value: [indexEntry(P, 'default', SEEN)] }
+    })
+    expect(await prepareRun(draft({ removesSeen: ['h2'] }))).toEqual({ ok: false, reason: 'master-mismatch' })
+  })
+
+  it('a push is unchanged: an unverified host pushes', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    expect(await prepareRun(draft({ direction: 'push' }))).toMatchObject({ ok: true, plan: { direction: 'push', removesHosts: [] } })
+  })
+
+  it('never shown, or shown another list: refused with the list as it is now — the user is to see it before anything runs', async () => {
+    expect(await prepareRun(draft({ removesSeen: null }))).toEqual({ ok: false, reason: 'removes-changed', removes: ['h2'] })
+    expect(await prepareRun(draft({ removesSeen: undefined }))).toEqual({ ok: false, reason: 'removes-changed', removes: ['h2'] })
+    expect(await prepareRun(draft({ removesSeen: [] }))).toEqual({ ok: false, reason: 'removes-changed', removes: ['h2'] })
+    // a host added here meanwhile, which no row names: it would go too
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h3: { ...h('h3', 'new'), ip: '10.0.0.3' } } })
+    expect(await prepareRun(draft({ removesSeen: ['h2'] }))).toEqual({ ok: false, reason: 'removes-changed', removes: ['h2', 'h3'] })
+  })
+
+  it('a host this device has is matched by its daemon — whatever key the row travels under: not removed', async () => {
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...h('h2', 'old box', { daemonId: 'box:111111' }), ip: '10.0.0.2' } } })
+    sotHosts({ zz9999: { name: 'mlab', daemonId: DAEMON }, 'foreign-local-id': { name: 'box', daemonId: 'box:111111' } })
+    expect(await prepareRun(draft({ removesSeen: [] }))).toMatchObject({ ok: true, plan: { removesHosts: [] } })
+  })
+
+  it('no hosts section on the SOT: a pull touches no host — nothing to remove', async () => {
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: null })
+    listed(indexEntry(P, 'default', [meta('workspaces', 7)]))
+    const r = await prepareRun(draft({ seen: sotFingerprint(indexEntry(P, 'default', [meta('workspaces', 7)])), removesSeen: [] }))
+    expect(r).toMatchObject({ ok: true, plan: { removesHosts: [] } })
+  })
+
+  it.each([
+    ['two rows name one daemon', { a: { daemonId: DAEMON }, b: { daemonId: DAEMON } }, 'duplicate-host-identity'],
+  ])('the rows cannot be matched one-to-one (%s): refused, nothing runs', async (_label, rows, reason) => {
+    sotHosts(rows)
+    expect(await prepareRun(draft({ removesSeen: ['h2'] }))).toEqual({ ok: false, reason })
+  })
+
+  it('two hosts HERE claim the daemon of one row: host-identity-conflict', async () => {
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...h('h2', 'twin', { daemonId: DAEMON }), ip: '10.0.0.2' } } })
+    expect(await prepareRun(draft({ removesSeen: [] }))).toEqual({ ok: false, reason: 'host-identity-conflict' })
+  })
+
+  it('the hosts section moved between the read and the list: the profile changed — nothing runs', async () => {
+    sotHosts({ d1_whatever: { daemonId: DAEMON } }, meta('hosts', 2)) // read at rev 2, the index says 3
+    expect(await prepareRun(draft({ removesSeen: ['h2'] }))).toMatchObject({ ok: false, reason: 'profile-changed' })
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: null }) // read: none; the index: rev 3
+    expect(await prepareRun(draft({ removesSeen: [] }))).toMatchObject({ ok: false, reason: 'profile-changed' })
+  })
+
+  it('the hosts section cannot be read, or is not what a hosts payload is: refused with the failure\'s class', async () => {
+    vi.mocked(getSection).mockResolvedValue(transportFailure('endpoint-changed'))
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'list-failed', request: 'endpoint-changed' })
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: ['x'] } } })
+    expect(await prepareRun(draft())).toEqual({ ok: false, reason: 'list-failed', request: 'malformed' })
+    vi.mocked(getSection).mockRejectedValue(new Error('boom SECRET'))
+    const r = await prepareRun(draft())
+    expect(r).toEqual({ ok: false, reason: 'list-failed', request: 'thrown' })
+    expect(listProfiles).not.toHaveBeenCalled()
+  })
+
+  it('previewPull — what the direction step names: the same list, or why there is none', async () => {
+    expect(await previewPull('h1', P)).toEqual({ ok: true, removes: ['h2'] })
+    expect(getSection).toHaveBeenCalledWith('h1', P, 'hosts', { expectEndpoint: AT })
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    expect(await previewPull('h1', P)).toEqual({ ok: false, reason: 'master-unverified' })
+    useHostStore.setState({ runtime: { h1: verified } })
+    vi.mocked(getSection).mockResolvedValue(transportFailure('timeout'))
+    expect(await previewPull('h1', P)).toEqual({ ok: false, reason: 'list-failed', request: 'timeout' })
   })
 })
 

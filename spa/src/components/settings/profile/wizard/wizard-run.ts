@@ -78,15 +78,16 @@
 // not one of `ATTACH_REASONS` leaves this file as `'other'`; `write-failed` leaves without its `detail`.
 import { useWorkspaceStore } from '../../../../features/workspace/store'
 import { effectiveDeviceName } from '../../../../lib/device-name'
-import { createProfile, listProfiles, type ProfileIndexEntry } from '../../../../lib/profile/api'
+import { createProfile, getSection, listProfiles, type ProfileIndexEntry } from '../../../../lib/profile/api'
+import { matchIncomingHosts, type HostMatchError } from '../../../../lib/profile/host-identity'
 import { readMasterWorld } from '../../../../lib/profile/master-world'
 import { attachMaster } from '../../../../lib/profile/start'
 import { copyMasterAsSlave, promoteToMaster } from '../../../../lib/profile/switch-active'
 import { useDeviceNameStore } from '../../../../stores/useDeviceNameStore'
-import { useHostStore } from '../../../../stores/useHostStore'
+import { selectDaemonIdMismatch, selectDaemonIdVerified, useHostStore } from '../../../../stores/useHostStore'
 import { useI18nStore } from '../../../../stores/useI18nStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../../../../stores/useLocalProfilesStore'
-import { selectMaster, useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
+import { endpointOfHost, selectMaster, useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
 import { useTabStore } from '../../../../stores/useTabStore'
 import { useUndoToast } from '../../../../stores/useUndoToast'
 import { defaultSlaveName } from '../profile-rules'
@@ -99,6 +100,9 @@ export interface WizardPlan {
   direction: SyncDirection
   /** Pull only: the name of the copy kept of the world the pull replaces; null = no copy. */
   saveAs: string | null
+  /** Pull only (`[]` for a push): the local hosts this pull removes — no row of the SOT's `hosts` section matches
+   *  them (`matchIncomingHosts`; host-sync-identity spec §6, §11.10). Exactly the list the user was shown. */
+  removesHosts: readonly string[]
 }
 
 export type SubStepId = 'promote' | 'save' | 'attach'
@@ -211,6 +215,8 @@ export interface WizardDraft {
   localId: string
   direction: SyncDirection | null
   saveAs: string | null
+  /** Pull only: the local hosts the user was SHOWN as removed by it (`previewPull`); null / absent = never shown. */
+  removesSeen?: readonly string[] | null
 }
 
 export type PremiseReason = 'attached-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone'
@@ -221,9 +227,25 @@ export interface SotNow {
   empty: boolean
 }
 
+/**
+ * Why a PULL cannot be made from this host (host-sync-identity spec §8). A pull takes the SOT's host list, and the
+ * attach host is the host its rows are matched against with certainty — so this device must have confirmed, this
+ * session and at the host's current address, that the daemon there is the one the host's record claims.
+ *   `master-mismatch`   the daemon at the host's address is another one than its record says.
+ *   `master-unverified` nothing is confirmed (no claim yet, or not reached since the claim or the address changed).
+ */
+export type PullPremiseReason = 'master-unverified' | 'master-mismatch'
+
+/** The SOT's `hosts` rows cannot be matched to this device's hosts one-to-one (`matchIncomingHosts`' error):
+ *  `duplicate-host-identity` — two of its rows name one daemon; `host-identity-conflict` — two hosts HERE claim the
+ *  daemon of one row. The pull would end `locked:invalid`: nothing runs. */
+export type PullMatchReason = HostMatchError
+
 export type PrepareResult =
   | { ok: true; plan: Readonly<WizardPlan> }
-  | { ok: false; reason: PremiseReason | 'incomplete' | 'profile-gone' }
+  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason | 'incomplete' | 'profile-gone' }
+  /** The hosts this pull removes are not the ones the user was shown (or none were shown): `removes` is the list now. */
+  | { ok: false; reason: 'removes-changed'; removes: string[] }
   | { ok: false; reason: 'profile-changed'; now: SotNow }
   /** `request`: the failure's class (wizard-shared.ts, `requestKey`) — never its message. */
   | { ok: false; reason: 'list-failed'; request: string }
@@ -251,28 +273,104 @@ export function brokenLocalPremise(hostId: string | null, localId: string, check
 }
 
 /** The host's profiles, or the class of the failure. */
-async function listOrClass(hostId: string): Promise<{ ok: true; rows: ProfileIndexEntry[] } | { ok: false; request: string }> {
+async function listOrClass(hostId: string, expectEndpoint?: string): Promise<{ ok: true; rows: ProfileIndexEntry[] } | { ok: false; request: string }> {
   try {
-    const r = await listProfiles(hostId)
+    const r = await listProfiles(hostId, expectEndpoint === undefined ? undefined : { expectEndpoint })
     return r.kind === 'ok' ? { ok: true, rows: r.value } : { ok: false, request: r.reason }
   } catch {
     return { ok: false, request: 'thrown' }
   }
 }
 
+/** The pull premise of `hostId`, read off the host store this instant (`PullPremiseReason`). Null = it holds. */
+export function brokenPullPremise(hostId: string): PullPremiseReason | null {
+  const hosts = useHostStore.getState()
+  if (selectDaemonIdMismatch(hosts, hostId) !== undefined) return 'master-mismatch'
+  if (!selectDaemonIdVerified(hosts, hostId)) return 'master-unverified'
+  return null
+}
+
+/** The SOT's `hosts` rows for a pull. `rev` / `hash` of the section read; `rows` null = there is no section. */
+type HostsRead = { ok: true; rows: Record<string, unknown> | null; rev: number | null; hash: string | null } | { ok: false; request: string }
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** The SOT's `hosts` section, read at `at` and nowhere else. A payload whose `hosts` is not a record is `malformed`:
+ *  nothing is guessed about what it would remove. */
+async function readSotHosts(hostId: string, profileId: string, at: string): Promise<HostsRead> {
+  try {
+    const r = await getSection(hostId, profileId, 'hosts', { expectEndpoint: at })
+    if (r.kind !== 'ok') return { ok: false, request: r.reason }
+    if (r.value === null) return { ok: true, rows: null, rev: null, hash: null }
+    const rows = r.value.payload.hosts
+    return isRecord(rows) ? { ok: true, rows, rev: r.value.rev, hash: r.value.hash } : { ok: false, request: 'malformed' }
+  } catch {
+    return { ok: false, request: 'thrown' }
+  }
+}
+
+/** The local hosts a pull of `rows` removes, matched against this device's hosts THIS INSTANT. No section → none. */
+function removalsOf(rows: Record<string, unknown> | null): { ok: true; removes: string[] } | { ok: false; reason: PullMatchReason } {
+  if (rows === null) return { ok: true, removes: [] }
+  const match = matchIncomingHosts(useHostStore.getState().hosts, rows)
+  return match.error !== undefined ? { ok: false, reason: match.error } : { ok: true, removes: match.removed }
+}
+
+export type PullPreview =
+  | { ok: true; removes: string[] }
+  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason }
+  | { ok: false; reason: 'list-failed'; request: string }
+
+/**
+ * For the direction step: which local hosts a pull would remove, as far as can be said NOW — so that the warning
+ * names them before anybody presses Start. Nothing is decided here: `prepareRun` reads it all again, and runs only
+ * if the list is still the one shown (`removesSeen`).
+ */
+export async function previewPull(hostId: string, profileId: string): Promise<PullPreview> {
+  const local = brokenLocalPremise(hostId, MASTER_PROFILE_ID, { host: true, local: false })
+  if (local !== null) return { ok: false, reason: local }
+  const pull = brokenPullPremise(hostId)
+  if (pull !== null) return { ok: false, reason: pull }
+  const read = await readSotHosts(hostId, profileId, endpointOfHost(useHostStore.getState().hosts[hostId]))
+  if (!read.ok) return { ok: false, reason: 'list-failed', request: read.request }
+  return removalsOf(read.rows)
+}
+
+const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x) => b.includes(x))
+
 /**
  * THE door (see the header): a frozen plan, or why there is none. Nothing is written, here or on the host.
  * `promoted`: a retry after the promote went through — the chosen local profile IS the master by now, so it is
  * no longer looked for among the local profiles.
+ *
+ * A PULL ASKS MORE (host-sync-identity spec §8): the host verified, with no mismatch (`brokenPullPremise`) — before
+ * the host is asked and again after; the SOT's `hosts` section, read BEFORE the list and checked against it (the
+ * rev and hash the index lists must be the ones read, else the profile moved in between: `profile-changed`); its
+ * rows matched one-to-one against this device's hosts as they are at the end; and the hosts that match none —
+ * the ones the pull removes — exactly those the user was shown (`removesSeen`), else `removes-changed` with the
+ * list as it is now. Every request goes to the address the host had when this began (`expectEndpoint`).
  */
 export async function prepareRun(draft: WizardDraft, promoted = false): Promise<PrepareResult> {
   const { hostId, profileId, seen, direction } = draft
   if (hostId === null || profileId === null || seen === null || direction === null) return { ok: false, reason: 'incomplete' }
-  const premises = (): PremiseReason | null => brokenLocalPremise(hostId, draft.localId, { host: true, local: !promoted })
+  const pulling = direction === 'pull'
+  const premises = (): PremiseReason | PullPremiseReason | null =>
+    brokenLocalPremise(hostId, draft.localId, { host: true, local: !promoted }) ?? (pulling ? brokenPullPremise(hostId) : null)
   const before = premises()
   if (before !== null) return { ok: false, reason: before }
+  // Every request of this door goes here or nowhere (the host is in the store: `premises` said so).
+  const at = endpointOfHost(useHostStore.getState().hosts[hostId])
 
-  const listedNow = await listOrClass(hostId)
+  let sotHosts: Extract<HostsRead, { ok: true }> | null = null
+  if (pulling) {
+    const read = await readSotHosts(hostId, profileId, at)
+    if (!read.ok) return { ok: false, reason: 'list-failed', request: read.request }
+    sotHosts = read
+  }
+
+  const listedNow = await listOrClass(hostId, at)
   if (!listedNow.ok) return { ok: false, reason: 'list-failed', request: listedNow.request }
   // The ask took a while: this device may have moved meanwhile.
   const after = premises()
@@ -283,7 +381,18 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
   const now = sotNow(entry)
   if (now.fingerprint !== seen) return { ok: false, reason: 'profile-changed', now }
 
-  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: direction === 'pull' ? draft.saveAs : null }) }
+  let removesHosts: readonly string[] = []
+  if (sotHosts !== null) {
+    const listed = entry.sections.find((m) => m.section === 'hosts')
+    const same = listed === undefined ? sotHosts.rev === null : listed.rev === sotHosts.rev && listed.hash === sotHosts.hash
+    if (!same) return { ok: false, reason: 'profile-changed', now }
+    const removal = removalsOf(sotHosts.rows)
+    if (!removal.ok) return { ok: false, reason: removal.reason }
+    if (draft.removesSeen == null || !sameSet(removal.removes, draft.removesSeen)) return { ok: false, reason: 'removes-changed', removes: removal.removes }
+    removesHosts = Object.freeze([...removal.removes])
+  }
+
+  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: pulling ? draft.saveAs : null, removesHosts }) }
 }
 
 // === Creating the SOT profile ===
