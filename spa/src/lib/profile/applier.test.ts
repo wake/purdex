@@ -1560,9 +1560,9 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
     expect(out.order).toEqual(['t1'])
   })
 
-  it('settings: host-settings keys and preset columns are resolved; a host-bearing column whose host is NOT live here is left out (never handed to the New Tab prune)', () => {
+  it('settings: host-settings keys and preset columns are resolved; a host-bearing column or key whose host is not here is kept verbatim (host ownership §3.2)', () => {
     const p: SettingsPayload = deepFreeze({
-      'purdex-host-settings': { hosts: { [WIRE]: { a: 1 }, gone00: { b: 2 } } },
+      'purdex-host-settings': { hosts: { [WIRE]: { a: 1 }, gone00: { b: 2 }, [syncIdOfSync('other:x')]: { c: 3 } } },
       'purdex-newtab-layout': {
         presets: {
           '3col': { enabled: true, columns: [[`sessions:${WIRE}`, 'files'], ['headless:aaaaaa', `headless:${syncIdOfSync('other:x')}`], ['sessions:gone00']] },
@@ -1572,11 +1572,11 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
       },
       'purdex-layout': { tabPosition: 'top' },
     })
-    const out = settingsFromWire(p, resolve, new Set(['bbbbbb']))
-    expect(out['purdex-host-settings']).toEqual({ hosts: { bbbbbb: { a: 1 }, gone00: { b: 2 } } })
+    const out = settingsFromWire(p, resolve)
+    expect(out['purdex-host-settings']).toEqual({ hosts: { bbbbbb: { a: 1 }, gone00: { b: 2 }, [syncIdOfSync('other:x')]: { c: 3 } } })
     expect(out['purdex-newtab-layout']).toEqual({
       presets: {
-        '3col': { enabled: true, columns: [['sessions:bbbbbb', 'files'], ['headless:bbbbbb'], []] },
+        '3col': { enabled: true, columns: [['sessions:bbbbbb', 'files'], ['headless:bbbbbb', `headless:${syncIdOfSync('other:x')}`], ['sessions:gone00']] },
         '2col': { enabled: true, columns: [[], []] },
         '1col': { enabled: true, columns: [['files']] },
       },
@@ -1586,7 +1586,7 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
 
   it('settings: a live host that the resolver leaves unchanged (a legacy id that IS the local id) keeps its column', () => {
     const p: SettingsPayload = { 'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['sessions:h1']] } } } }
-    const out = settingsFromWire(p, resolve, new Set(['h1']))
+    const out = settingsFromWire(p, resolve)
     expect(out['purdex-newtab-layout']).toEqual(p['purdex-newtab-layout'])
   })
 })

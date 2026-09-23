@@ -1399,7 +1399,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(wire) })
   })
 
-  it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is left out (the hash says so)', async () => {
+  it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is KEPT verbatim (host ownership §3.2)', async () => {
     const other = syncIdOfSync(OTHER)
     const presets = {
       '3col': { enabled: true, columns: [[`sessions:${WIRE}`], [`headless:${other}`], []] },
@@ -1410,11 +1410,31 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     const outcome = await applySectionToStores('settings', payload, ctx)
     expect(outcome).toMatchObject({ ok: true })
     expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } } })
-    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [], []])
+    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [`headless:${other}`], []])
     expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([[`sessions:${M}`]])
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) }) // the unknown column: pushed back without it, once
     const identity = identityOfSync(useHostStore.getState().hosts)
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)) })
+  })
+
+  // Host ownership §3.2: every reference to a host this device lacks is stored verbatim and built verbatim, so a
+  // payload carrying them comes back byte-for-byte — its hash is the incoming one and nothing is pushed.
+  it('settings: an unknown column and an unknown host-settings key round-trip apply → stores → build byte-for-byte', async () => {
+    const unknown = syncIdOfSync(OTHER)
+    const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+    const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+    for (const preset of Object.values(layout.presets)) preset.columns[0] = [...preset.columns[0], `sessions:${unknown}`, `headless:${unknown}`]
+    const payload: SettingsPayload = {
+      ...now,
+      'purdex-host-settings': { hosts: { [WIRE]: { mod: { k: 1 } }, [unknown]: { editor: { homePath: '/srv' } } } },
+    }
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } }, [unknown]: { editor: { homePath: '/srv' } } })
+    for (const preset of Object.values(useNewTabLayoutStore.getState().presets)) {
+      expect(preset.columns[0]).toEqual(expect.arrayContaining([`sessions:${unknown}`, `headless:${unknown}`]))
+    }
+    const identity = identityOfSync(useHostStore.getState().hosts)
+    expect(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)).toEqual(payload)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part

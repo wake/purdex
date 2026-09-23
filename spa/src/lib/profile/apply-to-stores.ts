@@ -535,8 +535,7 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
   const hostsSeen = resolverSignature(hostState)
   const resolve = wireResolverOf(hostState)
   if (resolve === null) return IDENTITY_CONFLICT()
-  const live = new Set(hostState.hostOrder.filter((id) => Object.hasOwn(hostState.hosts, id)))
-  const payload = settingsFromWire(upcast as SettingsPayload, resolve, live)
+  const payload = settingsFromWire(upcast as SettingsPayload, resolve)
   // Unsettled → no master set: scoping by an empty one would DROP every scoped entry the payload carries.
   const masterIds = masterWorkspaceIds()
   if (masterIds === null) return BUSY
