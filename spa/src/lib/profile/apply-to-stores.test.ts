@@ -287,7 +287,7 @@ describe('applySectionToStores — guards', () => {
 
   it('every invalid outcome carries a code from the closed list, and INVALID_REASONS is that list', async () => {
     expect([...INVALID_REASONS].sort()).toEqual([
-      'changes-master-host', 'deleted', 'duplicate-host-identity', 'host-identity-conflict', 'malformed', 'no-host', 'rejected-settings',
+      'changes-master-host', 'deleted', 'duplicate-host-alias', 'duplicate-host-identity', 'host-identity-conflict', 'malformed', 'no-host', 'rejected-settings',
       'removes-master-host', 'unknown-section',
     ])
   })
@@ -1262,6 +1262,31 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(await applySectionToStores('hosts', canonicalFromA({ ip: '10.9.9.9' }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
     expect(await applySectionToStores('hosts', canonicalFromA({ token: 'other' }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
     expect(useHostStore.getState().hosts).toBe(before)
+  })
+
+  // A2 (PR #1365): an alias listed by two rows (or equal to another row's key) would make every legacy id that
+  // goes through it ambiguous — tabs / presets resolved to nothing, panes branded host-removed. Refused whole.
+  it.each([
+    ['two canonical rows list the same alias', (p: HostsPayload) => {
+      const other = syncIdOfSync(OTHER)
+      ;(p.hosts[other] as HostConfig & { aliases?: string[] }).aliases = ['shared', 'zzzzzz']
+      ;(p.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['aaaaaa', 'shared']
+    }],
+    ['an alias is another row\'s (legacy) key', (p: HostsPayload) => {
+      p.hosts.legacy1 = { ...host('legacy1', { ip: '10.0.0.8', order: 2 }) }
+      p.hostOrder.push('legacy1')
+      ;(p.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['aaaaaa', 'legacy1']
+    }],
+  ])('duplicate-host-alias: %s → invalid before anything is applied; no store written', async (_name, edit) => {
+    seedTabWorld()
+    const payload = JSON.parse(JSON.stringify(canonicalFromA({}, [host('xxxxxx', { ip: '10.0.0.7', daemonId: OTHER, order: 1 })]))) as HostsPayload
+    edit(payload)
+    let outcome: unknown
+    const writes = await countWrites(async () => {
+      outcome = await applySectionToStores('hosts', payload, ctx)
+    })
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'duplicate-host-alias' })
+    expect(writes).toBe(0) // hosts, tabs, settings: all as they were
   })
 
   it('duplicate-host-identity: two rows for one daemon; host-identity-conflict: two LOCAL hosts claim the row\'s daemon — nothing written', async () => {

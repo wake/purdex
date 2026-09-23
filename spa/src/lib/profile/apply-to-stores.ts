@@ -53,7 +53,7 @@ import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
 import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
-import { applyHosts, applySettings, applyTabs, applyWorkspaces, isWellFormedSection, planHostsApply, settingsFromWire, tabsFromWire, upcastLegacySettings } from './applier'
+import { applyHosts, applySettings, applyTabs, applyWorkspaces, duplicateHostAlias, isWellFormedSection, planHostsApply, settingsFromWire, tabsFromWire, upcastLegacySettings } from './applier'
 import type { HostsPlan } from './applier'
 import { identityOfSync } from './host-identity'
 import { hashSection } from './hash'
@@ -88,6 +88,7 @@ export type ApplyOutcome =
  *   unknown-section      a key this build does not know as a section
  *   duplicate-host-identity   a `hosts` payload with two rows for one daemon (host-sync-identity §11.5)
  *   host-identity-conflict    two local hosts claim one daemon, so which one a row / an id means is ambiguous (§11.4)
+ *   duplicate-host-alias      a `hosts` payload whose rows share an alias (or an alias is another row's key) (A2, PR #1365)
  */
 export type InvalidReason =
   | 'deleted'
@@ -99,10 +100,11 @@ export type InvalidReason =
   | 'unknown-section'
   | 'duplicate-host-identity'
   | 'host-identity-conflict'
+  | 'duplicate-host-alias'
 
 export const INVALID_REASONS: readonly InvalidReason[] = [
   'deleted', 'malformed', 'no-host', 'removes-master-host', 'changes-master-host', 'rejected-settings', 'unknown-section',
-  'duplicate-host-identity', 'host-identity-conflict',
+  'duplicate-host-identity', 'host-identity-conflict', 'duplicate-host-alias',
 ]
 
 export interface ApplyContext {
@@ -201,6 +203,8 @@ const IDENTITY_CONFLICT = (): ApplyOutcome => invalid('host-identity-conflict', 
  */
 function planOrRefuse(local: Record<string, HostConfig>, incoming: HostsPayload, masterHostId: string): { plan: HostsPlan } | { outcome: ApplyOutcome } {
   if (Object.keys(incoming.hosts).length === 0) return { outcome: invalid('no-host', 'payload leaves no host') }
+  const shared = duplicateHostAlias(incoming)
+  if (shared !== null) return { outcome: invalid('duplicate-host-alias', `two hosts list the alias ${JSON.stringify(shared)}`) }
   const planned = planHostsApply(local, incoming, generateId)
   if ('error' in planned) {
     return { outcome: planned.error === 'duplicate-host-identity' ? invalid('duplicate-host-identity', 'payload has two rows for one daemon') : IDENTITY_CONFLICT() }

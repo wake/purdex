@@ -7,6 +7,7 @@ import {
   applyTabs,
   applyWorkspaces,
   deriveTabOrder,
+  duplicateHostAlias,
   isWellFormedSection,
   planHostsApply,
   restoreSizes,
@@ -1399,5 +1400,16 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
     const p: SettingsPayload = { 'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['sessions:h1']] } } } }
     const out = settingsFromWire(p, resolve, new Set(['h1']))
     expect(out['purdex-newtab-layout']).toEqual(p['purdex-newtab-layout'])
+  })
+})
+
+describe('duplicateHostAlias (A2)', () => {
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({ ...host(id), ...extra })
+  it('an alias on two rows, or equal to another row\'s key, is named; distinct aliases are fine', () => {
+    const w1 = syncIdOfSync('one:a')
+    const w2 = syncIdOfSync('two:b')
+    expect(duplicateHostAlias({ hosts: { [w1]: row(w1, { aliases: ['a', 'b'] }), [w2]: row(w2, { aliases: ['c'] }) }, hostOrder: [] } as unknown as HostsPayload)).toBeNull()
+    expect(duplicateHostAlias({ hosts: { [w1]: row(w1, { aliases: ['a', 'b'] }), [w2]: row(w2, { aliases: ['b'] }) }, hostOrder: [] } as unknown as HostsPayload)).toBe('b')
+    expect(duplicateHostAlias({ hosts: { [w1]: row(w1, { aliases: ['h9'] }), h9: row('h9') }, hostOrder: [] } as unknown as HostsPayload)).toBe('h9')
   })
 })

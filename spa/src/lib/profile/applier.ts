@@ -217,6 +217,26 @@ export function planHostsApply(
   return { plan: { payload, aliases, byRow, created } }
 }
 
+/**
+ * The first alias that is not unique across the payload's rows — listed by two rows, or equal to another row's
+ * key — or `null` (A2, PR #1365). Such an alias makes every legacy id that goes through it ambiguous: the
+ * resolver maps it to nothing, and the tabs / presets naming it would read as a removed host. No builder
+ * produces one (a local id is one host's, and a legacy key is matched to one host), so the hosts apply refuses
+ * the payload whole, before anything is written. Only called on a well-formed payload.
+ */
+export function duplicateHostAlias(incoming: HostsPayload): string | null {
+  const seen = new Set<string>()
+  for (const [, row] of Object.entries(incoming.hosts)) {
+    const aliases = (row as { aliases?: unknown }).aliases
+    if (!Array.isArray(aliases)) continue
+    for (const alias of aliases as string[]) {
+      if (seen.has(alias) || Object.hasOwn(incoming.hosts, alias)) return alias
+      seen.add(alias)
+    }
+  }
+  return null
+}
+
 /** wire → local over every tab of a `tabs.<ws>` payload (host-identity `layoutFromWire`). Input untouched. */
 export function tabsFromWire(payload: TabsPayload, resolve: WireResolver): TabsPayload {
   const tabs: Record<string, TabsPayload['tabs'][string]> = {}
