@@ -129,3 +129,11 @@ ordinal-2 SOT profile written by an alpha.434 client pulls cleanly and is rewrit
 10. PR 3 needs `lib/profile/api.ts` (`getSection` with `expectEndpoint`) and a `WizardPlan` field for the removal
     list — its file list says so.
 11. **PR 3 starts after PR 1 is merged** (it imports `matchIncomingHosts`); PR 2 and PR 3 run in parallel after it.
+
+**PR 1 task 0 (purdex-38, 2026-09-23)** — inventory confirmed: 10 places, all listed above (preset prefixes are
+exactly `sessions:` and `headless:`; `source.hostId` only when `source.type === 'daemon'`). Two notes for PR 2:
+(a) `execution.host` may be `''` (the no-host fallback) — passed through untranslated; (b) `useNewTabBootstrap`
+prunes `sessions:X` / `headless:X` whose X is not in `hostOrder` once the host store hydrates
+(`useNewTabBootstrap.ts:27-33`): a preset column apply could not translate would be deleted locally and pushed back —
+settings must be translated before any prune can see it, and an UNKNOWN wire id must not reach the store in a form
+the prune deletes (keep it out of the applied presets, or keep the local value; decide in PR 2 and test it).
