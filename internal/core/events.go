@@ -24,18 +24,63 @@ type HostEvent struct {
 // EventSubscriber wraps a WebSocket connection with a buffered send channel.
 // A dedicated goroutine per subscriber handles all writes to avoid concurrent
 // WriteMessage calls (gorilla/websocket requires one concurrent writer max).
+//
+// A subscriber handle may outlive its connection (a background retry holds
+// one, #1293): once removed, Send is a no-op and Done is closed.
 type EventSubscriber struct {
 	conn *websocket.Conn
 	send chan []byte
+
+	mu     sync.Mutex // guards closed; held across a send so close never races it
+	closed bool
+	done   chan struct{}
+}
+
+func newEventSubscriber(conn *websocket.Conn) *EventSubscriber {
+	return &EventSubscriber{
+		conn: conn,
+		send: make(chan []byte, 64),
+		done: make(chan struct{}),
+	}
 }
 
 // Send pushes data to the subscriber's write pump. Non-blocking — if the
-// buffer is full the message is silently dropped.
+// buffer is full the message is silently dropped; after Remove it is a no-op.
 func (sub *EventSubscriber) Send(data []byte) {
+	sub.TrySend(data)
+}
+
+// TrySend is Send that reports whether data was actually queued: false when
+// the buffer is full (data dropped) or the subscriber has been removed.
+// Non-blocking.
+func (sub *EventSubscriber) TrySend(data []byte) bool {
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if sub.closed {
+		return false
+	}
 	select {
 	case sub.send <- data:
+		return true
 	default: // drop if full
+		return false
 	}
+}
+
+// Done is closed once the subscriber has been removed (its connection is
+// closed or closing).
+func (sub *EventSubscriber) Done() <-chan struct{} { return sub.done }
+
+// shut marks the subscriber closed and closes its channels, once.
+func (sub *EventSubscriber) shut() {
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if sub.closed {
+		return
+	}
+	sub.closed = true
+	close(sub.send)
+	close(sub.done)
 }
 
 // SendCh returns the send channel for reading in tests.
@@ -64,10 +109,7 @@ func NewEventsBroadcaster() *EventsBroadcaster {
 // Add registers a WebSocket connection as subscriber and starts its write pump.
 // Returns the subscriber handle (needed for Remove).
 func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
-	sub := &EventSubscriber{
-		conn: conn,
-		send: make(chan []byte, 64),
-	}
+	sub := newEventSubscriber(conn)
 	eb.mu.Lock()
 	eb.subscribers[sub] = struct{}{}
 	eb.mu.Unlock()
@@ -100,14 +142,18 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
 	return sub
 }
 
-// Remove unregisters a subscriber and closes its send channel.
+// Remove unregisters a subscriber, closes its send channel and Done, and
+// closes its connection (the client sees the close). Idempotent; also
+// accepts a test subscriber, which has no connection.
 func (eb *EventsBroadcaster) Remove(sub *EventSubscriber) {
 	eb.mu.Lock()
 	defer eb.mu.Unlock()
 	if _, ok := eb.subscribers[sub]; ok {
 		delete(eb.subscribers, sub)
-		close(sub.send)
-		sub.conn.Close()
+		sub.shut()
+		if sub.conn != nil {
+			sub.conn.Close()
+		}
 	}
 }
 
@@ -134,11 +180,7 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 	defer eb.mu.RUnlock()
 
 	for sub := range eb.subscribers {
-		select {
-		case sub.send <- msg:
-		default:
-			// Subscriber too slow — drop this message.
-		}
+		sub.Send(msg) // a subscriber too slow to keep up drops this message
 	}
 }
 
@@ -147,9 +189,7 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 // but has no write pump — messages accumulate in SendCh() for test assertions.
 // Caller must call RemoveTestSubscriber when done.
 func (eb *EventsBroadcaster) AddTestSubscriber() *EventSubscriber {
-	sub := &EventSubscriber{
-		send: make(chan []byte, 64),
-	}
+	sub := newEventSubscriber(nil)
 	eb.mu.Lock()
 	eb.subscribers[sub] = struct{}{}
 	eb.mu.Unlock()
@@ -162,7 +202,7 @@ func (eb *EventsBroadcaster) RemoveTestSubscriber(sub *EventSubscriber) {
 	defer eb.mu.Unlock()
 	if _, ok := eb.subscribers[sub]; ok {
 		delete(eb.subscribers, sub)
-		close(sub.send)
+		sub.shut()
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
@@ -54,9 +55,16 @@ type SessionModule struct {
 	createMu ctxMutex
 
 	// listCache debounces rapid ListSessions calls (1s TTL). See #128.
+	// listCacheSlot serializes refills (one tmux read at a time) and, being
+	// an abandonable slot, lets a waiting request give up when its context
+	// ends (#1293). listCacheMu guards only the cached data and is never
+	// held across a tmux read, so invalidateListCache never waits on one;
+	// listCacheGen lets it win over a refill already in flight.
+	listCacheSlot slot
 	listCacheMu   sync.Mutex
 	listCacheData []SessionInfo
 	listCacheAt   time.Time
+	listCacheGen  uint64
 
 	// nameCache backs LookupCodeByName: a name→code map plus a TTL stamp.
 	// Separate from listCache because the lookup fast path runs only one
@@ -67,11 +75,45 @@ type SessionModule struct {
 	nameCacheAt   time.Time
 
 	// Versioned session lists (spec 2026-09-23 §3.3, versioned.go). epoch
-	// identifies this process's counter; snapMu serializes seq assignment
-	// together with the tmux read, and guards epoch (it rotates at maxSeq).
-	snapMu  sync.Mutex
-	snapSeq uint64
-	epoch   string
+	// identifies this process's counter; snapSlot (a one-holder slot a
+	// waiter can abandon, #1293) serializes the tmux read together with seq
+	// assignment, and guards snapSeq and epoch (it rotates at maxSeq).
+	snapSlot slot
+	snapSeq  uint64
+	epoch    string
+
+	// listTimeout overrides listReadTimeout (tests only; 0 = the constant).
+	listTimeout time.Duration
+
+	// Subscribe-snapshot recovery (#1293): a failed snapshot is retried in
+	// the background after each of snapshotRetryDelays (nil = the default
+	// schedule), each try with a fresh read budget; snapshotRetriesLive
+	// counts retry goroutines still running. runCtx ends at Stop.
+	snapshotRetryDelays []time.Duration
+	snapshotRetriesLive atomic.Int32
+	runCtx              context.Context
+}
+
+// defaultSnapshotRetryDelays is the wait before each subscribe-snapshot
+// retry: three more tries over ~7s (plus their read budgets), then the
+// connection is closed so the client reconnects.
+var defaultSnapshotRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
+// readTimeout is the session-list budget: listReadTimeout unless a test
+// shortened it.
+func (m *SessionModule) readTimeout() time.Duration {
+	if m.listTimeout > 0 {
+		return m.listTimeout
+	}
+	return listReadTimeout
+}
+
+// listReadContext is the context for a session-list read by a caller with no
+// context of its own (the WS subscribe snapshot, the wait-for and ticker
+// pushes): one fresh listReadTimeout budget, covering both the wait for the
+// versioned-read slot and the read.
+func (m *SessionModule) listReadContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), m.readTimeout())
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
@@ -83,6 +125,8 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 		shellProbe:      runShellProbe,
 		passwdShell:     passwdShellForCurrentUser,
 		epoch:           newEpoch(),
+		snapSlot:        newSlot(),
+		listCacheSlot:   newSlot(),
 	}
 }
 
@@ -127,6 +171,7 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	// Start session watcher with a child context.
 	watchCtx, cancel := context.WithCancel(ctx)
 	m.cancelWatch = cancel
+	m.runCtx = watchCtx
 	m.wstate.setTmuxAlive(m.tmux.TmuxAlive())
 	m.core.TmuxAliveFunc = m.TmuxAlive
 	m.watchSessions(watchCtx)
@@ -138,17 +183,98 @@ func (m *SessionModule) Start(ctx context.Context) error {
 }
 
 // sendSessionsSnapshot pushes a versioned session list to one new subscriber.
+//
+// The SPA keeps a new connection's attach gate shut until it has reconciled
+// a first sessions frame, and with an unchanged list no push will ever come,
+// so a failed snapshot is not the end of it (#1293): it is retried in the
+// background (retrySessionsSnapshot), and if every retry fails too the
+// connection is closed so the client reconnects and asks again — as it is at
+// once when a snapshot is read but cannot be queued. A retried
+// snapshot may land after a push on the same connection; each carries its own
+// seq and the client orders by it (spec 2026-09-23 §3.3/§3.4).
 func (m *SessionModule) sendSessionsSnapshot(sub *core.EventSubscriber) {
-	v, err := m.versionedList()
+	ctx, cancel := m.listReadContext()
+	defer cancel()
+	if err := m.trySessionsSnapshot(ctx, sub); err != nil {
+		log.Printf("session: OnSubscribe list error: %v (retrying in background)", err)
+		m.snapshotRetriesLive.Add(1)
+		go m.retrySessionsSnapshot(sub)
+	}
+}
+
+// trySessionsSnapshot reads a versioned list under ctx and queues it for sub.
+// Only a failed read is an error, the one outcome worth a retry. nil means
+// the attempt is over: the frame was queued, or it could not be — a
+// subscriber already removed is left alone, and a full send buffer means the
+// client is too slow to drain it, so the connection is closed for the client
+// to reconnect (re-reading would not help: the read was not the problem).
+func (m *SessionModule) trySessionsSnapshot(ctx context.Context, sub *core.EventSubscriber) error {
+	v, err := m.versionedList(ctx)
 	if err != nil {
-		log.Printf("session: OnSubscribe list error: %v", err)
-		return
+		return err
 	}
 	data, err := json.Marshal(v.hostEvent())
 	if err != nil {
-		return
+		log.Printf("session: OnSubscribe marshal error: %v", err)
+		return nil
 	}
-	sub.Send(data)
+	if sub.TrySend(data) {
+		return nil
+	}
+	select {
+	case <-sub.Done(): // already removed: nothing to close
+	default:
+		log.Printf("session: OnSubscribe snapshot could not be queued (send buffer full); closing the connection so the client reconnects")
+		m.core.Events.Remove(sub)
+	}
+	return nil
+}
+
+// retrySessionsSnapshot retries a failed subscribe snapshot after each delay,
+// each try with a fresh read budget. Everything it does — the waits and the
+// reads — ends as soon as the connection does (or the module stops); if every
+// try fails it closes the connection so the client reconnects.
+func (m *SessionModule) retrySessionsSnapshot(sub *core.EventSubscriber) {
+	defer m.snapshotRetriesLive.Add(-1)
+	run := m.runCtx
+	if run == nil {
+		run = context.Background()
+	}
+	life, endLife := context.WithCancel(run)
+	defer endLife()
+	go func() {
+		select {
+		case <-sub.Done():
+			endLife()
+		case <-life.Done():
+		}
+	}()
+
+	delays := m.snapshotRetryDelays
+	if delays == nil {
+		delays = defaultSnapshotRetryDelays
+	}
+	for i, d := range delays {
+		t := time.NewTimer(d)
+		select {
+		case <-life.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		ctx, cancel := context.WithTimeout(life, m.readTimeout())
+		err := m.trySessionsSnapshot(ctx, sub)
+		cancel()
+		if err == nil {
+			return
+		}
+		if life.Err() != nil {
+			return
+		}
+		log.Printf("session: OnSubscribe snapshot retry %d/%d failed: %v", i+1, len(delays), err)
+	}
+	log.Printf("session: OnSubscribe snapshot failed after %d retries; closing the connection so the client reconnects", len(delays))
+	m.core.Events.Remove(sub)
 }
 
 func (m *SessionModule) Stop(_ context.Context) error {

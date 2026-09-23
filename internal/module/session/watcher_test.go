@@ -454,6 +454,53 @@ func drainSessionFrames(t *testing.T, sub *core.EventSubscriber) []sessionsFrame
 
 // expireDebounce backdates the broadcastSessions debounce stamp so the next
 // call goes through.
+// #1293 T4: a push path whose tmux read hangs is bounded by the list read
+// timeout; it logs, sends nothing, consumes no seq, and leaves the slot free —
+// the next ?fresh=1 and a new subscriber's snapshot succeed right after.
+func TestPushPaths_StuckReadTimesOutThenFreshAndSnapshotSucceed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		push func(mod *SessionModule)
+	}{
+		{"tickNormal", func(mod *SessionModule) { mod.tickNormal() }},
+		{"broadcastSessions", func(mod *SessionModule) { expireDebounce(mod); mod.broadcastSessions() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mod, fake, events := newWatcherTestModule(t)
+			sub := events.AddTestSubscriber()
+			defer events.RemoveTestSubscriber(sub)
+			fake.AddSession("s1", "/tmp")
+			mod.listTimeout = 100 * time.Millisecond
+			mux := http.NewServeMux()
+			mod.RegisterRoutes(mux)
+
+			fake.SetReadHook(tmux.BlockReadsUntil(make(chan struct{}), nil))
+			done := make(chan struct{})
+			go func() {
+				tc.push(mod)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s: a hung tmux read was not bounded", tc.name)
+			}
+			assert.Empty(t, drainSessionFrames(t, sub), "a timed-out read pushes nothing")
+
+			fake.SetReadHook(nil)
+			v := getFresh(t, mux)
+			assert.Equal(t, uint64(1), v.Seq, "the timed-out push consumed no seq")
+
+			snapSub := events.AddTestSubscriber()
+			defer events.RemoveTestSubscriber(snapSub)
+			mod.sendSessionsSnapshot(snapSub)
+			frames := drainSessionFrames(t, snapSub)
+			require.Len(t, frames, 1)
+			assert.Equal(t, uint64(2), frames[0].Seq)
+		})
+	}
+}
+
 func expireDebounce(mod *SessionModule) {
 	mod.wstate.mu.Lock()
 	mod.wstate.lastBroadcast = time.Time{}

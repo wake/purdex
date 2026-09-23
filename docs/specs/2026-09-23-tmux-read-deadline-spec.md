@@ -1,6 +1,6 @@
-# Bounded tmux reads for the session list (#1293) — spec + plan (rev 2: codex plan review folded in)
+# Bounded tmux reads for the session list (#1293) — spec + plan (rev 3: subscribe-snapshot recovery, as implemented)
 
-Status: draft (2026-09-23) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
+Status: final, rev 3 (2026-09-23) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
 Context: daemon contract `docs/specs/2026-09-23-session-list-fresh-spec.md` (#1292, alpha.423).
 
 ## 1. Problem
@@ -28,8 +28,11 @@ needs to open its attach gate. The plain `GET /api/sessions` does the same under
 - G3. A caller waiting to enter a list read — `versionedList` AND the plain cached list — can
   give up when its own context ends instead of queueing behind a stuck read.
 - G4. No wire change: success responses are byte-identical; a timed-out read on `?fresh=1`
-  (and the plain GET) is a tmux read error → `500` with a text body, as today. WS paths keep
-  their "log and skip" behaviour on error.
+  (and the plain GET) is a tmux read error → `500` with a text body, as today. The ticker and
+  wait-for WS pushes keep their "log and skip" behaviour on error. The WS subscribe snapshot
+  does not: a failed one is retried in the background and, if that fails too (or the frame
+  cannot be queued), the connection is closed so the client reconnects (§3.5). No new frame
+  type or field — the recovery uses the existing sessions frame and a plain WS close.
 - G5. A HEALTHY host with many sessions stays well inside the bound (measured, §3.4).
 
 Non-goals: deadlines for tmux mutations (`new-session`, `kill-session`, send-keys, …) and for
@@ -86,6 +89,32 @@ reads outside `ListSessions` / `ActivePaneMetadata` (capture-pane etc.).
 Seven separate `display-message` calls ≈ 44 ms per session (≈ 0.66 s for 15; ≈ 4.4 s projected
 for 100 — too close to 5 s). One combined call ≈ 10 ms per session (≈ 1 s for 100). Hence the
 merge in §3.1 is part of this change, not an optimisation for later.
+
+### 3.5 Subscribe-snapshot recovery (WS)
+The SPA keeps a new connection's attach gate shut until it has reconciled a first sessions
+frame, and with an unchanged list no push will ever come. So a subscribe snapshot that fails
+cannot just be logged and skipped (`sendSessionsSnapshot` / `retrySessionsSnapshot`,
+module.go):
+- **Retries.** A failed snapshot read is retried in a background goroutine after 1 s, 2 s and
+  4 s (three retries). Each retry gets a fresh, full `listReadTimeout` budget — it does not
+  inherit what the first read used.
+- **Give-up.** If every retry fails, the connection is closed (`Events.Remove`) so the client
+  reconnects and gets a new snapshot on the new connection.
+- **Frame not queued.** A snapshot is delivered only if its frame is actually queued on the
+  subscriber (`EventSubscriber.TrySend`, `internal/core/events.go`; `Send` still drops
+  silently). A full send buffer means the client is too slow to drain it: the connection is
+  closed at once, first try or retry alike, with no further read (the read was not the
+  problem). A subscriber already removed ends the attempt quietly.
+- **Cancellation.** The waits and the in-flight read end as soon as the connection ends or the
+  module stops (the watcher context); the goroutine then exits without reading again.
+- **Ordering.** A retried snapshot may land after a push on the same connection. Every frame is
+  a versioned list with its own `seq` in the same epoch, and the SPA orders by it (contract
+  `2026-09-23-session-list-fresh-spec.md` §3.3 total order, §3.4 epoch handling), so a late
+  snapshot never overrides a newer push.
+- **Hung tmux.** While tmux stays stuck, one connection costs 5 s (first read) + 1 + 5 + 2 + 5 +
+  4 + 5 ≈ 27 s before it is closed; the client then reconnects and the cycle repeats — about one
+  reconnect every 27 s, not a tight loop.
+- The ticker and wait-for pushes are unchanged: log and skip, the next push tries again.
 
 ## 4. Tasks (TDD, one commit each)
 

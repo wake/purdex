@@ -52,7 +52,7 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 // metadata (#1293 §3.2). When the deadline (or a cancellation) ends the read
 // it returns an error wrapping ctx.Err() and no list — never a partial one.
 func (m *SessionModule) ListSessionsContext(ctx context.Context) ([]SessionInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, listReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, m.readTimeout())
 	defer cancel()
 	list, err := m.listSessions(ctx)
 	if err != nil {
@@ -134,7 +134,7 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 // read all end when the caller's context does — an HTTP handler passes
 // r.Context(), so a client that gives up ends a stuck read at once.
 func (m *SessionModule) GetSessionContext(ctx context.Context, code string) (*SessionInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, listReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, m.readTimeout())
 	defer cancel()
 	return m.getSession(ctx, code)
 }

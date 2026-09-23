@@ -230,7 +230,7 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 
 	// The reads before new-session follow the caller, capped like every
 	// session read: createMu is held from here on.
-	preCtx, cancelPre := context.WithTimeout(ctx, listReadTimeout)
+	preCtx, cancelPre := context.WithTimeout(ctx, m.readTimeout())
 	defer cancelPre()
 
 	exists, err := m.tmux.HasSessionContext(preCtx, name)
@@ -260,7 +260,7 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 
 	// new-session runs on its own cap, never the caller's (see
 	// CreateSessionContext).
-	newCtx, cancelNew := context.WithTimeout(context.Background(), listReadTimeout)
+	newCtx, cancelNew := context.WithTimeout(context.Background(), m.readTimeout())
 	newErr := m.tmux.NewSessionContext(newCtx, name, cwd)
 	cancelNew()
 
@@ -268,7 +268,7 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 	// of the caller (see CreateSessionContext), under one bounded context
 	// (#1293) — a hung tmux must not hold the create critical section
 	// (createMu) forever.
-	postCtx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	postCtx, cancel := context.WithTimeout(context.Background(), m.readTimeout())
 	defer cancel()
 
 	if newErr != nil {
