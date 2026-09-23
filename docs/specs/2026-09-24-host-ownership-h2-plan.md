@@ -13,7 +13,8 @@ records the coordinator's decisions below.
 - Confirmed as written: the guard test lands in H2a (§0.14); `useHostStore.reset()` also resets the two new stores
   (§0.18); "hosts added later" look seeding lives in the add-host dialog and `registerLocalHost`, not `addHost`
   (§0.19); §0.8 — before the H2 real-device acceptance, both clients' hosts must have a verified daemonId.
-- §0.7 → **still open** (asked of the user); H2d-2 is not started until it is decided.
+- §0.7 → **(b) stay hidden** (user) — and "hidden" now also hides the host's session tabs in that workbench (§0.21,
+  supersedes spec §4.5 for H2d). H2d-2 / H2d-3 below are re-planned per §0.21 before they start.
 - Order: H2a and H2b-1 / H2b-2 may start now; H2c-2 and H2d-1 wait for H1b (PR #1406).
 
 Spec: `docs/specs/2026-09-23-host-ownership-spec.md` (§4, decisions 3, 4, 7, 9; §3.3 re-resolve pass; §3.4; §6.4 steps
@@ -122,7 +123,9 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
    spec's `null`. `ids` keeps unknown ids and order in both modes. (The look store has the same need and meets it:
    `looks` defaults to `{}` and is always built — a test pins it.)
 7. **A host added while a workbench lists hosts is hidden there** (decision 4: unlisted = hidden). With `all: false`,
-   adding mlab-2 through the dialog makes it invisible at once in this workbench. **NEEDS DECISION** — three options:
+   adding mlab-2 through the dialog makes it invisible at once in this workbench. **DECIDED (user, 2026-09-24): (b)
+   stay hidden** — and the user widened what "hidden" means; see §0.21, which supersedes spec §4.5 for H2d. The options
+   as they were weighed:
    - **(a) auto-add**: the three add paths (dialog, `registerLocalHost`, transfer create) append the new host's wire id
      to `ids`. Cost (codex): an implicit write to the workbench-wide synced setting, and the wire id reaches devices
      that do not have the host — decision 4 read literally says unlisted = hidden, so this needs the user's explicit
@@ -234,6 +237,38 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
        2 alone — skip-if-present makes the retry idempotent and it never overwrites a look that arrived meanwhile.
     Between the steps a subscriber sees the new hosts with their `HostConfig` fallback (the received name) — a valid
     state. Invariants and tests: H2c-3 T2.
+21. **What "hidden" means — the user's decision (2026-09-24) supersedes spec §4.5 for H2d.** User's words: keep new
+    hosts hidden; a hidden host is still visible on the Hosts page in every workbench, with a different state ("hidden"
+    / zh-TW 「未啟用」) and colour; a hidden host does not appear in New Tab, cannot be used to add a tab / tmux, and
+    **its session tabs are not shown in this workbench**. The last point is stronger than spec §4.5 ("the tab bar: a
+    hidden host's tabs stay visible"), so the H2d filter table becomes:
+
+    | | hidden host |
+    |---|---|
+    | Hosts page sidebar / overview | **listed** (every host, every workbench), state "hidden / 未啟用", muted colour; opens normally |
+    | New Tab page `sessions:` / `headless:` blocks, the launcher inside them | **not rendered** (provider stays REGISTERED, column kept in the layout) |
+    | Any other entry that creates a tab / tmux session on a host (session picker, "open session" actions) | **host not offered** |
+    | **Tab bar and every tab list** (`SortableTab` / `InlineTabList` / workspace tab lists) | **tabs not shown** — see the rule below |
+    | Connections, health, `useMultiHostEventWs`, session watch / refresh, backup triggers, New Tab provider registration, `activeHostId` / `hostOrder[0]` fallbacks, device settings pickers | **unchanged** (the host keeps working) |
+    | Tab / pane DATA (stores, synced `tabs.*`) | **unchanged** — nothing is deleted, moved or marked; un-hiding shows the tabs again |
+
+    Plan choices for the tab rule (**PROPOSED — for the coordinator to confirm with the H2d-2 re-plan**):
+    - A tab is hidden when EVERY host-bearing leaf (tmux-session, execution with a host) is on a hidden host; a tab
+      with no host-bearing leaf, or with at least one leaf on a shown host, stays visible, its hidden-host panes
+      rendering a local "this host is not enabled in this workbench" state (no attach, no ticket) — hiding one pane of
+      a mixed split would change the layout, which is synced.
+    - The visible-tab list is a pure selector over (tabs, shown hosts, identity); nothing writes on hide / un-hide.
+    - The active tab: if the active tab becomes hidden, focus moves to the next visible tab in the workspace (a
+      device-local focus change, like closing); un-hiding does not restore focus.
+    - Keyboard tab switching (by index / next / previous) and "close others" count visible tabs only; a hidden tab is
+      never closed by a bulk action.
+    - A notification for a hidden host still fires (spec §4.5 keeps notifications); activating it opens the Hosts page
+      for that host instead of the hidden tab.
+    - A deep link / route to a hidden tab opens the Hosts page for that host.
+    Consequences: H2d-2's file list and tests are re-measured before H2d-2 starts (H2d comes after H2c anyway); the
+    tab-bar filter likely needs its own PR (H2d-2 editor + New Tab / picker filters; H2d-3 tab-bar filter + focus /
+    keyboard / notification rules; H2d-4 the not-filtered behaviour tests). The spec records the user's decision
+    (coordinator).
 
 ## H2a — the look selector, colour / icon surfaces (10 files)
 
