@@ -83,10 +83,12 @@ const bindingKey = (hostId: string, sessionCode: string, tmuxInstance: string) =
 
 /**
  * A pane that would take an ownership answer: live, terminal-mode, generation-
- * eligible, and either agent-less or flagged `unverified`.
+ * eligible, and either agent-less, flagged `unverified`, or holding an agent
+ * that has EXITED (agent-last-state spec, review decision 6: a live answer
+ * brings it back to running).
  *
- * Nothing else makes a pane eligible. A record with a confirmed agent never
- * asks again, which is what makes the whole thing terminate (spec §5.5).
+ * Nothing else makes a pane eligible. A record with a confirmed, running agent
+ * never asks again, which is what makes the whole thing terminate (spec §5.5).
  */
 function wantsProbe(
   hostId: string,
@@ -104,7 +106,7 @@ function wantsProbe(
       // write uses: a pane whose recorded instance is '' has not learnt its
       // generation yet.
       if (!generationMatchesLegacy(c.tmuxInstance, tmuxInstance)) return
-      if (c.rebuild?.agent && !c.rebuild.unverified) return
+      if (c.rebuild?.agent && !c.rebuild.unverified && !c.rebuild.agentExited) return
       found = true
     })
     if (found) return true
@@ -241,7 +243,11 @@ function startRequest(
             type: ans.agentType,
             sessionId: ans.sessionId || undefined,
             tmuxPaneId: ans.tmuxPaneId || undefined,
-            updatedAt: ans.lastSeenAt || Date.now(),
+            frameId: ans.frameId || undefined,
+            // When THIS client saw the agent live — what the Rebuild panel
+            // shows as "running when last seen". Not the daemon's
+            // `last_seen_at`: frames stamp that in nanoseconds.
+            updatedAt: Date.now(),
           },
           ...(ans.cwd ? { cwd: ans.cwd } : {}),
         },

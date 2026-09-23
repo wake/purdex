@@ -206,13 +206,13 @@ describe('fetchSessionProvenance', () => {
       new Response(JSON.stringify({
         found: true, agent_type: 'cc', session_id: 'fa657572',
         cwd: '/home/user/proj', tmux_pane_id: '%12',
-        tmux_instance: '222:2000', last_seen_at: 1788800000000,
+        tmux_instance: '222:2000', last_seen_at: 1788800000000, frame_id: 'F1',
       }), { status: 200 }),
     )
     expect(await fetchSessionProvenance(HOST_ID, 'abc123')).toEqual({
       found: true, agentType: 'cc', sessionId: 'fa657572',
       cwd: '/home/user/proj', tmuxPaneId: '%12',
-      tmuxInstance: '222:2000', lastSeenAt: 1788800000000,
+      tmuxInstance: '222:2000', lastSeenAt: 1788800000000, frameId: 'F1',
     })
     expectAuthFetch(`${BASE}/api/sessions/abc123/provenance`)
   })
@@ -225,7 +225,7 @@ describe('fetchSessionProvenance', () => {
     )
     expect(await fetchSessionProvenance(HOST_ID, 'abc123')).toEqual({
       found: false, agentType: '', sessionId: '', cwd: '', tmuxPaneId: '',
-      tmuxInstance: '', lastSeenAt: 0,
+      tmuxInstance: '', lastSeenAt: 0, frameId: '',
     })
   })
 

@@ -25,6 +25,7 @@ function answer(over?: Partial<SessionProvenance>): SessionProvenance {
     tmuxPaneId: '%12',
     tmuxInstance: '222:2000',
     lastSeenAt: 1788800000000,
+    frameId: 'F-live',
     ...over,
   }
 }
@@ -32,7 +33,7 @@ function answer(over?: Partial<SessionProvenance>): SessionProvenance {
 /** "I have no answer" — which leaves the pane eligible, so it will ask again. */
 const notFound = (tmuxInstance = '222:2000'): SessionProvenance => ({
   found: false, agentType: '', sessionId: '', cwd: '', tmuxPaneId: '',
-  tmuxInstance, lastSeenAt: 0,
+  tmuxInstance, lastSeenAt: 0, frameId: '',
 })
 
 function seed(overrides?: Partial<TmuxSessionContent>) {
@@ -138,11 +139,15 @@ describe('probeSessionProvenance', () => {
 
   it('maps every field of a matching answer onto the agent-backfill patch', async () => {
     const tab = seed()
+    vi.setSystemTime(5_000)
     vi.mocked(fetchSessionProvenance).mockResolvedValue(answer())
     trigger()
     await settle()
+    // `updatedAt` is when THIS client saw the agent live — the Rebuild panel
+    // shows it as "running when last seen". The daemon's `last_seen_at` is
+    // not used: frames stamp it in nanoseconds, so it is no time to display.
     expect(recordOf(tab.id)?.agent).toEqual({
-      type: 'cc', sessionId: 'sess-1', tmuxPaneId: '%12', updatedAt: 1788800000000,
+      type: 'cc', sessionId: 'sess-1', tmuxPaneId: '%12', frameId: 'F-live', updatedAt: 5_000,
     })
     expect(recordOf(tab.id)?.cwd).toBe('/w/proj')
     expect(recordOf(tab.id)?.cwdSource).toBe('agent-backfill')
@@ -190,6 +195,41 @@ describe('probeSessionProvenance', () => {
     expect(calls()).toBe(1)
     await settle()
     expect(recordOf(tab.id)?.unverified).toBeUndefined()
+  })
+
+  // agent-last-state spec, review decision 6: an exited agent is not a confirmed
+  // one, so the pane asks again — and a live answer clears the exit.
+  it('asks for a pane whose recorded agent exited, and a live answer brings it back to running', async () => {
+    const tab = seed()
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '222:2000', {
+      kind: 'agent-group',
+      record: { tmuxInstance: '222:2000', agent: { type: 'cc', sessionId: 'sess-1', frameId: 'F-old', updatedAt: 1 }, capturedAt: 1 },
+    })
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '222:2000', {
+      kind: 'agent-exit', frameId: 'F-old', exited: { at: 2, reason: 'session-end' },
+    })
+    expect(recordOf(tab.id)?.agentExited).toBeDefined()
+    vi.mocked(fetchSessionProvenance).mockResolvedValue(answer())
+    trigger()
+    expect(calls()).toBe(1)
+    await settle()
+    expect(recordOf(tab.id)?.agentExited).toBeUndefined()
+    expect(recordOf(tab.id)?.agent?.frameId).toBe('F-live')
+  })
+
+  it('an exited pane whose session has no live agent keeps its exit', async () => {
+    const tab = seed()
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '222:2000', {
+      kind: 'agent-group',
+      record: { tmuxInstance: '222:2000', agent: { type: 'cc', sessionId: 'sess-1', frameId: 'F-old', updatedAt: 1 }, capturedAt: 1 },
+    })
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '222:2000', {
+      kind: 'agent-exit', frameId: 'F-old', exited: { at: 2, reason: 'process-dead' },
+    })
+    vi.mocked(fetchSessionProvenance).mockResolvedValue(notFound())
+    trigger()
+    await settle()
+    expect(recordOf(tab.id)?.agentExited).toEqual({ at: 2, reason: 'process-dead' })
   })
 
   it('ignores terminated and foreign-generation panes', () => {
