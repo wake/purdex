@@ -212,6 +212,16 @@ export function wireResolverOf(s: HostsSource, identity: HostIdentity = identity
   return makeWireResolver({ identity, rows: buildHostsSection(s, identity).hosts })
 }
 
+/**
+ * Everything the settings translation read from the host store: the identity (pairs + conflict), the live
+ * hosts (the New Tab columns kept), and the aliases (legacy ids resolved). Equal before and after an await →
+ * what was written is still what this apply would write now. A rename or a runtime change moves none of it.
+ */
+export function hostResolverSignature(state: HostsSource): string {
+  const aliases = Object.keys(state.hosts).sort().map((id) => [id, state.hosts[id].syncAliases ?? []])
+  return JSON.stringify([identityOfSync(state.hosts).signature, state.hostOrder.filter((id) => Object.hasOwn(state.hosts, id)), aliases])
+}
+
 // === Section builders ===
 
 /**
