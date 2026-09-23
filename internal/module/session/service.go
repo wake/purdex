@@ -115,18 +115,31 @@ func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error)
 	return result, nil
 }
 
-// GetSession returns a single session by its code, or nil if not found.
+// GetSession returns a single session by its code, or nil if not found,
+// under a fresh listReadTimeout budget.
 func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	defer cancel()
+	return m.getSession(ctx, code)
+}
+
+// getSession is GetSession under ctx. A (nil, nil) answer is a reliable "not
+// found" only when ctx was still live when the list came back and when the
+// orphan meta row was dropped: once ctx has ended the answer is an error
+// wrapping ctx.Err() (#1293) — a list read past its deadline is not evidence
+// that a session is gone, and is not acted on.
+func (m *SessionModule) getSession(ctx context.Context, code string) (*SessionInfo, error) {
 	tmuxID, err := DecodeSessionID(code)
 	if err != nil {
 		return nil, nil // invalid code → not found
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
-	defer cancel()
 	sessions, err := m.tmux.ListSessions(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("session get: %w", err)
 	}
 
 	for _, s := range sessions {
@@ -153,12 +166,20 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 				info.Mode = meta.Mode
 			}
 
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("session get: %w", err)
+			}
 			return info, nil
 		}
 	}
 
 	// Not found in tmux — clean up orphan meta
-	_ = m.meta.DeleteMeta(tmuxID)
+	if err := m.meta.DeleteMetaContext(ctx, tmuxID); err != nil {
+		return nil, fmt.Errorf("session get: drop orphan meta: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("session get: %w", err)
+	}
 	return nil, nil
 }
 

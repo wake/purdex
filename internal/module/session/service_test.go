@@ -242,3 +242,78 @@ func TestListSessionsContext_CancelledCallerEndsTmuxList(t *testing.T) {
 		t.Fatal("ListSessionsContext did not return after its context was cancelled")
 	}
 }
+
+// listReturnsAtDeadline is a ReadHook whose tmux list only comes back once
+// its context has ended — and then succeeds anyway, as a list-sessions that
+// finished right at the deadline would.
+func listReturnsAtDeadline(ctx context.Context, op tmux.ReadOp, _ string) error {
+	if op == tmux.ReadListSessions {
+		<-ctx.Done()
+	}
+	return nil
+}
+
+// #1293: a GetSession whose list came back past its deadline without the
+// target must answer the deadline, not a reliable "not found" (nil, nil) —
+// and must not act on that list by deleting the target's meta row.
+func TestGetSession_ListAtDeadlineWithoutTargetIsCtxError(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
+	fake.AddSessionWithID("$1", "other", "/tmp")
+	require.NoError(t, meta.SetMeta("$9", store.SessionMeta{Mode: "terminal"}))
+	code, err := EncodeSessionID("$9")
+	require.NoError(t, err)
+	fake.SetReadHook(listReturnsAtDeadline)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	info, err := mod.getSession(ctx, code)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, info)
+	got, err := meta.GetMeta("$9")
+	require.NoError(t, err)
+	assert.NotNil(t, got, "a list read past the deadline must not drive the orphan delete")
+}
+
+// The found path: a list that came back past the deadline drives no further
+// reads (instance probe, pane metadata) and answers the deadline.
+func TestGetSession_ListAtDeadlineWithTargetIsCtxError(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	var probes int
+	mod.tmuxInstanceFn = func(context.Context) string { probes++; return "1:1" }
+	fake.AddSessionWithID("$1", "a", "/tmp")
+	fake.SetActivePaneMetadata("a", tmux.TmuxPaneMetadata{PaneTitle: "a"})
+	code, err := EncodeSessionID("$1")
+	require.NoError(t, err)
+	var paneReads int
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, target string) error {
+		if op == tmux.ReadPaneMetadata {
+			paneReads++
+		}
+		return listReturnsAtDeadline(ctx, op, target)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	info, err := mod.getSession(ctx, code)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, info)
+	assert.Zero(t, probes, "no instance probe after the deadline")
+	assert.Zero(t, paneReads, "no pane read after the deadline")
+}
+
+// A not-found answer whose orphan delete failed reports the failure.
+func TestGetSession_NotFoundDeleteFailureIsError(t *testing.T) {
+	mod, meta, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
+	fake.AddSessionWithID("$1", "other", "/tmp")
+	code, err := EncodeSessionID("$9")
+	require.NoError(t, err)
+	require.NoError(t, meta.Close())
+
+	info, err := mod.GetSession(code)
+	require.Error(t, err)
+	assert.Nil(t, info)
+}
