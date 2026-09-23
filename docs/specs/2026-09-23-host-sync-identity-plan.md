@@ -2,17 +2,18 @@
 
 Three PRs. PR 1 is pure and unused; PR 2 switches the wire over (build + apply + ordinals in ONE PR — a build that
 translates without an apply that does, or the reverse, breaks sync); PR 3 is the wizard and the paused state.
-PR 1 and PR 3 can be written in parallel; PR 2 needs PR 1. One bump after PR 3.
+PR 1 first; then PR 2 and PR 3 in parallel (both import PR 1). See spec §11 — it overrides this plan where they differ. One bump after PR 3.
 
 | PR | owner | files (expected) | must not touch |
 |---|---|---|---|
 | 1 codec | purdex-38 | `lib/profile/host-identity.ts` (+test) | everything else |
 | 2 wire | purdex-fb (subagent) | `sections.ts`, `collector.ts`, `applier.ts`, `apply-to-stores.ts`, `executor.ts` (settings gate), `projections.ts` (ordinals), tests, `types.ts` if needed | wizard, start.ts |
-| 3 wizard + pause | purdex-3b | `wizard-run.ts`, `ProfileWizard.tsx` / `WizardChoiceSteps.tsx`, `start.ts` (`blocked: 'host-identity-mismatch'`), `CurrentBlock.tsx` (its sentence), `sync-view.ts` (dot), locales, tests | sections / collector / applier / apply-to-stores / executor |
+| 3 wizard + pause | purdex-3b | `wizard-run.ts`, `lib/profile/api.ts` (use only), `ProfileWizard.tsx` / `WizardChoiceSteps.tsx`, `start.ts` (`blocked: 'host-identity-mismatch'`), `CurrentBlock.tsx` (its sentence), `sync-view.ts` (dot), locales, tests | sections / collector / applier / apply-to-stores / executor |
 
 ## PR 1 — the codec (pure)
 
-- `syncIdOf(daemonId): Promise<string>` — spec §3 exactly; golden vectors in the test (at least: `mini-lab:278cbm`,
+- Task 0: grep every producer of `<prefix>:<hostId>` preset columns (spec §11.1) and every other synced host id; report before coding.
+- `syncIdOf(daemonId): Promise<string>` and `syncIdOfSync` — spec §3 exactly; golden vectors in the test (at least: `mini-lab:278cbm`,
   an ASCII id with spaces, a non-ASCII id, a 512-char id), computed once and pinned; both hash paths
   (`crypto.subtle` and the JS fallback) give the same bytes.
 - `identityOf(hosts): Promise<Identity>` — `{ toWire: Map<local, wire>, toLocal: Map<wire, local>, conflict:

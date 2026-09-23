@@ -97,3 +97,35 @@ Expect: no lock; B's mlab keeps its local id; the SOT `hosts` row key is `d1_…
 opened on A appears on B bound to B's mlab and attaches); a conflict resolved; B's saved slave untouched. Also:
 a third host only B has (no daemonId: unreachable) — B's pull removes it and the wizard listed it first; an
 ordinal-2 SOT profile written by an alpha.434 client pulls cleanly and is rewritten canonical.
+
+## 11. Plan review (codex `task-mudm3zu7-gw99zj`, 11 findings, all taken) — these override the text above
+
+1. **Every host-bearing preset column**, not only `sessions:<id>`: `headless:<hostId>` too (execution module,
+   `lib/headless-new-tab-providers.tsx`). The translator takes the list of host-bearing prefixes from ONE constant;
+   PR 1's task 0 greps for any other `<prefix>:<hostId>` producer and adds it.
+2. **Legacy ids stay resolvable after the hosts row went canonical.** A canonical `hosts` row carries
+   `aliases: string[]` — the legacy wire keys (foreign local ids) it was matched from, deduplicated, ≤ 16, oldest
+   dropped. `fromWire` for tabs / settings resolves: sync id → local; else an alias of some row → that row's daemon →
+   local; else unknown (as today). This covers an interrupted transition (hosts canonical, tabs still legacy) on
+   any device, not only the one that did the matching. `aliases` is in the hosts projection (ordinal 3 already).
+3. **No "collector pass".** The identity is computed SYNCHRONOUSLY (`syncIdOfSync`) from the host store at every
+   build of a host-bearing section. Consistency across sections comes from invalidation instead: the collector
+   watches an identity signature (sorted `[localId, wireId]` pairs + conflict) and, when it changes, schedules
+   EVERY host-bearing section (`hosts`, `settings`, all `tabs.*`) — a daemonId learned later re-keys all of them.
+4. **Identity conflict pauses the profile**, like a mismatch: `blocked: 'host-identity-conflict'` (PR 3's
+   mechanism in start.ts; the executor is disposed, nothing built, pushed or applied), not just "build nothing".
+5. **One-to-one on apply.** An incoming payload with two rows for one daemon (two rows with the same `daemonId`, or a
+   canonical row and a legacy row resolving to one daemon) is `locked:invalid`, new code `duplicate-host-identity`.
+6. **A row carrying `daemonId` matches by `daemonId` ONLY.** The legacy local-id match applies only to a row with no
+   `daemonId`, and only to a local host that has no `daemonId` either (or the same). A foreign key that happens to
+   equal another local host's id can no longer capture it.
+7. **Interrupted transition** is tested at every write boundary (hosts pushed, tabs not; tabs partly; settings
+   not), across a restart, from both devices — with finding 2's aliases.
+8. **Settings gate = hosts settled AND workspaces settled** (conjunction), each gate's release pumps; tested both
+   orders and a gate re-closing after the pull was fetched.
+9. **Mismatch pause** (PR 3) is decided on entering master mode, on every host-store change incl. runtime-only
+   updates (`selectDaemonIdMismatch` over ALL hosts), disposes the leader at once, and rebuilds it when cleared;
+   tested for each.
+10. PR 3 needs `lib/profile/api.ts` (`getSection` with `expectEndpoint`) and a `WizardPlan` field for the removal
+    list — its file list says so.
+11. **PR 3 starts after PR 1 is merged** (it imports `matchIncomingHosts`); PR 2 and PR 3 run in parallel after it.
