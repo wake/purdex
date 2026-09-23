@@ -482,6 +482,30 @@ describe('step 4 — a pull\'s hosts: the host verified, and the hosts it remove
     expect(removedShown()).toHaveLength(2)
   })
 
+  it('verification lost and back WHILE the first check is out: the first answer, arriving last, is not the one shown', async () => {
+    type SectionAnswer = Awaited<ReturnType<typeof getSection>>
+    const answers: Array<(v: SectionAnswer) => void> = []
+    vi.mocked(getSection).mockImplementation(() => new Promise<SectionAnswer>((r) => answers.push(r)))
+    const rows = (hosts: Record<string, unknown>): SectionAnswer => ({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts, hostOrder: Object.keys(hosts) } } }) as SectionAnswer
+    await toDirection()
+    await choosePull()
+    expect(answers).toHaveLength(1)
+    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: { status: 'connected' } } }))
+    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: H1_VERIFIED } }))
+    await flush()
+    expect(answers).toHaveLength(2) // the same choice, asked again
+    // the second (current) answer: mlab only → air and gone are removed
+    await act(async () => answers[1](rows({ d1_x: { name: 'mlab', daemonId: MLAB } })))
+    await flush()
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
+    // the first, older answer arrives last, and says something else altogether
+    await act(async () => answers[0](rows({ a: { daemonId: MLAB }, b: { daemonId: MLAB } })))
+    await flush()
+    expect(screen.queryByTestId('profile-wizard-pull-refused')).toBeNull()
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+  })
+
   it('the profile\'s host list cannot be matched (one daemon twice): said, Next shut', async () => {
     vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { a: { daemonId: MLAB }, b: { daemonId: MLAB } }, hostOrder: [] } } })
     await toDirection()

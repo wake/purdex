@@ -160,6 +160,10 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const [pullRetry, setPullRetry] = useState(0)
   /** The choice a check is out (or in) for: asked once per choice, and an answer for another one is dropped. */
   const pullAsked = useRef<string | null>(null)
+  /** Bumped by every check sent (and by every answer set from elsewhere): only the latest one's answer is taken. The
+   *  key alone is not enough — the same choice is asked again when the host's verification drops and comes back,
+   *  and the older answer may arrive last (review R1). */
+  const pullGen = useRef(0)
   const alive = useRef(true)
 
   const sot = useSotProfiles(refusal === null && step !== 'stop' ? hostId : null)
@@ -310,9 +314,10 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     if (pullPremise !== null) pullAsked.current = null // once it holds again, it is asked again
     if (!wantPull || pullKey === null || hostId === null || profileId === null || pullAsked.current === pullKey) return
     pullAsked.current = pullKey
+    const gen = ++pullGen.current
     setPullRead({ key: pullKey, check: { state: 'loading' } })
     void previewPull(hostId, profileId).then((r) => {
-      if (!alive.current || pullAsked.current !== pullKey) return
+      if (!alive.current || pullGen.current !== gen || pullAsked.current !== pullKey) return
       setPullRead({ key: pullKey, check: r.ok ? { state: 'ok', removes: r.removes } : { state: 'failed', reason: r.reason, ...('request' in r ? { request: r.request } : {}) } })
     })
   }, [wantPull, pullKey, pullPremise, hostId, profileId, pullRetry])
@@ -399,6 +404,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     if (prepared.reason === 'removes-changed' || prepared.reason === 'master-unverified' || prepared.reason === 'master-mismatch' || prepared.reason === 'master-unmatched' || prepared.reason === 'duplicate-host-identity' || prepared.reason === 'host-identity-conflict') {
       if (pullKey !== null) {
         pullAsked.current = pullKey
+        pullGen.current += 1 // a check still out for this choice is older than what the door just found
         setPullRead({ key: pullKey, check: prepared.reason === 'removes-changed' ? { state: 'ok', removes: prepared.removes } : { state: 'failed', reason: prepared.reason } })
       }
       if (promoted) setLocalId(MASTER_PROFILE_ID)
