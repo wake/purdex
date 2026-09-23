@@ -193,13 +193,13 @@ describe('SidebarRegion', () => {
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
       const btn = screen.getByTestId('add-view-button')
       expect(btn).toHaveAttribute('title', 'Manage views')
-      expect(btn.getAttribute('title')).not.toBe('管理 views')
+      expect(btn.getAttribute('title')).not.toBe('管理檢視')
     })
 
     it('collapsed add-view button title is zh-TW for the zh-TW locale', () => {
       useI18nStore.getState().setLocale('zh-TW')
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
-      expect(screen.getByTestId('add-view-button')).toHaveAttribute('title', '管理 views')
+      expect(screen.getByTestId('add-view-button')).toHaveAttribute('title', '管理檢視')
     })
 
     it('expanded manage button title is English for the en locale', () => {
@@ -220,7 +220,7 @@ describe('SidebarRegion', () => {
       useI18nStore.getState().setLocale('zh-TW')
 
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
-      expect(screen.getByTestId('manage-button')).toHaveAttribute('title', '管理 views')
+      expect(screen.getByTestId('manage-button')).toHaveAttribute('title', '管理檢視')
     })
 
     it('empty pinned region shows the English empty-state text for the en locale', () => {
