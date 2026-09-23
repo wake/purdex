@@ -83,7 +83,7 @@ beforeEach(() => {
   api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
   api.putAttachment.mockResolvedValue({ kind: 'ok', value: { attached: true } })
   api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [], pullUnconfirmed: null })
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
@@ -153,6 +153,33 @@ describe('attachMaster, again, to the same master', () => {
     expect(daemon.revs()).toEqual(revs)
     expect(profileSyncState().status?.profile).toBe('synced')
     expect(useProfileStore.getState().pendingDirection).toBeNull()
+  })
+})
+
+describe('THE PULL GUARD end to end (#1366): the `hosts` the user confirmed is not the one on the SOT any more', () => {
+  it('attach pull with the confirmed row (rev n), the daemon holds rev n+1: nothing changes here, the attachment is removed, the notice is set', async () => {
+    await attachedAndSettled()
+    const confirmed = { rev: daemon.rows.get('hosts')!.rev, hash: daemon.rows.get('hosts')!.hash! }
+    // another device writes `hosts` after the wizard's last check
+    const row = daemon.rows.get('hosts')!
+    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' })
+    renameH2('mine-only')
+    await settle()
+    const writes = daemon.writes.length
+    api.deleteAttachment.mockClear()
+    api.getSection.mockClear()
+    const worldBefore = JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])
+
+    expect(await attachMaster(M, PROFILE, 'pull', { confirmedHosts: confirmed })).toEqual({ ok: true })
+    await settle()
+
+    expect(JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])).toBe(worldBefore)
+    expect(daemon.writes.slice(writes)).toEqual([])
+    expect(api.getSection.mock.calls.filter((c) => c[2] !== 'hosts')).toEqual([]) // nothing but the verdict was read
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null, pendingDetaches: [] })
+    expect(useProfileStore.getState().pullUnconfirmed).toMatchObject({ hostId: M, profileId: PROFILE })
+    expect(api.deleteAttachment).toHaveBeenCalledWith(M, PROFILE, 'c_aaaaaaaaaaaa')
+    expect(profileSyncState().problems.map((p) => p.kind)).toContain('pull-hosts-unconfirmed')
   })
 })
 

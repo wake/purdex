@@ -68,6 +68,14 @@
 // settled (`onInitialSettled`), at which point it is cleared here and conflicts
 // are the user's again. Never cleared by a timeout — see executor.ts.
 //
+// THE PULL GUARD (#1366). A wizard pull attaches with the SOT `hosts` row the user confirmed
+// (`attachMaster(…, 'pull', { confirmedHosts })`); it is stored as one pair with the direction
+// (`useProfileStore.pendingPullHosts`) and read live by the executor (`confirmedPullHosts`), which holds every
+// action until it has compared the SOT with it (executor.ts, THE PULL GUARD). On a mismatch the executor halts
+// and calls `onPullUnconfirmed`: the notice (`pullUnconfirmed`) is written FIRST, so that it survives whatever
+// follows, then the sync is stopped exactly as Stop sync stops it (`detachMaster`) — unless the user has attached
+// again by the time the queue gets there: that newer attach is theirs, and it is left alone.
+//
 // EVERY ATTACH IS A NEW ONE — to the master already set as well. `attachMaster`
 // clears the bases and `setMaster` bumps `attachGeneration`; this file watches
 // that counter and rebuilds the whole master mode when it moves, in every
@@ -94,7 +102,7 @@ import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } from '../../stores/useLocalProfilesStore'
 import { endpointOfHost, isMasterPair, isSyncDirection, pendingDetachKey, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
-import type { SyncDirection } from '../../stores/useProfileStore'
+import type { ConfirmedHosts, SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
@@ -326,6 +334,11 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     initialDirection: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingDirection),
     onInitialSettled: () => {
       if (!disposed && isCurrentMaster(master)) useProfileStore.getState().clearPendingDirection()
+    },
+    // THE PULL GUARD (see the header): paired with the direction, and like it only while the master is THIS one.
+    confirmedPullHosts: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingPullHosts),
+    onPullUnconfirmed: () => {
+      if (!disposed && isCurrentMaster(master)) stopUnconfirmedPull(master)
     },
     onProblem: reportProblem,
     onStatus: (s) => {
@@ -925,6 +938,9 @@ export function dismissPendingDetach(key: string): Promise<void> {
  * `tabs.*` of workspaces that are not here are deleted from it); `'pull'` = the
  * SOT overwrites this machine.
  *
+ * `opts.confirmedHosts` — `'pull'` only: the SOT `hosts` row the user was shown the removals of (`'absent'`: none).
+ * The first reconciliation applies nothing unless the SOT still holds it (see the header, THE PULL GUARD).
+ *
  * SAFETY — `'pull'` REPLACES THIS MACHINE'S workspaces, tabs, hosts and
  * settings with the SOT's. The user's decision 12 requires that the local state
  * is first saved as a slave profile, and that the user confirms. Slaves arrive
@@ -932,7 +948,7 @@ export function dismissPendingDetach(key: string): Promise<void> {
  * DEV HOOK; P3 must have completed that step BEFORE it calls
  * `attachMaster(…, 'pull')`. Nothing in here does it for the caller.
  */
-export function attachMaster(hostId: string, profileId: string, direction: SyncDirection): Promise<AttachResult> {
+export function attachMaster(hostId: string, profileId: string, direction: SyncDirection, opts: { confirmedHosts?: ConfirmedHosts } = {}): Promise<AttachResult> {
   const refusal = (): AttachResult | null => {
     if (!isSyncDirection(direction)) return { ok: false, reason: 'invalid-direction' }
     if (!isClientIdPersisted()) return { ok: false, reason: 'client-id-not-persisted' }
@@ -958,7 +974,7 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
         return late
       }
       hold.extend() // the wait in the queue is not part of the first request's budget
-      return await attachHeld({ hostId, profileId }, direction, hold)
+      return await attachHeld({ hostId, profileId }, direction, hold, opts.confirmedHosts)
     } finally {
       hold.stop()
     }
@@ -1043,7 +1059,7 @@ function holdStill(): Hold {
   return hold
 }
 
-async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): Promise<AttachResult> {
+async function attachHeld(next: Master, direction: SyncDirection, hold: Hold, confirmedHosts?: ConfirmedHosts): Promise<AttachResult> {
   const { hostId, profileId } = next
   const previous = selectMaster(useProfileStore.getState())
   // Where the PREVIOUS master's attachment is: read now, `setMaster` below replaces it.
@@ -1094,8 +1110,8 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
   if (hold.superseded()) return standDown(next, putAt, hold)
   clearSectionStore()
   hold.stop() // `setMaster` lifts our suspension on purpose
-  // One write: master, direction, endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
-  if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token)) return asYouWere('invalid-profile-id')
+  // One write: master, direction (with a pull's confirmed `hosts`), endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
+  if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token, confirmedHosts)) return asYouWere('invalid-profile-id')
   ownGenerationMove()
   // The attach has succeeded whatever comes of this: the ghost is the OLD master's, and it is said where a failed
   // detach is said (`pendingDetaches`, Settings › Profile). A stand-down after the drop does not get here — the
@@ -1136,19 +1152,36 @@ async function standDown(next: Master, putAt: string | null, hold: Hold): Promis
  * store — by then the master may be a new one, set by another window.
  */
 export function detachMaster(): Promise<DetachResult> {
-  return serial(async (): Promise<DetachResult> => {
-    const master = selectMaster(useProfileStore.getState())
-    if (master === null) return { ok: true }
-    // Read BEFORE the master goes: it is where the attachment is, and `clearMaster` forgets it.
-    const attachedAt = useProfileStore.getState().masterEndpoint
-    useProfileStore.getState().clearMaster()
-    ownGenerationMove() // an attach of THIS window queued behind us is not "overtaken" by it: the user asked in that order
-    clearSectionStore(master.profileId)
-    const told = await dropAttachment(master, attachedAt)
-    // The one thing written after the `await`, and not a field of the master: see `rememberPendingDetach`.
-    // (`attachedAt` is never null here — `selectMaster` answered — and a record cannot be written without it.)
-    if (!told.ok && attachedAt !== null) await rememberPendingDetach(master, attachedAt, told)
-    return told
+  return serial(detachNow)
+}
+
+async function detachNow(): Promise<DetachResult> {
+  const master = selectMaster(useProfileStore.getState())
+  if (master === null) return { ok: true }
+  // Read BEFORE the master goes: it is where the attachment is, and `clearMaster` forgets it.
+  const attachedAt = useProfileStore.getState().masterEndpoint
+  useProfileStore.getState().clearMaster()
+  ownGenerationMove() // an attach of THIS window queued behind us is not "overtaken" by it: the user asked in that order
+  clearSectionStore(master.profileId)
+  const told = await dropAttachment(master, attachedAt)
+  // The one thing written after the `await`, and not a field of the master: see `rememberPendingDetach`.
+  // (`attachedAt` is never null here — `selectMaster` answered — and a record cannot be written without it.)
+  if (!told.ok && attachedAt !== null) await rememberPendingDetach(master, attachedAt, told)
+  return told
+}
+
+/**
+ * THE PULL GUARD's way out (see the header): the executor of `master` has halted — the SOT's `hosts` is not the
+ * one the user confirmed. The notice first, synchronously; then Stop sync, in the attach / detach queue — but only
+ * if, when its turn comes, the master and the generation (as STORAGE holds it: another window may have attached)
+ * are still the ones of this halt. A newer attach, here or elsewhere, is the user's: left alone.
+ */
+function stopUnconfirmedPull(master: Master): void {
+  const generation = storedGeneration()
+  useProfileStore.getState().setPullUnconfirmed({ hostId: master.hostId, profileId: master.profileId, at: clock() })
+  void serial(async (): Promise<DetachResult> => {
+    if (storedGeneration() !== generation || !isCurrentMaster(master)) return { ok: true }
+    return detachNow()
   })
 }
 

@@ -15,6 +15,8 @@ interface FakeExecutor {
     onStatus: (s: unknown) => void
     initialDirection: () => 'push' | 'pull' | null
     onInitialSettled: () => void
+    confirmedPullHosts: () => { rev: number; hash: string } | 'absent' | null
+    onPullUnconfirmed: () => void
   }
   onSection: ReturnType<typeof vi.fn>
   onRemoteEvent: ReturnType<typeof vi.fn>
@@ -201,7 +203,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [] })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [], pullUnconfirmed: null })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceNameStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -1671,6 +1673,142 @@ describe('the direction of an attach', () => {
     await flush()
     expect(h.executors).toHaveLength(1)
     expect(h.executors[0].dispose).not.toHaveBeenCalled()
+  })
+})
+
+describe('the pull guard (#1366): the confirmed `hosts` row goes with the direction, and a mismatch stops the sync', () => {
+  const ROW = { rev: 7, hash: 'a'.repeat(64) }
+
+  it('attachMaster(pull, { confirmedHosts }) stores it with the direction; the executor reads it live', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toEqual({ ok: true })
+    await flush()
+    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: 'pull', pendingPullHosts: ROW })
+    expect(h.executors[0].deps.confirmedPullHosts()).toEqual(ROW)
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: 'absent' })).toEqual({ ok: true })
+    await flush()
+    expect(h.executors[1].deps.confirmedPullHosts()).toBe('absent')
+    expect(h.executors[0].deps.confirmedPullHosts()).toBeNull() // the old driver is out of it
+  })
+
+  it('push: nothing is stored; without the option: nothing either', async () => {
+    await attachMaster('h1', P1, 'push', { confirmedHosts: ROW })
+    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
+    await attachMaster('h1', P1, 'pull')
+    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
+  })
+
+  it('settling clears the direction AND the guard at once', async () => {
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    h.executors[0].deps.onInitialSettled()
+    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: null, pendingPullHosts: null })
+    expect(h.executors[0].deps.confirmedPullHosts()).toBeNull()
+  })
+
+  it('a leader handoff: the window that takes the lease continues the first reconciliation WITH the guard, and its settle clears both', async () => {
+    h.initialLeader = false
+    connect('h1')
+    stop = startProfileSync()
+    // what another window's attach left in the synced store
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1 })
+    await flush()
+    expect(h.executors).toHaveLength(0)
+    h.leaderships[0].set(true)
+    await flush()
+    const { deps } = h.executors[0]
+    expect(deps.initialDirection()).toBe('pull')
+    expect(deps.confirmedPullHosts()).toEqual(ROW)
+    deps.onInitialSettled()
+    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: null, pendingPullHosts: null, masterProfileId: P1 })
+  })
+
+  it('onPullUnconfirmed: the notice is written FIRST, then the sync stops like Stop sync (master gone, driver down, attachment deleted)', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    const seen: Array<[boolean, boolean]> = []
+    const unsubscribe = useProfileStore.subscribe((st) => seen.push([st.pullUnconfirmed !== null, st.masterHostId !== null]))
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    unsubscribe()
+    expect(seen[0]).toEqual([true, true]) // the notice, while the master was still set
+    expect(useProfileStore.getState().pullUnconfirmed).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null })
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
+    expect(clearSectionStore).toHaveBeenLastCalledWith(P1)
+    expect(useProfileStore.getState().pendingDetaches).toEqual([])
+  })
+
+  it('the DELETE fails: the local detach stands, the notice stays, and the ghost attachment is remembered', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    vi.mocked(deleteAttachment).mockResolvedValue(failed('network'))
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    await flush()
+    expect(useProfileStore.getState().masterHostId).toBeNull()
+    expect(useProfileStore.getState().pullUnconfirmed).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(useProfileStore.getState().pendingDetaches).toMatchObject([{ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'network' }])
+  })
+
+  it('the attach / detach queue is busy at that moment: the notice at once, the detach when its turn comes', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    // a retry of an older ghost holds the queue
+    useProfileStore.getState().addPendingDetach({ hostId: 'h2', profileId: P2, endpoint: EP, detail: 'network', at: 1 })
+    let release: (v: typeof okDetach) => void = () => {}
+    vi.mocked(deleteAttachment).mockReturnValueOnce(new Promise((r) => (release = r)))
+    const retrying = retryPendingDetach(pendingDetachKey({ hostId: 'h2', profileId: P2, endpoint: EP }))
+    await flush()
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    expect(useProfileStore.getState().pullUnconfirmed).not.toBeNull()
+    expect(useProfileStore.getState().masterHostId).toBe('h1') // still waiting its turn (the executor has halted by itself)
+    release(okDetach)
+    await retrying
+    await flush()
+    expect(useProfileStore.getState().masterHostId).toBeNull()
+    expect(deleteAttachment).toHaveBeenLastCalledWith('h1', P1, 'client-1')
+  })
+
+  it('…and if an attach in the queue re-attached meanwhile, that newer attach is NOT detached', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    let releasePut: (v: typeof okAttach) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (releasePut = r)))
+    const reattaching = attachMaster('h2', P2, 'push')
+    await flush()
+    h.executors[0].deps.onPullUnconfirmed()
+    releasePut(okAttach)
+    expect(await reattaching).toEqual({ ok: true })
+    await flush()
+    await flush()
+    expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: 'h2', profileId: P2 })
+    expect(deleteAttachment).not.toHaveBeenCalledWith('h2', P2, 'client-1')
+  })
+
+  it('a late call from a driver already torn down does nothing', async () => {
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    const { deps } = h.executors[0]
+    await attachMaster('h2', P2, 'pull', { confirmedHosts: 'absent' })
+    await flush()
+    deps.onPullUnconfirmed()
+    await flush()
+    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
+    expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: 'h2', profileId: P2 })
   })
 })
 
