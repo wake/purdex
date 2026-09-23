@@ -12,7 +12,8 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import type { Result, Section } from './api'
-import { startCollector, type Collector } from './collector'
+import { buildSectionPayload, startCollector, type Collector } from './collector'
+import type { ProfileSectionKey } from './types'
 import { createExecutor, type Executor } from './executor'
 import { hashSection } from './hash'
 import { clearSectionStore, saveConflict } from './section-store'
@@ -113,6 +114,7 @@ async function start(clientId: string, direction: 'push' | 'pull', guard: Guard)
     isReachable: () => true,
     autoSync: () => true,
     onProblem: (p) => problems.push(p),
+    buildNow: (key) => buildSectionPayload(key as ProfileSectionKey), // what start.ts wires
     initialDirection: () => run.direction.value,
     confirmedPullHosts: () => run.guard.value,
     onInitialSettled: run.settled,
@@ -588,7 +590,7 @@ describe('THE PULL GUARD — who has none', () => {
     // a stale guard beside no direction (a reload after the period): no period, so no barrier
     const ex = createExecutor({
       hostId: M, profileId: PROFILE, isLeader: () => true, isReachable: () => true, autoSync: () => true,
-      onProblem: (p) => problems.push(p), initialDirection: () => null, confirmedPullHosts: () => confirmed, onPullUnconfirmed: unconfirmed,
+      onProblem: (p) => problems.push(p), buildNow: (key) => buildSectionPayload(key as ProfileSectionKey), initialDirection: () => null, confirmedPullHosts: () => confirmed, onPullUnconfirmed: unconfirmed,
     })
     executor = ex
     collector = startCollector({ onSection: (r) => ex.onSection(r) })

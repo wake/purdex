@@ -10,12 +10,12 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import type { ProfileIndexEntry, PutOutcome, Result, SectionMeta } from './api'
-import { startCollector, type Collector } from './collector'
+import { buildSectionPayload, startCollector, type Collector } from './collector'
 import { createExecutor, type Executor } from './executor'
 import { hashSection } from './hash'
 import { clearSectionStore, loadSectionStore } from './section-store'
 import { buildHostsSection } from './sections'
-import type { HostsPayload } from './types'
+import type { HostsPayload, ProfileSectionKey } from './types'
 
 vi.mock('./hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hash')>()
@@ -88,6 +88,7 @@ function start(): void {
     isReachable: () => reachable,
     autoSync: () => true,
     onProblem: (p) => problems.push(p),
+    buildNow: (key) => buildSectionPayload(key as ProfileSectionKey), // what start.ts wires
   })
   collector = startCollector({ onSection: (r) => executor.onSection(r) })
 }

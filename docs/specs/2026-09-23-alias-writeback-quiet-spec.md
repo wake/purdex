@@ -1,8 +1,9 @@
 # Alias write-back without a problem — spec + plan (#1369)
 
 Status: rev 2 (codex plan review task-mudtuczk-t7jt07: #1 strict alias rule, #2 apply returns its payload, #3 the
-`hostOrder` counter-case) · R1 (PR #1376: the payload goes back only if a rebuild after the hash still equals it,
-§2.3) · 2026-09-23 · branch `worktree-alias-writeback-quiet` · base `4cecb6d3` (PR #1370 merged)
+`hostOrder` counter-case) · R1 (PR #1376: a payload the stores moved away from is not pushed, §2.3) · critic (the
+R1 check moved from the apply to the executor's stash — the lock-release observer moves the stores after the apply's
+last look, §2.3) · 2026-09-23 · branch `worktree-alias-writeback-quiet` · base `4cecb6d3` (PR #1370 merged)
 
 ## 1. Problem
 
@@ -70,17 +71,35 @@ excludes a key while `awaitsCollector`). The branch itself stays as a fallback f
 
 `pruneMemoryStash` keeps the entry: the section's `currentHash` is `outcome.hash` after `pull-applied`.
 
-**R1 (PR #1376): a payload the stores moved away from is not handed back.** The apply builds the payload, then
-awaits `hashSection` — and a user edit of the same section can land in that await. The payload is then a stale
-snapshot: pushed, it would overwrite the SOT with the old content until the collector's report of the edit pushes
-again (the collector path never pushed a stale snapshot). So `rebuilt` (apply-to-stores.ts) takes the build as a
-function and, after the hash, builds once more synchronously; the payload goes back only if that rebuild has the
-same `structuralKey` as the one hashed. Otherwise the outcome is `{ ok: true, hash }` — the hash still the one of
-what the apply rebuilt, so `localHash` keeps its meaning — and the executor falls back to `awaitsCollector`, where
-the collector reports the edit. All four branches build that way (`hosts`, `settings`, `workspaces`, `tabs.<id>`;
-an unsettled master world or a vanished workspace in the rebuild counts as moved). `aliasesOnly` is still decided
-on the payload that was hashed. The executor needs no check of its own: from the apply's return to the stash only
-microtasks run, and a user event is a macrotask.
+**R1 (PR #1376) + critic: a payload the stores moved away from is not pushed — checked by the executor, at the
+stash.** The apply's payload is a snapshot, and the stores can move between the apply's build and the stash. Pushed,
+a stale snapshot overwrites the SOT with old content until the collector's report of the change pushes again (the
+collector path never pushed a stale snapshot). Two ways they move:
+
+- a user edit of the same section landing in the apply's `hashSection` await;
+- the apply's own lock release. `withOperationLock` releases the operation lock in its `finally`, synchronously,
+  AFTER the body's last build; zustand notifies the hook's observer (`createOperationLockObserver`,
+  useMultiHostEventWs.ts) at once, which calls `reconcileAfterLockRelease` (refresh-sessions.ts); for a host that is
+  attach-ready but not versioned & live — or one that needs recovery — that runs `runRevivePass` synchronously and
+  rewrites tab layouts. All of it happens before the outcome reaches the executor.
+
+The first R1 fix rebuilt inside `rebuilt` (apply-to-stores.ts) after the hash and argued that from the apply's
+return to the stash only microtasks run. The second way refutes that: the rebuild ran inside the lock, and the
+release that moved the stores came after it (critic, PR #1376). So the check sits at the one place the payload is
+used. `ExecutorDeps.buildNow?(key) → { payload } | null` — start.ts wires collector.ts `buildSectionPayload`, the
+collector's own builder — is asked synchronously right before `stash.set(outcome.hash, outcome.payload)`, with no
+await between the two; the payload is stashed only if `buildNow` exists, answers non-null with a non-null payload,
+does not throw, and that payload has the same `structuralKey` as the outcome's. Anything else — moved, unsettled,
+a builder that throws, no `buildNow` (the conservative default) — is no stash: the executor falls back to
+`awaitsCollector`, and the collector's report of what the stores hold now is what goes out. The outcome's hash is
+still what `pull-applied` records as `localHash`; the collector's report moves it on. `rebuilt` is back to one
+build, one hash, the payload handed back; `aliasesOnly` is decided on that payload.
+
+Tests: executor.test.ts `the stores are asked again at the stash (#1369 critic)` (moved / unsettled / throws / no
+`buildNow` → waits for the collector; equal → pushed at once); executor.lock-release.integration.test.ts drives the
+real apply, the real lock and its real observer through a pull whose release revives a pane, and asserts the
+pre-revive payload is never PUT. The other executor integration harnesses wire `buildNow` as start.ts does; the
+T4 end-to-end test takes the stash path with the real builders.
 
 ## 3. Not in scope
 

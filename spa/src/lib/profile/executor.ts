@@ -241,7 +241,7 @@ import { applySectionToStores } from './apply-to-stores'
 import type { ApplyOutcome, InvalidReason } from './apply-to-stores'
 import { upcastLegacySettings } from './applier'
 import type { SectionReport } from './collector'
-import { hashSection } from './hash'
+import { hashSection, structuralKey } from './hash'
 import { readMasterWorld } from './master-world'
 import { compareShape, profileLock, profileStatus, reconcileSectionSet } from './profile-state'
 import type { ProfileStatus, SchemaLock } from './profile-state'
@@ -275,6 +275,13 @@ export interface ExecutorDeps {
   confirmedPullHosts?: () => ConfirmedHosts | null
   /** The guard did not match: this executor has halted. Called once. */
   onPullUnconfirmed?: () => void
+  /**
+   * One section as the collector would build it NOW (collector.ts `buildSectionPayload`): `{ payload }`, or `null`
+   * while nobody can say what the stores hold. Synchronous. Asked right before a pull stashes the payload its apply
+   * hashed (#1369 critic): only a payload the stores still build is stashed. Absent = never stashed — the push then
+   * waits for the collector's report, as it did before #1369.
+   */
+  buildNow?: (key: string) => { payload: unknown | null } | null
 }
 
 /**
@@ -1469,7 +1476,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // here, the push does not wait for the collector — which reports a hash only once, so a hash it reported
     // before (and this stash has since pruned) would never come again. `pruneMemoryStash` keeps it: it is the
     // section's `currentHash` now. Without a payload the collector's report of this very apply pumps the section.
-    if (outcome.hash !== null && outcome.payload !== undefined) stash.set(outcome.hash, outcome.payload)
+    //
+    // Only if the stores STILL build it, asked here and not in the apply (#1369 critic). The apply's payload is a
+    // snapshot, and the stores move after the apply's last look at them: its operation lock is released in
+    // `withOperationLock`'s `finally`, and that release synchronously runs the lock observer
+    // (useMultiHostEventWs.ts) → `reconcileAfterLockRelease` → on some paths `runRevivePass`, which rewrites tab
+    // layouts — all before the outcome gets here. A user edit landing in the apply's hash await is the same case.
+    // Pushed, the stale snapshot would overwrite the SOT until the collector's report of the change pushes again.
+    // So the check sits at the one place the payload is used, and nothing is awaited between it and the stash.
+    // Anything but "the same canonical form" (moved, unsettled, a builder that throws, no `buildNow`) = no stash:
+    // the collector reports what the stores hold now, and that is what goes out.
+    if (outcome.hash !== null && outcome.payload !== undefined && storesStillBuild(key, outcome.payload)) stash.set(outcome.hash, outcome.payload)
     const awaitsCollector = mismatch && outcome.hash !== null && !stash.has(outcome.hash)
     // `hosts` is applied, on the confirmed row: only now may anything else move (see the header). Not `hosts` itself
     // ahead of that report, though: pumped now (it is still running), `run()` would repump it into a payload-less push.
@@ -1479,6 +1496,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       return WAIT
     }
     return afterPull(key)
+  }
+
+  /** Do the stores, read NOW, build exactly `payload` for `key`? Synchronous; false whenever nobody can say. */
+  function storesStillBuild(key: string, payload: unknown): boolean {
+    if (deps.buildNow === undefined) return false
+    try {
+      const built = deps.buildNow(key)
+      return built !== null && built.payload !== null && structuralKey(built.payload) === structuralKey(payload)
+    } catch {
+      return false
+    }
   }
 
   /** What was served may be OLDER than the SOT this section knows of (the event

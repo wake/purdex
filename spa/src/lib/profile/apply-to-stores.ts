@@ -173,19 +173,11 @@ const invalid = (code: InvalidReason, detail: string): ApplyOutcome => ({ ok: fa
 const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
 
 /**
- * An ok outcome for a section rebuilt from the stores: its hash, and the very payload that hash was taken of.
- * `build` is called twice: `first` (the payload hashed — built by the caller when it needs it too) and once more,
- * synchronously, after the hash's await (#1369 R1). A user edit can land in that await; the payload is then a stale
- * snapshot, and handed back the executor would push it over the SOT before the collector's report of the edit
- * corrects it. So it goes back only when a rebuild still equals it (same canonical form as the hash); otherwise the
- * outcome carries the hash alone and the executor waits for the collector, as it did before #1369. The hash stays
- * the one of `first` — `localHash` is what the apply rebuilt; the collector's report moves it on. Nothing needs
- * checking past this point: from here back into the executor there are only microtasks, where no user event runs.
+ * An ok outcome for a section rebuilt from the stores: its hash, and the very payload that hash was taken of. A
+ * snapshot: the stores can move before the caller uses it (the hash await, the lock release's observer), so whether
+ * it is still what they hold is the executor's check, made where it stashes the payload (#1369 critic).
  */
-const rebuilt = async (build: () => unknown, first: unknown = build()): Promise<Extract<ApplyOutcome, { ok: true }>> => {
-  const hash = await hashSection(first)
-  return structuralKey(build()) === structuralKey(first) ? { ok: true, hash, payload: first } : { ok: true, hash }
-}
+const rebuilt = async (payload: unknown): Promise<Extract<ApplyOutcome, { ok: true }>> => ({ ok: true, hash: await hashSection(payload), payload })
 
 // === host-removed ===
 
@@ -474,9 +466,8 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
       throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
     await hooks
-    const build = (): HostsPayload => buildHostsSection(useHostStore.getState())
-    const built = build()
-    const outcome = await rebuilt(build, built)
+    const built = buildHostsSection(useHostStore.getState())
+    const outcome = await rebuilt(built)
     // #1369: a canonical row arriving without this device's own id comes back with it (withOwnAlias) — the one
     // designed write-back after a pull. Said so, so the executor pushes it without calling it a problem.
     return isAliasWriteBackOnly(incoming, built, plan.byRow) ? { ...outcome, aliasesOnly: true } : outcome
@@ -623,11 +614,7 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
   // No await since the last re-read either: the identity is the one this apply resolved through (checked above), and
   // with no patch at all nothing was awaited — the resolve and this hash read the same host store.
   const identity = identityOfSync(useHostStore.getState().hosts)
-  // The re-build after the hash (see `rebuilt`) reads the stores as they are then — identity included.
-  return rebuilt(
-    () => buildSettingsSection(readSettingsSources(), masterIds, identityOfSync(useHostStore.getState().hosts)),
-    buildSettingsSection(readSettingsSources(), masterIds, identity),
-  )
+  return rebuilt(buildSettingsSection(readSettingsSources(), masterIds, identity))
 }
 
 // === workspaces / tabs.<id> ===
@@ -661,13 +648,7 @@ async function applyWorkspacesSection(payload: unknown): Promise<ApplyOutcome> {
       // anything is awaited. Synchronous since the write, so "unsettled" here is for the type only.
       const after = readMasterWorld()
       if (written === 'unsettled' || !after.settled) return BUSY
-      return rebuilt(
-        () => {
-          const now = readMasterWorld()
-          return now.settled ? buildWorkspacesSection(now.world.workspaces) : null // unsettled = moved: no payload
-        },
-        buildWorkspacesSection(after.world.workspaces),
-      )
+      return rebuilt(buildWorkspacesSection(after.world.workspaces))
     },
     () => ({ ok: false, reason: 'busy' }),
   )
@@ -720,15 +701,7 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       if (!ws) return { ok: true, hash: null }
       // The identity the resolve above used: nothing was awaited since.
       const identity = identityOfSync(useHostStore.getState().hosts)
-      return rebuilt(
-        () => {
-          const now = readMasterWorld()
-          const w = now.settled ? now.world.workspaces.find((x) => x.id === workspaceId) : undefined
-          // unsettled, or the workspace gone = moved: no payload
-          return now.settled && w ? buildTabsSection(w, now.world.tabs, identityOfSync(useHostStore.getState().hosts)) : null
-        },
-        buildTabsSection(ws, after.world.tabs, identity),
-      )
+      return rebuilt(buildTabsSection(ws, after.world.tabs, identity))
     },
     () => ({ ok: false, reason: 'busy' }),
   )

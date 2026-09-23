@@ -18,7 +18,8 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
-import { startCollector, type Collector } from './collector'
+import { buildSectionPayload, startCollector, type Collector } from './collector'
+import type { ProfileSectionKey } from './types'
 import { createExecutor, type Executor } from './executor'
 import { hashSection } from './hash'
 import { buildHostsSection, buildWorkspacesSection } from './sections'
@@ -114,6 +115,7 @@ async function attach(clientId: string, direction: 'push' | 'pull', master = M):
     isReachable: () => true,
     autoSync: () => true,
     onProblem: (p) => problems.push(p),
+    buildNow: (key) => buildSectionPayload(key as ProfileSectionKey), // what start.ts wires
     initialDirection: () => run.direction.value,
     onInitialSettled: run.settled,
   })
@@ -655,7 +657,7 @@ describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordina
     h.clientId = B
     executor = createExecutor({
       hostId: M, profileId: PROFILE, isLeader: () => true, isReachable: () => true, autoSync: () => true,
-      onProblem: (p) => problems.push(p), initialDirection: () => null, onInitialSettled: () => undefined,
+      onProblem: (p) => problems.push(p), buildNow: (key) => buildSectionPayload(key as ProfileSectionKey), initialDirection: () => null, onInitialSettled: () => undefined,
     })
     const ex = executor
     collector = startCollector({ onSection: (r) => ex.onSection(r) })
