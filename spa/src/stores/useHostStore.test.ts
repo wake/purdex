@@ -480,6 +480,24 @@ describe('persist rehydrate (host color sanitize)', () => {
       useHostStore.getState().reset()
     }
   })
+
+  it('drops a stored daemonId that fails isValidDaemonId and keeps a valid one (codex attacker)', async () => {
+    const hosts = {
+      evil: { id: 'evil', name: 'evil', ip: '10.0.0.1', port: 7860, order: 0, daemonId: 'mini‮:abc123' },
+      good: { id: 'good', name: 'good', ip: '10.0.0.2', port: 7860, order: 1, daemonId: 'mini-lab:278cbm' },
+    }
+    localStorage.setItem('purdex-hosts', JSON.stringify({ state: { hosts, hostOrder: ['evil', 'good'], activeHostId: 'good', devHostId: null }, version: 1 }))
+    try {
+      await useHostStore.persist.rehydrate()
+      const s = useHostStore.getState()
+      expect('daemonId' in s.hosts.evil).toBe(false)
+      expect(s.hosts.evil.name).toBe('evil')
+      expect(s.hosts.good.daemonId).toBe('mini-lab:278cbm')
+    } finally {
+      localStorage.removeItem('purdex-hosts')
+      useHostStore.getState().reset()
+    }
+  })
 })
 
 describe('findHostByEndpoint', () => {
