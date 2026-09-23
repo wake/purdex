@@ -195,7 +195,7 @@ describe('step 2 — the host and the profile on it', () => {
     expect(offline.disabled).toBe(true)
     expect(offline).toHaveTextContent(en['settings.profile.wizard.sot.host_offline'].replace('{{name}}', 'gone'))
     expect((screen.getByTestId('profile-wizard-host-option-h2') as HTMLOptionElement).disabled).toBe(false)
-    expect(listProfiles).toHaveBeenCalledWith('h1')
+    expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: '10.0.0.1:7860' })
   })
 
   it('the dev host is offline: the first connected host stands in; none connected: nothing to choose, and it says so', async () => {
@@ -221,7 +221,7 @@ describe('step 2 — the host and the profile on it', () => {
     expect(screen.getByTestId('profile-wizard-profiles')).toHaveAttribute('data-state', 'rows')
     fireEvent.change(screen.getByTestId('profile-wizard-host'), { target: { value: 'h2' } })
     await flush()
-    expect(listProfiles).toHaveBeenLastCalledWith('h2')
+    expect(listProfiles).toHaveBeenLastCalledWith('h2', { expectEndpoint: '10.0.0.2:7860' })
   })
 
   it('the list cannot be read: a sentence for the failure\'s class — never the transport\'s message — and a retry', async () => {
@@ -886,7 +886,7 @@ describe('no host was connected when the wizard opened (review F5)', () => {
     expect(screen.queryByTestId('profile-wizard-host-none')).toBeNull()
     fireEvent.change(select, { target: { value: 'h2' } })
     await flush()
-    expect(listProfiles).toHaveBeenLastCalledWith('h2')
+    expect(listProfiles).toHaveBeenLastCalledWith('h2', { expectEndpoint: '10.0.0.2:7860' })
     expect(screen.getByTestId('profile-wizard-profiles')).toHaveAttribute('data-state', 'rows')
   })
 })

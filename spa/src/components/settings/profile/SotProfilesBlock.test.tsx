@@ -1,8 +1,10 @@
+import { useLayoutEffect } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import en from '../../../locales/en.json'
 import { SotProfilesBlock } from './SotProfilesBlock'
 import { useSotProfiles } from './useSotProfiles'
+import { useHostStore } from '../../../stores/useHostStore'
 import { deleteProfile, listProfiles, renameProfile } from '../../../lib/profile/api'
 import type { Attachment, DeleteProfileOutcome, Failure, ProfileIndexEntry } from '../../../lib/profile/api'
 
@@ -13,6 +15,34 @@ const profile = (id: string, name: string, attachments: Attachment[] = []): Prof
 const failure = (message: string, reason: Failure['reason'] = 'network'): Failure => ({ kind: 'failed', reason, status: 0, message })
 const rows = (...list: ProfileIndexEntry[]) => vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: list })
 
+/**
+ * THE A→B→A RACE (PR #1340 re-review): the list is rendered at A, the host is moved to B before the fetch leaves (a
+ * layout effect stands in for "another window, between the render and the effect"), and back to A before React
+ * renders again — so no render ever sees B. `listProfiles` answers as the machine at the address it would really
+ * reach: the one the host is at WHEN IT IS CALLED, and — like api.ts — refuses when `expectEndpoint` is not that.
+ */
+function raceAtoBtoA(machines: Record<string, ProfileIndexEntry[]>, a: string, b: string) {
+  const at = (ip: string) => useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, ip } } }))
+  const where = () => `${useHostStore.getState().hosts.h1.ip}:${useHostStore.getState().hosts.h1.port}`
+  let moved = false
+  vi.mocked(listProfiles).mockImplementation(async (hostId: string, opts?: { expectEndpoint?: string }) => {
+    const reached = where()
+    if (moved && reached === `${b}:7860`) at(a) // …and back, before anything renders again
+    if (opts?.expectEndpoint !== undefined && opts.expectEndpoint !== reached) return { kind: 'failed', reason: 'endpoint-changed', status: 0, message: 'moved' }
+    return { kind: 'ok', value: hostId === 'h1' ? (machines[reached] ?? []) : [] }
+  })
+  /** Rendered after the component under test: its layout effect runs after that component's render, before its effects. */
+  function MoveToB() {
+    useLayoutEffect(() => {
+      if (moved) return
+      moved = true
+      at(b)
+    }, [])
+    return null
+  }
+  return MoveToB
+}
+
 /** The section's wiring: one fetch, handed to the block. */
 function Harness({ hostId = 'h1', attached = 'p1' }: { hostId?: string; attached?: string }) {
   const { view, reload } = useSotProfiles(hostId)
@@ -21,8 +51,12 @@ function Harness({ hostId = 'h1', attached = 'p1' }: { hostId?: string; attached
 
 const ready = () => waitFor(() => expect(screen.getByTestId('profile-sot-block')).not.toHaveAttribute('data-state', 'loading'))
 
+/** Where h1 is: every request to it is pinned to this (useSotProfiles / useSotDelete never send unpinned). */
+const H1 = { expectEndpoint: '10.0.0.1:7860' }
+
 beforeEach(() => {
   for (const fn of [listProfiles, renameProfile, deleteProfile]) vi.mocked(fn).mockReset()
+  useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 }, h2: { id: 'h2', name: 'air', ip: '10.0.0.2', port: 7860, order: 1 } }, hostOrder: ['h1', 'h2'] })
 })
 
 afterEach(cleanup)
@@ -32,7 +66,7 @@ describe('the list: loading, failed, empty, rows', () => {
     let answer: (v: { kind: 'ok'; value: ProfileIndexEntry[] }) => void = () => {}
     vi.mocked(listProfiles).mockReturnValue(new Promise((resolve) => { answer = resolve }))
     render(<Harness />)
-    expect(listProfiles).toHaveBeenCalledWith('h1')
+    expect(listProfiles).toHaveBeenCalledWith('h1', H1)
     expect(screen.getByTestId('profile-sot-block')).toHaveAttribute('data-state', 'loading')
     expect(screen.getByTestId('profile-sot-loading')).toBeInTheDocument()
     await act(async () => { answer({ kind: 'ok', value: [profile('p1', 'default')] }) })
@@ -118,7 +152,7 @@ describe('delete — only what the FETCHED index shows nobody attached to', () =
     await ready()
     fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
     fireEvent.click(screen.getByTestId('profile-sot-delete-confirm'))
-    expect(deleteProfile).toHaveBeenCalledWith('h1', 'p2')
+    expect(deleteProfile).toHaveBeenCalledWith('h1', 'p2', H1)
     expect(screen.getByTestId('profile-sot-delete-confirm')).toBeDisabled()
     rows()
     await act(async () => { answer({ kind: 'deleted' }) })
@@ -173,7 +207,7 @@ describe('rename', () => {
     fireEvent.change(input, { target: { value: '  work  ' } })
     rows(profile('p1', 'work'))
     fireEvent.click(screen.getByTestId('profile-sot-rename-save'))
-    expect(renameProfile).toHaveBeenCalledWith('h1', 'p1', 'work')
+    expect(renameProfile).toHaveBeenCalledWith('h1', 'p1', 'work', H1)
     await waitFor(() => expect(screen.getByTestId('profile-sot-name-p1')).toHaveTextContent('work'))
     expect(screen.queryByTestId('profile-sot-rename-input')).toBeNull()
   })
@@ -221,6 +255,33 @@ describe('Refresh', () => {
     render(<NoHost />)
     expect(screen.getByTestId('view')).toHaveTextContent('null')
     expect(listProfiles).not.toHaveBeenCalled()
+  })
+
+  it('a host that is in no store has no address to pin to: nothing is asked, nothing is offered — until it appears, then it is asked PINNED (PR #1340 re-review)', async () => {
+    rows(profile('p2', 'experiment'))
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+    render(<Harness />)
+    await act(async () => {})
+    expect(listProfiles).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('profile-sot-block')).toBeNull()
+    expect(screen.queryByTestId('profile-sot-delete-p2')).toBeNull()
+    expect(screen.queryByTestId('profile-sot-rename-p2')).toBeNull()
+    act(() => useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] }))
+    await ready()
+    expect(listProfiles).toHaveBeenCalledTimes(1)
+    expect(listProfiles).toHaveBeenCalledWith('h1', H1)
+    expect(screen.getByTestId('profile-sot-delete-p2')).toBeEnabled()
+  })
+
+  it('… and when it leaves the store again, what was listed goes with it: nothing left to act on', async () => {
+    rows(profile('p2', 'experiment'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+    act(() => useHostStore.setState({ hosts: {}, hostOrder: [] }))
+    expect(screen.queryByTestId('profile-sot-delete-dialog')).toBeNull()
+    expect(screen.queryByTestId('profile-sot-block')).toBeNull()
+    expect(deleteProfile).not.toHaveBeenCalled()
   })
 })
 
@@ -343,5 +404,72 @@ describe('useSotProfiles — one host\'s answer never paints another host\'s lis
     await act(async () => { answer({ kind: 'ok', value: [] }) })
     expect(errors).not.toHaveBeenCalled()
     errors.mockRestore()
+  })
+})
+
+describe('an action belongs to the ADDRESS the list was fetched from, too — the same host id may move (PR #1340 review)', () => {
+  const A = '10.0.0.1:7860'
+  const hostAt = (ip: string) => act(() => useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip, port: 7860, order: 0 } } }))
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
+  })
+  afterEach(() => {
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+  })
+
+  it('h1\'s address changes while the delete confirmation is open: it closes in that render, nothing is sent, h1 is listed again', async () => {
+    rows(profile('p1', 'default'), profile('p2', 'experiment'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+    hostAt('10.0.0.99')
+    expect(screen.queryByTestId('profile-sot-delete-dialog')).toBeNull()
+    await waitFor(() => expect(listProfiles).toHaveBeenCalledTimes(2))
+    await ready()
+    expect(screen.queryByTestId('profile-sot-delete-dialog')).toBeNull()
+    expect(deleteProfile).not.toHaveBeenCalled()
+  })
+
+  it('… and so does the rename editor', async () => {
+    rows(profile('p1', 'default'), profile('p2', 'experiment'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-rename-p2'))
+    hostAt('10.0.0.99')
+    expect(screen.queryByTestId('profile-sot-rename-input')).toBeNull()
+    expect(renameProfile).not.toHaveBeenCalled()
+  })
+
+  it('the delete is pinned to the address; a move after the check → refused by the api, nothing deleted, said in a sentence', async () => {
+    rows(profile('p1', 'default'), profile('p2', 'experiment'))
+    vi.mocked(deleteProfile).mockResolvedValue(failure('host h1 is not at 10.0.0.1:7860 any more', 'endpoint-changed'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+    fireEvent.click(screen.getByTestId('profile-sot-delete-confirm'))
+    expect(deleteProfile).toHaveBeenCalledWith('h1', 'p2', { expectEndpoint: A })
+    expect(await screen.findByTestId('profile-sot-status')).toHaveTextContent(en['settings.profile.sot.endpoint_changed'])
+    await waitFor(() => expect(listProfiles).toHaveBeenCalledTimes(2))
+  })
+
+  it('A→B→A between the render and the fetch: B\'s list is NEVER shown as A\'s (the list call is pinned too)', async () => {
+    const MoveToB = raceAtoBtoA({ '10.0.0.1:7860': [profile('p2', 'on A')], '10.0.0.66:7860': [profile('p2', 'on B')] }, '10.0.0.1', '10.0.0.66')
+    render(<><Harness /><MoveToB /></>)
+    await waitFor(() => expect(screen.getByTestId('profile-sot-block')).toHaveTextContent('on A'))
+    expect(screen.getByTestId('profile-sot-block')).not.toHaveTextContent('on B')
+    expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: A })
+  })
+
+  it('the rename is pinned to the address too; refused likewise', async () => {
+    rows(profile('p1', 'default'))
+    vi.mocked(renameProfile).mockResolvedValue(failure('host h1 is not at 10.0.0.1:7860 any more', 'endpoint-changed'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-rename-p1'))
+    fireEvent.change(screen.getByTestId('profile-sot-rename-input'), { target: { value: 'work' } })
+    fireEvent.click(screen.getByTestId('profile-sot-rename-save'))
+    expect(renameProfile).toHaveBeenCalledWith('h1', 'p1', 'work', { expectEndpoint: A })
+    expect(await screen.findByTestId('profile-sot-status')).toHaveTextContent(en['settings.profile.sot.endpoint_changed'])
   })
 })

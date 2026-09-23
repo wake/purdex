@@ -54,6 +54,23 @@ export function sotActionStillValid(openedUnder: string, scopeNow: string, profi
   return openedUnder === scopeNow && rowsNow !== null && rowsNow.some((row) => row.id === profileId)
 }
 
+/**
+ * Why a SOT profile may NOT be offered for deletion; null = it may. Decided by the FETCHED index: anybody attached
+ * blocks it — and so does being the profile THIS device syncs with (`attachedProfileId`; null when none), listed
+ * attached or not (its attachment may not have been written yet): stop sync first. The index can be old, so the
+ * daemon still has the last word (409 `attached`).
+ */
+export function sotDeleteBlocked(row: { id: string; attachments: readonly unknown[] }, attachedProfileId: string | null): 'current' | 'attached' | null {
+  if (row.id === attachedProfileId) return 'current'
+  return row.attachments.length > 0 ? 'attached' : null
+}
+
+/** The wizard's scope for a SOT delete: the host chosen AND the step it was opened on — a confirmation opened on
+ *  step 2 for host A is not one for host B, nor one that may be sent from any other step. */
+export function wizardSotScopeOf(hostId: string | null, step: string): string {
+  return JSON.stringify(['wizard', hostId, step])
+}
+
 /** A record's key as a test id: `<host>.<profile>.<endpoint>`, everything but letters, digits, `.`, `-` and `_`
  *  replaced by `_` (the endpoint's colon). For the acceptance run to address one notice; React keys use the real key. */
 export function pendingDetachTestId(left: Pick<PendingDetach, 'hostId' | 'profileId' | 'endpoint'>): string {

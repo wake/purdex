@@ -4,6 +4,7 @@ import en from '../../../locales/en.json'
 import { ProfileSection } from './ProfileSection'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useProfileStore } from '../../../stores/useProfileStore'
+import { useHostStore } from '../../../stores/useHostStore'
 import { listProfiles } from '../../../lib/profile/api'
 import { useProfileSync } from '../../../hooks/useProfileSync'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
@@ -15,6 +16,7 @@ vi.mock('../../../lib/profile/api', () => ({ listProfiles: vi.fn(), renameProfil
 const NO_MASTER: ProfileSyncSnapshot = { master: null, leader: false, blocked: null, status: null, problems: [], remote: false, stale: false }
 const attach = () => {
   useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860' })
+  useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
   vi.mocked(useProfileSync).mockReturnValue({ ...NO_MASTER, master: { hostId: 'h1', profileId: 'p1' }, leader: true, status: { profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null } })
 }
 
@@ -22,6 +24,7 @@ beforeEach(() => {
   vi.mocked(useProfileSync).mockReturnValue(NO_MASTER)
   vi.mocked(listProfiles).mockReset()
   vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [] })
+  useHostStore.setState({ hosts: {}, hostOrder: [] })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
   useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null, suspension: null })
 })
@@ -98,6 +101,6 @@ describe('Settings › Profile', () => {
     attach()
     render(<ProfileSection />)
     expect(await screen.findByTestId('profile-sot-block')).toBeInTheDocument()
-    expect(listProfiles).toHaveBeenCalledWith('h1')
+    expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: '10.0.0.1:7860' })
   })
 })

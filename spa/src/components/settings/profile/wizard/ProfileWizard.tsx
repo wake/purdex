@@ -37,6 +37,11 @@
 // THE RESULT IS ALSO A TOAST (`announceRun`, acceptance F6): a pull replaces the world this page lives in. The
 // run's promise outlives the component — it announces, and sets state only while `alive`.
 //
+// STEP 2 CAN DELETE a profile on the host that nobody is attached to (#1325: with every device stopped there is no
+// master, so Settings' host block is gone). The rules are useSotDelete.ts's — SotProfilesBlock's own; the scope a
+// confirmation belongs to is the host AND the step (`wizardSotScopeOf`): a host change, or the wizard leaving
+// step 2 (a premise sent it back), closes it and nothing is sent. While it is in flight the step does not act.
+//
 // WHAT IS SHOWN OF A FAILURE is a sentence chosen by the failure's class. Never a transport's message, an
 // `Error.message` or a response body (wizard-run.ts closes the list for the run; `requestKey` for the requests).
 import { useEffect, useRef, useState } from 'react'
@@ -50,6 +55,9 @@ import { isClientIdPersisted } from '../../../../lib/client-identity'
 import { readMasterWorld } from '../../../../lib/profile/master-world'
 import { detachMaster, type DetachResult } from '../../../../lib/profile/start'
 import { useSotProfiles } from '../useSotProfiles'
+import { useSotDelete } from '../useSotDelete'
+import { wizardSotScopeOf } from '../profile-rules'
+import { ConfirmDialog } from '../../../ConfirmDialog'
 import { DirectionStep, LocalStep, SotStep, type SotChoice } from './WizardChoiceSteps'
 import { announceRun, brokenLocalPremise, createSotProfile, offeredProfileName, prepareRun, runPlan, sotNow, subStepsOf, type CreateResult, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 import { BTN, NOTICE, reasonKey, requestKey, useMasterWorldReason } from './wizard-shared'
@@ -151,6 +159,19 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const hosts = useHostStore((s) => s.hosts)
   const runtime = useHostStore((s) => s.runtime)
   const slaves = useLocalProfilesStore((s) => s.slaves)
+  /** The profile this device syncs with on the chosen host — never offered for deletion (none on step 2, by its premises). */
+  const syncedHere = useProfileStore((s) => (hostId !== null && s.masterHostId === hostId ? s.masterProfileId : null))
+
+  const del = useSotDelete({
+    hostId: hostId ?? '',
+    attachedProfileId: syncedHere,
+    scope: wizardSotScopeOf(hostId, step),
+    view: sot.view,
+    reload: sot.reload,
+    failedText: (f) => `${t('settings.profile.wizard.sot.delete_failed')} ${t(requestKey(f.reason))}`,
+    // The chosen profile is gone from the host: it is chosen no more.
+    onDeleted: (id) => setChoice((c) => (c?.kind === 'existing' && c.id === id ? null : c)),
+  })
 
   useEffect(() => {
     alive.current = true
@@ -226,7 +247,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const sotReady = hostId !== null && (choice?.kind === 'new' ? normalizeLocalProfileName(newName.value) !== null : chosenRow !== null)
 
   const confirmSot = async (): Promise<void> => {
-    if (!sotReady || hostId === null || choice === null || creating) return
+    if (!sotReady || hostId === null || choice === null || creating || del.busy) return
     if (choice.kind === 'existing') {
       if (chosenRow === null) return
       setSeen(sotNow(chosenRow)) // what the user is looking at, this instant
@@ -418,7 +439,8 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
               onNewName={(value) => setNewName({ value, touched: true })}
               createError={createError}
               maybeId={maybeId}
-              disabled={creating}
+              del={del}
+              disabled={creating || del.busy}
             />
           )}
 
@@ -449,7 +471,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
                 </button>
               )}
               {step === 'sot' && (
-                <button type="button" data-testid="profile-wizard-next" aria-busy={creating} disabled={!sotReady || creating} onClick={() => void confirmSot()} className={BTN}>
+                <button type="button" data-testid="profile-wizard-next" aria-busy={creating} disabled={!sotReady || creating || del.busy} onClick={() => void confirmSot()} className={BTN}>
                   {creating && <ArrowsClockwise size={14} className="animate-spin" />}
                   {t(choice?.kind === 'new' ? 'settings.profile.wizard.sot.create_next' : 'settings.profile.wizard.next')}
                 </button>
@@ -484,6 +506,18 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
             </div>
           )}
         </>
+      )}
+
+      {del.confirm && (
+        <ConfirmDialog
+          testIdPrefix="profile-wizard-delete"
+          busy={del.busy}
+          title={t('settings.profile.sot.delete_title', { name: del.confirm.row.name })}
+          body={t('settings.profile.sot.delete_body')}
+          confirmLabel={t('common.delete')}
+          onCancel={del.cancel}
+          onConfirm={() => void del.remove()}
+        />
       )}
     </div>
   )
