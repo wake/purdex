@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -130,8 +131,9 @@ type RealExecutor struct{}
 func NewRealExecutor() *RealExecutor { return &RealExecutor{} }
 
 // readWaitDelay bounds how long a bounded read waits for the child's pipes
-// after its context ended and the child was killed. Without it, a grandchild
-// that inherited stdout would keep Output() waiting past the deadline.
+// after its context ended and the child was killed. A tmux read is a single
+// client process, so this is defensive: should anything ever inherit the
+// child's stdout, Output() still returns within deadline + readWaitDelay.
 const readWaitDelay = 500 * time.Millisecond
 
 // boundedRead builds a tmux read that is killed when ctx ends.
@@ -221,51 +223,122 @@ func (r *RealExecutor) ActivePaneMetadata(ctx context.Context, sessionName strin
 		}
 		return TmuxPaneMetadata{}, fmt.Errorf("tmux display-message: %w", err)
 	}
-	return parseActivePaneMetadata(string(out))
+	if md, ok := parseActivePaneMetadata(string(out)); ok {
+		return md, nil
+	}
+	// The field boundaries of the combined answer cannot be trusted (a raw
+	// TAB in pane_title or window_name, or a short answer): ask field by
+	// field, as before #1293, rather than return misaligned values.
+	return r.activePaneMetadataPerField(ctx, sessionName)
 }
 
-// activePaneMetadataFields are the formats ActivePaneMetadata reads, in
-// TmuxPaneMetadata field order. They are fetched with ONE display-message,
-// TAB-joined (#1293 §3.1/§3.4: seven execs per session made a large host's
-// list read approach its deadline).
-var activePaneMetadataFields = []string{
-	"#{session_id}",
-	"#{session_name}",
-	"#{window_id}",
-	"#{pane_id}",
-	"#{pane_title}",
-	"#{window_name}",
-	"#{pane_current_command}",
-}
+// activePaneMetadataFormat reads every ActivePaneMetadata field with ONE
+// display-message (#1293 §3.1/§3.4: seven execs per session made a large
+// host's list read approach its deadline), TAB-joined.
+//
+// The order is chosen so the answer can be split safely. pane_title and
+// window_name are text a user or a program in the pane controls and may
+// carry a raw TAB, so each sits between two ids of a fixed shape
+// ($N, @N, %N) that can never contain one; a TAB inside either shifts the
+// ids out of their slots, which parseActivePaneMetadata detects. session_name
+// cannot hold a raw TAB (tmux vis-encodes it). pane_current_command is last
+// and absorbs any TABs of its own.
+const activePaneMetadataFormat = "#{session_id}\t#{pane_title}\t#{window_id}\t#{window_name}\t#{pane_id}\t#{session_name}\t#{pane_current_command}"
 
-var activePaneMetadataFormat = strings.Join(activePaneMetadataFields, "\t")
+const activePaneMetadataFieldCount = 7
+
+var (
+	tmuxSessionIDRe = regexp.MustCompile(`^\$[0-9]+$`)
+	tmuxWindowIDRe  = regexp.MustCompile(`^@[0-9]+$`)
+	tmuxPaneIDRe    = regexp.MustCompile(`^%[0-9]+$`)
+)
 
 // parseActivePaneMetadata splits the combined display-message answer on TAB
 // FIRST and only then sanitises each field — sanitizeTmuxMetadata maps TAB to
 // a space, so the separator cannot survive into a field value.
 //
-// SplitN on purpose, like parseListSessionsOutput: tmux vis-encodes TAB in
-// session names, window names and pane titles, and ids never contain one,
-// so the only field that can carry a raw TAB is the last one,
-// pane_current_command (a process name), which absorbs the rest of the line
-// and is then sanitised exactly as the per-field read sanitised it.
-// Fewer fields than asked for is an error, never a half-filled struct.
-func parseActivePaneMetadata(out string) (TmuxPaneMetadata, error) {
-	parts := strings.SplitN(strings.TrimSuffix(out, "\n"), "\t", len(activePaneMetadataFields))
-	if len(parts) != len(activePaneMetadataFields) {
-		return TmuxPaneMetadata{}, fmt.Errorf("tmux display-message: expected %d tab-separated fields, got %d", len(activePaneMetadataFields), len(parts))
+// SplitN, so the last field (pane_current_command) absorbs the rest of the
+// line. ok is false — and the caller must fall back to per-field reads —
+// when the answer is short of fields or any fenced id is not in its slot:
+// that is what a raw TAB in pane_title or window_name looks like, and the
+// fields around it would be misaligned. Never a half-filled struct.
+func parseActivePaneMetadata(out string) (md TmuxPaneMetadata, ok bool) {
+	parts := strings.SplitN(strings.TrimSuffix(out, "\n"), "\t", activePaneMetadataFieldCount)
+	if len(parts) != activePaneMetadataFieldCount ||
+		!tmuxSessionIDRe.MatchString(parts[0]) ||
+		!tmuxWindowIDRe.MatchString(parts[2]) ||
+		!tmuxPaneIDRe.MatchString(parts[4]) {
+		return TmuxPaneMetadata{}, false
 	}
 	for i := range parts {
 		parts[i] = sanitizeTmuxMetadata(parts[i])
 	}
 	return TmuxPaneMetadata{
 		SessionID:          parts[0],
-		SessionName:        parts[1],
+		PaneTitle:          parts[1],
 		WindowID:           parts[2],
-		PaneID:             parts[3],
-		PaneTitle:          parts[4],
-		WindowName:         parts[5],
+		WindowName:         parts[3],
+		PaneID:             parts[4],
+		SessionName:        parts[5],
 		PaneCurrentCommand: parts[6],
+	}, true
+}
+
+// activePaneMetadataPerField is the pre-#1293 read: one display-message per
+// field, each answer sanitised on its own. It is the fallback for a combined
+// answer whose field boundaries cannot be trusted (see
+// parseActivePaneMetadata). It runs under the same ctx, so a hung tmux still
+// ends at the caller's deadline.
+func (r *RealExecutor) activePaneMetadataPerField(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
+	target := activePaneTarget(sessionName)
+	query := func(format string) (string, error) {
+		out, err := boundedRead(ctx, "display-message", "-p", "-t", target, format).Output()
+		if err != nil {
+			if cerr := readCtxErr(ctx, "tmux display-message "+format, err); cerr != nil {
+				return "", cerr
+			}
+			return "", fmt.Errorf("tmux display-message %s: %w", format, err)
+		}
+		return sanitizeTmuxMetadata(strings.TrimSuffix(string(out), "\n")), nil
+	}
+
+	sessionID, err := query("#{session_id}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	resolvedSessionName, err := query("#{session_name}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	windowID, err := query("#{window_id}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	paneID, err := query("#{pane_id}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	paneTitle, err := query("#{pane_title}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	windowName, err := query("#{window_name}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+	paneCurrentCommand, err := query("#{pane_current_command}")
+	if err != nil {
+		return TmuxPaneMetadata{}, err
+	}
+
+	return TmuxPaneMetadata{
+		SessionID:          sessionID,
+		SessionName:        resolvedSessionName,
+		WindowID:           windowID,
+		PaneID:             paneID,
+		PaneTitle:          paneTitle,
+		WindowName:         windowName,
+		PaneCurrentCommand: paneCurrentCommand,
 	}, nil
 }
 

@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -107,7 +110,15 @@ func helperCalls(t *testing.T, logPath string) []string {
 
 // Pins ActivePaneMetadata's observable behaviour — field order, per-field
 // sanitising, error on a failing tmux — so the per-field → single
-// display-message merge (#1293 §3.1) is provably equivalent.
+// display-message merge (#1293 §3.1) is provably equivalent: every case is
+// checked against an explicit want AND against the per-field read on the same
+// raw tmux values.
+//
+// pane_title and window_name are text a user or a program in the pane can set,
+// so they may carry a raw TAB (the combined read's separator). The combined
+// format fences each of them between two fixed-shape ids; when a TAB shifts
+// the ids out of place the read falls back to per-field queries (wantCalls 8 =
+// 1 combined + 7 per-field) instead of returning misaligned fields.
 func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 	base := map[string]string{
 		"session_id":           "$3",
@@ -129,20 +140,56 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 		return m
 	}
 
+	baseWant := tmux.TmuxPaneMetadata{
+		SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+		PaneTitle: "my title", WindowName: "zsh", PaneCurrentCommand: "vim",
+	}
+
 	cases := []struct {
-		name    string
-		values  map[string]string
-		fail    bool
-		want    tmux.TmuxPaneMetadata
-		wantErr bool
+		name      string
+		values    map[string]string
+		fail      bool
+		want      tmux.TmuxPaneMetadata
+		wantErr   bool
+		wantCalls int
 	}{
 		{
-			name:   "plain values in field order",
-			values: base,
+			name:      "plain values in field order",
+			values:    base,
+			want:      baseWant,
+			wantCalls: 1,
+		},
+		{
+			name:      "TAB in pane_title falls back to per-field",
+			values:    with("pane_title", "my\ttitle"),
+			want:      baseWant,
+			wantCalls: 8,
+		},
+		{
+			name:   "TAB in window_name falls back to per-field",
+			values: with("window_name", "z\tsh"),
 			want: tmux.TmuxPaneMetadata{
 				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
-				PaneTitle: "my title", WindowName: "zsh", PaneCurrentCommand: "vim",
+				PaneTitle: "my title", WindowName: "z sh", PaneCurrentCommand: "vim",
 			},
+			wantCalls: 8,
+		},
+		{
+			name:   "TABs in pane_title and window_name fall back to per-field",
+			values: with("pane_title", "a\tb\tc", "window_name", "\tw\t"),
+			want: tmux.TmuxPaneMetadata{
+				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
+				PaneTitle: "a b c", WindowName: "w", PaneCurrentCommand: "vim",
+			},
+			wantCalls: 8,
+		},
+		{
+			// A title that forges the id shapes on its own still cannot pass:
+			// every fence it shifts lands on a field of the wrong shape.
+			name:      "TAB-laden pane_title that mimics ids falls back",
+			values:    with("pane_title", "x\t@9\ty"),
+			want:      tmux.TmuxPaneMetadata{SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7", PaneTitle: "x @9 y", WindowName: "zsh", PaneCurrentCommand: "vim"},
+			wantCalls: 8,
 		},
 		{
 			name: "control chars and runs of whitespace are sanitised per field",
@@ -155,6 +202,7 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
 				PaneTitle: "a b c [31m", WindowName: "win dow", PaneCurrentCommand: "cmd with tabs",
 			},
+			wantCalls: 1, // the last field absorbs its own TABs: no fallback
 		},
 		{
 			name:   "embedded newline inside a field",
@@ -163,6 +211,7 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 				SessionID: "$3", SessionName: "a b", WindowID: "@4", PaneID: "%7",
 				PaneTitle: "line1 line2", WindowName: "zsh", PaneCurrentCommand: "vim",
 			},
+			wantCalls: 1,
 		},
 		{
 			name:   "empty fields stay empty",
@@ -170,18 +219,23 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 			want: tmux.TmuxPaneMetadata{
 				SessionID: "$3", SessionName: "dev", WindowID: "@4", PaneID: "%7",
 			},
+			wantCalls: 1,
 		},
 		{
-			name:    "tmux failure is an error with zero metadata",
-			values:  base,
-			fail:    true,
-			wantErr: true,
+			name:      "tmux failure is an error with zero metadata",
+			values:    base,
+			fail:      true,
+			wantErr:   true,
+			wantCalls: 1,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			installHelperTmux(t, tc.values, tc.fail)
+			logPath := installHelperTmux(t, tc.values, tc.fail)
 			got, err := (&tmux.RealExecutor{}).ActivePaneMetadata(context.Background(), "dev")
+			if calls := helperCalls(t, logPath); len(calls) != tc.wantCalls {
+				t.Fatalf("want %d tmux exec(s), got %d: %v", tc.wantCalls, len(calls), calls)
+			}
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("want error, got %+v", got)
@@ -196,6 +250,13 @@ func TestRealExecutorActivePaneMetadata_Equivalence(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("ActivePaneMetadata() =\n %+v\nwant\n %+v", got, tc.want)
+			}
+			perField, err := (&tmux.RealExecutor{}).ActivePaneMetadataPerField(context.Background(), "dev")
+			if err != nil {
+				t.Fatalf("per-field read: %v", err)
+			}
+			if got != perField {
+				t.Fatalf("combined read differs from the per-field read:\n %+v\n %+v", got, perField)
 			}
 		})
 	}
@@ -220,29 +281,60 @@ func TestRealExecutorActivePaneMetadata_OneDisplayMessage(t *testing.T) {
 }
 
 // installSleepingTmux puts a fake tmux on PATH that never answers within any
-// test deadline and leaves a grandchild holding the stdout pipe, so only
-// cmd.WaitDelay can make Output() return once the direct child is killed.
-func installSleepingTmux(t *testing.T) string {
+// test deadline. Like a real tmux read it is ONE client process with no
+// children: the script records its PID and then execs sleep in place, so the
+// recorded PID is the very process exec.Cmd started and must Wait on. It
+// returns the fake's directory and the path of the PID file.
+func installSleepingTmux(t *testing.T) (dir, pidFile string) {
 	t.Helper()
-	dir := t.TempDir()
-	script := "#!/bin/sh\nsleep 3 &\nexec sleep 3\n"
-	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
+	dir = t.TempDir()
+	pidFile = filepath.Join(dir, "tmux.pid")
+	script := fmt.Sprintf("#!/bin/sh\n[ -n \"$PDX_FAKE_TMUX_WARM\" ] && exit 0\necho $$ > %q\nexec sleep 3\n", pidFile)
+	fake := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The first exec of a freshly written script can take longer than the
+	// read deadline on macOS (the system checks the new file), and a fake
+	// killed before it records its PID proves nothing. Run it once untimed.
+	warm := exec.Command(fake)
+	warm.Env = append(os.Environ(), "PDX_FAKE_TMUX_WARM=1")
+	if err := warm.Run(); err != nil {
+		t.Fatalf("warm-up run of the fake tmux: %v", err)
+	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return dir
+	return dir, pidFile
 }
 
-// readBound is how long a read may take past its deadline: the executor's
-// WaitDelay plus scheduling slack. Far below the fake's 3 s sleep, so a read
-// that is not killed, or that waits on the grandchild's pipe, goes red.
+// assertChildReaped checks that the fake tmux the read started is gone — not
+// merely killed but waited for. An un-reaped (zombie) child still answers
+// kill(pid, 0), so ESRCH proves exec.Cmd.Wait collected it.
+func assertChildReaped(t *testing.T, pidFile string) {
+	t.Helper()
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("fake tmux never recorded its PID: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("bad PID %q: %v", raw, err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("fake tmux (pid %d) still exists after the read returned: kill(pid, 0) = %v", pid, err)
+	}
+}
+
+// readDeadline is the read's context deadline. A killed read must return by
+// readDeadline + tmux.ReadWaitDelay; readSlack is scheduling slack on top.
+// All far below the fake's 3 s sleep, so a read that is not killed goes red.
 const (
 	readDeadline = 200 * time.Millisecond
-	readBound    = 2 * time.Second
+	readSlack    = 500 * time.Millisecond
+	readBound    = readDeadline + tmux.ReadWaitDelay + readSlack
 )
 
 func TestRealExecutorListSessions_DeadlineKillsHungRead(t *testing.T) {
-	dir := installSleepingTmux(t)
+	dir, pidFile := installSleepingTmux(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), readDeadline)
 	defer cancel()
@@ -259,6 +351,7 @@ func TestRealExecutorListSessions_DeadlineKillsHungRead(t *testing.T) {
 	if elapsed > readBound {
 		t.Fatalf("hung read returned after %v, want within %v", elapsed, readBound)
 	}
+	assertChildReaped(t, pidFile)
 
 	// The next read against a working tmux succeeds: nothing is left wedged.
 	working := "#!/bin/sh\nprintf '$0\\tdev\\t/tmp\\n'\n"
@@ -275,7 +368,7 @@ func TestRealExecutorListSessions_DeadlineKillsHungRead(t *testing.T) {
 }
 
 func TestRealExecutorListSessions_CancelWrapsCanceled(t *testing.T) {
-	installSleepingTmux(t)
+	_, pidFile := installSleepingTmux(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(readDeadline, cancel)
 	start := time.Now()
@@ -286,10 +379,11 @@ func TestRealExecutorListSessions_CancelWrapsCanceled(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > readBound {
 		t.Fatalf("cancelled read returned after %v, want within %v", elapsed, readBound)
 	}
+	assertChildReaped(t, pidFile)
 }
 
 func TestRealExecutorActivePaneMetadata_DeadlineKillsHungRead(t *testing.T) {
-	installSleepingTmux(t)
+	_, pidFile := installSleepingTmux(t)
 	ctx, cancel := context.WithTimeout(context.Background(), readDeadline)
 	defer cancel()
 	start := time.Now()
@@ -304,23 +398,33 @@ func TestRealExecutorActivePaneMetadata_DeadlineKillsHungRead(t *testing.T) {
 	if elapsed > readBound {
 		t.Fatalf("hung read returned after %v, want within %v", elapsed, readBound)
 	}
+	assertChildReaped(t, pidFile)
 }
 
-// A combined output that is short of fields (a format tmux could not fully
-// expand, or a truncated answer) is an error, never a half-filled struct.
-func TestRealExecutorActivePaneMetadata_MissingFieldIsError(t *testing.T) {
+// A combined answer short of fields (a format tmux could not fully expand, or
+// a truncated answer) is never turned into a half-filled struct: the read
+// falls back to per-field queries, and when those fail too it is an error
+// with zero metadata.
+func TestRealExecutorActivePaneMetadata_ShortAnswerFallsBackToPerField(t *testing.T) {
 	dir := t.TempDir()
-	script := "#!/bin/sh\nprintf '$1\\tdev\\t@1\\n'\n"
+	logPath := filepath.Join(dir, "calls.log")
+	// The combined format is the only argument containing a TAB: answer it
+	// short, and fail every per-field query.
+	script := fmt.Sprintf("#!/bin/sh\necho \"$*\" >> %q\ncase \"$5\" in\n*\"$(printf '\\t')\"*) printf '$1\\tdev\\t@1\\n' ;;\n*) echo \"can't find pane\" >&2; exit 1 ;;\nesac\n", logPath)
 	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	got, err := (&tmux.RealExecutor{}).ActivePaneMetadata(context.Background(), "dev")
 	if err == nil {
-		t.Fatalf("want error for a short answer, got %+v", got)
+		t.Fatalf("want error for a short answer whose fallback fails, got %+v", got)
 	}
 	if got != (tmux.TmuxPaneMetadata{}) {
 		t.Fatalf("want zero metadata on error, got %+v", got)
+	}
+	// 1 combined + the first per-field query, which fails and stops the read.
+	if calls := helperCalls(t, logPath); len(calls) != 2 {
+		t.Fatalf("want the combined read then the per-field fallback (2 execs), got %d: %v", len(calls), calls)
 	}
 }
 
