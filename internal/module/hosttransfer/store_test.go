@@ -433,3 +433,118 @@ func TestClearDropsEveryEntry(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+// fakeTimer is one timer handed out by fakeTimers; tests fire it by hand.
+type fakeTimer struct {
+	d       time.Duration
+	fn      func()
+	stopped bool
+}
+
+func (t *fakeTimer) Stop() bool {
+	was := !t.stopped
+	t.stopped = true
+	return was
+}
+
+// fakeTimers is the injected afterFunc: it records every timer instead of
+// arming a real one.
+type fakeTimers struct {
+	mu     sync.Mutex
+	timers []*fakeTimer
+}
+
+func (f *fakeTimers) afterFunc(d time.Duration, fn func()) stopper {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t := &fakeTimer{d: d, fn: fn}
+	f.timers = append(f.timers, t)
+	return t
+}
+
+func (f *fakeTimers) get(i int) *fakeTimer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.timers[i]
+}
+
+func (f *fakeTimers) len() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.timers)
+}
+
+func newTimedStore(gen func() (string, error)) (*Store, *fakeClock, *fakeTimers) {
+	clk := newFakeClock()
+	ft := &fakeTimers{}
+	return newStoreWith(clk.now, gen, ft.afterFunc), clk, ft
+}
+
+func liveEntries(s *Store) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.entries)
+}
+
+// R1 finding 1: an expired payload leaves memory when its TTL runs out,
+// even if no request ever comes to sweep it.
+func TestExpiryTimerDropsTheEntryWithoutAnyRequest(t *testing.T) {
+	s, _, ft := newTimedStore(seqGen())
+	_, _, err := s.Create(payloadN(1))
+	require.NoError(t, err)
+	require.Equal(t, 1, ft.len(), "one timer per entry")
+	assert.Equal(t, codeTTL, ft.get(0).d)
+	require.Equal(t, 1, liveEntries(s))
+
+	ft.get(0).fn()
+	assert.Equal(t, 0, liveEntries(s), "the timer deletes the payload")
+}
+
+func TestRedeemStopsTheExpiryTimer(t *testing.T) {
+	s, _, ft := newTimedStore(seqGen())
+	code, _, err := s.Create(payloadN(1))
+	require.NoError(t, err)
+	_, _, err = s.Redeem(code)
+	require.NoError(t, err)
+	assert.True(t, ft.get(0).stopped)
+}
+
+func TestSweepStopsTheExpiryTimer(t *testing.T) {
+	s, clk, ft := newTimedStore(seqGen())
+	_, _, err := s.Create(payloadN(1))
+	require.NoError(t, err)
+	clk.advance(codeTTL)
+	_, _, err = s.Create(payloadN(2)) // sweeps the first
+	require.NoError(t, err)
+	assert.True(t, ft.get(0).stopped)
+	assert.False(t, ft.get(1).stopped)
+}
+
+func TestLateTimerSparesANewEntryUnderTheSameCode(t *testing.T) {
+	s, _, ft := newTimedStore(func() (string, error) { return "AAAAAAAA", nil })
+	_, _, err := s.Create(payloadN(1))
+	require.NoError(t, err)
+	_, _, err = s.Redeem("AAAAAAAA")
+	require.NoError(t, err)
+	_, _, err = s.Create(payloadN(2)) // same code, new entry
+	require.NoError(t, err)
+
+	ft.get(0).fn() // the first entry's timer fires late
+	require.Equal(t, 1, liveEntries(s), "the new entry survives")
+	got, _, err := s.Redeem("AAAAAAAA")
+	require.NoError(t, err)
+	assert.JSONEq(t, string(payloadN(2)), string(got))
+}
+
+func TestClearStopsEveryTimer(t *testing.T) {
+	s, _, ft := newTimedStore(seqGen())
+	for i := 0; i < 3; i++ {
+		_, _, err := s.Create(payloadN(i))
+		require.NoError(t, err)
+	}
+	s.Clear()
+	require.Equal(t, 3, ft.len())
+	for i := 0; i < 3; i++ {
+		assert.True(t, ft.get(i).stopped, "timer %d", i)
+	}
+}

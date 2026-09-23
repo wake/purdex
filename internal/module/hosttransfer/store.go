@@ -36,24 +36,41 @@ var (
 type entry struct {
 	payload   json.RawMessage
 	expiresAt time.Time
+	seq       uint64  // unique per Create: a late timer spares a newer entry under the same code
+	timer     stopper // drops the entry at expiry even if no request ever sweeps
 }
 
 // Store is the in-memory code → payload table.
+//
+// An entry leaves memory at the latest when its TTL runs out (spec §6.1):
+// each one arms a timer that deletes it, and every Create/Redeem also
+// sweeps expired entries as a second line of defence.
 type Store struct {
 	mu          sync.Mutex
 	entries     map[string]entry // key: canonical code
+	seq         uint64
 	failures    int
 	windowStart time.Time // zero = no window open
 	now         func() time.Time
 	gen         func() (string, error)
+	afterFunc   func(time.Duration, func()) stopper
 }
 
 // NewStore returns an empty store on the wall clock and crypto/rand codes.
 func NewStore() *Store { return newStore(time.Now, generateCode) }
 
 func newStore(now func() time.Time, gen func() (string, error)) *Store {
-	return &Store{entries: map[string]entry{}, now: now, gen: gen}
+	return newStoreWith(now, gen, realAfterFunc)
 }
+
+func newStoreWith(now func() time.Time, gen func() (string, error), after func(time.Duration, func()) stopper) *Store {
+	return &Store{entries: map[string]entry{}, now: now, gen: gen, afterFunc: after}
+}
+
+// stopper is the part of *time.Timer the store uses; tests inject fakes.
+type stopper interface{ Stop() bool }
+
+func realAfterFunc(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }
 
 // generateCode draws 40 bits from crypto/rand and spells them as 8 Crockford
 // base32 characters.
@@ -105,8 +122,26 @@ func normalise(raw string) string {
 func (s *Store) sweepLocked(now time.Time) {
 	for code, e := range s.entries {
 		if !now.Before(e.expiresAt) {
-			delete(s.entries, code)
+			s.dropLocked(code, e)
 		}
+	}
+}
+
+// dropLocked deletes e and stops its timer. Caller holds mu.
+func (s *Store) dropLocked(code string, e entry) {
+	if e.timer != nil {
+		e.timer.Stop()
+	}
+	delete(s.entries, code)
+}
+
+// expire is an entry's timer: it drops the entry parked under code, but
+// only if it is still the entry the timer was armed for.
+func (s *Store) expire(code string, seq uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.entries[code]; ok && e.seq == seq {
+		delete(s.entries, code)
 	}
 }
 
@@ -129,7 +164,10 @@ func (s *Store) Create(payload json.RawMessage) (string, time.Time, error) {
 			continue
 		}
 		exp := now.Add(codeTTL)
-		s.entries[code] = entry{payload: payload, expiresAt: exp}
+		s.seq++
+		seq := s.seq
+		timer := s.afterFunc(codeTTL, func() { s.expire(code, seq) })
+		s.entries[code] = entry{payload: payload, expiresAt: exp, seq: seq, timer: timer}
 		return code, exp, nil
 	}
 	return "", time.Time{}, ErrUnavailable
@@ -168,13 +206,19 @@ func (s *Store) Redeem(raw string) (json.RawMessage, time.Duration, error) {
 		s.failures++
 		return nil, 0, ErrInvalidCode
 	}
-	delete(s.entries, code)
+	s.dropLocked(code, e)
 	return e.payload, 0, nil
 }
 
-// Clear drops every entry (module Stop): no payload outlives the module.
+// Clear drops every entry and stops its timer.
 func (s *Store) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	clear(s.entries)
+	s.clearLocked()
+}
+
+func (s *Store) clearLocked() {
+	for code, e := range s.entries {
+		s.dropLocked(code, e)
+	}
 }

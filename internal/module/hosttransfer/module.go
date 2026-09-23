@@ -26,8 +26,9 @@ func (m *Module) Init(_ *core.Core) error {
 	return nil
 }
 
-// Start logs a banner — the module's only log line; no background work (the
-// store sweeps expired codes on every call).
+// Start logs a banner — the module's only log line. Expiry needs no
+// background loop: each parked code arms its own timer (and every call
+// sweeps as a second line of defence).
 func (m *Module) Start(_ context.Context) error {
 	log.Println("[hosttransfer] endpoints enabled")
 	return nil
