@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   PROJECTIONS,
   SECTION_SCHEMA_ORDINAL,
+  WIRE_MARKERS,
   fingerprintOf,
   project,
   sectionFingerprint,
@@ -23,7 +24,8 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
-import { compareShape } from './profile-state'
+import { compareShape, profileLock } from './profile-state'
+import type { Shape, SotIndexEntry } from './types'
 
 const KINDS: SectionKind[] = ['hosts', 'settings', 'workspaces', 'tabs']
 
@@ -396,8 +398,10 @@ describe('shape: fingerprint and ordinal', () => {
     expect(new Set(fps).size).toBe(KINDS.length)
   })
 
-  it('sectionFingerprint(kind) is fingerprintOf(PROJECTIONS[kind])', async () => {
-    for (const kind of KINDS) expect(await sectionFingerprint(kind)).toBe(await fingerprintOf(PROJECTIONS[kind]))
+  it('sectionFingerprint(kind) is fingerprintOf(PROJECTIONS[kind] + WIRE_MARKERS[kind]) — the markers are hashed, never projected', async () => {
+    for (const kind of KINDS) expect(await sectionFingerprint(kind)).toBe(await fingerprintOf([...PROJECTIONS[kind], ...WIRE_MARKERS[kind]]))
+    expect(WIRE_MARKERS.workspaces).toEqual([]) // its wire meaning did not change: its fingerprint must not either
+    for (const kind of KINDS) for (const m of WIRE_MARKERS[kind]) expect(PROJECTIONS[kind]).not.toContain(m)
   })
 
   it('reordering a projection list leaves the fingerprint unchanged', async () => {
@@ -449,17 +453,41 @@ describe('shape: fingerprint and ordinal', () => {
     expect(compareShape(old, mine)).toBe('sot-is-newer')
   })
 
-  // host-sync-identity: tabs 1 → 2 and settings 4 → 5 re-interpret host ids WITHOUT changing a path, so the
-  // fingerprint is the same — and `compareShape` (§4.5 row 1) calls equal fingerprints 'ok' whatever the ordinals.
-  // An old client is kept out by the HOSTS row (profileLock locks the whole profile on any offender), not by these.
-  it('host-sync-identity: tabs and settings bumped their ordinal only — same fingerprint, so the shape alone does not order them', async () => {
-    expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(2)
-    expect(SECTION_SCHEMA_ORDINAL.settings).toBe(5)
-    for (const kind of ['tabs', 'settings'] as const) {
-      const mine = { fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] }
-      const old = { fingerprint: mine.fingerprint, ordinal: SECTION_SCHEMA_ORDINAL[kind] - 1 }
-      expect(compareShape(old, mine)).toBe('ok')
+  // host-sync-identity: hosts / tabs / settings re-interpret host ids (wire ids). `compareShape` calls equal
+  // fingerprints 'ok' whatever the ordinals, and old clients cannot be changed — so each of the three carries a wire
+  // marker in its FINGERPRINT (WIRE_MARKERS), and an ordinal-2-era client meets EACH section on its own as newer.
+  describe('host-sync-identity: an alpha.434 client (the ordinal-2-era shapes) is locked out by EACH host-bearing section alone', () => {
+    /** What alpha.434 computed: the projection lists without this PR's additions, no marker. */
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      return {
+        hosts: { fingerprint: await fingerprintOf(PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.aliases')), ordinal: 2 },
+        tabs: { fingerprint: await fingerprintOf(PROJECTIONS.tabs), ordinal: 1 },
+        settings: { fingerprint: await fingerprintOf(PROJECTIONS.settings), ordinal: 4 },
+        workspaces: { fingerprint: await fingerprintOf(PROJECTIONS.workspaces), ordinal: 1 },
+      }
     }
+    const entry = async (section: string, kind: SectionKind): Promise<SotIndexEntry> => ({
+      section, rev: 1, hash: 'h', fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind],
+    })
+
+    it.each([
+      ['hosts', 'hosts'],
+      ['tabs.w1', 'tabs'],
+      ['settings', 'settings'],
+    ] as const)('an index holding ONLY a new %s row → sot-is-newer (locked:schema) for the old client', async (section, kind) => {
+      const lock = profileLock([await entry(section, kind)], await oldShapes())
+      expect(lock).toMatchObject({ section, kind, verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets each old row as i-am-newer (pulls it), and the workspaces shape is unchanged (no lock either way)', async () => {
+      const old = await oldShapes()
+      for (const kind of ['hosts', 'tabs', 'settings'] as const) {
+        const mine = { fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] }
+        expect(compareShape(mine, old[kind]), kind).toBe('i-am-newer')
+      }
+      expect(await sectionFingerprint('workspaces')).toBe(old.workspaces.fingerprint)
+      expect(profileLock([await entry('workspaces', 'workspaces')], old)).toBeNull()
+    })
   })
 
   // GUARD (spec §4.5). If this fails: a projection changed — bump
@@ -470,15 +498,15 @@ describe('shape: fingerprint and ordinal', () => {
     expect(await shapeTable()).toMatchInlineSnapshot(`
       {
         "hosts": [
-          "aa5c845bc5aa692e9e549bd5f144b53499f9cc4c69ba210c0c8b9556a54e97f9",
+          "17265091ed11818ecd62b5cf092246454fa0d89cf805d090c06ad2b5ace6e412",
           3,
         ],
         "settings": [
-          "185ca6f39458c8ce645ee2b5e1548ffe99ab3cd26afbdc653722e2a113f1c0bc",
+          "dc4aa5a072306c61072f27189161c7b5852a84e320f68ac183b02341cd073c18",
           5,
         ],
         "tabs": [
-          "e8d2e6e42bdd9037c505f57bfd79e023aaf9746549d0e33f8a40a9848155debd",
+          "c14fe14a3e27bb16cb13f2a8b4e406373a3c5bd2d13142c506edc237c2c57605",
           2,
         ],
         "workspaces": [

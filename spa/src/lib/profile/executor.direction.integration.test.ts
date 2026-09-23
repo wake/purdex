@@ -24,7 +24,7 @@ import { hashSection } from './hash'
 import { buildHostsSection, buildWorkspacesSection } from './sections'
 import { identityOfSync, syncIdOfSync } from './host-identity'
 import { clearSectionStore, saveConflict } from './section-store'
-import { PROJECTIONS, SECTION_SCHEMA_ORDINAL, fingerprintOf } from './projections'
+import { PROJECTIONS, SECTION_SCHEMA_ORDINAL, fingerprintOf, sectionFingerprint } from './projections'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { FakeDaemon, type FakeRow as Row } from './test-fake-daemon'
 
@@ -490,7 +490,7 @@ async function realSettingsShapes(): Promise<{ current: [string, number]; legacy
   const legacyList = PROJECTIONS.settings.map((p) => (p === `${NEWTAB}.presets` ? `${NEWTAB}.profiles` : p))
   expect(legacyList).not.toEqual(PROJECTIONS.settings)
   expect(SECTION_SCHEMA_ORDINAL.settings).toBe(5) // 5: host-sync-identity (wire host ids) — the same paths as 4
-  return { current: [await fingerprintOf(PROJECTIONS.settings), SECTION_SCHEMA_ORDINAL.settings], legacy: [await fingerprintOf(legacyList), 3] }
+  return { current: [await sectionFingerprint('settings'), SECTION_SCHEMA_ORDINAL.settings], legacy: [await fingerprintOf(legacyList), 3] }
 }
 
 /** The placeholder shape table with the given kinds replaced — e.g. a REAL settings or hosts pair. */
@@ -751,7 +751,7 @@ async function realHostsShapes(): Promise<{ current: [string, number]; legacy: [
   const legacyList = PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.daemonId' && p !== 'hosts.*.aliases')
   expect(legacyList).toHaveLength(PROJECTIONS.hosts.length - 2)
   expect(SECTION_SCHEMA_ORDINAL.hosts).toBe(3)
-  return { current: [await fingerprintOf(PROJECTIONS.hosts), SECTION_SCHEMA_ORDINAL.hosts], legacy: [await fingerprintOf(legacyList), 1] }
+  return { current: [await sectionFingerprint('hosts'), SECTION_SCHEMA_ORDINAL.hosts], legacy: [await fingerprintOf(legacyList), 1] }
 }
 
 const hostsPuts = (from: number, clientId?: string) =>
@@ -1034,7 +1034,7 @@ describe('host-sync-identity OLD side: an ordinal-2 hosts client meets the hosts
   it('locks the whole profile (locked:schema, sot-is-newer) and writes nothing — so it never applies a wire id', async () => {
     const legacyList = PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.aliases')
     const old: [string, number] = [await fingerprintOf(legacyList), 2]
-    const current: [string, number] = [await fingerprintOf(PROJECTIONS.hosts), SECTION_SCHEMA_ORDINAL.hosts]
+    const current: [string, number] = [await sectionFingerprint('hosts'), SECTION_SCHEMA_ORDINAL.hosts]
     h.shape = shapeWith({ hosts: old })
     world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
     await attach(A, 'push')
@@ -1049,5 +1049,82 @@ describe('host-sync-identity OLD side: an ordinal-2 hosts client meets the hosts
     expect(executor!.status()).toMatchObject({ profile: 'locked:schema', schemaLock: { section: 'hosts', verdict: 'sot-is-newer' } })
     expect(daemon.writes.slice(writesBefore)).toEqual([])
     expect(Object.keys(useHostStore.getState().hosts)).toEqual([M, H2]) // nothing applied
+  })
+})
+
+/* ─── host-sync-identity: the wire marker in the fingerprint — tabs and settings lock an old client ON THEIR OWN ─── */
+
+describe('host-sync-identity: an alpha.434 client (ordinal-2-era shapes) meets ONE section this build writes', () => {
+  /** The real shape tables: alpha.434's (no marker, no `aliases`) and this build's. */
+  async function tables(): Promise<{ old: NonNullable<typeof h.shape>; mine: NonNullable<typeof h.shape> }> {
+    const fp = (paths: readonly string[]) => fingerprintOf(paths)
+    const old = {
+      hosts: [await fp(PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.aliases')), 2],
+      settings: [await fp(PROJECTIONS.settings), 4],
+      workspaces: [await fp(PROJECTIONS.workspaces), 1],
+      tabs: [await fp(PROJECTIONS.tabs), 1],
+    } as NonNullable<typeof h.shape>
+    const mine = {
+      hosts: [await sectionFingerprint('hosts'), SECTION_SCHEMA_ORDINAL.hosts],
+      settings: [await sectionFingerprint('settings'), SECTION_SCHEMA_ORDINAL.settings],
+      workspaces: [await sectionFingerprint('workspaces'), SECTION_SCHEMA_ORDINAL.workspaces],
+      tabs: [await sectionFingerprint('tabs'), SECTION_SCHEMA_ORDINAL.tabs],
+    } as NonNullable<typeof h.shape>
+    return { old, mine }
+  }
+
+  it.each(['tabs.wa1', 'settings'] as const)('a new %s row alone (hosts untouched) → the old client locks the whole profile (sot-is-newer), applies and writes NOTHING', async (section) => {
+    const { old, mine } = await tables()
+    h.shape = old
+    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
+    await attach(A, 'push')
+    expect(executor!.status().profile).toBe('synced')
+    const writesBefore = daemon.writes.length
+    const tabsBefore = useTabStore.getState().tabs
+
+    const cur = daemon.rows.get(section)!
+    const kind = section === 'settings' ? 'settings' : 'tabs'
+    // this build rewrote it: wire ids inside (here: the master's sync id on the pane)
+    const payload = JSON.parse(JSON.stringify(cur.payload).split(`"${M}"`).join(`"${syncIdOfSync('mini:new')}"`)) as Record<string, unknown>
+    const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: mine[kind][0], ordinal: mine[kind][1], writer: B }
+    daemon.rows.set(section, row)
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section, rev: row.rev, hash: row.hash!, writerClientId: B })
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(executor!.status()).toMatchObject({ profile: 'locked:schema', schemaLock: { section, verdict: 'sot-is-newer' } })
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+    expect(useTabStore.getState().tabs).toBe(tabsBefore) // no wire id was applied, nothing branded host-removed
+    expect(daemon.rows.get(section)).toEqual(row)
+  })
+
+  it('the NEW side meets the old client\'s tabs row (i-am-newer): pulled, rewritten canonical ONCE, then silence', async () => {
+    const { old, mine } = await tables()
+    h.shape = mine
+    world('named-by-B', [ws('wa1', ['ta1'])], [tab('ta1')])
+    claim(M, 'mini:b')
+    await attach(B, 'push')
+    expect(executor!.status().profile).toBe('synced')
+    problems.length = 0
+
+    // the old client (shared, pre-fix ids) pins its tab: local ids on the pane, its own shape
+    const cur = daemon.rows.get('tabs.wa1')!
+    const legacy = JSON.parse(JSON.stringify(cur.payload).split(`"${syncIdOfSync('mini:b')}"`).join(`"${M}"`)) as { tabs: Record<string, { pinned: boolean }> }
+    legacy.tabs.ta1.pinned = true
+    const payload = legacy as unknown as Record<string, unknown>
+    const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: old.tabs[0], ordinal: old.tabs[1], writer: 'c_cccccccccccc' }
+    daemon.rows.set('tabs.wa1', row)
+    const writesBefore = daemon.writes.length
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'tabs.wa1', rev: row.rev, hash: row.hash!, writerClientId: 'c_cccccccccccc' })
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(useTabStore.getState().tabs.ta1.pinned).toBe(true)
+    expect((useTabStore.getState().tabs.ta1.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
+    expect(daemon.writes.slice(writesBefore).map((w) => [w.key, w.outcome])).toEqual([['tabs.wa1', 'applied']])
+    expect(daemon.rows.get('tabs.wa1')).toMatchObject({ fingerprint: mine.tabs[0], ordinal: mine.tabs[1], writer: B })
+    expect(JSON.stringify(daemon.rows.get('tabs.wa1')!.payload)).toContain(syncIdOfSync('mini:b'))
+    expect(executor!.status().profile).toBe('synced')
+    const quiet = daemon.writes.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(daemon.writes.length).toBe(quiet)
   })
 })

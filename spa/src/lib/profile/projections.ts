@@ -107,7 +107,7 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   settings: 5,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
-  //    unchanged, so the fingerprint is too: see the note on `compareShape` in the host-sync-identity PR 2 report.
+  //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.
   tabs: 2,
 }
 
@@ -146,9 +146,27 @@ export async function fingerprintOf(paths: readonly string[]): Promise<string> {
   return sha256Hex(new TextEncoder().encode([...paths].sort().join('\n')))
 }
 
-/** The fingerprint of a section kind's projection: 64 lowercase hex. */
+/**
+ * Constant markers hashed into a kind's FINGERPRINT next to its projection — never projected (they are not in
+ * `PROJECTIONS`, so no builder, guard or applier ever reads them). They exist for one case the ordinal cannot
+ * cover: a re-interpreted value with an unchanged path list. `compareShape` calls equal fingerprints 'ok'
+ * whatever the ordinals (§4.5 row 1, on the daemon too), and an old client cannot be changed — so a new
+ * meaning must move the fingerprint, and a marker is how it moves.
+ *
+ * host-sync-identity: host ids on the wire are sync ids (`d1_…`) — `hosts` keys, `tabs.*` pane host fields,
+ * `settings` host-settings keys and New Tab columns. `workspaces` names no host: no marker, fingerprint unchanged.
+ * A marker is only ever ADDED with an ordinal bump (the guard test's snapshot enforces it).
+ */
+export const WIRE_MARKERS: Record<SectionKind, readonly string[]> = {
+  hosts: ['@wire:host-id=d1'],
+  tabs: ['@wire:host-id=d1'],
+  settings: ['@wire:host-id=d1'],
+  workspaces: [],
+}
+
+/** The fingerprint of a section kind's shape — its projection plus its wire markers: 64 lowercase hex. */
 export function sectionFingerprint(kind: SectionKind): Promise<string> {
-  return fingerprintOf(PROJECTIONS[kind])
+  return fingerprintOf([...PROJECTIONS[kind], ...WIRE_MARKERS[kind]])
 }
 
 /** `{kind: [fingerprint, ordinal]}` for all four kinds — what the guard test snapshots. */
