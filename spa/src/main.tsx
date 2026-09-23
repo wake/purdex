@@ -14,6 +14,7 @@ import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { startProfileSync } from './lib/profile/start'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
+import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
@@ -69,6 +70,10 @@ useTabStore.subscribe(() => {
     }
   }
 })
+
+// Leftovers of the removed Sync / device-state / workspace-snapshot features (#1303): on a later task, after the first
+// render is scheduled; never awaited, never throws.
+scheduleLegacyResidueCleanup()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -14,6 +14,7 @@ vi.mock('./stores/useNexHostStore', () => ({ startNexHostInvalidation: vi.fn() }
 vi.mock('./stores/useExecutionListStore', () => ({ startExecutionListInvalidation: vi.fn() }))
 vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
+vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
 vi.mock('./stores/useDeviceNameStore', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./stores/useDeviceNameStore')>()),
   ensureDefaultDeviceName: vi.fn(() => Promise.resolve()),
@@ -26,5 +27,12 @@ describe('boot', () => {
     const { ensureDefaultDeviceName } = await import('./stores/useDeviceNameStore')
     await import('./main')
     expect(ensureDefaultDeviceName).toHaveBeenCalledTimes(1)
+  })
+
+  // #1303: the removed Sync / device-state / workspace-snapshot features' leftovers. Scheduled, never awaited.
+  it('schedules the legacy residue cleanup once', async () => {
+    const { scheduleLegacyResidueCleanup } = await import('./lib/legacy-residue-cleanup')
+    await import('./main')
+    expect(scheduleLegacyResidueCleanup).toHaveBeenCalledTimes(1)
   })
 })
