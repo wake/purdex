@@ -103,9 +103,13 @@ interface HostState {
   /** Host the Development page targets. Device-local, not synced (spec D3). */
   devHostId: string | null
 
-  addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null; daemonId?: string }) => string
-  /** A re-point (ip or port changes) clears `daemonId` in the same write (spec D3). `daemonId: ''` removes it. */
-  updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token' | 'daemonId'>>) => void
+  /** Never writes `daemonId` — only `observeDaemonId` does (spec D3). */
+  addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
+  /**
+   * Never writes `daemonId` (only `observeDaemonId` does; sync applies through its own
+   * setState path). A re-point (ip or port changes) clears it unconditionally (spec D3).
+   */
+  updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
   /**
    * The single entry point for every `/api/info` answer (spec D3). `endpointAtRequest`
    * is the host's `ip:port` captured before the request; an answer for a host that is
@@ -223,7 +227,7 @@ export const useHostStore = create<HostState>()(
          
         const { id: _discardId, ...restOpts } = opts
         const host: HostConfig = { id, ...restOpts, order }
-        if (!host.daemonId) delete host.daemonId
+        delete host.daemonId
         set((state) => ({
           hosts: { ...state.hosts, [id]: host },
           hostOrder: [...state.hostOrder, id],
@@ -235,11 +239,11 @@ export const useHostStore = create<HostState>()(
         set((state) => {
           const host = state.hosts[hostId]
           if (!host) return state
-          const next: HostConfig = { ...host, ...updates }
+          const { daemonId: _ignored, ...allowed } = updates as Partial<HostConfig>
+          const next: HostConfig = { ...host, ...allowed }
           const repoint = hostEndpoint(next) !== hostEndpoint(host)
           // A re-point is learned afresh for the new endpoint (spec D3).
-          if (repoint && !('daemonId' in updates)) delete next.daemonId
-          if (!next.daemonId) delete next.daemonId
+          if (repoint) delete next.daemonId
           return {
             hosts: { ...state.hosts, [hostId]: next },
             ...(repoint ? { runtime: withoutMismatch(state.runtime, hostId) } : {}),

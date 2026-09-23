@@ -33,8 +33,9 @@ part 2 can match hosts across devices by daemon, not by SPA id.
 ## 3. Decisions
 
 ### D1. Field
-`HostConfig.daemonId?: string` — present only when non-empty. Never set to `""`. `updateHost`'s
-`Pick` gains `daemonId`.
+`HostConfig.daemonId?: string` — present only when non-empty. Never set to `""`. Only
+`observeDaemonId` writes it locally (sync applies through its own setState path): `addHost` and
+`updateHost` do not accept it and strip it if passed (PR review #4).
 
 ### D2. Stored value vs local verification — the model (revised after plan review `task-muddsq1i-rxkdeg`)
 Two things, deliberately separate:
@@ -58,8 +59,8 @@ wins + local flag" the stored value converges and each device knows whether it h
   `host_id`) and a synced address that reaches another daemon here.
 - A mismatch flag whose `endpoint` or `stored` no longer matches the host is ignored/cleared (so a
   re-point — local `updateHost` or one arriving by sync — never inherits an old flag).
-Local re-point (`updateHost` changing `ip` or `port`) clears `daemonId` in the same write (it is then
-learned for the new endpoint). A re-point arriving by sync carries its own `daemonId` (learned by the
+Local re-point (`updateHost` changing `ip` or `port`) clears `daemonId` in the same write,
+unconditionally (it is then learned for the new endpoint). A re-point arriving by sync carries its own `daemonId` (learned by the
 device that re-pointed).
 
 ### D4. When `/api/info` is asked (verification triggers)
