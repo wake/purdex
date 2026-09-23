@@ -45,6 +45,22 @@ describe('boot hydration (#1385)', () => {
     expect.soft(document.documentElement.dataset.theme).toBe('light')
   })
 
+  // The repair branch: only a theme that no longer exists makes the callback write to the store.
+  it('theme: a persisted theme that no longer exists falls back to dark at boot', async () => {
+    const registry = await import('../lib/theme-registry')
+    registry.clearThemeRegistry()
+    localStorage.setItem(
+      'purdex-themes',
+      JSON.stringify({ state: { activeThemeId: 'gone', customThemes: {} }, version: 1 }),
+    )
+
+    const { useThemeStore } = await import('./useThemeStore')
+
+    expect.soft(useThemeStore.persist.hasHydrated()).toBe(true)
+    expect.soft(useThemeStore.getState().activeThemeId).toBe('dark')
+    expect.soft(document.documentElement.dataset.theme).toBe('dark')
+  })
+
   it('UI settings: an out-of-range keepAliveCount is clamped at boot', async () => {
     localStorage.setItem(
       'purdex-ui-settings',
