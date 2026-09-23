@@ -32,7 +32,14 @@ interface State {
   placeModule: (preset: PresetKey, providerId: string, colIdx: number, rowIdx: number) => void
   placeModuleInShortest: (preset: PresetKey, providerId: string) => void
   removeModule: (preset: PresetKey, providerId: string) => void
-  ensureDefaults: (providers: ProviderInfo[]) => void
+  /**
+   * Place every provider not yet known, in each preset's shortest column.
+   * `placedAs(id)` names another id the same block may already be under (a
+   * host's block kept under its wire id — host ownership §3.3): a provider
+   * whose `placedAs` id is known or placed is not placed. Judged here, on the
+   * state this action writes — never on a snapshot the caller took before.
+   */
+  ensureDefaults: (providers: ProviderInfo[], placedAs?: (id: string) => string) => void
   /** Remove ids from every preset and from knownIds (e.g. a removed host's block). */
   pruneIds: (ids: string[]) => void
   /**
@@ -282,11 +289,20 @@ export const useNewTabLayoutStore = create<State>()(
           return { presets: { ...state.presets, [preset]: next } }
         }),
 
-      ensureDefaults: (providers) =>
+      ensureDefaults: (providers, placedAs) =>
         set((state) => {
           const known = new Set(state.knownIds)
+          const present = new Set(state.knownIds)
+          for (const key of ['3col', '2col', '1col'] as const) {
+            for (const col of state.presets[key].columns) col.forEach((id) => present.add(id))
+          }
+          const elsewhere = (id: string): boolean => {
+            if (placedAs === undefined) return false
+            const alt = placedAs(id)
+            return alt !== id && present.has(alt)
+          }
           const newcomers = providers
-            .filter((p) => !known.has(p.id) && !p.disabled)
+            .filter((p) => !known.has(p.id) && !p.disabled && !elsewhere(p.id))
             .sort((a, b) => a.order - b.order)
           if (newcomers.length === 0) return state
 

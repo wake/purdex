@@ -45,24 +45,18 @@ export function useNewTabBootstrap(): void {
       //    kept verbatim while this device lacked the host, and not yet
       //    rewritten by the (asynchronous) re-resolve pass (host ownership
       //    §3.3). That block is the one the pass will turn into this
-      //    provider's: placing the provider too would leave two.
-      const after = useNewTabLayoutStore.getState()
-      const present = new Set<string>(after.knownIds)
-      for (const key of ['3col', '2col', '1col'] as const) {
-        for (const col of after.presets[key].columns) col.forEach((id) => present.add(id))
-      }
+      //    provider's: placing the provider too would leave two. Judged inside
+      //    `ensureDefaults`, on the state it writes (a check made here first
+      //    could be stale by the write). Across windows the same residual as
+      //    the pass's stands (#1256): a layout another renderer wrote that this
+      //    one does not see yet is not part of that state.
       const identity = identityOfSync(useHostStore.getState().hosts)
-      const providers = getReadyNewTabProviders()
-        .filter((p) => {
-          const wire = presetColumnIdToWire(p.id, identity)
-          return wire === p.id || !present.has(wire)
-        })
-        .map((p) => ({
-          id: p.id,
-          order: p.order,
-          disabled: p.disabled,
-        }))
-      useNewTabLayoutStore.getState().ensureDefaults(providers)
+      const providers = getReadyNewTabProviders().map((p) => ({
+        id: p.id,
+        order: p.order,
+        disabled: p.disabled,
+      }))
+      useNewTabLayoutStore.getState().ensureDefaults(providers, (id) => presetColumnIdToWire(id, identity))
     }
 
     let unsubProviders: (() => void) | undefined

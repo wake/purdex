@@ -209,6 +209,24 @@ describe('useNewTabLayoutStore', () => {
       expect(useNewTabLayoutStore.getState().presets['1col'].columns[0]).toEqual(['a'])
     })
 
+    // PR #1406 attacker medium: the "already placed under another id" check runs inside the action, on the state it
+    // writes — never on a snapshot taken before it.
+    it('placedAs: a provider whose alternative id is already known or placed is not placed', () => {
+      useNewTabLayoutStore.setState({
+        presets: { '3col': makePreset(false, 3), '2col': { enabled: false, columns: [['sessions:d1_x'], []] }, '1col': makePreset(true, 1) },
+        knownIds: ['headless:d1_x'],
+      })
+      const placedAs = (id: string) => id.replace(':h2', ':d1_x')
+      useNewTabLayoutStore.getState().ensureDefaults([
+        { id: 'sessions:h2', order: 0 },
+        { id: 'headless:h2', order: 1 },
+        { id: 'browser', order: 2 },
+      ], placedAs)
+      const s = useNewTabLayoutStore.getState()
+      expect(s.knownIds).toEqual(['headless:d1_x', 'browser'])
+      expect(s.presets['1col'].columns[0]).toEqual(['browser'])
+    })
+
     it('respects order ascending', () => {
       useNewTabLayoutStore.getState().ensureDefaults([
         { id: 'b', order: 5 },
