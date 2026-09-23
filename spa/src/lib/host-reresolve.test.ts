@@ -8,6 +8,8 @@ import type { ParkedWorld } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+import { __resetMasterWorldForTest } from './profile/master-world'
 import { syncIdOfSync } from './profile/host-identity'
 import { STORAGE_KEYS } from './storage'
 import type { PaneContent, PaneLayout, Tab } from '../types/tab'
@@ -39,6 +41,7 @@ function hostIdsIn(value: unknown): string[] {
 /** Every store the pass touches holds `WIRE`, `UNKNOWN` and `LOCAL` references. */
 function seed(): void {
   useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }) }, hostOrder: [LOCAL], activeHostId: LOCAL })
+  // A settled world: local profile `on` on screen, the master and another local profile (`s1`) parked.
   useTabStore.setState({
     tabs: {
       t1: tab('t1', { type: 'split', id: 's', direction: 'h', sizes: [50, 50], children: [leaf('p1', tmux(WIRE)), leaf('p2', tmux(UNKNOWN))] }),
@@ -47,11 +50,19 @@ function seed(): void {
       t4: tab('t4', leaf('p5', tmux(LOCAL))),
     },
     tabOrder: ['t1', 't2', 't3', 't4'],
+    worldId: 'on',
+    worldEpoch: 1,
   })
+  useWorkspaceStore.setState({ workspaces: [{ id: 'won', name: 'on', tabs: ['t1', 't2', 't3', 't4'], activeTabId: 't1' }], activeWorkspaceId: 'won', worldId: 'on', worldEpoch: 1 })
   useLocalProfilesStore.setState({
+    activeProfileId: 'on',
+    worldEpoch: 1,
     parkedMaster: world({ m1: tab('m1', leaf('pm', tmux(WIRE))), m2: tab('m2', leaf('pm2', tmux(UNKNOWN))) }),
-    slaves: { s1: { id: 's1', name: 'S', createdAt: 1, world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: WIRE })) }) } },
-    slaveOrder: ['s1'],
+    slaves: {
+      on: { id: 'on', name: 'On', createdAt: 1, world: null },
+      s1: { id: 's1', name: 'S', createdAt: 1, world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: WIRE })) }) },
+    },
+    slaveOrder: ['on', 's1'],
   })
   useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/w' } }, [UNKNOWN]: { editor: { homePath: '/u' } } } })
   useNewTabLayoutStore.setState({
@@ -74,6 +85,8 @@ function snapshot() {
 }
 
 beforeEach(() => {
+  localStorage.clear()
+  __resetMasterWorldForTest()
   __resetHostReresolveForTest()
   useRebuildStore.setState({ lockedBy: null, lockGrant: null })
   seed()
@@ -269,6 +282,52 @@ describe('a store write fails half-way', () => {
     expect(attempts).toBe(writesPerAttempt * 3)
     vi.advanceTimersByTime(HOST_RERESOLVE_MAX_RETRY_MS * 10)
     expect(attempts).toBeLessThanOrEqual(writesPerAttempt * 20) // backed off to the cap: ~16 attempts, not ~600
+  })
+})
+
+// PR #1406 attacker high #1, narrowed (no CAS — the #1256 residual stands): the pass re-reads what the stores hold
+// ON DISK before it plans, so a value another window wrote before the pass began is kept, not overwritten.
+describe('another window wrote first', () => {
+  /** What another window's store wrote: storage only — this window's memory has not heard of it yet. */
+  function writeElsewhere(key: string, edit: (state: Record<string, unknown>) => void): void {
+    const envelope = JSON.parse(localStorage.getItem(key)!) as { state: Record<string, unknown>; version: number }
+    edit(envelope.state)
+    localStorage.setItem(key, JSON.stringify(envelope))
+  }
+
+  it('host settings: the other window\'s new key survives, and the wire key still moves', () => {
+    writeElsewhere(STORAGE_KEYS.HOST_SETTINGS, (st) => { (st.hosts as Record<string, unknown>).fresh1 = { editor: { homePath: '/fresh' } } })
+    runHostReresolve()
+    expect(useHostSettingsStore.getState().hosts).toMatchObject({ fresh1: { editor: { homePath: '/fresh' } }, [LOCAL]: { editor: { homePath: '/w' } } })
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.HOST_SETTINGS)!).state.hosts.fresh1).toBeDefined()
+  })
+
+  it('New Tab layout: a column the other window placed survives', () => {
+    writeElsewhere(STORAGE_KEYS.NEW_TAB_LAYOUT, (st) => { ((st.presets as Record<string, { columns: string[][] }>)['2col'].columns[1]).push('editor') })
+    runHostReresolve()
+    expect(useNewTabLayoutStore.getState().presets['2col'].columns[1]).toEqual(['editor'])
+  })
+
+  it('tabs on screen: a tab the other window opened survives', () => {
+    writeElsewhere(STORAGE_KEYS.TABS, (st) => { (st.tabs as Record<string, unknown>).fresh = tab('fresh', leaf('pf', tmux(WIRE))); (st.tabOrder as string[]).push('fresh') })
+    runHostReresolve()
+    expect(Object.keys(useTabStore.getState().tabs)).toContain('fresh')
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+  })
+
+  it('parked worlds: a tab the other window parked survives', () => {
+    writeElsewhere(STORAGE_KEYS.LOCAL_PROFILES, (st) => { ((st.parkedMaster as ParkedWorld).tabs).fresh = tab('fresh', leaf('pf', tmux(WIRE))) })
+    runHostReresolve()
+    const parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(Object.keys(parked.tabs)).toContain('fresh')
+    expect(hostIdsIn(parked)).not.toContain(WIRE)
+  })
+
+  it('a world the re-read shows unsettled (another window mid-switch) is not written: busy', () => {
+    writeElsewhere(STORAGE_KEYS.TABS, (st) => { st.worldEpoch = 7 })
+    const before = useLocalProfilesStore.getState().parkedMaster
+    expect(runHostReresolve()).toBe('busy')
+    expect(useLocalProfilesStore.getState().parkedMaster).toBe(before)
   })
 })
 

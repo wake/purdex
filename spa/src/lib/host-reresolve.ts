@@ -14,6 +14,13 @@
 // host's session list). The body is one synchronous stretch: nothing can interleave with it in this window.
 // Refused → retried later; a newer request supersedes a pending retry.
 //
+// A fresh view, not a safe one (#1256): the operation lock is this renderer's only, and localStorage has no
+// compare-and-set. So the body starts by re-reading, from storage, every store it rewrites (plus the workspace store,
+// which with the tab and local-profiles stores decides whether the world is settled — `readMasterWorld`, epoch and
+// fence) and plans from that; between that read and the writes nothing is awaited. What is left is the residual
+// #1256 accepts for the world switch: another renderer's write this one does not see yet — a moment late — can still
+// be overwritten by the pass's whole-store write. Closing it needs a commit point off localStorage, not this pass.
+//
 // All or nothing: the next state of every store is computed first, then written store by store; a write that throws
 // (the persist's `setItem` — quota, SecurityError — after zustand already changed memory) puts back every store
 // written so far, the failing one included, and the pass answers `write-failed` and is retried with backoff.
@@ -24,6 +31,8 @@ import type { LocalProfile, ParkedWorld } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { renameLayoutIds, useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+import { readMasterWorld } from './profile/master-world'
 import { hostSettingsFromWire, presetColumnIdFromWire } from './profile/host-identity'
 import { hostResolverSignature, wireResolverOf } from './profile/sections'
 
@@ -130,11 +139,58 @@ function commitAll(writes: readonly StoreWrite[]): boolean {
   }
 }
 
+/** A persisted store as far as the re-read needs it. */
+interface Rereadable {
+  getState: () => unknown
+  persist: {
+    getOptions: () => { name?: string; version?: number; partialize?: (state: never) => unknown }
+    rehydrate: () => unknown
+  }
+}
+
+/** The stores the pass rewrites, and the workspace store the world's settledness is read with. */
+const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore] as unknown as Rereadable[]
+
+/**
+ * Bring every store in `REREAD` up to what storage holds NOW. A store whose persisted record is exactly what its
+ * memory would write is left alone (its objects keep their identity); any other is rehydrated — synchronously, as
+ * every store here persists to localStorage (apply-to-stores' premises pin that).
+ */
+function rereadFromStorage(): void {
+  for (const store of REREAD) {
+    const { name, version, partialize } = store.persist.getOptions()
+    if (name === undefined) continue
+    let raw: string | null
+    try {
+      raw = localStorage.getItem(name)
+    } catch {
+      continue
+    }
+    if (raw === null) continue
+    const state = store.getState()
+    const mine = JSON.stringify({ state: partialize ? partialize(state as never) : state, version })
+    if (raw !== mine) void store.persist.rehydrate()
+  }
+}
+
 /** The host resolver signature the last pass that finished (`done` / `conflict`) ran against. */
 let settledSignature: string | null = null
 
+/** Inside a pass: a rehydrate the re-read causes fires the hydration triggers — they must not start another. */
+let inPass = false
+
 /** One pass, now. Never throws: a busy lock, a conflict and a failed write are outcomes. */
 export function runHostReresolve(): HostReresolveOutcome {
+  if (inPass) return 'busy'
+  inPass = true
+  try {
+    return passBody()
+  } finally {
+    inPass = false
+  }
+}
+
+function passBody(): HostReresolveOutcome {
   const { hosts, hostOrder } = useHostStore.getState()
   const signature = hostResolverSignature({ hosts, hostOrder })
   const resolve = wireResolverOf({ hosts, hostOrder })
@@ -148,6 +204,10 @@ export function runHostReresolve(): HostReresolveOutcome {
     const local = resolve(id)
     return Object.hasOwn(hosts, local) ? local : id
   }
+  // Everything from here to the last write is synchronous (the #1256 narrowing above).
+  rereadFromStorage()
+  // A world another window is mid-way through switching is nobody's to write: retried like a held lock.
+  if (!readMasterWorld().settled) return 'busy'
   const writes = planRewrite(map)
   if (writes.length > 0) {
     // Taking the lock is not free — every release reconciles every host's sessions — so only when something moves.
@@ -180,6 +240,7 @@ function scheduleRetry(ms: number): void {
  * the conflict clearing changes the identity, which requests again. Never throws.
  */
 export function requestHostReresolve(): void {
+  if (inPass) return // the pass under way re-reads every store before it plans
   cancelRetry()
   const outcome = runHostReresolve()
   if (outcome === 'busy') {
