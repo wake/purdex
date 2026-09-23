@@ -427,3 +427,130 @@ export function hostsFromWire(payload: WireHostsPayload, resolve: WireResolver):
   }
   return { hosts, hostOrder: mapOrder(payload?.hostOrder, resolve) as string[] }
 }
+
+// === Pane layouts (tabs.*) ===
+
+type IdMap = (id: string) => string
+
+const FILE_SOURCE_KINDS: ReadonlySet<string> = new Set(['editor', 'image-preview', 'pdf-preview'])
+
+/** One pane's content with its host-bearing field mapped; the same object when nothing applies. */
+function mapContent(content: unknown, map: IdMap): unknown {
+  if (!isRecord(content)) return content
+  const kind = content.kind
+  if (kind === 'tmux-session' && typeof content.hostId === 'string') {
+    return { ...content, hostId: map(content.hostId) }
+  }
+  if (typeof kind === 'string' && FILE_SOURCE_KINDS.has(kind)) {
+    const source = content.source
+    if (isRecord(source) && source.type === 'daemon' && typeof source.hostId === 'string') {
+      return { ...content, source: { ...source, hostId: map(source.hostId) } }
+    }
+    return content
+  }
+  // '' is "no hint", not a host.
+  if (kind === 'execution' && typeof content.host === 'string' && content.host !== '') {
+    return { ...content, host: map(content.host) }
+  }
+  return content
+}
+
+function mapLayout(layout: unknown, map: IdMap): unknown {
+  if (!isRecord(layout)) return layout
+  if (layout.type === 'leaf') {
+    const pane = layout.pane
+    if (!isRecord(pane)) return layout
+    const content = mapContent(pane.content, map)
+    return content === pane.content ? layout : { ...layout, pane: { ...pane, content } }
+  }
+  if (layout.type === 'split' && Array.isArray(layout.children)) {
+    return { ...layout, children: layout.children.map((child) => mapLayout(child, map)) }
+  }
+  return layout
+}
+
+/**
+ * local → wire over a whole split tree (full or size-stripped): the host of
+ * `tmux-session.hostId`, `source.hostId` of editor / image-preview /
+ * pdf-preview when `source.type === 'daemon'`, and `execution.host` ('' is
+ * left alone). Other kinds untouched; an unknown id passes through; the input
+ * is never mutated.
+ */
+export function layoutToWire<L>(layout: L, identity: HostIdentity): L {
+  return mapLayout(layout, (id) => identity.toWire.get(id) ?? id) as L
+}
+
+/** wire → local over a whole split tree, through `resolve` (same fields as `layoutToWire`). */
+export function layoutFromWire<L>(layout: L, resolve: WireResolver): L {
+  return mapLayout(layout, resolve) as L
+}
+
+// === settings: purdex-host-settings.hosts ===
+
+/** local → wire for the host-settings record (keyed by host id). An unknown key passes through. */
+export function hostSettingsToWire<T>(record: Record<string, T>, identity: HostIdentity): Record<string, T> {
+  if (!isRecord(record)) return record
+  return rekey(record, (id) => identity.toWire.get(id) ?? id)
+}
+
+/**
+ * wire → local for the host-settings record. When a canonical and a legacy
+ * key resolve to one host, the canonical (sync-id) entry wins.
+ */
+export function hostSettingsFromWire<T>(record: Record<string, T>, resolve: WireResolver): Record<string, T> {
+  if (!isRecord(record)) return record
+  return rekey(record, resolve)
+}
+
+// === settings: purdex-newtab-layout.presets ===
+
+/**
+ * The New Tab block id prefixes that end in a host id (`<prefix>:<hostId>`) —
+ * `sessionsProviderId` and `headlessProviderId`. THE one list: a new per-host
+ * block type must be added here or its columns will not survive a sync.
+ */
+export const HOST_BEARING_COLUMN_PREFIXES = ['sessions', 'headless'] as const
+
+function mapColumnId(id: unknown, map: IdMap): unknown {
+  if (typeof id !== 'string') return id
+  const colon = id.indexOf(':')
+  if (colon < 0) return id
+  const prefix = id.slice(0, colon)
+  const hostId = id.slice(colon + 1)
+  if (hostId === '' || !(HOST_BEARING_COLUMN_PREFIXES as readonly string[]).includes(prefix)) return id
+  return `${prefix}:${map(hostId)}`
+}
+
+/** local → wire for one New Tab column id; a non-host column is returned unchanged. */
+export function presetColumnIdToWire(id: string, identity: HostIdentity): string {
+  return mapColumnId(id, (h) => identity.toWire.get(h) ?? h) as string
+}
+
+/** wire → local for one New Tab column id. */
+export function presetColumnIdFromWire(id: string, resolve: WireResolver): string {
+  return mapColumnId(id, resolve) as string
+}
+
+function mapPresets<P>(presets: P, map: IdMap): P {
+  if (!isRecord(presets)) return presets
+  const out: Record<string, unknown> = {}
+  for (const [key, preset] of Object.entries(presets)) {
+    if (!isRecord(preset) || !Array.isArray(preset.columns)) {
+      out[key] = preset
+      continue
+    }
+    const columns = preset.columns.map((col: unknown) => (Array.isArray(col) ? col.map((id) => mapColumnId(id, map)) : col))
+    out[key] = { ...preset, columns }
+  }
+  return out as P
+}
+
+/** local → wire over the presets shape (`{ '3col'|'2col'|'1col': { enabled, columns: string[][] } }`). */
+export function presetColumnsToWire<P>(presets: P, identity: HostIdentity): P {
+  return mapPresets(presets, (h) => identity.toWire.get(h) ?? h)
+}
+
+/** wire → local over the presets shape. */
+export function presetColumnsFromWire<P>(presets: P, resolve: WireResolver): P {
+  return mapPresets(presets, resolve)
+}
