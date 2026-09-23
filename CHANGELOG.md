@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.432] - 2026-09-23
+
+### Feature：所有裝置都停止同步後，可以從 wizard 刪除同步主機上的 profile（#1325，#1340）
+
+Settings › Profile 的「同步主機上的 profiles」區塊需要 attach 著 master 才出現，停止同步後就沒有任何 UI 能刪主機上的 profile
+（P3 驗收第 6 步只能打 daemon 的 REST DELETE）。
+
+- wizard 選主機／profile 那一步：fetched index 顯示**沒有裝置 attach** 的列多一個「刪除」，先跳確認框；有裝置的列說明為什麼不能刪；
+  主機回 409 時在該列列出仍 attach 的裝置；清單多一個「重新整理」。
+- 刪除規則從 `SotProfilesBlock` 抽成共用的 `useSotDelete`，Settings 與 wizard 一套。
+- **安全修正（review 抓到，Settings 原本就有）**：主機端的刪除／改名與清單請求原本只綁 hostId——同一個 hostId 的位址被改到另一台時，
+  可能刪到那台同 id 的 profile。現在全部帶 `expectEndpoint`：位址一變確認框就關、清單重抓；主機不在設定裡就不發任何請求。
+- wizard 的失敗訊息只用依失敗類型挑的句子，不顯示主機回傳的原文。
+
 ## [1.0.0-alpha.431] - 2026-09-23
 
 ### Fix：operation lock 一釋放，就用有版本的 session 清單重新對帳（#1309、#1310，#1330）
