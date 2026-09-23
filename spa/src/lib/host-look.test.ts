@@ -55,6 +55,13 @@ describe('hostLookOf (H2a — HostConfig only)', () => {
     }
   })
 
+  it('only OWN keys are hosts: an inherited key or __proto__ resolves to the shared empty look', () => {
+    const empty = hostLookOf('nope')
+    expect(hostLookOf('__proto__')).toBe(empty)
+    const hosts = Object.create({ inherited: { ...hostA, id: 'inherited' } }) as Record<string, HostConfig>
+    expect(hostLookOf('inherited', hosts)).toBe(empty)
+  })
+
   it('reads the snapshot it is given, not the store', () => {
     const hosts = { x: { ...hostB, id: 'x', name: 'X', icon: 'Cloud' } }
     expect(hostLookOf('x', hosts)).toEqual({ name: 'X', icon: 'Cloud' })
