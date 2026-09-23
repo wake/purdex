@@ -3,6 +3,9 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { RebuildActionSet } from './RebuildActionSet'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
+import { useI18nStore } from '../stores/useI18nStore'
+import en from '../locales/en.json'
+import zhTW from '../locales/zh-TW.json'
 import type { PaneRebuildRecord } from '../types/tab'
 
 const BINDING = { hostId: 'h1', sessionCode: 'old1', tmuxInstance: '111:1000' }
@@ -433,6 +436,77 @@ describe('RebuildActionSet', () => {
     render(<RebuildActionSet tabId="t1" paneId="p1" record={record} onRebuild={vi.fn()} />)
     for (const key of ['agent_only', 'minimal_flags', 'cwd_scoped', 'multi_pane', 'local_storage']) {
       expect(screen.getByTestId(`rebuild-limit-${key}`)).toBeInTheDocument()
+    }
+  })
+})
+
+// agent-last-state spec §3: the pane's last agent state, and the resume default
+// that follows from it — `override.runResume ?? (!unverified && !agentExited)`.
+describe('RebuildActionSet — the last agent state', () => {
+  const fmt = (d: number, locale: string) => new Date(d).toLocaleString(locale).replace(/\s+/g, ' ')
+  const fill = (template: string, vars: Record<string, string>) =>
+    Object.entries(vars).reduce((out, [k, v]) => out.replace(`{{${k}}}`, v), template)
+  const SEEN = 1_788_700_000_000
+  const EXITED = 1_788_740_123_456
+  const running: PaneRebuildRecord = { ...record, agent: { type: 'cc', sessionId: 'S1', frameId: 'F1', updatedAt: SEEN } }
+  const exited = (reason: 'session-end' | 'process-dead'): PaneRebuildRecord => ({ ...running, agentExited: { at: EXITED, reason } })
+  const stateText = () => screen.getByTestId('rebuild-agent-state').textContent?.replace(/\s+/g, ' ')
+
+  beforeEach(() => useI18nStore.getState().setLocale('en'))
+
+  it('a running agent: "running when last seen", resume ticked', () => {
+    render(<RebuildActionSet tabId="t1" paneId="p1" record={running} onRebuild={vi.fn()} />)
+    expect(stateText()).toBe(fill(en['rebuild.agent_state_running'], { agent: 'Claude Code', time: fmt(SEEN, 'en') }))
+    expect(screen.getByRole('checkbox', { name: /resume/i })).toBeChecked()
+  })
+
+  it.each([
+    ['session-end', 'rebuild.agent_state_exited_session_end'],
+    ['process-dead', 'rebuild.agent_state_exited_process_dead'],
+  ] as const)('an exited agent (%s): its exit time and why, resume unticked — and ticking it still resumes', (reason, key) => {
+    const onRebuild = vi.fn()
+    render(<RebuildActionSet tabId="t1" paneId="p1" record={exited(reason)} onRebuild={onRebuild} />)
+    expect(stateText()).toBe(fill(en[key], { agent: 'Claude Code', time: fmt(EXITED, 'en') }))
+    const resume = screen.getByRole('checkbox', { name: /resume/i })
+    expect(resume).toBeEnabled()
+    expect(resume).not.toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: /^rebuild$/i }))
+    expect(onRebuild).toHaveBeenLastCalledWith({ createSession: true, applyCwd: true, runResume: false })
+    fireEvent.click(resume)
+    fireEvent.click(screen.getByRole('button', { name: /^rebuild$/i }))
+    expect(onRebuild).toHaveBeenLastCalledWith({ createSession: true, applyCwd: true, runResume: true })
+    expect(screen.getByTestId('rebuild-resume-command-cell')).toHaveTextContent('claude --resume S1')
+  })
+
+  it('a running agent the user unticks stays unticked', () => {
+    const onRebuild = vi.fn()
+    render(<RebuildActionSet tabId="t1" paneId="p1" record={running} onRebuild={onRebuild} />)
+    fireEvent.click(screen.getByRole('checkbox', { name: /resume/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^rebuild$/i }))
+    expect(onRebuild).toHaveBeenLastCalledWith({ createSession: true, applyCwd: true, runResume: false })
+  })
+
+  it('a shell-only record says nothing about an agent', () => {
+    render(<RebuildActionSet tabId="t1" paneId="p1" record={{ ...record, agent: undefined }} onRebuild={vi.fn()} />)
+    expect(screen.queryByTestId('rebuild-agent-state')).toBeNull()
+  })
+
+  it('an unknown agent type is named by its type', () => {
+    render(<RebuildActionSet tabId="t1" paneId="p1" onRebuild={vi.fn()}
+      record={{ ...exited('process-dead'), agent: { type: 'aider', frameId: 'F1', updatedAt: SEEN } }} />)
+    expect(stateText()).toBe(fill(en['rebuild.agent_state_exited_process_dead'], { agent: 'aider', time: fmt(EXITED, 'en') }))
+  })
+
+  it('zh-TW: the copy and the time are in the UI language', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      const { unmount } = render(<RebuildActionSet tabId="t1" paneId="p1" record={exited('session-end')} onRebuild={vi.fn()} />)
+      expect(stateText()).toBe(fill(zhTW['rebuild.agent_state_exited_session_end'], { agent: 'Claude Code', time: fmt(EXITED, 'zh-TW') }))
+      unmount()
+      render(<RebuildActionSet tabId="t1" paneId="p1" record={running} onRebuild={vi.fn()} />)
+      expect(stateText()).toBe(fill(zhTW['rebuild.agent_state_running'], { agent: 'Claude Code', time: fmt(SEEN, 'zh-TW') }))
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
     }
   })
 })
