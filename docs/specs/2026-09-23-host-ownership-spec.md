@@ -1,8 +1,9 @@
 # Spec — host ownership: hosts belong to the device, their look belongs to the workbench
 
-Status: user decisions 2026-09-23 (below are not to be re-litigated). Supersedes kickoff decision 7 ("host token in
-the profile") and the host half of decision 9 ("the master is the only source of hosts"). Terms (zh-TW): profile =
-工作台, master = 工作台主檔, slave = 本機工作台, a workbench's settings = 工作台設定檔.
+Status: user decisions 2026-09-23 and 2026-09-24 (below are not to be re-litigated). Revised 2026-09-24 after the
+codex spec review (§9). Supersedes kickoff decision 7 ("host token in the profile") and the host half of decision 9
+("the master is the only source of hosts"). Terms (zh-TW): profile = 工作台, master = 工作台主檔, slave = 本機工作台,
+a workbench's settings = 工作台設定檔.
 
 ## 1. Decisions (user, 2026-09-23)
 
@@ -18,62 +19,350 @@ the profile") and the host half of decision 9 ("the master is the only source of
 5. **Daemon-side settings (projects, commands, resume templates, daemon config, hooks, monitor, peers) are already
    shared by every client** through the daemon — no sync, no change.
 
+### 1.1 Decisions (user, 2026-09-24)
+
+6. **The relay daemon is trusted (H4).** Every host is the user's own. The relay holding the shared hosts' tokens in
+   plain text, in memory only, for the code's TTL is acceptable. No end-to-end encryption, no PAKE. The UI MUST say
+   so plainly (§6.1).
+7. **Old clients are not supported; devices upgrade together.** H2 locks old clients out through the `settings` wire
+   marker + ordinal (`locked:schema`); there is NO hosts↔looks dual-write bridge. H3 cannot guarantee a lock for a
+   profile whose SOT has only a `hosts` section and no `tabs.*` / `settings` written by a new client — that is a
+   documented known limitation (§5.4), not solved by a fencing write.
+8. The terms above (profile = 工作台 …) stand.
+
 ## 2. Where each piece of host data lives afterwards (measured on alpha.439)
 
 | Data | Owner | Synced? |
 |---|---|---|
-| host list, `hostOrder`, ip, port, token, daemonId, `activeHostId`, `devHostId` | device (`purdex-hosts`) | no — transfer code only |
-| name, colours (`colors`, legacy `color`), icon, iconWeight | workbench (a new settings store keyed by wire id) | yes (`settings`) |
-| shown hosts | workbench (same store) | yes (`settings`) |
+| host list, `hostOrder`, ip, port, token, daemonId, `activeHostId`, `devHostId`, `syncAliases` | device (`purdex-hosts`) | no — transfer code only |
+| `HostConfig.name` / colours / icon | device — the FALLBACK look only (§4.2) | no (after H3) |
+| name, colours (`colors`, legacy `color`), icon, iconWeight | workbench: `purdex-host-looks`, keyed by wire id | yes (`settings`) |
+| shown hosts | workbench: `purdex-shown-hosts`, wire ids | yes (`settings`) |
 | `purdex-host-settings` (editor.homePath), New Tab `sessions:` / `headless:` columns | workbench | yes (unchanged) |
 | pane host references in `tabs.*` | workbench | yes (unchanged) |
 | projects, commands, resume templates, daemon config, hooks | daemon | no (already shared) |
 
-The wire identity (`d1_…` from the daemonId, else the local id) stays: tabs and settings still name hosts across
-devices. Only the `hosts` SECTION and everything that exists to carry or reconcile it goes.
+Settings stores are device-global (one set per device, synced with the master's `settings`; only workspace-scoped
+entries follow workspaces — `master-world.ts`), so the look and shown-hosts stores are one per device like every other
+settings store.
 
-## 3. Traps that must be fixed BEFORE hosts stop syncing (they are silent today because lists agree)
+The wire identity (`d1_…` from the daemonId, else the local id) stays: tabs and settings still name hosts across
+devices. Only the `hosts` SECTION and what exists solely to carry or reconcile it goes (§5 lists exactly what).
+
+## 3. Host references this device cannot resolve (H1)
+
+Today the lists agree, so every incoming reference resolves. With per-device lists they will not — these traps must
+be fixed BEFORE hosts stop syncing.
+
+### 3.1 Traps
 
 1. **`applyTabsSection` brands panes of hosts unknown here as `terminated: 'host-removed'`** and that synced mark is
-   pushed back (`apply-to-stores.ts` `markHostRemovedPanes`). With per-device lists one device lacking host X would
-   mark every live X pane removed on every device. → An incoming pane naming a host this device lacks is applied
-   AS IS; the pane renders a local-only state "this device has no host ‹name›" (name from the workbench host look,
-   else the wire id), never writes a mark, and becomes live when the host is added here.
-2. **The settings apply and `useNewTabBootstrap` prune New Tab columns of hosts not here, and the prune is pushed.**
-   → Columns naming hosts this device lacks are kept in the store and in the build; only rendering skips them.
-3. **Gates:** `tabs.*` / `settings` wait for `hosts` settled — the `hosts` half of the gate goes; `settings` keeps
-   waiting for `workspaces`.
+   pushed back (`apply-to-stores.ts` `markHostRemovedPanes`, called at the tabs apply). One device lacking host X
+   would mark every live X pane removed on every device. → The apply no longer marks anything (§3.2).
+2. **The settings apply prunes New Tab columns of hosts not here** (`applier.ts` `settingsFromWire`, the
+   `liveHostIds` filter) **and so does the registry**: `createHostSessionProviderSource` /
+   `createHeadlessProviderSource` `ownsId` claim every `sessions:*` / `headless:*`, so `getStaleNewTabProviderIds`
+   reports a column whose host is not here as stale once the source is ready, and `useNewTabBootstrap` prunes it —
+   the prune is pushed. → §3.2.
+3. **Gates:** `tabs.*` / `settings` wait for `hosts` settled — the `hosts` half of the gate goes in H3; `settings`
+   keeps waiting for `workspaces`.
 
-## 4. Phases (each a PR ≤ 20 files, merged in order)
+### 3.2 The rule: an unresolvable reference is kept as is
 
-- **H1 — tolerate hosts that are not here** (§3.1, §3.2; no wire change, safe alone). Tests: a payload naming an
-  unknown host keeps the pane and the column byte-for-byte, nothing pushed back; adding the host later makes the
-  pane live.
-- **H2 — the workbench owns host looks and shown hosts.** New store `purdex-host-looks` (`{ [wireId]: { name?,
-  colors?, color?, icon?, iconWeight? } }`) + `purdex-shown-hosts` (`{ ids: wireId[] } | null`), projected in
-  `settings` (wire ids, unknown ids kept). The host UI reads the look through one selector (look, else the device's
-  HostConfig fields — which stay as the device fallback for hosts without a daemonId). Writes of name / colour / icon
-  go to the look store. Shown-hosts UI in Settings › 工作台. Migration: on first run, copy each host's current look
-  into the look store under its wire id. `settings` ordinal +1 and a wire marker.
-- **H3 — the `hosts` section leaves Profile Sync.** Stop building and applying it; the collector ignores it; the SOT's
-  existing `hosts` sections are left alone (never read, never deleted — deleting would need a tombstone push that old
-  clients act on). Remove: hosts apply / refusal / cascade path, alias machinery, the #1370 pull guard, the wizard's
-  removal list, the `hosts` gate half. Keep: wire identity, `blocked: host-identity-*`, master endpoint. Wizard:
-  pull no longer replaces hosts; the attach host must exist on this device (it always does — the wizard talks to it).
-  Ordinal / marker so old clients lock (`hosts`, `tabs`, `settings` as needed). `profiles.db` no longer receives
-  tokens from new clients (old sections keep theirs until the profile is deleted — note it in the UI copy of
-  "delete a workbench on the sync host").
-- **H4 — host transfer code** (daemon + SPA; independent of H1–H3, can run in parallel after this spec is approved).
-  Daemon: authenticated `POST /api/host-transfer` stores `{hosts payload}` under a fresh 8-character code (Crockford
-  base32, no ambiguous letters), TTL 10 min, one-time, in memory (never on disk); authenticated
-  `POST /api/host-transfer/redeem {code}` returns and deletes it; failure counter per client like the pairing handler.
-  The payload is the sender's chosen hosts: name, ip, port, token, daemonId, looks. SPA: Hosts page "Share hosts…"
-  (pick hosts + a shared host to relay through → shows the code), "Receive hosts…" (pick a shared host, enter the
-  code → per-host list with the three modes; dedup by daemonId; the receiver verifies each host by `/api/info`).
+A host reference is **unresolvable** when the wire resolver (`wireResolverOf`) returns an id that is not a key of
+`useHostStore.hosts` (the resolver already returns an unknown id unchanged — `makeWireResolver`). Every locally stored
+host reference that is unresolvable is **stored verbatim** (the wire id, byte for byte) and **built verbatim** (the
+builders already pass an unknown id through — `layoutToWire` / `hostSettingsToWire` / `presetColumnIdToWire`):
 
-## 5. Acceptance
+| Reference | Stored as | Behaviour while unresolvable |
+|---|---|---|
+| pane `tmux-session.hostId`, file-source `source.hostId`, `execution.host` (tab store AND every parked world) | the wire id | pane renders the local-only state "this device has no host ‹name›" (name: the look for that wire id (H2+), else the wire id); no `terminated` mark is written; rebuild / attach disabled |
+| `purdex-host-settings.hosts` key | the wire id | kept; no host reads it |
+| New Tab `sessions:<id>` / `headless:<id>` column | the wire id | kept in the store and the build; NOT stale, never pruned by apply or bootstrap; not rendered |
+| look / shown-hosts entries (H2) | the wire id (these stores are wire-keyed anyway) | kept; unused until a local host has that wire id |
+
+New Tab ownership (finding 2): host-bearing columns are no longer subject to stale pruning at all. The host sources
+keep `ownsId` (so the layout editor knows the family), and the registry gains an explicit rule: an id of a
+host-bearing prefix is never reported stale by `getStaleNewTabProviderIds`. The only id still pruned is the legacy
+single `sessions` (via its migration). Rendering skips a column whose host is not a local host (and, H2+, a hidden
+host — §4.5).
+
+### 3.3 The re-resolve pass
+
+Keeping a wire id verbatim is only half: when the host later arrives here, the reference must point at the local host.
+
+- **Trigger:** the host identity signature changes (`identityOfSync(hosts).signature` — it moves on add, remove,
+  daemonId learned/cleared, conflict entered/left) or a host's persisted `syncAliases` change. Subscribed once at boot;
+  also run once after hydration.
+- **Scope:** under the world lock (`WORLD_LOCK_NAME`), every world this device holds: the on-screen tab store,
+  every parked world (`useLocalProfilesStore.updateParkedWorlds`), `purdex-host-settings`, `purdex-newtab-layout`
+  presets, and (H2+) the look and shown-hosts stores.
+- **Rewrite:** each host reference whose id is not a local host is passed through the current `wireResolverOf`; if
+  that yields a local host, the reference is rewritten to the local id (covers `d1_…` ids and legacy aliases). A
+  reference that stays unresolvable is left untouched. Under an identity conflict (`wireResolverOf` → `null`) the
+  pass does nothing and runs again when the conflict clears.
+- **No-push invariant (tested):** for a `d1_…` reference, the build maps the new local id back through
+  `identity.toWire` to the SAME `d1_…` id, so every section payload and hash is byte-identical before and after the
+  pass, and nothing is pushed. A reference resolved through an alias (a legacy local id) IS canonicalised to `d1_…`
+  by the next build — one push, exactly as a pull of that reference already does today.
+- **New Tab placement race:** the pass is asynchronous (lock), so the bootstrap may see the new host before its
+  column is rewritten. `ensureDefaults` treats a provider as already placed when the layout holds EITHER its id or
+  `sessions:` / `headless:` + the provider host's wire id — no duplicate column.
+- **Look re-key (H2+):** the same pass moves a look / shown-hosts entry keyed by a host's local id to its `d1_…` key
+  when that host gains a daemonId (§4.3).
+
+## 4. Host looks and shown hosts (H2)
+
+### 4.1 Stores and wire
+
+- `purdex-host-looks`: `{ looks: { [wireId]: { name?, colors?, color?, icon?, iconWeight? } } }`, keys are wire ids
+  in the store itself (no local↔wire mapping on build or apply; the identity decides which local host a key means).
+- `purdex-shown-hosts`: `{ ids: wireId[] | null }` (`null` = all shown). Unknown ids kept, order kept.
+- Both are projected in `settings`; unknown ids are carried through apply and build untouched. Each store's arrival
+  bumps the `settings` ordinal and adds a wire marker (`@wire:host-look=1`, `@wire:shown-hosts=1`), so an old client
+  sees `settings` as newer and locks the whole profile (decision 7).
+
+### 4.2 One selector, and every surface that must use it (finding 7)
+
+`hostLookOf(hostId)` / `useHostLook(hostId)`: local id → wire id (identity) → `looks[wireId]` field by field, else the
+device's `HostConfig` field (the fallback, e.g. a host with no look yet). The New Tab host providers
+(`session-new-tab-providers.tsx`, `headless-new-tab-providers.tsx`) build `labelParams.host` from it and their
+`subscribe` ALSO listens to `purdex-host-looks`, so a label follows a rename that arrives by sync.
+
+Surfaces reading `HostConfig.name` / `color` / `colors` / `icon` / `iconWeight` directly on alpha.439 (grep of
+`spa/src`, tests excluded) — every one moves to the selector in H2; a guard test greps for new direct reads outside
+`useHostStore.ts`, `host-color.ts` (sanitiser) and the selector:
+
+- Colour / icon: `hooks/useTabHostBadge.ts` (tab bar + sidebar badges via `SortableTab`, `InlineTab`),
+  `components/hosts/HostBadgePreview.tsx`, `components/hosts/HostColorField.tsx`, `components/hosts/HostIconField.tsx`.
+- Name, Hosts pages: `components/hosts/HostSidebar.tsx`, `OverviewSection.tsx`, `LogsSection.tsx`,
+  `PeersSection.tsx`, `nex/NexConfigForm.tsx`, `AddHostDialog.tsx` (duplicate-daemon message).
+- Name, sessions / New Tab: `lib/session-new-tab-providers.tsx`, `lib/headless-new-tab-providers.tsx`,
+  `components/SessionSection.tsx`, `SessionPanel.tsx`, `SessionPickerList.tsx`,
+  `components/editor/EditorNewTabSection.tsx`.
+- Name, elsewhere: `components/StatusBar.tsx`, `components/editor/EditorStatusBar.tsx`, `MemoryMonitorPage.tsx`,
+  `components/executions/ExecutionsView.tsx`, `hooks/useNotificationDispatcher.ts`,
+  `components/settings/DevEnvironmentSection.tsx`, `components/settings/profile/CurrentBlock.tsx`,
+  `components/settings/profile/wizard/ProfileWizard.tsx`, `wizard/WizardChoiceSteps.tsx`, `lib/peer-pairing-load.ts`
+  (caller-supplied name — the caller moves).
+
+Writes of name / colour / icon go to the look store under the host's current wire id (`useHostStore` setters
+`setHostColorLayer` & co. and the rename in `OverviewSection` are rerouted); `HostConfig` look fields are then only
+written by add-host and the transfer receiver (§6.4).
+
+### 4.3 Migration, new hosts, re-key (finding 4)
+
+- **First run:** for each local host, key = its CURRENT wire id (`d1_…` when it has a daemonId, else its local id);
+  if `looks[key]` exists, skip (never overwrite); else copy the host's `HostConfig` name / colors / color / icon /
+  iconWeight. Then set the device-local, non-projected marker `purdex-host-looks-migrated = 1`; the migration never
+  runs again with it set. The skip-if-present rule alone makes a re-run harmless; the marker stops a re-run from
+  resurrecting a look the user reset. Before H3 the `hosts` section keeps every device's `HostConfig` looks equal, so
+  two devices migrating the same `d1_…` host produce the same entry and the same `settings` hash — no conflict.
+- **Hosts added later** (add-host dialog, transfer): name / look go to `HostConfig` (the device fallback) AND a look
+  entry is created under the host's current wire id only if none exists — a workbench look already under that
+  `d1_…` wins.
+- **Re-key** (in the §3.3 pass): when a host's wire id changes from its local id to `d1_…` (daemonId learned), the
+  entry under the local id moves to the `d1_…` key; if a `d1_…` entry already exists it wins and the local-id entry
+  is dropped. Same for shown-hosts ids. This changes the payload: one push.
+- **Two local rows later proven to be one daemon:** that is an identity conflict — nothing is built and the pass
+  does nothing (§3.3). The user removes one row (existing duplicate flow); the pass then re-keys the survivor by the
+  rule above. Deleting a host deletes look / shown-hosts entries keyed by its LOCAL id (meaningless elsewhere); a
+  `d1_…`-keyed entry is never deleted by a host deletion (it belongs to the workbench).
+
+### 4.4 The period between H2 and H3 (finding 3)
+
+The `hosts` section still syncs, and decision 7 locks every old client, so only new clients write. For a new client:
+
+- The look store is the only look SOT. UI reads go through the selector; UI writes go to the look store.
+- `hosts` apply still updates `HostConfig` name / colours / icon (it is the device fallback; harmless); the `hosts`
+  build still sends them. Neither the apply nor the build ever touches the look store.
+- `HostConfig` look fields are read as a SOURCE only by the first-run migration and by the selector's fallback.
+
+### 4.5 Shown hosts — where the filter applies (finding 8)
+
+Hidden ≠ absent. The filter is applied ONLY in navigation / selection UI:
+
+- Hosts page sidebar (`HostSidebar`); session panel host groups (`SessionPanel`); `SessionPickerList`; New Tab page
+  rendering of `sessions:` / `headless:` blocks; the session launcher's host choice.
+
+It is NOT applied to (the host keeps working): connections and health, `useMultiHostEventWs` subscriptions,
+`useSessionWatch` / session refresh, notifications, backup triggers, New Tab provider REGISTRATION and the layout
+(columns stay), pane liveness and the tab bar (a hidden host's tabs stay visible with their badge), `activeHostId` /
+`hostOrder[0]` fallbacks (`HostPage`, `nex/resolve-host`, fs backends), device settings pickers
+(`DevEnvironmentSection`), and direct navigation to `/hosts/<hidden id>/…` (opens normally). The Settings › 工作台
+editor lists every local host plus unknown ids ("not on this device").
+
+## 5. The `hosts` section leaves Profile Sync (H3)
+
+### 5.1 Client
+
+- Stop building, pushing, pulling, applying and deleting `hosts`. `hosts` becomes a retired kind: skipped by
+  `profileLock`, not in the managed section set, its persisted section-store record discarded, never touched by any
+  orphan sweep; the collector ignores it.
+- Remove: hosts apply / refusal / cascade path, the #1370 pull guard (`confirmedPullHosts`, the barrier), the
+  wizard's host removal list, the `hosts` half of `GATES` / `SETTINGS_GATES`.
+- Keep: wire identity, `blocked: host-identity-*`, master endpoint.
+- Wizard: pull no longer replaces hosts; the attach host must exist on this device (it always does — the wizard talks
+  to it).
+- `profiles.db` no longer receives tokens from new clients (old `hosts` rows keep theirs until the profile is deleted —
+  say so in the UI copy of "delete a workbench on the sync host").
+
+### 5.2 Alias machinery stays (finding 6)
+
+H3 does NOT remove: `makeWireResolver` / `wireResolverOf`, persisted `HostConfig.syncAliases`, `mergeAliases`, the
+hosts wire builder as the resolver's alias source (`wireResolverOf` builds rows from this device's own hosts — no
+longer a section), and every legacy-reference test. `tabs.*`, `settings` and parked worlds may still hold legacy
+local ids only an alias resolves. After H3 no new aliases are learned (no `hosts` row is read any more); the
+persisted ones keep resolving.
+
+Exit condition (tracked in its own issue, NOT part of this spec): every client is ≥ H3, AND each SOT profile's
+`tabs.*` / `settings` have been verified to hold only `d1_…` or unresolvable-but-canonical ids (an audit that reports
+zero alias-resolved references), AND no local host that any reference names lacks a daemonId.
+
+### 5.3 Daemon keeps legacy `hosts` support (finding 13)
+
+The daemon's section validator (`sectionPattern` in `validate.go`), section API, index and DB keep `hosts` as a
+writable section, unchanged — old rows must stay readable for the lock comparison of any straggler and deletable with
+the profile. Removal condition (own issue): every client ≥ H3 AND no profile on the daemon still holds a `hosts` row
+(a later, user-consented cleanup; the rows hold tokens).
+
+New-client guarantees, each a test: with a SOT that lists `hosts`, a new client never PUTs or DELETEs it in
+restore-local, in a resolve action (keep local / keep SOT), in the orphan / section-lifecycle sweep, in a push after a
+pull, in the wizard's attach, or in "detach and keep local".
+
+### 5.4 Known limitation (decision 7)
+
+Old clients are locked by the `settings` (H2) and `tabs.*` markers — but only once a new client has written such a
+section to that SOT. A profile whose SOT has only a `hosts` section (or whose `tabs.*` / `settings` were last written
+by an old client) does not lock an old client, which may keep syncing `hosts` there. Not fixed: devices upgrade
+together. The H3 release notes say so.
+
+## 6. Host transfer code (H4)
+
+Daemon + SPA; independent of H1–H3.
+
+### 6.1 Trust (decision 6)
+
+The relay daemon holds the shared hosts' tokens in plain text in memory for ≤ the TTL; whoever controls that daemon
+process can read them. Share dialog copy (both locales), shown before the code is created: "‹relay› will hold the
+access tokens of the hosts you share, readable by that host, until the code is used or expires (10 min). Only relay
+through a host you trust." The payload is never logged or written to disk; a daemon restart loses it.
+
+### 6.2 Daemon store and endpoints
+
+- `POST /api/host-transfer` (TokenAuth): body `{ hosts: [...] }` — ≤ 32 hosts, ≤ 64 KiB (else 413/400). Returns
+  `{ code, expiresAt }`. Code: 8 characters of Crockford base32 from `crypto/rand` (40 bits); on collision with a
+  live code, regenerate, at most 5 tries, then 503.
+- Capacity: at most 16 unredeemed, unexpired codes per daemon; one more → 429 `{"reason":"capacity"}`. Expired
+  entries are swept on every call.
+- `POST /api/host-transfer/redeem` (TokenAuth): body `{ code }`, normalised Crockford-style (upper-case, `-` and
+  spaces dropped, `I`/`L` → `1`, `O` → `0`).
+
+### 6.3 Redeem: atomicity and brute force (findings 10, 11)
+
+- One mutex guards the store. Rate-limit check, lookup, TTL check and delete happen in ONE critical section: of two
+  concurrent redeems of one code exactly one gets the payload, the other gets `invalid_code`.
+- Unknown, expired and already-redeemed codes all answer the same 404 `{"reason":"invalid_code"}` (same body, no
+  timing branch worth measuring). A wrong code consumes nothing and affects no stored code; a right code is deleted
+  on its first redeem.
+- Brute force, per daemon process (not per client — a request carries only the shared daemon token, no client
+  identity, and IP keys break behind NAT / proxies): a fixed window starts at the first failure; 10 failures inside
+  60 s → every redeem answers 429 `{"reason":"rate_limited"}` with `Retry-After` until the window ends, then the
+  counter resets. A success does NOT reset the counter. Creating codes is not rate-limited (capacity bounds it).
+  Accepted cost: a guesser holding the relay's token can delay a genuine redeem by ≤ 60 s. Worst case ≈ 14 400
+  guesses/day against ≤ 16 live codes in 2^40 → ≈ 2·10⁻⁷/day.
+
+### 6.4 Receiver: verify, preview, one commit (finding 12)
+
+1. Redeem → payload rows `{ name, ip, port, token, daemonId?, look? }`.
+2. For EVERY row, `GET /api/info` at `ip:port` with the PAYLOAD token; the observed `host_id` is the truth.
+3. Preview, one line per row, each with a status that decides what can be committed:
+   - `new` — verified, no local row has that daemonId;
+   - `existing` — verified, exactly one local row has that daemonId (add-only: skipped; overwrite: ip / port / token
+     replaced, local id kept);
+   - `mismatch` — the payload's daemonId ≠ observed: not committable;
+   - `unverified` — unreachable, auth failed, or the daemon reports no id: not committable (retry button);
+   - `duplicate` — a second payload row with the same observed daemonId: not committable (first row wins);
+   - `local-conflict` — two local rows already claim that daemonId, or the endpoint equals a local row with a
+     different daemonId: not committable.
+4. The user picks rows and a mode and confirms. Nothing is written before this.
+5. ONE `useHostStore` action applies the whole plan in a single `set()`; any throw → the store is untouched.
+   Looks from the payload are written to the look store only where no entry exists for that `d1_…` (§4.3).
+6. `replace-all` removes every local host not in the committed set EXCEPT: the relay host used for this transfer, the
+   current master's attach host, `activeHostId` (else reassigned to a kept host) and `devHostId` (else cleared); it
+   refuses to leave zero hosts. Removals go through the normal delete path (its cascade and undo).
+
+## 7. Phases (each a PR ≤ 20 files, merged in order; file counts are estimates the plan measures)
+
+- **H1a — tolerate unresolvable references** (§3.1, §3.2; no wire change, safe alone; ~16 files: `applier.ts`,
+  `apply-to-stores.ts`, `new-tab-registry.ts`, both host provider sources, `useNewTabBootstrap.ts`,
+  `SessionPaneContent.tsx` + the missing-host state, 2 locales, tests). Tests: a `tabs.*` payload naming an unknown
+  `d1_…` keeps the pane byte-for-byte, writes no `terminated`, and the next build hashes equal (nothing pushed);
+  a `settings` payload with an unknown `sessions:d1_…` / `headless:d1_…` column keeps it through apply, bootstrap
+  (source ready) and build; the legacy `sessions` id is still migrated/pruned; unknown host-settings key round-trips;
+  the pane renders "no host ‹id› here".
+- **H1b — the re-resolve pass** (§3.3; ~8 files: new `host-reresolve.ts`, boot wiring, `ensureDefaults` wire-id
+  check, tests). Tests: add a host whose daemonId hashes to a stored `d1_…` → panes (on screen AND parked), host
+  settings and both column kinds point at the local id; every section hash is unchanged and nothing is pushed; the
+  full path "receive unknown column → restart → add the daemon" ends with the column live and no duplicate; an
+  alias reference is canonicalised with one push; identity conflict → pass does nothing, runs after resolution;
+  the pass holds the world lock.
+- **H2a — the look selector, colour/icon surfaces** (§4.2; pure refactor, selector reads `HostConfig` only; ~14
+  files). Tests: selector unit tests; badge / preview / colour & icon fields unchanged in behaviour.
+- **H2b — the look selector, name surfaces** (§4.2; pure refactor; ~18 files) + the guard test against new direct
+  reads.
+- **H2c — the look store** (§4.1, §4.3, §4.4; `settings` ordinal +1, `@wire:host-look=1`; ~16 files: store,
+  projection + guard snapshot, settings build/apply, migration, writers rerouted, provider `subscribe` on the look
+  store, re-key + delete rules in the pass). Tests: migration keyed by current wire id, skip-if-present, marker stops a
+  re-run, a no-daemonId host's look re-keys to `d1_…` when the daemonId is learned (existing `d1_…` wins), host
+  deletion drops only local-id entries, a look arriving by `settings` relabels the New Tab provider, an old client
+  locks on the new `settings`.
+- **H2d — shown hosts** (§4.5; ordinal +1, `@wire:shown-hosts=1`; ~12 files: store, projection, Settings › 工作台
+  editor, the filters, locales). "Hidden ≠ absent" tests: a hidden host stays connected and its event WS open; its
+  panes stay live and its tabs stay in the tab bar; notifications still fire; its New Tab provider stays registered
+  and its column is not pruned; `/hosts/<hidden>` opens; unknown ids survive apply + build; `null` shows all.
+- **H3a — stop syncing `hosts`** (§5.1 client, §5.3 guarantees; ~15 files: executor, start, collector, sections,
+  applier, apply-to-stores, profile-state, sync-status / sync-view, tests). Tests: §5.3's never-PUT/DELETE list;
+  `profileLock` ignores a `hosts` row; gates no longer wait on `hosts`; a device adding a host locally pushes nothing
+  about it; the alias resolver still resolves a legacy id after H3 (§5.2).
+- **H3b — wizard and dead code** (§5.1 wizard, UI copy; ~12 files). Tests: a pull never removes a local host; the
+  attach host check; the delete-workbench copy mentions stored tokens.
+- **H4a — daemon transfer store** (§6.2, §6.3; ~4 files). Tests: TTL, one-time, concurrent redeem (N goroutines,
+  one winner), identical `invalid_code` for unknown / expired / used, 10 failures → 429 until window end, success does
+  not reset, capacity 16 → 429, collision retry via an injected generator, payload never in logs.
+- **H4b — SPA share / receive** (§6.1, §6.4; ~14 files: API client, pure planner, store commit action, two dialogs,
+  Hosts page entries, locales, tests). Tests: planner statuses (new / existing / mismatch / unverified / duplicate /
+  local-conflict); `/api/info` uses the payload token; rollback for each mode (a throw inside the commit leaves
+  `hosts`, `hostOrder`, `activeHostId`, `devHostId` and the look store identical); replace-all keeps the relay, the
+  master's attach host and `activeHostId`, clears a removed `devHostId`, refuses zero hosts; the trust copy is shown.
+
+## 8. Acceptance
 
 H1: A and B with independent host lists (B lacks host X): A opens a tab on X → B shows it as "no host X here", A
-still live, nothing marked. H2: change mlab's colour on A → B follows; hide a host in workbench W on A → hidden on
-B in W. H3: a device adds a host locally → no other device gets it; a pull never removes a local host. H4: A shares
-mlab + air26 through mlab → B enters the code → gets both (add-new mode), connected, looks from the workbench.
+still live, nothing marked; B then adds X → the pane goes live, no push from B. H2: change mlab's colour on A → B
+follows; rename on A → B's New Tab label follows; hide a host in workbench W on A → hidden on B in W, still connected
+on both. H3: a device adds a host locally → no other device gets it; a pull never removes a local host. H4: A shares
+mlab + air26 through mlab → B enters the code → gets both (add-new mode), connected, looks from the workbench; a
+second redeem of the same code fails.
+
+## 9. Review 2026-09-24 (codex spec review task-mue86vwz-bnbayc)
+
+1. H1 unknown wire id then host added — adopted: verbatim storage + re-resolve pass with the no-push invariant (§3.2, §3.3, H1b).
+2. New Tab stale — adopted: host-bearing columns never stale; full receive→restart→add path tested (§3.2, H1a/H1b).
+3. H2 two look SOTs — adopted via decision 7: old clients locked by the `settings` marker; H2–H3 read/write rules (§4.4).
+4. H2 migration without daemonId — adopted: current-wire-id keys, re-key in the pass, idempotent marker, later hosts, duplicate rows (§4.3).
+5. H3 fencing — adopted as a known limitation per decision 7, no fencing write (§5.4).
+6. Alias machinery — adopted: resolver, `syncAliases`, legacy tests stay; exit condition in its own issue (§5.2).
+7. Look selector scope — adopted: surface inventory + guard test; provider labels subscribe to the look store (§4.2, H2a/H2b/H2c).
+8. Shown-hosts boundary — adopted: filter list, not-filtered list, "hidden ≠ absent" tests (§4.5, H2d).
+9. H4 relay trust — adopted via decision 6: trusted relay, explicit UI copy, no E2E (§6.1).
+10. H4 brute force — adopted: per-daemon fixed window 10/60 s → 429, success no reset, capacity 16, collision retry (§6.2, §6.3).
+11. H4 redeem atomicity — adopted: one critical section, one winner, wrong code consumes nothing (§6.3).
+12. H4 receiver commit — adopted: verify all → preview statuses → one commit; replace-all invariants; rollback tests (§6.4, H4b).
+13. H3 daemon side — adopted: daemon keeps legacy `hosts` support with a removal condition; never-rewrite tests (§5.3, H3a).
+
+Not in the review, found while revising — **open, needs a user decision before H1 plan**: a LOCAL host deletion
+(`deleteHostCascade`) still writes the synced `terminated: 'host-removed'` mark (or closes the tabs) and deletes the
+host's `purdex-host-settings` entry — with per-device lists that deletion propagates to devices that still have the
+host. Options: (a) keep as is (deleting = removing from the workbench), (b) local deletion rewrites the host's
+references to its wire id (the inverse of §3.3) and writes no synced mark.
