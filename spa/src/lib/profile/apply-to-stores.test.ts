@@ -1305,6 +1305,69 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(outcome).toEqual({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)) })
   })
 
+  // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part
+  // already written was resolved through a resolver that no longer holds — rolled back, `busy`, retried.
+  describe('the host identity moves WHILE the settings apply is awaiting', () => {
+    const OTHER_WIRE = syncIdOfSync(OTHER)
+    function seed(): { payload: SettingsPayload; before: unknown; persisted: unknown } {
+      useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), h2: host('h2', { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, 'h2'] })
+      const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
+      const payload: SettingsPayload = {
+        ...now,
+        'purdex-ui-settings': { ...now['purdex-ui-settings'], dynamicTabName: !UI_DEFAULTS.dynamicTabName },
+        'purdex-host-settings': { hosts: { [WIRE]: { mod: { k: 1 } }, [OTHER_WIRE]: { mod: { k: 2 } } } },
+        'purdex-newtab-layout': { presets: { '3col': { enabled: true, columns: [[`sessions:${WIRE}`], [`sessions:${OTHER_WIRE}`], []] }, '2col': { enabled: true, columns: [[], []] }, '1col': { enabled: true, columns: [[]] } } },
+      }
+      return { payload, before: JSON.parse(JSON.stringify(readSettingsSources())) as unknown, persisted: persistedOf(STORAGE_KEYS.HOST_SETTINGS) }
+    }
+    /** `change` runs once, inside the first rehydrate any settings store awaits. */
+    function midApply(change: () => void): void {
+      let done = false
+      for (const store of [useUISettingsStore, useHostSettingsStore, useNewTabLayoutStore]) {
+        const real = store.persist.rehydrate.bind(store.persist)
+        vi.spyOn(store.persist, 'rehydrate').mockImplementation(async () => {
+          if (!done) {
+            done = true
+            change()
+          }
+          await real()
+        })
+      }
+    }
+
+    it.each([
+      ['h2 learns its daemonId', () => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...useHostStore.getState().hosts.h2, daemonId: OTHER } } })],
+      ['a host is added', () => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h3: host('h3', { ip: '10.0.0.3', daemonId: 'third:x' }) }, hostOrder: [...useHostStore.getState().hostOrder, 'h3'] })],
+      ['a conflict appears (h2 claims the master\'s daemon)', () => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...useHostStore.getState().hosts.h2, daemonId: DAEMON } } })],
+    ])('%s → `busy`, every store byte as before; the retry lands', async (_name, change) => {
+      const { payload, before, persisted } = seed()
+      midApply(change)
+      const outcome = await applySectionToStores('settings', payload, ctx)
+      vi.restoreAllMocks()
+      expect(outcome).toEqual({ ok: false, reason: 'busy' })
+      expect(JSON.parse(JSON.stringify(readSettingsSources()))).toEqual(before)
+      expect(persistedOf(STORAGE_KEYS.HOST_SETTINGS)).toEqual(persisted)
+      expect(persistedOf(STORAGE_KEYS.UI_SETTINGS).dynamicTabName).toBe(UI_DEFAULTS.dynamicTabName)
+
+      const retry = await applySectionToStores('settings', payload, ctx)
+      if (identityOfSync(useHostStore.getState().hosts).conflict !== null) {
+        expect(retry).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' }) // still refused while it lasts
+        useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: host('h2', { ip: '10.0.0.2', order: 1 }) } })
+        expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+      } else {
+        expect(retry).toMatchObject({ ok: true })
+        expect(useUISettingsStore.getState().dynamicTabName).toBe(!UI_DEFAULTS.dynamicTabName)
+      }
+    })
+
+    it('a host-store change that moves nothing the resolver reads (a rename) is no reason to give up', async () => {
+      const { payload } = seed()
+      midApply(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...useHostStore.getState().hosts.h2, name: 'renamed' } } }))
+      expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+      vi.restoreAllMocks()
+    })
+  })
+
   it('tabs and settings refuse to land while the host identity is in conflict (two local hosts, one daemon)', async () => {
     useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), twin: host('twin', { daemonId: DAEMON }) }, hostOrder: [M, 'twin'] })
     seedTabWorld()

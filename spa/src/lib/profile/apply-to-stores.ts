@@ -453,6 +453,18 @@ function unregisterDropped(key: SettingsStorageKey, before: Record<string, unkno
 
 /** Thrown — and caught — inside `applySettingsSection`: the master's workspace set moved under the apply. */
 const SCOPE_MOVED = Symbol('the master workspace set moved')
+/** Thrown — and caught — inside `applySettingsSection`: what the wire → local translation read moved under the apply. */
+const HOSTS_MOVED = Symbol('the host identity moved')
+
+/**
+ * Everything the settings translation read from the host store: the identity (pairs + conflict), the live
+ * hosts (the New Tab columns kept), and the aliases (legacy ids resolved). Equal before and after an await →
+ * what was written is still what this apply would write now. A rename or a runtime change moves none of it.
+ */
+function resolverSignature(state: { hosts: Record<string, HostConfig>; hostOrder: string[] }): string {
+  const aliases = Object.keys(state.hosts).sort().map((id) => [id, state.hosts[id].syncAliases ?? []])
+  return JSON.stringify([identityOfSync(state.hosts).signature, state.hostOrder.filter((id) => Object.hasOwn(state.hosts, id)), aliases])
+}
 
 const sameIds = (a: ReadonlySet<string> | null, b: ReadonlySet<string>): boolean => a !== null && a.size === b.size && [...a].every((id) => b.has(id))
 
@@ -484,6 +496,7 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
   if (!isWellFormedSection('settings', upcast)) return invalid('malformed', 'malformed settings payload')
   // wire → local, through the hosts as they are now (the executor pulls `settings` only once `hosts` is up to date).
   const hostState = useHostStore.getState()
+  const hostsSeen = resolverSignature(hostState)
   const resolve = wireResolverOf(hostState)
   if (resolve === null) return IDENTITY_CONFLICT()
   const live = new Set(hostState.hostOrder.filter((id) => Object.hasOwn(hostState.hosts, id)))
@@ -510,6 +523,9 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
       await rehydrate(store)
       publish(store)
       if (!sameIds(masterWorkspaceIds(), masterIds)) throw SCOPE_MOVED
+      // Same for the hosts (R1, PR #1365): a daemonId learned, a host added / removed, a conflict appearing — the
+      // part written so far was resolved through a resolver that no longer holds.
+      if (resolverSignature(useHostStore.getState()) !== hostsSeen) throw HOSTS_MOVED
     }
   } catch (err) {
     // A settings write is more than fields: registries, <html> theme / lang, the
@@ -531,16 +547,17 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
         unfinished.push(`${key}: ${messageOf(rollbackErr)}`)
       }
     }
-    if (unfinished.length === 0 && err === SCOPE_MOVED) return BUSY
+    const moved = err === SCOPE_MOVED ? 'the master workspace set moved during the apply' : err === HOSTS_MOVED ? 'the host identity moved during the apply' : null
+    if (unfinished.length === 0 && moved !== null) return BUSY
     if (unfinished.length === 0) throw err
-    throw new Error(`${err === SCOPE_MOVED ? 'the master workspace set moved during the apply' : messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
+    throw new Error(`${moved ?? messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
   }
   // Terminals read the renderer on (re)connect only; the bump is what makes them reconnect.
   if (useUISettingsStore.getState().terminalRenderer !== rendererBefore) useUISettingsStore.getState().bumpTerminalSettingsVersion()
   // No await since the last re-read: the set is still the one this apply was scoped by — which is what the collector will hash.
-  // The identity is the host store's NOW, as the collector's would be (a conflict that appeared meanwhile: retried).
+  // No await since the last re-read either: the identity is the one this apply resolved through (checked above), and
+  // with no patch at all nothing was awaited — the resolve and this hash read the same host store.
   const identity = identityOfSync(useHostStore.getState().hosts)
-  if (identity.conflict !== null) return BUSY
   return { ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterIds, identity)) }
 }
 
