@@ -28,10 +28,35 @@ function parseLook(raw: unknown): TransferLook | undefined {
   return Object.keys(look).length > 0 ? look : undefined
 }
 
+const LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
+const OCTET = /^(?:0|[1-9][0-9]{0,2})$/
+
+/**
+ * A payload row's `ip` as it may be spliced into `http://${ip}:${port}` — the probe's URL and the stored host
+ * address are built from this one value, so it must not be able to change which URL is requested. Accepted: a
+ * hostname (dot-separated labels of ASCII letters, digits and inner hyphens, ≤ 253 chars) or a dotted-quad IPv4 with
+ * decimal octets 0–255 and no zero padding. Anything else is refused — `#` `?` `@` `\` `/` `:` `%`, whitespace,
+ * control and non-ASCII characters, and IPv6: no address field in the app writes the `[…]` form a URL needs, so a
+ * row carrying one could only be stored broken. A hostname whose last label is numeric (or `0x…`) is what a URL
+ * parser reads as IPv4, so it must then be a strict dotted quad.
+ *
+ * The add-host dialog has no such validator (it only trims), so this one lives here.
+ */
+export function isTransferHost(ip: string): boolean {
+  if (ip.length === 0 || ip.length > 253) return false
+  const labels = ip.split('.')
+  if (!labels.every((l) => LABEL.test(l))) return false
+  const last = labels[labels.length - 1]
+  if (/^[0-9]+$/.test(last) || /^0x/i.test(last)) {
+    return labels.length === 4 && labels.every((l) => OCTET.test(l) && Number(l) <= 255)
+  }
+  return true
+}
+
 function parseRow(raw: unknown): TransferRow | null {
   if (!isPlainObject(raw)) return null
   const { ip, port, token, name, daemonId, look } = raw
-  if (typeof ip !== 'string' || ip === '' || ip.includes('/')) return null
+  if (typeof ip !== 'string' || !isTransferHost(ip)) return null
   if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) return null
   if (typeof token !== 'string' || token === '') return null
   const row: TransferRow = { name: typeof name === 'string' && name.trim() !== '' ? name : ip, ip, port, token }
@@ -42,7 +67,7 @@ function parseRow(raw: unknown): TransferRow | null {
 }
 
 /**
- * Reads a redeemed `hosts` array (spec §6.4.1, plan R5). A row survives only with `ip` (non-empty, no `/`),
+ * Reads a redeemed `hosts` array (spec §6.4.1, plan R5). A row survives only with `ip` (`isTransferHost`),
  * `port` (integer 1–65535) and `token` (non-empty); `name` falls back to `ip`; an invalid `daemonId` or look
  * field is dropped while the row stays. Unknown fields are ignored. `dropped` counts the rows that did not survive.
  */

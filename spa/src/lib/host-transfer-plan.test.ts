@@ -50,6 +50,55 @@ describe('parseTransferRows (R5)', () => {
     expect(parseTransferRows([raw])).toEqual({ rows: [], dropped: 1 })
   })
 
+  // F1: the ip is spliced into `http://${ip}:${port}` for the probe and stored as the host's address, so anything
+  // that is not a bare hostname / dotted-quad IPv4 would change which URL is requested (a fragment, a query, userinfo,
+  // an extra port) — the probe then answers for a different address than the one stored.
+  it.each([
+    ['a fragment', 'attacker.example#ignored'],
+    ['a query', 'attacker.example?x=1'],
+    ['userinfo', 'user@attacker.example'],
+    ['a backslash', 'attacker.example\\x'],
+    ['a space', 'mlab host'],
+    ['a leading space', ' mlab.host'],
+    ['a tab', 'mlab\thost'],
+    ['a control character', 'mlab\u0001host'],
+    ['a DEL', 'mlab\u007fhost'],
+    ['percent-encoding', 'attacker.example%2Fx'],
+    ['a port', 'host:1'],
+    ['IPv6 (unsupported: no bracket form anywhere in the app)', '::1'],
+    ['bracketed IPv6', '[::1]'],
+    ['an underscore', 'my_host'],
+    ['a leading dot', '.mlab.host'],
+    ['an empty label', 'mlab..host'],
+    ['a leading hyphen', '-mlab.host'],
+    ['an IPv4 octet over 255', '100.64.0.256'],
+    ['a three-part numeric address', '100.64.4'],
+    ['a zero-padded octet (octal to a URL parser)', '010.0.0.1'],
+    ['a hex IPv4 form', '0x7f.0.0.1'],
+    ['a numeric last label', 'mlab.123'],
+    ['non-ASCII', 'mläb.host'],
+  ])('drops a row whose ip has %s', (_label, ip) => {
+    expect(parseTransferRows([{ ip, port: 1, token: 't' }])).toEqual({ rows: [], dropped: 1 })
+  })
+
+  it.each(['mlab.host', 'air-2026', 'localhost', 'A1.Example.COM', '100.64.0.4', '127.0.0.1', '255.255.255.255', '0.0.0.0'])(
+    'keeps a row whose ip is %s',
+    (ip) => {
+      expect(parseTransferRows([{ ip, port: 1, token: 't' }]).rows.map((r) => r.ip)).toEqual([ip])
+    },
+  )
+
+  it('counts every bad-ip row as dropped, keeping the good ones', () => {
+    const res = parseTransferRows([
+      { ip: 'a#b', port: 1, token: 't' },
+      { ip: 'ok.host', port: 1, token: 't' },
+      { ip: 'x?y', port: 1, token: 't' },
+      { ip: 'h:1', port: 1, token: 't' },
+    ])
+    expect(res.dropped).toBe(3)
+    expect(res.rows.map((r) => r.ip)).toEqual(['ok.host'])
+  })
+
   it('accepts the port bounds 1 and 65535', () => {
     expect(parseTransferRows([{ ip: 'a', port: 1, token: 't' }, { ip: 'b', port: 65535, token: 't' }]).rows).toHaveLength(2)
   })
