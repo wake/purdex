@@ -142,8 +142,8 @@ it('a pull whose lock release revives a pane: the payload the apply hashed is ne
   api.putSection.mockClear()
   api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
 
-  // Another client adds `a2` (a tmux-restarted pane named `late`) and `a3` (on a host this device does not know: the
-  // apply marks it host-removed, so the stores never hold what arrived — a mismatch, pushed back).
+  // Another client adds `a2` (a tmux-restarted pane named `late`) and `a3` (on a host this device does not know: kept
+  // verbatim and unmarked — host ownership §3.2 — so it alone would push nothing).
   const restarted = tab('a2', leaf('p-a2', { sessionCode: 'dead01', cachedName: 'late', tmuxInstance: '111:1000', terminated: 'tmux-restarted' }))
   const elsewhere = tab('a3', leaf('p-a3', { hostId: 'host-unknown-here' }))
   const incoming = { order: ['a1', 'a2', 'a3'], tabs: { a1: tab('a1'), a2: restarted, a3: elsewhere } }
@@ -152,11 +152,12 @@ it('a pull whose lock release revives a pane: the payload the apply hashed is ne
   executor.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'tabs.wa', rev: 2, hash: sotHash, writerClientId: OTHER_CLIENT })
   await vi.advanceTimersByTimeAsync(5_000)
 
-  // the lock release revived `a2` on `late01`, and `a3` is host-removed
+  // the lock release revived `a2` on `late01`; `a3` is exactly what arrived — no `terminated` mark
   const a2 = useTabStore.getState().tabs.a2.layout
   expect(a2.type === 'leaf' && a2.pane.content).toMatchObject({ sessionCode: 'late01', tmuxInstance: '222:2000' })
   const a3 = useTabStore.getState().tabs.a3.layout
-  expect(a3.type === 'leaf' && a3.pane.content).toMatchObject({ terminated: 'host-removed' })
+  expect(a3.type === 'leaf' && a3.pane.content).toEqual(elsewhere.layout.type === 'leaf' && elsewhere.layout.pane.content)
+  expect(a3.type === 'leaf' && a3.pane.content).not.toHaveProperty('terminated')
 
   // What went out is what the stores hold NOW — never the pre-revive snapshot the apply hashed.
   const now = buildSectionPayload('tabs.wa')?.payload

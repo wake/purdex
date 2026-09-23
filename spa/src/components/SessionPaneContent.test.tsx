@@ -10,12 +10,16 @@ import type { Pane, PaneContent, Tab, Workspace } from '../types/tab'
 import type { ConfigData } from '../lib/host-api'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
+import { fetchWsTicket } from '../lib/host-api'
 
 const terminalViewProps = vi.hoisted(() => ({ last: undefined as Record<string, unknown> | undefined }))
 
 vi.mock('./TerminalView', () => ({
   default: (props: Record<string, unknown>) => {
     terminalViewProps.last = props
+    // The real view asks for its ticket as soon as it mounts; doing the same
+    // here makes "no ticket was fetched" mean "nothing tried to attach".
+    void (props.getTicket as () => Promise<string>)()
     return <div data-testid="terminal-view" />
   },
 }))
@@ -24,6 +28,11 @@ vi.mock('./TerminatedPane', () => ({
   TerminatedPane: ({ content }: { content: { terminated: string } }) => (
     <div data-testid="terminated-pane">Terminated: {content.terminated}</div>
   ),
+}))
+
+vi.mock('../lib/host-api', async (orig) => ({
+  ...(await orig<typeof import('../lib/host-api')>()),
+  fetchWsTicket: vi.fn(async () => 'ticket'),
 }))
 
 vi.mock('../lib/rebuild/cwd-probe', () => ({ probeSessionCwd: vi.fn() }))
@@ -79,6 +88,7 @@ beforeEach(() => {
   cleanup()
   vi.mocked(probeSessionCwd).mockClear()
   vi.mocked(probeSessionProvenance).mockClear()
+  vi.mocked(fetchWsTicket).mockClear()
   terminalViewProps.last = undefined
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 } },
@@ -318,5 +328,108 @@ describe('SessionPaneContent', () => {
     render(<SessionPaneContent pane={pane} isActive={true} />)
     expect(screen.queryByTestId('terminal-view')).not.toBeInTheDocument()
     expect(screen.getByTestId('terminated-pane')).toBeInTheDocument()
+  })
+
+  // Host ownership §3.2 / plan §0.4: a pane naming a host this device does not
+  // have (an unresolvable wire id) is kept verbatim and shown as missing. It
+  // must never reach the network — `getWsBase` falls back to the active host
+  // for an unknown id, so attaching would open a terminal on the WRONG host.
+  describe('host this device does not have', () => {
+    const missing = (): Pane => makePane({
+      content: {
+        kind: 'tmux-session', hostId: 'd1_unknownhost', sessionCode: 'dev001',
+        mode: 'terminal', cachedName: 'dev', tmuxInstance: '222:2000',
+      },
+    })
+
+    it('renders the missing-host state naming the id, not a terminal', () => {
+      const pane = missing()
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(screen.getByTestId('missing-host-pane')).toBeInTheDocument()
+      expect(screen.getByText(/This device has no host d1_unknownhost/)).toBeInTheDocument()
+      expect(screen.queryByTestId('terminal-view')).not.toBeInTheDocument()
+      expect(terminalViewProps.last).toBeUndefined()
+    })
+
+    it('asks for no ticket and runs no probe, even with a gate entry for that id', () => {
+      // A stale runtime entry must not open the probe gate for a host the
+      // store no longer has.
+      useHostStore.setState({
+        runtime: {
+          [HOST_ID]: { status: 'connected' as const, attachReady: true },
+          d1_unknownhost: { status: 'connected' as const, attachReady: true },
+        },
+      })
+      const pane = missing()
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(fetchWsTicket).not.toHaveBeenCalled()
+      expect(probeSessionCwd).not.toHaveBeenCalled()
+      expect(probeSessionProvenance).not.toHaveBeenCalled()
+    })
+
+    // R1 (PR #1400): an `in`-style lookup would take a prototype member for a host.
+    it.each(['toString', 'constructor', '__proto__', 'hasOwnProperty'])('a pane naming the prototype member %s is a missing host, not a known one', (name) => {
+      const pane = makePane({
+        content: { kind: 'tmux-session', hostId: name, sessionCode: 'dev001', mode: 'terminal', cachedName: 'dev', tmuxInstance: '' },
+      })
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(screen.getByTestId('missing-host-pane')).toBeInTheDocument()
+      expect(screen.queryByTestId('terminal-view')).not.toBeInTheDocument()
+      expect(fetchWsTicket).not.toHaveBeenCalled()
+    })
+
+    // PR #1400 (attacker, high): the host goes away after the pane rendered its terminal, while the terminal's
+    // ticket request is still to come (a pending effect, a retry). The request must not fall back to another host.
+    it('host deleted after render: the terminal\'s ticket request fetches nothing', async () => {
+      const actual = await vi.importActual<typeof import('../lib/host-api')>('../lib/host-api')
+      vi.mocked(fetchWsTicket).mockImplementation((id) => actual.fetchWsTicket(id))
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ticket: 't' }), { status: 200 }))
+      try {
+        const pane = makePane()
+        setupTabStore(pane)
+        render(<SessionPaneContent pane={pane} isActive={true} />)
+        const getTicket = terminalViewProps.last?.getTicket as () => Promise<string>
+        await act(async () => {})
+        fetchSpy.mockClear()
+        useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null })
+        // a second host is active now: the fallback would pick it
+        useHostStore.setState({ hosts: { other: { id: 'other', name: 'o', ip: '100.64.0.9', port: 7860, order: 0 } }, hostOrder: ['other'], activeHostId: 'other' })
+        await expect(getTicket()).rejects.toThrow(/not configured/)
+        expect(fetchSpy).not.toHaveBeenCalled()
+      } finally {
+        fetchSpy.mockRestore()
+        vi.mocked(fetchWsTicket).mockImplementation(async () => 'ticket')
+      }
+    })
+
+    it('an existing host-removed mark still renders as today', () => {
+      const pane = makePane({
+        content: {
+          kind: 'tmux-session', hostId: 'd1_unknownhost', sessionCode: 'dev001',
+          mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'host-removed',
+        },
+      })
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(screen.getByTestId('terminated-pane')).toBeInTheDocument()
+      expect(screen.queryByTestId('missing-host-pane')).not.toBeInTheDocument()
+    })
+
+    it('goes live once the host exists on this device', async () => {
+      const pane = missing()
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(screen.getByTestId('missing-host-pane')).toBeInTheDocument()
+      await act(async () => {
+        useHostStore.setState((s) => ({
+          hosts: { ...s.hosts, d1_unknownhost: { id: 'd1_unknownhost', name: 'x', ip: '100.64.0.4', port: 7860, order: 1 } },
+        }))
+      })
+      expect(screen.getByTestId('terminal-view')).toBeInTheDocument()
+      expect(terminalViewProps.last?.wsUrl).toBe('ws://100.64.0.4:7860/ws/terminal/dev001')
+    })
   })
 })

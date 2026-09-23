@@ -24,7 +24,6 @@ import { isValidDaemonId } from '../daemon-id'
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
 import {
-  HOST_BEARING_COLUMN_PREFIXES,
   MAX_HOST_ALIASES,
   NEW_HOST,
   SYNC_ID_PREFIX,
@@ -70,7 +69,7 @@ import type {
 
 export interface ApplyHostsResult {
   next: HostsSlice
-  /** Hosts that existed locally and are not in the payload — P2b marks their panes (`markHostRemovedPanes`). */
+  /** Hosts that existed locally and are not in the payload — the hosts apply removes each through `deleteHostCascade`. */
   removedHostIds: string[]
 }
 
@@ -260,27 +259,16 @@ export function tabsFromWire(payload: TabsPayload, resolve: WireResolver): TabsP
   return { ...payload, tabs }
 }
 
-/** The host id of a host-bearing New Tab column (`sessions:<id>` / `headless:<id>`), or null. */
-function columnHost(id: unknown): string | null {
-  if (typeof id !== 'string') return null
-  const colon = id.indexOf(':')
-  if (colon < 0 || colon === id.length - 1) return null
-  return (HOST_BEARING_COLUMN_PREFIXES as readonly string[]).includes(id.slice(0, colon)) ? id.slice(colon + 1) : null
-}
-
 /**
  * wire → local for `settings`: the `purdex-host-settings.hosts` keys and the
- * host-bearing New Tab columns. A host-bearing column whose host is not LIVE here
- * after that (`liveHostIds`: in `hostOrder` and in `hosts` — exactly the per-host
- * providers useNewTabBootstrap keeps) is LEFT OUT of the applied presets
- * (host-sync-identity PR-1 note (b)): in the store it would be pruned by the
- * bootstrap at some later render, which then pushes the settings back without it
- * — the same end, but racing the apply's own hash. Left out here, the apply's
- * hash says so at once (`pull-hash-mismatch`) and ONE push drops it from the SOT,
- * as this device's prune always did for a host it does not have. An unknown
- * host-settings key is kept as is (nothing prunes it; it round-trips). Input untouched.
+ * host-bearing New Tab columns. A key or column whose host is not here stays
+ * exactly as it arrived (host ownership spec §3.2): the builders pass an unknown
+ * id through unchanged, so it round-trips and the apply's hash is the payload's —
+ * nothing is pushed, and a device lacking a host no longer deletes that host's
+ * columns for every device. It points at the local host once that host arrives
+ * (the re-resolve pass). Input untouched.
  */
-export function settingsFromWire(payload: SettingsPayload, resolve: WireResolver, liveHostIds: ReadonlySet<string>): SettingsPayload {
+export function settingsFromWire(payload: SettingsPayload, resolve: WireResolver): SettingsPayload {
   const out: SettingsPayload = { ...payload }
   const hostSettings = payload['purdex-host-settings']
   if (isPlainObject(hostSettings) && isPlainObject(hostSettings.hosts)) {
@@ -288,19 +276,7 @@ export function settingsFromWire(payload: SettingsPayload, resolve: WireResolver
   }
   const newtab = payload['purdex-newtab-layout']
   if (isPlainObject(newtab) && isPlainObject(newtab.presets)) {
-    const resolved = presetColumnsFromWire(newtab.presets, resolve) as Rec
-    const presets: Rec = {}
-    for (const [key, preset] of Object.entries(resolved)) {
-      if (!isPlainObject(preset) || !Array.isArray(preset.columns)) {
-        setOwn(presets, key, preset)
-        continue
-      }
-      const columns = preset.columns.map((col: unknown) =>
-        Array.isArray(col) ? col.filter((id) => { const h = columnHost(id); return h === null || liveHostIds.has(h) }) : col,
-      )
-      setOwn<unknown>(presets, key, { ...preset, columns })
-    }
-    out['purdex-newtab-layout'] = { ...newtab, presets }
+    out['purdex-newtab-layout'] = { ...newtab, presets: presetColumnsFromWire(newtab.presets, resolve) }
   }
   return out
 }

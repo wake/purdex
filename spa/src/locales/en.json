@@ -273,6 +273,8 @@
   "pane.split_vertical": "Split Vertical",
   "pane.close": "Close pane",
   "pane.detach": "Detach to tab",
+  "pane.missing_host.title": "This device has no host {{host}}",
+  "pane.missing_host.desc": "The tab stays as it is. It comes back when this host is added on this device; other devices are not affected.",
 
   "nav.scroll_left": "Scroll left",
   "nav.scroll_right": "Scroll right",
@@ -625,7 +627,7 @@
   "execution.loading": "Loading execution…",
   "execution.loading_error": "Could not load: {{message}} — retrying",
   "execution.not_found": "Execution not found on this host.",
-  "execution.host_removed": "Host removed.",
+  "execution.host_removed": "This device has no host for this execution.",
   "execution.nex_unavailable": "Nexen is unavailable on this host: {{error}}",
   "execution.nex_disabled": "Nexen is not enabled on this host. Enable it under Hosts → Nexen.",
   "execution.empty": "No messages yet.",

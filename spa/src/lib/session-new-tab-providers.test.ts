@@ -53,6 +53,14 @@ describe('createHostSessionProviderSource', () => {
     expect(src.ownsId('editor')).toBe(false)
   })
 
+  it('retains every sessions:<id> column (a host not on this device is kept), but not the legacy sessions id', () => {
+    const src = createHostSessionProviderSource()
+    expect(src.retainsId?.('sessions:whatever')).toBe(true)
+    expect(src.retainsId?.('sessions:d1_unknown')).toBe(true)
+    expect(src.retainsId?.('sessions')).toBe(false)
+    expect(src.retainsId?.('headless:h1')).toBe(false)
+  })
+
   it('is ready only once the host store has hydrated, and notifies on hydration finish', () => {
     let finish: (() => void) | undefined
     const hydrated = vi.spyOn(useHostStore.persist, 'hasHydrated').mockReturnValue(false)

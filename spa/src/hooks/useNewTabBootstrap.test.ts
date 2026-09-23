@@ -5,6 +5,7 @@ import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useHostStore } from '../stores/useHostStore'
 import { clearNewTabRegistry, registerNewTabProvider, registerNewTabProviderSource } from '../lib/new-tab-registry'
 import { createHostSessionProviderSource } from '../lib/session-new-tab-providers'
+import { createHeadlessProviderSource } from '../lib/headless-new-tab-providers'
 
 vi.mock('./useSessionWatch', () => ({ useSessionWatch: vi.fn() }))
 
@@ -38,7 +39,10 @@ describe('useNewTabBootstrap — per-host session blocks', () => {
     expect(useNewTabLayoutStore.getState().knownIds).toContain('sessions:h2')
   })
 
-  it('prunes a removed host’s block and the legacy sessions id', () => {
+  // Host ownership §3.2: a host-bearing column whose host is not on this device is kept as is — never pruned —
+  // so it comes back when the host is added here, and a device lacking a host does not delete it for every device.
+  // Only the legacy single `sessions` id still goes (through its migration).
+  it('keeps the block of a host not on this device (and of a removed host); the legacy sessions id still goes', () => {
     useNewTabLayoutStore.setState({
       presets: {
         '3col': { enabled: false, columns: [['sessions'], ['sessions:h1'], ['sessions:old']] },
@@ -49,12 +53,30 @@ describe('useNewTabBootstrap — per-host session blocks', () => {
     })
     renderHook(() => useNewTabBootstrap())
     const s = useNewTabLayoutStore.getState()
-    expect(s.knownIds).toEqual(['browser', 'sessions:h1'])
-    expect(s.presets['1col'].columns).toEqual([['browser', 'sessions:h1']])
-    expect(s.presets['3col'].columns.flat()).toEqual(['sessions:h1'])
+    expect(s.knownIds).toEqual(['browser', 'sessions:old', 'sessions:h1'])
+    expect(s.presets['1col'].columns).toEqual([['browser', 'sessions:old', 'sessions:h1']])
+    expect(s.presets['3col'].columns).toEqual([[], ['sessions:h1'], ['sessions:old']])
 
     act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
-    expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([['browser']])
+    expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([['browser', 'sessions:old', 'sessions:h1']])
+  })
+
+  it('with the host store hydrated, sessions:/headless: columns of a host not on this device survive run()', () => {
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    const layout = {
+      presets: {
+        '3col': { enabled: false, columns: [['sessions:d1_unknown'], ['headless:d1_unknown'], []] },
+        '2col': { enabled: false, columns: [['sessions:h1', 'headless:d1_unknown'], ['sessions:d1_unknown']] },
+        '1col': { enabled: true, columns: [['browser', 'sessions:h1', 'headless:h1', 'sessions:d1_unknown', 'headless:d1_unknown']] },
+      },
+      knownIds: ['browser', 'sessions:h1', 'headless:h1', 'sessions:d1_unknown', 'headless:d1_unknown'],
+    }
+    useNewTabLayoutStore.setState(layout)
+    expect(useHostStore.persist.hasHydrated()).toBe(true)
+    renderHook(() => useNewTabBootstrap())
+    const s = useNewTabLayoutStore.getState()
+    expect(s.presets).toEqual(layout.presets)
+    expect(s.knownIds).toEqual(layout.knownIds)
   })
 
   it('does not prune or place host blocks until the host store has hydrated', () => {

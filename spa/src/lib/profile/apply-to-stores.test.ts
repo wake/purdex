@@ -31,6 +31,11 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
+import { renderHook } from '@testing-library/react'
+import { useNewTabBootstrap } from '../../hooks/useNewTabBootstrap'
+import { clearNewTabRegistry, registerNewTabProviderSource } from '../new-tab-registry'
+import { createHostSessionProviderSource } from '../session-new-tab-providers'
+import { createHeadlessProviderSource } from '../headless-new-tab-providers'
 import { getTheme, unregisterTheme } from '../theme-registry'
 import { registerBuiltinThemes } from '../register-themes'
 import { getLocale, unregisterLocale } from '../locale-registry'
@@ -40,7 +45,7 @@ import { hashSection } from './hash'
 import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, stripSizes } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
-import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
+import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, readSettingsSources } from './apply-to-stores'
 import { identityOfSync, syncIdOfSync } from './host-identity'
 
 // === fixtures ===
@@ -1071,15 +1076,19 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(writes).toBe(0)
   })
 
-  it('marks an arriving pane of a host unknown here as host-removed, and reports the honest hash', async () => {
+  // Host ownership §3.1.1 / §3.2: a pane naming a host this device lacks is kept verbatim — never marked — so the
+  // stores hold exactly what arrived and nothing is pushed back.
+  it('keeps an arriving pane of a host unknown here byte-for-byte, unmarked, and reports the incoming payload\'s hash', async () => {
     seedTabWorld()
-    const split: PaneLayout = { type: 'split', id: 's9', direction: 'v', children: [tmuxLeaf('gone-pane', 'host-gone'), tmuxLeaf('ok-pane', M)], sizes: [50, 50] }
+    const unknown = syncIdOfSync('air-lab:0unkn0')
+    const split: PaneLayout = { type: 'split', id: 's9', direction: 'v', children: [tmuxLeaf('gone-pane', unknown), tmuxLeaf('ok-pane', M)], sizes: [50, 50] }
     const payload = incomingFor([tab('a5', split)])
     const outcome = await applySectionToStores('tabs.wa', payload, ctx)
     const layout = useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>
-    expect(layout.children[0]).toMatchObject({ pane: { content: { hostId: 'host-gone', terminated: 'host-removed' } } })
-    expect((layout.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
+    const wired = (payload.tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>).children[0] as Extract<PaneLayout, { type: 'leaf' }>
+    expect((layout.children[0] as Extract<PaneLayout, { type: 'leaf' }>).pane).toEqual(wired.pane)
+    expect(JSON.stringify(useTabStore.getState().tabs.a5)).not.toContain('terminated')
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   describe('an ordinal-2 payload listing device-local tabs (tabs-local-only §3.5)', () => {
@@ -1135,17 +1144,6 @@ describe('applySectionToStores — tabs.<id>', () => {
     })
     expect(second).toEqual({ ok: true, hash: null })
     expect(writes).toBe(0)
-  })
-})
-
-describe('markHostRemovedPanes', () => {
-  it('returns the same object when every host is known, and never overwrites an existing reason', () => {
-    const live = tmuxLeaf('p1', M)
-    expect(markHostRemovedPanes(live, new Set([M]))).toBe(live)
-    const dead: PaneLayout = { type: 'leaf', pane: { id: 'p2', content: { kind: 'tmux-session', hostId: 'x', sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i', terminated: 'session-closed' } } }
-    expect(markHostRemovedPanes(dead, new Set())).toBe(dead)
-    const other: PaneLayout = { type: 'leaf', pane: { id: 'p3', content: { kind: 'new-tab' } as never } }
-    expect(markHostRemovedPanes(other, new Set())).toBe(other)
   })
 })
 
@@ -1209,6 +1207,17 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildTabsSection(parked.workspaces.find((w) => w.id === 'wa')!, parked.tabs)) })
     expect(screen()).toBe(before)
     expect(JSON.stringify(parked)).not.toContain('SLAVE-ONLY')
+  })
+
+  it('tabs.<id> naming a host unknown here marks nothing in the PARKED master (host ownership §3.2)', async () => {
+    parkMasterShowSlave()
+    const unknown = syncIdOfSync('air-lab:0unkn0')
+    const payload = JSON.parse(JSON.stringify(buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', tmuxLeaf('gone-pane', unknown)) }))) as TabsPayload
+    const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+    const parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(parked.tabs.a5.layout).toEqual(payload.tabs.a5.layout)
+    expect(JSON.stringify(parked.tabs.a5)).not.toContain('terminated')
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   // tabs-local-only §3.6 on the parked path: `writeMasterWorld` re-points the parked world's active tab by the same rule.
@@ -1395,7 +1404,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(wire) })
   })
 
-  it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is left out (the hash says so)', async () => {
+  it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is KEPT verbatim (host ownership §3.2)', async () => {
     const other = syncIdOfSync(OTHER)
     const presets = {
       '3col': { enabled: true, columns: [[`sessions:${WIRE}`], [`headless:${other}`], []] },
@@ -1406,11 +1415,52 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     const outcome = await applySectionToStores('settings', payload, ctx)
     expect(outcome).toMatchObject({ ok: true })
     expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } } })
-    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [], []])
+    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [`headless:${other}`], []])
     expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([[`sessions:${M}`]])
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) }) // the unknown column: pushed back without it, once
     const identity = identityOfSync(useHostStore.getState().hosts)
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)) })
+  })
+
+  // Host ownership §3.2: every reference to a host this device lacks is stored verbatim and built verbatim, so a
+  // payload carrying them comes back byte-for-byte — its hash is the incoming one and nothing is pushed.
+  it('settings: an unknown column and an unknown host-settings key round-trip apply → stores → build byte-for-byte', async () => {
+    const unknown = syncIdOfSync(OTHER)
+    const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+    const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+    for (const preset of Object.values(layout.presets)) preset.columns[0] = [...preset.columns[0], `sessions:${unknown}`, `headless:${unknown}`]
+    const payload: SettingsPayload = {
+      ...now,
+      'purdex-host-settings': { hosts: { [WIRE]: { mod: { k: 1 } }, [unknown]: { editor: { homePath: '/srv' } } } },
+    }
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } }, [unknown]: { editor: { homePath: '/srv' } } })
+    for (const preset of Object.values(useNewTabLayoutStore.getState().presets)) {
+      expect(preset.columns[0]).toEqual(expect.arrayContaining([`sessions:${unknown}`, `headless:${unknown}`]))
+    }
+    const identity = identityOfSync(useHostStore.getState().hosts)
+    expect(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)).toEqual(payload)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('settings: an unknown column survives the New Tab bootstrap too — apply → bootstrap → build is byte-for-byte', async () => {
+    const unknown = syncIdOfSync(OTHER)
+    clearNewTabRegistry()
+    registerNewTabProviderSource(createHostSessionProviderSource())
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    try {
+      expect(useHostStore.persist.hasHydrated()).toBe(true)
+      renderHook(() => useNewTabBootstrap()).unmount() // the local host's own blocks placed: the steady state
+      const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+      const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+      for (const preset of Object.values(layout.presets)) preset.columns[0] = [...preset.columns[0], `sessions:${unknown}`, `headless:${unknown}`]
+      const payload: SettingsPayload = { ...now, 'purdex-host-settings': { hosts: { [unknown]: { editor: { homePath: '/srv' } } } } }
+      expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+
+      renderHook(() => useNewTabBootstrap()).unmount()
+      expect(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts))).toEqual(payload)
+    } finally {
+      clearNewTabRegistry()
+    }
   })
 
   // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part

@@ -169,6 +169,12 @@ describe('new-tab-registry — dynamic provider sources', () => {
     expect(getStaleNewTabProviderIds(['static', 'dyn', 'dyn:a', 'dyn:gone', 'unowned'])).toEqual(['dyn', 'dyn:gone'])
   })
 
+  // Host ownership §3.2: a host-bearing column whose host is not on this device is kept, never pruned.
+  it('an id a ready source RETAINS is never stale; an owned id it does not retain still is', () => {
+    registerNewTabProviderSource({ ...makeSource(['a']).source, retainsId: (id: string) => id.startsWith('dyn:') })
+    expect(getStaleNewTabProviderIds(['dyn', 'dyn:a', 'dyn:gone'])).toEqual(['dyn'])
+  })
+
   it('an unready source neither reports stale ids nor contributes ready providers', () => {
     registerNewTabProvider({ id: 'static', label: 'S', icon: 'S', order: 0, component: Stub })
     let ready = false

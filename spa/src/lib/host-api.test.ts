@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, listSessionsFresh, createSession, deleteSession,
-  fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
+  fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, fetchWsTicket, getConfig, updateConfig, agentUpload,
   fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers, fetchInfoAt, INFO_AT_TIMEOUT_MS,
   type MonitorSnapshot, type Session,
 } from './host-api'
@@ -232,6 +232,30 @@ describe('fetchSessionProvenance', () => {
   it('throws on non-ok response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 500 }))
     await expect(fetchSessionProvenance(HOST_ID, 'abc123')).rejects.toThrow('500')
+  })
+})
+
+// PR #1400 (attacker, high): these requests are pinned to the host they name. `hostFetch` resolves an unknown id to
+// the active / first host (`getDaemonBase`), so a host deleted between a pane's render and its effect would send a
+// ticket request or a probe to a DIFFERENT daemon. For a host this device does not have they reject without fetching.
+describe('host-pinned requests refuse a host that is not here', () => {
+  const calls = {
+    fetchWsTicket: (id: string) => fetchWsTicket(id),
+    fetchSessionCwd: (id: string) => fetchSessionCwd(id, 'abc123'),
+    fetchSessionProvenance: (id: string) => fetchSessionProvenance(id, 'abc123'),
+  }
+  it.each(Object.keys(calls) as (keyof typeof calls)[])('%s: an unknown or prototype-named host rejects and nothing is fetched', async (name) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ticket: 't' }), { status: 200 }))
+    for (const id of ['gone-host', 'd1_unknownhost', 'toString', '__proto__']) {
+      await expect(calls[name](id)).rejects.toThrow(/not configured/)
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('fetchWsTicket: a known host still gets its ticket from that host', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ticket: 'tk' }), { status: 200 }))
+    expect(await fetchWsTicket(HOST_ID)).toBe('tk')
+    expectAuthFetch(`${BASE}/api/ws-ticket`, { method: 'POST' })
   })
 })
 

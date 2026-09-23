@@ -53,6 +53,14 @@ describe('createHeadlessProviderSource', () => {
     expect(src.migrations).toBeUndefined()
   })
 
+  it('retains every headless:<id> column (a host not on this device is kept), and nothing else', () => {
+    const src = createHeadlessProviderSource()
+    expect(src.retainsId?.('headless:whatever')).toBe(true)
+    expect(src.retainsId?.('headless:d1_unknown')).toBe(true)
+    expect(src.retainsId?.('headless')).toBe(false)
+    expect(src.retainsId?.('sessions:h1')).toBe(false)
+  })
+
   it('is ready only once the host store has hydrated, and notifies on hydration finish', () => {
     let finish: (() => void) | undefined
     const hydrated = vi.spyOn(useHostStore.persist, 'hasHydrated').mockReturnValue(false)

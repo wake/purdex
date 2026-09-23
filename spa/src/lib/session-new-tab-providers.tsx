@@ -30,7 +30,8 @@ function componentFor(hostId: string): ComponentType<NewTabProviderProps> {
 /**
  * One New Tab "sessions" block per host (`sessions:<hostId>`), in host order,
  * so each host's block can be placed independently in the layout editor.
- * Owns the legacy single `sessions` id so a stale persisted entry gets pruned.
+ * Owns the legacy single `sessions` id so a stale persisted entry gets pruned;
+ * every `sessions:<id>` is retained, whether or not that host is here.
  */
 export function createHostSessionProviderSource(): NewTabProviderSource {
   return {
@@ -58,6 +59,9 @@ export function createHostSessionProviderSource(): NewTabProviderSource {
       return () => { unsubState(); unsubHydration() }
     },
     ownsId: (id) => id === LEGACY_ID || id.startsWith(PREFIX),
+    // A block of a host this device lacks is kept, never pruned (host ownership
+    // §3.2); only the legacy single id still goes, through its migration.
+    retainsId: (id) => id.startsWith(PREFIX),
     // Until the persisted host list is loaded, hostOrder is a transient
     // default — never prune or place per-host blocks from it.
     isReady: () => useHostStore.persist.hasHydrated(),
