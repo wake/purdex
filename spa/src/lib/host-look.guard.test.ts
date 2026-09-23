@@ -10,8 +10,9 @@
 //
 // Counted as a read:
 //   - `x.f`, `x?.f`, `x['f']` (string-literal element access);
-//   - object-binding destructuring of `f` (`const { f } = host`, nested too);
-//   - parameter destructuring `({ f }: HostConfig)`.
+//   - object-binding destructuring of `f` (`const { f } = host`, nested too),
+//     including a literal computed key (`{ ['f']: v }`, `` { [`f`]: v } ``);
+//   - parameter destructuring `({ f }: HostConfig)`, same key forms.
 // Not a read: the left side of an assignment (`next.icon = x`, `x.f += …`),
 // `delete x.f`, an object-literal property (`{ icon: x }`). Writes are the
 // writer tests' job.
@@ -19,7 +20,8 @@
 // KNOWN FALSE NEGATIVES (the fixture half pins each one as "not flagged", so a
 // change of the detector is visible):
 //   - computed access with a non-literal key: `h[f]` (e.g. the look loop of
-//     `host-transfer-plan.ts`);
+//     `host-transfer-plan.ts`), and a destructuring key that is not a literal
+//     (`const k = 'icon'; const { [k]: v } = h` — even when `k` is a constant);
 //   - a value first narrowed / copied into another type: `(h as { icon?: string }).icon`,
 //     `Pick<HostConfig, 'icon'>`, `Partial<HostConfig>`, a spread `({ ...h }).icon`;
 //   - destructuring ASSIGNMENT (`({ icon } = h)`), reads in `.d.ts` files or
@@ -27,20 +29,37 @@
 //   - test files (excluded by design: `*.test.*`, `__tests__/`, `test-setup.ts`,
 //     `test-utils*`).
 //
-// Every hit also carries `decl`: the innermost NAMED declaration around the read
-// — a function / method / accessor name, a `const f = () => …` name, or the key
-// of an object-literal property (`setHostIcon: (…) => …` → `setHostIcon`);
-// `<module>` when there is none. The allowlist is file → decl → field → EXACT
-// count, and the repo test demands the hit multiset equal it: a new read, a
-// removed read, or a read moved into another declaration of the same file
-// (same file-wide count) all fail and print `file:line decl field`.
+// Every hit also carries `decl`, a lexical path that is unique within its file:
+// the chain of enclosing KEY SEGMENTS, outermost first, joined with `.`
+// (`useHostStore.persist(arg0).setHostIcon.set(arg0)`, `A.m` vs `B.m`);
+// `<module>` when there is none. A key segment is
+//   - a function / class declaration (anonymous: `default` when exported as
+//     default, else `<anonymous>`), a method / accessor / constructor, an
+//     object-literal property or a class field (a non-literal computed name is
+//     `<computed>`);
+//   - a variable declaration with a plain name whose initializer is a function
+//     or class, or any such variable at module level;
+//   - a function / class expression that is not the initializer of one of the
+//     above, named by its own name or else by where it is bound: `default`
+//     (`export default`), `callee(argN)` (a call / `new` argument), the JSX
+//     attribute name, or `<anonymous>`.
+// When siblings under the same parent segment share a name, each gets `#n`,
+// its 1-based order among them. Nothing positional (line, offset) enters the
+// key, so an unrelated edit leaves every key alone; adding a same-named sibling
+// renumbers the `#n`s — a loud failure, never a false green.
 //
-// WIDENING THE ALLOWLIST takes two edits, on purpose: the `ALLOWLIST` constant
-// AND the verbatim literal pinned in the "pinned" test (which never references
-// the constant). Only `stores/useHostStore.ts`, `lib/host-color.ts` and
-// `lib/host-look.ts` may appear (the spec §4.2 exception); a test asserts the
-// allowlisted files are a subset of those three. H2a checks the colour / icon
-// fields; H2b adds `name`.
+// The allowlist is file → decl → field → EXACT count, and the repo test demands
+// the hit multiset equal it: a new read, a removed read, or a read moved into
+// another declaration of the same file (same file-wide count) all fail and
+// print `file:line decl field`.
+//
+// This guard is a TRIPWIRE, not an enforcement boundary: the `ALLOWLIST`
+// constant and the verbatim copy pinned in the "pinned" test live in this one
+// file, so one PR can widen both. What it buys is that any widening is an
+// explicit, reviewable diff to this file. Only `stores/useHostStore.ts`,
+// `lib/host-color.ts` and `lib/host-look.ts` may appear (the spec §4.2
+// exception); a test asserts the allowlisted files are a subset of those
+// three. H2a checks the colour / icon fields; H2b adds `name`.
 import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
 
@@ -63,7 +82,7 @@ export interface GuardHit {
   file: string
   line: number
   field: string
-  /** The innermost named declaration around the read (`<module>` when none). */
+  /** The declaration key of the read: a unique lexical path (see the header; `<module>` when none). */
   decl: string
 }
 
@@ -89,40 +108,146 @@ function isWriteTarget(node: ts.Expression): boolean {
   return ts.isBinaryExpression(parent) && parent.left === n && ASSIGNMENT_OPERATORS.has(parent.operatorToken.kind)
 }
 
-/** A declaration name as text, or undefined when it is not a plain name (binding pattern, computed key). */
+/**
+ * The text of a statically known property key: an identifier, a string /
+ * numeric literal, or a computed key that is a string / no-substitution
+ * template literal (`['icon']`, `` [`icon`] ``). Undefined otherwise (`[k]`).
+ */
 function nameText(name: ts.Node | undefined): string | undefined {
   if (!name) return undefined
   if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
     return name.text
   }
+  if (ts.isComputedPropertyName(name)) {
+    const e = name.expression
+    if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isNumericLiteral(e)) return e.text
+  }
   return undefined
 }
 
-/** The innermost named declaration enclosing `node` (see the header), or `<module>`. */
-export function enclosingDecl(node: ts.Node): string {
-  for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
-    let name: string | undefined
-    if (
-      ts.isFunctionDeclaration(n) ||
-      ts.isFunctionExpression(n) ||
-      ts.isMethodDeclaration(n) ||
-      ts.isGetAccessorDeclaration(n) ||
-      ts.isSetAccessorDeclaration(n) ||
-      ts.isPropertyAssignment(n) ||
-      ts.isPropertyDeclaration(n) ||
-      ts.isClassDeclaration(n)
-    ) {
-      name = nameText(n.name)
-    } else if (
-      ts.isVariableDeclaration(n) &&
-      n.initializer &&
-      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
-    ) {
-      name = nameText(n.name)
-    }
-    if (name !== undefined) return name
+/** Expression wrappers that do not change which declaration a value belongs to. */
+function isWrapper(n: ts.Node): boolean {
+  return (
+    ts.isParenthesizedExpression(n) ||
+    ts.isAsExpression(n) ||
+    ts.isSatisfiesExpression(n) ||
+    ts.isNonNullExpression(n) ||
+    ts.isTypeAssertionExpression(n)
+  )
+}
+
+function skipWrappersDown(e: ts.Expression): ts.Expression {
+  while (isWrapper(e)) e = (e as ts.ParenthesizedExpression).expression
+  return e
+}
+
+/** `n` with its wrappers climbed: the node its real parent sees. */
+function skipWrappersUp(n: ts.Node): ts.Node {
+  while (isWrapper(n.parent)) n = n.parent
+  return n
+}
+
+function calleeName(e: ts.Expression): string {
+  e = skipWrappersDown(e)
+  if (ts.isIdentifier(e)) return e.text
+  if (ts.isPropertyAccessExpression(e)) return e.name.text
+  if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression)) return e.argumentExpression.text
+  return '<call>'
+}
+
+/** An anonymous function / class, named after where it is bound. */
+function anonymousName(n: ts.Node): string {
+  const c = skipWrappersUp(n)
+  const p = c.parent
+  if (ts.isExportAssignment(p)) return 'default'
+  if ((ts.isCallExpression(p) || ts.isNewExpression(p)) && p.arguments) {
+    const i = p.arguments.indexOf(c as ts.Expression)
+    if (i >= 0) return `${calleeName(p.expression)}(arg${i})`
   }
-  return '<module>'
+  if (ts.isJsxExpression(p) && ts.isJsxAttribute(p.parent) && ts.isIdentifier(p.parent.name)) return p.parent.name.text
+  return '<anonymous>'
+}
+
+/** `n` is the initializer of a declaration that is itself a key segment (so `n` adds none). */
+function isDeclInitializer(n: ts.Node): boolean {
+  const c = skipWrappersUp(n)
+  const p = c.parent
+  return (
+    ((ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) || ts.isPropertyAssignment(p) || ts.isPropertyDeclaration(p)) &&
+    p.initializer === c
+  )
+}
+
+function isModuleLevel(d: ts.VariableDeclaration): boolean {
+  const stmt = d.parent.parent
+  return ts.isVariableStatement(stmt) && (ts.isSourceFile(stmt.parent) || ts.isModuleBlock(stmt.parent))
+}
+
+/**
+ * The base name `n` contributes to a declaration key, or undefined when `n` is
+ * not a key segment (see the header for which nodes are).
+ */
+function segmentBase(n: ts.Node): string | undefined {
+  if (ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) {
+    if (n.name) return n.name.text
+    return n.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword) ? 'default' : '<anonymous>'
+  }
+  if (
+    ts.isMethodDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) ||
+    ts.isSetAccessorDeclaration(n) ||
+    ts.isPropertyAssignment(n) ||
+    ts.isPropertyDeclaration(n)
+  ) {
+    return nameText(n.name) ?? '<computed>'
+  }
+  if (ts.isConstructorDeclaration(n)) return 'constructor'
+  if (ts.isVariableDeclaration(n)) {
+    if (!ts.isIdentifier(n.name) || !n.initializer) return undefined
+    const init = skipWrappersDown(n.initializer)
+    const code = ts.isArrowFunction(init) || ts.isFunctionExpression(init) || ts.isClassExpression(init)
+    return code || isModuleLevel(n) ? n.name.text : undefined
+  }
+  if (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isClassExpression(n)) {
+    if (isDeclInitializer(n)) return undefined
+    return !ts.isArrowFunction(n) && n.name ? n.name.text : anonymousName(n)
+  }
+  return undefined
+}
+
+/** container → base name → its key segments of that name, in source order. */
+const childSegmentCache = new WeakMap<ts.Node, Map<string, ts.Node[]>>()
+
+/** The key segments directly under `container` (not nested in another segment). */
+function childSegments(container: ts.Node): Map<string, ts.Node[]> {
+  let byName = childSegmentCache.get(container)
+  if (byName) return byName
+  const found = new Map<string, ts.Node[]>()
+  const visit = (c: ts.Node): void => {
+    const base = segmentBase(c)
+    if (base === undefined) return void ts.forEachChild(c, visit)
+    found.set(base, [...(found.get(base) ?? []), c])
+  }
+  ts.forEachChild(container, visit)
+  byName = found
+  childSegmentCache.set(container, byName)
+  return byName
+}
+
+/** The declaration key of `node`: its enclosing key segments, outermost first (see the header). */
+export function enclosingDecl(node: ts.Node): string {
+  const chain: ts.Node[] = []
+  for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+    if (segmentBase(n) !== undefined) chain.unshift(n)
+  }
+  if (chain.length === 0) return '<module>'
+  return chain
+    .map((seg, i) => {
+      const base = segmentBase(seg)!
+      const siblings = childSegments(i === 0 ? seg.getSourceFile() : chain[i - 1]).get(base) ?? [seg]
+      return siblings.length > 1 ? `${base}#${siblings.indexOf(seg) + 1}` : base
+    })
+    .join('.')
 }
 
 function hostConfigSymbol(program: ts.Program, checker: ts.TypeChecker): ts.Symbol {
@@ -185,8 +310,8 @@ export function detectHostConfigReads(program: ts.Program, opts: DetectOptions):
         if (isHostConfig(patternType)) {
           for (const el of node.elements) {
             if (el.dotDotDotToken) continue
-            const key = el.propertyName ?? el.name
-            const field = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : undefined
+            // `{ icon }`, `{ icon: v }`, `{ 'icon': v }`, `{ ['icon']: v }`; `{ [k]: v }` stays unresolved.
+            const field = nameText(el.propertyName ?? el.name)
             if (field !== undefined && fields.has(field)) hit(el, field)
           }
         }
@@ -268,6 +393,11 @@ const FIXTURES: Record<string, [string, string[]]> = {
   'parameter-destructure.ts': [`export const f = ({ icon }: HostConfig) => icon`, ['icon']],
   'alias.ts': [`type H = HostConfig\ndeclare const a: H\nexport const v = a.icon`, ['icon']],
   'read-in-rhs.ts': [`declare const next: HostConfig\nnext.icon = h.icon`, ['icon']],
+  'computed-binding-literal.ts': [
+    `const { ['icon']: v1 } = h\nconst { [\`color\`]: v2 } = h\nexport const v = [v1, v2]`,
+    ['icon', 'color'],
+  ],
+  'computed-parameter-literal.ts': [`export const f = ({ ['colors']: c }: HostConfig) => c`, ['colors']],
   // not flagged
   'assignment-left.ts': [`declare const next: HostConfig\nnext.icon = 'Laptop'\nnext.color ??= '#ffffff'`, []],
   'delete.ts': [`declare const next: HostConfig\ndelete next.icon\ndelete next['colors']`, []],
@@ -281,6 +411,7 @@ const FIXTURES: Record<string, [string, string[]]> = {
   'blind-partial.ts': [`const p: Partial<HostConfig> = h\nexport const v = p.icon`, []],
   'blind-spread.ts': [`export const v = ({ ...h }).icon`, []],
   'blind-destructure-assign.ts': [`let icon: string | undefined\n;({ icon } = h)\nexport const v = icon`, []],
+  'blind-computed-binding-variable.ts': [`const k = 'icon'\nconst { [k]: v1 } = h\nexport const v = v1`, []],
 }
 
 describe('host-look guard — detector fixtures', { timeout: 60_000 }, () => {
@@ -308,16 +439,28 @@ describe('host-look guard — detector fixtures', { timeout: 60_000 }, () => {
 
 /** name → [snippet, the `decl` of each hit (in order)]. */
 const DECL_FIXTURES: Record<string, [string, string[]]> = {
-  'decl-module.ts': [`export const v = h.icon`, ['<module>']],
-  'decl-function.ts': [`export function f() { return h.icon }`, ['f']],
+  'decl-module.ts': [`console.log(h.color)\nexport const v = h.icon`, ['<module>', 'v']],
+  'decl-function.ts': [`export function f() { const local = h.color; return [local, h.icon] }`, ['f', 'f']],
   'decl-arrow-const.ts': [`export const f = () => [h.icon, h.color]`, ['f', 'f']],
-  'decl-nested.ts': [`export function outer() { function inner() { return h.icon } return [inner(), h.color] }`, ['inner', 'outer']],
+  'decl-nested.ts': [`export function outer() { function inner() { return h.icon } return [inner(), h.color] }`, ['outer.inner', 'outer']],
   'decl-property-key.ts': [
     `export const store = { setIcon: (x: HostConfig) => [1].map(() => x.icon), other: () => h.colors }`,
-    ['setIcon', 'other'],
+    ['store.setIcon.map(arg0)', 'store.other'],
   ],
-  'decl-method.ts': [`export class C { m() { return h.iconWeight } get g() { return h.icon } }`, ['m', 'g']],
+  'decl-method.ts': [`export class C { m() { return h.iconWeight } get g() { return h.icon } }`, ['C.m', 'C.g']],
   'decl-destructure.ts': [`export function f() { const { icon, color } = h; return [icon, color] }`, ['f', 'f']],
+  'decl-same-name-ordinal.ts': [
+    `export function o() { if (h.id) { function inner() { return h.icon } return inner() } function inner() { return h.color } return inner() }`,
+    ['o.inner#1', 'o.inner#2'],
+  ],
+  'decl-anonymous.ts': [
+    `export default function () { return h.icon }\n;[h].forEach(() => h.color)\n;[h].forEach(() => h.colors)\nexport const w = [() => h.iconWeight]`,
+    ['default', 'forEach(arg0)#1', 'forEach(arg0)#2', 'w.<anonymous>'],
+  ],
+  'decl-computed-names.ts': [
+    `declare const k: string\nexport const o = { ['lit']: () => h.icon, [k]: () => h.color }`,
+    ['o.lit', 'o.<computed>'],
+  ],
 }
 
 describe('host-look guard — enclosing declaration', { timeout: 60_000 }, () => {
@@ -409,19 +552,101 @@ describe('host-look guard — allowlistProblems', { timeout: 60_000 }, () => {
   })
 })
 
+/** The allowlist a scan would need to pass exactly (whatever the key format). */
+function allowlistOf(hits: readonly GuardHit[]): Allowlist {
+  const out: Allowlist = {}
+  for (const h of hits) {
+    const counts = ((out[h.file] ??= {})[h.decl] ??= {})
+    counts[h.field as GuardedField] = (counts[h.field as GuardedField] ?? 0) + 1
+  }
+  return out
+}
+
+/**
+ * name → [baseline, swapped]: `swapped` moves the `icon` read into a declaration
+ * that shares a NAME (or anonymity) with the one it came from, keeping every
+ * file-wide count. The allowlist measured on `baseline` must reject `swapped`.
+ */
+const SWAPS: Record<string, [string, string]> = {
+  'same-named nested functions, different parents': [
+    `export function a(x: HostConfig) { function inner() { return x.icon } return inner() }\n` +
+      `export function b(x: HostConfig) { function inner() { return x.name } return inner() }`,
+    `export function a(x: HostConfig) { function inner() { return x.name } return inner() }\n` +
+      `export function b(x: HostConfig) { function inner() { return x.icon } return inner() }`,
+  ],
+  'same-named nested functions, same parent': [
+    `export function o(x: HostConfig) { if (x.id) { function inner() { return x.icon } return inner() } else { function inner() { return x.name } return inner() } }`,
+    `export function o(x: HostConfig) { if (x.id) { function inner() { return x.name } return inner() } else { function inner() { return x.icon } return inner() } }`,
+  ],
+  'same-named methods, two classes': [
+    `export class A { m(x: HostConfig) { return x.icon } }\nexport class B { m(x: HostConfig) { return x.name } }`,
+    `export class A { m(x: HostConfig) { return x.name } }\nexport class B { m(x: HostConfig) { return x.icon } }`,
+  ],
+  'same-named methods, two named object literals': [
+    `export const A = { m(x: HostConfig) { return x.icon } }\nexport const B = { m(x: HostConfig) { return x.name } }`,
+    `export const A = { m(x: HostConfig) { return x.name } }\nexport const B = { m(x: HostConfig) { return x.icon } }`,
+  ],
+  'same-named methods, two anonymous object literals': [
+    `declare function reg(o: object): void\nreg({ m(x: HostConfig) { return x.icon } })\nreg({ m(x: HostConfig) { return x.name } })`,
+    `declare function reg(o: object): void\nreg({ m(x: HostConfig) { return x.name } })\nreg({ m(x: HostConfig) { return x.icon } })`,
+  ],
+  'anonymous default export vs anonymous callback': [
+    `export default function (x: HostConfig) { return x.icon }\nexport const r = [h].map((x) => x.name)`,
+    `export default function (x: HostConfig) { return x.name }\nexport const r = [h].map((x) => x.icon)`,
+  ],
+  'two anonymous callbacks': [
+    `;[h].forEach((x) => x.icon)\n;[h].forEach((x) => x.name)`,
+    `;[h].forEach((x) => x.name)\n;[h].forEach((x) => x.icon)`,
+  ],
+}
+
+describe('host-look guard — declaration keys are unique', { timeout: 60_000 }, () => {
+  const { program, dir } = fixtureProgram(
+    Object.fromEntries(
+      Object.values(SWAPS).flatMap(([base, swapped], i) => [
+        [`swap-${i}-base.ts`, HEADER + base + '\n'],
+        [`swap-${i}-swapped.ts`, HEADER + swapped + '\n'],
+        // the baseline behind an unrelated edit: a new declaration above everything
+        [`swap-${i}-shifted.ts`, HEADER + `export function unrelated(x: HostConfig) { return x.ip }\n` + base + '\n'],
+      ]),
+    ),
+  )
+  const hits = detectHostConfigReads(program, { fields: GUARDED_FIELDS, include: (f) => f.startsWith(`${dir}/`) })
+  const of = (name: string) =>
+    hits.filter((h) => h.file.endsWith(`/${name}`)).map((h) => ({ ...h, file: 'swap.ts' }))
+
+  it('the swap fixtures type-check', () => {
+    const errors = ts
+      .getPreEmitDiagnostics(program)
+      .filter((d) => d.file?.fileName.startsWith(`${dir}/`))
+      .map((d) => `${d.file!.fileName.slice(dir.length + 1)}: ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`)
+    expect(errors).toEqual([])
+  })
+
+  it.each(Object.keys(SWAPS).map((name, i) => [name, i] as const))('%s', (_name, i) => {
+    const allow = allowlistOf(of(`swap-${i}-base.ts`))
+    expect(of(`swap-${i}-base.ts`).map((h) => h.field)).toEqual(['icon'])
+    expect(allowlistProblems(of(`swap-${i}-shifted.ts`), allow)).toEqual([])
+    expect(allowlistProblems(of(`swap-${i}-swapped.ts`), allow)).not.toEqual([])
+  })
+})
+
 // === repo half ===
 
 /**
  * The only production reads of a colour / icon field off `HostConfig`: file →
- * enclosing declaration → field → exact count. Measured at H2a T4.
- * Widening this ALSO requires editing the pinned literal below (see the header).
+ * declaration key → field → exact count. Measured at H2a T4.
+ * A widening also edits the pinned copy below — same file, so a tripwire made
+ * visible in review, not an enforcement boundary (see the header).
  */
 export const ALLOWLIST: Allowlist = {
   // the store: its writers read the current value to build the next one
   'stores/useHostStore.ts': {
-    setHostColor: { colors: 1 }, // the current console alpha
-    setHostColorLayer: { colors: 1, color: 1 }, // `{ ...host.colors }`, the `{ color: _legacy }` drop
-    setHostIcon: { icon: 1, iconWeight: 1 }, // the `{ icon: _i, iconWeight: _w }` drop
+    'useHostStore.persist(arg0).setHostColor': { colors: 1 }, // the current console alpha
+    // `{ ...host.colors }`, the `{ color: _legacy }` drop
+    'useHostStore.persist(arg0).setHostColorLayer.set(arg0)': { colors: 1, color: 1 },
+    // the `{ icon: _i, iconWeight: _w }` drop
+    'useHostStore.persist(arg0).setHostIcon.set(arg0)': { icon: 1, iconWeight: 1 },
   },
   // the persisted-state sanitiser
   'lib/host-color.ts': {
@@ -442,12 +667,12 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
     expect(allowlistProblems(hits, ALLOWLIST)).toEqual([])
   })
 
-  it('the allowlist is pinned verbatim (widening it takes a second, deliberate edit here)', () => {
+  it('the allowlist is pinned verbatim (a widening shows up as a second, explicit edit here)', () => {
     expect(ALLOWLIST).toEqual({
       'stores/useHostStore.ts': {
-        setHostColor: { colors: 1 },
-        setHostColorLayer: { colors: 1, color: 1 },
-        setHostIcon: { icon: 1, iconWeight: 1 },
+        'useHostStore.persist(arg0).setHostColor': { colors: 1 },
+        'useHostStore.persist(arg0).setHostColorLayer.set(arg0)': { colors: 1, color: 1 },
+        'useHostStore.persist(arg0).setHostIcon.set(arg0)': { icon: 1, iconWeight: 1 },
       },
       'lib/host-color.ts': {
         sanitizeHostConfig: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
