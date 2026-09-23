@@ -553,8 +553,22 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// session/owner data straddle two different tmux generations into one
 	// answer. Either sample being "" (unknown) means the check cannot fire,
 	// and the response proceeds as if nothing had changed.
-	if after := m.tmuxInstanceWithin(invCtx); instance != "" && after != "" && after != instance {
+	after := m.tmuxInstanceWithin(invCtx)
+	if instance != "" && after != "" && after != instance {
 		return writeError("tmux server restarted during inventory")
+	}
+	// ...except when a sample is "" because the inventory's budget ran out
+	// (#1293): then the generation check did not run for want of time, not
+	// because tmux could not say, and the answer cannot vouch that its
+	// session and owner data come from one tmux generation. It is reported
+	// the way an owner lookup the budget cut off is — ok:true (the list
+	// answered, the rows are shown), partial:true — even when no session was
+	// left unresolved. One check covers both probes: invCtx only ever goes
+	// from live to done, so a first probe that spent the budget leaves it
+	// done here too.
+	generationUnverified := invCtx.Err() != nil
+	if generationUnverified {
+		m.logf("peers: inventory: budget ran out before the tmux generation re-check, reporting partial: %v", invCtx.Err())
 	}
 
 	// Registry diagnosis (spec §3.3): an alive-but-undecodable file could
@@ -583,7 +597,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	}
 	titlesUnavailable := titlesErr != nil
 
-	partial := len(unresolved) > 0 || len(unknown) > 0 || titlesUnavailable
+	partial := len(unresolved) > 0 || len(unknown) > 0 || titlesUnavailable || generationUnverified
 
 	// This daemon's own helpers are hidden as proxy rows by pid (their
 	// registry entries are otherwise indistinguishable from a Claude Code

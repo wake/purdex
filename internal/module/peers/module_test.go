@@ -573,6 +573,53 @@ func TestLocalEnvelope_SecondProbeSharesBudget(t *testing.T) {
 	}
 }
 
+// #1293 (codex critic on #1345): a second generation probe that runs the
+// budget out cannot vouch that session and owner data share one tmux
+// generation. With nothing else making the inventory partial — zero sessions,
+// or every owner resolved — it must not be reported as a complete answer.
+func TestLocalEnvelope_SecondProbeExpiry_ZeroSessions_NotComplete(t *testing.T) {
+	sessions := &fakeSessions{blockSecondInstance: true, instances: []string{"gen-1"}}
+	owners := &fakeOwners{}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if n := sessions.instanceCtxCalls.Load(); n != 2 {
+		t.Fatalf("context-aware probes = %d, want 2", n)
+	}
+	if !env.OK || !env.Partial {
+		t.Errorf("ok = %v (%q), partial = %v; want ok:true, partial:true: the list answered, but the generation re-check hit the budget", env.OK, env.Error, env.Partial)
+	}
+}
+
+func TestLocalEnvelope_SecondProbeExpiry_AllOwnersResolved_NotComplete(t *testing.T) {
+	sessions := &fakeSessions{
+		blockSecondInstance: true,
+		instances:           []string{"gen-1"},
+		sessions:            []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+	}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{
+		"mt1code": {AgentType: "cc", SessionID: "sess-1"},
+	}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if len(owners.calls) != 1 {
+		t.Fatalf("owner lookups = %d, want 1 (resolved before the probe hung)", len(owners.calls))
+	}
+	if n := sessions.instanceCtxCalls.Load(); n != 2 {
+		t.Fatalf("context-aware probes = %d, want 2", n)
+	}
+	if !env.OK || !env.Partial {
+		t.Errorf("ok = %v (%q), partial = %v; want ok:true, partial:true: the list answered, but the generation re-check hit the budget", env.OK, env.Error, env.Partial)
+	}
+}
+
 // The owner resolver runs under the inventory's budget context too.
 func TestLocalEnvelope_OwnerResolutionUnderBudgetContext(t *testing.T) {
 	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}}}

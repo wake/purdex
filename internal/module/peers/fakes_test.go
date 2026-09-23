@@ -44,14 +44,18 @@ type fakeSessions struct {
 	// without the inventory's context pays that on every probe.
 	blockInstance bool
 	instanceHang  time.Duration
+	// blockSecondInstance hangs only the second TmuxInstanceContext call
+	// (the post-owner-resolution generation re-check) until its context
+	// ends; the first probe answers normally.
+	blockSecondInstance bool
 	// instanceCtxCalls counts TmuxInstanceContext calls.
 	instanceCtxCalls atomic.Int32
 }
 
 // TmuxInstanceContext is the context-aware probe localEnvelope uses (#1293).
 func (f *fakeSessions) TmuxInstanceContext(ctx context.Context) string {
-	f.instanceCtxCalls.Add(1)
-	if f.blockInstance {
+	n := f.instanceCtxCalls.Add(1)
+	if f.blockInstance || (f.blockSecondInstance && n == 2) {
 		<-ctx.Done()
 		return ""
 	}
