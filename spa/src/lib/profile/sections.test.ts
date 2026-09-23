@@ -25,10 +25,12 @@ import {
   buildWorkspacesSection,
   stripSizes,
   unsyncableWorkspaceIds,
+  wireResolverOf,
   type CollectInput,
   type SettingsBuildInput,
 } from './sections'
 import type { HostsSource, TabsSource, WorkspacesSource } from './types'
+import { identityOfSync, syncIdOfSync } from './host-identity'
 
 /** No master workspace: for the tests that are not about workspace-scoped settings. */
 const NO_WS: ReadonlySet<string> = new Set()
@@ -626,5 +628,113 @@ describe('repairTabOwnership', () => {
     ['no pointer, no tab on screen → the first workspace', { activeTabId: null, activeWorkspaceId: null }, [ws('a', 'A', ['t1']), ws('b', 'B', ['t2', 'o'])], 'a'],
   ])('%s', (_name, focus, workspaces, expected) => {
     expect(repairTabOwnership({ workspaces, ...base, ...focus }, opts).activeWorkspaceId).toBe(expected)
+  })
+})
+
+// --- host-sync-identity PR 2: the builders speak WIRE ids --------------------
+
+describe('host-sync-identity: local → wire at build', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const WIRE = syncIdOfSync(DAEMON)
+  const hostCfg = (id: string, extra: Partial<HostConfig> = {}): HostConfig => ({ id, name: `N-${id}`, ip: '10.0.0.1', port: 7860, order: 0, ...extra })
+  const hostsSrc = (): HostsSource => ({
+    hosts: {
+      bbbbbb: hostCfg('bbbbbb', { daemonId: DAEMON, syncAliases: ['aaaaaa'] }),
+      legacy: hostCfg('legacy', { syncAliases: ['zzzzzz'] }), // no claim: travels under its local id, never with aliases
+    },
+    hostOrder: ['bbbbbb', 'legacy'],
+  })
+
+  it('hosts: a claimed host is keyed, `.id`-ed and ordered by its sync id and carries its syncAliases as `aliases`; a host with no claim keeps its local id', () => {
+    const p = buildHostsSection(hostsSrc())
+    expect(Object.keys(p.hosts)).toEqual([WIRE, 'legacy'])
+    expect(p.hostOrder).toEqual([WIRE, 'legacy'])
+    expect(p.hosts[WIRE]).toEqual({ id: WIRE, name: 'N-bbbbbb', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON, aliases: ['aaaaaa'] })
+    expect(p.hosts.legacy).toEqual({ id: 'legacy', name: 'N-legacy', ip: '10.0.0.1', port: 7860, order: 0 })
+    expect(JSON.stringify(p)).not.toContain('syncAliases')
+    expect(isWellFormedSection('hosts', p)).toBe(true)
+  })
+
+  it('hosts: a stray local `aliases` field never travels (only syncAliases, and only on a canonical row)', () => {
+    const src = hostsSrc()
+    ;(src.hosts.legacy as unknown as Record<string, unknown>).aliases = ['x']
+    ;(src.hosts.bbbbbb as unknown as Record<string, unknown>).aliases = ['y']
+    const p = buildHostsSection({ ...src, hosts: { ...src.hosts, bbbbbb: { ...src.hosts.bbbbbb, syncAliases: undefined } } })
+    expect(Object.hasOwn(p.hosts.legacy, 'aliases')).toBe(false)
+    expect(Object.hasOwn(p.hosts[WIRE], 'aliases')).toBe(false)
+  })
+
+  it('hosts / tabs / settings refuse to build under an identity conflict (two hosts, one daemon)', () => {
+    const src: HostsSource = { hosts: { a: hostCfg('a', { daemonId: DAEMON }), b: hostCfg('b', { daemonId: DAEMON }) }, hostOrder: ['a', 'b'] }
+    const identity = identityOfSync(src.hosts)
+    expect(identity.conflict).toEqual(['a', 'b'])
+    expect(() => buildHostsSection(src)).toThrow(/host identity conflict/)
+    expect(() => buildTabsSection({ id: 'w', name: 'W', tabs: [], activeTabId: null }, {}, identity)).toThrow(/host identity conflict/)
+    expect(() => buildSettingsSection({}, NO_WS, identity)).toThrow(/host identity conflict/)
+    expect(wireResolverOf(src)).toBeNull()
+  })
+
+  it('tabs: every host-bearing pane field is translated through the identity; an id it does not know passes through', () => {
+    const identity = identityOfSync(hostsSrc().hosts)
+    const layout = split('s', [
+      leaf('p1', tmux('one', { hostId: 'bbbbbb' })),
+      leaf('p2', { kind: 'editor', source: { type: 'daemon', hostId: 'bbbbbb' }, filePath: '/f' } as PaneContent),
+      leaf('p3', { kind: 'execution', host: 'bbbbbb' } as unknown as PaneContent),
+      leaf('p4', tmux('gone', { hostId: 'gone00' })),
+      leaf('p5', tmux('legacy', { hostId: 'legacy' })),
+    ], [20, 20, 20, 20, 20])
+    const p = buildTabsSection({ id: 'w', name: 'W', tabs: ['t1'], activeTabId: 't1' }, { t1: tab('t1', layout) }, identity)
+    const kids = (p.tabs.t1.layout as { children: Array<{ pane: { content: Record<string, unknown> } }> }).children.map((c) => c.pane.content)
+    expect(kids[0].hostId).toBe(WIRE)
+    expect((kids[1].source as { hostId: string }).hostId).toBe(WIRE)
+    expect(kids[2].host).toBe(WIRE)
+    expect(kids[3].hostId).toBe('gone00')
+    expect(kids[4].hostId).toBe('legacy')
+    // no identity: nothing is translated (the pure builder's old behaviour — production passes one)
+    const plain = buildTabsSection({ id: 'w', name: 'W', tabs: ['t1'], activeTabId: 't1' }, { t1: tab('t1', layout) })
+    expect(JSON.stringify(plain)).not.toContain(WIRE)
+  })
+
+  it('settings: host-settings keys and `sessions:` / `headless:` preset columns are translated; other columns and fields are not', () => {
+    const identity = identityOfSync(hostsSrc().hosts)
+    const presets = {
+      '3col': { enabled: true, columns: [['sessions:bbbbbb', 'x'], ['headless:bbbbbb'], ['sessions:gone00']] },
+      '2col': { enabled: true, columns: [['sessions:legacy'], []] },
+      '1col': { enabled: false, columns: [['files']] },
+    }
+    const input: SettingsBuildInput = {
+      'purdex-host-settings': { hosts: { bbbbbb: { a: 1 }, legacy: { b: 2 } } },
+      'purdex-newtab-layout': { presets },
+    }
+    const p = buildSettingsSection(input, NO_WS, identity)
+    expect(p['purdex-host-settings']).toEqual({ hosts: { [WIRE]: { a: 1 }, legacy: { b: 2 } } })
+    expect(p['purdex-newtab-layout']).toEqual({
+      presets: {
+        '3col': { enabled: true, columns: [[`sessions:${WIRE}`, 'x'], [`headless:${WIRE}`], ['sessions:gone00']] },
+        '2col': { enabled: true, columns: [['sessions:legacy'], []] },
+        '1col': { enabled: false, columns: [['files']] },
+      },
+    })
+    expect(input['purdex-newtab-layout']).toEqual({ presets }) // the store state is never touched
+  })
+
+  it('buildProfileDocument translates hosts, tabs and settings through ONE identity of its hosts', () => {
+    const doc = buildProfileDocument({
+      hosts: hostsSrc(),
+      workspaces: { workspaces: [{ id: 'w1', name: 'W', tabs: ['t1'], activeTabId: 't1' }] },
+      tabs: { tabs: { t1: tab('t1', leaf('p', tmux('one', { hostId: 'bbbbbb' }))) }, tabOrder: ['t1'] },
+      settings: { 'purdex-host-settings': { hosts: { bbbbbb: {} } } },
+    }).document
+    expect(JSON.stringify(doc)).not.toMatch(/"(hostId|id)":"bbbbbb"|"bbbbbb":/)
+    expect(JSON.stringify(doc['tabs.w1'])).toContain(WIRE)
+  })
+
+  it('wireResolverOf: a sync id → its local host; an alias the canonical row carries → that host; anything else unchanged', () => {
+    const resolve = wireResolverOf(hostsSrc())!
+    expect(resolve(WIRE)).toBe('bbbbbb')
+    expect(resolve('aaaaaa')).toBe('bbbbbb')
+    expect(resolve('legacy')).toBe('legacy')
+    expect(resolve('zzzzzz')).toBe('zzzzzz') // a no-claim row never carries aliases
+    expect(resolve(syncIdOfSync('other:daemon'))).toBe(syncIdOfSync('other:daemon'))
   })
 })

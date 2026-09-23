@@ -13,6 +13,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { PROJECTIONS } from './projections'
+import { syncIdOfSync } from './host-identity'
 import { UNSYNCED_SETTINGS_KEYS, startCollector, watchUnsyncedStores, type Collector, type SectionReport } from './collector'
 
 // A `crypto.subtle` digest resolves off the microtask queue and fake timers
@@ -171,7 +172,9 @@ describe('startCollector — debounce', () => {
     useHostStore.getState().observeDaemonId('h1', 'mini:abc123', requestAtOf(useHostStore.getState().hosts.h1))
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['hosts'])
-    expect((reports[0].payload as { hosts: Record<string, { daemonId?: string }> }).hosts.h1.daemonId).toBe('mini:abc123')
+    // …keyed by its wire id from then on (host-sync-identity)
+    const wire = syncIdOfSync('mini:abc123')
+    expect((reports[0].payload as { hosts: Record<string, { daemonId?: string }> }).hosts[wire].daemonId).toBe('mini:abc123')
   })
 
   it('honours debounceMs', async () => {

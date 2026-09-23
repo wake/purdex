@@ -12,6 +12,7 @@ import {
   upcastLegacySettings,
 } from './applier'
 import { hashSection } from './hash'
+import { identityOfSync } from './host-identity'
 import { PROJECTIONS, project } from './projections'
 import {
   buildHostsSection,
@@ -79,8 +80,14 @@ function tabRecord(...tabs: Tab[]): Record<string, Tab> {
 
 const EMPTY_HOSTS: HostsSlice = { hosts: {}, hostOrder: [], activeHostId: null, devHostId: null }
 
+
+/** `applyHosts` works on LOCAL ids (apply-to-stores translates the wire first): the hosts builder with an identity that maps nothing. */
+function buildLocalHosts(s: Parameters<typeof buildHostsSection>[0]): ReturnType<typeof buildHostsSection> {
+  return buildHostsSection(s, identityOfSync({}))
+}
+
 function hostsPayload(): HostsPayload {
-  return buildHostsSection({
+  return buildLocalHosts({
     hosts: {
       h1: host('h1', { token: 'tok', color: '#112233', icon: 'Laptop', iconWeight: 'bold' }),
       h2: host('h2', { order: 1, token: null, colors: { console: { main: { color: '#112233', alpha: 100 } } } }),
@@ -104,14 +111,14 @@ describe('applyHosts', () => {
     const p = deepFreeze(hostsPayload())
     for (const local of hostsLocals()) {
       const { next } = applyHosts(deepFreeze(local), p)
-      expect(await hashSection(buildHostsSection(next))).toBe(await hashSection(p))
+      expect(await hashSection(buildLocalHosts(next))).toBe(await hashSection(p))
     }
   })
 
   it('round trip from empty over a built world, including the empty world', async () => {
-    for (const world of [hostsPayload(), buildHostsSection({ hosts: {}, hostOrder: [] })]) {
+    for (const world of [hostsPayload(), buildLocalHosts({ hosts: {}, hostOrder: [] })]) {
       const { next } = applyHosts(EMPTY_HOSTS, world)
-      expect(await hashSection(buildHostsSection(next))).toBe(await hashSection(world))
+      expect(await hashSection(buildLocalHosts(next))).toBe(await hashSection(world))
     }
   })
 
@@ -161,28 +168,28 @@ describe('applyHosts', () => {
     // an old client re-points without knowing the field) or a host deleted and
     // recreated under the same id — the local id belongs to another daemon.
     it('a re-pointed host (another ip) arriving without daemonId does NOT keep the local one — an ordinal-2 clear stays cleared', () => {
-      const p = deepFreeze(buildHostsSection({ hosts: { h1: host('h1', { ip: '10.9.9.9' }) }, hostOrder: ['h1'] }))
+      const p = deepFreeze(buildLocalHosts({ hosts: { h1: host('h1', { ip: '10.9.9.9' }) }, hostOrder: ['h1'] }))
       const { next } = applyHosts(deepFreeze(local()), p)
       expect(next.hosts.h1).toEqual(p.hosts.h1)
       expect(Object.hasOwn(next.hosts.h1, 'daemonId')).toBe(false)
     })
 
     it('another port is another endpoint: the local daemonId is NOT kept', () => {
-      const p = deepFreeze(buildHostsSection({ hosts: { h1: host('h1', { port: 7861 }) }, hostOrder: ['h1'] }))
+      const p = deepFreeze(buildLocalHosts({ hosts: { h1: host('h1', { port: 7861 }) }, hostOrder: ['h1'] }))
       const { next } = applyHosts(deepFreeze(local()), p)
       expect(Object.hasOwn(next.hosts.h1, 'daemonId')).toBe(false)
     })
 
     it('a host deleted and recreated under the same id at a different address does not inherit the old incarnation\'s daemonId', () => {
       const recreated = host('h1', { name: 'new one', ip: 'other.example', port: 9000, order: 3 })
-      const p = deepFreeze(buildHostsSection({ hosts: { h1: recreated }, hostOrder: ['h1'] }))
+      const p = deepFreeze(buildLocalHosts({ hosts: { h1: recreated }, hostOrder: ['h1'] }))
       const { next } = applyHosts(deepFreeze(local()), p)
       expect(next.hosts.h1).toEqual(recreated)
-      expect(buildHostsSection(next)).toEqual(p) // nothing to push back: the wrong id never goes out
+      expect(buildLocalHosts(next)).toEqual(p) // nothing to push back: the wrong id never goes out
     })
 
     it('an incoming host WITH daemonId wins over the local one (SOT wins, D2)', () => {
-      const p = deepFreeze(buildHostsSection({ hosts: { h1: host('h1', { daemonId: 'mini:sot' }) }, hostOrder: ['h1'] }))
+      const p = deepFreeze(buildLocalHosts({ hosts: { h1: host('h1', { daemonId: 'mini:sot' }) }, hostOrder: ['h1'] }))
       const { next } = applyHosts(deepFreeze(local()), p)
       expect(next.hosts.h1.daemonId).toBe('mini:sot')
     })
@@ -190,11 +197,11 @@ describe('applyHosts', () => {
     it('the upcast state builds the ordinal-2 payload (the one upgrade push), which then round-trips as is', async () => {
       const p = deepFreeze(hostsPayload())
       const { next } = applyHosts(deepFreeze(local()), p)
-      const upgraded = buildHostsSection(next)
+      const upgraded = buildLocalHosts(next)
       expect(upgraded.hosts.h1.daemonId).toBe('mini:local')
       expect(await hashSection(upgraded)).not.toBe(await hashSection(p))
       const again = applyHosts(next, deepFreeze(upgraded)).next
-      expect(await hashSection(buildHostsSection(again))).toBe(await hashSection(upgraded))
+      expect(await hashSection(buildLocalHosts(again))).toBe(await hashSection(upgraded))
     })
 
     it('keeps no local daemonId for a host whose id is not in the payload, and copies nothing else of the local host', () => {
