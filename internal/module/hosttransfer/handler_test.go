@@ -28,8 +28,36 @@ func newHarnessWith(t *testing.T, gen func() (string, error)) *harness {
 	clk := newFakeClock()
 	s := newStore(clk.now, gen)
 	mux := http.NewServeMux()
-	(&Module{store: s}).RegisterRoutes(mux)
+	(&Module{store: s, tokenFn: func() string { return "admin-token" }}).RegisterRoutes(mux)
 	return &harness{t: t, store: s, clk: clk, mux: mux}
+}
+
+// Attacker finding: with no admin token configured the outer TokenAuth is
+// open, so the module fails closed on its own — 403 no_token, before the
+// body is read, and neither a store write nor a counted failure.
+func TestEmptyTokenRefusesBothEndpoints(t *testing.T) {
+	for name, tokenFn := range map[string]func() string{
+		"empty token":   func() string { return "" },
+		"no token func": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			clk := newFakeClock()
+			s := newStore(clk.now, seqGen())
+			mux := http.NewServeMux()
+			(&Module{store: s, tokenFn: tokenFn}).RegisterRoutes(mux)
+			h := &harness{t: t, store: s, clk: clk, mux: mux}
+
+			assertReason(t, h.create(oneHost), http.StatusForbidden, "no_token")
+			for i := 0; i < failLimit+2; i++ {
+				assertReason(t, h.redeem(wrongCode), http.StatusForbidden, "no_token")
+			}
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			assert.Empty(t, s.entries, "create wrote nothing")
+			assert.Zero(t, s.failures, "a refused redeem is not a failure")
+			assert.True(t, s.windowStart.IsZero())
+		})
+	}
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessWith(t, seqGen()) }

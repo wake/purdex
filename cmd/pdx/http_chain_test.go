@@ -659,3 +659,30 @@ func TestOuterChain_HostTransferBehindTokenAuth(t *testing.T) {
 		t.Fatalf("redeem with bearer: want 200 with the rows, got %d %s", res.Code, res.Body.String())
 	}
 }
+
+// TestOuterChain_HostTransferFailsClosedWithoutAdminToken (H4a attacker
+// finding): with no admin token configured TokenAuth lets every request
+// through, so the module itself refuses — 403 no_token, not 200 — rather
+// than park or hand out host credentials unauthenticated.
+func TestOuterChain_HostTransferFailsClosedWithoutAdminToken(t *testing.T) {
+	c := newTestCore(&config.Config{Token: ""})
+	mod := hosttransfermod.New()
+	if err := mod.Init(c); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	outer := newOuterHandler(c, mux, nil)
+
+	for path, body := range map[string]string{
+		"/api/host-transfer":        `{"hosts":[{"ip":"10.0.0.1","token":"t"}]}`,
+		"/api/host-transfer/redeem": `{"code":"ZZZZZZZZ"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"no_token"`) {
+			t.Fatalf("%s without admin token: want 403 no_token, got %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}

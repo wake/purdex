@@ -12,6 +12,10 @@ import (
 // memory, are never logged or written to disk, and Stop drops them.
 type Module struct {
 	store *Store
+	// tokenFn reads the daemon's admin token live. An empty token (or a nil
+	// tokenFn) closes both endpoints: TokenAuth is open without a token, and
+	// host credentials must never be parked or handed out unauthenticated.
+	tokenFn func() string
 }
 
 // New returns a new Module ready for registration.
@@ -20,10 +24,24 @@ func New() *Module { return &Module{} }
 func (m *Module) Name() string           { return "hosttransfer" }
 func (m *Module) Dependencies() []string { return nil }
 
-// Init starts from an empty store.
-func (m *Module) Init(_ *core.Core) error {
+// Init starts from an empty store and reads the admin token the way the
+// outer chain does (cmd/pdx/http_chain.go tokenFn): live, under CfgMu.RLock.
+func (m *Module) Init(c *core.Core) error {
 	m.store = NewStore()
+	m.tokenFn = func() string {
+		c.CfgMu.RLock()
+		defer c.CfgMu.RUnlock()
+		if c.Cfg == nil {
+			return ""
+		}
+		return c.Cfg.Token
+	}
 	return nil
+}
+
+// hasToken reports whether an admin token is configured right now.
+func (m *Module) hasToken() bool {
+	return m.tokenFn != nil && m.tokenFn() != ""
 }
 
 // Start logs a banner — the module's only log line. Expiry needs no

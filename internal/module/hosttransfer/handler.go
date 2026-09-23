@@ -17,7 +17,9 @@ const (
 )
 
 // RegisterRoutes wires the two endpoints of spec §6.2. Both sit behind the
-// general chain's TokenAuth (cmd/pdx/http_chain.go).
+// general chain's TokenAuth (cmd/pdx/http_chain.go), which is open when no
+// admin token is configured — so each handler also fails closed on its own:
+// no token → 403 no_token, before the body, the store or the failure count.
 //
 // Nothing here logs: a body, a code or a payload never reaches the log.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
@@ -60,6 +62,10 @@ func decodeStrict(body []byte, v any) error {
 // handleCreate parks `{"hosts": [...]}` under a new code. The rows are
 // opaque to the daemon: it only checks that each is a JSON object.
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
+	if !m.hasToken() {
+		writeReason(w, http.StatusForbidden, "no_token")
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, createBodyCap))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -107,6 +113,10 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 // that is not a well-formed request answers bad_request and is not counted
 // as a failure: it is not a guess.
 func (m *Module) handleRedeem(w http.ResponseWriter, r *http.Request) {
+	if !m.hasToken() {
+		writeReason(w, http.StatusForbidden, "no_token")
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, redeemBodyCap))
 	if err != nil {
 		writeReason(w, http.StatusBadRequest, "bad_request")

@@ -2,11 +2,15 @@ package hosttransfer
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 )
 
@@ -44,6 +48,44 @@ func TestStopDropsEveryPayload(t *testing.T) {
 	require.NoError(t, m.Init(&core.Core{}))
 	_, _, err = m.store.Redeem(code)
 	assert.ErrorIs(t, err, ErrInvalidCode)
+}
+
+// The token Init hands the handlers is read live from the core config under
+// CfgMu, like the outer chain's tokenFn: clearing it closes the endpoints,
+// setting it opens them, with no re-Init.
+func TestInitReadsTheAdminTokenLive(t *testing.T) {
+	c := core.New(core.CoreDeps{Config: &config.Config{Token: ""}, Registry: core.NewServiceRegistry()})
+	m := New()
+	require.NoError(t, m.Init(c))
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	create := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/host-transfer", strings.NewReader(oneHost)))
+		return rec
+	}
+
+	assertReason(t, create(), http.StatusForbidden, "no_token")
+
+	c.CfgMu.Lock()
+	c.Cfg.Token = "admin-token"
+	c.CfgMu.Unlock()
+	assert.Equal(t, http.StatusOK, create().Code)
+
+	c.CfgMu.Lock()
+	c.Cfg.Token = ""
+	c.CfgMu.Unlock()
+	assertReason(t, create(), http.StatusForbidden, "no_token")
+}
+
+func TestInitWithoutConfigFailsClosed(t *testing.T) {
+	m := New()
+	require.NoError(t, m.Init(&core.Core{}))
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/host-transfer", strings.NewReader(oneHost)))
+	assertReason(t, rec, http.StatusForbidden, "no_token")
 }
 
 func TestStopBeforeInitIsSafe(t *testing.T) {
