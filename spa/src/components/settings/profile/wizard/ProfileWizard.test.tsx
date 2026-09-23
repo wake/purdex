@@ -691,7 +691,7 @@ describe('step 5 — the run', () => {
     expect(calls).toEqual(['promote', 'copy-master', 'attach'])
     expect(promoteToMaster).toHaveBeenCalledWith('s1', 'Laptop 2')
     expect(copyMasterAsSlave).toHaveBeenCalledWith('Laptop')
-    expect(attachMaster).toHaveBeenCalledWith('h1', P1, 'pull')
+    expect(attachMaster).toHaveBeenCalledWith('h1', P1, 'pull', { confirmedHosts: 'absent' }) // the SOT has no `hosts` here
     expect(saveScreenAsSlave).not.toHaveBeenCalled()
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
     expect(screen.queryByTestId('profile-wizard-start')).toBeNull()

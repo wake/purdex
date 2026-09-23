@@ -8,7 +8,8 @@
 //             the world that held it becomes a local profile. Refused while a master is attached
 //             (`master-attached`) — which is why the wizard's FIRST step stops the sync.
 //   copy      only for a pull with "keep a copy" ticked (decision 12).
-//   attach    `attachMaster(host, profile, direction)`.
+//   attach    `attachMaster(host, profile, direction)` — a pull with `{ confirmedHosts }`: the SOT `hosts` row of the
+//             LAST check (`recheckBeforeAttach`'s plan), the one the removals the user confirmed are computed from.
 // A sub-step that fails STOPS the run: nothing after it is attempted, nothing before it is undone (a promote is a
 // fact). `runPlan(plan, failedAt)` is the retry — that sub-step and the ones after it, never the ones before.
 //
@@ -43,7 +44,10 @@
 //                 and the user chooses again (both directions, and the warning). Gone → back to the profile
 //                 step. The list cannot be read → no run either; it is said, and Start may be pressed again.
 //                 A profile this visit created is no exception: it is empty only while the host says so.
-// WHAT IS LEFT. `attachMaster` takes no rev, and there is none to give it: under `push` the executor answers
+// A PULL IS HANDED ITS `hosts` (#1366). The removals shown come from one `hosts` row of the SOT; the executor's
+// first reconciliation applies nothing unless the SOT still holds that row (executor.ts, THE PULL GUARD), so a
+// `hosts` another device writes after the last check cannot remove a host the user was never told of.
+// WHAT IS LEFT. For a push `attachMaster` takes no rev, and there is none to give it: under `push` the executor answers
 // every conflict of the first reconciliation with keep-local — each PUT is a CAS on the rev ITS OWN index read
 // gave, rebased and sent again on a 409 (executor.ts, THE FIRST RECONCILIATION). So a push is an unconditional
 // overwrite for as long as that reconciliation lasts, and nothing this file knows can be handed down to narrow
@@ -87,7 +91,7 @@ import { useDeviceNameStore } from '../../../../stores/useDeviceNameStore'
 import { selectDaemonIdMismatch, selectDaemonIdVerified, useHostStore } from '../../../../stores/useHostStore'
 import { useI18nStore } from '../../../../stores/useI18nStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../../../../stores/useLocalProfilesStore'
-import { endpointOfHost, selectMaster, useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
+import { endpointOfHost, selectMaster, useProfileStore, type ConfirmedHosts, type SyncDirection } from '../../../../stores/useProfileStore'
 import { useTabStore } from '../../../../stores/useTabStore'
 import { useUndoToast } from '../../../../stores/useUndoToast'
 import { defaultSlaveName } from '../profile-rules'
@@ -103,6 +107,9 @@ export interface WizardPlan {
   /** Pull only (`[]` for a push): the local hosts this pull removes — no row of the SOT's `hosts` section matches
    *  them (`matchIncomingHosts`; host-sync-identity spec §6, §11.10). Exactly the list the user was shown. */
   removesHosts: readonly string[]
+  /** Pull only (null for a push): the SOT `hosts` row `removesHosts` was computed from — `'absent'` when the profile
+   *  had no `hosts` section. The attach hands the one of the LAST check to the executor (#1366). */
+  hostsRow: ConfirmedHosts | null
   /** The host's address when the plan was made: every request of the run goes there, and the attach is not made
    *  if the host has been re-pointed since. */
   at: string
@@ -173,7 +180,9 @@ async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true }
     // The promote and the copy took time: ask again what the plan was made against (review, attacker H1).
     const again = await recheckBeforeAttach(plan)
     if (!again.ok) return { ok: false, reason: again.reason, recheck: again }
-    const r = await attachMaster(plan.hostId, plan.profileId, plan.direction)
+    // THIS check's `hosts` row — the one the removals were just computed from — not the plan's (#1366).
+    const confirmed = again.plan.hostsRow
+    const r = plan.direction === 'pull' && confirmed !== null ? await attachMaster(plan.hostId, plan.profileId, plan.direction, { confirmedHosts: confirmed }) : await attachMaster(plan.hostId, plan.profileId, plan.direction)
     if (r.ok) return { ok: true }
     return { ok: false, reason: KNOWN_ATTACH.has(r.reason) ? r.reason : 'other' }
   } catch {
@@ -403,6 +412,7 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
   if (now.fingerprint !== seen) return { ok: false, reason: 'profile-changed', now }
 
   let removesHosts: readonly string[] = []
+  let hostsRow: ConfirmedHosts | null = null
   if (sotHosts !== null) {
     const listed = entry.sections.find((m) => m.section === 'hosts')
     const same = listed === undefined ? sotHosts.rev === null : listed.rev === sotHosts.rev && listed.hash === sotHosts.hash
@@ -411,9 +421,10 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
     if (!removal.ok) return { ok: false, reason: removal.reason }
     if (draft.removesSeen == null || !sameSet(removal.removes, draft.removesSeen)) return { ok: false, reason: 'removes-changed', removes: removal.removes }
     removesHosts = Object.freeze([...removal.removes])
+    hostsRow = sotHosts.rev === null || sotHosts.hash === null ? 'absent' : Object.freeze({ rev: sotHosts.rev, hash: sotHosts.hash })
   }
 
-  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: pulling ? draft.saveAs : null, removesHosts, at, seen }) }
+  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: pulling ? draft.saveAs : null, removesHosts, hostsRow, at, seen }) }
 }
 
 /**
@@ -429,7 +440,7 @@ export function retargetPlan(old: Readonly<WizardPlan>, fresh: Readonly<WizardPl
   const same = subStepsOf(fresh)
   if (old.hostId !== fresh.hostId || old.profileId !== fresh.profileId || steps.length !== same.length || steps.some((id, i) => id !== same[i])) return null
   if (!sameSet(old.removesHosts, fresh.removesHosts)) return null
-  return Object.freeze({ ...old, at: fresh.at, seen: fresh.seen, removesHosts: fresh.removesHosts })
+  return Object.freeze({ ...old, at: fresh.at, seen: fresh.seen, removesHosts: fresh.removesHosts, hostsRow: fresh.hostsRow })
 }
 
 /**
@@ -447,8 +458,8 @@ export function retargetPlan(old: Readonly<WizardPlan>, fresh: Readonly<WizardPl
  *   attach host lost its row      `master-unmatched`
  *   match errors, profile gone, this device's premises — as `prepareRun`.
  * The chosen local profile is not looked for: by now it has been promoted (or was the master all along).
- * NOT CLOSED: the window from this ask to the first reconciliation. `attachMaster` takes no rev, so the executor's
- * first reconciliation cannot be told to accept only the version asked here (executor.ts; out of this PR's scope).
+ * The window from this ask to the first reconciliation is closed for a pull by handing THIS answer's `hostsRow` to
+ * the attach (#1366; `runSubStep`): the executor applies nothing unless the SOT still holds it.
  */
 export async function recheckBeforeAttach(plan: WizardPlan): Promise<PrepareResult> {
   const moved = (): boolean => {
