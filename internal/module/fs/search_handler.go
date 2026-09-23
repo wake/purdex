@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // httpSearchRequest is the wire-format body accepted by POST /api/fs/search.
@@ -76,7 +78,7 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roots, status, err := m.resolveCapabilityRoots(body.Roots)
+	roots, status, err := m.resolveCapabilityRoots(r.Context(), body.Roots)
 	if err != nil {
 		jsonError(w, err.Error(), status)
 		return
@@ -130,7 +132,7 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 // Defers:
 //   - `workspace-projectPath` → 501 (layer-3 follow-up; daemon has no
 //     workspace registry yet).
-func (m *FsModule) resolveCapabilityRoots(roots []httpSearchRoot) ([]SearchRoot, int, error) {
+func (m *FsModule) resolveCapabilityRoots(ctx context.Context, roots []httpSearchRoot) ([]SearchRoot, int, error) {
 	out := make([]SearchRoot, 0, len(roots))
 	for _, r := range roots {
 		switch r.Kind {
@@ -138,7 +140,7 @@ func (m *FsModule) resolveCapabilityRoots(roots []httpSearchRoot) ([]SearchRoot,
 			if r.SessionCode == "" {
 				return nil, http.StatusBadRequest, errors.New("sessionCode required for session-cwd root")
 			}
-			info, err := m.sessions.GetSession(r.SessionCode)
+			info, err := session.GetSessionWithin(ctx, m.sessions, r.SessionCode)
 			if err != nil {
 				return nil, http.StatusBadRequest, errors.New("session lookup failed: " + err.Error())
 			}

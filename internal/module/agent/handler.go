@@ -233,7 +233,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		if code, _ := m.resolveSessionCodeFromHook(req); code != "" {
 			cwdFallback := ""
 			if m.sessions != nil {
-				if info, err := m.sessions.GetSession(code); err == nil && info != nil {
+				if info, err := session.GetSessionWithin(r.Context(), m.sessions, code); err == nil && info != nil {
 					cwdFallback = info.Cwd
 				}
 			}
