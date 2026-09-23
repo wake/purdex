@@ -63,7 +63,9 @@ func TestInitReadsTheAdminTokenLive(t *testing.T) {
 	m.RegisterRoutes(mux)
 	create := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/host-transfer", strings.NewReader(oneHost)))
+		req := httptest.NewRequest(http.MethodPost, "/api/host-transfer", strings.NewReader(oneHost))
+		req.Header.Set("Authorization", "Bearer admin-token")
+		mux.ServeHTTP(rec, req)
 		return rec
 	}
 
@@ -100,7 +102,9 @@ func TestStoppedModuleRefusesBothEndpoints(t *testing.T) {
 	m.RegisterRoutes(mux)
 	post := func(path, body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer admin-token")
+		mux.ServeHTTP(rec, req)
 		return rec
 	}
 	rec := post("/api/host-transfer", oneHost)

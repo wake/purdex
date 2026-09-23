@@ -12,9 +12,11 @@ import (
 // memory, are never logged or written to disk, and Stop drops them.
 type Module struct {
 	store *Store
-	// tokenFn reads the daemon's admin token live. An empty token (or a nil
-	// tokenFn) closes both endpoints: TokenAuth is open without a token, and
-	// host credentials must never be parked or handed out unauthenticated.
+	// tokenFn reads the daemon's admin token live. Each handler reads it
+	// once and authenticates the request against that snapshot (authorize):
+	// an empty token (or a nil tokenFn) closes both endpoints, since
+	// TokenAuth is open without a token and host credentials must never be
+	// parked or handed out unauthenticated.
 	tokenFn func() string
 }
 
@@ -37,11 +39,6 @@ func (m *Module) Init(c *core.Core) error {
 		return c.Cfg.Token
 	}
 	return nil
-}
-
-// hasToken reports whether an admin token is configured right now.
-func (m *Module) hasToken() bool {
-	return m.tokenFn != nil && m.tokenFn() != ""
 }
 
 // Start logs a banner — the module's only log line. Expiry needs no

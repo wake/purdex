@@ -686,3 +686,43 @@ func TestOuterChain_HostTransferFailsClosedWithoutAdminToken(t *testing.T) {
 		}
 	}
 }
+
+// TestOuterChain_HostTransferTokenSetAfterOuterAuth (PR #1394 critic,
+// TOCTOU): the outer TokenAuth reads an empty admin token and lets the
+// request through; the token is set before the module handler reads it. The
+// handler re-authenticates against its own snapshot, so a request with no
+// bearer is 401 — not 200 (credentials parked or handed out) nor 403.
+//
+// The outer chain reads c.Cfg.Token directly, so the window is reproduced by
+// an inner handler that sets the token between the outer check and the
+// module's mux (equivalent to a tokenFn that returns "" then "T").
+func TestOuterChain_HostTransferTokenSetAfterOuterAuth(t *testing.T) {
+	for path, body := range map[string]string{
+		"/api/host-transfer":        `{"hosts":[{"ip":"10.0.0.1","token":"t"}]}`,
+		"/api/host-transfer/redeem": `{"code":"ZZZZZZZZ"}`,
+	} {
+		t.Run(path, func(t *testing.T) {
+			c := newTestCore(&config.Config{Token: ""})
+			mod := hosttransfermod.New()
+			if err := mod.Init(c); err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			mux := http.NewServeMux()
+			mod.RegisterRoutes(mux)
+			setTokenThenServe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c.CfgMu.Lock()
+				c.Cfg.Token = "T"
+				c.CfgMu.Unlock()
+				mux.ServeHTTP(w, r)
+			})
+			outer := newOuterHandler(c, setTokenThenServe, nil)
+
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			outer.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"unauthorized"`) {
+				t.Fatalf("%s with the token set after outer auth: want 401 unauthorized, got %d %s", path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

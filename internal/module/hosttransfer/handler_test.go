@@ -9,11 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/middleware"
 )
 
 type harness struct {
@@ -21,6 +24,8 @@ type harness struct {
 	store *Store
 	clk   *fakeClock
 	mux   *http.ServeMux
+	// auth is the Authorization header every request carries; "" sends none.
+	auth string
 }
 
 func newHarnessWith(t *testing.T, gen func() (string, error)) *harness {
@@ -29,7 +34,7 @@ func newHarnessWith(t *testing.T, gen func() (string, error)) *harness {
 	s := newStore(clk.now, gen)
 	mux := http.NewServeMux()
 	(&Module{store: s, tokenFn: func() string { return "admin-token" }}).RegisterRoutes(mux)
-	return &harness{t: t, store: s, clk: clk, mux: mux}
+	return &harness{t: t, store: s, clk: clk, mux: mux, auth: "Bearer admin-token"}
 }
 
 // Attacker finding: with no admin token configured the outer TokenAuth is
@@ -47,26 +52,105 @@ func TestEmptyTokenRefusesBothEndpoints(t *testing.T) {
 			(&Module{store: s, tokenFn: tokenFn}).RegisterRoutes(mux)
 			h := &harness{t: t, store: s, clk: clk, mux: mux}
 
-			assertReason(t, h.create(oneHost), http.StatusForbidden, "no_token")
-			for i := 0; i < failLimit+2; i++ {
-				assertReason(t, h.redeem(wrongCode), http.StatusForbidden, "no_token")
+			for _, auth := range []string{"", "Bearer ", "Bearer admin-token"} {
+				h.auth = auth
+				assertReason(t, h.create(oneHost), http.StatusForbidden, "no_token")
+				for i := 0; i < failLimit+2; i++ {
+					assertReason(t, h.redeem(wrongCode), http.StatusForbidden, "no_token")
+				}
 			}
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			assert.Empty(t, s.entries, "create wrote nothing")
-			assert.Zero(t, s.failures, "a refused redeem is not a failure")
-			assert.True(t, s.windowStart.IsZero())
+			assertUntouched(t, s)
 		})
 	}
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessWith(t, seqGen()) }
 
+// assertUntouched: no store write, no counted failure, no rate-limit window.
+func assertUntouched(t *testing.T, s *Store) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assert.Empty(t, s.entries, "create wrote nothing")
+	assert.Zero(t, s.failures, "a refused redeem is not a failure")
+	assert.True(t, s.windowStart.IsZero())
+}
+
+// PR #1394 critic: with a token configured, each handler checks the bearer
+// itself — a missing or wrong one is 401 unauthorized before the body, with
+// no store write and no counted failure.
+func TestBearerRequiredOnBothEndpoints(t *testing.T) {
+	for name, auth := range map[string]string{
+		"no header":        "",
+		"wrong token":      "Bearer nope",
+		"token prefix":     "Bearer admin-toke",
+		"token plus extra": "Bearer admin-tokenX",
+		"case differs":     "Bearer ADMIN-TOKEN",
+		"basic scheme":     "Basic admin-token",
+		"bare token":       "admin-token",
+		"empty bearer":     "Bearer ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.auth = auth
+			assertReason(t, h.create(oneHost), http.StatusUnauthorized, "unauthorized")
+			for i := 0; i < failLimit+2; i++ {
+				assertReason(t, h.redeem(wrongCode), http.StatusUnauthorized, "unauthorized")
+			}
+			assertUntouched(t, h.store)
+		})
+	}
+}
+
+// The Bearer prefix is case-insensitive, as in middleware.TokenAuth.
+func TestBearerPrefixIsCaseInsensitive(t *testing.T) {
+	h := newHarness(t)
+	h.auth = "bEaReR admin-token"
+	code := h.mustCreate(oneHost)
+	assert.Equal(t, http.StatusOK, h.redeem(code).Code)
+}
+
+// PR #1394 critic (TOCTOU): TokenAuth reads the token first and lets the
+// request through when it is empty; if the token is set before the handler
+// reads it, a request with no bearer must still be refused — 401, not 200
+// (nor 403: the handler's snapshot has a token).
+func TestTokenSetBetweenOuterAuthAndHandlerStillNeedsBearer(t *testing.T) {
+	for _, path := range []string{"/api/host-transfer", "/api/host-transfer/redeem"} {
+		t.Run(path, func(t *testing.T) {
+			var calls atomic.Int32
+			tokenFn := func() string {
+				if calls.Add(1) == 1 {
+					return ""
+				}
+				return "T"
+			}
+			clk := newFakeClock()
+			s := newStore(clk.now, seqGen())
+			mux := http.NewServeMux()
+			(&Module{store: s, tokenFn: tokenFn}).RegisterRoutes(mux)
+			outer := middleware.TokenAuth(tokenFn, nil)(mux)
+
+			body := oneHost
+			if strings.HasSuffix(path, "/redeem") {
+				body = `{"code":"` + wrongCode + `"}`
+			}
+			rec := httptest.NewRecorder()
+			outer.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+			assertReason(t, rec, http.StatusUnauthorized, "unauthorized")
+			assert.GreaterOrEqual(t, calls.Load(), int32(2), "outer and handler each read the token")
+			assertUntouched(t, s)
+		})
+	}
+}
+
 // post sends body and asserts the one header every response carries
 // (test 13): Cache-Control: no-store.
 func (h *harness) post(path, body string) *httptest.ResponseRecorder {
 	h.t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	if h.auth != "" {
+		req.Header.Set("Authorization", h.auth)
+	}
 	rec := httptest.NewRecorder()
 	h.mux.ServeHTTP(rec, req)
 	assert.Equal(h.t, "no-store", rec.Header().Get("Cache-Control"), "%s %d", path, rec.Code)

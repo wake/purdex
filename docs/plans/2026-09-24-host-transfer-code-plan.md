@@ -136,6 +136,17 @@ Gates: `go test ./internal/module/hosttransfer/... -race`, `go vet ./...`, the r
    it tells the client the relay is going away instead of blaming a typo. Tests: `TestStopIsPermanent`,
    `TestStopRacesCreateAndRedeem` (`-race`: once `Stop` returns the map is empty and stays empty, and every timer
    ever armed is stopped), `TestStoppedModuleRefusesBothEndpoints` (through the mux).
+4. **Handlers re-authenticate on one token snapshot (critic, high — TOCTOU).** Revision 2 only checked that the
+   token was non-empty, trusting `TokenAuth` for the bearer. But `TokenAuth` reads the token separately and passes
+   everything when it reads empty; if the token is set between that read and the handler's, a request with no
+   bearer passed both. Each handler now reads `tokenFn()` once (`Module.authorize`): empty or nil → **403
+   `no_token`**; otherwise `Authorization` must be `Bearer <token>` (prefix case-insensitive, value via
+   `subtle.ConstantTimeCompare`, as in `TokenAuth`) or it is **401 `{"reason":"unauthorized"}`** — before the body,
+   with no store write and no counted failure. `hasToken` is gone. Tests: `TestBearerRequiredOnBothEndpoints`,
+   `TestBearerPrefixIsCaseInsensitive`, `TestTokenSetBetweenOuterAuthAndHandlerStillNeedsBearer` (a tokenFn that
+   returns `""` then `"T"`, shared by `middleware.TokenAuth` and the module), and
+   `TestOuterChain_HostTransferTokenSetAfterOuterAuth` (real `newOuterHandler`; an inner handler sets
+   `Cfg.Token` between the outer check and the module mux → 401, not 200). Existing handler tests send the bearer.
 
 ### Deploy
 

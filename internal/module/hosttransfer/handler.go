@@ -2,11 +2,13 @@ package hosttransfer
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,9 +19,10 @@ const (
 )
 
 // RegisterRoutes wires the two endpoints of spec §6.2. Both sit behind the
-// general chain's TokenAuth (cmd/pdx/http_chain.go), which is open when no
-// admin token is configured — so each handler also fails closed on its own:
-// no token → 403 no_token, before the body, the store or the failure count.
+// general chain's TokenAuth (cmd/pdx/http_chain.go), but each handler also
+// authenticates the request itself (see authorize): no token → 403
+// no_token, a missing or wrong bearer → 401 unauthorized — before the body,
+// the store or the failure count.
 //
 // Nothing here logs: a body, a code or a payload never reaches the log.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
@@ -59,11 +62,48 @@ func decodeStrict(body []byte, v any) error {
 	return nil
 }
 
+// authorize re-authenticates r against one snapshot of the admin token and
+// answers the refusal itself; it reports whether the handler may go on.
+//
+// Why not trust the outer TokenAuth: it lets every request through when the
+// token it reads is empty, and it reads the token separately from this
+// handler. If the token goes from empty to set between the two reads
+// (TOCTOU), a request carrying no bearer would pass TokenAuth and then see a
+// non-empty token here — parking or handing out host credentials
+// unauthenticated (PR #1394 critic). So both checks run here, on the same
+// snapshot: empty (or no tokenFn) → 403 no_token; otherwise the request
+// must carry "Bearer <token>" (prefix case-insensitive, value compared in
+// constant time, as in middleware.TokenAuth) or it is 401 unauthorized.
+// Neither refusal reads the body, touches the store or counts a failure.
+func (m *Module) authorize(w http.ResponseWriter, r *http.Request) bool {
+	var token string
+	if m.tokenFn != nil {
+		token = m.tokenFn()
+	}
+	if token == "" {
+		writeReason(w, http.StatusForbidden, "no_token")
+		return false
+	}
+	if !bearerMatches(r, token) {
+		writeReason(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	return true
+}
+
+// bearerMatches reports whether r carries "Authorization: Bearer <token>".
+func bearerMatches(r *http.Request, token string) bool {
+	auth := r.Header.Get("Authorization")
+	if len(auth) < 7 || !strings.EqualFold(auth[:7], "bearer ") {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(auth[7:]), []byte(token)) == 1
+}
+
 // handleCreate parks `{"hosts": [...]}` under a new code. The rows are
 // opaque to the daemon: it only checks that each is a JSON object.
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
-	if !m.hasToken() {
-		writeReason(w, http.StatusForbidden, "no_token")
+	if !m.authorize(w, r) {
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, createBodyCap))
@@ -113,8 +153,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 // that is not a well-formed request answers bad_request and is not counted
 // as a failure: it is not a guess.
 func (m *Module) handleRedeem(w http.ResponseWriter, r *http.Request) {
-	if !m.hasToken() {
-		writeReason(w, http.StatusForbidden, "no_token")
+	if !m.authorize(w, r) {
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, redeemBodyCap))
