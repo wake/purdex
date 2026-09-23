@@ -14,6 +14,11 @@ var (
 		return m.projectionForSession(sessionName)
 	}
 	projectPaneFn = func(m *Module, paneID string) (*SessionProjection, error) { return m.projectPane(paneID) }
+	// claimDeleteFn is the claim itself, a seam so a test can make a caller
+	// lose it without staging the race.
+	claimDeleteFn = func(m *Module, frameID, sessionID string) (bool, error) {
+		return m.frames.ClaimDelete(frameID, sessionID)
+	}
 )
 
 // logAfterClaim records a failure that happened after an exit was claimed. The
@@ -41,7 +46,7 @@ func logAfterClaim(where string, frameID string, err error) {
 // exit is built by the caller from its pre-delete snapshot (nil for a child
 // frame) and is returned only on a successful claim.
 func (m *Module) claimFrameEnd(frame store.Frame, requireSessionID string, exit *Exit) (*Exit, bool, error) {
-	claimed, err := m.frames.ClaimDelete(frame.FrameID, requireSessionID)
+	claimed, err := claimDeleteFn(m, frame.FrameID, requireSessionID)
 	if err != nil || !claimed {
 		return nil, false, err
 	}

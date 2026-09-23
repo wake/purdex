@@ -492,3 +492,62 @@ func TestExit_OtherEventProjectionFails_StillAborts(t *testing.T) {
 		})
 	}
 }
+
+// #1381 critic C2: the proxy detach runs only AFTER a successful claim. A
+// SessionEnd that loses its claim (the sweep, or a newer run, got the frame)
+// must leave every proxy ref alone — the ref may be the newer run's.
+func TestExit_LostClaim_LeavesProxyRefsUntouched(t *testing.T) {
+	m := newProvenanceTestModule(t, exitTestInstance)
+	ref := agentpkg.SubagentRef{
+		ID: "proxy:codex:200:t200", Type: "codex", StartedAt: 50,
+		SourcePID: 200, SourceStartTime: "t200", IsProxy: true,
+	}
+	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 10, []agentpkg.SubagentRef{ref})
+	seedRootWithIdentity(t, m, "%5", "codex", 200, "t200", "S1") // the partial state: own frame + a ref on the parent
+	orig := claimDeleteFn
+	claimDeleteFn = func(*Module, string, string) (bool, error) { return false, nil } // someone else won
+	t.Cleanup(func() { claimDeleteFn = orig })
+
+	req := EventRequest{
+		TmuxPaneID: "%5", AgentType: "codex", SenderPID: 200,
+		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+		RawEvent: []byte(`{"session_id":"S1"}`),
+	}
+	if e, ok := exitOf(t, m.buildNormalizedForTest(t, req)); ok {
+		t.Fatalf("a lost claim sent %+v", e)
+	}
+	got, err := m.frames.GetByIdentity("%5", 100, "t100")
+	if err != nil || got == nil {
+		t.Fatalf("parent: %v", err)
+	}
+	if len(got.Subagents) != 1 || got.Subagents[0].ID != ref.ID {
+		t.Fatalf("parent %s Subagents = %+v, want the proxy ref untouched", parent.FrameID, got.Subagents)
+	}
+}
+
+// The degraded 200 belongs to a CLAIMED SessionEnd only: one that claimed
+// nothing (no exact identity match) still answers a failed read with 500, so
+// the hook retries.
+func TestExit_UnclaimedSessionEndReadFails_StillAborts(t *testing.T) {
+	m := newTestModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	m.tmux = fakeTmux
+	m.sessions = fakeProviderWithInstance(exitTestInstance)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+	m.registry.Register(&fakeAgentProvider{typeName: "cc", derive: deriveWithSessionDetail})
+	seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S-new")
+	orig := projectionForSessionFn
+	projectionForSessionFn = func(*Module, string) (*SessionProjection, error) { return nil, errors.New("boom") }
+	t.Cleanup(func() { projectionForSessionFn = orig })
+
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"S-old"},"agent_type":"cc"}`
+	w := httptest.NewRecorder()
+	m.handleEvent(w, httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body)))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 1 {
+		t.Fatalf("frames = %+v, want the frame kept", frames)
+	}
+}

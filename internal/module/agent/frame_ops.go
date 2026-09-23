@@ -202,18 +202,12 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	switch lifecycle {
 	case agentpkg.LifecycleSessionEnd:
 		if frame != nil {
-			// Phase 3.5 §2.3 (v8 L1 fix, codex round PR-2 attack):
-			// detach-first ordering. The previous delete-first +
-			// best-effort detach left a permanent orphan whenever
-			// removeProxyRefForSender failed (storage error, retry
-			// exhaustion, daemon crash mid-handler) — the child row
-			// was gone so projection_dedup could no longer hide the
-			// ancestor's stale proxy ref, and PR-3.5a ships without
-			// pruneDeadProxyRefs. By detaching first and propagating
-			// the error before Delete, a hook handler failure leaves
-			// the DB in a recoverable state (child row + parent ref
-			// both still present; sweep canonicalize / next
-			// SessionEnd retry can fix it).
+			// Order: identity match → claim → proxy detach (#1381). Phase
+			// 3.5 §2.3 used to detach FIRST so a failed detach left the
+			// child row for a retry, because PR-3.5a had no
+			// pruneDeadProxyRefs. The sweep now has it, and a detach
+			// before the claim would let a SessionEnd that loses the claim
+			// strip a ref belonging to the run that won (critic C2).
 			//
 			// The exit envelope is taken from the frame BEFORE anything is
 			// deleted: after the delete there is no row left to read the
@@ -250,9 +244,6 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			if exit != nil {
 				exit.SessionID = payloadSID
 			}
-			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
-				return nil, FrameTraceMeta{}, derr
-			}
 			exit, claimed, cerr := m.claimFrameEnd(*frame, payloadSID, exit)
 			if cerr != nil {
 				return nil, FrameTraceMeta{}, cerr
@@ -269,6 +260,17 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 					Before:        before,
 					After:         map[string]any{},
 				}, err
+			}
+			// Detach only AFTER the claim (#1381 critic C2): a SessionEnd
+			// that lost its claim must not touch proxy refs that may belong
+			// to the run that won. This reverses the old detach-first order;
+			// its orphan concern is covered by the sweep — a detach that
+			// fails here leaves a ref whose source process is exiting, and
+			// pruneDeadProxyRefs reaps it once that process is gone. The
+			// failure is logged, not returned: the claim is done, and a
+			// retry would find no frame and lose the exit (attacker #4).
+			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
+				logAfterClaim("removeProxyRefForSender", frame.FrameID, derr)
 			}
 			projection, err := projectPaneFn(m, req.TmuxPaneID)
 			if err != nil {
