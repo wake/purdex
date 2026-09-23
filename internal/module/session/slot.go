@@ -13,14 +13,17 @@ type slot chan struct{}
 func newSlot() slot { return make(slot, 1) }
 
 // acquire takes the slot, or returns ctx.Err() once ctx ends while waiting.
-// A context that has already ended never takes the slot, even a free one, so
-// the outcome does not depend on select's random choice.
+// A caller whose context has ended never comes back holding the slot: when
+// the slot frees as ctx ends (or ctx has already ended and the slot is free),
+// both select cases are ready and select may pick the send, so a successful
+// send is followed by a ctx check that hands the slot straight back.
 func (s slot) acquire(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	select {
 	case s <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			s.release()
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
