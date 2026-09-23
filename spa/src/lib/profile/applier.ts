@@ -16,6 +16,7 @@
 // No fetching, no clocks, no stores, no id generation. Nothing is mutated;
 // results may share structure with `local` and `incoming`.
 import type { HostConfig } from '../../stores/useHostStore'
+import { isValidDaemonId } from '../daemon-id'
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
 import { PROJECTIONS, workspaceIdOf } from './projections'
@@ -438,7 +439,6 @@ function isOptional(value: unknown, test: (v: unknown) => boolean): boolean {
 }
 
 const isString = (v: unknown): boolean => typeof v === 'string'
-const isNonEmptyString = (v: unknown): boolean => typeof v === 'string' && v !== ''
 const isFiniteNumber = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
 
 /** `order` is a duplicate-free string array and exactly the key set of `record`. */
@@ -541,8 +541,8 @@ function isHostsPayload(p: Rec): boolean {
       isOptional(h.colors, isPlainObject) &&
       isOptional(h.icon, isString) &&
       isOptional(h.iconWeight, isString) &&
-      // hosts ordinal 2 (host-daemon-id D6); absent in an ordinal-1 payload. Never "" (D1).
-      isOptional(h.daemonId, isNonEmptyString)
+      // hosts ordinal 2 (host-daemon-id D6); absent in an ordinal-1 payload. The shared validator: never "", never hostile text.
+      isOptional(h.daemonId, isValidDaemonId)
     )
   })
 }
