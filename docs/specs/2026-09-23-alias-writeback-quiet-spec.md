@@ -1,7 +1,8 @@
 # Alias write-back without a problem — spec + plan (#1369)
 
 Status: rev 2 (codex plan review task-mudtuczk-t7jt07: #1 strict alias rule, #2 apply returns its payload, #3 the
-`hostOrder` counter-case) · 2026-09-23 · branch `worktree-alias-writeback-quiet` · base `4cecb6d3` (PR #1370 merged)
+`hostOrder` counter-case) · R1 (PR #1376: the payload goes back only if a rebuild after the hash still equals it,
+§2.3) · 2026-09-23 · branch `worktree-alias-writeback-quiet` · base `4cecb6d3` (PR #1370 merged)
 
 ## 1. Problem
 
@@ -68,6 +69,18 @@ excludes a key while `awaitsCollector`). The branch itself stays as a fallback f
 — harmless (the push already went, or goes once: `send` takes one in-flight token).
 
 `pruneMemoryStash` keeps the entry: the section's `currentHash` is `outcome.hash` after `pull-applied`.
+
+**R1 (PR #1376): a payload the stores moved away from is not handed back.** The apply builds the payload, then
+awaits `hashSection` — and a user edit of the same section can land in that await. The payload is then a stale
+snapshot: pushed, it would overwrite the SOT with the old content until the collector's report of the edit pushes
+again (the collector path never pushed a stale snapshot). So `rebuilt` (apply-to-stores.ts) takes the build as a
+function and, after the hash, builds once more synchronously; the payload goes back only if that rebuild has the
+same `structuralKey` as the one hashed. Otherwise the outcome is `{ ok: true, hash }` — the hash still the one of
+what the apply rebuilt, so `localHash` keeps its meaning — and the executor falls back to `awaitsCollector`, where
+the collector reports the edit. All four branches build that way (`hosts`, `settings`, `workspaces`, `tabs.<id>`;
+an unsettled master world or a vanished workspace in the rebuild counts as moved). `aliasesOnly` is still decided
+on the payload that was hashed. The executor needs no check of its own: from the apply's return to the stash only
+microtasks run, and a user event is a macrotask.
 
 ## 3. Not in scope
 

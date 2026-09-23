@@ -43,6 +43,23 @@ import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } fr
 import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
 import { identityOfSync, syncIdOfSync } from './host-identity'
 
+// Passthrough: the real hash everywhere; a test that needs a store edit to land DURING the apply's hash (#1369 R1)
+// sets `duringTheHash` for one call.
+let duringTheHash: (() => void) | null = null
+vi.mock('./hash', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./hash')>()
+  return {
+    ...real,
+    hashSection: async (payload: unknown): Promise<string> => {
+      const edit = duringTheHash
+      duringTheHash = null
+      const hash = real.hashSection(payload)
+      edit?.()
+      return hash
+    },
+  }
+})
+
 // === fixtures ===
 
 /** Every test in this file that asks has the master world settled. */
@@ -1482,6 +1499,63 @@ describe('applySectionToStores — an ok outcome hands back the payload it hashe
     const outcome = await applySectionToStores('tabs.nowhere', buildTabsSection(ws('nowhere', ['z1']), { z1: tab('z1') }), ctx)
     expect(outcome).toEqual({ ok: true, hash: null })
     expect(outcome).not.toHaveProperty('payload')
+  })
+
+  // #1369 R1: the hash is awaited, and a user edit can land in that await. The payload built before it is then a
+  // stale snapshot — handed back, the executor would push it over the SOT. So: no payload; the executor waits for
+  // the collector, which reports the edit. The hash stays the one of what the apply rebuilt.
+  describe('the stores moved while the hash was being taken → no payload (#1369 R1)', () => {
+    afterEach(() => {
+      duringTheHash = null
+    })
+
+    async function expectStale(outcome: unknown, before: unknown, now: unknown): Promise<void> {
+      expect(now).not.toEqual(before) // the edit did land
+      expect(outcome).toMatchObject({ ok: true, hash: await hashSection(before) })
+      expect(outcome).not.toHaveProperty('payload')
+    }
+
+    it('hosts', async () => {
+      let before: unknown
+      duringTheHash = () => {
+        before = buildHostsSection(useHostStore.getState())
+        const s = useHostStore.getState()
+        useHostStore.setState({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], name: 'edited meanwhile' } } })
+      }
+      const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' }), host(H2)]), ctx)
+      await expectStale(outcome, before, buildHostsSection(useHostStore.getState()))
+    })
+
+    it('workspaces', async () => {
+      seedTabWorld()
+      let before: unknown
+      duringTheHash = () => {
+        before = buildWorkspacesSection(useWorkspaceStore.getState().workspaces)
+        useWorkspaceStore.setState({ workspaces: useWorkspaceStore.getState().workspaces.map((w) => (w.id === 'wa' ? { ...w, name: 'Edited' } : w)) })
+      }
+      const outcome = await applySectionToStores('workspaces', { order: ['wb', 'wa'], workspaces: { wa: { name: 'Alpha' }, wb: { name: 'WB' } } }, ctx)
+      await expectStale(outcome, before, buildWorkspacesSection(useWorkspaceStore.getState().workspaces))
+    })
+
+    it('settings', async () => {
+      const payload = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
+      payload['purdex-layout'] = { ...payload['purdex-layout'], tabPosition: 'bottom' }
+      let before: unknown
+      duringTheHash = () => {
+        before = buildSettingsSection(readSettingsSources(), masterWorkspaceIds())
+        useLayoutStore.setState({ tabPosition: 'top' })
+      }
+      const outcome = await applySectionToStores('settings', payload, ctx)
+      await expectStale(outcome, before, buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))
+    })
+
+    it('an edit that changes nothing the section holds keeps the payload', async () => {
+      duringTheHash = () => {
+        useHostStore.setState({ runtime: {} }) // not part of the section
+      }
+      const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' }), host(H2)]), ctx)
+      await expectOwnPayload(outcome, buildHostsSection(useHostStore.getState()))
+    })
   })
 })
 

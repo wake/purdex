@@ -1302,6 +1302,22 @@ describe('executor — pull', () => {
       expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
       expect(ex.status().profile).toBe('synced')
     })
+
+    it('(d) R1: an outcome without a payload (the stores moved under the hash) pushes nothing stale — the collector’s report of the edit is what goes out', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' })
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', aliasesOnly: true })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(problems).toEqual([])
+      expect(api.putSection).not.toHaveBeenCalled() // nothing to push but a stale snapshot: it waits
+      ex.onSection({ key: 'hosts', hash: 'H2-user', payload: { v: 'user' } })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-user', payload: { v: 'user' } })
+      expect(ex.status().profile).toBe('synced')
+    })
   })
 })
 
