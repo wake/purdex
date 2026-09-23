@@ -148,6 +148,7 @@ import { pendingDetachKey, selectMaster, useProfileStore } from '../../stores/us
 import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { STORAGE_KEYS } from '../storage/keys'
 import { useUndoToast } from '../../stores/useUndoToast'
+import { readPullUnconfirmed, writePullUnconfirmed } from './pull-unconfirmed'
 import en from '../../locales/en.json'
 import { deleteAttachment, listProfiles, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
@@ -205,7 +206,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [], pullUnconfirmed: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceNameStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -1733,12 +1734,12 @@ describe('the pull guard (#1366): the confirmed `hosts` row goes with the direct
     await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
     await flush()
     const seen: Array<[boolean, boolean]> = []
-    const unsubscribe = useProfileStore.subscribe((st) => seen.push([st.pullUnconfirmed !== null, st.masterHostId !== null]))
+    const unsubscribe = useProfileStore.subscribe((st) => seen.push([readPullUnconfirmed() !== null, st.masterHostId !== null]))
     h.executors[0].deps.onPullUnconfirmed()
     await flush()
     unsubscribe()
-    expect(seen[0]).toEqual([true, true]) // the notice, while the master was still set
-    expect(useProfileStore.getState().pullUnconfirmed).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(seen[0]).toEqual([true, false]) // the notice was there by the first write of the control plane — the detach's
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: 'h1', profileId: P1 })
     expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null })
     expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
     expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
@@ -1758,7 +1759,7 @@ describe('the pull guard (#1366): the confirmed `hosts` row goes with the direct
     await flush()
     await flush()
     expect(useProfileStore.getState().masterHostId).toBeNull()
-    expect(useProfileStore.getState().pullUnconfirmed).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: 'h1', profileId: P1 })
     expect(useProfileStore.getState().pendingDetaches).toMatchObject([{ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'network' }])
   })
 
@@ -1775,7 +1776,7 @@ describe('the pull guard (#1366): the confirmed `hosts` row goes with the direct
     await flush()
     h.executors[0].deps.onPullUnconfirmed()
     await flush()
-    expect(useProfileStore.getState().pullUnconfirmed).not.toBeNull()
+    expect(readPullUnconfirmed()).not.toBeNull()
     expect(useProfileStore.getState().masterHostId).toBe('h1') // still waiting its turn (the executor has halted by itself)
     release(okDetach)
     await retrying
@@ -1811,8 +1812,42 @@ describe('the pull guard (#1366): the confirmed `hosts` row goes with the direct
     await flush()
     deps.onPullUnconfirmed()
     await flush()
-    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
+    expect(readPullUnconfirmed()).toBeNull()
     expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: 'h2', profileId: P2 })
+  })
+
+  it('two windows (codex R2 #1): B attaches anew while A\'s guarded GET is out; A\'s late mismatch writes the notice and NOTHING of the control plane', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    // Window B's attach, as it lands in the shared storage — A has not heard of it (no broadcast, no rehydrate).
+    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { version: number; state: Record<string, unknown> }
+    const generationA = envelope.state.attachGeneration as number
+    const bState = { ...envelope.state, masterHostId: 'h2', masterProfileId: P2, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: { rev: 9, hash: 'b'.repeat(64) }, attachGeneration: generationA + 1, suspension: null }
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: bState }))
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', attachGeneration: generationA }) // A's memory: stale
+
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    await flush()
+
+    const after = (JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { state: Record<string, unknown> }).state
+    expect({ masterHostId: after.masterHostId, masterProfileId: after.masterProfileId, attachGeneration: after.attachGeneration, pendingDirection: after.pendingDirection, pendingPullHosts: after.pendingPullHosts }).toEqual({
+      masterHostId: 'h2', masterProfileId: P2, attachGeneration: generationA + 1, pendingDirection: 'pull', pendingPullHosts: { rev: 9, hash: 'b'.repeat(64) },
+    })
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(deleteAttachment).not.toHaveBeenCalled() // B's attach is the user's: not stopped
+  })
+
+  it('an attach that succeeds clears the notice (the user set sync up again); one that fails leaves it', async () => {
+    writePullUnconfirmed({ hostId: 'h1', profileId: P1, at: 1 })
+    vi.mocked(putAttachment).mockResolvedValueOnce(failed('network'))
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toMatchObject({ ok: false })
+    expect(readPullUnconfirmed()).not.toBeNull()
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toEqual({ ok: true })
+    expect(readPullUnconfirmed()).toBeNull()
+    expect(localStorage.getItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED)).toBeNull()
   })
 })
 

@@ -1,6 +1,6 @@
 # A wizard pull applies only the `hosts` the user confirmed (#1366) — spec + plan
 
-Status: draft rev 3 (2026-09-23, codex plan review folded in; rev 3: the barrier holds until `hosts` is applied) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
+Status: draft rev 4 (2026-09-23, codex plan review folded in; rev 3: the barrier holds until `hosts` is applied; rev 4: codex PR R2 — the notice under its own key) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
 Follows #1362 (wizard: pull needs a verified host, lists the hosts it removes, re-checks before attach) and
 #1365 (host sync identity wire). Files: `executor.ts`, `start.ts`, `useProfileStore.ts`, `wizard-run.ts`, the
 Profile settings UI, locales.
@@ -64,14 +64,23 @@ No guard (null) or direction `push` → no barrier, today's behaviour. The guard
 reconciliation period has ended (an executor born without a direction never has one).
 
 ### 2.4 The start layer
-`onPullUnconfirmed` → the start layer records the device-local notice
-`useProfileStore.pullUnconfirmed = { hostId, profileId, at }` FIRST (so it survives whatever follows), then stops
-sync exactly like the user's Stop sync (`detachMaster`: master cleared, executor disposed, daemon DELETE of the
+`onPullUnconfirmed` → the start layer records the device-local notice `{ hostId, profileId, at }` FIRST (so it
+survives whatever follows), then stops sync exactly like the user's Stop sync (`detachMaster`: master cleared, executor disposed, daemon DELETE of the
 attachment). The DELETE is best effort as today: if it fails, the local detach still stands and the ghost
 attachment is recorded in `pendingDetaches` (existing mechanism, codex #5); the notice is kept either way.
 Nothing of this machine's world was replaced and nothing was pushed — the barrier held every action — so
 stopping is safe; the wizard's promote / save happened BEFORE the attach and are the user's own choices (a saved
 copy stays a local profile).
+
+**Where the notice lives (rev 4, codex PR R2 #1)**: under its OWN localStorage key
+(`STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED`, `lib/profile/pull-unconfirmed.ts`) — NOT in `useProfileStore`. The window
+that halts may hold a stale memory of the control plane (another window attached anew — new master, higher
+`attachGeneration` — and this one has not rehydrated yet); a persisted zustand store writes its whole state on any
+`set`, so a notice written through it would put the old master / generation / direction / guard back over that
+attach. The key is device-local, not in the SOT, not registered with syncManager; every read / write is
+try/catch'd. Cleared by Dismiss and by an attach that succeeds (`attachHeld`, right after `setMaster`).
+Likewise the queued detach compares storage's `attachGeneration` with the generation the halted executor was BUILT
+for (not one read at the halt, which may already be the other window's): a newer attach is left alone.
 
 ### 2.2a Pairing (codex #6)
 `pendingPullHosts` and `pendingDirection` are one pair of the same attach generation: set together by `setMaster`,
@@ -80,10 +89,12 @@ without direction `pull` → null). Tests: storage rehydrate; a leader handoff w
 first reconciliation with the guard; the other window calling `onInitialSettled` clears both at once.
 
 ### 2.5 UI
-Settings › Profile Current block: when `pullUnconfirmed` is set, one sentence — "The hosts on the sync host
+Settings › Profile Current block: when the notice is set, one sentence — "The hosts on the sync host
 changed after you confirmed the pull, so nothing was pulled and sync was stopped. Set it up again to see what the
 pull would remove now." (+ zh-TW) with a Dismiss and the existing "Set up sync" entry; it coexists with the
-existing pending-detach notice. A toast at the moment it happens.
+existing pending-detach notice. A toast at the moment it happens. The block reads the key through
+`useSyncExternalStore`: this window's writes via the module's listeners, another window's via the native `storage`
+event (listener attached only while the block is mounted).
 
 ### 2.6 Considered, not done (codex #8, #9)
 - A conditional GET (`If-Match` / `baseRev`) on the daemon would make the check atomic and remove the index-vs-404
@@ -98,7 +109,8 @@ existing pending-detach notice. A toast at the moment it happens.
 - #1367 (daemon-side attachment fencing).
 
 ## 4. Tasks (TDD, one commit each)
-- T1 store: `pendingPullHosts` (+ rehydrate guard) and `pullUnconfirmed`; `setMaster` signature; tests.
+- T1 store: `pendingPullHosts` (+ rehydrate guard); `setMaster` signature; tests. (rev 4: the notice moved out of
+  the store to its own key — §2.4.)
 - T2 executor: dep, the barrier, `checkConfirmedHosts`, halted state, problem + callback once. Tests: match by hash
   (rev higher) → released, proceeds; mismatch → NO `applySectionToStores`, NO `putSection`, NO `deleteSection`,
   NO restore for ANY section (including a section restored from the section store in `restoreLocal`, and sections

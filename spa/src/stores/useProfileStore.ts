@@ -116,10 +116,10 @@
 // window that holds the lease). A guard without the direction `pull` means nothing and is sanitised away. The
 // executor holds every action until it has compared the SOT with it (executor.ts, THE PULL GUARD).
 //
-// WHY `pullUnconfirmed` = { hostId, profileId, at } (#1366). When the SOT's `hosts` is no longer the one the user
-// confirmed, nothing is pulled and sync is stopped (start.ts). The user has to hear why — after the detach, after a
-// reload, in any window — so it is written down here, BEFORE the detach, like `pendingDetaches`: not part of the
-// master, it survives `clearMaster`. Gone when dismissed, or when the user attaches again (they set sync up anew).
+// WHY THE NOTICE OF A STOPPED PULL IS NOT HERE (#1366, codex R2 #1). It is written by the window whose executor
+// halted, whose memory of THIS store may be stale (another window attached anew a moment ago); a persisted store
+// writes its whole state on any `set`, and would put that stale master / generation / direction / guard back over
+// the other window's attach. So it lives under its own key: lib/profile/pull-unconfirmed.ts.
 //
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
 // non-null, and non-null only together with `masterEndpoint`; `pendingDirection` and `suspension` are null whenever there is no master, `pendingPullHosts` whenever `pendingDirection` is not `pull`. `setMaster`
@@ -136,13 +136,6 @@ export type SyncDirection = 'push' | 'pull'
 
 /** The SOT `hosts` row the user confirmed a pull against; `'absent'` = the profile had no `hosts` section. */
 export type ConfirmedHosts = { rev: number; hash: string } | 'absent'
-
-/** A pull was stopped because the SOT's `hosts` moved after the user confirmed it (see the header). */
-export interface PullUnconfirmed {
-  hostId: string
-  profileId: string
-  at: number
-}
 
 export interface Suspension {
   token: string
@@ -176,8 +169,6 @@ interface ProfileControl {
   autoSync: boolean
   /** Independent of the master: see the header. Oldest first; at most one per `pendingDetachKey`. */
   pendingDetaches: PendingDetach[]
-  /** Independent of the master: see the header. */
-  pullUnconfirmed: PullUnconfirmed | null
 }
 
 export interface ProfileState extends ProfileControl {
@@ -203,9 +194,6 @@ export interface ProfileState extends ProfileControl {
   addPendingDetach: (left: PendingDetach & { endpoint: string }) => boolean
   /** Only the record of that `pendingDetachKey`: a late answer about one must not clear another. */
   clearPendingDetach: (key: string) => void
-  /** Malformed → nothing changes, `false`. */
-  setPullUnconfirmed: (notice: PullUnconfirmed) => boolean
-  clearPullUnconfirmed: () => void
 }
 
 /** What `setMaster` accepts. Exported for `lib/profile/start.ts`, which must know
@@ -243,12 +231,6 @@ export function sanitiseConfirmedHosts(v: unknown): ConfirmedHosts | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
   const { rev, hash } = v as Record<string, unknown>
   return Number.isSafeInteger(rev) && (rev as number) >= 0 && typeof hash === 'string' && hash !== '' ? { rev: rev as number, hash } : null
-}
-
-function sanitisePullUnconfirmed(v: unknown): PullUnconfirmed | null {
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
-  const { hostId, profileId, at } = v as Record<string, unknown>
-  return isMasterPair(hostId, profileId) && typeof at === 'number' && Number.isFinite(at) ? { hostId: hostId as string, profileId: profileId as string, at } : null
 }
 
 export const PENDING_DETACH_DETAIL_MAX = 120
@@ -318,7 +300,6 @@ function sanitiseControl(persisted: unknown): ProfileControl {
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
     pendingDetaches: sanitisePendingDetaches(p.pendingDetaches, p.pendingDetach),
-    pullUnconfirmed: sanitisePullUnconfirmed(p.pullUnconfirmed),
   }
 }
 
@@ -334,11 +315,10 @@ export const useProfileStore = create<ProfileState>()(
       attachGeneration: 0,
       autoSync: true,
       pendingDetaches: [],
-      pullUnconfirmed: null,
       setMaster: (hostId, profileId, direction, endpoint, token, confirmedHosts) => {
         if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction) || !isEndpoint(endpoint)) return false
         const pendingPullHosts = direction === 'pull' ? sanitiseConfirmedHosts(confirmedHosts) : null
-        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, pendingPullHosts, pullUnconfirmed: null, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, pendingDetaches: withoutKey(s.pendingDetaches, pendingDetachKey({ hostId, profileId, endpoint })) }))
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, pendingPullHosts, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, pendingDetaches: withoutKey(s.pendingDetaches, pendingDetachKey({ hostId, profileId, endpoint })) }))
         return true
       },
       suspend: (token, until) => set((s) => (selectMaster(s) === null || !isSuspension(token, until) ? s : { suspension: { token, until } })),
@@ -359,13 +339,6 @@ export const useProfileStore = create<ProfileState>()(
           const pendingDetaches = withoutKey(s.pendingDetaches, key)
           return pendingDetaches === s.pendingDetaches ? s : { pendingDetaches }
         }),
-      setPullUnconfirmed: (notice) => {
-        const clean = sanitisePullUnconfirmed(notice)
-        if (clean === null) return false
-        set({ pullUnconfirmed: clean })
-        return true
-      },
-      clearPullUnconfirmed: () => set((s) => (s.pullUnconfirmed === null ? s : { pullUnconfirmed: null })),
     }),
     {
       name: STORAGE_KEYS.PROFILE,
@@ -381,9 +354,8 @@ export const useProfileStore = create<ProfileState>()(
         attachGeneration: state.attachGeneration,
         autoSync: state.autoSync,
         pendingDetaches: state.pendingDetaches,
-        pullUnconfirmed: state.pullUnconfirmed,
       }),
-      // Only the ten sanitised fields ever come out of storage: persisted
+      // Only the nine sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },

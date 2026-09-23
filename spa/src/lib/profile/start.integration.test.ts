@@ -13,6 +13,7 @@ import { useProfileStore } from '../../stores/useProfileStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { readPullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore, loadSectionStore } from './section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, startProfileSync } from './start'
 import { FakeDaemon } from './test-fake-daemon'
@@ -83,7 +84,7 @@ beforeEach(() => {
   api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
   api.putAttachment.mockResolvedValue({ kind: 'ok', value: { attached: true } })
   api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [], pullUnconfirmed: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
@@ -177,7 +178,7 @@ describe('THE PULL GUARD end to end (#1366): the `hosts` the user confirmed is n
     expect(daemon.writes.slice(writes)).toEqual([])
     expect(api.getSection.mock.calls.filter((c) => c[2] !== 'hosts')).toEqual([]) // nothing but the verdict was read
     expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null, pendingDetaches: [] })
-    expect(useProfileStore.getState().pullUnconfirmed).toMatchObject({ hostId: M, profileId: PROFILE })
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: M, profileId: PROFILE })
     expect(api.deleteAttachment).toHaveBeenCalledWith(M, PROFILE, 'c_aaaaaaaaaaaa')
     expect(profileSyncState().problems.map((p) => p.kind)).toContain('pull-hosts-unconfirmed')
   })

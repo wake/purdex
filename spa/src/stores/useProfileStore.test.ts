@@ -8,7 +8,7 @@ const EP = '100.64.0.2:7860'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [], pullUnconfirmed: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [] })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -110,7 +110,7 @@ describe('useProfileStore', () => {
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', pendingPullHosts: null, attachGeneration: 1, masterEndpoint: EP, suspension: null, pendingDetaches: [], pullUnconfirmed: null })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', pendingPullHosts: null, attachGeneration: 1, masterEndpoint: EP, suspension: null, pendingDetaches: [] })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
@@ -790,44 +790,5 @@ describe('pendingPullHosts — the `hosts` row a pull was confirmed against (#13
   it('rehydrate keeps only rev and hash of a row', async () => {
     await rehydrateFrom({ ...M, pendingDirection: 'pull', pendingPullHosts: { ...ROW, extra: 1 } })
     expect(useProfileStore.getState().pendingPullHosts).toEqual(ROW)
-  })
-})
-
-describe('pullUnconfirmed — the notice that a pull was stopped because the hosts moved (#1366)', () => {
-  const NOTICE = { hostId: 'host-1', profileId: PROFILE, at: 1_000 }
-
-  it('starts null; set, then dismissed', () => {
-    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
-    expect(useProfileStore.getState().setPullUnconfirmed(NOTICE)).toBe(true)
-    expect(useProfileStore.getState().pullUnconfirmed).toEqual(NOTICE)
-    useProfileStore.getState().clearPullUnconfirmed()
-    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
-  })
-
-  it('survives the detach that follows it, and a reload', async () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
-    useProfileStore.getState().setPullUnconfirmed(NOTICE)
-    useProfileStore.getState().clearMaster()
-    expect(useProfileStore.getState().pullUnconfirmed).toEqual(NOTICE)
-    expect(persistedEnvelope().state.pullUnconfirmed).toEqual(NOTICE)
-    await rehydrateFrom({ pullUnconfirmed: NOTICE })
-    expect(useProfileStore.getState().pullUnconfirmed).toEqual(NOTICE)
-  })
-
-  it('the next attach clears it: the user set sync up again', () => {
-    useProfileStore.getState().setPullUnconfirmed(NOTICE)
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
-    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
-  })
-
-  it.each([
-    ['a malformed profile id', { ...NOTICE, profileId: 'nope' }],
-    ['an empty host id', { ...NOTICE, hostId: '' }],
-    ['a non-finite time', { ...NOTICE, at: Number.NaN }],
-  ])('%s: refused by the setter, dropped by a rehydrate', async (_label, bad) => {
-    expect(useProfileStore.getState().setPullUnconfirmed(bad)).toBe(false)
-    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
-    await rehydrateFrom({ pullUnconfirmed: bad })
-    expect(useProfileStore.getState().pullUnconfirmed).toBeNull()
   })
 })

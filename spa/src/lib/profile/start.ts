@@ -72,9 +72,10 @@
 // (`attachMaster(…, 'pull', { confirmedHosts })`); it is stored as one pair with the direction
 // (`useProfileStore.pendingPullHosts`) and read live by the executor (`confirmedPullHosts`), which holds every
 // action until it has compared the SOT with it (executor.ts, THE PULL GUARD). On a mismatch the executor halts
-// and calls `onPullUnconfirmed`: the notice (`pullUnconfirmed`) is written FIRST, so that it survives whatever
-// follows, then the sync is stopped exactly as Stop sync stops it (`detachMaster`) — unless the user has attached
-// again by the time the queue gets there: that newer attach is theirs, and it is left alone.
+// and calls `onPullUnconfirmed`: the notice is written FIRST, so that it survives whatever follows (under its own
+// key, pull-unconfirmed.ts — never through `useProfileStore`, whose persist would write this window's possibly
+// stale control plane with it); then the sync is stopped exactly as Stop sync stops it (`detachMaster`) — unless
+// the user has attached again by the time the queue gets there: that newer attach is theirs, and it is left alone.
 //
 // EVERY ATTACH IS A NEW ONE — to the master already set as well. `attachMaster`
 // clears the bases and `setMaster` bumps `attachGeneration`; this file watches
@@ -114,6 +115,7 @@ import { contendForLeadership, leaderWindowId, readLeaderLease } from './leader'
 import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { readMasterWorld } from './master-world'
+import { clearPullUnconfirmed, writePullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore } from './section-store'
 import { withNamedLock } from '../storage/world-lock'
 import { copyMasterAsSlave, deleteSlave, promoteToMaster, renameSlave, saveScreenAsSlave, switchActiveProfile } from './switch-active'
@@ -311,7 +313,7 @@ interface Leader {
   dispose(): void
 }
 
-function lead(master: Master, leadership: Leadership, onProfileGone: (detail: string) => void): Leader {
+function lead(master: Master, generation: number, leadership: Leadership, onProfileGone: (detail: string) => void): Leader {
   const { hostId, profileId } = master
   let disposed = false
   /** Aborted FIRST by `dispose`: an attachment PUT still out when the driver is taken down (a host identity block,
@@ -340,7 +342,7 @@ function lead(master: Master, leadership: Leadership, onProfileGone: (detail: st
     // THE PULL GUARD (see the header): paired with the direction, and like it only while the master is THIS one.
     confirmedPullHosts: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingPullHosts),
     onPullUnconfirmed: () => {
-      if (!disposed && isCurrentMaster(master)) stopUnconfirmedPull(master)
+      if (!disposed && isCurrentMaster(master)) stopUnconfirmedPull(master, generation)
     },
     onProblem: reportProblem,
     onStatus: (s) => {
@@ -566,7 +568,7 @@ function enterMasterMode(master: Master, generation: number): MasterMode {
   const apply = (isLeader: boolean): void => {
     if (ended) return
     if (!isLeader || blocked || gone || identity !== null || isSuspended()) follow()
-    else if (leader === null) leader = lead(master, leadership, profileGone)
+    else if (leader === null) leader = lead(master, generation, leadership, profileGone)
     changed() // the lease, a block or a suspension moved — or a driver now exists to be asked
   }
   const profileGone = (detail: string): void => {
@@ -1115,6 +1117,7 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold, co
   // One write: master, direction (with a pull's confirmed `hosts`), endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
   if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token, confirmedHosts)) return asYouWere('invalid-profile-id')
   ownGenerationMove()
+  clearPullUnconfirmed() // the user has set sync up anew: the notice of a stopped pull is said (pull-unconfirmed.ts)
   // The attach has succeeded whatever comes of this: the ghost is the OLD master's, and it is said where a failed
   // detach is said (`pendingDetaches`, Settings › Profile). A stand-down after the drop does not get here — the
   // previous master is then still the master (or the winner's business), and its leader writes the attachment again.
@@ -1173,14 +1176,18 @@ async function detachNow(): Promise<DetachResult> {
 }
 
 /**
- * THE PULL GUARD's way out (see the header): the executor of `master` has halted — the SOT's `hosts` is not the
- * one the user confirmed. The notice first, synchronously; then Stop sync, in the attach / detach queue — but only
- * if, when its turn comes, the master and the generation (as STORAGE holds it: another window may have attached)
- * are still the ones of this halt. A newer attach, here or elsewhere, is the user's: left alone.
+ * THE PULL GUARD's way out (see the header): the executor of `master`, built for attach `generation`, has halted —
+ * the SOT's `hosts` is not the one the user confirmed. The notice first, synchronously (its own key: it writes
+ * nothing of the control plane); then Stop sync, in the attach / detach queue — but only if, when its turn comes,
+ * STORAGE still holds that generation (another window may have attached while this one's memory lags: a
+ * generation read at the halt would be THAT attach's, and the detach — made from this window's stale memory —
+ * would clear it) and the master is still this one. A newer attach, here or elsewhere, is the user's: left alone.
  */
-function stopUnconfirmedPull(master: Master): void {
-  const generation = storedGeneration()
-  useProfileStore.getState().setPullUnconfirmed({ hostId: master.hostId, profileId: master.profileId, at: clock() })
+function stopUnconfirmedPull(master: Master, generation: number): void {
+  // Its own key, NOT a field of `useProfileStore`: this window's memory may be stale (another window may have
+  // attached anew), and a persisted store writes its whole state — the old master, generation, direction and guard
+  // would land over that attach (pull-unconfirmed.ts).
+  writePullUnconfirmed({ hostId: master.hostId, profileId: master.profileId, at: clock() })
   // Said at the moment it happens, whatever page is open (the Current block says it for as long as it stands).
   useUndoToast.getState().show(useI18nStore.getState().t('settings.profile.current.pull_unconfirmed_toast'))
   void serial(async (): Promise<DetachResult> => {
