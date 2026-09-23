@@ -16,6 +16,12 @@ import (
 
 const listCacheTTL = time.Second
 
+// listReadTimeout is the one deadline covering a whole session-list read —
+// tmux list-sessions, every session's pane metadata, the tmux-instance probe
+// and the meta-DB reads (#1293 §3.3). A read that exceeds it is killed and
+// the list call fails; it never returns a partial list.
+const listReadTimeout = 5 * time.Second
+
 // SessionModule manages tmux sessions, meta cache, and HTTP API.
 type SessionModule struct {
 	meta            *store.MetaStore

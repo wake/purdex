@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
@@ -25,7 +26,9 @@ func (m *SessionModule) TmuxInstance() string {
 
 // ListSessions returns all live tmux sessions merged with cached meta.
 func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
-	sessions, err := m.tmux.ListSessions()
+	ctx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	defer cancel()
+	sessions, err := m.tmux.ListSessions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +63,7 @@ func (m *SessionModule) ListSessions() ([]SessionInfo, error) {
 			Cwd:          s.Cwd,
 			TmuxInstance: instance,
 		}
-		m.applyActivePaneMetadata(&info)
+		m.applyActivePaneMetadata(ctx, &info)
 
 		// Merge meta from DB (Cwd always comes from tmux — SOT)
 		meta, err := m.meta.GetMeta(s.ID)
@@ -84,7 +87,9 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 		return nil, nil // invalid code → not found
 	}
 
-	sessions, err := m.tmux.ListSessions()
+	ctx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	defer cancel()
+	sessions, err := m.tmux.ListSessions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +105,7 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 				Cwd:          s.Cwd,
 				TmuxInstance: m.TmuxInstance(),
 			}
-			m.applyActivePaneMetadata(info)
+			m.applyActivePaneMetadata(ctx, info)
 
 			// Merge meta from DB (Cwd always comes from tmux — SOT)
 			meta, err := m.meta.GetMeta(s.ID)
@@ -120,8 +125,8 @@ func (m *SessionModule) GetSession(code string) (*SessionInfo, error) {
 	return nil, nil
 }
 
-func (m *SessionModule) applyActivePaneMetadata(info *SessionInfo) {
-	metadata, err := m.tmux.ActivePaneMetadata(info.Name)
+func (m *SessionModule) applyActivePaneMetadata(ctx context.Context, info *SessionInfo) {
+	metadata, err := m.tmux.ActivePaneMetadata(ctx, info.Name)
 	if err != nil {
 		return
 	}

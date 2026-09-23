@@ -17,7 +17,7 @@ func TestListSessions(t *testing.T) {
 	fake.AddSession("dev", "/home/user/dev")
 	fake.AddSession("prod", "/home/user/prod")
 
-	sessions, err := fake.ListSessions()
+	sessions, err := fake.ListSessions(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestSendKeysRawMultiple(t *testing.T) {
 func TestListSessionsIncludesID(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
 	fake.AddSession("main", "/home/user")
-	sessions, err := fake.ListSessions()
+	sessions, err := fake.ListSessions(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestFakeExecutorIDAutoIncrement(t *testing.T) {
 	fake.AddSession("beta", "/tmp/b")
 	fake.AddSession("gamma", "/tmp/c")
 
-	sessions, err := fake.ListSessions()
+	sessions, err := fake.ListSessions(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestAddSessionWithID(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
 	fake.AddSessionWithID("$42", "custom", "/tmp/custom")
 
-	sessions, err := fake.ListSessions()
+	sessions, err := fake.ListSessions(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestNewSessionAssignsID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := fake.ListSessions()
+	sessions, err := fake.ListSessions(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

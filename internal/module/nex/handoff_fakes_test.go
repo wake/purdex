@@ -109,7 +109,7 @@ func (f *handoffSessions) CreateSession(name, cwd string) (*session.SessionInfo,
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	list, _ := f.tmux.ListSessions()
+	list, _ := f.tmux.ListSessions(context.Background())
 	for _, s := range list {
 		if s.Name != name {
 			continue

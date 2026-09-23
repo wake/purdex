@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -31,8 +32,12 @@ type TmuxPaneMetadata struct {
 
 // Executor abstracts tmux CLI for testability.
 type Executor interface {
-	ListSessions() ([]TmuxSession, error)
-	ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error)
+	// ListSessions and ActivePaneMetadata are the reads a session list is
+	// built from (#1293). They take a context and are bounded by it: when it
+	// ends the tmux child is killed and the returned error wraps ctx.Err(),
+	// so errors.Is(err, context.DeadlineExceeded|Canceled) holds.
+	ListSessions(ctx context.Context) ([]TmuxSession, error)
+	ActivePaneMetadata(ctx context.Context, sessionName string) (TmuxPaneMetadata, error)
 	NewSession(name, cwd string) error
 	KillSession(name string) error
 	RenameSession(oldName, newName string) error
@@ -125,9 +130,38 @@ type RealExecutor struct{}
 
 func NewRealExecutor() *RealExecutor { return &RealExecutor{} }
 
-func (r *RealExecutor) ListSessions() ([]TmuxSession, error) {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_path}").Output()
+// readWaitDelay bounds how long a bounded read waits for the child's pipes
+// after its context ended and the child was killed. A tmux read is a single
+// client process, so this is defensive: should anything ever inherit the
+// child's stdout, Output() still returns within deadline + readWaitDelay.
+const readWaitDelay = 500 * time.Millisecond
+
+// boundedRead builds a tmux read that is killed when ctx ends.
+func boundedRead(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.WaitDelay = readWaitDelay
+	return cmd
+}
+
+// readCtxErr reports a bounded read that failed because its context ended as
+// an error wrapping ctx.Err() — not the bare "signal: killed" the killed
+// child produces — so callers can errors.Is it against
+// context.DeadlineExceeded / context.Canceled. Returns nil when the context
+// is still live (the failure is tmux's own).
+func readCtxErr(ctx context.Context, op string, err error) error {
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w (%v)", op, ctxErr, err)
+}
+
+func (r *RealExecutor) ListSessions(ctx context.Context) ([]TmuxSession, error) {
+	out, err := boundedRead(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_path}").Output()
 	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux list-sessions", err); cerr != nil {
+			return nil, cerr
+		}
 		if strings.Contains(err.Error(), "no server running") ||
 			strings.Contains(string(out), "no server running") {
 			return nil, nil
@@ -181,11 +215,101 @@ func parseListSessionsOutput(out string) []TmuxSession {
 	return sessions
 }
 
-func (r *RealExecutor) ActivePaneMetadata(sessionName string) (TmuxPaneMetadata, error) {
+func (r *RealExecutor) ActivePaneMetadata(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
+	out, err := boundedRead(ctx, "display-message", "-p", "-t", activePaneTarget(sessionName), activePaneMetadataFormat).Output()
+	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux display-message", err); cerr != nil {
+			return TmuxPaneMetadata{}, cerr
+		}
+		return TmuxPaneMetadata{}, fmt.Errorf("tmux display-message: %w", err)
+	}
+	if md, ok := parseActivePaneMetadata(string(out)); ok {
+		return md, nil
+	}
+	// The field boundaries of the combined answer cannot be trusted (a TAB
+	// the substitution did not remove, or a short answer): ask field by
+	// field, as before #1293, rather than return misaligned values.
+	return r.activePaneMetadataPerField(ctx, sessionName)
+}
+
+// activePaneMetadataFormat reads every ActivePaneMetadata field with ONE
+// display-message (#1293 §3.1/§3.4: seven execs per session made a large
+// host's list read approach its deadline), TAB-joined.
+//
+// pane_title and window_name are text a user or a program in the pane
+// controls, and session_name / pane_current_command are free text too, so
+// each goes through tmux's substitution modifier #{s/<TAB>/ /:…}: tmux
+// replaces every TAB in the value with a space before printing, and the six
+// separators are the only TABs in the answer. That is the same value the
+// per-field read yields, since sanitizeTmuxMetadata maps TAB to a space
+// anyway. The ids ($N, @N, %N) cannot contain a TAB and need no modifier.
+//
+// parseActivePaneMetadata is the second line for a tmux that does not apply
+// the modifier: it demands exactly seven fields and each id in its slot
+// ($N, @N, %N fence the free-text fields), else the read falls back.
+const activePaneMetadataFormat = "#{session_id}\t" + tabsToSpace + "pane_title}" +
+	"\t#{window_id}\t" + tabsToSpace + "window_name}" +
+	"\t#{pane_id}\t" + tabsToSpace + "session_name}" +
+	"\t" + tabsToSpace + "pane_current_command}"
+
+// tabsToSpace opens a format whose value has every TAB replaced by a space:
+// tabsToSpace + "field}" is #{s/<TAB>/ /:field} (the pattern is a literal TAB).
+const tabsToSpace = "#{s/\t/ /:"
+
+const activePaneMetadataFieldCount = 7
+
+var (
+	tmuxSessionIDRe = regexp.MustCompile(`^\$[0-9]+$`)
+	tmuxWindowIDRe  = regexp.MustCompile(`^@[0-9]+$`)
+	tmuxPaneIDRe    = regexp.MustCompile(`^%[0-9]+$`)
+)
+
+// parseActivePaneMetadata splits the combined display-message answer on TAB
+// FIRST and only then sanitises each field — sanitizeTmuxMetadata maps TAB to
+// a space, so the separator cannot survive into a field value.
+//
+// ok is false — and the caller must fall back to per-field reads — when the
+// answer does not have exactly seven fields or any fenced id is not in its
+// slot. With the substitution modifier applied neither can happen; a tmux
+// that ignored it and printed a raw TAB inside a field yields extra fields,
+// and even a field that forges an id in every slot it shifts (codex critic
+// on dfafdf1a: pane_title "x<TAB>@9<TAB>y<TAB>%9") is caught by the count.
+// Never a half-filled struct.
+func parseActivePaneMetadata(out string) (md TmuxPaneMetadata, ok bool) {
+	parts := strings.Split(strings.TrimSuffix(out, "\n"), "\t")
+	if len(parts) != activePaneMetadataFieldCount ||
+		!tmuxSessionIDRe.MatchString(parts[0]) ||
+		!tmuxWindowIDRe.MatchString(parts[2]) ||
+		!tmuxPaneIDRe.MatchString(parts[4]) {
+		return TmuxPaneMetadata{}, false
+	}
+	for i := range parts {
+		parts[i] = sanitizeTmuxMetadata(parts[i])
+	}
+	return TmuxPaneMetadata{
+		SessionID:          parts[0],
+		PaneTitle:          parts[1],
+		WindowID:           parts[2],
+		WindowName:         parts[3],
+		PaneID:             parts[4],
+		SessionName:        parts[5],
+		PaneCurrentCommand: parts[6],
+	}, true
+}
+
+// activePaneMetadataPerField is the pre-#1293 read: one display-message per
+// field, each answer sanitised on its own. It is the fallback for a combined
+// answer whose field boundaries cannot be trusted (see
+// parseActivePaneMetadata). It runs under the same ctx, so a hung tmux still
+// ends at the caller's deadline.
+func (r *RealExecutor) activePaneMetadataPerField(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
 	target := activePaneTarget(sessionName)
 	query := func(format string) (string, error) {
-		out, err := exec.Command("tmux", "display-message", "-p", "-t", target, format).Output()
+		out, err := boundedRead(ctx, "display-message", "-p", "-t", target, format).Output()
 		if err != nil {
+			if cerr := readCtxErr(ctx, "tmux display-message "+format, err); cerr != nil {
+				return "", cerr
+			}
 			return "", fmt.Errorf("tmux display-message %s: %w", format, err)
 		}
 		return sanitizeTmuxMetadata(strings.TrimSuffix(string(out), "\n")), nil
