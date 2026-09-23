@@ -507,9 +507,10 @@ function mapLayout(layout: unknown, map: IdMap): unknown {
     const content = mapContent(pane.content, map)
     return content === pane.content ? layout : { ...layout, pane: { ...pane, content } }
   }
-  if (layout.type === 'split' && Array.isArray(layout.children)) {
-    const children = layout.children.map((child) => mapLayout(child, map))
-    return children.every((child, i) => child === layout.children[i]) ? layout : { ...layout, children }
+  const before = layout.children
+  if (layout.type === 'split' && Array.isArray(before)) {
+    const children = before.map((child) => mapLayout(child, map))
+    return children.every((child, i) => child === before[i]) ? layout : { ...layout, children }
   }
   return layout
 }
