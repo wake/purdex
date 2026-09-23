@@ -25,6 +25,8 @@ import {
   identityOfSync,
   layoutToWire,
   makeWireResolver,
+  mergeAliases,
+  MAX_HOST_ALIASES,
   presetColumnsToWire,
   type HostIdentity,
   type WireResolver,
@@ -142,8 +144,25 @@ export function buildHostsSection(s: HostsSource, identity: HostIdentity = ident
   // `aliases` is a WIRE field (the projection lists it for the guard and the fingerprint): only `syncAliases`,
   // through `hostsToWire`, may put it on a row. A local host carrying a field of that name does not send it.
   for (const row of Object.values(local.hosts)) delete (row as { aliases?: unknown }).aliases
-  const aliasesOf = (id: string): readonly unknown[] | undefined => (Object.hasOwn(s.hosts, id) ? s.hosts[id].syncAliases : undefined)
+  const aliasesOf = (id: string): readonly unknown[] => withOwnAlias(Object.hasOwn(s.hosts, id) ? s.hosts[id].syncAliases : undefined, id)
   return hostsToWire(local, identity, aliasesOf)
+}
+
+/**
+ * A canonical row's `aliases`: the remembered ones (`syncAliases`, in `mergeAliases`' form) plus the host's OWN
+ * local id — its wire key in the ordinal-2 era, so a legacy `tabs.*` / `settings` this device wrote resolves on
+ * every other device even when this device went canonical by PUSHING (spec §11.7; it never matched a legacy row).
+ * Order-preserving: an own id already listed stays where it is (every device then builds the same list); else it
+ * is appended. Over MAX_HOST_ALIASES the oldest OTHER alias is dropped — never the own id.
+ * `hostsToWire` only adds this on a canonical row (a no-claim host's own id IS its key).
+ */
+function withOwnAlias(syncAliases: unknown, own: string): string[] {
+  const list = mergeAliases(syncAliases, []) // ≤ MAX_HOST_ALIASES already
+  if (list.includes(own)) return list
+  // Full: the oldest goes. It is never the own id — that one is not in the list yet, and goes in last.
+  if (list.length === MAX_HOST_ALIASES) list.shift()
+  list.push(own)
+  return list
 }
 
 /**

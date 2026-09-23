@@ -1221,9 +1221,13 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     const outcome = await applySectionToStores('hosts', payload, ctx)
     const s = useHostStore.getState()
     expect(Object.keys(s.hosts)).toEqual([M])
-    expect(s.hosts[M]).toMatchObject({ id: M, name: 'mlab by A', daemonId: DAEMON })
+    expect(s.hosts[M]).toMatchObject({ id: M, name: 'mlab by A', daemonId: DAEMON, syncAliases: ['aaaaaa'] })
     expect(s.hostOrder).toEqual([M])
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    // the wire build: A's row plus THIS device's own id as an alias (its ordinal-2-era key) — one push, then agreed
+    const rebuilt = buildHostsSection(s)
+    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) })
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
   })
 
   it('hosts: a canonical row nobody matches is created under a NEW random local id (never its sync id); its aliases land in syncAliases', async () => {
@@ -1234,8 +1238,8 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     const created = s.hostOrder[1]
     expect(created).toMatch(/^[0-9a-z]{6}$/)
     expect(created).not.toBe('xxxxxx')
-    expect(s.hosts[created]).toMatchObject({ daemonId: OTHER, syncAliases: ['legacy1'] })
-    expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    expect(s.hosts[created]).toMatchObject({ daemonId: OTHER, syncAliases: ['legacy1', 'xxxxxx'] })
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildHostsSection(s)) })
   })
 
   it('hosts: an ORDINAL-2 row (A\'s local id as key, with daemonId) is matched by daemonId; its key becomes an alias; the rebuilt hash is canonical (one push)', async () => {
@@ -1246,7 +1250,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(s.hosts[M].syncAliases).toEqual(['aaaaaa'])
     const rebuilt = buildHostsSection(s)
     expect(Object.keys(rebuilt.hosts)).toEqual([WIRE])
-    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa'])
+    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
     expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) })
     expect(outcome).not.toEqual({ ok: true, hash: await hashSection(legacy) })
   })

@@ -999,7 +999,7 @@ describe('host-sync-identity: B added the SAME daemon under its own id (the case
   const mlab = (id: string): HostConfig => ({ ...host(id), ip: '100.64.0.2', daemonId: DAEMON })
   const paneOn = (hostId: string): PaneLayout => ({ type: 'leaf', pane: { id: 'p1', content: { kind: 'tmux-session', hostId, sessionCode: 'c1', mode: 'terminal', cachedName: 'one', tmuxInstance: 'inst' } } })
 
-  it('PULL: B keeps its id, nothing is locked or branded host-removed, its own extra host goes, and B writes NOTHING', async () => {
+  it('PULL: B keeps its id, nothing is locked or branded host-removed, its own extra host goes; B writes ONE hosts PUT (its own id as an alias), then silence — and A, back, writes nothing', async () => {
     h.shape = null
     useHostStore.setState({ hosts: { aaaaaa: mlab('aaaaaa') }, hostOrder: ['aaaaaa'], activeHostId: 'aaaaaa', runtime: {} })
     useTabStore.setState({ tabs: { ta1: { ...tab('ta1'), layout: paneOn('aaaaaa') } }, tabOrder: ['ta1'], activeTabId: null, visitHistory: [] })
@@ -1023,8 +1023,24 @@ describe('host-sync-identity: B added the SAME daemon under its own id (the case
     const content = (useTabStore.getState().tabs.ta1.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content
     expect(content).toMatchObject({ hostId: 'bbbbbb' })
     expect(content).not.toHaveProperty('terminated')
-    expect(daemon.writes.slice(writesBefore)).toEqual([]) // every section B built hashes as A's did
-    expect(problems.filter((p) => p.kind !== 'sections-unrendered')).toEqual([])
+    // every section B built hashes as A's did, but hosts: B's row adds B's own id as an alias (spec §11.7)
+    expect(daemon.writes.slice(writesBefore).map((w) => [w.key, w.clientId, w.outcome])).toEqual([['hosts', B, 'applied']])
+    expect(sotHosts().hosts[syncIdOfSync(DAEMON)].aliases).toEqual(['aaaaaa', 'bbbbbb'])
+    expect(problems.filter((p) => p.kind !== 'sections-unrendered' && p.kind !== 'pull-hash-mismatch')).toEqual([])
+    const quiet = daemon.writes.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(daemon.writes.length).toBe(quiet)
+
+    // A reattaches (pull) with its own world: it takes B's row, whose aliases already list A's id — nothing to write
+    leave()
+    useHostStore.setState({ hosts: { aaaaaa: mlab('aaaaaa') }, hostOrder: ['aaaaaa'], activeHostId: 'aaaaaa', runtime: {} })
+    useTabStore.setState({ tabs: { ta1: { ...tab('ta1'), layout: paneOn('aaaaaa') } }, tabOrder: ['ta1'], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [ws('wa1', ['ta1'])], activeWorkspaceId: 'wa1' })
+    const beforeA = daemon.writes.length
+    await attach(A, 'pull', 'aaaaaa')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(daemon.writes.slice(beforeA)).toEqual([])
+    expect(executor!.status().profile).toBe('synced')
   })
 })
 

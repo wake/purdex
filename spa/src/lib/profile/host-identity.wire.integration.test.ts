@@ -127,7 +127,7 @@ beforeEach(() => {
 })
 
 describe('two devices, one daemon, INDEPENDENT local ids (the scenario that shipped broken)', () => {
-  it('A builds, B applies: B keeps its id everywhere, nothing is host-removed, no lock, B\'s own extra host goes; B then builds the SAME hashes', async () => {
+  it('A builds, B applies: B keeps its id everywhere, nothing is host-removed, no lock, B\'s own extra host goes; B builds the SAME hashes — hosts but for B\'s own alias, agreed after ONE round', async () => {
     load(deviceA())
     const a = await buildAll()
     expect(Object.keys((a.hosts.payload as { hosts: object }).hosts)).toEqual([WIRE]) // no local id on the wire
@@ -135,8 +135,9 @@ describe('two devices, one daemon, INDEPENDENT local ids (the scenario that ship
     load(deviceB())
     const outcomes = await applyAll(a, B_ID)
 
-    // no lock, and every apply already holds what the SOT holds (no push back)
-    for (const key of KEYS) expect(outcomes[key], key).toEqual({ ok: true, hash: a[key].hash })
+    // no lock; every apply but hosts already holds what the SOT holds (no push back)
+    for (const key of KEYS) expect(outcomes[key], key).toMatchObject({ ok: true })
+    for (const key of KEYS.filter((k) => k !== 'hosts')) expect(outcomes[key], key).toEqual({ ok: true, hash: a[key].hash })
 
     // hosts: B's mlab kept its local id, updated in place; the host only B had is gone (cascade)
     const hs = useHostStore.getState()
@@ -155,9 +156,21 @@ describe('two devices, one daemon, INDEPENDENT local ids (the scenario that ship
     expect(useHostSettingsStore.getState().hosts).toEqual({ [B_ID]: { files: { root: '/srv' } } })
     expect(useNewTabLayoutStore.getState().presets).toEqual(presetsOn(B_ID))
 
-    // B builds: the very hashes A built
+    // B builds: the very hashes A built — for hosts, A's row plus B's OWN id as an alias (§11.7: B's ordinal-2-era
+    // key must resolve on every device). That is the ONE hosts push this pull costs (the apply reported it).
     const b = await buildAll()
-    for (const key of KEYS) expect(b[key].hash, key).toBe(a[key].hash)
+    for (const key of KEYS.filter((k) => k !== 'hosts')) expect(b[key].hash, key).toBe(a[key].hash)
+    expect(outcomes.hosts).toEqual({ ok: true, hash: b.hosts.hash })
+    const aRow = (a.hosts.payload as { hosts: Record<string, Record<string, unknown>> }).hosts[WIRE]
+    const bRow = (b.hosts.payload as { hosts: Record<string, Record<string, unknown>> }).hosts[WIRE]
+    expect(aRow.aliases).toEqual([A_ID])
+    expect(bRow).toEqual({ ...aRow, aliases: [A_ID, B_ID] })
+
+    // A takes B's push: its build is B's — no second round, either way
+    const bHosts = b.hosts
+    load(deviceA())
+    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(bHosts.payload)), { masterHostId: A_ID })).toEqual({ ok: true, hash: bHosts.hash })
+    expect((await buildAll(['hosts'])).hosts.hash).toBe(bHosts.hash)
   })
 
   it('and back: B edits, A applies B\'s build — A keeps ITS id; A\'s build equals B\'s (no ping-pong either way)', async () => {
@@ -170,7 +183,7 @@ describe('two devices, one daemon, INDEPENDENT local ids (the scenario that ship
 
     load(deviceA())
     const outcomes = await applyAll(b, A_ID)
-    for (const key of KEYS) expect(outcomes[key], key).toEqual({ ok: true, hash: b[key].hash })
+    for (const key of KEYS) expect(outcomes[key], key).toEqual({ ok: true, hash: b[key].hash }) // B's row lists A's id already
     expect(useHostStore.getState().hosts[A_ID].name).toBe('mlab (renamed on B)')
     expect(panesOf('t1')[0]).toMatchObject({ hostId: A_ID })
     const again = await buildAll()
@@ -220,7 +233,7 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
     const b = await buildAll()
     const hosts = b.hosts.payload as { hosts: Record<string, { aliases?: string[] }> }
     expect(Object.keys(hosts.hosts)).toEqual([WIRE])
-    expect(hosts.hosts[WIRE].aliases).toEqual([A_ID])
+    expect(hosts.hosts[WIRE].aliases).toEqual([A_ID, B_ID]) // A's id (matched from) and B's own
     expect(JSON.stringify(b['tabs.w1'].payload)).not.toContain(B_ID)
     for (const key of ['hosts', 'tabs.w1'] as const) expect(outcomes[key], key).not.toEqual({ ok: true, hash: legacy[key].hash }) // → one push each
   })
@@ -234,7 +247,7 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
     load(deviceA())
     const outcomes = await applyAll(b, A_ID)
     for (const key of KEYS) expect(outcomes[key], key).toEqual({ ok: true, hash: b[key].hash })
-    expect(useHostStore.getState().hosts[A_ID].syncAliases).toEqual([A_ID])
+    expect(useHostStore.getState().hosts[A_ID].syncAliases).toEqual([A_ID, B_ID])
     const a = await buildAll()
     for (const key of KEYS) expect(a[key].hash, key).toBe(b[key].hash)
   })
@@ -263,7 +276,7 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
       load({ ...deviceB(), hosts: { cccccc: mlab('cccccc') }, hostOrder: ['cccccc'], presets: presetsOn('cccccc') })
       const outcomes = await applyAll(sot, 'cccccc')
       for (const key of KEYS) expect(outcomes[key], key).toMatchObject({ ok: true })
-      expect(useHostStore.getState().hosts.cccccc.syncAliases).toEqual([A_ID])
+      expect(useHostStore.getState().hosts.cccccc.syncAliases).toEqual([A_ID, B_ID])
       expect(panesOf('t1')[0]).toMatchObject({ hostId: 'cccccc' })
       expect(panesOf('t1')[0]).not.toHaveProperty('terminated')
       expect(useHostSettingsStore.getState().hosts).toEqual({ cccccc: { files: { root: '/srv' } } })
@@ -280,18 +293,22 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
       expect(panesOf('t1')[0]).not.toHaveProperty('terminated')
     })
 
-    // GAP, reported with PR 2 (not closed by the spec): the device that goes canonical FIRST by PUSHING (its base
-    // agreed with the ordinal-2 SOT, so after the upgrade it is dirty, not behind) never matched a legacy row, so its
-    // canonical row carries no alias — and its own old local id is what the still-legacy tabs name. Interrupted
-    // after its hosts PUT, a device with an independent id cannot resolve them (→ host-removed, pushed back).
-    it.fails('GAP: A itself pushes canonical hosts first (no alias), tabs still legacy — a third device resolves A\'s old id', async () => {
+    // The device that goes canonical FIRST by PUSHING (its base agreed with the ordinal-2 SOT, so after the upgrade it
+    // is dirty, not behind) never matched a legacy row — but its canonical row carries its OWN local id as an alias,
+    // and that id is what its still-legacy tabs name. Interrupted after its hosts PUT, a device with an independent
+    // id resolves them through it.
+    it('A itself pushes canonical hosts first, tabs still legacy — a third device resolves A\'s old id through A\'s own alias', async () => {
       const legacy = await legacyOfA()
       load(deviceA())
       const canonicalHosts = await buildAll(['hosts'])
       const sot = { ...legacy, hosts: canonicalHosts.hosts }
       load({ ...deviceB(), hosts: { cccccc: mlab('cccccc') }, hostOrder: ['cccccc'] })
-      await applyAll(sot, 'cccccc')
+      const outcomes = await applyAll(sot, 'cccccc')
+      for (const key of KEYS) expect(outcomes[key], key).toMatchObject({ ok: true })
+      expect(panesOf('t1').map((c) => c.hostId ?? (c.source as { hostId?: string } | undefined)?.hostId ?? c.host)).toEqual(['cccccc', 'cccccc', 'cccccc'])
       expect(panesOf('t1')[0]).not.toHaveProperty('terminated')
+      expect(useHostSettingsStore.getState().hosts).toEqual({ cccccc: { files: { root: '/srv' } } })
+      expect(useNewTabLayoutStore.getState().presets).toEqual(presetsOn('cccccc'))
     })
 
     it('ACROSS A RESTART: the alias is persisted (syncAliases) — a reload between the hosts apply and the tabs apply still resolves', async () => {
@@ -304,7 +321,7 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
       useHostStore.setState({ hosts: {}, hostOrder: [] })
       localStorage.setItem(STORAGE_KEYS.HOSTS, persisted as string)
       await useHostStore.persist.rehydrate()
-      expect(useHostStore.getState().hosts.cccccc.syncAliases).toEqual([A_ID])
+      expect(useHostStore.getState().hosts.cccccc.syncAliases).toEqual([A_ID, B_ID])
       const outcomes = await applyAll(sot, 'cccccc', ['workspaces', 'settings', 'tabs.w1'])
       for (const key of ['workspaces', 'settings', 'tabs.w1']) expect(outcomes[key], key).toMatchObject({ ok: true })
       expect(panesOf('t1')[0]).toMatchObject({ hostId: 'cccccc' })

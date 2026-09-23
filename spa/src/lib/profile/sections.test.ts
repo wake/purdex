@@ -649,10 +649,23 @@ describe('host-sync-identity: local → wire at build', () => {
     const p = buildHostsSection(hostsSrc())
     expect(Object.keys(p.hosts)).toEqual([WIRE, 'legacy'])
     expect(p.hostOrder).toEqual([WIRE, 'legacy'])
-    expect(p.hosts[WIRE]).toEqual({ id: WIRE, name: 'N-bbbbbb', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON, aliases: ['aaaaaa'] })
+    // aliases: the legacy keys it was matched from, AND its own local id (its wire key in the ordinal-2 era)
+    expect(p.hosts[WIRE]).toEqual({ id: WIRE, name: 'N-bbbbbb', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON, aliases: ['aaaaaa', 'bbbbbb'] })
     expect(p.hosts.legacy).toEqual({ id: 'legacy', name: 'N-legacy', ip: '10.0.0.1', port: 7860, order: 0 })
     expect(JSON.stringify(p)).not.toContain('syncAliases')
     expect(isWellFormedSection('hosts', p)).toBe(true)
+  })
+
+  it('hosts: a canonical row ALWAYS carries its own local id as an alias — kept where it already is, else appended; never the one the cap drops', () => {
+    const at = (syncAliases?: string[]) =>
+      (buildHostsSection({ hosts: { bbbbbb: hostCfg('bbbbbb', { daemonId: DAEMON, syncAliases }) }, hostOrder: ['bbbbbb'] }).hosts[WIRE] as { aliases?: string[] }).aliases
+    expect(at(undefined)).toEqual(['bbbbbb'])
+    expect(at(['bbbbbb', 'aaaaaa'])).toEqual(['bbbbbb', 'aaaaaa']) // its place is kept: another device's build is the same list
+    const sixteen = Array.from({ length: 16 }, (_, i) => `x${i}`)
+    expect(at(sixteen)).toEqual([...sixteen.slice(1), 'bbbbbb']) // full: the oldest OTHER alias goes
+    expect(at(['bbbbbb', ...sixteen.slice(1)])).toEqual(['bbbbbb', ...sixteen.slice(1)]) // own id first of 16: kept
+    const s = { hosts: { bbbbbb: hostCfg('bbbbbb', { daemonId: DAEMON, syncAliases: ['bbbbbb', ...sixteen.slice(1)] }) }, hostOrder: ['bbbbbb'] }
+    expect(isWellFormedSection('hosts', buildHostsSection(s))).toBe(true)
   })
 
   it('hosts: a stray local `aliases` field never travels (only syncAliases, and only on a canonical row)', () => {
@@ -661,7 +674,7 @@ describe('host-sync-identity: local → wire at build', () => {
     ;(src.hosts.bbbbbb as unknown as Record<string, unknown>).aliases = ['y']
     const p = buildHostsSection({ ...src, hosts: { ...src.hosts, bbbbbb: { ...src.hosts.bbbbbb, syncAliases: undefined } } })
     expect(Object.hasOwn(p.hosts.legacy, 'aliases')).toBe(false)
-    expect(Object.hasOwn(p.hosts[WIRE], 'aliases')).toBe(false)
+    expect((p.hosts[WIRE] as { aliases?: string[] }).aliases).toEqual(['bbbbbb']) // its own id only — never the stray field's
   })
 
   it('hosts / tabs / settings refuse to build under an identity conflict (two hosts, one daemon)', () => {

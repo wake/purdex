@@ -1297,7 +1297,7 @@ describe('planHostsApply — incoming wire rows onto local hosts (spec §6, §11
     expect(p.payload.hostOrder).toEqual(['bbbbbb'])
     expect([...p.byRow]).toEqual([[WIRE, 'bbbbbb']])
     expect(p.created).toEqual([])
-    expect(p.aliases).toEqual({})
+    expect(p.aliases).toEqual({ bbbbbb: ['aaaaaa'] }) // A's own id, from A's canonical row (the SOT wins)
   })
 
   it('a canonical row nobody here matches is CREATED under a NEW random id; its aliases come back for syncAliases', () => {
@@ -1305,7 +1305,7 @@ describe('planHostsApply — incoming wire rows onto local hosts (spec §6, §11
     const p = plan({ h1: host('h1') }, incoming, ids('newid1'))
     expect(p.created).toEqual(['newid1'])
     expect(p.payload.hosts.newid1).toEqual({ ...host('aaaaaa', { daemonId: DAEMON }), id: 'newid1' })
-    expect(p.aliases).toEqual({ newid1: ['old1'] })
+    expect(p.aliases).toEqual({ newid1: ['old1', 'aaaaaa'] }) // the row's aliases (A's own id among them)
   })
 
   it('a LEGACY row (ordinal 2: another device\'s local id) with a daemonId matches by daemonId, and its key becomes an alias', () => {
