@@ -3,7 +3,7 @@
 //
 // WHY NOT A FIELD OF `useProfileStore` (codex R2 #1). The notice is written by the window whose executor halted —
 // at a moment when that window's memory of the control plane may be STALE: another window may just have attached
-// anew (new master, higher `attachGeneration`, its own direction and guard in storage) and this one not have
+// anew (new master or `attachId`, its own direction and guard in storage) and this one not have
 // rehydrated yet. A persisted zustand store writes its WHOLE partialized state on any `set`, so a notice written
 // through it would put the old master, generation, direction and guard back over the other window's attach. Here
 // the write is one `localStorage.setItem` of this key alone: nothing of the master, the generation, the direction

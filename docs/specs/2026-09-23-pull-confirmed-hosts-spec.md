@@ -1,6 +1,6 @@
 # A wizard pull applies only the `hosts` the user confirmed (#1366) — spec + plan
 
-Status: draft rev 4 (2026-09-23, codex plan review folded in; rev 3: the barrier holds until `hosts` is applied; rev 4: codex PR R2 — the notice under its own key, the guard snapshotted) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
+Status: draft rev 5 (2026-09-23, codex plan review folded in; rev 3: the barrier holds until `hosts` is applied; rev 4: codex PR R2 — the notice under its own key, the guard snapshotted; rev 5: codex critic — an attach is named by `attachId`, not `attachGeneration`) · Owner: mlab/purdex-3b · Coordinator: mlab/purdex-fb
 Follows #1362 (wizard: pull needs a verified host, lists the hosts it removes, re-checks before attach) and
 #1365 (host sync identity wire). Files: `executor.ts`, `start.ts`, `useProfileStore.ts`, `wizard-run.ts`, the
 Profile settings UI, locales.
@@ -30,6 +30,15 @@ LAST check before the attach (`recheckBeforeAttach`), which is the one the remov
 life: set by `setMaster` together with the direction, cleared by `clearPendingDirection`, by detach, and by any
 new `setMaster` (persisted and synced like `pendingDirection`, for the same reason — the first reconciliation may
 continue in another window after a reload). Well-formedness on rehydrate: anything else → null.
+
+**`attachId` (rev 5, codex critic).** `attachGeneration` counts, it does not name: `setMaster` computes it from
+each window's OWN memory (`s.attachGeneration + 1`), so two windows that have not heard of each other reach the
+SAME generation from the same old value — even for the same master pair. Every accepted `setMaster` therefore
+also writes `useProfileStore.attachId`, 128 random bits (hex, `crypto.getRandomValues`), in the same write as the
+master; `clearMaster` sets it null; persisted and synced with the rest; rehydrate keeps it only with a master and
+only as a non-empty string (a master persisted before the field → null until its next attach — it never carries a
+guard, which only comes with an attach that wrote an id). `attachGeneration` keeps its job (the attach queue's
+"was I overtaken" check and the status channel's tag, both outside this issue).
 
 ### 2.3 The executor — a pre-step barrier (rev 2, codex plan review #1–#4)
 Gating individual pulls is not enough: `restore-local` bypasses `mayPull` (sync-state.ts:390, executor.ts:886),
@@ -69,9 +78,10 @@ live store is not consulted for the guard again. Read live, another window clear
 was out (same master and generation) lowered the barrier and the answer was applied unconfirmed; replacing it made
 the compare use a row the user never saw. A live value that is cleared or changed is neither a downgrade nor a halt
 — the executor keeps judging on the snapshot — because the snapshot is what the user confirmed for THIS attach,
-and a real new attach moves the master or `attachGeneration`, on which the start layer disposes the executor and
-builds a new one (start.ts: the `useProfileStore` subscription → `sync()` returns early only for the same master
-AND generation → `mode.end()` → `leader.dispose()` → `executor.dispose()`; then `enterMasterMode` → `lead`). A
+and a real new attach moves the master or `attachId` (rev 5: NOT necessarily `attachGeneration` — two stale
+windows can produce the same one), on which the start layer disposes the executor and
+builds a new one (start.ts: the `useProfileStore` subscription → `sync()` returns early only for the same master,
+generation AND attach id → `mode.end()` → `leader.dispose()` → `executor.dispose()`; then `enterMasterMode` → `lead`). A
 guard that appears after the build raises nothing (like a direction: no period of this executor). Unchanged, still
 LIVE: the direction's answer to a lock and the stale-direction check — so with the live direction gone the `hosts`
 lock waits for the user while the barrier stays up; nothing moves unconfirmed either way.
@@ -92,8 +102,12 @@ that halts may hold a stale memory of the control plane (another window attached
 `set`, so a notice written through it would put the old master / generation / direction / guard back over that
 attach. The key is device-local, not in the SOT, not registered with syncManager; every read / write is
 try/catch'd. Cleared by Dismiss and by an attach that succeeds (`attachHeld`, right after `setMaster`).
-Likewise the queued detach compares storage's `attachGeneration` with the generation the halted executor was BUILT
-for (not one read at the halt, which may already be the other window's): a newer attach is left alone.
+Likewise the queued detach is fenced by the attach the halted executor was BUILT for (not one read at the halt,
+which may already be the other window's): rev 5 — when its turn comes it reads STORAGE (not this window's store)
+and goes ahead only if storage holds the same `attachId` AND the same master pair, and this window's memory
+agrees; anything else → no detach (the notice stays). rev 4 compared `attachGeneration`, which another window's
+attach made from the same old value passes — and A's stale-memory `clearMaster` then overwrote B's attach
+(codex critic). A null id (pre-field master) is never detached this way.
 
 ### 2.2a Pairing (codex #6)
 `pendingPullHosts` and `pendingDirection` are one pair of the same attach generation: set together by `setMaster`,
@@ -137,7 +151,9 @@ event (listener attached only while the block is mounted).
   → released on the agreement.
 - T3 start layer: `attachMaster(…, { confirmedHosts })` stores it with the direction; `onPullUnconfirmed` → notice
   first, then detach; tests incl. the DELETE failing (notice kept, ghost in `pendingDetaches`) and the
-  attach/detach queue busy at the moment of the mismatch (the executor is already halted); integration test through the fake daemon (`executor.direction.integration.test.ts` style): B attaches
+  attach/detach queue busy at the moment of the mismatch (the executor is already halted); (rev 5) two stale
+  windows at one generation — B's attach (another master, and the same master pair) in storage with A's
+  generation and another `attachId` → A's late mismatch leaves storage B's, notice written; integration test through the fake daemon (`executor.direction.integration.test.ts` style): B attaches
   pull with guard rev 7, the daemon holds rev 8 → no store change, attachment removed, notice set.
 - T4 wizard: `WizardPlan` gains the `hosts` row it was computed from (`{rev, hash} | 'absent'`); the attach step uses
   the plan RETURNED by `recheckBeforeAttach` (today it checks `again.ok` and discards `again.plan` — codex #7) and
@@ -147,7 +163,8 @@ event (listener attached only while the block is mounted).
 - Gates: lint, tsc (`-p tsconfig.app.json`), full vitest, build. Mutations: barrier lets `restore-local` through (T2 red); barrier lets
   a push through (T2 red); compare rev instead of hash (T2 red on rev-higher-same-hash); no
   detach on mismatch (T3 red); wizard passes nothing (T4 red); (rev 3) release as soon as the fetched `hosts`
-  matches, before it is applied (T2 red on the in-flight and busy tests).
+  matches, before it is applied (T2 red on the in-flight and busy tests); (rev 5) the queued detach's fence back to
+  the generation only (T3 red on the two-stale-windows tests).
 
 ## 5. Real machine
 With my own profile name only (purdex-38 is running cross-device acceptance on mlab — never touch his profiles).

@@ -48,6 +48,19 @@
 // world it was asked in is gone — or it would re-attach a client the user has
 // just told to stop (`lib/profile/start.ts` compares the value it read at the
 // call with the one in `localStorage` before it commits).
+//   IT COUNTS, IT DOES NOT NAME. Each window computes the next value from ITS OWN memory
+// (`s.attachGeneration + 1`), so two windows that have not heard of each other yet reach the SAME value from
+// the same old one: "a new attach moves the generation" holds within a window, not across windows. Whatever
+// must know WHICH attach it belongs to uses `attachId`.
+//
+// WHY `attachId` (#1366, codex critic). A random 128-bit id written by every accepted `setMaster` (with the
+// master, in the same write) and cleared by `clearMaster`: it names ONE attach, and two attaches never share it,
+// however stale the windows that made them. It is the fence for everything that belongs to one attach and may
+// act late — the start layer rebuilds the master mode when it changes (the executor and its guard snapshot are
+// that attach's), and the pull guard's queued Stop sync goes ahead only while STORAGE still holds that id and
+// master (lib/profile/start.ts, `stopUnconfirmedPull`). Rehydrate keeps it only with a master and only as a
+// non-empty string; a master persisted before the field existed has none (null) until its next attach — nothing
+// fenced by it can be that old: a guard only comes with an attach that wrote an id.
 //
 // WHY `masterEndpoint` ("<ip>:<port>" of the master host AT ATTACH). The section
 // bases, the attachment, a schema lock — all of it belongs to ONE daemon, and the
@@ -163,8 +176,11 @@ interface ProfileControl {
   masterEndpoint: string | null
   /** While `now < suspension.until` (epoch ms) no window runs a driver: an attach — `token`'s — is in progress. */
   suspension: Suspension | null
-  /** +1 with every accepted `setMaster` and every `clearMaster`. A change with the same master = attach was called again. */
+  /** +1 with every accepted `setMaster` and every `clearMaster`. A change with the same master = attach was called again.
+   *  Per window: two stale windows can reach the same value — `attachId` names the attach. */
   attachGeneration: number
+  /** A fresh random id per accepted `setMaster`; null without a master (and for a master persisted before the field). */
+  attachId: string | null
   /** Sync without being asked. Default on. */
   autoSync: boolean
   /** Independent of the master: see the header. Oldest first; at most one per `pendingDetachKey`. */
@@ -233,6 +249,17 @@ export function sanitiseConfirmedHosts(v: unknown): ConfirmedHosts | null {
   return Number.isSafeInteger(rev) && (rev as number) >= 0 && typeof hash === 'string' && hash !== '' ? { rev: rev as number, hash } : null
 }
 
+/** 128 random bits, hex: no two attaches share one, whichever windows made them. */
+function newAttachId(): string {
+  const bytes = new Uint8Array(16)
+  try {
+    crypto.getRandomValues(bytes)
+  } catch {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export const PENDING_DETACH_DETAIL_MAX = 120
 
 /** `"<ip>:<port>"` — THE way an endpoint is written: `masterEndpoint`, `pendingDetach.endpoint`, and every
@@ -298,6 +325,7 @@ function sanitiseControl(persisted: unknown): ProfileControl {
     masterEndpoint: attached ? (p.masterEndpoint as string) : null,
     suspension: attached ? sanitiseSuspension(p.suspension) : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
+    attachId: attached && typeof p.attachId === 'string' && p.attachId !== '' ? p.attachId : null,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
     pendingDetaches: sanitisePendingDetaches(p.pendingDetaches, p.pendingDetach),
   }
@@ -313,18 +341,19 @@ export const useProfileStore = create<ProfileState>()(
       masterEndpoint: null,
       suspension: null,
       attachGeneration: 0,
+      attachId: null,
       autoSync: true,
       pendingDetaches: [],
       setMaster: (hostId, profileId, direction, endpoint, token, confirmedHosts) => {
         if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction) || !isEndpoint(endpoint)) return false
         const pendingPullHosts = direction === 'pull' ? sanitiseConfirmedHosts(confirmedHosts) : null
-        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, pendingPullHosts, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, pendingDetaches: withoutKey(s.pendingDetaches, pendingDetachKey({ hostId, profileId, endpoint })) }))
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, pendingPullHosts, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, attachId: newAttachId(), pendingDetaches: withoutKey(s.pendingDetaches, pendingDetachKey({ hostId, profileId, endpoint })) }))
         return true
       },
       suspend: (token, until) => set((s) => (selectMaster(s) === null || !isSuspension(token, until) ? s : { suspension: { token, until } })),
       resume: (token) => set((s) => (s.suspension !== null && s.suspension.token === token ? { suspension: null } : s)),
       clearMaster: () =>
-        set((s) => ({ masterHostId: null, masterProfileId: null, pendingDirection: null, pendingPullHosts: null, masterEndpoint: null, suspension: null, attachGeneration: s.attachGeneration + 1 })),
+        set((s) => ({ masterHostId: null, masterProfileId: null, pendingDirection: null, pendingPullHosts: null, masterEndpoint: null, suspension: null, attachGeneration: s.attachGeneration + 1, attachId: null })),
       // ONE pair: the guard never outlives its direction (see the header, `pendingPullHosts`).
       clearPendingDirection: () => set({ pendingDirection: null, pendingPullHosts: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
@@ -352,10 +381,11 @@ export const useProfileStore = create<ProfileState>()(
         masterEndpoint: state.masterEndpoint,
         suspension: state.suspension,
         attachGeneration: state.attachGeneration,
+        attachId: state.attachId,
         autoSync: state.autoSync,
         pendingDetaches: state.pendingDetaches,
       }),
-      // Only the nine sanitised fields ever come out of storage: persisted
+      // Only the ten sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },
@@ -368,10 +398,10 @@ export const useProfileStore = create<ProfileState>()(
  * reaches THIS window's store a broadcast and a rehydrate later; the storage it
  * persisted to is shared synchronously. For the few decisions that must not be
  * made on a stale memory — lib/profile/start.ts (the suspension, the attach
- * generation), lib/profile/switch-active.ts (`promoteToMaster`). ONE parser, here,
+ * generation, the attach id), lib/profile/switch-active.ts (`promoteToMaster`). ONE parser, here,
  * next to the shape it reads.
  */
-export function storedControl(): { masterHostId?: unknown; masterProfileId?: unknown; masterEndpoint?: unknown; attachGeneration?: unknown; suspension?: { until?: unknown } | null } | null {
+export function storedControl(): { masterHostId?: unknown; masterProfileId?: unknown; masterEndpoint?: unknown; attachGeneration?: unknown; attachId?: unknown; suspension?: { until?: unknown } | null } | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.PROFILE)
     if (raw === null) return null
@@ -385,6 +415,13 @@ export function storedControl(): { masterHostId?: unknown; masterProfileId?: unk
 /** Does storage hold an attached master right now? Judged by the rule `merge` applies to it (`sanitiseControl`). */
 export function masterAttachedInStorage(): boolean {
   return selectMaster(sanitiseControl(storedControl())) !== null
+}
+
+/** The attach storage holds right now — its master and `attachId` — judged by `merge`'s rule; null = no master. */
+export function attachInStorage(): { hostId: string; profileId: string; attachId: string | null } | null {
+  const control = sanitiseControl(storedControl())
+  const master = selectMaster(control)
+  return master === null ? null : { ...master, attachId: control.attachId }
 }
 
 /** The attached master, or null. Null for half a master too, so a caller never

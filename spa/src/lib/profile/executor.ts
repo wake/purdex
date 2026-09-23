@@ -206,7 +206,7 @@
 //     while the guarded GET is out (same master, `onInitialSettled` of a stale driver, a junk rehydrate) lowered
 //     the barrier and the GET's answer was applied unconfirmed; replacing it made the compare use a row the user
 //     never saw. A live value cleared or changed is therefore neither a downgrade nor a halt: the snapshot is
-//     what the user confirmed for THIS attach, and a real new attach (master or `attachGeneration` moved) gets a
+//     what the user confirmed for THIS attach, and a real new attach (master or `attachId` moved) gets a
 //     new executor from the start layer anyway. A guard that turns up after the build raises nothing (like a
 //     direction: no period of this executor). What still reads the direction LIVE is unchanged — the answer to a
 //     lock (`answerFor`) and the stale-direction check; so with the live direction gone the `hosts` lock is left
