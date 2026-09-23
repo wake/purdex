@@ -37,7 +37,7 @@ import {
   type WireResolver,
 } from './host-identity'
 import { PROJECTIONS, workspaceIdOf } from './projections'
-import { WORKSPACE_SCOPED_SETTINGS, isSyncableWorkspaceId } from './sections'
+import { WORKSPACE_SCOPED_SETTINGS, isSyncableWorkspaceId, normaliseAliases } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type {
   HostsPayload,
@@ -206,12 +206,13 @@ export function planHostsApply(
 
   const resolve: WireResolver = (key) => byRow.get(key) ?? key
   const { hosts: payload, aliasesByLocal } = hostsFromWire({ hosts: rows, hostOrder: incoming.hostOrder } as WireHostsPayload, resolve)
-  const aliases: Record<string, string[]> = { ...aliasesByLocal }
+  const aliases: Record<string, string[]> = {}
+  for (const [local, list] of Object.entries(aliasesByLocal)) aliases[local] = normaliseAliases(list)
   for (const [key, row] of Object.entries(rows)) {
     if (isSyncId(key) || !isValidDaemonId(row.daemonId)) continue
     const local = byRow.get(key) as string
     const before = created.includes(local) ? [] : localHosts[local]?.syncAliases
-    const merged = mergeAliases(aliases[local] ?? before, [key])
+    const merged = normaliseAliases([...(aliases[local] ?? (Array.isArray(before) ? before : [])), key])
     if (merged.length > 0) aliases[local] = merged
   }
   return { plan: { payload, aliases, byRow, created } }
@@ -701,9 +702,9 @@ function isWireKeyOf(id: string, h: Rec): boolean {
   if (h.aliases === undefined) return true
   const a = h.aliases
   if (!isSyncId(id) || !Array.isArray(a) || a.length === 0 || a.length > MAX_HOST_ALIASES) return false
+  // Normalised and unique; ANY order (the apply and every build sort it — sections.ts `normaliseAliases`).
   const canonical = mergeAliases(a, [])
-  // …and sorted (the builder's rule, sections.ts `withOwnAlias`): one list for every client.
-  return canonical.length === a.length && canonical.every((alias, i) => alias === a[i] && (i === 0 || a[i - 1] < alias))
+  return canonical.length === a.length && canonical.every((alias, i) => alias === a[i])
 }
 
 function isHostsPayload(p: Rec): boolean {

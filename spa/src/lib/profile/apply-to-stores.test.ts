@@ -1395,6 +1395,20 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
 
   // Follow-up to R1: the tabs apply resolves wire ids under the operation lock, with the write — a host-store change
   // while the lock is being taken cannot leave the panes resolved through the hosts as they were before it.
+  it('aliases in ANY order are accepted: applied sorted, the rebuild is the sorted fixed point — ONE write, then none', async () => {
+    const payload = JSON.parse(JSON.stringify(canonicalFromA())) as HostsPayload
+    ;(payload.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['bbbbbb', 'aaaaaa'] // insertion order (e9e24625)
+    const outcome = await applySectionToStores('hosts', payload, ctx)
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useHostStore.getState().hosts[M].syncAliases).toEqual(['aaaaaa', 'bbbbbb'])
+    const rebuilt = buildHostsSection(useHostStore.getState())
+    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', 'bbbbbb', M])
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) }) // ≠ the payload's: the one write
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+    // the sorted row applied back: the stores hold exactly it — nothing more to write
+    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(rebuilt)), ctx)).toEqual({ ok: true, hash: await hashSection(rebuilt) })
+  })
+
   it('tabs: a daemonId learned while the operation lock is taken is the one the panes resolve through', async () => {
     useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), h2: host('h2', { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, 'h2'] })
     seedTabWorld()

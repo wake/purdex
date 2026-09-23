@@ -1272,7 +1272,8 @@ describe('isWellFormedSection(hosts) — wire ids and aliases (host-sync-identit
     expect(ok((p) => { p.hosts[WIRE].aliases = 'aaaaaa' })).toBe(false)
     expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 17 }, (_, i) => `a${i}`) })).toBe(false)
     expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 16 }, (_, i) => `a${i.toString(36).padStart(2, '0')}`) })).toBe(true)
-    expect(ok((p) => { p.hosts[WIRE].aliases = ['b', 'a'] })).toBe(false) // A1: sorted, as every builder writes it
+    // any ORDER is accepted (a build of e9e24625 wrote insertion order); the apply and every build sort it
+    expect(ok((p) => { p.hosts[WIRE].aliases = ['b', 'a'] })).toBe(true)
   })
 
   it('a legacy (local-id) key carrying a daemonId — an ordinal-2 row — stays well-formed', () => {
@@ -1314,7 +1315,7 @@ describe('planHostsApply — incoming wire rows onto local hosts (spec §6, §11
     const incoming = buildLocalHosts({ hosts: { aaaaaa: host('aaaaaa', { daemonId: DAEMON }) }, hostOrder: ['aaaaaa'] })
     const p = plan({ bbbbbb: host('bbbbbb', { daemonId: DAEMON, syncAliases: ['older'] }) }, incoming)
     expect(Object.keys(p.payload.hosts)).toEqual(['bbbbbb'])
-    expect(p.aliases).toEqual({ bbbbbb: ['older', 'aaaaaa'] })
+    expect(p.aliases).toEqual({ bbbbbb: ['aaaaaa', 'older'] }) // normalised: sorted
   })
 
   it('a legacy row WITHOUT daemonId keeps its id when this device has none by that id — it syncs "as today", never under a random id (no ping-pong)', () => {

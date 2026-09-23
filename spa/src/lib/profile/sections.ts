@@ -162,8 +162,17 @@ export function buildHostsSection(s: HostsSource, identity: HostIdentity = ident
  * until 16 smaller ids exist. `hostsToWire` only adds this on a canonical row (a no-claim host's own id IS its key).
  */
 function withOwnAlias(syncAliases: unknown, own: string): string[] {
-  const union = new Set([...mergeAliases(syncAliases, []), ...mergeAliases([], [own])])
-  return [...union].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, MAX_HOST_ALIASES)
+  return normaliseAliases([...(Array.isArray(syncAliases) ? syncAliases : []), own])
+}
+
+/**
+ * THE alias form, applied and built alike: the valid entries (`mergeAliases`' rule — non-empty strings, no sync
+ * ids), each once, sorted ascending, the first MAX_HOST_ALIASES. The guard accepts any order (a build of e9e24625
+ * wrote insertion order); what lands and what is built is always this, so such a row costs one write, then none.
+ */
+export function normaliseAliases(list: readonly unknown[]): string[] {
+  const valid = new Set(list.filter((a) => mergeAliases([], [a]).length === 1) as string[])
+  return [...valid].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, MAX_HOST_ALIASES)
 }
 
 /**
