@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import en from '../../../locales/en.json'
 import { SotProfilesBlock } from './SotProfilesBlock'
 import { useSotProfiles } from './useSotProfiles'
+import { useHostStore } from '../../../stores/useHostStore'
 import { deleteProfile, listProfiles, renameProfile } from '../../../lib/profile/api'
 import type { Attachment, DeleteProfileOutcome, Failure, ProfileIndexEntry } from '../../../lib/profile/api'
 
@@ -343,5 +344,64 @@ describe('useSotProfiles — one host\'s answer never paints another host\'s lis
     await act(async () => { answer({ kind: 'ok', value: [] }) })
     expect(errors).not.toHaveBeenCalled()
     errors.mockRestore()
+  })
+})
+
+describe('an action belongs to the ADDRESS the list was fetched from, too — the same host id may move (PR #1340 review)', () => {
+  const A = '10.0.0.1:7860'
+  const hostAt = (ip: string) => act(() => useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip, port: 7860, order: 0 } } }))
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
+  })
+  afterEach(() => {
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+  })
+
+  it('h1\'s address changes while the delete confirmation is open: it closes in that render, nothing is sent, h1 is listed again', async () => {
+    rows(profile('p1', 'default'), profile('p2', 'experiment'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+    hostAt('10.0.0.99')
+    expect(screen.queryByTestId('profile-sot-delete-dialog')).toBeNull()
+    await waitFor(() => expect(listProfiles).toHaveBeenCalledTimes(2))
+    await ready()
+    expect(screen.queryByTestId('profile-sot-delete-dialog')).toBeNull()
+    expect(deleteProfile).not.toHaveBeenCalled()
+  })
+
+  it('… and so does the rename editor', async () => {
+    rows(profile('p1', 'default'), profile('p2', 'experiment'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-rename-p2'))
+    hostAt('10.0.0.99')
+    expect(screen.queryByTestId('profile-sot-rename-input')).toBeNull()
+    expect(renameProfile).not.toHaveBeenCalled()
+  })
+
+  it('the delete is pinned to the address; a move after the check → refused by the api, nothing deleted, said in a sentence', async () => {
+    rows(profile('p1', 'default'), profile('p2', 'experiment'))
+    vi.mocked(deleteProfile).mockResolvedValue(failure('host h1 is not at 10.0.0.1:7860 any more', 'endpoint-changed'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+    fireEvent.click(screen.getByTestId('profile-sot-delete-confirm'))
+    expect(deleteProfile).toHaveBeenCalledWith('h1', 'p2', { expectEndpoint: A })
+    expect(await screen.findByTestId('profile-sot-status')).toHaveTextContent(en['settings.profile.sot.endpoint_changed'])
+    await waitFor(() => expect(listProfiles).toHaveBeenCalledTimes(2))
+  })
+
+  it('the rename is pinned to the address too; refused likewise', async () => {
+    rows(profile('p1', 'default'))
+    vi.mocked(renameProfile).mockResolvedValue(failure('host h1 is not at 10.0.0.1:7860 any more', 'endpoint-changed'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-rename-p1'))
+    fireEvent.change(screen.getByTestId('profile-sot-rename-input'), { target: { value: 'work' } })
+    fireEvent.click(screen.getByTestId('profile-sot-rename-save'))
+    expect(renameProfile).toHaveBeenCalledWith('h1', 'p1', 'work', { expectEndpoint: A })
+    expect(await screen.findByTestId('profile-sot-status')).toHaveTextContent(en['settings.profile.sot.endpoint_changed'])
   })
 })

@@ -27,6 +27,8 @@ vi.mock('../../../../lib/profile/master-world', async (importOriginal) => ({
 const P1 = 'p_000000000001'
 const P2 = 'p_000000000002'
 const P9 = 'p_000000000009'
+/** Where h1 is — and where its list was fetched from. */
+const A = '10.0.0.1:7860'
 const attachment = (clientId: string, deviceName: string): Attachment => ({ clientId, profileId: 'p', deviceName, attachedAt: 1, lastSeen: 2 })
 const entry = (id: string, name: string, attachments: Attachment[] = []): ProfileIndexEntry => ({ id, name, createdAt: 1, updatedAt: 1, attachments, sections: [{ section: 's', rev: 1, hash: 'h', fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 1 }] })
 const host = (id: string, name: string, ip: string) => ({ id, name, ip, port: 7860, order: 0 })
@@ -89,7 +91,7 @@ describe('step 2 — confirmed', () => {
     byHost({ h1: [entry(P1, 'default', [attachment('c2', 'Air')])] })
     click('profile-wizard-delete-confirm')
     await flush()
-    expect(deleteProfile).toHaveBeenCalledWith('h1', P2)
+    expect(deleteProfile).toHaveBeenCalledWith('h1', P2, { expectEndpoint: A })
     expect(listsOf('h1')).toBe(2)
     expect(screen.queryByTestId('profile-wizard-delete-dialog')).toBeNull()
     expect(screen.queryByTestId(`profile-wizard-profile-${P2}`)).toBeNull()
@@ -159,7 +161,7 @@ describe('step 2 — confirmed', () => {
     click(`profile-wizard-profile-delete-${P2}`)
     click('profile-wizard-delete-confirm')
     await flush()
-    expect(deleteProfile).toHaveBeenCalledWith('h1', P2)
+    expect(deleteProfile).toHaveBeenCalledWith('h1', P2, { expectEndpoint: A })
     expect(screen.getByTestId(`profile-wizard-profile-${P2}`)).not.toBeChecked()
     expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
   })
@@ -207,5 +209,34 @@ describe('a confirmation belongs to the host and the step it was opened on', () 
     expect(deleteProfile).not.toHaveBeenCalled()
     expect(screen.queryByTestId('profile-wizard-delete-dialog')).toBeNull()
     expect(screen.getByTestId('profile-wizard-delete-status')).toHaveTextContent(en['settings.profile.sot.stale_action'])
+  })
+})
+
+describe('a confirmation belongs to the ADDRESS the list was fetched from, too — the same host id may move (PR #1340 review)', () => {
+  const moveH1 = () => act(() => useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, ip: '10.0.0.99' } } })))
+
+  it('h1\'s address changes while it is open: it closes in that render, nothing is sent, and h1 is listed again at its new address', async () => {
+    await askDelete(P2)
+    moveH1()
+    expect(screen.queryByTestId('profile-wizard-delete-dialog')).toBeNull()
+    await flush()
+    expect(listsOf('h1')).toBe(2)
+    expect(screen.queryByTestId('profile-wizard-delete-dialog')).toBeNull()
+    expect(deleteProfile).not.toHaveBeenCalled()
+  })
+
+  it('the delete is pinned to the address it was confirmed at; a move that slips in after the check → the api refuses, nothing is deleted, and that is said', async () => {
+    vi.mocked(deleteProfile).mockResolvedValue({ kind: 'failed', reason: 'endpoint-changed', status: 0, message: 'host h1 is not at 10.0.0.1:7860 any more' })
+    open()
+    await flush()
+    click(`profile-wizard-profile-${P2}`)
+    click(`profile-wizard-profile-delete-${P2}`)
+    click('profile-wizard-delete-confirm')
+    await flush()
+    expect(deleteProfile).toHaveBeenCalledWith('h1', P2, { expectEndpoint: A })
+    expect(screen.getByTestId('profile-wizard-delete-status')).toHaveTextContent(en['settings.profile.sot.endpoint_changed'])
+    expect(wizard().textContent).not.toMatch(/any more/)
+    expect(listsOf('h1')).toBe(2)
+    expect(screen.getByTestId(`profile-wizard-profile-${P2}`)).toBeChecked() // not deleted: still chosen
   })
 })

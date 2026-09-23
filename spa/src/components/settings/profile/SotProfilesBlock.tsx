@@ -14,7 +14,8 @@
 //   - what is sent is checked once more against the page as it is NOW: the scope it was opened under, and that the
 //     profile is still in the fetched list. Otherwise nothing is sent, and that is said;
 //   - an answer that arrives after the scope moved is for a page that is gone: it sets nothing.
-// The delete's half of this lives in useSotDelete.ts, shared with the wizard's step 2 (#1325).
+// The delete's half of this lives in useSotDelete.ts, shared with the wizard's step 2 (#1325) — and so does the
+// ADDRESS: the scope includes where the host is, and a send is pinned to where the list was fetched (`expectEndpoint`).
 import { useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -22,7 +23,7 @@ import { renameProfile } from '../../../lib/profile/api'
 import type { Attachment, ProfileIndexEntry } from '../../../lib/profile/api'
 import { ConfirmDialog } from '../../ConfirmDialog'
 import { sotScopeOf } from './profile-rules'
-import { useSotDelete } from './useSotDelete'
+import { pinnedTo, useSotDelete } from './useSotDelete'
 import type { SotProfilesView } from './useSotProfiles'
 
 const BTN =
@@ -42,7 +43,7 @@ export interface SotProfilesBlockProps {
 
 export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: SotProfilesBlockProps) {
   const t = useI18nStore((s) => s.t)
-  const [renaming, setRenaming] = useState<{ under: string; id: string; name: string } | null>(null)
+  const [renaming, setRenaming] = useState<{ under: string; at: string | null; id: string; name: string } | null>(null)
   // The delete — its confirmation, refusal, the scope guard — is `useSotDelete`'s; `busy`, `status` and the scope
   // checks are shared with the rename, and a scope change or a stale send drops the rename editor with the rest.
   const scope = sotScopeOf(hostId, attachedProfileId)
@@ -55,7 +56,9 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
     failedText: (f) => t('settings.profile.sot.delete_failed', { message: f.message }),
     onDrop: () => setRenaming(null),
   })
-  const { busy, setBusy, status, setStatus, stillValid, isLive } = del
+  // `del.scope` is `scope` plus where the host is: the rename editor is opened under it, and pinned (`at`) to the
+  // address the list was fetched from, as a delete is.
+  const { busy, setBusy, status, setStatus, stillValid, isLive, endpointChanged } = del
 
   const state = view.kind === 'rows' && view.rows.length === 0 ? 'empty' : view.kind
 
@@ -63,17 +66,18 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
     const name = renaming?.name.trim() ?? ''
     if (renaming === null || busy || name === '' || name === row.name) return
     // The scope the editor was OPENED under — not this render's, which is by construction the current one.
-    const under = renaming.under
+    const { under, at } = renaming
     if (!stillValid(under, row.id)) return
     setBusy(true)
     setStatus(null)
     try {
-      const r = await renameProfile(hostId, row.id, name)
+      const r = await renameProfile(hostId, row.id, name, ...pinnedTo(at))
       if (!isLive(under)) return
       if (r.kind === 'ok') {
         setRenaming(null)
         reload()
-      } else setStatus(t('settings.profile.sot.rename_failed', { message: r.message }))
+      } else if (r.reason === 'endpoint-changed') endpointChanged()
+      else setStatus(t('settings.profile.sot.rename_failed', { message: r.message }))
     } catch (e) {
       if (isLive(under)) setStatus(t('settings.profile.sot.rename_failed', { message: message(e) }))
     } finally {
@@ -132,7 +136,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       type="button"
                       data-testid={`profile-sot-rename-${row.id}`}
                       disabled={busy}
-                      onClick={() => setRenaming(draft === null ? { under: scope, id: row.id, name: row.name } : null)}
+                      onClick={() => setRenaming(draft === null ? { under: del.scope, at: del.listedAt, id: row.id, name: row.name } : null)}
                       className={BTN}
                     >
                       {t('settings.profile.sot.rename')}
@@ -176,7 +180,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                       data-testid="profile-sot-rename-input"
                       spellCheck={false}
                       value={draft}
-                      onChange={(e) => setRenaming({ under: renaming?.under ?? scope, id: row.id, name: e.target.value })}
+                      onChange={(e) => setRenaming({ under: renaming?.under ?? del.scope, at: renaming?.at ?? del.listedAt, id: row.id, name: e.target.value })}
                       onKeyDown={(e) => {
                         if (e.nativeEvent.isComposing) return
                         if (e.key === 'Enter') void rename(row)
