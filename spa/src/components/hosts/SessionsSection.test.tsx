@@ -1,5 +1,6 @@
 // spa/src/components/hosts/SessionsSection.test.tsx
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { SessionsSection } from './SessionsSection'
 import { useSessionStore } from '../../stores/useSessionStore'
@@ -148,6 +149,34 @@ describe('SessionsSection', () => {
     useAgentStore.setState({ statuses: { [ck]: 'running' } })
     render(<SessionsSection hostId={HOST_ID} />)
     expect(screen.getByText('running')).toBeInTheDocument()
+  })
+
+  describe('agent status badge is locale-aware', () => {
+    afterEach(() => { useI18nStore.getState().setLocale('en') })
+
+    it.each([
+      ['running', '執行中'],
+      ['waiting', '等待中'],
+      ['idle', '閒置'],
+      ['error', '錯誤'],
+    ] as const)('%s renders in English for en and as %s for zh-TW', (status, zh) => {
+      useAgentStore.setState({ statuses: { [compositeKey(HOST_ID, 'abc')]: status } })
+      const { unmount } = render(<SessionsSection hostId={HOST_ID} />)
+      expect(screen.getByText(status)).toBeInTheDocument()
+      unmount()
+
+      useI18nStore.getState().setLocale('zh-TW')
+      render(<SessionsSection hostId={HOST_ID} />)
+      expect(screen.getByText(zh)).toBeInTheDocument()
+      expect(screen.queryByText(status)).not.toBeInTheDocument()
+    })
+
+    it('an unknown status from the wire still shows raw', () => {
+      useAgentStore.setState({ statuses: { [compositeKey(HOST_ID, 'abc')]: 'compacting' as never } })
+      useI18nStore.getState().setLocale('zh-TW')
+      render(<SessionsSection hostId={HOST_ID} />)
+      expect(screen.getByText('compacting')).toBeInTheDocument()
+    })
   })
 
   it('renders dash when no agent status for session', () => {
