@@ -120,6 +120,12 @@ describe('layoutToWire / layoutFromWire', () => {
     expect(contentOf(wire, exec('e3'))).toEqual({ kind: 'execution', executionId: 'e3', host: '' })
   })
 
+  it('an empty execution.host is "no hint", never mapped — even if some host were keyed by ""', () => {
+    const odd = identityOfSync({ '': { id: '', daemonId: MLAB } })
+    const content: PaneContent = { kind: 'execution', executionId: 'e', host: '' }
+    expect(layoutToWire(leaf('p', content), odd)).toEqual(leaf('p', content))
+  })
+
   it('translates the whole nested tree and keeps split structure and sizes', () => {
     expect(layoutToWire(nested(L), identity)).toEqual(nested(W))
   })
@@ -143,11 +149,12 @@ describe('layoutToWire / layoutFromWire', () => {
   })
 
   it('does not mutate its input', () => {
-    const input = nested(L)
-    const snapshot = structuredClone(input)
-    layoutToWire(input, identity)
-    layoutFromWire(input, resolve)
-    expect(input).toEqual(snapshot)
+    const local = nested(L)
+    layoutToWire(local, identity)
+    expect(local).toEqual(nested(L))
+    const wire = nested(W)
+    layoutFromWire(wire, resolve)
+    expect(wire).toEqual(nested(W))
   })
 
   it('is total on garbage', () => {
@@ -213,6 +220,11 @@ describe('preset columns', () => {
     for (const id of ['browser', 'editor', 'editor-buffers', 'sessions', 'headless', `other:${L}`, `sessions:`, `${L}`]) {
       expect(presetColumnIdToWire(id, identity), id).toBe(id)
     }
+  })
+
+  it('a bare `<prefix>:` has no host id — never mapped, even if some host were keyed by ""', () => {
+    const odd = identityOfSync({ '': { id: '', daemonId: MLAB } })
+    expect(presetColumnIdToWire('sessions:', odd)).toBe('sessions:')
   })
 
   it('an unknown host id in a column passes through', () => {
