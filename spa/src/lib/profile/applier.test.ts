@@ -155,6 +155,32 @@ describe('applyHosts', () => {
       expect(Object.hasOwn(next.hosts.h2, 'daemonId')).toBe(false)
     })
 
+    // The upcast keeps the local claim only for the SAME incarnation as far as the
+    // address can tell (codex R1 P1): a payload host without daemonId at another
+    // ip or port is a re-point (an ordinal-2 client clears daemonId by re-pointing;
+    // an old client re-points without knowing the field) or a host deleted and
+    // recreated under the same id — the local id belongs to another daemon.
+    it('a re-pointed host (another ip) arriving without daemonId does NOT keep the local one — an ordinal-2 clear stays cleared', () => {
+      const p = deepFreeze(buildHostsSection({ hosts: { h1: host('h1', { ip: '10.9.9.9' }) }, hostOrder: ['h1'] }))
+      const { next } = applyHosts(deepFreeze(local()), p)
+      expect(next.hosts.h1).toEqual(p.hosts.h1)
+      expect(Object.hasOwn(next.hosts.h1, 'daemonId')).toBe(false)
+    })
+
+    it('another port is another endpoint: the local daemonId is NOT kept', () => {
+      const p = deepFreeze(buildHostsSection({ hosts: { h1: host('h1', { port: 7861 }) }, hostOrder: ['h1'] }))
+      const { next } = applyHosts(deepFreeze(local()), p)
+      expect(Object.hasOwn(next.hosts.h1, 'daemonId')).toBe(false)
+    })
+
+    it('a host deleted and recreated under the same id at a different address does not inherit the old incarnation\'s daemonId', () => {
+      const recreated = host('h1', { name: 'new one', ip: 'other.example', port: 9000, order: 3 })
+      const p = deepFreeze(buildHostsSection({ hosts: { h1: recreated }, hostOrder: ['h1'] }))
+      const { next } = applyHosts(deepFreeze(local()), p)
+      expect(next.hosts.h1).toEqual(recreated)
+      expect(buildHostsSection(next)).toEqual(p) // nothing to push back: the wrong id never goes out
+    })
+
     it('an incoming host WITH daemonId wins over the local one (SOT wins, D2)', () => {
       const p = deepFreeze(buildHostsSection({ hosts: { h1: host('h1', { daemonId: 'mini:sot' }) }, hostOrder: ['h1'] }))
       const { next } = applyHosts(deepFreeze(local()), p)

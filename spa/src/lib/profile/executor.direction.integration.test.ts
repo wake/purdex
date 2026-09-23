@@ -956,6 +956,42 @@ describe('D6 NEW side: this build (hosts ordinal 2) meets hosts an ordinal-1 cli
     expect(hostsPuts(writesBefore, B)).toHaveLength(1)
     await expectHostsQuiet()
   })
+
+  // codex R1 P1: the upcast must not carry this device's claim onto another
+  // incarnation. A re-point arriving by sync — from a new client (ordinal 2,
+  // daemonId cleared by the re-point) or an old one (ordinal 1, never had it) —
+  // lands without daemonId, and the old id is never PUT back.
+  for (const writer of [{ name: 'a NEW client (ordinal 2, daemonId cleared)', legacy: false }, { name: 'an OLD client (ordinal 1)', legacy: true }]) {
+    it(`a re-point by ${writer.name} lands WITHOUT the local daemonId, and the old id is never PUT`, async () => {
+      h.shape = shapeWith({ hosts: shapes.current })
+      world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+      claim(H2, 'mini:b')
+      await attach(B, 'push')
+      expect(sotHosts().hosts[H2].daemonId).toBe('mini:b')
+      problems.length = 0
+      const putCallsBefore = api.putSection.mock.calls.length
+
+      const cur = daemon.rows.get('hosts')!
+      const moved = JSON.parse(JSON.stringify(cur.payload)) as HostsRow
+      moved.hosts[H2].ip = '10.7.7.7'
+      delete moved.hosts[H2].daemonId
+      const payload = moved as unknown as Record<string, unknown>
+      const shape = writer.legacy ? shapes.legacy : shapes.current
+      const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: shape[0], ordinal: shape[1], writer: 'c_eeeeeeeeeeee' }
+      daemon.rows.set('hosts', row)
+      executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'hosts', rev: row.rev, hash: row.hash!, writerClientId: 'c_eeeeeeeeeeee' })
+      for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      expect(useHostStore.getState().hosts[H2].ip).toBe('10.7.7.7')
+      expect(Object.hasOwn(useHostStore.getState().hosts[H2], 'daemonId')).toBe(false)
+      const hostsBodies = api.putSection.mock.calls.slice(putCallsBefore).filter((c) => c[2] === 'hosts').map((c) => JSON.stringify(c[3]))
+      expect(hostsBodies.filter((b) => b.includes('mini:b'))).toEqual([]) // the wrong daemonId never goes out
+      expect(hostsBodies).toEqual([]) // nothing to push back at all: the build equals what arrived
+      expect(daemon.rows.get('hosts')).toEqual(row)
+      expect(executor!.status().profile).toBe('synced')
+    })
+  }
 })
 
 describe('D6 OLD side: an ordinal-1 hosts client meets the hosts row this build writes (ordinal 2)', () => {
