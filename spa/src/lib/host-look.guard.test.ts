@@ -27,9 +27,20 @@
 //   - test files (excluded by design: `*.test.*`, `__tests__/`, `test-setup.ts`,
 //     `test-utils*`).
 //
-// The allowlist is per file AND per field with the EXACT count: a count going
-// up (a new direct read) or down (a read moved) fails and prints the
-// `file:line field` list. H2a checks the colour / icon fields; H2b adds `name`.
+// Every hit also carries `decl`: the innermost NAMED declaration around the read
+// — a function / method / accessor name, a `const f = () => …` name, or the key
+// of an object-literal property (`setHostIcon: (…) => …` → `setHostIcon`);
+// `<module>` when there is none. The allowlist is file → decl → field → EXACT
+// count, and the repo test demands the hit multiset equal it: a new read, a
+// removed read, or a read moved into another declaration of the same file
+// (same file-wide count) all fail and print `file:line decl field`.
+//
+// WIDENING THE ALLOWLIST takes two edits, on purpose: the `ALLOWLIST` constant
+// AND the verbatim literal pinned in the "pinned" test (which never references
+// the constant). Only `stores/useHostStore.ts`, `lib/host-color.ts` and
+// `lib/host-look.ts` may appear (the spec §4.2 exception); a test asserts the
+// allowlisted files are a subset of those three. H2a checks the colour / icon
+// fields; H2b adds `name`.
 import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
 
@@ -52,6 +63,8 @@ export interface GuardHit {
   file: string
   line: number
   field: string
+  /** The innermost named declaration around the read (`<module>` when none). */
+  decl: string
 }
 
 // === the detector ===
@@ -74,6 +87,42 @@ function isWriteTarget(node: ts.Expression): boolean {
   const parent = n.parent
   if (ts.isDeleteExpression(parent)) return true
   return ts.isBinaryExpression(parent) && parent.left === n && ASSIGNMENT_OPERATORS.has(parent.operatorToken.kind)
+}
+
+/** A declaration name as text, or undefined when it is not a plain name (binding pattern, computed key). */
+function nameText(name: ts.Node | undefined): string | undefined {
+  if (!name) return undefined
+  if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text
+  }
+  return undefined
+}
+
+/** The innermost named declaration enclosing `node` (see the header), or `<module>`. */
+export function enclosingDecl(node: ts.Node): string {
+  for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+    let name: string | undefined
+    if (
+      ts.isFunctionDeclaration(n) ||
+      ts.isFunctionExpression(n) ||
+      ts.isMethodDeclaration(n) ||
+      ts.isGetAccessorDeclaration(n) ||
+      ts.isSetAccessorDeclaration(n) ||
+      ts.isPropertyAssignment(n) ||
+      ts.isPropertyDeclaration(n) ||
+      ts.isClassDeclaration(n)
+    ) {
+      name = nameText(n.name)
+    } else if (
+      ts.isVariableDeclaration(n) &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      name = nameText(n.name)
+    }
+    if (name !== undefined) return name
+  }
+  return '<module>'
 }
 
 function hostConfigSymbol(program: ts.Program, checker: ts.TypeChecker): ts.Symbol {
@@ -110,7 +159,12 @@ export function detectHostConfigReads(program: ts.Program, opts: DetectOptions):
     if (sf.isDeclarationFile || !opts.include(sf.fileName)) continue
     const file = srcRelative(sf.fileName) ?? sf.fileName
     const hit = (node: ts.Node, field: string) =>
-      hits.push({ file, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, field })
+      hits.push({
+        file,
+        line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+        field,
+        decl: enclosingDecl(node),
+      })
 
     const visit = (node: ts.Node): void => {
       if (ts.isPropertyAccessExpression(node)) {
@@ -252,45 +306,159 @@ describe('host-look guard — detector fixtures', { timeout: 60_000 }, () => {
   })
 })
 
+/** name → [snippet, the `decl` of each hit (in order)]. */
+const DECL_FIXTURES: Record<string, [string, string[]]> = {
+  'decl-module.ts': [`export const v = h.icon`, ['<module>']],
+  'decl-function.ts': [`export function f() { return h.icon }`, ['f']],
+  'decl-arrow-const.ts': [`export const f = () => [h.icon, h.color]`, ['f', 'f']],
+  'decl-nested.ts': [`export function outer() { function inner() { return h.icon } return [inner(), h.color] }`, ['inner', 'outer']],
+  'decl-property-key.ts': [
+    `export const store = { setIcon: (x: HostConfig) => [1].map(() => x.icon), other: () => h.colors }`,
+    ['setIcon', 'other'],
+  ],
+  'decl-method.ts': [`export class C { m() { return h.iconWeight } get g() { return h.icon } }`, ['m', 'g']],
+  'decl-destructure.ts': [`export function f() { const { icon, color } = h; return [icon, color] }`, ['f', 'f']],
+}
+
+describe('host-look guard — enclosing declaration', { timeout: 60_000 }, () => {
+  const { program, dir } = fixtureProgram(
+    Object.fromEntries(Object.entries(DECL_FIXTURES).map(([name, [snippet]]) => [name, HEADER + snippet + '\n'])),
+  )
+  const hits = detectHostConfigReads(program, { fields: GUARDED_FIELDS, include: (f) => f.startsWith(`${dir}/`) })
+
+  it.each(Object.entries(DECL_FIXTURES))('%s', (name, [, expected]) => {
+    expect(hits.filter((h) => h.file.endsWith(`/${name}`)).map((h) => h.decl)).toEqual(expected)
+  })
+})
+
+// === the allowlist check ===
+
+type GuardedField = (typeof GUARDED_FIELDS)[number]
+/** file (relative to `spa/src`) → enclosing declaration → field → exact read count. */
+export type Allowlist = Record<string, Record<string, Partial<Record<GuardedField, number>>>>
+
+/**
+ * Every difference between the hit multiset and `allowlist`, keyed by
+ * (file, decl, field): a key with more reads than allowlisted, fewer, or not
+ * allowlisted at all. Empty = exact match.
+ */
+export function allowlistProblems(hits: readonly GuardHit[], allowlist: Allowlist): string[] {
+  const key = (file: string, decl: string, field: string) => JSON.stringify([file, decl, field])
+  const got = new Map<string, GuardHit[]>()
+  for (const h of hits) {
+    const k = key(h.file, h.decl, h.field)
+    got.set(k, [...(got.get(k) ?? []), h])
+  }
+  const want = new Map<string, number>()
+  for (const [file, decls] of Object.entries(allowlist)) {
+    for (const [decl, counts] of Object.entries(decls)) {
+      for (const [field, n] of Object.entries(counts)) want.set(key(file, decl, field), n ?? 0)
+    }
+  }
+  const problems: string[] = []
+  for (const k of new Set([...got.keys(), ...want.keys()])) {
+    const list = got.get(k) ?? []
+    const n = want.get(k) ?? 0
+    if (list.length === n) continue
+    const [file, decl, field] = JSON.parse(k) as [string, string, string]
+    const where = list.map((h) => `${h.file}:${h.line}`).join(', ') || 'none'
+    problems.push(
+      want.has(k)
+        ? `${file} ${decl} ${field}: ${list.length} read(s), allowlisted ${n} — ${where}`
+        : `${file} ${decl} ${field}: ${list.length} read(s), not allowlisted — ${where}`,
+    )
+  }
+  return problems.sort()
+}
+
+describe('host-look guard — allowlistProblems', { timeout: 60_000 }, () => {
+  const scan = (src: string) => {
+    const { program, dir } = fixtureProgram({ 'swap.ts': HEADER + src + '\n' })
+    return detectHostConfigReads(program, { fields: GUARDED_FIELDS, include: (f) => f.startsWith(`${dir}/`) })
+  }
+  const FILE = 'lib/__host_look_guard_fixture__/swap.ts'
+  const allow: Allowlist = { [FILE]: { keep: { icon: 1 }, twice: { color: 2 } } }
+  const baseline = [
+    `export function keep(x: HostConfig) { return x.icon }`,
+    `export function other(x: HostConfig) { return x.name }`,
+    `export function twice(x: HostConfig) { return [x.color, x.color] }`,
+  ].join('\n')
+
+  it('the baseline matches its allowlist', () => {
+    expect(allowlistProblems(scan(baseline), allow)).toEqual([])
+  })
+
+  it('a same-file, same-count swap into another declaration fails', () => {
+    const swapped = baseline
+      .replace('keep(x: HostConfig) { return x.icon }', 'keep(x: HostConfig) { return x.name }')
+      .replace('other(x: HostConfig) { return x.name }', 'other(x: HostConfig) { return x.icon }')
+    expect(swapped).not.toBe(baseline)
+    expect(allowlistProblems(scan(swapped), allow)).toEqual([
+      `${FILE} keep icon: 0 read(s), allowlisted 1 — none`,
+      `${FILE} other icon: 1 read(s), not allowlisted — ${FILE}:4`,
+    ])
+  })
+
+  it('the count inside one declaration must match too', () => {
+    const once = baseline.replace('[x.color, x.color]', '[x.color, x.name]')
+    expect(allowlistProblems(scan(once), allow)).toEqual([`${FILE} twice color: 1 read(s), allowlisted 2 — ${FILE}:5`])
+  })
+
+  it('a read in a file that is not allowlisted fails', () => {
+    expect(allowlistProblems(scan(baseline), {})).toHaveLength(2)
+  })
+})
+
 // === repo half ===
 
 /**
- * The only production files that may read a colour / icon field off
- * `HostConfig`, with the exact count per field. Measured at H2a T4.
+ * The only production reads of a colour / icon field off `HostConfig`: file →
+ * enclosing declaration → field → exact count. Measured at H2a T4.
+ * Widening this ALSO requires editing the pinned literal below (see the header).
  */
-export const ALLOWLIST: Record<string, Partial<Record<(typeof GUARDED_FIELDS)[number], number>>> = {
+export const ALLOWLIST: Allowlist = {
   // the store: its writers read the current value to build the next one
-  // (:447 / :455 `colors`, :488 `color`, :501 the `{ icon, iconWeight }` destructure)
-  'stores/useHostStore.ts': { colors: 2, color: 1, icon: 1, iconWeight: 1 },
-  // the persisted-state sanitiser (:113–:116)
-  'lib/host-color.ts': { colors: 1, color: 1, icon: 1, iconWeight: 1 },
-  // THE selector (`lookOfHost`'s destructure)
-  'lib/host-look.ts': { colors: 1, color: 1, icon: 1, iconWeight: 1 },
+  'stores/useHostStore.ts': {
+    setHostColor: { colors: 1 }, // the current console alpha
+    setHostColorLayer: { colors: 1, color: 1 }, // `{ ...host.colors }`, the `{ color: _legacy }` drop
+    setHostIcon: { icon: 1, iconWeight: 1 }, // the `{ icon: _i, iconWeight: _w }` drop
+  },
+  // the persisted-state sanitiser
+  'lib/host-color.ts': {
+    sanitizeHostConfig: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
+  },
+  // THE selector
+  'lib/host-look.ts': {
+    lookOfHost: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
+  },
 }
 
+/** The spec §4.2 exception: the only files the allowlist may ever name. */
+const ALLOWLIST_FILES_MAY_BE = ['stores/useHostStore.ts', 'lib/host-color.ts', 'lib/host-look.ts']
+
 describe('host-look guard — repo', { timeout: 60_000 }, () => {
-  it('no colour / icon read of HostConfig outside the allowlist, at exactly the allowlisted counts', () => {
+  it('the colour / icon reads of HostConfig are exactly the allowlist (file, declaration, field, count)', () => {
     const hits = detectHostConfigReads(repoProgram(), { fields: GUARDED_FIELDS, include: isGuardedSource })
-    const problems: string[] = []
-    const byFile = new Map<string, GuardHit[]>()
-    for (const h of hits) byFile.set(h.file, [...(byFile.get(h.file) ?? []), h])
-    for (const [file, list] of byFile) {
-      if (!Object.hasOwn(ALLOWLIST, file)) {
-        problems.push(...list.map((h) => `${h.file}:${h.line} ${h.field} (file not allowlisted)`))
-      }
-    }
-    for (const [file, counts] of Object.entries(ALLOWLIST)) {
-      const list = byFile.get(file) ?? []
-      for (const field of GUARDED_FIELDS) {
-        const got = list.filter((h) => h.field === field)
-        const want = counts[field] ?? 0
-        if (got.length !== want) {
-          problems.push(
-            `${file} ${field}: ${got.length} read(s), allowlisted ${want} — ${got.map((h) => `${h.file}:${h.line}`).join(', ') || 'none'}`,
-          )
-        }
-      }
-    }
-    expect(problems).toEqual([])
+    expect(allowlistProblems(hits, ALLOWLIST)).toEqual([])
+  })
+
+  it('the allowlist is pinned verbatim (widening it takes a second, deliberate edit here)', () => {
+    expect(ALLOWLIST).toEqual({
+      'stores/useHostStore.ts': {
+        setHostColor: { colors: 1 },
+        setHostColorLayer: { colors: 1, color: 1 },
+        setHostIcon: { icon: 1, iconWeight: 1 },
+      },
+      'lib/host-color.ts': {
+        sanitizeHostConfig: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
+      },
+      'lib/host-look.ts': {
+        lookOfHost: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
+      },
+    })
+  })
+
+  it('the allowlisted files are a subset of the spec §4.2 three', () => {
+    expect(Object.keys(ALLOWLIST).filter((f) => !ALLOWLIST_FILES_MAY_BE.includes(f))).toEqual([])
   })
 })
