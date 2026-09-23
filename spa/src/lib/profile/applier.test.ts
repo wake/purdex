@@ -8,11 +8,14 @@ import {
   applyWorkspaces,
   deriveTabOrder,
   isWellFormedSection,
+  planHostsApply,
   restoreSizes,
+  settingsFromWire,
+  tabsFromWire,
   upcastLegacySettings,
 } from './applier'
 import { hashSection } from './hash'
-import { identityOfSync } from './host-identity'
+import { NEW_HOST, identityOfSync, makeWireResolver, syncIdOfSync } from './host-identity'
 import { PROJECTIONS, project } from './projections'
 import {
   buildHostsSection,
@@ -1232,5 +1235,168 @@ describe('upcastLegacySettings — an ordinal-3 settings payload (newtab `profil
   it('carries the other fields of the newtab store along (the guard then judges them, as before)', () => {
     const legacy = deepFreeze({ 'purdex-newtab-layout': { profiles: copy(layout), knownIds: ['x'] } })
     expect(upcastLegacySettings(legacy)).toEqual({ 'purdex-newtab-layout': { presets: layout, knownIds: ['x'] } })
+  })
+})
+
+// --- host-sync-identity PR 2: the wire side of the applier -------------------
+
+const DAEMON = 'mini-lab:278cbm'
+const WIRE = syncIdOfSync(DAEMON)
+
+describe('isWellFormedSection(hosts) — wire ids and aliases (host-sync-identity)', () => {
+  const canonical = (): Record<string, unknown> => copy<unknown>(buildHostsSection({ hosts: { bbbbbb: host('bbbbbb', { daemonId: DAEMON, syncAliases: ['aaaaaa'] }), h2: host('h2') }, hostOrder: ['bbbbbb', 'h2'] })) as Record<string, unknown>
+  const ok = (edit: (p: { hosts: Record<string, Record<string, unknown>>; hostOrder: string[] }) => void): boolean => {
+    const p = canonical() as { hosts: Record<string, Record<string, unknown>>; hostOrder: string[] }
+    edit(p)
+    return isWellFormedSection('hosts', p)
+  }
+
+  it('a canonical row (sync-id key, its daemonId, aliases) is well-formed', () => {
+    expect(isWellFormedSection('hosts', canonical())).toBe(true)
+  })
+
+  it('a sync-id key must be THE sync id of the row\'s own daemonId — a builder cannot produce anything else', () => {
+    expect(ok((p) => { delete p.hosts[WIRE].daemonId })).toBe(false)
+    expect(ok((p) => { p.hosts[WIRE].daemonId = 'other:daemon' })).toBe(false)
+    const d2 = 'd2_0000000000000001'
+    expect(ok((p) => { p.hosts[d2] = { ...p.hosts[WIRE], id: d2 }; delete p.hosts[WIRE]; p.hostOrder[0] = d2 })).toBe(false)
+  })
+
+  it('aliases: only on a canonical row, only in mergeAliases\' form (strings, no sync ids, each once, ≤ 16, never empty)', () => {
+    expect(ok((p) => { p.hosts.h2.aliases = ['x'] })).toBe(false) // a legacy row carries none
+    expect(ok((p) => { p.hosts[WIRE].aliases = [] })).toBe(false)
+    expect(ok((p) => { p.hosts[WIRE].aliases = ['a', 'a'] })).toBe(false)
+    expect(ok((p) => { p.hosts[WIRE].aliases = ['a', 5] })).toBe(false)
+    expect(ok((p) => { p.hosts[WIRE].aliases = [WIRE] })).toBe(false)
+    expect(ok((p) => { p.hosts[WIRE].aliases = 'aaaaaa' })).toBe(false)
+    expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 17 }, (_, i) => `a${i}`) })).toBe(false)
+    expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 16 }, (_, i) => `a${i}`) })).toBe(true)
+  })
+
+  it('a legacy (local-id) key carrying a daemonId — an ordinal-2 row — stays well-formed', () => {
+    expect(isWellFormedSection('hosts', copy(buildLocalHosts({ hosts: { aaaaaa: host('aaaaaa', { daemonId: DAEMON }) }, hostOrder: ['aaaaaa'] })))).toBe(true)
+  })
+})
+
+describe('planHostsApply — incoming wire rows onto local hosts (spec §6, §11.5/§11.6)', () => {
+  const ids = (...list: string[]) => {
+    const queue = [...list]
+    return () => queue.shift() ?? 'zzzzzz'
+  }
+  const wire = (hosts: Record<string, HostConfig>, hostOrder = Object.keys(hosts)): HostsPayload => buildHostsSection({ hosts, hostOrder })
+  const plan = (local: Record<string, HostConfig>, incoming: HostsPayload, newId = ids('nnnnnn')) => {
+    const out = planHostsApply(local, incoming, newId)
+    if ('error' in out) throw new Error(out.error)
+    return out.plan
+  }
+
+  it('INDEPENDENT ids, one daemon: A\'s canonical row updates B\'s host IN PLACE — B\'s id kept; B\'s host that A lacks is not in the payload', () => {
+    const incoming = wire({ aaaaaa: host('aaaaaa', { name: 'mlab by A', daemonId: DAEMON }) })
+    const p = plan({ bbbbbb: host('bbbbbb', { daemonId: DAEMON }), onlyb: host('onlyb') }, incoming)
+    expect(p.payload.hosts).toEqual({ bbbbbb: { ...host('bbbbbb', { name: 'mlab by A', daemonId: DAEMON }) } })
+    expect(p.payload.hostOrder).toEqual(['bbbbbb'])
+    expect([...p.byRow]).toEqual([[WIRE, 'bbbbbb']])
+    expect(p.created).toEqual([])
+    expect(p.aliases).toEqual({})
+  })
+
+  it('a canonical row nobody here matches is CREATED under a NEW random id; its aliases come back for syncAliases', () => {
+    const incoming = wire({ aaaaaa: host('aaaaaa', { daemonId: DAEMON, syncAliases: ['old1'] }) })
+    const p = plan({ h1: host('h1') }, incoming, ids('newid1'))
+    expect(p.created).toEqual(['newid1'])
+    expect(p.payload.hosts.newid1).toEqual({ ...host('aaaaaa', { daemonId: DAEMON }), id: 'newid1' })
+    expect(p.aliases).toEqual({ newid1: ['old1'] })
+  })
+
+  it('a LEGACY row (ordinal 2: another device\'s local id) with a daemonId matches by daemonId, and its key becomes an alias', () => {
+    const incoming = buildLocalHosts({ hosts: { aaaaaa: host('aaaaaa', { daemonId: DAEMON }) }, hostOrder: ['aaaaaa'] })
+    const p = plan({ bbbbbb: host('bbbbbb', { daemonId: DAEMON, syncAliases: ['older'] }) }, incoming)
+    expect(Object.keys(p.payload.hosts)).toEqual(['bbbbbb'])
+    expect(p.aliases).toEqual({ bbbbbb: ['older', 'aaaaaa'] })
+  })
+
+  it('a legacy row WITHOUT daemonId keeps its id when this device has none by that id — it syncs "as today", never under a random id (no ping-pong)', () => {
+    const incoming = buildLocalHosts({ hosts: { cccccc: host('cccccc') }, hostOrder: ['cccccc'] })
+    const p = plan({ h1: host('h1') }, incoming, ids('random'))
+    expect(p.created).toEqual(['cccccc'])
+    expect(Object.keys(p.payload.hosts)).toEqual(['cccccc'])
+    // and it is its own wire id again: the next build reproduces the row
+    expect(buildHostsSection({ hosts: p.payload.hosts, hostOrder: p.payload.hostOrder })).toEqual(incoming)
+  })
+
+  it('a legacy key already taken HERE (by a host with a claim) is not reused: a new random id', () => {
+    const incoming = buildLocalHosts({ hosts: { h1: host('h1', { ip: '10.9.9.9' }) }, hostOrder: ['h1'] })
+    const p = plan({ h1: host('h1', { daemonId: DAEMON }) }, incoming, ids('fresh1'))
+    expect(p.created).toEqual(['fresh1'])
+  })
+
+  it('D6 upcast BEFORE matching: a no-daemonId row under a local id whose host has a claim at the SAME address is that host (the claim kept)', () => {
+    const incoming = buildLocalHosts({ hosts: { h1: host('h1', { name: 'renamed' }) }, hostOrder: ['h1'] })
+    const p = plan({ h1: host('h1', { daemonId: DAEMON }) }, incoming)
+    expect(p.created).toEqual([])
+    expect(p.payload.hosts.h1).toEqual(host('h1', { name: 'renamed', daemonId: DAEMON }))
+    expect(p.aliases).toEqual({ h1: ['h1'] })
+  })
+
+  it('refuses a payload with two rows for one daemon, and one whose daemon two local hosts claim', () => {
+    const two = buildLocalHosts({ hosts: { a1: host('a1', { daemonId: DAEMON }), a2: host('a2', { daemonId: DAEMON }) }, hostOrder: ['a1', 'a2'] })
+    expect(planHostsApply({}, two, ids())).toEqual({ error: 'duplicate-host-identity' })
+    const one = wire({ a1: host('a1', { daemonId: DAEMON }) })
+    expect(planHostsApply({ b1: host('b1', { daemonId: DAEMON }), b2: host('b2', { daemonId: DAEMON }) }, one, ids())).toEqual({ error: 'host-identity-conflict' })
+  })
+
+  it('never hands NEW_HOST out as an id, and never mutates its inputs', () => {
+    const local = deepFreeze({ h1: host('h1') })
+    const incoming = deepFreeze(wire({ x: host('x', { daemonId: DAEMON }) }))
+    const p = plan(local, incoming, ids('abcdef'))
+    expect([...p.byRow.values()]).not.toContain(NEW_HOST)
+  })
+})
+
+describe('tabsFromWire / settingsFromWire — wire → local for the sections that name hosts', () => {
+  const identity = identityOfSync({ bbbbbb: { id: 'bbbbbb', daemonId: DAEMON } })
+  const resolve = makeWireResolver({ identity, rows: { [WIRE]: { daemonId: DAEMON, aliases: ['aaaaaa'] } } })
+
+  it('tabs: every host-bearing pane field of every tab, nested splits included; unknown ids unchanged; input untouched', () => {
+    const tmux = (hostId: string): PaneContent => ({ kind: 'tmux-session', hostId, sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i' })
+    const p: TabsPayload = deepFreeze({
+      order: ['t1'],
+      tabs: { t1: { id: 't1', pinned: false, locked: false, createdAt: 1, layout: stripSizes(split('s', [leaf('a', tmux(WIRE)), split('s2', [leaf('b', tmux('aaaaaa')), leaf('c', tmux('gone00'))], [50, 50])], [50, 50])) } },
+    })
+    const out = tabsFromWire(p, resolve)
+    expect(JSON.stringify(out)).not.toContain(WIRE)
+    expect(JSON.stringify(out)).not.toContain('aaaaaa')
+    expect(JSON.stringify(out)).toContain('gone00')
+    expect(out.order).toEqual(['t1'])
+  })
+
+  it('settings: host-settings keys and preset columns are resolved; a host-bearing column whose host is NOT live here is left out (never handed to the New Tab prune)', () => {
+    const p: SettingsPayload = deepFreeze({
+      'purdex-host-settings': { hosts: { [WIRE]: { a: 1 }, gone00: { b: 2 } } },
+      'purdex-newtab-layout': {
+        presets: {
+          '3col': { enabled: true, columns: [[`sessions:${WIRE}`, 'files'], ['headless:aaaaaa', `headless:${syncIdOfSync('other:x')}`], ['sessions:gone00']] },
+          '2col': { enabled: true, columns: [[], []] },
+          '1col': { enabled: true, columns: [['files']] },
+        },
+      },
+      'purdex-layout': { tabPosition: 'top' },
+    })
+    const out = settingsFromWire(p, resolve, new Set(['bbbbbb']))
+    expect(out['purdex-host-settings']).toEqual({ hosts: { bbbbbb: { a: 1 }, gone00: { b: 2 } } })
+    expect(out['purdex-newtab-layout']).toEqual({
+      presets: {
+        '3col': { enabled: true, columns: [['sessions:bbbbbb', 'files'], ['headless:bbbbbb'], []] },
+        '2col': { enabled: true, columns: [[], []] },
+        '1col': { enabled: true, columns: [['files']] },
+      },
+    })
+    expect(out['purdex-layout']).toBe(p['purdex-layout'])
+  })
+
+  it('settings: a live host that the resolver leaves unchanged (a legacy id that IS the local id) keeps its column', () => {
+    const p: SettingsPayload = { 'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['sessions:h1']] } } } }
+    const out = settingsFromWire(p, resolve, new Set(['h1']))
+    expect(out['purdex-newtab-layout']).toEqual(p['purdex-newtab-layout'])
   })
 })
