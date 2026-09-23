@@ -417,13 +417,30 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
 }
 
 /**
+ * A RETRY'S PLAN: the plan the run was started with (`old` — its sub-steps' states are indexed by it), re-aimed at
+ * what the door has just found (`fresh`): the host's address now (`at`), the fingerprint (`seen`) and the hosts it
+ * removes. Only those: what is done stays done, and the retry goes on from where it stopped. Null when `fresh`
+ * would run other sub-steps, or remove other hosts, than `old` — then it is not the same plan, and the user
+ * chooses again (the wizard goes back to the direction step). The door is asked with `old`'s own draft, so it
+ * refuses a changed list itself (`removes-changed`); this is the second lock, not the first.
+ */
+export function retargetPlan(old: Readonly<WizardPlan>, fresh: Readonly<WizardPlan>): Readonly<WizardPlan> | null {
+  const steps = subStepsOf(old)
+  const same = subStepsOf(fresh)
+  if (old.hostId !== fresh.hostId || old.profileId !== fresh.profileId || steps.length !== same.length || steps.some((id, i) => id !== same[i])) return null
+  if (!sameSet(old.removesHosts, fresh.removesHosts)) return null
+  return Object.freeze({ ...old, at: fresh.at, seen: fresh.seen, removesHosts: fresh.removesHosts })
+}
+
+/**
  * THE ASK BEFORE THE ATTACH (review, attacker H1). `prepareRun` answered before the promote and the copy; those are
  * asynchronous, and meanwhile the SOT may have moved, a host may have been added here, or the attach host may have
  * turned out to be at another daemon. So right before `attachMaster` everything `prepareRun` checks is checked
  * again, against the PLAN — the address it was made for (`at`), the fingerprint it was made against (`seen`), and
  * the hosts it removes (`removesHosts`, the list the user was shown). Anything moved → no attach, and the refusal
  * is `prepareRun`'s own (the wizard sends the user back as it does for those):
- *   the host re-pointed           `list-failed` / `endpoint-changed`   (retryable: the next door reads the new address)
+ *   the host re-pointed           `list-failed` / `endpoint-changed`   (retryable: the next door reads the new address,
+ *                                                                      and the retry's plan is re-aimed there: `retargetPlan`)
  *   hosts section / fingerprint   `profile-changed`, with what is there now
  *   a host added / one matched    `removes-changed`, with the list now
  *   attach host verified no more  `master-unverified` / `master-mismatch`

@@ -62,7 +62,7 @@ import { useSotDelete } from '../useSotDelete'
 import { wizardSotScopeOf } from '../profile-rules'
 import { ConfirmDialog } from '../../../ConfirmDialog'
 import { DirectionStep, LocalStep, SotStep, type SotChoice } from './WizardChoiceSteps'
-import { announceRun, brokenLocalPremise, brokenPullPremise, createSotProfile, offeredProfileName, prepareRun, previewPull, runPlan, sotNow, subStepsOf, type CreateResult, type PrepareRefusal, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import { announceRun, brokenLocalPremise, brokenPullPremise, createSotProfile, offeredProfileName, prepareRun, previewPull, retargetPlan, runPlan, sotNow, subStepsOf, type CreateResult, type PrepareRefusal, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 import type { PullCheck } from './WizardChoiceSteps'
 import { BTN, NOTICE, reasonKey, requestKey, useMasterWorldReason } from './wizard-shared'
 
@@ -355,14 +355,19 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     const before = run.phase
     const promoted = run.states[subStepsOf(run.plan).indexOf('promote')] === 'done'
     const labels = { profile: profileName, host: hostId === null ? '' : (hosts[hostId]?.name ?? hostId) }
-    const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: seen?.fingerprint ?? null, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs, removesSeen }
+    // A first run asks with what the steps show; a retry with what its run was made for (the door's plan).
+    const first = from === 0 && before === 'idle'
+    const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: first ? (seen?.fingerprint ?? null) : run.plan.seen, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs, removesSeen: first ? removesSeen : run.plan.removesHosts }
     setRun((r) => (r === null ? r : { ...r, phase: 'checking', checkFailed: null }))
     // THE door: nothing irreversible happens before it has answered with a plan.
     const prepared = await prepareRun(draft, promoted)
     if (!alive.current) return
     if (!prepared.ok) return refused(prepared, promoted, () => setRun((r) => (r === null ? r : { ...r, phase: before, checkFailed: prepared.reason === 'list-failed' ? prepared.request : null })))
-    // A first run takes the door's plan; a retry keeps its own (its sub-steps' states are indexed by it).
-    const plan = from === 0 && before === 'idle' ? prepared.plan : run.plan
+    // A first run takes the door's plan. A retry keeps its own (its sub-steps' states are indexed by it), re-aimed
+    // at the address, fingerprint and removals the door just read — else the ask before the attach, made against
+    // the old address, would refuse every retry after a re-point. Another plan altogether: choose again.
+    const plan = first ? prepared.plan : retargetPlan(run.plan, prepared.plan)
+    if (plan === null) return refused({ ok: false, reason: 'removes-changed', removes: [...prepared.plan.removesHosts] }, promoted, () => undefined)
     setRun((r) => (r === null ? r : { ...r, plan, phase: 'running', failure: null }))
     const result = await runPlan(plan, from, (index, state) => {
       if (alive.current) setRun((r) => (r === null ? r : { ...r, states: r.states.map((s, i) => (i === index ? state : s)) }))

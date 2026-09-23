@@ -19,7 +19,7 @@ import en from '../../../../locales/en.json'
 import { createProfile, getSection, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { useUndoToast } from '../../../../stores/useUndoToast'
-import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, previewPull, runPlan, sotFingerprint, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, previewPull, retargetPlan, runPlan, sotFingerprint, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
 vi.mock('../../../../lib/profile/start', () => ({ attachMaster: vi.fn() }))
 vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn(), getSection: vi.fn() }))
@@ -105,6 +105,19 @@ describe('the sub-steps of a plan, in their order', () => {
   it('pull with a copy kept: the copy is made AFTER the promote and BEFORE the attach', () => expect(subStepsOf(plan({ localId: 's1' }))).toEqual(['promote', 'save', 'attach']))
   it('pull without a copy', () => expect(subStepsOf(plan({ saveAs: null }))).toEqual(['attach']))
   it('a push keeps no copy, whatever the plan carries: nothing on this device is replaced', () => expect(subStepsOf(plan({ direction: 'push', saveAs: 'Kept' }))).toEqual(['attach']))
+})
+
+describe('retargetPlan — a retry keeps its plan, re-aimed at what the door just read', () => {
+  const old = plan({ localId: 's1', removesHosts: ['h2'], at: '10.0.0.1:7860', seen: 'f1' })
+  it('the address, the fingerprint and the removals are the fresh plan\'s; the rest, and so the sub-steps, the old one\'s', () => {
+    const fresh = plan({ localId: 's1', removesHosts: ['h2'], at: '10.0.0.9:7860', seen: 'f2' })
+    expect(retargetPlan(old, fresh)).toEqual({ ...old, at: '10.0.0.9:7860', seen: 'f2', removesHosts: ['h2'] })
+  })
+  it('other hosts removed: not the same plan', () => expect(retargetPlan(old, plan({ localId: 's1', removesHosts: ['h2', 'h4'] }))).toBeNull())
+  it('other sub-steps (no copy now, or a push): not the same plan', () => {
+    expect(retargetPlan(old, plan({ localId: 's1', removesHosts: ['h2'], saveAs: null }))).toBeNull()
+    expect(retargetPlan(old, plan({ localId: 's1', removesHosts: ['h2'], direction: 'push' }))).toBeNull()
+  })
 })
 
 describe('THE TABLE — a pull replaces the world that is the master WHEN THE ATTACH IS MADE; the copy kept is of that world', () => {

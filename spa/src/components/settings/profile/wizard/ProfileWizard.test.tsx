@@ -616,6 +616,53 @@ describe('step 4 — a pull\'s hosts: the host verified, and the hosts it remove
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
   })
 
+  /** The copy is made, and meanwhile h1 is re-pointed to 10.0.0.9 (and confirmed at its daemon there). */
+  const repointDuringCopy = (): void => {
+    vi.mocked(copyMasterAsSlave).mockImplementationOnce(() => {
+      calls.push('copy-master')
+      const hosts = useHostStore.getState()
+      useHostStore.setState({ hosts: { ...hosts.hosts, h1: { ...hosts.hosts.h1, ip: '10.0.0.9' } }, runtime: { ...hosts.runtime, h1: { status: 'connected', daemonIdVerified: { endpoint: '10.0.0.9:7860', daemonId: MLAB } } } })
+      return { ok: true, id: 'c1' }
+    })
+  }
+
+  it('THE HOST RE-POINTED WHILE THE COPY IS MADE: the attach waits; Retry reads the NEW address and attaches there — no second promote, no second copy', async () => {
+    repointDuringCopy()
+    await toDirection('s1')
+    await choosePull()
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['promote', 'copy-master'])
+    expect(screen.getByTestId('profile-wizard-failure')).toHaveAttribute('data-step', 'attach')
+    expect(screen.getByTestId('profile-wizard-check-failed')).toHaveTextContent(en['settings.profile.wizard.request.endpoint_changed'])
+    click('profile-wizard-retry')
+    await flush()
+    expect(calls).toEqual(['promote', 'copy-master', 'attach'])
+    expect(promoteToMaster).toHaveBeenCalledTimes(1)
+    expect(copyMasterAsSlave).toHaveBeenCalledTimes(1)
+    expect(getSection).toHaveBeenLastCalledWith('h1', P1, 'hosts', { expectEndpoint: '10.0.0.9:7860' })
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+  })
+
+  it('… and when Retry finds OTHER hosts to remove (one added meanwhile): back to the direction step with the list as it is now — no attach', async () => {
+    repointDuringCopy()
+    await toDirection('s1')
+    await choosePull()
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(screen.getByTestId('profile-wizard-failure')).toHaveAttribute('data-step', 'attach')
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] }))
+    click('profile-wizard-retry')
+    await flush()
+    expect(calls).toEqual(['promote', 'copy-master'])
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
+  })
+
   it('ANOTHER host at a daemon other than its record: not in the way, but said — the sync will pause on it', async () => {
     const hosts = useHostStore.getState().hosts
     useHostStore.setState({ hosts: { ...hosts, h2: { ...hosts.h2, daemonId: 'air:111111' } }, runtime: { ...useHostStore.getState().runtime, h2: { status: 'connected', daemonIdMismatch: { stored: 'air:111111', observed: 'else:222222', endpoint: '10.0.0.2:7860' } } } })
