@@ -53,7 +53,7 @@ import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
 import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
-import { applyHosts, applySettings, applyTabs, applyWorkspaces, duplicateHostAlias, isWellFormedSection, planHostsApply, settingsFromWire, tabsFromWire, upcastLegacySettings } from './applier'
+import { applyHosts, applySettings, applyTabs, applyWorkspaces, duplicateHostAlias, isWellFormedSection, planHostsApply, settingsFromWire, tabsFromWire, upcastLegacySettings, upcastLegacyTabs } from './applier'
 import type { HostsPlan } from './applier'
 import { identityOfSync, MAX_HOST_ALIASES } from './host-identity'
 import { hashSection, structuralKey } from './hash'
@@ -69,9 +69,11 @@ export type ApplyOutcome =
   /** Written. `hash` is rebuilt from the stores afterwards; `null` = the section does not exist locally (nothing was written).
    *  `payload` is the section `hash` was computed from (absent with a `null` hash): when it differs from the SOT's,
    *  the executor pushes it back without waiting for the collector to report it (#1369).
-   *  `aliasesOnly` (hosts only): the hash differs from the payload's, and ONLY by the own-alias write-back every
-   *  canonical build makes (`isAliasWriteBackOnly`) — a designed write, not a problem (#1369). */
-  | { ok: true; hash: string | null; payload?: unknown; aliasesOnly?: true }
+   *  `rewrite`: the hash differs from the payload's, and ONLY by a designed write — pushed back once, not a problem:
+   *    'aliases' (hosts): the own-alias write-back every canonical build makes (`isAliasWriteBackOnly`, #1369);
+   *    'device-local-tabs' (tabs.*): an ordinal-2 payload's interface-only tabs, left out by `upcastLegacyTabs`
+   *    (tabs-local-only §3.5) — the rebuild equals the upcast payload. */
+  | { ok: true; hash: string | null; payload?: unknown; rewrite?: 'aliases' | 'device-local-tabs' }
   /** Not now, retry later, never lock the section: the operation lock is held by someone else — or the master's
    *  tab world is unsettled (master-world.ts: a switch is half-way through this window's rehydrates), so there is
    *  nowhere to write `workspaces` / `tabs.*` and no master workspace set to scope `settings` by. */
@@ -470,7 +472,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
     const outcome = await rebuilt(built)
     // #1369: a canonical row arriving without this device's own id comes back with it (withOwnAlias) — the one
     // designed write-back after a pull. Said so, so the executor pushes it without calling it a problem.
-    return isAliasWriteBackOnly(incoming, built, plan.byRow) ? { ...outcome, aliasesOnly: true } : outcome
+    return isAliasWriteBackOnly(incoming, built, plan.byRow) ? { ...outcome, rewrite: 'aliases' } : outcome
   }
 
   // Decided on the state as it is now; `write` re-reads under the lock, and nothing can run in between (no await).
@@ -676,7 +678,11 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       // resolve and what is written (the R1 race, PR #1365). The executor pulls a `tabs.*` only once `hosts` is up to date.
       const resolve = wireResolverOf(useHostStore.getState())
       if (resolve === null) return IDENTITY_CONFLICT()
-      const incoming = payload === null ? EMPTY_TABS : tabsFromWire(payload as TabsPayload, resolve)
+      // An ordinal-2 payload (an older build's interface-only tabs in it) is made canonical first: those tabs never
+      // arrive on a device that lacks them, and one this device has is device-local here and kept by `applyTabs`.
+      // The upcast is judged on the WIRE payload — the one whose hash the SOT holds and the rebuild is compared to.
+      const canonical = payload === null ? null : upcastLegacyTabs(payload as TabsPayload)
+      const incoming = canonical === null ? EMPTY_TABS : tabsFromWire(canonical, resolve)
       const read = readMasterWorld()
       if (!read.settled) return BUSY
       const local = read.world
@@ -701,7 +707,11 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       if (!ws) return { ok: true, hash: null }
       // The identity the resolve above used: nothing was awaited since.
       const identity = identityOfSync(useHostStore.getState().hosts)
-      return rebuilt(buildTabsSection(ws, after.world.tabs, identity))
+      const outcome = await rebuilt(buildTabsSection(ws, after.world.tabs, identity))
+      // The upcast removed something and the stores hold exactly the upcast payload: the difference from the SOT's
+      // hash is the migration (pushed once), not "the stores did not keep what arrived".
+      const upcastOnly = canonical !== null && canonical !== payload && outcome.hash === (await hashSection(canonical))
+      return upcastOnly ? { ...outcome, rewrite: 'device-local-tabs' } : outcome
     },
     () => ({ ok: false, reason: 'busy' }),
   )

@@ -14,6 +14,7 @@ import {
   settingsFromWire,
   tabsFromWire,
   upcastLegacySettings,
+  upcastLegacyTabs,
 } from './applier'
 import { hashSection } from './hash'
 import { NEW_HOST, identityOfSync, makeWireResolver, syncIdOfSync } from './host-identity'
@@ -568,6 +569,37 @@ describe('applyTabs — a device-local tab is kept where it was (tabs-local-only
     expect(repaired.adopted).toEqual([])
     expect(repaired.dropped).toBe(0)
     expect(repaired.membershipChanged).toBe(false)
+  })
+})
+
+describe('upcastLegacyTabs — an ordinal-2 tabs payload (device-local tabs in it) reads as ordinal 3', () => {
+  const entryOf = (t: Tab): TabsPayload['tabs'][string] => ({ ...t, layout: stripSizes(t.layout) })
+  const settingsTab = tab('s1', leaf('ps', { kind: 'settings', scope: 'global' }))
+  const legacy = (): TabsPayload => ({
+    order: ['a', 's1', 'b'],
+    tabs: { a: entryOf(tab('a')), s1: entryOf(settingsTab), b: entryOf(tab('b', split('sp', [leaf('n', { kind: 'new-tab' }), leaf('x')], [50, 50]))) },
+  })
+
+  it('drops the device-local tabs from order and record, keeps the rest (a mixed split included), never mutates', () => {
+    const p = deepFreeze(legacy())
+    const out = upcastLegacyTabs(p)
+    expect(out.order).toEqual(['a', 'b'])
+    expect(Object.keys(out.tabs)).toEqual(['a', 'b'])
+    expect(out.tabs.a).toBe(p.tabs.a)
+    expect(isWellFormedSection('tabs', out)).toBe(true)
+  })
+
+  it('a canonical payload comes back as the SAME object', () => {
+    const p = buildTabsSection(ws('w', 'W', ['a']), tabRecord(tab('a')))
+    expect(upcastLegacyTabs(p)).toBe(p)
+    const empty: TabsPayload = { order: [], tabs: {} }
+    expect(upcastLegacyTabs(empty)).toBe(empty)
+  })
+
+  it('an entry that is not a well-formed layout is left for the guard to refuse, and garbage never throws', () => {
+    const broken = { order: ['z'], tabs: { z: { id: 'z', pinned: false, locked: false, createdAt: 1 } } } as unknown as TabsPayload
+    expect(upcastLegacyTabs(broken)).toBe(broken)
+    for (const junk of [null, 1, 'x', [], { order: 'x' }, { tabs: 1, order: [] }]) expect(upcastLegacyTabs(junk as never)).toBe(junk)
   })
 })
 

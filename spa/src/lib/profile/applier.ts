@@ -838,6 +838,41 @@ export function upcastLegacySettings(payload: unknown): unknown {
 }
 
 /**
+ * Tabs ordinal 2 → 3 (tabs-local-only spec §3.5): an ordinal-2 build sent every
+ * tab of a workspace, its own interface-only tabs included. Such a payload is not
+ * canonical — no current build produces it — and applied as-is it would CREATE
+ * the sender's Settings / New Tab tabs on this device. So each place a payload of
+ * an older build can reach the stores (the pull in apply-to-stores, and a
+ * persisted keep-local snapshot in the executor's `restoreLocal`) runs this first:
+ * the payload without its device-local tabs, order and record alike. A device
+ * that already has such a tab keeps its own copy (`applyTabs` never removes one).
+ *
+ * The SAME object when there is nothing to drop — the caller tells "upcast" from
+ * "unchanged" by reference. Only an entry whose layout the guard would accept is
+ * judged: a malformed one stays, so the guard that follows still refuses the
+ * payload (dropping it here would launder a malformed payload into a valid one).
+ * Never throws, never mutates.
+ */
+export function upcastLegacyTabs(payload: TabsPayload): TabsPayload {
+  try {
+    if (!isPlainObject(payload) || !Array.isArray(payload.order) || !isPlainObject(payload.tabs)) return payload
+    const record = payload.tabs as Rec
+    const drop = new Set(
+      Object.keys(record).filter((id) => {
+        const entry = record[id]
+        return isPlainObject(entry) && isLayout(entry.layout, 0) && !isSyncableTab(entry as { layout: StrippedLayout })
+      }),
+    )
+    if (drop.size === 0) return payload
+    const tabs: Record<string, TabsPayload['tabs'][string]> = {}
+    for (const id of Object.keys(record)) if (!drop.has(id)) setOwn(tabs, id, record[id] as TabsPayload['tabs'][string])
+    return { ...payload, order: payload.order.filter((id) => !drop.has(id)), tabs }
+  } catch {
+    return payload
+  }
+}
+
+/**
  * The structural guard run on a payload from the daemon BEFORE any apply. It
  * accepts what the builders can produce and nothing else, and never throws —
  * whatever it is handed. A payload that fails is not applied at all; the caller

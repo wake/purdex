@@ -38,7 +38,7 @@ import { STORAGE_KEYS } from '../storage'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { hashSection } from './hash'
 import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
-import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
+import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, stripSizes } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
 import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
 import { identityOfSync, syncIdOfSync } from './host-identity'
@@ -1063,6 +1063,46 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
+  describe('an ordinal-2 payload listing device-local tabs (tabs-local-only §3.5)', () => {
+    const settingsLeaf = (id: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'settings', scope: 'global' } } })
+    /** What an ordinal-2 client built: its own Settings tab `sX` in the order and the record. */
+    function legacyWith(sX: string): TabsPayload {
+      // Built by hand: this build's `buildTabsSection` leaves the Settings tab out.
+      const p = JSON.parse(JSON.stringify(incomingFor([useTabStore.getState().tabs.a1]))) as TabsPayload
+      const settings = tab(sX, settingsLeaf(`p-${sX}`))
+      return { order: [...p.order, sX], tabs: { ...p.tabs, [sX]: { ...settings, layout: stripSizes(settings.layout) } } }
+    }
+
+    it('one this device lacks is not created; the outcome says the rewrite is designed and hands back the canonical payload', async () => {
+      seedTabWorld()
+      const legacy = legacyWith('sX')
+      expect(legacy.order).toEqual(['a1', 'sX'])
+      const outcome = await applySectionToStores('tabs.wa', legacy, ctx)
+      expect(Object.hasOwn(useTabStore.getState().tabs, 'sX')).toBe(false)
+      expect(useWorkspaceStore.getState().workspaces[0].tabs).toEqual(['a1'])
+      const canonical = { order: ['a1'], tabs: { a1: legacy.tabs.a1 } }
+      expect(outcome).toMatchObject({ ok: true, hash: await hashSection(canonical), rewrite: 'device-local-tabs' })
+      expect((outcome as { payload: TabsPayload }).payload.order).toEqual(['a1'])
+    })
+
+    it('one this device has is device-local here: kept, listed, untouched', async () => {
+      seedTabWorld()
+      const mine = tab('sX', settingsLeaf('p-mine'))
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, sX: mine } })
+      useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'sX', 'a2'], 'a2'), ws('wb', ['b1'])] })
+      const outcome = await applySectionToStores('tabs.wa', legacyWith('sX'), ctx)
+      expect(useTabStore.getState().tabs.sX).toBe(mine)
+      expect(useWorkspaceStore.getState().workspaces[0].tabs).toEqual(['a1', 'sX'])
+      expect(outcome).toMatchObject({ ok: true, rewrite: 'device-local-tabs' })
+    })
+
+    it('a canonical payload carries no rewrite', async () => {
+      seedTabWorld()
+      const outcome = await applySectionToStores('tabs.wa', incomingFor([tab('a1')]), ctx)
+      expect(outcome).not.toHaveProperty('rewrite')
+    })
+  })
+
   it('null payload: a workspace still known has its tabs emptied; an unknown one is a no-op', async () => {
     seedTabWorld()
     const outcome = await applySectionToStores('tabs.wa', null, ctx)
@@ -1492,7 +1532,7 @@ describe('applySectionToStores — hosts: a difference in the own-alias write-ba
   const WIRE = syncIdOfSync(DAEMON)
   const OTHER = 'other-lab:abc123'
   type Row = HostConfig & { aliases?: string[] }
-  type Ok = { ok: true; hash: string | null; payload?: HostsPayload; aliasesOnly?: true }
+  type Ok = { ok: true; hash: string | null; payload?: HostsPayload; rewrite?: 'aliases' | 'device-local-tabs' }
   const fromA = (extra: HostConfig[] = [], over: Partial<HostConfig> = {}): HostsPayload =>
     JSON.parse(JSON.stringify(buildHostsSection({ hosts: Object.fromEntries([host('aaaaaa', { daemonId: DAEMON, ...over }), ...extra].map((h) => [h.id, h])), hostOrder: ['aaaaaa', ...extra.map((h) => h.id)] }))) as HostsPayload
   const withAliases = (p: HostsPayload, list: string[]): HostsPayload => {
@@ -1525,16 +1565,16 @@ describe('applySectionToStores — hosts: a difference in the own-alias write-ba
     return outcome as Ok
   }
 
-  it('(a) a canonical row arriving without this device\'s own id → aliasesOnly', async () => {
+  it('(a) a canonical row arriving without this device\'s own id → rewrite: aliases', async () => {
     const payload = fromA()
     const outcome = await apply(payload)
     expect(outcome.hash).not.toBe(await hashSection(payload))
     expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual(['aaaaaa', M])
-    expect(outcome.aliasesOnly).toBe(true)
+    expect(outcome.rewrite).toBe('aliases')
   })
 
-  it('(b) an unsorted incoming list → aliasesOnly; a duplicated one is refused by the guard before any of this', async () => {
-    expect((await apply(withAliases(fromA(), ['bbbbbb', 'aaaaaa']))).aliasesOnly).toBe(true)
+  it('(b) an unsorted incoming list → rewrite: aliases; a duplicated one is refused by the guard before any of this', async () => {
+    expect((await apply(withAliases(fromA(), ['bbbbbb', 'aaaaaa']))).rewrite).toBe('aliases')
     expect(await applySectionToStores('hosts', withAliases(fromA(), ['aaaaaa', 'aaaaaa']), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'malformed' })
   })
 
@@ -1544,38 +1584,38 @@ describe('applySectionToStores — hosts: a difference in the own-alias write-ba
     expect(isAliasWriteBackOnly(incoming, built, new Map([[WIRE, M]]))).toBe(true)
   })
 
-  it('(c) 16 incoming aliases, the own id sorting among them → one displaced by the cap → aliasesOnly', async () => {
+  it('(c) 16 incoming aliases, the own id sorting among them → one displaced by the cap → rewrite: aliases', async () => {
     const sixteen = [...Array.from({ length: 15 }, (_, i) => `a${String(i).padStart(2, '0')}`), 'zzzzzz']
     const outcome = await apply(withAliases(fromA(), sixteen))
     expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual([...sixteen.slice(0, 15), M]) // 'zzzzzz' displaced
-    expect(outcome.aliasesOnly).toBe(true)
+    expect(outcome.rewrite).toBe('aliases')
   })
 
   it('(d) an incoming alias the rebuilt row lacks without the cap → not set', async () => {
     afterTheWrite((s) => ({ hosts: { ...s.hosts, [M]: { ...s.hosts[M], syncAliases: ['aaaaaa'] } } }))
     const outcome = await apply(withAliases(fromA(), ['aaaaaa', 'bbbbbb']))
     expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual(['aaaaaa', M]) // 'bbbbbb' lost
-    expect(outcome).not.toHaveProperty('aliasesOnly')
+    expect(outcome).not.toHaveProperty('rewrite')
   })
 
   it('(e) the rebuilt row carries an alias neither incoming nor its own id → not set', async () => {
     afterTheWrite((s) => ({ hosts: { ...s.hosts, [M]: { ...s.hosts[M], syncAliases: ['aaaaaa', 'cccccc'] } } }))
     const outcome = await apply(fromA())
     expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual(['aaaaaa', 'cccccc', M])
-    expect(outcome).not.toHaveProperty('aliasesOnly')
+    expect(outcome).not.toHaveProperty('rewrite')
   })
 
   it('(f) another field differs → not set', async () => {
     const outcome = await apply(fromA([], { icon: 'NotARealIcon' })) // the sanitiser drops it
     expect(outcome.payload!.hosts[WIRE].icon).toBeUndefined()
-    expect(outcome).not.toHaveProperty('aliasesOnly')
+    expect(outcome).not.toHaveProperty('rewrite')
   })
 
   it('(f) a row added → not set', async () => {
     afterTheWrite((s) => ({ hosts: { ...s.hosts, extra: host('extra', { ip: '10.0.0.5', order: 1 }) }, hostOrder: [...s.hostOrder, 'extra'] }))
     const outcome = await apply(fromA())
     expect(Object.keys(outcome.payload!.hosts)).toHaveLength(2)
-    expect(outcome).not.toHaveProperty('aliasesOnly')
+    expect(outcome).not.toHaveProperty('rewrite')
   })
 
   it('(f) a row dropped → not set', async () => {
@@ -1586,25 +1626,25 @@ describe('applySectionToStores — hosts: a difference in the own-alias write-ba
     })
     const outcome = await apply(fromA([other()]))
     expect(Object.keys(outcome.payload!.hosts)).toEqual([WIRE])
-    expect(outcome).not.toHaveProperty('aliasesOnly')
+    expect(outcome).not.toHaveProperty('rewrite')
   })
 
   it('(f) hostOrder differs → not set', async () => {
     afterTheWrite((s) => ({ hostOrder: [...s.hostOrder].reverse() }))
     const outcome = await apply(fromA([other()]))
     expect(outcome.payload!.hostOrder[0]).not.toBe(WIRE)
-    expect(outcome).not.toHaveProperty('aliasesOnly')
+    expect(outcome).not.toHaveProperty('rewrite')
   })
 
   it('(g) the build equals what arrived → not set (no mismatch, nothing to say)', async () => {
     const first = await apply(fromA())
     const again = await apply(JSON.parse(JSON.stringify(first.payload)) as HostsPayload)
     expect(again.hash).toBe(first.hash)
-    expect(again).not.toHaveProperty('aliasesOnly')
+    expect(again).not.toHaveProperty('rewrite')
   })
 
   it('other sections never set it', async () => {
     seedTabWorld()
-    expect(await applySectionToStores('workspaces', { order: ['wa'], workspaces: { wa: { name: 'X' } } }, ctx)).not.toHaveProperty('aliasesOnly')
+    expect(await applySectionToStores('workspaces', { order: ['wa'], workspaces: { wa: { name: 'X' } } }, ctx)).not.toHaveProperty('rewrite')
   })
 })
