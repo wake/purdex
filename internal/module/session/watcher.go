@@ -61,7 +61,7 @@ func (m *SessionModule) checkAndBroadcast() {
 func (m *SessionModule) tickNormal() {
 	// Versioned even when nothing is broadcast: the list pushed below must
 	// carry the seq of the very read that produced it (spec §3.3 rule 5).
-	v, err := m.versionedList()
+	v, err := m.versionedList(context.Background())
 	if err != nil {
 		log.Printf("session: watcher list error: %v", err)
 		return
@@ -133,7 +133,7 @@ func (m *SessionModule) broadcastSessions() {
 	m.wstate.lastBroadcast = time.Now()
 	m.wstate.mu.Unlock()
 
-	v, err := m.versionedList()
+	v, err := m.versionedList(context.Background())
 	if err != nil {
 		log.Printf("session: broadcast list error: %v", err)
 		return

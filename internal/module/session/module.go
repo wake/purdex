@@ -67,11 +67,12 @@ type SessionModule struct {
 	nameCacheAt   time.Time
 
 	// Versioned session lists (spec 2026-09-23 §3.3, versioned.go). epoch
-	// identifies this process's counter; snapMu serializes seq assignment
-	// together with the tmux read, and guards epoch (it rotates at maxSeq).
-	snapMu  sync.Mutex
-	snapSeq uint64
-	epoch   string
+	// identifies this process's counter; snapSlot (a one-holder slot a
+	// waiter can abandon, #1293) serializes the tmux read together with seq
+	// assignment, and guards snapSeq and epoch (it rotates at maxSeq).
+	snapSlot slot
+	snapSeq  uint64
+	epoch    string
 }
 
 // NewSessionModule creates a SessionModule with the given MetaStore.
@@ -83,6 +84,7 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 		shellProbe:      runShellProbe,
 		passwdShell:     passwdShellForCurrentUser,
 		epoch:           newEpoch(),
+		snapSlot:        newSlot(),
 	}
 }
 
@@ -139,7 +141,7 @@ func (m *SessionModule) Start(ctx context.Context) error {
 
 // sendSessionsSnapshot pushes a versioned session list to one new subscriber.
 func (m *SessionModule) sendSessionsSnapshot(sub *core.EventSubscriber) {
-	v, err := m.versionedList()
+	v, err := m.versionedList(context.Background())
 	if err != nil {
 		log.Printf("session: OnSubscribe list error: %v", err)
 		return

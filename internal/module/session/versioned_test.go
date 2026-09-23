@@ -84,9 +84,9 @@ func TestVersionedList_SeqIncreasesEpochStable(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	fake.AddSession("a", "/tmp")
 
-	v1, err := mod.versionedList()
+	v1, err := mod.versionedList(context.Background())
 	require.NoError(t, err)
-	v2, err := mod.versionedList()
+	v2, err := mod.versionedList(context.Background())
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(1), v1.Seq)
@@ -100,9 +100,9 @@ func TestVersionedList_SeqIncreasesEpochStable(t *testing.T) {
 func TestVersionedList_EpochDiffersBetweenModules(t *testing.T) {
 	a, _, _ := newTestModule(t)
 	b, _, _ := newTestModule(t)
-	va, err := a.versionedList()
+	va, err := a.versionedList(context.Background())
 	require.NoError(t, err)
-	vb, err := b.versionedList()
+	vb, err := b.versionedList(context.Background())
 	require.NoError(t, err)
 	assert.NotEqual(t, va.Epoch, vb.Epoch)
 }
@@ -112,18 +112,18 @@ func TestVersionedList_ErrorDoesNotConsumeSeq(t *testing.T) {
 	failing := &toggleFailExecutor{Executor: fake, fail: true}
 	mod.tmux = failing
 
-	_, err := mod.versionedList()
+	_, err := mod.versionedList(context.Background())
 	require.Error(t, err)
 
 	failing.setFail(false)
-	v, err := mod.versionedList()
+	v, err := mod.versionedList(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), v.Seq, "a failed read must not take a seq")
 }
 
 func TestVersionedList_EmptyIsNonNil(t *testing.T) {
 	mod, _, _ := newTestModule(t)
-	v, err := mod.versionedList()
+	v, err := mod.versionedList(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, v.Sessions)
 	data, err := json.Marshal(v)
@@ -132,7 +132,7 @@ func TestVersionedList_EmptyIsNonNil(t *testing.T) {
 }
 
 // Versioned reads are serialized (spec §3.3 rule 1): while one read is inside
-// tmux, a second caller must not start its read. Removing snapMu turns this red.
+// tmux, a second caller must not start its read. Removing snapSlot turns this red.
 func TestVersionedList_ReadsAreSerialized(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	fake.AddSession("a", "/tmp")
@@ -146,7 +146,7 @@ func TestVersionedList_ReadsAreSerialized(t *testing.T) {
 
 	go func() {
 		defer close(doneA)
-		va, errA = mod.versionedList()
+		va, errA = mod.versionedList(context.Background())
 	}()
 	select {
 	case <-blk.entered[0]:
@@ -156,7 +156,7 @@ func TestVersionedList_ReadsAreSerialized(t *testing.T) {
 
 	go func() {
 		defer close(doneB)
-		vb, errB = mod.versionedList()
+		vb, errB = mod.versionedList(context.Background())
 	}()
 
 	select {
@@ -183,6 +183,9 @@ type ordinalExecutor struct {
 	n  int
 	// onRead, if set, runs inside read k before it returns.
 	onRead func(k int)
+	// block, if set, runs inside read k with the read's context; a non-nil
+	// error fails read k (a hung read that its deadline ends).
+	block func(ctx context.Context, k int) error
 }
 
 func (e *ordinalExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession, error) {
@@ -190,9 +193,15 @@ func (e *ordinalExecutor) ListSessions(ctx context.Context) ([]tmux.TmuxSession,
 	e.n++
 	k := e.n
 	hook := e.onRead
+	block := e.block
 	e.mu.Unlock()
 	if hook != nil {
 		hook(k)
+	}
+	if block != nil {
+		if err := block(ctx, k); err != nil {
+			return nil, err
+		}
 	}
 	return []tmux.TmuxSession{{ID: "$0", Name: fmt.Sprintf("r%d", k), Cwd: "/tmp"}}, nil
 }
@@ -347,7 +356,7 @@ func TestVersioned_WarmPlainCacheNeverLeaks(t *testing.T) {
 // tmux read, a concurrent ?fresh=1 is given the chance to run to completion.
 // If the push took its seq separately from its read (e.g. read through the
 // plain cache, then stamped), the fetch would slip in between and the push
-// would pair an older list with a newer seq. With the read under snapMu the
+// would pair an older list with a newer seq. With the read under snapSlot the
 // fetch must wait, and so reads after the push.
 func TestVersioned_ConcurrentFetchCannotSplitReadFromSeq(t *testing.T) {
 	for _, tc := range []struct {
@@ -408,23 +417,245 @@ func TestVersioned_ConcurrentFetchCannotSplitReadFromSeq(t *testing.T) {
 	}
 }
 
+// setSnapSeq moves the counter under the versioned-read slot, the way every
+// production writer of snapSeq holds it.
+func setSnapSeq(t *testing.T, mod *SessionModule, seq uint64) {
+	t.Helper()
+	require.NoError(t, mod.snapSlot.acquire(context.Background()))
+	mod.snapSeq = seq
+	mod.snapSlot.release()
+}
+
+// snapState reads (epoch, snapSeq) under the slot.
+func snapState(t *testing.T, mod *SessionModule) (string, uint64) {
+	t.Helper()
+	require.NoError(t, mod.snapSlot.acquire(context.Background()))
+	defer mod.snapSlot.release()
+	return mod.epoch, mod.snapSeq
+}
+
 func TestVersionedList_RotatesEpochAtMaxSeq(t *testing.T) {
 	mod, _, _ := newTestModule(t)
-	v1, err := mod.versionedList()
+	v1, err := mod.versionedList(context.Background())
 	require.NoError(t, err)
 
-	mod.snapMu.Lock()
-	mod.snapSeq = maxSeq
-	mod.snapMu.Unlock()
+	setSnapSeq(t, mod, maxSeq)
 
-	v2, err := mod.versionedList()
+	v2, err := mod.versionedList(context.Background())
 	require.NoError(t, err)
 	assert.NotEqual(t, v1.Epoch, v2.Epoch, "exhausting the counter must draw a new epoch")
 	assert.Regexp(t, epochRe, v2.Epoch)
 	assert.Equal(t, uint64(1), v2.Seq)
 
-	v3, err := mod.versionedList()
+	v3, err := mod.versionedList(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, v2.Epoch, v3.Epoch)
 	assert.Equal(t, uint64(2), v3.Seq)
+}
+
+// --- #1293 T3: the versioned-read slot and bounded reads ---
+
+// stuckListHook makes every tmux list-sessions read hang until its context
+// ends, signalling entered each time one starts.
+func stuckListHook(entered chan<- struct{}) tmux.ReadHook {
+	return func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		if op != tmux.ReadListSessions {
+			return nil
+		}
+		if entered != nil {
+			entered <- struct{}{}
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+}
+
+// A read that hits its deadline returns the deadline error, frees the slot
+// and consumes no seq: the next success is seq N+1 (contract §3.3 rule 5).
+func TestVersionedList_StuckReadTimesOutAndFreesSlot(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	v1, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+
+	fake.SetReadHook(stuckListHook(nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = mod.versionedList(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 2*time.Second)
+
+	fake.SetReadHook(nil)
+	next, err := mod.versionedList(context.Background())
+	require.NoError(t, err, "the slot must be free after a timed-out read")
+	assert.Equal(t, v1.Epoch, next.Epoch)
+	assert.Equal(t, v1.Seq+1, next.Seq, "a timed-out read must not consume a seq")
+}
+
+// A caller waiting for the slot behind a stuck read gives up when its own
+// context ends — it neither waits the holder out nor starts a read — and
+// consumes nothing.
+func TestVersionedList_WaiterGivesUpWhenItsContextEnds(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("a", "/tmp")
+	v1, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, _ string) error {
+		if op != tmux.ReadListSessions {
+			return nil
+		}
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
+	holderDone := make(chan VersionedSessions, 1)
+	go func() {
+		v, err := mod.versionedList(context.Background())
+		if err == nil {
+			holderDone <- v
+		}
+		close(holderDone)
+	}()
+	<-entered // the holder is inside its read
+
+	waitCtx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := mod.versionedList(waitCtx)
+		waiterDone <- err
+	}()
+	select {
+	case err := <-waiterDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("a cancelled waiter kept queueing behind the stuck read")
+	}
+	select {
+	case <-entered:
+		t.Fatal("the cancelled waiter started a tmux read")
+	default:
+	}
+
+	close(release)
+	held, ok := <-holderDone
+	require.True(t, ok, "holder read failed")
+	assert.Equal(t, v1.Seq+1, held.Seq)
+	fake.SetReadHook(nil)
+	next, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, v1.Seq+2, next.Seq, "the cancelled waiter must not have consumed a seq")
+}
+
+// At the rotation point a timed-out read must not rotate the epoch: the
+// next SUCCESSFUL read is the one that draws the new epoch, with seq 1.
+func TestVersionedList_TimeoutAtMaxSeqDoesNotRotate(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	v1, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+	setSnapSeq(t, mod, maxSeq)
+
+	fake.SetReadHook(stuckListHook(nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = mod.versionedList(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	epoch, seq := snapState(t, mod)
+	assert.Equal(t, v1.Epoch, epoch, "a failed read must not rotate the epoch")
+	assert.Equal(t, uint64(maxSeq), seq)
+
+	fake.SetReadHook(nil)
+	next, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+	assert.NotEqual(t, v1.Epoch, next.Epoch)
+	assert.Equal(t, uint64(1), next.Seq)
+}
+
+// Nor does a waiter that gives up at the rotation point.
+func TestVersionedList_CancelledWaiterAtMaxSeqDoesNotRotate(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	v1, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+	setSnapSeq(t, mod, maxSeq)
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake.SetReadHook(tmux.BlockReadsUntil(release, func(op tmux.ReadOp, _ string) bool {
+		if op == tmux.ReadListSessions {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			return true
+		}
+		return false
+	}))
+	holderDone := make(chan VersionedSessions, 1)
+	go func() {
+		v, err := mod.versionedList(context.Background())
+		if err == nil {
+			holderDone <- v
+		}
+		close(holderDone)
+	}()
+	<-entered
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = mod.versionedList(waitCtx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	// The holder is still reading and has written nothing yet; the waiter
+	// must not have touched the counter either.
+	assert.Equal(t, v1.Epoch, mod.epoch, "a cancelled waiter must not rotate the epoch")
+	assert.Equal(t, uint64(maxSeq), mod.snapSeq)
+
+	close(release)
+	held, ok := <-holderDone
+	require.True(t, ok)
+	assert.NotEqual(t, v1.Epoch, held.Epoch, "the holder's successful read rotates")
+	assert.Equal(t, uint64(1), held.Seq)
+}
+
+// Rule 5 across a timeout: seq ↔ read ordinal stays a monotone bijection
+// over the reads that succeeded, and the timed-out read is never handed out.
+func TestVersionedList_SeqBelongsToReadAcrossTimeout(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	ex := &ordinalExecutor{Executor: fake}
+	mod.tmux = ex
+	ex.mu.Lock()
+	ex.block = func(ctx context.Context, k int) error {
+		if k != 2 {
+			return nil
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ex.mu.Unlock()
+
+	v1, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = mod.versionedList(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	v3, err := mod.versionedList(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(1), v1.Seq)
+	assert.Equal(t, 1, ordinalOf(t, v1.Sessions))
+	assert.Equal(t, uint64(2), v3.Seq)
+	assert.Equal(t, 3, ordinalOf(t, v3.Sessions), "seq 2 must carry read r3, the read that took it")
+	assert.Equal(t, 3, ex.reads())
 }

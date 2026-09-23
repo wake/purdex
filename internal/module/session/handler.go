@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -20,7 +21,7 @@ func (m *SessionModule) handleList(w http.ResponseWriter, r *http.Request) {
 	// never from the list cache (spec §3.1). Any other value keeps the bare
 	// array, so an old daemon's answer is structurally distinguishable.
 	if r.URL.Query().Get("fresh") == "1" {
-		v, err := m.versionedList()
+		v, err := m.versionedList(context.Background())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

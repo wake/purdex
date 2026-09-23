@@ -1,8 +1,10 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/wake/purdex/internal/core"
 )
@@ -41,29 +43,35 @@ func newEpoch() string {
 
 // versionedList performs a fresh tmux read and stamps it with the next seq.
 //
-// The seq is taken and the read performed under one lock, so within an epoch
-// a larger seq always means a read that started after the smaller one's read
-// finished (spec §3.3 rule 1), and every seq belongs to exactly the read that
-// produced the list it is sent with (rule 5). A failed read does not advance
-// the counter. Every versioned path — ?fresh=1, the subscribe snapshot, the
-// wait-for and ticker pushes — goes through here and never re-uses a list.
-func (m *SessionModule) versionedList() (VersionedSessions, error) {
-	m.snapMu.Lock()
-	defer m.snapMu.Unlock()
-
-	if m.snapSeq >= maxSeq {
-		m.epoch = newEpoch()
-		m.snapSeq = 0
+// The read is performed and the seq taken inside one slot (snapSlot), so
+// within an epoch a larger seq always means a read that started after the
+// smaller one's read finished (spec §3.3 rule 1), and every seq belongs to
+// exactly the read that produced the list it is sent with (rule 5). Every
+// versioned path — ?fresh=1, the subscribe snapshot, the wait-for and ticker
+// pushes — goes through here and never re-uses a list.
+//
+// Bounded (#1293): the read runs under ctx capped at listReadTimeout, and a
+// caller waiting for the slot gives up with ctx.Err() when ctx ends. The seq
+// is assigned — and the epoch rotated at maxSeq — only AFTER a successful
+// read, so a failed, timed-out or abandoned read never consumes a seq and
+// never rotates the epoch.
+func (m *SessionModule) versionedList(ctx context.Context) (VersionedSessions, error) {
+	if err := m.snapSlot.acquire(ctx); err != nil {
+		return VersionedSessions{}, fmt.Errorf("versioned session list: %w", err)
 	}
-	seq := m.snapSeq + 1
+	defer m.snapSlot.release()
 
-	sessions, err := m.ListSessions()
+	sessions, err := m.ListSessionsContext(ctx)
 	if err != nil {
 		return VersionedSessions{}, err
 	}
 	if sessions == nil {
 		sessions = []SessionInfo{}
 	}
-	m.snapSeq = seq
-	return VersionedSessions{Epoch: m.epoch, Seq: seq, Sessions: sessions}, nil
+	if m.snapSeq >= maxSeq {
+		m.epoch = newEpoch()
+		m.snapSeq = 0
+	}
+	m.snapSeq++
+	return VersionedSessions{Epoch: m.epoch, Seq: m.snapSeq, Sessions: sessions}, nil
 }
