@@ -65,6 +65,16 @@ export type RedeemResult = { kind: 'ok'; hosts: unknown[] } | TransferFailure
 
 export const TRANSFER_TIMEOUT_MS = 10_000
 
+/** The relay's create limits (internal/module/hosttransfer/handler.go `maxRows` / `createBodyCap`, spec §6.2): more
+ *  rows is a 400 `bad_payload`, a larger body a 413 `too_large`. The share dialog checks both before sending. */
+export const MAX_TRANSFER_ROWS = 32
+export const MAX_TRANSFER_BODY_BYTES = 64 << 10
+
+/** The byte size of the create body for `rows` — the exact JSON `createTransfer` sends. */
+export function transferBodyBytes(rows: TransferRow[]): number {
+  return new TextEncoder().encode(JSON.stringify({ hosts: rows })).length
+}
+
 const COMMON: Record<number, TransferFailureReason> = {
   401: 'unauthorized',
   403: 'no_token',

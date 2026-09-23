@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as transferApi from '../../lib/host-transfer-api'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { ShareHostsDialog } from './ShareHostsDialog'
 
 const TRUST = /will hold the access tokens of the hosts you share, readable by that host, until the code is used or expires \(10 min\)\. Only relay through a host you trust\./
@@ -83,5 +83,75 @@ describe('ShareHostsDialog', () => {
     render(<ShareHostsDialog onClose={() => {}} />)
     expect((screen.getByRole('button', { name: 'Create code' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText(/No connected host to relay through/)).toBeTruthy()
+  })
+
+  describe('the relay limits (32 rows, 64 KiB body)', () => {
+    function manyHosts(n: number) {
+      const hosts: Record<string, HostConfig> = {}
+      const hostOrder: string[] = []
+      for (let i = 1; i <= n; i++) {
+        const id = `h${i}`
+        hosts[id] = { id, name: `host-${String(i).padStart(2, '0')}`, ip: `10.0.0.${i}`, port: 7860, order: i - 1, token: `tok-${i}` }
+        hostOrder.push(id)
+      }
+      useHostStore.setState({ hosts, hostOrder, runtime: { h1: { status: 'connected' } }, activeHostId: 'h1' })
+    }
+    const box = (i: number) => screen.getByLabelText(new RegExp(`host-${String(i).padStart(2, '0')}`)) as HTMLInputElement
+    const create = () => screen.getByRole('button', { name: 'Create code' }) as HTMLButtonElement
+
+    it('exports the daemon limits', () => {
+      expect(transferApi.MAX_TRANSFER_ROWS).toBe(32)
+      expect(transferApi.MAX_TRANSFER_BODY_BYTES).toBe(65536)
+    })
+
+    it('33 shareable hosts: only the first 32 start ticked, the limit is said, and create works with 32 rows', async () => {
+      manyHosts(33)
+      const spy = vi.spyOn(transferApi, 'createTransfer').mockResolvedValue({ kind: 'ok', code: 'ABCD2345', expiresAt: 0 })
+      render(<ShareHostsDialog onClose={() => {}} />)
+      expect(box(1).checked).toBe(true)
+      expect(box(32).checked).toBe(true)
+      expect(box(33).checked).toBe(false)
+      expect(screen.getByTestId('transfer-limit').textContent).toMatch(/at most 32 hosts at a time/)
+      expect(create().disabled).toBe(false)
+      await act(async () => {
+        fireEvent.click(create())
+      })
+      expect(spy.mock.calls[0][1]).toHaveLength(32)
+    })
+
+    it('ticking the 33rd disables create and asks to untick 1', () => {
+      manyHosts(33)
+      const spy = vi.spyOn(transferApi, 'createTransfer')
+      render(<ShareHostsDialog onClose={() => {}} />)
+      fireEvent.click(box(33))
+      expect(box(33).checked).toBe(true)
+      expect(create().disabled).toBe(true)
+      expect(screen.getByTestId('transfer-limit').textContent).toMatch(/at most 32 hosts at a time; untick 1/)
+      fireEvent.click(create())
+      expect(spy).not.toHaveBeenCalled()
+      fireEvent.click(box(5))
+      expect(create().disabled).toBe(false)
+    })
+
+    it('32 or fewer shareable hosts: no limit note', () => {
+      manyHosts(32)
+      render(<ShareHostsDialog onClose={() => {}} />)
+      expect(screen.queryByTestId('transfer-limit')).toBeNull()
+      expect(create().disabled).toBe(false)
+    })
+
+    it('a body estimated over 64 KiB disables create and says so', () => {
+      const big = { id: 'big', name: 'big', ip: '10.0.0.99', port: 7860, order: 3, token: 'x'.repeat(70_000) }
+      useHostStore.setState((st) => ({ hosts: { ...st.hosts, big }, hostOrder: [...st.hostOrder, 'big'] }))
+      const spy = vi.spyOn(transferApi, 'createTransfer')
+      render(<ShareHostsDialog onClose={() => {}} />)
+      expect(create().disabled).toBe(true)
+      expect(screen.getByTestId('transfer-limit').textContent).toMatch(/too large/)
+      fireEvent.click(create())
+      expect(spy).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByLabelText(/^big/))
+      expect(create().disabled).toBe(false)
+      expect(screen.queryByTestId('transfer-limit')).toBeNull()
+    })
   })
 })

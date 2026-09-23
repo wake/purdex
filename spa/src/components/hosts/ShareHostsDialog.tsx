@@ -4,7 +4,15 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, Copy, X } from '@phosphor-icons/react'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { createTransfer, formatTransferCode, transferFailureText, type TransferFailure } from '../../lib/host-transfer-api'
+import {
+  MAX_TRANSFER_BODY_BYTES,
+  MAX_TRANSFER_ROWS,
+  createTransfer,
+  formatTransferCode,
+  transferBodyBytes,
+  transferFailureText,
+  type TransferFailure,
+} from '../../lib/host-transfer-api'
 import { payloadRowsOf } from '../../lib/host-transfer-plan'
 
 interface Props {
@@ -30,7 +38,10 @@ export function ShareHostsDialog({ onClose }: Props) {
 
   const list = hostOrder.map((id) => hosts[id]).filter((h): h is HostConfig => h !== undefined)
   const connected = list.filter((h) => runtime[h.id]?.status === 'connected')
-  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set())
+  // Everything shareable starts ticked — but only up to the relay's row limit: past it the create could only fail.
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(
+    () => new Set(list.filter(hasToken).slice(MAX_TRANSFER_ROWS).map((h) => h.id)),
+  )
   const [relayPick, setRelayPick] = useState<string | null>(null)
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const mounted = useRef(true)
@@ -57,6 +68,17 @@ export function ShareHostsDialog({ onClose }: Props) {
   const relayName = relay?.name ?? t('hosts.transfer.relay_fallback')
   const picked = list.filter((h) => hasToken(h) && !unticked.has(h.id))
   const creating = phase.kind === 'creating'
+  const rows = payloadRowsOf(picked)
+  const overRows = rows.length > MAX_TRANSFER_ROWS
+  const overBytes = !overRows && transferBodyBytes(rows) > MAX_TRANSFER_BODY_BYTES
+  const blocked = !relay || rows.length === 0 || overRows || overBytes || creating
+  const limitNote = overRows
+    ? t('hosts.transfer.limit_rows_over', { max: MAX_TRANSFER_ROWS, count: rows.length - MAX_TRANSFER_ROWS })
+    : overBytes
+      ? t('hosts.transfer.limit_bytes')
+      : list.filter(hasToken).length > MAX_TRANSFER_ROWS
+        ? t('hosts.transfer.limit_rows', { max: MAX_TRANSFER_ROWS })
+        : null
 
   const toggle = (id: string) =>
     setUnticked((prev) => {
@@ -67,10 +89,10 @@ export function ShareHostsDialog({ onClose }: Props) {
     })
 
   const handleCreate = async () => {
-    if (!relay || picked.length === 0 || creating) return
+    if (blocked || !relay) return
     const name = relay.name
     setPhase({ kind: 'creating' })
-    const res = await createTransfer(relay.id, payloadRowsOf(picked))
+    const res = await createTransfer(relay.id, rows)
     if (!mounted.current) return
     setPhase(res.kind === 'ok' ? { kind: 'created', code: res.code, expiresAt: res.expiresAt, relayName: name } : { kind: 'failed', failure: res, relayName: name })
   }
@@ -153,6 +175,12 @@ export function ShareHostsDialog({ onClose }: Props) {
                 )}
               </div>
 
+              {limitNote !== null && (
+                <p data-testid="transfer-limit" className={`text-xs ${overRows || overBytes ? 'text-red-400' : 'text-text-secondary'}`}>
+                  {limitNote}
+                </p>
+              )}
+
               <p data-testid="transfer-trust" className="text-xs text-yellow-400">
                 {t('hosts.transfer.trust', { relay: relayName })}
               </p>
@@ -176,7 +204,7 @@ export function ShareHostsDialog({ onClose }: Props) {
               </button>
               <button
                 onClick={() => void handleCreate()}
-                disabled={!relay || picked.length === 0 || creating}
+                disabled={blocked}
                 className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
               >
                 {creating && <ArrowsClockwise size={14} className="animate-spin" />}
