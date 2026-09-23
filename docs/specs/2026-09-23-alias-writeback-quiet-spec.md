@@ -1,9 +1,9 @@
 # Alias write-back without a problem — spec + plan (#1369)
 
 Status: rev 2 (codex plan review task-mudtuczk-t7jt07: #1 strict alias rule, #2 apply returns its payload, #3 the
-`hostOrder` counter-case) · R1 (PR #1376: a payload the stores moved away from is not pushed, §2.3) · critic (the
+`hostOrder` counter-case) · R1 (PR #1376: the pull stashes no payload the stores moved away from, §2.3) · critic (the
 R1 check moved from the apply to the executor's stash — the lock-release observer moves the stores after the apply's
-last look, §2.3) · 2026-09-23 · branch `worktree-alias-writeback-quiet` · base `4cecb6d3` (PR #1370 merged)
+last look, §2.3) · critic 2 (the executor's older windows are out of scope → #1377, §2.3) · 2026-09-23 · branch `worktree-alias-writeback-quiet` · base `4cecb6d3` (PR #1370 merged)
 
 ## 1. Problem
 
@@ -71,10 +71,10 @@ excludes a key while `awaitsCollector`). The branch itself stays as a fallback f
 
 `pruneMemoryStash` keeps the entry: the section's `currentHash` is `outcome.hash` after `pull-applied`.
 
-**R1 (PR #1376) + critic: a payload the stores moved away from is not pushed — checked by the executor, at the
+**R1 (PR #1376) + critic: the pull adds no stale-snapshot push of its own — checked by the executor, at the
 stash.** The apply's payload is a snapshot, and the stores can move between the apply's build and the stash. Pushed,
-a stale snapshot overwrites the SOT with old content until the collector's report of the change pushes again (the
-collector path never pushed a stale snapshot). Two ways they move:
+a stale snapshot overwrites the SOT with old content until the collector's report of the change pushes again. Two
+ways they move:
 
 - a user edit of the same section landing in the apply's `hashSection` await;
 - the apply's own lock release. `withOperationLock` releases the operation lock in its `finally`, synchronously,
@@ -94,6 +94,13 @@ a builder that throws, no `buildNow` (the conservative default) — is no stash:
 `awaitsCollector`, and the collector's report of what the stores hold now is what goes out. The outcome's hash is
 still what `pull-applied` records as `localHash`; the collector's report moves it on. `rebuilt` is back to one
 build, one hash, the payload handed back; `aliasesOnly` is decided on that payload.
+
+**What this does not guarantee (critic round 2, PR #1376 → #1377).** The check governs only the entry THIS path
+adds. Two older windows stay as on main, where every push already has them: an entry the stash already holds for
+the same hash (an earlier collector report — same hash, same content; `awaitsCollector` is `!stash.has(hash)` on
+main), and the `await shapes()` in `send` before it reads the stash. Both are transient — the stores' change is a
+collector report of a new hash, which pushes again (the lock-release integration test asserts the last PUT equals
+the stores' current build) — and both are the executor's, not the pull's: tracked in #1377 (a send-time check).
 
 Tests: executor.test.ts `the stores are asked again at the stash (#1369 critic)` (moved / unsettled / throws / no
 `buildNow` → waits for the collector; equal → pushed at once); executor.lock-release.integration.test.ts drives the
