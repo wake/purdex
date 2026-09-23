@@ -42,6 +42,14 @@ interface State {
    * unplaced, preserving the removal. Targets already present are not duplicated.
    */
   migrateId: (from: string, to: string[]) => void
+  /**
+   * Rename ids through `map` in every preset and in knownIds, in place (the
+   * host re-resolve pass: `sessions:<wire id>` → `sessions:<local id>`). Where
+   * a renamed id lands on one already present, the FIRST occurrence in that
+   * preset (column by column) — or in knownIds — is kept and the later one
+   * dropped (host ownership plan §0.11). Nothing renamed → no `set`.
+   */
+  renameIds: (map: (id: string) => string) => void
   reset: () => void
 }
 
@@ -302,6 +310,35 @@ export const useNewTabLayoutStore = create<State>()(
           const knownIds = state.knownIds.filter((id) => id !== from)
           for (const id of to) if (!knownIds.includes(id)) knownIds.push(id)
           return { presets, knownIds }
+        }),
+
+      renameIds: (map) =>
+        set((state) => {
+          const keys = ['3col', '2col', '1col'] as const
+          // Every id that moves, and where to: the targets are what can collide.
+          const targets = new Set<string>()
+          for (const id of [...state.knownIds, ...keys.flatMap((k) => state.presets[k].columns.flat())]) {
+            const to = map(id)
+            if (to !== id) targets.add(to)
+          }
+          if (targets.size === 0) return state
+          // Renamed per list; a target already seen earlier in the same list is dropped.
+          const renameIn = (seen: Set<string>) => (id: string): string[] => {
+            const to = map(id)
+            if (!targets.has(to)) return [id]
+            if (seen.has(to)) return []
+            seen.add(to)
+            return [to]
+          }
+          const presets = { ...state.presets }
+          for (const key of keys) {
+            const src = state.presets[key]
+            const next = renameIn(new Set())
+            const columns = src.columns.map((col) => col.flatMap(next))
+            const same = columns.every((col, i) => col.length === src.columns[i].length && col.every((id, j) => id === src.columns[i][j]))
+            if (!same) presets[key] = { enabled: src.enabled, columns }
+          }
+          return { presets, knownIds: state.knownIds.flatMap(renameIn(new Set())) }
         }),
 
       reset: () => set({ ...initialState() }),

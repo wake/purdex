@@ -8,6 +8,7 @@ import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/binding'
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { UntitledDocumentState } from '../types/tab'
+import { layoutFromWire } from '../lib/profile/host-identity'
 
 // --- Persist migration helpers ---
 // These functions handle legacy persisted data whose shape no longer matches
@@ -556,6 +557,13 @@ interface TabState {
   markTerminatedForGeneration: (hostId: string, sessionCode: string, expectedTmuxInstance: string, reason: TerminatedReason) => void
   adoptTmuxInstance: (hostId: string, sessionCode: string, tmuxInstance: string) => void
   markHostTerminated: (hostId: string, reason: TerminatedReason) => void
+  /**
+   * Map every pane's host reference — `tmux-session.hostId`, a daemon file
+   * source's `hostId`, a non-empty `execution.host` — through `map`, in every
+   * tab (the host re-resolve pass, host ownership spec §3.3). An untouched tab
+   * keeps its object; nothing changed → no `set` at all.
+   */
+  rewritePaneHosts: (map: (hostId: string) => string) => void
 }
 
 export const useTabStore = create<TabState>()(
@@ -959,6 +967,18 @@ export const useTabStore = create<TabState>()(
             }
           }
           return changed ? { tabs } : state
+        }),
+
+      rewritePaneHosts: (map) =>
+        set((state) => {
+          let tabs: Record<string, Tab> | null = null
+          for (const [id, tab] of Object.entries(state.tabs)) {
+            const layout = layoutFromWire(tab.layout, map)
+            if (layout === tab.layout) continue
+            tabs ??= { ...state.tabs }
+            tabs[id] = { ...tab, layout }
+          }
+          return tabs === null ? state : { tabs }
         }),
     }),
     {

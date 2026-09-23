@@ -306,6 +306,68 @@ describe('useNewTabLayoutStore', () => {
     })
   })
 
+  // Host ownership plan H1b T1 / §0.11: the re-resolve pass renames host-bearing column ids in every preset and in
+  // knownIds. A rename whose target is already placed keeps the FIRST occurrence in that preset (what the build,
+  // mapping column by column, would have sent twice).
+  describe('renameIds', () => {
+    const W = 'sessions:d1_aaaaaaaaaaaaaaaa'
+    const map = (id: string) => (id === W ? 'sessions:loc1' : id === 'headless:d1_aaaaaaaaaaaaaaaa' ? 'headless:loc1' : id)
+
+    it('renames in every preset and in knownIds, in place', () => {
+      useNewTabLayoutStore.setState({
+        presets: {
+          '3col': { enabled: true, columns: [['browser'], [W], ['headless:d1_aaaaaaaaaaaaaaaa']] },
+          '2col': { enabled: false, columns: [[W, 'browser'], []] },
+          '1col': { enabled: true, columns: [['browser', W]] },
+        },
+        knownIds: ['browser', W, 'headless:d1_aaaaaaaaaaaaaaaa'],
+      })
+      useNewTabLayoutStore.getState().renameIds(map)
+      const s = useNewTabLayoutStore.getState()
+      expect(s.presets['3col']).toEqual({ enabled: true, columns: [['browser'], ['sessions:loc1'], ['headless:loc1']] })
+      expect(s.presets['2col']).toEqual({ enabled: false, columns: [['sessions:loc1', 'browser'], []] })
+      expect(s.presets['1col']).toEqual({ enabled: true, columns: [['browser', 'sessions:loc1']] })
+      expect(s.knownIds).toEqual(['browser', 'sessions:loc1', 'headless:loc1'])
+    })
+
+    it('a target already placed in a preset: the first occurrence is kept, the later one dropped (knownIds too)', () => {
+      useNewTabLayoutStore.setState({
+        presets: {
+          '3col': { enabled: true, columns: [[W], ['sessions:loc1'], []] },
+          '2col': { enabled: false, columns: [['sessions:loc1'], [W]] },
+          '1col': { enabled: true, columns: [['browser', 'sessions:loc1', W]] },
+        },
+        knownIds: ['sessions:loc1', 'browser', W],
+      })
+      useNewTabLayoutStore.getState().renameIds(map)
+      const s = useNewTabLayoutStore.getState()
+      expect(s.presets['3col'].columns).toEqual([['sessions:loc1'], [], []])
+      expect(s.presets['2col'].columns).toEqual([['sessions:loc1'], []])
+      expect(s.presets['1col'].columns).toEqual([['browser', 'sessions:loc1']])
+      expect(s.knownIds).toEqual(['sessions:loc1', 'browser'])
+    })
+
+    it('nothing to rename → the same state object', () => {
+      useNewTabLayoutStore.setState({
+        presets: { '3col': makePreset(false, 3), '2col': makePreset(false, 2), '1col': { enabled: true, columns: [['browser', 'sessions:loc1']] } },
+        knownIds: ['browser', 'sessions:loc1'],
+      })
+      const before = useNewTabLayoutStore.getState()
+      useNewTabLayoutStore.getState().renameIds(map)
+      expect(useNewTabLayoutStore.getState()).toBe(before)
+    })
+
+    it('an untouched preset keeps its identity', () => {
+      const untouched = { enabled: false, columns: [['browser'], []] }
+      useNewTabLayoutStore.setState({
+        presets: { '3col': makePreset(false, 3), '2col': untouched, '1col': { enabled: true, columns: [[W]] } },
+        knownIds: [W],
+      })
+      useNewTabLayoutStore.getState().renameIds(map)
+      expect(useNewTabLayoutStore.getState().presets['2col']).toBe(untouched)
+    })
+  })
+
   describe('reset', () => {
     it('restores initial state', () => {
       useNewTabLayoutStore.getState().setEnabled('3col', true)
