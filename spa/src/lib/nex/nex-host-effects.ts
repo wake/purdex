@@ -9,7 +9,7 @@ import { fetchInfo } from '../host-api'
 import type { HostInfo } from '../../stores/useHostStore'
 import { fetchNexCapabilities } from './nex-api'
 import { isNexReady } from '../../components/hosts/nex/nex-ready'
-import { useHostStore } from '../../stores/useHostStore'
+import { hostEndpoint, useHostStore } from '../../stores/useHostStore'
 import {
   commitLoaded,
   emptyEntry,
@@ -43,14 +43,21 @@ function readJson(r: Response, path: string): Promise<HostInfo> {
   return r.ok ? r.json() : Promise.reject(new Error(`${path}: ${r.status}`))
 }
 
-async function load(hostId: string): Promise<Loaded> {
+/** One fetch round, plus the daemon's `host_id` from `/api/info` (`''` when unknown). */
+async function load(hostId: string): Promise<{ loaded: Loaded; observed: string }> {
   let info: Loaded['info']
+  let observed = ''
   try {
     const data = await fetchInfo(hostId).then((r) => readJson(r, '/api/info'))
     info = data.nex ?? null
+    if (typeof data.host_id === 'string') observed = data.host_id
   } catch (err) {
-    return { info: null, capabilities: null, error: errorText(err) }
+    return { loaded: { info: null, capabilities: null, error: errorText(err) }, observed }
   }
+  return { loaded: await loadCapabilities(hostId, info), observed }
+}
+
+async function loadCapabilities(hostId: string, info: Loaded['info']): Promise<Loaded> {
   if (!info) return { info, capabilities: null, error: '/api/info: no nex section' }
   if (!info.configured || !info.mounted) return { info, capabilities: null, error: null }
   if (info.init_error) return { info, capabilities: null, error: info.init_error }
@@ -97,8 +104,12 @@ export function createNexHostEffects(sink: EntrySink): NexHostEffects {
     sink.get()[hostId]?.generation === token.generation && fingerprintOf(hostId) === token.fingerprint
 
   async function fetchAndCommit(hostId: string, token: RequestToken): Promise<void> {
-    const loaded = await load(hostId)
+    const host = useHostStore.getState().hosts[hostId]
+    const endpoint = host ? hostEndpoint(host) : ''
+    const { loaded, observed } = await load(hostId)
     if (!stillCurrent(hostId, token)) return
+    // The same answer is also this device's daemon-identity check (spec 2026-09-23 D4.3).
+    useHostStore.getState().observeDaemonId(hostId, observed, endpoint)
     sink.set((byHost) => ({ ...byHost, [hostId]: commitLoaded(loaded, token, Date.now()) }))
   }
 

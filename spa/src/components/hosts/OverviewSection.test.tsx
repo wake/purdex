@@ -519,6 +519,25 @@ describe('TokenField', () => {
     })
   })
 
+  it('feeds the /api/info host_id to the host store (spec 2026-09-23 D4.3)', async () => {
+    mockFetchInfo.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ host_id: 'mini-lab:abc123', purdex_version: '1.0.0', tmux_version: '3.6', os: 'darwin', arch: 'arm64' }),
+    } as Response)
+    render(<OverviewSection hostId={HOST_ID} />)
+    await waitFor(() => expect(useHostStore.getState().hosts[HOST_ID].daemonId).toBe('mini-lab:abc123'))
+  })
+
+  it('a /api/info answer that lands after a re-point is not learned (D4.3)', async () => {
+    let settle!: (r: Response) => void
+    mockFetchInfo.mockReturnValue(new Promise<Response>((resolve) => { settle = resolve }))
+    render(<OverviewSection hostId={HOST_ID} />)
+    useHostStore.getState().updateHost(HOST_ID, { ip: '5.6.7.8' })
+    settle({ ok: true, json: () => Promise.resolve({ host_id: 'mini-lab:old' }) } as Response)
+    await new Promise((r) => setTimeout(r, 0))
+    expect('daemonId' in useHostStore.getState().hosts[HOST_ID]).toBe(false)
+  })
+
   it('switching the Color row mode drives the badge preview next to the icon', () => {
     useHostStore.getState().setHostColorLayer(HOST_ID, 'console', 'main', { color: '#3b82f6', alpha: 100 })
     useHostStore.getState().setHostColorLayer(HOST_ID, 'terminal', 'main', { color: '#ef4444', alpha: 100 })
