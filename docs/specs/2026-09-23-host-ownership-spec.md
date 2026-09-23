@@ -29,6 +29,11 @@ a workbench's settings = 工作台設定檔.
    profile whose SOT has only a `hosts` section and no `tabs.*` / `settings` written by a new client — that is a
    documented known limitation (§5.4), not solved by a fencing write.
 8. The terms above (profile = 工作台 …) stand.
+9. **Deleting a host affects only this device.** A local host deletion rewrites this device's references to that
+   host back to its wire id (the inverse of §3.3): its panes show the local-only "this device has no host ‹name›",
+   no `terminated: 'host-removed'` mark is written, no tab is closed, and its `purdex-host-settings` entry, New Tab
+   columns and look are kept. Other devices are not affected at all. H4's replace-all removes hosts the same way
+   (§3.4).
 
 ## 2. Where each piece of host data lives afterwards (measured on alpha.439)
 
@@ -111,6 +116,36 @@ Keeping a wire id verbatim is only half: when the host later arrives here, the r
 - **Look re-key (H2+):** the same pass moves a look / shown-hosts entry keyed by a host's local id to its `d1_…` key
   when that host gains a daemonId (§4.3).
 
+### 3.4 Local host deletion only affects this device (decision 9, H1c)
+
+`deleteHostCascade` today closes the host's tabs (`closeTabs: true`) or writes the synced `terminated:
+'host-removed'` mark (on screen and in every parked world), pins hostless execution panes to the removed host, and
+deletes the host's `purdex-host-settings` entry — all synced, so the deletion reaches every device. New behaviour, for
+every deletion path (Hosts page, H4 replace-all; before H3 also a `hosts` apply that drops a host):
+
+- **One step under the world lock:** capture `wireId = identity.toWire(localId) ?? localId` BEFORE removal; rewrite
+  every reference to `localId` into `wireId` in the on-screen tab store, every parked world
+  (`updateParkedWorlds`), `purdex-host-settings` keys and New Tab `sessions:` / `headless:` columns (a no-daemonId
+  host: wire id = local id, nothing changes); THEN remove the host and clear this device's own per-host state
+  (sessions, agent, execution view, runtime; a held lease is released best-effort as today). Look / shown-hosts
+  entries are wire-keyed and are not touched.
+- **Not done any more:** no `terminated` mark (on screen or parked), no tab close — the delete dialog loses its
+  "close tabs" choice and says the tabs stay, shown as "no host here" on this device, and other devices are
+  unaffected; no host-settings deletion; no look deletion.
+- **Hostless execution panes** (`execution.host === ''`) are NOT pinned any more: pinning is a synced write. Such a
+  pane follows this device's first host, like every hostless pane (for deletion, this supersedes the no-rebind rule
+  of the Nexen spec §4.3.2 step 5 that `host-lifecycle.ts` cites).
+- **No-push invariant (tested):** every section hash is identical before and after the deletion — the build mapped
+  `localId` to `wireId` before; the stored `wireId` passes through unchanged after.
+- **Undo** restores the host row (same local id, config, order, `activeHostId`) and the device-local stores it
+  cleared (sessions, agent state) as today. It restores no tabs, workspace memberships or marks — none were touched.
+  The identity signature changes, so the §3.3 pass rewrites every `wireId` reference (on screen and parked, whoever's
+  world it is by then — a relabel since the deletion no longer matters) back to the local id. The `worldSkipped`
+  result and the snapshot's `closedTabs` / `tabWorkspaces` / `terminatedTabPaneIds` go.
+- **Existing `host-removed` marks** already in data are left alone and render as today.
+- **Before H3** a deletion still changes this device's `hosts` build; another device applying that drops the host
+  through this same rule — its tabs are not touched either. Only after H3 is the host list fully per-device.
+
 ## 4. Host looks and shown hosts (H2)
 
 ### 4.1 Stores and wire
@@ -166,8 +201,10 @@ written by add-host and the transfer receiver (§6.4).
   is dropped. Same for shown-hosts ids. This changes the payload: one push.
 - **Two local rows later proven to be one daemon:** that is an identity conflict — nothing is built and the pass
   does nothing (§3.3). The user removes one row (existing duplicate flow); the pass then re-keys the survivor by the
-  rule above. Deleting a host deletes look / shown-hosts entries keyed by its LOCAL id (meaningless elsewhere); a
-  `d1_…`-keyed entry is never deleted by a host deletion (it belongs to the workbench).
+  rule above. Deleting a host deletes no look / shown-hosts entry (decision 9) — the removed duplicate's local-id entry
+  stays as an unresolvable id, like any other.
+- **Transferred looks and the H2c / H4b merge order:** whichever of H2c and H4b merges SECOND makes the transfer
+  receiver follow §6.4 step 5 (§6.4 step 7).
 
 ### 4.4 The period between H2 and H3 (finding 3)
 
@@ -290,7 +327,14 @@ through a host you trust." The payload is never logged or written to disk; a dae
    Looks from the payload are written to the look store only where no entry exists for that `d1_…` (§4.3).
 6. `replace-all` removes every local host not in the committed set EXCEPT: the relay host used for this transfer, the
    current master's attach host, `activeHostId` (else reassigned to a kept host) and `devHostId` (else cleared); it
-   refuses to leave zero hosts. Removals go through the normal delete path (its cascade and undo).
+   refuses to leave zero hosts. Removals go through the normal delete path, i.e. decision 9 / §3.4: references become
+   wire ids, nothing synced is marked or closed, each removal is undoable.
+7. **Merge order with H2c (agreed with d4).** If H4b merges BEFORE H2c, a received look is written to the new host's
+   `HostConfig` name / colors / color / icon / iconWeight (the device fallback) — to an EXISTING host's only in
+   overwrite mode — and H2c's first-run migration (§4.3) later moves it into the look store. Whichever of the two
+   merges second owns making the receiver match step 5: after H2c a received look goes to the look store, only where
+   no entry exists for that `d1_…`; `HostConfig` gets the name only (the required fallback field). That PR carries the
+   test.
 
 ## 7. Phases (each a PR ≤ 20 files, merged in order; file counts are estimates the plan measures)
 
@@ -307,15 +351,24 @@ through a host you trust." The payload is never logged or written to disk; a dae
   full path "receive unknown column → restart → add the daemon" ends with the column live and no duplicate; an
   alias reference is canonicalised with one push; identity conflict → pass does nothing, runs after resolution;
   the pass holds the world lock.
+- **H1c — local deletion only affects this device** (§3.4, decision 9; after H1b, whose pass the undo relies on; ~9
+  files: `host-lifecycle.ts`, the delete dialog in `OverviewSection.tsx`, `apply-to-stores.ts` (its
+  `deleteHostCascade(id, false)` caller), 2 locales, `host-lifecycle.test.ts`, `host-lifecycle.worlds.test.ts`,
+  `apply-to-stores.test.ts`, `OverviewSection` test). Tests: deleting a host with panes on screen, in a parked master
+  and in a parked slave rewrites them to the wire id, writes no `terminated`, closes no tab, keeps host settings /
+  columns / look, and every section hash is unchanged (nothing pushed); a no-daemonId host's references stay its local
+  id; a hostless execution pane is not pinned; undo re-adds the host and the pass brings every reference back to the
+  local id (also after a relabel); a `hosts` apply dropping a host (pre-H3) follows the same rule; the dialog has no
+  "close tabs" choice.
 - **H2a — the look selector, colour/icon surfaces** (§4.2; pure refactor, selector reads `HostConfig` only; ~14
   files). Tests: selector unit tests; badge / preview / colour & icon fields unchanged in behaviour.
 - **H2b — the look selector, name surfaces** (§4.2; pure refactor; ~18 files) + the guard test against new direct
   reads.
 - **H2c — the look store** (§4.1, §4.3, §4.4; `settings` ordinal +1, `@wire:host-look=1`; ~16 files: store,
   projection + guard snapshot, settings build/apply, migration, writers rerouted, provider `subscribe` on the look
-  store, re-key + delete rules in the pass). Tests: migration keyed by current wire id, skip-if-present, marker stops a
+  store, re-key in the pass; if H4b merged first, also the receiver switch of §6.4 step 7). Tests: migration keyed by current wire id, skip-if-present, marker stops a
   re-run, a no-daemonId host's look re-keys to `d1_…` when the daemonId is learned (existing `d1_…` wins), host
-  deletion drops only local-id entries, a look arriving by `settings` relabels the New Tab provider, an old client
+  deletion keeps every look entry, a look arriving by `settings` relabels the New Tab provider, an old client
   locks on the new `settings`.
 - **H2d — shown hosts** (§4.5; ordinal +1, `@wire:shown-hosts=1`; ~12 files: store, projection, Settings › 工作台
   editor, the filters, locales). "Hidden ≠ absent" tests: a hidden host stays connected and its event WS open; its
@@ -332,14 +385,17 @@ through a host you trust." The payload is never logged or written to disk; a dae
   not reset, capacity 16 → 429, collision retry via an injected generator, payload never in logs.
 - **H4b — SPA share / receive** (§6.1, §6.4; ~14 files: API client, pure planner, store commit action, two dialogs,
   Hosts page entries, locales, tests). Tests: planner statuses (new / existing / mismatch / unverified / duplicate /
-  local-conflict); `/api/info` uses the payload token; rollback for each mode (a throw inside the commit leaves
+  local-conflict); `/api/info` uses the payload token; received looks land where §6.4 step 7 says for the merge
+  order at hand; rollback for each mode (a throw inside the commit leaves
   `hosts`, `hostOrder`, `activeHostId`, `devHostId` and the look store identical); replace-all keeps the relay, the
-  master's attach host and `activeHostId`, clears a removed `devHostId`, refuses zero hosts; the trust copy is shown.
+  master's attach host and `activeHostId`, clears a removed `devHostId`, refuses zero hosts, and its
+  removals leave tabs and synced data untouched (§3.4); the trust copy is shown.
 
 ## 8. Acceptance
 
 H1: A and B with independent host lists (B lacks host X): A opens a tab on X → B shows it as "no host X here", A
-still live, nothing marked; B then adds X → the pane goes live, no push from B. H2: change mlab's colour on A → B
+still live, nothing marked; B then adds X → the pane goes live, no push from B; B deletes X → B's X tabs stay ("no
+host X here"), A notices nothing; B undoes → live again. H2: change mlab's colour on A → B
 follows; rename on A → B's New Tab label follows; hide a host in workbench W on A → hidden on B in W, still connected
 on both. H3: a device adds a host locally → no other device gets it; a pull never removes a local host. H4: A shares
 mlab + air26 through mlab → B enters the code → gets both (add-new mode), connected, looks from the workbench; a
@@ -361,8 +417,8 @@ second redeem of the same code fails.
 12. H4 receiver commit — adopted: verify all → preview statuses → one commit; replace-all invariants; rollback tests (§6.4, H4b).
 13. H3 daemon side — adopted: daemon keeps legacy `hosts` support with a removal condition; never-rewrite tests (§5.3, H3a).
 
-Not in the review, found while revising — **open, needs a user decision before H1 plan**: a LOCAL host deletion
-(`deleteHostCascade`) still writes the synced `terminated: 'host-removed'` mark (or closes the tabs) and deletes the
-host's `purdex-host-settings` entry — with per-device lists that deletion propagates to devices that still have the
-host. Options: (a) keep as is (deleting = removing from the workbench), (b) local deletion rewrites the host's
-references to its wire id (the inverse of §3.3) and writes no synced mark.
+Decisions recorded 2026-09-24 after this review: (1) the question raised while revising — a local host deletion
+propagating to other devices — decided by the user as option (b), "only this device": decision 9, §3.4, H1c; H4
+replace-all uses it (§6.4 step 6). (2) H4b / H2c merge order, agreed with d4: before H2c a received look goes to
+`HostConfig` and H2c's migration moves it; whichever merges second makes the receiver write the look store (§4.3,
+§6.4 step 7, H2c / H4b).
