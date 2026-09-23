@@ -55,6 +55,9 @@ type FakeExecutor struct {
 	// readHook runs at the start of every ListSessions / ActivePaneMetadata
 	// call with the caller's context; see SetReadHook.
 	readHook ReadHook
+	// createHook runs at the start of every HasSessionContext /
+	// NewSessionContext call with the caller's context; see SetCreateHook.
+	createHook ReadHook
 	// instance is the fake server's generation, the value SendKeysIfInstance
 	// compares against. Tests move it to model a restart.
 	instance             string
@@ -249,6 +252,39 @@ func BlockReadsUntil(release <-chan struct{}, match func(op ReadOp, target strin
 	}
 }
 
+// Ops a create hook is called for (SetCreateHook).
+const (
+	OpHasSession ReadOp = "has-session"
+	OpNewSession ReadOp = "new-session"
+)
+
+// SetCreateHook installs (or, with nil, removes) the hook run at the start of
+// every HasSessionContext / NewSessionContext call, outside the fake's lock,
+// with the caller's context; target is the session name. A non-nil error is
+// what the call returns and — for new-session — nothing is created, unless
+// the hook created the session itself (fake.NewSession) to model a tmux
+// server that made it while the client was being killed. It is separate from
+// the read hook so a test that parks list reads does not also park creates.
+func (f *FakeExecutor) SetCreateHook(fn ReadHook) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createHook = fn
+}
+
+// beginCreateOp is beginRead for the create hook.
+func (f *FakeExecutor) beginCreateOp(ctx context.Context, op ReadOp, target string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	hook := f.createHook
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(ctx, op, target)
+	}
+	return nil
+}
+
 // beginRead models the real executor's context handling: a read whose
 // context has already ended never runs, and the hook sees the context.
 func (f *FakeExecutor) beginRead(ctx context.Context, op ReadOp, target string) error {
@@ -309,6 +345,14 @@ func (f *FakeExecutor) NewSession(name, cwd string) error {
 	f.sessions[name] = TmuxSession{ID: id, Name: name, Cwd: cwd}
 	f.sessionOrder = append(f.sessionOrder, name)
 	return nil
+}
+
+// NewSessionContext is NewSession behind the create hook.
+func (f *FakeExecutor) NewSessionContext(ctx context.Context, name, cwd string) error {
+	if err := f.beginCreateOp(ctx, OpNewSession, name); err != nil {
+		return err
+	}
+	return f.NewSession(name, cwd)
 }
 
 func (f *FakeExecutor) KillSession(name string) error {
@@ -384,6 +428,14 @@ func (f *FakeExecutor) HasSession(name string) bool {
 	defer f.mu.Unlock()
 	_, ok := f.sessions[name]
 	return ok
+}
+
+// HasSessionContext is HasSession behind the create hook.
+func (f *FakeExecutor) HasSessionContext(ctx context.Context, name string) (bool, error) {
+	if err := f.beginCreateOp(ctx, OpHasSession, name); err != nil {
+		return false, err
+	}
+	return f.HasSession(name), nil
 }
 
 // HasPane reports whether paneID exists in the fake's recorded pane list.

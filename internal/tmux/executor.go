@@ -39,9 +39,19 @@ type Executor interface {
 	ListSessions(ctx context.Context) ([]TmuxSession, error)
 	ActivePaneMetadata(ctx context.Context, sessionName string) (TmuxPaneMetadata, error)
 	NewSession(name, cwd string) error
+	// NewSessionContext is NewSession bounded by ctx (#1293): when ctx ends
+	// the tmux client is killed and the error wraps ctx.Err(). A killed
+	// client says nothing about the server: new-session may still have
+	// created the session, so a caller whose ctx ended asks HasSessionContext
+	// before concluding that nothing exists.
+	NewSessionContext(ctx context.Context, name, cwd string) error
 	KillSession(name string) error
 	RenameSession(oldName, newName string) error
 	HasSession(name string) bool
+	// HasSessionContext is HasSession bounded by ctx (#1293). (false, nil) is
+	// tmux's own "no" (no such session, or no server); an error wraps
+	// ctx.Err() and means the question went unanswered.
+	HasSessionContext(ctx context.Context, name string) (bool, error)
 	// HasPane reports whether the given pane id (e.g. "%5") still exists in
 	// the global tmux pane list. Returns (false, nil) on empty paneID or
 	// confirmed absence; (true, nil) on confirmed presence; (_, err) on a
@@ -136,7 +146,8 @@ func NewRealExecutor() *RealExecutor { return &RealExecutor{} }
 // child's stdout, Output() still returns within deadline + readWaitDelay.
 const readWaitDelay = 500 * time.Millisecond
 
-// boundedRead builds a tmux read that is killed when ctx ends.
+// boundedRead builds a tmux invocation that is killed when ctx ends — the
+// reads above, and new-session, whose caller bounds it with a cap of its own.
 func boundedRead(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "tmux", args...)
 	cmd.WaitDelay = readWaitDelay
@@ -377,6 +388,17 @@ func (r *RealExecutor) NewSession(name, cwd string) error {
 	return exec.Command("tmux", "new-session", "-d", "-s", name, "-c", cwd).Run()
 }
 
+func (r *RealExecutor) NewSessionContext(ctx context.Context, name, cwd string) error {
+	err := boundedRead(ctx, "new-session", "-d", "-s", name, "-c", cwd).Run()
+	if err == nil {
+		return nil
+	}
+	if cerr := readCtxErr(ctx, "tmux new-session", err); cerr != nil {
+		return cerr
+	}
+	return err
+}
+
 func (r *RealExecutor) KillSession(name string) error {
 	err := exec.Command("tmux", "kill-session", "-t", "="+name).Run()
 	if err != nil {
@@ -397,6 +419,17 @@ func (r *RealExecutor) HasSession(name string) bool {
 	// Use "=" prefix for exact name matching (tmux 3.2+).
 	// Without it, "has-session -t foo" matches "foobar" via prefix.
 	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
+}
+
+func (r *RealExecutor) HasSessionContext(ctx context.Context, name string) (bool, error) {
+	err := boundedRead(ctx, "has-session", "-t", "="+name).Run()
+	if err == nil {
+		return true, nil
+	}
+	if cerr := readCtxErr(ctx, "tmux has-session", err); cerr != nil {
+		return false, cerr
+	}
+	return false, nil
 }
 
 // HasPane reports whether the given pane id is currently listed by
