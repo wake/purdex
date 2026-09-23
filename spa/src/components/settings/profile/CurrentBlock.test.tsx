@@ -421,6 +421,44 @@ describe('blocked — each reason its own sentence', () => {
     expect(screen.getByTestId('profile-current-blocked')).toHaveTextContent(en[key])
   })
 
+  describe('paused by a host (host-sync-identity §4, §11.4): which host, and what mends it', () => {
+    const D = 'mlab:278cbm'
+    const hostCfg = (id: string, name: string, ip: string, daemonId?: string) => ({ id, name, ip, port: 7860, order: 0, ...(daemonId ? { daemonId } : {}) })
+
+    it('host-identity-mismatch: names the host this window sees at another daemon, and says to fix its address or remove it', () => {
+      useHostStore.setState({
+        hosts: { h1: hostCfg('h1', 'mlab', '10.0.0.1', D), h2: hostCfg('h2', 'air', '10.0.0.2', 'air:111111') },
+        hostOrder: ['h1', 'h2'],
+        runtime: { h2: { status: 'connected', daemonIdMismatch: { stored: 'air:111111', observed: 'else:222222', endpoint: '10.0.0.2:7860' } } },
+      })
+      show(attached({ blocked: 'host-identity-mismatch', status: null }))
+      const el = screen.getByTestId('profile-current-blocked')
+      expect(el).toHaveAttribute('data-reason', 'host-identity-mismatch')
+      expect(el).toHaveTextContent(en['settings.profile.current.blocked.host_identity_mismatch'].replace('{{hosts}}', 'air'))
+      expect(screen.getByTestId('profile-current-state')).toHaveAttribute('data-state', 'problem')
+      expect(screen.getByTestId('profile-sync-now')).toBeDisabled()
+    })
+
+    it('host-identity-mismatch published by a leader whose runtime this window does not share: the sentence without a name', () => {
+      useHostStore.setState({ hosts: { h1: hostCfg('h1', 'mlab', '10.0.0.1', D) }, hostOrder: ['h1'], runtime: {} })
+      show(attached({ blocked: 'host-identity-mismatch', status: null, leader: false, remote: true }))
+      expect(screen.getByTestId('profile-current-blocked')).toHaveTextContent(en['settings.profile.current.blocked.host_identity_mismatch_unnamed'])
+    })
+
+    it('host-identity-conflict: names the hosts that claim one daemon, and says to remove one', () => {
+      useHostStore.setState({ hosts: { h1: hostCfg('h1', 'mlab', '10.0.0.1', D), h2: hostCfg('h2', 'mlab (old)', '10.0.0.5', D) }, hostOrder: ['h1', 'h2'], runtime: {} })
+      show(attached({ blocked: 'host-identity-conflict', status: null }))
+      const el = screen.getByTestId('profile-current-blocked')
+      expect(el).toHaveAttribute('data-reason', 'host-identity-conflict')
+      expect(el).toHaveTextContent(en['settings.profile.current.blocked.host_identity_conflict'].replace('{{hosts}}', 'mlab, mlab (old)'))
+    })
+
+    it('host-identity-conflict this window does not see (yet): the sentence without names', () => {
+      show(attached({ blocked: 'host-identity-conflict', status: null }))
+      expect(screen.getByTestId('profile-current-blocked')).toHaveTextContent(en['settings.profile.current.blocked.host_identity_conflict_unnamed'])
+    })
+  })
+
   it('the profile gone by the INDEX (the executor\'s profileGone, `blocked` null) is said exactly as the 404 is', () => {
     show(attached({ status: { ...status({ hosts: 'synced' }, 'locked:reset'), profileGone: true } }))
     const el = screen.getByTestId('profile-current-blocked')

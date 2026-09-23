@@ -24,6 +24,11 @@ describe('syncDotOf — one reading of the whole master, for the switcher\'s dot
     [{ blocked: 'suspended' as const }, 'syncing'],
     [{ blocked: 'profile-gone' as const }, 'problem'],
     [{ blocked: 'master-endpoint-changed' as const }, 'problem'],
+    [{ blocked: 'host-identity-mismatch' as const }, 'problem'],
+    [{ blocked: 'host-identity-conflict' as const }, 'problem'],
+    // paused by a host: red whatever the figures last said — the leader has no driver
+    [{ blocked: 'host-identity-mismatch' as const, status: status({}, 'synced') }, 'problem'],
+    [{ blocked: 'host-identity-conflict' as const, remote: true, stale: true }, 'problem'],
     [{ status: null }, 'unknown'],
     [{ remote: true, stale: true }, 'unknown'],
     [{ status: status({}, 'locked:conflict') }, 'locked'],
