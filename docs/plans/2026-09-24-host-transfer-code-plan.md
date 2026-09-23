@@ -113,6 +113,30 @@ module: Stop clears the store (a code created before Stop is invalid after a new
 
 Gates: `go test ./internal/module/hosttransfer/... -race`, `go vet ./...`, the repo's usual `go test ./...`.
 
+### R1 / attacker revisions (PR #1394) — these override the text above
+
+1. **Expiry without traffic (R1 P1).** Sweeping only on Create/Redeem left an expired payload in memory until the next
+   request, breaking §6.1 "≤ TTL". Each entry now arms a timer (`afterFunc(codeTTL, …)`, injectable; tests fire it by
+   hand) that deletes it under `mu` — only if the slot still holds the same entry (per-entry `seq`), so a late timer
+   spares a newer entry under the same code. Redeem, sweep, `Clear` and `Stop` stop the timer. Sweep stays as the
+   second line of defence. Tests: `TestExpiryTimerDropsTheEntryWithoutAnyRequest`, `TestRedeemStopsTheExpiryTimer`,
+   `TestSweepStopsTheExpiryTimer`, `TestLateTimerSparesANewEntryUnderTheSameCode`, `TestClearStopsEveryTimer`.
+2. **Fail closed without an admin token (attacker, high).** `TokenAuth` lets everything through when `Config.Token`
+   is empty, which made both credential-carrying routes unauthenticated. `Init` keeps a live token reader
+   (`c.CfgMu.RLock` → `c.Cfg.Token`, as `http_chain.go`'s `tokenFn`; nil `Cfg` → empty); tests set `Module.tokenFn`
+   directly. Both handlers first answer **403 `{"reason":"no_token"}`** when it is empty (or unset) — before the
+   body, with no store write and no counted failure. Tests: `TestEmptyTokenRefusesBothEndpoints`,
+   `TestInitReadsTheAdminTokenLive`, `TestInitWithoutConfigFailsClosed`, and
+   `TestOuterChain_HostTransferFailsClosedWithoutAdminToken` (outer handler, no bearer → 403, not 200).
+3. **Stop is permanent (attacker, medium).** The daemon runs `StopModules` before `http.Server.Shutdown`, so requests
+   can still reach the handlers after `Module.Stop`. `Store.Stop()` sets a permanent `stopped` flag and clears every
+   entry (timers included) in one critical section; `Module.Stop` calls it. Afterwards `Create` → `ErrUnavailable`
+   (503 `unavailable`) and `Redeem` → new `ErrStopped` (503 `unavailable`). `ErrStopped` rather than
+   `ErrInvalidCode`: the answer does not depend on the code (no oracle), it is not counted toward the rate limit, and
+   it tells the client the relay is going away instead of blaming a typo. Tests: `TestStopIsPermanent`,
+   `TestStopRacesCreateAndRedeem` (`-race`: once `Stop` returns the map is empty and stays empty, and every timer
+   ever armed is stopped), `TestStoppedModuleRefusesBothEndpoints` (through the mux).
+
 ### Deploy
 
 H4a needs the daemon on the relay host. Deploying mlab / air26 is the coordinator's call (asked before, never done
