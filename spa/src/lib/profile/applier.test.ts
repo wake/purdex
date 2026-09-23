@@ -98,6 +98,8 @@ function hostsLocals(): HostsSlice[] {
 }
 
 describe('applyHosts', () => {
+  // The one deliberate exception: a local daemonId under a host id the payload
+  // carries without one — the ordinal-1 upcast below, which pushes once.
   it('round trip: hash(build(apply(local, p))) === hash(p) for any local', async () => {
     const p = deepFreeze(hostsPayload())
     for (const local of hostsLocals()) {
@@ -135,6 +137,47 @@ describe('applyHosts', () => {
     expect(next.activeHostId).toBeNull()
     expect(next.devHostId).toBeNull()
     expect(removedHostIds).toEqual(['x', 'y'])
+  })
+
+  describe('daemonId (hosts ordinal 2, host-daemon-id D6)', () => {
+    const local = (): HostsSlice => ({
+      hosts: { h1: host('h1', { name: 'old', token: 'other', daemonId: 'mini:local' }), z: host('z', { daemonId: 'mini:z' }) },
+      hostOrder: ['z', 'h1'],
+      activeHostId: 'h1',
+      devHostId: null,
+    })
+
+    it('UPCAST: an incoming host WITHOUT daemonId (ordinal-1 payload) keeps the local host\'s — every other field is the incoming one', () => {
+      const p = deepFreeze(hostsPayload())
+      const { next } = applyHosts(deepFreeze(local()), p)
+      expect(next.hosts.h1).toEqual({ ...p.hosts.h1, daemonId: 'mini:local' })
+      expect(next.hosts.h2).toEqual(p.hosts.h2) // not local: nothing to keep
+      expect(Object.hasOwn(next.hosts.h2, 'daemonId')).toBe(false)
+    })
+
+    it('an incoming host WITH daemonId wins over the local one (SOT wins, D2)', () => {
+      const p = deepFreeze(buildHostsSection({ hosts: { h1: host('h1', { daemonId: 'mini:sot' }) }, hostOrder: ['h1'] }))
+      const { next } = applyHosts(deepFreeze(local()), p)
+      expect(next.hosts.h1.daemonId).toBe('mini:sot')
+    })
+
+    it('the upcast state builds the ordinal-2 payload (the one upgrade push), which then round-trips as is', async () => {
+      const p = deepFreeze(hostsPayload())
+      const { next } = applyHosts(deepFreeze(local()), p)
+      const upgraded = buildHostsSection(next)
+      expect(upgraded.hosts.h1.daemonId).toBe('mini:local')
+      expect(await hashSection(upgraded)).not.toBe(await hashSection(p))
+      const again = applyHosts(next, deepFreeze(upgraded)).next
+      expect(await hashSection(buildHostsSection(again))).toBe(await hashSection(upgraded))
+    })
+
+    it('keeps no local daemonId for a host whose id is not in the payload, and copies nothing else of the local host', () => {
+      const p = deepFreeze(hostsPayload())
+      const { next } = applyHosts(deepFreeze(local()), p)
+      expect(Object.keys(next.hosts).sort()).toEqual(['h1', 'h2'])
+      expect(next.hosts.h1.name).toBe('host-h1')
+      expect(next.hosts.h1.token).toBe('tok')
+    })
   })
 
   it('does not hand out the incoming order array itself', () => {

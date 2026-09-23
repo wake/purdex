@@ -82,11 +82,24 @@ function unique(ids: readonly string[]): string[] {
 
 // === hosts ===
 
-/** Replaces `hosts` + `hostOrder`; the device's `activeHostId` / `devHostId` survive while their host does. */
+/**
+ * Replaces `hosts` + `hostOrder`; the device's `activeHostId` / `devHostId` survive while their host does.
+ *
+ * Hosts ordinal 1 → 2 added `daemonId` (host-daemon-id D6). An incoming host
+ * WITHOUT one (an ordinal-1 writer, or a host nobody has verified yet) keeps the
+ * local host's `daemonId` under the same id — the only local field that does;
+ * one that carries it wins (SOT wins, D2). The upcast state then builds a
+ * payload that differs from the one pulled, and that difference is the one
+ * upgrade push. The runtime `daemonIdMismatch` lives outside `hosts` and is
+ * never touched here.
+ */
 export function applyHosts(local: HostsSlice, incoming: HostsPayload): ApplyHostsResult {
   const hosts: Record<string, HostConfig> = {}
   for (const id of Object.keys(incoming.hosts)) {
-    if (id !== PROTO_KEY) hosts[id] = incoming.hosts[id]
+    if (id === PROTO_KEY) continue
+    const h = incoming.hosts[id]
+    const kept = h.daemonId === undefined && Object.hasOwn(local.hosts, id) ? local.hosts[id].daemonId : undefined
+    hosts[id] = kept ? { ...h, daemonId: kept } : h
   }
   const survives = (id: string | null): string | null => (id !== null && Object.hasOwn(hosts, id) ? id : null)
   return {
