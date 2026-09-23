@@ -37,6 +37,10 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     // NOT `runtime.*.daemonIdMismatch`: this device's verification lives in
     // `runtime`, outside `hosts`, and never travels.
     'hosts.*.daemonId',
+    // The legacy wire keys (other devices' local ids) a CANONICAL row was matched
+    // from (host-sync-identity §11.2). Never a local field of that name: the
+    // builder adds it from `HostConfig.syncAliases` (host-identity.ts `hostsToWire`).
+    'hosts.*.aliases',
   ],
   workspaces: [
     'order', 'workspaces.*.name', 'workspaces.*.icon', 'workspaces.*.iconWeight', 'workspaces.*.moduleConfig',
@@ -93,10 +97,18 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
  * re-interpreted field) — the case the fingerprint cannot see.
  */
 export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
-  hosts: 2, // 2: `hosts.*.daemonId` added (an ordinal-1 payload lacks it and is upcast on apply: applier.ts `applyHosts` keeps the local daemonId)
-  settings: 4, // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings); 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`)
+  // 2: `hosts.*.daemonId` added (an ordinal-1 payload lacks it and is upcast on apply: apply-to-stores keeps the local daemonId)
+  // 3: keys are WIRE ids (host-sync-identity: `d1_…` per daemon, else the local id) + `hosts.*.aliases` (an ordinal-2 payload's
+  //    local-id keys are matched on apply — daemonId first — and the next build is canonical)
+  hosts: 3,
+  // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings);
+  // 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`);
+  // 5: host ids in `purdex-host-settings.hosts` keys and `sessions:` / `headless:` preset columns are WIRE ids (host-sync-identity)
+  settings: 5,
   workspaces: 1,
-  tabs: 1,
+  // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
+  //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.
+  tabs: 2,
 }
 
 // === Section keys ===
@@ -134,9 +146,27 @@ export async function fingerprintOf(paths: readonly string[]): Promise<string> {
   return sha256Hex(new TextEncoder().encode([...paths].sort().join('\n')))
 }
 
-/** The fingerprint of a section kind's projection: 64 lowercase hex. */
+/**
+ * Constant markers hashed into a kind's FINGERPRINT next to its projection — never projected (they are not in
+ * `PROJECTIONS`, so no builder, guard or applier ever reads them). They exist for one case the ordinal cannot
+ * cover: a re-interpreted value with an unchanged path list. `compareShape` calls equal fingerprints 'ok'
+ * whatever the ordinals (§4.5 row 1, on the daemon too), and an old client cannot be changed — so a new
+ * meaning must move the fingerprint, and a marker is how it moves.
+ *
+ * host-sync-identity: host ids on the wire are sync ids (`d1_…`) — `hosts` keys, `tabs.*` pane host fields,
+ * `settings` host-settings keys and New Tab columns. `workspaces` names no host: no marker, fingerprint unchanged.
+ * A marker is only ever ADDED with an ordinal bump (the guard test's snapshot enforces it).
+ */
+export const WIRE_MARKERS: Record<SectionKind, readonly string[]> = {
+  hosts: ['@wire:host-id=d1'],
+  tabs: ['@wire:host-id=d1'],
+  settings: ['@wire:host-id=d1'],
+  workspaces: [],
+}
+
+/** The fingerprint of a section kind's shape — its projection plus its wire markers: 64 lowercase hex. */
 export function sectionFingerprint(kind: SectionKind): Promise<string> {
-  return fingerprintOf(PROJECTIONS[kind])
+  return fingerprintOf([...PROJECTIONS[kind], ...WIRE_MARKERS[kind]])
 }
 
 /** `{kind: [fingerprint, ordinal]}` for all four kinds — what the guard test snapshots. */

@@ -55,6 +55,15 @@
 //         locked or failing, no setting of any kind travels.)
 //     An entry whose workspace is on NO client is an orphan an older build
 //     pushed: it is dropped by the apply and pushed back without it, once.
+//   - `settings` WAITS FOR `hosts` TOO, IN BOTH DIRECTIONS (host-sync-identity
+//     §6, §11.8). It names hosts by WIRE id (`purdex-host-settings.hosts` keys,
+//     `sessions:` / `headless:` New Tab columns), resolved on apply through the
+//     hosts as they are here: applied while `hosts` is behind, the id of a host
+//     that has not arrived resolves to nothing, its column is left out and the
+//     section is pushed back without it. Sent before the `hosts` that lists a
+//     host added here, the same happens on every other client. So `settings`
+//     waits for the conjunction — `hosts` AND `workspaces` up to date — and a
+//     release of either one decides it again.
 //   - AN EMPTY `tabs.<id>` THAT WAS NEVER AGREED ON, WHILE THE SOT HAS CONTENT,
 //     IS NOT AN EDIT — IT HAS NOT ARRIVED YET. Applying `workspaces` from another
 //     client makes an empty workspace appear here; 500 ms later the collector
@@ -290,8 +299,9 @@ const DEFAULT_CONTENDED_MS = 1_000
 const STUCK_DELETION_ATTEMPTS = 4
 /** The sections every `tabs.*` pull waits for (apply-to-stores' CALLER CONTRACT). */
 const GATES: readonly string[] = ['hosts', 'workspaces']
-/** The sections `settings` waits for, pull and push (see the header). */
-const SETTINGS_GATES: readonly string[] = ['workspaces']
+/** The sections `settings` waits for, pull and push (see the header) — BOTH: `workspaces` for its scoped entries,
+ *  `hosts` for the host ids it names (host-sync-identity §6, §11.8). Each one's release pumps it (`pumpGatedBy`). */
+const SETTINGS_GATES: readonly string[] = ['hosts', 'workspaces']
 
 /** What must be up to date before `key` is pulled. */
 function pullGatesOf(key: string): readonly string[] {
@@ -611,7 +621,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     if (pumpAfter) {
       pump(key)
-      // `hosts` / `workspaces` gate every `tabs.*` pull, `workspaces` gates `settings`
+      // `hosts` / `workspaces` gate every `tabs.*` pull and `settings`
       pumpGatedBy(key)
       checkSettled()
     }
@@ -841,7 +851,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       })
   }
 
-  /** The section's gates are UP TO DATE (`tabs.*`: `hosts` and `workspaces`; `settings`: `workspaces`), and a
+  /** The section's gates are UP TO DATE (`tabs.*` and `settings`: `hosts` and `workspaces`), and a
    *  `tabs.*` has its workspace here. `status === 'synced'` alone is not that: it means clean, and a clean section
    *  that is behind the SOT (its pull decided or still out) reads `synced` too. */
   function mayPull(key: string): boolean {

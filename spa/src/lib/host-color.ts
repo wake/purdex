@@ -2,6 +2,7 @@ import type { IconWeight, PaneContent, PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
 import { rgbaString } from './color-space'
 import { isValidDaemonId } from './daemon-id'
+import { mergeAliases } from './profile/host-identity'
 // Static import on purpose: `CommandIconPicker` already pulls icon-meta into the
 // main chunk, so the catalog costs nothing extra here.
 import iconMetaData from '../features/workspace/generated/icon-meta.json'
@@ -95,10 +96,17 @@ function sanitizeHostColors(v: unknown): { value: HostConfig['colors']; same: bo
   return { value: out, same }
 }
 
+/** `value` is exactly the string list `list` (same members, same order). An empty list never is: absence is its form. */
+function sameStrings(list: readonly string[], value: unknown): boolean {
+  return list.length > 0 && Array.isArray(value) && value.length === list.length && list.every((s, i) => value[i] === s)
+}
+
 /**
  * Drops present-but-invalid identity keys (`color`, `colors`, `icon`, `iconWeight`,
  * and `daemonId` — judged by the shared `isValidDaemonId`) from an untrusted host
- * config (sync payload, persisted state). Returns the same object when every
+ * config (sync payload, persisted state). `syncAliases` is brought to its
+ * canonical form (`mergeAliases`; removed when nothing is left), so that a
+ * rehydrate never changes what the hosts builder sends as `aliases`. Returns the same object when every
  * present key is valid.
  */
 export function sanitizeHostConfig(host: HostConfig): HostConfig {
@@ -108,13 +116,19 @@ export function sanitizeHostConfig(host: HostConfig): HostConfig {
   const colors = 'colors' in host ? sanitizeHostColors(host.colors) : null
   const badColors = colors !== null && !colors.same
   const badDaemonId = 'daemonId' in host && !isValidDaemonId(host.daemonId)
-  if (!badColor && !badIcon && !badWeight && !badColors && !badDaemonId) return host
+  const aliases = 'syncAliases' in host ? mergeAliases(host.syncAliases, []) : null
+  const badAliases = aliases !== null && !sameStrings(aliases, host.syncAliases)
+  if (!badColor && !badIcon && !badWeight && !badColors && !badDaemonId && !badAliases) return host
 
   const cleaned = { ...host }
   if (badColor) delete cleaned.color
   if (badIcon) delete cleaned.icon
   if (badWeight) delete cleaned.iconWeight
   if (badDaemonId) delete cleaned.daemonId
+  if (badAliases) {
+    if (aliases.length === 0) delete cleaned.syncAliases
+    else cleaned.syncAliases = aliases
+  }
   if (badColors) {
     if (colors.value === undefined) delete cleaned.colors
     else cleaned.colors = colors.value

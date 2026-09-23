@@ -10,7 +10,27 @@
 //
 // No fetching, no clocks, no stores, no id generation — every input is a
 // parameter (the new workspace's id included), and no input is ever mutated.
+//
+// HOST IDS TRAVEL AS WIRE IDS (host-sync-identity spec §2, §5, §11.3). `hosts`,
+// `tabs.*` and `settings` name hosts; each of their builders translates local →
+// wire through a `HostIdentity` (host-identity.ts) — for `hosts` computed from
+// the very snapshot it builds, for the other two handed in by the caller, who
+// takes it from the host store AT BUILD TIME (collector, apply-to-stores). An
+// identity with a `conflict` builds nothing: the builders throw. The apply side
+// resolves back through `wireResolverOf`.
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import {
+  hostSettingsToWire,
+  hostsToWire,
+  identityOfSync,
+  layoutToWire,
+  makeWireResolver,
+  mergeAliases,
+  MAX_HOST_ALIASES,
+  presetColumnsToWire,
+  type HostIdentity,
+  type WireResolver,
+} from './host-identity'
 import { PROJECTIONS, project, tabsSectionKey, workspaceIdOf } from './projections'
 import type {
   HostsPayload,
@@ -53,6 +73,10 @@ export interface ProfileDocumentResult {
 // on a plain object would rewrite the prototype instead of adding a key.
 const FORBIDDEN_KEY = '__proto__'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 /** `ids` without duplicates (first occurrence wins), restricted to ids `has` accepts. */
 function uniqueKnown(ids: readonly string[], has: (id: string) => boolean): string[] {
   const seen = new Set<string>()
@@ -77,6 +101,30 @@ export function stripSizes(layout: PaneLayout): StrippedLayout {
   return { type: 'split', id: layout.id, direction: layout.direction, children: layout.children.map(stripSizes) }
 }
 
+// === Host identity ===
+
+/** Thrown by a builder handed an identity with a conflict: a payload that names hosts would be ambiguous. */
+function refuseConflict(identity: HostIdentity | undefined): void {
+  if (identity !== undefined && identity.conflict !== null) {
+    throw new Error(`profile: host identity conflict (${identity.conflict.join(', ')}): nothing that names hosts is built`)
+  }
+}
+
+/**
+ * wire → local for `tabs.*` / `settings`, from the host store as it is NOW —
+ * after the `hosts` apply (spec §6, §11.2): a sync id → the local host of that
+ * daemon; a legacy id → the host whose canonical row lists it in `aliases`
+ * (persisted as `HostConfig.syncAliases`, so this survives a restart and an
+ * interrupted transition); anything else unchanged (the existing unknown-host
+ * handling). `null` under an identity conflict: nothing may be applied.
+ * The rows are this device's own wire build of its hosts, which after a
+ * `hosts` apply are the applied rows — `matched` is not needed.
+ */
+export function wireResolverOf(s: HostsSource, identity: HostIdentity = identityOfSync(s.hosts)): WireResolver | null {
+  if (identity.conflict !== null) return null
+  return makeWireResolver({ identity, rows: buildHostsSection(s, identity).hosts })
+}
+
 // === Section builders ===
 
 /**
@@ -88,10 +136,43 @@ export function stripSizes(layout: PaneLayout): StrippedLayout {
  * host the order never mentions is NOT added: the guard allows that state, and
  * the builder reflects the store rather than repairing it.
  */
-export function buildHostsSection(s: HostsSource): HostsPayload {
+export function buildHostsSection(s: HostsSource, identity: HostIdentity = identityOfSync(s.hosts)): HostsPayload {
+  refuseConflict(identity)
   const shaped = { hosts: s.hosts, hostOrder: uniqueKnown(s.hostOrder, (id) => Object.hasOwn(s.hosts, id)) }
   // An empty record matches no `hosts.*` path; the key must exist all the same.
-  return { hosts: {}, ...(project(shaped, PROJECTIONS.hosts) as object) } as HostsPayload
+  const local = { hosts: {}, ...(project(shaped, PROJECTIONS.hosts) as object) } as HostsPayload
+  // `aliases` is a WIRE field (the projection lists it for the guard and the fingerprint): only `syncAliases`,
+  // through `hostsToWire`, may put it on a row. A local host carrying a field of that name does not send it.
+  for (const row of Object.values(local.hosts)) delete (row as { aliases?: unknown }).aliases
+  const aliasesOf = (id: string): readonly unknown[] => withOwnAlias(Object.hasOwn(s.hosts, id) ? s.hosts[id].syncAliases : undefined, id)
+  return hostsToWire(local, identity, aliasesOf)
+}
+
+/**
+ * A canonical row's `aliases`: the SORTED unique union of the remembered ones (`syncAliases`) and the host's OWN
+ * local id — its wire key in the ordinal-2 era, so a legacy `tabs.*` / `settings` this device wrote resolves on
+ * every other device even when this device went canonical by PUSHING (spec §11.7; it never matched a legacy row) —
+ * the first MAX_HOST_ALIASES kept.
+ *
+ * Sorted, not "most recent": a rule every client computes identically has a fixed point however many devices
+ * share the daemon (A1, PR #1365 — with "own id in, oldest out" 17 devices would displace each other for ever).
+ * The price: a device whose own id sorts past the 16th is simply not listed — its build then equals the row it
+ * received and nothing is pushed — and during a transition its legacy keys stay unresolved on the others
+ * (their panes read as a removed host there), which is accepted. A stale id (a device gone) holds its place
+ * until 16 smaller ids exist. `hostsToWire` only adds this on a canonical row (a no-claim host's own id IS its key).
+ */
+function withOwnAlias(syncAliases: unknown, own: string): string[] {
+  return normaliseAliases([...(Array.isArray(syncAliases) ? syncAliases : []), own])
+}
+
+/**
+ * THE alias form, applied and built alike: the valid entries (`mergeAliases`' rule — non-empty strings, no sync
+ * ids), each once, sorted ascending, the first MAX_HOST_ALIASES. The guard accepts any order (a build of e9e24625
+ * wrote insertion order); what lands and what is built is always this, so such a row costs one write, then none.
+ */
+export function normaliseAliases(list: readonly unknown[]): string[] {
+  const valid = new Set(list.filter((a) => mergeAliases([], [a]).length === 1) as string[])
+  return [...valid].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, MAX_HOST_ALIASES)
 }
 
 /**
@@ -135,10 +216,14 @@ export function buildWorkspacesSection(workspaces: readonly Workspace[]): Worksp
  * holds exactly those — so `order` has no duplicates and equals the record's key
  * set, which is what the applier's well-formedness guard demands.
  */
-export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>): TabsPayload {
+export function buildTabsSection(ws: Workspace, tabs: Record<string, Tab>, identity?: HostIdentity): TabsPayload {
+  refuseConflict(identity)
   const order = uniqueKnown(ws.tabs, (id) => Object.hasOwn(tabs, id))
   const record: Record<string, unknown> = {}
-  for (const id of order) record[id] = { ...tabs[id], layout: stripSizes(tabs[id].layout) }
+  for (const id of order) {
+    const stripped = stripSizes(tabs[id].layout)
+    record[id] = { ...tabs[id], layout: identity === undefined ? stripped : layoutToWire(stripped, identity) }
+  }
   return { tabs: {}, ...(project({ order, tabs: record }, PROJECTIONS.tabs) as object) } as TabsPayload
 }
 
@@ -164,8 +249,16 @@ export const WORKSPACE_SCOPED_SETTINGS: { storageKey: SettingsStorageKey; field:
  * master's world. Filtered down to nothing the field is `{}`, exactly what a
  * store with no entry builds. `applySettings` is the other half.
  */
-export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspaceIds: ReadonlySet<string>): SettingsPayload {
+export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspaceIds: ReadonlySet<string>, identity?: HostIdentity): SettingsPayload {
+  refuseConflict(identity)
   const payload = project(stores, PROJECTIONS.settings) as SettingsPayload
+  if (identity !== undefined) {
+    // `project` returns fresh structure: replacing its members touches no store.
+    const hostSettings = payload['purdex-host-settings']
+    if (hostSettings !== undefined && isRecord(hostSettings.hosts)) hostSettings.hosts = hostSettingsToWire(hostSettings.hosts, identity)
+    const newtab = payload['purdex-newtab-layout']
+    if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = presetColumnsToWire(newtab.presets, identity)
+  }
   const scoped = payload[WORKSPACE_SCOPED_SETTINGS.storageKey]?.[WORKSPACE_SCOPED_SETTINGS.field]
   // `project` returns fresh structure, so deleting from it touches no store.
   if (typeof scoped === 'object' && scoped !== null && !Array.isArray(scoped)) {
@@ -192,15 +285,16 @@ function standaloneIds(workspaces: readonly Workspace[], tabs: Record<string, Ta
 export function buildProfileDocument(input: CollectInput): ProfileDocumentResult {
   const { workspaces } = input.workspaces
   const workspacesPayload = buildWorkspacesSection(workspaces)
+  const identity = identityOfSync(input.hosts.hosts) // ONE identity for every section of the document
   const document: Record<ProfileSectionKey, SectionPayload> = {
-    hosts: buildHostsSection(input.hosts),
+    hosts: buildHostsSection(input.hosts, identity),
     // The master's workspaces ARE the ones this document's `workspaces` section lists.
-    settings: buildSettingsSection(input.settings, new Set(workspacesPayload.order)),
+    settings: buildSettingsSection(input.settings, new Set(workspacesPayload.order), identity),
     workspaces: workspacesPayload,
   }
   for (const id of workspacesPayload.order) {
     const ws = workspaces.find((w) => w.id === id) as Workspace
-    document[tabsSectionKey(id)] = buildTabsSection(ws, input.tabs.tabs)
+    document[tabsSectionKey(id)] = buildTabsSection(ws, input.tabs.tabs, identity)
   }
   return { document }
 }

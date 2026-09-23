@@ -306,6 +306,29 @@ describe('sanitizeHostConfig', () => {
     expect(sanitizeHostConfig(h)).toBe(h)
   })
 
+  // host-sync-identity §11.2: the legacy wire keys a canonical `hosts` row carries (`aliases` on the wire).
+  describe('syncAliases', () => {
+    it('keeps a canonical list (same object reference)', () => {
+      const h: HostConfig = { ...base, syncAliases: ['aaaaaa', 'bbbbbb'] }
+      expect(sanitizeHostConfig(h)).toBe(h)
+    })
+
+    it.each([
+      [['aaaaaa', 'aaaaaa'], ['aaaaaa']],
+      [['aaaaaa', 42, '', 'd1_0000000000000001'], ['aaaaaa']],
+      [Array.from({ length: 20 }, (_, i) => `a${i}`), Array.from({ length: 16 }, (_, i) => `a${i + 4}`)],
+    ])('canonicalises %j to %j (mergeAliases: strings, no sync ids, each once, ≤ 16, oldest dropped)', (raw, want) => {
+      const out = sanitizeHostConfig({ ...base, syncAliases: raw as never })
+      expect(out.syncAliases).toEqual(want)
+    })
+
+    it.each([[[]], [['', 7]], ['aaaaaa'], [{}], [null], [42]])('removes a list that holds no alias, or is not a list: %j', (bad) => {
+      const out = sanitizeHostConfig({ ...base, token: 'T', syncAliases: bad as never })
+      expect('syncAliases' in out).toBe(false)
+      expect(out).toEqual({ ...base, token: 'T' })
+    })
+  })
+
   it('removes an explicit undefined icon key', () => {
     const out = sanitizeHostConfig({ ...base, icon: undefined })
     expect('icon' in out).toBe(false)

@@ -665,10 +665,10 @@ describe('executor — push and delete', () => {
   })
 
   it('TOKEN: a write whose section moved on while it was queued is not sent; the fresh decision is', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1', 'tabs.w1': 'T1' })
     const first = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(first.promise).mockResolvedValue({ kind: 'applied', rev: 2 })
-    ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 1 } })
+    ex.onSection({ key: 'tabs.w1', hash: 'T2', payload: { a: 1 } }) // not a gate of settings: only the FIFO holds it
     ex.onSection({ key: 'settings', hash: 'S2', payload: { stale: true } })
     await flush()
     ex.onSection({ key: 'settings', hash: 'S3', payload: { fresh: true } }) // the queued token is dead now
@@ -680,10 +680,10 @@ describe('executor — push and delete', () => {
   })
 
   it('TOKEN: a section that locked while its write was queued sends nothing', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1', 'tabs.w1': 'T1' })
     const first = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(first.promise).mockResolvedValue({ kind: 'applied', rev: 9 })
-    ex.onSection({ key: 'hosts', hash: 'H2', payload: { a: 1 } })
+    ex.onSection({ key: 'tabs.w1', hash: 'T2', payload: { a: 1 } }) // not a gate of settings: only the FIFO holds it
     ex.onSection({ key: 'settings', hash: 'S2', payload: { b: 1 } })
     await flush()
     ex.onRemoteEvent({ hostId: HOST, profileId: PROFILE, section: 'settings', rev: 4, hash: 'S9', writerClientId: OTHER_CLIENT })
@@ -1082,6 +1082,98 @@ describe('executor — pull', () => {
     expect(applySectionToStores).toHaveBeenCalledWith('tabs.w1', { order: [] }, { masterHostId: HOST })
   })
 
+  // host-sync-identity §6 / §11.8: `settings` names hosts (host-settings keys, sessions: / headless: columns) by WIRE
+  // id, resolved through the hosts as they are — so it waits for `hosts` AND `workspaces`, each release pumping it.
+  describe('ORDER: settings waits for hosts AND workspaces (conjunction)', () => {
+    /** hosts and workspaces each behind, their fetches held; a settings event; returns the controls. */
+    async function bothBehind() {
+      const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', settings: 'S1' })
+      const hostsGet = deferred<Result<Section | null>>()
+      const wsGet = deferred<Result<Section | null>>()
+      api.getSection.mockImplementation((_h, _p, section) =>
+        section === 'hosts' ? hostsGet.promise : section === 'workspaces' ? wsGet.promise : Promise.resolve(sectionOf(meta('settings', 2, 'S2'), { s: 2 })),
+      )
+      const applied: string[] = []
+      applySectionToStores.mockImplementation(async (key) => {
+        applied.push(key)
+        return { ok: true, hash: key === 'hosts' ? 'H2' : key === 'workspaces' ? 'W2' : 'S2' }
+      })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      ex.onRemoteEvent(remote('workspaces', 2, 'W2'))
+      ex.onRemoteEvent(remote('settings', 2, 'S2'))
+      await vi.advanceTimersByTimeAsync(10_000)
+      return { ex, hostsGet, wsGet, applied }
+    }
+    const settingsFetches = () => api.getSection.mock.calls.filter((c) => c[2] === 'settings').length
+
+    it('hosts lands first: settings still waits for workspaces; workspaces lands: settings is pulled', async () => {
+      const { hostsGet, wsGet, applied } = await bothBehind()
+      expect(settingsFetches()).toBe(0)
+      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      await flush()
+      expect(applied).toEqual(['hosts'])
+      expect(settingsFetches()).toBe(0)
+      wsGet.resolve(sectionOf(meta('workspaces', 2, 'W2'), { order: [] }))
+      await flush()
+      expect(applied).toEqual(['hosts', 'workspaces', 'settings'])
+    })
+
+    it('workspaces lands first: settings still waits for hosts; hosts lands: settings is pulled', async () => {
+      const { hostsGet, wsGet, applied } = await bothBehind()
+      wsGet.resolve(sectionOf(meta('workspaces', 2, 'W2'), { order: [] }))
+      await flush()
+      expect(applied).toEqual(['workspaces'])
+      expect(settingsFetches()).toBe(0)
+      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      await flush()
+      expect(applied).toEqual(['workspaces', 'hosts', 'settings'])
+    })
+
+    it('hosts moves again AFTER the settings pull was fetched: not applied; pulled again once hosts has landed', async () => {
+      const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', settings: 'S1' })
+      const settingsGet = deferred<Result<Section | null>>()
+      const hostsGet = deferred<Result<Section | null>>()
+      api.getSection.mockImplementation((_h, _p, section) => {
+        if (section === 'hosts') return hostsGet.promise
+        return settingsFetches() === 1 ? settingsGet.promise : Promise.resolve(sectionOf(meta('settings', 2, 'S2'), { s: 2 }))
+      })
+      const applied: string[] = []
+      applySectionToStores.mockImplementation(async (key) => {
+        applied.push(key)
+        return { ok: true, hash: key === 'hosts' ? 'H2' : 'S2' }
+      })
+      ex.onRemoteEvent(remote('settings', 2, 'S2'))
+      await flush()
+      expect(settingsFetches()).toBe(1) // on the wire
+      ex.onRemoteEvent(remote('hosts', 2, 'H2')) // the gate closes meanwhile
+      await flush()
+      settingsGet.resolve(sectionOf(meta('settings', 2, 'S2'), { s: 2 }))
+      await flush()
+      expect(applied).toEqual([]) // judged again when it landed: not applied
+      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(applied).toEqual(['hosts', 'settings'])
+      expect(settingsFetches()).toBe(2)
+      expect(ex.status().profile).toBe('synced')
+    })
+
+    it('a settings PUSH waits for hosts to be up to date too (a column naming a host the SOT does not list yet would be dropped elsewhere)', async () => {
+      const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', settings: 'S1' })
+      const hostsGet = deferred<Result<Section | null>>()
+      api.getSection.mockImplementation(() => hostsGet.promise)
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2' })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2')) // hosts behind, its pull out
+      await flush()
+      ex.onSection({ key: 'settings', hash: 'SL', payload: { local: 2 } })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(api.putSection).not.toHaveBeenCalled()
+      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      await flush()
+      expect(api.putSection.mock.calls.map((c) => c[2])).toEqual(['settings'])
+    })
+  })
+
   it('ORDER: a tabs.* pull waits for workspaces too, and for its workspace to exist here', async () => {
     const { ex } = await synced({ hosts: 'H1', workspaces: 'W1' })
     const wsGet = deferred<Result<Section | null>>()
@@ -1252,13 +1344,13 @@ describe('executor — a pulled section carries its shape, and a newer one locks
   })
 
   it('a write queued behind the pull that locks is not sent', async () => {
-    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1' })
+    const { ex } = await synced({ hosts: 'H1', settings: 'S1', workspaces: 'W1', 'tabs.w1': 'T1' })
     const get = deferred<Result<Section | null>>()
     api.getSection.mockReturnValue(get.promise)
     const put = deferred<PutOutcome>()
     api.putSection.mockReturnValueOnce(put.promise).mockResolvedValue({ kind: 'applied', rev: 9 })
     ex.onRemoteEvent(remote('settings', 2, 'S2'))
-    ex.onSection({ key: 'hosts', hash: 'H2', payload: { hosts: {} } }) // on the wire before anyone knew
+    ex.onSection({ key: 'tabs.w1', hash: 'T2', payload: { order: [], tabs: {} } }) // on the wire before anyone knew (not a gate of settings)
     await flush()
     get.resolve(sectionOf(meta('settings', 2, 'S2', ['fp-newer', 99]), {}))
     await flush()
@@ -1505,9 +1597,9 @@ describe('executor — resolve and restore-local', () => {
     const canonical = { 'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['a']] } } }, other: { k: 1 } }
     const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash')
     const canonicalHash = structuralKey(canonical)
-    h.stored = { workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
     h.persistedStash.set('S2', legacy)
-    api.listProfiles.mockResolvedValue(index([meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
     applySectionToStores.mockResolvedValue({ ok: true, hash: canonicalHash })
     api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
     const { ex, problems } = make()
@@ -1523,9 +1615,9 @@ describe('executor — resolve and restore-local', () => {
 
   it('P3e: a settings snapshot already in this build\'s shape is restored as-is (same hash, no localHash)', async () => {
     const current = { 'purdex-newtab-layout': { presets: {} } }
-    h.stored = { workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
+    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
     h.persistedStash.set('S2', current)
-    api.listProfiles.mockResolvedValue(index([meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
     api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
     const { ex } = make()

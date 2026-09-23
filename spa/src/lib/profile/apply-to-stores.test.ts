@@ -41,6 +41,7 @@ import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
 import { INVALID_REASONS, applySectionToStores, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
+import { identityOfSync, syncIdOfSync } from './host-identity'
 
 // === fixtures ===
 
@@ -285,7 +286,10 @@ describe('applySectionToStores — guards', () => {
   })
 
   it('every invalid outcome carries a code from the closed list, and INVALID_REASONS is that list', async () => {
-    expect([...INVALID_REASONS].sort()).toEqual(['changes-master-host', 'deleted', 'malformed', 'no-host', 'rejected-settings', 'removes-master-host', 'unknown-section'])
+    expect([...INVALID_REASONS].sort()).toEqual([
+      'changes-master-host', 'deleted', 'duplicate-host-alias', 'duplicate-host-identity', 'host-identity-conflict', 'malformed', 'no-host', 'rejected-settings',
+      'removes-master-host', 'unknown-section',
+    ])
   })
 })
 
@@ -1194,5 +1198,246 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(outcome).toEqual({ ok: false, reason: 'busy' })
     expect(writes).toBe(0)
     expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+})
+
+// === host-sync-identity PR 2: the apply speaks WIRE ids ===
+
+describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const WIRE = syncIdOfSync(DAEMON)
+  const OTHER = 'other-lab:abc123'
+  /** The same daemon under ANOTHER device's local id, as that device's canonical build sends it. */
+  const canonicalFromA = (over: Partial<HostConfig> = {}, extra: HostConfig[] = []): HostsPayload =>
+    buildHostsSection({ hosts: Object.fromEntries([host('aaaaaa', { daemonId: DAEMON, ...over }), ...extra].map((h) => [h.id, h])), hostOrder: ['aaaaaa', ...extra.map((h) => h.id)] })
+
+  beforeEach(() => {
+    // this device: its master IS that daemon, under its own id; plus a host only it has
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), onlyb: host('onlyb', { ip: '10.0.0.9', order: 1 }) }, hostOrder: [M, 'onlyb'], activeHostId: M, devHostId: null, runtime: {} })
+  })
+
+  it('hosts: the canonical row updates the master IN PLACE (its local id kept), the host only this device has is removed, and the hash is of the wire build', async () => {
+    const payload = canonicalFromA({ name: 'mlab by A' })
+    const outcome = await applySectionToStores('hosts', payload, ctx)
+    const s = useHostStore.getState()
+    expect(Object.keys(s.hosts)).toEqual([M])
+    expect(s.hosts[M]).toMatchObject({ id: M, name: 'mlab by A', daemonId: DAEMON, syncAliases: ['aaaaaa'] })
+    expect(s.hostOrder).toEqual([M])
+    // the wire build: A's row plus THIS device's own id as an alias (its ordinal-2-era key) — one push, then agreed
+    const rebuilt = buildHostsSection(s)
+    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) })
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('hosts: a canonical row nobody matches is created under a NEW random local id (never its sync id); its aliases land in syncAliases', async () => {
+    const other = { ...host('xxxxxx', { ip: '10.0.0.7', daemonId: OTHER, order: 1 }), syncAliases: ['legacy1'] }
+    const payload = canonicalFromA({}, [other])
+    const outcome = await applySectionToStores('hosts', payload, ctx)
+    const s = useHostStore.getState()
+    const created = s.hostOrder[1]
+    expect(created).toMatch(/^[0-9a-z]{6}$/)
+    expect(created).not.toBe('xxxxxx')
+    expect(s.hosts[created]).toMatchObject({ daemonId: OTHER, syncAliases: ['legacy1', 'xxxxxx'] })
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildHostsSection(s)) })
+  })
+
+  it('hosts: an ORDINAL-2 row (A\'s local id as key, with daemonId) is matched by daemonId; its key becomes an alias; the rebuilt hash is canonical (one push)', async () => {
+    const legacy: HostsPayload = { hosts: { aaaaaa: host('aaaaaa', { daemonId: DAEMON }) }, hostOrder: ['aaaaaa'] }
+    const outcome = await applySectionToStores('hosts', legacy, ctx)
+    const s = useHostStore.getState()
+    expect(Object.keys(s.hosts)).toEqual([M])
+    expect(s.hosts[M].syncAliases).toEqual(['aaaaaa'])
+    const rebuilt = buildHostsSection(s)
+    expect(Object.keys(rebuilt.hosts)).toEqual([WIRE])
+    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) })
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(legacy) })
+  })
+
+  it('master by IDENTITY: a payload without the master daemon\'s row → removes-master-host; its row at another ip → changes-master-host; nothing written', async () => {
+    const before = useHostStore.getState().hosts
+    const without = buildHostsSection({ hosts: { zz: host('zz', { daemonId: OTHER }) }, hostOrder: ['zz'] })
+    expect(await applySectionToStores('hosts', without, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'removes-master-host' })
+    expect(await applySectionToStores('hosts', canonicalFromA({ ip: '10.9.9.9' }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
+    expect(await applySectionToStores('hosts', canonicalFromA({ token: 'other' }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
+    expect(useHostStore.getState().hosts).toBe(before)
+  })
+
+  // A2 (PR #1365): an alias listed by two rows (or equal to another row's key) would make every legacy id that
+  // goes through it ambiguous — tabs / presets resolved to nothing, panes branded host-removed. Refused whole.
+  it.each([
+    ['two canonical rows list the same alias', (p: HostsPayload) => {
+      const other = syncIdOfSync(OTHER)
+      ;(p.hosts[other] as HostConfig & { aliases?: string[] }).aliases = ['shared', 'zzzzzz']
+      ;(p.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['aaaaaa', 'shared']
+    }],
+    ['an alias is another row\'s (legacy) key', (p: HostsPayload) => {
+      p.hosts.legacy1 = { ...host('legacy1', { ip: '10.0.0.8', order: 2 }) }
+      p.hostOrder.push('legacy1')
+      ;(p.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['aaaaaa', 'legacy1']
+    }],
+  ])('duplicate-host-alias: %s → invalid before anything is applied; no store written', async (_name, edit) => {
+    seedTabWorld()
+    const payload = JSON.parse(JSON.stringify(canonicalFromA({}, [host('xxxxxx', { ip: '10.0.0.7', daemonId: OTHER, order: 1 })]))) as HostsPayload
+    edit(payload)
+    let outcome: unknown
+    const writes = await countWrites(async () => {
+      outcome = await applySectionToStores('hosts', payload, ctx)
+    })
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'duplicate-host-alias' })
+    expect(writes).toBe(0) // hosts, tabs, settings: all as they were
+  })
+
+  it('duplicate-host-identity: two rows for one daemon; host-identity-conflict: two LOCAL hosts claim the row\'s daemon — nothing written', async () => {
+    const two: HostsPayload = { hosts: { a1: host('a1', { daemonId: DAEMON }), a2: host('a2', { daemonId: DAEMON }) }, hostOrder: ['a1', 'a2'] }
+    expect(await applySectionToStores('hosts', two, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'duplicate-host-identity' })
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), twin: host('twin', { daemonId: DAEMON }) }, hostOrder: [M, 'twin'] })
+    const before = useHostStore.getState().hosts
+    expect(await applySectionToStores('hosts', canonicalFromA(), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' })
+    expect(useHostStore.getState().hosts).toBe(before)
+  })
+
+  it('tabs: a sync id and an alias resolve to the local host; nothing is marked host-removed; the hash is of the wire build', async () => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON, syncAliases: ['aaaaaa'] }) }, hostOrder: [M] })
+    seedTabWorld()
+    const split: PaneLayout = { type: 'split', id: 's9', direction: 'v', children: [tmuxLeaf('canon', WIRE), tmuxLeaf('legacy', 'aaaaaa')], sizes: [50, 50] }
+    const payload = buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', split) })
+    const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+    const layout = useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>
+    for (const child of layout.children) expect((child as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toMatchObject({ hostId: M })
+    expect(JSON.stringify(layout)).not.toContain('host-removed')
+    // the canonical form of what the stores hold: both panes now name the master's sync id
+    const wire = buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', { ...split, children: [tmuxLeaf('canon', WIRE), tmuxLeaf('legacy', WIRE)] }) })
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(wire) })
+  })
+
+  it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is left out (the hash says so)', async () => {
+    const other = syncIdOfSync(OTHER)
+    const presets = {
+      '3col': { enabled: true, columns: [[`sessions:${WIRE}`], [`headless:${other}`], []] },
+      '2col': { enabled: true, columns: [[], []] },
+      '1col': { enabled: true, columns: [[`sessions:${WIRE}`]] },
+    }
+    const payload: SettingsPayload = { 'purdex-host-settings': { hosts: { [WIRE]: { mod: { k: 1 } } } }, 'purdex-newtab-layout': { presets } }
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } } })
+    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [], []])
+    expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([[`sessions:${M}`]])
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) }) // the unknown column: pushed back without it, once
+    const identity = identityOfSync(useHostStore.getState().hosts)
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)) })
+  })
+
+  // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part
+  // already written was resolved through a resolver that no longer holds — rolled back, `busy`, retried.
+  describe('the host identity moves WHILE the settings apply is awaiting', () => {
+    const OTHER_WIRE = syncIdOfSync(OTHER)
+    function seed(): { payload: SettingsPayload; before: unknown; persisted: unknown } {
+      useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), h2: host('h2', { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, 'h2'] })
+      const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
+      const payload: SettingsPayload = {
+        ...now,
+        'purdex-ui-settings': { ...now['purdex-ui-settings'], dynamicTabName: !UI_DEFAULTS.dynamicTabName },
+        'purdex-host-settings': { hosts: { [WIRE]: { mod: { k: 1 } }, [OTHER_WIRE]: { mod: { k: 2 } } } },
+        'purdex-newtab-layout': { presets: { '3col': { enabled: true, columns: [[`sessions:${WIRE}`], [`sessions:${OTHER_WIRE}`], []] }, '2col': { enabled: true, columns: [[], []] }, '1col': { enabled: true, columns: [[]] } } },
+      }
+      return { payload, before: JSON.parse(JSON.stringify(readSettingsSources())) as unknown, persisted: persistedOf(STORAGE_KEYS.HOST_SETTINGS) }
+    }
+    /** `change` runs once, inside the first rehydrate any settings store awaits. */
+    function midApply(change: () => void): void {
+      let done = false
+      for (const store of [useUISettingsStore, useHostSettingsStore, useNewTabLayoutStore]) {
+        const real = store.persist.rehydrate.bind(store.persist)
+        vi.spyOn(store.persist, 'rehydrate').mockImplementation(async () => {
+          if (!done) {
+            done = true
+            change()
+          }
+          await real()
+        })
+      }
+    }
+
+    it.each([
+      ['h2 learns its daemonId', () => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...useHostStore.getState().hosts.h2, daemonId: OTHER } } })],
+      ['a host is added', () => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h3: host('h3', { ip: '10.0.0.3', daemonId: 'third:x' }) }, hostOrder: [...useHostStore.getState().hostOrder, 'h3'] })],
+      ['a conflict appears (h2 claims the master\'s daemon)', () => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...useHostStore.getState().hosts.h2, daemonId: DAEMON } } })],
+    ])('%s → `busy`, every store byte as before; the retry lands', async (_name, change) => {
+      const { payload, before, persisted } = seed()
+      midApply(change)
+      const outcome = await applySectionToStores('settings', payload, ctx)
+      vi.restoreAllMocks()
+      expect(outcome).toEqual({ ok: false, reason: 'busy' })
+      expect(JSON.parse(JSON.stringify(readSettingsSources()))).toEqual(before)
+      expect(persistedOf(STORAGE_KEYS.HOST_SETTINGS)).toEqual(persisted)
+      expect(persistedOf(STORAGE_KEYS.UI_SETTINGS).dynamicTabName).toBe(UI_DEFAULTS.dynamicTabName)
+
+      const retry = await applySectionToStores('settings', payload, ctx)
+      if (identityOfSync(useHostStore.getState().hosts).conflict !== null) {
+        expect(retry).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' }) // still refused while it lasts
+        useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: host('h2', { ip: '10.0.0.2', order: 1 }) } })
+        expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+      } else {
+        expect(retry).toMatchObject({ ok: true })
+        expect(useUISettingsStore.getState().dynamicTabName).toBe(!UI_DEFAULTS.dynamicTabName)
+      }
+    })
+
+    it('a host-store change that moves nothing the resolver reads (a rename) is no reason to give up', async () => {
+      const { payload } = seed()
+      midApply(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...useHostStore.getState().hosts.h2, name: 'renamed' } } }))
+      expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+      vi.restoreAllMocks()
+    })
+  })
+
+  // Follow-up to R1: the tabs apply resolves wire ids under the operation lock, with the write — a host-store change
+  // while the lock is being taken cannot leave the panes resolved through the hosts as they were before it.
+  it('aliases in ANY order are accepted: applied sorted, the rebuild is the sorted fixed point — ONE write, then none', async () => {
+    const payload = JSON.parse(JSON.stringify(canonicalFromA())) as HostsPayload
+    ;(payload.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['bbbbbb', 'aaaaaa'] // insertion order (e9e24625)
+    const outcome = await applySectionToStores('hosts', payload, ctx)
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useHostStore.getState().hosts[M].syncAliases).toEqual(['aaaaaa', 'bbbbbb'])
+    const rebuilt = buildHostsSection(useHostStore.getState())
+    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', 'bbbbbb', M])
+    expect(outcome).toEqual({ ok: true, hash: await hashSection(rebuilt) }) // ≠ the payload's: the one write
+    expect(outcome).not.toEqual({ ok: true, hash: await hashSection(payload) })
+    // the sorted row applied back: the stores hold exactly it — nothing more to write
+    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(rebuilt)), ctx)).toEqual({ ok: true, hash: await hashSection(rebuilt) })
+  })
+
+  it('tabs: a daemonId learned while the operation lock is taken is the one the panes resolve through', async () => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), h2: host('h2', { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, 'h2'] })
+    seedTabWorld()
+    const payload = buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', tmuxLeaf('p5', syncIdOfSync(OTHER))) })
+    const real = useRebuildStore.getState().acquireOperationLock
+    useRebuildStore.setState({
+      acquireOperationLock: (...args: Parameters<typeof real>) => {
+        const { hosts } = useHostStore.getState()
+        useHostStore.setState({ hosts: { ...hosts, h2: { ...hosts.h2, daemonId: OTHER } } }) // learned at that moment
+        return real(...args)
+      },
+    })
+    try {
+      const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+      const content = (useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content
+      expect(content).toMatchObject({ hostId: 'h2' })
+      expect(content).not.toHaveProperty('terminated')
+      expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    } finally {
+      useRebuildStore.setState({ acquireOperationLock: real })
+    }
+  })
+
+  it('tabs and settings refuse to land while the host identity is in conflict (two local hosts, one daemon)', async () => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), twin: host('twin', { daemonId: DAEMON }) }, hostOrder: [M, 'twin'] })
+    seedTabWorld()
+    const tabsBefore = useTabStore.getState().tabs
+    expect(await applySectionToStores('tabs.wa', buildTabsSection(ws('wa', ['a1']), { a1: tab('a1') }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' })
+    expect(useTabStore.getState().tabs).toBe(tabsBefore)
+    expect(await applySectionToStores('settings', { 'purdex-layout': { tabPosition: 'bottom' } }, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' })
   })
 })
