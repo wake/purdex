@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -228,4 +229,121 @@ func TestMetaStoreContextReadsHonourContext(t *testing.T) {
 	n, err := ms.CleanOrphansContext(context.Background(), []string{"$2"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
+}
+
+func TestMetaStoreDeleteMetaContext(t *testing.T) {
+	ms, err := store.OpenMeta(":memory:")
+	require.NoError(t, err)
+	defer ms.Close()
+	require.NoError(t, ms.SetMeta("$1", store.SessionMeta{Mode: "terminal"}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.ErrorIs(t, ms.DeleteMetaContext(ctx, "$1"), context.Canceled)
+	got, err := ms.GetMetaContext(context.Background(), "$1")
+	require.NoError(t, err)
+	require.NotNil(t, got, "a cancelled DeleteMeta must not have deleted anything")
+
+	require.NoError(t, ms.DeleteMetaContext(context.Background(), "$1"))
+	got, err = ms.GetMetaContext(context.Background(), "$1")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+// holdMetaLock opens a second connection to the meta DB at path and holds its
+// write lock until release is called, so a write on the MetaStore
+// waits in SQLite's busy handler — a query that has already STARTED when its
+// context ends.
+func holdMetaLock(t *testing.T, path string) (release func()) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)")
+	require.NoError(t, err)
+	conn, err := raw.Conn(context.Background())
+	require.NoError(t, err)
+	for _, stmt := range []string{
+		`BEGIN IMMEDIATE`,
+		`UPDATE session_meta SET mode = mode`,
+	} {
+		_, err = conn.ExecContext(context.Background(), stmt)
+		require.NoError(t, err, stmt)
+	}
+	return func() {
+		_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		conn.Close()
+		raw.Close()
+	}
+}
+
+// #1293: a statement already running when its context ends can fail with the
+// driver's own error ("interrupted", "database is locked") instead of
+// ctx.Err(). The meta calls on the session read chain still report it as the
+// context's error, so a caller can tell a deadline from a DB fault.
+func TestMetaStoreContextCancelMidQueryWrapsCtxErr(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "meta.db")
+	ms, err := store.OpenMeta(path)
+	require.NoError(t, err)
+	defer ms.Close()
+	require.NoError(t, ms.SetMeta("$1", store.SessionMeta{Mode: "terminal"}))
+
+	ops := []struct {
+		name string
+		run  func(ctx context.Context) error
+	}{
+		// GetMetaContext is not here: under WAL a reader is never made to
+		// wait by a writer, so there is no way to hold a read mid-query. It
+		// goes through the same ctxErr wrapping as the two writes.
+		{"CleanOrphansContext", func(ctx context.Context) error {
+			_, err := ms.CleanOrphansContext(ctx, []string{"$2"})
+			return err
+		}},
+		{"DeleteMetaContext", func(ctx context.Context) error {
+			return ms.DeleteMetaContext(ctx, "$1")
+		}},
+	}
+	for _, op := range ops {
+		t.Run(op.name, func(t *testing.T) {
+			release := holdMetaLock(t, path)
+			defer release()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			timer := time.AfterFunc(50*time.Millisecond, cancel)
+			defer timer.Stop()
+			err := op.run(ctx)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, context.Canceled, "got %v", err)
+		})
+	}
+}
+
+// The driver maps the cancel above to ctx.Err() itself (modernc v1.54 checks
+// its interrupt flag), so that test holds even without the store's own
+// wrapping. This one pins the store's contract regardless of the driver: when
+// a meta call on the read chain fails for a reason that is NOT ctx.Err()
+// (here database/sql's "database is closed", which it reports before looking
+// at ctx) while ctx has ended, the error still satisfies errors.Is(ctx.Err())
+// and keeps the driver's message for diagnosis.
+func TestMetaStoreContextFailureWithEndedCtxWrapsCtxErr(t *testing.T) {
+	ms, err := store.OpenMeta(":memory:")
+	require.NoError(t, err)
+	require.NoError(t, ms.Close())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	<-ctx.Done()
+
+	_, err = ms.GetMetaContext(ctx, "$1")
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "GetMetaContext: %v", err)
+	assert.ErrorContains(t, err, "closed")
+	_, err = ms.CleanOrphansContext(ctx, []string{"$2"})
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "CleanOrphansContext: %v", err)
+	assert.ErrorContains(t, err, "closed")
+	err = ms.DeleteMetaContext(ctx, "$1")
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "DeleteMetaContext: %v", err)
+	assert.ErrorContains(t, err, "closed")
+
+	// A failure with a live ctx is passed through unchanged.
+	_, err = ms.GetMetaContext(context.Background(), "$1")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotErrorIs(t, err, context.Canceled)
 }
