@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, Copy, X } from '@phosphor-icons/react'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
-import { useI18nStore } from '../../stores/useI18nStore'
+import { useDateLocale, useI18nStore } from '../../stores/useI18nStore'
 import {
   MAX_TRANSFER_BODY_BYTES,
   MAX_TRANSFER_ROWS,
@@ -31,6 +31,7 @@ function hasToken(h: HostConfig): boolean {
 
 export function ShareHostsDialog({ onClose }: Props) {
   const t = useI18nStore((s) => s.t)
+  const dateLocale = useDateLocale()
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
@@ -125,7 +126,7 @@ export function ShareHostsDialog({ onClose }: Props) {
               </div>
               <p data-testid="transfer-code-meta" className="text-xs text-text-secondary">
                 {t('hosts.transfer.code_meta', {
-                  time: new Date(phase.expiresAt).toLocaleTimeString(),
+                  time: new Date(phase.expiresAt).toLocaleTimeString(dateLocale),
                   relay: phase.relayName,
                 })}
               </p>

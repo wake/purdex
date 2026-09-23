@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as transferApi from '../../lib/host-transfer-api'
+import en from '../../locales/en.json'
+import zhTW from '../../locales/zh-TW.json'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { ShareHostsDialog } from './ShareHostsDialog'
 
 const TRUST = /will hold the access tokens of the hosts you share, readable by that host, until the code is used or expires \(10 min\)\. Only relay through a host you trust\./
@@ -153,5 +156,46 @@ describe('ShareHostsDialog', () => {
       expect(create().disabled).toBe(false)
       expect(screen.queryByTestId('transfer-limit')).toBeNull()
     })
+  })
+})
+
+describe('the code\'s expiry time is in the UI language, not the browser\'s', () => {
+  const expiresAt = new Date(2026, 8, 24, 15, 17, 38).getTime()
+  const realToLocaleTimeString = Date.prototype.toLocaleTimeString
+  const fmt = (locale: string) => realToLocaleTimeString.call(new Date(expiresAt), locale)
+
+  // Pretend the browser speaks `tag`: a call that names no locale gets `tag`'s format, as on the real machine.
+  function browserSpeaks(tag: string) {
+    vi.spyOn(Date.prototype, 'toLocaleTimeString').mockImplementation(function (this: Date, locales, options) {
+      return realToLocaleTimeString.call(this, locales ?? tag, options)
+    })
+  }
+
+  async function createCode(label: string) {
+    vi.spyOn(transferApi, 'createTransfer').mockResolvedValue({ kind: 'ok', code: 'ABCD2345', expiresAt })
+    render(<ShareHostsDialog onClose={() => {}} />)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: label }))
+    })
+    return screen.getByTestId('transfer-code-meta').textContent
+  }
+
+  afterEach(() => {
+    useI18nStore.getState().setLocale('en')
+  })
+
+  it('English UI on a zh-TW browser: "Expires at" an English time', async () => {
+    expect(fmt('en')).not.toBe(fmt('zh-TW'))
+    browserSpeaks('zh-TW')
+    useI18nStore.getState().setLocale('en')
+    const meta = await createCode(en['hosts.transfer.create'])
+    expect(meta).toBe(en['hosts.transfer.code_meta'].replace('{{time}}', fmt('en')).replace('{{relay}}', 'mlab'))
+  })
+
+  it('zh-TW UI on an English browser: a zh-TW time', async () => {
+    browserSpeaks('en')
+    useI18nStore.getState().setLocale('zh-TW')
+    const meta = await createCode(zhTW['hosts.transfer.create'])
+    expect(meta).toBe(zhTW['hosts.transfer.code_meta'].replace('{{time}}', fmt('zh-TW')).replace('{{relay}}', 'mlab'))
   })
 })
