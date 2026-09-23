@@ -83,7 +83,9 @@ export function planForRecord(
   return {
     createSession: true,
     applyCwd: !!record.cwd,
-    runResume: !!resolveResumeCommand(record, templates) && !record.unverified,
+    // An exited agent (agent-last-state spec §3) is not resumed by default:
+    // the pane was a shell by then. The single-pane panel still offers it.
+    runResume: !!resolveResumeCommand(record, templates) && !record.unverified && !record.agentExited,
   }
 }
 

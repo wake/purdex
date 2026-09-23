@@ -36,8 +36,7 @@
 // no clock runs on this page — except a "sent" Resolve row's, bounded by the command's TTL (ResolveRow.tsx).
 import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
-import { useI18nStore } from '../../../stores/useI18nStore'
-import { getLocale } from '../../../lib/locale-registry'
+import { useDateLocale, useI18nStore } from '../../../stores/useI18nStore'
 import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
 import { clearPullUnconfirmed, pullUnconfirmedSnapshot, subscribePullUnconfirmed } from '../../../lib/profile/pull-unconfirmed'
 import { selectDaemonIdMismatch, useHostStore } from '../../../stores/useHostStore'
@@ -100,19 +99,6 @@ const WORLD_KEY: Record<UnsettledReason, string> = {
   'behind-fence': 'settings.profile.current.world.catching_up',
   'junk-epoch': 'settings.profile.current.world.junk_epoch',
   'no-parked-master': 'settings.profile.current.world.no_parked_master',
-}
-
-/**
- * The UI language as a tag `Date#toLocale*` takes. A built-in locale's id IS one (`en`, `zh-TW`); a user-imported
- * locale's id is random and names no language, and its missing keys fall back to English — so do its times. Never
- * `undefined`: that is the browser's language, which is not the one the page is written in.
- */
-function dateLocaleOf(localeId: string): string {
-  return getLocale(localeId)?.builtin === true ? localeId : 'en'
-}
-
-function useDateLocale(): string {
-  return dateLocaleOf(useI18nStore((s) => s.activeLocaleId))
 }
 
 interface Props {

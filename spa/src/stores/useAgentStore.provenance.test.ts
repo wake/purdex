@@ -60,7 +60,12 @@ const recordOfPane = (tabId: string, paneId: string) => {
 
 const envelope = (over?: Record<string, unknown>) => ({
   owner_session_start: true, agent_type: 'codex', session_id: 'S1',
-  cwd: '/w/p', tmux_pane_id: '%2', tmux_instance: '222:2000', ...over,
+  cwd: '/w/p', tmux_pane_id: '%2', tmux_instance: '222:2000', frame_id: 'F1', ...over,
+})
+
+const exitEnvelope = (over?: Record<string, unknown>) => ({
+  agent_type: 'codex', session_id: 'S1', tmux_pane_id: '%2', tmux_instance: '222:2000',
+  frame_id: 'F1', reason: 'session-end', at: 7_000, ...over,
 })
 
 const event = (over: Partial<NormalizedEvent>): NormalizedEvent => ({
@@ -83,7 +88,7 @@ describe('provenance write path', () => {
     // The record holds the IDENTITY, not a command — the resolver composes.
     expect(recordOf(tab.id)?.resumeCommandOverride).toBeUndefined()
     expect(resolveResumeCommand(recordOf(tab.id), defaultTemplates)).toBe('codex resume S1')
-    expect(recordOf(tab.id)?.agent).toMatchObject({ type: 'codex', sessionId: 'S1', tmuxPaneId: '%2' })
+    expect(recordOf(tab.id)?.agent).toMatchObject({ type: 'codex', sessionId: 'S1', tmuxPaneId: '%2', frameId: 'F1' })
     expect(recordOf(tab.id)?.cwd).toBe('/w/p')
     expect(recordOf(tab.id)?.cwdSource).toBe('agent-session-start')
     expect(recordOf(tab.id)?.tmuxInstance).toBe('222:2000')
@@ -212,5 +217,54 @@ describe('unverified flagging', () => {
     send(event({ detail: { pdx_provenance: envelope({ agent_type: 'cc', session_id: 'S9' }) } }))
     expect(recordOf(tab.id)?.unverified).toBeUndefined()
     expect(resolveResumeCommand(recordOf(tab.id), defaultTemplates)).toBe('claude --resume S9')
+  })
+})
+
+// agent-last-state spec §2: `pdx_exit` is read BEFORE the `clear` early return —
+// the root's SessionEnd is exactly the event that empties the session.
+describe('exit write path', () => {
+  const start = (frameId = 'F1', sessionId = 'S1') =>
+    send(event({ detail: { pdx_provenance: envelope({ frame_id: frameId, session_id: sessionId }) } }))
+
+  it('a clear event carrying the exit marks the record exited — and still clears the session', () => {
+    const tab = seedTerminalPane('222:2000')
+    start()
+    expect(Object.values(useAgentStore.getState().statuses)).toEqual(['idle'])
+    send(event({ status: 'clear', raw_event_name: 'PdxSessionEnd', detail: { pdx_exit: exitEnvelope() } }))
+    expect(recordOf(tab.id)?.agentExited).toEqual({ at: 7_000, reason: 'session-end' })
+    expect(recordOf(tab.id)?.agent).toMatchObject({ type: 'codex', sessionId: 'S1', frameId: 'F1' })
+    expect(Object.keys(useAgentStore.getState().statuses)).toEqual([])
+  })
+
+  it('a sweep broadcast whose status is a sibling\'s still carries the exit', () => {
+    const tab = seedTerminalPane('222:2000')
+    start()
+    send(event({ status: 'running', agent_type: 'cc', raw_event_name: 'sweep:pid_dead', detail: { pdx_exit: exitEnvelope({ reason: 'process-dead' }) } }))
+    expect(recordOf(tab.id)?.agentExited).toEqual({ at: 7_000, reason: 'process-dead' })
+  })
+
+  it('/clear out of order on one frame: the old run\'s late exit leaves the new run running', () => {
+    const tab = seedTerminalPane('222:2000')
+    start('F1', 'S1')
+    start('F1', 'S2') // the new run's SessionStart reused the frame
+    send(event({ status: 'clear', detail: { pdx_exit: exitEnvelope({ frame_id: 'F1', session_id: 'S1' }) } }))
+    expect(recordOf(tab.id)?.agentExited).toBeUndefined()
+    expect(recordOf(tab.id)?.agent).toMatchObject({ sessionId: 'S2', frameId: 'F1' })
+  })
+
+  it('an exit of another run changes nothing', () => {
+    const tab = seedTerminalPane('222:2000')
+    start('F2')
+    send(event({ status: 'clear', detail: { pdx_exit: exitEnvelope({ frame_id: 'F1' }) } }))
+    expect(recordOf(tab.id)?.agentExited).toBeUndefined()
+  })
+
+  it('cc /clear: SessionEnd then SessionStart — exited, then running again under the new run', () => {
+    const tab = seedTerminalPane('222:2000')
+    start('F1', 'S1')
+    send(event({ status: 'clear', detail: { pdx_exit: exitEnvelope() } }))
+    start('F2', 'S2')
+    expect(recordOf(tab.id)?.agentExited).toBeUndefined()
+    expect(recordOf(tab.id)?.agent).toMatchObject({ sessionId: 'S2', frameId: 'F2' })
   })
 })

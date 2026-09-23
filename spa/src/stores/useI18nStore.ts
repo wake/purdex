@@ -131,3 +131,17 @@ export const useI18nStore = create<I18nState>()(
 )
 
 syncManager.register(STORAGE_KEYS.I18N, useI18nStore)
+
+/**
+ * The UI language as a tag `Date#toLocale*` takes. A built-in locale's id IS one (`en`, `zh-TW`); a user-imported
+ * locale's id is random and names no language, and its missing keys fall back to English — so do its times. Never
+ * `undefined`: that is the browser's language, which is not the one the page is written in.
+ */
+export function dateLocaleOf(localeId: string): string {
+  return getLocale(localeId)?.builtin === true ? localeId : 'en'
+}
+
+/** {@link dateLocaleOf} for the active UI language, subscribed. */
+export function useDateLocale(): string {
+  return dateLocaleOf(useI18nStore((s) => s.activeLocaleId))
+}

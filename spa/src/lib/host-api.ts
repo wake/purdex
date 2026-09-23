@@ -561,6 +561,11 @@ export interface SessionProvenance {
   tmuxPaneId: string
   tmuxInstance: string
   lastSeenAt: number
+  /**
+   * The answering agent run's daemon frame id ('' from a daemon that predates
+   * it). Optional so hand-built answers in older fixtures stay valid.
+   */
+  frameId?: string
 }
 
 export async function fetchSessionProvenance(
@@ -579,6 +584,7 @@ export async function fetchSessionProvenance(
     tmuxPaneId: String(body.tmux_pane_id ?? ''),
     tmuxInstance: String(body.tmux_instance ?? ''),
     lastSeenAt: Number(body.last_seen_at ?? 0),
+    frameId: String(body.frame_id ?? ''),
   }
 }
 
