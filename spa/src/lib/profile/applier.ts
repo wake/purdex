@@ -6,10 +6,14 @@
 //
 //     hash(build(apply(local, p))) === hash(p)     for every well-formed p
 //
+// (for `tabs.*`: every CANONICAL p — one with no device-local tab in it, which is
+// every p the current builder can produce; an older build's payload is made
+// canonical first by `upcastLegacyTabs`.)
+//
 // Without it a section could never be "converged": every apply would leave the
 // client dirty again. So an apply REPLACES the synced fields with the incoming
 // ones (never merges them), keeps what is device-local (focus, split ratios,
-// unlisted settings fields), and `isWellFormedSection` refuses any payload the
+// unlisted settings fields, interface-only tabs), and `isWellFormedSection` refuses any payload the
 // builders could not have produced — unknown fields included, since a field
 // that does not survive the next build can never hash back to `p`.
 //
@@ -37,7 +41,7 @@ import {
   type WireResolver,
 } from './host-identity'
 import { PROJECTIONS, workspaceIdOf } from './projections'
-import { WORKSPACE_SCOPED_SETTINGS, isSyncableWorkspaceId, normaliseAliases } from './sections'
+import { WORKSPACE_SCOPED_SETTINGS, isSyncableTab, isSyncableWorkspaceId, normaliseAliases } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type {
   HostsPayload,
@@ -379,6 +383,16 @@ function withoutTabs(ws: Workspace, taken: ReadonlySet<string>): Workspace {
  * exactly one workspace (§4.3), and that workspace's own section may not have
  * been applied yet. Everything else of the other workspaces is returned by
  * reference.
+ *
+ * DEVICE-LOCAL TABS (tabs-local-only spec §3.3). A tab of this workspace that
+ * `isSyncableTab` rejects is never sent (`buildTabsSection` leaves it out), so no
+ * payload can mean "delete it" — the precedent is `applyWorkspaces`' unsyncable
+ * workspaces. It is kept: not removed, its `Tab` untouched, and still listed in
+ * `ws.tabs` (dropped from there, `repairTabOwnership` would adopt it into
+ * Unsorted) at its relative place — see `anchorKeptTabs`. The round trip holds
+ * for every canonical payload because the builder filters these out again; a
+ * legacy payload that carries such tabs is made canonical before it gets here
+ * (`upcastLegacyTabs`).
  */
 export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsPayload): ApplyTabsResult {
   const target = local.workspaces.find((w) => w.id === workspaceId)
@@ -386,7 +400,11 @@ export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsP
 
   const order = unique(incoming.order).filter((id) => id !== PROTO_KEY && Object.hasOwn(incoming.tabs, id))
   const arriving = new Set(order)
-  const removedTabIds = unique(target.tabs).filter((id) => !arriving.has(id) && Object.hasOwn(local.tabs, id))
+  const listed = unique(target.tabs)
+  const keptLocal = new Set(
+    listed.filter((id) => id !== PROTO_KEY && Object.hasOwn(local.tabs, id) && !isSyncableTab(local.tabs[id]) && !arriving.has(id)),
+  )
+  const removedTabIds = listed.filter((id) => !arriving.has(id) && !keptLocal.has(id) && Object.hasOwn(local.tabs, id))
   const removed = new Set(removedTabIds)
 
   const tabs: Record<string, Tab> = {}
@@ -405,9 +423,37 @@ export function applyTabs(local: TabsSlice, workspaceId: string, incoming: TabsP
     }
   }
 
-  const activeTabId = target.activeTabId !== null && arriving.has(target.activeTabId) ? target.activeTabId : (order[0] ?? null)
-  const workspaces = local.workspaces.map((w) => (w === target ? { ...w, tabs: order, activeTabId } : withoutTabs(w, arriving)))
+  const wsTabs = anchorKeptTabs(listed, order, keptLocal)
+  const stays = (id: string): boolean => arriving.has(id) || keptLocal.has(id)
+  const activeTabId = target.activeTabId !== null && stays(target.activeTabId) ? target.activeTabId : (wsTabs[0] ?? null)
+  const workspaces = local.workspaces.map((w) => (w === target ? { ...w, tabs: wsTabs, activeTabId } : withoutTabs(w, arriving)))
   return { next: { tabs, workspaces }, unrendered: false, removedTabIds }
+}
+
+/**
+ * The workspace's new tab list: the incoming `order`, with each kept device-local
+ * tab put back after its ANCHOR — the nearest id before it in the local listing
+ * that the incoming order holds (a synced neighbour that was removed is skipped,
+ * so the tab falls back to the next earlier survivor). With no anchor it goes to
+ * the front. Tabs sharing an anchor keep their local order. The position is only
+ * ever relative to synced tabs: those are the only ones both sides see, and
+ * where other devices put THEIR local tabs is none of this device's business.
+ * `listed` and `order` are duplicate-free and `kept` is disjoint from `order`, so
+ * no id comes out twice.
+ */
+function anchorKeptTabs(listed: readonly string[], order: readonly string[], kept: ReadonlySet<string>): string[] {
+  const arriving = new Set(order)
+  const front: string[] = []
+  const after = new Map<string, string[]>()
+  let anchor: string | null = null
+  for (const id of listed) {
+    if (arriving.has(id)) anchor = id
+    else if (kept.has(id)) {
+      if (anchor === null) front.push(id)
+      else after.set(anchor, [...(after.get(anchor) ?? []), id])
+    }
+  }
+  return [...front, ...order.flatMap((id) => [id, ...(after.get(id) ?? [])])]
 }
 
 /**
