@@ -25,7 +25,7 @@ func TestHandlerSendKeys_ServerRestartsDuringMetadataRead_RefusesWithoutSending(
 	mod, _, fake := newTestModule(t)
 	// The daemon reads its generation from the same server the executor talks
 	// to, so one `SetInstance` moves the whole world at once.
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	fake.SetInstance("111:1000")
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
@@ -53,7 +53,7 @@ func TestHandlerSendKeys_ServerRestartsDuringMetadataRead_RefusesWithoutSending(
 // never decides on its own sample at all.
 func TestHandlerSendKeys_MatchingGeneration_SendsBySessionID(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	fake.SetInstance("111:1000")
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
@@ -79,7 +79,7 @@ func TestHandlerSendKeys_MatchingGeneration_SendsBySessionID(t *testing.T) {
 // still sends nothing.
 func TestHandlerSendKeys_ConditionalSendFails_Reports500AndSendsNothing(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	fake.SetInstance("111:1000")
 	fake.FailSendKeys = true
 	mux := http.NewServeMux()
@@ -100,7 +100,7 @@ func TestHandlerSendKeys_ConditionalSendFails_Reports500AndSendsNothing(t *testi
 // asserted against any generation, and it must never reach a tmux format.
 func TestHandlerSendKeys_UnsafeExpectation_Refuses400(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = fake.Instance
+	mod.tmuxInstanceFn = instanceOf(fake.Instance)
 	fake.SetInstance("111:1000")
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)

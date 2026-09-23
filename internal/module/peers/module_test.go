@@ -475,6 +475,172 @@ func TestHandlePeers_TmuxRestartedDuringInventory(t *testing.T) {
 	}
 }
 
+// #1293 §3.2: the session list is read under the inventory's own budget, so a
+// hung tmux read cannot hold GET /api/peers past it — the answer is an
+// ok:false envelope at (about) the budget, not a request that never returns.
+func TestLocalEnvelope_SessionListBoundedByBudget(t *testing.T) {
+	sessions := &fakeSessions{blockList: true}
+	owners := &fakeOwners{}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	done := make(chan ipeers.Envelope, 1)
+	start := time.Now()
+	go func() { done <- m.localEnvelope(context.Background(), "mlab:abc123", "mlab") }()
+	select {
+	case env := <-done:
+		if elapsed := time.Since(start); elapsed > budget+time.Second {
+			t.Errorf("localEnvelope took %v, want about the %v budget", elapsed, budget)
+		}
+		if env.OK {
+			t.Errorf("ok = true, want false for a list that hit the budget")
+		}
+		if !strings.Contains(env.Error, context.DeadlineExceeded.Error()) {
+			t.Errorf("error = %q, want the list's deadline error", env.Error)
+		}
+		if sessions.listCalls.Load() != 1 {
+			t.Errorf("list calls = %d, want 1", sessions.listCalls.Load())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("localEnvelope never returned: the session list is not bounded by the budget")
+	}
+}
+
+// inventorySlack is how far past its budget a stuck localEnvelope may run:
+// scheduling and the post-deadline bookkeeping, nothing that waits on tmux.
+const inventorySlack = 300 * time.Millisecond
+
+// #1293: the inventory budget is ONE deadline for the whole local inventory —
+// both tmux-instance probes and the session list share it. With all three
+// hung, the envelope still ends at the budget (not budget + two probe caps).
+func TestLocalEnvelope_ProbesAndListShareOneBudget(t *testing.T) {
+	sessions := &fakeSessions{blockList: true, blockInstance: true, instanceHang: time.Second}
+	owners := &fakeOwners{}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	start := time.Now()
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if elapsed := time.Since(start); elapsed > budget+inventorySlack {
+		t.Errorf("localEnvelope took %v, want at most the %v budget + %v", elapsed, budget, inventorySlack)
+	}
+	if env.OK {
+		t.Errorf("ok = true, want false for a list that hit the budget")
+	}
+	if !strings.Contains(env.Error, context.DeadlineExceeded.Error()) {
+		t.Errorf("error = %q, want the budget's deadline error", env.Error)
+	}
+	if n := sessions.instanceCtxCalls.Load(); n != 1 {
+		t.Errorf("context-aware probes = %d, want 1 (the list failed before the second)", n)
+	}
+}
+
+// The second probe (after owner resolution) runs under the same budget: a
+// list that answers but a probe that hangs still ends the inventory at the
+// budget. A session whose owner lookup failed (the resolver sees the spent
+// budget) is still reported partial, as before.
+func TestLocalEnvelope_SecondProbeSharesBudget(t *testing.T) {
+	sessions := &fakeSessions{
+		blockInstance: true,
+		instanceHang:  time.Second,
+		sessions: []session.SessionInfo{
+			{Code: "mt1code", Name: "mt1", Cwd: "/w", TmuxInstance: ""},
+		},
+	}
+	owners := &fakeOwners{errs: map[string]error{"mt1code": context.DeadlineExceeded}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	start := time.Now()
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if elapsed := time.Since(start); elapsed > budget+inventorySlack {
+		t.Errorf("localEnvelope took %v, want at most the %v budget + %v", elapsed, budget, inventorySlack)
+	}
+	if !env.OK {
+		t.Fatalf("ok = false (%q), want true: the list answered", env.Error)
+	}
+	if !env.Partial {
+		t.Errorf("partial = false, want true for an unresolved owner")
+	}
+	if n := sessions.instanceCtxCalls.Load(); n != 2 {
+		t.Errorf("context-aware probes = %d, want 2", n)
+	}
+}
+
+// #1293 (codex critic on #1345): a second generation probe that runs the
+// budget out cannot vouch that session and owner data share one tmux
+// generation. With nothing else making the inventory partial — zero sessions,
+// or every owner resolved — it must not be reported as a complete answer.
+func TestLocalEnvelope_SecondProbeExpiry_ZeroSessions_NotComplete(t *testing.T) {
+	sessions := &fakeSessions{blockSecondInstance: true, instances: []string{"gen-1"}}
+	owners := &fakeOwners{}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if n := sessions.instanceCtxCalls.Load(); n != 2 {
+		t.Fatalf("context-aware probes = %d, want 2", n)
+	}
+	if !env.OK || !env.Partial {
+		t.Errorf("ok = %v (%q), partial = %v; want ok:true, partial:true: the list answered, but the generation re-check hit the budget", env.OK, env.Error, env.Partial)
+	}
+}
+
+func TestLocalEnvelope_SecondProbeExpiry_AllOwnersResolved_NotComplete(t *testing.T) {
+	sessions := &fakeSessions{
+		blockSecondInstance: true,
+		instances:           []string{"gen-1"},
+		sessions:            []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}},
+	}
+	owners := &fakeOwners{owners: map[string]agent.PaneOwner{
+		"mt1code": {AgentType: "cc", SessionID: "sess-1"},
+	}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if len(owners.calls) != 1 {
+		t.Fatalf("owner lookups = %d, want 1 (resolved before the probe hung)", len(owners.calls))
+	}
+	if n := sessions.instanceCtxCalls.Load(); n != 2 {
+		t.Fatalf("context-aware probes = %d, want 2", n)
+	}
+	if !env.OK || !env.Partial {
+		t.Errorf("ok = %v (%q), partial = %v; want ok:true, partial:true: the list answered, but the generation re-check hit the budget", env.OK, env.Error, env.Partial)
+	}
+}
+
+// The owner resolver runs under the inventory's budget context too.
+func TestLocalEnvelope_OwnerResolutionUnderBudgetContext(t *testing.T) {
+	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}}}
+	var gotDeadline time.Time
+	var hasDeadline bool
+	owners := &ctxRecordingOwners{record: func(ctx context.Context) { gotDeadline, hasDeadline = ctx.Deadline() }}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 2 * time.Second
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	before := time.Now()
+	m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if !hasDeadline {
+		t.Fatal("owner resolution ran without the inventory's deadline")
+	}
+	if gotDeadline.After(before.Add(budget).Add(50 * time.Millisecond)) {
+		t.Errorf("owner deadline %v is later than the inventory budget", gotDeadline)
+	}
+}
+
 // TestHandlePeers_TmuxInstanceUnknown_ProceedsNormally is the companion case:
 // when either sample is "" (unknown), the mismatch check cannot fire — the
 // handler proceeds exactly as before this change.

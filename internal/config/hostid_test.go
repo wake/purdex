@@ -1,10 +1,12 @@
 package config_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/wake/purdex/internal/config"
@@ -115,5 +117,39 @@ func TestEnsureHostID_AppendsToExistingConfig(t *testing.T) {
 	}
 	if saved.HostID == "" {
 		t.Fatal("HostID should be set")
+	}
+}
+
+// #1293 §3.2: the tmux-instance probe on the session-list path runs under the
+// list's budget — min(parent deadline, its own 3 s). A parent deadline far
+// shorter than 3 s must end a hung probe at the parent's deadline.
+func TestGetTmuxInstanceContext_HonoursShorterParentDeadline(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	got := config.GetTmuxInstanceContext(ctx)
+	elapsed := time.Since(start)
+	if got != "" {
+		t.Fatalf("hung probe = %q, want \"\"", got)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("probe returned after %v; the parent's 200ms deadline must bound it (not the 3 s default)", elapsed)
+	}
+}
+
+func TestGetTmuxInstanceContext_ReadsInstance(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nprintf '4471:1788740000\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if got := config.GetTmuxInstanceContext(context.Background()); got != "4471:1788740000" {
+		t.Fatalf("GetTmuxInstanceContext() = %q", got)
 	}
 }

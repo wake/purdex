@@ -20,9 +20,20 @@ const tmuxExecTimeout = 3 * time.Second
 // GetTmuxInstance returns the tmux server's "pid:startTime" identifier.
 // Returns empty string if tmux is not running or the command times out.
 func GetTmuxInstance() string {
-	ctx, cancel := context.WithTimeout(context.Background(), tmuxExecTimeout)
+	return GetTmuxInstanceContext(context.Background())
+}
+
+// GetTmuxInstanceContext is GetTmuxInstance bounded by min(ctx's deadline,
+// tmuxExecTimeout), so the probe on the session-list path (#1293) runs
+// inside that read's budget.
+func GetTmuxInstanceContext(parent context.Context) string {
+	ctx, cancel := context.WithTimeout(parent, tmuxExecTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#{pid}:#{start_time}").Output()
+	cmd := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#{pid}:#{start_time}")
+	// A killed probe must not keep Output() waiting on a grandchild that
+	// inherited the pipe.
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

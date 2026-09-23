@@ -419,6 +419,52 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(m.allEnvelope(r.Context(), snap.hostID, snap.alias, snap.hosts))
 }
 
+// contextSessionLister is the context-aware session list the production
+// provider (*session.SessionModule) offers alongside SessionProvider. It is an
+// optional interface — asserted, as the agent module does for
+// LookupCodeByName — so the SessionProvider contract (and its many fakes)
+// stays unchanged.
+type contextSessionLister interface {
+	ListSessionsContext(ctx context.Context) ([]session.SessionInfo, error)
+}
+
+// contextTmuxInstancer is the context-aware tmux-instance probe, optional in
+// the same way as contextSessionLister.
+type contextTmuxInstancer interface {
+	TmuxInstanceContext(ctx context.Context) string
+}
+
+// The production provider offers both; a rename there must not silently
+// drop the inventory back to unbounded reads.
+var (
+	_ contextSessionLister = (*session.SessionModule)(nil)
+	_ contextTmuxInstancer = (*session.SessionModule)(nil)
+)
+
+// listSessionsWithin reads the session list under ctx — the inventory's
+// budget context (#1293 §3.2): a hung tmux read ends at the budget with an
+// error, and the inventory answers ok:false instead of holding the request.
+// A provider without ListSessionsContext is read unbounded here (the session
+// module still caps its own read).
+func (m *Module) listSessionsWithin(ctx context.Context) ([]session.SessionInfo, error) {
+	lister, ok := m.sessions.(contextSessionLister)
+	if !ok {
+		return m.sessions.ListSessions()
+	}
+	return lister.ListSessionsContext(ctx)
+}
+
+// tmuxInstanceWithin probes the tmux generation under ctx (the inventory's
+// budget context); "" when the probe fails or ctx ends first. A provider
+// without TmuxInstanceContext is probed unbounded here (the probe keeps its
+// own cap).
+func (m *Module) tmuxInstanceWithin(ctx context.Context) string {
+	if p, ok := m.sessions.(contextTmuxInstancer); ok {
+		return p.TmuxInstanceContext(ctx)
+	}
+	return m.sessions.TmuxInstance()
+}
+
 // localEnvelope builds this host's own inventory from a caller-supplied
 // hostID/alias: the response body for scope unset/"local", and the local
 // row's peers/ok/partial/error for scope=all. It never touches CfgMu itself
@@ -426,6 +472,14 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 // request, so the local row's titles and the host/host_id embedded in its
 // own Peers records are always built from the same values.
 func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
+	// ONE budget for the whole local inventory (#1293 §3.2): both tmux-
+	// instance probes, the session list and every owner lookup run under
+	// invCtx, so a hung tmux costs the budget once, not once per read. It is
+	// wall-clock (context.WithTimeout), not m.now: m.now is the owner loop's
+	// clock and may be a test clock, which the per-session check below keeps
+	// using.
+	invCtx, cancel := context.WithTimeout(ctx, m.budget)
+	defer cancel()
 	deadline := m.now().Add(m.budget)
 
 	writeError := func(errMsg string) ipeers.Envelope {
@@ -441,9 +495,9 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		}
 	}
 
-	instance := m.sessions.TmuxInstance()
+	instance := m.tmuxInstanceWithin(invCtx)
 
-	sessions, err := m.sessions.ListSessions()
+	sessions, err := m.listSessionsWithin(invCtx)
 	if err != nil {
 		return writeError(err.Error())
 	}
@@ -471,7 +525,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 			continue
 		}
 
-		owner, ok, err := m.owners.ResolveSessionOwner(ctx, s.Code)
+		owner, ok, err := m.owners.ResolveSessionOwner(invCtx, s.Code)
 		if err != nil {
 			// The lookup itself failed (tmux read error, resolver timeout,
 			// cancelled context) — this is not "no agent". Reporting it as
@@ -499,8 +553,22 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// session/owner data straddle two different tmux generations into one
 	// answer. Either sample being "" (unknown) means the check cannot fire,
 	// and the response proceeds as if nothing had changed.
-	if after := m.sessions.TmuxInstance(); instance != "" && after != "" && after != instance {
+	after := m.tmuxInstanceWithin(invCtx)
+	if instance != "" && after != "" && after != instance {
 		return writeError("tmux server restarted during inventory")
+	}
+	// ...except when a sample is "" because the inventory's budget ran out
+	// (#1293): then the generation check did not run for want of time, not
+	// because tmux could not say, and the answer cannot vouch that its
+	// session and owner data come from one tmux generation. It is reported
+	// the way an owner lookup the budget cut off is — ok:true (the list
+	// answered, the rows are shown), partial:true — even when no session was
+	// left unresolved. One check covers both probes: invCtx only ever goes
+	// from live to done, so a first probe that spent the budget leaves it
+	// done here too.
+	generationUnverified := invCtx.Err() != nil
+	if generationUnverified {
+		m.logf("peers: inventory: budget ran out before the tmux generation re-check, reporting partial: %v", invCtx.Err())
 	}
 
 	// Registry diagnosis (spec §3.3): an alive-but-undecodable file could
@@ -529,7 +597,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	}
 	titlesUnavailable := titlesErr != nil
 
-	partial := len(unresolved) > 0 || len(unknown) > 0 || titlesUnavailable
+	partial := len(unresolved) > 0 || len(unknown) > 0 || titlesUnavailable || generationUnverified
 
 	// This daemon's own helpers are hidden as proxy rows by pid (their
 	// registry entries are otherwise indistinguishable from a Claude Code

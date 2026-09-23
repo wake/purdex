@@ -26,8 +26,8 @@ var ErrResolveNotReady = errors.New("inventory partial: the peer may be missing"
 // host's inventory envelope (spec §3.3).
 type ResolveSnapshot struct {
 	// Partial is the envelope's partial flag: some owner lookup did not
-	// run, the title store could not be read, or the registry is
-	// incomplete. A tier-1 miss on a Partial snapshot is ErrResolveNotReady
+	// run, the title store could not be read, the registry is incomplete,
+	// or the budget ran out before the tmux-generation re-check. A tier-1 miss on a Partial snapshot is ErrResolveNotReady
 	// rather than a tier-2 fallback.
 	Partial bool
 	// RegistryIncomplete is true when the envelope named at least one

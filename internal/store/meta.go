@@ -2,7 +2,9 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -222,8 +224,32 @@ func (m *MetaStore) SetMeta(tmuxID string, meta SessionMeta) error {
 
 // GetMeta returns the SessionMeta for tmuxID, or nil if not found (not an error).
 func (m *MetaStore) GetMeta(tmuxID string) (*SessionMeta, error) {
+	return m.GetMetaContext(context.Background(), tmuxID)
+}
+
+// ctxErr reports a failed DB call made under ctx. Once ctx has ended the
+// failure is reported as ctx's error, whatever the driver said: a statement
+// that was already running when the deadline hit can come back as the
+// driver's own "interrupted" or "database is locked", and the session read
+// chain (#1293) has to be able to tell a deadline from a DB fault with
+// errors.Is. The driver's message is kept for diagnosis. A failure under a
+// live ctx is returned unchanged.
+func ctxErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+		return fmt.Errorf("%w: %v", cerr, err)
+	}
+	return err
+}
+
+// GetMetaContext is GetMeta bounded by ctx: the session-list read (#1293)
+// runs it under that read's deadline, and an ended ctx fails it with an error
+// wrapping ctx.Err() (see ctxErr).
+func (m *MetaStore) GetMetaContext(ctx context.Context, tmuxID string) (*SessionMeta, error) {
 	var meta SessionMeta
-	err := m.db.QueryRow(`
+	err := m.db.QueryRowContext(ctx, `
 		SELECT tmux_id, mode, cwd
 		FROM session_meta WHERE tmux_id = ?
 	`, tmuxID).Scan(&meta.TmuxID, &meta.Mode, &meta.Cwd)
@@ -231,7 +257,7 @@ func (m *MetaStore) GetMeta(tmuxID string) (*SessionMeta, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, ctxErr(ctx, err)
 	}
 	return &meta, nil
 }
@@ -284,8 +310,13 @@ func (m *MetaStore) UpdateMeta(tmuxID string, update MetaUpdate) error {
 
 // DeleteMeta removes the record for tmuxID (no-op if not found).
 func (m *MetaStore) DeleteMeta(tmuxID string) error {
-	_, err := m.db.Exec("DELETE FROM session_meta WHERE tmux_id = ?", tmuxID)
-	return err
+	return m.DeleteMetaContext(context.Background(), tmuxID)
+}
+
+// DeleteMetaContext is DeleteMeta bounded by ctx (see GetMetaContext).
+func (m *MetaStore) DeleteMetaContext(ctx context.Context, tmuxID string) error {
+	_, err := m.db.ExecContext(ctx, "DELETE FROM session_meta WHERE tmux_id = ?", tmuxID)
+	return ctxErr(ctx, err)
 }
 
 // CleanOrphans deletes meta records whose tmux_id is not in liveTmuxIDs.
@@ -293,6 +324,11 @@ func (m *MetaStore) DeleteMeta(tmuxID string) error {
 // If liveTmuxIDs is empty, does nothing — an empty set means "tmux unavailable",
 // not "nothing is alive".
 func (m *MetaStore) CleanOrphans(liveTmuxIDs []string) (int, error) {
+	return m.CleanOrphansContext(context.Background(), liveTmuxIDs)
+}
+
+// CleanOrphansContext is CleanOrphans bounded by ctx (see GetMetaContext).
+func (m *MetaStore) CleanOrphansContext(ctx context.Context, liveTmuxIDs []string) (int, error) {
 	if len(liveTmuxIDs) == 0 {
 		return 0, nil // tmux unavailable or no sessions — don't delete anything
 	}
@@ -306,9 +342,9 @@ func (m *MetaStore) CleanOrphans(liveTmuxIDs []string) (int, error) {
 	}
 
 	query := fmt.Sprintf("DELETE FROM session_meta WHERE tmux_id NOT IN (%s)", placeholders)
-	res, err := m.db.Exec(query, args...)
+	res, err := m.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, err
+		return 0, ctxErr(ctx, err)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil

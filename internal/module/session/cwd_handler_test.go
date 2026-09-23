@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -87,7 +88,7 @@ func TestHandleSessionCwd_TmuxError(t *testing.T) {
 // refuse to write it under a binding it does not belong to.
 func TestHandleSessionCwd_ReturnsTmuxInstance(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = func() string { return "111:1000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "111:1000" }
 
 	fake.AddSession("my-sess", "/initial")
 	fake.SetPaneCwd("my-sess", "/home/user/proj")
@@ -120,7 +121,7 @@ func TestHandleSessionCwd_ReturnsTmuxInstance(t *testing.T) {
 // value meaning "unknown", never an elided field (spec §4.6).
 func TestHandleSessionCwd_TmuxInstanceKeyAlwaysPresent(t *testing.T) {
 	mod, _, fake := newTestModule(t)
-	mod.tmuxInstanceFn = func() string { return "" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "" }
 
 	fake.AddSession("my-sess", "/initial")
 	fake.SetPaneCwd("my-sess", "/home/user/proj")
@@ -154,7 +155,7 @@ func TestHandleSessionCwd_RestartDuringRead_ReportsUnknown(t *testing.T) {
 	fake.AddSession("my-sess", "/initial")
 	fake.SetPaneCwd("my-sess", "/home/user/proj")
 
-	mod.tmuxInstanceFn = func() string { return "111:1000" }
+	mod.tmuxInstanceFn = func(context.Context) string { return "111:1000" }
 	sessions, err := mod.ListSessions()
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
@@ -163,7 +164,7 @@ func TestHandleSessionCwd_RestartDuringRead_ReportsUnknown(t *testing.T) {
 	// The handler samples the instance twice: once resolving the session and
 	// once after reading the pane path. Flip the answer between them.
 	calls := 0
-	mod.tmuxInstanceFn = func() string {
+	mod.tmuxInstanceFn = func(context.Context) string {
 		calls++
 		if calls == 1 {
 			return "111:1000"

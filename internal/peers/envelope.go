@@ -8,7 +8,10 @@ package peers
 // explicit signal so a consumer never has to infer one from the absence
 // of the others: owner lookups that did not run (visible per row as
 // agent:null with an empty reason), UnknownRegistryFiles, and
-// TitlesUnavailable.
+// TitlesUnavailable. A fourth, rarer cause has no field of its own (#1293):
+// the inventory budget ran out before the tmux-generation re-check, so the
+// answer cannot vouch that its rows come from one tmux generation. A
+// consumer treats it like an owner lookup that did not run — retry.
 //
 // The three are not equally serious, and TitlesUnavailable is the mild one
 // (spec §6.1): every address in Peers is built from that row's own registry
