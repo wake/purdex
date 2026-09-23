@@ -254,7 +254,7 @@ export type PullCheck =
   | { state: 'failed'; reason: string; request?: string }
 
 /** Sentences for a pull that cannot be made; anything else read from the host is `check_failed` + the request's class. */
-const PULL_REFUSED = new Set(['master-unverified', 'master-mismatch', 'duplicate-host-identity', 'host-identity-conflict'])
+const PULL_REFUSED = new Set(['master-unverified', 'master-mismatch', 'master-unmatched', 'duplicate-host-identity', 'host-identity-conflict'])
 
 interface DirectionStepProps {
   profileName: string
@@ -271,9 +271,11 @@ interface DirectionStepProps {
   /** Null unless the direction is pull. */
   pullCheck: PullCheck | null
   onRetryPullCheck: () => void
+  /** The host the pull is made through — named when the profile has no row for it (`master-unmatched`). */
+  attachHostId: string | null
 }
 
-export function DirectionStep({ profileName, pullUnavailable, direction, onDirection, localId, saveFirst, onSaveFirst, saveName, onSaveName, saveNameOk, pullCheck, onRetryPullCheck }: DirectionStepProps) {
+export function DirectionStep({ profileName, pullUnavailable, direction, onDirection, localId, saveFirst, onSaveFirst, saveName, onSaveName, saveNameOk, pullCheck, onRetryPullCheck, attachHostId }: DirectionStepProps) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -338,7 +340,7 @@ export function DirectionStep({ profileName, pullUnavailable, direction, onDirec
             <div className="flex flex-wrap items-center gap-2">
               <p data-testid="profile-wizard-pull-refused" data-reason={pullCheck.reason} role="alert" className="text-red-500">
                 {PULL_REFUSED.has(pullCheck.reason)
-                  ? t(`settings.profile.wizard.pull.${pullCheck.reason.replace(/-/g, '_')}`)
+                  ? t(`settings.profile.wizard.pull.${pullCheck.reason.replace(/-/g, '_')}`, { name: attachHostId === null ? '' : hostName(attachHostId) })
                   : `${t('settings.profile.wizard.pull.check_failed')} ${t(requestKey(pullCheck.state === 'failed' ? (pullCheck.request ?? 'thrown') : 'thrown'))}`}
               </p>
               {pullCheck.state === 'failed' && (

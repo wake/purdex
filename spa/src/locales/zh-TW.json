@@ -1613,6 +1613,7 @@
   "settings.profile.wizard.pull.check_failed": "無法確認這次拉取會移除哪些主機。",
   "settings.profile.wizard.pull.master_unverified": "拉取前，這台裝置必須先在這台主機目前的位址上確認它是哪一個 daemon——目前還沒有確認。請等主機連上，或改用推送。",
   "settings.profile.wizard.pull.master_mismatch": "這台主機位址上的 daemon 不是它記錄的那一個，所以無法安全比對主機清單。請到「設定 › 主機」修正它的位址，或改用推送。",
+  "settings.profile.wizard.pull.master_unmatched": "同步主機上的這份 profile 裡沒有你用來同步的這台主機（{{name}}）——拉取會把它移除，所以不能用它來拉。",
   "settings.profile.wizard.pull.duplicate_host_identity": "這個 profile 的主機清單把同一個 daemon 列了兩次，拉取分不出是哪一筆。請用推送覆蓋它，或從另一台裝置修正。",
   "settings.profile.wizard.pull.host_identity_conflict": "這台裝置上有兩台主機其實是同一個 daemon。拉取前請先到「設定 › 主機」移除其中一台。",
   "settings.profile.wizard.direction.host_mismatch": "{{name}} 這台目前連到的 daemon 和它記錄的身分不同，開始同步後會暫停，直到你修正它的位址或移除它。",

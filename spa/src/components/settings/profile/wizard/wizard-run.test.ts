@@ -417,6 +417,21 @@ describe('prepareRun — a PULL: the host verified, and the hosts it removes are
     expect(listProfiles).not.toHaveBeenCalled()
   })
 
+  it('NO ROW FOR THE ATTACH HOST ITSELF (the pull would remove the very host it pulls through): master-unmatched — from prepareRun and previewPull alike', async () => {
+    // one row, for another daemon: h1 (the attach host) matches nothing
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: { ...h('h2', 'old box', { daemonId: 'box:111111' }), ip: '10.0.0.2' } } })
+    sotHosts({ zz: { name: 'box', daemonId: 'box:111111' } })
+    expect(await prepareRun(draft({ removesSeen: ['h1'] }))).toEqual({ ok: false, reason: 'master-unmatched' })
+    expect(await previewPull('h1', P)).toEqual({ ok: false, reason: 'master-unmatched' })
+    // no row at all: every host would go, the attach host among them
+    sotHosts({})
+    expect(await prepareRun(draft({ removesSeen: ['h1', 'h2'] }))).toEqual({ ok: false, reason: 'master-unmatched' })
+    expect(await previewPull('h1', P)).toEqual({ ok: false, reason: 'master-unmatched' })
+    // OTHER unmatched hosts are no refusal: listed, as before
+    sotHosts({ d1: { name: 'mlab', daemonId: DAEMON } })
+    expect(await previewPull('h1', P)).toEqual({ ok: true, removes: ['h2'] })
+  })
+
   it('previewPull — what the direction step names: the same list, or why there is none', async () => {
     expect(await previewPull('h1', P)).toEqual({ ok: true, removes: ['h2'] })
     expect(getSection).toHaveBeenCalledWith('h1', P, 'hosts', { expectEndpoint: AT })

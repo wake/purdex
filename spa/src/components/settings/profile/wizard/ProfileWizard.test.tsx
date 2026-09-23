@@ -490,6 +490,31 @@ describe('step 4 — a pull\'s hosts: the host verified, and the hosts it remove
     expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
   })
 
+  it('the profile has NO ROW for the attach host itself: pull refused in words naming it, Next shut — other hosts would not have stopped it', async () => {
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { b: { name: 'air-row', daemonId: 'air:999999' } }, hostOrder: ['b'] } } })
+    await toDirection()
+    await choosePull()
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unmatched')
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en['settings.profile.wizard.pull.master_unmatched'].replace('{{name}}', 'mlab'))
+    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
+    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
+    click('profile-wizard-direction-push')
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+  })
+
+  it('START FINDS THE ATTACH HOST UNMATCHED (the profile\'s host list changed meanwhile): nothing runs — back to the direction step, which says why', async () => {
+    await toDirection()
+    await choosePull()
+    next()
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { b: { name: 'air-row', daemonId: 'air:999999' } }, hostOrder: ['b'] } } })
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'pull-refused')
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unmatched')
+  })
+
   it('the host list cannot be read: the class of the failure, and Try again asks again', async () => {
     vi.mocked(getSection).mockResolvedValueOnce(failed('timeout'))
     await toDirection()

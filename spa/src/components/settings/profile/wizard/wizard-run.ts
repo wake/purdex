@@ -241,9 +241,14 @@ export type PullPremiseReason = 'master-unverified' | 'master-mismatch'
  *  daemon of one row. The pull would end `locked:invalid`: nothing runs. */
 export type PullMatchReason = HostMatchError
 
+/** The SOT's `hosts` rows name no daemon this device can match to THE ATTACH HOST itself: the pull would remove the
+ *  very host it is made through (host-sync-identity spec §11, coordinator decision b). Other unmatched hosts are
+ *  listed as removed and stop nothing; this one does. */
+export type PullUnmatchedReason = 'master-unmatched'
+
 export type PrepareResult =
   | { ok: true; plan: Readonly<WizardPlan> }
-  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason | 'incomplete' | 'profile-gone' }
+  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason | PullUnmatchedReason | 'incomplete' | 'profile-gone' }
   /** The hosts this pull removes are not the ones the user was shown (or none were shown): `removes` is the list now. */
   | { ok: false; reason: 'removes-changed'; removes: string[] }
   | { ok: false; reason: 'profile-changed'; now: SotNow }
@@ -311,16 +316,19 @@ async function readSotHosts(hostId: string, profileId: string, at: string): Prom
   }
 }
 
-/** The local hosts a pull of `rows` removes, matched against this device's hosts THIS INSTANT. No section → none. */
-function removalsOf(rows: Record<string, unknown> | null): { ok: true; removes: string[] } | { ok: false; reason: PullMatchReason } {
+/** The local hosts a pull of `rows` through `hostId` removes, matched against this device's hosts THIS INSTANT. No
+ *  section → none. `hostId` itself among them → `master-unmatched`: a pull cannot remove the host it is made through. */
+function removalsOf(hostId: string, rows: Record<string, unknown> | null): { ok: true; removes: string[] } | { ok: false; reason: PullMatchReason | PullUnmatchedReason } {
   if (rows === null) return { ok: true, removes: [] }
   const match = matchIncomingHosts(useHostStore.getState().hosts, rows)
-  return match.error !== undefined ? { ok: false, reason: match.error } : { ok: true, removes: match.removed }
+  if (match.error !== undefined) return { ok: false, reason: match.error }
+  if (match.removed.includes(hostId)) return { ok: false, reason: 'master-unmatched' }
+  return { ok: true, removes: match.removed }
 }
 
 export type PullPreview =
   | { ok: true; removes: string[] }
-  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason }
+  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason | PullUnmatchedReason }
   | { ok: false; reason: 'list-failed'; request: string }
 
 /**
@@ -335,7 +343,7 @@ export async function previewPull(hostId: string, profileId: string): Promise<Pu
   if (pull !== null) return { ok: false, reason: pull }
   const read = await readSotHosts(hostId, profileId, endpointOfHost(useHostStore.getState().hosts[hostId]))
   if (!read.ok) return { ok: false, reason: 'list-failed', request: read.request }
-  return removalsOf(read.rows)
+  return removalsOf(hostId, read.rows)
 }
 
 const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x) => b.includes(x))
@@ -386,7 +394,7 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
     const listed = entry.sections.find((m) => m.section === 'hosts')
     const same = listed === undefined ? sotHosts.rev === null : listed.rev === sotHosts.rev && listed.hash === sotHosts.hash
     if (!same) return { ok: false, reason: 'profile-changed', now }
-    const removal = removalsOf(sotHosts.rows)
+    const removal = removalsOf(hostId, sotHosts.rows)
     if (!removal.ok) return { ok: false, reason: removal.reason }
     if (draft.removesSeen == null || !sameSet(removal.removes, draft.removesSeen)) return { ok: false, reason: 'removes-changed', removes: removal.removes }
     removesHosts = Object.freeze([...removal.removes])

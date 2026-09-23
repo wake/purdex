@@ -371,7 +371,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
       if (prepared.reason === 'incomplete') return setRun((r) => (r === null ? r : { ...r, phase: before }))
       // A pull that cannot be made, or that would remove other hosts than the ones shown: back to the direction
       // step, which says why (or names the hosts as they are now) — push stays offered.
-      if (prepared.reason === 'removes-changed' || prepared.reason === 'master-unverified' || prepared.reason === 'master-mismatch' || prepared.reason === 'duplicate-host-identity' || prepared.reason === 'host-identity-conflict') {
+      if (prepared.reason === 'removes-changed' || prepared.reason === 'master-unverified' || prepared.reason === 'master-mismatch' || prepared.reason === 'master-unmatched' || prepared.reason === 'duplicate-host-identity' || prepared.reason === 'host-identity-conflict') {
         if (pullKey !== null) {
           pullAsked.current = pullKey
           setPullRead({ key: pullKey, check: prepared.reason === 'removes-changed' ? { state: 'ok', removes: prepared.removes } : { state: 'failed', reason: prepared.reason } })
@@ -507,6 +507,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
               saveNameOk={saveNameOk}
               pullCheck={pullCheck}
               onRetryPullCheck={retryPullCheck}
+              attachHostId={hostId}
             />
           )}
 

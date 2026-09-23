@@ -1613,6 +1613,7 @@
   "settings.profile.wizard.pull.check_failed": "Which hosts this pull would remove could not be checked.",
   "settings.profile.wizard.pull.master_unverified": "Pulling needs this device to have confirmed which daemon this host is, at its current address — it has not yet. Wait until the host is connected, or push instead.",
   "settings.profile.wizard.pull.master_mismatch": "The daemon at this host's address is not the one the host is recorded as, so its host list cannot be matched safely. Fix the host's address in Settings › Hosts, or push instead.",
+  "settings.profile.wizard.pull.master_unmatched": "This profile on the sync host has no entry for the host you sync through ({{name}}) — a pull would remove it, so it cannot be pulled through it.",
   "settings.profile.wizard.pull.duplicate_host_identity": "This profile lists one daemon twice in its host list, so a pull cannot tell its entries apart. Push to replace it, or fix it from another device.",
   "settings.profile.wizard.pull.host_identity_conflict": "Two hosts on this device are the same daemon. Remove one of them in Settings › Hosts before pulling.",
   "settings.profile.wizard.direction.host_mismatch": "{{name}}: the daemon this host connects to now is not the one it is recorded as. Once sync starts it will pause until you fix this host's address or remove it.",
