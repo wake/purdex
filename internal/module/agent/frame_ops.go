@@ -152,6 +152,24 @@ func (m *Module) recordSessionIdentity(req EventRequest, frameID string) {
 	}
 }
 
+// payloadSessionID is the session id the hook payload itself carries — the
+// agent run that SENT this event — or "" when it carries none. It never falls
+// back to a frame's stored id, which may already belong to a newer run. The
+// provider's SessionIdentifier answers when it has one; otherwise the shared
+// top-level extractor (what every built-in provider's IdentifyEvent uses).
+func (m *Module) payloadSessionID(req EventRequest) string {
+	if m != nil && m.registry != nil {
+		if provider, ok := m.registry.Get(req.AgentType); ok {
+			if identifier, ok := provider.(agentpkg.SessionIdentifier); ok {
+				sessionID, _ := identifier.IdentifyEvent(req.PurdexName, req.RawEvent)
+				return sessionID
+			}
+		}
+	}
+	sessionID, _ := agentpkg.ExtractSessionIdentity(req.RawEvent)
+	return sessionID
+}
+
 func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult, broadcastTs int64) (*SessionProjection, FrameTraceMeta, error) {
 	if m.frames == nil {
 		return nil, FrameTraceMeta{Decision: "skipped", Reason: "frame_store_unavailable", Before: map[string]any{}, After: map[string]any{}}, nil
@@ -199,8 +217,15 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			//
 			// The exit envelope is taken from the frame BEFORE anything is
 			// deleted: after the delete there is no row left to read the
-			// session id or frame id from. nil for a child frame.
+			// frame id from. nil for a child frame. Its session id is the
+			// PAYLOAD's (#1381 R1 P1): a SessionStart on the same frame
+			// (same pid/start — /clear delivered out of order, /resume) keeps
+			// the frame id and overwrites the frame's session id, so only the
+			// SessionEnd itself names the run that is ending.
 			exit := exitForFrame(*frame, m.sessionTmuxInstance(), ExitReasonSessionEnd, broadcastTs/int64(time.Millisecond))
+			if exit != nil {
+				exit.SessionID = m.payloadSessionID(req)
+			}
 			if _, _, _, _, derr := m.removeProxyRefForSender(req.TmuxPaneID, req.SenderPID, req.SenderStartTime, broadcastTs); derr != nil {
 				return nil, FrameTraceMeta{}, derr
 			}

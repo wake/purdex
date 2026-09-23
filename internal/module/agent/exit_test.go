@@ -91,6 +91,7 @@ func TestExit_RootSessionEnd_CarriesEnvelopeBuiltBeforeDelete(t *testing.T) {
 			req := EventRequest{
 				TmuxPaneID: "%5", AgentType: agentType, SenderPID: 200,
 				SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+				RawEvent: []byte(`{"session_id":"S1"}`),
 			}
 
 			before := time.Now().UnixMilli()
@@ -116,6 +117,45 @@ func TestExit_RootSessionEnd_CarriesEnvelopeBuiltBeforeDelete(t *testing.T) {
 				t.Fatalf("an exit must not also carry provenance")
 			}
 		})
+	}
+}
+
+// R1 P1 (#1381): a SessionStart landing on the SAME frame (same pid and start
+// time — cc /clear delivered out of order, an in-process /resume) keeps the
+// frame id and overwrites the frame's session id. The exit must name the run
+// that is ENDING, which only the SessionEnd payload knows — not the frame.
+func TestExit_SessionEnd_SessionIDComesFromThePayload(t *testing.T) {
+	m := newProvenanceTestModule(t, exitTestInstance)
+	root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S-new") // SessionStart(new) already landed
+	req := EventRequest{
+		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
+		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+		RawEvent: []byte(`{"session_id":"S-old"}`),
+	}
+	e, ok := exitOf(t, m.buildNormalizedForTest(t, req))
+	if !ok {
+		t.Fatalf("no pdx_exit")
+	}
+	if e.SessionID != "S-old" || e.FrameID != root.FrameID {
+		t.Fatalf("envelope = %+v, want the ENDING run's session id S-old on frame %s", e, root.FrameID)
+	}
+}
+
+// A payload without a session id sends "" — never the frame's id, which may
+// already name a newer run.
+func TestExit_SessionEnd_PayloadWithoutSessionID_SendsEmpty(t *testing.T) {
+	m := newProvenanceTestModule(t, exitTestInstance)
+	seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S-frame")
+	req := EventRequest{
+		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
+		SenderStartTime: "t200", PurdexName: "PdxSessionEnd",
+	}
+	e, ok := exitOf(t, m.buildNormalizedForTest(t, req))
+	if !ok {
+		t.Fatalf("no pdx_exit")
+	}
+	if e.SessionID != "" {
+		t.Fatalf("SessionID = %q, want empty (no fallback to the frame's id)", e.SessionID)
 	}
 }
 
@@ -209,7 +249,7 @@ func TestExit_HandlerBroadcastsEnvelopeOnTheWire(t *testing.T) {
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
 
-	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxSessionEnd","raw_event":{},"agent_type":"cc"}`
+	body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"S1"},"agent_type":"cc"}`
 	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
