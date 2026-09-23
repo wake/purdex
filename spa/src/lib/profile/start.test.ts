@@ -15,6 +15,8 @@ interface FakeExecutor {
     onStatus: (s: unknown) => void
     initialDirection: () => 'push' | 'pull' | null
     onInitialSettled: () => void
+    confirmedPullHosts: () => { rev: number; hash: string } | 'absent' | null
+    onPullUnconfirmed: () => void
   }
   onSection: ReturnType<typeof vi.fn>
   onRemoteEvent: ReturnType<typeof vi.fn>
@@ -145,6 +147,9 @@ import { useTabStore } from '../../stores/useTabStore'
 import { pendingDetachKey, selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { STORAGE_KEYS } from '../storage/keys'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { readPullUnconfirmed, writePullUnconfirmed } from './pull-unconfirmed'
+import en from '../../locales/en.json'
 import { deleteAttachment, listProfiles, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
@@ -201,7 +206,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null, pendingDetaches: [] })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceNameStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -1663,6 +1668,17 @@ describe('the direction of an attach', () => {
     expect(h.leaderships[0].stop).toHaveBeenCalledTimes(1)
   })
 
+  it('the SAME master and the SAME generation but another attach id (two stale windows): a new attach — the mode is rebuilt', async () => {
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    useProfileStore.setState({ attachId: 'b'.repeat(32), pendingDirection: 'push' }) // attachGeneration unchanged
+    await flush()
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.executors).toHaveLength(2)
+  })
+
   it('a changed direction ALONE (no new generation) rebuilds nothing and pumps nothing: the executor calls it stale by itself', async () => {
     stop = startProfileSync()
     useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
@@ -1671,6 +1687,231 @@ describe('the direction of an attach', () => {
     await flush()
     expect(h.executors).toHaveLength(1)
     expect(h.executors[0].dispose).not.toHaveBeenCalled()
+  })
+})
+
+describe('the pull guard (#1366): the confirmed `hosts` row goes with the direction, and a mismatch stops the sync', () => {
+  const ROW = { rev: 7, hash: 'a'.repeat(64) }
+
+  it('attachMaster(pull, { confirmedHosts }) stores it with the direction; the dep answers it (the executor snapshots it when built)', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toEqual({ ok: true })
+    await flush()
+    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: 'pull', pendingPullHosts: ROW })
+    expect(h.executors[0].deps.confirmedPullHosts()).toEqual(ROW)
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: 'absent' })).toEqual({ ok: true })
+    await flush()
+    expect(h.executors[1].deps.confirmedPullHosts()).toBe('absent')
+    expect(h.executors[0].deps.confirmedPullHosts()).toBeNull() // the old driver is out of it
+  })
+
+  it('push: nothing is stored; without the option: nothing either', async () => {
+    await attachMaster('h1', P1, 'push', { confirmedHosts: ROW })
+    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
+    await attachMaster('h1', P1, 'pull')
+    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
+  })
+
+  it('settling clears the direction AND the guard at once', async () => {
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    h.executors[0].deps.onInitialSettled()
+    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: null, pendingPullHosts: null })
+    expect(h.executors[0].deps.confirmedPullHosts()).toBeNull()
+  })
+
+  it('a leader handoff: the window that takes the lease continues the first reconciliation WITH the guard, and its settle clears both', async () => {
+    h.initialLeader = false
+    connect('h1')
+    stop = startProfileSync()
+    // what another window's attach left in the synced store
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1, attachId: 'a'.repeat(32) })
+    await flush()
+    expect(h.executors).toHaveLength(0)
+    h.leaderships[0].set(true)
+    await flush()
+    const { deps } = h.executors[0]
+    expect(deps.initialDirection()).toBe('pull')
+    expect(deps.confirmedPullHosts()).toEqual(ROW)
+    deps.onInitialSettled()
+    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: null, pendingPullHosts: null, masterProfileId: P1 })
+  })
+
+  it('a reload from storage whose guard has no attachId (codex critic): no guard — the direction is kept, the executor is built as today (no barrier, nothing to halt on)', async () => {
+    connect('h1')
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ version: 1, state: { masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1, autoSync: true } }))
+    await useProfileStore.persist.rehydrate()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', attachId: null, pendingDirection: 'pull', pendingPullHosts: null })
+    stop = startProfileSync()
+    await flush()
+    const { deps } = h.executors[0]
+    expect(deps.initialDirection()).toBe('pull')
+    expect(deps.confirmedPullHosts()).toBeNull()
+  })
+
+  it('a guard in memory without an attachId (no writer makes one; defence in depth): the executor is not given it — fail open to today, never a halt nobody can stop', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1, attachId: null })
+    await flush()
+    const { deps } = h.executors[0]
+    expect(deps.initialDirection()).toBe('pull')
+    expect(deps.confirmedPullHosts()).toBeNull()
+  })
+
+  it('onPullUnconfirmed: the notice is written FIRST, then the sync stops like Stop sync (master gone, driver down, attachment deleted)', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    const seen: Array<[boolean, boolean]> = []
+    const unsubscribe = useProfileStore.subscribe((st) => seen.push([readPullUnconfirmed() !== null, st.masterHostId !== null]))
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    unsubscribe()
+    expect(seen[0]).toEqual([true, false]) // the notice was there by the first write of the control plane — the detach's
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null })
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(deleteAttachment).toHaveBeenCalledWith('h1', P1, 'client-1')
+    expect(clearSectionStore).toHaveBeenLastCalledWith(P1)
+    expect(useProfileStore.getState().pendingDetaches).toEqual([])
+    // said at the moment it happens, whatever page is open
+    expect(useUndoToast.getState().toast?.message).toBe(en['settings.profile.current.pull_unconfirmed_toast'])
+  })
+
+  it('the DELETE fails: the local detach stands, the notice stays, and the ghost attachment is remembered', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    vi.mocked(deleteAttachment).mockResolvedValue(failed('network'))
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    await flush()
+    expect(useProfileStore.getState().masterHostId).toBeNull()
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(useProfileStore.getState().pendingDetaches).toMatchObject([{ hostId: 'h1', profileId: P1, endpoint: EP, detail: 'network' }])
+  })
+
+  it('the attach / detach queue is busy at that moment: the notice at once, the detach when its turn comes', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    // a retry of an older ghost holds the queue
+    useProfileStore.getState().addPendingDetach({ hostId: 'h2', profileId: P2, endpoint: EP, detail: 'network', at: 1 })
+    let release: (v: typeof okDetach) => void = () => {}
+    vi.mocked(deleteAttachment).mockReturnValueOnce(new Promise((r) => (release = r)))
+    const retrying = retryPendingDetach(pendingDetachKey({ hostId: 'h2', profileId: P2, endpoint: EP }))
+    await flush()
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    expect(readPullUnconfirmed()).not.toBeNull()
+    expect(useProfileStore.getState().masterHostId).toBe('h1') // still waiting its turn (the executor has halted by itself)
+    release(okDetach)
+    await retrying
+    await flush()
+    expect(useProfileStore.getState().masterHostId).toBeNull()
+    expect(deleteAttachment).toHaveBeenLastCalledWith('h1', P1, 'client-1')
+  })
+
+  it('…and if an attach in the queue re-attached meanwhile, that newer attach is NOT detached', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    let releasePut: (v: typeof okAttach) => void = () => {}
+    vi.mocked(putAttachment).mockReturnValueOnce(new Promise((r) => (releasePut = r)))
+    const reattaching = attachMaster('h2', P2, 'push')
+    await flush()
+    h.executors[0].deps.onPullUnconfirmed()
+    releasePut(okAttach)
+    expect(await reattaching).toEqual({ ok: true })
+    await flush()
+    await flush()
+    expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: 'h2', profileId: P2 })
+    expect(deleteAttachment).not.toHaveBeenCalledWith('h2', P2, 'client-1')
+  })
+
+  it('a late call from a driver already torn down does nothing', async () => {
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    const { deps } = h.executors[0]
+    await attachMaster('h2', P2, 'pull', { confirmedHosts: 'absent' })
+    await flush()
+    deps.onPullUnconfirmed()
+    await flush()
+    expect(readPullUnconfirmed()).toBeNull()
+    expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: 'h2', profileId: P2 })
+  })
+
+  it('two windows (codex R2 #1): B attaches anew while A\'s guarded GET is out; A\'s late mismatch writes the notice and NOTHING of the control plane', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    // Window B's attach, as it lands in the shared storage — A has not heard of it (no broadcast, no rehydrate).
+    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { version: number; state: Record<string, unknown> }
+    const generationA = envelope.state.attachGeneration as number
+    const bState = { ...envelope.state, masterHostId: 'h2', masterProfileId: P2, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: { rev: 9, hash: 'b'.repeat(64) }, attachGeneration: generationA + 1, suspension: null }
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: bState }))
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', attachGeneration: generationA }) // A's memory: stale
+
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    await flush()
+
+    const after = (JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { state: Record<string, unknown> }).state
+    expect({ masterHostId: after.masterHostId, masterProfileId: after.masterProfileId, attachGeneration: after.attachGeneration, pendingDirection: after.pendingDirection, pendingPullHosts: after.pendingPullHosts }).toEqual({
+      masterHostId: 'h2', masterProfileId: P2, attachGeneration: generationA + 1, pendingDirection: 'pull', pendingPullHosts: { rev: 9, hash: 'b'.repeat(64) },
+    })
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(deleteAttachment).not.toHaveBeenCalled() // B's attach is the user's: not stopped
+  })
+
+  // codex critic: `setMaster` makes the generation from each window's OWN memory (`s.attachGeneration + 1`), so two
+  // windows that have not heard of each other reach the SAME generation. Only the attach id tells the attaches apart.
+  it.each([
+    ['another master', { masterHostId: 'h2', masterProfileId: P2 }],
+    ['the SAME master pair', {}],
+  ])('two stale windows, one generation (codex critic): B\'s attach to %s is NOT cleared by A\'s late mismatch', async (_label, over) => {
+    connect('h1')
+    stop = startProfileSync()
+    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await flush()
+    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { version: number; state: Record<string, unknown> }
+    const generationA = envelope.state.attachGeneration as number
+    // Window B attached from the same old generation A had: storage's generation is A's, the attach is B's.
+    const bRow = { rev: 9, hash: 'b'.repeat(64) }
+    const bState = { ...envelope.state, ...over, pendingDirection: 'pull', pendingPullHosts: bRow, attachGeneration: generationA, attachId: 'b'.repeat(32), suspension: null }
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: bState }))
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', attachGeneration: generationA }) // A's memory: stale
+    expect(useProfileStore.getState().attachId).not.toBe('b'.repeat(32))
+
+    h.executors[0].deps.onPullUnconfirmed()
+    await flush()
+    await flush()
+
+    const after = (JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { state: Record<string, unknown> }).state
+    expect({ masterHostId: after.masterHostId, masterProfileId: after.masterProfileId, attachId: after.attachId, pendingDirection: after.pendingDirection, pendingPullHosts: after.pendingPullHosts }).toEqual({
+      masterHostId: bState.masterHostId, masterProfileId: bState.masterProfileId, attachId: 'b'.repeat(32), pendingDirection: 'pull', pendingPullHosts: bRow,
+    })
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: 'h1', profileId: P1 })
+    expect(deleteAttachment).not.toHaveBeenCalled()
+  })
+
+  it('an attach that succeeds clears the notice (the user set sync up again); one that fails leaves it', async () => {
+    writePullUnconfirmed({ hostId: 'h1', profileId: P1, at: 1 })
+    vi.mocked(putAttachment).mockResolvedValueOnce(failed('network'))
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toMatchObject({ ok: false })
+    expect(readPullUnconfirmed()).not.toBeNull()
+    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toEqual({ ok: true })
+    expect(readPullUnconfirmed()).toBeNull()
+    expect(localStorage.getItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED)).toBeNull()
   })
 })
 

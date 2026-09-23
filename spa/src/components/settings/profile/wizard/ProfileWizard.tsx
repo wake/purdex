@@ -343,7 +343,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const confirmDirection = (): void => {
     if (!directionReady || hostId === null || profileId === null || effectiveDirection === null) return
     // What the summary shows; the run takes `prepareRun`'s own plan (its address and fingerprint are read there).
-    const plan: WizardPlan = { hostId, profileId, localId, direction: effectiveDirection, saveAs: effectiveDirection === 'pull' && saveFirst ? saveName.value : null, removesHosts: effectiveDirection === 'pull' ? (removesSeen ?? []) : [], at: '', seen: seen?.fingerprint ?? '' }
+    const plan: WizardPlan = { hostId, profileId, localId, direction: effectiveDirection, saveAs: effectiveDirection === 'pull' && saveFirst ? saveName.value : null, removesHosts: effectiveDirection === 'pull' ? (removesSeen ?? []) : [], hostsRow: null, at: '', seen: seen?.fingerprint ?? '' }
     if (recheck('run')) return
     setRun({ plan, states: subStepsOf(plan).map(() => 'pending'), phase: 'idle', failure: null, checkFailed: null, localName: localId === MASTER_PROFILE_ID ? null : (slaves[localId]?.name ?? null) })
     setNotice(null)

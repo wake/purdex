@@ -59,7 +59,7 @@ const H1_DAEMON = 'mini-lab:278cbm'
 const H1_AT = '10.0.0.1:7860'
 /** An empty profile P, as `plan` says it was seen (`seen`) — so that the re-check before the attach passes. */
 const EMPTY_SEEN = JSON.stringify([])
-const plan = (over: Partial<WizardPlan>): WizardPlan => ({ hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: [], at: H1_AT, seen: EMPTY_SEEN, ...over })
+const plan = (over: Partial<WizardPlan>): WizardPlan => ({ hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: [], hostsRow: 'absent', at: H1_AT, seen: EMPTY_SEEN, ...over })
 const textOf = (w: unknown): string => JSON.stringify(w)
 const sentinelsIn = (text: string): string[] => [MASTER, S1, S2].filter((s) => text.includes(s))
 const slaveNamed = (name: string) => Object.values(useLocalProfilesStore.getState().slaves).find((s) => s.name === name)
@@ -110,8 +110,8 @@ describe('the sub-steps of a plan, in their order', () => {
 describe('retargetPlan — a retry keeps its plan, re-aimed at what the door just read', () => {
   const old = plan({ localId: 's1', removesHosts: ['h2'], at: '10.0.0.1:7860', seen: 'f1' })
   it('the address, the fingerprint and the removals are the fresh plan\'s; the rest, and so the sub-steps, the old one\'s', () => {
-    const fresh = plan({ localId: 's1', removesHosts: ['h2'], at: '10.0.0.9:7860', seen: 'f2' })
-    expect(retargetPlan(old, fresh)).toEqual({ ...old, at: '10.0.0.9:7860', seen: 'f2', removesHosts: ['h2'] })
+    const fresh = plan({ localId: 's1', removesHosts: ['h2'], hostsRow: { rev: 4, hash: 'h4' }, at: '10.0.0.9:7860', seen: 'f2' })
+    expect(retargetPlan(old, fresh)).toEqual({ ...old, at: '10.0.0.9:7860', seen: 'f2', removesHosts: ['h2'], hostsRow: { rev: 4, hash: 'h4' } })
   })
   it('other hosts removed: not the same plan', () => expect(retargetPlan(old, plan({ localId: 's1', removesHosts: ['h2', 'h4'] }))).toBeNull())
   it('other sub-steps (no copy now, or a push): not the same plan', () => {
@@ -216,7 +216,7 @@ describe('the order, and what a failure stops', () => {
     expect(again.result).toEqual({ done: true })
     expect(again.seen).toEqual([[2, 'running'], [2, 'done']])
     expect(Object.keys(useLocalProfilesStore.getState().slaves)).toHaveLength(slavesThen) // no second promote, no second copy
-    expect(attachMaster).toHaveBeenLastCalledWith('h1', P, 'pull')
+    expect(attachMaster).toHaveBeenLastCalledWith('h1', P, 'pull', { confirmedHosts: 'absent' })
   })
 
   it.each(ATTACH_REASONS)('attach reason %s is passed on as it is', async (reason) => {
@@ -251,7 +251,7 @@ describe('prepareRun — the ONE door before the run: this device\'s premises AN
 
   it('nothing moved: a plan — frozen, and exactly what was asked for', async () => {
     const r = await prepareRun(draft({ direction: 'push', saveAs: 'Kept', localId: 's1' }))
-    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: 's1', direction: 'push', saveAs: null, removesHosts: [], at: '10.0.0.1:7860', seen: sotFingerprint(indexEntry(P, 'default', SEEN)) } })
+    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: 's1', direction: 'push', saveAs: null, removesHosts: [], hostsRow: null, at: '10.0.0.1:7860', seen: sotFingerprint(indexEntry(P, 'default', SEEN)) } })
     expect(r.ok && Object.isFrozen(r.plan)).toBe(true)
     // pinned to where the host is (host-sync-identity §8): a host re-pointed during the ask is not listed elsewhere
     expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: '10.0.0.1:7860' })
@@ -348,7 +348,7 @@ describe('prepareRun — a PULL: the host verified, and the hosts it removes are
 
   it('the host is verified, the list shown is the list now: a plan that carries it; both reads pinned to the host\'s address', async () => {
     const r = await prepareRun(draft({ removesSeen: ['h2'] }))
-    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: ['h2'], at: AT, seen: sotFingerprint(indexEntry(P, 'default', SEEN)) } })
+    expect(r).toEqual({ ok: true, plan: { hostId: 'h1', profileId: P, localId: MASTER_PROFILE_ID, direction: 'pull', saveAs: 'Kept', removesHosts: ['h2'], hostsRow: { rev: 3, hash: 'h-hosts-3' }, at: AT, seen: sotFingerprint(indexEntry(P, 'default', SEEN)) } })
     expect(r.ok && Object.isFrozen(r.plan.removesHosts)).toBe(true)
     expect(getSection).toHaveBeenCalledWith('h1', P, 'hosts', { expectEndpoint: AT })
     expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: AT })
@@ -403,7 +403,7 @@ describe('prepareRun — a PULL: the host verified, and the hosts it removes are
     vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: null })
     listed(indexEntry(P, 'default', [meta('workspaces', 7)]))
     const r = await prepareRun(draft({ seen: sotFingerprint(indexEntry(P, 'default', [meta('workspaces', 7)])), removesSeen: [] }))
-    expect(r).toMatchObject({ ok: true, plan: { removesHosts: [] } })
+    expect(r).toMatchObject({ ok: true, plan: { removesHosts: [], hostsRow: 'absent' } })
   })
 
   it.each([
@@ -485,6 +485,7 @@ describe('THE ATTACH ASKS AGAIN: promote and copy take time, and what the pull w
   it('nothing moved: the attach is made — after the host was asked again, at the address the plan was made for', async () => {
     expect(await runPlan(prepared(), 0, () => {})).toEqual({ done: true })
     expect(attachMaster).toHaveBeenCalledTimes(1)
+    expect(attachMaster).toHaveBeenCalledWith('h1', P, 'pull', { confirmedHosts: { rev: 3, hash: 'h-hosts-3' } })
     expect(getSection).toHaveBeenCalledWith('h1', P, 'hosts', { expectEndpoint: H1_AT })
     expect(listProfiles).toHaveBeenCalledWith('h1', { expectEndpoint: H1_AT })
   })
@@ -513,6 +514,26 @@ describe('THE ATTACH ASKS AGAIN: promote and copy take time, and what the pull w
     )
     expect(attachMaster).not.toHaveBeenCalled()
     expect(r).toMatchObject({ done: false, failedAt: 2, reason: 'master-mismatch' })
+  })
+
+  it('#1366: the attach carries the `hosts` row of the LAST check (the one the removals were just computed from), not the one the plan was started with', async () => {
+    expect(await runPlan(prepared({ hostsRow: { rev: 1, hash: 'from-the-first-prepare' } }), 0, () => {})).toEqual({ done: true })
+    expect(attachMaster).toHaveBeenCalledTimes(1)
+    expect(attachMaster).toHaveBeenCalledWith('h1', P, 'pull', { confirmedHosts: { rev: 3, hash: 'h-hosts-3' } })
+  })
+
+  it('#1366: no `hosts` on the SOT at the last check → the attach says so (`absent`)', async () => {
+    const seen = [meta('workspaces', 7)]
+    listed(indexEntry(P, 'default', seen))
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: null })
+    expect(await runPlan(prepared({ seen: sotFingerprint(indexEntry(P, 'default', seen)), removesHosts: [], hostsRow: { rev: 3, hash: 'h-hosts-3' } }), 0, () => {})).toEqual({ done: true })
+    expect(attachMaster).toHaveBeenCalledWith('h1', P, 'pull', { confirmedHosts: 'absent' })
+  })
+
+  it('a push attaches with no guard', async () => {
+    listed(indexEntry(P, 'default', SEEN))
+    expect(await runPlan(prepared({ direction: 'push', saveAs: null, removesHosts: [], hostsRow: null }), 0, () => {})).toEqual({ done: true })
+    expect(attachMaster).toHaveBeenCalledWith('h1', P, 'push')
   })
 
   it('the host was re-pointed meanwhile (another address): no attach — said as the request class, and retryable', async () => {

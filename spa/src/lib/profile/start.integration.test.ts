@@ -13,9 +13,11 @@ import { useProfileStore } from '../../stores/useProfileStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { readPullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore, loadSectionStore } from './section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, startProfileSync } from './start'
 import { FakeDaemon } from './test-fake-daemon'
+import { STORAGE_KEYS } from '../storage/keys'
 
 vi.mock('./hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hash')>()
@@ -83,7 +85,7 @@ beforeEach(() => {
   api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
   api.putAttachment.mockResolvedValue({ kind: 'ok', value: { attached: true } })
   api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, masterEndpoint: null, suspension: null })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
@@ -153,6 +155,57 @@ describe('attachMaster, again, to the same master', () => {
     expect(daemon.revs()).toEqual(revs)
     expect(profileSyncState().status?.profile).toBe('synced')
     expect(useProfileStore.getState().pendingDirection).toBeNull()
+  })
+})
+
+describe('THE PULL GUARD end to end (#1366): the `hosts` the user confirmed is not the one on the SOT any more', () => {
+  it('attach pull with the confirmed row (rev n), the daemon holds rev n+1: nothing changes here, the attachment is removed, the notice is set', async () => {
+    await attachedAndSettled()
+    const confirmed = { rev: daemon.rows.get('hosts')!.rev, hash: daemon.rows.get('hosts')!.hash! }
+    // another device writes `hosts` after the wizard's last check
+    const row = daemon.rows.get('hosts')!
+    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' })
+    renameH2('mine-only')
+    await settle()
+    const writes = daemon.writes.length
+    api.deleteAttachment.mockClear()
+    api.getSection.mockClear()
+    const worldBefore = JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])
+
+    expect(await attachMaster(M, PROFILE, 'pull', { confirmedHosts: confirmed })).toEqual({ ok: true })
+    await settle()
+
+    expect(JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])).toBe(worldBefore)
+    expect(daemon.writes.slice(writes)).toEqual([])
+    expect(api.getSection.mock.calls.filter((c) => c[2] !== 'hosts')).toEqual([]) // nothing but the verdict was read
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null, pendingDetaches: [] })
+    expect(readPullUnconfirmed()).toMatchObject({ hostId: M, profileId: PROFILE })
+    expect(api.deleteAttachment).toHaveBeenCalledWith(M, PROFILE, 'c_aaaaaaaaaaaa')
+    expect(profileSyncState().problems.map((p) => p.kind)).toContain('pull-hosts-unconfirmed')
+  })
+})
+
+describe('a stored guard without its attachId (codex critic): no guard, never a halt nobody can stop', () => {
+  it('a reload: `hosts` differs from the stored guard, yet the first reconciliation runs as today — attached, settled, no notice, no detach', async () => {
+    await attachedAndSettled()
+    stop()
+    stop = () => {}
+    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { version: number; state: Record<string, unknown> }
+    const row = daemon.rows.get('hosts')!
+    const { attachId: _dropped, ...rest } = envelope.state
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...rest, pendingDirection: 'pull', pendingPullHosts: { rev: row.rev, hash: row.hash } } }))
+    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' }) // not the guard's row any more
+    await useProfileStore.persist.rehydrate()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, attachId: null, pendingDirection: 'pull', pendingPullHosts: null })
+    api.deleteAttachment.mockClear()
+
+    stop = startProfileSync()
+    await settle()
+
+    expect(readPullUnconfirmed()).toBeNull()
+    expect(api.deleteAttachment).not.toHaveBeenCalled()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, masterProfileId: PROFILE, pendingDirection: null })
+    expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('pull-hosts-unconfirmed')
   })
 })
 
