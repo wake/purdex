@@ -616,13 +616,15 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
   const workspaceId = workspaceIdOf(key)
   if (workspaceId === null) return invalid('unknown-section', `not a tabs section key: ${key}`)
   if (payload !== null && !isWellFormedSection('tabs', payload)) return invalid('malformed', 'malformed tabs payload')
-  // wire → local through the hosts as they are now (the executor pulls a `tabs.*` only once `hosts` is up to date).
-  const resolve = wireResolverOf(useHostStore.getState())
-  if (resolve === null) return IDENTITY_CONFLICT()
-  const incoming = payload === null ? EMPTY_TABS : tabsFromWire(payload as TabsPayload, resolve)
   return withOperationLock<ApplyOutcome>(
     PROFILE_SYNC_LOCK_OWNER,
     async () => {
+      // wire → local through the hosts as they are NOW — under the lock, in the same synchronous stretch as the
+      // write and the hash below (nothing is awaited in between), so no host-store change can fall between the
+      // resolve and what is written (the R1 race, PR #1365). The executor pulls a `tabs.*` only once `hosts` is up to date.
+      const resolve = wireResolverOf(useHostStore.getState())
+      if (resolve === null) return IDENTITY_CONFLICT()
+      const incoming = payload === null ? EMPTY_TABS : tabsFromWire(payload as TabsPayload, resolve)
       const read = readMasterWorld()
       if (!read.settled) return BUSY
       const local = read.world
@@ -645,8 +647,8 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       if (!after.settled) return BUSY
       const ws = after.world.workspaces.find((w) => w.id === workspaceId)
       if (!ws) return { ok: true, hash: null }
+      // The identity the resolve above used: nothing was awaited since.
       const identity = identityOfSync(useHostStore.getState().hosts)
-      if (identity.conflict !== null) return BUSY // appeared since the resolve: nothing names hosts until it is gone
       return { ok: true, hash: await hashSection(buildTabsSection(ws, after.world.tabs, identity)) }
     },
     () => ({ ok: false, reason: 'busy' }),

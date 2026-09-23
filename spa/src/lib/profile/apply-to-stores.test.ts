@@ -1393,6 +1393,31 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     })
   })
 
+  // Follow-up to R1: the tabs apply resolves wire ids under the operation lock, with the write — a host-store change
+  // while the lock is being taken cannot leave the panes resolved through the hosts as they were before it.
+  it('tabs: a daemonId learned while the operation lock is taken is the one the panes resolve through', async () => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), h2: host('h2', { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, 'h2'] })
+    seedTabWorld()
+    const payload = buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', tmuxLeaf('p5', syncIdOfSync(OTHER))) })
+    const real = useRebuildStore.getState().acquireOperationLock
+    useRebuildStore.setState({
+      acquireOperationLock: (...args: Parameters<typeof real>) => {
+        const { hosts } = useHostStore.getState()
+        useHostStore.setState({ hosts: { ...hosts, h2: { ...hosts.h2, daemonId: OTHER } } }) // learned at that moment
+        return real(...args)
+      },
+    })
+    try {
+      const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+      const content = (useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content
+      expect(content).toMatchObject({ hostId: 'h2' })
+      expect(content).not.toHaveProperty('terminated')
+      expect(outcome).toEqual({ ok: true, hash: await hashSection(payload) })
+    } finally {
+      useRebuildStore.setState({ acquireOperationLock: real })
+    }
+  })
+
   it('tabs and settings refuse to land while the host identity is in conflict (two local hosts, one daemon)', async () => {
     useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), twin: host('twin', { daemonId: DAEMON }) }, hostOrder: [M, 'twin'] })
     seedTabWorld()
