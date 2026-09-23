@@ -40,8 +40,8 @@ storage 讀回資料，讀回後的處理函式又引用了還沒建立完成的
   原因、時間）；刪除 frame 改成原子 claim，只有真正刪到的一方送出，事件晚到或清理失敗都不會重送或漏送；晚到的舊
   `SessionEnd` 不再刪掉同一程序中新一次執行的 frame（既有 bug）。**需要重新部署 daemon。**
 - **App**：分頁的 rebuild 紀錄記下 agent 的 frame id；收到結束通知且 frame id 與 session id 都相符才記「已結束」
-  （時間、正常退出／程序消失），同 session 其他 pane 的 agent 不會混進來。Rebuild 面板顯示「最後看到時 ‹Agent› 在執行」
-  或「‹Agent› 已於 ‹時間› 結束」，agent 已結束時 resume 預設不勾（仍可手動勾）；Rebuild all 同規則。
+  （時間、正常結束／行程已消失），同 session 其他 pane 的 agent 不會混進來。Rebuild 面板顯示「‹Agent› 最後所見仍在執行」
+  或「‹Agent› 已於 ‹時間› 結束（正常結束／行程已消失）」，agent 已結束時 resume 預設不勾（仍可手動勾）；Rebuild all 同規則。
   App 斷線期間的結束不會補記（畫面會說明）。tabs 格式再加一個標記（ordinal 4）。
 
 追蹤：#1379（Rebuild all 預覽表，擱置）、#1383（proxy 關聯只用 pid 辨識的既有競態）。
