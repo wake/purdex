@@ -1,6 +1,20 @@
 # Plan — host ownership H2 (H2a / H2b / H2c / H2d)
 
-Status: **rev 2** (2026-09-24) — revised after the codex plan review `task-muei1qbr-0hu3ol` (§Review).
+Status: **rev 3** (2026-09-24) — rev 2 revised after the codex plan review `task-muei1qbr-0hu3ol` (§Review); rev 3
+records the coordinator's decisions below.
+
+**Coordinator decisions (2026-09-24) — these override every alternative written further down:**
+- §0.5 → **option A** (group fallback). Every **[B]** variant, `null` tombstone and "[B only]" case below is VOID;
+  implement the **[A]** text. Recorded as a deviation from spec §4.2 ("field by field") — reason: with every write in
+  the look store, per-field fallback makes "no colour" / "default icon" unreachable (the old `HostConfig` value comes
+  back), and option A reaches the same UX without widening the synced entry domain with `null`.
+- §0.2 → **DECIDED**: delete `SessionPanel` in H2b-1.
+- §0.6 → **DECIDED**: `purdex-shown-hosts` = `{ all: boolean; ids: string[] }`, both keys always present.
+- Confirmed as written: the guard test lands in H2a (§0.14); `useHostStore.reset()` also resets the two new stores
+  (§0.18); "hosts added later" look seeding lives in the add-host dialog and `registerLocalHost`, not `addHost`
+  (§0.19); §0.8 — before the H2 real-device acceptance, both clients' hosts must have a verified daemonId.
+- §0.7 → **still open** (asked of the user); H2d-2 is not started until it is decided.
+- Order: H2a and H2b-1 / H2b-2 may start now; H2c-2 and H2d-1 wait for H1b (PR #1406).
 
 Spec: `docs/specs/2026-09-23-host-ownership-spec.md` (§4, decisions 3, 4, 7, 9; §3.3 re-resolve pass; §3.4; §6.4 steps
 5 / 7; §7 H2a–H2d; §8 H2). Measured on the worktree at `618ab449` (alpha.442: H1a, H4a, H4b merged; H1b NOT merged —
@@ -51,7 +65,7 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
    - **dead:** `components/SessionPanel.tsx` — only `SessionPanel.test.tsx` imports it (item 2).
    Plan: every file above is in H2a / H2b-1 / H2b-2 (colour/icon in H2a, names split by area).
 2. **`SessionPanel` is dead code** (spec §4.2 name surface, §4.5 filter surface). No production import; last touched
-   by P-D.3. **RECOMMENDED** — delete `SessionPanel.tsx` + `SessionPanel.test.tsx` in H2b-1 (then it is neither
+   by P-D.3. **DECIDED (coordinator, 2026-09-24)** — delete `SessionPanel.tsx` + `SessionPanel.test.tsx` in H2b-1 (then it is neither
    migrated nor filtered). Alternative: migrate its name read (H2b-1) and add the filter (H2d-2), +1 file each.
 3. **"The session launcher's host choice" (§4.5) does not exist.** `SessionLauncher` takes `hostId` as a prop and is
    mounted per host block (`SessionSection.tsx:134` inside `HostSessionSection`, and `hosts/SessionsSection.tsx:115`
@@ -67,7 +81,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
    cannot occur. (Plan choice, not contested by the review.)
 5. **Field-by-field fallback makes "no colour" impossible (§4.2 "looks[wireId] field by field, else HostConfig").**
    After H2c every write goes to the look store and `HostConfig` keeps its old colour forever; clearing the colour in
-   the look store (a field removed) would reveal that old colour again. **NEEDS DECISION** — two options:
+   the look store (a field removed) would reveal that old colour again. **DECIDED (coordinator, 2026-09-24): option A**
+   — a deviation from spec §4.2, reason in the decisions block at the top. The two options as they were weighed:
    - **Option A — group fallback** (the rev-1 recommendation). Once `looks[key]` exists, the colour group (`colors` +
      legacy `color`) and the icon group (`icon` + `iconWeight`) come from the entry only (absent = none / default);
      `name` still falls back to `HostConfig.name` field by field. No entry → every field from `HostConfig`.
@@ -101,7 +116,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
    rules in `applier.ts`: (a) `applySettings` rejects the WHOLE `settings` payload when a patched field changes shape
    class, and `null` is its own class (`shapeOf`) — `null` ↔ array is `rejected-settings`; (b) a store the payload
    lacks is "not sent" and left alone, so encoding "all" as an absent field (the builder then emits no store key)
-   could never clear another device's list — that device would push its list back. **RECOMMENDED** —
+   could never clear another device's list — that device would push its list back. **DECIDED (coordinator,
+   2026-09-24)** —
    `{ all: boolean; ids: string[] }`, both always present (default `{ all: true, ids: [] }`); `all: true` is the
    spec's `null`. `ids` keeps unknown ids and order in both modes. (The look store has the same need and meets it:
    `looks` defaults to `{}` and is always built — a test pins it.)
