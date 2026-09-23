@@ -234,6 +234,14 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [masterNow, hosts, runtime, slaves, step, busy, runStarted, refusal, stopResult])
 
+  // NO HOST CHOSEN (none was connected when the wizard opened, or the chosen one went): the first that connects is
+  // chosen. A host that IS chosen is never replaced by one that connects later — that is the user's (review F5).
+  useEffect(() => {
+    if (refusal !== null || hostId !== null) return
+    const first = defaultHostId()
+    if (first !== null) setHostId(first)
+  }, [refusal, hostId, hosts, runtime])
+
   const go = (to: StepId): void => {
     if (recheck(to)) return
     setNotice(null)

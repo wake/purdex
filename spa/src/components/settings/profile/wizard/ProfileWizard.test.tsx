@@ -1112,20 +1112,35 @@ describe('the host list follows the connections while the wizard is open', () =>
 })
 
 describe('no host was connected when the wizard opened (review F5)', () => {
-  it('the select is disabled only WHILE nothing can be chosen: a host that connects later can be picked', async () => {
+  it('the select is disabled only WHILE nothing can be chosen: the first host that connects is chosen, and listed', async () => {
     useHostStore.setState({ runtime: {} })
     open()
     await flush()
     expect(screen.getByTestId('profile-wizard-host')).toBeDisabled()
     act(() => useHostStore.getState().setRuntime('h2', { status: 'connected' }))
+    await flush()
     const select = screen.getByTestId('profile-wizard-host') as HTMLSelectElement
     expect(select).not.toBeDisabled()
-    expect(select.value).toBe('') // nothing is chosen FOR the user
+    expect(select.value).toBe('h2') // nothing was chosen: the first host that connects is
     expect(screen.queryByTestId('profile-wizard-host-none')).toBeNull()
-    fireEvent.change(select, { target: { value: 'h2' } })
-    await flush()
     expect(listProfiles).toHaveBeenLastCalledWith('h2', { expectEndpoint: '10.0.0.2:7860' })
     expect(screen.getByTestId('profile-wizard-profiles')).toHaveAttribute('data-state', 'rows')
+    // and it stays the user's to change
+    act(() => useHostStore.getState().setRuntime('h1', H1_VERIFIED))
+    fireEvent.change(select, { target: { value: 'h1' } })
+    await flush()
+    expect(select.value).toBe('h1')
+  })
+
+  it('a host ALREADY chosen is never replaced by one that connects later', async () => {
+    open()
+    await flush()
+    const select = screen.getByTestId('profile-wizard-host') as HTMLSelectElement
+    expect(select.value).toBe('h1')
+    act(() => useHostStore.getState().setRuntime('h3', { status: 'connected' }))
+    await flush()
+    expect(select.value).toBe('h1')
+    expect(listProfiles).not.toHaveBeenCalledWith('h3', expect.anything())
   })
 })
 
