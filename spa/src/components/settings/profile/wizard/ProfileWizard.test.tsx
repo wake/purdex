@@ -1005,6 +1005,28 @@ describe('a create whose outcome is not known is looked for, never simply sent a
   })
 })
 
+describe('the host list follows the connections while the wizard is open', () => {
+  it('a host that connects: its option becomes choosable, its label loses "not connected" — and back when it drops', async () => {
+    open()
+    await flush()
+    const option = () => screen.getByTestId('profile-wizard-host-option-h3') as HTMLOptionElement
+    expect(option().disabled).toBe(true)
+    act(() => useHostStore.getState().setRuntime('h3', { status: 'connected' }))
+    expect(option().disabled).toBe(false)
+    expect(option()).toHaveTextContent(/^gone$/)
+    act(() => useHostStore.getState().setRuntime('h3', { status: 'reconnecting' }))
+    expect(option().disabled).toBe(true)
+    expect(option()).toHaveTextContent(en['settings.profile.wizard.sot.host_offline'].replace('{{name}}', 'gone'))
+  })
+
+  it('a host added while it is open is listed', async () => {
+    open()
+    await flush()
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'], runtime: { ...useHostStore.getState().runtime, h4: { status: 'connected' } } }))
+    expect((screen.getByTestId('profile-wizard-host-option-h4') as HTMLOptionElement).disabled).toBe(false)
+  })
+})
+
 describe('no host was connected when the wizard opened (review F5)', () => {
   it('the select is disabled only WHILE nothing can be chosen: a host that connects later can be picked', async () => {
     useHostStore.setState({ runtime: {} })
