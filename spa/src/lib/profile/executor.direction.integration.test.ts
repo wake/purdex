@@ -1026,7 +1026,7 @@ describe('host-sync-identity: B added the SAME daemon under its own id (the case
     // every section B built hashes as A's did, but hosts: B's row adds B's own id as an alias (spec §11.7)
     expect(daemon.writes.slice(writesBefore).map((w) => [w.key, w.clientId, w.outcome])).toEqual([['hosts', B, 'applied']])
     expect(sotHosts().hosts[syncIdOfSync(DAEMON)].aliases).toEqual(['aaaaaa', 'bbbbbb'])
-    expect(problems.filter((p) => p.kind !== 'sections-unrendered' && p.kind !== 'pull-hash-mismatch')).toEqual([])
+    expect(problems.filter((p) => p.kind !== 'sections-unrendered')).toEqual([]) // no pull-hash-mismatch either (#1369)
     const quiet = daemon.writes.length
     await vi.advanceTimersByTimeAsync(60_000)
     expect(daemon.writes.length).toBe(quiet)
@@ -1041,6 +1041,37 @@ describe('host-sync-identity: B added the SAME daemon under its own id (the case
     await vi.advanceTimersByTimeAsync(60_000)
     expect(daemon.writes.slice(beforeA)).toEqual([])
     expect(executor!.status().profile).toBe('synced')
+  })
+
+  // #1369 (real machine, #1366 acceptance): B's only problem after that pull was `pull-hash-mismatch · hosts` — for
+  // the designed own-alias write-back. It is not a problem: the log stays empty, and the write-back goes once.
+  it('PULL: B\'s problem log stays EMPTY — the own-alias write-back is one hosts PUT, not a problem; the SOT row lists both ids; a second pass pushes nothing', async () => {
+    h.shape = null
+    useHostStore.setState({ hosts: { aaaaaa: mlab('aaaaaa') }, hostOrder: ['aaaaaa'], activeHostId: 'aaaaaa', runtime: {} })
+    useTabStore.setState({ tabs: { ta1: { ...tab('ta1'), layout: paneOn('aaaaaa') } }, tabOrder: ['ta1'], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [ws('wa1', ['ta1'])], activeWorkspaceId: 'wa1' })
+    useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+    await attach(A, 'push', 'aaaaaa')
+    expect(sotHosts().hosts[syncIdOfSync(DAEMON)].aliases).toEqual(['aaaaaa'])
+    leave()
+    problems.length = 0
+    const writesBefore = daemon.writes.length
+
+    useHostStore.setState({ hosts: { bbbbbb: mlab('bbbbbb') }, hostOrder: ['bbbbbb'], activeHostId: 'bbbbbb', runtime: {} })
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+    await attach(B, 'pull', 'bbbbbb')
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    // (a brand-new B lists `tabs.wa1` before its workspace arrives: the once-only notice the attach tests above allow too)
+    const logged = () => problems.filter((p) => p.kind !== 'sections-unrendered')
+    expect(logged()).toEqual([])
+    expect(hostsProblems()).toEqual([])
+    expect(executor!.status().profile).toBe('synced')
+    expect(daemon.writes.slice(writesBefore).map((w) => [w.key, w.clientId, w.outcome])).toEqual([['hosts', B, 'applied']])
+    expect(sotHosts().hosts[syncIdOfSync(DAEMON)].aliases).toEqual(['aaaaaa', 'bbbbbb'])
+    await expectHostsQuiet()
+    expect(logged()).toEqual([])
   })
 })
 
