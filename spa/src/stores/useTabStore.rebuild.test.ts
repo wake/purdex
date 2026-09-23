@@ -663,6 +663,169 @@ describe('setPaneRebuild — agent-backfill', () => {
   })
 })
 
+// The `agent-exit` patch (agent-last-state spec §2, review decisions 2, 4, 6, 8):
+// an exit applies to exactly one agent run — the record's `agent.frameId` —
+// even on a terminated pane, and re-stamps `capturedAt`. Every writer that
+// establishes a live agent clears it.
+describe('setPaneRebuild — agent-exit', () => {
+  beforeEach(() => useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null }))
+
+  const group = (frameId: string | undefined, sessionId = 'S1', at = 5) =>
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
+      kind: 'agent-group',
+      record: {
+        tmuxInstance: '111:1000', cwd: '/w/p', cwdSource: 'agent-session-start',
+        agent: { type: 'cc', sessionId, tmuxPaneId: '%2', ...(frameId ? { frameId } : {}), updatedAt: at },
+        capturedAt: at,
+      },
+    })
+  const exit = (frameId: string, at = 7_000, reason: 'session-end' | 'process-dead' = 'session-end', instance = '111:1000') =>
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', instance, {
+      kind: 'agent-exit', frameId, exited: { at, reason },
+    })
+  const backfill = (agent: NonNullable<PaneRebuildRecord['agent']>) =>
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
+      kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent },
+    })
+
+  it('marks the run the frame id names as exited, keeps the identity, and re-stamps capturedAt', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000)
+      const tab = seed()
+      group('F1')
+      const before = rec(tab.id)!
+      vi.setSystemTime(9_000)
+      exit('F1', 7_000, 'process-dead')
+      expect(rec(tab.id)).toEqual({ ...before, agentExited: { at: 7_000, reason: 'process-dead' }, capturedAt: 9_000 })
+      expect(resolveResumeCommand(rec(tab.id), defaultTemplates)).toBe('claude --resume S1') // "resume anyway" stays possible
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an exit of another run (another pane, an older run with the same session id) changes nothing', () => {
+    const tab = seed()
+    const paneId = getPrimaryPane(tab.layout).id
+    group('F2')
+    const before = paneContentOf(tab.id, paneId)
+    exit('F1')
+    expect(paneContentOf(tab.id, paneId)).toBe(before)
+  })
+
+  it('a record written before frame ids (no agent.frameId) never takes an exit', () => {
+    const tab = seed()
+    const paneId = getPrimaryPane(tab.layout).id
+    group(undefined)
+    const before = paneContentOf(tab.id, paneId)
+    exit('F1')
+    expect(paneContentOf(tab.id, paneId)).toBe(before)
+  })
+
+  it('an exit never creates a record', () => {
+    const tab = seed()
+    exit('F1')
+    expect(rec(tab.id)).toBeUndefined()
+  })
+
+  it('the generation guard applies: an exit stamped with another instance changes nothing', () => {
+    const tab = seed()
+    group('F1')
+    exit('F1', 7_000, 'session-end', '222:2000')
+    expect(rec(tab.id)?.agentExited).toBeUndefined()
+  })
+
+  it('a repeated identical exit is a no-op', () => {
+    const tab = seed()
+    const paneId = getPrimaryPane(tab.layout).id
+    group('F1')
+    exit('F1')
+    const before = paneContentOf(tab.id, paneId)
+    exit('F1')
+    expect(paneContentOf(tab.id, paneId)).toBe(before)
+  })
+
+  it('terminate → exit: the exit still lands on the terminated pane, and only that field changes', () => {
+    const tab = seed()
+    const paneId = getPrimaryPane(tab.layout).id
+    group('F1')
+    killPane(tab.id, paneId)
+    exit('F1', 7_000, 'session-end')
+    expect(paneContentOf(tab.id, paneId)?.terminated).toBe('session-closed')
+    expect(rec(tab.id)?.agentExited).toEqual({ at: 7_000, reason: 'session-end' })
+    // Every OTHER session-scoped write still skips the terminated pane.
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', { kind: 'unverified', unverified: true })
+    group('F9', 'S9')
+    expect(rec(tab.id)?.unverified).toBeUndefined()
+    expect(rec(tab.id)?.agent?.frameId).toBe('F1')
+  })
+
+  it('exit → terminate: termination keeps the exit', () => {
+    const tab = seed()
+    const paneId = getPrimaryPane(tab.layout).id
+    group('F1')
+    exit('F1')
+    useTabStore.getState().markTerminated('h1', 'abc123', 'session-closed')
+    expect(paneContentOf(tab.id, paneId)?.terminated).toBe('session-closed')
+    expect(rec(tab.id)?.agentExited).toEqual({ at: 7_000, reason: 'session-end' })
+  })
+
+  it('cc /clear (SessionEnd then SessionStart): set, then cleared by the new run; a late exit of the old run stays out', () => {
+    const tab = seed()
+    group('F1', 'S1')
+    exit('F1')
+    expect(rec(tab.id)?.agentExited).toBeDefined()
+    group('F2', 'S2')
+    expect(rec(tab.id)?.agentExited).toBeUndefined()
+    expect(rec(tab.id)?.agent).toMatchObject({ sessionId: 'S2', frameId: 'F2' })
+    exit('F1', 8_000)
+    expect(rec(tab.id)?.agentExited).toBeUndefined()
+  })
+
+  it('backfill: an exited record is confirmed live by the same identity — cleared, frame id adopted, capturedAt kept', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000)
+      const tab = seed()
+      group('F1')
+      exit('F1')
+      const before = rec(tab.id)!
+      vi.setSystemTime(9_000)
+      backfill({ type: 'cc', sessionId: 'S1', tmuxPaneId: '%4', frameId: 'F3', updatedAt: 9_000 })
+      expect(rec(tab.id)).toEqual({ ...before, agentExited: undefined, agent: { ...before.agent!, frameId: 'F3' } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('backfill: an exited record meets a DIFFERENT live agent — replaced whole, no exit left', () => {
+    const tab = seed()
+    group('F1')
+    exit('F1')
+    backfill({ type: 'codex', sessionId: 'C1', tmuxPaneId: '%4', frameId: 'F3', updatedAt: 9_000 })
+    expect(rec(tab.id)?.agent).toEqual({ type: 'codex', sessionId: 'C1', tmuxPaneId: '%4', frameId: 'F3', updatedAt: 9_000 })
+    expect(rec(tab.id)?.agentExited).toBeUndefined()
+    expect(rec(tab.id)?.cwd).toBeUndefined() // the old agent's directory does not ride along
+  })
+
+  it('backfill: confirming an unverified record adopts the answer\'s frame id, so its exit can land later', () => {
+    const tab = seed()
+    group(undefined)
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', { kind: 'unverified', unverified: true })
+    backfill({ type: 'cc', sessionId: 'S1', frameId: 'F3', updatedAt: 9_000 })
+    expect(rec(tab.id)?.unverified).toBeUndefined()
+    expect(rec(tab.id)?.agent?.frameId).toBe('F3')
+    exit('F3')
+    expect(rec(tab.id)?.agentExited).toEqual({ at: 7_000, reason: 'session-end' })
+  })
+
+  it('backfill: fill takes the answer\'s frame id', () => {
+    const tab = seed()
+    backfill({ type: 'cc', sessionId: 'S1', frameId: 'F3', updatedAt: 9_000 })
+    expect(rec(tab.id)?.agent?.frameId).toBe('F3')
+  })
+})
+
 describe('updateSessionCache — generation scoped', () => {
   beforeEach(() => useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null }))
 

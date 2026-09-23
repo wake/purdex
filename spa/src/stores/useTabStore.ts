@@ -293,6 +293,13 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
         prev.agent.type === record.agent.type &&
         (prev.agent.sessionId ?? '') === (record.agent.sessionId ?? '')
 
+      // An exited record is as open to correction as a flagged one (agent-last-
+      // state spec, review decision 6): the agent it names is known to be gone,
+      // so a live answer is news — a different agent replaces it (mode 2), the
+      // same one confirms it back to running (mode 3). Neither leaves the exit
+      // behind: the answer IS evidence of a live run.
+      const correctable = prev.unverified || prev.agentExited !== undefined
+
       // Mode 2 — REPLACE. The record is flagged and the answer names someone
       // else, so the whole group goes as one unit exactly like `agent-group`:
       // correcting the agent while leaving the previous agent's cwd and command
@@ -300,7 +307,7 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
       // prevent. A `cwdSource: 'user'` cwd is the one thing kept — the override
       // is dropped by omission, since the identity it named is the one this
       // correction just replaced (spec §4.3).
-      if (prev.unverified && !identityMatches) {
+      if (correctable && !identityMatches) {
         const keepsUserCwd = prev.cwd !== undefined && prev.cwdSource === 'user'
         next = {
           sessionName: prev.sessionName,
@@ -324,8 +331,17 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
       // never saw the user's pane-scoped edit outrank the pane they typed into,
       // purely because the daemon happened to answer about it later. Confirm
       // learns nothing new about the record's CONTENT; it only clears the flag.
-      if (prev.unverified) {
-        next = { ...prev, unverified: undefined }
+      //
+      // It also adopts the answer's frame id when it carries one: that id names
+      // the run an exit will later name, and a record without it (written
+      // before the daemon sent frame ids) could never take that exit.
+      if (correctable) {
+        next = {
+          ...prev,
+          unverified: undefined,
+          agentExited: undefined,
+          ...(record.agent.frameId ? { agent: { ...prev.agent, frameId: record.agent.frameId } } : {}),
+        }
         break
       }
 
@@ -359,6 +375,20 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
     case 'unverified': {
       if (prev.unverified === patch.unverified) return c
       next = { ...prev, unverified: patch.unverified, capturedAt: now }
+      break
+    }
+    case 'agent-exit': {
+      // Exactly one agent run (review decision 2): the frame id is the match
+      // key, so another pane's agent, an older run sharing the session id, and
+      // a record written before frame ids existed are all left alone. No
+      // record, no agent — nothing to mark.
+      const frameId = prev.agent?.frameId
+      if (!frameId || frameId !== patch.frameId) return c
+      const { at, reason } = patch.exited
+      if (prev.agentExited?.at === at && prev.agentExited.reason === reason) return c
+      // Re-stamped (review decision 8): the batch elects each group's newest
+      // record, and that election has to see the exit.
+      next = { ...prev, agentExited: { at, reason }, capturedAt: now }
       break
     }
   }
@@ -820,7 +850,14 @@ export const useTabStore = create<TabState>()(
           for (const [id, tab] of Object.entries(tabs)) {
             const newLayout = mapTmuxPanesInLayout(
               tab.layout,
-              (c): c is TmuxSessionContent => acceptsSessionScopedWrite(c, hostId, sessionCode, expectedTmuxInstance),
+              // The exit is the one session-scoped write a terminated pane still
+              // takes (agent-last-state spec, review decision 4): termination can
+              // arrive before the SessionEnd / sweep broadcast. It is safe there
+              // because it lands only on a frame-id match — a sibling's run on a
+              // reused code has another frame id — and touches only `agentExited`.
+              patch.kind === 'agent-exit'
+                ? (c): c is TmuxSessionContent => rebuildBindingMatches(c, hostId, sessionCode, expectedTmuxInstance)
+                : (c): c is TmuxSessionContent => acceptsSessionScopedWrite(c, hostId, sessionCode, expectedTmuxInstance),
               (c) => applyRebuildPatch(c, patch),
             )
             if (newLayout !== tab.layout) {
