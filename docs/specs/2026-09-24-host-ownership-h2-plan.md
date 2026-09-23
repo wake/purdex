@@ -1,7 +1,8 @@
 # Plan — host ownership H2 (H2a / H2b / H2c / H2d)
 
-Status: **rev 3** (2026-09-24) — rev 2 revised after the codex plan review `task-muei1qbr-0hu3ol` (§Review); rev 3
-records the coordinator's decisions below.
+Status: **rev 4** (2026-09-24) — rev 2 revised after the codex plan review `task-muei1qbr-0hu3ol` (§Review); rev 3
+records the coordinator's decisions below; rev 4 replaces the "hidden tabs" model of §0.21 by the user's "disabling
+closes" model and re-plans H2d (H2d-2 … H2d-6), measured on this worktree at `4f8414ba`.
 
 **Coordinator decisions (2026-09-24) — these override every alternative written further down:**
 - §0.5 → **option A** (group fallback). Every **[B]** variant, `null` tombstone and "[B only]" case below is VOID;
@@ -13,8 +14,12 @@ records the coordinator's decisions below.
 - Confirmed as written: the guard test lands in H2a (§0.14); `useHostStore.reset()` also resets the two new stores
   (§0.18); "hosts added later" look seeding lives in the add-host dialog and `registerLocalHost`, not `addHost`
   (§0.19); §0.8 — before the H2 real-device acceptance, both clients' hosts must have a verified daemonId.
-- §0.7 → **(b) stay hidden** (user) — and "hidden" now also hides the host's session tabs in that workbench (§0.21,
-  supersedes spec §4.5 for H2d). H2d-2 / H2d-3 below are re-planned per §0.21 before they start.
+- §0.7 → **(b) stay hidden** (user): a host added while the workbench lists hosts starts **disabled** there
+  (zh-TW「未啟用」). What "disabled" means is the user's model of §0.21 (2026-09-24, **supersedes** the rev-3 "hidden
+  tabs" model and spec §4.5 for H2d): **a tab is never hidden — disabling a host in a workbench CLOSES its tabs
+  there** (mixed split tabs are split, the host's panes closed), once, on the device that pressed it, after a
+  confirmation; tmux sessions are untouched; an apply never closes anything. H2d-2 … H2d-6 are planned per §0.21;
+  §0.22 – §0.29 are open (NEEDS DECISION).
 - Order: H2a and H2b-1 / H2b-2 may start now; H2c-2 and H2d-1 wait for H1b (PR #1406).
 
 Spec: `docs/specs/2026-09-23-host-ownership-spec.md` (§4, decisions 3, 4, 7, 9; §3.3 re-resolve pass; §3.4; §6.4 steps
@@ -25,10 +30,11 @@ commit. File lists are the files each PR touches, counted from the code — not 
 Test / lint / build: `cd spa && npx vitest run <files>`, `pnpm run lint`, `pnpm run build`, and
 `npx tsc --noEmit -p tsconfig.app.json` (a bare `tsc --noEmit` checks nothing in `spa/`).
 
-**Order and dependencies.** Nine PRs (the spec's four; H2b, H2c and H2d split to stay ≤ 20 files — §0.15):
+**Order and dependencies.** Twelve PRs (the spec's four; H2b, H2c and H2d split to stay ≤ 20 files / ≤ 800 lines —
+§0.15):
 
 ```
-H2a ─► H2b-1 ─► H2b-2 ─► H2c-1 ─► H2c-2 ─► H2c-3 ─► H2d-1 ─► H2d-2 ─► H2d-3
+H2a ─► H2b-1 ─► H2b-2 ─► H2c-1 ─► H2c-2 ─► H2c-3 ─► H2d-1 ─► H2d-2 ─► H2d-3 ─► H2d-4 ─► H2d-5 ─► H2d-6
                                     ▲                   ▲
 H1b (T3 pass, T4 triggers/hydration, T6 integration) ───┴── merged before H2c-2 and before H2d-1
 ```
@@ -39,9 +45,12 @@ H1b (T3 pass, T4 triggers/hydration, T6 integration) ───┴── merged b
 - **Needs H1b merged** (its T3 pass, T4 trigger / hydration wiring and T6 integration test — the interface §0.11
   lists): H2c-2 (look re-key) and H2d-1 (shown-hosts re-key).
 - H2c-3 is the H4b sender / receiver switch of §6.4 step 7 (H4b merged first, so H2c owns it — §0.9).
-- H2d-1 follows H2c-3 (ordinal 6 → 7); H2d-2 and H2d-3 follow.
+- H2d-1 follows H2c-3 (ordinal 6 → 7); H2d-2 … H2d-6 follow (§0.21).
 - Release: H2c-2 and H2c-3 share one bump PR (no released build has the look store as SOT while the transfer still
   writes looks to `HostConfig`, and New Tab labels follow a synced rename from the same release — §0.9, §0.15).
+- Release: H2d-2 … H2d-5 share one bump PR (H2d-6 is tests only and may join it). The editor (H2d-3) is the only
+  writer of the shown-hosts store; no released build may let a user disable a host while New Tab, the Hosts page and
+  the notification / deep-link landings still offer to open tabs on it.
 
 ## 0. Where the spec and the code disagree (found while measuring)
 
@@ -67,11 +76,11 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
    Plan: every file above is in H2a / H2b-1 / H2b-2 (colour/icon in H2a, names split by area).
 2. **`SessionPanel` is dead code** (spec §4.2 name surface, §4.5 filter surface). No production import; last touched
    by P-D.3. **DECIDED (coordinator, 2026-09-24)** — delete `SessionPanel.tsx` + `SessionPanel.test.tsx` in H2b-1 (then it is neither
-   migrated nor filtered). Alternative: migrate its name read (H2b-1) and add the filter (H2d-2), +1 file each.
+   migrated nor filtered). Alternative: migrate its name read (H2b-1) and add the filter (H2d-4), +1 file each.
 3. **"The session launcher's host choice" (§4.5) does not exist.** `SessionLauncher` takes `hostId` as a prop and is
    mounted per host block (`SessionSection.tsx:134` inside `HostSessionSection`, and `hosts/SessionsSection.tsx:115`
    on that host's page); `HeadlessLauncher` likewise lives in the per-host `headless:` block. Plan: the New Tab block
-   filter (H2d-2) hides a hidden host's launchers; nothing else to filter.
+   filter (H2d-4) hides a disabled host's launchers; the Hosts page's own launcher is §0.29.
 4. **Wire id in the selector: per host, not `identity.toWire` (§4.2 "local id → wire id (identity)").** Under an
    identity conflict `toWire` omits both conflicting hosts (`buildIdentity`, `host-identity.ts`), so the selector
    would lose their looks exactly while the user is fixing the duplicate. Plan: `wireIdOfHost(host) =
@@ -124,7 +133,7 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
    `looks` defaults to `{}` and is always built — a test pins it.)
 7. **A host added while a workbench lists hosts is hidden there** (decision 4: unlisted = hidden). With `all: false`,
    adding mlab-2 through the dialog makes it invisible at once in this workbench. **DECIDED (user, 2026-09-24): (b)
-   stay hidden** — and the user widened what "hidden" means; see §0.21, which supersedes spec §4.5 for H2d. The options
+   stay hidden** (= disabled) — what a disabled host means is the user's model of §0.21, which supersedes spec §4.5. The options
    as they were weighed:
    - **(a) auto-add**: the three add paths (dialog, `registerLocalHost`, transfer create) append the new host's wire id
      to `ids`. Cost (codex): an implicit write to the workbench-wide synced setting, and the wire id reaches devices
@@ -136,7 +145,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
      `registerLocalHost` (installer, no dialog) writes nothing.
    Files per option (H2d-2): (a) `AddHostDialog.tsx`, `AddHostDialog.test.tsx`, `useHostStore.ts`, `useHostStore.test.ts`
    (+ transfer create); (b) none; (c) `AddHostDialog.tsx`, `AddHostDialog.test.tsx`, `ReceiveHostsDialog.tsx`,
-   `ReceiveHostsDialog.test.tsx`, locales. The H2d-2 list below carries the union and is re-trimmed once decided.
+   `ReceiveHostsDialog.test.tsx`, locales. (b) was chosen: no H2d file exists for this item (H2d-3 T4 pins "an add
+   writes nothing to the shown store").
 8. **Upgrade may open one `settings` conflict for hosts without a daemonId (§4.3 "same entry, same hash, no
    conflict").** That holds for `d1_…` keys only. A host with no learned daemonId is migrated under its LOCAL id,
    which differs per device, so two devices upgrading build different `settings` payloads → the second push is a
@@ -199,8 +209,12 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
       `.d.ts` or `any`-typed code; reads in test files (excluded by design). The fixture tests pin each so a future
       change of the detector is visible.
 15. **Sizes.** H2b is 26 surface files (§0.1) → H2b-1 / H2b-2. H2c is ≈36 files → H2c-1 (wire) / H2c-2 (switch) /
-    H2c-3 (transfer + New Tab labels). H2d is ≈33 → H2d-1 (store, wire, re-key) / H2d-2 (editor, filters) / H2d-3
-    (not-filtered behaviour tests only). Ordinals: `settings` is **5** today (`projections.ts:107`); H2c-1 → **6** with
+    H2c-3 (transfer + New Tab labels). H2d (rev 4, §0.21) is 59 files (61 with §0.22 (b)) → H2d-1 (store, wire,
+    re-key; 15) / H2d-2 (the disable action: plan, close, split; 7) / H2d-3 (editor + confirmation dialog; 10) /
+    H2d-4 (no way to open a tab on a disabled host: New Tab, picker, Hosts page; 14, 16 with §0.22 (b)) / H2d-5
+    (landings: notification, execution deep link, route; 8) / H2d-6 (not-filtered behaviour tests + import guard; 5).
+    H2d-2 and H2d-3 are split by the 800-line limit, not the file limit. Ordinals: `settings` is **5** today
+    (`projections.ts:107`); H2c-1 → **6** with
     `@wire:host-look=1`; H2d-1 → **7** with `@wire:shown-hosts=1` (`WIRE_MARKERS.settings`, `projections.ts:172`).
 16. **Migration runs after hydration and before Profile Sync starts.** **DECIDED** (review item 1, critical). The
     rev-1 "defer to `onFinishHydration` without delaying `startProfileSync`" branch is removed: it let the first
@@ -215,11 +229,11 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     test in `host-look-migration.test.ts` with an async storage.
 17. **"Settings › 工作台" is `ProfileSection`, and settings stores are device-global** (spec §2). The shown-hosts setting
     therefore applies to whatever workbench is on screen (a local slave too) and syncs with the attached master. The
-    editor block (`ShownHostsBlock`, H2d-2) says "synced with the attached workbench". `ProfileSection`'s header rule
+    editor block (`ShownHostsBlock`, H2d-3) says "synced with the attached workbench". `ProfileSection`'s header rule
     "opening this page writes nothing" (and the iron rule, `start.ironrule.test.ts`) extends to the block — tested.
 18. **Test isolation.** The look store is module state; tests that write a colour and later expect none for the same
     host id would leak inside one file. `useHostStore.reset()` has no production caller and 29 test files use it —
-    H2c-2 makes it also reset `useHostLookStore`; H2d-2 adds `useShownHostsStore`.
+    H2c-2 makes it also reset `useHostLookStore`; H2d-3 adds `useShownHostsStore`.
 19. **"Hosts added later" seeding (§4.3) goes to the add paths, not `addHost`.** `addHost` is also the undo of a
     deletion (`host-lifecycle.ts:359`), which must not create entries. Plan: the add-host dialog (`AddHostDialog.tsx:187`)
     and `registerLocalHost` (`useHostStore.ts:515`) seed `looks[wireIdOfHost(host)]` from the new `HostConfig` when
@@ -237,38 +251,176 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
        2 alone — skip-if-present makes the retry idempotent and it never overwrites a look that arrived meanwhile.
     Between the steps a subscriber sees the new hosts with their `HostConfig` fallback (the received name) — a valid
     state. Invariants and tests: H2c-3 T2.
-21. **What "hidden" means — the user's decision (2026-09-24) supersedes spec §4.5 for H2d.** User's words: keep new
-    hosts hidden; a hidden host is still visible on the Hosts page in every workbench, with a different state ("hidden"
-    / zh-TW 「未啟用」) and colour; a hidden host does not appear in New Tab, cannot be used to add a tab / tmux, and
-    **its session tabs are not shown in this workbench**. The last point is stronger than spec §4.5 ("the tab bar: a
-    hidden host's tabs stay visible"), so the H2d filter table becomes:
+21. **Disabling a host closes its tabs — the user's model (2026-09-24; supersedes the rev-3 "hidden tabs" model and
+    spec §4.5 for H2d).** There is no hidden tab: a tab the workbench does not allow is CLOSED. Wording: a host is
+    **enabled** / **disabled** in a workbench (zh-TW「啟用」/「未啟用」); the store stays `purdex-shown-hosts`
+    (`{ all, ids }`, H2d-1 unchanged) — "shown" = enabled.
+    1. **Unticking X in workbench W closes every tab of X in W.** A split tab that mixes X panes with other panes is
+       **split**: X's panes are closed and every remaining pane becomes a tab of its own. Nothing is merged back when X
+       is re-enabled; the user reopens / re-merges by hand.
+    2. **tmux sessions are untouched** — they belong to the host. They can be reopened from X's session list (after X
+       is re-enabled), and the provenance backfill (`agent-backfill`) fills agent / cwd again.
+    3. **The close syncs** — tabs are workbench data (`tabs.<ws>`), so the other devices on W lose the tabs through
+       the normal `tabs.*` apply.
+    4. **A confirmation comes first**, listing the tabs that will be closed and the split tabs that will be split. The
+       copy says: the tmux sessions are not affected and can be reopened from the host; but if a session ends later,
+       these tabs can no longer be Rebuilt (their rebuild records go with them).
+    5. **While X is disabled** — see the table.
+    6. **The close runs once, on the device that pressed.** Data that arrives later with tabs of X (a device that was
+       offline, an older SOT row, a restore) is shown as it is; no apply closes anything.
+    7. **Switching workbench needs nothing** — no close, no filter on switch.
 
-    | | hidden host |
+    | while X is disabled in W | behaviour |
     |---|---|
-    | Hosts page sidebar / overview | **listed** (every host, every workbench), state "hidden / 未啟用", muted colour; opens normally |
-    | New Tab page `sessions:` / `headless:` blocks, the launcher inside them | **not rendered** (provider stays REGISTERED, column kept in the layout) |
-    | Any other entry that creates a tab / tmux session on a host (session picker, "open session" actions) | **host not offered** |
-    | **Tab bar and every tab list** (`SortableTab` / `InlineTabList` / workspace tab lists) | **tabs not shown** — see the rule below |
-    | Connections, health, `useMultiHostEventWs`, session watch / refresh, backup triggers, New Tab provider registration, `activeHostId` / `hostOrder[0]` fallbacks, device settings pickers | **unchanged** (the host keeps working) |
-    | Tab / pane DATA (stores, synced `tabs.*`) | **unchanged** — nothing is deleted, moved or marked; un-hiding shows the tabs again |
+    | Tabs of X that exist (arrived after the close — rule 6) | **shown and working** like any tab (badge, pane, terminal); never closed, filtered or re-focused by the disabled state |
+    | New Tab `sessions:` / `headless:` blocks of X (and the launchers in them) | **not rendered**; provider stays REGISTERED, the column stays in every preset (H2d-4) |
+    | Every other way to OPEN a tab on X — terminated-pane session picker, Hosts page session "open", Hosts page executions / Nex executions "open" | **not offered** (hidden or disabled with a hint) (H2d-4) |
+    | Notification of X | **still fires**; activating it opens X's Hosts page (no tab created or focused) (H2d-5) |
+    | Execution deep link (`purdex://`) / route `/execution/…` naming X | opens X's Hosts page instead of a tab (H2d-5) |
+    | Hosts page sidebar / overview | **every host listed**, in every workbench; a disabled host carries the state 「未啟用」/ "Disabled" and a muted colour; it opens normally (H2d-4) |
+    | New host added while W lists hosts (§0.7 (b)) | disabled (unticked) — nothing to close |
+    | Connections, health, `useMultiHostEventWs`, session watch / refresh, backup triggers, New Tab provider registration and layout, `activeHostId` / `hostOrder[0]` fallbacks, device settings pickers | **unchanged** |
+    | Hosts page "new session" (creates a tmux session, no tab) | §0.29 |
 
-    Plan choices for the tab rule (**PROPOSED — for the coordinator to confirm with the H2d-2 re-plan**):
-    - A tab is hidden when EVERY host-bearing leaf (tmux-session, execution with a host) is on a hidden host; a tab
-      with no host-bearing leaf, or with at least one leaf on a shown host, stays visible, its hidden-host panes
-      rendering a local "this host is not enabled in this workbench" state (no attach, no ticket) — hiding one pane of
-      a mixed split would change the layout, which is synced.
-    - The visible-tab list is a pure selector over (tabs, shown hosts, identity); nothing writes on hide / un-hide.
-    - The active tab: if the active tab becomes hidden, focus moves to the next visible tab in the workspace (a
-      device-local focus change, like closing); un-hiding does not restore focus.
-    - Keyboard tab switching (by index / next / previous) and "close others" count visible tabs only; a hidden tab is
-      never closed by a bulk action.
-    - A notification for a hidden host still fires (spec §4.5 keeps notifications); activating it opens the Hosts page
-      for that host instead of the hidden tab.
-    - A deep link / route to a hidden tab opens the Hosts page for that host.
-    Consequences: H2d-2's file list and tests are re-measured before H2d-2 starts (H2d comes after H2c anyway); the
-    tab-bar filter likely needs its own PR (H2d-2 editor + New Tab / picker filters; H2d-3 tab-bar filter + focus /
-    keyboard / notification rules; H2d-4 the not-filtered behaviour tests). The spec records the user's decision
-    (coordinator).
+    **Why an apply never closes (rule 6).** (a) The confirmation is the user's consent, given on ONE device; a
+    `settings` apply on B has no one to ask, and B may hold tabs of X opened after A's decision (B had not yet
+    received it) that A's dialog never listed — an apply that closed them would delete work nobody confirmed. (b)
+    `settings` and `tabs.<ws>` are separate sections pushed and applied in either order: the closes already travel in
+    A's `tabs.<ws>` push, so a close-on-apply on B would write a SECOND, competing `tabs.<ws>` for the same change
+    (a `locked:conflict` whenever B also had a local tab edit). (c) Two devices whose enabled sets briefly differ
+    would each close what the other just re-opened — the "two devices delete each other's tabs" loop. So: the closing
+    code runs only inside the dialog's confirm handler; no subscriber of the shown-hosts store, no apply path and no
+    hydration path calls it (tested by behaviour in H2d-2, statically by the import guard in H2d-6).
+
+    **What is "a tab of X"** (host-bearing leaves, matched in WIRE space — H2d-2 T1):
+    - `tmux-session` → `hostId` (terminated panes included: they are X's too);
+    - `execution` → its effective host `host ?? hostOrder[0]` (the rule `resolveExecutionHostId` and the old
+      `deleteHostCascade` use — a legacy hostless pane renders against the first host);
+    - `editor` / `image-preview` / `pdf-preview` with `source.type === 'daemon'` → **§0.22 NEEDS DECISION**
+      (recommended: not host-bearing);
+    - every other kind (new-tab, browser, settings, hosts, dashboard, history, memory-monitor, editor-buffers, local /
+      in-app files) → not host-bearing.
+    A pane's host ref is a LOCAL id for a host this device has, or a wire id (`d1_…`) it has not resolved (H1a keeps
+    those; the re-resolve pass maps them once the host exists). The shown-hosts `ids` are WIRE ids. The matcher maps
+    both into wire space: `wireOfRef(ref) = Object.hasOwn(hosts, ref) ? wireIdOfHost(hosts[ref]) : ref`, and a leaf
+    is X's when `wireOfRef(hostRef) ∈ disabling`, where `disabling` = the wire ids enabled before and disabled after
+    the edit (candidates: every local host's `wireIdOfHost` ∪ `before.ids` ∪ `after.ids`; `all: true` enables every
+    candidate). Consequences, all intended: a pane still on `d1_X` (arrived, not yet re-resolved) is matched; two
+    local rows claiming one daemon (conflict) are disabled together, as the H2d-1 selector already reads them;
+    unticking an id "not on this device" closes the `MissingHostPane` tabs on that id (they name that daemon).
+
+    **Which tabs: the world on screen.** W is the workbench on screen = the tab world in `useTabStore` /
+    `useWorkspaceStore` (every workspace of it, plus a tab no workspace has adopted yet). Parked worlds are never
+    touched — the rule `host-lifecycle.ts` already follows ("a parked world is marked, never closed") and rule 7
+    (no work on switch). The device-global nature of settings stores makes one case visible: §0.27.
+
+    **A tab is closed or split, never partly hidden:**
+    - every leaf host-bearing on a disabling host → the tab is **closed**;
+    - at least one leaf on a disabling host and at least one other leaf → **split**: the X leaves go; the survivors,
+      in tree order (`collectLeaves`, depth-first), become one tab each. The ORIGINAL tab keeps its id, `pinned`,
+      `locked`, `createdAt`, workspace position and (if it was) the active / workspace-active status, with the first
+      survivor as its single leaf; each further survivor is a NEW tab (`generateId()`, `pinned` inherited, `locked:
+      false`, `createdAt: now`) inserted right after the previous one, in the same workspace, without changing any
+      active tab. **Survivor panes are moved, not recreated**: the same `Pane` object, same `pane.id`, content
+      byte-for-byte unchanged (unlike `detachPane`, which mints a new pane id through `createTab` — the editor's
+      `paneStates`, `useRebuildStore.operations` and every other pane-id-keyed state would lose track). Split ratios
+      (`sizes`) are dropped with the split node (device-local anyway, `!tabs.*.layout..sizes`).
+    - a tab with no leaf on a disabling host → untouched. Locked tabs → §0.23.
+
+    **One synchronous body under the operation lock (H1 plan §0.1).** The action rewrites the tab tree outside a
+    switch, which is exactly what the in-process operation lock guards (`useRebuildStore`: "everything that creates
+    tmux sessions or rewrites the tab tree passes through it") — a `tabs.*` apply awaiting between its read and its
+    write, or a rebuild re-pointing a pane, must not interleave with it. `applyHostDisable(next, shownPlan)` =
+    `acquireOperationLock('host-disable')` (synchronous) → refused ⇒ `{ kind: 'busy', holder }` and NOTHING is written
+    (the dialog says so, with Retry) → re-plan from the live stores; plan ≠ the plan the dialog showed (compared by
+    a signature of tab ids / pane ids) ⇒ `{ kind: 'changed', plan }`, nothing written, the dialog shows the new list
+    and asks again → else, with no `await` anywhere: closes (`closeTabInWorkspace(id, { skipHistory: true })` —
+    workspace membership, `visitHistory` focus fallback and active-tab sync as for any close, and not
+    `tab-lifecycle.closeTab`, whose dirty-editor `window.confirm` and browser teardown are for user closes of other
+    kinds), then splits (`useTabStore.splitOutPanes` + `useWorkspaceStore.insertTabsAfter`, one `set()` each), then
+    the shown-hosts write LAST (`setShown` / `toggle`) → release → `{ kind: 'applied', closed, split }`.
+    It is several `set()` calls on three stores in one task, not one write. The collector (500 ms trailing debounce
+    per section, builds from the stores when the timer fires) therefore reports the FINAL state once per touched
+    section: `settings` (shown hosts) and `tabs.<ws>` for each workspace that lost or gained a tab; `workspaces`
+    does not move (its projection holds no tab list); untouched `tabs.<ws2>` do not move. Across sections there is no
+    atomicity, and none is needed: B may apply `settings` first (X disabled, X's tabs still there — a valid rule-6
+    state) or `tabs.<ws>` first (tabs gone, X still enabled for a moment) — both valid. Another window of the SAME
+    device sees the stores through their persistence only; it never runs the close itself.
+
+    **X offline is fine.** Nothing in the action talks to a daemon: no session API, no ticket, no fetch. Closing an
+    execution pane unmounts it and its own lease release runs as on any close (best-effort; an unreachable daemon
+    lets the lease expire). The invariant "tmux sessions are not killed" is tested as: no call to `deleteSession`,
+    to `hostFetch(…, { method: 'DELETE' })`, or to any `host-api` export during the action (H2d-2 T4).
+
+    **The confirmation's data** (`planHostDisable`, pure — the dialog lists exactly what the executor will do):
+    - per disabling host: its label (`hostLabel(wireOrLocal, look)`);
+    - `closes: { tabId, workspaceId | null, label }[]` and `splits: { tabId, workspaceId | null, label, closing:
+      { paneId, label }[], keeping: number }[]`, grouped by workspace (workspace name; a tab no workspace has adopted
+      under the `workspace.unsorted` label), in workspace tab order;
+    - labels: `getPaneLabel(content, sessionLookup, workspaceLookup, t)` (`lib/pane-labels.ts`, as
+      `WorkspaceSettingsPage`'s delete dialog does) with the live session name from `useSessionStore` (falls back to
+      `cachedName` / code; terminated panes say so); a tab's label = its primary pane's; a split lists the label of
+      each closing pane and "N panes stay, as N tabs";
+    - (per §0.23 (a)) `keptLocked: { tabId, label }[]`, shown as "kept (locked)".
+    Empty plan → §0.26.
+
+22. **Are file panes on X's disk "tabs of X"?** **NEEDS DECISION.** `editor` / `image-preview` / `pdf-preview` with
+    `source: { type: 'daemon', hostId }` read and write X's file system.
+    - **(a) not host-bearing — RECOMMENDED.** Only tmux and execution panes count. Reasons: New Tab has no per-host
+      file block (the host blocks the user hides are `sessions:` / `headless:`); file tabs are opened from paths that
+      stay unfiltered by the spec (`FileTreeView` follows `activeHostId`; a terminal link opens a file on the pane's
+      host; `EditorNewTabSection`'s recent list); a dirty buffer would be discarded by a close the user thought was
+      about sessions; H1 plan §0.5 already treats file panes separately. Cost: X's file tabs stay after X is disabled
+      (they keep working — X stays connected).
+    - (b) host-bearing. + the matcher arm, a "N unsaved files will be discarded" line in the dialog, and the file entry
+      points filtered (`EditorNewTabSection` recent entries of X: +2 files in H2d-4; `FileTreeView` / terminal-link
+      opener would need a rule of their own — not planned).
+23. **Locked tabs.** **NEEDS DECISION.** Every close path refuses a locked tab (`closeTabInWorkspace`, `closeTab`).
+    - **(a) keep them — RECOMMENDED**: a locked tab of X is neither closed nor split; the dialog lists it under "kept
+      (locked)". It is then a rule-6 tab (shown, working). Lock means "do not close this by accident"; a bulk action
+      is the accident it exists for.
+    - (b) close / split them anyway (the dialog is the consent) — the executor unlocks first (`toggleLock`, as
+      `WorkspaceSettingsPage` does for its settings tabs).
+24. **Undo.** **NEEDS DECISION.**
+    - **(a) no undo, no toast — RECOMMENDED.** The dialog is the guard and lists everything; re-enabling X and
+      reopening from the session list is the way back (rule 1). An undo would have to put back closed tabs AND
+      re-join split tabs AND re-enable X, after the 500 ms debounce may already have pushed the closes — a second
+      synced rewrite, racing whatever B did meanwhile.
+    - (b) an info toast "Closed N tabs of X" without an action (`useUndoToast.show(message)`); +0 files beyond locales.
+    - (c) an undo toast: snapshot the closed tabs, the split tabs' original layouts and the previous shown value;
+      undo restores them if every affected tab id is still as the action left it, else says it could not. ≈ +3 files,
+      one more lock-guarded body, and its own mutation set.
+25. **History (reopen closed tab).** **NEEDS DECISION.** `closeTabInWorkspace` records the close in
+    `useHistoryStore` unless `skipHistory`.
+    - **(a) `skipHistory: true` — RECOMMENDED**: reopening from history would be a way to open a tab on X while it is
+      disabled (table: "not offered"), and it is how `deleteHostCascade` and `pane-move` close.
+    - (b) record them (the History page lists them; reopening puts a tab of X back — a rule-6 tab).
+26. **Nothing to close.** **NEEDS DECISION.** Unticking a host that has no tab in W (or turning "all" off, or
+    re-ticking) closes nothing.
+    - **(a) no dialog when the plan is empty — RECOMMENDED**: the dialog's purpose is the list; the tmux copy has
+      nothing to warn about. Turning "all" off initialises `ids` to every candidate wire id (nothing becomes
+      disabled, so the plan is always empty there); re-ticking and "all" on never close.
+    - (b) always confirm a disable, even with an empty list.
+27. **Settings are device-global, tabs are per world.** **NEEDS DECISION** (edge). When a local profile (slave) is
+    on screen, the Settings › 工作台 block edits the device's shown-hosts store, which is synced with the attached
+    master (§0.17) — but the tabs on screen are the slave's. The action closes the SLAVE's tabs of X; the parked
+    master's tabs of X are not touched here, and the other devices on the master do not close theirs (rule 6).
+    - **(a) as described — RECOMMENDED** (one rule: "the world on screen"; the master's tabs of X become rule-6 tabs,
+      which the user can close by hand; rule 7 says switching does nothing).
+    - (b) also close in the parked master when this device is attached (`updateParkedWorlds`, the path the old
+      cascade used for marks) — a close of tabs the user cannot see, in a world the dialog would have to list too.
+    - (c) disable the block while a slave is on screen.
+28. **Split survivors that are only interface panes.** Plan choice, listed for visibility: a survivor that is a
+    `new-tab` placeholder, a settings / hosts page or any other `DEVICE_LOCAL_PANE_KINDS` pane becomes a tab of its
+    own like any survivor (rule 1 says every remaining pane). Such a tab is device-local (`tabs.*` build leaves it
+    out), so on the other devices the original split tab simply disappears with the push. Alternative (not planned):
+    drop blank `new-tab` survivors.
+29. **Hosts page "new session" on a disabled host.** **NEEDS DECISION.** `hosts/SessionsSection.tsx` has an "open"
+    per session (creates a tab — **not offered**, H2d-4) and a "new session" launcher that creates a tmux session
+    WITHOUT a tab ("Host page semantics: creating only").
+    - **(a) keep "new session" — RECOMMENDED**: rule 5 forbids ways to add a TAB; the Hosts page is the management
+      surface and "照舊列出全部主機"; the session appears in the list, openable once X is enabled.
+    - (b) disable it too (the rev-3 wording "cannot be used to add a tab / tmux") — +0 files (same component).
 
 ## H2a — the look selector, colour / icon surfaces (10 files)
 
@@ -659,7 +811,7 @@ Selector (`shown-hosts.ts`): `isHostShown(hostId, hosts, shown)` = `shown.all ||
 Tasks:
 - **T1 — store.** Tests: defaults; `merge`; `toggle` from all / from a list; `addShown` idempotent; unknown ids
   survive every action; `rekey` (`d1_…` already present → local id dropped, else replaced in place). The tests of
-  this PR reset the store in their own `beforeEach`; the `useHostStore.reset()` hook of §0.18 is added by H2d-2.
+  this PR reset the store in their own `beforeEach`; the `useHostStore.reset()` hook of §0.18 is added by H2d-3.
   Commit.
 - **T2 — wire and old-client lock.** Guard snapshot (ordinal 7) with the final marker array pinned exactly as
   `['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1']`; a real `profileLock` regression (as in H2c-1 T2):
@@ -685,103 +837,275 @@ are not local hosts; M3 ordinal not bumped (snapshot red); M4 marker missing (ma
 selector compares local ids (daemonId case red); M6 re-key keeps both forms (dedupe test red); M7 re-key runs in
 `rewriteHostRefs` (deletion test red).
 
-## H2d-2 — shown hosts: editor and filters (up to 20 files; trimmed by §0.7)
+## H2d-2 — the disable action: plan, close, split (7 files; §0.21)
 
-Files (files marked ⁷ exist only for a §0.7 option — (a) or (c); drop them for (b)):
-1. `spa/src/components/settings/profile/ShownHostsBlock.tsx` (new)
-2. `spa/src/components/settings/profile/ShownHostsBlock.test.tsx` (new)
-3. `spa/src/components/settings/profile/ProfileSection.tsx` (renders the block after `CurrentBlock`)
-4. `spa/src/components/settings/profile/ProfileSection.test.tsx` (opening writes nothing)
-5. `spa/src/components/hosts/HostSidebar.tsx`
-6. `spa/src/components/hosts/HostSidebar.test.tsx`
-7. `spa/src/components/SessionPickerList.tsx`
-8. `spa/src/components/SessionPickerList.test.tsx`
-9. `spa/src/components/NewTabPage.tsx` (filter `byId` for host-bearing ids)
-10. `spa/src/components/NewTabPage.test.tsx`
-11. `spa/src/stores/useHostStore.ts` (`reset` resets shown hosts — §0.18; ⁷(a) append in `registerLocalHost` and
-    transfer create)
-12. `spa/src/stores/useHostStore.test.ts`
-13. `spa/src/locales/en.json`
-14. `spa/src/locales/zh-TW.json`
-15. `spa/src/components/hosts/AddHostDialog.tsx` ⁷ ((a) append / (c) prompt)
-16. `spa/src/components/hosts/AddHostDialog.test.tsx` ⁷ (listed before the decision, per review item 5)
-17. `spa/src/components/hosts/ReceiveHostsDialog.tsx` ⁷ ((c) prompt in the done step)
-18. `spa/src/components/hosts/ReceiveHostsDialog.test.tsx` ⁷
+No UI. Pure planner + a synchronous executor + two store actions. Nothing calls the executor until H2d-3.
 
-Count: 14 for (b), 16 for (a) (+ transfer create in file 11), 18 for (c).
+Files:
+1. `spa/src/lib/host-disable.ts` (new — `disablingWireIds`, `hostRefOf`, `planHostDisable`, `planSignature`,
+   `applyHostDisable`)
+2. `spa/src/lib/host-disable.test.ts` (new)
+3. `spa/src/lib/host-disable.integration.test.ts` (new — real collector builders / hashes and `applySectionToStores`)
+4. `spa/src/stores/useTabStore.ts` (`splitOutPanes(tabId, dropPaneIds): string[]`)
+5. `spa/src/stores/useTabStore.split.test.ts`
+6. `spa/src/features/workspace/store.ts` (`insertTabsAfter(wsId, afterTabId, tabIds)` — no active-tab change)
+7. `spa/src/features/workspace/store-tabs.test.ts`
 
-Editor (`ShownHostsBlock`): "Show all hosts" switch (`all`); when off, one checkbox per local host in `hostOrder`
-(label from `useHostLookResolver`), then every `ids` entry that is not a local host's wire id, labelled with its look
-name or id and "not on this device" (checked, can be unticked = removed). Copy says the choice is synced with the
-attached workbench and hidden hosts stay connected. Writes only on user action.
+API (`host-disable.ts`; imports `useTabStore`, `useWorkspaceStore`, `useHostStore`, `useShownHostsStore`,
+`useRebuildStore`, `host-identity`, `pane-tree`, `nex/resolve-host`; NOT `host-api` — pinned by T4):
+- `disablingWireIds(before, after, hosts): Set<string>` — enabled-before minus enabled-after over the candidates of
+  §0.21 (`all: true` enables every candidate).
+- `hostRefOf(content, fallbackHost): string | null` — tmux → `hostId`; execution → `host || fallbackHost`; §0.22 (b)
+  only: daemon-source file panes → `source.hostId`; else `null`.
+- `planHostDisable({ tabs, workspaces, hosts, hostOrder, disabling, sessions, t }): DisablePlan` — pure;
+  `{ closes, splits, keptLocked (§0.23 (a)), hostLabels }` per §0.21 "The confirmation's data"; empty when
+  `disabling` is empty.
+- `planSignature(plan)` — tab ids + closing pane ids, sorted.
+- `applyHostDisable(next: ShownHosts, shown: string): DisableResult` — §0.21 "One synchronous body": lock → re-plan
+  → signature check → closes → splits → shown-hosts write → release. `DisableResult = { kind: 'applied', closed,
+  split } | { kind: 'busy', holder } | { kind: 'changed', plan }`.
 
-Filters (spec §4.5, and only these): `HostSidebar` (`hostOrder.filter(isShown)` — the selected host is still rendered
-by `HostPage` if navigated to directly); `SessionPickerList` (`connectedHosts.filter(isShown)`); `NewTabPage`
-(`byId` drops a provider whose id is `sessions:<id>` / `headless:<id>` — prefixes from
-`HOST_BEARING_COLUMN_PREFIXES` — with `isShown(id) === false`; the launchers go with the block, §0.3). `SessionPanel`
-is gone (§0.2).
+Store actions:
+- `useTabStore.splitOutPanes(tabId, dropPaneIds)` — ONE `set()`: survivors = `collectLeaves(layout)` minus the dropped
+  ids, in order; none / no drop / unknown tab → no-op, returns `[]`; else the original tab's layout = `{ type: 'leaf',
+  pane: survivors[0] }` (the same `Pane` object), and for each further survivor a tab `{ id: generateId(), pinned:
+  tab.pinned, locked: false, createdAt: Date.now(), layout: { type: 'leaf', pane } }`, spliced into `tabOrder` right
+  after the previous one (the `addTab` pinned-group rule applies); returns the new ids in order. `activeTabId` and
+  `visitHistory` untouched.
+- `useWorkspaceStore.insertTabsAfter(wsId, afterTabId, tabIds)` — ONE `set()`: `tabIds` spliced after `afterTabId`
+  (appended when absent), deduped against every workspace (the singleton rule of `insertTab`), `activeTabId` of every
+  workspace unchanged; unknown `wsId` → no-op.
 
 Tasks:
-- **T1 — editor.** Tests: renders local hosts + unknown ids ("not on this device"); toggling writes the store; the
-  switch writes `all`; mounting `ProfileSection` with no master and no action writes nothing (spy on
-  `localStorage.setItem` and the store's `setState`). Locale keys `settings.profile.shown_hosts.*` (en + zh-TW;
-  `locale-completeness.test.ts` covers parity). `useHostStore.reset()` resets the store. Commit.
-- **T2 — the three filters.** Tests: hidden host absent from `HostSidebar`, from `SessionPickerList`, and its
-  `sessions:` / `headless:` blocks not rendered on the New Tab page while other columns render; the preset still holds
-  the hidden host's columns afterwards; `all: true` shows all; an unknown id in `ids` hides nothing local. Commit.
-- **T3 — a new host under a list** (§0.7, per the decision). (a): with `all: false`, the dialog add /
-  `registerLocalHost` / transfer create call `addShown(wireId)`; with `all: true` nothing changes. (b): no code; a
-  test pins that an add with `all: false` writes nothing to the shown store. (c): with `all: false`, the add-host
-  dialog and the receive done step show the prompt; nothing is written until the button; the button calls
-  `addShown`; `registerLocalHost` writes nothing. Commit.
+- **T1 — matcher and plan.** Tests (`host-disable.test.ts`): `disablingWireIds` — all → list minus X = {X};
+  list → list minus X = {X}; list → all = ∅; re-tick = ∅; "all" off initialised to every candidate = ∅; an unknown id
+  unticked = {that id}. `planHostDisable`: single-pane X tmux tab → close; terminated X tmux → close; X execution with
+  `host` → close; hostless execution with X = `hostOrder[0]` → close, with X ≠ `hostOrder[0]` → untouched; a pane on
+  `d1_X` (unresolved) → close; a local host WITHOUT daemonId matched by its local id; two local rows claiming one
+  daemon → both disabled together; `[mlab | X]` → split, closing = the X pane, keeping 1; `[X | [editor(local) |
+  mlab]]` → split, keeping 2, survivor order editor then mlab; a tab with no host-bearing leaf → absent; tabs of every
+  workspace AND a tab no workspace holds; §0.22 (a): a daemon-source editor on X → absent; §0.23 (a): a locked X tab
+  → `keptLocked`, a locked mixed tab → `keptLocked` (not split); labels: live session name, else `cachedName`,
+  terminated suffix; grouping and order follow the workspaces. Implement. Commit.
+- **T2 — store actions.** Tests (`useTabStore.split.test.ts`, `store-tabs.test.ts`): `splitOutPanes` keeps the
+  original tab id / pinned / locked / createdAt, its leaf is the SAME `Pane` object (`toBe`) and every survivor's
+  `JSON.stringify(pane)` equals the one before; new tabs follow the original in `tabOrder`, in survivor order;
+  `activeTabId` / `visitHistory` unchanged; a pinned original → pinned new tabs placed in the pinned group; nested
+  split → one tab per survivor; drop-all / drop-none / unknown ids → no-op; `insertTabsAfter` places after the anchor,
+  moves an id out of another workspace, leaves every `activeTabId` alone, unknown workspace no-op. Implement. Commit.
+- **T3 — the executor.** Tests (`host-disable.test.ts`): lock held by another owner → `busy`, and the tab store, the
+  workspace store AND the shown-hosts store are the same objects as before (no `set()` at all — subscriber spies);
+  a plan signature that no longer matches (a tab of X added / closed between plan and confirm) → `changed` with the
+  fresh plan, nothing written; applied → closes done through `closeTabInWorkspace` with `skipHistory` (§0.25 (a):
+  `useHistoryStore` unchanged), splits done, shown hosts = `next`, lock released (also when a step throws — `finally`);
+  closing the ACTIVE tab moves focus by `visitHistory` inside its workspace; splitting the active tab keeps it active;
+  the shown-hosts write happens after the tab writes (call-order spy); X's host runtime status `offline` changes
+  nothing. Implement. Commit.
+- **T4 — the tmux sessions and the daemon are not touched.** Tests: during `applyHostDisable` no export of
+  `lib/host-api` is called (module mock with every export spied — `deleteSession`, `hostFetch` included) and
+  `fetch` is not called; closed X tmux panes' sessions remain in `useSessionStore`; `host-disable.ts` imports nothing
+  from `host-api` (import-declaration scan of the file). Commit.
+- **T5 — sync behaviour** (`host-disable.integration.test.ts`, real builders and hashes, two simulated devices through
+  `applySectionToStores`):
+  - on A the action changes exactly: `settings`, and `tabs.<ws>` of each workspace that lost / gained a tab;
+    `workspaces` and an untouched `tabs.<ws2>` hash identical; a second build is identical (one push per section);
+  - **apply never closes**: B holds tabs of X; applying A's `settings` (X disabled) leaves B's tab store and
+    workspace store the SAME objects and every B `tabs.*` hash unchanged; applying A's `tabs.<ws>` afterwards makes
+    B's tabs equal A's (the closes arrive as data); the other order (tabs first, then settings) ends the same;
+  - **later data is kept**: after the action, applying an OLDER `tabs.<ws>` payload that still holds X's tab (a
+    device that was offline) shows the tab on A and nothing closes it; a following rebuild of A's sections carries it;
+  - B running `useShownHostsStore.setState(disabled X)` directly (no action) closes nothing (no subscriber closes);
+  - survivors' pane objects on A are byte-for-byte what they were, and after the push / apply B's survivor panes
+    are byte-for-byte A's.
+  Commit.
 
-Invariants: only the three navigation surfaces filter; the editor writes only on user action; §0.7's option is the
-only writer on add.
+Invariants: the executor is the only code that closes because of a host being disabled, and it runs only when
+called (no subscriber, apply or hydration path calls it); an apply never closes; surviving panes are moved
+byte-for-byte with their pane ids; no daemon call, no session deletion; a refused lock or a stale plan writes
+nothing; the whole action is synchronous.
 
-Mutations: M1 `NewTabPage` removes the column from the preset instead of skipping it (preset-kept test red); M2 the
-sidebar filters by local id (daemonId host test red); M3 the editor drops unknown ids on toggle (unknown-id test red);
-M4 the block writes on mount (iron-rule test red); M5 (c) the dialog writes before the button (prompt test red).
+Mutations: M1 the matcher compares local ids only (`d1_X` pane test red); M2 hostless executions ignored (effective-
+host test red); M3 `splitOutPanes` mints new pane ids like `detachPane` (same-object / byte-for-byte test red); M4 new
+tabs appended at the end of `tabOrder` / workspace (position tests red); M5 `insertTabsAfter` activates the inserted
+tab (active-unchanged test red); M6 the executor ignores a refused lock (busy test red); M7 the executor runs a stale
+plan (changed test red); M8 a `useShownHostsStore.subscribe` that runs the close on every change (apply-never-closes
+test red); M9 the executor calls `deleteSession` for each closed tmux pane (T4 red); M10 closes recorded in history
+(history test red, §0.25 (a)); M11 locked tabs closed (keptLocked test red, §0.23 (a)); M12 the shown-hosts write
+first, the tab writes after a `queueMicrotask` (call-order / synchronous test red).
 
-## H2d-3 — hidden ≠ absent: behaviour tests for the not-filtered list (5 files, tests only)
+## H2d-3 — the editor and the confirmation (10 files)
+
+Files:
+1. `spa/src/components/settings/profile/ShownHostsBlock.tsx` (new)
+2. `spa/src/components/settings/profile/ShownHostsBlock.test.tsx` (new)
+3. `spa/src/components/settings/profile/HostDisableDialog.tsx` (new)
+4. `spa/src/components/settings/profile/HostDisableDialog.test.tsx` (new)
+5. `spa/src/components/settings/profile/ProfileSection.tsx` (renders the block after `CurrentBlock`)
+6. `spa/src/components/settings/profile/ProfileSection.test.tsx` (opening writes nothing)
+7. `spa/src/stores/useHostStore.ts` (`reset` resets shown hosts — §0.18)
+8. `spa/src/stores/useHostStore.test.ts`
+9. `spa/src/locales/en.json` (`settings.profile.shown_hosts.*`, `settings.profile.host_disable.*`)
+10. `spa/src/locales/zh-TW.json`
+
+Editor (`ShownHostsBlock`): "Enable all hosts" switch (`all`); when off, one checkbox per local host in `hostOrder`
+(label from `useHostLookResolver`), then every `ids` entry that is not a local host's wire id, labelled with its look
+name or id and "not on this device". Copy: the choice is synced with the attached workbench; a disabled host stays
+connected; disabling a host closes its tabs in this workbench (§0.21). Writes:
+- switch off → `setShown(every candidate wire id)` directly (nothing becomes disabled); switch on → `showAll()`
+  directly; tick → `setShown(ids + wireId)` directly;
+- untick → `next` computed → `planHostDisable` → empty plan: write directly (§0.26 (a)) / else open the dialog.
+
+Dialog (`HostDisableDialog`, modal): title "Disable ‹host› in this workbench?"; sections "Tabs that will close" and
+"Tabs that will be split" (each with the closing panes' labels and "N panes stay, each as its own tab"), grouped by
+workspace; "Kept (locked)" (§0.23 (a)); the fixed notice: tmux sessions are not affected and can be reopened from the
+host's session list; if a session ends later, these tabs can no longer be Rebuilt; the closes sync to every device
+on this workbench. Buttons: Cancel (writes nothing) / "Disable and close N tabs" → `applyHostDisable(next,
+planSignature(plan))`: `applied` → close the dialog; `busy` → inline "another operation is running (‹holder›)" with
+Retry, dialog stays; `changed` → the dialog re-renders with the new plan and the confirm button is re-armed (no
+automatic retry).
+
+Tasks:
+- **T1 — the block.** Tests: local hosts in `hostOrder` with look labels; unknown ids as "not on this device"; a
+  host added under `all: false` is shown unticked (§0.7 (b)); mounting `ProfileSection` with no master and no action
+  writes nothing (spies on `localStorage.setItem` and on `setState` of the shown-hosts, tab and workspace stores);
+  switch off / on and tick write directly, open no dialog and close nothing. `useHostStore.reset()` resets the store.
+  Locale keys (en + zh-TW; `locale-completeness.test.ts` covers parity). Commit.
+- **T2 — untick opens the confirmation.** Tests: untick X with tabs → dialog lists exactly the plan's closes / splits
+  (labels, grouping, split pane labels, kept-locked); untick X without tabs → no dialog, store written (§0.26 (a));
+  untick an unknown id with a `MissingHostPane` tab on it → dialog lists that tab. Commit.
+- **T3 — cancel writes nothing; confirm runs the action.** Tests: Cancel (button, Escape, backdrop) → tab store,
+  workspace store, shown-hosts store the SAME objects, `localStorage.setItem` not called, the checkbox is ticked
+  again; Confirm → `applyHostDisable` called once with `next` and the shown signature; `applied` → dialog closed, the
+  tabs gone, X unticked; `busy` → message, nothing written, Retry calls again; `changed` → new list shown, nothing
+  written until a second confirm. Commit.
+- **T4 — adds write nothing** (§0.7 (b)): with `all: false`, the add-host dialog add and `registerLocalHost` leave
+  the shown-hosts store the same object. Commit.
+
+Invariants: the block writes only on user action; a disable writes only after Confirm; Cancel writes nothing
+anywhere; the dialog lists exactly what the executor does (same plan function, signature-checked).
+
+Mutations: M1 the block writes on mount (iron-rule test red); M2 untick writes the store before the dialog (cancel
+test red); M3 Cancel leaves X unticked (checkbox test red); M4 the dialog builds its own list instead of
+`planHostDisable` (list-equals-plan test red); M5 `changed` auto-confirms (second-confirm test red); M6 the editor
+drops unknown ids on toggle (unknown-id test red); M7 switch-off initialises `ids` to `[]` (nothing-closes test red).
+
+## H2d-4 — no way to open a tab on a disabled host: New Tab, picker, Hosts page (14 files)
+
+Files:
+1. `spa/src/components/NewTabPage.tsx` (skip `sessions:<id>` / `headless:<id>` blocks of a disabled host —
+   prefixes from `HOST_BEARING_COLUMN_PREFIXES`)
+2. `spa/src/components/NewTabPage.test.tsx`
+3. `spa/src/components/SessionPickerList.tsx` (`connectedHosts.filter(isShown)`)
+4. `spa/src/components/SessionPickerList.test.tsx`
+5. `spa/src/components/hosts/HostSidebar.tsx` (every host listed; a disabled one gets 「未啟用」/ "Disabled" and muted
+   text; NOT filtered)
+6. `spa/src/components/hosts/HostSidebar.test.tsx`
+7. `spa/src/components/hosts/SessionsSection.tsx` ("open" per session not offered for a disabled host, with the hint
+   "Enable this host in the workbench to open its sessions"; "new session" per §0.29)
+8. `spa/src/components/hosts/SessionsSection.test.tsx`
+9. `spa/src/components/executions/ExecutionsView.tsx` (row "open" not offered, same hint)
+10. `spa/src/components/executions/ExecutionsView.test.tsx`
+11. `spa/src/components/hosts/nex/NexExecutionsTable.tsx` (row "open" not offered, same hint)
+12. `spa/src/components/hosts/nex/NexExecutionsTable.test.tsx`
+13. `spa/src/locales/en.json` (`hosts.disabled_badge`, `hosts.disabled_open_hint`)
+14. `spa/src/locales/zh-TW.json`
+(§0.22 (b) only: + `spa/src/components/editor/EditorNewTabSection.tsx` and its test — recent entries of a disabled
+host not offered → 16.)
+
+All read `useIsHostShown(hostId)` / `useShownHostFilter()` (H2d-1).
+
+Tasks:
+- **T1 — New Tab and the picker.** Tests: a disabled host's `sessions:` / `headless:` blocks not rendered while other
+  columns render; the preset still holds the columns afterwards; `all: true` shows all; an unknown id in `ids`
+  disables nothing local; the terminated-pane picker omits the disabled host. Commit.
+- **T2 — the Hosts page.** Tests: `HostSidebar` lists every host; the disabled one has the badge and muted class and
+  still selects / expands; a host enabled by `all: true` has no badge; `SessionsSection` / `ExecutionsView` /
+  `NexExecutionsTable` for a disabled host render the list without an "open" action (or disabled) and the hint,
+  clicking a row creates no tab (`useTabStore` tabs unchanged); for an enabled host unchanged; §0.29 (a): "new
+  session" still offered. Commit.
+
+Invariants: no UI path creates a tab on a disabled host; nothing listed on the Hosts page disappears; the New Tab
+layout data is never changed by the filter.
+
+Mutations: M1 `NewTabPage` removes the column from the preset instead of skipping it (preset-kept test red); M2
+`HostSidebar` filters the disabled host (listed test red); M3 the filter compares local ids (daemonId-host test red);
+M4 `SessionsSection` "open" still creates a tab for a disabled host (no-tab test red); M5 the badge reads `ids`
+without `all` (all-true test red).
+
+## H2d-5 — landings: notification, execution deep link, route (8 files)
+
+Files:
+1. `spa/src/lib/shown-hosts.ts` (`landOnHostsPageIfDisabled(hostId): boolean` — disabled → open the Hosts page on
+   that host (`openSingletonTab({ kind: 'hosts' })` + `setActiveHost`, the `open-host` action's body) and `true`)
+2. `spa/src/lib/shown-hosts.test.ts`
+3. `spa/src/hooks/useNotificationDispatcher.ts` (`open-session` for a disabled host → the landing; no tab focused
+   or created — also when a rule-6 tab of that session exists)
+4. `spa/src/hooks/useNotificationDispatcher.test.ts`
+5. `spa/src/lib/deeplink/deeplinkResolver.ts` (`openExecutionDetailTab` → the landing first; covers `purdex://`
+   deep links and the Nex executions table)
+6. `spa/src/lib/deeplink/deeplinkResolver.test.ts`
+7. `spa/src/hooks/useRouteSync.ts` (`execution` route on a disabled host → the landing, no tab)
+8. `spa/src/hooks/useRouteSync.test.ts`
+
+Tasks:
+- **T1 — the helper.** Tests: disabled → Hosts tab opened / focused, `activeHostId` = the host, returns `true`, no
+  tab of that host created; enabled / unknown id → `false`, nothing done. Commit.
+- **T2 — notifications still fire, clicks land on the Hosts page.** Tests: an agent notification of a disabled host
+  is dispatched (the not-filtered half); its `open-session` click opens the Hosts page for that host, creates no tab,
+  does NOT focus an existing tab of that session, still marks it read; enabled host unchanged. Commit.
+- **T3 — execution deep link and route.** Tests: `resolveDeeplink` / `openExecutionDetailTab` for a disabled host →
+  Hosts page, no execution tab; the `/execution/<id>/<host>` route likewise (and a hostless route whose fallback
+  `hostOrder[0]` is disabled); enabled host → the tab as today. Commit.
+
+Invariants: a notification of a disabled host is always delivered; no landing creates or focuses a tab on a disabled
+host.
+
+Mutations: M1 the dispatcher drops notifications of disabled hosts (delivery test red); M2 the click focuses the
+existing tab (no-focus test red); M3 the route ignores the fallback host (hostless-route test red).
+
+## H2d-6 — disabled ≠ absent: behaviour tests for the not-filtered list (5 files, tests only)
 
 Files (all new):
 1. `spa/src/lib/shown-hosts.not-filtered.connection.test.tsx`
-2. `spa/src/lib/shown-hosts.not-filtered.panes.test.tsx`
+2. `spa/src/lib/shown-hosts.not-filtered.tabs.test.tsx`
 3. `spa/src/lib/shown-hosts.not-filtered.fallbacks.test.tsx`
 4. `spa/src/lib/shown-hosts.not-filtered.newtab.test.tsx`
 5. `spa/src/lib/shown-hosts.import-guard.test.ts`
 
-Every case sets `{ all: false, ids: [<wire id of mlab>] }` so air26 (a local host with a daemonId) is HIDDEN, and
-asserts air26 behaves exactly as with `{ all: true }` (each case is run under both settings via `it.each` and the two
-results compared). One behaviour test per item of spec §4.5's not-filtered list (review item 4):
+Every case sets `{ all: false, ids: [<wire id of mlab>] }` so air26 (a local host with a daemonId) is DISABLED, and
+asserts air26 behaves exactly as with `{ all: true }` (`it.each` over both settings, results compared). One
+behaviour test per "unchanged" row of the §0.21 table:
 
-- **T1 — connections and health** (file 1): `useHostConnection` (health / reconnect state machine) runs for air26 and
-  updates `runtime[air26].status`; `useMultiHostEventWs` opens the event WS for air26 (the `WebSocket` mock sees its
-  URL) and processes its `sessions` event (attach gate opens); `useSessionWatch` / session refresh
-  (`lib/rebuild/refresh-sessions.ts`) fetches air26's sessions. Commit.
-- **T2 — panes, tabs, notifications** (file 2): a tab with an air26 tmux pane stays in the tab bar (`SortableTab` /
-  `InlineTab` rendered) with its badge (`useTabHostBadge` non-null); `SessionPaneContent` for air26 renders the
-  terminal path (not `MissingHostPane`, ticket fetched); an execution pane on air26 subscribes (not
-  `host_removed`); `useNotificationDispatcher` dispatches an air26 agent notification. Commit.
+- **T1 — connections and health** (file 1): `useHostConnection` runs for air26 and updates `runtime[air26].status`;
+  `useMultiHostEventWs` opens air26's event WS (the `WebSocket` mock sees its URL) and processes its `sessions` event;
+  `useSessionWatch` / session refresh (`lib/rebuild/refresh-sessions.ts`) fetches air26's sessions. Commit.
+- **T2 — tabs that exist (rule 6)** (file 2): an air26 tmux tab present in the store (as if synced in after the
+  close) stays in the tab bar (`SortableTab` / `InlineTab` rendered) with its badge (`useTabHostBadge` non-null);
+  `SessionPaneContent` renders the terminal path (not `MissingHostPane`, ticket fetched); an air26 execution pane
+  subscribes; keyboard next / previous tab and "close others" treat it like any tab; nothing closes it over a
+  `settings` apply that keeps air26 disabled. Commit.
 - **T3 — fallbacks and direct navigation** (file 3): with air26 as `activeHostId` / `hostOrder[0]`:
-  `nex/resolve-host.ts` returns air26 for a hostless id; the fs backends (`register-modules/fs-backends.tsx`)
-  resolve air26; `backup-auto-trigger` targets air26; `HostPage` at `/hosts/<air26>/overview` renders
-  `OverviewSection`; `DevEnvironmentSection` lists air26 in its picker. Commit.
+  `nex/resolve-host.ts` returns air26 for a hostless id; the fs backends resolve air26; `backup-auto-trigger`
+  targets air26; `HostPage` at `/hosts/<air26>/overview` renders `OverviewSection`; `DevEnvironmentSection` lists
+  air26 in its picker. Commit.
 - **T4 — New Tab registration and layout** (file 4): the provider sources still return air26's `sessions:` /
-  `headless:` providers; `getStaleNewTabProviderIds` does not report their ids; `useNewTabBootstrap` run keeps the
-  columns in every preset and in `knownIds`; the next `settings` build carries them unchanged. Commit.
-- **T5 — import guard** (file 5, the static half): only `ShownHostsBlock.tsx`, `HostSidebar.tsx`,
-  `SessionPickerList.tsx`, `NewTabPage.tsx`, `shown-hosts.ts`, `useHostStore.ts`, `host-reresolve.ts`,
-  `collector.ts`, `apply-to-stores.ts` (and, per §0.7, `AddHostDialog.tsx` / `ReceiveHostsDialog.tsx`) may import
-  `useShownHostsStore` / `lib/shown-hosts` (scan of import declarations in non-test files). Commit.
+  `headless:` providers; `getStaleNewTabProviderIds` does not report their ids; `useNewTabBootstrap` keeps the columns
+  in every preset and in `knownIds`; the next `settings` build carries them unchanged. Commit.
+- **T5 — import guard** (file 5, the static half; scan of import declarations in non-test files):
+  `useShownHostsStore` may be imported only by `shown-hosts.ts`, `host-disable.ts`, `ShownHostsBlock.tsx`,
+  `useHostStore.ts`, `host-reresolve.ts`, `collector.ts`, `apply-to-stores.ts`; `lib/shown-hosts` only by the H2d-4 /
+  H2d-5 files and `ShownHostsBlock.tsx`; **`lib/host-disable` only by `ShownHostsBlock.tsx` and
+  `HostDisableDialog.tsx`** (the static proof that only the pressing device's dialog closes — rule 6). Commit.
 
-Invariant: every item of the not-filtered list has a behaviour test that is identical with the host hidden and shown.
+Invariant: every "unchanged" row of §0.21 has a behaviour test that is identical with the host disabled and enabled;
+the closing code is reachable only from the dialog.
 
-Mutations (each a one-line change in production code, reverted after): M1 `useMultiHostEventWs` skips hidden hosts
-(T1 red); M2 `useHostConnection` skips them (T1 red); M3 `useTabHostBadge` returns null for a hidden host (T2 red);
-M4 `nex/resolve-host` skips hidden hosts in its `hostOrder[0]` fallback (T3 red); M5 the provider sources filter
-hidden hosts (T4 red); M6 `getStaleNewTabProviderIds` reports a hidden host's column (T4 red); M7 import the store in
-`useSessionWatch` (T5 red).
+Mutations (each a one-line change in production code, reverted after): M1 `useMultiHostEventWs` skips disabled hosts
+(T1 red); M2 `useHostConnection` skips them (T1 red); M3 `useTabHostBadge` returns null for a disabled host (T2 red);
+M4 the tab bar filters tabs of disabled hosts (T2 red — the rev-3 model must not come back); M5 `nex/resolve-host`
+skips disabled hosts in its `hostOrder[0]` fallback (T3 red); M6 the provider sources filter disabled hosts (T4 red);
+M7 `getStaleNewTabProviderIds` reports a disabled host's column (T4 red); M8 import `host-disable` in
+`apply-to-stores.ts` (T5 red); M9 import the store in `useSessionWatch` (T5 red).
 
 ## Real-device acceptance (spec §8 H2)
 
@@ -812,12 +1136,44 @@ After H2c-3 (H2c-2 + H2c-3 released together):
    air26 shows the WORKBENCH name / colour, not C's; `settings.looks.<d1 air26>` is byte-for-byte what was recorded;
    B's `HostConfig` for air26 carries C's name only (inspect `purdex-hosts` in B's localStorage, no look fields).
 
-After H2d-2:
-6. On A in W, Settings › 工作台: turn off "show all", untick air26 → B: air26 gone from the Hosts sidebar, the New
-   Tab page and the terminated-pane picker; on BOTH clients air26 stays connected (Hosts page status via direct URL
-   `/hosts/<air26 id>/overview`, tab badge of an air26 tab still shown, `playwright cli requests` shows its event WS
-   open).
-7. On A turn "show all" back on → B shows air26 again; no section locked.
+After H2d-5 (H2d-2 … H2d-5 released together; H2d-6 is tests only). Extra setup, on A in W, before step 6: three
+tmux sessions on air26 (`acc-s1`, `acc-s2`, `acc-s3`) and two on mlab (`acc-m1`, `acc-m2`), created from the Hosts
+page; tabs: T1 = `acc-s1` alone; T2 = split `[acc-m1 | acc-s2]`; T3 = split `[acc-s3 | [local editor on a scratch
+file | acc-m2]]`; T4 = `acc-m2` alone in a second workspace; T5 = `acc-s1` again, LOCKED (only if §0.23 (a)). Wait
+until B shows all of them. Record: the `settings` and every `tabs.<ws>` rev on the SOT; A's `purdex-tabs`
+(`playwright cli -s=host-ownership-a localstorage-get purdex-tabs`, saved to the scratchpad, not printed); air26's
+session list (`GET /api/sessions` on `100.64.0.4:7860`, auth header from a variable).
+6. **The confirmation.** On A, Settings › 工作台: turn "Enable all hosts" off → no dialog, every box ticked, no tab
+   changes; `settings` rev moved once, no `tabs.*` rev moved. Untick air26 → the dialog lists: close T1; split T2
+   (closing `acc-s2`, 1 pane stays) and T3 (closing `acc-s3`, 2 panes stay, as 2 tabs); T4 not listed; T5 under
+   "kept (locked)"; the tmux / Rebuild notice is there (en and zh-TW — switch A's language once).
+7. **Cancel writes nothing.** Cancel → air26 ticked again; the SOT revs and A's `purdex-tabs` are exactly the recorded
+   ones; B unchanged.
+8. **Confirm.** Untick air26 again → Confirm. On A: T1 gone; T2 = `acc-m1` alone (same tab id); T3 = the editor alone
+   (same tab id) and a new tab `acc-m2` right after it, in the same workspace; T4 and T5 unchanged; the survivor panes
+   in A's `purdex-tabs` have the recorded pane ids and byte-identical content (compare the saved JSON with a
+   scratchpad script; print only "equal" / the differing paths). SOT: `settings` moved once, `tabs.<W's first
+   workspace>` moved once, T4's workspace and `workspaces` did not move. On B, without reload: the same tab structure
+   (T1 gone, T2 single, T3 split into two), nothing locked on either client.
+9. **tmux untouched.** air26's session list still holds `acc-s1`, `acc-s2`, `acc-s3` (same codes as recorded);
+   `playwright cli -s=host-ownership-a requests` shows no `DELETE` to either daemon during steps 6–8.
+10. **While disabled** (both clients): New Tab has no air26 `sessions:` / `headless:` block (and the layout editor
+   still lists the columns); the terminated-pane picker offers no air26; the Hosts sidebar lists air26 with
+   「未啟用」/ "Disabled" and muted colour, its page opens, its session list shows the sessions without "open" and with
+   the hint; air26 stays connected (status on its Hosts page, `requests` shows its event WS open).
+11. **Old data is not closed (rule 6).** Inject into W's SOT the `tabs.<ws>` payload recorded before step 6 (current
+   rev as base, `PUT /api/profiles/{id}/sections/tabs.<ws>`) → both clients show T1 and the split T2 / T3 again, with
+   badges, and air26 still disabled; wait 5 s: the `tabs.<ws>` rev moved only by the injection (no client closed
+   anything and pushed). Close those tabs by hand afterwards.
+12. **Notification.** Trigger an agent notification in `acc-s1` on air26 (e.g. a short `claude -p` turn in that session
+   ends) → the notification appears on A; clicking it opens air26's Hosts page, and no tab of `acc-s1` is created or
+   focused. Navigate A to `/execution/<any id>/<air26 id>` → air26's Hosts page, no execution tab.
+13. **Re-enable.** On A tick air26 → no dialog; B shows the air26 block in New Tab again; from air26's Hosts page open
+   `acc-s1` → a tab attaches to the SAME session (same code), and if an agent runs there its provenance appears on the
+   pane's rebuild record (backfill). Nothing re-merged automatically.
+14. On A turn "Enable all hosts" back on → B unchanged apart from the setting; no section locked.
+(Only if §0.27 is decided (a): with a local profile on screen on A, untick air26 → the dialog lists the local
+profile's tabs only; the parked master's air26 tabs are there after switching back.)
 
 Not reachable before H3 (the `hosts` section still syncs — same reason as H1 plan §0.9):
 - A client that lacks a host the workbench has a look / shown id for: the host lists converge through `hosts`, so
@@ -827,6 +1183,9 @@ Not reachable before H3 (the `hosts` section still syncs — same reason as H1 p
   only by the injection), the editor lists it as "not on this device", a pane injected on that id shows its look name.
 - "B deletes a host, A unaffected": pre-H3 A loses the host through `hosts`; what IS checked is that the look entry
   and shown id survive on both.
+- Unticking an id "not on this device" (§0.21: closes the tabs whose panes name it) is checked on the injected
+  `d1_ffff…` above: with the injected pane's tab present, untick it on A → the dialog lists that tab; Confirm → it
+  closes on both clients and `settings.ids` no longer holds the id.
 - Independent host lists with different add orders / names per device: the `HostConfig` fallback differs per device
   only after H3; here both fallbacks are equal, so steps 2–4 prove the look path through the `hosts`-rev-unchanged
   check instead.
@@ -835,6 +1194,13 @@ Cleanup: `playwright cli -s=host-ownership-a close`, `-s=host-ownership-b close`
 cwd), delete W, stop :5175.
 
 ## Review
+
+### 2026-09-24 — user decision (rev 3 → rev 4)
+
+- User decision superseded §0.21 hidden-tabs model: disabling a host closes its tabs in the workbench on screen (mixed
+  split tabs are split), once, on the device that pressed, after a confirmation; tmux sessions untouched; an apply
+  never closes. PROPOSED 1–4 of rev 3 (tab-bar filter, focus move, keyboard / bulk actions count visible tabs only,
+  hidden-tab deep links) are void. H2d re-planned as H2d-2 … H2d-6; new open items §0.22 – §0.29.
 
 ### 2026-09-24 — codex plan review `task-muei1qbr-0hu3ol` (rev 1 → rev 2)
 
