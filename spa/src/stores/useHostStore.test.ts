@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useHostStore, selectDevHostId, findHostByEndpoint } from './useHostStore'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch } from './useHostStore'
 
 describe('useHostStore', () => {
   beforeEach(() => {
@@ -494,5 +494,115 @@ describe('findHostByEndpoint', () => {
   it('treats loopback and Tailscale IP as distinct endpoints', () => {
     expect(findHostByEndpoint(hosts, '127.0.0.1', 7860)?.id).toBe('b')
     expect(findHostByEndpoint({ a: hosts.a }, '127.0.0.1', 7860)).toBeUndefined()
+  })
+})
+
+describe('daemonId (spec 2026-09-23 D1–D3)', () => {
+  const ID = 'mini-lab:abc123'
+  const OTHER = 'mini-lab:zzz999'
+  let hostId: string
+  const ep = () => { const h = useHostStore.getState().hosts[hostId]; return `${h.ip}:${h.port}` }
+  const flag = () => selectDaemonIdMismatch(useHostStore.getState(), hostId)
+
+  beforeEach(() => {
+    useHostStore.getState().reset()
+    hostId = useHostStore.getState().addHost({ name: 'h', ip: '10.0.0.1', port: 7860, token: 't' })
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('absent stored value → observe writes it', () => {
+    useHostStore.getState().observeDaemonId(hostId, ID, ep())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toBeUndefined()
+  })
+
+  it('an empty observed id is never written and flags nothing', () => {
+    useHostStore.getState().observeDaemonId(hostId, '', ep())
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    useHostStore.getState().observeDaemonId(hostId, ID, ep())
+    useHostStore.getState().observeDaemonId(hostId, '', ep())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toBeUndefined()
+  })
+
+  it('updateHost / addHost never store an empty daemonId', () => {
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    useHostStore.getState().updateHost(hostId, { daemonId: '' })
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    const other = useHostStore.getState().addHost({ name: 'o', ip: '10.0.0.2', port: 7860, daemonId: '' })
+    expect('daemonId' in useHostStore.getState().hosts[other]).toBe(false)
+  })
+
+  it('different observed value → no write, mismatch flag, one warn per (host, observed)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toEqual({ stored: ID, observed: OTHER, endpoint: ep() })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('equal observed value clears the mismatch flag', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    expect(flag()).toBeDefined()
+    useHostStore.getState().observeDaemonId(hostId, ID, ep())
+    expect(flag()).toBeUndefined()
+    expect(useHostStore.getState().runtime[hostId]?.daemonIdMismatch).toBeUndefined()
+  })
+
+  it('an answer for a stale endpoint is dropped', () => {
+    useHostStore.getState().observeDaemonId(hostId, ID, '10.0.0.9:7860')
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    useHostStore.getState().observeDaemonId(hostId, OTHER, '10.0.0.9:7860')
+    expect(flag()).toBeUndefined()
+  })
+
+  it('an answer for a deleted host is dropped', () => {
+    useHostStore.getState().removeHost(hostId)
+    useHostStore.getState().observeDaemonId(hostId, ID, '10.0.0.1:7860')
+    expect(useHostStore.getState().hosts[hostId]).toBeUndefined()
+    expect(useHostStore.getState().runtime[hostId]).toBeUndefined()
+  })
+
+  it('a local re-point clears daemonId and the flag', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    useHostStore.getState().updateHost(hostId, { port: 7861 })
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    expect(flag()).toBeUndefined()
+    expect(useHostStore.getState().runtime[hostId]?.daemonIdMismatch).toBeUndefined()
+  })
+
+  it('updateHost without an endpoint change keeps daemonId', () => {
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    useHostStore.getState().updateHost(hostId, { name: 'x', token: 'u', ip: '10.0.0.1', port: 7860 })
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+  })
+
+  it('a flag is ignored after a store replace re-points the host or changes its stored value (sync)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    const h = useHostStore.getState().hosts[hostId]
+    useHostStore.setState({ hosts: { [hostId]: { ...h, ip: '10.0.0.5' } } })
+    expect(flag()).toBeUndefined()
+    useHostStore.setState({ hosts: { [hostId]: { ...h, daemonId: OTHER } } })
+    expect(flag()).toBeUndefined()
+    useHostStore.setState({ hosts: { [hostId]: h } })
+    expect(flag()).toBeDefined()
+  })
+
+  it('the mismatch flag is not persisted', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useHostStore.getState().updateHost(hostId, { daemonId: ID })
+    useHostStore.getState().observeDaemonId(hostId, OTHER, ep())
+    const partialize = useHostStore.persist.getOptions().partialize!
+    expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain(OTHER)
   })
 })
