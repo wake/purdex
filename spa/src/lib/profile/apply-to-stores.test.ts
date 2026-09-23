@@ -1042,6 +1042,25 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(useTabStore.getState().activeTabId).toBe('a2')
   })
 
+  // tabs-local-only §3.6: the commit re-points the global active tab through `repointActiveTab`.
+  it('a global active tab that is a kept device-local tab stays active; a removed synced one moves as before', async () => {
+    seedTabWorld()
+    const settings = tab('sL', { type: 'leaf', pane: { id: 'p-sL', content: { kind: 'settings', scope: 'global' } } })
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, sL: settings }, activeTabId: 'sL' })
+    useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'sL', 'a2'], 'a2'), ws('wb', ['b1'])], activeWorkspaceId: 'wa' })
+    await applySectionToStores('tabs.wa', incomingFor([tab('a1')]), ctx)
+    expect(useTabStore.getState().activeTabId).toBe('sL')
+    expect(useTabStore.getState().tabs.sL).toBe(settings)
+    expect(useWorkspaceStore.getState().workspaces[0]).toMatchObject({ tabs: ['a1', 'sL'], activeTabId: 'a1' })
+
+    // a2 (synced) was on screen and is removed → the active workspace's pointer, as today
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, a2: tab('a2') }, activeTabId: 'a2' })
+    useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'sL', 'a2'], 'sL'), ws('wb', ['b1'])], activeWorkspaceId: 'wa' })
+    await applySectionToStores('tabs.wa', incomingFor([tab('a1')]), ctx)
+    expect(useTabStore.getState().activeTabId).toBe('sL')
+    expect(Object.hasOwn(useTabStore.getState().tabs, 'a2')).toBe(false)
+  })
+
   it('unrendered: a workspace unknown locally → ok with a null hash, nothing written', async () => {
     seedTabWorld()
     let outcome: unknown
@@ -1190,6 +1209,30 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildTabsSection(parked.workspaces.find((w) => w.id === 'wa')!, parked.tabs)) })
     expect(screen()).toBe(before)
     expect(JSON.stringify(parked)).not.toContain('SLAVE-ONLY')
+  })
+
+  // tabs-local-only §3.6 on the parked path: `writeMasterWorld` re-points the parked world's active tab by the same rule.
+  it('tabs.<id> into the PARKED master: its active tab, a kept device-local tab, stays; a removed synced one moves', async () => {
+    seedTabWorld()
+    const settings = tab('sL', { type: 'leaf', pane: { id: 'p-sL', content: { kind: 'settings', scope: 'global' } } })
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, sL: settings }, activeTabId: 'sL' })
+    useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'sL', 'a2'], 'a2'), ws('wb', ['b1'])], activeWorkspaceId: 'wa' })
+    parkMasterShowSlaveFromCurrent()
+    const before = screen()
+    const payload = JSON.parse(JSON.stringify(buildTabsSection(ws('wa', ['a1']), { a1: tab('a1') }))) as TabsPayload
+
+    await applySectionToStores('tabs.wa', payload, ctx)
+    let parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(parked.activeTabId).toBe('sL')
+    expect(parked.tabs.sL).toEqual(settings)
+    expect(parked.workspaces.find((w) => w.id === 'wa')?.tabs).toEqual(['a1', 'sL'])
+    expect(screen()).toBe(before)
+
+    useLocalProfilesStore.setState({ parkedMaster: { ...parked, tabs: { ...parked.tabs, a2: tab('a2') }, workspaces: [ws('wa', ['a1', 'a2', 'sL'], 'sL'), ws('wb', ['b1'])], activeTabId: 'a2' } })
+    await applySectionToStores('tabs.wa', payload, ctx)
+    parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(parked.activeTabId).toBe('sL') // a2 is gone → the active workspace (wa)'s pointer
+    expect(Object.hasOwn(parked.tabs, 'a2')).toBe(false)
   })
 
   it('tabs.<id> of a workspace only the SLAVE has is unrendered — the screen is not where the master looks', async () => {
