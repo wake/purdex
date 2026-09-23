@@ -14,6 +14,8 @@
 // and a value it cannot map passes through unchanged.
 import { sha256Hex, sha256HexSync } from '../crypto-hash'
 import { isValidDaemonId } from '../daemon-id'
+import type { HostConfig } from '../../stores/useHostStore'
+import type { HostsPayload } from './types'
 
 /** The prefix of THIS version's sync ids. A new algorithm gets a new prefix (`d2_`), never a changed `d1_`. */
 export const SYNC_ID_PREFIX = 'd1_'
@@ -248,4 +250,180 @@ export function matchIncomingHosts(
 
   const removed = Object.keys(localHosts).filter((local) => !matched.has(local))
   return { byRow, removed }
+}
+
+// === Aliases (spec §11.2) ===
+
+/** How many legacy keys a canonical `hosts` row remembers. */
+export const MAX_HOST_ALIASES = 16
+
+function isAlias(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !isSyncId(value)
+}
+
+/**
+ * The legacy wire keys (foreign local ids) a canonical row was matched from:
+ * `existing` in its order, then each unseen `added` entry; only non-empty
+ * non-sync-id strings, each once; at most MAX_HOST_ALIASES, the oldest dropped.
+ * Re-adding a known alias does not move it. Total on wire data.
+ */
+export function mergeAliases(existing: unknown, added: readonly unknown[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const take = (list: readonly unknown[]) => {
+    for (const a of list) {
+      if (isAlias(a) && !seen.has(a)) {
+        seen.add(a)
+        out.push(a)
+      }
+    }
+  }
+  take(Array.isArray(existing) ? existing : [])
+  take(added)
+  return out.slice(-MAX_HOST_ALIASES)
+}
+
+// === wire → local resolution (spec §11.2) ===
+
+/** Maps one wire host id to this device's local id; an id it cannot map comes back unchanged. */
+export type WireResolver = (wireId: string) => string
+
+export interface WireResolverInput {
+  /** The identity of the host store AFTER the hosts apply. */
+  identity: HostIdentity
+  /** The incoming `hosts` rows (by wire key) — their `aliases` resolve legacy ids. */
+  rows?: Record<string, unknown>
+  /** The hosts apply's result: row key → local id it updated or created (`NEW_HOST` is ignored). */
+  matched?: ReadonlyMap<string, string>
+  /** Test seam: replaces `syncIdOfSync`. */
+  hash?: (daemonId: string) => string
+}
+
+/**
+ * The resolver tabs / settings apply through (spec §11.2):
+ *   - a sync id → the identity's local host (or the row this apply matched);
+ *     one nobody maps — any version — stays unchanged;
+ *   - a legacy id → the local host its exact row was matched to; else the
+ *     local host of the canonical row listing it in `aliases` (by row key, then
+ *     by that row's `daemonId`); an alias claimed by rows resolving to
+ *     different hosts is ambiguous; else unchanged.
+ * "Unchanged" hands the id to the existing unknown-host handling.
+ */
+export function makeWireResolver(input: WireResolverInput): WireResolver {
+  const { identity, rows = {}, matched = new Map<string, string>() } = input
+  const hash = input.hash ?? syncIdOfSync
+  const matchedLocal = (key: string): string | undefined => {
+    const local = matched.get(key)
+    return local === undefined || local === NEW_HOST ? undefined : local
+  }
+  const rowLocal = (key: string, row: unknown): string | undefined => {
+    const byKey = identity.toLocal.get(key) ?? matchedLocal(key)
+    if (byKey !== undefined) return byKey
+    const daemonId = rowDaemonId(row)
+    return daemonId === undefined ? undefined : identity.toLocal.get(hash(daemonId))
+  }
+
+  // alias → the one local host it resolves to (null = ambiguous)
+  const aliasLocal = new Map<string, string | null>()
+  for (const [key, row] of Object.entries(rows)) {
+    if (row === null || typeof row !== 'object') continue
+    const aliases = (row as IncomingHostRow).aliases
+    if (!Array.isArray(aliases)) continue
+    const local = rowLocal(key, row)
+    for (const alias of aliases) {
+      if (!isAlias(alias)) continue
+      const prev = aliasLocal.get(alias)
+      if (prev === undefined) aliasLocal.set(alias, local ?? null)
+      else if (prev !== local) aliasLocal.set(alias, null)
+    }
+  }
+
+  return (wireId) => {
+    if (isSyncId(wireId)) return identity.toLocal.get(wireId) ?? matchedLocal(wireId) ?? wireId
+    return matchedLocal(wireId) ?? aliasLocal.get(wireId) ?? wireId
+  }
+}
+
+// === hosts payload (spec §4) ===
+
+/** A `hosts` row on the wire: a host config under its wire id, plus the canonical row's `aliases`. */
+export type WireHostRow = HostConfig & { aliases?: string[] }
+
+export interface WireHostsPayload {
+  hosts: Record<string, WireHostRow>
+  hostOrder: string[]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Re-key a record through `map`. When two keys land on one target, the entry
+ * whose SOURCE key is a sync id wins (canonical over legacy), else the first.
+ */
+function rekeyEntries<T>(record: Record<string, T>, map: (key: string) => string): Array<[source: string, target: string, value: T]> {
+  const kept = new Map<string, [string, string, T]>()
+  for (const [key, value] of Object.entries(record)) {
+    const target = map(key)
+    const had = kept.get(target)
+    if (had === undefined || (isSyncId(key) && !isSyncId(had[0]))) kept.set(target, [key, target, value])
+  }
+  return [...kept.values()]
+}
+
+function rekey<T>(record: Record<string, T>, map: (key: string) => string): Record<string, T> {
+  const out: Record<string, T> = {}
+  for (const [, target, value] of rekeyEntries(record, map)) out[target] = value
+  return out
+}
+
+function mapOrder(order: unknown, map: (id: string) => string): unknown {
+  return Array.isArray(order) ? order.map((id) => (typeof id === 'string' ? map(id) : id)) : order
+}
+
+/**
+ * local → wire for the `hosts` payload: record keys, each row's `.id`, and
+ * `hostOrder`. `aliasesOf` (optional) supplies the legacy keys a CANONICAL
+ * row carries (merged and capped by `mergeAliases`; an empty list is omitted).
+ * An id the identity does not map passes through. Input is never mutated.
+ */
+export function hostsToWire(
+  payload: HostsPayload,
+  identity: HostIdentity,
+  aliasesOf?: (localId: string) => readonly unknown[] | undefined,
+): WireHostsPayload {
+  const toWire = (id: string) => identity.toWire.get(id) ?? id
+  const hosts: Record<string, WireHostRow> = {}
+  for (const [local, wire, value] of rekeyEntries(payload.hosts as Record<string, unknown>, toWire)) {
+    if (!isRecord(value)) {
+      hosts[wire] = value as WireHostRow
+      continue
+    }
+    const next = { ...value, id: wire } as WireHostRow
+    if (isSyncId(wire) && aliasesOf) {
+      const aliases = mergeAliases([], aliasesOf(local) ?? [])
+      if (aliases.length > 0) next.aliases = aliases
+    }
+    hosts[wire] = next
+  }
+  return { hosts, hostOrder: mapOrder(payload.hostOrder, toWire) as string[] }
+}
+
+/**
+ * wire → local for the `hosts` payload: record keys, `.id`, `hostOrder`
+ * through `resolve`; `aliases` is dropped (not a HostConfig field). Total.
+ */
+export function hostsFromWire(payload: WireHostsPayload, resolve: WireResolver): HostsPayload {
+  const hosts: Record<string, HostConfig> = {}
+  const source = isRecord(payload?.hosts) ? payload.hosts : {}
+  for (const [local, value] of Object.entries(rekey(source as Record<string, unknown>, resolve))) {
+    if (!isRecord(value)) {
+      hosts[local] = value as unknown as HostConfig
+      continue
+    }
+    const { aliases: _aliases, ...rest } = value as unknown as WireHostRow
+    hosts[local] = { ...rest, id: local }
+  }
+  return { hosts, hostOrder: mapOrder(payload?.hostOrder, resolve) as string[] }
 }
