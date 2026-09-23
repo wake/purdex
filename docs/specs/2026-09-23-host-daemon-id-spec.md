@@ -35,8 +35,9 @@ part 2 can match hosts across devices by daemon, not by SPA id.
 ### D1. Field
 `HostConfig.daemonId?: string` — present only when **valid**: `isValidDaemonId`
 (`spa/src/lib/daemon-id.ts`, the one shared validator) — a non-empty string of at most 512 UTF-16 code
-units with no control (`\p{Cc}`) or format (`\p{Cf}`: bidi overrides/isolates, zero-width chars)
-character. Never `""`. The contract mirrors the daemon — `EnsureHostID` keeps any non-empty `host_id`
+units with no control (`\p{Cc}`), format (`\p{Cf}`: bidi overrides/isolates, zero-width chars),
+line/paragraph separator (`\p{Zl}`, `\p{Zp}`) or lone surrogate (`\p{Cs}`; a proper surrogate pair
+is accepted) character. Never `""`. The contract mirrors the daemon — `EnsureHostID` keeps any non-empty `host_id`
 already in `config.toml` and only lowercases a generated hostname label, so upper case, extra colons,
 spaces and Unicode are real identities — and excludes only what is unsafe to store or render (review
 on #1351). The validator guards all three ways in: `observeDaemonId` (D3), `isHostsPayload` and the

@@ -34,4 +34,19 @@ describe('isValidDaemonId — any `host_id` a daemon can report (internal/config
       expect(isValidDaemonId(id), JSON.stringify(id)).toBe(false)
     }
   })
+
+  it('rejects line / paragraph separators (Zl, Zp) — they break a log line or the UI like a newline', () => {
+    for (const id of ['mini :abc123', 'mini:abc123 ']) expect(isValidDaemonId(id), JSON.stringify(id)).toBe(false)
+  })
+
+  it('rejects lone surrogates (Cs) — they render as U+FFFD, so two different ids would look the same', () => {
+    for (const id of ['\ud800', 'x\udc00y', 'mini:abc\ud83d', 'mini\ude00:abc']) expect(isValidDaemonId(id), JSON.stringify(id)).toBe(false)
+  })
+
+  it('accepts a proper surrogate pair (astral characters)', () => {
+    for (const id of ['host-😀:abc123', '𠀀:abc123']) {
+      expect(id.length - [...id].length).toBe(1) // exactly one pair: two code units, one code point
+      expect(isValidDaemonId(id), JSON.stringify(id)).toBe(true)
+    }
+  })
 })
