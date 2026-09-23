@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.438] - 2026-09-23
+
+### Feature：純介面分頁不再同步（#1380）
+
+新分頁、設定、dashboard、hosts、history、效能監看、編輯緩衝清單這些「只是頁面」的分頁不進 Profile Sync：送出時
+濾掉、收到時保留這台自己的（位置不變，目前停在它上面也不會被跳走）。新分頁一旦啟動成終端機等內容就開始同步；分割
+畫面只要有一個 pane 已啟動就整個同步。設定頁改成每台裝置各自一個。tabs 格式加標記，舊版 client 會 `locked:schema`
+到升級為止（不會刪掉自己的這類分頁）。
+
+### Feature：Rebuild 顯示 pane 最後的 agent 狀態，resume 預設跟著走（#1381，#1382）
+
+- **daemon**：最上層 agent 結束時（正常 `SessionEnd`，或程序被掃描到消失）廣播 `pdx_exit`（frame id、session id、
+  原因、時間）；刪除 frame 改成原子 claim，只有真正刪到的一方送出，事件晚到或清理失敗都不會重送或漏送；晚到的舊
+  `SessionEnd` 不再刪掉同一程序中新一次執行的 frame（既有 bug）。**需要重新部署 daemon。**
+- **App**：分頁的 rebuild 紀錄記下 agent 的 frame id；收到結束通知且 frame id 與 session id 都相符才記「已結束」
+  （時間、正常退出／程序消失），同 session 其他 pane 的 agent 不會混進來。Rebuild 面板顯示「最後看到時 ‹Agent› 在執行」
+  或「‹Agent› 已於 ‹時間› 結束」，agent 已結束時 resume 預設不勾（仍可手動勾）；Rebuild all 同規則。
+  App 斷線期間的結束不會補記（畫面會說明）。tabs 格式再加一個標記（ordinal 4）。
+
+追蹤：#1379（Rebuild all 預覽表，擱置）、#1383（proxy 關聯只用 pid 辨識的既有競態）。
+
 ## [1.0.0-alpha.437] - 2026-09-23
 
 ### Fix：第一次拉取後，Settings › Profile 不再出現嚇人的 `pull-hash-mismatch`（#1369，#1376）
