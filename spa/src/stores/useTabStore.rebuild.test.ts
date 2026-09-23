@@ -679,9 +679,9 @@ describe('setPaneRebuild — agent-exit', () => {
         capturedAt: at,
       },
     })
-  const exit = (frameId: string, at = 7_000, reason: 'session-end' | 'process-dead' = 'session-end', instance = '111:1000') =>
+  const exit = (frameId: string, at = 7_000, reason: 'session-end' | 'process-dead' = 'session-end', instance = '111:1000', sessionId = 'S1') =>
     useTabStore.getState().setPaneRebuild('h1', 'abc123', instance, {
-      kind: 'agent-exit', frameId, exited: { at, reason },
+      kind: 'agent-exit', frameId, sessionId, exited: { at, reason },
     })
   const backfill = (agent: NonNullable<PaneRebuildRecord['agent']>) =>
     useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
@@ -711,6 +711,28 @@ describe('setPaneRebuild — agent-exit', () => {
     const before = paneContentOf(tab.id, paneId)
     exit('F1')
     expect(paneContentOf(tab.id, paneId)).toBe(before)
+  })
+
+  // #1381 R1 P1: a SessionStart on the SAME daemon frame (same pid/start — cc
+  // /clear delivered out of order, an in-process /resume) keeps the frame id.
+  // The old run's late exit then shares the frame id with the new run, and
+  // only the session id tells them apart.
+  it('/clear interleaved with the OLD run\'s late exit (one frame id): the new run stays running', () => {
+    const tab = seed()
+    group('F1', 'S1')
+    group('F1', 'S2') // the new run's SessionStart landed on the same frame first
+    exit('F1', 8_000, 'session-end', '111:1000', 'S1') // the old run's SessionEnd, late
+    expect(rec(tab.id)?.agentExited).toBeUndefined()
+    expect(rec(tab.id)?.agent).toMatchObject({ sessionId: 'S2', frameId: 'F1' })
+    exit('F1', 9_000, 'session-end', '111:1000', 'S2') // the new run's own end does land
+    expect(rec(tab.id)?.agentExited).toEqual({ at: 9_000, reason: 'session-end' })
+  })
+
+  it('an exit without a session id lands only on a record without one', () => {
+    const tab = seed()
+    group('F1', 'S1')
+    exit('F1', 8_000, 'session-end', '111:1000', '')
+    expect(rec(tab.id)?.agentExited).toBeUndefined()
   })
 
   it('a record written before frame ids (no agent.frameId) never takes an exit', () => {
@@ -857,7 +879,7 @@ describe('Rebuild all — the last agent state', () => {
     seedOn('run1')
     seedOn('gone1')
     useTabStore.getState().setPaneRebuild('h1', 'gone1', '111:1000', {
-      kind: 'agent-exit', frameId: 'F-gone1', exited: { at: 5, reason: 'session-end' },
+      kind: 'agent-exit', frameId: 'F-gone1', sessionId: 'S-gone1', exited: { at: 5, reason: 'session-end' },
     })
     useTabStore.getState().markTerminated('h1', 'run1', 'session-closed')
     useTabStore.getState().markTerminated('h1', 'gone1', 'session-closed')
@@ -891,7 +913,7 @@ describe('Rebuild all — the last agent state', () => {
       )
       vi.setSystemTime(3_000)
       useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
-        kind: 'agent-exit', frameId: 'F1', exited: { at: 2_500, reason: 'process-dead' },
+        kind: 'agent-exit', frameId: 'F1', sessionId: 'S1', exited: { at: 2_500, reason: 'process-dead' },
       })
       useTabStore.getState().markTerminated('h1', 'abc123', 'session-closed')
 

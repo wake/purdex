@@ -243,6 +243,15 @@ describe('exit write path', () => {
     expect(recordOf(tab.id)?.agentExited).toEqual({ at: 7_000, reason: 'process-dead' })
   })
 
+  it('/clear out of order on one frame: the old run\'s late exit leaves the new run running', () => {
+    const tab = seedTerminalPane('222:2000')
+    start('F1', 'S1')
+    start('F1', 'S2') // the new run's SessionStart reused the frame
+    send(event({ status: 'clear', detail: { pdx_exit: exitEnvelope({ frame_id: 'F1', session_id: 'S1' }) } }))
+    expect(recordOf(tab.id)?.agentExited).toBeUndefined()
+    expect(recordOf(tab.id)?.agent).toMatchObject({ sessionId: 'S2', frameId: 'F1' })
+  })
+
   it('an exit of another run changes nothing', () => {
     const tab = seedTerminalPane('222:2000')
     start('F2')

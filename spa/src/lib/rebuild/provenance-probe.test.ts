@@ -206,7 +206,7 @@ describe('probeSessionProvenance', () => {
       record: { tmuxInstance: '222:2000', agent: { type: 'cc', sessionId: 'sess-1', frameId: 'F-old', updatedAt: 1 }, capturedAt: 1 },
     })
     useTabStore.getState().setPaneRebuild('h1', 'abc123', '222:2000', {
-      kind: 'agent-exit', frameId: 'F-old', exited: { at: 2, reason: 'session-end' },
+      kind: 'agent-exit', frameId: 'F-old', sessionId: 'sess-1', exited: { at: 2, reason: 'session-end' },
     })
     expect(recordOf(tab.id)?.agentExited).toBeDefined()
     vi.mocked(fetchSessionProvenance).mockResolvedValue(answer())
@@ -224,7 +224,7 @@ describe('probeSessionProvenance', () => {
       record: { tmuxInstance: '222:2000', agent: { type: 'cc', sessionId: 'sess-1', frameId: 'F-old', updatedAt: 1 }, capturedAt: 1 },
     })
     useTabStore.getState().setPaneRebuild('h1', 'abc123', '222:2000', {
-      kind: 'agent-exit', frameId: 'F-old', exited: { at: 2, reason: 'process-dead' },
+      kind: 'agent-exit', frameId: 'F-old', sessionId: 'sess-1', exited: { at: 2, reason: 'process-dead' },
     })
     vi.mocked(fetchSessionProvenance).mockResolvedValue(notFound())
     trigger()

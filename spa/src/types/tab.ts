@@ -156,7 +156,7 @@ export type TmuxSessionContent = Extract<PaneContent, { kind: 'tmux-session' }>
  *   flagged `unverified` or `agentExited`, or confirms one — and otherwise does
  *   nothing.
  * - `agent-exit` — the daemon's `pdx_exit` envelope. Sets `agentExited` only on
- *   a record whose `agent.frameId` equals the exit's, and is the one
+ *   a record whose `agent.frameId` AND `agent.sessionId` equal the exit's, and is the one
  *   session-scoped write a TERMINATED pane still takes (agent-last-state spec,
  *   review decision 4): termination can arrive before the exit broadcast.
  */
@@ -173,7 +173,13 @@ export type RebuildPatch =
   | { kind: 'field'; field: 'cwd' | 'resumeCommandOverride' | 'sessionName'; value: string }
   | { kind: 'probe-cwd'; cwd: string }
   | { kind: 'unverified'; unverified: boolean }
-  | { kind: 'agent-exit'; frameId: string; exited: NonNullable<PaneRebuildRecord['agentExited']> }
+  | {
+      kind: 'agent-exit'
+      frameId: string
+      /** The ENDING run's session id, from the SessionEnd payload ('' when it carried none). */
+      sessionId: string
+      exited: NonNullable<PaneRebuildRecord['agentExited']>
+    }
 
 // === Workspace ===
 export type IconWeight = 'bold' | 'regular' | 'thin' | 'light' | 'fill' | 'duotone'

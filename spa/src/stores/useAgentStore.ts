@@ -103,8 +103,8 @@ function writeProvenanceRecord(
 
 /**
  * Mark the recorded agent exited from a `pdx_exit` envelope (agent-last-state
- * spec §2). The store applies it only to a record whose `agent.frameId` is the
- * exit's — so this may be called for every event without a pane check here.
+ * spec §2). The store applies it only to a record whose `agent.frameId` and
+ * `agent.sessionId` are the exit's — so this may be called for every event without a pane check here.
  */
 function writeExitRecord(
   hostId: string,
@@ -116,6 +116,7 @@ function writeExitRecord(
   useTabStore.getState().setPaneRebuild(hostId, sessionCode, exit.tmuxInstance, {
     kind: 'agent-exit',
     frameId: exit.frameId,
+    sessionId: exit.sessionId,
     exited: { at: exit.at, reason: exit.reason },
   })
 }

@@ -382,8 +382,15 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
       // key, so another pane's agent, an older run sharing the session id, and
       // a record written before frame ids existed are all left alone. No
       // record, no agent — nothing to mark.
+      //
+      // The session id must match too (#1381 R1 P1): a SessionStart on the
+      // same daemon frame (same pid/start — cc /clear delivered out of order,
+      // an in-process /resume) keeps the frame id, so the old run's late exit
+      // shares it with the new run. Only the session id — which the daemon
+      // takes from the SessionEnd payload — says which run ended.
       const frameId = prev.agent?.frameId
       if (!frameId || frameId !== patch.frameId) return c
+      if ((prev.agent?.sessionId ?? '') !== patch.sessionId) return c
       const { at, reason } = patch.exited
       if (prev.agentExited?.at === at && prev.agentExited.reason === reason) return c
       // Re-stamped (review decision 8): the batch elects each group's newest
