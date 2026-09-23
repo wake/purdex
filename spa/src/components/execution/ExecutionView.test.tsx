@@ -264,7 +264,7 @@ describe('ExecutionView', () => {
     expect(screen.getByText(/not found/i)).toBeInTheDocument()
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'host_removed', paused: false })
     rerender(<ExecutionView {...base} isActive />)
-    expect(screen.getByText(/host removed/i)).toBeInTheDocument()
+    expect(screen.getByText(/no host for this execution/i)).toBeInTheDocument()
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'nex_disabled', paused: false })
     rerender(<ExecutionView {...base} isActive />)
     expect(screen.getByText(/not enabled/i)).toBeInTheDocument()

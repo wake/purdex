@@ -273,6 +273,8 @@
   "pane.split_vertical": "垂直分割",
   "pane.close": "關閉分割區",
   "pane.detach": "分離為分頁",
+  "pane.missing_host.title": "這台裝置沒有主機 {{host}}",
+  "pane.missing_host.desc": "分頁保持原樣；在這台裝置加入此主機後即會恢復，其他裝置不受影響。",
 
   "nav.scroll_left": "向左捲動",
   "nav.scroll_right": "向右捲動",
@@ -625,7 +627,7 @@
   "execution.loading": "載入執行體…",
   "execution.loading_error": "載入失敗：{{message}}，重試中",
   "execution.not_found": "這台主機上找不到此執行體。",
-  "execution.host_removed": "主機已移除。",
+  "execution.host_removed": "這台裝置沒有此執行所屬的主機。",
   "execution.nex_unavailable": "這台主機的 Nexen 無法使用：{{error}}",
   "execution.nex_disabled": "這台主機未啟用 Nexen，請到「主機 → Nexen」啟用。",
   "execution.empty": "尚無訊息。",
