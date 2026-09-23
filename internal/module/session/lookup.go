@@ -42,7 +42,7 @@ func (m *SessionModule) LookupCodeByNameContext(ctx context.Context, name string
 
 	// Bounded like every session-list read (#1293): this runs under
 	// nameCacheMu on the hook hot path.
-	ctx, cancel := context.WithTimeout(ctx, listReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, m.readTimeout())
 	defer cancel()
 	sessions, err := m.tmux.ListSessions(ctx)
 	if err != nil {

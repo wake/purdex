@@ -291,3 +291,42 @@ func TestGetSessionContext_CappedAtListReadTimeout(t *testing.T) {
 	require.False(t, gotDeadline.IsZero())
 	assert.WithinDuration(t, start.Add(listReadTimeout), gotDeadline, time.Second)
 }
+
+// GetSession, CreateSession (its post-create read) and the name lookup take
+// their budget from m.readTimeout(), so a test override applies to them like
+// to every other session-list read.
+func TestReadTimeoutOverride_GetCreateLookup(t *testing.T) {
+	const short = 150 * time.Millisecond
+	cases := map[string]func(t *testing.T, mod *SessionModule){
+		"GetSession": func(t *testing.T, mod *SessionModule) {
+			code, err := EncodeSessionID("$0")
+			require.NoError(t, err)
+			_, _ = mod.GetSessionContext(context.Background(), code)
+		},
+		"CreateSession": func(t *testing.T, mod *SessionModule) {
+			_, _ = mod.CreateSessionContext(context.Background(), "fresh", t.TempDir())
+		},
+		"LookupCodeByName": func(t *testing.T, mod *SessionModule) {
+			_, _ = mod.LookupCodeByNameContext(context.Background(), "dev")
+		},
+	}
+	for name, run := range cases {
+		t.Run(name, func(t *testing.T) {
+			mod, _, fake := newTestModule(t)
+			mod.tmuxInstanceFn = func(context.Context) string { return "1:1" }
+			mod.listTimeout = short
+			fake.AddSession("dev", "/tmp")
+			var gotDeadline time.Time
+			fake.SetReadHook(func(ctx context.Context, op tmux.ReadOp, target string) error {
+				if op == tmux.ReadListSessions && gotDeadline.IsZero() {
+					gotDeadline, _ = ctx.Deadline()
+				}
+				return nil
+			})
+			start := time.Now()
+			run(t, mod)
+			require.False(t, gotDeadline.IsZero(), "list read ran without a deadline")
+			assert.WithinDuration(t, start.Add(short), gotDeadline, 100*time.Millisecond)
+		})
+	}
+}
