@@ -159,6 +159,10 @@ func runServe(args []string) {
 	pidFile := mustAcquirePidLock(pidPath, os.Getpid(), log.Fatalf)
 	defer releasePidLock(pidFile, pidPath)
 
+	// Files of modules that no longer exist (sync.db, device_state.db + -wal/-shm; #1303).
+	// After the PID lock, so only the daemon that owns this data_dir touches it.
+	removeLegacyDataFiles(cfg.DataDir, log.Printf)
+
 	// Register token for crash log redaction
 	if cfg.Token != "" {
 		setRedactTokens([]string{cfg.Token})
