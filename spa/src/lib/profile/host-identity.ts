@@ -150,3 +150,102 @@ export async function identityOf(hosts: Record<string, IdentityHost>, opts: Asyn
   }
   return buildIdentity(hosts, claimWire)
 }
+
+// === Apply-side matching (spec §6, §11.5, §11.6) ===
+
+/**
+ * An incoming `hosts` row as far as matching is concerned. Wire data: every
+ * field is untrusted, so it is typed loosely and read defensively.
+ */
+export interface IncomingHostRow {
+  id?: unknown
+  daemonId?: unknown
+  aliases?: unknown
+}
+
+export type HostMatchError =
+  /** Two incoming rows name one daemon (same daemonId, or a canonical key and a claim hashing to it). */
+  | 'duplicate-host-identity'
+  /** A row's daemon is claimed by more than one LOCAL host: which one it updates is ambiguous. */
+  | 'host-identity-conflict'
+
+export interface HostMatch {
+  /** Per incoming row key: the local host it updates in place, or `'new'` (create with a new local id). */
+  byRow: Map<string, string>
+  /** Local hosts no row matched (the caller cascades their removal). */
+  removed: string[]
+  /** Set → nothing may be applied; `byRow` and `removed` are then empty. */
+  error?: HostMatchError
+}
+
+/** The one sentinel `byRow` uses for "create a new local host". Never a local id (those are 6-char base36). */
+export const NEW_HOST = 'new'
+
+function rowDaemonId(row: unknown): string | undefined {
+  if (row === null || typeof row !== 'object') return undefined
+  const daemonId = (row as IncomingHostRow).daemonId
+  return isValidDaemonId(daemonId) ? daemonId : undefined
+}
+
+/**
+ * Match each incoming row to a local host (spec §6 as amended by §11.5/§11.6):
+ *   - a row carrying a valid `daemonId` matches the local host with that
+ *     `daemonId` — and ONLY by it; its key never captures anything;
+ *   - else a `d1_` key matches the local host whose `syncIdOf(daemonId)` is it;
+ *     a sync id of another version matches nothing;
+ *   - else (a legacy local-id key) it matches the local host of that id, but
+ *     only if that host has no `daemonId` either;
+ *   - otherwise the row is new.
+ * One-to-one: two rows resolving to one daemon → `duplicate-host-identity`.
+ */
+export function matchIncomingHosts(
+  localHosts: Record<string, IdentityHost>,
+  incomingRows: Record<string, unknown>,
+  opts: IdentityOptions = {},
+): HostMatch {
+  const hash = opts.hash ?? syncIdOfSync
+  const failed = (error: HostMatchError): HostMatch => ({ byRow: new Map(), removed: [], error })
+
+  const localsByDaemon = new Map<string, string[]>()
+  const localsBySyncId = new Map<string, string[]>()
+  for (const [local, host] of Object.entries(localHosts)) {
+    const daemonId = host?.daemonId
+    if (!isValidDaemonId(daemonId)) continue
+    const push = (m: Map<string, string[]>, k: string) => {
+      const list = m.get(k)
+      if (list) list.push(local)
+      else m.set(k, [local])
+    }
+    push(localsByDaemon, daemonId)
+    push(localsBySyncId, hash(daemonId))
+  }
+
+  const byRow = new Map<string, string>()
+  const seenDaemons = new Set<string>()
+  const matched = new Set<string>()
+  for (const [key, row] of Object.entries(incomingRows)) {
+    const daemonId = rowDaemonId(row)
+    let candidates: string[] = []
+    let daemonKey: string | null = null
+    if (daemonId !== undefined) {
+      daemonKey = hash(daemonId)
+      candidates = localsByDaemon.get(daemonId) ?? []
+    } else if (isSyncId(key)) {
+      daemonKey = key
+      if (key.startsWith(SYNC_ID_PREFIX)) candidates = localsBySyncId.get(key) ?? []
+    } else {
+      const host = Object.hasOwn(localHosts, key) ? localHosts[key] : undefined
+      if (host && !isValidDaemonId(host.daemonId)) candidates = [key]
+    }
+    if (daemonKey !== null) {
+      if (seenDaemons.has(daemonKey)) return failed('duplicate-host-identity')
+      seenDaemons.add(daemonKey)
+    }
+    if (candidates.length > 1) return failed('host-identity-conflict')
+    byRow.set(key, candidates[0] ?? NEW_HOST)
+    if (candidates[0] !== undefined) matched.add(candidates[0])
+  }
+
+  const removed = Object.keys(localHosts).filter((local) => !matched.has(local))
+  return { byRow, removed }
+}
