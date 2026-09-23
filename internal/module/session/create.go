@@ -40,7 +40,7 @@ const (
 	// the session. SessionAlive reports true so the caller does not assume
 	// nothing was left behind.
 	CreateStageNewSessionUnconfirmed CreateStage = "new_session_unconfirmed"
-	CreateStageList       CreateStage = "list"        // tmux list-sessions failed, or the new session was not in it
+	CreateStageList                  CreateStage = "list" // tmux list-sessions failed, or the new session was not in it
 	// The tmux generation read after list-sessions differs from the one read
 	// before new-session: the server the session was created on has been
 	// replaced, and the session died with it. Nothing of ours exists.

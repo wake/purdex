@@ -217,7 +217,7 @@ func TestCreateSessionContext_NewSessionTimedOutButCreated(t *testing.T) {
 			return nil
 		}
 		_ = fake.NewSession(target, "/tmp") // the server made it...
-		<-ctx.Done()                         // ...and the client never answered
+		<-ctx.Done()                        // ...and the client never answered
 		return ctx.Err()
 	})
 
