@@ -20,6 +20,9 @@ import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
 import { useLayoutStore } from './stores/useLayoutStore'
 
+// Locales / themes are also registered by useI18nStore / useThemeStore before their persist
+// hydrates (#1385) — by the time this line runs, those stores already exist. These calls are
+// idempotent Map sets, kept so the registries don't depend on which module imports a store first.
 registerBuiltinLocales()
 registerBuiltinThemes()
 registerBuiltinModules()
