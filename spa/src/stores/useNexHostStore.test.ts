@@ -306,6 +306,25 @@ describe('stale resolves', () => {
     expect(entry().info).toBeNull()
   })
 
+  it('feeds the answered host_id to the host store (spec 2026-09-23 D4.3)', async () => {
+    vi.mocked(hostApi.fetchInfo).mockResolvedValueOnce(
+      { ok: true, status: 200, json: () => Promise.resolve({ host_id: 'mini-lab:abc123', nex: info() }) } as Response,
+    )
+    await ensure()
+    expect(useHostStore.getState().hosts[H].daemonId).toBe('mini-lab:abc123')
+  })
+
+  it('a host_id answered for the old endpoint after a re-point is dropped (D4.3)', async () => {
+    let settle!: (r: Response) => void
+    vi.mocked(hostApi.fetchInfo).mockReturnValueOnce(new Promise<Response>((resolve) => { settle = resolve }))
+    const p = ensure()
+    await flush()
+    useHostStore.getState().updateHost(H, { port: 7861 })
+    settle({ ok: true, status: 200, json: () => Promise.resolve({ host_id: 'mini-lab:old', nex: info() }) } as Response)
+    await p
+    expect('daemonId' in useHostStore.getState().hosts[H]).toBe(false)
+  })
+
   it('after the host was removed without clearHost are ignored', async () => {
     const i = pendingInfo()
     const p = ensure()

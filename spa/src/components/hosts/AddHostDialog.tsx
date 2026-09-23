@@ -1,17 +1,39 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   X, LinkSimple, ArrowsClockwise, CheckCircle, Warning, ArrowCounterClockwise,
 } from '@phosphor-icons/react'
-import { useHostStore } from '../../stores/useHostStore'
+import { requestAtOf, selectDaemonIdMismatch, selectDaemonIdVerified, useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { decodePairingCode, cleanPairingInput, generatePurdexToken } from '../../lib/pairing-codec'
-import { fetchPairVerify, fetchPairSetup, fetchTokenAuth, PairingError } from '../../lib/host-api'
+import { fetchInfoAt, fetchPairVerify, fetchPairSetup, fetchTokenAuth, PairingError } from '../../lib/host-api'
 
 interface Props {
   onClose: () => void
 }
 
-type Stage = 'idle' | 'pairing' | 'paired' | 'manual' | 'saving' | 'done' | 'error'
+type Stage = 'idle' | 'pairing' | 'paired' | 'manual' | 'saving' | 'done' | 'error' | 'duplicate'
+
+/** What the dialog learned when the confirmed daemon is already a host here (spec 2026-09-23 D5). */
+interface DuplicateDaemon {
+  hostId: string
+  name: string
+  /** The endpoint + token just confirmed — only offered for a re-point on the pairing route. */
+  ip: string
+  port: number
+  token: string | undefined
+  /** The `host_id` the new endpoint answered. */
+  observed: string
+  /** Pairing route, `H` verified here: its token was already replaced with the new one (PR review #1). */
+  tokenUpdated: boolean
+}
+
+/** An existing host claiming `daemonId` whose claim is not contradicted here (a mismatch-flagged host cannot tell). */
+function findHostByDaemon(daemonId: string): { id: string; name: string } | undefined {
+  const state = useHostStore.getState()
+  return Object.values(state.hosts).find(
+    (h) => h.daemonId === daemonId && !selectDaemonIdMismatch(state, h.id),
+  )
+}
 
 export function AddHostDialog({ onClose }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -26,6 +48,20 @@ export function AddHostDialog({ onClose }: Props) {
   const [useToken, setUseToken] = useState(false)
   const [setupSecret, setSetupSecret] = useState('')
   const [healthMode, setHealthMode] = useState<'pairing' | 'pending' | 'normal' | null>(null)
+  const [duplicate, setDuplicate] = useState<DuplicateDaemon | null>(null)
+  // The identity probe in flight; aborted when the dialog goes away (PR review #3).
+  const probeRef = useRef<AbortController | null>(null)
+  // Pairing route: once `fetchPairSetup` succeeded the daemon's token is rotated, so the new
+  // token must end up in a host however the dialog ends. This is that save, pending until the
+  // dialog decides; running it clears it, so it happens at most once.
+  const commitRef = useRef<(() => string) | null>(null)
+
+  useEffect(() => () => {
+    probeRef.current?.abort()
+    const commit = commitRef.current
+    commitRef.current = null
+    commit?.()
+  }, [])
 
   // Debounced health check in manual (token) mode
   useEffect(() => {
@@ -52,14 +88,25 @@ export function AddHostDialog({ onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useToken, ip, port, stage])
 
+  // Every way of dismissing (Escape, X, backdrop, Cancel) goes through here. A probe in
+  // flight is cancelled; a pending pairing-route save runs — so dismissing an unanswered
+  // duplicate choice counts as "Add as a separate host" (PR review #1).
+  const dismiss = useCallback(() => {
+    probeRef.current?.abort()
+    const commit = commitRef.current
+    commitRef.current = null
+    commit?.()
+    onClose()
+  }, [onClose])
+
   // Escape to close
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') dismiss()
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+  }, [dismiss])
 
   const handlePair = async () => {
     setError('')
@@ -119,13 +166,62 @@ export function AddHostDialog({ onClose }: Props) {
       if (existingId) {
         // Update existing host's token instead of creating a duplicate
         useHostStore.getState().updateHost(existingId, { token: trimmedToken || undefined })
+        // …and verify it now (spec D4.1), even if it is not connected. The request identity is
+        // captured after the token update so observeDaemonId's freshness guards apply. Failure,
+        // timeout or dismissal changes nothing else — the token update stands.
+        const updated = useHostStore.getState().hosts[existingId]
+        if (updated) {
+          const at = requestAtOf(updated)
+          const probe = new AbortController()
+          probeRef.current = probe
+          const observed = await fetchInfoAt(`http://${trimmedIp}:${trimmedPort || '7860'}`, trimmedToken, probe.signal)
+            .then((info) => (typeof info?.host_id === 'string' ? info.host_id : ''))
+            .catch(() => '')
+          probeRef.current = null
+          if (probe.signal.aborted) return
+          useHostStore.getState().observeDaemonId(existingId, observed, at)
+        }
       } else {
-        addHost({
-          name: trimmedIp,
-          ip: trimmedIp,
-          port: portNum,
-          token: trimmedToken || undefined,
-        })
+        const addNew = () => {
+          commitRef.current = null
+          return addHost({
+            name: trimmedIp,
+            ip: trimmedIp,
+            port: portNum,
+            token: trimmedToken || undefined,
+          })
+        }
+        // Pairing route: from here on the rotated token is saved even if the dialog is dismissed.
+        if (!useToken) commitRef.current = addNew
+        // Learn the new daemon's identity (spec D4.1). Any failure → cannot tell → add as today.
+        const base = `http://${trimmedIp}:${trimmedPort || '7860'}`
+        const probe = new AbortController()
+        probeRef.current = probe
+        const observed = await fetchInfoAt(base, trimmedToken, probe.signal)
+          .then((info) => (typeof info?.host_id === 'string' ? info.host_id : ''))
+          .catch(() => '')
+        probeRef.current = null
+        // Dismissed mid-probe: the pairing route already saved the host (the pending
+        // commit ran); the token route simply cancels.
+        if (probe.signal.aborted || (!useToken && commitRef.current !== addNew)) return
+        const same = observed ? findHostByDaemon(observed) : undefined
+        if (same) {
+          const dup = { hostId: same.id, name: same.name, ip: trimmedIp, port: portNum, token: trimmedToken || undefined, observed }
+          if (!useToken && selectDaemonIdVerified(useHostStore.getState(), same.id)) {
+            // Same daemon, verified here, token just rotated: carry the new token over.
+            commitRef.current = null
+            useHostStore.getState().updateHost(same.id, { token: trimmedToken || undefined })
+            setDuplicate({ ...dup, tokenUpdated: true })
+          } else {
+            // Pairing route: `commitRef` still holds "add as a separate host" until the user picks.
+            setDuplicate({ ...dup, tokenUpdated: false })
+          }
+          setStage('duplicate')
+          return
+        }
+        const newId = addNew()
+        const added = useHostStore.getState().hosts[newId]
+        if (added) useHostStore.getState().observeDaemonId(newId, observed, requestAtOf(added))
       }
       setStage('done')
       onClose()
@@ -143,6 +239,26 @@ export function AddHostDialog({ onClose }: Props) {
         setError(err instanceof Error ? err.message : t('hosts.connection_failed'))
       }
     }
+  }
+
+  // Pairing route only: the daemon's token was just replaced, so the existing host's
+  // saved token is stale. Re-point it here, explicitly — never silently (spec D5).
+  const handleUseAddress = () => {
+    if (!duplicate) return
+    commitRef.current = null
+    useHostStore.getState().updateHost(duplicate.hostId, { ip: duplicate.ip, port: duplicate.port, token: duplicate.token })
+    onClose()
+  }
+
+  // Pairing route, `H` not verified: keep `H` as it is and add the new endpoint as its own host.
+  const handleAddSeparate = () => {
+    if (!duplicate) return
+    const commit = commitRef.current
+    commitRef.current = null
+    const newId = commit?.()
+    const added = newId ? useHostStore.getState().hosts[newId] : undefined
+    if (added) useHostStore.getState().observeDaemonId(added.id, duplicate.observed, requestAtOf(added))
+    onClose()
   }
 
   const handleToggleToken = (checked: boolean) => {
@@ -168,12 +284,12 @@ export function AddHostDialog({ onClose }: Props) {
   const tokenValid = token.length >= 20
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="add-host-dialog-title" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="add-host-dialog-title" onClick={dismiss}>
       <div className="bg-surface-primary border border-border-default rounded-lg shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
           <h2 id="add-host-dialog-title" className="text-sm font-semibold">{t('hosts.add_host')}</h2>
-          <button onClick={onClose} className="text-text-muted hover:text-text-primary cursor-pointer">
+          <button onClick={dismiss} className="text-text-muted hover:text-text-primary cursor-pointer">
             <X size={16} />
           </button>
         </div>
@@ -290,6 +406,14 @@ export function AddHostDialog({ onClose }: Props) {
             )}
           </div>
 
+          {/* Duplicate daemon (spec D5) */}
+          {stage === 'duplicate' && duplicate && (
+            <div className="flex items-start gap-2 px-2 py-2 rounded text-xs bg-yellow-500/10 border border-yellow-500/20 text-yellow-400">
+              <Warning size={14} className="shrink-0 mt-0.5" />
+              <span>{t(duplicate.tokenUpdated ? 'hosts.duplicate_daemon_token_updated' : 'hosts.duplicate_daemon', { name: duplicate.name })}</span>
+            </div>
+          )}
+
           {/* Error feedback */}
           {error && (
             <div className="flex items-center gap-2 text-xs text-red-400">
@@ -304,20 +428,47 @@ export function AddHostDialog({ onClose }: Props) {
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border-subtle">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded text-xs text-text-secondary hover:text-text-primary cursor-pointer"
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            onClick={handleConfirm}
-            disabled={confirmDisabled || !ip || !tokenValid || isSaving}
-            className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
-          >
-            {isSaving && <ArrowsClockwise size={14} className="animate-spin" />}
-            {t('hosts.confirm')}
-          </button>
+          {stage === 'duplicate' && duplicate && isPairingRoute && !duplicate.tokenUpdated ? (
+            // The daemon's token was rotated and `H` is not verified here: a choice is required.
+            <>
+              <button
+                onClick={handleUseAddress}
+                className="px-4 py-2 rounded text-xs text-text-secondary hover:text-text-primary cursor-pointer"
+              >
+                {t('hosts.duplicate_daemon_use_address', { name: duplicate.name })}
+              </button>
+              <button
+                onClick={handleAddSeparate}
+                className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer"
+              >
+                {t('hosts.duplicate_daemon_add_separate')}
+              </button>
+            </>
+          ) : stage === 'duplicate' && duplicate ? (
+            <button
+              onClick={dismiss}
+              className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer"
+            >
+              {t('common.close')}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={dismiss}
+                className="px-4 py-2 rounded text-xs text-text-secondary hover:text-text-primary cursor-pointer"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={confirmDisabled || !ip || !tokenValid || isSaving}
+                className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isSaving && <ArrowsClockwise size={14} className="animate-spin" />}
+                {t('hosts.confirm')}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

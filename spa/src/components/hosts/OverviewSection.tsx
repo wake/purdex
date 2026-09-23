@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, Trash, Plugs, LockSimple } from '@phosphor-icons/react'
-import { useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
+import { requestAtOf, useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
 import { deleteHostWithUndoToast } from '../../lib/host-lifecycle'
@@ -44,9 +44,18 @@ export function OverviewSection({ hostId }: Props) {
   // Fetch info + config on mount or hostId change
   useEffect(() => {
     let cancelled = false
+    const atRequest = useHostStore.getState().hosts[hostId]
+    const at = atRequest ? requestAtOf(atRequest) : { endpoint: '', token: '' }
     fetchInfo(hostId)
       .then((r) => r.ok ? r.json() : null)
-      .then((data) => { if (!cancelled && data) setInfo(data) })
+      .then((data) => {
+        // Also this device's daemon-identity check (spec 2026-09-23 D4.3); guarded by the
+        // endpoint + token captured above, so it holds even after unmount.
+        if (data && typeof data.host_id === 'string') {
+          useHostStore.getState().observeDaemonId(hostId, data.host_id, at)
+        }
+        if (!cancelled && data) setInfo(data)
+      })
       .catch(() => {})
 
     hostFetch(hostId, '/api/config')

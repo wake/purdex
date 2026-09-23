@@ -4,7 +4,7 @@ import { useHostStore } from '../stores/useHostStore'
 import {
   listSessions, listSessionsFresh, createSession, deleteSession,
   fetchSessionCwd, fetchSessionProvenance, fetchSessionHome, getConfig, updateConfig, agentUpload,
-  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers,
+  fetchMonitorSnapshot, fetchMonitorConfig, updateMonitorConfig, fetchPeers, fetchInfoAt, INFO_AT_TIMEOUT_MS,
   type MonitorSnapshot, type Session,
 } from './host-api'
 import { indexPeerRows } from '../stores/usePeerStore'
@@ -517,5 +517,56 @@ describe('fetchPeers', () => {
       new Response('nope', { status: 503 }),
     )
     await expect(fetchPeers(HOST_ID)).rejects.toThrow('fetchPeers failed: 503')
+  })
+})
+
+describe('fetchInfoAt (raw base + Bearer, spec 2026-09-23 D4.1)', () => {
+  it('GETs <base>/api/info with the given token and returns the typed body', async () => {
+    const info = { host_id: 'mini-lab:abc123', tmux_instance: '', purdex_version: '', tmux_version: '', os: '', arch: '' }
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(info), { status: 200 }))
+    await expect(fetchInfoAt('http://10.0.0.7:7860', 'tok-x')).resolves.toEqual(info)
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toBe('http://10.0.0.7:7860/api/info')
+    expect(new Headers((init as RequestInit).headers).get('Authorization')).toBe('Bearer tok-x')
+  })
+
+  it('does not use any stored host token', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+    await fetchInfoAt(BASE, 'other')
+    expect(new Headers((spy.mock.calls[0][1] as RequestInit).headers).get('Authorization')).toBe('Bearer other')
+  })
+
+  it('rejects on a non-2xx answer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('no', { status: 401 }))
+    await expect(fetchInfoAt(BASE, 'bad')).rejects.toThrow()
+  })
+
+  // A fetch that only ends when its signal aborts.
+  const hangUntilAborted = () =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise<Response>((_res, rej) => {
+      (init as RequestInit | undefined)?.signal?.addEventListener('abort', () => rej(new Error('aborted')))
+    }))
+
+  it('gives up after a bounded timeout (review #3)', async () => {
+    vi.useFakeTimers()
+    try {
+      hangUntilAborted()
+      const p = fetchInfoAt(BASE, 'tok')
+      const settled = expect(p).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(INFO_AT_TIMEOUT_MS)
+      await settled
+      expect(INFO_AT_TIMEOUT_MS).toBeLessThanOrEqual(5000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts when the caller signal aborts (review #3)', async () => {
+    hangUntilAborted()
+    const ctl = new AbortController()
+    const p = fetchInfoAt(BASE, 'tok', ctl.signal)
+    ctl.abort()
+    const stillPending = new Promise((_res, rej) => setTimeout(() => rej(new Error('still pending')), 50))
+    await expect(Promise.race([p, stillPending])).rejects.toThrow('aborted')
   })
 })

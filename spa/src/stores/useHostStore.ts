@@ -49,6 +49,21 @@ export interface HostConfig {
   icon?: string
   /** Phosphor weight for `icon`; absent means `'regular'`. Re-validated with `isIconWeight`. */
   iconWeight?: IconWeight
+  /**
+   * The daemon's own stable identity (`/api/info` → `host_id`) as claimed for this
+   * entry (spec 2026-09-23 D1/D2). Present only when non-empty — never `""`. Synced;
+   * on pull the SOT value wins. Whether it holds on *this* device is the runtime
+   * `daemonIdMismatch`, never this field.
+   */
+  daemonId?: string
+}
+
+/** This device's verification of `HostConfig.daemonId` failed (spec D2/D3). Runtime only. */
+export interface DaemonIdMismatch {
+  stored: string
+  observed: string
+  /** `ip:port` the answer came from. */
+  endpoint: string
 }
 
 export interface HostRuntime {
@@ -64,6 +79,13 @@ export interface HostRuntime {
   daemonState?: 'connected' | 'refused' | 'unreachable' | 'auth-error'
   tmuxState?: 'ok' | 'unavailable'
   manualRetry?: () => Promise<void> | void  // safe: runtime excluded from persist partialize
+  /** Read through `selectDaemonIdMismatch` — a raw flag may be stale after a re-point. */
+  daemonIdMismatch?: DaemonIdMismatch
+  /**
+   * This session observed `daemonId` at `endpoint` (a learned or equal answer; token-agnostic).
+   * Read through `selectDaemonIdVerified` (PR review #1).
+   */
+  daemonIdVerified?: { endpoint: string; daemonId: string }
 }
 
 export interface HostInfo {
@@ -86,8 +108,19 @@ interface HostState {
   /** Host the Development page targets. Device-local, not synced (spec D3). */
   devHostId: string | null
 
+  /** Never writes `daemonId` — only `observeDaemonId` does (spec D3). */
   addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
+  /**
+   * Never writes `daemonId` (only `observeDaemonId` does; sync applies through its own
+   * setState path). A re-point (ip or port changes) clears it unconditionally (spec D3).
+   */
   updateHost: (hostId: string, updates: Partial<Pick<HostConfig, 'name' | 'ip' | 'port' | 'token'>>) => void
+  /**
+   * The single entry point for every `/api/info` answer (spec D3). `atRequest` is
+   * `requestAtOf(host)` captured before the request; an answer for a host that is gone,
+   * has moved or changed token since is dropped, as is an empty `observed`.
+   */
+  observeDaemonId: (hostId: string, observed: string, atRequest: HostRequestAt) => void
   /** Legacy entry point kept for the current color UI: writes `colors.console.main` (alpha preserved, default 100); `null` clears the console set. */
   setHostColor: (hostId: string, color: string | null) => void
   /**
@@ -143,6 +176,58 @@ function createDefaultState() {
   }
 }
 
+/** `ip:port` — the endpoint part of what `observeDaemonId` guards on. */
+export function hostEndpoint(h: Pick<HostConfig, 'ip' | 'port'>): string {
+  return `${h.ip}:${h.port}`
+}
+
+/** What an `/api/info` request went to: endpoint + token, captured before the request (spec D3). */
+export interface HostRequestAt {
+  endpoint: string
+  token: string
+}
+
+export function requestAtOf(h: Pick<HostConfig, 'ip' | 'port' | 'token'>): HostRequestAt {
+  return { endpoint: hostEndpoint(h), token: h.token ?? '' }
+}
+
+/** The host's mismatch flag, only while it still describes the host as it is now
+ *  (same endpoint, same stored claim) — a re-point, local or by sync, never
+ *  inherits an old flag (spec D3). */
+export function selectDaemonIdMismatch(
+  state: Pick<HostState, 'hosts' | 'runtime'>,
+  hostId: string,
+): DaemonIdMismatch | undefined {
+  const host = state.hosts[hostId]
+  const flag = state.runtime[hostId]?.daemonIdMismatch
+  if (!host || !flag) return undefined
+  if (flag.endpoint !== hostEndpoint(host) || flag.stored !== host.daemonId) return undefined
+  return flag
+}
+
+/** True only while this session verified the host's current stored `daemonId` at its current
+ *  endpoint (PR review #1). Stale after a re-point or a change of the stored value, local or by sync. */
+export function selectDaemonIdVerified(state: Pick<HostState, 'hosts' | 'runtime'>, hostId: string): boolean {
+  const host = state.hosts[hostId]
+  const mark = state.runtime[hostId]?.daemonIdVerified
+  return !!host && !!mark && !!host.daemonId && mark.endpoint === hostEndpoint(host) && mark.daemonId === host.daemonId
+}
+
+// (host, observed) pairs already warned about — one console.warn each (spec D3).
+const warnedMismatch = new Set<string>()
+
+function withoutVerification(runtime: Record<string, HostRuntime>, hostId: string): Record<string, HostRuntime> {
+  const rt = runtime[hostId]
+  if (!rt || (!('daemonIdMismatch' in rt) && !('daemonIdVerified' in rt))) return runtime
+  const { daemonIdMismatch: _m, daemonIdVerified: _v, ...rest } = rt
+  return { ...runtime, [hostId]: rest as HostRuntime }
+}
+
+function withVerified(runtime: Record<string, HostRuntime>, hostId: string, endpoint: string, daemonId: string): Record<string, HostRuntime> {
+  const { daemonIdMismatch: _m, ...rest } = runtime[hostId] ?? ({} as HostRuntime)
+  return { ...runtime, [hostId]: { ...rest, daemonIdVerified: { endpoint, daemonId } } as HostRuntime }
+}
+
 /** Exact-endpoint lookup shared by registerLocalHost and the Local daemon UI
  *  (spec §3.3). Strict ip+port equality — 127.0.0.1 and a Tailscale IP are
  *  two endpoints, never merged. */
@@ -170,6 +255,7 @@ export const useHostStore = create<HostState>()(
          
         const { id: _discardId, ...restOpts } = opts
         const host: HostConfig = { id, ...restOpts, order }
+        delete host.daemonId
         set((state) => ({
           hosts: { ...state.hosts, [id]: host },
           hostOrder: [...state.hostOrder, id],
@@ -181,8 +267,44 @@ export const useHostStore = create<HostState>()(
         set((state) => {
           const host = state.hosts[hostId]
           if (!host) return state
+          const { daemonId: _ignored, ...allowed } = updates as Partial<HostConfig>
+          const next: HostConfig = { ...host, ...allowed }
+          const repoint = hostEndpoint(next) !== hostEndpoint(host)
+          // A re-point is learned afresh for the new endpoint (spec D3).
+          if (repoint) delete next.daemonId
           return {
-            hosts: { ...state.hosts, [hostId]: { ...host, ...updates } },
+            hosts: { ...state.hosts, [hostId]: next },
+            ...(repoint ? { runtime: withoutVerification(state.runtime, hostId) } : {}),
+          }
+        }),
+
+      observeDaemonId: (hostId, observed, atRequest) =>
+        set((state) => {
+          const host = state.hosts[hostId]
+          if (!host || !observed) return state
+          const now = requestAtOf(host)
+          if (now.endpoint !== atRequest.endpoint || now.token !== atRequest.token) return state
+          const endpointAtRequest = atRequest.endpoint
+          if (!host.daemonId) {
+            return {
+              hosts: { ...state.hosts, [hostId]: { ...host, daemonId: observed } },
+              runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed),
+            }
+          }
+          if (host.daemonId === observed) {
+            return { runtime: withVerified(state.runtime, hostId, endpointAtRequest, observed) }
+          }
+          const key = `${hostId}\u0000${observed}`
+          if (!warnedMismatch.has(key)) {
+            warnedMismatch.add(key)
+            console.warn(
+              `[purdex] host ${hostId}: daemon at ${endpointAtRequest} reports host_id ${observed}, stored ${host.daemonId}`,
+            )
+          }
+          const daemonIdMismatch: DaemonIdMismatch = { stored: host.daemonId, observed, endpoint: endpointAtRequest }
+          const { daemonIdVerified: _v, ...rest } = state.runtime[hostId] ?? ({} as HostRuntime)
+          return {
+            runtime: { ...state.runtime, [hostId]: { ...rest, daemonIdMismatch } as HostRuntime },
           }
         }),
 
@@ -339,7 +461,10 @@ export const useHostStore = create<HostState>()(
         return { Authorization: `Bearer ${host.token}` }
       },
 
-      reset: () => set(createDefaultState()),
+      reset: () => {
+        warnedMismatch.clear()
+        set(createDefaultState())
+      },
     }),
     {
       name: STORAGE_KEYS.HOSTS,

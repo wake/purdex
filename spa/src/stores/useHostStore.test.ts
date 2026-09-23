@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useHostStore, selectDevHostId, findHostByEndpoint } from './useHostStore'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch, selectDaemonIdVerified, requestAtOf } from './useHostStore'
 
 describe('useHostStore', () => {
   beforeEach(() => {
@@ -494,5 +494,192 @@ describe('findHostByEndpoint', () => {
   it('treats loopback and Tailscale IP as distinct endpoints', () => {
     expect(findHostByEndpoint(hosts, '127.0.0.1', 7860)?.id).toBe('b')
     expect(findHostByEndpoint({ a: hosts.a }, '127.0.0.1', 7860)).toBeUndefined()
+  })
+})
+
+describe('daemonId (spec 2026-09-23 D1–D3)', () => {
+  const ID = 'mini-lab:abc123'
+  const OTHER = 'mini-lab:zzz999'
+  let hostId: string
+  const ep = () => { const h = useHostStore.getState().hosts[hostId]; return `${h.ip}:${h.port}` }
+  const at = () => requestAtOf(useHostStore.getState().hosts[hostId])
+  const flag = () => selectDaemonIdMismatch(useHostStore.getState(), hostId)
+  // A stored claim as sync would write it (updateHost no longer accepts daemonId).
+  const seed = (daemonId: string) =>
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [hostId]: { ...s.hosts[hostId], daemonId } } }))
+
+  beforeEach(() => {
+    useHostStore.getState().reset()
+    hostId = useHostStore.getState().addHost({ name: 'h', ip: '10.0.0.1', port: 7860, token: 't' })
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('absent stored value → observe writes it', () => {
+    useHostStore.getState().observeDaemonId(hostId, ID, at())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toBeUndefined()
+  })
+
+  it('an empty observed id is never written and flags nothing', () => {
+    useHostStore.getState().observeDaemonId(hostId, '', at())
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    useHostStore.getState().observeDaemonId(hostId, ID, at())
+    useHostStore.getState().observeDaemonId(hostId, '', at())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toBeUndefined()
+  })
+
+  it('updateHost never writes daemonId — only observeDaemonId does (review #4)', () => {
+    const update = useHostStore.getState().updateHost as (id: string, u: Record<string, unknown>) => void
+    update(hostId, { daemonId: ID })
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    seed(ID)
+    update(hostId, { daemonId: '' })
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+  })
+
+  it('addHost never writes daemonId', () => {
+    const add = useHostStore.getState().addHost as (o: Record<string, unknown>) => string
+    const other = add({ name: 'o', ip: '10.0.0.2', port: 7860, daemonId: ID })
+    expect('daemonId' in useHostStore.getState().hosts[other]).toBe(false)
+  })
+
+  it('a re-point clears daemonId unconditionally, even with an explicit daemonId in the same update (review #4)', () => {
+    seed(ID)
+    const update = useHostStore.getState().updateHost as (id: string, u: Record<string, unknown>) => void
+    update(hostId, { ip: '10.0.0.7', daemonId: ID })
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+  })
+
+  it('different observed value → no write, mismatch flag, one warn per (host, observed)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seed(ID)
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+    expect(flag()).toEqual({ stored: ID, observed: OTHER, endpoint: ep() })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('equal observed value clears the mismatch flag', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seed(ID)
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+    expect(flag()).toBeDefined()
+    useHostStore.getState().observeDaemonId(hostId, ID, at())
+    expect(flag()).toBeUndefined()
+    expect(useHostStore.getState().runtime[hostId]?.daemonIdMismatch).toBeUndefined()
+  })
+
+  it('an answer for a stale endpoint is dropped', () => {
+    useHostStore.getState().observeDaemonId(hostId, ID, { endpoint: '10.0.0.9:7860', token: 't' })
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    seed(ID)
+    useHostStore.getState().observeDaemonId(hostId, OTHER, { endpoint: '10.0.0.9:7860', token: 't' })
+    expect(flag()).toBeUndefined()
+  })
+
+  it('an answer for a token that has since changed is dropped (review #2)', () => {
+    const before = at()
+    useHostStore.getState().updateHost(hostId, { token: 'rotated' })
+    useHostStore.getState().observeDaemonId(hostId, ID, before)
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+  })
+
+  it('an answer for a deleted host is dropped', () => {
+    useHostStore.getState().removeHost(hostId)
+    useHostStore.getState().observeDaemonId(hostId, ID, { endpoint: '10.0.0.1:7860', token: 't' })
+    expect(useHostStore.getState().hosts[hostId]).toBeUndefined()
+    expect(useHostStore.getState().runtime[hostId]).toBeUndefined()
+  })
+
+  it('a local re-point clears daemonId and the flag', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seed(ID)
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+    useHostStore.getState().updateHost(hostId, { port: 7861 })
+    expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+    expect(flag()).toBeUndefined()
+    expect(useHostStore.getState().runtime[hostId]?.daemonIdMismatch).toBeUndefined()
+  })
+
+  it('updateHost without an endpoint change keeps daemonId', () => {
+    seed(ID)
+    useHostStore.getState().updateHost(hostId, { name: 'x', token: 'u', ip: '10.0.0.1', port: 7860 })
+    expect(useHostStore.getState().hosts[hostId].daemonId).toBe(ID)
+  })
+
+  it('a flag is ignored after a store replace re-points the host or changes its stored value (sync)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seed(ID)
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+    const h = useHostStore.getState().hosts[hostId]
+    useHostStore.setState({ hosts: { [hostId]: { ...h, ip: '10.0.0.5' } } })
+    expect(flag()).toBeUndefined()
+    useHostStore.setState({ hosts: { [hostId]: { ...h, daemonId: OTHER } } })
+    expect(flag()).toBeUndefined()
+    useHostStore.setState({ hosts: { [hostId]: h } })
+    expect(flag()).toBeDefined()
+  })
+
+  it('the mismatch flag is not persisted', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seed(ID)
+    useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+    const partialize = useHostStore.persist.getOptions().partialize!
+    expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain(OTHER)
+  })
+
+  describe('verified marker (PR review #1)', () => {
+    const verified = () => selectDaemonIdVerified(useHostStore.getState(), hostId)
+
+    it('is false until an answer is observed', () => {
+      seed(ID)
+      expect(verified()).toBe(false)
+    })
+
+    it('is set by a learned answer and by an equal answer', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      expect(verified()).toBe(true)
+      useHostStore.getState().reset()
+      hostId = useHostStore.getState().addHost({ name: 'h', ip: '10.0.0.1', port: 7860, token: 't' })
+      seed(ID)
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      expect(verified()).toBe(true)
+    })
+
+    it('is cleared by a mismatching answer', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      useHostStore.getState().observeDaemonId(hostId, OTHER, at())
+      expect(verified()).toBe(false)
+    })
+
+    it('is token-agnostic', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      useHostStore.getState().updateHost(hostId, { token: 'rotated' })
+      expect(verified()).toBe(true)
+    })
+
+    it('is dropped by a local re-point and ignored after a store replace changes endpoint or stored value', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      const h = useHostStore.getState().hosts[hostId]
+      useHostStore.setState({ hosts: { [hostId]: { ...h, daemonId: OTHER } } })
+      expect(verified()).toBe(false)
+      useHostStore.setState({ hosts: { [hostId]: { ...h, ip: '10.0.0.5' } } })
+      expect(verified()).toBe(false)
+      useHostStore.setState({ hosts: { [hostId]: h } })
+      expect(verified()).toBe(true)
+      useHostStore.getState().updateHost(hostId, { port: 7861 })
+      useHostStore.getState().updateHost(hostId, { port: 7860 })
+      seed(ID)
+      expect(verified()).toBe(false)
+    })
+
+    it('is not persisted', () => {
+      useHostStore.getState().observeDaemonId(hostId, ID, at())
+      const partialize = useHostStore.persist.getOptions().partialize!
+      expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain('daemonIdVerified')
+    })
   })
 })
