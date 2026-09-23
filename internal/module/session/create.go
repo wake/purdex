@@ -37,8 +37,9 @@ const (
 	CreateStageNewSession CreateStage = "new_session"
 	// tmux new-session was killed at its cap and the has-session asked
 	// afterwards could not answer either: the server may or may not have made
-	// the session. SessionAlive reports true so the caller does not assume
-	// nothing was left behind.
+	// the session. SessionAlive reports false: unknown is not announced as
+	// existing (session_alive means the session is there); a caller that
+	// refreshes its session list sees it if it really was made.
 	CreateStageNewSessionUnconfirmed CreateStage = "new_session_unconfirmed"
 	CreateStageList                  CreateStage = "list" // tmux list-sessions failed, or the new session was not in it
 	// The tmux generation read after list-sessions differs from the one read
@@ -92,11 +93,12 @@ func (e *CreateError) Is(target error) bool {
 // and no code was returned. A caller that wanted an atomic create decides
 // what to do with it. generation_changed is false: new-session succeeded,
 // but on a server that has since been replaced. new_session_unconfirmed is
-// true: the session may exist, and "alive" is the answer that makes the
-// caller look.
+// false too: whether the session exists is unknown, and unknown is not
+// announced as alive — the caller's refreshed session list shows it if it
+// really exists.
 func (e *CreateError) SessionAlive() bool {
 	switch e.Stage {
-	case CreateStageList, CreateStageEncode, CreateStageMeta, CreateStageNewSessionUnconfirmed:
+	case CreateStageList, CreateStageEncode, CreateStageMeta:
 		return true
 	}
 	return false

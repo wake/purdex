@@ -232,7 +232,8 @@ func TestCreateSessionContext_NewSessionTimedOutButCreated(t *testing.T) {
 }
 
 // A new-session that timed out and a follow-up has-session that cannot answer
-// either: whether the session exists is unknown, and the error says it may.
+// either: whether the session exists is unknown, and the error does not
+// claim it does — SessionAlive is false; a refreshed list shows it if it is.
 func TestCreateSessionContext_NewSessionTimedOutUnconfirmed(t *testing.T) {
 	t.Parallel()
 	mod, meta, fake := newTestModule(t)
@@ -251,7 +252,7 @@ func TestCreateSessionContext_NewSessionTimedOutUnconfirmed(t *testing.T) {
 	var ce *CreateError
 	require.ErrorAs(t, err, &ce)
 	assert.Equal(t, CreateStageNewSessionUnconfirmed, ce.Stage)
-	assert.True(t, ce.SessionAlive(), "the session may exist; SessionAlive must not deny it")
+	assert.False(t, ce.SessionAlive(), "unknown is not announced as alive (exec-to-terminal spec: session_alive means it exists)")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	metas, err := meta.ListMeta()
 	require.NoError(t, err)

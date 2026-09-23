@@ -270,3 +270,25 @@ func TestCreateSession_NoServerBeforeCreateStampsTheNewServer(t *testing.T) {
 	assert.Equal(t, "444:4000", info.TmuxInstance)
 	assert.True(t, fake.HasSession("proj-6"))
 }
+
+// SessionAlive means "a tmux session of this create exists" (the nex
+// take-to-terminal session_alive contract). A stage where existence is
+// unknown — new_session_unconfirmed — must not announce it.
+func TestCreateError_SessionAliveByStage(t *testing.T) {
+	cases := map[CreateStage]bool{
+		CreateStageInvalidName:           false,
+		CreateStageInvalidCwd:            false,
+		CreateStageExists:                false,
+		CreateStageCancelled:             false,
+		CreateStageNewSession:            false,
+		CreateStageNewSessionUnconfirmed: false,
+		CreateStageGenerationChanged:     false,
+		CreateStageList:                  true,
+		CreateStageEncode:                true,
+		CreateStageMeta:                  true,
+	}
+	for stage, want := range cases {
+		ce := &CreateError{Stage: stage, Name: "x", Err: errors.New("boom")}
+		assert.Equal(t, want, ce.SessionAlive(), "stage %s", stage)
+	}
+}
