@@ -30,20 +30,34 @@ function parseLook(raw: unknown): TransferLook | undefined {
 
 const LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
 const OCTET = /^(?:0|[1-9][0-9]{0,2})$/
+const BRACKETED_V6 = /^\[[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*\]$/
+
+/** `[…]` holding only hex digits, `:` and `.` (at least one `:`), which a URL parser accepts as an IPv6 host. */
+function isBracketedIPv6(ip: string): boolean {
+  if (!BRACKETED_V6.test(ip)) return false
+  try {
+    return new URL(`http://${ip}:1`).hostname.startsWith('[')
+  } catch {
+    return false
+  }
+}
 
 /**
  * A payload row's `ip` as it may be spliced into `http://${ip}:${port}` — the probe's URL and the stored host
  * address are built from this one value, so it must not be able to change which URL is requested. Accepted: a
- * hostname (dot-separated labels of ASCII letters, digits and inner hyphens, ≤ 253 chars) or a dotted-quad IPv4 with
- * decimal octets 0–255 and no zero padding. Anything else is refused — `#` `?` `@` `\` `/` `:` `%`, whitespace,
- * control and non-ASCII characters, and IPv6: no address field in the app writes the `[…]` form a URL needs, so a
- * row carrying one could only be stored broken. A hostname whose last label is numeric (or `0x…`) is what a URL
- * parser reads as IPv4, so it must then be a strict dotted quad.
+ * hostname (dot-separated labels of ASCII letters, digits and inner hyphens, ≤ 253 chars), a dotted-quad IPv4 with
+ * decimal octets 0–255 and no zero padding, or a bracketed IPv6 literal (`[::1]`, `[::ffff:100.64.0.2]`) that a URL
+ * parser accepts. Anything else is refused — `#` `?` `@` `\` `/` `%` (so no zone id), a `:` outside brackets,
+ * whitespace, control and non-ASCII characters. IPv6 is taken only in the bracketed form: it is what the add-host
+ * dialog stores and splices into its URLs as typed, so a host added that way must transfer too (PR #1397 critic);
+ * a bare `::1` gives `http://::1:7860`, which is not a URL. A hostname whose last label is numeric (or `0x…`) is what
+ * a URL parser reads as IPv4, so it must then be a strict dotted quad.
  *
  * The add-host dialog has no such validator (it only trims), so this one lives here.
  */
 export function isTransferHost(ip: string): boolean {
   if (ip.length === 0 || ip.length > 253) return false
+  if (ip.startsWith('[')) return isBracketedIPv6(ip)
   const labels = ip.split('.')
   if (!labels.every((l) => LABEL.test(l))) return false
   const last = labels[labels.length - 1]

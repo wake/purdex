@@ -65,8 +65,14 @@ describe('parseTransferRows (R5)', () => {
     ['a DEL', 'mlab\u007fhost'],
     ['percent-encoding', 'attacker.example%2Fx'],
     ['a port', 'host:1'],
-    ['IPv6 (unsupported: no bracket form anywhere in the app)', '::1'],
-    ['bracketed IPv6', '[::1]'],
+    ['bare IPv6 (`http://::1:7860` is not a URL; only the bracketed form is accepted)', '::1'],
+    ['an unclosed IPv6 bracket', '[::1'],
+    ['an unopened IPv6 bracket', '::1]'],
+    ['empty brackets', '[]'],
+    ['a non-hex IPv6 digit', '[g::1]'],
+    ['text after the IPv6 bracket', '[::1]x'],
+    ['an IPv6 zone id', '[fe80::1%25eth0]'],
+    ['an IPv6 literal the URL parser rejects', '[:::1]'],
     ['an underscore', 'my_host'],
     ['a leading dot', '.mlab.host'],
     ['an empty label', 'mlab..host'],
@@ -87,6 +93,12 @@ describe('parseTransferRows (R5)', () => {
       expect(parseTransferRows([{ ip, port: 1, token: 't' }]).rows.map((r) => r.ip)).toEqual([ip])
     },
   )
+
+  // PR #1397 critic: the add-host dialog stores whatever the user typed (trimmed) and builds `http://${ip}:${port}`,
+  // so a bracketed IPv6 is a working host there — the receive side must not silently drop it.
+  it.each(['[::1]', '[fe80::1]', '[2001:db8::1]', '[::ffff:100.64.0.2]'])('keeps a row whose ip is the bracketed IPv6 %s', (ip) => {
+    expect(parseTransferRows([{ ip, port: 1, token: 't' }])).toEqual({ rows: [{ name: ip, ip, port: 1, token: 't' }], dropped: 0 })
+  })
 
   it('counts every bad-ip row as dropped, keeping the good ones', () => {
     const res = parseTransferRows([
@@ -149,6 +161,16 @@ describe('payloadRowsOf', () => {
       { name: 'a', ip: '10.0.0.1', port: 7860, token: 'tok-a', daemonId: 'd1_a', look: { icon: 'Laptop', color: '#ff0000' } },
       { name: 'dd', ip: '10.0.0.2', port: 7860, token: 'tok-dd' },
     ])
+  })
+})
+
+describe('share → receive round trip', () => {
+  it('a host whose ip is a bracketed IPv6 survives from payloadRowsOf through parseTransferRows (PR #1397 critic)', () => {
+    const sent = payloadRowsOf([host('v6', { ip: '[::1]' }), host('v4')])
+    const received = parseTransferRows(JSON.parse(JSON.stringify(sent)))
+    expect(received.dropped).toBe(0)
+    expect(received.rows).toEqual(sent)
+    expect(received.rows.map((r) => r.ip)).toEqual(['[::1]', '10.0.0.2'])
   })
 })
 
