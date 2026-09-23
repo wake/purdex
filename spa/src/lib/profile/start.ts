@@ -109,7 +109,7 @@ import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } fro
 import { attachInStorage, endpointOfHost, isMasterPair, isSyncDirection, pendingDetachKey, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
 import type { ConfirmedHosts, SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
-import { startCollector, watchUnsyncedStores } from './collector'
+import { buildSectionPayload, startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
 import { identityOfSync } from './host-identity'
 import type { Executor, ExecutorStatus, SectionLock } from './executor'
@@ -119,6 +119,7 @@ import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { readMasterWorld } from './master-world'
 import { clearPullUnconfirmed, writePullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore } from './section-store'
+import type { ProfileSectionKey } from './types'
 import { withNamedLock } from '../storage/world-lock'
 import { copyMasterAsSlave, deleteSlave, promoteToMaster, renameSlave, saveScreenAsSlave, switchActiveProfile } from './switch-active'
 import type { CopyResult, PromoteResult, SwitchResult } from './switch-active'
@@ -348,6 +349,10 @@ function lead(master: Master, attachId: string | null, leadership: Leadership, o
     onPullUnconfirmed: () => {
       if (!disposed && isCurrentMaster(master)) stopUnconfirmedPull(master, attachId)
     },
+    // #1369 critic: a pull stashes the payload its apply hashed only if the stores still build it — asked with the
+    // collector's own builder, the same one whose report would otherwise carry the payload. The key is one the
+    // executor already applies (`applySectionToStores` takes it the same way).
+    buildNow: (key) => buildSectionPayload(key as ProfileSectionKey),
     onProblem: reportProblem,
     onStatus: (s) => {
       if (disposed) return

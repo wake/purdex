@@ -137,7 +137,7 @@ describe('two devices, one daemon, INDEPENDENT local ids (the scenario that ship
 
     // no lock; every apply but hosts already holds what the SOT holds (no push back)
     for (const key of KEYS) expect(outcomes[key], key).toMatchObject({ ok: true })
-    for (const key of KEYS.filter((k) => k !== 'hosts')) expect(outcomes[key], key).toEqual({ ok: true, hash: a[key].hash })
+    for (const key of KEYS.filter((k) => k !== 'hosts')) expect(outcomes[key], key).toMatchObject({ ok: true, hash: a[key].hash })
 
     // hosts: B's mlab kept its local id, updated in place; the host only B had is gone (cascade)
     const hs = useHostStore.getState()
@@ -160,7 +160,7 @@ describe('two devices, one daemon, INDEPENDENT local ids (the scenario that ship
     // key must resolve on every device). That is the ONE hosts push this pull costs (the apply reported it).
     const b = await buildAll()
     for (const key of KEYS.filter((k) => k !== 'hosts')) expect(b[key].hash, key).toBe(a[key].hash)
-    expect(outcomes.hosts).toEqual({ ok: true, hash: b.hosts.hash })
+    expect(outcomes.hosts).toMatchObject({ ok: true, hash: b.hosts.hash })
     const aRow = (a.hosts.payload as { hosts: Record<string, Record<string, unknown>> }).hosts[WIRE]
     const bRow = (b.hosts.payload as { hosts: Record<string, Record<string, unknown>> }).hosts[WIRE]
     expect(aRow.aliases).toEqual([A_ID])
@@ -169,7 +169,7 @@ describe('two devices, one daemon, INDEPENDENT local ids (the scenario that ship
     // A takes B's push: its build is B's — no second round, either way
     const bHosts = b.hosts
     load(deviceA())
-    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(bHosts.payload)), { masterHostId: A_ID })).toEqual({ ok: true, hash: bHosts.hash })
+    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(bHosts.payload)), { masterHostId: A_ID })).toMatchObject({ ok: true, hash: bHosts.hash })
     expect((await buildAll(['hosts'])).hosts.hash).toBe(bHosts.hash)
   })
 
@@ -183,7 +183,7 @@ describe('two devices, one daemon, INDEPENDENT local ids (the scenario that ship
 
     load(deviceA())
     const outcomes = await applyAll(b, A_ID)
-    for (const key of KEYS) expect(outcomes[key], key).toEqual({ ok: true, hash: b[key].hash }) // B's row lists A's id already
+    for (const key of KEYS) expect(outcomes[key], key).toMatchObject({ ok: true, hash: b[key].hash }) // B's row lists A's id already
     expect(useHostStore.getState().hosts[A_ID].name).toBe('mlab (renamed on B)')
     expect(panesOf('t1')[0]).toMatchObject({ hostId: A_ID })
     const again = await buildAll()
@@ -235,7 +235,7 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
     expect(Object.keys(hosts.hosts)).toEqual([WIRE])
     expect(hosts.hosts[WIRE].aliases).toEqual([A_ID, B_ID]) // A's id (matched from) and B's own
     expect(JSON.stringify(b['tabs.w1'].payload)).not.toContain(B_ID)
-    for (const key of ['hosts', 'tabs.w1'] as const) expect(outcomes[key], key).not.toEqual({ ok: true, hash: legacy[key].hash }) // → one push each
+    for (const key of ['hosts', 'tabs.w1'] as const) expect(outcomes[key], key).not.toMatchObject({ ok: true, hash: legacy[key].hash }) // → one push each
   })
 
   it('A (upgraded too) then pulls B\'s canonical profile: A keeps its id, takes the alias, and its build equals B\'s — the transition ends in one round', async () => {
@@ -246,7 +246,7 @@ describe('transition from ordinal-2 data (local-id keys) — spec §7, §11.2, �
 
     load(deviceA())
     const outcomes = await applyAll(b, A_ID)
-    for (const key of KEYS) expect(outcomes[key], key).toEqual({ ok: true, hash: b[key].hash })
+    for (const key of KEYS) expect(outcomes[key], key).toMatchObject({ ok: true, hash: b[key].hash })
     expect(useHostStore.getState().hosts[A_ID].syncAliases).toEqual([A_ID, B_ID])
     const a = await buildAll()
     for (const key of KEYS) expect(a[key].hash, key).toBe(b[key].hash)

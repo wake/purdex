@@ -1247,6 +1247,137 @@ describe('executor — pull', () => {
     expect(api.putSection).toHaveBeenCalledTimes(1)
     expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-clean', payload: { v: 2 } })
   })
+
+  // #1369: a `hosts` pull comes back with this device's own id added to a canonical row's aliases — the designed
+  // write-back. Not a problem; and the apply hands back the payload, so the push needs no collector report.
+  describe('#1369 — the own-alias write-back after a pull', () => {
+    const OWN = { v: 2, aliases: ['aaaaaa', 'bbbbbb'] }
+    /** The stores, read at the stash, still build exactly what the apply hashed (a copy: compared by canonical form). */
+    const stillOwn: Partial<ExecutorDeps> = { buildNow: () => ({ payload: structuredClone(OWN) }) }
+
+    it('(a) aliasesOnly: no problem, the section is dirty, the push sends THAT payload without any collector report', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await flush()
+      expect(problems).toEqual([])
+      expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: 'H2', localHash: 'H2-own' }])
+      expect(store.saveSection).toHaveBeenCalledWith(PROFILE, 'hosts', { base: { rev: 2, hash: 'H2' }, currentHash: 'H2-own' })
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
+      expect(ex.status().profile).toBe('synced')
+      // the collector's later report of the same content is harmless: nothing more is sent
+      ex.onSection({ key: 'hosts', hash: 'H2-own', payload: OWN })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(problems).toEqual([])
+    })
+
+    it('(b) without aliasesOnly the mismatch is still a problem (and the payload is pushed all the same)', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await flush()
+      expect(problems).toEqual([{ kind: 'pull-hash-mismatch', section: 'hosts', detail: expect.stringContaining('pushed back') }])
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
+    })
+
+    it('(c) pumped again while the pull runs, the collector never reporting (dedup): one push, no push-payload-missing, settled', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      const applying = deferred<ApplyOutcome>()
+      applySectionToStores.mockReturnValue(applying.promise)
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await flush()
+      expect(applySectionToStores).toHaveBeenCalledTimes(1)
+      ex.syncNow() // pumps `hosts` while its pull is still running → `repump`
+      applying.resolve({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(problems).toEqual([])
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
+      expect(ex.status().profile).toBe('synced')
+    })
+
+    it('(d) an outcome without a payload (a test double, a future branch) pushes nothing of its own — the collector’s report is what goes out', async () => {
+      const { ex, problems } = await synced({ hosts: 'H1' })
+      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', aliasesOnly: true })
+      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(problems).toEqual([])
+      expect(api.putSection).not.toHaveBeenCalled() // nothing to push but a stale snapshot: it waits
+      ex.onSection({ key: 'hosts', hash: 'H2-user', payload: { v: 'user' } })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(api.putSection).toHaveBeenCalledTimes(1)
+      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-user', payload: { v: 'user' } })
+      expect(ex.status().profile).toBe('synced')
+    })
+
+    // #1369 critic: the apply's payload can go stale AFTER the apply's last look at the stores — releasing the
+    // operation lock synchronously runs the lock-release observer (reconcileAfterLockRelease → runRevivePass), which
+    // rewrites tab layouts before the outcome ever reaches the executor. So the executor asks the stores itself, at
+    // the stash. Anything but "they still build this very payload" = no stash; the collector's report is what goes out.
+    describe('the stores are asked again at the stash (#1369 critic)', () => {
+      async function expectWaitsForTheCollector(over: Partial<ExecutorDeps>): Promise<void> {
+        const { ex, problems } = await synced({ hosts: 'H1' }, over)
+        api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+        api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+        ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(problems).toEqual([])
+        expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: 'H2', localHash: 'H2-own' }])
+        expect(api.putSection).not.toHaveBeenCalled() // the outcome's payload is not pushed: it waits for the collector
+        ex.onSection({ key: 'hosts', hash: 'H2-moved', payload: { v: 'moved' } })
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(api.putSection).toHaveBeenCalledTimes(1)
+        expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-moved', payload: { v: 'moved' } })
+        expect(ex.status().profile).toBe('synced')
+      }
+
+      it('the stores build something else by then (the lock-release observer moved them) → the stale payload is never pushed', async () => {
+        const buildNow = vi.fn(() => ({ payload: { v: 'moved' } as unknown }))
+        await expectWaitsForTheCollector({ buildNow })
+        expect(buildNow).toHaveBeenCalledWith('hosts')
+      })
+
+      it('the world is unsettled by then (buildNow → null) → the same: no stash, the collector’s report goes out', async () => {
+        await expectWaitsForTheCollector({ buildNow: () => null })
+      })
+
+      it('the builder throws by then → the same (and nothing escapes the pull)', async () => {
+        await expectWaitsForTheCollector({
+          buildNow: () => {
+            throw new Error('boom')
+          },
+        })
+      })
+
+      it('no buildNow at all (nobody can say what the stores hold) → the conservative default: no stash, it waits', async () => {
+        await expectWaitsForTheCollector({})
+      })
+
+      it('the stores still build it → pushed at once, no collector report needed (T3)', async () => {
+        const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
+        api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, aliasesOnly: true })
+        api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+        ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+        await flush()
+        expect(problems).toEqual([])
+        expect(api.putSection).toHaveBeenCalledTimes(1)
+        expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
+      })
+    })
+  })
 })
 
 /* ─── the shape of what a pull fetched (spec §4.4 / §4.5) ─── */
