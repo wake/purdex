@@ -17,6 +17,7 @@ import { readPullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore, loadSectionStore } from './section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, startProfileSync } from './start'
 import { FakeDaemon } from './test-fake-daemon'
+import { STORAGE_KEYS } from '../storage/keys'
 
 vi.mock('./hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hash')>()
@@ -181,6 +182,30 @@ describe('THE PULL GUARD end to end (#1366): the `hosts` the user confirmed is n
     expect(readPullUnconfirmed()).toMatchObject({ hostId: M, profileId: PROFILE })
     expect(api.deleteAttachment).toHaveBeenCalledWith(M, PROFILE, 'c_aaaaaaaaaaaa')
     expect(profileSyncState().problems.map((p) => p.kind)).toContain('pull-hosts-unconfirmed')
+  })
+})
+
+describe('a stored guard without its attachId (codex critic): no guard, never a halt nobody can stop', () => {
+  it('a reload: `hosts` differs from the stored guard, yet the first reconciliation runs as today — attached, settled, no notice, no detach', async () => {
+    await attachedAndSettled()
+    stop()
+    stop = () => {}
+    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { version: number; state: Record<string, unknown> }
+    const row = daemon.rows.get('hosts')!
+    const { attachId: _dropped, ...rest } = envelope.state
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...rest, pendingDirection: 'pull', pendingPullHosts: { rev: row.rev, hash: row.hash } } }))
+    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' }) // not the guard's row any more
+    await useProfileStore.persist.rehydrate()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, attachId: null, pendingDirection: 'pull', pendingPullHosts: null })
+    api.deleteAttachment.mockClear()
+
+    stop = startProfileSync()
+    await settle()
+
+    expect(readPullUnconfirmed()).toBeNull()
+    expect(api.deleteAttachment).not.toHaveBeenCalled()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, masterProfileId: PROFILE, pendingDirection: null })
+    expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('pull-hosts-unconfirmed')
   })
 })
 

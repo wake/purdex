@@ -59,8 +59,12 @@
 // act late — the start layer rebuilds the master mode when it changes (the executor and its guard snapshot are
 // that attach's), and the pull guard's queued Stop sync goes ahead only while STORAGE still holds that id and
 // master (lib/profile/start.ts, `stopUnconfirmedPull`). Rehydrate keeps it only with a master and only as a
-// non-empty string; a master persisted before the field existed has none (null) until its next attach — nothing
-// fenced by it can be that old: a guard only comes with an attach that wrote an id.
+// non-empty string; a master persisted before the field existed has none (null) until its next attach. A GUARD
+// NEVER EXISTS WITHOUT ITS ID (codex critic): `setMaster` writes both at once, but storage can hold a guard whose id
+// is missing or malformed (a dev build, a hand edit) — and a halted executor's Stop sync, fenced by the id, would
+// then refuse for ever: attached on the control plane, a driver that never moves. So rehydrate drops such a guard
+// and keeps the direction — a pull without a guard is exactly the first reconciliation of before #1366, which ends
+// by itself; dropping the direction too would turn the user's `pull` into the state machine's lock-and-ask.
 //
 // WHY `masterEndpoint` ("<ip>:<port>" of the master host AT ATTACH). The section
 // bases, the attachment, a schema lock — all of it belongs to ONE daemon, and the
@@ -127,7 +131,8 @@
 // `setMaster` (pull only), cleared together by `clearPendingDirection`, `clearMaster` and the next `setMaster`,
 // persisted and synced for the same reasons (the first reconciliation may continue after a reload, or in the
 // window that holds the lease). A guard without the direction `pull` means nothing and is sanitised away. The
-// executor holds every action until it has compared the SOT with it (executor.ts, THE PULL GUARD).
+// executor holds every action until it has compared the SOT with it (executor.ts, THE PULL GUARD). It exists only
+// with an `attachId` as well (rehydrate drops it otherwise; see WHY `attachId`).
 //
 // WHY THE NOTICE OF A STOPPED PULL IS NOT HERE (#1366, codex R2 #1). It is written by the window whose executor
 // halted, whose memory of THIS store may be stale (another window attached anew a moment ago); a persisted store
@@ -317,15 +322,17 @@ function sanitiseControl(persisted: unknown): ProfileControl {
   const p = (typeof persisted === 'object' && persisted !== null ? persisted : {}) as Record<string, unknown>
   const attached = isMasterPair(p.masterHostId, p.masterProfileId) && isEndpoint(p.masterEndpoint)
   const pendingDirection = attached && isSyncDirection(p.pendingDirection) ? p.pendingDirection : null
+  const attachId = attached && typeof p.attachId === 'string' && p.attachId !== '' ? p.attachId : null
   return {
     masterHostId: attached ? (p.masterHostId as string) : null,
     masterProfileId: attached ? (p.masterProfileId as string) : null,
     pendingDirection,
-    pendingPullHosts: pendingDirection === 'pull' ? sanitiseConfirmedHosts(p.pendingPullHosts) : null,
+    // No `attachId`, no guard (codex critic): its only way out is a Stop sync fenced by that id — see WHY `attachId`.
+    pendingPullHosts: pendingDirection === 'pull' && attachId !== null ? sanitiseConfirmedHosts(p.pendingPullHosts) : null,
     masterEndpoint: attached ? (p.masterEndpoint as string) : null,
     suspension: attached ? sanitiseSuspension(p.suspension) : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
-    attachId: attached && typeof p.attachId === 'string' && p.attachId !== '' ? p.attachId : null,
+    attachId,
     autoSync: typeof p.autoSync === 'boolean' ? p.autoSync : true,
     pendingDetaches: sanitisePendingDetaches(p.pendingDetaches, p.pendingDetach),
   }

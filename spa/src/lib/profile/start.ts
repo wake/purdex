@@ -342,7 +342,9 @@ function lead(master: Master, attachId: string | null, leadership: Leadership, o
       if (!disposed && isCurrentMaster(master)) useProfileStore.getState().clearPendingDirection()
     },
     // THE PULL GUARD (see the header): paired with the direction, and like it only while the master is THIS one.
-    confirmedPullHosts: () => (disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingPullHosts),
+    // Never without an `attachId`: its way out (`stopUnconfirmedPull`) is fenced by it and would refuse — a halt
+    // nobody could lift. The store never holds one so (setMaster writes both, rehydrate drops it); fail open anyway.
+    confirmedPullHosts: () => (attachId === null || disposed || !isCurrentMaster(master) ? null : useProfileStore.getState().pendingPullHosts),
     onPullUnconfirmed: () => {
       if (!disposed && isCurrentMaster(master)) stopUnconfirmedPull(master, attachId)
     },

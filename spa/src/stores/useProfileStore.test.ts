@@ -374,6 +374,20 @@ describe('attachId — WHICH attach, not how many (codex critic: two stale windo
     await rehydrateFrom(state)
     expect(useProfileStore.getState().attachId).toBeNull()
   })
+
+  it.each([
+    ['missing', {}],
+    ['empty', { attachId: '' }],
+    ['not a string', { attachId: 7 }],
+  ])('rehydrate: a pull guard whose attachId is %s is NO guard — the direction stays (codex critic: a guard nobody can stop is a dead end)', async (_label, over) => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: { rev: 7, hash: 'a'.repeat(64) }, ...over })
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'host-1', pendingDirection: 'pull', pendingPullHosts: null, attachId: null })
+  })
+
+  it('rehydrate: the guard WITH its attachId survives', async () => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: 'absent', attachId: 'abc123' })
+    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: 'pull', pendingPullHosts: 'absent', attachId: 'abc123' })
+  })
 })
 
 describe('masterEndpoint — where the daemon was when the bases were agreed', () => {
@@ -821,11 +835,11 @@ describe('pendingPullHosts — the `hosts` row a pull was confirmed against (#13
   it('is persisted and survives a reload with its direction', async () => {
     useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, ROW)
     expect(persistedEnvelope().state.pendingPullHosts).toEqual(ROW)
-    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: 'absent' })
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, attachId: 'abc123', pendingDirection: 'pull', pendingPullHosts: 'absent' })
     expect(useProfileStore.getState().pendingPullHosts).toBe('absent')
   })
 
-  const M = { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP }
+  const M = { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, attachId: 'abc123' }
   it.each([
     ['a guard with direction push', { ...M, pendingDirection: 'push', pendingPullHosts: ROW }],
     ['a guard without a direction', { ...M, pendingDirection: null, pendingPullHosts: ROW }],

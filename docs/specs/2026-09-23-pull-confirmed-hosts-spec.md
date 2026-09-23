@@ -29,15 +29,18 @@ LAST check before the attach (`recheckBeforeAttach`), which is the one the remov
 `useProfileStore.pendingPullHosts: { rev, hash } | 'absent' | null`, next to `pendingDirection` and with the same
 life: set by `setMaster` together with the direction, cleared by `clearPendingDirection`, by detach, and by any
 new `setMaster` (persisted and synced like `pendingDirection`, for the same reason — the first reconciliation may
-continue in another window after a reload). Well-formedness on rehydrate: anything else → null.
+continue in another window after a reload). Well-formedness on rehydrate: anything else → null — and so is a
+guard stored without a well-formed `attachId` (rev 5, codex critic: its only way out, the id-fenced Stop sync,
+would refuse for ever); the direction is kept, so that pull runs as before #1366. The start layer likewise never
+hands the executor a guard when its `attachId` is null (fail open).
 
 **`attachId` (rev 5, codex critic).** `attachGeneration` counts, it does not name: `setMaster` computes it from
 each window's OWN memory (`s.attachGeneration + 1`), so two windows that have not heard of each other reach the
 SAME generation from the same old value — even for the same master pair. Every accepted `setMaster` therefore
 also writes `useProfileStore.attachId`, 128 random bits (hex, `crypto.getRandomValues`), in the same write as the
 master; `clearMaster` sets it null; persisted and synced with the rest; rehydrate keeps it only with a master and
-only as a non-empty string (a master persisted before the field → null until its next attach — it never carries a
-guard, which only comes with an attach that wrote an id). `attachGeneration` keeps its job (the attach queue's
+only as a non-empty string (a master persisted before the field → null until its next attach — and without its
+guard, see above). `attachGeneration` keeps its job (the attach queue's
 "was I overtaken" check and the status channel's tag, both outside this issue).
 
 ### 2.3 The executor — a pre-step barrier (rev 2, codex plan review #1–#4)

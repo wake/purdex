@@ -1727,7 +1727,7 @@ describe('the pull guard (#1366): the confirmed `hosts` row goes with the direct
     connect('h1')
     stop = startProfileSync()
     // what another window's attach left in the synced store
-    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1 })
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1, attachId: 'a'.repeat(32) })
     await flush()
     expect(h.executors).toHaveLength(0)
     h.leaderships[0].set(true)
@@ -1737,6 +1737,28 @@ describe('the pull guard (#1366): the confirmed `hosts` row goes with the direct
     expect(deps.confirmedPullHosts()).toEqual(ROW)
     deps.onInitialSettled()
     expect(useProfileStore.getState()).toMatchObject({ pendingDirection: null, pendingPullHosts: null, masterProfileId: P1 })
+  })
+
+  it('a reload from storage whose guard has no attachId (codex critic): no guard — the direction is kept, the executor is built as today (no barrier, nothing to halt on)', async () => {
+    connect('h1')
+    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ version: 1, state: { masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1, autoSync: true } }))
+    await useProfileStore.persist.rehydrate()
+    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'h1', attachId: null, pendingDirection: 'pull', pendingPullHosts: null })
+    stop = startProfileSync()
+    await flush()
+    const { deps } = h.executors[0]
+    expect(deps.initialDirection()).toBe('pull')
+    expect(deps.confirmedPullHosts()).toBeNull()
+  })
+
+  it('a guard in memory without an attachId (no writer makes one; defence in depth): the executor is not given it — fail open to today, never a halt nobody can stop', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1, attachId: null })
+    await flush()
+    const { deps } = h.executors[0]
+    expect(deps.initialDirection()).toBe('pull')
+    expect(deps.confirmedPullHosts()).toBeNull()
   })
 
   it('onPullUnconfirmed: the notice is written FIRST, then the sync stops like Stop sync (master gone, driver down, attachment deleted)', async () => {
