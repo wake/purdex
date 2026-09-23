@@ -813,21 +813,51 @@ describe('setPaneRebuild — agent-exit', () => {
       exit('F1')
       const before = rec(tab.id)!
       vi.setSystemTime(9_000)
-      backfill({ type: 'cc', sessionId: 'S1', tmuxPaneId: '%4', frameId: 'F3', updatedAt: 9_000 })
+      backfill({ type: 'cc', sessionId: 'S1', tmuxPaneId: '%2', frameId: 'F3', updatedAt: 9_000 })
       expect(rec(tab.id)).toEqual({ ...before, agentExited: undefined, agent: { ...before.agent!, frameId: 'F3' } })
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('backfill: an exited record meets a DIFFERENT live agent — replaced whole, no exit left', () => {
+  it('backfill: an exited record meets a DIFFERENT live agent in the SAME tmux pane — replaced whole, no exit left', () => {
     const tab = seed()
     group('F1')
     exit('F1')
-    backfill({ type: 'codex', sessionId: 'C1', tmuxPaneId: '%4', frameId: 'F3', updatedAt: 9_000 })
-    expect(rec(tab.id)?.agent).toEqual({ type: 'codex', sessionId: 'C1', tmuxPaneId: '%4', frameId: 'F3', updatedAt: 9_000 })
+    backfill({ type: 'codex', sessionId: 'C1', tmuxPaneId: '%2', frameId: 'F3', updatedAt: 9_000 })
+    expect(rec(tab.id)?.agent).toEqual({ type: 'codex', sessionId: 'C1', tmuxPaneId: '%2', frameId: 'F3', updatedAt: 9_000 })
     expect(rec(tab.id)?.agentExited).toBeUndefined()
     expect(rec(tab.id)?.cwd).toBeUndefined() // the old agent's directory does not ride along
+  })
+
+  // #1382 attacker: the answer is SESSION-scoped — with a live agent in a
+  // sibling tmux pane it names that sibling. It must never speak for an exited
+  // record of another pane: no clear, no identity, no cwd.
+  it.each([
+    ['the same identity', { type: 'cc', sessionId: 'S1' }],
+    ['another agent', { type: 'codex', sessionId: 'C1' }],
+  ])('backfill: an answer about ANOTHER tmux pane (%s) never touches an exited record', (_name, who) => {
+    const tab = seed()
+    const paneId = getPrimaryPane(tab.layout).id
+    group('F1')
+    exit('F1')
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', { kind: 'unverified', unverified: true })
+    const before = paneContentOf(tab.id, paneId)
+    backfill({ ...who, tmuxPaneId: '%4', frameId: 'F3', updatedAt: 9_000 })
+    expect(paneContentOf(tab.id, paneId)).toBe(before)
+  })
+
+  it('backfill: an exited record whose agent names no tmux pane takes no answer', () => {
+    const tab = seed()
+    const paneId = getPrimaryPane(tab.layout).id
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
+      kind: 'agent-group',
+      record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S1', frameId: 'F1', updatedAt: 5 }, capturedAt: 5 },
+    })
+    exit('F1')
+    const before = paneContentOf(tab.id, paneId)
+    backfill({ type: 'cc', sessionId: 'S1', tmuxPaneId: '%2', frameId: 'F3', updatedAt: 9_000 })
+    expect(paneContentOf(tab.id, paneId)).toBe(before)
   })
 
   it('backfill: confirming an unverified record adopts the answer\'s frame id, so its exit can land later', () => {

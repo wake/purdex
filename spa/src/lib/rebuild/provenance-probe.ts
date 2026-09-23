@@ -83,12 +83,13 @@ const bindingKey = (hostId: string, sessionCode: string, tmuxInstance: string) =
 
 /**
  * A pane that would take an ownership answer: live, terminal-mode, generation-
- * eligible, and either agent-less, flagged `unverified`, or holding an agent
- * that has EXITED (agent-last-state spec, review decision 6: a live answer
- * brings it back to running).
+ * eligible, and either agent-less or flagged `unverified`.
  *
- * Nothing else makes a pane eligible. A record with a confirmed, running agent
- * never asks again, which is what makes the whole thing terminate (spec §5.5).
+ * Nothing else makes a pane eligible. A record with a confirmed agent never
+ * asks again, which is what makes the whole thing terminate (spec §5.5). An
+ * EXITED agent does not make it eligible either (#1382): the answer is
+ * session-scoped, so with a live agent in a sibling tmux pane it names that
+ * sibling. A new run in the pane clears the exit through its own SessionStart.
  */
 function wantsProbe(
   hostId: string,
@@ -106,7 +107,7 @@ function wantsProbe(
       // write uses: a pane whose recorded instance is '' has not learnt its
       // generation yet.
       if (!generationMatchesLegacy(c.tmuxInstance, tmuxInstance)) return
-      if (c.rebuild?.agent && !c.rebuild.unverified && !c.rebuild.agentExited) return
+      if (c.rebuild?.agent && !c.rebuild.unverified) return
       found = true
     })
     if (found) return true

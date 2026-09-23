@@ -68,8 +68,10 @@ the agent in one → only that pane's record changes. codex and opencode (quit �
    arrive before the SessionEnd / sweep broadcast. Every other session-scoped write still skips terminated panes.
 5. **`at` is Unix milliseconds on the daemon's clock**, used for display only (never for ordering — 2. makes ordering
    unnecessary). Formatted in the UI language.
-6. **A live agent answer clears it:** backfill must treat an `agentExited` record as probe-eligible, and every backfill
-   mode that confirms a live frame (incl. the same identity) clears `agentExited` and adopts the answer's frameId.
+6. **A live agent answer clears it — only for its own pane** (revised after the #1382 review): an exit does NOT make a
+   record probe-eligible (the answer is session-scoped and may name a live sibling pane's agent; a new run clears the exit
+   through its own SessionStart), and a backfill clears `agentExited` and adopts the answer only when the answer's
+   `tmuxPaneId` equals the record's `agent.tmuxPaneId`.
 7. **Sweep: build the envelope BEFORE the frame is deleted** (`clearFrame` snapshots the frame, passes the envelope to
    `afterFrameCleared`); tests prove it survives the delete; root only (child / proxy frames send none), `pid_dead`
    and `pid_reused`.

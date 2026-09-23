@@ -293,11 +293,21 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
         prev.agent.type === record.agent.type &&
         (prev.agent.sessionId ?? '') === (record.agent.sessionId ?? '')
 
-      // An exited record is as open to correction as a flagged one (agent-last-
-      // state spec, review decision 6): the agent it names is known to be gone,
-      // so a live answer is news — a different agent replaces it (mode 2), the
-      // same one confirms it back to running (mode 3). Neither leaves the exit
-      // behind: the answer IS evidence of a live run.
+      // An exited record takes an answer ONLY about its own tmux pane (#1382):
+      // the answer is session-scoped, and with a live agent in a sibling pane
+      // it names that sibling — clearing the exit and adopting the sibling's
+      // identity and cwd would make Rebuild resume the wrong session. An
+      // answer about another pane (or a record that names no pane) leaves the
+      // exited record exactly as it is, whatever mode would otherwise apply.
+      if (prev.agentExited) {
+        const ownPane = prev.agent.tmuxPaneId
+        if (!ownPane || ownPane !== record.agent.tmuxPaneId) return c
+      }
+
+      // An exited record answered for its own pane is as open to correction as
+      // a flagged one: the agent it names is known to be gone, so a live answer
+      // is news — a different agent replaces it (mode 2), the same one confirms
+      // it back to running (mode 3). Neither leaves the exit behind.
       const correctable = prev.unverified || prev.agentExited !== undefined
 
       // Mode 2 — REPLACE. The record is flagged and the answer names someone
