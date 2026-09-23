@@ -29,7 +29,7 @@ type cwdResponse struct {
 // unknown generation never authorises a write.
 func (m *SessionModule) handleSessionCwd(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
-	info, err := m.GetSession(code)
+	info, err := m.GetSessionContext(r.Context(), code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

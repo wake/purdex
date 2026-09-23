@@ -110,7 +110,20 @@ func (m *SessionModule) ValidateCwd(cwd string) error {
 // cwd and records its meta (mode `terminal`), returning the same
 // SessionInfo POST /api/sessions answers with. On failure the error is a
 // *CreateError; see SessionAlive for what may have been left behind.
+//
+// It runs under a fresh listReadTimeout budget; callers that hold a request
+// or operation context use CreateSessionContext.
 func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
+	return m.CreateSessionContext(context.Background(), name, cwd)
+}
+
+// CreateSessionContext is CreateSession whose post-create tmux list is
+// bounded by ctx, capped at listReadTimeout (#1293). That read runs inside
+// the createMu critical section, so ending it when the caller's context ends
+// (POST /api/sessions passes r.Context()) also frees createMu for the next
+// create. A read ended that way reports CreateStageList like any other list
+// failure: the tmux session may already exist (see SessionAlive).
+func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd string) (*SessionInfo, error) {
 	fail := func(stage CreateStage, err error) (*SessionInfo, error) {
 		return nil, &CreateError{Stage: stage, Name: name, Err: err}
 	}
@@ -155,7 +168,7 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 	// Find the newly created session to get its tmux ID. The read is bounded
 	// like every session-list read (#1293): a hung tmux must not hold the
 	// create critical section (createMu) forever.
-	listCtx, cancel := context.WithTimeout(context.Background(), listReadTimeout)
+	listCtx, cancel := context.WithTimeout(ctx, listReadTimeout)
 	sessions, err := m.tmux.ListSessions(listCtx)
 	cancel()
 	if err != nil {

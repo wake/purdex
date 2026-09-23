@@ -70,7 +70,7 @@ func (m *SessionModule) invalidateListCache() {
 
 func (m *SessionModule) handleGet(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
-	info, err := m.GetSession(code)
+	info, err := m.GetSessionContext(r.Context(), code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -112,7 +112,7 @@ func (m *SessionModule) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// critical section live in CreateSession (shared with the nex module);
 	// this handler only maps its stages onto the HTTP codes and texts the
 	// SPA has always seen.
-	info, err := m.CreateSession(req.Name, req.Cwd)
+	info, err := m.CreateSessionContext(r.Context(), req.Name, req.Cwd)
 	if err != nil {
 		var ce *CreateError
 		if !errors.As(err, &ce) {
@@ -179,7 +179,7 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := m.GetSession(code)
+	info, err := m.GetSessionContext(r.Context(), code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -212,7 +212,7 @@ func (m *SessionModule) handleRename(w http.ResponseWriter, r *http.Request) {
 func (m *SessionModule) handleDelete(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 
-	info, err := m.GetSession(code)
+	info, err := m.GetSessionContext(r.Context(), code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -269,7 +269,7 @@ func (m *SessionModule) handleSendKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := m.GetSession(code)
+	info, err := m.GetSessionContext(r.Context(), code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
