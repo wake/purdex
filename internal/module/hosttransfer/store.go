@@ -31,6 +31,11 @@ var (
 	ErrUnavailable = errors.New("hosttransfer: could not allocate a code")
 	ErrInvalidCode = errors.New("hosttransfer: invalid code")
 	ErrRateLimited = errors.New("hosttransfer: rate limited")
+	// ErrStopped is Redeem on a stopped store. It is not ErrInvalidCode: it
+	// does not depend on the code (so it reveals nothing about one), it is
+	// not counted as a failure, and it tells the client the relay is going
+	// away rather than that it mistyped.
+	ErrStopped = errors.New("hosttransfer: stopped")
 )
 
 type entry struct {
@@ -49,6 +54,7 @@ type Store struct {
 	mu          sync.Mutex
 	entries     map[string]entry // key: canonical code
 	seq         uint64
+	stopped     bool // permanent once set (Stop)
 	failures    int
 	windowStart time.Time // zero = no window open
 	now         func() time.Time
@@ -146,10 +152,13 @@ func (s *Store) expire(code string, seq uint64) {
 }
 
 // Create parks payload under a fresh code for codeTTL. It is not
-// rate-limited; maxLive bounds it.
+// rate-limited; maxLive bounds it. A stopped store is ErrUnavailable.
 func (s *Store) Create(payload json.RawMessage) (string, time.Time, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopped {
+		return "", time.Time{}, ErrUnavailable
+	}
 	now := s.now()
 	s.sweepLocked(now)
 	if len(s.entries) >= maxLive {
@@ -180,10 +189,14 @@ func (s *Store) Create(payload json.RawMessage) (string, time.Time, error) {
 // the 10th failure in a window still answers ErrInvalidCode, and every
 // redeem after it, right code or wrong, answers ErrRateLimited until the
 // window (fixed from the first failure) ends. A success does not reset the
-// counter, and a miss never touches a stored entry.
+// counter, and a miss never touches a stored entry. A stopped store is
+// ErrStopped, whatever the code, and counts nothing.
 func (s *Store) Redeem(raw string) (json.RawMessage, time.Duration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopped {
+		return nil, 0, ErrStopped
+	}
 	now := s.now()
 	s.sweepLocked(now)
 
@@ -214,6 +227,17 @@ func (s *Store) Redeem(raw string) (json.RawMessage, time.Duration, error) {
 func (s *Store) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.clearLocked()
+}
+
+// Stop drops every entry, stops its timer and closes the store for good, in
+// one critical section: once Stop returns no entry is left and none can be
+// added. Module Stop calls it; the daemon stops modules before it shuts
+// the HTTP server down, so requests can still arrive afterwards.
+func (s *Store) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = true
 	s.clearLocked()
 }
 

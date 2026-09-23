@@ -135,6 +135,8 @@ func (m *Module) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrRateLimited):
 		w.Header().Set("Retry-After", strconv.Itoa(ceilSeconds(retryAfter)))
 		writeReason(w, http.StatusTooManyRequests, "rate_limited")
+	case errors.Is(err, ErrStopped):
+		writeReason(w, http.StatusServiceUnavailable, "unavailable")
 	case err != nil:
 		writeReason(w, http.StatusNotFound, "invalid_code")
 	default:

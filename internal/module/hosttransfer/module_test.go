@@ -2,6 +2,7 @@ package hosttransfer
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,8 +42,9 @@ func TestStopDropsEveryPayload(t *testing.T) {
 	store := m.store
 
 	require.NoError(t, m.Stop(context.Background()))
+	assert.Equal(t, 0, liveEntries(store), "Stop clears the store it was serving")
 	_, _, err = store.Redeem(code)
-	assert.ErrorIs(t, err, ErrInvalidCode, "Stop clears the store it was serving")
+	assert.ErrorIs(t, err, ErrStopped)
 
 	// A new Init starts from nothing.
 	require.NoError(t, m.Init(&core.Core{}))
@@ -86,6 +88,33 @@ func TestInitWithoutConfigFailsClosed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/host-transfer", strings.NewReader(oneHost)))
 	assertReason(t, rec, http.StatusForbidden, "no_token")
+}
+
+// Attacker finding 3: the daemon stops modules before http.Server.Shutdown,
+// so the routes stay reachable for a while after Stop. Through the same mux
+// both endpoints now refuse with 503 unavailable.
+func TestStoppedModuleRefusesBothEndpoints(t *testing.T) {
+	m := New()
+	require.NoError(t, m.Init(core.New(core.CoreDeps{Config: &config.Config{Token: "admin-token"}})))
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	post := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		return rec
+	}
+	rec := post("/api/host-transfer", oneHost)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var created struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+
+	require.NoError(t, m.Stop(context.Background()))
+
+	assertReason(t, post("/api/host-transfer", oneHost), http.StatusServiceUnavailable, "unavailable")
+	assertReason(t, post("/api/host-transfer/redeem", `{"code":"`+created.Code+`"}`), http.StatusServiceUnavailable, "unavailable")
+	assertReason(t, post("/api/host-transfer/redeem", `{"code":"ZZZZZZZZ"}`), http.StatusServiceUnavailable, "unavailable")
 }
 
 func TestStopBeforeInitIsSafe(t *testing.T) {

@@ -536,6 +536,64 @@ func TestLateTimerSparesANewEntryUnderTheSameCode(t *testing.T) {
 	assert.JSONEq(t, string(payloadN(2)), string(got))
 }
 
+// Attacker finding 3: Stop is permanent. It drops every entry and stops its
+// timer in one critical section, and afterwards Create is ErrUnavailable
+// and Redeem is ErrStopped — neither counted as a failure.
+func TestStopIsPermanent(t *testing.T) {
+	s, _, ft := newTimedStore(seqGen())
+	code, _, err := s.Create(payloadN(1))
+	require.NoError(t, err)
+
+	s.Stop()
+	assert.Equal(t, 0, liveEntries(s))
+	assert.True(t, ft.get(0).stopped)
+
+	_, _, err = s.Create(payloadN(2))
+	assert.ErrorIs(t, err, ErrUnavailable)
+	for i := 0; i < failLimit+2; i++ {
+		_, _, err = s.Redeem(code)
+		assert.ErrorIs(t, err, ErrStopped)
+	}
+	assert.Equal(t, 0, liveEntries(s))
+	assert.Equal(t, 1, ft.len(), "no timer armed after Stop")
+	s.mu.Lock()
+	assert.Zero(t, s.failures, "a redeem after Stop is not a failure")
+	s.mu.Unlock()
+
+	s.Stop() // idempotent
+}
+
+// Stop racing Create/Redeem (run with -race): once Stop has returned the map
+// is empty and stays empty, and every timer ever armed has been stopped —
+// so no Create slipped in after Stop.
+func TestStopRacesCreateAndRedeem(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		s, _, ft := newTimedStore(seqGen())
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				for i := 0; i < 50; i++ {
+					if code, _, err := s.Create(payloadN(i)); err == nil && i%2 == 0 {
+						_, _, _ = s.Redeem(code)
+					}
+				}
+			}()
+		}
+		close(start)
+		s.Stop()
+		assert.Equal(t, 0, liveEntries(s), "empty the moment Stop returns")
+		wg.Wait()
+		assert.Equal(t, 0, liveEntries(s), "and nothing appears afterwards")
+		for i := 0; i < ft.len(); i++ {
+			assert.True(t, ft.get(i).stopped, "round %d timer %d armed after Stop or left running", round, i)
+		}
+	}
+}
+
 func TestClearStopsEveryTimer(t *testing.T) {
 	s, _, ft := newTimedStore(seqGen())
 	for i := 0; i < 3; i++ {

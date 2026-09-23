@@ -52,10 +52,12 @@ func (m *Module) Start(_ context.Context) error {
 	return nil
 }
 
-// Stop drops every parked payload.
+// Stop drops every parked payload and closes the store for good: the HTTP
+// server outlives StopModules, and a request arriving in between must not
+// park or hand out anything.
 func (m *Module) Stop(_ context.Context) error {
 	if m.store != nil {
-		m.store.Clear()
+		m.store.Stop()
 	}
 	return nil
 }
