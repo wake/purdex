@@ -151,6 +151,17 @@ func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEve
 
 // handleEvent handles POST /api/agent/event.
 // It stores the hook event and broadcasts normalized events to WS subscribers.
+//
+// The event is processed synchronously, before the response is written, and
+// it is processed to completion: a sender that hangs up mid-request must not
+// leave an event half-applied (identity written, frame not; path hint sent,
+// broadcast not). So every session read on this path runs on its own bounded
+// context — context.WithTimeout(context.Background(), session.ListReadTimeout)
+// for the path-hint cwd fallback, and the session module's own fresh
+// listReadTimeout budget for the name lookups (LookupCodeByName /
+// ListSessions in resolveSessionCode) — never on r.Context(). Unlike the
+// read-only handlers (fs search, nex preflights, upload), which follow their
+// request, this is deliberate (#1293).
 func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	var req EventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -233,7 +244,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		if code, _ := m.resolveSessionCodeFromHook(req); code != "" {
 			cwdFallback := ""
 			if m.sessions != nil {
-				if info, err := m.sessions.GetSession(code); err == nil && info != nil {
+				// Its own bounded budget, not r.Context() — see handleEvent's
+				// doc: a hook event is processed to completion.
+				readCtx, cancelRead := context.WithTimeout(context.Background(), session.ListReadTimeout)
+				info, err := session.GetSessionWithin(readCtx, m.sessions, code)
+				cancelRead()
+				if err == nil && info != nil {
 					cwdFallback = info.Cwd
 				}
 			}
@@ -742,6 +758,10 @@ type sessionCodeLookuper interface {
 // the cached fast path first; falls through to ListSessions on a cache miss
 // so a hook fired during a rename/create race window before cache refresh
 // still resolves correctly (safety net per SOT §3.1).
+//
+// Both reads take no request context on purpose: they run on the session
+// module's own fresh listReadTimeout budget, so a hook whose sender hung up is
+// still resolved and processed to completion (see handleEvent, #1293).
 func (m *Module) resolveSessionCode(tmuxName string) string {
 	if m.sessions == nil {
 		return ""

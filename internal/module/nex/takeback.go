@@ -98,7 +98,7 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	defer m.locks.Unlock(code)
 
 	// Preflight: nothing below touches the execution.
-	sess, err := m.sessions.GetSession(code)
+	sess, err := session.GetSessionWithin(r.Context(), m.sessions, code)
 	if err != nil {
 		writeHandoffError(w, http.StatusInternalServerError, "session_lookup_failed", err.Error(), nil)
 		return

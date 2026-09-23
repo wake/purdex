@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // createDedupFile atomically creates a file in dir using O_CREATE|O_EXCL to
@@ -60,7 +63,7 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	// Resolve session code to tmux session name.
-	tmuxName := m.resolveSessionName(sessionCode)
+	tmuxName := m.resolveSessionName(r.Context(), sessionCode)
 	if tmuxName == "" {
 		http.Error(w, `{"error":"session not found"}`, http.StatusNotFound)
 		return
@@ -109,11 +112,11 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveSessionName maps a pdx session code to the tmux session name.
-func (m *Module) resolveSessionName(code string) string {
+func (m *Module) resolveSessionName(ctx context.Context, code string) string {
 	if m.sessions == nil {
 		return ""
 	}
-	info, err := m.sessions.GetSession(code)
+	info, err := session.GetSessionWithin(ctx, m.sessions, code)
 	if err != nil || info == nil {
 		return ""
 	}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wake/purdex/internal/module/session"
 )
 
 // httpSearchRequest is the wire-format body accepted by POST /api/fs/search.
@@ -76,7 +78,17 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roots, status, err := m.resolveCapabilityRoots(body.Roots)
+	// One budget for the whole search: limits.timeoutMs (when given) bounds
+	// the session-cwd root lookup as well as the walk, so a stuck tmux read
+	// cannot hold a 50ms search for the full session-list timeout (#1293).
+	ctx := r.Context()
+	if body.Limits != nil && body.Limits.TimeoutMs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(body.Limits.TimeoutMs)*time.Millisecond)
+		defer cancel()
+	}
+
+	roots, status, err := m.resolveCapabilityRoots(ctx, body.Roots)
 	if err != nil {
 		jsonError(w, err.Error(), status)
 		return
@@ -96,13 +108,6 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 			ExcludeBasenameGlobs: body.Filters.ExcludeBasenameGlobs,
 			RespectGitignore:     body.Filters.RespectGitignore,
 		}
-	}
-
-	ctx := r.Context()
-	if body.Limits != nil && body.Limits.TimeoutMs > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(body.Limits.TimeoutMs)*time.Millisecond)
-		defer cancel()
 	}
 
 	resp, err := Search(ctx, req)
@@ -130,7 +135,7 @@ func (m *FsModule) handleSearch(w http.ResponseWriter, r *http.Request) {
 // Defers:
 //   - `workspace-projectPath` → 501 (layer-3 follow-up; daemon has no
 //     workspace registry yet).
-func (m *FsModule) resolveCapabilityRoots(roots []httpSearchRoot) ([]SearchRoot, int, error) {
+func (m *FsModule) resolveCapabilityRoots(ctx context.Context, roots []httpSearchRoot) ([]SearchRoot, int, error) {
 	out := make([]SearchRoot, 0, len(roots))
 	for _, r := range roots {
 		switch r.Kind {
@@ -138,7 +143,7 @@ func (m *FsModule) resolveCapabilityRoots(roots []httpSearchRoot) ([]SearchRoot,
 			if r.SessionCode == "" {
 				return nil, http.StatusBadRequest, errors.New("sessionCode required for session-cwd root")
 			}
-			info, err := m.sessions.GetSession(r.SessionCode)
+			info, err := session.GetSessionWithin(ctx, m.sessions, r.SessionCode)
 			if err != nil {
 				return nil, http.StatusBadRequest, errors.New("session lookup failed: " + err.Error())
 			}

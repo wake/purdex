@@ -11,6 +11,7 @@ import (
 	"lab.protype.tw/wake/nexen/sandbox"
 	"lab.protype.tw/wake/nexen/store"
 
+	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -172,7 +173,7 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.locks.Unlock(code)
 
-	sess, err := m.sessions.GetSession(code)
+	sess, err := session.GetSessionWithin(r.Context(), m.sessions, code)
 	if err != nil {
 		writeHandoffError(w, http.StatusInternalServerError, "session_lookup_failed", err.Error(), nil)
 		return
