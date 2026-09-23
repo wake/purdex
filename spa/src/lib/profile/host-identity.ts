@@ -472,23 +472,29 @@ type IdMap = (id: string) => string
 
 const FILE_SOURCE_KINDS: ReadonlySet<string> = new Set(['editor', 'image-preview', 'pdf-preview'])
 
-/** One pane's content with its host-bearing field mapped; the same object when nothing applies. */
+/**
+ * One pane's content with its host-bearing field mapped; the same object when nothing applies OR the mapped id is
+ * the one it already had — so a mapping that moves nothing leaves the tree untouched (host ownership plan §0.12).
+ */
 function mapContent(content: unknown, map: IdMap): unknown {
   if (!isRecord(content)) return content
   const kind = content.kind
   if (kind === 'tmux-session' && typeof content.hostId === 'string') {
-    return { ...content, hostId: map(content.hostId) }
+    const hostId = map(content.hostId)
+    return hostId === content.hostId ? content : { ...content, hostId }
   }
   if (typeof kind === 'string' && FILE_SOURCE_KINDS.has(kind)) {
     const source = content.source
     if (isRecord(source) && source.type === 'daemon' && typeof source.hostId === 'string') {
-      return { ...content, source: { ...source, hostId: map(source.hostId) } }
+      const hostId = map(source.hostId)
+      return hostId === source.hostId ? content : { ...content, source: { ...source, hostId } }
     }
     return content
   }
   // '' is "no hint", not a host.
   if (kind === 'execution' && typeof content.host === 'string' && content.host !== '') {
-    return { ...content, host: map(content.host) }
+    const host = map(content.host)
+    return host === content.host ? content : { ...content, host }
   }
   return content
 }
@@ -502,7 +508,8 @@ function mapLayout(layout: unknown, map: IdMap): unknown {
     return content === pane.content ? layout : { ...layout, pane: { ...pane, content } }
   }
   if (layout.type === 'split' && Array.isArray(layout.children)) {
-    return { ...layout, children: layout.children.map((child) => mapLayout(child, map)) }
+    const children = layout.children.map((child) => mapLayout(child, map))
+    return children.every((child, i) => child === layout.children[i]) ? layout : { ...layout, children }
   }
   return layout
 }
