@@ -6,7 +6,7 @@ import { createTab } from '../types/tab'
 import type { PaneRebuildRecord, Tab } from '../types/tab'
 import { getPrimaryPane, findPane, updatePaneInLayout } from '../lib/pane-tree'
 import { batchCandidates, collectRecordRows } from '../lib/rebuild/eligibility'
-import { groupForBatch } from '../lib/rebuild/batch'
+import { groupForBatch, planGroups } from '../lib/rebuild/batch'
 import { resolveResumeCommand } from '../lib/rebuild/composer'
 import { defaultResumeLookup as defaultTemplates } from '../lib/resume-templates'
 
@@ -823,6 +823,86 @@ describe('setPaneRebuild — agent-exit', () => {
     const tab = seed()
     backfill({ type: 'cc', sessionId: 'S1', frameId: 'F3', updatedAt: 9_000 })
     expect(rec(tab.id)?.agent?.frameId).toBe('F3')
+  })
+})
+
+// "Rebuild all" and the last agent state (agent-last-state spec §3 + review
+// decision 8): an exited agent's resume is off by default in the batch too, and
+// the exit's re-stamp is what lets the group's newest-record election see it.
+describe('Rebuild all — the last agent state', () => {
+  beforeEach(() => useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null }))
+
+  function seedOn(sessionCode: string) {
+    const tab = createTab({
+      kind: 'tmux-session', hostId: 'h1', sessionCode,
+      mode: 'terminal', cachedName: sessionCode, tmuxInstance: '111:1000',
+    })
+    useTabStore.setState((st) => ({ tabs: { ...st.tabs, [tab.id]: tab }, tabOrder: [...st.tabOrder, tab.id] }))
+    useTabStore.getState().setPaneRebuild('h1', sessionCode, '111:1000', {
+      kind: 'agent-group',
+      record: {
+        tmuxInstance: '111:1000', cwd: `/w/${sessionCode}`, cwdSource: 'agent-session-start',
+        agent: { type: 'cc', sessionId: `S-${sessionCode}`, frameId: `F-${sessionCode}`, updatedAt: 1 },
+        capturedAt: 1,
+      },
+    })
+    return tab
+  }
+  const plan = () => planGroups(
+    groupForBatch(batchCandidates(collectRecordRows(useTabStore.getState().tabs))).groups,
+    () => defaultTemplates,
+  )
+
+  it('mixed: the running session resumes, the exited one only recreates the shell', () => {
+    seedOn('run1')
+    seedOn('gone1')
+    useTabStore.getState().setPaneRebuild('h1', 'gone1', '111:1000', {
+      kind: 'agent-exit', frameId: 'F-gone1', exited: { at: 5, reason: 'session-end' },
+    })
+    useTabStore.getState().markTerminated('h1', 'run1', 'session-closed')
+    useTabStore.getState().markTerminated('h1', 'gone1', 'session-closed')
+
+    const bySession = Object.fromEntries(plan().map((g) => [g.sessionCode, g.plan]))
+    expect(bySession.run1).toEqual({ createSession: true, applyCwd: true, runResume: true })
+    expect(bySession.gone1).toEqual({ createSession: true, applyCwd: true, runResume: false })
+  })
+
+  it('the exit\'s re-stamp wins the group election over an older sibling edit', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000)
+      const tab = seed()
+      useTabStore.setState({ tabs: { [tab.id]: splitTabWithSecondPane(tab, 'p2') }, tabOrder: [tab.id], activeTabId: tab.id })
+      // p1 carries the agent; p2 only a hand-typed cwd (pane-scoped, no agent).
+      useTabStore.getState().setPaneRebuildForPane(
+        tab.id, 'p1', { hostId: 'h1', sessionCode: 'abc123', tmuxInstance: '111:1000' },
+        { kind: 'field', field: 'cwd', value: '/w/p1' },
+      )
+      useTabStore.setState((st) => ({
+        tabs: { ...st.tabs, [tab.id]: { ...st.tabs[tab.id], layout: updatePaneInLayout(st.tabs[tab.id].layout, 'p1', {
+          ...paneContentOf(tab.id, 'p1')!,
+          rebuild: { ...recordOfPane(tab.id, 'p1')!, agent: { type: 'cc', sessionId: 'S1', frameId: 'F1', updatedAt: 1_000 } },
+        }) } },
+      }))
+      vi.setSystemTime(2_000)
+      useTabStore.getState().setPaneRebuildForPane(
+        tab.id, 'p2', { hostId: 'h1', sessionCode: 'abc123', tmuxInstance: '111:1000' },
+        { kind: 'field', field: 'cwd', value: '/w/p1' },
+      )
+      vi.setSystemTime(3_000)
+      useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
+        kind: 'agent-exit', frameId: 'F1', exited: { at: 2_500, reason: 'process-dead' },
+      })
+      useTabStore.getState().markTerminated('h1', 'abc123', 'session-closed')
+
+      const { groups } = groupForBatch(batchCandidates(collectRecordRows(useTabStore.getState().tabs)))
+      expect(groups).toHaveLength(1)
+      expect(groups[0].sourcePaneId).toBe('p1')
+      expect(groups[0].record.agentExited).toEqual({ at: 2_500, reason: 'process-dead' })
+      expect(plan()[0].plan.runResume).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
