@@ -116,7 +116,17 @@ unilaterally). H4b's real-machine test needs it deployed on at least the relay.
 
 ## H4b — SPA share / receive (§6.1, §6.4)
 
-### Open decision (asked of the coordinator, 2026-09-24): the look before H2c
+### Decided by the coordinator (2026-09-24): the look before H2c — option (b)
+
+Condition: whichever of H4b and H2c merges LATER makes the receive path follow §6.4.5 (after H2c, a received look goes
+to the look store, only for a `d1_…` that has no entry yet). The spec and H2c's plan record this.
+
+Also decided (user, spec update pending): a LOCAL host deletion affects only this device — no synced `host-removed`
+mark, no deletion of the workbench's host settings. Replace-all's removals go through the normal delete path
+(`deleteHostCascade`), so they get that behaviour from the PR that implements it; H4b adds no delete logic of its own.
+If H4b merges first, replace-all behaves like today's delete until then — noted in the PR.
+
+Original proposal, as adopted:
 
 §6.4.5 writes a payload's look "to the look store only where no entry exists for that `d1_…`", but the look store is
 H2c's and does not exist on main. Proposed (b): until H2c, the receiver writes the look into the new `HostConfig`'s
