@@ -67,17 +67,24 @@ interface HostEntry {
  * as a reload would. The token has to be part of it (#1360): a tokenless host
  * ends its negotiation in `auth-error`, which the state machine treats as final
  * — so without a new connection, a token added in-app was never tried.
+ *
+ * JSON, not a joined string: a token is user input and may contain any
+ * separator, so a joined key could serialise two different configurations
+ * identically. `null` and an absent token are the same (no token). The key
+ * carries the token, so it must never be logged.
  */
 function connectionKey(host: { ip: string; port: number; token?: string | null }): string {
-  return `${host.ip}:${host.port}:${host.token ?? ''}`
+  return JSON.stringify([host.ip, host.port, host.token ?? ''])
 }
 
 export function useMultiHostEventWs() {
+  // Every host's `connectionKey`, in order — JSON for the same reason as the
+  // per-host key: a joined string lets a token span two hosts' fields (#1360).
   const hostConfigKey = useHostStore((s) =>
-    s.hostOrder.map((id) => {
+    JSON.stringify(s.hostOrder.map((id) => {
       const h = s.hosts[id]
-      return h ? `${id}:${connectionKey(h)}` : id
-    }).join(',')
+      return [id, h ? connectionKey(h) : null]
+    })),
   )
 
   const entriesRef = useRef(new Map<string, HostEntry>())

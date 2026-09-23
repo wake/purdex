@@ -11,10 +11,9 @@ import { __resetForTests } from '../lib/rebuild/session-version'
 // The real checkHealth's auth contract, minus the network: no token → auth-error
 // (the daemon is not in pairing mode); a token the daemon knows → a ticket.
 const { checkHealth } = vi.hoisted(() => {
-  const VALID = new Set(['good', 'good-2'])
   const checkHealth = vi.fn(async (_base: string, getToken?: () => string | undefined) => {
     const token = getToken?.()
-    if (!token || !VALID.has(token)) {
+    if (!token) {
       return { daemon: 'auth-error', tmux: 'unavailable', latency: 1, mode: 'normal' }
     }
     return { daemon: 'connected', tmux: 'unavailable', latency: 1, mode: 'normal', ticket: `tk-${token}` }
@@ -162,6 +161,50 @@ describe('useMultiHostEventWs — token change (#1360)', () => {
     expect(sockets[0].close).not.toHaveBeenCalled()
     expect(checkHealth.mock.calls.length).toBe(checks)
     expect(status()).toBe('connected')
+    view.unmount()
+  })
+
+  // Tokens are user input and may contain the separators a joined-string key
+  // uses. Here the old and new pairs serialise identically under
+  // `${id}:${ip}:${port}:${token}` joined by ',' — tokenA's tail swallows host
+  // 2's prefix before the update, tokenB's head carries it after — so an atomic
+  // two-host write (sync apply, cross-window rehydrate) must still re-run.
+  it('an atomic two-host token update whose tokens contain the key separators reconnects both hosts', async () => {
+    const H2 = 'h2'
+    const P = `${H2}:100.64.0.4:7860:` // host 2's fixed prefix in a ':'/','-joined key
+    const host1 = { id: HOST, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0 }
+    const host2 = { id: H2, name: 'air', ip: '100.64.0.4', port: 7860, order: 1 }
+    useHostStore.setState({
+      hosts: { [HOST]: { ...host1, token: `q,${P}r` }, [H2]: { ...host2, token: 's' } },
+      hostOrder: [HOST, H2],
+    })
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(2))
+    const [old1, old2] = sockets
+    expect(new Set([ticketOf(old1), ticketOf(old2)])).toEqual(new Set([`tk-q,${P}r`, 'tk-s']))
+
+    act(() => {
+      useHostStore.setState((st) => ({
+        hosts: { ...st.hosts, [HOST]: { ...st.hosts[HOST], token: 'q' }, [H2]: { ...st.hosts[H2], token: `r,${P}s` } },
+      }))
+    })
+
+    await waitFor(() => expect(sockets).toHaveLength(4))
+    expect(old1.close).toHaveBeenCalled()
+    expect(old2.close).toHaveBeenCalled()
+    expect(new Set(liveSockets().map(ticketOf))).toEqual(new Set(['tk-q', `tk-r,${P}s`]))
+    view.unmount()
+  })
+
+  it('an explicit null token and an absent one are the same connection (no reconnect)', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(status()).toBe('auth-error'))
+    const checks = checkHealth.mock.calls.length
+
+    act(() => { useHostStore.getState().updateHost(HOST, { token: null }) })
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+
+    expect(checkHealth.mock.calls.length).toBe(checks)
     view.unmount()
   })
 })
