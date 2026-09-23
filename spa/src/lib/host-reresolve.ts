@@ -20,13 +20,13 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { hostSettingsFromWire, layoutFromWire, presetColumnIdFromWire } from './profile/host-identity'
-import { wireResolverOf } from './profile/sections'
+import { hostResolverSignature, wireResolverOf } from './profile/sections'
 import type { Tab } from '../types/tab'
 
 export const HOST_RERESOLVE_LOCK_OWNER = 'host-reresolve'
 export const HOST_RERESOLVE_RETRY_MS = 500
 
-/** `done` — ran (whether or not anything moved); `conflict` — identity conflict, nothing done; `busy` — lock held. */
+/** `done` — ran, or had nothing to move; `conflict` — identity conflict, nothing done; `busy` — lock held elsewhere. */
 export type HostReresolveOutcome = 'done' | 'conflict' | 'busy'
 
 type HostMap = (hostId: string) => string
@@ -54,7 +54,26 @@ function rewriteHostRefs(map: HostMap): void {
   if (Object.keys(settings).some((id) => map(id) !== id)) {
     useHostSettingsStore.setState({ hosts: hostSettingsFromWire(settings, map) })
   }
-  useNewTabLayoutStore.getState().renameIds((id) => presetColumnIdFromWire(id, map))
+  useNewTabLayoutStore.getState().renameIds(columnMap(map))
+}
+
+const columnMap = (map: HostMap) => (id: string) => presetColumnIdFromWire(id, map)
+
+/**
+ * Whether `map` moves any reference this device holds. Checked BEFORE the lock is taken, in the same synchronous
+ * stretch as the write: taking and releasing the operation lock is not free — every release reconciles the session
+ * lists of every host (`createOperationLockObserver`) — so a pass with nothing to do must not touch it.
+ */
+function anythingMoves(map: HostMap): boolean {
+  const moves = (tabs: Record<string, Tab>) => Object.values(tabs).some((tab) => layoutFromWire(tab.layout, map) !== tab.layout)
+  if (moves(useTabStore.getState().tabs)) return true
+  const { parkedMaster, slaves } = useLocalProfilesStore.getState()
+  if (parkedMaster !== null && moves(parkedMaster.tabs)) return true
+  if (Object.values(slaves).some((slave) => slave.world !== null && moves(slave.world.tabs))) return true
+  if (Object.keys(useHostSettingsStore.getState().hosts).some((id) => map(id) !== id)) return true
+  const { presets, knownIds } = useNewTabLayoutStore.getState()
+  const col = columnMap(map)
+  return [...knownIds, ...Object.values(presets).flatMap((preset) => preset.columns.flat())].some((id) => col(id) !== id)
 }
 
 /** One pass, now. Never throws on a busy lock or a conflict — it says so. */
@@ -68,8 +87,8 @@ export function runHostReresolve(): HostReresolveOutcome {
     const local = resolve(id)
     return Object.hasOwn(hosts, local) ? local : id
   }
-  const lock = useRebuildStore.getState()
-  const grant = lock.acquireOperationLock(HOST_RERESOLVE_LOCK_OWNER)
+  if (!anythingMoves(map)) return 'done'
+  const grant = useRebuildStore.getState().acquireOperationLock(HOST_RERESOLVE_LOCK_OWNER)
   if (grant === null) return 'busy'
   try {
     rewriteHostRefs(map)
@@ -87,10 +106,7 @@ let retry: ReturnType<typeof setTimeout> | null = null
  * Under a conflict nothing is scheduled: the conflict clearing changes the identity, which requests again.
  */
 export function requestHostReresolve(): void {
-  if (retry !== null) {
-    clearTimeout(retry)
-    retry = null
-  }
+  cancelRetry()
   if (runHostReresolve() !== 'busy') return
   retry = setTimeout(() => {
     retry = null
@@ -98,7 +114,43 @@ export function requestHostReresolve(): void {
   }, HOST_RERESOLVE_RETRY_MS)
 }
 
-export function __resetHostReresolveForTest(): void {
+/** Every persisted store the pass reads or rewrites: it runs only once ALL of them hold their real state. */
+const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore] as const
+
+/**
+ * The pass's triggers, for the app's lifetime (`main.tsx`): once every store it touches has hydrated; again whenever
+ * one of them finishes a (re)hydration — a store landing after the first pass, or one another window rewrote, may hold
+ * a wire id this device can resolve; and on every change of the host resolver signature (a host added / removed, a
+ * daemonId learned or cleared, a conflict entered or left, `syncAliases` changed — not a rename, not runtime churn).
+ * The profile applies request one too, when they settle (`applySectionToStores`).
+ */
+export function startHostReresolve(): () => void {
+  const request = () => {
+    if (STORES.every((store) => store.persist.hasHydrated())) requestHostReresolve()
+  }
+  const unsubs = STORES.map((store) => store.persist.onFinishHydration(request))
+  let seen = hostResolverSignature(useHostStore.getState())
+  unsubs.push(
+    useHostStore.subscribe((state, prev) => {
+      if (state.hosts === prev.hosts && state.hostOrder === prev.hostOrder) return // runtime / active-host churn
+      const signature = hostResolverSignature(state)
+      if (signature === seen) return
+      seen = signature
+      request()
+    }),
+  )
+  request()
+  return () => {
+    for (const unsub of unsubs) unsub()
+    cancelRetry()
+  }
+}
+
+function cancelRetry(): void {
   if (retry !== null) clearTimeout(retry)
   retry = null
+}
+
+export function __resetHostReresolveForTest(): void {
+  cancelRetry()
 }

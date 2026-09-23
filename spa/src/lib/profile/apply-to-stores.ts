@@ -48,6 +48,7 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { Tab } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
+import { requestHostReresolve } from '../host-reresolve'
 import { generateId } from '../id'
 import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
@@ -703,16 +704,23 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
  * orders that too (no `settings` pull, and no push, before `workspaces` is synced).
  */
 export async function applySectionToStores(key: ProfileSectionKey, payload: unknown | null, ctx: ApplyContext): Promise<ApplyOutcome> {
-  switch (sectionKind(key)) {
-    case 'hosts':
-      return applyHostsSection(payload, ctx)
-    case 'settings':
-      return applySettingsSection(payload)
-    case 'workspaces':
-      return applyWorkspacesSection(payload)
-    case 'tabs':
-      return applyTabsSection(key, payload)
-    default:
-      return invalid('unknown-section', `unknown section key: ${String(key)}`)
+  try {
+    switch (sectionKind(key)) {
+      case 'hosts':
+        return await applyHostsSection(payload, ctx)
+      case 'settings':
+        return await applySettingsSection(payload)
+      case 'workspaces':
+        return await applyWorkspacesSection(payload)
+      case 'tabs':
+        return await applyTabsSection(key, payload)
+      default:
+        return invalid('unknown-section', `unknown section key: ${String(key)}`)
+    }
+  } finally {
+    // At the SETTLEMENT boundary, whatever the outcome — a throw included (host ownership plan §0.2): a rollback
+    // (`setState(old)`) may have put back a wire id the re-resolve pass had already resolved, and an applied payload
+    // may carry one this device can resolve. The pass is idempotent and writes nothing when nothing moves.
+    requestHostReresolve()
   }
 }

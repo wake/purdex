@@ -16,6 +16,7 @@ import {
   __resetHostReresolveForTest,
   requestHostReresolve,
   runHostReresolve,
+  startHostReresolve,
 } from './host-reresolve'
 
 const DAEMON = 'air-lab:26aaaa'
@@ -158,6 +159,15 @@ describe('runHostReresolve', () => {
     useRebuildStore.getState().releaseOperationLock(grant)
   })
 
+  it('nothing to move → the operation lock is never taken (a release reconciles every host\'s sessions)', () => {
+    runHostReresolve()
+    const seen: (string | null)[] = []
+    const unsub = useRebuildStore.subscribe((st) => { seen.push(st.lockedBy) })
+    expect(runHostReresolve()).toBe('done')
+    unsub()
+    expect(seen).toEqual([])
+  })
+
   it('idempotent: a second run writes nothing', () => {
     runHostReresolve()
     const after = snapshot()
@@ -195,6 +205,7 @@ describe('requestHostReresolve', () => {
       vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS * 3)
       expect(runs).toBe(1)
 
+      seed() // something to move again
       grant = useRebuildStore.getState().acquireOperationLock('someone-else')
       requestHostReresolve()
       useRebuildStore.getState().releaseOperationLock(grant)
@@ -205,5 +216,108 @@ describe('requestHostReresolve', () => {
     } finally {
       unsub()
     }
+  })
+})
+
+describe('startHostReresolve (the triggers)', () => {
+  let stop: (() => void) | null = null
+  let runs = 0
+  let unsubRuns: (() => void) | null = null
+
+  beforeEach(() => {
+    runs = 0
+    unsubRuns = useRebuildStore.subscribe((st, prev) => { if (st.lockedBy === HOST_RERESOLVE_LOCK_OWNER && prev.lockedBy !== HOST_RERESOLVE_LOCK_OWNER) runs++ })
+    // Start from a device that does NOT have the daemon yet: every WIRE ref is unresolvable.
+    useHostStore.setState({ hosts: { other: host('other') }, hostOrder: ['other'], activeHostId: 'other' })
+  })
+
+  afterEach(() => {
+    stop?.()
+    stop = null
+    unsubRuns?.()
+    vi.restoreAllMocks()
+  })
+
+  const addHostX = (over: Partial<HostConfig> = {}) =>
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: host(LOCAL, { daemonId: DAEMON, order: 1, ...over }) }, hostOrder: [...s.hostOrder, LOCAL] }))
+
+  it('runs once at start when every store has hydrated', () => {
+    addHostX()
+    stop = startHostReresolve()
+    expect(runs).toBe(1)
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+  })
+
+  it('adding a host whose daemon the refs name → they point at it', () => {
+    stop = startHostReresolve()
+    addHostX()
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+    expect(Object.keys(useHostSettingsStore.getState().hosts)).toContain(LOCAL)
+  })
+
+  it('learning a daemonId triggers', () => {
+    addHostX({ daemonId: undefined })
+    stop = startHostReresolve()
+    expect(hostIdsIn(useTabStore.getState().tabs)).toContain(WIRE)
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+  })
+
+  it('changing syncAliases triggers (a legacy id becomes resolvable)', () => {
+    addHostX()
+    useTabStore.setState({ tabs: { l: tab('l', leaf('pl', tmux('legacy1'))) }, tabOrder: ['l'] })
+    stop = startHostReresolve()
+    expect(hostIdsIn(useTabStore.getState().tabs)).toEqual(['legacy1'])
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], syncAliases: ['legacy1'] } } }))
+    expect(hostIdsIn(useTabStore.getState().tabs)).toEqual([LOCAL])
+  })
+
+  it('a rename, or runtime churn, does not trigger', () => {
+    addHostX()
+    stop = startHostReresolve()
+    const after = runs
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], name: 'renamed' } } }))
+    useHostStore.getState().setRuntime(LOCAL, { status: 'connected' })
+    expect(runs).toBe(after)
+  })
+
+  it('waits for every store it rewrites: nothing runs while purdex-host-settings has not hydrated, then it does', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useHostSettingsStore.persist, 'hasHydrated').mockReturnValue(false)
+    vi.spyOn(useHostSettingsStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useHostSettingsStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    expect(runs).toBe(0)
+    expect(Object.keys(useHostSettingsStore.getState().hosts)).toContain(WIRE)
+    hydrated.mockReturnValue(true)
+    finish?.()
+    expect(runs).toBe(1)
+    expect(Object.keys(useHostSettingsStore.getState().hosts)).not.toContain(WIRE)
+  })
+
+  it('purdex-host-settings hydrating AFTER the first pass with a d1_ key (host present) ends on the local id', () => {
+    let finish: (() => void) | undefined
+    vi.spyOn(useHostSettingsStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useHostSettingsStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    expect(runs).toBe(1)
+    // another window wrote it; the rehydrate lands the wire key
+    useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/late' } } } })
+    finish?.()
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [LOCAL]: { editor: { homePath: '/late' } } })
+  })
+
+  it('stop() ends every subscription', () => {
+    stop = startHostReresolve()
+    stop()
+    stop = null
+    addHostX()
+    expect(hostIdsIn(useTabStore.getState().tabs)).toContain(WIRE)
   })
 })

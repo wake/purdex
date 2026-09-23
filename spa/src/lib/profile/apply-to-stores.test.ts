@@ -32,6 +32,7 @@ import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalP
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
 import { renderHook } from '@testing-library/react'
+import { HOST_RERESOLVE_RETRY_MS, __resetHostReresolveForTest, requestHostReresolve } from '../host-reresolve'
 import { useNewTabBootstrap } from '../../hooks/useNewTabBootstrap'
 import { clearNewTabRegistry, registerNewTabProviderSource } from '../new-tab-registry'
 import { createHostSessionProviderSource } from '../session-new-tab-providers'
@@ -101,6 +102,8 @@ function resetStores(): void {
   useExecutionListStore.setState({ byHost: {} })
   useNexHostStore.setState({ byHost: {} })
   useHostSettingsStore.setState({ hosts: {} })
+  // Reset too: since every apply ends with a re-resolve pass, a column one test left behind would move in the next.
+  useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
 }
 
 beforeAll(() => registerBuiltinThemes())
@@ -1461,6 +1464,56 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     } finally {
       clearNewTabRegistry()
     }
+  })
+
+  // Host ownership plan §0.2 / H1b T4: every apply, however it settles, requests a re-resolve pass — a rollback may
+  // have put back a wire id the pass had resolved, and the pass is idempotent and cheap.
+  describe('an apply requests a re-resolve pass when it settles', () => {
+    it.each([
+      ['a resolved outcome', () => buildWorkspacesSection(useWorkspaceStore.getState().workspaces)],
+      ['an invalid outcome', () => ({ junk: true })],
+    ] as const)('%s → a store holding a resolvable wire id ends on the local id', async (_label, payloadOf) => {
+      useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/w' } } } })
+      await applySectionToStores('workspaces', payloadOf(), ctx)
+      expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { editor: { homePath: '/w' } } })
+    })
+
+    it('a busy outcome → the pass is requested too (and retried once the lock is free)', async () => {
+      vi.useFakeTimers()
+      try {
+        useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/w' } } } })
+        const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+        expect(await applySectionToStores('workspaces', buildWorkspacesSection(useWorkspaceStore.getState().workspaces), ctx)).toEqual({ ok: false, reason: 'busy' })
+        expect(Object.keys(useHostSettingsStore.getState().hosts)).toEqual([WIRE])
+        useRebuildStore.getState().releaseOperationLock(grant)
+        await vi.advanceTimersByTimeAsync(HOST_RERESOLVE_RETRY_MS)
+        expect(Object.keys(useHostSettingsStore.getState().hosts)).toEqual([M])
+      } finally {
+        __resetHostReresolveForTest()
+        vi.useRealTimers()
+      }
+    })
+
+    it('a settings apply that THROWS after its rollback restored a wire id still ends with it resolved', async () => {
+      // Another window's write landed `WIRE` here and the pass has not run yet; the apply rewrites the key, a later
+      // store fails, and the rollback puts `WIRE` back — whatever pass ran between the awaits is undone by it.
+      useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/old' } } } })
+      const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+      const payload: SettingsPayload = {
+        ...now,
+        'purdex-host-settings': { hosts: { [WIRE]: { editor: { homePath: '/new' } } } },
+        'purdex-layout': { ...(now['purdex-layout'] as object), tabPosition: 'left' },
+      }
+      const realRehydrate = useHostSettingsStore.persist.rehydrate
+      vi.spyOn(useHostSettingsStore.persist, 'rehydrate').mockImplementationOnce(async () => {
+        await realRehydrate()
+        requestHostReresolve() // a pass interleaved between the apply's awaits
+      })
+      vi.spyOn(useLayoutStore, 'setState').mockImplementationOnce(() => { throw new Error('layout write failed') })
+      await expect(applySectionToStores('settings', payload, ctx)).rejects.toThrow('layout write failed')
+      vi.restoreAllMocks()
+      expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { editor: { homePath: '/old' } } })
+    })
   })
 
   // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part
