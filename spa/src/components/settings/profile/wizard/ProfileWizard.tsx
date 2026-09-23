@@ -10,6 +10,9 @@
 //              the last step; here it is only said.
 //   direction  push / pull. A new profile — and one that holds nothing — offers push only. Pull shows what it
 //              replaces (counts) and offers to keep a copy first: ticked by default, named after this device.
+//              A pull also needs the host VERIFIED (no mismatch) and names, one by one, the local hosts it removes
+//              (`previewPull`, host-sync-identity spec §8); Next waits for that list, and Start runs only if
+//              `prepareRun` finds the same one. A host whose daemon is not its record's is said here too.
 //   run        a summary, Start, then the sub-steps of wizard-run.ts. A failure stops the run where it is.
 // There is no way to a step but through the one before it: the step list is text, and Next is the only door.
 //
@@ -59,14 +62,15 @@ import { useSotDelete } from '../useSotDelete'
 import { wizardSotScopeOf } from '../profile-rules'
 import { ConfirmDialog } from '../../../ConfirmDialog'
 import { DirectionStep, LocalStep, SotStep, type SotChoice } from './WizardChoiceSteps'
-import { announceRun, brokenLocalPremise, createSotProfile, offeredProfileName, prepareRun, runPlan, sotNow, subStepsOf, type CreateResult, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import { announceRun, brokenLocalPremise, brokenPullPremise, createSotProfile, offeredProfileName, prepareRun, previewPull, retargetPlan, runPlan, sotNow, subStepsOf, type CreateResult, type PrepareRefusal, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import type { PullCheck } from './WizardChoiceSteps'
 import { BTN, NOTICE, reasonKey, requestKey, useMasterWorldReason } from './wizard-shared'
 
 type StepId = 'stop' | 'sot' | 'local' | 'direction' | 'run'
 const ORDER: readonly StepId[] = ['stop', 'sot', 'local', 'direction', 'run']
 
 type Refusal = 'client-id' | 'junk-epoch' | 'no-parked-master'
-type NoticeReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone' | 'profile-changed' | 'profile-emptied' | 'profile-gone' | 'create-maybe'
+type NoticeReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone' | 'profile-changed' | 'profile-emptied' | 'profile-gone' | 'create-maybe' | 'pull-refused' | 'removes-changed'
 type PremiseReason = Extract<NoticeReason, 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone'>
 
 /** Which step a broken premise sends the wizard back to. */
@@ -151,6 +155,15 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const [saveFirst, setSaveFirst] = useState(true)
   const [saveName, setSaveName] = useState<{ value: string; touched: boolean }>(() => ({ value: offeredProfileName(), touched: false }))
   const [run, setRun] = useState<RunState | null>(null)
+  /** A pull's check of the SOT's hosts (`previewPull`), and the choice (`pullKey`) it was read for. */
+  const [pullRead, setPullRead] = useState<{ key: string; check: PullCheck } | null>(null)
+  const [pullRetry, setPullRetry] = useState(0)
+  /** The choice a check is out (or in) for: asked once per choice, and an answer for another one is dropped. */
+  const pullAsked = useRef<string | null>(null)
+  /** Bumped by every check sent (and by every answer set from elsewhere): only the latest one's answer is taken. The
+   *  key alone is not enough — the same choice is asked again when the host's verification drops and comes back,
+   *  and the older answer may arrive last (review R1). */
+  const pullGen = useRef(0)
   const alive = useRef(true)
 
   const sot = useSotProfiles(refusal === null && step !== 'stop' ? hostId : null)
@@ -221,6 +234,14 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [masterNow, hosts, runtime, slaves, step, busy, runStarted, refusal, stopResult])
 
+  // NO HOST CHOSEN (none was connected when the wizard opened, or the chosen one went): the first that connects is
+  // chosen. A host that IS chosen is never replaced by one that connects later — that is the user's (review F5).
+  useEffect(() => {
+    if (refusal !== null || hostId !== null) return
+    const first = defaultHostId()
+    if (first !== null) setHostId(first)
+  }, [refusal, hostId, hosts, runtime])
+
   const go = (to: StepId): void => {
     if (recheck(to)) return
     setNotice(null)
@@ -290,11 +311,39 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const effectiveDirection: SyncDirection | null = pullUnavailable !== null ? 'push' : direction
   const worldReason = useMasterWorldReason()
   const saveNameOk = normalizeLocalProfileName(saveName.value) !== null
-  const directionReady = effectiveDirection === 'push' || (effectiveDirection === 'pull' && (!saveFirst || saveNameOk))
+
+  // === a pull's hosts (host-sync-identity spec §8) ===
+  // Read off the host store at render — `runtime` above is subscribed, so a verification that lands re-renders.
+  const pullPremise = hostId === null ? null : brokenPullPremise(hostId)
+  /** The choice a pull check belongs to: another host, profile or content is another check. */
+  const pullKey = hostId !== null && profileId !== null && seen !== null ? `${hostId}|${profileId}|${seen.fingerprint}` : null
+  const wantPull = refusal === null && step === 'direction' && effectiveDirection === 'pull' && pullKey !== null && pullPremise === null
+  useEffect(() => {
+    if (pullPremise !== null) pullAsked.current = null // once it holds again, it is asked again
+    if (!wantPull || pullKey === null || hostId === null || profileId === null || pullAsked.current === pullKey) return
+    pullAsked.current = pullKey
+    const gen = ++pullGen.current
+    setPullRead({ key: pullKey, check: { state: 'loading' } })
+    void previewPull(hostId, profileId).then((r) => {
+      if (!alive.current || pullGen.current !== gen || pullAsked.current !== pullKey) return
+      setPullRead({ key: pullKey, check: r.ok ? { state: 'ok', removes: r.removes } : { state: 'failed', reason: r.reason, ...('request' in r ? { request: r.request } : {}) } })
+    })
+  }, [wantPull, pullKey, pullPremise, hostId, profileId, pullRetry])
+  const pullCheck: PullCheck | null =
+    effectiveDirection !== 'pull' ? null : pullPremise !== null ? { state: 'refused', reason: pullPremise } : pullRead !== null && pullRead.key === pullKey ? pullRead.check : { state: 'loading' }
+  /** The hosts the user is shown a pull removes: what `prepareRun` must find again. */
+  const removesSeen = pullCheck?.state === 'ok' ? pullCheck.removes : null
+  const retryPullCheck = (): void => {
+    pullAsked.current = null
+    setPullRetry((n) => n + 1)
+  }
+
+  const directionReady = effectiveDirection === 'push' || (effectiveDirection === 'pull' && (!saveFirst || saveNameOk) && removesSeen !== null)
 
   const confirmDirection = (): void => {
     if (!directionReady || hostId === null || profileId === null || effectiveDirection === null) return
-    const plan: WizardPlan = { hostId, profileId, localId, direction: effectiveDirection, saveAs: effectiveDirection === 'pull' && saveFirst ? saveName.value : null }
+    // What the summary shows; the run takes `prepareRun`'s own plan (its address and fingerprint are read there).
+    const plan: WizardPlan = { hostId, profileId, localId, direction: effectiveDirection, saveAs: effectiveDirection === 'pull' && saveFirst ? saveName.value : null, removesHosts: effectiveDirection === 'pull' ? (removesSeen ?? []) : [], at: '', seen: seen?.fingerprint ?? '' }
     if (recheck('run')) return
     setRun({ plan, states: subStepsOf(plan).map(() => 'pending'), phase: 'idle', failure: null, checkFailed: null, localName: localId === MASTER_PROFILE_ID ? null : (slaves[localId]?.name ?? null) })
     setNotice(null)
@@ -306,38 +355,19 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     const before = run.phase
     const promoted = run.states[subStepsOf(run.plan).indexOf('promote')] === 'done'
     const labels = { profile: profileName, host: hostId === null ? '' : (hosts[hostId]?.name ?? hostId) }
-    const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: seen?.fingerprint ?? null, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs }
+    // A first run asks with what the steps show; a retry with what its run was made for (the door's plan).
+    const first = from === 0 && before === 'idle'
+    const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: first ? (seen?.fingerprint ?? null) : run.plan.seen, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs, removesSeen: first ? removesSeen : run.plan.removesHosts }
     setRun((r) => (r === null ? r : { ...r, phase: 'checking', checkFailed: null }))
     // THE door: nothing irreversible happens before it has answered with a plan.
     const prepared = await prepareRun(draft, promoted)
     if (!alive.current) return
-    if (!prepared.ok) {
-      if (prepared.reason === 'list-failed') return setRun((r) => (r === null ? r : { ...r, phase: before, checkFailed: prepared.request }))
-      if (prepared.reason === 'profile-changed') {
-        setSeen(prepared.now)
-        setDirection(null)
-        // After a promote the chosen profile IS the master: the next plan must not promote again.
-        if (promoted) setLocalId(MASTER_PROFILE_ID)
-        setRun(null)
-        setNotice(prepared.now.empty ? 'profile-emptied' : 'profile-changed')
-        sot.reload()
-        return setStep('direction')
-      }
-      if (prepared.reason === 'profile-gone') {
-        setChoice(null)
-        setSeen(null)
-        setDirection(null)
-        if (promoted) setLocalId(MASTER_PROFILE_ID)
-        setRun(null)
-        setNotice('profile-gone')
-        sot.reload()
-        return setStep('sot')
-      }
-      if (prepared.reason === 'incomplete') return setRun((r) => (r === null ? r : { ...r, phase: before }))
-      return sendBack({ step: PREMISE_STEP[prepared.reason], reason: prepared.reason })
-    }
-    // A first run takes the door's plan; a retry keeps its own (its sub-steps' states are indexed by it).
-    const plan = from === 0 && before === 'idle' ? prepared.plan : run.plan
+    if (!prepared.ok) return refused(prepared, promoted, () => setRun((r) => (r === null ? r : { ...r, phase: before, checkFailed: prepared.reason === 'list-failed' ? prepared.request : null })))
+    // A first run takes the door's plan. A retry keeps its own (its sub-steps' states are indexed by it), re-aimed
+    // at the address, fingerprint and removals the door just read — else the ask before the attach, made against
+    // the old address, would refuse every retry after a re-point. Another plan altogether: choose again.
+    const plan = first ? prepared.plan : retargetPlan(run.plan, prepared.plan)
+    if (plan === null) return refused({ ok: false, reason: 'removes-changed', removes: [...prepared.plan.removesHosts] }, promoted, () => undefined)
     setRun((r) => (r === null ? r : { ...r, plan, phase: 'running', failure: null }))
     const result = await runPlan(plan, from, (index, state) => {
       if (alive.current) setRun((r) => (r === null ? r : { ...r, states: r.states.map((s, i) => (i === index ? state : s)) }))
@@ -345,7 +375,58 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     // Said whether or not this component is still there — a pull replaces the world it lives in.
     announceRun(result, plan, labels, alive.current)
     if (!alive.current) return
+    if (!result.done && result.recheck !== undefined) {
+      // The ask right before the attach found the premises moved (wizard-run.ts, `recheckBeforeAttach`): the
+      // attach was not made; what the promote and the copy did stays done. Handled as the door's refusals are —
+      // except that "stay here and try again" is the failed attach's Retry, never Start (that would promote again).
+      const recheck = result.recheck
+      const nowPromoted = promoted || subStepsOf(plan).includes('promote') // it ran before the attach, or was done before
+      return refused(recheck, nowPromoted, () =>
+        setRun((r) => (r === null ? r : { ...r, phase: 'failed', failure: { at: result.failedAt, reason: recheck.reason }, checkFailed: recheck.reason === 'list-failed' ? recheck.request : null })),
+      )
+    }
     setRun((r) => (r === null ? r : result.done ? { ...r, phase: 'done' } : { ...r, phase: 'failed', failure: { at: result.failedAt, reason: result.reason } }))
+  }
+
+  /** What a refusal of the door (or of the ask before the attach) does to the wizard. `stay`: nothing to go back
+   *  to — the host could not be asked, or the draft is incomplete; said where the wizard is. */
+  const refused = (prepared: PrepareRefusal, promoted: boolean, stay: () => void): void => {
+    if (prepared.reason === 'list-failed' || prepared.reason === 'incomplete') return stay()
+    if (prepared.reason === 'profile-changed') {
+      setSeen(prepared.now)
+      setDirection(null)
+      // After a promote the chosen profile IS the master: the next plan must not promote again.
+      if (promoted) setLocalId(MASTER_PROFILE_ID)
+      setRun(null)
+      setNotice(prepared.now.empty ? 'profile-emptied' : 'profile-changed')
+      sot.reload()
+      return setStep('direction')
+    }
+    if (prepared.reason === 'profile-gone') {
+      setChoice(null)
+      setSeen(null)
+      setDirection(null)
+      if (promoted) setLocalId(MASTER_PROFILE_ID)
+      setRun(null)
+      setNotice('profile-gone')
+      sot.reload()
+      return setStep('sot')
+    }
+    // A pull that cannot be made, or that would remove other hosts than the ones shown: back to the direction
+    // step, which says why (or names the hosts as they are now) — push stays offered.
+    if (prepared.reason === 'removes-changed' || prepared.reason === 'master-unverified' || prepared.reason === 'master-mismatch' || prepared.reason === 'master-unmatched' || prepared.reason === 'duplicate-host-identity' || prepared.reason === 'host-identity-conflict') {
+      if (pullKey !== null) {
+        pullAsked.current = pullKey
+        pullGen.current += 1 // a check still out for this choice is older than what the door just found
+        setPullRead({ key: pullKey, check: prepared.reason === 'removes-changed' ? { state: 'ok', removes: prepared.removes } : { state: 'failed', reason: prepared.reason } })
+      }
+      if (promoted) setLocalId(MASTER_PROFILE_ID)
+      setRun(null)
+      setNotice(prepared.reason === 'removes-changed' ? 'removes-changed' : 'pull-refused')
+      return setStep('direction')
+    }
+    if (promoted) setLocalId(MASTER_PROFILE_ID)
+    return sendBack({ step: PREMISE_STEP[prepared.reason], reason: prepared.reason })
   }
 
   const restart = (): void => {
@@ -458,6 +539,9 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
               saveName={saveName.value}
               onSaveName={(value) => setSaveName({ value, touched: true })}
               saveNameOk={saveNameOk}
+              pullCheck={pullCheck}
+              onRetryPullCheck={retryPullCheck}
+              attachHostId={hostId}
             />
           )}
 
@@ -568,7 +652,8 @@ function RunStep({ run, profileName, hostName }: { run: RunState; profileName: s
 
       {run.phase === 'failed' && run.failure !== null && failed !== null && (
         <div data-testid="profile-wizard-failure" data-step={failed} data-reason={run.failure.reason} role="alert" className="mt-2 flex flex-col gap-0.5">
-          <p className="text-red-500">{t(reasonKey(failed, run.failure.reason))}</p>
+          {/* A host that could not be asked is said above (`check_failed`); no second sentence for it. */}
+          {run.checkFailed === null && <p className="text-red-500">{t(reasonKey(failed, run.failure.reason))}</p>}
           <p className="text-text-secondary">{t('settings.profile.wizard.now.stopped_here')}</p>
           {done('promote') && <p className="text-text-secondary">{t('settings.profile.wizard.now.promoted', { name: run.localName ?? '' })}</p>}
           {done('save') && <p className="text-text-secondary">{t('settings.profile.wizard.now.saved', { name: run.plan.saveAs ?? '' })}</p>}

@@ -32,7 +32,8 @@ import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { getLocale } from '../../../lib/locale-registry'
 import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
-import { useHostStore } from '../../../stores/useHostStore'
+import { selectDaemonIdMismatch, useHostStore } from '../../../stores/useHostStore'
+import { identityOfSync } from '../../../lib/profile/host-identity'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../../../features/workspace/store'
@@ -168,6 +169,10 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const setAutoSync = useProfileStore((s) => s.setAutoSync)
   const attachedAt = useProfileStore((s) => s.masterEndpoint)
   const host = useHostStore((s) => s.hosts[master.hostId])
+  // Every host, for the sentence that names the one(s) the sync is paused on (`blocked: 'host-identity-*'`).
+  const allHosts = useHostStore((s) => s.hosts)
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const runtime = useHostStore((s) => s.runtime)
   const world = useSyncExternalStore(subscribeWorld, worldReason, worldReason)
   const workspaces = useSyncExternalStore(subscribeWorld, masterWorkspaces, masterWorkspaces)
   /** The snapshot a "Sync now" was pressed under: the note stays until something in the state moves. No timer. */
@@ -209,6 +214,19 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
         return t('settings.profile.current.blocked.endpoint_changed', { was: attachedAt ?? '', now: host ? endpointOfHost(host) : '' })
       case 'profile-gone':
         return t('settings.profile.current.blocked.profile_gone')
+      case 'host-identity-mismatch':
+      case 'host-identity-conflict': {
+        // Which hosts: read off THIS window's store — the conflict is synced config (the same everywhere), a
+        // mismatch this window's runtime; a follower that does not see what its leader saw says it without names.
+        const ids = blocked === 'host-identity-conflict'
+          ? (identityOfSync(allHosts).conflict ?? [])
+          : hostOrder.filter((id) => allHosts[id] !== undefined && selectDaemonIdMismatch({ hosts: allHosts, runtime }, id) !== undefined)
+        const key = blocked.replace(/-/g, '_')
+        // Host names are the user's own text: into the sentence as they are.
+        return ids.length > 0
+          ? t(`settings.profile.current.blocked.${key}`, { hosts: ids.map((id) => allHosts[id]?.name ?? id).join(', ') })
+          : t(`settings.profile.current.blocked.${key}_unnamed`)
+      }
       case 'suspended':
         return t('settings.profile.current.blocked.suspended')
       default:

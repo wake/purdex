@@ -13,7 +13,7 @@ import { useDeviceNameStore } from '../../../../stores/useDeviceNameStore'
 import { useLocalProfilesStore } from '../../../../stores/useLocalProfilesStore'
 import { useUndoToast } from '../../../../stores/useUndoToast'
 import { attachMaster, detachMaster } from '../../../../lib/profile/start'
-import { createProfile, listProfiles } from '../../../../lib/profile/api'
+import { createProfile, getSection, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { copyMasterAsSlave, promoteToMaster, saveScreenAsSlave } from '../../../../lib/profile/switch-active'
 import { isClientIdPersisted } from '../../../../lib/client-identity'
@@ -21,7 +21,7 @@ import { readMasterWorld } from '../../../../lib/profile/master-world'
 import type { MasterWorldRead } from '../../../../lib/profile/master-world'
 
 vi.mock('../../../../lib/profile/start', () => ({ attachMaster: vi.fn(), detachMaster: vi.fn() }))
-vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn() }))
+vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn(), getSection: vi.fn() }))
 vi.mock('../../../../lib/profile/switch-active', () => ({ promoteToMaster: vi.fn(), copyMasterAsSlave: vi.fn(), saveScreenAsSlave: vi.fn() }))
 vi.mock('../../../../lib/client-identity', () => ({ isClientIdPersisted: vi.fn(), getClientId: () => 'c_aaaaaaaaaaaa' }))
 vi.mock('../../../../lib/profile/master-world', async (importOriginal) => ({
@@ -36,6 +36,8 @@ const P1 = 'p_000000000001'
 const P2 = 'p_000000000002'
 const failed = (reason: string, status = 0) => ({ kind: 'failed', reason, status, message: `RAW-${reason} http://10.0.0.1/?token=SECRET` }) as never
 const host = (id: string, name: string, ip: string) => ({ id, name, ip, port: 7860, order: 0 })
+const MLAB = 'mlab:278cbm'
+const H1_VERIFIED = { status: 'connected' as const, daemonIdVerified: { endpoint: '10.0.0.1:7860', daemonId: MLAB } }
 
 const calls: string[] = []
 const onClose = vi.fn()
@@ -66,9 +68,15 @@ async function toDirection(localId = 'master', profile = P1): Promise<void> {
   next()
   expect(step()).toBe('direction')
 }
+/** Pull chosen, and the check of the profile's hosts it asks for (`previewPull`) answered. */
+async function choosePull(): Promise<void> {
+  click('profile-wizard-direction-pull')
+  await flush()
+}
 async function toRun(direction: 'push' | 'pull', localId = 'master'): Promise<void> {
   await toDirection(localId)
-  click(`profile-wizard-direction-${direction}`)
+  if (direction === 'pull') await choosePull()
+  else click('profile-wizard-direction-push')
   next()
   expect(step()).toBe('run')
 }
@@ -90,7 +98,10 @@ beforeEach(() => {
   vi.mocked(saveScreenAsSlave).mockReset().mockImplementation(() => (calls.push('save-screen'), { ok: true, id: 'c2' }))
   vi.mocked(attachMaster).mockReset().mockImplementation(async () => (calls.push('attach'), { ok: true }))
   useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null, suspension: null, pendingDetaches: [] })
-  useHostStore.setState({ hosts: { h1: host('h1', 'mlab', '10.0.0.1'), h2: host('h2', 'air', '10.0.0.2'), h3: host('h3', 'gone', '10.0.0.3') }, hostOrder: ['h1', 'h2', 'h3'], devHostId: 'h1', runtime: { h1: { status: 'connected' }, h2: { status: 'connected' }, h3: { status: 'disconnected' } } })
+  // h1 knows its daemon and this session confirmed it there: a pull from it is possible (host-sync-identity §8)
+  useHostStore.setState({ hosts: { h1: { ...host('h1', 'mlab', '10.0.0.1'), daemonId: MLAB }, h2: host('h2', 'air', '10.0.0.2'), h3: host('h3', 'gone', '10.0.0.3') }, hostOrder: ['h1', 'h2', 'h3'], devHostId: 'h1', runtime: { h1: H1_VERIFIED, h2: { status: 'connected' }, h3: { status: 'disconnected' } } })
+  // the profiles listed hold no `hosts` section: a pull removes no host
+  vi.mocked(getSection).mockReset().mockResolvedValue({ kind: 'ok', value: null })
   useDeviceNameStore.setState({ deviceName: 'Laptop' })
   useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: tabs(7), activeWorkspaceId: null, activeTabId: null } } }, slaveOrder: ['s1'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 })
@@ -405,11 +416,263 @@ describe('step 4 — the direction', () => {
 
   it('a copy needs a name; unticked, it says that nothing is kept — and lets the user go on', async () => {
     await toDirection()
-    click('profile-wizard-direction-pull')
+    await choosePull()
     fireEvent.change(screen.getByTestId('profile-wizard-save-name'), { target: { value: ' ' } })
     expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
     click('profile-wizard-save-first')
     expect(screen.getByTestId('profile-wizard-no-copy-warning')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+  })
+})
+
+describe('step 4 — a pull\'s hosts: the host verified, and the hosts it removes named first (host-sync-identity §8)', () => {
+  const HOSTS_META = { section: 'hosts', rev: 4, hash: 'hh', fingerprint: 'f', ordinal: 3, writer: 'c', updatedAt: 1 }
+  /** P1 holds a `hosts` section with ONE row: mlab's daemon. h2 and h3 are only this device's — a pull removes them. */
+  beforeEach(() => {
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META] }, entry(P2, 'empty one', 0)] })
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { d1_x: { name: 'mlab', daemonId: MLAB } }, hostOrder: ['d1_x'] } } })
+  })
+  const removedShown = (): string[] => [...screen.getByTestId('profile-wizard-pull-removes').querySelectorAll('li')].map((li) => li.getAttribute('data-testid') ?? '')
+
+  it('names, one by one, the hosts the pull removes — read pinned to the host\'s address; Start runs with exactly that list', async () => {
+    await toDirection()
+    await choosePull()
+    expect(getSection).toHaveBeenCalledWith('h1', P1, 'hosts', { expectEndpoint: '10.0.0.1:7860' })
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
+    expect(screen.getByTestId('profile-wizard-pull-removes-h2')).toHaveTextContent('air')
+    expect(screen.getByTestId('profile-wizard-pull-removes-h3')).toHaveTextContent('gone')
+    expect(screen.getByTestId('profile-wizard-pull-removes')).toHaveTextContent(en['settings.profile.wizard.pull.removes'])
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['copy-master', 'attach'])
+  })
+
+  it('nothing to remove: no list', async () => {
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { a: { daemonId: MLAB }, b: { name: 'air' } }, hostOrder: [] } } })
+    useHostStore.setState({ hosts: { h1: useHostStore.getState().hosts.h1 }, hostOrder: ['h1'] })
+    await toDirection()
+    await choosePull()
+    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+  })
+
+  it.each([
+    ['not verified', { status: 'connected' as const }, 'master-unverified'],
+    ['a mismatch', { status: 'connected' as const, daemonIdMismatch: { stored: MLAB, observed: 'other:zzzzzz', endpoint: '10.0.0.1:7860' } }, 'master-mismatch'],
+  ])('the host %s: pull is refused in words, Next stays shut, the host is not asked — push remains', async (_label, rt, reason) => {
+    useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: rt } })
+    await toDirection()
+    await choosePull()
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', reason)
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en[`settings.profile.wizard.pull.${reason.replace(/-/g, '_')}` as keyof typeof en])
+    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
+    expect(getSection).not.toHaveBeenCalled()
+    click('profile-wizard-direction-push')
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+  })
+
+  it('verified while the step is open: the check runs then', async () => {
+    useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: { status: 'connected' } } })
+    await toDirection()
+    await choosePull()
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unverified')
+    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: H1_VERIFIED } }))
+    await flush()
+    expect(removedShown()).toHaveLength(2)
+  })
+
+  it('verification lost and back WHILE the first check is out: the first answer, arriving last, is not the one shown', async () => {
+    type SectionAnswer = Awaited<ReturnType<typeof getSection>>
+    const answers: Array<(v: SectionAnswer) => void> = []
+    vi.mocked(getSection).mockImplementation(() => new Promise<SectionAnswer>((r) => answers.push(r)))
+    const rows = (hosts: Record<string, unknown>): SectionAnswer => ({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts, hostOrder: Object.keys(hosts) } } }) as SectionAnswer
+    await toDirection()
+    await choosePull()
+    expect(answers).toHaveLength(1)
+    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: { status: 'connected' } } }))
+    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: H1_VERIFIED } }))
+    await flush()
+    expect(answers).toHaveLength(2) // the same choice, asked again
+    // the second (current) answer: mlab only → air and gone are removed
+    await act(async () => answers[1](rows({ d1_x: { name: 'mlab', daemonId: MLAB } })))
+    await flush()
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
+    // the first, older answer arrives last, and says something else altogether
+    await act(async () => answers[0](rows({ a: { daemonId: MLAB }, b: { daemonId: MLAB } })))
+    await flush()
+    expect(screen.queryByTestId('profile-wizard-pull-refused')).toBeNull()
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+  })
+
+  it('the profile\'s host list cannot be matched (one daemon twice): said, Next shut', async () => {
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { a: { daemonId: MLAB }, b: { daemonId: MLAB } }, hostOrder: [] } } })
+    await toDirection()
+    await choosePull()
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'duplicate-host-identity')
+    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
+  })
+
+  it('the profile has NO ROW for the attach host itself: pull refused in words naming it, Next shut — other hosts would not have stopped it', async () => {
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { b: { name: 'air-row', daemonId: 'air:999999' } }, hostOrder: ['b'] } } })
+    await toDirection()
+    await choosePull()
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unmatched')
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en['settings.profile.wizard.pull.master_unmatched'].replace('{{name}}', 'mlab'))
+    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
+    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
+    click('profile-wizard-direction-push')
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+  })
+
+  it('START FINDS THE ATTACH HOST UNMATCHED (the profile\'s host list changed meanwhile): nothing runs — back to the direction step, which says why', async () => {
+    await toDirection()
+    await choosePull()
+    next()
+    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { b: { name: 'air-row', daemonId: 'air:999999' } }, hostOrder: ['b'] } } })
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'pull-refused')
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unmatched')
+  })
+
+  it('the host list cannot be read: the class of the failure, and Try again asks again', async () => {
+    vi.mocked(getSection).mockResolvedValueOnce(failed('timeout'))
+    await toDirection()
+    await choosePull()
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en['settings.profile.wizard.request.timeout'])
+    expect(screen.getByTestId('profile-wizard-pull-refused')).not.toHaveTextContent('SECRET')
+    click('profile-wizard-pull-retry')
+    await flush()
+    expect(removedShown()).toHaveLength(2)
+  })
+
+  it('START FINDS ANOTHER LIST (a host was added here meanwhile): nothing runs — back to the direction step, the list as it is now', async () => {
+    await toDirection()
+    await choosePull()
+    next()
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] }))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
+    // shown now: the next Start runs
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['copy-master', 'attach'])
+  })
+
+  it('START FINDS THE HOST UNVERIFIED: nothing runs — back to the direction step, which says why', async () => {
+    await toDirection()
+    await choosePull()
+    next()
+    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: { status: 'connected' } } }))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'pull-refused')
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unverified')
+  })
+
+  it('A HOST ADDED WHILE THE COPY IS MADE (after the door said yes): the attach is not made — back to the direction step, the list as it is now; the copy stays', async () => {
+    vi.mocked(copyMasterAsSlave).mockImplementationOnce(() => {
+      calls.push('copy-master')
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] })
+      return { ok: true, id: 'c1' }
+    })
+    await toDirection()
+    await choosePull()
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['copy-master'])
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
+  })
+
+  it('THE HOST CANNOT BE ASKED RIGHT BEFORE THE ATTACH: the attach step fails with the request\'s class; Try again asks again and attaches — no second copy', async () => {
+    await toDirection()
+    await choosePull()
+    next()
+    // the door's two reads pass; the ask before the attach cannot list
+    vi.mocked(listProfiles).mockResolvedValueOnce({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META] }] }).mockResolvedValueOnce(failed('timeout'))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['copy-master'])
+    expect(screen.getByTestId('profile-wizard-failure')).toHaveAttribute('data-step', 'attach')
+    expect(screen.getByTestId('profile-wizard-check-failed')).toHaveTextContent(en['settings.profile.wizard.request.timeout'])
+    click('profile-wizard-retry')
+    await flush()
+    expect(calls).toEqual(['copy-master', 'attach'])
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+  })
+
+  /** The copy is made, and meanwhile h1 is re-pointed to 10.0.0.9 (and confirmed at its daemon there). */
+  const repointDuringCopy = (): void => {
+    vi.mocked(copyMasterAsSlave).mockImplementationOnce(() => {
+      calls.push('copy-master')
+      const hosts = useHostStore.getState()
+      useHostStore.setState({ hosts: { ...hosts.hosts, h1: { ...hosts.hosts.h1, ip: '10.0.0.9' } }, runtime: { ...hosts.runtime, h1: { status: 'connected', daemonIdVerified: { endpoint: '10.0.0.9:7860', daemonId: MLAB } } } })
+      return { ok: true, id: 'c1' }
+    })
+  }
+
+  it('THE HOST RE-POINTED WHILE THE COPY IS MADE: the attach waits; Retry reads the NEW address and attaches there — no second promote, no second copy', async () => {
+    repointDuringCopy()
+    await toDirection('s1')
+    await choosePull()
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['promote', 'copy-master'])
+    expect(screen.getByTestId('profile-wizard-failure')).toHaveAttribute('data-step', 'attach')
+    expect(screen.getByTestId('profile-wizard-check-failed')).toHaveTextContent(en['settings.profile.wizard.request.endpoint_changed'])
+    click('profile-wizard-retry')
+    await flush()
+    expect(calls).toEqual(['promote', 'copy-master', 'attach'])
+    expect(promoteToMaster).toHaveBeenCalledTimes(1)
+    expect(copyMasterAsSlave).toHaveBeenCalledTimes(1)
+    expect(getSection).toHaveBeenLastCalledWith('h1', P1, 'hosts', { expectEndpoint: '10.0.0.9:7860' })
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+  })
+
+  it('… and when Retry finds OTHER hosts to remove (one added meanwhile): back to the direction step with the list as it is now — no attach', async () => {
+    repointDuringCopy()
+    await toDirection('s1')
+    await choosePull()
+    next()
+    click('profile-wizard-start')
+    await flush()
+    expect(screen.getByTestId('profile-wizard-failure')).toHaveAttribute('data-step', 'attach')
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] }))
+    click('profile-wizard-retry')
+    await flush()
+    expect(calls).toEqual(['promote', 'copy-master'])
+    expect(attachMaster).not.toHaveBeenCalled()
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
+    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
+  })
+
+  it('ANOTHER host at a daemon other than its record: not in the way, but said — the sync will pause on it', async () => {
+    const hosts = useHostStore.getState().hosts
+    useHostStore.setState({ hosts: { ...hosts, h2: { ...hosts.h2, daemonId: 'air:111111' } }, runtime: { ...useHostStore.getState().runtime, h2: { status: 'connected', daemonIdMismatch: { stored: 'air:111111', observed: 'else:222222', endpoint: '10.0.0.2:7860' } } } })
+    await toDirection()
+    expect(screen.getByTestId('profile-wizard-host-mismatch-h2')).toHaveTextContent(en['settings.profile.wizard.direction.host_mismatch'].replace('{{name}}', 'air'))
+    expect(screen.queryByTestId('profile-wizard-host-mismatch-h1')).toBeNull()
+    click('profile-wizard-direction-push')
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+    await choosePull()
+    expect(screen.getByTestId('profile-wizard-host-mismatch-h2')).toBeInTheDocument()
     expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
   })
 })
@@ -436,7 +699,7 @@ describe('step 5 — the run', () => {
 
   it('pull, copy unticked: no copy', async () => {
     await toDirection()
-    click('profile-wizard-direction-pull')
+    await choosePull()
     click('profile-wizard-save-first')
     next()
     click('profile-wizard-start')
@@ -873,21 +1136,58 @@ describe('a create whose outcome is not known is looked for, never simply sent a
   })
 })
 
+describe('the host list follows the connections while the wizard is open', () => {
+  it('a host that connects: its option becomes choosable, its label loses "not connected" — and back when it drops', async () => {
+    open()
+    await flush()
+    const option = () => screen.getByTestId('profile-wizard-host-option-h3') as HTMLOptionElement
+    expect(option().disabled).toBe(true)
+    act(() => useHostStore.getState().setRuntime('h3', { status: 'connected' }))
+    expect(option().disabled).toBe(false)
+    expect(option()).toHaveTextContent(/^gone$/)
+    act(() => useHostStore.getState().setRuntime('h3', { status: 'reconnecting' }))
+    expect(option().disabled).toBe(true)
+    expect(option()).toHaveTextContent(en['settings.profile.wizard.sot.host_offline'].replace('{{name}}', 'gone'))
+  })
+
+  it('a host added while it is open is listed', async () => {
+    open()
+    await flush()
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'], runtime: { ...useHostStore.getState().runtime, h4: { status: 'connected' } } }))
+    expect((screen.getByTestId('profile-wizard-host-option-h4') as HTMLOptionElement).disabled).toBe(false)
+  })
+})
+
 describe('no host was connected when the wizard opened (review F5)', () => {
-  it('the select is disabled only WHILE nothing can be chosen: a host that connects later can be picked', async () => {
+  it('the select is disabled only WHILE nothing can be chosen: the first host that connects is chosen, and listed', async () => {
     useHostStore.setState({ runtime: {} })
     open()
     await flush()
     expect(screen.getByTestId('profile-wizard-host')).toBeDisabled()
     act(() => useHostStore.getState().setRuntime('h2', { status: 'connected' }))
+    await flush()
     const select = screen.getByTestId('profile-wizard-host') as HTMLSelectElement
     expect(select).not.toBeDisabled()
-    expect(select.value).toBe('') // nothing is chosen FOR the user
+    expect(select.value).toBe('h2') // nothing was chosen: the first host that connects is
     expect(screen.queryByTestId('profile-wizard-host-none')).toBeNull()
-    fireEvent.change(select, { target: { value: 'h2' } })
-    await flush()
     expect(listProfiles).toHaveBeenLastCalledWith('h2', { expectEndpoint: '10.0.0.2:7860' })
     expect(screen.getByTestId('profile-wizard-profiles')).toHaveAttribute('data-state', 'rows')
+    // and it stays the user's to change
+    act(() => useHostStore.getState().setRuntime('h1', H1_VERIFIED))
+    fireEvent.change(select, { target: { value: 'h1' } })
+    await flush()
+    expect(select.value).toBe('h1')
+  })
+
+  it('a host ALREADY chosen is never replaced by one that connects later', async () => {
+    open()
+    await flush()
+    const select = screen.getByTestId('profile-wizard-host') as HTMLSelectElement
+    expect(select.value).toBe('h1')
+    act(() => useHostStore.getState().setRuntime('h3', { status: 'connected' }))
+    await flush()
+    expect(select.value).toBe('h1')
+    expect(listProfiles).not.toHaveBeenCalledWith('h3', expect.anything())
   })
 })
 

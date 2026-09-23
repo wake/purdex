@@ -22,7 +22,7 @@ const KNOWN: Record<SubStepId, ReadonlySet<string>> = {
 }
 
 /** The api layer's `FailureReason`, plus `thrown`. */
-const REQUEST = new Set(['network', 'timeout', 'aborted', 'contended', 'not-found', 'too-large', 'rejected', 'unauthorized', 'server', 'malformed', 'unknown-host', 'thrown'])
+const REQUEST = new Set(['network', 'timeout', 'aborted', 'contended', 'not-found', 'too-large', 'rejected', 'unauthorized', 'server', 'malformed', 'unknown-host', 'endpoint-changed', 'thrown'])
 
 const snake = (reason: string): string => reason.replace(/-/g, '_')
 

@@ -47,7 +47,7 @@
 // every conflict of the first reconciliation with keep-local — each PUT is a CAS on the rev ITS OWN index read
 // gave, rebased and sent again on a 409 (executor.ts, THE FIRST RECONCILIATION). So a push is an unconditional
 // overwrite for as long as that reconciliation lasts, and nothing this file knows can be handed down to narrow
-// it. The window that remains is from this re-list to the end of the first reconciliation: a device that writes
+// it. The window that remains is from the LAST re-list — the one right before the attach (`recheckBeforeAttach`) — to the end of the first reconciliation: a device that writes
 // into the profile in those seconds is overwritten, as the user was told a push does.
 //
 // A CREATE WHOSE OUTCOME IS NOT KNOWN IS NEVER SIMPLY SENT AGAIN (`createSotProfile`, review F2). The daemon
@@ -78,15 +78,16 @@
 // not one of `ATTACH_REASONS` leaves this file as `'other'`; `write-failed` leaves without its `detail`.
 import { useWorkspaceStore } from '../../../../features/workspace/store'
 import { effectiveDeviceName } from '../../../../lib/device-name'
-import { createProfile, listProfiles, type ProfileIndexEntry } from '../../../../lib/profile/api'
+import { createProfile, getSection, listProfiles, type ProfileIndexEntry } from '../../../../lib/profile/api'
+import { matchIncomingHosts, type HostMatchError } from '../../../../lib/profile/host-identity'
 import { readMasterWorld } from '../../../../lib/profile/master-world'
 import { attachMaster } from '../../../../lib/profile/start'
 import { copyMasterAsSlave, promoteToMaster } from '../../../../lib/profile/switch-active'
 import { useDeviceNameStore } from '../../../../stores/useDeviceNameStore'
-import { useHostStore } from '../../../../stores/useHostStore'
+import { selectDaemonIdMismatch, selectDaemonIdVerified, useHostStore } from '../../../../stores/useHostStore'
 import { useI18nStore } from '../../../../stores/useI18nStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../../../../stores/useLocalProfilesStore'
-import { selectMaster, useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
+import { endpointOfHost, selectMaster, useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
 import { useTabStore } from '../../../../stores/useTabStore'
 import { useUndoToast } from '../../../../stores/useUndoToast'
 import { defaultSlaveName } from '../profile-rules'
@@ -99,11 +100,23 @@ export interface WizardPlan {
   direction: SyncDirection
   /** Pull only: the name of the copy kept of the world the pull replaces; null = no copy. */
   saveAs: string | null
+  /** Pull only (`[]` for a push): the local hosts this pull removes — no row of the SOT's `hosts` section matches
+   *  them (`matchIncomingHosts`; host-sync-identity spec §6, §11.10). Exactly the list the user was shown. */
+  removesHosts: readonly string[]
+  /** The host's address when the plan was made: every request of the run goes there, and the attach is not made
+   *  if the host has been re-pointed since. */
+  at: string
+  /** The SOT profile's `sotFingerprint` the plan was made against — what the user saw. */
+  seen: string
 }
 
 export type SubStepId = 'promote' | 'save' | 'attach'
 export type SubStepState = 'pending' | 'running' | 'done' | 'failed'
-export type RunResult = { done: true } | { done: false; failedAt: number; reason: string }
+export type RunResult =
+  | { done: true }
+  /** `recheck`: the attach was not made because the ask before it (`recheckBeforeAttach`) found the premises moved —
+   *  `reason` is that refusal's reason, and the wizard handles it as it handles `prepareRun`'s. */
+  | { done: false; failedAt: number; reason: string; recheck?: PrepareRefusal }
 
 /** Every reason `attachMaster` can answer that is NOT a thrown error's message: its own refusals, `superseded`,
  *  and the api layer's `FailureReason` (start.ts, `attachHeld`: `asYouWere(put.reason)`). */
@@ -145,7 +158,7 @@ export function offeredProfileName(also: readonly string[] = []): string {
   return defaultSlaveName(effectiveDeviceName(useDeviceNameStore.getState()), [...takenNames(), ...also])
 }
 
-async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true } | { ok: false; reason: string }> {
+async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true } | { ok: false; reason: string; recheck?: PrepareRefusal }> {
   try {
     if (id === 'promote') {
       // Names the demoted master only if nobody named it; never like the copy that is made next.
@@ -157,6 +170,9 @@ async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true }
       const r = copyMasterAsSlave(plan.saveAs ?? '')
       return r.ok ? { ok: true } : { ok: false, reason: r.reason }
     }
+    // The promote and the copy took time: ask again what the plan was made against (review, attacker H1).
+    const again = await recheckBeforeAttach(plan)
+    if (!again.ok) return { ok: false, reason: again.reason, recheck: again }
     const r = await attachMaster(plan.hostId, plan.profileId, plan.direction)
     if (r.ok) return { ok: true }
     return { ok: false, reason: KNOWN_ATTACH.has(r.reason) ? r.reason : 'other' }
@@ -173,7 +189,7 @@ export async function runPlan(plan: WizardPlan, from: number, report: (index: nu
     const r = await runSubStep(steps[i], plan)
     if (!r.ok) {
       report(i, 'failed')
-      return { done: false, failedAt: i, reason: r.reason }
+      return { done: false, failedAt: i, reason: r.reason, ...(r.recheck === undefined ? {} : { recheck: r.recheck }) }
     }
     report(i, 'done')
   }
@@ -211,6 +227,8 @@ export interface WizardDraft {
   localId: string
   direction: SyncDirection | null
   saveAs: string | null
+  /** Pull only: the local hosts the user was SHOWN as removed by it (`previewPull`); null / absent = never shown. */
+  removesSeen?: readonly string[] | null
 }
 
 export type PremiseReason = 'attached-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone'
@@ -221,9 +239,31 @@ export interface SotNow {
   empty: boolean
 }
 
-export type PrepareResult =
-  | { ok: true; plan: Readonly<WizardPlan> }
-  | { ok: false; reason: PremiseReason | 'incomplete' | 'profile-gone' }
+/**
+ * Why a PULL cannot be made from this host (host-sync-identity spec §8). A pull takes the SOT's host list, and the
+ * attach host is the host its rows are matched against with certainty — so this device must have confirmed, this
+ * session and at the host's current address, that the daemon there is the one the host's record claims.
+ *   `master-mismatch`   the daemon at the host's address is another one than its record says.
+ *   `master-unverified` nothing is confirmed (no claim yet, or not reached since the claim or the address changed).
+ */
+export type PullPremiseReason = 'master-unverified' | 'master-mismatch'
+
+/** The SOT's `hosts` rows cannot be matched to this device's hosts one-to-one (`matchIncomingHosts`' error):
+ *  `duplicate-host-identity` — two of its rows name one daemon; `host-identity-conflict` — two hosts HERE claim the
+ *  daemon of one row. The pull would end `locked:invalid`: nothing runs. */
+export type PullMatchReason = HostMatchError
+
+/** The SOT's `hosts` rows name no daemon this device can match to THE ATTACH HOST itself: the pull would remove the
+ *  very host it is made through (host-sync-identity spec §11, coordinator decision b). Other unmatched hosts are
+ *  listed as removed and stop nothing; this one does. */
+export type PullUnmatchedReason = 'master-unmatched'
+
+export type PrepareResult = { ok: true; plan: Readonly<WizardPlan> } | PrepareRefusal
+
+export type PrepareRefusal =
+  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason | PullUnmatchedReason | 'incomplete' | 'profile-gone' }
+  /** The hosts this pull removes are not the ones the user was shown (or none were shown): `removes` is the list now. */
+  | { ok: false; reason: 'removes-changed'; removes: string[] }
   | { ok: false; reason: 'profile-changed'; now: SotNow }
   /** `request`: the failure's class (wizard-shared.ts, `requestKey`) — never its message. */
   | { ok: false; reason: 'list-failed'; request: string }
@@ -251,28 +291,107 @@ export function brokenLocalPremise(hostId: string | null, localId: string, check
 }
 
 /** The host's profiles, or the class of the failure. */
-async function listOrClass(hostId: string): Promise<{ ok: true; rows: ProfileIndexEntry[] } | { ok: false; request: string }> {
+async function listOrClass(hostId: string, expectEndpoint?: string): Promise<{ ok: true; rows: ProfileIndexEntry[] } | { ok: false; request: string }> {
   try {
-    const r = await listProfiles(hostId)
+    const r = await listProfiles(hostId, expectEndpoint === undefined ? undefined : { expectEndpoint })
     return r.kind === 'ok' ? { ok: true, rows: r.value } : { ok: false, request: r.reason }
   } catch {
     return { ok: false, request: 'thrown' }
   }
 }
 
+/** The pull premise of `hostId`, read off the host store this instant (`PullPremiseReason`). Null = it holds. */
+export function brokenPullPremise(hostId: string): PullPremiseReason | null {
+  const hosts = useHostStore.getState()
+  if (selectDaemonIdMismatch(hosts, hostId) !== undefined) return 'master-mismatch'
+  if (!selectDaemonIdVerified(hosts, hostId)) return 'master-unverified'
+  return null
+}
+
+/** The SOT's `hosts` rows for a pull. `rev` / `hash` of the section read; `rows` null = there is no section. */
+type HostsRead = { ok: true; rows: Record<string, unknown> | null; rev: number | null; hash: string | null } | { ok: false; request: string }
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** The SOT's `hosts` section, read at `at` and nowhere else. A payload whose `hosts` is not a record is `malformed`:
+ *  nothing is guessed about what it would remove. */
+async function readSotHosts(hostId: string, profileId: string, at: string): Promise<HostsRead> {
+  try {
+    const r = await getSection(hostId, profileId, 'hosts', { expectEndpoint: at })
+    if (r.kind !== 'ok') return { ok: false, request: r.reason }
+    if (r.value === null) return { ok: true, rows: null, rev: null, hash: null }
+    const rows = r.value.payload.hosts
+    return isRecord(rows) ? { ok: true, rows, rev: r.value.rev, hash: r.value.hash } : { ok: false, request: 'malformed' }
+  } catch {
+    return { ok: false, request: 'thrown' }
+  }
+}
+
+/** The local hosts a pull of `rows` through `hostId` removes, matched against this device's hosts THIS INSTANT. No
+ *  section → none. `hostId` itself among them → `master-unmatched`: a pull cannot remove the host it is made through. */
+function removalsOf(hostId: string, rows: Record<string, unknown> | null): { ok: true; removes: string[] } | { ok: false; reason: PullMatchReason | PullUnmatchedReason } {
+  if (rows === null) return { ok: true, removes: [] }
+  const match = matchIncomingHosts(useHostStore.getState().hosts, rows)
+  if (match.error !== undefined) return { ok: false, reason: match.error }
+  if (match.removed.includes(hostId)) return { ok: false, reason: 'master-unmatched' }
+  return { ok: true, removes: match.removed }
+}
+
+export type PullPreview =
+  | { ok: true; removes: string[] }
+  | { ok: false; reason: PremiseReason | PullPremiseReason | PullMatchReason | PullUnmatchedReason }
+  | { ok: false; reason: 'list-failed'; request: string }
+
+/**
+ * For the direction step: which local hosts a pull would remove, as far as can be said NOW — so that the warning
+ * names them before anybody presses Start. Nothing is decided here: `prepareRun` reads it all again, and runs only
+ * if the list is still the one shown (`removesSeen`).
+ */
+export async function previewPull(hostId: string, profileId: string): Promise<PullPreview> {
+  const local = brokenLocalPremise(hostId, MASTER_PROFILE_ID, { host: true, local: false })
+  if (local !== null) return { ok: false, reason: local }
+  const pull = brokenPullPremise(hostId)
+  if (pull !== null) return { ok: false, reason: pull }
+  const read = await readSotHosts(hostId, profileId, endpointOfHost(useHostStore.getState().hosts[hostId]))
+  if (!read.ok) return { ok: false, reason: 'list-failed', request: read.request }
+  return removalsOf(hostId, read.rows)
+}
+
+const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x) => b.includes(x))
+
 /**
  * THE door (see the header): a frozen plan, or why there is none. Nothing is written, here or on the host.
  * `promoted`: a retry after the promote went through — the chosen local profile IS the master by now, so it is
  * no longer looked for among the local profiles.
+ *
+ * A PULL ASKS MORE (host-sync-identity spec §8): the host verified, with no mismatch (`brokenPullPremise`) — before
+ * the host is asked and again after; the SOT's `hosts` section, read BEFORE the list and checked against it (the
+ * rev and hash the index lists must be the ones read, else the profile moved in between: `profile-changed`); its
+ * rows matched one-to-one against this device's hosts as they are at the end; and the hosts that match none —
+ * the ones the pull removes — exactly those the user was shown (`removesSeen`), else `removes-changed` with the
+ * list as it is now. Every request goes to the address the host had when this began (`expectEndpoint`).
  */
 export async function prepareRun(draft: WizardDraft, promoted = false): Promise<PrepareResult> {
   const { hostId, profileId, seen, direction } = draft
   if (hostId === null || profileId === null || seen === null || direction === null) return { ok: false, reason: 'incomplete' }
-  const premises = (): PremiseReason | null => brokenLocalPremise(hostId, draft.localId, { host: true, local: !promoted })
+  const pulling = direction === 'pull'
+  const premises = (): PremiseReason | PullPremiseReason | null =>
+    brokenLocalPremise(hostId, draft.localId, { host: true, local: !promoted }) ?? (pulling ? brokenPullPremise(hostId) : null)
   const before = premises()
   if (before !== null) return { ok: false, reason: before }
+  // Every request of this door goes here or nowhere (the host is in the store: `premises` said so).
+  const at = endpointOfHost(useHostStore.getState().hosts[hostId])
 
-  const listedNow = await listOrClass(hostId)
+  let sotHosts: Extract<HostsRead, { ok: true }> | null = null
+  if (pulling) {
+    const read = await readSotHosts(hostId, profileId, at)
+    if (!read.ok) return { ok: false, reason: 'list-failed', request: read.request }
+    sotHosts = read
+  }
+
+  const listedNow = await listOrClass(hostId, at)
   if (!listedNow.ok) return { ok: false, reason: 'list-failed', request: listedNow.request }
   // The ask took a while: this device may have moved meanwhile.
   const after = premises()
@@ -283,7 +402,63 @@ export async function prepareRun(draft: WizardDraft, promoted = false): Promise<
   const now = sotNow(entry)
   if (now.fingerprint !== seen) return { ok: false, reason: 'profile-changed', now }
 
-  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: direction === 'pull' ? draft.saveAs : null }) }
+  let removesHosts: readonly string[] = []
+  if (sotHosts !== null) {
+    const listed = entry.sections.find((m) => m.section === 'hosts')
+    const same = listed === undefined ? sotHosts.rev === null : listed.rev === sotHosts.rev && listed.hash === sotHosts.hash
+    if (!same) return { ok: false, reason: 'profile-changed', now }
+    const removal = removalsOf(hostId, sotHosts.rows)
+    if (!removal.ok) return { ok: false, reason: removal.reason }
+    if (draft.removesSeen == null || !sameSet(removal.removes, draft.removesSeen)) return { ok: false, reason: 'removes-changed', removes: removal.removes }
+    removesHosts = Object.freeze([...removal.removes])
+  }
+
+  return { ok: true, plan: Object.freeze({ hostId, profileId, localId: draft.localId, direction, saveAs: pulling ? draft.saveAs : null, removesHosts, at, seen }) }
+}
+
+/**
+ * A RETRY'S PLAN: the plan the run was started with (`old` — its sub-steps' states are indexed by it), re-aimed at
+ * what the door has just found (`fresh`): the host's address now (`at`), the fingerprint (`seen`) and the hosts it
+ * removes. Only those: what is done stays done, and the retry goes on from where it stopped. Null when `fresh`
+ * would run other sub-steps, or remove other hosts, than `old` — then it is not the same plan, and the user
+ * chooses again (the wizard goes back to the direction step). The door is asked with `old`'s own draft, so it
+ * refuses a changed list itself (`removes-changed`); this is the second lock, not the first.
+ */
+export function retargetPlan(old: Readonly<WizardPlan>, fresh: Readonly<WizardPlan>): Readonly<WizardPlan> | null {
+  const steps = subStepsOf(old)
+  const same = subStepsOf(fresh)
+  if (old.hostId !== fresh.hostId || old.profileId !== fresh.profileId || steps.length !== same.length || steps.some((id, i) => id !== same[i])) return null
+  if (!sameSet(old.removesHosts, fresh.removesHosts)) return null
+  return Object.freeze({ ...old, at: fresh.at, seen: fresh.seen, removesHosts: fresh.removesHosts })
+}
+
+/**
+ * THE ASK BEFORE THE ATTACH (review, attacker H1). `prepareRun` answered before the promote and the copy; those are
+ * asynchronous, and meanwhile the SOT may have moved, a host may have been added here, or the attach host may have
+ * turned out to be at another daemon. So right before `attachMaster` everything `prepareRun` checks is checked
+ * again, against the PLAN — the address it was made for (`at`), the fingerprint it was made against (`seen`), and
+ * the hosts it removes (`removesHosts`, the list the user was shown). Anything moved → no attach, and the refusal
+ * is `prepareRun`'s own (the wizard sends the user back as it does for those):
+ *   the host re-pointed           `list-failed` / `endpoint-changed`   (retryable: the next door reads the new address,
+ *                                                                      and the retry's plan is re-aimed there: `retargetPlan`)
+ *   hosts section / fingerprint   `profile-changed`, with what is there now
+ *   a host added / one matched    `removes-changed`, with the list now
+ *   attach host verified no more  `master-unverified` / `master-mismatch`
+ *   attach host lost its row      `master-unmatched`
+ *   match errors, profile gone, this device's premises — as `prepareRun`.
+ * The chosen local profile is not looked for: by now it has been promoted (or was the master all along).
+ * NOT CLOSED: the window from this ask to the first reconciliation. `attachMaster` takes no rev, so the executor's
+ * first reconciliation cannot be told to accept only the version asked here (executor.ts; out of this PR's scope).
+ */
+export async function recheckBeforeAttach(plan: WizardPlan): Promise<PrepareResult> {
+  const moved = (): boolean => {
+    const host = useHostStore.getState().hosts[plan.hostId]
+    return host !== undefined && endpointOfHost(host) !== plan.at
+  }
+  if (moved()) return { ok: false, reason: 'list-failed', request: 'endpoint-changed' }
+  const again = await prepareRun({ hostId: plan.hostId, profileId: plan.profileId, seen: plan.seen, localId: MASTER_PROFILE_ID, direction: plan.direction, saveAs: plan.saveAs, removesSeen: plan.removesHosts }, true)
+  if (again.ok && (again.plan.at !== plan.at || moved())) return { ok: false, reason: 'list-failed', request: 'endpoint-changed' }
+  return again
 }
 
 // === Creating the SOT profile ===
