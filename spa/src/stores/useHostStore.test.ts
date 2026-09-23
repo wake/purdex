@@ -784,7 +784,37 @@ describe('applyHostTransfer (host transfer H4b, spec §6.4.5, plan R2/R4)', () =
     })
     expect(s.hostOrder).toEqual([defaultId, m])
     expect(selectDaemonIdVerified(s, m)).toBe(true)
-    expect(s.runtime[m].status).toBe('connected')
+  })
+
+  it('an overwrite to a new endpoint starts the runtime over: nothing of the old connection, only daemonIdVerified', () => {
+    const retry = vi.fn()
+    useHostStore.getState().setRuntime(m, {
+      status: 'connected', latency: 12, attachReady: true, daemonState: 'connected', tmuxState: 'ok', manualRetry: retry,
+    })
+    useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    const rt = useHostStore.getState().runtime[m]
+    expect(rt.status).not.toBe('connected')
+    expect(rt.attachReady).toBeUndefined()
+    expect(rt).toEqual({ daemonIdVerified: { endpoint: '2.2.2.2:7860', daemonId: 'd1_m' } })
+  })
+
+  it('an overwrite that only changes the token also starts the runtime over', () => {
+    useHostStore.getState().setRuntime(m, { status: 'connected', attachReady: true })
+    const [o] = change().overwrite
+    useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ ...o, ip: '1.1.1.1', port: 1, token: 'rotated' }] })
+    expect(useHostStore.getState().runtime[m]).toEqual({ daemonIdVerified: { endpoint: '1.1.1.1:1', daemonId: 'd1_m' } })
+  })
+
+  it('an overwrite that keeps endpoint and token (look / name only) leaves the runtime as it was', () => {
+    useHostStore.getState().setRuntime(m, { status: 'connected', attachReady: true, latency: 12 })
+    const before = useHostStore.getState().runtime[m]
+    const [o] = change().overwrite
+    const res = useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ ...o, ip: '1.1.1.1', port: 1, token: 'old' }] })
+    expect(res.kind).toBe('applied')
+    const s = useHostStore.getState()
+    expect(s.hosts[m]).toMatchObject({ name: 'mm', icon: 'Desktop' })
+    expect(s.runtime[m]).toEqual(before)
+    expect(s.runtime[m]).toMatchObject({ status: 'connected', attachReady: true, latency: 12 })
   })
 
   it.each<[string, () => void]>([

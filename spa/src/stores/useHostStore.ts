@@ -297,6 +297,7 @@ function transferPatch(
 ): { patch: Pick<HostState, 'hosts' | 'hostOrder' | 'runtime'>; created: string[]; overwritten: string[] } | null {
   const hosts: Record<string, HostConfig> = { ...state.hosts }
   const hostOrder = [...state.hostOrder]
+  let runtime = state.runtime
   // [hostId, the daemonId it must end verified with, the endpoint + token it was observed at]
   const observe: [string, string, HostRequestAt][] = []
   const overwritten: string[] = []
@@ -308,7 +309,16 @@ function transferPatch(
     const next = sanitizeHostConfig({ ...h, ...o.look, name: o.name, ip: o.ip, port: o.port, token: o.token })
     hosts[o.hostId] = next
     overwritten.push(o.hostId)
-    observe.push([o.hostId, o.expect.daemonId, requestAtOf(next)])
+    const nextAt = requestAtOf(next)
+    // A new endpoint or token is a new connection (useMultiHostEventWs keys it on both and rebuilds it): nothing the
+    // old one established — status, latency, attach gate, daemon / tmux state, its retry hook — describes the new
+    // address, so the runtime starts over as a host that was never connected (no entry), exactly what a fresh host
+    // has; below only `daemonIdVerified` is written back. A look / name-only overwrite keeps the connection as is.
+    if (nextAt.endpoint !== at.endpoint || nextAt.token !== at.token) {
+      const { [o.hostId]: _old, ...rest } = runtime
+      runtime = rest
+    }
+    observe.push([o.hostId, o.expect.daemonId, nextAt])
   }
   const created: string[] = []
   for (const c of change.create) {
@@ -319,7 +329,7 @@ function transferPatch(
     created.push(id)
     observe.push([id, c.daemonId, requestAtOf(host)])
   }
-  let working: Pick<HostState, 'hosts' | 'runtime'> = { hosts, runtime: state.runtime }
+  let working: Pick<HostState, 'hosts' | 'runtime'> = { hosts, runtime }
   for (const [id, daemonId, at] of observe) {
     const next = applyObservedDaemonId(working, id, daemonId, at)
     if (!next) return null
