@@ -192,6 +192,43 @@ function placeIn(preset: LayoutPreset, id: string, colIdx: number, rowIdx: numbe
   return next
 }
 
+/**
+ * `renameIds` as a pure step: the presets and knownIds with every id renamed
+ * through `map`, a target already present earlier in the same list dropped
+ * (first occurrence kept); `null` when nothing is renamed. An untouched preset
+ * keeps its object.
+ */
+export function renameLayoutIds(
+  state: Pick<State, 'presets' | 'knownIds'>,
+  map: (id: string) => string,
+): Pick<State, 'presets' | 'knownIds'> | null {
+  const keys = ['3col', '2col', '1col'] as const
+  // Every id that moves, and where to: the targets are what can collide.
+  const targets = new Set<string>()
+  for (const id of [...state.knownIds, ...keys.flatMap((k) => state.presets[k].columns.flat())]) {
+    const to = map(id)
+    if (to !== id) targets.add(to)
+  }
+  if (targets.size === 0) return null
+  // Renamed per list; a target already seen earlier in the same list is dropped.
+  const renameIn = (seen: Set<string>) => (id: string): string[] => {
+    const to = map(id)
+    if (!targets.has(to)) return [id]
+    if (seen.has(to)) return []
+    seen.add(to)
+    return [to]
+  }
+  const presets = { ...state.presets }
+  for (const key of keys) {
+    const src = state.presets[key]
+    const next = renameIn(new Set())
+    const columns = src.columns.map((col) => col.flatMap(next))
+    const same = columns.every((col, i) => col.length === src.columns[i].length && col.every((id, j) => id === src.columns[i][j]))
+    if (!same) presets[key] = { enabled: src.enabled, columns }
+  }
+  return { presets, knownIds: state.knownIds.flatMap(renameIn(new Set())) }
+}
+
 export const useNewTabLayoutStore = create<State>()(
   persist(
     (set) => ({
@@ -313,33 +350,7 @@ export const useNewTabLayoutStore = create<State>()(
         }),
 
       renameIds: (map) =>
-        set((state) => {
-          const keys = ['3col', '2col', '1col'] as const
-          // Every id that moves, and where to: the targets are what can collide.
-          const targets = new Set<string>()
-          for (const id of [...state.knownIds, ...keys.flatMap((k) => state.presets[k].columns.flat())]) {
-            const to = map(id)
-            if (to !== id) targets.add(to)
-          }
-          if (targets.size === 0) return state
-          // Renamed per list; a target already seen earlier in the same list is dropped.
-          const renameIn = (seen: Set<string>) => (id: string): string[] => {
-            const to = map(id)
-            if (!targets.has(to)) return [id]
-            if (seen.has(to)) return []
-            seen.add(to)
-            return [to]
-          }
-          const presets = { ...state.presets }
-          for (const key of keys) {
-            const src = state.presets[key]
-            const next = renameIn(new Set())
-            const columns = src.columns.map((col) => col.flatMap(next))
-            const same = columns.every((col, i) => col.length === src.columns[i].length && col.every((id, j) => id === src.columns[i][j]))
-            if (!same) presets[key] = { enabled: src.enabled, columns }
-          }
-          return { presets, knownIds: state.knownIds.flatMap(renameIn(new Set())) }
-        }),
+        set((state) => renameLayoutIds(state, map) ?? state),
 
       reset: () => set({ ...initialState() }),
     }),

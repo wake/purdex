@@ -9,9 +9,11 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { syncIdOfSync } from './profile/host-identity'
+import { STORAGE_KEYS } from './storage'
 import type { PaneContent, PaneLayout, Tab } from '../types/tab'
 import {
   HOST_RERESOLVE_LOCK_OWNER,
+  HOST_RERESOLVE_MAX_RETRY_MS,
   HOST_RERESOLVE_RETRY_MS,
   __resetHostReresolveForTest,
   requestHostReresolve,
@@ -180,6 +182,96 @@ describe('runHostReresolve', () => {
   })
 })
 
+// PR #1406 review (R1 P2, attacker high #2): the four stores are written as one unit. A write that fails — the
+// persist's `setItem` throwing (quota, SecurityError) AFTER zustand already changed memory — puts back every store
+// already written, the failing one included; the pass says `write-failed` instead of throwing, and is retried.
+describe('a store write fails half-way', () => {
+  const WRITTEN = [STORAGE_KEYS.TABS, STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT] as const
+
+  function failWrites(key: string, times: number): void {
+    const real = Storage.prototype.setItem
+    let left = times
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === key && left > 0) {
+        left--
+        throw new DOMException('quota', 'QuotaExceededError')
+      }
+      real.call(this, k, v)
+    })
+  }
+
+  function everything(): string {
+    return JSON.stringify([
+      useTabStore.getState().tabs,
+      useLocalProfilesStore.getState().parkedMaster,
+      useLocalProfilesStore.getState().slaves,
+      useHostSettingsStore.getState().hosts,
+      useNewTabLayoutStore.getState().presets,
+      useNewTabLayoutStore.getState().knownIds,
+      ...WRITTEN.map((k) => localStorage.getItem(k)),
+    ])
+  }
+
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it.each(WRITTEN)('%s fails once → all or nothing: every store as before, memory and storage; then the retry lands', (key) => {
+    vi.useFakeTimers()
+    const before = everything()
+    failWrites(key, 1)
+    requestHostReresolve()
+    expect(everything()).toBe(before)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+    vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+    expect(JSON.stringify(useNewTabLayoutStore.getState())).not.toContain(WIRE)
+    expect(Object.keys(useHostSettingsStore.getState().hosts)).not.toContain(WIRE)
+  })
+
+  it('the pass answers write-failed; it never throws', () => {
+    failWrites(STORAGE_KEYS.HOST_SETTINGS, 1)
+    expect(runHostReresolve()).toBe('write-failed')
+  })
+
+  it('a rollback that fails too is reported, not thrown', () => {
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // tabs is written (and persisted) first; the host-settings write then fails, and so does putting tabs back
+    const real = Storage.prototype.setItem
+    let tabsWrites = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.HOST_SETTINGS) throw new DOMException('quota', 'QuotaExceededError')
+      if (k === STORAGE_KEYS.TABS && ++tabsWrites > 1) throw new DOMException('quota', 'QuotaExceededError')
+      real.call(this, k, v)
+    })
+    expect(runHostReresolve()).toBe('write-failed')
+    expect(report).toHaveBeenCalled()
+    expect(String(report.mock.calls[0][0])).toMatch(/rollback incomplete/)
+  })
+
+  it('a write that keeps failing is retried with backoff, never tighter than every 500 ms, capped', () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let attempts = 0
+    const real = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.TABS) {
+        attempts++
+        throw new DOMException('quota', 'QuotaExceededError')
+      }
+      real.call(this, k, v)
+    })
+    requestHostReresolve()
+    const writesPerAttempt = attempts
+    vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+    expect(attempts).toBe(writesPerAttempt * 2) // retry 1 at 500 ms
+    vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+    expect(attempts).toBe(writesPerAttempt * 2) // retry 2 not before 1000 ms
+    vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+    expect(attempts).toBe(writesPerAttempt * 3)
+    vi.advanceTimersByTime(HOST_RERESOLVE_MAX_RETRY_MS * 10)
+    expect(attempts).toBeLessThanOrEqual(writesPerAttempt * 20) // backed off to the cap: ~16 attempts, not ~600
+  })
+})
+
 describe('requestHostReresolve', () => {
   it('busy → retried every 500 ms until the lock is free, then runs', () => {
     vi.useFakeTimers()
@@ -311,6 +403,23 @@ describe('startHostReresolve (the triggers)', () => {
     useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/late' } } } })
     finish?.()
     expect(useHostSettingsStore.getState().hosts).toEqual({ [LOCAL]: { editor: { homePath: '/late' } } })
+  })
+
+  it('an identity whose pass failed is not marked handled: the next host-store change asks again', () => {
+    vi.useFakeTimers() // the backoff retry stays pending: only the subscription can bring it back
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stop = startHostReresolve()
+    const real = Storage.prototype.setItem
+    let fail = true
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (fail && k === STORAGE_KEYS.HOST_SETTINGS) throw new DOMException('quota', 'QuotaExceededError')
+      real.call(this, k, v)
+    })
+    addHostX()
+    expect(hostIdsIn(useTabStore.getState().tabs)).toContain(WIRE) // failed, rolled back
+    fail = false
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], name: 'renamed' } } }))
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
   })
 
   it('stop() ends every subscription', () => {

@@ -566,6 +566,22 @@ interface TabState {
   rewritePaneHosts: (map: (hostId: string) => string) => void
 }
 
+/**
+ * `tabs` with every pane's host reference mapped (`rewritePaneHosts`, and the
+ * host re-resolve pass, which needs the next state before it writes). An
+ * untouched tab keeps its object; nothing changed → `tabs` itself.
+ */
+export function rewriteTabsHosts(tabs: Record<string, Tab>, map: (hostId: string) => string): Record<string, Tab> {
+  let next: Record<string, Tab> | null = null
+  for (const [id, tab] of Object.entries(tabs)) {
+    const layout = layoutFromWire(tab.layout, map)
+    if (layout === tab.layout) continue
+    next ??= { ...tabs }
+    next[id] = { ...tab, layout }
+  }
+  return next ?? tabs
+}
+
 export const useTabStore = create<TabState>()(
   persist(
     (set, get) => ({
@@ -971,14 +987,8 @@ export const useTabStore = create<TabState>()(
 
       rewritePaneHosts: (map) =>
         set((state) => {
-          let tabs: Record<string, Tab> | null = null
-          for (const [id, tab] of Object.entries(state.tabs)) {
-            const layout = layoutFromWire(tab.layout, map)
-            if (layout === tab.layout) continue
-            tabs ??= { ...state.tabs }
-            tabs[id] = { ...tab, layout }
-          }
-          return tabs === null ? state : { tabs }
+          const tabs = rewriteTabsHosts(state.tabs, map)
+          return tabs === state.tabs ? state : { tabs }
         }),
     }),
     {
