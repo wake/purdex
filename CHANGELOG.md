@@ -29,8 +29,8 @@
 
 - **記下 daemon 身分** —— 每個 host 記住 daemon 的身分（`/api/info` 的 `host_id`，存成 `daemonId`）；連線、換位址或換 token 時
   重新驗證。本機驗到的身分與記錄不同時只標記（不寫入、不同步），例如 daemon 重裝或同一位址在不同裝置連到不同 daemon。
-- **新增主機依身分去重** —— 同一個 daemon 換個位址也會被擋下；配對流程若 token 已輪替，會依情況自動更新既有主機的 token，
-  或讓使用者選「把這個位址用在 X」／「另外新增」，新 token 絕不遺失。
+- **新增主機依身分去重** —— 同一個 daemon 換個位址也會被擋下；配對流程若 token 已輪替：既有主機在這台已驗證為同一個 daemon 時
+  自動更新它的 token，否則讓使用者選「把這個位址用在 X」／「另外新增」，新 token 絕不遺失。
 - **daemonId 隨 hosts section 同步** —— `SECTION_SCHEMA_ORDINAL.hosts` 1 → 2：還沒升級的舊版 client 同步這份 profile 會進
   `locked:schema`，直到升級為止；新版 client 拉到舊形狀的 hosts 不會鎖。
 - **尚未完成的第二塊** —— 跨裝置 pull 的修正還沒做：兩台裝置各自加入同一個 daemon 時，第二台用 wizard 拉資料仍會
