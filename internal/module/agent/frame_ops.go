@@ -262,7 +262,15 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 					After:         map[string]any{},
 				}, err
 			}
-			projection, err := m.projectPane(req.TmuxPaneID)
+			projection, err := projectPaneFn(m, req.TmuxPaneID)
+			if err != nil {
+				// Claimed: the row is gone, so a hook retry would find no
+				// frame and the exit would be lost (#1381 attacker #4).
+				// Nothing is left to retry — log it and let the handler
+				// broadcast the exit with a degraded (clear) projection.
+				logAfterClaim("projectPane", frame.FrameID, err)
+				projection, err = nil, nil
+			}
 			return projection, FrameTraceMeta{
 				FrameID:       frame.FrameID,
 				ParentFrameID: frame.ParentFrameID,

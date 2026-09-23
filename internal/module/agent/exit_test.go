@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -323,5 +324,113 @@ func TestClaimFrameEnd_NewerRunTookTheFrameAfterTheSnapshot(t *testing.T) {
 	}
 	if got, claimed, err := m.claimFrameEnd(snapshot, "S-new", exit); err != nil || !claimed || got != exit {
 		t.Fatalf("the current run's end = (%v, %v, %v), want claimed with the exit", got, claimed, err)
+	}
+}
+
+// Attacker #4 (#1381): after the SessionEnd has claimed (deleted) its frame, a
+// failing read or cleanup must not abort the handler — a hook retry would find
+// no frame and the exit would be lost. The exit is broadcast (degraded to
+// status clear) and the hook is answered 200: nothing is left to retry.
+func TestExit_SessionEndFailsAfterClaim_ExitStillBroadcast(t *testing.T) {
+	boom := errors.New("boom")
+	cases := []struct {
+		name            string
+		handlerDegrades bool
+		inject          func(t *testing.T)
+	}{
+		{"projectPane", false, func(t *testing.T) {
+			orig := projectPaneFn
+			projectPaneFn = func(*Module, string) (*SessionProjection, error) { return nil, boom }
+			t.Cleanup(func() { projectPaneFn = orig })
+		}},
+		{"projectionForSession", true, func(t *testing.T) {
+			orig := projectionForSessionFn
+			projectionForSessionFn = func(*Module, string) (*SessionProjection, error) { return nil, boom }
+			t.Cleanup(func() { projectionForSessionFn = orig })
+		}},
+		{"events.Delete", true, func(t *testing.T) {
+			orig := eventsDeleteFn
+			eventsDeleteFn = func(*Module, string) error { return boom }
+			t.Cleanup(func() { eventsDeleteFn = orig })
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModule(t)
+			fakeTmux := tmux.NewFakeExecutor()
+			fakeTmux.SetPaneSessionName("%5", "work")
+			m.tmux = fakeTmux
+			m.sessions = fakeProviderWithInstance(exitTestInstance)
+			m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+			// The fake derives idle for SessionEnd, so a clear on the wire in
+			// the handler-degraded cases is the handler's own doing.
+			m.registry.Register(&fakeAgentProvider{typeName: "cc", derive: deriveWithSessionDetail})
+			root := seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S1")
+			sub := m.core.Events.AddTestSubscriber()
+			defer m.core.Events.RemoveTestSubscriber(sub)
+			tc.inject(t)
+
+			body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxSessionEnd","raw_event":{"session_id":"S1"},"agent_type":"cc"}`
+			w := httptest.NewRecorder()
+			m.handleEvent(w, httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body)))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (nothing is left to retry)", w.Code)
+			}
+			ev := readSweepNormalizedEvent(t, sub)
+			e, ok := exitOf(t, ev)
+			if !ok || e.FrameID != root.FrameID || e.Reason != ExitReasonSessionEnd {
+				t.Fatalf("exit = %+v ok=%v, want the claimed frame's session-end exit", e, ok)
+			}
+			if tc.handlerDegrades && ev.Status != "clear" {
+				t.Fatalf("status = %q, want the degraded clear", ev.Status)
+			}
+		})
+	}
+}
+
+// Only a claimed exit degrades: any other event whose projection fails still
+// aborts with 500 so the hook retries, and broadcasts nothing.
+func TestExit_OtherEventProjectionFails_StillAborts(t *testing.T) {
+	boom := errors.New("boom")
+	for _, tc := range []struct {
+		name   string
+		inject func(t *testing.T)
+	}{
+		{"projectionForSession", func(t *testing.T) {
+			orig := projectionForSessionFn
+			projectionForSessionFn = func(*Module, string) (*SessionProjection, error) { return nil, boom }
+			t.Cleanup(func() { projectionForSessionFn = orig })
+		}},
+		{"events.Delete", func(t *testing.T) {
+			orig := eventsDeleteFn
+			eventsDeleteFn = func(*Module, string) error { return boom }
+			t.Cleanup(func() { eventsDeleteFn = orig })
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModule(t)
+			fakeTmux := tmux.NewFakeExecutor()
+			fakeTmux.SetPaneSessionName("%5", "work")
+			m.tmux = fakeTmux
+			m.sessions = fakeProviderWithInstance(exitTestInstance)
+			m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
+			m.registry.Register(&fakeAgentProvider{typeName: "cc", derive: deriveWithSessionDetail})
+			seedRootWithIdentity(t, m, "%5", "cc", 200, "t200", "S1")
+			sub := m.core.Events.AddTestSubscriber()
+			defer m.core.Events.RemoveTestSubscriber(sub)
+			tc.inject(t)
+
+			body := `{"tmux_session":"work","tmux_pane_id":"%5","sender_pid":200,"sender_start_time":"t200","purdex_name":"PdxUserPromptSubmit","raw_event":{"session_id":"S1"},"agent_type":"cc"}`
+			w := httptest.NewRecorder()
+			m.handleEvent(w, httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body)))
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want 500", w.Code)
+			}
+			select {
+			case msg := <-sub.SendCh():
+				t.Fatalf("broadcast %s", msg)
+			case <-time.After(50 * time.Millisecond):
+			}
+		})
 	}
 }
