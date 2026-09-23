@@ -293,6 +293,28 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
     expect(useHostStore.getState().hosts.H.token).toBe(TOKEN)
   })
 
+  it('same ip+port: the existing host learns its daemon id right away (D4.1, critic #1349)', async () => {
+    vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+    useHostStore.setState({ hosts: { H: existing({ ip: '10.0.0.1', daemonId: undefined }) }, hostOrder: ['H'] })
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+    confirmTokenRoute()
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(hostApi.fetchInfoAt).toHaveBeenCalledWith('http://10.0.0.1:7860', TOKEN, expect.any(AbortSignal))
+    expect(Object.keys(useHostStore.getState().hosts)).toEqual(['H'])
+    expect(useHostStore.getState().hosts.H).toMatchObject({ token: TOKEN, daemonId: X })
+  })
+
+  it('same ip+port: a failed probe keeps the token update and learns nothing', async () => {
+    useHostStore.setState({ hosts: { H: existing({ ip: '10.0.0.1', daemonId: undefined }) }, hostOrder: ['H'] })
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+    confirmTokenRoute()
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(useHostStore.getState().hosts.H.token).toBe(TOKEN)
+    expect(useHostStore.getState().hosts.H.daemonId).toBeUndefined()
+  })
+
   it('a different endpoint reaching an already-added daemon is refused with the host name (token route: no re-point action)', async () => {
     vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
     useHostStore.setState({ hosts: { H: existing() }, hostOrder: ['H'] })

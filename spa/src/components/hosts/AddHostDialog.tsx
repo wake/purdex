@@ -166,6 +166,21 @@ export function AddHostDialog({ onClose }: Props) {
       if (existingId) {
         // Update existing host's token instead of creating a duplicate
         useHostStore.getState().updateHost(existingId, { token: trimmedToken || undefined })
+        // …and verify it now (spec D4.1), even if it is not connected. The request identity is
+        // captured after the token update so observeDaemonId's freshness guards apply. Failure,
+        // timeout or dismissal changes nothing else — the token update stands.
+        const updated = useHostStore.getState().hosts[existingId]
+        if (updated) {
+          const at = requestAtOf(updated)
+          const probe = new AbortController()
+          probeRef.current = probe
+          const observed = await fetchInfoAt(`http://${trimmedIp}:${trimmedPort || '7860'}`, trimmedToken, probe.signal)
+            .then((info) => (typeof info?.host_id === 'string' ? info.host_id : ''))
+            .catch(() => '')
+          probeRef.current = null
+          if (probe.signal.aborted) return
+          useHostStore.getState().observeDaemonId(existingId, observed, at)
+        }
       } else {
         const addNew = () => {
           commitRef.current = null

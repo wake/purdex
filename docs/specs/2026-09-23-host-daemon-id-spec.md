@@ -92,7 +92,10 @@ One request per trigger, per host, only while connected:
 
 ### D5. Duplicate detection on add (by daemon)
 In `AddHostDialog`, after learning the new daemon's `host_id` `X`:
-- same ip+port as an existing host → today's behaviour (update that host's token). Unchanged.
+- same ip+port as an existing host → today's behaviour (update that host's token), then the same
+  bounded probe with the new token feeds `observeDaemonId` for that existing host (request identity
+  captured after the token update), so it is identified even while not connected. Probe failure,
+  timeout or dismissal changes nothing else — the token update stands (critic on #1349).
 - different endpoint, and an existing host `H` with `daemonId === X` **and no `daemonIdMismatch`**
   → do not add a second host.
   - **Token route** (nothing rotated, nothing to lose): "This daemon is already added as “{name}”."
