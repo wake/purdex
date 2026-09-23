@@ -317,3 +317,15 @@ func TestGetSession_NotFoundDeleteFailureIsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, info)
 }
+
+// TmuxInstanceContext probes under the caller's context (the peers
+// inventory's budget, #1293).
+func TestTmuxInstanceContext_ProbesUnderCallerContext(t *testing.T) {
+	mod, _, _ := newTestModule(t)
+	type key struct{}
+	var got any
+	mod.tmuxInstanceFn = func(ctx context.Context) string { got = ctx.Value(key{}); return "1:1" }
+	ctx := context.WithValue(context.Background(), key{}, "caller")
+	assert.Equal(t, "1:1", mod.TmuxInstanceContext(ctx))
+	assert.Equal(t, "caller", got)
+}

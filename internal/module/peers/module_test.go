@@ -508,6 +508,92 @@ func TestLocalEnvelope_SessionListBoundedByBudget(t *testing.T) {
 	}
 }
 
+// inventorySlack is how far past its budget a stuck localEnvelope may run:
+// scheduling and the post-deadline bookkeeping, nothing that waits on tmux.
+const inventorySlack = 300 * time.Millisecond
+
+// #1293: the inventory budget is ONE deadline for the whole local inventory —
+// both tmux-instance probes and the session list share it. With all three
+// hung, the envelope still ends at the budget (not budget + two probe caps).
+func TestLocalEnvelope_ProbesAndListShareOneBudget(t *testing.T) {
+	sessions := &fakeSessions{blockList: true, blockInstance: true, instanceHang: time.Second}
+	owners := &fakeOwners{}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	start := time.Now()
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if elapsed := time.Since(start); elapsed > budget+inventorySlack {
+		t.Errorf("localEnvelope took %v, want at most the %v budget + %v", elapsed, budget, inventorySlack)
+	}
+	if env.OK {
+		t.Errorf("ok = true, want false for a list that hit the budget")
+	}
+	if !strings.Contains(env.Error, context.DeadlineExceeded.Error()) {
+		t.Errorf("error = %q, want the budget's deadline error", env.Error)
+	}
+	if n := sessions.instanceCtxCalls.Load(); n != 1 {
+		t.Errorf("context-aware probes = %d, want 1 (the list failed before the second)", n)
+	}
+}
+
+// The second probe (after owner resolution) runs under the same budget: a
+// list that answers but a probe that hangs still ends the inventory at the
+// budget. A session whose owner lookup failed (the resolver sees the spent
+// budget) is still reported partial, as before.
+func TestLocalEnvelope_SecondProbeSharesBudget(t *testing.T) {
+	sessions := &fakeSessions{
+		blockInstance: true,
+		instanceHang:  time.Second,
+		sessions: []session.SessionInfo{
+			{Code: "mt1code", Name: "mt1", Cwd: "/w", TmuxInstance: ""},
+		},
+	}
+	owners := &fakeOwners{errs: map[string]error{"mt1code": context.DeadlineExceeded}}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 100 * time.Millisecond
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	start := time.Now()
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if elapsed := time.Since(start); elapsed > budget+inventorySlack {
+		t.Errorf("localEnvelope took %v, want at most the %v budget + %v", elapsed, budget, inventorySlack)
+	}
+	if !env.OK {
+		t.Fatalf("ok = false (%q), want true: the list answered", env.Error)
+	}
+	if !env.Partial {
+		t.Errorf("partial = false, want true for an unresolved owner")
+	}
+	if n := sessions.instanceCtxCalls.Load(); n != 2 {
+		t.Errorf("context-aware probes = %d, want 2", n)
+	}
+}
+
+// The owner resolver runs under the inventory's budget context too.
+func TestLocalEnvelope_OwnerResolutionUnderBudgetContext(t *testing.T) {
+	sessions := &fakeSessions{sessions: []session.SessionInfo{{Code: "mt1code", Name: "mt1", Cwd: "/w"}}}
+	var gotDeadline time.Time
+	var hasDeadline bool
+	owners := &ctxRecordingOwners{record: func(ctx context.Context) { gotDeadline, hasDeadline = ctx.Deadline() }}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	const budget = 2 * time.Second
+	m := newTestModule(t, c, sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, budget)
+
+	before := time.Now()
+	m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if !hasDeadline {
+		t.Fatal("owner resolution ran without the inventory's deadline")
+	}
+	if gotDeadline.After(before.Add(budget).Add(50 * time.Millisecond)) {
+		t.Errorf("owner deadline %v is later than the inventory budget", gotDeadline)
+	}
+}
+
 // TestHandlePeers_TmuxInstanceUnknown_ProceedsNormally is the companion case:
 // when either sample is "" (unknown), the mismatch check cannot fire — the
 // handler proceeds exactly as before this change.

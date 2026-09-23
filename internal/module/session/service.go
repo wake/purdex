@@ -23,6 +23,13 @@ func (m *SessionModule) TmuxInstance() string {
 	return m.tmuxInstance(context.Background())
 }
 
+// TmuxInstanceContext is TmuxInstance bounded by ctx: a caller with a budget
+// of its own (the peers inventory, #1293) probes under it instead of paying
+// the probe's full cap. Returns "" when the probe fails or ctx ends first.
+func (m *SessionModule) TmuxInstanceContext(ctx context.Context) string {
+	return m.tmuxInstance(ctx)
+}
+
 // tmuxInstance is TmuxInstance bounded by ctx (the probe's own timeout still
 // applies when ctx has a later deadline or none).
 func (m *SessionModule) tmuxInstance(ctx context.Context) string {

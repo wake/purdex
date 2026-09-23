@@ -38,6 +38,24 @@ type fakeSessions struct {
 	listCalls atomic.Int32
 	// blockList makes ListSessionsContext hang until its context ends.
 	blockList bool
+	// blockInstance models a hung tmux-instance probe: TmuxInstanceContext
+	// hangs until its context ends, and the context-free TmuxInstance hangs
+	// for instanceHang (the real probe's own cap) — so a caller that probes
+	// without the inventory's context pays that on every probe.
+	blockInstance bool
+	instanceHang  time.Duration
+	// instanceCtxCalls counts TmuxInstanceContext calls.
+	instanceCtxCalls atomic.Int32
+}
+
+// TmuxInstanceContext is the context-aware probe localEnvelope uses (#1293).
+func (f *fakeSessions) TmuxInstanceContext(ctx context.Context) string {
+	f.instanceCtxCalls.Add(1)
+	if f.blockInstance {
+		<-ctx.Done()
+		return ""
+	}
+	return f.TmuxInstance()
 }
 
 // setSessions replaces the live tmux inventory this fake reports — a tmux
@@ -92,6 +110,10 @@ func (f *fakeSessions) CreateSession(string, string) (*session.SessionInfo, erro
 }
 
 func (f *fakeSessions) TmuxInstance() string {
+	if f.blockInstance {
+		time.Sleep(f.instanceHang)
+		return ""
+	}
 	if f.instances == nil {
 		return ""
 	}
@@ -156,4 +178,15 @@ func (c *fakeClock) Now() time.Time {
 	t := c.times[c.i]
 	c.i++
 	return t
+}
+
+// ctxRecordingOwners is an agent.OwnerResolver that hands every call's
+// context to record and reports no owner.
+type ctxRecordingOwners struct {
+	record func(ctx context.Context)
+}
+
+func (o *ctxRecordingOwners) ResolveSessionOwner(ctx context.Context, _ string) (agent.PaneOwner, bool, error) {
+	o.record(ctx)
+	return agent.PaneOwner{}, false, nil
 }
