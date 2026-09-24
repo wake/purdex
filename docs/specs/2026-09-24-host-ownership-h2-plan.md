@@ -236,10 +236,10 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
       `.d.ts` or `any`-typed code; reads in test files (excluded by design). The fixture tests pin each so a future
       change of the detector is visible.
 15. **Sizes.** H2b is 26 surface files (§0.1) → H2b-1 / H2b-2. H2c is ≈36 files → H2c-1 (wire) / H2c-2 (switch) /
-    H2c-3 (transfer + New Tab labels). H2d (rev 6, §0.21) is 74 files (§0.22 (b) is void — decided (a)) → H2d-1
+    H2c-3 (transfer + New Tab labels). H2d (rev 6, §0.21) is 77 files (§0.22 (b) is void — decided (a)) → H2d-1
     (store, wire, re-key, selectors incl. the pane matcher; 15) / H2d-2 (the disable action: plan, close, split, on
     screen and in every parked world; 9) / H2d-3 (editor + confirmation dialog; 10) / H2d-4 (no way to open a tab on a
-    disabled host: New Tab, picker, Hosts page; 14) / H2d-4b (pane gate and per-pane sweeps; 13) / H2d-5 (landings:
+    disabled host: New Tab, picker, Hosts page; 14) / H2d-4b (pane gate, per-pane sweeps, re-enable recovery; 16) / H2d-5 (landings:
     notification, execution deep link, route; 8) / H2d-6 (not-filtered behaviour tests + import guard; 5).
     H2d-2 and H2d-3 are split by the 800-line limit, not the file limit. Ordinals: `settings` is **5** today
     (`projections.ts:107`); H2c-1 → **6** with
@@ -1246,7 +1246,7 @@ Mutations: M1 `NewTabPage` removes the column from the preset instead of skippin
 M4 `SessionsSection` "open" still creates a tab for a disabled host (no-tab test red); M5 the badge reads `ids`
 without `all` (all-true test red).
 
-## H2d-4b — pane gate and per-pane sweeps (13 files; §0.23; rev 6)
+## H2d-4b — pane gate, per-pane sweeps, re-enable recovery (16 files; §0.23; rev 6)
 
 Split out of H2d-4 in rev 6 (coordinator decisions 2 and 3): the one rule of §0.23 — in W, a pane whose host (wire
 space) is disabled renders 「此主機在這個工作台未啟用」 and opens no connection — plus the per-pane sweeps and the
@@ -1330,12 +1330,39 @@ to `usePeerInfo` (peer-refresh test red); M7 the revive guard moved to `reconcil
 `runRevivePass` test red); M8 `provenanceBindings` unguarded, only the sweep in `reconcileHostSessions` guarded (the
 hook-event test red); M9 the guard also skips `reconcileHostSessions` (terminated-marking test red).
 
-Open question (rev 6, not decided): **re-enable does not re-run the revive pass.** After X is re-enabled, the gated
-panes remount and `SessionPaneContent`'s own mount effect probes cwd / provenance again, but a pane the revive pass
-skipped while X was disabled is revived only at X's next `sessions` frame / session refresh / lock release. Plan
-default: accept (the pane shows `TerminatedPane` with Rebuild meanwhile). Alternative: on the enabled transition the
-gate asks for one `runRevivePass(host)` — a tab rewrite started by a store change, which the plan otherwise keeps out
-of subscribers; the coordinator decides.
+**Re-enable recovery (DECIDED, coordinator 2026-09-24 — the rev-6 open question).** Waiting for X's next `sessions`
+frame is not acceptable: the daemon pushes that frame only when the session list changes (500 ms debounce), so an idle
+host may send nothing for a long time and the user would see a wall of Rebuild right after re-enabling. On every
+disabled → enabled transition of a host in W, call the EXISTING `recoverHostSessions(hostId)`
+(`lib/rebuild/refresh-sessions.ts:264`) once for that local host — no new revive trigger: it needs no attach gate,
+defers to the operation-lock release when the lock is held (`needsRecovery`), and runs `refreshHost` → the
+`sessions` reconcile → `runRevivePass`, all fenced as today. The transition is detected from the stores, not in the
+dialog, so a re-enable that ARRIVES by a `settings` apply (another device ticked X) recovers here too: a small
+subscriber over `useShownHostsStore` + `useHostStore` computes the set of local host ids enabled per the §0.21 matcher,
+and for each id that was disabled before and is enabled now calls `recoverHostSessions`. It never closes, splits or
+filters anything (rule 6 is untouched; the H2d-6 T5 import guard lists it as a permitted importer of
+`lib/shown-hosts`), and a host that is merely added, or whose daemonId is learned, is not a transition. If this turns
+out to need a mechanism beyond "subscribe + call the existing function", or pushes H2d-4b past 20 files, STOP and
+report.
+
+- **T4 — re-enable recovery.** Files 14–16 below. Tests (`host-reenable.test.ts`, real stores, `recoverHostSessions`
+  spied): `{all:false, ids:[mlab]}` → add X's wire id → one call with X's local id; the same write again → no call;
+  X enabled → disabled → no call; `all: false → true` with X previously disabled → one call for X only (mlab was
+  already enabled → none); a `settings` apply path (store `setState` as `apply-to-stores` does) enabling X → one call;
+  a host added (`addHost`) or a daemonId learned while enabled → no call; two local rows of one daemon (conflict) →
+  one call each; the subscriber is idempotent on install (installing twice → one call per transition). Integration
+  (`host-reenable.test.ts`, with `refresh-sessions` real and fetch mocked): a pane on X marked terminated while X was
+  disabled whose session is alive → after re-enable, within the same test tick sequence, the pane is repointed live
+  (revive ran), no `sessions` frame needed. Install in `main.tsx` next to `startStandaloneAdoption()`. Implement.
+  Commit.
+- Files added by T4 (H2d-4b becomes **16** files):
+  14. `spa/src/lib/rebuild/host-reenable.ts` (new — `startHostReenableRecovery()`)
+  15. `spa/src/lib/rebuild/host-reenable.test.ts` (new)
+  16. `spa/src/main.tsx` (one install line)
+- Mutations added: M10 the subscriber compares `isHostShown` instead of the wire-space matcher (the `d1_`/conflict
+  cases red); M11 recovery only from the dialog's confirm handler (the apply-path test red); M12 `runRevivePass`
+  called directly instead of `recoverHostSessions` (the lock-held test red: with the operation lock held the call
+  must defer, not revive).
 
 ## H2d-5 — landings: notification, execution deep link, route (8 files)
 
@@ -1492,6 +1519,11 @@ session list (`GET /api/sessions` on `100.64.0.4:7860`, auth header from a varia
 13. **Re-enable.** On A tick air26 → no dialog; B shows the air26 block in New Tab again; from air26's Hosts page open
    `acc-s1` → a tab attaches to the SAME session (same code), and if an agent runs there its provenance appears on the
    pane's rebuild record (backfill). Nothing re-merged automatically.
+13b. **Re-enable recovers without a reload (H2d-4b T4).** Before step 13, keep a LOCKED air26 tab of `acc-s3` in W
+   (kept by the dialog — placeholder) and make sure `acc-s3` stays alive and idle (no session is created or killed on
+   air26 during the check, so no `sessions` frame is pushed). Tick air26 on A and do NOT reload either client: within
+   5 s the `acc-s3` pane shows the live terminal on BOTH clients (B through the `settings` apply), `playwright cli
+   requests` shows one `GET /api/sessions?fresh=1` to air26 per client after the tick, and no pane in W shows Rebuild.
 14. On A turn "Enable all hosts" back on → B unchanged apart from the setting; no section locked.
 15. **Parked worlds (§0.27 decided (b), widened; rev 6).** On A, recreate an air26 tab and a split `[acc-m1 |
    acc-s2]` in W, wait until B shows them, then switch A to a local profile (slave) holding its own air26 tab. Record
@@ -1552,7 +1584,7 @@ where each is fixed:
 Coordinator decisions (header list, rev 6): (1) no Web Lock — synchronous settled check first, `{ kind: 'unsettled',
 reason }` writes nothing, the residual accepted and commented citing #1256; (2) the pane gate is its own PR, H2d-4b;
 (3) host-level connections unchanged, per-pane sweeps and StatusBar peer info skip disabled hosts' panes (H2d-4b).
-File counts: H2d-2 7 → 9, H2d-3 10, H2d-4b 13 (new), H2d total 59 → 74; the §0.27 "stop and report" gate is passed.
+File counts: H2d-2 7 → 9, H2d-3 10, H2d-4b 13 (new; 16 after the re-enable recovery decision), H2d total 59 → 77; the §0.27 "stop and report" gate is passed.
 Open (not decided here): H2d-4b's re-enable does not re-run the revive pass (see the end of H2d-4b).
 
 ### 2026-09-24 — user decision (rev 3 → rev 4)
