@@ -174,6 +174,10 @@ async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true }
     if (id === 'save') {
       // THE MASTER'S world, after the promote — see the table in the header. Not `saveScreenAsSlave`.
       const r = copyMasterAsSlave(plan.saveAs ?? '')
+      // A copy that could not be fully undone may have left the new workbench: the same notice as Settings › Profile.
+      if (!r.ok && r.reason === 'rollback-incomplete') {
+        useUndoToast.getState().show(useI18nStore.getState().t('settings.profile.local.error.rollback_incomplete'), undefined, undefined, { persistent: true })
+      }
       return r.ok ? { ok: true } : { ok: false, reason: r.reason }
     }
     // The promote and the copy took time: ask again what the plan was made against (review, attacker H1).

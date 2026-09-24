@@ -17,7 +17,7 @@ export const INPUT = 'bg-surface-secondary border border-border-default rounded 
 
 const KNOWN: Record<SubStepId, ReadonlySet<string>> = {
   promote: new Set(['master-attached', 'busy', 'unsettled', 'superseded', 'not-found', 'bad-name', 'bad-epoch', 'write-failed', 'rollback-incomplete']),
-  save: new Set(['unsettled', 'bad-name', 'bad-world', 'write-failed']),
+  save: new Set(['unsettled', 'bad-name', 'bad-world', 'write-failed', 'rollback-incomplete']),
   attach: new Set(ATTACH_REASONS),
 }
 

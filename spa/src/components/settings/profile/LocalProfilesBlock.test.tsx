@@ -439,6 +439,28 @@ describe('the three ways to a new local workbench (per-workbench plan §0.7)', (
     expect(screen.getByTestId('profile-new-name')).toBeInTheDocument()
   })
 
+  it.each(KINDS)('%s: rollback-incomplete → the persistent notice (reload and check), and the form closes', (kind) => {
+    vi.mocked(CREATE[kind]).mockReturnValue({ ok: false, reason: 'rollback-incomplete' })
+    useUndoToast.setState({ notice: null })
+    render(<LocalProfilesBlock />)
+    open(kind)
+    fireEvent.click(screen.getByTestId('profile-new-create'))
+    expect(useUndoToast.getState().notice?.message).toBe(en['settings.profile.local.error.rollback_incomplete'])
+    expect(en['settings.profile.local.error.rollback_incomplete']).toBe("Creating the workbench did not finish and could not be fully undone — reload and check this device's workbenches.")
+    expect(zhTW['settings.profile.local.error.rollback_incomplete']).toBe('建立工作台沒有完成，也無法完整還原——請重新載入並檢查這台裝置的工作台。')
+    expect(screen.queryByTestId('profile-new-form')).toBeNull() // no second click on a half state
+    useUndoToast.setState({ notice: null })
+  })
+
+  it('write-failed raises no notice', () => {
+    vi.mocked(createBlankSlave).mockReturnValue({ ok: false, reason: 'write-failed', detail: 'x' })
+    useUndoToast.setState({ notice: null })
+    render(<LocalProfilesBlock />)
+    open('blank')
+    fireEvent.click(screen.getByTestId('profile-new-create'))
+    expect(useUndoToast.getState().notice).toBeNull()
+  })
+
   it('write-failed says what the storage said', () => {
     vi.mocked(createSettingsCopySlave).mockReturnValue({ ok: false, reason: 'write-failed', detail: 'QuotaExceededError' })
     render(<LocalProfilesBlock />)

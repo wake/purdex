@@ -969,6 +969,61 @@ describe('createBlankSlave', () => {
 
 // === C3. The three ways to a new workbench and their shown-hosts lists (per-workbench plan §0.2 / §0.3, B1) ===
 
+// PR-B review (attacker high): a create whose write failed AND whose rollback failed may have left the new slave in the
+// store; it must say so (`rollback-incomplete`), never a plain `write-failed` the user answers with a second click.
+describe('every create / copy path: a failed write, and a failed rollback', () => {
+  const PATHS = [
+    ['New blank workbench', () => createBlankSlave('New')],
+    ['Duplicate settings only', () => createSettingsCopySlave('New')],
+    ['Duplicate all', () => saveScreenAsSlave('New')],
+    ["the wizard's copy of the master", () => copyMasterAsSlave('New')],
+  ] as const
+  afterEach(() => { vi.restoreAllMocks() })
+
+  /** The add's storage write throws once, after persist has set memory. */
+  function failAddWrite(): void {
+    const real = Storage.prototype.setItem
+    let left = 1
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.LOCAL_PROFILES && left > 0) {
+        left--
+        throw new Error('quota')
+      }
+      real.call(this, k, v)
+    })
+  }
+
+  it.each(PATHS)('%s: the write fails, the rollback works → write-failed, no slave added', (_name, make) => {
+    const order = useLocalProfilesStore.getState().slaveOrder
+    failAddWrite()
+    expect(make()).toEqual({ ok: false, reason: 'write-failed', detail: 'quota' })
+    expect(useLocalProfilesStore.getState().slaveOrder).toEqual(order)
+  })
+
+  it.each(PATHS)('%s: the write fails and the rollback fails too → rollback-incomplete', (_name, make) => {
+    failAddWrite()
+    vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+      throw new Error('restore failed')
+    })
+    expect(make()).toEqual({ ok: false, reason: 'rollback-incomplete' })
+  })
+
+  it('a copy whose workspace-scoped settings cannot be put back → rollback-incomplete', () => {
+    useWorkspaceSettingsStore.setState({ workspaces: { mws: { files: { a: 1 } } } })
+    const realWs = useWorkspaceSettingsStore.setState
+    let wsCalls = 0
+    vi.spyOn(useWorkspaceSettingsStore, 'setState').mockImplementation((...args) => {
+      wsCalls++
+      if (wsCalls === 1) {
+        realWs(...(args as Parameters<typeof realWs>))
+        throw new Error('scoped write failed') // the copy's scoped settings: memory set, storage refused
+      }
+      throw new Error('scoped restore failed')
+    })
+    expect(saveScreenAsSlave('New')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+  })
+})
+
 describe('the three creates — their shown-hosts lists (B1)', () => {
   const CURRENT = ['d1_current']
   const SLAVE_LIST = ['d1_slave']

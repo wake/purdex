@@ -388,7 +388,12 @@ function copyWorld(source: ParkedWorld): WorldCopy {
   }
 }
 
-export type CopyResult = { ok: true; id: string } | Refused<'unsettled' | 'bad-name' | 'bad-world'> | WriteFailed
+/** A write threw AND putting everything back did not fully work either: the store may hold half the operation (a
+ *  promote's two stores; a create's new slave). Distinct from `write-failed` on purpose — the user is told to reload
+ *  and check (a persistent notice), and must not be invited to press again. */
+type RollbackIncomplete = { ok: false; reason: 'rollback-incomplete' }
+
+export type CopyResult = { ok: true; id: string } | Refused<'unsettled' | 'bad-name' | 'bad-world'> | WriteFailed | RollbackIncomplete
 
 /**
  * `source`, copied, as a new parked slave — with the workspace-scoped settings
@@ -418,15 +423,16 @@ function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly st
     if (Object.keys(scoped).length > 0) useWorkspaceSettingsStore.setState({ workspaces: { ...oldScoped, ...scoped } })
     return added
   } catch (err) {
-    restoreLocal(old)
+    // Both restores are attempted; either failing is `rollback-incomplete` — the new slave may still be there.
+    let complete = restoreLocal(old)
     if (useWorkspaceSettingsStore.getState().workspaces !== oldScoped) {
       try {
         useWorkspaceSettingsStore.setState({ workspaces: oldScoped })
       } catch {
-        // best effort
+        complete = false
       }
     }
-    return writeFailed(err)
+    return complete ? writeFailed(err) : { ok: false, reason: 'rollback-incomplete' }
   }
 }
 
@@ -489,16 +495,11 @@ function addEmptyWorldSlave(name: string, shownHostIds: readonly string[]): Copy
     const workspace: Workspace = { ...createWorkspace(nextWorkspaceName([])), id: freshId(idsInUse()) }
     return useLocalProfilesStore.getState().addSlave(name, { workspaces: [workspace], tabs: {}, activeWorkspaceId: workspace.id, activeTabId: null }, shownHostIds)
   } catch (err) {
-    restoreLocal(old)
-    return writeFailed(err)
+    return restoreLocal(old) ? writeFailed(err) : { ok: false, reason: 'rollback-incomplete' }
   }
 }
 
 // === The move ===
-
-/** A write threw AND putting everything back did not fully work either: some store may hold half a promote. Distinct
- *  from `write-failed` on purpose — the user is told to reload and check (wizard-run.ts, a persistent notice). */
-type RollbackIncomplete = { ok: false; reason: 'rollback-incomplete' }
 
 export type PromoteResult =
   | { ok: true; demotedId: string }

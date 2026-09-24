@@ -233,7 +233,26 @@ describe('the order, and what a failure stops', () => {
       expect(attachMaster).not.toHaveBeenCalled()
     })
 
-    it('only for rollback-incomplete: a clean write-failed, or a refusal, raises no notice', async () => {
+    it('the copy kept (save) could not be fully undone: rollback-incomplete, the attach is not made, the persistent notice', async () => {
+    const real = Storage.prototype.setItem
+    let armed = true
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (armed && k === 'purdex-local-profiles') {
+        armed = false
+        throw new Error('quota') // the copy's add: memory set, storage refused
+      }
+      real.call(this, k, v)
+    })
+    vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+      throw new Error('restore failed') // and its rollback
+    })
+    const { result } = await run(plan({ saveAs: 'Kept' })) // the master chosen: the save is step 0
+    expect(result).toEqual({ done: false, failedAt: 0, reason: 'rollback-incomplete' })
+    expect(notice()).toBe(en['settings.profile.local.error.rollback_incomplete'])
+    expect(attachMaster).not.toHaveBeenCalled()
+  })
+
+  it('only for rollback-incomplete: a clean write-failed, or a refusal, raises no notice', async () => {
       vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
         throw new Error('stamp failed')
       })

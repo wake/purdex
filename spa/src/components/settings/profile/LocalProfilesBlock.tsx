@@ -12,6 +12,7 @@
 // `promoteToMaster` is not here: it is the wizard's third step (P3d-3), and refused while a master is attached.
 import { useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { useUndoToast } from '../../../stores/useUndoToast'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../../stores/useDeviceNameStore'
@@ -103,6 +104,13 @@ export function LocalProfilesBlock() {
     const kind = creating.kind
     const r: CopyResult = (NEW_KINDS.find((k) => k.kind === kind) ?? NEW_KINDS[0]).create(creating.name)
     if (r.ok) {
+      setCreating(null)
+      setCreateNote(null)
+      return
+    }
+    if (r.reason === 'rollback-incomplete') {
+      // Half a create may be left (the new workbench may be there): a notice that stays, and no form to press again.
+      useUndoToast.getState().show(t('settings.profile.local.error.rollback_incomplete'), undefined, undefined, { persistent: true })
       setCreating(null)
       setCreateNote(null)
       return
