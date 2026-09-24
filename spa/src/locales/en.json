@@ -803,6 +803,8 @@
   "hosts.transfer.confirm": "Apply",
   "hosts.transfer.stale": "The host list changed, check again.",
   "hosts.transfer.done": "Added {{added}}, updated {{updated}}.",
+  "hosts.transfer.looks_failed": "Hosts added; their names / colours from the code could not be saved.",
+  "hosts.transfer.looks_retry": "Retry saving",
   "hosts.transfer.error.capacity": "Too many open codes on {{relay}} — wait or use another relay.",
   "hosts.transfer.error.rate_limited": "Too many wrong codes on {{relay}} — try again in {{seconds}} s.",
   "hosts.transfer.error.rate_limited_later": "Too many wrong codes on {{relay}} — try again in a minute.",

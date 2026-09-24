@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { TransferChange } from '../lib/host-transfer-plan'
-import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch, selectDaemonIdVerified, requestAtOf } from './useHostStore'
+import {
+  useHostStore,
+  selectDevHostId,
+  findHostByEndpoint,
+  selectDaemonIdMismatch,
+  selectDaemonIdVerified,
+  requestAtOf,
+  applyTransferLooks,
+  lookKeyOf,
+  transferLookEntries,
+} from './useHostStore'
 import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
 import { hostLookOf } from '../lib/host-look'
 import { syncIdOfSync } from '../lib/profile/host-identity'
@@ -913,6 +923,9 @@ describe('applyHostTransfer (host transfer H4b, spec §6.4.5, plan R2/R4)', () =
     s.setDevHost(m)
   })
 
+  // Before the next test's reset(): a spy left on the look store's state would be copied into every later state.
+  afterEach(() => vi.restoreAllMocks())
+
   function change(over: Partial<TransferChange> = {}): TransferChange {
     return {
       create: [{ name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', look: { icon: 'Laptop', color: '#ff0000' } }],
@@ -940,33 +953,130 @@ describe('applyHostTransfer (host transfer H4b, spec §6.4.5, plan R2/R4)', () =
     expect(res.kind).toBe('applied')
   })
 
-  it('a created row carries the observed daemonId, is verified, and gets the look', () => {
+  it('a created row carries the observed daemonId, is verified; HostConfig gets the name only, the look store name + look', () => {
     const res = useHostStore.getState().applyHostTransfer(change({ overwrite: [] }))
     if (res.kind !== 'applied') throw new Error('not applied')
+    expect(res.looks).toBe('ok')
     const [id] = res.created
     const s = useHostStore.getState()
-    expect(s.hosts[id]).toMatchObject({
-      name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', icon: 'Laptop', color: '#ff0000', order: 2,
-    })
+    expect(s.hosts[id]).toEqual({ id, name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', order: 2 })
     expect(s.hostOrder).toEqual([defaultId, m, id])
     expect(selectDaemonIdVerified(s, id)).toBe(true)
+    expect(lookEntry(syncIdOfSync('d1_air'))).toEqual({ name: 'air26', icon: 'Laptop', color: '#ff0000' })
   })
 
-  it('an overwrite keeps the local id, replaces ip / port / token, writes name and look, and is verified at the new endpoint', () => {
+  it('the received entry key (syncIdOfSync(daemonId)) is the key the selector reads for that host afterwards', () => {
+    const res = useHostStore.getState().applyHostTransfer(change())
+    if (res.kind !== 'applied') throw new Error('not applied')
+    const { hosts } = useHostStore.getState()
+    const looks = useHostLookStore.getState().looks
+    expect(lookKeyOf(hosts[res.created[0]], looks)).toBe(syncIdOfSync('d1_air'))
+    expect(lookKeyOf(hosts[m], looks)).toBe(syncIdOfSync('d1_m'))
+    expect(hostLookOf(res.created[0])).toEqual({ name: 'air26', icon: 'Laptop', color: '#ff0000' })
+    expect(hostLookOf(m)).toEqual({ name: 'mm', icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } })
+  })
+
+  it('an overwrite keeps the local id, replaces name / ip / port / token, leaves the HostConfig look fields, and is verified at the new endpoint', () => {
+    useHostStore.setState((st) => ({ hosts: { ...st.hosts, [m]: { ...st.hosts[m], icon: 'Cpu' } } }))
     useHostStore.getState().applyHostTransfer(change({ create: [] }))
     const s = useHostStore.getState()
-    expect(s.hosts[m]).toMatchObject({
-      id: m,
-      name: 'mm',
-      ip: '2.2.2.2',
-      port: 7860,
-      token: 'new',
-      daemonId: 'd1_m',
-      icon: 'Desktop',
-      colors: { console: { main: { color: '#00ff00', alpha: 80 } } },
-    })
+    expect(s.hosts[m]).toEqual({ id: m, name: 'mm', ip: '2.2.2.2', port: 7860, token: 'new', daemonId: 'd1_m', order: 1, icon: 'Cpu' })
     expect(s.hostOrder).toEqual([defaultId, m])
     expect(selectDaemonIdVerified(s, m)).toBe(true)
+    // no entry before → the received look is written
+    expect(lookEntry(syncIdOfSync('d1_m'))).toEqual({ name: 'mm', icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } })
+  })
+
+  it('transferLookEntries: one entry per created / overwritten row under syncIdOfSync(daemonId), { name, ...look }; pure', () => {
+    const c = change()
+    expect(transferLookEntries(c)).toEqual({
+      [syncIdOfSync('d1_air')]: { name: 'air26', icon: 'Laptop', color: '#ff0000' },
+      [syncIdOfSync('d1_m')]: { name: 'mm', icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } },
+    })
+    expect(c).toEqual(change())
+    expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  it('a row without a look still gives the entry its name', () => {
+    const [c] = change().create
+    useHostStore.getState().applyHostTransfer({ create: [{ ...c, look: undefined }], overwrite: [] })
+    expect(lookEntry(syncIdOfSync('d1_air'))).toEqual({ name: 'air26' })
+  })
+
+  it('an existing d1_ entry is never changed by a received look (the workbench wins); HostConfig.name is still replaced', () => {
+    const mine = { name: 'mine', icon: 'Cpu' }
+    useHostLookStore.setState({ looks: { [syncIdOfSync('d1_m')]: mine } })
+    const res = useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    expect(res).toMatchObject({ kind: 'applied', looks: 'ok' })
+    expect(useHostLookStore.getState().looks).toEqual({ [syncIdOfSync('d1_m')]: mine })
+    expect(useHostStore.getState().hosts[m].name).toBe('mm')
+    expect(hostLookOf(m)).toEqual(mine)
+  })
+
+  it('a local-id entry still awaiting the re-key is the look: no d1_ entry is written over it', () => {
+    useHostLookStore.setState({ looks: { [m]: { name: 'mine-local' } } })
+    useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    expect(useHostLookStore.getState().looks).toEqual({ [m]: { name: 'mine-local' } })
+    expect(hostLookOf(m).name).toBe('mine-local')
+  })
+
+  it('a stale step 1 never runs step 2: host store and look store untouched', () => {
+    useHostStore.getState().removeHost(m)
+    const put = vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent')
+    const looksBefore = useHostLookStore.getState().looks
+    expect(useHostStore.getState().applyHostTransfer(change())).toEqual({ kind: 'stale' })
+    expect(put).not.toHaveBeenCalled()
+    expect(useHostLookStore.getState().looks).toBe(looksBefore)
+  })
+
+  it('a throw in step 1 is stale and never runs step 2', () => {
+    const before = useHostStore.getState().hosts
+    const put = vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent')
+    const boom = { ...change().create[0], get ip(): string { throw new Error('boom') } }
+    expect(useHostStore.getState().applyHostTransfer({ create: [boom], overwrite: [] })).toEqual({ kind: 'stale' })
+    expect(useHostStore.getState().hosts).toBe(before)
+    expect(put).not.toHaveBeenCalled()
+    expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  describe('step 2 fails (plan §0.20)', () => {
+    it('the hosts are committed as on success, the look store is unchanged, looks: failed; the Retry writes the entries', () => {
+      vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent').mockImplementation(() => {
+        throw new Error('quota')
+      })
+      const looksBefore = useHostLookStore.getState().looks
+      const seen = vi.fn()
+      const unsub = useHostLookStore.subscribe(seen)
+      const res = useHostStore.getState().applyHostTransfer(change())
+      unsub()
+      if (res.kind !== 'applied') throw new Error('not applied')
+      expect(res.looks).toBe('failed')
+      expect(res.overwritten).toEqual([m])
+      const s = useHostStore.getState()
+      expect(s.hosts[res.created[0]]).toEqual({ id: res.created[0], name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', order: 2 })
+      expect(s.hosts[m]).toMatchObject({ name: 'mm', ip: '2.2.2.2', token: 'new' })
+      expect(selectDaemonIdVerified(s, res.created[0])).toBe(true)
+      expect(useHostLookStore.getState().looks).toBe(looksBefore)
+      expect(seen).not.toHaveBeenCalled()
+
+      vi.restoreAllMocks()
+      expect(applyTransferLooks(transferLookEntries(change()))).toBe('ok')
+      expect(lookEntry(syncIdOfSync('d1_air'))).toEqual({ name: 'air26', icon: 'Laptop', color: '#ff0000' })
+      expect(lookEntry(syncIdOfSync('d1_m'))).toMatchObject({ name: 'mm', icon: 'Desktop' })
+    })
+
+    it('a Retry after another device’s look arrived for that key leaves it untouched', () => {
+      vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent').mockImplementation(() => {
+        throw new Error('quota')
+      })
+      useHostStore.getState().applyHostTransfer(change())
+      vi.restoreAllMocks()
+      const synced = { name: 'from-another-device' }
+      useHostLookStore.setState({ looks: { [syncIdOfSync('d1_air')]: synced } })
+      expect(applyTransferLooks(transferLookEntries(change()))).toBe('ok')
+      expect(lookEntry(syncIdOfSync('d1_air'))).toBe(synced)
+      expect(lookEntry(syncIdOfSync('d1_m'))).toMatchObject({ name: 'mm' })
+    })
   })
 
   it('an overwrite to a new endpoint starts the runtime over: nothing of the old connection, only daemonIdVerified', () => {
@@ -995,7 +1105,9 @@ describe('applyHostTransfer (host transfer H4b, spec §6.4.5, plan R2/R4)', () =
     const res = useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ ...o, ip: '1.1.1.1', port: 1, token: 'old' }] })
     expect(res.kind).toBe('applied')
     const s = useHostStore.getState()
-    expect(s.hosts[m]).toMatchObject({ name: 'mm', icon: 'Desktop' })
+    expect(s.hosts[m]).toMatchObject({ name: 'mm' })
+    expect(s.hosts[m].icon).toBeUndefined()
+    expect(lookEntry(syncIdOfSync('d1_m'))).toMatchObject({ name: 'mm', icon: 'Desktop' })
     expect(s.runtime[m]).toEqual(before)
     expect(s.runtime[m]).toMatchObject({ status: 'connected', attachReady: true, latency: 12 })
   })

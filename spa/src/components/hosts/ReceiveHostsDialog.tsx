@@ -3,7 +3,7 @@
 // Nothing is written before the confirm. Replace-all is shown disabled (plan R1, issue #1395).
 import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, X } from '@phosphor-icons/react'
-import { useHostStore, type HostConfig } from '../../stores/useHostStore'
+import { applyTransferLooks, transferLookEntries, useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { fetchInfoAt } from '../../lib/host-api'
 import { hostLabel, useHostLookResolver } from '../../lib/host-look'
@@ -16,6 +16,7 @@ import {
   type Observation,
   type ReceiveMode,
   type ReceiveStatus,
+  type TransferChange,
 } from '../../lib/host-transfer-plan'
 
 interface Props {
@@ -27,7 +28,7 @@ type Phase =
   | { kind: 'redeeming' }
   | { kind: 'failed'; failure: TransferFailure; relayName: string }
   | { kind: 'review' }
-  | { kind: 'done'; added: number; updated: number }
+  | { kind: 'done'; added: number; updated: number; looks: 'ok' | 'failed'; change: TransferChange }
 
 const STATUS_KEY: Record<ReceiveStatus, string> = {
   new: 'hosts.transfer.status.new',
@@ -133,7 +134,13 @@ export function ReceiveHostsDialog({ onClose }: Props) {
       setStale(true)
       return
     }
-    setPhase({ kind: 'done', added: res.created.length, updated: res.overwritten.length })
+    setPhase({ kind: 'done', added: res.created.length, updated: res.overwritten.length, looks: res.looks, change })
+  }
+
+  // Step 2 alone (plan §0.20): skip-if-present, so a retry never overwrites a look that arrived meanwhile.
+  const handleRetryLooks = () => {
+    if (phase.kind !== 'done') return
+    if (applyTransferLooks(transferLookEntries(phase.change)) === 'ok') setPhase({ ...phase, looks: 'ok' })
   }
 
   return (
@@ -148,7 +155,17 @@ export function ReceiveHostsDialog({ onClose }: Props) {
 
         <div className="p-4 space-y-3">
           {phase.kind === 'done' ? (
-            <p className="text-sm text-green-400">{t('hosts.transfer.done', { added: phase.added, updated: phase.updated })}</p>
+            <>
+              <p className="text-sm text-green-400">{t('hosts.transfer.done', { added: phase.added, updated: phase.updated })}</p>
+              {phase.looks === 'failed' && (
+                <div role="alert" className="flex items-center gap-2 text-xs text-yellow-400">
+                  <span>{t('hosts.transfer.looks_failed')}</span>
+                  <button onClick={handleRetryLooks} className="text-accent cursor-pointer">
+                    {t('hosts.transfer.looks_retry')}
+                  </button>
+                </div>
+              )}
+            </>
           ) : phase.kind === 'review' ? (
             <>
               {dropped > 0 && <p className="text-xs text-yellow-400">{t('hosts.transfer.dropped', { count: dropped })}</p>}

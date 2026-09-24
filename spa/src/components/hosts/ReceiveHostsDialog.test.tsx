@@ -3,6 +3,11 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as hostApi from '../../lib/host-api'
 import * as transferApi from '../../lib/host-transfer-api'
 import { useHostStore, type HostInfo } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { syncIdOfSync } from '../../lib/profile/host-identity'
+import en from '../../locales/en.json'
+import zhTW from '../../locales/zh-TW.json'
 import { ReceiveHostsDialog } from './ReceiveHostsDialog'
 
 function info(hostId: string): HostInfo {
@@ -27,6 +32,8 @@ const realApply = useHostStore.getState().applyHostTransfer
 
 beforeEach(() => {
   cleanup()
+  useI18nStore.getState().setLocale('en')
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     applyHostTransfer: realApply,
     hosts: {
@@ -167,5 +174,42 @@ describe('ReceiveHostsDialog', () => {
     const added = Object.values(s.hosts).find((h) => h.name === 'air26')
     expect(added).toMatchObject({ ip: '100.64.0.4', token: 'tok-air', daemonId: 'd1_air' })
     expect(s.hosts.m.token).toBe('local-m-tok')
+  })
+
+  describe('the received look goes to the look store (H2c-3 T2)', () => {
+    const AIR_KEY = syncIdOfSync('d1_air')
+
+    async function confirmAir() {
+      vi.spyOn(transferApi, 'redeemTransfer').mockResolvedValue({ kind: 'ok', hosts: [{ ...PAYLOAD[0], look: { icon: 'Laptop' } }] })
+      await redeem()
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    }
+
+    it('confirm → the look store holds the entry; HostConfig holds the name only', async () => {
+      await confirmAir()
+      expect(useHostLookStore.getState().looks[AIR_KEY]).toEqual({ name: 'air26', icon: 'Laptop' })
+      const added = Object.values(useHostStore.getState().hosts).find((h) => h.daemonId === 'd1_air')
+      expect(added?.name).toBe('air26')
+      expect(added?.icon).toBeUndefined()
+      expect(screen.queryByText(en['hosts.transfer.looks_failed'])).toBeNull()
+    })
+
+    it.each([
+      ['en', en],
+      ['zh-TW', zhTW],
+    ] as const)('step 2 failing (%s) → the notice and a Retry that writes the entry and removes the notice', async (locale, dict) => {
+      vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent').mockImplementationOnce(() => {
+        throw new Error('quota')
+      })
+      await confirmAir()
+      act(() => useI18nStore.getState().setLocale(locale))
+      expect(screen.getByText(dict['hosts.transfer.looks_failed'])).toBeTruthy()
+      expect(Object.values(useHostStore.getState().hosts).some((h) => h.daemonId === 'd1_air')).toBe(true)
+      expect(Object.hasOwn(useHostLookStore.getState().looks, AIR_KEY)).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: dict['hosts.transfer.looks_retry'] }))
+      expect(useHostLookStore.getState().looks[AIR_KEY]).toEqual({ name: 'air26', icon: 'Laptop' })
+      expect(screen.queryByText(dict['hosts.transfer.looks_failed'])).toBeNull()
+      expect(screen.queryByRole('button', { name: dict['hosts.transfer.looks_retry'] })).toBeNull()
+    })
   })
 })
