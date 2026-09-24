@@ -141,7 +141,7 @@ describe('hidden ≠ absent — fallbacks and direct navigation (H2d-5 T3)', () 
       const inapp = { onMutation: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb) } }
       clearFsBackendRegistry()
       registerFsBackend('inapp', inapp as unknown as FsBackend)
-      const backupNow = vi.fn(async () => null)
+      const backupNow = vi.fn(async (_hostId: string) => null)
       useBackupStore.setState({ backupNow } as never)
       const trigger = startBackupAutoTrigger()
       listeners.forEach((cb) => cb())
