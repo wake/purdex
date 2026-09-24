@@ -71,8 +71,12 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     ...settingsPaths('purdex-newtab-layout', ['presets']),
     // The only field taken from useLayoutStore; the rest of it is device-local.
     ...settingsPaths('purdex-layout', ['tabPosition']),
-    // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — eight
-    // stores, not ten. useModuleEnabledStore
+    // Host looks (host ownership H2c, spec §4.1): the whole record. Its keys are WIRE ids in the store itself, so
+    // the builder and the applier pass them through verbatim — no local↔wire mapping (unlike host-settings keys);
+    // the entries are sanitised by the store's `merge`. NOT `purdex-host-looks-migrated` (a device-local marker).
+    ...settingsPaths('purdex-host-looks', ['looks']),
+    // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — nine
+    // stores, not eleven. useModuleEnabledStore
     // says so itself: toggling a module on or off "is a device-local preference
     // (a host with limited resources can turn off modules it doesn't want to
     // run), not a config to sync between devices". P2a listed `.enabled` here;
@@ -104,7 +108,8 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   // 2: `purdex-module-enabled.enabled` removed; 3: `purdex-editor-settings.*` removed (both device-local, see PROJECTIONS.settings);
   // 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`);
   // 5: host ids in `purdex-host-settings.hosts` keys and `sessions:` / `headless:` preset columns are WIRE ids (host-sync-identity)
-  settings: 5,
+  // 6: purdex-host-looks.looks (host looks keyed by wire id; host ownership H2c)
+  settings: 6,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.
@@ -164,12 +169,14 @@ export async function fingerprintOf(paths: readonly string[]): Promise<string> {
  * tabs-local-only: `tabs.*` no longer holds the interface-only tabs of its workspace — same paths, new meaning.
  * agent-last-state: `tabs.*.layout` rebuild records carry the agent run's frame id and its exit (`agentExited`) — an
  * older client would drop both on its next write, so it must see the tabs shape as newer and lock.
+ * host ownership H2c: `settings` carries the workbench's host looks keyed by wire id (spec §4.1) — an older client
+ * must see `settings` as newer and lock the whole profile (decision 7), so the arrival brings a marker of its own.
  * A marker is only ever ADDED with an ordinal bump (the guard test's snapshot enforces it).
  */
 export const WIRE_MARKERS: Record<SectionKind, readonly string[]> = {
   hosts: ['@wire:host-id=d1'],
   tabs: ['@wire:host-id=d1', '@tabs:device-local=v1', '@wire:rebuild-agent-state=1'],
-  settings: ['@wire:host-id=d1'],
+  settings: ['@wire:host-id=d1', '@wire:host-look=1'],
   workspaces: [],
 }
 

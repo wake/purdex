@@ -16,6 +16,12 @@ export const STORAGE_KEYS = {
   BROWSER_HISTORY: 'purdex-browser-history',
   LAYOUT: 'purdex-layout',
   NEW_TAB_LAYOUT: 'purdex-newtab-layout',
+  /** 工作台的主機外觀（useHostLookStore，host ownership H2c）：`{ looks: { [wireId]: { name?, colors?, color?, icon?, iconWeight? } } }`，
+   *  key 是 wire id；投影進 `settings`（PROJECTIONS.settings），走 syncManager */
+  HOST_LOOKS: 'purdex-host-looks',
+  /** 手動管理（非 Zustand store）：主機外觀首次遷移（HostConfig → HOST_LOOKS）已跑過的標記，值是 `'1'`；
+   *  device-local、**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、刻意不註冊 syncManager、直接操作 localStorage（讀寫皆 try/catch） */
+  HOST_LOOKS_MIGRATED: 'purdex-host-looks-migrated',
   /** 手動管理（非 Zustand store），直接操作 localStorage，不走 browserStorage/syncManager */
   NOTIFICATION_SEEN: 'purdex-notification-seen',
   MODULE_CONFIG: 'purdex-module-config',
