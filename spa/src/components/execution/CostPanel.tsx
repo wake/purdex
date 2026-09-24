@@ -15,6 +15,7 @@ import { fetchNexHost } from '../../lib/nex/nex-api'
 import type { NexHostInfo } from '../../lib/nex/types'
 import { formatTokens, formatUsd } from '../../lib/nex/format-cost'
 import { formatDuration } from '../../lib/nex/format-duration'
+import { maskAccount } from '../../lib/nex/mask-account'
 
 export interface CostPanelProps {
   summary: CostSummary
@@ -176,7 +177,7 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostP
 
         {host && quota && (
           <div data-testid="cost-quota" className="flex items-baseline gap-2 tabular-nums">
-            <span className="text-text-muted truncate">{t('execution.cost.quota', { account: host.active_account })}</span>
+            <span className="text-text-muted truncate">{t('execution.cost.quota', { account: maskAccount(host.active_account) })}</span>
             <span className="flex-1" />
             <span className="whitespace-nowrap">
               5h {quota.five_hour_pct}% · 7d {quota.seven_day_pct}% · {quota.source}
