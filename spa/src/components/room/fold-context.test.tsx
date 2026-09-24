@@ -1,8 +1,15 @@
 // spa/src/components/room/fold-context.test.tsx
 import { useEffect, type ReactNode } from 'react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { act, render, renderHook, screen, fireEvent } from '@testing-library/react'
-import { FoldContext, TurnIndexContext, useFold, useFoldMemory, type FoldStore } from './fold-context'
+import {
+  FoldContext,
+  TurnIndexContext,
+  useFold,
+  useFoldMemory,
+  useFoldStore,
+  type FoldStore,
+} from './fold-context'
 
 /** A leaf that registers itself with the surrounding turn, like a real fold. */
 function Foldable({ foldKey }: { foldKey: string }) {
@@ -36,6 +43,20 @@ function Turn({
 }
 
 describe('fold memory', () => {
+  it('throws outside a provider', () => {
+    // A block that reads the store without a provider above it has no pane
+    // memory: it would silently fall back to collapsing forever. That has to
+    // be a crash at the first render, not a quiet loss of state.
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(() => renderHook(() => useFoldStore())).toThrow(
+        /useFoldStore must be used inside a FoldContext\.Provider/,
+      )
+    } finally {
+      quiet.mockRestore()
+    }
+  })
+
   it('defaults to collapsed', () => {
     const { result } = renderHook(() => useFoldMemory())
     expect(result.current.isExpanded('op-1')).toBe(false)
@@ -50,23 +71,22 @@ describe('fold memory', () => {
     expect(result.current.isExpanded('op-1')).toBe(false)
   })
 
-  it('setTurn expands every key registered in that turn in one update', () => {
-    let renders = 0
-    const { result } = renderHook(() => {
-      renders += 1
-      return useFoldMemory()
-    })
+  // No render-count assertion here: React 19 batches the updates inside one
+  // `act`, so a per-key `setExpanded` loop renders once too. Measured — the
+  // assertion this test used to carry passed against that mutation, so it
+  // guaranteed nothing. What is worth asserting is the outcome: every key of
+  // the turn moves.
+  it('setTurn expands every key registered in that turn', () => {
+    const { result } = renderHook(() => useFoldMemory())
     act(() => {
       result.current.register(0, 'op-1')
       result.current.register(0, 'op-2')
       result.current.register(0, 'op-3')
     })
-    const before = renders
     act(() => result.current.setTurn(0, true))
     expect(result.current.isExpanded('op-1')).toBe(true)
     expect(result.current.isExpanded('op-2')).toBe(true)
     expect(result.current.isExpanded('op-3')).toBe(true)
-    expect(renders - before).toBe(1)
   })
 
   it('setTurn leaves another turn alone', () => {
