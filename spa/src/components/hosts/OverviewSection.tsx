@@ -38,7 +38,6 @@ export function OverviewSection({ hostId }: Props) {
   const [testResult, setTestResult] = useState<{ ok: boolean; latency?: number; error?: string } | null>(null)
   const [testing, setTesting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [closeTabs, setCloseTabs] = useState(true)
   const [colorMode, setColorMode] = useState<HostColorMode>('console')
 
   const prevStatusRef = useRef(runtime?.status)
@@ -222,15 +221,7 @@ export function OverviewSection({ hostId }: Props) {
         {confirmDelete && (
           <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded">
             <p className="text-xs text-red-400 mb-2">{t('hosts.confirm_delete')}</p>
-            <label className="flex items-center gap-2 text-xs text-zinc-400 mb-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={closeTabs}
-                onChange={(e) => setCloseTabs(e.target.checked)}
-                className="rounded"
-              />
-              {t('hosts.confirm_delete_tabs')}
-            </label>
+            <p className="text-xs text-zinc-400 mb-3">{t('hosts.delete_keeps_tabs')}</p>
             <div className="flex gap-2">
               <button
                 onClick={handleDeleteHost}
