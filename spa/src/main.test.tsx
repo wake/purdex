@@ -35,4 +35,65 @@ describe('boot', () => {
     await import('./main')
     expect(scheduleLegacyResidueCleanup).toHaveBeenCalledTimes(1)
   })
+
+  // H2c-2 (plan §0.16): the host-look migration runs after BOTH the host store and the look store hydrated, and
+  // Profile Sync starts only after it — the collector exists only inside `startProfileSync`, so no `settings` build
+  // or report can precede the migration.
+  it('starts Profile Sync only after both stores hydrated and the host-look migration ran', async () => {
+    vi.resetModules()
+    const { useHostStore } = await import('./stores/useHostStore')
+    const { useHostLookStore } = await import('./stores/useHostLookStore')
+    const { STORAGE_KEYS } = await import('./lib/storage')
+    const { startProfileSync } = await import('./lib/profile/start')
+    localStorage.removeItem(STORAGE_KEYS.HOST_LOOKS_MIGRATED)
+    vi.mocked(startProfileSync).mockClear() // the mock outlives `resetModules`: the earlier boots called it
+
+    // Hold both hydrations back: not hydrated, and every `onFinishHydration` listener captured for the test to fire.
+    interface Held {
+      getState: () => unknown
+      persist: { hasHydrated: () => boolean; onFinishHydration: (fn: (state: never) => void) => () => void }
+    }
+    function holdHydration(store: Held) {
+      let hydrated = false
+      const listeners: ((state: never) => void)[] = []
+      vi.spyOn(store.persist, 'hasHydrated').mockImplementation(() => hydrated)
+      vi.spyOn(store.persist, 'onFinishHydration').mockImplementation((fn: (state: never) => void) => {
+        listeners.push(fn)
+        return () => {}
+      })
+      return () => {
+        hydrated = true
+        for (const fn of listeners) fn(store.getState() as never)
+      }
+    }
+    const hydrateHosts = holdHydration(useHostStore as unknown as Held)
+    const hydrateLooks = holdHydration(useHostLookStore as unknown as Held)
+
+    const order: string[] = []
+    const lookWrites = vi.fn(() => order.push('migration'))
+    useHostLookStore.subscribe(lookWrites)
+    vi.mocked(startProfileSync).mockImplementation(() => {
+      order.push(`startProfileSync (marker ${localStorage.getItem(STORAGE_KEYS.HOST_LOOKS_MIGRATED)})`)
+      return () => {}
+    })
+    const flush = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+    }
+
+    await import('./main')
+    await flush()
+    expect(startProfileSync).not.toHaveBeenCalled()
+    expect(lookWrites).not.toHaveBeenCalled()
+    expect(localStorage.getItem(STORAGE_KEYS.HOST_LOOKS_MIGRATED)).toBeNull()
+
+    hydrateHosts()
+    await flush()
+    expect(startProfileSync).not.toHaveBeenCalled()
+    expect(lookWrites).not.toHaveBeenCalled()
+
+    hydrateLooks()
+    await flush()
+    expect(startProfileSync).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['migration', 'startProfileSync (marker 1)'])
+  })
 })

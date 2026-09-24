@@ -14,6 +14,7 @@ import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { startProfileSync } from './lib/profile/start'
+import { bootHostLooks } from './lib/host-look-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { getActiveSessionInfo } from './lib/active-session'
@@ -52,7 +53,10 @@ startNexHostInvalidation()
 // Execution lists: open/close a host's site-wide stream on nex readiness, drop its rows on identity change.
 startExecutionListInvalidation()
 // Profile Sync: with no master set this is one subscription to useProfileStore and nothing else (app lifetime).
-startProfileSync()
+// It starts behind the host-look gate (plan §0.16): after the host and look stores hydrated and the first-run look
+// migration returned — the collector exists only inside it, so no `settings` build precedes the migration. With
+// synchronous localStorage this is a microtask. `bootHostLooks` never rejects.
+void bootHostLooks().then(() => startProfileSync())
 // Every tab belongs to exactly one workspace: a tab found in none is moved into `Unsorted`, one found in two keeps
 // the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
 // runs with no master, too.

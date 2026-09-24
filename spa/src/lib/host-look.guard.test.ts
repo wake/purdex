@@ -58,9 +58,10 @@
 // file, so one PR can widen both. What it buys is that any widening is an
 // explicit, reviewable diff to this file. Permanently only `stores/useHostStore.ts`,
 // `lib/host-color.ts` and `lib/host-look.ts` may appear (the spec §4.2
-// exception); every other allowlisted file is TEMPORARY, named in
+// exception), plus `lib/host-look-migration.ts` (spec §4.4: the first-run
+// migration reads `HostConfig` looks as a source; H2c-2); every other allowlisted file is TEMPORARY, named in
 // `TEMPORARY_FILES` with the PR that removes it, and a test asserts the
-// allowlisted files are a subset of those three plus exactly that list.
+// allowlisted files are a subset of those four plus exactly that list.
 // H2a checked the colour / icon fields; H2b-1 adds `name`; H2b-2 moves the
 // last name surfaces onto the selector (only the share payload stays, until H2c-3).
 import { describe, expect, it } from 'vitest'
@@ -661,6 +662,10 @@ export const ALLOWLIST: Allowlist = {
   'lib/host-look.ts': {
     lookOfHost: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
   },
+  // the first-run migration: `HostConfig` look as a SOURCE (spec §4.4) — its one destructure (H2c-2 T3)
+  'lib/host-look-migration.ts': {
+    lookOfConfig: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
+  },
 
   // --- TEMPORARY (see `TEMPORARY_FILES`) ---
 
@@ -670,8 +675,11 @@ export const ALLOWLIST: Allowlist = {
   },
 }
 
-/** The spec §4.2 exception: the only files the allowlist may name for good. */
-const PERMANENT_FILES = ['stores/useHostStore.ts', 'lib/host-color.ts', 'lib/host-look.ts']
+/**
+ * The spec §4.2 exception — plus the first-run migration, which spec §4.4 names as the one other SOURCE reader of
+ * `HostConfig` looks (H2c-2): the only files the allowlist may name for good.
+ */
+const PERMANENT_FILES = ['stores/useHostStore.ts', 'lib/host-color.ts', 'lib/host-look.ts', 'lib/host-look-migration.ts']
 
 /**
  * Every other file the allowlist may name, and the PR that takes it out. Each
@@ -698,6 +706,9 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
       'lib/host-look.ts': {
         lookOfHost: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
       },
+      'lib/host-look-migration.ts': {
+        lookOfConfig: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
+      },
       'lib/host-transfer-plan.ts': { 'payloadRowsOf.name': { name: 1 } },
     })
   })
@@ -708,7 +719,7 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
     })
   })
 
-  it('outside the spec §4.2 three, the allowlisted files are exactly the temporary list', () => {
+  it('outside the permanent four (spec §4.2 three + the §4.4 migration), the allowlisted files are exactly the temporary list', () => {
     const others = Object.keys(ALLOWLIST).filter((f) => !PERMANENT_FILES.includes(f))
     expect(others.sort()).toEqual(Object.keys(TEMPORARY_FILES).sort())
   })
