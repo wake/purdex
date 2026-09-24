@@ -105,7 +105,11 @@ beforeEach(() => {
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
   useHostSettingsStore.setState({ hosts: {} })
-  useHostLookStore.setState({ looks: { [W]: { name: 'air26' }, [M]: { name: 'mlab' } } })
+  // Both hosts have a daemonId, so their looks live under their wire ids — the shape the re-resolve pass keeps
+  // (H2c-2: a local-id entry of a host with a known daemonId is moved to its `d1_…` key by the next pass, which the
+  // undo's host write triggers; an `M`-keyed entry here would move and change `settings` for a reason unrelated to
+  // the deletion).
+  useHostLookStore.setState({ looks: { [W]: { name: 'air26' }, [syncIdOfSync(MLAB)]: { name: 'mlab' } } })
 })
 
 afterEach(() => {

@@ -8,6 +8,7 @@ import type { ParkedWorld } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
+import { useHostLookStore } from '../stores/useHostLookStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { __resetMasterWorldForTest } from './profile/master-world'
 import { syncIdOfSync } from './profile/host-identity'
@@ -24,6 +25,7 @@ import {
   runHostReresolve,
   startHostReresolve,
 } from './host-reresolve'
+import { hostLookOf } from './host-look'
 
 const DAEMON = 'air-lab:26aaaa'
 const WIRE = syncIdOfSync(DAEMON)
@@ -91,6 +93,7 @@ beforeEach(() => {
   __resetMasterWorldForTest()
   __resetHostReresolveForTest()
   useRebuildStore.setState({ lockedBy: null, lockGrant: null })
+  useHostLookStore.setState({ looks: {} })
   seed()
 })
 
@@ -194,6 +197,110 @@ describe('runHostReresolve', () => {
     expect(again.profiles).toBe(after.profiles)
     expect(again.hostSettings).toBe(after.hostSettings)
     expect(again.newtab).toBe(after.newtab)
+  })
+})
+
+// H2c-2 T5 (spec §4.3, plan §0.11 / §0.12): the look store is keyed by WIRE id, so the pass moves a look the other
+// way from its map — local id → `d1_…` once the host's daemonId is known — as its own step after the ref rewrite.
+describe('the look re-key (H2c-2)', () => {
+  it('a local-id entry moves to the d1_ key of the host whose daemonId is known', () => {
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'air26', icon: 'Cloud' } } })
+    expect(runHostReresolve()).toBe('done')
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'air26', icon: 'Cloud' } })
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.HOST_LOOKS)!).state.looks).toEqual({ [WIRE]: { name: 'air26', icon: 'Cloud' } })
+  })
+
+  it('an existing d1_ entry wins; the local-id entry is dropped', () => {
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'local' }, [WIRE]: { name: 'workbench' } } })
+    runHostReresolve()
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'workbench' } })
+  })
+
+  it('a host without a daemonId keeps its local-id entry; an unknown key is untouched', () => {
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }), plain: host('plain') }, hostOrder: [LOCAL, 'plain'] })
+    useHostLookStore.setState({ looks: { plain: { name: 'P' }, [UNKNOWN]: { name: 'U' } } })
+    const looks = useHostLookStore.getState().looks
+    runHostReresolve()
+    expect(useHostLookStore.getState().looks).toBe(looks)
+  })
+
+  it('under an identity conflict nothing moves', () => {
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }), dup: host('dup', { daemonId: DAEMON }) }, hostOrder: [LOCAL, 'dup'] })
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'local' }, dup: { name: 'dup' } } })
+    const looks = useHostLookStore.getState().looks
+    expect(runHostReresolve()).toBe('conflict')
+    expect(useHostLookStore.getState().looks).toBe(looks)
+  })
+
+  it('the ref map never moves a look: a d1_ key whose refs the pass rewrites to the local id stays a d1_ key', () => {
+    // The map sends WIRE → LOCAL (every ref above moves); a look keyed by WIRE must not follow it — the deletion
+    // direction (local → wire, H1c) reuses the map rewrite and must touch no look (decision 9).
+    useHostLookStore.setState({ looks: { [WIRE]: { name: 'workbench' } } })
+    const looks = useHostLookStore.getState().looks
+    runHostReresolve()
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+    expect(useHostLookStore.getState().looks).toBe(looks)
+  })
+
+  it('takes the operation lock for the look move alone (it is a write like any other)', () => {
+    runHostReresolve() // every ref moved: nothing else to write
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'x' } } })
+    const seen: (string | null)[] = []
+    const unsub = useRebuildStore.subscribe((st) => seen.push(st.lockedBy))
+    runHostReresolve()
+    unsub()
+    expect(seen).toContain(HOST_RERESOLVE_LOCK_OWNER)
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'x' } })
+  })
+
+  it('the lock held elsewhere → busy, no look moved', () => {
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'x' } } })
+    const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+    expect(runHostReresolve()).toBe('busy')
+    expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'x' } })
+    useRebuildStore.getState().releaseOperationLock(grant)
+  })
+
+  it('idempotent: a second run writes nothing', () => {
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'x' } } })
+    runHostReresolve()
+    const looks = useHostLookStore.getState().looks
+    const writes = vi.fn()
+    const unsub = useHostLookStore.subscribe(writes)
+    runHostReresolve()
+    unsub()
+    expect(writes).not.toHaveBeenCalled()
+    expect(useHostLookStore.getState().looks).toBe(looks)
+  })
+
+  it('a look another window wrote under the local id (storage only) still moves: the store is re-read first', () => {
+    useHostLookStore.setState({ looks: {} })
+    localStorage.setItem(STORAGE_KEYS.HOST_LOOKS, JSON.stringify({ state: { looks: { [LOCAL]: { name: 'elsewhere' } } }, version: 1 }))
+    runHostReresolve()
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'elsewhere' } })
+  })
+
+  it('a failed look write puts every store back (all or nothing); the retry lands', () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'x' } } })
+    const tabs = useTabStore.getState().tabs
+    const real = Storage.prototype.setItem
+    let left = 1
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.HOST_LOOKS && left > 0) {
+        left--
+        throw new DOMException('quota', 'QuotaExceededError')
+      }
+      real.call(this, k, v)
+    })
+    requestHostReresolve()
+    expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'x' } })
+    expect(useTabStore.getState().tabs).toEqual(tabs)
+    vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'x' } })
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+    vi.restoreAllMocks()
   })
 })
 
@@ -499,6 +606,89 @@ describe('startHostReresolve (the triggers)', () => {
     expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
   })
 
+  it('learning a daemonId moves the host\'s local-id look to its d1_ key (H2c-2)', () => {
+    addHostX({ daemonId: undefined })
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'air26' } } })
+    stop = startHostReresolve()
+    expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'air26' } })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'air26' } })
+  })
+
+  it('waits for the look store: nothing runs while purdex-host-looks has not hydrated, then it does (H2c-2)', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useHostLookStore.persist, 'hasHydrated').mockReturnValue(false)
+    vi.spyOn(useHostLookStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useHostLookStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    expect(runs).toBe(0)
+    hydrated.mockReturnValue(true)
+    finish?.()
+    expect(runs).toBe(1)
+  })
+
+  it('the look store hydrating AFTER the first pass with a local-id key ends on the d1_ key (H2c-2)', () => {
+    let finish: (() => void) | undefined
+    vi.spyOn(useHostLookStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useHostLookStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'late' } } }) // another window's write landed
+    finish?.()
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'late' } })
+  })
+
+  // Codex critic review-mufd6v5g-2gh633: the pass that moves looks[localId] → looks[d1_] can be delayed after the
+  // daemonId is learned. In that window the UI shows the local-id entry and an edit lands there; the pass then moves
+  // it — the edit included — and nothing is lost.
+  describe('a look edited before the delayed re-key is kept (H2c-2)', () => {
+    const RED = { console: { main: { color: '#ef4444', alpha: 60 } } }
+    const learn = () => useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
+
+    it('the operation lock held elsewhere: the UI keeps the local look, the edit lands in it, the pass moves it intact', () => {
+      vi.useFakeTimers()
+      addHostX({ daemonId: undefined })
+      useHostLookStore.setState({ looks: { [LOCAL]: { name: 'L', colors: RED, icon: 'Cloud' } } })
+      stop = startHostReresolve()
+      const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+      learn()
+      expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'L', colors: RED, icon: 'Cloud' } }) // busy
+      expect(hostLookOf(LOCAL)).toEqual({ name: 'L', colors: RED, icon: 'Cloud' })
+      useHostStore.getState().setHostColor(LOCAL, '#3b82f6')
+      const edited = { name: 'L', colors: { console: { main: { color: '#3b82f6', alpha: 60 } } }, icon: 'Cloud' }
+      expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: edited })
+      useRebuildStore.getState().releaseOperationLock(grant)
+      vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+      expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: edited })
+      expect(hostLookOf(LOCAL)).toEqual(edited)
+    })
+
+    it('the look store not hydrated yet: same — the edit lands in the local entry and the pass moves it once hydrated', () => {
+      let finish: (() => void) | undefined
+      const hydrated = vi.spyOn(useHostLookStore.persist, 'hasHydrated').mockReturnValue(false)
+      vi.spyOn(useHostLookStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+        finish = () => cb(useHostLookStore.getState())
+        return () => { finish = undefined }
+      })
+      addHostX({ daemonId: undefined })
+      useHostLookStore.setState({ looks: { [LOCAL]: { name: 'L', colors: RED } } })
+      stop = startHostReresolve()
+      learn()
+      expect(runs).toBe(0)
+      expect(hostLookOf(LOCAL)).toEqual({ name: 'L', colors: RED })
+      useHostStore.getState().setHostIcon(LOCAL, 'Cloud')
+      expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'L', colors: RED, icon: 'Cloud' } })
+      hydrated.mockReturnValue(true)
+      finish?.()
+      expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'L', colors: RED, icon: 'Cloud' } })
+    })
+  })
+
   it('changing syncAliases triggers (a legacy id becomes resolvable)', () => {
     addHostX()
     useTabStore.setState({ tabs: { l: tab('l', leaf('pl', tmux('legacy1'))) }, tabOrder: ['l'] })
@@ -615,6 +805,20 @@ describe('rewriteHostRefs (explicit map — the deletion direction)', () => {
     const { parkedMaster, slaves } = useLocalProfilesStore.getState()
     expect(hostIdsIn(parkedMaster).sort()).toEqual([WIRE, UNKNOWN].sort())
     expect(hostIdsIn(slaves.s1.world)).toEqual([WIRE])
+  })
+
+  it('moves no look: the look store is keyed by wire id and only the re-resolve pass re-keys it (decision 9, M9)', () => {
+    // A deletion rewrites refs local → wire; the host's look entries must stay exactly where they are, under either
+    // key — the look re-key belongs to `passBody`, never to `planRewrite`, which this explicit-map rewrite reuses.
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'local look', icon: 'Cloud' }, [UNKNOWN]: { name: 'other' } } })
+    const looks = useHostLookStore.getState().looks
+    const writes = vi.fn()
+    const unsub = useHostLookStore.subscribe(writes)
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    unsub()
+    expect(hostIdsIn(useTabStore.getState().tabs)).toContain(WIRE)
+    expect(useHostLookStore.getState().looks).toBe(looks)
+    expect(writes).not.toHaveBeenCalled()
   })
 
   it('re-keys host settings and renames both column kinds in every preset and knownIds', () => {
