@@ -99,7 +99,7 @@ Keeping a wire id verbatim is only half: when the host later arrives here, the r
 - **Trigger:** the host identity signature changes (`identityOfSync(hosts).signature` — it moves on add, remove,
   daemonId learned/cleared, conflict entered/left) or a host's persisted `syncAliases` change. Subscribed once at boot;
   also run once after hydration.
-- **Scope:** under the world lock (`WORLD_LOCK_NAME`), every world this device holds: the on-screen tab store,
+- **Scope:** under the in-process operation lock (owner `host-reresolve`; not the world lock — plan §0.1), every world this device holds: the on-screen tab store,
   every parked world (`useLocalProfilesStore.updateParkedWorlds`), `purdex-host-settings`, `purdex-newtab-layout`
   presets, and (H2+) the look and shown-hosts stores.
 - **Rewrite:** each host reference whose id is not a local host is passed through the current `wireResolverOf`; if
@@ -123,12 +123,16 @@ Keeping a wire id verbatim is only half: when the host later arrives here, the r
 deletes the host's `purdex-host-settings` entry — all synced, so the deletion reaches every device. New behaviour, for
 every deletion path (Hosts page, H4 replace-all; before H3 also a `hosts` apply that drops a host):
 
-- **One step under the world lock:** capture `wireId = identity.toWire(localId) ?? localId` BEFORE removal; rewrite
+- **One step under the operation lock** (not the world lock — plan §0.1; the Hosts page acquires it as `host-delete`,
+  retrying every 250 ms for up to ~4 s, then gives up with a toast, and deletes only the host confirmed — gone,
+  gone-and-back or re-pointed meanwhile → nothing deleted, a stale notice; the hosts apply runs it under its own
+  grant): capture `wireId = identity.toWire(localId) ?? localId` BEFORE removal; rewrite
   every reference to `localId` into `wireId` in the on-screen tab store, every parked world
   (`updateParkedWorlds`), `purdex-host-settings` keys and New Tab `sessions:` / `headless:` columns (a no-daemonId
   host: wire id = local id, nothing changes); THEN remove the host and clear this device's own per-host state
-  (sessions, agent, execution view, runtime; a held lease is released best-effort as today). Look / shown-hosts
-  entries are wire-keyed and are not touched.
+  (sessions, agent, execution view, runtime). A held lease is released best-effort only once the deletion has
+  committed — to the endpoint pinned before removal; a rolled-back deletion releases nothing. The step is all or
+  nothing: a failing write puts every store back. Look / shown-hosts entries are wire-keyed and are not touched.
 - **Not done any more:** no `terminated` mark (on screen or parked), no tab close — the delete dialog loses its
   "close tabs" choice and says the tabs stay, shown as "no host here" on this device, and other devices are
   unaffected; no host-settings deletion; no look deletion.
@@ -354,7 +358,7 @@ through a host you trust." The payload is never logged or written to disk; a dae
   settings and both column kinds point at the local id; every section hash is unchanged and nothing is pushed; the
   full path "receive unknown column → restart → add the daemon" ends with the column live and no duplicate; an
   alias reference is canonicalised with one push; identity conflict → pass does nothing, runs after resolution;
-  the pass holds the world lock.
+  the pass holds the operation lock.
 - **H1c — local deletion only affects this device** (§3.4, decision 9; after H1b, whose pass the undo relies on; ~9
   files: `host-lifecycle.ts`, the delete dialog in `OverviewSection.tsx`, `apply-to-stores.ts` (its
   `deleteHostCascade(id, false)` caller), 2 locales, `host-lifecycle.test.ts`, `host-lifecycle.worlds.test.ts`,
