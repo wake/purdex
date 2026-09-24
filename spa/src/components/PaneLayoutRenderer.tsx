@@ -72,6 +72,11 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   useEffect(() => {
     if (tmuxHostId) void useNexHostStore.getState().ensure(tmuxHostId)
   }, [tmuxHostId])
+  // Hiding the host closes a handoff dialog opened on this pane: the pane is gated, so nothing may be handed off
+  // from it. A request already confirmed is not abortable — `handToNex` re-checks before it writes the pane (H2d-3).
+  useEffect(() => {
+    if (!hostShown) setHandoff(null)
+  }, [hostShown])
   const handoffCandidate = tmux && tmuxHostId ? isHandoffCandidate(tmux, { agentType, handoffReady }) : false
 
   if (layout.type === 'leaf') {

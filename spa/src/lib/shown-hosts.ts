@@ -10,11 +10,12 @@
 // There is deliberately no "not a local host → shown" helper: with one, `/execution/d1_X/<id>` opened a tab that the
 // gate then hid (codex plan review task-mufjfxo4-h4e2rf item 1).
 //
-// Placement: this module imports `useHostStore`, `useShownHostsStore` and `host-look` (`wireKeyMovesOf`); none of them
-// may import this module.
+// Placement: this module imports `useHostStore`, `useShownHostsStore`, `useTabStore` (the landing, H2d-3) and
+// `host-look` (`wireKeyMovesOf`); none of them may import this module.
 import { useCallback } from 'react'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { useTabStore } from '../stores/useTabStore'
 import { wireIdOfHost } from './profile/host-identity'
 import { wireKeyMovesOf } from './host-look'
 import type { PaneContent } from '../types/tab'
@@ -74,6 +75,21 @@ export function useShownRefFilter(): (ref: string) => boolean {
   const hosts = useHostStore((s) => s.hosts)
   const ids = useShownHostsStore((s) => s.ids)
   return useCallback((ref: string) => isRefShown(ref, hosts, ids), [hosts, ids])
+}
+
+// === The landing (H2d-3: notification, deep link, route, the Handoff toast) ===
+
+/**
+ * The landing of an opener that would create or focus a tab on `ref`. Shown (`isRefShownNow`) → `false`, nothing done
+ * — the caller opens its tab. Otherwise → the Hosts page and `true`, never a tab: a hidden LOCAL host → the Hosts page
+ * on that host (the `open-host` notification action's body); any other ref — an unlisted `d1_X`, a deleted host's id,
+ * `''` from a hostless link with no host — is not openable → the Hosts page, `activeHostId` unchanged.
+ */
+export function landOnHostsPageIfHidden(ref: string): boolean {
+  if (isRefShownNow(ref)) return false
+  useTabStore.getState().openSingletonTab({ kind: 'hosts' })
+  if (localHostOf(useHostStore.getState().hosts, ref) !== undefined) useHostStore.getState().setActiveHost(ref)
+  return true
 }
 
 // === The pane matcher ===

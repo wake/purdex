@@ -657,6 +657,9 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     }
     seedTab(split)
     seedReady()
+    // The dialog hands off only on a host shown in the workbench (host ownership H2d-3).
+    const { useShownHostsStore } = await import('../stores/useShownHostsStore')
+    useShownHostsStore.setState({ ids: [H] })
     mockedHandToNex.mockResolvedValueOnce({ result: { execution_id: 'exc_1', state: 'running', session_id: 's', cwd: '/' }, swapped: true })
     const { act } = await import('react')
     render(<PaneLayoutRenderer layout={split} tabId="t1" isActive={true} />)
@@ -691,6 +694,23 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     fireEvent.click(screen.getByTestId('handoff-cancel'))
     expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
     expect(mockedHandToNex).not.toHaveBeenCalled()
+  })
+
+  it('hiding the host closes an open handoff dialog (the pane is gated; nothing is sent)', async () => {
+    const recorded = tmux('p1', { rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', updatedAt: 1 }, capturedAt: 1 } })
+    seedTab(recorded)
+    seedReady()
+    const { act } = await import('react')
+    render(<PaneLayoutRenderer layout={recorded} tabId="t1" isActive={true} />)
+    rightClick('tmux-p1')
+    fireEvent.click(screen.getByText('Hand to nex'))
+    expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()
+    await act(async () => { useShownHostsStore.setState({ ids: [] }) })
+    expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    // Shown again: the dialog does not come back by itself.
+    await act(async () => { useShownHostsStore.setState({ ids: [H] }) })
+    expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
   })
 
   it('does not open the dialog when the pane left the live layout while the menu was open', async () => {

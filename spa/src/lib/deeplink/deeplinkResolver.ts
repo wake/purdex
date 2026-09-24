@@ -4,6 +4,7 @@
 // (host, executionId) so the same id on two hosts opens two panes.
 import { useTabStore } from '../../stores/useTabStore'
 import { resolveExecutionHostId } from '../nex/resolve-host'
+import { landOnHostsPageIfHidden } from '../shown-hosts'
 
 /** The deeplink payload broadcast by the electron main process (P.11 contract). */
 export interface DeeplinkPayload {
@@ -13,10 +14,14 @@ export interface DeeplinkPayload {
 
 /**
  * Open (or focus, if already open) the execution pane. Singleton per
- * (host, executionId), so repeated deeplinks reuse the same tab.
+ * (host, executionId), so repeated deeplinks reuse the same tab. A host not
+ * shown in this workbench (hidden, or a ref neither local nor listed — host
+ * ownership H2d-3, the one opener rule) lands on the Hosts page instead: no tab.
  */
 export function openExecutionDetailTab(executionId: string, host: string): void {
-  useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host })
+  if (!landOnHostsPageIfHidden(host)) {
+    useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host })
+  }
   window.electronAPI?.focusMyWindow?.()
 }
 

@@ -19,6 +19,7 @@ import {
   manualResumeHint,
   type HandToNexArgs,
 } from '../lib/nex/handoff'
+import { isRefShownNow, landOnHostsPageIfHidden } from '../lib/shown-hosts'
 import { ConfirmDialog } from './ConfirmDialog'
 
 interface Props extends Omit<HandToNexArgs, 'keepSession'> {
@@ -38,6 +39,11 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
 
   const confirm = async () => {
     if (inFlight.current) return
+    // Host ownership H2d-3: the host was hidden in the workbench while the dialog was open → nothing is handed off.
+    if (!isRefShownNow(args.hostId)) {
+      onClose()
+      return
+    }
     inFlight.current = true
     setBusy(true)
     const toast = useUndoToast.getState()
@@ -45,11 +51,18 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
       const { result, swapped } = await handToNex({ ...args, keepSession })
       if (swapped) {
         toast.show(t('handoff.success'))
+      } else if (!isRefShownNow(args.hostId)) {
+        // Hidden during the flight (H2d-3): no "open execution" — it would open a tab on a hidden host.
+        toast.show(t('handoff.success'))
       } else {
         const from = handoffFromFor(args, result)
         toast.show(
           t('handoff.success'),
-          () => { useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from)) },
+          () => {
+            // Re-checked at click (H2d-3): hidden since → the Hosts page on that host, never an execution tab.
+            if (landOnHostsPageIfHidden(args.hostId)) return
+            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from))
+          },
           t('handoff.open_execution'),
         )
       }
