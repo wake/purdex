@@ -5,7 +5,10 @@ records the coordinator's decisions below; rev 4 replaces the "hidden tabs" mode
 closes" model and re-plans H2d (H2d-2 … H2d-6), measured on this worktree at `4f8414ba`; rev 5 (after H2a merged,
 `83a2cb59`) records the decisions on §0.22 – §0.29; rev 6 (after H2a / H2b-1 / H2b-2 / H2c-1 merged, `1e3d1812`)
 corrects §0.21 / §0.23 / §0.27 and H2d against the H2d pre-measurement (10 statements that did not match the code —
-§Review rev 6) and splits the pane gate into its own PR, **H2d-4b**.
+§Review rev 6) and splits the pane gate into its own PR, **H2d-4b**; rev 6 then takes the codex plan review
+`task-mufbtxpn-8p1egj` (§Review): the disable rolls back all four stores on a throw, adopts a standalone split tab's
+survivors in the same body, reports a fence-dropped write, H2d-3 gains `AddHostDialog.test.tsx` (10 → 11 files) and
+H2d-4b T1 tests the real lease.
 
 **Coordinator decisions (2026-09-24) — these override every alternative written further down:**
 - §0.5 → **option A** (group fallback). Every **[B]** variant, `null` tombstone and "[B only]" case below is VOID;
@@ -39,7 +42,9 @@ corrects §0.21 / §0.23 / §0.27 and H2d against the H2d pre-measurement (10 st
      (`switch-active.ts:428-433`); unsettled → the whole action returns `{ kind: 'unsettled', reason }` and writes
      nothing (the on-screen world included). The residual is accepted and commented in the code citing #1256: a
      concurrent switch in another window may lose part of the edit, and the tabs it loses stay as rule-6 tabs with
-     placeholder panes (§0.21).
+     placeholder panes (§0.21) — it cannot overwrite the world that switch parked (the fence refuses the stale write;
+     the action reports `superseded`); only another window's epoch-free local-profiles edits are last-writer-wins
+     (§0.21 "No Web Lock", rev 6 plan review finding 3).
   2. **The pane gate is its own PR, H2d-4b**: the `PaneLayoutRenderer` leaf gate + `HostDisabledPane` + the
      wire-space `usePaneHostEnabled` (§0.23, H2d-4b).
   3. **Host-level connections stay unchanged** (event WS, health, session watch); the **per-pane sweeps** (reconcile's
@@ -236,9 +241,9 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
       `.d.ts` or `any`-typed code; reads in test files (excluded by design). The fixture tests pin each so a future
       change of the detector is visible.
 15. **Sizes.** H2b is 26 surface files (§0.1) → H2b-1 / H2b-2. H2c is ≈36 files → H2c-1 (wire) / H2c-2 (switch) /
-    H2c-3 (transfer + New Tab labels). H2d (rev 6, §0.21) is 77 files (§0.22 (b) is void — decided (a)) → H2d-1
+    H2c-3 (transfer + New Tab labels). H2d (rev 6, §0.21) is 78 files (§0.22 (b) is void — decided (a)) → H2d-1
     (store, wire, re-key, selectors incl. the pane matcher; 15) / H2d-2 (the disable action: plan, close, split, on
-    screen and in every parked world; 9) / H2d-3 (editor + confirmation dialog; 10) / H2d-4 (no way to open a tab on a
+    screen and in every parked world; 9) / H2d-3 (editor + confirmation dialog; 11) / H2d-4 (no way to open a tab on a
     disabled host: New Tab, picker, Hosts page; 14) / H2d-4b (pane gate, per-pane sweeps, re-enable recovery; 16) / H2d-5 (landings:
     notification, execution deep link, route; 8) / H2d-6 (not-filtered behaviour tests + import guard; 5).
     H2d-2 and H2d-3 are split by the 800-line limit, not the file limit. Ordinals: `settings` is **5** today
@@ -373,6 +378,21 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
       fallback and active-tab sync as for any close; not `tab-lifecycle.closeTab`, whose dirty-editor
       `window.confirm` and browser teardown are for user closes of other kinds), then `useTabStore.splitOutPanes` +
       `useWorkspaceStore.insertTabsAfter` (one `set()` each).
+      **A split tab no workspace holds (rev 6 plan review, finding 2).** On screen a tab can be standalone for a while
+      (`closeTabInWorkspace` handles that case, `workspace/store.ts:240-242`; the standing invariant
+      `adopt-standalone.ts` adopts it only after its settle / max-wait). Its survivors must not be left the same way:
+      until the invariant runs they are in no `tabs.<ws>` build ("a tab in no workspace enters no section",
+      `sections.ts:374`), so the push of this very action would not carry them.
+      So in the same synchronous body, after `splitOutPanes`: if the original has an owner workspace, the survivors go
+      there (`insertTabsAfter`); if it has NONE, the ownership rule runs at once for the original and its survivors —
+      `repairTabOwnership(world, { unsortedName: t('workspace.unsorted'), newWorkspaceId: UNSORTED_WORKSPACE_ID, only:
+      new Set([original, ...survivors]) })` (`lib/profile/sections.ts:466-482`, the call `adopt-standalone.ts:156-159`
+      makes), whose result is written with ONE `useWorkspaceStore.setState({ workspaces, activeWorkspaceId })`. The
+      rule is `adoptStandaloneTabs`' (`sections.ts:404-420`): the workspace whose id is `unsorted`, else the first one
+      named `t('workspace.unsorted')`, else a new `unsorted` workspace; the ids are appended in `tabOrder` order (so
+      the survivors follow the original, as `splitOutPanes` placed them); the workspace pointer follows only by the
+      rule's own "adopted active tab" clause. `only` keeps every OTHER standalone tab as it is (the invariant's
+      business). Parked worlds need none of this: they hold no standalone tab (`switch-active.ts:235`).
     - **Parked:** a new pure module `spa/src/lib/host-disable-world.ts` — `disableInParkedWorld(world, entries):
       ParkedWorld` does the same close + split over a `ParkedWorld`: a close removes the tab from `tabs` and from its
       workspace's `ws.tabs`; a split rewrites the original tab's layout and inserts the new tab ids into `ws.tabs`
@@ -403,18 +423,64 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     3. re-plan from the live stores AND every parked world; plan ≠ the plan the dialog showed (compared by
        `planSignature`: owner + tab id + closing pane ids, sorted) ⇒ `{ kind: 'changed', plan }`, nothing written,
        the dialog shows the new list and asks again;
-    4. apply: the on-screen closes, then the on-screen splits, then ONE `updateParkedWorlds` for every parked world,
-       then the shown-hosts write LAST (`setShown` / `toggle`) → release (`finally`) → `{ kind: 'applied', closed,
-       split }` (counts over every world).
+    4. **snapshot** (rev 6 plan review, finding 1) — before the first write, the fields the action can change in all
+       FOUR stores: `useTabStore` `{ tabs, tabOrder, activeTabId, visitHistory }`, `useWorkspaceStore` `{ workspaces,
+       activeWorkspaceId }`, `useLocalProfilesStore` `{ parkedMaster, slaves }` (what `updateParkedWorlds` sets,
+       `useLocalProfilesStore.ts:511-528`) and `useShownHostsStore` `{ all, ids }` — references, not copies;
+    5. apply: the on-screen closes, then the on-screen splits (each followed by its survivors' workspace write —
+       `insertTabsAfter`, or the adoption of "Two editors" when the original is standalone), then ONE
+       `updateParkedWorlds` for every parked world, then the shown-hosts write LAST (`setShown` / `toggle`) →
+       `{ kind: 'applied', closed, split }` (counts over every world);
+    6. **any throw in step 5 → restore all four stores** from the snapshot — each store whose fields are no longer
+       the snapshot's references is `setState` back (a store step 5 had not reached yet is left alone; the check covers
+       a write that threw after zustand had already changed memory, as the persist's `setItem` does on quota /
+       `SecurityError`), then return `{ kind: 'failed', message }`; a throw inside the restore itself is caught per store, the rest are still restored, and the result
+       is `{ kind: 'failed', message, rollbackFailed: true }` with the unfinished stores logged by `console.error`
+       (the H1b pattern: `commitAll` in `lib/host-reresolve.ts`, outcomes `write-failed` / `rollback-failed`, on
+       `origin/main` since #1406; and `commitTabWorld`, `master-world.ts:221-248`, whose `catch` restores every store
+       it began). The action never throws;
+    7. the operation lock is released in `finally` — after `applied`, `failed` and `rollbackFailed` alike.
+    **Why a rolled-back action pushes nothing.** The whole body is synchronous, and the collector does not build on a
+    `set()`: its 500 ms trailing debounce builds each section from the stores when the timer fires. By then the four
+    stores hold the snapshot again (the same references), so `settings` and every `tabs.<ws>` build to the bytes they
+    had → hashes unchanged → no push. What does happen: each written store persisted twice (the edit, then the
+    restore — the same bytes as before at the end), which another window of this device may see as a transient
+    rehydrate; and when the restore itself failed, a store's memory and its storage can disagree until a reload —
+    what `rollbackFailed` tells the user (H2d-3: "reload the app").
+    **Detecting a write the fence dropped** (finding 3, below): a refused persist does not throw — `fencedWorldStorage`
+    just returns and queues a rehydrate (`world-fence.ts:224-228`). So after step 5 the action reads again:
+    `readMasterWorld()` returning `behind-fence` (live `worldEpoch` < fence, `master-world.ts:106`) means another
+    window raised the fence during this body and the world-store writes were refused → `recoverUnsettledWorld(read,
+    true)` and the result is `{ kind: 'applied', closed, split, superseded: true }` (the same question `superseded`
+    asks for a switch, `switch-active.ts:195-199`). The shown-hosts write — not fenced — stands; the tabs the refused
+    writes would have closed come back with the rehydrate as rule-6 tabs (placeholder panes, H2d-4b), which the dialog
+    says (H2d-3).
 
     **No Web Lock — the accepted residual** (commented in the code, citing #1256). The world lock (Web Locks,
     `world-lock.ts:1-16`) serialises only the blocks that move the world epoch (switch / promote — `promoteToMaster`
     takes it asynchronously, `switch-active.ts:476-481`); the disable moves no epoch and stays synchronous. Without
     it, a switch running in ANOTHER window between this window's settled check and its persist can lose part of the
-    edit: a write whose `worldEpoch` is below the new fence is not saved and the store is rehydrated
-    (`world-fence.ts:224-229`), or a window parking an un-reloaded screen overwrites the parked world. The tabs lost
-    that way stay — they are rule-6 tabs whose X panes show the placeholder (H2d-4b). The delete-host cascade and the
-    sync apply accept the same risk today (`apply-to-stores.ts:336-338, :428, :661-674`).
+    edit — but it cannot make this window's stale snapshot overwrite the world that switch just parked (rev 6 plan
+    review, finding 3 — the review's claim, answered with evidence against):
+    - **parking always moves the epoch.** Every switch / promote opens its epoch first — `openEpoch()` =
+      `nextWorldEpoch([...])` + `raiseWorldEpochFence(worldEpoch)` (`switch-active.ts:185-189`, used at `:241` and
+      `:490`) — and the park itself, `swapActive`, refuses anything but the next epoch (`isNextEpoch`,
+      `useLocalProfilesStore.ts:446-463`, the write at `:463` carries it); `promoteSlave` likewise (`:467-472`);
+    - **a write below the fence is refused and the store rehydrated.** `fencedWorldStorage.setItem` drops a value
+      whose `worldEpoch` is below the fence and queues a rehydrate (`world-fence.ts:224-228`). This window's
+      `updateParkedWorlds` (and its tab / workspace writes) carry the OLD epoch, so after the other window parked they
+      never reach storage; the rehydrate brings the newly parked world into memory. What is lost is this action's own
+      edit — the tabs it would have closed come back as rule-6 tabs (placeholder panes, H2d-4b) — and the action
+      reports it (`superseded: true`, "Detecting a write the fence dropped" above; H2d-2 T3 test).
+    - **What remains is the epoch-free class.** `useLocalProfilesStore` edits that move no epoch — `renameSlave`,
+      `setProfileAppearance`, `addSlave` (copy master / save screen as slave, `switch-active.ts:428-443`),
+      `removeSlave`, `reorderSlaves`, `replaceParkedWorld` — made in ANOTHER window between this window's read and its
+      `updateParkedWorlds` write: both persist whole-store, the last writer wins (e.g. a slave renamed or deleted there
+      comes back here). That is #1256 — accepted project-wide (the same words as H1b's `lib/host-reresolve.ts`
+      header on `origin/main`: "another renderer's write this one does not see yet … can still be overwritten by the
+      pass's whole-store write"); closing it needs a commit point off `localStorage`, not this action.
+    The delete-host cascade and the sync apply accept the same risk today (`apply-to-stores.ts:336-338, :428,
+    :661-674`).
 
     **Four stores, several `set()` calls, one task.** The action writes `useTabStore`, `useWorkspaceStore`,
     `useLocalProfilesStore` (the parked worlds) and `useShownHostsStore`. The first three are the world stores and
@@ -423,7 +489,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     stores when the timer fires) therefore reports the FINAL state once per touched section: `settings` (shown hosts)
     and `tabs.<ws>` for each workspace of the ATTACHED MASTER's world that lost or gained a tab — built from the tab
     store when the master is on screen, and from `parkedMaster` when a slave is on screen (a slave's world is never
-    pushed); `workspaces` does not move (its projection holds no tab list); untouched `tabs.<ws2>` do not move. Across
+    pushed); `workspaces` does not move (its projection holds no tab list) — except when the adoption of a standalone
+    split tab creates the `unsorted` workspace ("Two editors"); untouched `tabs.<ws2>` do not move. Across
     sections there is no atomicity, and none is needed: B may apply `settings` first (X disabled, X's tabs still
     there — a valid rule-6 state) or `tabs.<ws>` first (tabs gone, X still enabled for a moment) — both valid.
     Another window of the SAME device sees the stores through their persistence only; it never runs the close itself.
@@ -540,7 +607,7 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     `promoteToMaster` uses the ASYNC world lock (`switch-active.ts:476-481`) — so the settled check is written NEW,
     synchronous, in the `copyMasterAsSlave` style (`switch-active.ts:428-433`; §0.21 step 1, no Web Lock — decision 1
     of rev 6); (2) no parked close / split exists — the pure `lib/host-disable-world.ts` is new (§0.21 "Two editors").
-    The "stop and report" gate is passed: H2d-2 is **9** files, H2d-3 **10**.
+    The "stop and report" gate is passed: H2d-2 is **9** files, H2d-3 **11** (10 at rev 6; +1 by the rev 6 plan review, finding 4).
 28. **Split survivors that are only interface panes.** Plan choice, listed for visibility: a survivor that is a
     `new-tab` placeholder, a settings / hosts page or any other `DEVICE_LOCAL_PANE_KINDS` pane becomes a tab of its
     own like any survivor (rule 1 says every remaining pane). Such a tab is device-local (`tabs.*` build leaves it
@@ -1007,8 +1074,9 @@ Files:
 
 API (`host-disable.ts`; imports `useTabStore`, `useWorkspaceStore`, `useLocalProfilesStore`, `useHostStore`,
 `useShownHostsStore`, `useRebuildStore`, `lib/shown-hosts` (`hostRefOf`, `wireOfRef`), `lib/host-disable-world`,
-`lib/profile/master-world` (`readMasterWorld`, `recoverUnsettledWorld`), `host-identity`, `pane-tree`; NOT `host-api`
-— pinned by T4):
+`lib/profile/master-world` (`readMasterWorld`, `recoverUnsettledWorld`), `lib/profile/sections`
+(`repairTabOwnership`), `UNSORTED_WORKSPACE_ID` (`features/workspace/store`), `useI18nStore` (the
+`workspace.unsorted` name), `host-identity`, `pane-tree`; NOT `host-api` — pinned by T4):
 - `type WorldOwner = { kind: 'screen' } | { kind: 'master' } | { kind: 'slave'; id: string }` — tab / pane ids are
   unique only within one world (`host-lifecycle.ts:39-41`), so every entry carries its owner.
 - `disablingWireIds(before, after, hosts): Set<string>` — enabled-before minus enabled-after over the candidates of
@@ -1021,11 +1089,14 @@ API (`host-disable.ts`; imports `useTabStore`, `useWorkspaceStore`, `useLocalPro
   `master.name ?? t('nav.home')`, slave `name`.
 - `planSignature(plan)` — `owner` + tab id + closing pane ids per entry (closes, splits, keptLocked), sorted.
 - `applyHostDisable(next: ShownHosts, shown: string): DisableResult` — §0.21 "One synchronous body": settled check →
-  lock → re-plan → signature check → on-screen closes → on-screen splits → one `updateParkedWorlds` → shown-hosts
-  write → release. `DisableResult = { kind: 'applied', closed, split } | { kind: 'unsettled', reason:
-  UnsettledReason } | { kind: 'busy', holder } | { kind: 'changed', plan }`. A code comment at the settled check
-  states the accepted residual (no Web Lock; a concurrent switch in another window may lose part of the edit → rule-6
-  tabs; #1256).
+  lock → re-plan → signature check → snapshot of the four stores → on-screen closes → on-screen splits (each with
+  its survivors' workspace write: `insertTabsAfter`, or `repairTabOwnership` with `only` when the original is
+  standalone) → one `updateParkedWorlds` → shown-hosts write → fence re-read → release (`finally`); any throw →
+  restore all four → `failed`. `DisableResult = { kind: 'applied', closed, split, superseded?: true } | { kind:
+  'failed', message, rollbackFailed?: true } | { kind: 'unsettled', reason: UnsettledReason } | { kind: 'busy',
+  holder } | { kind: 'changed', plan }`; it never throws. A code comment at the settled check states the accepted
+  residual (no Web Lock; a switch in another window during the body makes the fence drop this edit → `superseded`,
+  rule-6 tabs; the epoch-free local-profiles edits of another window are last-writer-wins; #1256 — §0.21).
 
 Parked-world editor (`host-disable-world.ts`, pure, imports types + `pane-tree` + `generateId` only):
 `disableInParkedWorld(world, { closes: tabId[], splits: { tabId, dropPaneIds }[] }, now): ParkedWorld` — a close
@@ -1088,6 +1159,27 @@ Tasks:
   shown hosts = `next`, lock released (also when a step throws — `finally`); closing the ACTIVE on-screen tab moves
   focus by `visitHistory` inside its workspace; splitting the active tab keeps it active; the shown-hosts write happens
   after every tab write, parked included (call-order spy); X's host runtime status `offline` changes nothing.
+  **Rollback (finding 1).** A throw injected at EACH write point in turn — the on-screen close
+  (`closeTabInWorkspace`), `splitOutPanes`, `insertTabsAfter`, the standalone adoption's `useWorkspaceStore.setState`,
+  `updateParkedWorlds`, the shown-hosts write — both as a throwing action and as a throwing persist `setItem` (memory
+  already changed) → the result is `{ kind: 'failed' }` (no throw out of the action); the four stores' fields equal
+  the snapshot (`toEqual`, and the same references where the store was restored) and their persisted bytes in
+  `localStorage` equal the bytes before the action; the operation lock is released; with the real collector
+  (fake timers, 500 ms elapsed) no section hash changes and nothing is pushed. A throw inside the restore (one
+  store's restore `setState` throws too) → `{ kind: 'failed', rollbackFailed: true }`, the OTHER stores are still
+  restored, `console.error` names the unfinished store, the lock is released.
+  **Standalone mixed tab (finding 2).** On screen, a split `[mlab | X | editor(local)]` tab that NO workspace holds →
+  after the action the original and both survivors are each in exactly one workspace (the `unsorted` one — existing,
+  or created with that id and `t('workspace.unsorted')`), in `tabOrder` order (original, then survivors); another
+  standalone tab that is not part of the split stays standalone (`only`); a mixed tab that HAS an owner → survivors
+  in that workspace right after it (no adoption, no `unsorted` created).
+  **Fence (finding 3).** A disable during which another window parks (the fence raised past the stores' epoch between
+  the settled check and the writes — simulated by raising it with `raiseWorldEpochFence` from inside the first write,
+  i.e. after step 1 read `settled`) → `localStorage` for `purdex-tabs` / `purdex-workspaces` /
+  `purdex-local-profiles` keeps the other window's bytes (in particular the newly parked world — the `updateParkedWorlds`
+  write never reaches storage), a rehydrate is queued for each and after it the stores hold that world; the shown-hosts
+  store holds `next`; the result is `{ kind: 'applied', …, superseded: true }`. And the plain case: a store epoch
+  already below the fence BEFORE the action → `unsettled` (`behind-fence`, step 1), nothing written.
   Implement. Commit.
 - **T4 — the tmux sessions and the daemon are not touched.** Tests: during `applyHostDisable` no export of
   `lib/host-api` is called (module mock with every export spied — `deleteSession`, `hostFetch` included) and
@@ -1108,14 +1200,20 @@ Tasks:
     device that was offline) shows the tab on A and nothing closes it; a following rebuild of A's sections carries it;
   - B running `useShownHostsStore.setState(disabled X)` directly (no action) closes nothing (no subscriber closes);
   - survivors' pane objects on A are byte-for-byte what they were, and after the push / apply B's survivor panes
-    are byte-for-byte A's.
+    are byte-for-byte A's;
+  - **standalone mixed tab (finding 2):** A's on-screen split tab held by no workspace → the `tabs.unsorted` build
+    (the adopting workspace) contains the original AND every survivor, and `workspaces` lists that workspace; B,
+    after applying A's sections, holds every survivor; on A, a reload (stores re-created from `localStorage`) and a
+    switch to a slave and back (real switch helpers) keep every survivor in its workspace — none standalone.
   Commit.
 
 Invariants: the executor is the only code that closes because of a host being disabled, and it runs only when
 called (no subscriber, apply or hydration path calls it); an apply never closes; surviving panes are moved
 byte-for-byte with their pane ids, on screen and parked; no daemon call, no session deletion; an unsettled world, a
 refused lock or a stale plan writes nothing; plan entries and the signature are owner-keyed; a slave's world is never
-pushed; the whole action is synchronous.
+pushed; the whole action is synchronous; a throw at any write leaves all four stores (memory and storage) as they were
+and pushes nothing, and the action never throws; every split survivor ends in a workspace in the same body; a write
+the fence dropped is reported (`superseded`), never claimed applied silently.
 
 Mutations: M1 the matcher compares local ids only (`d1_X` pane test red); M2 hostless executions ignored (effective-
 host test red); M3 `splitOutPanes` mints new pane ids like `detachPane` (same-object / byte-for-byte test red); M4 new
@@ -1129,9 +1227,16 @@ synchronous test red); M13 the settled check skipped (unsettled tests red — th
 check placed after the lock and the lock not released on `unsettled` (lock-never-taken test red); M15
 `planSignature` without the owner (owner-only-differs test red); M16 the parked editor leaves `ws.activeTabId` on a
 closed tab (parked focus test red); M17 the parked editor writes a `tabOrder` key (no-`tabOrder` / `isParkedWorld`
-test red); M18 parked worlds skipped — only the world on screen edited (slave-on-screen integration test red).
+test red); M18 parked worlds skipped — only the world on screen edited (slave-on-screen integration test red); M19
+the rollback skips one store (each of the four in turn — the throw-at-each-write test for that store red); M20 no
+rollback, the throw propagates (the `failed` result / lock-released / no-push tests red); M21 the adoption of a
+standalone split tab skipped — survivors left standalone (the `tabs.unsorted` build and reload / switch round-trip
+tests red); M22 the adoption without `only` (the unrelated-standalone-tab test red); M23 the post-write fence re-read
+dropped (the `superseded` test red).
 
-## H2d-3 — the editor and the confirmation (10 files)
+## H2d-3 — the editor and the confirmation (11 files)
+
+(Rev 6 plan review, finding 4: 10 → 11 — T4 tests the add-host dialog, whose test file was not listed.)
 
 Files:
 1. `spa/src/components/settings/profile/ShownHostsBlock.tsx` (new)
@@ -1143,8 +1248,11 @@ Files:
 7. `spa/src/stores/useHostStore.ts` (`reset` resets shown hosts — §0.18)
 8. `spa/src/stores/useHostStore.test.ts`
 9. `spa/src/locales/en.json` (`settings.profile.shown_hosts.*`, `settings.profile.host_disable.*` — incl. the
-   world-group heading and the `unsettled` / `no-parked-master` copy)
+   world-group heading, the `unsettled` / `no-parked-master` copy and the `failed` / `rollbackFailed` / `superseded`
+   copy)
 10. `spa/src/locales/zh-TW.json`
+11. `spa/src/components/hosts/AddHostDialog.test.tsx` (T4: an add under `all: false` leaves the shown-hosts store
+    untouched — `AddHostDialog.tsx` itself is unchanged here)
 
 Editor (`ShownHostsBlock`): "Enable all hosts" switch (`all`); when off, one checkbox per local host in `hostOrder`
 (label from `useHostLookResolver`), then every `ids` entry that is not a local host's wire id, labelled with its look
@@ -1168,7 +1276,12 @@ button is re-armed (no automatic retry); **`unsettled`** → inline "The workben
 reloaded in another window — nothing was changed. Try again in a moment." with Retry (the refusal has already asked
 the stores to re-read storage, `recoverUnsettledWorld(read, true)`), dialog stays; for `reason: 'no-parked-master'`
 the copy says instead "The workbench state needs a reload — nothing was changed. Reload the app and try again." (no
-Retry: it is permanent until a reload, `master-world.ts:43-47`).
+Retry: it is permanent until a reload, `master-world.ts:43-47`). **`failed`** (rev 6 plan review, finding 1) → inline
+"Saving failed — nothing was changed. (‹message›)" with Retry, dialog stays, the checkbox stays ticked; with
+`rollbackFailed: true` → "Saving failed and the workbench could not be fully put back. Reload the app." (no Retry).
+**`applied` with `superseded: true`** (finding 3) → the dialog closes and an inline notice in the block says "Host
+disabled, but the workbench was switched in another window at the same moment — some tabs were not closed; they stay
+with the not-enabled placeholder."
 
 Tasks:
 - **T1 — the block.** Tests: local hosts in `hostOrder` with look labels; unknown ids as "not on this device"; a
@@ -1187,9 +1300,14 @@ Tasks:
   again; Confirm → `applyHostDisable` called once with `next` and the shown signature; `applied` → dialog closed, the
   tabs gone, X unticked; `busy` → message, nothing written, Retry calls again; `changed` → new list shown, nothing
   written until a second confirm; `unsettled` (`behind-fence`) → the retry copy, nothing written, the checkbox stays
-  ticked, Retry calls again; `unsettled` (`no-parked-master`) → the reload copy and no Retry button. Commit.
-- **T4 — adds write nothing** (§0.7 (b)): with `all: false`, the add-host dialog add and `registerLocalHost` leave
-  the shown-hosts store the same object. Commit.
+  ticked, Retry calls again; `unsettled` (`no-parked-master`) → the reload copy and no Retry button; `failed` → the
+  saving-failed copy with Retry, dialog stays, checkbox ticked; `failed` + `rollbackFailed` → the reload copy, no
+  Retry; `applied` + `superseded` → dialog closed and the block shows the "switched in another window" notice.
+  Commit.
+- **T4 — adds write nothing** (§0.7 (b)): with `all: false`, adding a host through the rendered add-host dialog
+  (`AddHostDialog.test.tsx`, file 11 — the add flow the dialog's own tests already drive) and `registerLocalHost`
+  (`useHostStore.test.ts`, file 8) each leave the shown-hosts store the same object (`toBe`) and
+  `localStorage['purdex-shown-hosts']` unchanged. Commit.
 
 Invariants: the block writes only on user action; a disable writes only after Confirm; Cancel writes nothing
 anywhere; the dialog lists exactly what the executor does (same plan function, signature-checked).
@@ -1199,7 +1317,8 @@ test red); M3 Cancel leaves X unticked (checkbox test red); M4 the dialog builds
 `planHostDisable` (list-equals-plan test red); M5 `changed` auto-confirms (second-confirm test red); M6 the editor
 drops unknown ids on toggle (unknown-id test red); M7 switch-off initialises `ids` to `[]` (nothing-closes test red);
 M8 the dialog lists the on-screen world only (per-world test red); M9 `unsettled` treated as `applied` (the dialog
-closes — unsettled test red).
+closes — unsettled test red); M10 `failed` treated as `applied` (the failed test red); M11 `superseded` ignored (the
+notice test red).
 
 ## H2d-4 — no way to open a tab on a disabled host: New Tab, picker, Hosts page (14 files)
 
@@ -1306,7 +1425,17 @@ Tasks:
   leaf is gated; **live**: disable X while the leaf is mounted → the renderer unmounts (its unmount spy runs — for an
   execution pane that is the lease release) and the placeholder shows; re-enable → the renderer mounts again with the
   SAME `pane.id` and content (`toBe` on the pane object), `fetchWsTicket` called once, the tab store unchanged (no
-  write). Locale keys (en + zh-TW; `locale-completeness.test.ts` covers parity). Implement. Commit.
+  write). **The lease, for real (rev 6 plan review, finding 5 — no new file):** the execution renderer registered for
+  these cases is a small test component that calls the REAL `useExecutionLease(hostId, executionId)`
+  (`hooks/useExecutionLease.ts`), with `lib/nex/nex-api` module-mocked (`attachControl`, `releaseLease`,
+  `renewLease` spied) and the lease seeded through `useExecutionStore.setLease`: lease held → disabling X unmounts
+  the renderer and `releaseLease` is called exactly once, with X, the execution id and the lease id
+  (`useExecutionLease.ts:179-193` teardown); no lease held → `releaseLease` not called; `releaseLease` rejecting →
+  the placeholder still renders and nothing throws (no unhandled rejection); while disabled, `attachControl` is never
+  called; re-enable → the renderer remounts and `attachControl` is still not called (the lease is lazy — acquired on
+  the user's send / interrupt, `useExecutionLease.ts:1-6`) until the test calls the hook's `ensureLease()`, the
+  stand-in for the user acting. Locale keys (en + zh-TW; `locale-completeness.test.ts` covers parity). Implement.
+  Commit.
 - **T2 — StatusBar.** Tests: the active tab's primary pane on disabled X → `usePeerInfo` receives `null` host / code
   (no `usePeerStore.refresh`, no `useSessionCwdStore.refresh` call) and no peer row renders; the same pane with X
   enabled → as today; terminated behaviour unchanged. Implement. Commit.
@@ -1362,7 +1491,8 @@ report.
 - Mutations added: M10 the subscriber compares `isHostShown` instead of the wire-space matcher (the `d1_`/conflict
   cases red); M11 recovery only from the dialog's confirm handler (the apply-path test red); M12 `runRevivePass`
   called directly instead of `recoverHostSessions` (the lock-held test red: with the operation lock held the call
-  must defer, not revive).
+  must defer, not revive); M13 the gate keeps the execution renderer mounted and only hides it (the real-lease
+  `releaseLease`-once test of T1 red).
 
 ## H2d-5 — landings: notification, execution deep link, route (8 files)
 
@@ -1554,6 +1684,37 @@ cwd), delete W, stop :5175.
 
 ## Review
 
+### 2026-09-24 — rev 6 plan review `task-mufbtxpn-8p1egj`
+
+codex plan review of rev 6 (`116b2806`), five findings; triage approved by the coordinator.
+1. [critical 0.98] The executor had no cross-store rollback — ADOPTED. Snapshot of the four stores before the first
+   write; any throw → all four restored, `{ kind: 'failed', rollbackFailed?: true }`, lock released in `finally`, the
+   action never throws. Nothing is pushed: the body is synchronous and the collector's 500 ms debounce builds the
+   restored state → hashes unchanged. Pattern: `commitTabWorld` (`master-world.ts:221-248`) and H1b's `commitAll` /
+   `rollback-failed` (`lib/host-reresolve.ts` on `origin/main`). Tests per write point + a throw inside the rollback;
+   M19 / M20 (§0.21 steps 4–7, H2d-2 API / T3; H2d-3 dialog copy, T3, M10).
+2. [critical 0.96] A standalone mixed tab's survivors were left in no workspace ("a tab in no workspace enters no
+   section", `sections.ts:374`) — ADOPTED. Same body: survivors go to the original's owner workspace; with none,
+   `repairTabOwnership(…, { only: original + survivors })` adopts them first. **Correction to the triage:** the rule
+   is not "active → first → Unsorted" — it is `adoptStandaloneTabs`' (`sections.ts:404-420`): the workspace with id
+   `unsorted`, else the first named `t('workspace.unsorted')`, else a new `unsorted` workspace. Tests incl. the
+   `tabs.<ws>` build and the reload / switch round trip; M21 / M22 (§0.21 "Two editors", H2d-2 T3 / T5).
+3. [critical 0.93] No Web Lock → a stale local-profiles snapshot overwrites a world another window just parked —
+   EVIDENCE AGAINST, design kept. Parking always moves the epoch (`openEpoch`, `switch-active.ts:185-189`;
+   `swapActive` requires the next epoch, `useLocalProfilesStore.ts:446-463`); a write below the fence is refused and
+   the store rehydrated (`lib/storage/world-fence.ts:224-228` — the file is under `lib/storage/`). What remains is
+   the epoch-free class (rename, appearance, add / copy / delete / reorder slaves, `replaceParkedWorld` in another
+   window between read and write) = last writer wins = #1256. Added: the residual written out (§0.21 "No Web Lock"),
+   a post-write fence re-read reporting `applied` + `superseded: true`, and the H2d-2 T3 fence test; M23.
+4. [important 0.94] H2d-3 T4 tests the add-host dialog without its test file — ADOPTED: `AddHostDialog.test.tsx`
+   listed, H2d-3 10 → 11.
+5. [important 0.91] The lease release was asserted only through an unmount spy — ADOPTED, no new file: H2d-4b T1
+   mounts the real `useExecutionLease` with `lib/nex/nex-api` mocked (release once / none / rejecting; no
+   `attachControl` while disabled nor after re-enable until the user acts); M13.
+
+File counts: H2d-2 9 (unchanged; more tests in its existing files — if the added rollback / adoption code and tests
+take it past 800 lines, stop and report before splitting), H2d-3 10 → 11, H2d-4b 16; H2d total 77 → 78.
+
 ### 2026-09-24 — H2d pre-measurement and coordinator decisions (rev 5 → rev 6)
 
 Read-only measurement at H2c-1 head `2efaade2` (≈ main `1e3d1812`). Plan statements that did not match the code, and
@@ -1584,7 +1745,7 @@ where each is fixed:
 Coordinator decisions (header list, rev 6): (1) no Web Lock — synchronous settled check first, `{ kind: 'unsettled',
 reason }` writes nothing, the residual accepted and commented citing #1256; (2) the pane gate is its own PR, H2d-4b;
 (3) host-level connections unchanged, per-pane sweeps and StatusBar peer info skip disabled hosts' panes (H2d-4b).
-File counts: H2d-2 7 → 9, H2d-3 10, H2d-4b 13 (new; 16 after the re-enable recovery decision), H2d total 59 → 77; the §0.27 "stop and report" gate is passed.
+File counts: H2d-2 7 → 9, H2d-3 10, H2d-4b 13 (new; 16 after the re-enable recovery decision), H2d total 59 → 77 (then H2d-3 → 11, total → 78 by the rev 6 plan review above); the §0.27 "stop and report" gate is passed.
 Open (not decided here): H2d-4b's re-enable does not re-run the revive pass (see the end of H2d-4b).
 
 ### 2026-09-24 — user decision (rev 3 → rev 4)
