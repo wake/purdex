@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
+import zhTW from '../../../locales/zh-TW.json'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { LocalProfilesBlock } from './LocalProfilesBlock'
 import { useLocalProfilesStore, type LocalProfile } from '../../../stores/useLocalProfilesStore'
 import { __resetProfileSwitcherForTest, useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
@@ -208,6 +210,23 @@ describe('the two ways to a new local profile', () => {
     expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('New blank')
     expect(screen.queryByTestId('profile-new-copy')).toBeNull()
     expect(screen.queryByTestId('profile-new-save')).toBeNull()
+    // exactly two: no third way (the master's copy is the wizard's)
+    expect(within(screen.getByTestId('profile-local-block')).getAllByTestId(/^profile-new-/)).toHaveLength(2)
+  })
+
+  it('zh-TW: 複製目前工作台, 新增空白工作台', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      render(<LocalProfilesBlock />)
+      expect(screen.getByTestId('profile-new-duplicate')).toHaveTextContent('複製目前工作台')
+      expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('新增空白工作台')
+      open('duplicate')
+      expect(screen.getByTestId('profile-new-form')).toHaveTextContent(zhTW['settings.profile.local.new_duplicate_hint'])
+      open('blank')
+      expect(screen.getByTestId('profile-new-form')).toHaveTextContent(zhTW['settings.profile.local.new_blank_hint'])
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
   })
 
   it('the block says what a local profile holds, and what it shares with the master', () => {
@@ -289,15 +308,26 @@ describe('the two ways to a new local profile', () => {
       return { name: slaves[slaveOrder[0]].name, world: w }
     }
 
-    it('Duplicate current: the new profile holds the tab on screen', () => {
+    it('Duplicate current: the new profile is what is on screen — same workspaces and tabs, fresh ids', () => {
       render(<LocalProfilesBlock />)
       open('duplicate')
       fireEvent.click(screen.getByTestId('profile-new-create'))
       const { name, world } = created()
       expect(name).toBe('Mini')
-      expect(Object.values(world.tabs)).toHaveLength(1)
       expect(world.workspaces.map((ws) => ws.name)).toEqual(['On screen'])
-      expect(world.workspaces[0].tabs).toHaveLength(1)
+      const [ws] = world.workspaces
+      const tabIds = Object.keys(world.tabs)
+      expect(tabIds).toHaveLength(1)
+      expect(ws.tabs).toEqual(tabIds)
+      expect(ws.id).not.toBe('w1')
+      expect(tabIds[0]).not.toBe('t1')
+      expect(world.tabs[tabIds[0]].layout).toMatchObject({ type: 'leaf', pane: { content: { kind: 'new-tab' } } })
+      expect(world.activeWorkspaceId).toBe(ws.id)
+      expect(world.activeTabId).toBe(tabIds[0])
+      // the screen did not move
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['w1'])
+      expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
+      expect(useLocalProfilesStore.getState().activeProfileId).toBe('master')
     })
 
     it('New blank: the new profile is one empty workspace', () => {
@@ -309,7 +339,23 @@ describe('the two ways to a new local profile', () => {
       expect(world.tabs).toEqual({})
       expect(world.workspaces).toHaveLength(1)
       expect(world.workspaces[0]).toMatchObject({ name: 'Workspace 1', tabs: [], activeTabId: null })
-      expect(useWorkspaceStore.getState().workspaces.map((ws) => ws.name)).toEqual(['On screen']) // the screen did not move
+      expect(world.workspaces[0].id).not.toBe('w1')
+      expect(world.activeWorkspaceId).toBe(world.workspaces[0].id)
+      expect(world.activeTabId).toBeNull()
+      // the screen did not move
+      expect(useWorkspaceStore.getState().workspaces.map((ws) => ws.id)).toEqual(['w1'])
+      expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
+      expect(useLocalProfilesStore.getState().activeProfileId).toBe('master')
+    })
+
+    it.each(['duplicate', 'blank'] as const)('%s with a blank name: bad-name, nothing is created, the form stays', (which) => {
+      render(<LocalProfilesBlock />)
+      open(which)
+      fireEvent.change(nameInput(), { target: { value: '   ' } })
+      fireEvent.click(screen.getByTestId('profile-new-create'))
+      expect(screen.getByTestId('profile-new-error')).toHaveTextContent(en['settings.profile.local.error.bad_name'])
+      expect(useLocalProfilesStore.getState().slaveOrder).toEqual([])
+      expect(nameInput()).toBeInTheDocument()
     })
   })
 
