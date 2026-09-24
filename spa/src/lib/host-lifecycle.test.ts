@@ -15,13 +15,13 @@ import { useWorkspaceStore } from '../features/workspace/store'
 import { useUndoToast } from '../stores/useUndoToast'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
-import { deleteHostCascade, startPeerCacheInvalidation } from './host-lifecycle'
+import { HOST_DELETE_LOCK_OWNER, deleteHostCascade, deleteHostWithUndoToast, startPeerCacheInvalidation } from './host-lifecycle'
 import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
 import { STORAGE_KEYS } from './storage/keys'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
-import { useRebuildStore } from '../stores/useRebuildStore'
+import { useRebuildStore, withOperationLock } from '../stores/useRebuildStore'
 import { syncIdOfSync } from './profile/host-identity'
 import { __resetMasterWorldForTest } from './profile/master-world'
 import { __resetHostReresolveForTest } from './host-reresolve'
@@ -649,6 +649,88 @@ describe('host delete cascade — a write fails half-way', () => {
     expect(() => deleteHostCascade(HOST_A)).toThrow('cwd blew up')
     vi.restoreAllMocks()
     expect(everything()).toBe(before)
+  })
+})
+
+// PR #1413 attacker (medium #3): the Hosts page's deletion rewrites the tab tree, and whatever rewrites the tab tree
+// holds the operation lock (useRebuildStore) — a rebuild in flight must not see its pane moved under it. Held
+// elsewhere, the deletion is retried every 250 ms for up to 4 s, then given up and said.
+describe('deleteHostWithUndoToast — the operation lock', () => {
+  const MESSAGES = { deleted: 'A deleted', busy: 'busy, try again' }
+  const contentOf = (tabId: string) => getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+
+  beforeEach(resetAllStores)
+  afterEach(() => { vi.useRealTimers() })
+
+  it('the lock free: deleted at once, under the lock (owner host-delete), released after; the undo toast is up', async () => {
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    let heldBy: string | null = null
+    const unsub = useTabStore.subscribe(() => { heldBy = useRebuildStore.getState().lockedBy })
+
+    const done = deleteHostWithUndoToast(HOST_A, MESSAGES)
+
+    unsub()
+    expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined() // synchronously
+    expect(heldBy).toBe(HOST_DELETE_LOCK_OWNER)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+    expect(useUndoToast.getState().toast).toMatchObject({ message: MESSAGES.deleted })
+    expect(typeof useUndoToast.getState().toast?.action).toBe('function')
+    await expect(done).resolves.toBe(true)
+  })
+
+  it('a rebuild holds the lock and never lets go: nothing is rewritten, nothing deleted — after ~4 s the user is told', async () => {
+    vi.useFakeTimers()
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    let finishRebuild!: () => void
+    const rebuild = withOperationLock('rebuild:batch', () => new Promise<void>((r) => { finishRebuild = r }), () => undefined)
+    const tabs = useTabStore.getState().tabs
+
+    const done = deleteHostWithUndoToast(HOST_A, MESSAGES)
+    await vi.advanceTimersByTimeAsync(3_900)
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useUndoToast.getState().toast).toBeNull()
+    await vi.advanceTimersByTimeAsync(400)
+
+    await expect(done).resolves.toBe(false)
+    expect(useUndoToast.getState().toast).toEqual({ message: MESSAGES.busy, action: undefined, actionLabel: undefined })
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(contentOf(t.id)).toMatchObject({ hostId: HOST_A })
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useRebuildStore.getState().lockedBy).toBe('rebuild:batch')
+    finishRebuild()
+    await rebuild
+  })
+
+  it('the rebuild finishes inside the window: the next retry deletes', async () => {
+    vi.useFakeTimers()
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    let finishRebuild!: () => void
+    const rebuild = withOperationLock('rebuild:batch', () => new Promise<void>((r) => { finishRebuild = r }), () => undefined)
+
+    const done = deleteHostWithUndoToast(HOST_A, MESSAGES)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    finishRebuild()
+    await rebuild
+    await vi.advanceTimersByTimeAsync(250)
+
+    await expect(done).resolves.toBe(true)
+    expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
+    expect(contentOf(t.id)).toMatchObject({ hostId: WIRE_A })
+    expect(useUndoToast.getState().toast).toMatchObject({ message: MESSAGES.deleted })
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('a deletion that fails releases the lock and rejects, with no toast', async () => {
+    vi.spyOn(useSessionCwdStore.getState(), 'forgetHost').mockImplementationOnce(() => { throw new Error('cwd blew up') })
+    await expect(deleteHostWithUndoToast(HOST_A, MESSAGES)).rejects.toThrow('cwd blew up')
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+    expect(useUndoToast.getState().toast).toBeNull()
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
   })
 })
 

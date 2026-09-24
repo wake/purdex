@@ -15,7 +15,7 @@ import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { wireIdOfHost } from './profile/host-identity'
 import { reresolveRestoredHost, rewriteHostRefs, scheduleHostReresolve } from './host-reresolve'
-import type { OperationLockGrant } from '../stores/useRebuildStore'
+import { useRebuildStore, type OperationLockGrant } from '../stores/useRebuildStore'
 import type { Session } from './host-api'
 
 // === Deleting a host affects only this device (host ownership spec §3.4, decision 9) ===
@@ -30,8 +30,9 @@ import type { Session } from './host-api'
 // is pinned (a legacy hostless execution pane keeps resolving to the first host — spec §3.4). What IS cleared is this
 // device's own per-host state: sessions, agent state, execution views, caches, runtime.
 //
-// No lock: the deletion is synchronous and takes none (plan §0.1) — the UI path as ever, and the hosts apply calls it
-// under its own grant.
+// The lock: the deletion rewrites the tab tree, so it runs under the operation lock like everything that does — the
+// cascade itself takes none; its callers hold it: the Hosts page's `deleteHostWithUndoToast` (owner `host-delete`,
+// retried while busy — PR #1413 review), the hosts apply its own grant.
 
 /**
  * Remove a host from this device: its references become its wire id, its device-local state is cleared, the row
@@ -270,10 +271,50 @@ function restoredHostSlice(
   }
 }
 
-/** `deleteHostCascade` behind the app's undo toast; `deleted` is the toast's text (the caller's `t`). */
-export function deleteHostWithUndoToast(hostId: string, deleted: string): void {
-  const undo = deleteHostCascade(hostId)
-  useUndoToast.getState().show(deleted, undo)
+export const HOST_DELETE_LOCK_OWNER = 'host-delete'
+/** While the operation lock is held elsewhere, the Hosts page's deletion is retried this often… */
+export const HOST_DELETE_BUSY_RETRY_MS = 250
+/** …for this long from the click, then given up (as the profile switcher does with `busy`). */
+export const HOST_DELETE_BUSY_TOTAL_MS = 4_000
+
+/**
+ * `deleteHostCascade` behind the app's undo toast — the Hosts page's deletion. It rewrites the tab tree, so it runs
+ * holding the operation lock (owner `host-delete`), as everything that rewrites the tab tree does: a rebuild in flight
+ * never sees its pane moved to a wire id under it. Held elsewhere, the deletion is retried every
+ * `HOST_DELETE_BUSY_RETRY_MS` up to `HOST_DELETE_BUSY_TOTAL_MS` after the click, then left undone and `messages.busy`
+ * said. With the lock free it happens at once, synchronously. The texts are the caller's (`t`). Resolves `true` once
+ * deleted, `false` when given up; rejects when the deletion itself fails (nothing was deleted then — the cascade
+ * put everything back).
+ */
+export function deleteHostWithUndoToast(hostId: string, messages: { deleted: string; busy: string }): Promise<boolean> {
+  const startedAt = Date.now()
+  return new Promise<boolean>((resolve, reject) => {
+    const attempt = (): void => {
+      const grant = useRebuildStore.getState().acquireOperationLock(HOST_DELETE_LOCK_OWNER)
+      if (grant === null) {
+        if (Date.now() - startedAt < HOST_DELETE_BUSY_TOTAL_MS) {
+          setTimeout(attempt, HOST_DELETE_BUSY_RETRY_MS)
+        } else {
+          useUndoToast.getState().show(messages.busy)
+          resolve(false)
+        }
+        return
+      }
+      let undo: () => void
+      try {
+        // No grant for the undo: it runs later, outside this lock, and takes the lock itself then.
+        undo = deleteHostCascade(hostId)
+      } catch (err) {
+        reject(err)
+        return
+      } finally {
+        useRebuildStore.getState().releaseOperationLock(grant)
+      }
+      useUndoToast.getState().show(messages.deleted, undo)
+      resolve(true)
+    }
+    attempt()
+  })
 }
 
 /** Endpoint identity of a host: what makes a cached answer still that host's. */
