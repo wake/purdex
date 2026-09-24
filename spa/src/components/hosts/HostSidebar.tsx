@@ -4,6 +4,7 @@ import { listContributions } from '../../lib/settings-contribution-registry'
 import { isModuleOwnedContribution } from '../../lib/settings-contribution-types'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useHostLookResolver } from '../../lib/host-look'
+import { useShownRefFilter } from '../../lib/shown-hosts'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 interface Props {
@@ -32,6 +33,8 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
   const lookOf = useHostLookResolver()
+  // Every host is listed in every workbench; a hidden one only looks muted (H2d-2, user rule 1).
+  const isShown = useShownRefFilter()
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({
     [selectedHostId]: true,
   }))
@@ -54,6 +57,8 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           const host = hosts[hostId]
           if (!host) return null
           const isExpanded = expanded[hostId] || hostId === selectedHostId
+          const hidden = !isShown(hostId)
+          const selected = selectedHostId === hostId
           // ctx carries runtime[hostId] so disabled(ctx) predicates can react
           // to live host runtime changes without a separate side-read.
           const hostCtx = { scope: 'host' as const, hostId, runtime: runtime[hostId] }
@@ -81,19 +86,32 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                     onSelect(hostId, targetSubPage)
                   }
                 }}
+                data-host-hidden={hidden ? 'true' : undefined}
                 className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-1.5 ${
-                  selectedHostId === hostId
-                    ? 'bg-accent text-white'
+                  selected
+                    ? `bg-accent text-white${hidden ? ' opacity-70' : ''}`
                     : 'text-text-secondary hover:bg-surface-secondary/50'
                 }`}
               >
                 {isExpanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
                 <StatusIcon runtime={runtime[hostId]} />
                 <span
-                  className={`truncate flex-1 ${runtime[hostId]?.status === 'auth-error' ? 'text-red-400' : ''}`}
+                  className={`truncate flex-1 ${
+                    runtime[hostId]?.status === 'auth-error' ? 'text-red-400' : hidden && !selected ? 'text-text-muted' : ''
+                  }`}
                 >
                   {lookOf(hostId).name}
                 </span>
+                {hidden && (
+                  <span
+                    data-testid="host-hidden-tag"
+                    className={`shrink-0 px-1 rounded text-[10px] leading-4 border ${
+                      selected ? 'border-white/50 text-white' : 'border-border-default text-text-muted'
+                    }`}
+                  >
+                    {t('hosts.shown.hidden_badge')}
+                  </span>
+                )}
               </button>
               {isExpanded && (
                 <div className="ml-4 border-l-2 border-border-subtle pl-2 mt-1">

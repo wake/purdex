@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { HistoryPage } from './HistoryPage'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useTabStore } from '../stores/useTabStore'
 import { createTab } from '../types/tab'
 import type { PaneContent } from '../types/tab'
 import type { Pane } from '../types/tab'
+import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 
 const makePaneProps = () => {
   const pane: Pane = { id: 'hp-1', content: { kind: 'history' } }
@@ -77,5 +79,62 @@ describe('HistoryPage', () => {
     })
     render(<HistoryPage {...makePaneProps()} />)
     expect(screen.getByText('Closed')).toBeTruthy()
+  })
+})
+
+// Host ownership H2d-3 (review fix) — a history record of a closed tab would CREATE a tab: its host hidden in this
+// workbench (checked at click, live store) → the Hosts page on that host, no tab. An open tab is still focused (rule 4).
+describe('HistoryPage — a hidden host (H2d-3)', () => {
+  const tmux: PaneContent = { kind: 'tmux-session', hostId: 'h2', sessionCode: 'c1', mode: 'terminal', cachedName: 'x', tmuxInstance: 'default' }
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'mlab', ip: '1', port: 7860, order: 0 },
+        h2: { id: 'h2', name: 'air', ip: '2', port: 7860, order: 1 },
+      },
+      hostOrder: ['h1', 'h2'],
+      activeHostId: 'h1',
+    })
+  })
+
+  const kinds = () => Object.values(useTabStore.getState().tabs).map((t) => t.layout.type === 'leaf' ? t.layout.pane.content.kind : 'split')
+
+  it('a closed record on a hidden host → the Hosts page on that host; no tab of the record is created', () => {
+    useShownHostsStore.setState({ ids: ['h1'] })
+    useHistoryStore.setState({ browseHistory: [{ tabId: 'gone', paneContent: tmux, visitedAt: 1 }] })
+    render(<HistoryPage {...makePaneProps()} />)
+    fireEvent.click(screen.getByText('Closed'))
+    expect(kinds()).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe('h2')
+  })
+
+  it('checks at click, not at render: hidden after the page rendered → still no tab', () => {
+    useShownHostsStore.setState({ ids: ['h1', 'h2'] })
+    useHistoryStore.setState({ browseHistory: [{ tabId: 'gone', paneContent: tmux, visitedAt: 1 }] })
+    render(<HistoryPage {...makePaneProps()} />)
+    useShownHostsStore.setState({ ids: ['h1'] })
+    fireEvent.click(screen.getByText('Closed'))
+    expect(kinds()).toEqual(['hosts'])
+  })
+
+  it('a closed record on a shown host → creates its tab', () => {
+    useShownHostsStore.setState({ ids: ['h2'] })
+    useHistoryStore.setState({ browseHistory: [{ tabId: 'gone', paneContent: tmux, visitedAt: 1 }] })
+    render(<HistoryPage {...makePaneProps()} />)
+    fireEvent.click(screen.getByText('Closed'))
+    expect(kinds()).toEqual(['tmux-session'])
+  })
+
+  it('an OPEN tab on a hidden host is still focused (rule 4: hiding never changes existing tabs)', () => {
+    useShownHostsStore.setState({ ids: [] })
+    const tab = createTab(tmux)
+    const other = createTab({ kind: 'dashboard' })
+    useTabStore.setState({ tabs: { [tab.id]: tab, [other.id]: other }, tabOrder: [tab.id, other.id], activeTabId: other.id })
+    useHistoryStore.setState({ browseHistory: [{ tabId: tab.id, paneContent: tmux, visitedAt: 1 }] })
+    render(<HistoryPage {...makePaneProps()} />)
+    fireEvent.click(screen.getByText('Open'))
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(2)
   })
 })

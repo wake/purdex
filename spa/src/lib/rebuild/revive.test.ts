@@ -9,6 +9,7 @@ import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../
 import { useHostStore } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../../types/tab'
 
 /** A full `Session`, so the dep-injected fakes stay type-checked (copied from engine.test.ts:18). */
@@ -222,6 +223,22 @@ describe('runRevivePass', () => {
     noteReconciledSessions('h1', [live])
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+    useShownHostsStore.setState({ ids: ['h1', 'h2'] }) // shown in this workbench (H2d-4)
+  })
+
+  // Host ownership H2d-4 (§0.21): the pass is a per-pane sweep; a hidden host's panes are not revived — its
+  // placeholder stays and the recovery on show (host-reshow) revives them. The guard is inside the pass, so every
+  // caller (the reconcile, the lock release) is covered.
+  it('does nothing for a host hidden in this workbench; revives once it is shown', () => {
+    seedPane('t1', 'p1')
+    useShownHostsStore.setState({ ids: ['h2'] })
+    const tabsBefore = useTabStore.getState().tabs
+    runRevivePass('h1')
+    expect(useTabStore.getState().tabs).toBe(tabsBefore)
+    expect(paneContent('t1', 'p1')).toMatchObject(deadContent)
+    useShownHostsStore.setState({ ids: ['h2', 'h1'] })
+    runRevivePass('h1')
+    expect(paneContent('t1', 'p1')).toMatchObject(revivedContent)
   })
 
   it('reads the reconciled snapshot, not the session store', () => {

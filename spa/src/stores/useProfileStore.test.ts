@@ -8,7 +8,7 @@ const EP = '100.64.0.2:7860'
 
 /** Merge-mode reset with every mutable field listed (the harness convention). */
 const resetStore = (): void => {
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
 }
 
 const persistedEnvelope = (): { state: Record<string, unknown>; version: number } =>
@@ -104,14 +104,14 @@ describe('useProfileStore', () => {
     expect(selectMaster({ ...base, masterHostId: null, masterProfileId: PROFILE })).toBeNull()
   })
 
-  it('persists exactly the eleven fields', () => {
+  it('persists exactly its nine fields', () => {
     useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
     useProfileStore.getState().setAutoSync(false)
 
     const envelope = persistedEnvelope()
     expect(envelope.version).toBe(1)
     const attachId = useProfileStore.getState().attachId
-    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', pendingPullHosts: null, attachGeneration: 1, attachId, masterEndpoint: EP, suspension: null, pendingDetaches: [] })
+    expect(envelope.state).toEqual({ masterHostId: 'host-1', masterProfileId: PROFILE, autoSync: false, pendingDirection: 'pull', attachGeneration: 1, attachId, masterEndpoint: EP, suspension: null, pendingDetaches: [] })
   })
 
   describe('rehydrate sanitises what storage holds', () => {
@@ -373,20 +373,6 @@ describe('attachId — WHICH attach, not how many (codex critic: two stale windo
   ])('rehydrate: %s → null', async (_label, state) => {
     await rehydrateFrom(state)
     expect(useProfileStore.getState().attachId).toBeNull()
-  })
-
-  it.each([
-    ['missing', {}],
-    ['empty', { attachId: '' }],
-    ['not a string', { attachId: 7 }],
-  ])('rehydrate: a pull guard whose attachId is %s is NO guard — the direction stays (codex critic: a guard nobody can stop is a dead end)', async (_label, over) => {
-    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: { rev: 7, hash: 'a'.repeat(64) }, ...over })
-    expect(useProfileStore.getState()).toMatchObject({ masterHostId: 'host-1', pendingDirection: 'pull', pendingPullHosts: null, attachId: null })
-  })
-
-  it('rehydrate: the guard WITH its attachId survives', async () => {
-    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: 'absent', attachId: 'abc123' })
-    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: 'pull', pendingPullHosts: 'absent', attachId: 'abc123' })
   })
 })
 
@@ -777,82 +763,28 @@ describe('pendingDetaches — every detach the daemon was not told of, kept unti
   })
 })
 
-describe('pendingPullHosts — the `hosts` row a pull was confirmed against (#1366); one pair with pendingDirection', () => {
-  const ROW = { rev: 7, hash: 'a'.repeat(64) }
-
-  it('starts null', () => expect(useProfileStore.getState().pendingPullHosts).toBeNull())
-
-  it.each([['a row', ROW], ['absent', 'absent' as const]])('setMaster(pull) records %s with the direction', (_label, confirmed) => {
-    expect(useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, confirmed)).toBe(true)
+describe('the pull guard\'s store half is gone (host ownership H3b): no `pendingPullHosts`, `setMaster` takes five arguments', () => {
+  it('setMaster(host, profile, direction, endpoint, token): five parameters; a pull stores its direction and nothing of hosts', () => {
+    expect(useProfileStore.getState().setMaster.length).toBe(5)
+    expect(useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)).toBe(true)
     const s = useProfileStore.getState()
     expect(s.pendingDirection).toBe('pull')
-    expect(s.pendingPullHosts).toEqual(confirmed)
+    expect('pendingPullHosts' in s).toBe(false)
+    expect('pendingPullHosts' in persistedEnvelope().state).toBe(false)
   })
 
-  it('setMaster(push) never stores one', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'push', EP, undefined, ROW)
-    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
-  })
-
-  it.each([
-    ['nothing', undefined],
-    ['null', null],
-    ['a negative rev', { rev: -1, hash: 'x' }],
-    ['a fractional rev', { rev: 1.5, hash: 'x' }],
-    ['an empty hash', { rev: 1, hash: '' }],
-    ['a non-string hash', { rev: 1, hash: 3 }],
-    ['another string', 'present'],
-  ])('setMaster(pull) with %s: no guard', (_label, confirmed) => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, confirmed as never)
-    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
-  })
-
-  it('a new setMaster replaces it (the next attach generation): without one it is gone', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, ROW)
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
-    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
-  })
-
-  it('a refused setMaster leaves the pair as it was', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, ROW)
-    expect(useProfileStore.getState().setMaster('host-1', 'nope', 'pull', EP, undefined, 'absent')).toBe(false)
-    expect(useProfileStore.getState().pendingPullHosts).toEqual(ROW)
-  })
-
-  it('clearPendingDirection clears BOTH at once', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, ROW)
-    useProfileStore.getState().clearPendingDirection()
+  it('a persisted state that holds one (an older build) rehydrates without it, and the next write does not carry it', async () => {
+    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, attachId: 'abc123', pendingDirection: 'pull', pendingPullHosts: { rev: 7, hash: 'a'.repeat(64) } })
     const s = useProfileStore.getState()
-    expect([s.pendingDirection, s.pendingPullHosts]).toEqual([null, null])
+    expect(s).toMatchObject({ masterHostId: 'host-1', pendingDirection: 'pull', attachId: 'abc123' })
+    expect('pendingPullHosts' in s).toBe(false)
+    useProfileStore.getState().setAutoSync(false)
+    expect('pendingPullHosts' in persistedEnvelope().state).toBe(false)
   })
 
-  it('clearMaster clears it', () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, ROW)
-    useProfileStore.getState().clearMaster()
-    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
-  })
-
-  it('is persisted and survives a reload with its direction', async () => {
-    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP, undefined, ROW)
-    expect(persistedEnvelope().state.pendingPullHosts).toEqual(ROW)
-    await rehydrateFrom({ masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, attachId: 'abc123', pendingDirection: 'pull', pendingPullHosts: 'absent' })
-    expect(useProfileStore.getState().pendingPullHosts).toBe('absent')
-  })
-
-  const M = { masterHostId: 'host-1', masterProfileId: PROFILE, masterEndpoint: EP, attachId: 'abc123' }
-  it.each([
-    ['a guard with direction push', { ...M, pendingDirection: 'push', pendingPullHosts: ROW }],
-    ['a guard without a direction', { ...M, pendingDirection: null, pendingPullHosts: ROW }],
-    ['a guard without a master', { pendingDirection: 'pull', pendingPullHosts: ROW }],
-    ['a malformed guard', { ...M, pendingDirection: 'pull', pendingPullHosts: { rev: '7', hash: 'x' } }],
-    ['a string that is not `absent`', { ...M, pendingDirection: 'pull', pendingPullHosts: 'ABSENT' }],
-  ])('rehydrate: %s → null', async (_label, state) => {
-    await rehydrateFrom(state)
-    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
-  })
-
-  it('rehydrate keeps only rev and hash of a row', async () => {
-    await rehydrateFrom({ ...M, pendingDirection: 'pull', pendingPullHosts: { ...ROW, extra: 1 } })
-    expect(useProfileStore.getState().pendingPullHosts).toEqual(ROW)
+  it('clearPendingDirection clears the direction', () => {
+    useProfileStore.getState().setMaster('host-1', PROFILE, 'pull', EP)
+    useProfileStore.getState().clearPendingDirection()
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
   })
 })

@@ -5,6 +5,7 @@
 // asserted both on the call and on what it wrote.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
@@ -90,6 +91,7 @@ beforeEach(() => {
     },
     hostOrder: [H], runtime: {}, activeHostId: H,
   })
+  useShownHostsStore.setState({ ids: [H, H2] }) // shown in this workbench: the revive pass skips a hidden host (H2d-4)
   useSessionStore.setState({ sessions: {} })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })

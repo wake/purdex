@@ -22,6 +22,8 @@ import * as paneMove from '../lib/pane-move'
 import { createHeadlessProviderSource } from '../lib/headless-new-tab-providers'
 import { useHostStore } from '../stores/useHostStore'
 import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { syncIdOfSync } from '../lib/profile/host-identity'
 
 // Keep MOVABLE_KINDS (imported by NewTabPage) real; only spy the mover.
 vi.mock('../lib/pane-move', async (importOriginal) => {
@@ -75,6 +77,8 @@ beforeEach(() => {
   registerModule({ id: 'editor', name: 'Editor', disableable: true })
   useModuleEnabledStore.setState({ enabled: {}, baseline: null })
   useI18nStore.setState({ t: (k: string) => k })
+  // The tests below that predate shown hosts (H2d-3) use the hosts h1 / h2: show them.
+  useShownHostsStore.setState({ ids: ['h1', 'h2'] })
   forceHydrated()
 })
 
@@ -335,6 +339,8 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
         hostB: [mkSession('dup', 'server-beta')],
       },
     })
+    // Both hosts shown (H2d-3: a hidden host's tab is not a Bring-in candidate).
+    useShownHostsStore.setState({ ids: ['hostA', 'hostB'] })
 
     const { tab: current, paneId } = seedSplitCurrentTab('WS')
     seedWorkspaceTab('WS', {
@@ -678,5 +684,158 @@ describe('NewTabPage — Headless section per host (P-C.1)', () => {
     expect(screen.getAllByTestId('headless-disabled')).toHaveLength(2)
     const ensure = vi.mocked(useNexHostStore.getState().ensure)
     expect(ensure.mock.calls.map((c) => c[0]).sort()).toEqual(['h1', 'h2'])
+  })
+})
+
+// Host ownership H2d-3 T1 — a hidden host's `sessions:` / `headless:` blocks are not rendered; the provider stays
+// registered and the column stays in the preset and in `knownIds` (plan §0.21 table, H2d-3).
+describe('NewTabPage — blocks of a hidden host (H2d-3)', () => {
+  const DAEMON = 'air-lab:26aaaa'
+  const WIRE = syncIdOfSync(DAEMON)
+  const Card = (id: string): React.FC<NewTabProviderProps> => () => <div data-testid={`card-${id}`}>{id}</div>
+  const IDS = ['browser', 'sessions:h1', 'sessions:h2', 'headless:h1', 'headless:h2', 'editor']
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'mlab', ip: '1', port: 7860, order: 0, daemonId: DAEMON },
+        h2: { id: 'h2', name: 'air', ip: '2', port: 7860, order: 1 },
+      },
+      hostOrder: ['h1', 'h2'],
+      activeHostId: 'h1',
+    })
+    registerNewTabProvider({ id: 'browser', label: 'browser', icon: 'Globe', order: -10, component: Card('browser') })
+    registerNewTabProviderSource({
+      id: 'hostblocks',
+      getProviders: () => useHostStore.getState().hostOrder.flatMap((h) => [
+        { id: `sessions:${h}`, label: `sessions:${h}`, icon: 'List', order: 0, component: Card(`sessions:${h}`) },
+        { id: `headless:${h}`, label: `headless:${h}`, icon: 'List', order: 5, component: Card(`headless:${h}`) },
+      ]),
+      subscribe: () => () => {},
+      ownsId: (id) => id.startsWith('sessions:') || id.startsWith('headless:'),
+    })
+    registerNewTabProvider({ id: 'editor', label: 'editor', icon: 'File', order: 5, component: Card('editor') })
+    primeLayout(IDS)
+  })
+
+  const rendered = (id: string) => screen.queryByTestId(`card-${id}`) !== null
+
+  it('a hidden host: its sessions / headless blocks are not rendered; a shown host (listed by its d1_ id) and the non-host columns are', () => {
+    useShownHostsStore.setState({ ids: [WIRE] })
+    render(<NewTabPage onSelect={() => {}} />)
+    expect(rendered('sessions:h1')).toBe(true)
+    expect(rendered('headless:h1')).toBe(true)
+    expect(rendered('sessions:h2')).toBe(false)
+    expect(rendered('headless:h2')).toBe(false)
+    expect(rendered('browser')).toBe(true)
+    expect(rendered('editor')).toBe(true)
+    // The provider stays registered.
+    expect(getNewTabProviders().map((p) => p.id)).toContain('sessions:h2')
+  })
+
+  it('the preset and knownIds keep the hidden host\'s columns (the filter changes no layout data)', () => {
+    useShownHostsStore.setState({ ids: [WIRE] })
+    const before = useNewTabLayoutStore.getState()
+    render(<NewTabPage onSelect={() => {}} />)
+    const after = useNewTabLayoutStore.getState()
+    expect(after.presets).toBe(before.presets)
+    expect(after.knownIds).toBe(before.knownIds)
+    expect(after.presets['1col'].columns[0]).toEqual(IDS)
+    expect(after.knownIds).toEqual(IDS)
+  })
+
+  it('ids [] → no host block at all; the non-host columns still render', () => {
+    useShownHostsStore.setState({ ids: [] })
+    render(<NewTabPage onSelect={() => {}} />)
+    for (const id of ['sessions:h1', 'sessions:h2', 'headless:h1', 'headless:h2']) expect(rendered(id), id).toBe(false)
+    expect(rendered('browser')).toBe(true)
+    expect(rendered('editor')).toBe(true)
+  })
+
+  it('an unknown id listed shows nothing local', () => {
+    useShownHostsStore.setState({ ids: [syncIdOfSync('nowhere:000000')] })
+    render(<NewTabPage onSelect={() => {}} />)
+    for (const id of ['sessions:h1', 'sessions:h2', 'headless:h1', 'headless:h2']) expect(rendered(id), id).toBe(false)
+  })
+
+  it('follows a show / hide live', () => {
+    useShownHostsStore.setState({ ids: [] })
+    render(<NewTabPage onSelect={() => {}} />)
+    expect(rendered('sessions:h2')).toBe(false)
+    act(() => { useShownHostsStore.setState({ ids: ['h2'] }) })
+    expect(rendered('sessions:h2')).toBe(true)
+  })
+})
+
+// Host ownership H2d-3 (review fix) — "Bring in an open tab" moves a tab's content into this pane, i.e. it opens that
+// content here: a candidate whose host is hidden in this workbench is not listed, and the click re-checks the live
+// store (TOCTOU) — hidden then → no move, the source tab stays.
+describe('NewTabPage — bring in: a hidden host\'s tab (H2d-3)', () => {
+  const tmux = (hostId: string, cachedName: string): PaneContent => ({
+    kind: 'tmux-session', hostId, sessionCode: `c-${cachedName}`, mode: 'terminal', cachedName, tmuxInstance: 'default',
+  })
+
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useSessionStore.setState({ sessions: {} })
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'mlab', ip: '1', port: 7860, order: 0 },
+        h2: { id: 'h2', name: 'air', ip: '2', port: 7860, order: 1 },
+      },
+      hostOrder: ['h1', 'h2'],
+    })
+    vi.mocked(paneMove.moveTabContentIntoPane).mockClear()
+    seedProvidersForGrid()
+  })
+
+  afterEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+  })
+
+  it('does not list a tab on a hidden host; lists a shown host\'s tab and a non-host tab', () => {
+    useShownHostsStore.setState({ ids: ['h1'] })
+    const { tab: current, paneId } = seedSplitCurrentTab('WS')
+    seedWorkspaceTab('WS', tmux('h1', 'on-shown'))
+    seedWorkspaceTab('WS', tmux('h2', 'on-hidden'))
+    seedWorkspaceTab('WS', editorContent('/plain.ts'))
+    render(<NewTabPage onSelect={() => {}} currentTabId={current.id} currentPaneId={paneId} />)
+    expect(screen.getByText('on-shown')).toBeTruthy()
+    expect(screen.getByText('plain.ts')).toBeTruthy()
+    expect(screen.queryByText('on-hidden')).toBeNull()
+  })
+
+  it('follows a hide live: the candidate leaves the list', () => {
+    useShownHostsStore.setState({ ids: ['h1', 'h2'] })
+    const { tab: current, paneId } = seedSplitCurrentTab('WS')
+    seedWorkspaceTab('WS', tmux('h2', 'on-h2'))
+    render(<NewTabPage onSelect={() => {}} currentTabId={current.id} currentPaneId={paneId} />)
+    expect(screen.getByText('on-h2')).toBeTruthy()
+    act(() => { useShownHostsStore.setState({ ids: ['h1'] }) })
+    expect(screen.queryByText('on-h2')).toBeNull()
+  })
+
+  it('re-checks at click: the host hidden after the list rendered → no move, the source tab stays', () => {
+    useShownHostsStore.setState({ ids: ['h1', 'h2'] })
+    const { tab: current, paneId } = seedSplitCurrentTab('WS')
+    const { tab: source } = seedWorkspaceTab('WS', tmux('h2', 'on-h2'))
+    render(<NewTabPage onSelect={() => {}} currentTabId={current.id} currentPaneId={paneId} />)
+    const row = screen.getByText('on-h2')
+    // Hidden between the render and the click (no re-render in between).
+    useShownHostsStore.setState({ ids: ['h1'] })
+    fireEvent.click(row)
+    expect(paneMove.moveTabContentIntoPane).not.toHaveBeenCalled()
+    expect(useTabStore.getState().tabs[source.id]).toBeDefined()
+  })
+
+  it('a shown host at click → moves', () => {
+    useShownHostsStore.setState({ ids: ['h2'] })
+    const { tab: current, paneId } = seedSplitCurrentTab('WS')
+    const { tab: source } = seedWorkspaceTab('WS', tmux('h2', 'on-h2'))
+    render(<NewTabPage onSelect={() => {}} currentTabId={current.id} currentPaneId={paneId} />)
+    fireEvent.click(screen.getByText('on-h2'))
+    expect(paneMove.moveTabContentIntoPane).toHaveBeenCalledWith(source.id, current.id, paneId)
   })
 })

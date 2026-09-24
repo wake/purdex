@@ -6,7 +6,9 @@ import { createTab } from '../types/tab'
 import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
 import { closeTab } from '../lib/tab-lifecycle'
 import { getTabShortcutHandler } from '../lib/tab-shortcut-registry'
-import { getPrimaryPane } from '../lib/pane-tree'
+import { collectLeaves, getPrimaryPane } from '../lib/pane-tree'
+import { useHostStore } from '../stores/useHostStore'
+import { hostRefOf, landOnHostsPageIfHidden } from '../lib/shown-hosts'
 import { hasLocalSlaves, useProfileSwitcherStore } from '../stores/useProfileSwitcherStore'
 
 export function useShortcuts(): void {
@@ -98,6 +100,18 @@ export function useShortcuts(): void {
       }
 
       if (action === 'reopen-closed-tab') {
+        // Host ownership H2d-3: reopening opens the closed tab's hosts. Peek at the record `reopenLast` would take
+        // (the latest not yet reopened) WITHOUT consuming it: a host-bearing pane on a host hidden in this workbench →
+        // the Hosts page on that host, nothing reopened or focused, and the record stays for when the host is shown.
+        const { closedTabs } = useHistoryStore.getState()
+        const next = closedTabs.findLast((r) => r.reopenedAt === undefined)
+        if (next) {
+          const { hostOrder } = useHostStore.getState()
+          for (const pane of collectLeaves(next.tab.layout)) {
+            const ref = hostRefOf(pane.content, hostOrder)
+            if (ref !== null && landOnHostsPageIfHidden(ref)) return
+          }
+        }
         const tab = useHistoryStore.getState().reopenLast()
         if (tab) {
           tabState.addTab(tab)

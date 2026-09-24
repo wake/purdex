@@ -12,6 +12,8 @@ import { HostColorField } from './HostColorField'
 import { HostIconField } from './HostIconField'
 import type { HostColorMode } from '../../lib/host-color'
 import { hostLabel, hostLookOf, useHostLook } from '../../lib/host-look'
+import { setHostShown, useIsRefShown } from '../../lib/shown-hosts'
+import { ToggleSwitch } from '../settings/ToggleSwitch'
 
 interface Props {
   hostId: string
@@ -34,6 +36,7 @@ export function OverviewSection({ hostId }: Props) {
   const updateHost = useHostStore((s) => s.updateHost)
   const setHostName = useHostStore((s) => s.setHostName)
   const hostOrder = useHostStore((s) => s.hostOrder)
+  const shown = useIsRefShown(hostId)
 
   const [info, setInfo] = useState<HostInfo | null>(null)
   const [config, setConfig] = useState<ConfigData | null>(null)
@@ -139,6 +142,21 @@ export function OverviewSection({ hostId }: Props) {
   return (
     <div className="max-w-2xl space-y-2">
       <h2 className="text-lg font-semibold mb-4">{look.name}</h2>
+
+      {/* The ONLY writer of the shown list (plan H2d-2, §0.21): it writes this host's forms only, on click only. A new
+          host — and every host when this shipped — starts hidden, so the switch sits first and stands out while off. */}
+      <div
+        data-testid="host-shown-switch"
+        className={`flex items-start gap-3 px-3 py-2.5 rounded-md mb-4 border ${
+          shown ? 'border-border-subtle' : 'bg-accent/10 border-accent/40'
+        }`}
+      >
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-text-primary font-medium">{t('hosts.shown.switch')}</p>
+          <p className="text-xs text-text-muted mt-0.5">{t('hosts.shown.switch_hint')}</p>
+        </div>
+        <ToggleSwitch label={t('hosts.shown.switch')} checked={shown} onChange={(next) => setHostShown(hostId, next)} />
+      </div>
 
       {runtime?.status === 'auth-error' && (
         <div className="flex items-start gap-3 px-3 py-2.5 rounded-md mb-4 bg-red-500/10 border border-red-500/20">
