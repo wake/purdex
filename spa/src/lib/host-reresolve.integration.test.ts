@@ -13,6 +13,7 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { useHostLookStore } from '../stores/useHostLookStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useNewTabBootstrap } from '../hooks/useNewTabBootstrap'
 import { clearNewTabRegistry, registerNewTabProviderSource } from './new-tab-registry'
 import { createHostSessionProviderSource } from './session-new-tab-providers'
@@ -105,6 +106,7 @@ beforeEach(() => {
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
   useHostSettingsStore.setState({ hosts: {} })
   useHostLookStore.setState({ looks: {} })
+  useShownHostsStore.setState({ all: true, ids: [] })
 })
 
 afterEach(() => {
@@ -270,6 +272,47 @@ describe('(e) the look re-key: one push, settings only (H2c-2)', () => {
     expect((buildSectionPayload('settings')!.payload as SettingsPayload)['purdex-host-looks']).toEqual({ looks: { [W]: { name: 'air26' }, [WM]: { name: 'mlab' } } })
     expect(runHostReresolve()).toBe('done')
     expect(await hashes()).toEqual(once)
+  })
+})
+
+// H2d-1 T4 (plan §0.13): the same exception for the shown-hosts store — a listed LOCAL id moves to the host's `d1_…`
+// once its daemonId is learned: `settings` changes once, every other section stays. With both a look entry and a
+// shown id on that local id, the pass still changes `settings` exactly once (one write each, one push).
+describe('(f) the shown-hosts re-key: one push, settings only (H2d-1)', () => {
+  it.each([
+    ['a shown id only', false],
+    ['a shown id and a look entry on the same local id', true],
+  ])('%s + the daemonId learned → only settings differs, and a second pass changes nothing', async (_label, withLook) => {
+    masterOnScreen()
+    seedSettings()
+    addX({ daemonId: undefined })
+    useShownHostsStore.setState({ all: false, ids: [WM, X] })
+    if (withLook) useHostLookStore.setState({ looks: { [X]: { name: 'air26' } } })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [X]: { ...s.hosts[X], daemonId: DAEMON } } }))
+    const before = await hashes()
+    expect(runHostReresolve()).toBe('done')
+    const { all, ids } = useShownHostsStore.getState()
+    expect({ all, ids }).toEqual({ all: false, ids: [WM, W] })
+    if (withLook) expect(useHostLookStore.getState().looks).toEqual({ [W]: { name: 'air26' } })
+    const once = await hashes()
+    for (const key of KEYS) {
+      if (key === 'settings') expect(once[key], key).not.toBe(before[key])
+      else expect(once[key], key).toBe(before[key])
+    }
+    expect((buildSectionPayload('settings')!.payload as SettingsPayload)['purdex-shown-hosts']).toEqual({ all: false, ids: [WM, W] })
+    expect(runHostReresolve()).toBe('done')
+    expect(await hashes()).toEqual(once)
+  })
+
+  it('a host arriving WITH its daemonId, listed by its d1_ id: the pass leaves every section hash as it was', async () => {
+    masterOnScreen()
+    seedSettings()
+    useShownHostsStore.setState({ all: false, ids: [W] })
+    addX()
+    const before = await hashes()
+    expect(runHostReresolve()).toBe('done')
+    expect(useShownHostsStore.getState().ids).toEqual([W])
+    expect(await hashes()).toEqual(before)
   })
 })
 

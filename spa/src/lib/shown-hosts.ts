@@ -11,11 +11,13 @@
 //   and a ref is enabled when `all`, or its wire id is listed — so a pane on an unresolved `d1_X` is disabled when
 //   `d1_X` is not listed, where `isHostShown('d1_X')` says `true`.
 //
-// Placement: this module imports `useHostStore` and `useShownHostsStore`; neither may import this module.
+// Placement: this module imports `useHostStore`, `useShownHostsStore` and `host-look` (`wireKeyMovesOf`); none of them
+// may import this module.
 import { useCallback } from 'react'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useShownHostsStore, type ShownHosts } from '../stores/useShownHostsStore'
 import { wireIdOfHost } from './profile/host-identity'
+import { wireKeyMovesOf } from './host-look'
 import type { PaneContent } from '../types/tab'
 
 /** What the rules read of the store: `all` and the listed wire ids. */
@@ -107,4 +109,22 @@ export function usePaneHostEnabled(content: PaneContent): boolean {
 /** The non-hook read for the per-pane sweeps: `isRefEnabled` over both stores' current state. */
 export function isHostRefEnabledNow(ref: string): boolean {
   return isRefEnabled(ref, useHostStore.getState().hosts, useShownHostsStore.getState())
+}
+
+// === Re-key (spec §4.3, plan §0.12; run by the re-resolve pass) ===
+
+/**
+ * The pass's shown-hosts step: a listed local id of a host whose daemonId is known becomes its `d1_…` id, in place;
+ * when that `d1_…` is already listed the local id is dropped (`useShownHostsStore.rekey`). Same moves as the look
+ * re-key (`wireKeyMovesOf` — a daemon two rows claim moves nothing). `null` when nothing would move; else the write
+ * and its way back, for the pass to commit under its lock. Never part of the explicit-map rewrite a deletion reuses.
+ */
+export function rekeyShownHosts(hosts: Record<string, HostConfig>): { commit: () => void; undo: () => void } | null {
+  const { all, ids } = useShownHostsStore.getState()
+  const moves = wireKeyMovesOf(hosts).filter(([from]) => ids.includes(from))
+  if (moves.length === 0) return null
+  return {
+    commit: () => useShownHostsStore.getState().rekey(moves),
+    undo: () => useShownHostsStore.setState({ all, ids }),
+  }
 }
