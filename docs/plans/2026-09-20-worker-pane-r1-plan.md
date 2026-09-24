@@ -146,7 +146,16 @@ export function maskAccount(account: string): string {
   `wa…@gmail.com`), `keeps a short local part whole` (`ab@x.io` → `ab@x.io`),
   `masks a bare handle` (`wakeliu` → `wa…`), `leaves a short bare handle`
   (`abcd` → `abcd`), `leaves an empty string` (`''` → `''`), `treats the last
-  @ as the separator` (`a@b@c.io` → `a@b@c.io`).
+  @ as the separator` (`a@b@c.io` → `a@…@c.io`: the local part is `a@b`,
+  which is over the two-character floor, so it masks — an earlier draft of
+  this line wrote `a@b@c.io`, which is what splitting on the *first* `@`
+  would give and therefore contradicted the case's own name).
+
+  Wherever a test claims the address is nowhere in the DOM, assert on
+  `document.body.innerHTML`, not on the `container` that `render` returns:
+  `FloatingPanel` portals into the body
+  (`spa/src/components/FloatingPanel.tsx:262`), so a container-scoped
+  assertion passes while the panel leaks.
 
 ### T1.2 wire it into `CostPanel` (TDD)
 
