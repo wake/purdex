@@ -56,10 +56,12 @@
 // This guard is a TRIPWIRE, not an enforcement boundary: the `ALLOWLIST`
 // constant and the verbatim copy pinned in the "pinned" test live in this one
 // file, so one PR can widen both. What it buys is that any widening is an
-// explicit, reviewable diff to this file. Only `stores/useHostStore.ts`,
+// explicit, reviewable diff to this file. Permanently only `stores/useHostStore.ts`,
 // `lib/host-color.ts` and `lib/host-look.ts` may appear (the spec §4.2
-// exception); a test asserts the allowlisted files are a subset of those
-// three. H2a checks the colour / icon fields; H2b adds `name`.
+// exception); every other allowlisted file is TEMPORARY, named in
+// `TEMPORARY_FILES` with the PR that removes it, and a test asserts the
+// allowlisted files are a subset of those three plus exactly that list.
+// H2a checked the colour / icon fields; H2b-1 adds `name`.
 import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
 
@@ -74,8 +76,8 @@ function srcRelative(fileName: string): string | null {
   return fileName.startsWith(`${SRC_DIR}/`) ? fileName.slice(SRC_DIR.length + 1) : null
 }
 
-/** The fields H2a guards. */
-export const GUARDED_FIELDS = ['colors', 'color', 'icon', 'iconWeight'] as const
+/** The guarded look fields (H2a: colour / icon; H2b-1: `name`). */
+export const GUARDED_FIELDS = ['name', 'colors', 'color', 'icon', 'iconWeight'] as const
 
 export interface GuardHit {
   /** Relative to `spa/src`, `/`-separated. */
@@ -398,12 +400,16 @@ const FIXTURES: Record<string, [string, string[]]> = {
     ['icon', 'color'],
   ],
   'computed-parameter-literal.ts': [`export const f = ({ ['colors']: c }: HostConfig) => c`, ['colors']],
+  'name-read.ts': [
+    `declare const m: HostConfig | undefined\nconst { name } = h\nexport const v = [name, m?.name, h['name']]`,
+    ['name', 'name', 'name'],
+  ],
   // not flagged
   'assignment-left.ts': [`declare const next: HostConfig\nnext.icon = 'Laptop'\nnext.color ??= '#ffffff'`, []],
   'delete.ts': [`declare const next: HostConfig\ndelete next.icon\ndelete next['colors']`, []],
   'object-literal.ts': [`export const v: Partial<HostConfig> = { icon: 'x', color: '#000000' }`, []],
   'other-type.ts': [`declare const f: { icon: string; colors: string }\nexport const v = [f.icon, f.colors]`, []],
-  'unguarded-field.ts': [`export const v = [h.name, h.ip, h.daemonId]`, []],
+  'unguarded-field.ts': [`export const v = [h.id, h.ip, h.daemonId]`, []],
   // KNOWN FALSE NEGATIVES — pinned blind spots, NOT flagged on purpose
   'blind-variable-key.ts': [`declare const k: 'icon' | 'colors'\nexport const v = h[k]`, []],
   'blind-cast.ts': [`export const v = (h as { icon?: string }).icon`, []],
@@ -523,7 +529,7 @@ describe('host-look guard — allowlistProblems', { timeout: 60_000 }, () => {
   const allow: Allowlist = { [FILE]: { keep: { icon: 1 }, twice: { color: 2 } } }
   const baseline = [
     `export function keep(x: HostConfig) { return x.icon }`,
-    `export function other(x: HostConfig) { return x.name }`,
+    `export function other(x: HostConfig) { return x.ip }`,
     `export function twice(x: HostConfig) { return [x.color, x.color] }`,
   ].join('\n')
 
@@ -533,8 +539,8 @@ describe('host-look guard — allowlistProblems', { timeout: 60_000 }, () => {
 
   it('a same-file, same-count swap into another declaration fails', () => {
     const swapped = baseline
-      .replace('keep(x: HostConfig) { return x.icon }', 'keep(x: HostConfig) { return x.name }')
-      .replace('other(x: HostConfig) { return x.name }', 'other(x: HostConfig) { return x.icon }')
+      .replace('keep(x: HostConfig) { return x.icon }', 'keep(x: HostConfig) { return x.ip }')
+      .replace('other(x: HostConfig) { return x.ip }', 'other(x: HostConfig) { return x.icon }')
     expect(swapped).not.toBe(baseline)
     expect(allowlistProblems(scan(swapped), allow)).toEqual([
       `${FILE} keep icon: 0 read(s), allowlisted 1 — none`,
@@ -543,7 +549,7 @@ describe('host-look guard — allowlistProblems', { timeout: 60_000 }, () => {
   })
 
   it('the count inside one declaration must match too', () => {
-    const once = baseline.replace('[x.color, x.color]', '[x.color, x.name]')
+    const once = baseline.replace('[x.color, x.color]', '[x.color, x.ip]')
     expect(allowlistProblems(scan(once), allow)).toEqual([`${FILE} twice color: 1 read(s), allowlisted 2 — ${FILE}:5`])
   })
 
@@ -570,33 +576,33 @@ function allowlistOf(hits: readonly GuardHit[]): Allowlist {
 const SWAPS: Record<string, [string, string]> = {
   'same-named nested functions, different parents': [
     `export function a(x: HostConfig) { function inner() { return x.icon } return inner() }\n` +
-      `export function b(x: HostConfig) { function inner() { return x.name } return inner() }`,
-    `export function a(x: HostConfig) { function inner() { return x.name } return inner() }\n` +
+      `export function b(x: HostConfig) { function inner() { return x.ip } return inner() }`,
+    `export function a(x: HostConfig) { function inner() { return x.ip } return inner() }\n` +
       `export function b(x: HostConfig) { function inner() { return x.icon } return inner() }`,
   ],
   'same-named nested functions, same parent': [
-    `export function o(x: HostConfig) { if (x.id) { function inner() { return x.icon } return inner() } else { function inner() { return x.name } return inner() } }`,
-    `export function o(x: HostConfig) { if (x.id) { function inner() { return x.name } return inner() } else { function inner() { return x.icon } return inner() } }`,
+    `export function o(x: HostConfig) { if (x.id) { function inner() { return x.icon } return inner() } else { function inner() { return x.ip } return inner() } }`,
+    `export function o(x: HostConfig) { if (x.id) { function inner() { return x.ip } return inner() } else { function inner() { return x.icon } return inner() } }`,
   ],
   'same-named methods, two classes': [
-    `export class A { m(x: HostConfig) { return x.icon } }\nexport class B { m(x: HostConfig) { return x.name } }`,
-    `export class A { m(x: HostConfig) { return x.name } }\nexport class B { m(x: HostConfig) { return x.icon } }`,
+    `export class A { m(x: HostConfig) { return x.icon } }\nexport class B { m(x: HostConfig) { return x.ip } }`,
+    `export class A { m(x: HostConfig) { return x.ip } }\nexport class B { m(x: HostConfig) { return x.icon } }`,
   ],
   'same-named methods, two named object literals': [
-    `export const A = { m(x: HostConfig) { return x.icon } }\nexport const B = { m(x: HostConfig) { return x.name } }`,
-    `export const A = { m(x: HostConfig) { return x.name } }\nexport const B = { m(x: HostConfig) { return x.icon } }`,
+    `export const A = { m(x: HostConfig) { return x.icon } }\nexport const B = { m(x: HostConfig) { return x.ip } }`,
+    `export const A = { m(x: HostConfig) { return x.ip } }\nexport const B = { m(x: HostConfig) { return x.icon } }`,
   ],
   'same-named methods, two anonymous object literals': [
-    `declare function reg(o: object): void\nreg({ m(x: HostConfig) { return x.icon } })\nreg({ m(x: HostConfig) { return x.name } })`,
-    `declare function reg(o: object): void\nreg({ m(x: HostConfig) { return x.name } })\nreg({ m(x: HostConfig) { return x.icon } })`,
+    `declare function reg(o: object): void\nreg({ m(x: HostConfig) { return x.icon } })\nreg({ m(x: HostConfig) { return x.ip } })`,
+    `declare function reg(o: object): void\nreg({ m(x: HostConfig) { return x.ip } })\nreg({ m(x: HostConfig) { return x.icon } })`,
   ],
   'anonymous default export vs anonymous callback': [
-    `export default function (x: HostConfig) { return x.icon }\nexport const r = [h].map((x) => x.name)`,
-    `export default function (x: HostConfig) { return x.name }\nexport const r = [h].map((x) => x.icon)`,
+    `export default function (x: HostConfig) { return x.icon }\nexport const r = [h].map((x) => x.ip)`,
+    `export default function (x: HostConfig) { return x.ip }\nexport const r = [h].map((x) => x.icon)`,
   ],
   'two anonymous callbacks': [
-    `;[h].forEach((x) => x.icon)\n;[h].forEach((x) => x.name)`,
-    `;[h].forEach((x) => x.name)\n;[h].forEach((x) => x.icon)`,
+    `;[h].forEach((x) => x.icon)\n;[h].forEach((x) => x.ip)`,
+    `;[h].forEach((x) => x.ip)\n;[h].forEach((x) => x.icon)`,
   ],
 }
 
@@ -634,8 +640,9 @@ describe('host-look guard — declaration keys are unique', { timeout: 60_000 },
 // === repo half ===
 
 /**
- * The only production reads of a colour / icon field off `HostConfig`: file →
- * declaration key → field → exact count. Measured at H2a T4.
+ * The only production reads of a look field off `HostConfig`: file →
+ * declaration key → field → exact count. Colour / icon measured at H2a T4,
+ * `name` at H2b-1 T1.
  * A widening also edits the pinned copy below — same file, so a tripwire made
  * visible in review, not an enforcement boundary (see the header).
  */
@@ -654,15 +661,76 @@ export const ALLOWLIST: Allowlist = {
   },
   // THE selector
   'lib/host-look.ts': {
-    lookOfHost: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
+    lookOfHost: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
+  },
+
+  // --- TEMPORARY (see `TEMPORARY_FILES`) ---
+
+  // the share payload's name, until H2c-3 (plan §0.9 / §0.10)
+  'lib/host-transfer-plan.ts': {
+    'payloadRowsOf.name': { name: 1 },
+  },
+
+  // name surfaces not yet on the selector — emptied by H2b-2
+  'components/StatusBar.tsx': {
+    StatusBar: { name: 1 },
+  },
+  'components/MemoryMonitorPage.tsx': {
+    MemoryMonitorPage: { name: 1 },
+  },
+  'components/executions/ExecutionsView.tsx': {
+    'ExecutionsView.useHostStore(arg0)': { name: 1 },
+  },
+  'hooks/useNotificationDispatcher.ts': {
+    'useNotificationDispatcher.useEffect(arg0)#3.subscribe(arg0)': { name: 1 },
+  },
+  'components/settings/DevEnvironmentSection.tsx': {
+    'DevEnvironmentSection.map(arg0)': { name: 1 },
+  },
+  'components/settings/LocalDaemonSection.tsx': {
+    'LocalDaemonSection.name': { name: 1 },
+  },
+  'components/settings/profile/CurrentBlock.tsx': {
+    'Attached.blockedText.hosts.map(arg0)': { name: 1 },
+    'Attached.host': { name: 1 },
+  },
+  'components/settings/profile/StopSyncControl.tsx': {
+    LeftoverItem: { name: 1 },
+  },
+  'components/settings/profile/wizard/ProfileWizard.tsx': {
+    ProfileWizard: { name: 1 },
+    'ProfileWizard.execute.host': { name: 1 },
+  },
+  'components/settings/profile/wizard/WizardChoiceSteps.tsx': {
+    'DirectionStep.hostName': { name: 1 },
+    'SotStep.map(arg0)#1': { name: 1 },
+    'SotStep.map(arg0)#1.name': { name: 1 },
   },
 }
 
-/** The spec §4.2 exception: the only files the allowlist may ever name. */
-const ALLOWLIST_FILES_MAY_BE = ['stores/useHostStore.ts', 'lib/host-color.ts', 'lib/host-look.ts']
+/** The spec §4.2 exception: the only files the allowlist may name for good. */
+const PERMANENT_FILES = ['stores/useHostStore.ts', 'lib/host-color.ts', 'lib/host-look.ts']
+
+/**
+ * Every other file the allowlist may name, and the PR that takes it out. Each
+ * reads `name` only (colour / icon have no temporary reader).
+ */
+const TEMPORARY_FILES: Record<string, string> = {
+  'lib/host-transfer-plan.ts': 'H2c-3',
+  'components/StatusBar.tsx': 'emptied by H2b-2',
+  'components/MemoryMonitorPage.tsx': 'emptied by H2b-2',
+  'components/executions/ExecutionsView.tsx': 'emptied by H2b-2',
+  'hooks/useNotificationDispatcher.ts': 'emptied by H2b-2',
+  'components/settings/DevEnvironmentSection.tsx': 'emptied by H2b-2',
+  'components/settings/LocalDaemonSection.tsx': 'emptied by H2b-2',
+  'components/settings/profile/CurrentBlock.tsx': 'emptied by H2b-2',
+  'components/settings/profile/StopSyncControl.tsx': 'emptied by H2b-2',
+  'components/settings/profile/wizard/ProfileWizard.tsx': 'emptied by H2b-2',
+  'components/settings/profile/wizard/WizardChoiceSteps.tsx': 'emptied by H2b-2',
+}
 
 describe('host-look guard — repo', { timeout: 60_000 }, () => {
-  it('the colour / icon reads of HostConfig are exactly the allowlist (file, declaration, field, count)', () => {
+  it('the look reads of HostConfig are exactly the allowlist (file, declaration, field, count)', () => {
     const hits = detectHostConfigReads(repoProgram(), { fields: GUARDED_FIELDS, include: isGuardedSource })
     expect(allowlistProblems(hits, ALLOWLIST)).toEqual([])
   })
@@ -678,12 +746,57 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
         sanitizeHostConfig: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
       },
       'lib/host-look.ts': {
-        lookOfHost: { colors: 1, color: 1, icon: 1, iconWeight: 1 },
+        lookOfHost: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
+      },
+      'lib/host-transfer-plan.ts': { 'payloadRowsOf.name': { name: 1 } },
+      'components/StatusBar.tsx': { StatusBar: { name: 1 } },
+      'components/MemoryMonitorPage.tsx': { MemoryMonitorPage: { name: 1 } },
+      'components/executions/ExecutionsView.tsx': { 'ExecutionsView.useHostStore(arg0)': { name: 1 } },
+      'hooks/useNotificationDispatcher.ts': { 'useNotificationDispatcher.useEffect(arg0)#3.subscribe(arg0)': { name: 1 } },
+      'components/settings/DevEnvironmentSection.tsx': { 'DevEnvironmentSection.map(arg0)': { name: 1 } },
+      'components/settings/LocalDaemonSection.tsx': { 'LocalDaemonSection.name': { name: 1 } },
+      'components/settings/profile/CurrentBlock.tsx': {
+        'Attached.blockedText.hosts.map(arg0)': { name: 1 },
+        'Attached.host': { name: 1 },
+      },
+      'components/settings/profile/StopSyncControl.tsx': { LeftoverItem: { name: 1 } },
+      'components/settings/profile/wizard/ProfileWizard.tsx': {
+        ProfileWizard: { name: 1 },
+        'ProfileWizard.execute.host': { name: 1 },
+      },
+      'components/settings/profile/wizard/WizardChoiceSteps.tsx': {
+        'DirectionStep.hostName': { name: 1 },
+        'SotStep.map(arg0)#1': { name: 1 },
+        'SotStep.map(arg0)#1.name': { name: 1 },
       },
     })
   })
 
-  it('the allowlisted files are a subset of the spec §4.2 three', () => {
-    expect(Object.keys(ALLOWLIST).filter((f) => !ALLOWLIST_FILES_MAY_BE.includes(f))).toEqual([])
+  it('the temporary files are pinned verbatim, each with the PR that removes it', () => {
+    expect(TEMPORARY_FILES).toEqual({
+      'lib/host-transfer-plan.ts': 'H2c-3',
+      'components/StatusBar.tsx': 'emptied by H2b-2',
+      'components/MemoryMonitorPage.tsx': 'emptied by H2b-2',
+      'components/executions/ExecutionsView.tsx': 'emptied by H2b-2',
+      'hooks/useNotificationDispatcher.ts': 'emptied by H2b-2',
+      'components/settings/DevEnvironmentSection.tsx': 'emptied by H2b-2',
+      'components/settings/LocalDaemonSection.tsx': 'emptied by H2b-2',
+      'components/settings/profile/CurrentBlock.tsx': 'emptied by H2b-2',
+      'components/settings/profile/StopSyncControl.tsx': 'emptied by H2b-2',
+      'components/settings/profile/wizard/ProfileWizard.tsx': 'emptied by H2b-2',
+      'components/settings/profile/wizard/WizardChoiceSteps.tsx': 'emptied by H2b-2',
+    })
+  })
+
+  it('outside the spec §4.2 three, the allowlisted files are exactly the temporary list', () => {
+    const others = Object.keys(ALLOWLIST).filter((f) => !PERMANENT_FILES.includes(f))
+    expect(others.sort()).toEqual(Object.keys(TEMPORARY_FILES).sort())
+  })
+
+  it('a temporary file is allowlisted for `name` only', () => {
+    const fields = Object.keys(TEMPORARY_FILES).flatMap((f) =>
+      Object.values(ALLOWLIST[f] ?? {}).flatMap((counts) => Object.keys(counts)),
+    )
+    expect(new Set(fields)).toEqual(new Set(['name']))
   })
 })
