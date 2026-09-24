@@ -242,11 +242,14 @@ describe('ToolDiffView folding (#1227)', () => {
 // the header; `+N −M` belongs to the diff, and it went nowhere when
 // `ToolResultBlock`'s facts span was dismantled.
 describe('ToolDiffView stat (spec §3.1.1 #3)', () => {
-  it('shows the path and the +N −M stat', () => {
+  it('shows the +N −M stat, and not the path', () => {
     render(<ToolDiffView diff={statDiff(5, 0, [addedHunk(3)])} foldKey="d" />)
     const stat = screen.getByTestId('diff-stat')
-    expect(stat).toHaveTextContent('/srv/app.ts')
     expect(stat).toHaveTextContent('+5 −0')
+    // The path is the header's `primary_arg`, already drawn once above this
+    // block. Repeating it here would be the same stacking spec §3.1.1 #3
+    // objects to, one column over.
+    expect(stat.textContent).not.toContain('/srv/app.ts')
     // U+2212 MINUS, not the hyphen: it is the width of `+` under tabular-nums.
     expect(stat.textContent).toContain('−0')
     expect(stat.textContent).not.toContain('-0')

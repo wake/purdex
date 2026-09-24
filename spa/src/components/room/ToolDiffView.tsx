@@ -96,10 +96,14 @@ export default function ToolDiffView({ diff, foldKey }: Props) {
         *instead* of expanding — and it is drawn even when the daemon dropped
         every hunk, where it is the only thing left that says what changed.
         `+0 −0` is a normal edit result and renders (contract rule 7).
+
+        The stat is the numbers alone. `diff.path` is the same string the
+        header already draws as the operation's `primary_arg`, so printing it
+        again here would rebuild, one column over, the stacking spec §3.1.1 #3
+        objects to.
       */}
-      <div data-testid="diff-stat" className="flex items-baseline gap-2 px-2 py-0.5 text-text-muted">
-        <span className="min-w-0 flex-1 break-all">{diff.path}</span>
-        <span className="shrink-0 tabular-nums">{`+${diff.added} ${MINUS}${diff.removed}`}</span>
+      <div data-testid="diff-stat" className="px-2 py-0.5 text-text-muted tabular-nums">
+        {`+${diff.added} ${MINUS}${diff.removed}`}
       </div>
       {visible.map(({ hunk, rows: hunkRows }, i) => {
         if (hunkRows.length === 0) return null
