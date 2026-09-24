@@ -188,27 +188,27 @@ describe('OverviewSection', () => {
     // PR #1413 critic: a deletion that failed is said, not only logged — and when it could not even put everything
     // back, said so that it stays: reload, check the host settings.
     it('a deletion that failed (and was put back): a failure toast, not persistent', async () => {
-      useUndoToast.setState({ toast: null })
+      useUndoToast.setState({ toast: null, notice: null })
       vi.spyOn(console, 'error').mockImplementation(() => {})
       vi.mocked(lifecycle.deleteHostWithUndoToast).mockRejectedValueOnce(new Error('quota'))
       render(<OverviewSection hostId={HOST_ID} />)
       fireEvent.click(screen.getByText('Delete Host'))
       fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
       await waitFor(() => expect(useUndoToast.getState().toast).toMatchObject({ message: 'Test could not be deleted — nothing was changed' }))
-      expect(useUndoToast.getState().toast?.persistent).toBeFalsy()
+      expect(useUndoToast.getState().notice).toBeNull()
     })
 
     it('a deletion whose rollback was incomplete: a persistent notice to reload and check the host settings', async () => {
-      useUndoToast.setState({ toast: null })
+      useUndoToast.setState({ toast: null, notice: null })
       vi.spyOn(console, 'error').mockImplementation(() => {})
       vi.mocked(lifecycle.deleteHostWithUndoToast).mockRejectedValueOnce(new lifecycle.HostDeleteRollbackIncompleteError('quota (rollback incomplete — x)'))
       render(<OverviewSection hostId={HOST_ID} />)
       fireEvent.click(screen.getByText('Delete Host'))
       fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
-      await waitFor(() => expect(useUndoToast.getState().toast).toMatchObject({
+      await waitFor(() => expect(useUndoToast.getState().notice).toMatchObject({
         message: 'Deleting Test failed and could not be fully undone — reload Purdex and check the host settings',
-        persistent: true,
       }))
+      expect(useUndoToast.getState().toast).toBeNull()
     })
 
     it('the real call: the host is gone, the undo toast is up, and its action brings the host back', () => {

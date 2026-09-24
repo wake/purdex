@@ -9,22 +9,30 @@ import { create } from 'zustand'
  * Renamed semantically from "restore" to "action" — the field can host an undo
  * callback OR a retry callback; existing back-compat callers (delete-host undo)
  * pass a function and stay green.
- *  - persistent          → not dismissed after a while: it stays until closed (a failure the user must act on)
+ *
+ * `show(…, { persistent: true })` is a NOTICE, not a toast: a failure the user must act on. It is kept apart
+ * (`notice`) — never replaced by a later toast, an Undo offer included, and never timed out — and shown alongside
+ * the toast until the user closes it (`dismissNotice`). A later persistent notice replaces an earlier one.
  */
 interface UndoToastState {
   toast: {
     message: string
     action?: () => void
     actionLabel?: string
-    persistent?: boolean
   } | null
+  notice: { message: string } | null
   show: (message: string, action?: () => void, actionLabel?: string, opts?: { persistent?: boolean }) => void
+  /** Clears the toast; a notice stays. */
   dismiss: () => void
+  /** Clears the notice; the toast stays. */
+  dismissNotice: () => void
 }
 
 export const useUndoToast = create<UndoToastState>()((set) => ({
   toast: null,
+  notice: null,
   show: (message, action, actionLabel, opts) =>
-    set({ toast: opts?.persistent ? { message, action, actionLabel, persistent: true } : { message, action, actionLabel } }),
+    set(opts?.persistent ? { notice: { message } } : { toast: { message, action, actionLabel } }),
   dismiss: () => set({ toast: null }),
+  dismissNotice: () => set({ notice: null }),
 }))

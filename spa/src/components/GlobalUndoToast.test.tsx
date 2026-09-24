@@ -38,7 +38,7 @@ describe('GlobalUndoToast — render rules (codex round-1 B4)', () => {
 // they close it — it is not gone in 5 s like an undo offer.
 describe('GlobalUndoToast — persistent notices', () => {
   beforeEach(() => {
-    useUndoToast.setState({ toast: null })
+    useUndoToast.setState({ toast: null, notice: null })
     vi.useFakeTimers()
   })
   afterEach(() => { vi.useRealTimers() })
@@ -56,7 +56,41 @@ describe('GlobalUndoToast — persistent notices', () => {
     act(() => { vi.advanceTimersByTime(60_000) })
     expect(screen.getByText('Reload and check the host settings')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(useUndoToast.getState().notice).toBeNull()
+    expect(screen.queryByText('Reload and check the host settings')).toBeNull()
+  })
+
+  // PR #1413 critic 2: a later toast — an ordinary one, an Undo offer — must not replace the persistent notice. They
+  // are kept apart and shown together: the notice until closed, the toast as ever (its button works, it times out).
+  it('a later ordinary toast and a later Undo toast do not replace it: both are shown, both work', () => {
+    useUndoToast.getState().show('Reload and check the host settings', undefined, undefined, { persistent: true })
+    render(<GlobalUndoToast />)
+    act(() => { useUndoToast.getState().show('Saved') })
+    expect(screen.getByText('Reload and check the host settings')).toBeInTheDocument()
+    expect(screen.getByText('Saved')).toBeInTheDocument()
+
+    const undo = vi.fn()
+    act(() => { useUndoToast.getState().show('B deleted', undo) })
+    expect(screen.getByText('Reload and check the host settings')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(undo).toHaveBeenCalledOnce()
     expect(useUndoToast.getState().toast).toBeNull()
+    expect(screen.getByText('Reload and check the host settings')).toBeInTheDocument()
+
+    act(() => { useUndoToast.getState().show('Saved again') })
+    act(() => { vi.advanceTimersByTime(5_000) })
+    expect(useUndoToast.getState().toast).toBeNull() // the ordinary toast times out …
+    expect(screen.getByText('Reload and check the host settings')).toBeInTheDocument() // … the notice does not
+  })
+
+  it('dismissing the ordinary toast leaves the notice; closing the notice leaves the toast', () => {
+    useUndoToast.getState().show('notice', undefined, undefined, { persistent: true })
+    useUndoToast.getState().show('toast')
+    useUndoToast.getState().dismiss()
+    expect(useUndoToast.getState().notice).toMatchObject({ message: 'notice' })
+    useUndoToast.getState().show('toast')
+    useUndoToast.getState().dismissNotice()
+    expect(useUndoToast.getState().toast).toMatchObject({ message: 'toast' })
+    expect(useUndoToast.getState().notice).toBeNull()
   })
 })
-
