@@ -9,7 +9,7 @@ import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores
 import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
-import { releaseLease } from './nex/nex-api'
+import { pinnedLeaseRelease } from './nex/nex-api'
 import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useUndoToast } from '../stores/useUndoToast'
@@ -40,8 +40,13 @@ import type { Session } from './host-api'
  *
  * `grant` — the operation-lock grant the caller holds (the hosts apply), which the UNDO runs its re-resolve under:
  * that apply rolls back through the undo with nothing awaited, so the undo must finish then and there.
+ *
+ * `afterCommit` — what may happen only once the caller's whole transaction has committed: the release of each lease
+ * this device holds on the host, a daemon side effect no store rollback can take back (plan §0.8). Given (the hosts
+ * apply), those actions are pushed there for the caller to run after its commit, or to drop on its rollback; not
+ * given (the Hosts page), they run as soon as this deletion has committed.
  */
-export function deleteHostCascade(hostId: string, grant: OperationLockGrant | null = null): () => void {
+export function deleteHostCascade(hostId: string, grant: OperationLockGrant | null = null, afterCommit?: Array<() => void>): () => void {
   const hostStore = useHostStore.getState()
   const sessionStore = useSessionStore.getState()
   const agentStore = useAgentStore.getState()
@@ -89,6 +94,7 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
   // ONE UNIT: every store the cascade writes, as it is now. A step that throws — a store action, or a persist's
   // `setItem` (quota, SecurityError) after zustand already changed memory, `removeHost`'s own included — puts every
   // one of them back, newest first, and the cascade throws: the caller gets no undo, because nothing happened.
+  const releases = leaseReleasesOf(hostId)
   const before = CASCADE_STORES.map((store) => store.getState())
   try {
     cascadeSteps(hostId, wireId)
@@ -107,7 +113,31 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
     throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
   }
 
+  if (afterCommit) afterCommit.push(...releases)
+  else for (const release of releases) release()
   return makeUndo(hostId, wireId, snapshot, grant)
+}
+
+/**
+ * One action per lease this device holds on `hostId`: release it at the daemon, best-effort — to the endpoint and
+ * auth pinned NOW, while the host is still configured (it is gone by the time these run). Sends nothing itself.
+ */
+function leaseReleasesOf(hostId: string): Array<() => void> {
+  const held: Array<[executionId: string, leaseId: string]> = []
+  for (const [key, execution] of Object.entries(useExecutionStore.getState().executions)) {
+    const { hostId: execHostId, executionId } = splitExecutionKey(key)
+    if (execHostId === hostId && execution.lease) held.push([executionId, execution.lease.leaseId])
+  }
+  if (held.length === 0) return []
+  const release = pinnedLeaseRelease(hostId)
+  if (release === null) return []
+  return held.map(([executionId, leaseId]) => () => {
+    try {
+      void release(executionId, leaseId).catch(() => {})
+    } catch {
+      // best-effort: a release that throws synchronously stops nothing
+    }
+  })
 }
 
 /** An error's message — a `DOMException` (a persist's quota error) included, which is not always an `Error` here. */
@@ -145,19 +175,8 @@ function cascadeSteps(hostId: string, wireId: string): void {
     if (rewritten !== 'ok') throw new Error(`host ${hostId}: its references could not be rewritten (${rewritten})`)
   }
 
-  // A held lease: released best-effort now, while the host row — and its auth — is still here, so other devices are
-  // not blocked until it expires (plan §0.8). The execution store is cleared below; a pane's own release would find
-  // nothing, and its host would be gone.
-  for (const [key, execution] of Object.entries(useExecutionStore.getState().executions)) {
-    const { hostId: execHostId, executionId } = splitExecutionKey(key)
-    if (execHostId !== hostId || !execution.lease) continue
-    try {
-      void releaseLease(hostId, executionId, execution.lease.leaseId).catch(() => {})
-    } catch {
-      // best-effort: a release that throws synchronously does not stop the deletion
-    }
-  }
-
+  // A held lease is NOT released here: that is a daemon side effect, sent only once the deletion has committed
+  // (`leaseReleasesOf`, `afterCommit`). The execution store is cleared below; a pane's own release would find nothing.
   useSessionStore.getState().removeHost(hostId)
   useAgentStore.getState().removeHost(hostId)
   // Nexen execution view state for this host: its panes stay, and render "no host here" from now on.

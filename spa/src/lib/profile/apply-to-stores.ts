@@ -389,10 +389,9 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   //     re-acquires if not. Entries such a subscriber CREATED for the removed
   //     host during the cascade are dropped by the restore (it replaces the
   //     host's entries, it does not merge into them).
-  //   - a held lease the cascade released at the daemon (best-effort, plan §0.8)
-  //     stays released there: the restored entry names a lease the daemon has
-  //     dropped, and the next renew answers `lease_expired` / `lease_mismatch`,
-  //     which clears it (`useExecutionLease`) — as when the daemon expires one.
+  //   - a held lease on a removed host is released at the daemon only AFTER the
+  //     commit (`afterCommit`, run below the try): a rollback drops those
+  //     releases, so the lease it restores is still held at the daemon.
   //   - the per-pane SSE of `useExecutionSubscription` is torn down from a React
   //     effect, which never ran: it is still open and continues from the restored
   //     `lastSeq`.
@@ -424,6 +423,8 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
     const { removedHostIds } = applied
     const next = { ...applied.next, hosts: withSyncAliases(applied.next.hosts, plan.aliases) }
     const undos: Array<() => void> = []
+    /** The cascades' daemon side effects (lease releases): run once this apply has committed, dropped on a rollback. */
+    const afterCommit: Array<() => void> = []
     const caches = snapshotHostCaches(removedHostIds) // BEFORE the cascade clears them
     let hooks: void | Promise<void>
     try {
@@ -431,7 +432,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
         const leaving: Record<string, HostConfig> = {}
         for (const id of removedHostIds) leaving[id] = state.hosts[id]
         store.setState({ hosts: { ...next.hosts, ...leaving }, hostOrder: [...next.hostOrder, ...removedHostIds] })
-        for (const id of removedHostIds) undos.push(deleteHostCascade(id, grant))
+        for (const id of removedHostIds) undos.push(deleteHostCascade(id, grant, afterCommit))
       }
       // Focus is whatever the cascade left (it moves `activeHostId` to the first host, as a manual delete does) while that host survives.
       const now = useHostStore.getState()
@@ -453,6 +454,8 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
       if (unfinished.length === 0) throw err
       throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
+    // Committed: the removed hosts' daemon side effects may happen now (each is best-effort and never throws).
+    for (const action of afterCommit) action()
     await hooks
     const built = buildHostsSection(useHostStore.getState())
     const outcome = await rebuilt(built)

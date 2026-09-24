@@ -22,7 +22,7 @@ import type { PaneContent, PaneLayout, Tab, Workspace } from '../types/tab'
 import { __resetHostReresolveForTest } from './host-reresolve'
 import { deleteHostCascade } from './host-lifecycle'
 
-vi.mock('./nex/nex-api', () => ({ releaseLease: vi.fn(async () => undefined) }))
+vi.mock('./nex/nex-api', () => ({ releaseLease: vi.fn(async () => undefined), pinnedLeaseRelease: vi.fn(() => async () => undefined) }))
 
 const MLAB = 'mlab-daemon:111111'
 const DAEMON = 'air-lab:26cccc'

@@ -28,7 +28,7 @@ import { __resetHostReresolveForTest } from './host-reresolve'
 import type { Tab } from '../types/tab'
 import type { Session } from './host-api'
 
-vi.mock('../lib/nex/nex-api', () => ({ releaseLease: vi.fn() }))
+vi.mock('../lib/nex/nex-api', () => ({ releaseLease: vi.fn(), pinnedLeaseRelease: vi.fn() }))
 
 function makeSession(code: string, name: string = code): Session {
   return { code, name, mode: 'terminal', cwd: '~' }
@@ -49,6 +49,7 @@ function resetAllStores() {
   __resetMasterWorldForTest()
   __resetHostReresolveForTest()
   vi.mocked(nexApi.releaseLease).mockReset().mockResolvedValue(undefined)
+  vi.mocked(nexApi.pinnedLeaseRelease).mockReset().mockReturnValue(vi.fn(async () => {}))
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
   useHostStore.setState({
@@ -211,30 +212,63 @@ describe('host delete cascade — this device only (host ownership spec §3.4)',
     expect(useExecutionListStore.getState().byHost[HOST_B]).toBe(listCache)
   })
 
-  it('a held lease on the host is released best-effort while the host (and its auth) is still there (plan §0.8)', () => {
+  // Plan §0.8 + PR #1413 attacker (high #2): the release is a side effect at the daemon that no store rollback can take
+  // back, so it is sent only once the deletion has COMMITTED — to the endpoint and auth pinned while the host was
+  // still configured (the row is gone by then).
+  it('a held lease on the host is released once, after the deletion committed, to the endpoint pinned before removal', () => {
     useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
-    useExecutionStore.getState().setLease(HOST_A, 'exc_2', null) // no lease held — must not call releaseLease
+    useExecutionStore.getState().setLease(HOST_A, 'exc_2', null) // no lease held — nothing to release
     useExecutionStore.getState().setLease(HOST_B, 'exc_3', { leaseId: 'ls_3', expiresAt: Date.now() + 30_000 })
-    let hostPresent: boolean | null = null
-    vi.mocked(nexApi.releaseLease).mockImplementation(async () => {
-      hostPresent = useHostStore.getState().hosts[HOST_A] !== undefined
+    let pinnedWhilePresent: boolean | null = null
+    let sentAfterRemoval: boolean | null = null
+    const release = vi.fn(async () => {
+      sentAfterRemoval = useHostStore.getState().hosts[HOST_A] === undefined
+    })
+    vi.mocked(nexApi.pinnedLeaseRelease).mockImplementation((id: string) => {
+      pinnedWhilePresent = useHostStore.getState().hosts[id] !== undefined
+      return release
     })
 
     deleteHostCascade(HOST_A)
 
-    expect(nexApi.releaseLease).toHaveBeenCalledTimes(1)
-    expect(nexApi.releaseLease).toHaveBeenCalledWith(HOST_A, 'exc_1', 'ls_1')
-    expect(hostPresent).toBe(true)
+    expect(nexApi.pinnedLeaseRelease).toHaveBeenCalledWith(HOST_A)
+    expect(pinnedWhilePresent).toBe(true)
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalledWith('exc_1', 'ls_1')
+    expect(sentAfterRemoval).toBe(true)
     expect(useExecutionStore.getState().executions[`${HOST_A}:exc_1`]).toBeUndefined()
+  })
+
+  it('with an after-commit list (the hosts apply) the release is handed over, not sent', () => {
+    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
+    const release = vi.fn(async () => {})
+    vi.mocked(nexApi.pinnedLeaseRelease).mockReturnValue(release)
+    const afterCommit: Array<() => void> = []
+
+    deleteHostCascade(HOST_A, null, afterCommit)
+
+    expect(release).not.toHaveBeenCalled()
+    expect(afterCommit).toHaveLength(1)
+    afterCommit[0]()
+    expect(release).toHaveBeenCalledExactlyOnceWith('exc_1', 'ls_1')
+  })
+
+  it('no lease held: nothing is pinned, nothing handed over', () => {
+    const afterCommit: Array<() => void> = []
+    deleteHostCascade(HOST_A, null, afterCommit)
+    expect(nexApi.pinnedLeaseRelease).not.toHaveBeenCalled()
+    expect(afterCommit).toEqual([])
   })
 
   it('a release that rejects (or throws) does not stop the deletion', () => {
     useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
     useExecutionStore.getState().setLease(HOST_A, 'exc_2', { leaseId: 'ls_2', expiresAt: Date.now() + 30_000 })
-    vi.mocked(nexApi.releaseLease).mockImplementationOnce(() => { throw new Error('sync throw') }).mockRejectedValueOnce(new Error('offline'))
+    const release = vi.fn().mockImplementationOnce(() => { throw new Error('sync throw') }).mockRejectedValueOnce(new Error('offline'))
+    vi.mocked(nexApi.pinnedLeaseRelease).mockReturnValue(release)
 
     expect(() => deleteHostCascade(HOST_A)).not.toThrow()
     expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
+    expect(release).toHaveBeenCalledTimes(2)
   })
 
   it('cascade cleans SessionStore entries', () => {
@@ -581,6 +615,17 @@ describe('host delete cascade — a write fails half-way', () => {
     vi.restoreAllMocks()
     expect(everything()).toBe(before)
     expect(JSON.stringify(useTabStore.getState().tabs)).not.toContain(WIRE_A)
+  })
+
+  it('no lease is released for a deletion that did not happen — nothing pinned is ever sent', () => {
+    seedEverything()
+    const release = vi.fn(async () => {})
+    vi.mocked(nexApi.pinnedLeaseRelease).mockReturnValue(release)
+    failHostsWrites(1)
+    expect(() => deleteHostCascade(HOST_A)).toThrow()
+    expect(release).not.toHaveBeenCalled()
+    expect(nexApi.releaseLease).not.toHaveBeenCalled()
+    expect(useExecutionStore.getState().executions[`${HOST_A}:exc_1`].lease).toEqual({ leaseId: 'ls_1', expiresAt: 9_999_999_999_999 })
   })
 
   it('the rollback fails too: the error says so, and keeps the original', () => {

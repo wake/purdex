@@ -19,7 +19,7 @@ import { deleteSlave, promoteToMaster, switchActiveProfile } from './profile/swi
 import { syncIdOfSync } from './profile/host-identity'
 import { __resetHostReresolveForTest } from './host-reresolve'
 
-vi.mock('./nex/nex-api', () => ({ releaseLease: vi.fn(async () => undefined) }))
+vi.mock('./nex/nex-api', () => ({ releaseLease: vi.fn(async () => undefined), pinnedLeaseRelease: vi.fn(() => async () => undefined) }))
 vi.mock('./profile/hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./profile/hash')>()
   return { ...actual, hashSection: vi.fn(async (payload: unknown) => actual.structuralKey(payload)) }

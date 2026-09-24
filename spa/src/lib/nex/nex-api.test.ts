@@ -5,7 +5,7 @@ import {
   nexFetch, fetchNexCapabilities, listExecutions, fetchExecutionEvents,
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
   getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
-  delegateExecution,
+  delegateExecution, pinnedLeaseRelease,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -104,6 +104,35 @@ describe('nex-api', () => {
     expect(init.keepalive).toBe(true)
     expect(init.method).toBe('DELETE')
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+  })
+
+  it('pinnedLeaseRelease: endpoint and auth read NOW — the release goes there even after the host left the store', async () => {
+    const release = pinnedLeaseRelease(hostId)
+    expect(release).not.toBeNull()
+    expect(testGlobal.fetch).not.toHaveBeenCalled() // pinning sends nothing
+    useHostStore.getState().addHost({ id: 'host-other', name: 'other', ip: '10.9.9.9', port: 7860 })
+    useHostStore.getState().removeHost(hostId)
+    testGlobal.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await release!('exc_1', 'ls_1')
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/attach')
+    expect(init.method).toBe('DELETE')
+    expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
+    const h = new Headers(init.headers)
+    expect(h.get('Authorization')).toBe('Bearer tok-1')
+    expect(h.get('X-Pdx-Client')).toMatch(NEX_CLIENT_ID_RE)
+  })
+
+  it('pinnedLeaseRelease: an unknown host pins nothing (never the fallback host)', () => {
+    expect(pinnedLeaseRelease('nope')).toBeNull()
+  })
+
+  it('pinnedLeaseRelease: a failed request is a NexApiError', async () => {
+    const release = pinnedLeaseRelease(hostId)!
+    testGlobal.fetch.mockRejectedValueOnce(new TypeError('offline'))
+    await expect(release('exc_1', 'ls_1')).rejects.toMatchObject({ code: 'network' })
+    testGlobal.fetch.mockResolvedValueOnce(json({ error: { code: 'lease_mismatch', message: 'x' } }, 409))
+    await expect(release('exc_1', 'ls_1')).rejects.toBeInstanceOf(NexApiError)
   })
 
   it('archiveExecution posts the target archived flag (api/interact.go:81)', async () => {

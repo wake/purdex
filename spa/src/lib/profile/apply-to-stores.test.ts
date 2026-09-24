@@ -668,6 +668,41 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
       expect(useRebuildStore.getState().lockedBy).toBeNull()
     })
 
+    // PR #1413 attacker (high #2): the lease release is a daemon side effect no rollback can take back — it is sent
+    // only after the whole apply committed, and a rollback restores a lease that was never released.
+    const attachDeletes = () => vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith('/attach') && (init as RequestInit | undefined)?.method === 'DELETE')
+
+    it('a failed apply sends no release: the lease comes back exactly as it was, still held at the daemon', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
+      try {
+        seedRich()
+        const leaseBefore = useExecutionStore.getState().executions[`${H2}:exc_2`].lease
+        failHostWrite(2)
+        await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('host write failed')
+        vi.mocked(useHostStore.setState).mockRestore()
+        await new Promise((r) => setTimeout(r, 0))
+        expect(attachDeletes()).toEqual([])
+        expect(useExecutionStore.getState().executions[`${H2}:exc_2`].lease).toEqual(leaseBefore)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('a committed apply sends the release exactly once, to the removed host\'s own daemon', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
+      try {
+        seedRich()
+        expect((await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).ok).toBe(true)
+        await new Promise((r) => setTimeout(r, 0))
+        const sent = attachDeletes()
+        expect(sent).toHaveLength(1)
+        expect(String(sent[0][0])).toBe('http://10.0.0.2:7860/api/nex/v1/executions/exc_2/attach')
+        expect(JSON.parse(String((sent[0][1] as RequestInit).body))).toEqual({ lease_id: 'ls_1' })
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
     it('a restore that throws is not swallowed: the original error survives and says the rollback is incomplete', async () => {
       seedRich()
       const before = hostSlice()
