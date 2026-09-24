@@ -28,9 +28,18 @@ export function ExecutionsGroup({ group, daemonHostId, now, onOpen }: Props) {
   return (
     <div data-testid={`executions-group-${group.source}`} className="flex flex-col">
       <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-text-muted truncate">{label}</div>
-      {group.rows.map((row) => (
-        <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} onOpen={onOpen ? () => onOpen(row.id) : undefined} />
-      ))}
+      {onOpen ? (
+        group.rows.map((row) => (
+          <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} onOpen={() => onOpen(row.id)} />
+        ))
+      ) : (
+        // Non-openable rows (a hidden host, plan H2d-2) are list items; this is their list.
+        <div role="list" aria-label={label} className="flex flex-col">
+          {group.rows.map((row) => (
+            <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

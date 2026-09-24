@@ -24,6 +24,9 @@ export function ExecutionRowCompact({ row, daemonHostId, now, onOpen }: Props) {
   const t = useI18nStore((s) => s.t)
   const age = relativeAge(row.updated_at, now)
   const sessionCode = daemonHostId ? sameHostSessionCode(row.origin, daemonHostId) : null
+  const brief = firstLine(typeof row.brief === 'string' ? row.brief : '')
+  const markerTitle = sessionCode !== null ? t('executions.marker_title', { code: sessionCode }) : null
+  const ageText = t(`executions.age.${age.key}`, { n: age.n })
 
   const content = (
     <>
@@ -33,26 +36,26 @@ export function ExecutionRowCompact({ row, daemonHostId, now, onOpen }: Props) {
         title={row.state}
       />
       <span data-testid="executions-brief" className="flex-1 min-w-0 truncate text-xs text-text-primary">
-        {firstLine(typeof row.brief === 'string' ? row.brief : '')}
+        {brief}
       </span>
-      {sessionCode !== null && (
-        <span
-          data-testid="executions-marker"
-          className="shrink-0 text-xs text-text-muted"
-          title={t('executions.marker_title', { code: sessionCode })}
-        >
+      {markerTitle !== null && (
+        <span data-testid="executions-marker" className="shrink-0 text-xs text-text-muted" title={markerTitle}>
           ↩
         </span>
       )}
       <span data-testid="executions-age" className="shrink-0 text-xs text-text-muted tabular-nums">
-        {t(`executions.age.${age.key}`, { n: age.n })}
+        {ageText}
       </span>
     </>
   )
 
   if (!onOpen) {
+    // Not an action (plan H2d-2): a list item of the group's list — no tabIndex (a focusable non-interactive element
+    // is an anti-pattern; screen readers reach it with the browse cursor), named with what a sighted user sees plus
+    // the full id that is otherwise only in `title`.
+    const label = [brief, row.state, markerTitle, ageText, row.id].filter((part) => part !== null && part !== '').join(' · ')
     return (
-      <div data-testid="executions-row" title={row.id} className={ROW_CLASS}>
+      <div data-testid="executions-row" role="listitem" aria-label={label} title={row.id} className={ROW_CLASS}>
         {content}
       </div>
     )

@@ -198,12 +198,35 @@ describe('ExecutionsView', () => {
     for (const el of rows) {
       expect(el.tagName).not.toBe('BUTTON')
       expect(el).not.toHaveAttribute('tabindex')
-      expect(el).not.toHaveAttribute('role')
       expect(el.className).not.toMatch(/cursor-pointer|hover:/)
       fireEvent.click(el)
       fireEvent.keyDown(el, { key: 'Enter' })
     }
     expect(openSingletonTab).not.toHaveBeenCalled()
+  })
+
+  it('hidden host: each row is a list item inside a list, named with the full id, state, summary and age', () => {
+    useShownHostsStore.setState({ ids: [] })
+    seedList([row({ id: 'exc_0123456789abcdef', state: 'completed', brief: 'fix the login flow\nmore detail', updated_at: NOW - 5 * MIN })])
+    render(<ExecutionsView hostId={H} isActive />)
+    const list = screen.getByRole('list')
+    const item = within(list).getByRole('listitem')
+    expect(item).toBe(screen.getByTestId('executions-row'))
+    expect(item).not.toHaveAttribute('tabindex')
+    const name = item.getAttribute('aria-label') ?? ''
+    expect(name).toContain('exc_0123456789abcdef')
+    expect(name).toContain('completed')
+    expect(name).toContain('fix the login flow')
+    expect(name).toContain(within(item).getByTestId('executions-age').textContent!)
+    expect(within(list).getByRole('listitem', { name: /exc_0123456789abcdef/ })).toBe(item)
+  })
+
+  it('shown host: the rows stay buttons, with no list / listitem roles', () => {
+    seedList([row({ id: 'exc_a' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByRole('list')).toBeNull()
+    expect(screen.queryByRole('listitem')).toBeNull()
+    expect(screen.getByRole('button', { name: /first|brief/ })).toBe(screen.getByTestId('executions-row'))
   })
 
   it('hidden host: the executions hint (its own key), in en and zh-TW', () => {
