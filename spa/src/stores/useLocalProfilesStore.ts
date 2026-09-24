@@ -71,6 +71,7 @@ import { normalizeDeviceName } from '../lib/device-name'
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { isWorldEpoch } from '../lib/storage/world-fence'
 import { isIconWeight, isPhosphorIconName, isValidHostColor } from '../lib/host-color'
+import { sanitizeShownIds } from './useShownHostsStore'
 import type { IconWeight, Tab, Workspace } from '../types/tab'
 
 /** The `activeProfileId` of the master; never a slave's id. */
@@ -97,6 +98,11 @@ export interface LocalProfile extends ProfileAppearance {
   id: string
   name: string
   createdAt: number
+  /** The hosts shown in THIS workbench (per-workbench shown hosts, 2026-09-25 plan A1): wire ids, the rules of
+   *  `useShownHostsStore.ids` (a plain list, unknown ids kept, `[]` = every host hidden). The master's list is that
+   *  store's, never here. Device-local like the rest of this record: it never syncs. Every path that rebuilds a
+   *  record keeps it, every path that creates one states it. */
+  shownHostIds: string[]
   /** null ⇔ this slave is the one on screen. */
   world: ParkedWorld | null
 }
@@ -131,8 +137,11 @@ type Refused<R extends string> = { ok: false; reason: R }
 
 export interface LocalProfilesState extends LocalProfilesData {
   /** A new PARKED slave holding `world`, last in the order. The world is kept by reference: hand over one nobody else will mutate. */
-  addSlave: (name: string, world: ParkedWorld) => { ok: true; id: string } | Refused<'bad-name' | 'bad-world'>
+  addSlave: (name: string, world: ParkedWorld, shownHostIds?: readonly string[]) => { ok: true; id: string } | Refused<'bad-name' | 'bad-world'>
   renameSlave: (id: string, name: string) => { ok: true } | Refused<'not-found' | 'bad-name'>
+  /** A slave's shown-hosts list, mapped (sanitised like the master's). `fn` returning the same reference → no `set`.
+   *  Only a slave: the master's list is `useShownHostsStore`'s. */
+  setSlaveShownHosts: (id: string, fn: (ids: string[]) => string[]) => { ok: true } | Refused<'not-found'>
   /** Never the one on screen. The removed world is handed back (the caller may need its sessions, or an undo). */
   removeSlave: (id: string) => { ok: true; world: ParkedWorld } | Refused<'not-found' | 'on-screen'>
   /** `order` must be a permutation of the current ids. */
@@ -284,6 +293,8 @@ function sanitiseSlave(key: string, v: unknown): LocalProfile | null {
     id: key,
     name: normalizeLocalProfileName(v.name) ?? RECOVERED_SLAVE_NAME,
     createdAt: typeof v.createdAt === 'number' && Number.isFinite(v.createdAt) ? v.createdAt : 0,
+    // Absent — a record from before per-workbench lists — reads as [] (every host hidden): THE upgrade (plan §0.5).
+    shownHostIds: sanitizeShownIds(v.shownHostIds),
     world: v.world,
     ...sanitiseAppearance(v),
   }
@@ -350,7 +361,7 @@ function sanitiseData(persisted: unknown): LocalProfilesData {
   if (activeProfileId === MASTER_PROFILE_ID && parkedMaster !== null) {
     let id = RECOVERED_ID
     for (let n = 2; Object.hasOwn(slaves, id); n++) id = `${RECOVERED_ID}-${n}`
-    slaves[id] = { id, name: RECOVERED_MASTER_NAME, createdAt: 0, world: parkedMaster }
+    slaves[id] = { id, name: RECOVERED_MASTER_NAME, createdAt: 0, shownHostIds: [], world: parkedMaster }
     slaveOrder.push(id)
     parkedMaster = null
   }
@@ -377,14 +388,14 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
       relabelCount: 0,
       master: { name: null },
 
-      addSlave: (name, world) => {
+      addSlave: (name, world, shownHostIds = []) => {
         const normalized = normalizeLocalProfileName(name)
         if (normalized === null) return { ok: false, reason: 'bad-name' }
         if (!isParkedWorld(world)) return { ok: false, reason: 'bad-world' }
         const s = get()
         const id = freshSlaveId(s.slaves)
         set({
-          slaves: { ...s.slaves, [id]: { id, name: normalized, createdAt: Date.now(), world } },
+          slaves: { ...s.slaves, [id]: { id, name: normalized, createdAt: Date.now(), shownHostIds: sanitizeShownIds(shownHostIds), world } },
           slaveOrder: [...s.slaveOrder, id],
         })
         return { ok: true, id }
@@ -396,6 +407,16 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         const normalized = normalizeLocalProfileName(name)
         if (normalized === null) return { ok: false, reason: 'bad-name' }
         set({ slaves: { ...s.slaves, [id]: { ...s.slaves[id], name: normalized } } })
+        return { ok: true }
+      },
+
+      setSlaveShownHosts: (id, fn) => {
+        const s = get()
+        if (!Object.hasOwn(s.slaves, id)) return { ok: false, reason: 'not-found' }
+        const current = s.slaves[id].shownHostIds
+        const next = fn(current)
+        if (next === current) return { ok: true }
+        set({ slaves: { ...s.slaves, [id]: { ...s.slaves[id], shownHostIds: sanitizeShownIds(next) } } })
         return { ok: true }
       },
 
@@ -414,8 +435,8 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         if (!patched.ok) return patched
         if (isMaster) set({ master: { name, ...patched.appearance } })
         else {
-          const { id: slaveId, createdAt, world } = s.slaves[id]
-          set({ slaves: { ...s.slaves, [id]: { id: slaveId, name: name as string, createdAt, world, ...patched.appearance } } })
+          const { id: slaveId, createdAt, shownHostIds, world } = s.slaves[id]
+          set({ slaves: { ...s.slaves, [id]: { id: slaveId, name: name as string, createdAt, shownHostIds, world, ...patched.appearance } } })
         }
         return { ok: true }
       },
@@ -481,7 +502,8 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         // cases one: the master slot gets the slave's world, the new slave gets what the master slot held.
         // The look goes with the world (see APPEARANCE): the old master's — and its name, if it had one; `demotedName`
         // is for a master nobody named — to the new slave, the promoted slave's to the master.
-        slaves[demotedId] = { id: demotedId, name: s.master.name ?? name, createdAt: Date.now(), world: s.parkedMaster, ...appearanceOf(s.master) }
+        // Its shown-hosts list: [] here; the caller that owns the master's list hands it over (plan A3).
+        slaves[demotedId] = { id: demotedId, name: s.master.name ?? name, createdAt: Date.now(), shownHostIds: [], world: s.parkedMaster, ...appearanceOf(s.master) }
         const activeProfileId =
           s.activeProfileId === MASTER_PROFILE_ID ? demotedId : s.activeProfileId === slaveId ? MASTER_PROFILE_ID : s.activeProfileId
 

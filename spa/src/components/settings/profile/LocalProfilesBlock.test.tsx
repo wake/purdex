@@ -23,6 +23,7 @@ const slave = (id: string, name: string, onScreen = false, extra: Partial<LocalP
   id,
   name,
   createdAt: 1,
+  shownHostIds: [],
   world: onScreen ? null : { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null },
   ...extra,
 })

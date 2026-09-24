@@ -610,7 +610,7 @@ describe('useMultiHostEventWs revive — a profile switch', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
     useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
     useLocalProfilesStore.setState({
-      slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, world: slaveWorld() } },
+      slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, shownHostIds: [], world: slaveWorld() } },
       slaveOrder: [SLAVE], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, master: { name: null },
     })
   })

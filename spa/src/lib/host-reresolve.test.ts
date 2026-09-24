@@ -65,8 +65,8 @@ function seed(): void {
     worldEpoch: 1,
     parkedMaster: world({ m1: tab('m1', leaf('pm', tmux(WIRE))), m2: tab('m2', leaf('pm2', tmux(UNKNOWN))) }),
     slaves: {
-      on: { id: 'on', name: 'On', createdAt: 1, world: null },
-      s1: { id: 's1', name: 'S', createdAt: 1, world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: WIRE })) }) },
+      on: { id: 'on', name: 'On', createdAt: 1, shownHostIds: [], world: null },
+      s1: { id: 's1', name: 'S', createdAt: 1, shownHostIds: [], world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: WIRE })) }) },
     },
     slaveOrder: ['on', 's1'],
   })
@@ -928,8 +928,8 @@ describe('rewriteHostRefs (explicit map — the deletion direction)', () => {
     useLocalProfilesStore.setState({
       parkedMaster: world({ m1: tab('m1', leaf('pm', tmux(LOCAL))), m2: tab('m2', leaf('pm2', tmux(UNKNOWN))) }),
       slaves: {
-        on: { id: 'on', name: 'On', createdAt: 1, world: null },
-        s1: { id: 's1', name: 'S', createdAt: 1, world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: LOCAL })) }) },
+        on: { id: 'on', name: 'On', createdAt: 1, shownHostIds: [], world: null },
+        s1: { id: 's1', name: 'S', createdAt: 1, shownHostIds: [], world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: LOCAL })) }) },
       },
     })
     useHostSettingsStore.setState({ hosts: { [LOCAL]: { editor: { homePath: '/l' } }, [UNKNOWN]: { editor: { homePath: '/u' } } } })

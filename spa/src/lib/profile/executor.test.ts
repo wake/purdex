@@ -2286,7 +2286,7 @@ describe('executor — the first reconciliation (initialDirection)', () => {
       mineAgrees([meta('tabs.w7', 3, 'T7')])
       api.deleteSection.mockResolvedValue({ kind: 'applied', rev: 4 })
       useLocalProfilesStore.setState({
-        slaves: { s1: { id: 's1', name: 'S', createdAt: 1, world: null } },
+        slaves: { s1: { id: 's1', name: 'S', createdAt: 1, shownHostIds: [], world: null } },
         slaveOrder: ['s1'],
         activeProfileId: 's1',
         parkedMaster: { workspaces: [ws('w1')], tabs: {}, activeWorkspaceId: null, activeTabId: null },

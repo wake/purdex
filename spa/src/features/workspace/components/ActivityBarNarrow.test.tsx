@@ -83,7 +83,7 @@ describe('ActivityBarNarrow', () => {
 
     it('with a slave: the button is a menu trigger and the menu opens BESIDE it, outside the overflow-hidden bar', () => {
       useLocalProfilesStore.setState({
-        slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null } } },
+        slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, shownHostIds: [], world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null } } },
         slaveOrder: ['s1'],
       })
       const rect = (left: number, top: number, width: number, height: number): DOMRect =>

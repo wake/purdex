@@ -43,7 +43,7 @@ function world(prefix: string, sentinel: string, tabs = 2): ParkedWorld {
   const ws: Workspace = { id: `${prefix}ws`, name: `${sentinel}-ws`, tabs: ids, activeTabId: ids[0] ?? null }
   return { workspaces: [ws], tabs: Object.fromEntries(ids.map((id) => [id, tab(id, sentinel)])), activeWorkspaceId: ws.id, activeTabId: ids[0] ?? null }
 }
-const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, world: w })
+const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, shownHostIds: [], world: w })
 
 function putOnScreen(w: ParkedWorld, worldId: string, epoch: number): void {
   useTabStore.setState({ tabs: w.tabs, tabOrder: w.workspaces.flatMap((x) => x.tabs), activeTabId: w.activeTabId, visitHistory: [], worldId, worldEpoch: epoch })

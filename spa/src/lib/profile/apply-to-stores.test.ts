@@ -317,7 +317,7 @@ describe('applySectionToStores — hosts is not synced (host ownership H3)', () 
     const w = useWorkspaceStore.getState()
     const parked: ParkedWorld = { tabs: t.tabs, workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId, activeTabId: t.activeTabId }
     const slaveWorld: ParkedWorld = { tabs: { s1: tab('s1', tmuxLeaf('p-s1', H2)) }, workspaces: [ws('sw', ['s1'])], activeWorkspaceId: 'sw', activeTabId: 's1' }
-    useLocalProfilesStore.setState({ slaves: { sl: { id: 'sl', name: 'Slave', createdAt: 1, world: slaveWorld } }, slaveOrder: ['sl'], parkedMaster: parked })
+    useLocalProfilesStore.setState({ slaves: { sl: { id: 'sl', name: 'Slave', createdAt: 1, shownHostIds: [], world: slaveWorld } }, slaveOrder: ['sl'], parkedMaster: parked })
     useHostSettingsStore.setState({ hosts: { [H2]: { files: { root: '/srv' } } } as never })
     useHostLookStore.setState({ looks: { [H2]: { color: '#123456' } } as never })
     // the master renamed, H2 removed, a new host added: a payload the pre-H3 apply would have landed in full
@@ -1096,7 +1096,7 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     const t = useTabStore.getState()
     const w = useWorkspaceStore.getState()
     const parked: ParkedWorld = { tabs: t.tabs, workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId, activeTabId: t.activeTabId }
-    useLocalProfilesStore.setState({ slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, world: null } }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: parked, worldEpoch: 1 })
+    useLocalProfilesStore.setState({ slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: parked, worldEpoch: 1 })
     const st = { ...tab('SLAVE-ONLY-t1', tmuxLeaf('SLAVE-ONLY-p1', M)) }
     useTabStore.setState({ tabs: { [st.id]: st }, tabOrder: [st.id], activeTabId: st.id, visitHistory: [st.id], worldId: SLAVE, worldEpoch: 1 })
     useWorkspaceStore.setState({ workspaces: [ws('SLAVE-ONLY-ws', [st.id])], activeWorkspaceId: 'SLAVE-ONLY-ws', worldId: SLAVE, worldEpoch: 1 })

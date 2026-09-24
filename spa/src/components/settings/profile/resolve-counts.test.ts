@@ -57,7 +57,7 @@ function masterOnScreen(m: ParkedWorld): void {
 
 /** A local profile on screen, the master parked — what a follower window shows after another window switched. */
 function slaveOnScreen(m: ParkedWorld, s: ParkedWorld): void {
-  useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'S', createdAt: 1, world: null } }, slaveOrder: ['s1'], activeProfileId: 's1', parkedMaster: m, worldEpoch: 1 })
+  useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'S', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: ['s1'], activeProfileId: 's1', parkedMaster: m, worldEpoch: 1 })
   useTabStore.setState({ tabs: s.tabs, tabOrder: Object.keys(s.tabs), activeTabId: null, visitHistory: [], worldId: 's1', worldEpoch: 1 })
   useWorkspaceStore.setState({ workspaces: s.workspaces, activeWorkspaceId: s.activeWorkspaceId, worldId: 's1', worldEpoch: 1 })
 }

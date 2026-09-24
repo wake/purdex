@@ -88,7 +88,7 @@ const masterWorld = (): ParkedWorld => world('m', MASTER_SENTINEL)
 const slaveWorld = (): ParkedWorld => world('s', SLAVE_SENTINEL)
 const otherWorld = (): ParkedWorld => world('o', OTHER_SENTINEL)
 
-const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, world: w })
+const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, shownHostIds: [], world: w })
 
 function putOnScreen(w: ParkedWorld, worldId: string, epoch: number): void {
   useTabStore.setState({ tabs: w.tabs, tabOrder: w.workspaces.flatMap((x) => x.tabs), activeTabId: w.activeTabId, visitHistory: [], worldId, worldEpoch: epoch })

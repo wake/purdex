@@ -70,8 +70,8 @@ async function rehydrateFrom(state: unknown): Promise<void> {
 }
 
 /** addSlave that must succeed; returns the id. */
-function add(name: string, w: ParkedWorld = world(name)): string {
-  const r = get().addSlave(name, w)
+function add(name: string, w: ParkedWorld = world(name), shownHostIds?: string[]): string {
+  const r = get().addSlave(name, w, shownHostIds)
   if (!r.ok) throw new Error(`addSlave failed: ${r.reason}`)
   return r.id
 }
@@ -83,7 +83,7 @@ function swap(targetId: string, onScreen: ParkedWorld, epoch = get().worldEpoch 
   return r.world
 }
 
-const slave = (id: string, name: string, w: ParkedWorld | null, createdAt = 1): LocalProfile => ({ id, name, createdAt, world: w })
+const slave = (id: string, name: string, w: ParkedWorld | null, createdAt = 1, shownHostIds: string[] = []): LocalProfile => ({ id, name, createdAt, shownHostIds, world: w })
 
 beforeEach(() => {
   localStorage.clear()
@@ -151,7 +151,7 @@ describe('addSlave', () => {
     const b = add('beta')
     vi.restoreAllMocks()
     expect(get().slaveOrder).toEqual([a, b])
-    expect(get().slaves[a]).toEqual({ id: a, name: 'alpha', createdAt: 1234, world: world('alpha') })
+    expect(get().slaves[a]).toEqual({ id: a, name: 'alpha', createdAt: 1234, shownHostIds: [], world: world('alpha') })
     expect(get().activeProfileId).toBe('master')
   })
 
@@ -426,7 +426,7 @@ describe('promoteSlave — a move, never a copy', () => {
     const s = get()
     expect(s.parkedMaster).toEqual(world('beta'))
     expect(s.slaves[b]).toBeUndefined()
-    expect(s.slaves.demote).toEqual({ id: 'demote', name: 'old master', createdAt: 777, world: null })
+    expect(s.slaves.demote).toEqual({ id: 'demote', name: 'old master', createdAt: 777, shownHostIds: [], world: null })
     expect(s.activeProfileId).toBe('demote')
     expect(s.slaveOrder).toEqual([a, 'demote', c])
     expect(s.worldEpoch).toBe(1)
@@ -683,8 +683,8 @@ describe('rehydrate sanitises what storage holds', () => {
       parkedMaster: null,
       worldEpoch: 0,
     })
-    expect(get().slaves.a).toEqual({ id: 'a', name: 'Recovered', createdAt: 1, world: world('a') })
-    expect(get().slaves.b).toEqual({ id: 'b', name: 'Recovered', createdAt: 0, world: world('b') })
+    expect(get().slaves.a).toEqual({ id: 'a', name: 'Recovered', createdAt: 1, shownHostIds: [], world: world('a') })
+    expect(get().slaves.b).toEqual({ id: 'b', name: 'Recovered', createdAt: 0, shownHostIds: [], world: world('b') })
   })
 
   it('an over-long persisted name is cut like a new one', async () => {
@@ -738,7 +738,7 @@ describe('rehydrate sanitises what storage holds', () => {
       worldEpoch: 4,
     })
     expect(data()).toEqual({
-      slaves: { a: slave('a', 'a', world('a')), recovered: { id: 'recovered', name: 'Recovered master', createdAt: 0, world: world('M') } },
+      slaves: { a: slave('a', 'a', world('a')), recovered: { id: 'recovered', name: 'Recovered master', createdAt: 0, shownHostIds: [], world: world('M') } },
       slaveOrder: ['a', 'recovered'],
       activeProfileId: 'master',
       parkedMaster: null,
@@ -997,7 +997,7 @@ describe('appearance', () => {
     it('addSlave gives the new slave a name and nothing else, whatever the master looks like', () => {
       get().setProfileAppearance('master', { name: 'Work', ...LOOK })
       const a = add('copy')
-      expect(get().slaves[a]).toEqual({ id: a, name: 'copy', createdAt: expect.any(Number), world: expect.anything() })
+      expect(get().slaves[a]).toEqual({ id: a, name: 'copy', createdAt: expect.any(Number), shownHostIds: [], world: expect.anything() })
     })
   })
 
@@ -1017,7 +1017,7 @@ describe('appearance', () => {
       const a = add('Scratch')
       const r = get().promoteSlave(a, 'This Mac', 1)
       if (!r.ok) throw new Error(r.reason)
-      expect(get().slaves[r.demotedId]).toEqual({ id: r.demotedId, name: 'This Mac', createdAt: expect.any(Number), world: null })
+      expect(get().slaves[r.demotedId]).toEqual({ id: r.demotedId, name: 'This Mac', createdAt: expect.any(Number), shownHostIds: [], world: null })
       expect(get().master).toEqual({ name: 'Scratch' })
     })
   })
@@ -1167,6 +1167,137 @@ describe('profile names — invisible characters are removed, and nothing else',
       await rehydrateFrom({ slaves: { a: slave('a', invisible, world('a')) }, slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, master: { name: invisible } })
       expect(get().slaves.a.name).toBe('Recovered')
       expect(get().master.name).toBeNull()
+    })
+  })
+})
+
+// === Per-workbench shown hosts (2026-09-25 plan, A1): a slave's own shown-hosts list lives on its record ===
+
+describe('shownHostIds — a local workbench keeps its own shown-hosts list', () => {
+  const base = { slaveOrder: ['a'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 }
+
+  describe('rehydrate (the upgrade is this default: plan §0.5)', () => {
+    it('a record from before the field existed reads as [] — every host hidden in that workbench', async () => {
+      await rehydrateFrom({ ...base, slaves: { a: { id: 'a', name: 'a', createdAt: 1, world: world('a') } } })
+      expect(get().slaves.a.shownHostIds).toEqual([])
+    })
+
+    it("a stored list is sanitised like the master's: strings only, deduped keeping the first, unknown ids and order kept", async () => {
+      await rehydrateFrom({ ...base, slaves: { a: { ...slave('a', 'a', world('a')), shownHostIds: ['d1_z', 'local-1', 3, null, 'd1_z', 'd1_a'] } } })
+      expect(get().slaves.a.shownHostIds).toEqual(['d1_z', 'local-1', 'd1_a'])
+    })
+
+    it.each([['a string', 'd1_a'], ['an object', { ids: ['d1_a'] }], ['null', null]])('a non-array (%s) reads as []', async (_label, stored) => {
+      await rehydrateFrom({ ...base, slaves: { a: { ...slave('a', 'a', world('a')), shownHostIds: stored } } })
+      expect(get().slaves.a.shownHostIds).toEqual([])
+    })
+
+    it('the rescued parked master is created with [] (it states its list)', async () => {
+      await rehydrateFrom({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: world('m'), worldEpoch: 0 })
+      expect(get().slaves.recovered.shownHostIds).toEqual([])
+    })
+
+    it('a reload keeps the list', async () => {
+      const a = add('alpha', world('alpha'), ['d1_a', 'd1_b'])
+      await rehydrateFrom(persistedEnvelope().state)
+      expect(get().slaves[a].shownHostIds).toEqual(['d1_a', 'd1_b'])
+    })
+  })
+
+  describe('every path that creates a record states its list', () => {
+    it('addSlave: [] unless a list is given; a given list is sanitised and kept', () => {
+      const a = add('alpha')
+      expect(get().slaves[a].shownHostIds).toEqual([])
+      const b = add('beta', world('beta'), ['d1_a', 'd1_a', 'local-2'])
+      expect(get().slaves[b].shownHostIds).toEqual(['d1_a', 'local-2'])
+    })
+
+    it('promoteSlave: the demoted master is created with a list', () => {
+      const a = add('alpha')
+      const r = get().promoteSlave(a, 'old', get().worldEpoch + 1)
+      if (!r.ok) throw new Error(r.reason)
+      expect(Array.isArray(get().slaves[r.demotedId].shownHostIds)).toBe(true)
+    })
+  })
+
+  describe('every path that rebuilds a record keeps the list (codex #1)', () => {
+    const LIST = ['d1_a', 'local-2']
+
+    it('setProfileAppearance keeps the same array', () => {
+      const a = add('alpha', world('alpha'), LIST)
+      const list = get().slaves[a].shownHostIds
+      expect(get().setProfileAppearance(a, { name: 'Renamed', icon: 'Rocket', color: '#3b82f6' })).toEqual({ ok: true })
+      expect(get().slaves[a].shownHostIds).toBe(list)
+      expect(get().setProfileAppearance(a, { icon: null, color: null })).toEqual({ ok: true })
+      expect(get().slaves[a].shownHostIds).toBe(list)
+    })
+
+    it('renameSlave keeps the same array', () => {
+      const a = add('alpha', world('alpha'), LIST)
+      const list = get().slaves[a].shownHostIds
+      get().renameSlave(a, 'beta')
+      expect(get().slaves[a].shownHostIds).toBe(list)
+    })
+
+    it('swapActive, replaceParkedWorld, updateParkedWorlds keep it', () => {
+      const a = add('alpha', world('alpha'), LIST)
+      const list = get().slaves[a].shownHostIds
+      swap(a, world('M'))
+      expect(get().slaves[a].shownHostIds).toBe(list)
+      swap('master', world('alpha'))
+      expect(get().slaves[a].shownHostIds).toBe(list)
+      get().replaceParkedWorld(a, world('alpha2'))
+      expect(get().slaves[a].shownHostIds).toBe(list)
+      get().updateParkedWorlds((w) => ({ ...w }))
+      expect(get().slaves[a].shownHostIds).toBe(list)
+    })
+
+    it("promoteSlave keeps every OTHER slave's list", () => {
+      const a = add('alpha')
+      const b = add('beta', world('beta'), LIST)
+      const list = get().slaves[b].shownHostIds
+      expect(get().promoteSlave(a, 'old', get().worldEpoch + 1)).toMatchObject({ ok: true })
+      expect(get().slaves[b].shownHostIds).toBe(list)
+    })
+  })
+
+  describe('setSlaveShownHosts', () => {
+    it("maps the slave's list and persists it", () => {
+      const a = add('alpha', world('alpha'), ['d1_a'])
+      expect(get().setSlaveShownHosts(a, (ids) => [...ids, 'd1_b'])).toEqual({ ok: true })
+      expect(get().slaves[a].shownHostIds).toEqual(['d1_a', 'd1_b'])
+      expect((persistedEnvelope().state.slaves as Record<string, LocalProfile>)[a].shownHostIds).toEqual(['d1_a', 'd1_b'])
+    })
+
+    it('works for the slave on screen too, and leaves its world and the other slaves alone', () => {
+      const a = add('alpha')
+      const b = add('beta')
+      swap(a, world('M'))
+      const other = get().slaves[b]
+      expect(get().setSlaveShownHosts(a, () => ['d1_x'])).toEqual({ ok: true })
+      expect(get().slaves[a]).toMatchObject({ world: null, shownHostIds: ['d1_x'] })
+      expect(get().slaves[b]).toBe(other)
+    })
+
+    it('the result is sanitised', () => {
+      const a = add('alpha')
+      get().setSlaveShownHosts(a, () => ['d1_x', 'd1_x', 7 as never])
+      expect(get().slaves[a].shownHostIds).toEqual(['d1_x'])
+    })
+
+    it('unchanged (the same reference back) → no set: the state object is the same', () => {
+      const a = add('alpha', world('alpha'), ['d1_a'])
+      const before = get()
+      expect(get().setSlaveShownHosts(a, (ids) => ids)).toEqual({ ok: true })
+      expect(get()).toBe(before)
+    })
+
+    it("an unknown id, and the master (its list is useShownHostsStore's), are not-found; nothing changes", () => {
+      add('alpha')
+      const before = get()
+      expect(get().setSlaveShownHosts('nope', () => ['d1_x'])).toEqual({ ok: false, reason: 'not-found' })
+      expect(get().setSlaveShownHosts('master', () => ['d1_x'])).toEqual({ ok: false, reason: 'not-found' })
+      expect(get()).toBe(before)
     })
   })
 })
