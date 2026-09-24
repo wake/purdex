@@ -56,7 +56,9 @@ a workbench's settings = 工作台設定檔.
     would open a tab — landing on the host's management page instead is fine).
 
 Model: each workbench keeps a plain shown list of wire ids; no "all" flag; showing / hiding adds / removes exactly that
-host; unknown ids are kept; empty = every host hidden; the list syncs in `settings`.
+host; unknown ids are kept; empty = every host hidden. **Each workbench keeps its own list** (2026-09-25,
+`2026-09-25-per-workbench-shown-hosts-plan.md` §0): the **master's** list syncs in `settings`; a local workbench's list
+is stored with that workbench on this device and never syncs.
 
 ## 2. Where each piece of host data lives afterwards (measured on alpha.439)
 
@@ -65,14 +67,15 @@ host; unknown ids are kept; empty = every host hidden; the list syncs in `settin
 | host list, `hostOrder`, ip, port, token, daemonId, `activeHostId`, `devHostId`, `syncAliases` | device (`purdex-hosts`) | no — transfer code only |
 | `HostConfig.name` / colours / icon | device — the FALLBACK look only (§4.2) | no (after H3) |
 | name, colours (`colors`, legacy `color`), icon, iconWeight | workbench: `purdex-host-looks`, keyed by wire id | yes (`settings`) |
-| shown hosts | workbench: `purdex-shown-hosts`, wire ids | yes (`settings`) |
+| shown hosts | workbench (master: `purdex-shown-hosts`; local workbench: its record in `purdex-local-profiles`), wire ids | master only (`settings`) |
 | `purdex-host-settings` (editor.homePath), New Tab `sessions:` / `headless:` columns | workbench | yes (unchanged) |
 | pane host references in `tabs.*` | workbench | yes (unchanged) |
 | projects, commands, resume templates, daemon config, hooks | daemon | no (already shared) |
 
 Settings stores are device-global (one set per device, synced with the master's `settings`; only workspace-scoped
-entries follow workspaces — `master-world.ts`), so the look and shown-hosts stores are one per device like every other
-settings store.
+entries follow workspaces — `master-world.ts`), so the look store is one per device like every other settings store.
+**The shown list is the exception** (2026-09-25, per-workbench plan §0.1): one per workbench — the master's in
+`purdex-shown-hosts`, each local workbench's on its own record.
 
 The wire identity (`d1_…` from the daemonId, else the local id) stays: tabs and settings still name hosts across
 devices. Only the `hosts` SECTION and what exists solely to carry or reconcile it goes (§5 lists exactly what).
@@ -187,8 +190,12 @@ every deletion path (Hosts page, H4 replace-all; before H3 also a `hosts` apply 
 
 - `purdex-host-looks`: `{ looks: { [wireId]: { name?, colors?, color?, icon?, iconWeight? } } }`, keys are wire ids
   in the store itself (no local↔wire mapping on build or apply; the identity decides which local host a key means).
-- `purdex-shown-hosts`: `{ ids: wireId[] }` — the hosts SHOWN in the workbench; `[]` (the default, and the state at
-  ship time) = every host hidden; no `null`, no "all" (§1.2). Unknown ids kept, order kept.
+- `purdex-shown-hosts`: `{ ids: wireId[] }` — the hosts SHOWN in the **master's** workbench (on screen or not); `[]`
+  (the default, and the state at ship time) = every host hidden; no `null`, no "all" (§1.2). Unknown ids kept, order
+  kept. It also persists a device-local `relabelStamp` (never projected): the `relabelCount` its list belongs to.
+- `LocalProfile.shownHostIds: wireId[]` (2026-09-25) — a local workbench's own list: same rules (plain list, unknown ids
+  kept, `[]` = all hidden), sanitised with `sanitizeShownIds`, never projected. A record from before it existed reads
+  `[]`.
 - Both are projected in `settings`; unknown ids are carried through apply and build untouched. Each store's arrival
   bumps the `settings` ordinal and adds a wire marker (`@wire:host-look=1`, `@wire:shown-hosts=1`), so an old client
   sees `settings` as newer and locks the whole profile (decision 7).
@@ -443,7 +450,9 @@ H1: A and B with independent host lists (B lacks host X): A opens a tab on X →
 still live, nothing marked; B then adds X → the pane goes live, no push from B; B deletes X → B's X tabs stay ("no
 host X here"), A notices nothing; B undoes → live again. H2: change mlab's colour on A → B
 follows; rename on A → B's New Tab label follows; every host starts hidden; show / hide a host in workbench W on A → the same
-on B in W, still connected on both, its tabs kept on both with only its panes gated, restored without reload on show. H3: a device adds a host locally → no other device gets it; a pull never removes a local host. H4: A shares
+on B in W, still connected on both, its tabs kept on both with only its panes gated, restored without reload on show;
+show a host in local workbench L on A → nothing changes in the master on A or anywhere on B; switch A to the master →
+the master's own list applies. H3: a device adds a host locally → no other device gets it; a pull never removes a local host. H4: A shares
 mlab + air26 through mlab → B enters the code → gets both (add-new mode), connected, looks from the workbench; a
 second redeem of the same code fails.
 
