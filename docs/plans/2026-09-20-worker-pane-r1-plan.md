@@ -72,6 +72,36 @@ affordance promising lines it cannot reveal, #12 re-asserted the contracts of
 the three deleted components, #13 fixed a self-contradiction about #1227, and
 #14 dropped the `title` attribute PR-1 was going to keep the address in.
 
+## PR-2 review (R1 `review-mufwx2bu-g5pzhj`, attack `review-mufx0mwj-93whae`, critic `review-mufx6d8a-oipti6`)
+
+Five findings, all agreed by the critic, all folded into the tasks above
+before the fixes were written. Four of them are the same failure in different
+clothes — **an affordance, a pairing or a boundary that claims something the
+data does not support**:
+
+- **A1** — `daemonTruncated` alone made a body "collapsible", so a truncated
+  body the preview already showed whole rendered a `+0 lines` button.
+- **A2** — the bidirectional pairing queue let a stale orphan result be
+  claimed by a call that arrived later, so the call rendered the wrong body.
+  This one **overturns plan-review #8**, which had asserted that a result
+  arriving before its call should still pair: the critic showed the case
+  cannot occur (`useExecutionSubscription.ts:173-192` finishes paging history
+  before opening the SSE; `applyDurableEvent` only accepts increasing seq).
+  Pairing is forward-only.
+- **A3** — de-duplicating `turnStarts` by message index swallowed the second
+  of two boundaries that share an index, which is precisely the textless-turn
+  case the field was added for.
+- **A4** — `unregister(key)` swept every turn, so one turn's unmount stripped
+  a key another turn still had mounted.
+- **R1-1 / A5** — the 1 KB threshold counted UTF-16 code units, so a 1.2 KB
+  Han body measured 400 and was shown whole; and the preview cut by UTF-16
+  index, which can leave a lone surrogate.
+
+A5 is a design decision of this plan's own (#5, "byte length is
+`text.length`") being wrong on its face for this machine: the argument was
+that UTF-16 length never under-reports **ASCII**, in a project whose agent
+output is largely Chinese.
+
 ## Design decisions this plan makes (not in the spec)
 
 1. **Two affordances per operation, not one.** The spec drops the card but
@@ -90,9 +120,11 @@ the three deleted components, #13 fixed a self-contradiction about #1227, and
    counts any cut as "something is hidden". No second `max-height` mechanism
    anywhere, and no separate diff budget either (T3.2).
 4. **Duration is shown at ≥ 1 s** (spec §3.1.1 #3) until #1229 lands.
-5. **Byte length is `text.length`** (UTF-16 units) when N2 gives no
-   `total_bytes`. It never under-reports ASCII, and it keeps `foldPlan` free
-   of a `TextEncoder` allocation per render.
+5. **Byte length is UTF-8 bytes** when N2 gives no `total_bytes`, measured
+   by a code-point walk rather than a `TextEncoder` allocation per render.
+   An earlier draft used `text.length` and argued it never under-reports
+   ASCII — true, and irrelevant here: agent output on this machine is largely
+   Chinese, where it under-reports threefold.
 6. **No new theme tokens.** Room's palette is `status-{error,warning,success}`,
    `text-*`, `border-subtle`, `accent` — which is exactly what clears the
    nine `TODO: theme token` comments the spec §3.2 lists.
@@ -253,7 +285,12 @@ export function foldPlan(src: FoldSource): FoldPlan
   - `lines = text.length === 0 ? [] : text.split('\n')`; a single trailing
     `'\n'` does not add an empty last line (`'a\n'` is one line).
   - `localLines = lines.length`, `totalLines = src.totalLines ?? localLines`,
-    `bytes = src.totalBytes ?? src.text.length`.
+    `bytes = src.totalBytes ?? utf8Length(src.text)`. **UTF-8 bytes, not
+    `String.length`.** N2's `total_bytes` is a byte count and spec §4.2's
+    first row says 1 KB, so the fallback has to measure the same thing: 400
+    Han characters are ~1200 bytes and `String.length` calls them 400, which
+    on this machine — where agent output is largely Chinese — silently shows
+    a 1.2 KB body whole (R1's P2, attack A5, critic agreed).
   - `level = src.truncated || totalLines > FOLD_MEDIUM_MAX_LINES ? 2
       : totalLines > FOLD_WHOLE_MAX_LINES || bytes > FOLD_WHOLE_MAX_BYTES ? 1
       : 0`.
@@ -262,13 +299,22 @@ export function foldPlan(src: FoldSource): FoldPlan
   - `take = level === 2 ? FOLD_PREVIEW_LARGE : level === 1 ? FOLD_PREVIEW_MEDIUM : 0`.
   - **The preview has a byte budget as well as a line budget.** Lines are
     taken until either `take` lines or `FOLD_WHOLE_MAX_BYTES` characters are
-    consumed; the line that crosses the byte budget is cut at the remaining
-    room, and any line longer than `FOLD_LINE_MAX_CHARS` is cut there first.
-    Every cut sets `clamped`. This is what makes the spec table's first row
+    consumed (again UTF-8 bytes); the line that crosses the byte budget is
+    cut at the remaining room, and any line longer than
+    `FOLD_LINE_MAX_CHARS` is cut there first. **Every cut lands on a Unicode
+    code-point boundary** — slicing by UTF-16 index leaves a lone surrogate
+    and the browser draws a replacement glyph (attack A5). Every cut sets
+    `clamped`. This is what makes the spec table's first row
     hold: a body over 1 KB is never "shown whole", however few lines it has
     (codex plan review #10 — three 350-character lines used to pass the
     line-count test and come back `collapsible: false`).
-  - `hiddenLines = Math.max(0, localLines - previewLines.length)` — counted
+  - `hiddenLines = Math.max(0, localLines - previewLines.length)` when the
+    body is folded, and **exactly `0` when `collapsible` is false** — the
+    field means "how much this affordance is hiding", and a body shown whole
+    hides nothing. Without that clause the formula returns the body's own
+    line count for a short body (`previewLines` is `[]` there), which reads
+    as `+3 lines` to any consumer that renders the count before checking
+    `collapsible`. Counted
     against **the body we actually have**, never against N2's `total_lines`.
     An affordance must be able to reveal what it promises (codex plan review
     #11: a 3-line body with `total_lines: 900` used to advertise `+897 lines`
@@ -276,8 +322,14 @@ export function foldPlan(src: FoldSource): FoldPlan
   - `daemonTruncated = src.truncated === true || totalLines > localLines` —
     when N2 counts more lines than the body carries, the daemon cut it
     whatever the flag says, and the expanded view has to say so.
-  - `collapsible = level > 0 && (hiddenLines > 0 || clamped || daemonTruncated)`;
-    when false, `previewLines` is `[]`.
+  - `collapsible = level > 0 && (hiddenLines > 0 || clamped)` — **not**
+    `daemonTruncated`. An affordance exists to reveal something, and a body
+    the daemon cut but the preview shows whole has nothing left to reveal;
+    the old clause produced a `+0 lines` button that expanded to the same
+    text (attack A1). The truncation is still reported — `daemonTruncated`
+    stays on the plan and `FoldedOutput` prints its note beside the body
+    whether or not there is a button. When `collapsible` is false,
+    `previewLines` is `[]`.
   - `firstLine(text)` = `text.split('\n', 1)[0] ?? ''`, cut to
     `FOLD_LINE_MAX_CHARS` — **never** the lines joined by a space (#1265).
 
@@ -298,8 +350,27 @@ export function foldPlan(src: FoldSource): FoldPlan
   written); **`counts only the lines it can reveal`** (3-line `text` with
   `totalLines: 900` → `hiddenLines === 0` and `daemonTruncated === true`,
   **not** `hiddenLines === 897` — the #11 guard); **`uses N2's count to pick
-  the fold level`** (the same input still folds: `collapsible === true`);
-  `handles an empty
+  the fold level`** (a **10-line** body with `totalLines: 900` →
+  `previewLines.length === 3`: ten local lines alone would be medium and
+  preview six, so a preview of three proves the level came from N2's count.
+  The 3-line body an earlier draft used here could not tell level 1 from
+  level 2 at all — its preview was the whole body either way — and once
+  `collapsible` stopped counting `daemonTruncated` it could not even stay
+  collapsible. The case was named after something it never checked.);
+  **`hides nothing when it shows the body whole`** (3-line body →
+  `collapsible === false` **and** `hiddenLines === 0`);
+  **`does not offer to expand an empty daemon-truncated body`**
+  (`{ text: '', truncated: true }` → `collapsible === false`,
+  `daemonTruncated === true` — the A1 guard);
+  **`does not offer to expand a truncated body the preview shows whole`**
+  (`{ text: 'a\nb\nc\nd', truncated: true, severity: 'error' }` →
+  `collapsible === false`);
+  **`measures a Han body in UTF-8 bytes`** (`'中'.repeat(400)` on one line →
+  `collapsible === true`, because it is ~1200 bytes — the A5 guard, and it
+  must fail while the fallback is `String.length`);
+  **`measures an emoji body in UTF-8 bytes`** (`'😀'.repeat(300)`);
+  **`never cuts a surrogate pair`** (`'a'.repeat(399) + '😀' + 'x'.repeat(10)`
+  with `totalBytes: 2000` → the preview ends on a whole code point); `handles an empty
   body` (`''` → `totalLines === 0`, not collapsible); `does not count a
   trailing newline as a line` (`'a\n'` → `totalLines === 1`);
   `firstLine takes the first line, not the joined body`
@@ -345,9 +416,22 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex
   **Pairing is one-to-one and positional** (codex plan review #7). An
   id-keyed map pairs *every* call that shares an id with the *same* result,
   so a repeated `tool_use_id` renders one result twice while the second
-  result block vanishes. The rule instead is: walk the list once in order,
-  keep a queue of unanswered call positions per id, and give each
-  `tool_result` to the **oldest unanswered call with that id**. A call with
+  result block vanishes. The rule instead is: walk the list once in order
+  keeping one FIFO per id of calls still waiting for an answer, and give
+  each `tool_result` to the **oldest unanswered call with that id**. A result
+  with no waiting call is an orphan and **stays** one.
+
+  **Pairing is forward-only.** An earlier draft queued results too, so a
+  result could pair with a call that arrives *later*; the attack review found
+  what that does to `[result X 'stale'], [call X], [result X 'fresh']` — the
+  call renders the stale body and the fresh one floats off as an orphan. The
+  critic then established that the reverse case cannot arise at all:
+  `useExecutionSubscription.ts:173-192` pages history forward from `after=0`
+  and only opens the SSE once history is in, and `applyDurableEvent` accepts
+  by strictly increasing `lastSeq` (`event-reducer.ts:186-200`), so a
+  `tool_result` is never in the final array ahead of its `tool_use`. The
+  bidirectional rule generalised over a path that does not exist, and bought
+  a wrong body for it. A call with
   no result is simply absent from `resultForCall`; a result with no call is
   absent from `consumedResults` and renders as an orphan. The reducer's own
   duplicate-id merge (`tool-activity.ts:216`) keeps one `ToolActivity` for
@@ -366,9 +450,10 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex
   (two `tool_use` blocks with id `X`, two results → the first call gets the
   first result, the second the second, and **both** result blocks are
   consumed — the #7 guard); **`leaves the second of two same-id calls
-  unanswered when only one result arrives`**; **`pairs a result that arrives
-  before its call`** (the reducer applies frames in seq order, but a history
-  page can be applied around a live frame — the #8 guard); **`consumes every
+  unanswered when only one result arrives`**; **`leaves a result that precedes its call
+  as an orphan and gives the call the result that follows it`**
+  (`[result X 'stale'], [call X], [result X 'fresh']` → the call shows
+  `fresh`, `stale` renders as an orphan — the A2 guard); **`consumes every
   result exactly once`** (property over a mixed list:
   `consumedResults.size + orphanCount === total tool_result blocks`);
   `flattens a text-block content
@@ -401,9 +486,16 @@ not new wire data (spec §10 Q5): it is an event the SPA has always received.
 ```
 
   `defaultExecutionState()` seeds it `[]`. Both arms push
-  `next.messages.length` before appending their bubble; a duplicate index is
-  never pushed twice (a second `message_accepted` at the same length means
-  the first appended nothing, and the two are one boundary).
+  `next.messages.length` before appending their bubble. **Repeated indexes
+  are kept.** An earlier draft de-duplicated by index, reasoning that a
+  second `message_accepted` at the same length meant the first appended
+  nothing — but that is exactly the case this field exists for: a turn whose
+  payload carried no text, ended, and was followed by another turn produces
+  two boundaries at the same index, and dropping one merges two real turns
+  (attack A3, critic agreed, citing spec §4.1). The seq guard in
+  `applyDurableEvent` already makes it impossible to apply one event twice,
+  so a dedupe protects nothing. `groupTurns` therefore has to tolerate an
+  empty range (`start === end`).
 
 - `spa/src/lib/nex/message-types.ts:20-37` — `AssistantMessage` and
   `UserMessage` each gain
@@ -417,7 +509,10 @@ not new wire data (spec §10 Q5): it is an event the SPA has always received.
 - Tests in `spa/src/lib/nex/event-reducer.test.ts`: `records a turn start on
   message_accepted`; `records a turn start even when the payload has no text`
   (the boundary the message list cannot show); `records a turn start on
-  delegated`; `does not record the same index twice`; `keeps turn starts in
+  delegated`; **`records two boundaries at the same index when the first turn appended
+  nothing`** (`message_accepted` with no text → `execution.terminal` →
+  `message_accepted` with text ⇒ `turnStarts` is `[0, 0]`, **not** `[0]` —
+  the A3 guard); `keeps turn starts in
   ascending order across a history replay`; `a subagent frame does not record
   a turn start`; `turn starts survive a duplicate seq` (the seq guard returns
   the same state).
@@ -441,10 +536,12 @@ export interface FoldedOutputProps {
   `data-testid="fold-more"` reading `t('room.fold.more', { n: hiddenLines })`
   — `+166 lines`. When `hiddenLines === 0 && plan.clamped` the button reads
   `t('room.fold.show_all')`. Expanded: the whole `text` plus a
-  `data-testid="fold-less"` button, and, when `plan.daemonTruncated`, a
-  `<span data-testid="fold-daemon-truncated">` carrying
-  `t('room.fold.daemon_truncated')`. `plan.collapsible === false` renders the
-  body with no button at all.
+  `data-testid="fold-less"` button. `plan.collapsible === false` renders the
+  body with no button at all. **The `data-testid="fold-daemon-truncated"`
+  note carrying `t('room.fold.daemon_truncated')` renders whenever
+  `plan.daemonTruncated` is set — collapsed, expanded, or with no button at
+  all.** It reports a fact about the payload, not about the fold, and after
+  A1 a truncated body often has no button to hang it on.
 
 - New locale keys in **both** `src/locales/en.json` and `zh-TW.json`
   (`src/locales/locale-completeness.test.ts` fails if only one moves):
@@ -456,7 +553,9 @@ export interface FoldedOutputProps {
 
 - Test `spa/src/components/room/FoldedOutput.test.tsx`: `renders the preview
   and the count`; `renders the body whole when it is not collapsible`;
-  `calls onToggle`; `shows the daemon-truncation note only when expanded`;
+  `calls onToggle`; **`shows the daemon-truncation note even when there is no button`**
+  (`collapsible: false`, `daemonTruncated: true` → the note renders and
+  `fold-more` does not — the A1 guard at the render level);
   `says "show all" when only a clamp is hiding content`; `never joins lines
   with a space` (a 3-line body's preview contains `'\n'` — the #1265
   regression guard).
@@ -474,7 +573,8 @@ export interface FoldStore {
   toggle(key: string): void
   /** Every foldable thing announces itself, so expand-all knows what "all" is. */
   register(turnIndex: number, key: string): void
-  unregister(key: string): void
+  /** Takes the turn too: the same key can be live in two turns at once. */
+  unregister(turnIndex: number, key: string): void
   setTurn(turnIndex: number, expanded: boolean): void
 }
 export const FoldContext = createContext<FoldStore | null>(null)
@@ -487,7 +587,13 @@ export function useFold(key: string): [boolean, () => void]
 ```
 
   `useFoldMemory` keeps a `useState<Record<string, boolean>>({})` plus a
-  `useRef<Map<number, Set<string>>>` of the keys registered per turn;
+  `useRef<Map<number, Map<string, number>>>` of the keys registered per turn
+  (`setTurn` iterates `keys.keys()`; iterating the Map itself yields
+  `[key, count]` pairs and would write entry arrays into `expanded`)
+  **with a reference count** — nothing guarantees a key is unique across the
+  pane, and an `unregister` that swept every turn let one turn's unmount
+  strip a key another turn still had mounted (attack A4). `unregister`
+  decrements its own `(turnIndex, key)` and drops the entry at zero;
   unknown keys read `false`. `setTurn` writes every key registered under that
   turn in one update.
 
@@ -509,7 +615,14 @@ export function useFold(key: string): [boolean, () => void]
   a thinking key registered by nested components`** (the #6 guard: the
   harness renders an operation, a diff and a thinking block, and one
   `setTurn` opens all three); `unregisters a key when its component
-  unmounts`; `keeps state across a child remount`.
+  unmounts`; **`keeps a key registered in one turn when the same key
+  unmounts in another`** (two turns each mount `useFold('op-1')`, turn 0's
+  unmounts, `setTurn(1, true)` still reaches it — the A4 guard);
+  **`keeps a key registered while another component in the same turn still
+  holds it`** (the reference count's only guard: a per-turn `Set` passes the
+  A4 test above, so without this one the implementation can regress to a Set
+  and the suite stays green);
+  `keeps state across a child remount`.
 
 ### T2.6 PR-2
 
@@ -739,7 +852,8 @@ export function groupTurns(messages: StreamMessage[], turnStarts: readonly numbe
 ```
 
   `groupTurns`: the ranges are `turnStarts` (clamped to
-  `[0, messages.length]`, de-duplicated, sorted) with `end` = the next start
+  `[0, messages.length]`, sorted, **repeats kept** — a repeat is an empty
+  turn, not a duplicate) with `end` = the next start
   or `messages.length`; a leading range is prepended when the first start is
   not 0. `openerIndex` is the first index in the range for which
   `isOpeningLine` holds, else null. `isOpeningLine` requires
@@ -756,8 +870,8 @@ export function groupTurns(messages: StreamMessage[], turnStarts: readonly numbe
   interrupt sentinel as the opening line`; `treats a slash command as the
   opening line`; `does not treat a subagent prompt as the opening line`
   (`parent_tool_use_id` set); `returns an empty array for an empty list`;
-  `ignores a boundary past the end of the list`; `de-duplicates repeated
-  boundaries`; `covers every index exactly once` (property: the ranges
+  `ignores a boundary past the end of the list`; **`keeps an empty turn as its own range`** (`turnStarts` `[0, 0]` → two
+  ranges, the first empty); `covers every index exactly once` (property: the ranges
   partition `[0, messages.length)`).
 
 ### T4.2 `RoomTurn` — the container and its hover strip (TDD)

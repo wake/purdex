@@ -340,3 +340,69 @@ describe('defaultExecutionState', () => {
     expect(s.tools).toEqual({})
   })
 })
+
+describe('turn starts (spec §4.1)', () => {
+  const accepted = (seq: number, payload: Record<string, unknown> = {}) =>
+    ev(seq, 'execution.message_accepted', { turn_id: `t${seq}`, ...payload })
+
+  it('records a turn start on message_accepted', () => {
+    const s = applyDurableEvent(defaultExecutionState(), accepted(1, { text: 'go' }))
+    expect(s.turnStarts).toEqual([0])
+    expect(s.messages).toHaveLength(1)
+  })
+
+  it('records a turn start even when the payload has no text', () => {
+    // The site-wide stream strips `text`, so the bubble never arrives — but
+    // the turn did open, and the boundary has to survive it.
+    const s = applyDurableEvent(defaultExecutionState(), accepted(1))
+    expect(s.turnStarts).toEqual([0])
+    expect(s.messages).toEqual([])
+  })
+
+  it('records a turn start on delegated', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.delegated', { brief: 'do the thing' }))
+    expect(s.turnStarts).toEqual([0])
+  })
+
+  it('records two boundaries at the same index when the first turn appended nothing', () => {
+    // A turn whose payload carried no text, ended, and was followed by another
+    // turn: both boundaries sit at index 0, and collapsing them would merge two
+    // turns the daemon declared separately (spec §4.1).
+    let s = applyDurableEvent(defaultExecutionState(), accepted(1))
+    s = applyDurableEvent(s, ev(2, 'execution.terminal', { turn_id: 't1' }))
+    s = applyDurableEvent(s, accepted(3, { text: 'second' }))
+    expect(s.turnStarts).toEqual([0, 0])
+    expect(s.messages).toHaveLength(1)
+  })
+
+  it('keeps turn starts in ascending order across a history replay', () => {
+    const assistantMsg = (seq: number) =>
+      ev(seq, 'assistant', { type: 'assistant', message: { role: 'assistant', content: [], stop_reason: null } })
+    let s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.delegated', { brief: 'first' }))
+    s = applyDurableEvent(s, assistantMsg(2))
+    s = applyDurableEvent(s, accepted(3, { text: 'second' }))
+    s = applyDurableEvent(s, assistantMsg(4))
+    s = applyDurableEvent(s, accepted(5))
+    expect(s.turnStarts).toEqual([0, 2, 4])
+    expect(s.messages).toHaveLength(4)
+  })
+
+  it('a subagent frame does not record a turn start', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'assistant', {
+      type: 'assistant', parent_tool_use_id: 'toolu_parent',
+      message: { role: 'assistant', content: [], stop_reason: null },
+    }))
+    expect(s.turnStarts).toEqual([])
+  })
+
+  it('turn starts survive a duplicate seq', () => {
+    const s = applyDurableEvent(defaultExecutionState(), accepted(1, { text: 'go' }))
+    const again = applyDurableEvent(s, accepted(1, { text: 'go' }))
+    expect(again).toBe(s)
+    expect(again.turnStarts).toEqual([0])
+  })
+
+  it('starts with no turn boundaries', () => {
+    expect(defaultExecutionState().turnStarts).toEqual([])
+  })
+})
