@@ -285,6 +285,41 @@ describe('OperationBlock inherited contracts', () => {
     expect(screen.getByTestId('op-duration')).toHaveTextContent(/^6\.2s$/)
   })
 
+  // codex R2 A2, inherited from ToolCallBlock: a call that was denied or that
+  // failed still reports how long it took. The daemon's `durationMs` is the
+  // only clock that survives — both raw-frame timestamps are 0 when unknown —
+  // and dropping either branch from `durationOf` silently loses the badge on
+  // exactly the two outcomes a reader most wants timed.
+  it('shows a denial\u2019s durationMs when both clocks are unknown', () => {
+    render(<OperationBlock tool="Bash" input={{}} foldKey="tu1"
+      activity={{ status: 'denied', startedAt: 0, endedAt: 0, durationMs: 1_200 }}
+      result={ok('Permission denied')} />)
+    expect(screen.getByTestId('op-duration')).toHaveTextContent(/^1\.2s$/)
+  })
+
+  it('shows an error\u2019s durationMs when both clocks are unknown', () => {
+    render(<OperationBlock tool="Bash" input={{}} foldKey="tu1"
+      activity={{ status: 'error', startedAt: 0, endedAt: 0, durationMs: 1_200 }}
+      result={bad('boom')} />)
+    expect(screen.getByTestId('op-duration')).toHaveTextContent(/^1\.2s$/)
+  })
+
+  // The last fallback in `resolveStatus`: no lifecycle activity and no N2
+  // status, so the raw frame's `is_error` is all there is. Every other status
+  // test feeds an activity or a `facts.status`, so this path had no guard.
+  it('falls back to the raw frame\u2019s is_error when nothing else says', () => {
+    render(<OperationBlock tool="Bash" input={{}} foldKey="tu1" result={bad('boom')} />)
+    expect(screen.getByTestId('op-dot').className).toContain('bg-status-error')
+    expect(screen.getByTestId('op-rail').className).toContain('bg-status-error/10')
+    cleanup()
+    // The control: the same block with is_error false is an ordinary success —
+    // the ok dot and a rail with no fill at all.
+    render(<OperationBlock tool="Bash" input={{}} foldKey="tu1" result={ok('fine')} />)
+    expect(screen.getByTestId('op-dot').className).toContain('bg-status-success')
+    expect(screen.getByTestId('op-dot').className).not.toContain('bg-status-error')
+    expect(screen.getByTestId('op-rail').className).not.toContain('bg-status')
+  })
+
   it('shows the aborted badge', () => {
     render(<OperationBlock tool="Bash" input={{}} foldKey="tu1"
       activity={{ status: 'aborted' }} result={null} />)

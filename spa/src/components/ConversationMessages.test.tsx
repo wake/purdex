@@ -259,6 +259,29 @@ describe('ConversationMessages', () => {
       expect(blocks[1]).not.toHaveTextContent('ANSWER A')
     })
 
+    it('two calls sharing a tool_use id expand independently', () => {
+      // The fold key is the call's **position** (`blockKey(i, j)`), not its
+      // tool_use id: ids repeat (the #7 case above), and two calls under one
+      // id would then share one expansion — opening either would open both.
+      // Position is safe because `event-reducer.ts` only appends to
+      // `messages`; no unshift or splice ever moves an existing index.
+      render(<ConversationMessages
+        messages={[
+          asst(use('tu1', 'Bash', { command: 'first' }), use('tu1', 'Bash', { command: 'second' })),
+          usr(res('tu1', `A\n${longBody}`), res('tu1', `B\n${longBody}`)),
+        ]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      const blocks = screen.getAllByTestId('operation-block')
+      expect(blocks).toHaveLength(2)
+      expect(screen.getAllByTestId('fold-more')).toHaveLength(2)
+      fireEvent.click(within(blocks[0]).getByTestId('fold-more'))
+      // The one that was clicked is open; the other is untouched.
+      expect(within(blocks[0]).getByTestId('fold-less')).toBeInTheDocument()
+      expect(within(blocks[0]).queryByTestId('fold-more')).toBeNull()
+      expect(within(blocks[1]).getByTestId('fold-more')).toBeInTheDocument()
+      expect(within(blocks[1]).queryByTestId('fold-less')).toBeNull()
+    })
+
     it('renders every result exactly once', () => {
       render(<ConversationMessages
         messages={[
