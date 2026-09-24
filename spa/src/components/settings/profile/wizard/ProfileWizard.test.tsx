@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import en from '../../../../locales/en.json'
+import zhTW from '../../../../locales/zh-TW.json'
 import { ProfileWizard } from './ProfileWizard'
 import { ATTACH_REASONS } from './wizard-run'
 import { reasonKey, requestKey } from './wizard-shared'
@@ -369,6 +370,11 @@ describe('step 4 — the direction', () => {
     await toDirection()
     click('profile-wizard-direction-push')
     expect(screen.getByTestId('profile-wizard-push-warning')).toHaveTextContent(en['settings.profile.wizard.direction.push_replaces'].replace('{{profile}}', 'default'))
+    // host ownership H3: a push does not send this device's host list — the warning says what it replaces, and no more
+    expect(en['settings.profile.wizard.direction.push_replaces']).not.toMatch(/this device's hosts/)
+    expect(en['settings.profile.wizard.direction.push_replaces']).toMatch(/host list is not sent/)
+    expect(zhTW['settings.profile.wizard.direction.push_replaces']).not.toContain('主機、設定')
+    expect(zhTW['settings.profile.wizard.direction.push_replaces']).toContain('主機清單不會送出')
   })
 
   it('A NEW PROFILE OFFERS PUSH ONLY', async () => {

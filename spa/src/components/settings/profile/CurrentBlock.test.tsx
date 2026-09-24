@@ -68,6 +68,11 @@ describe('no master', () => {
     const block = screen.getByTestId('profile-current-block')
     expect(block).toHaveAttribute('data-state', 'none')
     expect(block).toHaveTextContent(en['settings.profile.current.none_what'])
+    // host ownership H3: the host list is not in what a profile syncs — said, in both languages
+    expect(en['settings.profile.current.none_what']).not.toMatch(/its hosts/)
+    expect(en['settings.profile.current.none_what']).toMatch(/Each device keeps its own host list/)
+    expect(zhTW['settings.profile.current.none_what']).not.toContain('主機、設定')
+    expect(zhTW['settings.profile.current.none_what']).toContain('主機清單是各裝置自己的')
     expect(block).toHaveTextContent(en['settings.profile.current.none_how'])
     // ONE control: the way into the wizard (P3d-3)
     expect(within(block).getAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['profile-setup-start'])
