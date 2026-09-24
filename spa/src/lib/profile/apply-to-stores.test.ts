@@ -52,6 +52,7 @@ import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspa
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
 import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, readSettingsSources } from './apply-to-stores'
 import { identityOfSync, syncIdOfSync } from './host-identity'
+import { isRefShownNow, setHostShown } from '../shown-hosts'
 
 // === fixtures ===
 
@@ -1051,6 +1052,48 @@ describe('applySectionToStores — settings: shown hosts', () => {
     expect(useTabStore.getState()).toBe(tabs)
     expect(useWorkspaceStore.getState()).toBe(workspaces)
     expect(useLocalProfilesStore.getState()).toBe(profiles)
+  })
+
+  // The #1421 attacker finding, as a regression: two devices with different host lists share one synced list. A's
+  // hide must carry every id it does not know through; B, applying it, keeps its own host shown. Hosts added later are
+  // hidden on each device and write nothing.
+  it('two clients: A hides a → payload [d1_b, d1_c] (d1_c kept although A lacks c); on B c stays shown, a is hidden; later adds write nothing', async () => {
+    const d = (n: string) => `${n}-lab:${n.repeat(6).slice(0, 6)}`
+    const hostsOf = (names: string[]) => ({
+      [M]: host(M, { daemonId: DAEMON }),
+      ...Object.fromEntries(names.map((n, i) => [n, host(n, { ip: `10.0.1.${i + 1}`, order: i + 1, daemonId: d(n) })])),
+    })
+    const [A_HOSTS, B_HOSTS] = [hostsOf(['a', 'b']), hostsOf(['a', 'b', 'c'])]
+    const SYNCED = ['a', 'b', 'c'].map((n) => syncIdOfSync(d(n)))
+
+    // device A
+    useHostStore.setState({ hosts: A_HOSTS, hostOrder: [M, 'a', 'b'] })
+    useShownHostsStore.setState({ ids: SYNCED })
+    setHostShown('a', false)
+    const fromA = settingsNow()
+    expect(fromA['purdex-shown-hosts']).toEqual({ ids: [SYNCED[1], SYNCED[2]] })
+
+    // device B
+    useHostStore.setState({ hosts: B_HOSTS, hostOrder: [M, 'a', 'b', 'c'] })
+    useShownHostsStore.setState({ ids: SYNCED })
+    expect(await applySectionToStores('settings', fromA, ctx)).toMatchObject({ ok: true, hash: await hashSection(fromA) })
+    expect(isRefShownNow('c')).toBe(true)
+    expect(isRefShownNow('b')).toBe(true)
+    expect(isRefShownNow('a')).toBe(false)
+
+    // a host added later on B is hidden there; nothing is written, the payload rebuilds byte-identical
+    const onB = JSON.stringify(settingsNow())
+    const e = useHostStore.getState().addHost({ name: 'e', ip: '10.0.2.1', port: 7860 })
+    expect(isRefShownNow(e)).toBe(false)
+    expect(JSON.stringify(settingsNow())).toBe(onB)
+
+    // back on A (its store as it left it): a host d added is hidden; the payload rebuilds byte-identical
+    useHostStore.setState({ hosts: A_HOSTS, hostOrder: [M, 'a', 'b'] })
+    useShownHostsStore.setState({ ids: fromA['purdex-shown-hosts']!.ids as string[] })
+    const onA = JSON.stringify(settingsNow())
+    const dId = useHostStore.getState().addHost({ name: 'd', ip: '10.0.3.1', port: 7860 })
+    expect(isRefShownNow(dId)).toBe(false)
+    expect(JSON.stringify(settingsNow())).toBe(onA)
   })
 
   it('an ordinal-6 payload (no shown-hosts store) leaves the store untouched; the rebuild carries it, so the hash differs (pushed once)', async () => {
