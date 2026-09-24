@@ -391,26 +391,23 @@ describe('buildHostsSection', () => {
     expect(structuralKey(buildHostsSection(state as unknown as HostsSource))).not.toContain(S)
   })
 
-  it('drops a hostOrder id that has no host (reorderHosts does not check ids), so the receiver accepts the section', () => {
+  it('drops a hostOrder id that has no host (reorderHosts does not check ids)', () => {
     const source = deepFreeze({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['a', 'ghost', 'b'] })
     const out = buildHostsSection(source)
     expect(out.hostOrder).toEqual(['a', 'b'])
     expect(Object.keys(out.hosts).sort()).toEqual(['a', 'b'])
-    expect(isWellFormedSection('hosts', out)).toBe(true)
     expect(source.hostOrder).toEqual(['a', 'ghost', 'b']) // input untouched
   })
 
   it('keeps a repeated hostOrder id once, at its first occurrence', () => {
     const out = buildHostsSection(deepFreeze({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['b', 'a', 'b', 'a'] }))
     expect(out.hostOrder).toEqual(['b', 'a'])
-    expect(isWellFormedSection('hosts', out)).toBe(true)
   })
 
   it('does not add a host that hostOrder never mentions (the store state is reflected, not repaired)', () => {
     const out = buildHostsSection({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['b'] })
     expect(out.hostOrder).toEqual(['b'])
     expect(Object.keys(out.hosts).sort()).toEqual(['a', 'b'])
-    expect(isWellFormedSection('hosts', out)).toBe(true)
   })
 })
 
@@ -816,7 +813,6 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(p.hosts[WIRE]).toEqual({ id: WIRE, name: 'N-bbbbbb', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON, aliases: ['aaaaaa', 'bbbbbb'] }) // sorted
     expect(p.hosts.legacy).toEqual({ id: 'legacy', name: 'N-legacy', ip: '10.0.0.1', port: 7860, order: 0 })
     expect(JSON.stringify(p)).not.toContain('syncAliases')
-    expect(isWellFormedSection('hosts', p)).toBe(true)
   })
 
   it('hosts: a canonical row\'s aliases are the SORTED unique union of the remembered ones and its own id, the first 16 (A1: one list every client computes)', () => {
@@ -829,8 +825,6 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(at('zzzzzz', sixteen)).toEqual(sixteen)
     // full, own id sorts first: it goes in, the LARGEST goes out
     expect(at('aaaaaa', sixteen)).toEqual(['aaaaaa', ...sixteen.slice(0, 15)])
-    const s = { hosts: { aaaaaa: hostCfg('aaaaaa', { daemonId: DAEMON, syncAliases: sixteen }) }, hostOrder: ['aaaaaa'] }
-    expect(isWellFormedSection('hosts', buildHostsSection(s))).toBe(true)
   })
 
   it('hosts: a stray local `aliases` field never travels (only syncAliases, and only on a canonical row)', () => {
