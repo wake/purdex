@@ -1655,6 +1655,7 @@
   "settings.profile.wizard.promote.bad_name": "無法替原本的工作台主檔取名。請重新開始。",
   "settings.profile.wizard.promote.bad_epoch": "這個視窗一時落後於另一個視窗。請再試一次。",
   "settings.profile.wizard.promote.write_failed": "這台裝置無法儲存這項變更——儲存空間可能已滿。所有內容已恢復原狀。",
+  "settings.profile.wizard.promote.rollback_incomplete": "設為工作台主檔沒有完成，也無法完整還原——請重新載入並檢查這台裝置的工作台。",
   "settings.profile.wizard.promote.other": "無法更換工作台主檔。",
   "settings.profile.wizard.save.unsettled": "另一個視窗剛切換了工作台，這一刻讀不到工作台主檔。請稍後再試。",
   "settings.profile.wizard.save.bad_name": "副本的名稱無法使用。請重新開始並換一個名稱。",

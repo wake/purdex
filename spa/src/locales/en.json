@@ -1655,6 +1655,7 @@
   "settings.profile.wizard.promote.bad_name": "The previous master could not be given a name. Start over.",
   "settings.profile.wizard.promote.bad_epoch": "This window was behind another one for a moment. Try again.",
   "settings.profile.wizard.promote.write_failed": "This device could not save the change — its storage may be full. Everything was put back.",
+  "settings.profile.wizard.promote.rollback_incomplete": "Making this the workbench master did not finish and could not be fully undone — reload and check this device's workbenches.",
   "settings.profile.wizard.promote.other": "The master could not be changed.",
   "settings.profile.wizard.save.unsettled": "Another window just switched profile, so the master cannot be read this instant. Try again in a moment.",
   "settings.profile.wizard.save.bad_name": "The copy's name cannot be used. Start over and give it another.",

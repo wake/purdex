@@ -13,6 +13,8 @@ import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { useProfileStore } from '../../stores/useProfileStore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { currentShownIdsNow } from '../shown-hosts'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../storage'
 import { MAX_WORLD_EPOCH, readWorldEpochFence } from '../storage/world-fence'
@@ -1083,5 +1085,162 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     })
     expect((await promoteToMaster(SLAVE, 'Old')).ok).toBe(false)
     expect(useLocalProfilesStore.getState().master).toBe(master)
+  })
+})
+
+// === E. The shown-hosts list follows the workbench (per-workbench shown hosts, 2026-09-25 plan A3) ===
+
+describe('promoteToMaster — the shown-hosts list follows the workbench (A3)', () => {
+  const MASTER_LIST = ['d1_master']
+  const SLAVE_LIST = ['d1_slave']
+  const shown = () => useShownHostsStore.getState()
+  const local = () => useLocalProfilesStore.getState()
+  const shownFields = () => [shown().ids, shown().relabelStamp]
+
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: MASTER_LIST, relabelStamp: local().relabelCount })
+    local().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks() // before the reset below: a test spies on the stores' setState (the outer afterEach runs later)
+    useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
+  })
+
+  it('the promoted slave\'s list becomes the master\'s (the store, stamped with the new relabelCount); the demoted workbench keeps the old master list (m4)', async () => {
+    const slaveList = local().slaves[SLAVE].shownHostIds
+    const result = await promoteToMaster(SLAVE, 'Old master')
+    if (!result.ok) throw new Error(result.reason)
+    expect(shown().ids).toBe(slaveList)
+    expect(shown().relabelStamp).toBe(local().relabelCount)
+    expect(local().slaves[result.demotedId].shownHostIds).toEqual(MASTER_LIST)
+    expect(persisted(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ ids: SLAVE_LIST, relabelStamp: local().relabelCount })
+    // the master was on screen: the screen is now the demoted workbench, and reads ITS list — the one it had
+    expect(currentShownIdsNow()).toEqual(MASTER_LIST)
+  })
+
+  it('that slave on screen: the screen becomes the master and keeps reading the list it had', async () => {
+    slaveOnScreen()
+    local().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    expect(currentShownIdsNow()).toEqual(SLAVE_LIST)
+    const result = await promoteToMaster(SLAVE, 'Old master')
+    if (!result.ok) throw new Error(result.reason)
+    expect(currentShownIdsNow()).toEqual(SLAVE_LIST)
+    expect(local().slaves[result.demotedId].shownHostIds).toEqual(MASTER_LIST)
+  })
+
+  it('a refusal writes neither list', async () => {
+    const before = shownFields()
+    const slaves = local().slaves
+    expect(await promoteToMaster('nope', 'Old')).toEqual({ ok: false, reason: 'not-found' })
+    shownFields().forEach((v, i) => expect(v).toBe(before[i]))
+    expect(local().slaves).toBe(slaves)
+  })
+
+  describe('a write that throws: every store put back, in reverse (codex #3)', () => {
+    const everything = () => [...threeStores(), ...shownFields()]
+
+    /** `key`'s storage write throws the first time (after persist has set memory). */
+    const failStorageOnce = (key: string): void => {
+      const real = Storage.prototype.setItem
+      let thrown = 0
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, value: string) {
+        if (k === key && thrown++ === 0) throw new Error(`${k} write failed`)
+        real.call(this, k, value)
+      })
+    }
+
+    it('the local-profiles write fails → write-failed, all four stores as they were', async () => {
+      const before = everything()
+      failStorageOnce(STORAGE_KEYS.LOCAL_PROFILES)
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: `${STORAGE_KEYS.LOCAL_PROFILES} write failed` })
+      everything().forEach((v, i) => expect(v).toBe(before[i]))
+    })
+
+    it('the shown-store write fails (memory set, storage threw) → write-failed, the shown store AND the parking lot back (m6)', async () => {
+      const before = everything()
+      failStorageOnce(STORAGE_KEYS.SHOWN_HOSTS)
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: `${STORAGE_KEYS.SHOWN_HOSTS} write failed` })
+      everything().forEach((v, i) => expect(v).toBe(before[i]))
+    })
+
+    it('restampWorld fails → write-failed, the shown store and the parking lot back too (m6)', async () => {
+      const before = everything()
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: 'stamp failed' })
+      everything().forEach((v, i) => expect(v).toBe(before[i]))
+    })
+
+    it('… and the parking lot\'s restore fails too → rollback-incomplete; the shown store is still put back', async () => {
+      const shownBefore = shownFields()
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      shownFields().forEach((v, i) => expect(v).toBe(shownBefore[i]))
+    })
+
+    it('… and the shown store\'s restore fails → rollback-incomplete; the parking lot is still put back', async () => {
+      const localBefore = pick(local(), LOCAL_FIELDS)
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      const real = useShownHostsStore.setState
+      let calls = 0
+      vi.spyOn(useShownHostsStore, 'setState').mockImplementation((...args) => {
+        if (++calls > 1) throw new Error('restore failed') // the promote's write goes through; its restore does not
+        real(...(args as Parameters<typeof real>))
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      pick(local(), LOCAL_FIELDS).forEach((v, i) => expect(v).toBe(localBefore[i]))
+    })
+
+    it('the shown-store write fails and the local restore fails → rollback-incomplete', async () => {
+      failStorageOnce(STORAGE_KEYS.SHOWN_HOSTS)
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+    })
+
+    it('the local write fails and its own restore fails → rollback-incomplete', async () => {
+      failStorageOnce(STORAGE_KEYS.LOCAL_PROFILES)
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+    })
+
+    // restampWorld's own two restores (master-world.ts): each is attempted even when the other throws, and a failure
+    // is reported (m11). The workspace write sets memory and then its storage throws, so BOTH live stores hold the new
+    // tag when the restores run.
+    it("restampWorld: the tab store's restore fails → the workspace store is still put back; rollback-incomplete (m11)", async () => {
+      const wsBefore = pick(useWorkspaceStore.getState(), WS_FIELDS)
+      failStorageOnce(STORAGE_KEYS.WORKSPACES)
+      const real = useTabStore.setState
+      let calls = 0
+      vi.spyOn(useTabStore, 'setState').mockImplementation((...args) => {
+        if (++calls === 2) throw new Error('tab restore failed')
+        real(...(args as Parameters<typeof real>))
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      pick(useWorkspaceStore.getState(), WS_FIELDS).forEach((v, i) => expect(v).toBe(wsBefore[i]))
+    })
+
+    it("restampWorld: the workspace store's restore fails → the tab store is still put back; rollback-incomplete", async () => {
+      const tabBefore = pick(useTabStore.getState(), TAB_FIELDS)
+      let calls = 0
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementation(() => {
+        ++calls
+        throw new Error(calls === 1 ? 'stamp failed' : 'ws restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      pick(useTabStore.getState(), TAB_FIELDS).forEach((v, i) => expect(v).toBe(tabBefore[i]))
+    })
   })
 })

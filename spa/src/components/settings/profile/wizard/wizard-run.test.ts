@@ -206,6 +206,41 @@ describe('the order, and what a failure stops', () => {
     expect(slaveNamed('Kept')).toBeUndefined()
   })
 
+  // per-workbench shown hosts A3: a promote whose rollback did not finish is shown as a persistent notice (H1c)
+  describe('a promote that could not be fully undone', () => {
+    const notice = () => useUndoToast.getState().notice?.message ?? null
+    beforeEach(() => useUndoToast.getState().dismissNotice())
+    afterEach(() => {
+      vi.restoreAllMocks()
+      useUndoToast.getState().dismissNotice()
+    })
+
+    it('rollback-incomplete: the run stops there, and the persistent notice says to reload and check', async () => {
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      const { result } = await run(plan({ localId: 's1' }))
+      expect(result).toEqual({ done: false, failedAt: 0, reason: 'rollback-incomplete' })
+      expect(notice()).toBe(en['settings.profile.wizard.promote.rollback_incomplete'])
+      expect(notice()).toBe('Making this the workbench master did not finish and could not be fully undone — reload and check this device\'s workbenches.')
+      expect(attachMaster).not.toHaveBeenCalled()
+    })
+
+    it('only for rollback-incomplete: a clean write-failed, or a refusal, raises no notice', async () => {
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      expect((await run(plan({ localId: 's1' }))).result).toEqual({ done: false, failedAt: 0, reason: 'write-failed' })
+      expect(notice()).toBeNull()
+      useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P, masterEndpoint: '10.0.0.1:7860' })
+      expect((await run(plan({ localId: 's1' }))).result).toMatchObject({ reason: 'master-attached' })
+      expect(notice()).toBeNull()
+    })
+  })
+
   it('the copy is refused (a name that is none): the attach is NOT made — a pull without the copy that was asked for would be a loss', async () => {
     const { result } = await run(plan({ saveAs: '   ' }))
     expect(result).toEqual({ done: false, failedAt: 0, reason: 'bad-name' })

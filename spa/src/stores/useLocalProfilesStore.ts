@@ -160,12 +160,16 @@ export interface LocalProfilesState extends LocalProfilesData {
    *    master on screen  → the screen is now the demoted slave   (answer: activeProfileId === demotedId)
    *    that slave        → the screen is now the master          (answer: activeProfileId === 'master')
    *    another slave     → untouched                             (answer: activeProfileId unchanged)
-   *  The caller re-stamps the tab stores' world tag with the answer's `activeProfileId` and the same epoch. */
+   *  The caller re-stamps the tab stores' world tag with the answer's `activeProfileId` and the same epoch.
+   *  SHOWN HOSTS (per-workbench, plan A3): the list goes with the world too. `demotedShownIds` — the master's list, which
+   *  lives in `useShownHostsStore` — becomes the demoted slave's, in this same `set`; the promoted slave's list is
+   *  handed back (`promotedShownHostIds`) for the caller to write into that store. */
   promoteSlave: (
     slaveId: string,
     demotedName: string,
     worldEpoch: number,
-  ) => { ok: true; demotedId: string; activeProfileId: string } | Refused<'not-found' | 'bad-name' | 'bad-epoch'>
+    demotedShownIds: readonly string[],
+  ) => { ok: true; demotedId: string; activeProfileId: string; promotedShownHostIds: string[] } | Refused<'not-found' | 'bad-name' | 'bad-epoch'>
   /** Name / icon / colour of the master (`'master'`) or a slave. One bad value refuses the whole patch. */
   setProfileAppearance: (
     id: string,
@@ -485,7 +489,7 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         return { ok: true, world: taken, previousId }
       },
 
-      promoteSlave: (slaveId, demotedName, worldEpoch) => {
+      promoteSlave: (slaveId, demotedName, worldEpoch, demotedShownIds) => {
         const s = get()
         if (!Object.hasOwn(s.slaves, slaveId)) return { ok: false, reason: 'not-found' }
         const name = normalizeLocalProfileName(demotedName)
@@ -502,8 +506,7 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         // cases one: the master slot gets the slave's world, the new slave gets what the master slot held.
         // The look goes with the world (see APPEARANCE): the old master's — and its name, if it had one; `demotedName`
         // is for a master nobody named — to the new slave, the promoted slave's to the master.
-        // Its shown-hosts list: [] here; the caller that owns the master's list hands it over (plan A3).
-        slaves[demotedId] = { id: demotedId, name: s.master.name ?? name, createdAt: Date.now(), shownHostIds: [], world: s.parkedMaster, ...appearanceOf(s.master) }
+        slaves[demotedId] = { id: demotedId, name: s.master.name ?? name, createdAt: Date.now(), shownHostIds: sanitizeShownIds(demotedShownIds), world: s.parkedMaster, ...appearanceOf(s.master) }
         const activeProfileId =
           s.activeProfileId === MASTER_PROFILE_ID ? demotedId : s.activeProfileId === slaveId ? MASTER_PROFILE_ID : s.activeProfileId
 
@@ -516,7 +519,7 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
           worldEpoch,
           relabelCount: s.relabelCount + 1,
         })
-        return { ok: true, demotedId, activeProfileId }
+        return { ok: true, demotedId, activeProfileId, promotedShownHostIds: promoted.shownHostIds }
       },
 
       replaceParkedWorld: (targetId, world) => {

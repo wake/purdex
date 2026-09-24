@@ -404,12 +404,12 @@ describe('promoteSlave — a move, never a copy', () => {
     get().removeSlave(b)
     expect(get().relabelCount).toBe(0)
 
-    expect(get().promoteSlave('nope', 'x', 99)).toMatchObject({ ok: false }) // refused: not counted
+    expect(get().promoteSlave('nope', 'x', 99, [])).toMatchObject({ ok: false }) // refused: not counted
     expect(get().relabelCount).toBe(0)
-    const first = get().promoteSlave(a, 'old', get().worldEpoch + 1)
+    const first = get().promoteSlave(a, 'old', get().worldEpoch + 1, [])
     if (!first.ok) throw new Error(first.reason)
     expect(get().relabelCount).toBe(1)
-    expect(get().promoteSlave(first.demotedId, 'older', get().worldEpoch + 1)).toMatchObject({ ok: true })
+    expect(get().promoteSlave(first.demotedId, 'older', get().worldEpoch + 1, [])).toMatchObject({ ok: true })
     expect(get().relabelCount).toBe(2)
     expect(persistedEnvelope().state.relabelCount).toBe(2)
   })
@@ -420,9 +420,9 @@ describe('promoteSlave — a move, never a copy', () => {
     const c = add('gamma')
     vi.spyOn(Date, 'now').mockReturnValue(777)
     idQueue.push('demote')
-    const r = get().promoteSlave(b, ' old master ', 1)
+    const r = get().promoteSlave(b, ' old master ', 1, [])
     vi.restoreAllMocks()
-    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: 'demote' })
+    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: 'demote', promotedShownHostIds: [] })
     const s = get()
     expect(s.parkedMaster).toEqual(world('beta'))
     expect(s.slaves[b]).toBeUndefined()
@@ -436,8 +436,8 @@ describe('promoteSlave — a move, never a copy', () => {
     const a = add('alpha')
     swap(a, world('M'))
     idQueue.push('demote')
-    const r = get().promoteSlave(a, 'old master', 2)
-    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: 'master' })
+    const r = get().promoteSlave(a, 'old master', 2, [])
+    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: 'master', promotedShownHostIds: [] })
     const s = get()
     expect(s.activeProfileId).toBe('master')
     expect(s.parkedMaster).toBeNull()
@@ -452,8 +452,8 @@ describe('promoteSlave — a move, never a copy', () => {
     const b = add('beta')
     swap(a, world('M'))
     idQueue.push('demote')
-    const r = get().promoteSlave(b, 'old master', 2)
-    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: a })
+    const r = get().promoteSlave(b, 'old master', 2, [])
+    expect(r).toEqual({ ok: true, demotedId: 'demote', activeProfileId: a, promotedShownHostIds: [] })
     const s = get()
     expect(s.activeProfileId).toBe(a)
     expect(s.slaves[a].world).toBeNull()
@@ -470,7 +470,7 @@ describe('promoteSlave — a move, never a copy', () => {
     const a = add('alpha', wA)
     const b = add('beta', wB)
     swap(a, wM)
-    get().promoteSlave(b, 'old master', 2)
+    get().promoteSlave(b, 'old master', 2, [])
     const held = [get().parkedMaster, ...Object.values(get().slaves).map((p) => p.world)].filter((w) => w !== null)
     expect(held).toHaveLength(2)
     expect(held).toContain(wB)
@@ -481,7 +481,7 @@ describe('promoteSlave — a move, never a copy', () => {
     const a = add('alpha')
     const seen: Data[] = []
     const off = useLocalProfilesStore.subscribe((s) => seen.push(s))
-    get().promoteSlave(a, 'old', 1)
+    get().promoteSlave(a, 'old', 1, [])
     off()
     expect(seen).toHaveLength(1)
     assertInvariant(seen[0])
@@ -491,7 +491,7 @@ describe('promoteSlave — a move, never a copy', () => {
     idQueue.push('alpha1')
     const a = add('alpha')
     idQueue.push('master', 'alpha1', 'fresh1')
-    expect(get().promoteSlave(a, 'old', 1)).toMatchObject({ ok: true, demotedId: 'fresh1' })
+    expect(get().promoteSlave(a, 'old', 1, [])).toMatchObject({ ok: true, demotedId: 'fresh1' })
   })
 
   it.each([
@@ -503,7 +503,7 @@ describe('promoteSlave — a move, never a copy', () => {
   ])('refuses %s and changes nothing', (_label, id, name, epoch, reason) => {
     const a = add('alpha')
     const before = get()
-    expect(get().promoteSlave(id ?? a, name, epoch)).toEqual({ ok: false, reason })
+    expect(get().promoteSlave(id ?? a, name, epoch, [])).toEqual({ ok: false, reason })
     expect(get()).toBe(before)
   })
 })
@@ -1006,7 +1006,7 @@ describe('appearance', () => {
       get().setProfileAppearance('master', { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
       const a = add('Scratch')
       get().setProfileAppearance(a, LOOK)
-      const r = get().promoteSlave(a, 'fallback', 1)
+      const r = get().promoteSlave(a, 'fallback', 1, [])
       if (!r.ok) throw new Error(r.reason)
       expect(get().master).toEqual({ name: 'Scratch', ...LOOK })
       expect(get().slaves[r.demotedId]).toMatchObject({ name: 'Work', icon: 'Briefcase', color: '#ef4444' })
@@ -1015,7 +1015,7 @@ describe('appearance', () => {
 
     it('an unnamed master takes `demotedName` as the demoted slave\'s name; nothing else is invented', () => {
       const a = add('Scratch')
-      const r = get().promoteSlave(a, 'This Mac', 1)
+      const r = get().promoteSlave(a, 'This Mac', 1, [])
       if (!r.ok) throw new Error(r.reason)
       expect(get().slaves[r.demotedId]).toEqual({ id: r.demotedId, name: 'This Mac', createdAt: expect.any(Number), shownHostIds: [], world: null })
       expect(get().master).toEqual({ name: 'Scratch' })
@@ -1141,7 +1141,7 @@ describe('profile names — invisible characters are removed, and nothing else',
 
     it.each(DIRTY)('promoteSlave\'s demotedName — %s', (_, dirty, clean) => {
       const a = add('a')
-      const r = get().promoteSlave(a, dirty, 1)
+      const r = get().promoteSlave(a, dirty, 1, [])
       if (!r.ok) throw new Error(r.reason)
       expect(get().slaves[r.demotedId].name).toBe(clean)
     })
@@ -1212,11 +1212,25 @@ describe('shownHostIds — a local workbench keeps its own shown-hosts list', ()
       expect(get().slaves[b].shownHostIds).toEqual(['d1_a', 'local-2'])
     })
 
-    it('promoteSlave: the demoted master is created with a list', () => {
+    it('promoteSlave: the demoted master is created with the list it is handed (the master\'s — A3), sanitised', () => {
       const a = add('alpha')
-      const r = get().promoteSlave(a, 'old', get().worldEpoch + 1)
+      const r = get().promoteSlave(a, 'old', get().worldEpoch + 1, ['d1_m', 'd1_m', 'local-9'])
       if (!r.ok) throw new Error(r.reason)
-      expect(Array.isArray(get().slaves[r.demotedId].shownHostIds)).toBe(true)
+      expect(get().slaves[r.demotedId].shownHostIds).toEqual(['d1_m', 'local-9'])
+    })
+
+    it("promoteSlave hands back the promoted slave's list (same array) — its record is gone — in ONE set", () => {
+      const a = add('alpha', world('alpha'), ['d1_p'])
+      const list = get().slaves[a].shownHostIds
+      const sets = vi.fn()
+      const unsub = useLocalProfilesStore.subscribe(sets)
+      const r = get().promoteSlave(a, 'old', get().worldEpoch + 1, ['d1_m'])
+      unsub()
+      if (!r.ok) throw new Error(r.reason)
+      expect(r.promotedShownHostIds).toBe(list)
+      expect(sets).toHaveBeenCalledTimes(1)
+      expect(get().slaves[a]).toBeUndefined()
+      expect(get().slaves[r.demotedId].shownHostIds).toEqual(['d1_m'])
     })
   })
 
@@ -1256,7 +1270,7 @@ describe('shownHostIds — a local workbench keeps its own shown-hosts list', ()
       const a = add('alpha')
       const b = add('beta', world('beta'), LIST)
       const list = get().slaves[b].shownHostIds
-      expect(get().promoteSlave(a, 'old', get().worldEpoch + 1)).toMatchObject({ ok: true })
+      expect(get().promoteSlave(a, 'old', get().worldEpoch + 1, [])).toMatchObject({ ok: true })
       expect(get().slaves[b].shownHostIds).toBe(list)
     })
   })

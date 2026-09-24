@@ -2,8 +2,9 @@
 // ownership plan H2d-5 T5). A scan of the import declarations of every NON-test source file under `src/`:
 //
 // 1. `stores/useShownHostsStore` is imported only by the files listed below — the reader module, the host store (its
-//    delete cascade), the re-resolve pass, the `settings` builder / applier, the re-show recovery and the local-profiles
-//    store (only `sanitizeShownIds`, for a local workbench's own list — per-workbench shown hosts A1). Everything else
+//    delete cascade), the re-resolve pass, the `settings` builder / applier, the re-show recovery, the local-profiles
+//    store (only `sanitizeShownIds`, for a local workbench's own list — per-workbench shown hosts A1) and the promote
+//    (switch-active.ts: the list follows the workbench into and out of the master's store — A3). Everything else
 //    goes through `lib/shown-hosts` (the one predicate).
 // 2. `lib/shown-hosts` is imported only by the H2d-2 / H2d-3 / H2d-4 production files listed below (the Hosts page, the
 //    openers and landings, the pane gate, the StatusBar, the per-pane sweeps, the re-show recovery) and the re-resolve
@@ -32,6 +33,7 @@ const STORE_IMPORTERS = [
   'src/lib/host-reresolve.ts',
   'src/lib/profile/apply-to-stores.ts',
   'src/lib/profile/collector.ts',
+  'src/lib/profile/switch-active.ts',
   'src/lib/rebuild/host-reshow.ts',
   'src/lib/shown-hosts.ts',
   'src/stores/useHostStore.ts',

@@ -541,3 +541,48 @@ describe('the hooks follow every input (A2)', () => {
     expect(renders).toBe(after)
   })
 })
+
+describe('setHostShown — writes the list of the workbench on screen (A3)', () => {
+  it('the master on screen: the store, as before; answers true', () => {
+    expect(setHostShown(LOCAL, true)).toBe(true)
+    expect(ids()).toEqual([WIRE])
+    expect(setHostShown(LOCAL, false)).toBe(true)
+    expect(ids()).toEqual([])
+  })
+
+  it("a slave on screen: ITS record — show appends the wire id, hide removes every form — and never the master's store (m2)", () => {
+    slaveOnScreen(['d1_unknown', LOCAL], [WIRE])
+    const master = useShownHostsStore.getState()
+    expect(setHostShown(PLAIN, true)).toBe(true)
+    expect(useLocalProfilesStore.getState().slaves[SLAVE].shownHostIds).toEqual(['d1_unknown', LOCAL, PLAIN])
+    expect(setHostShown(LOCAL, false)).toBe(true)
+    expect(useLocalProfilesStore.getState().slaves[SLAVE].shownHostIds).toEqual(['d1_unknown', PLAIN])
+    expect(useShownHostsStore.getState()).toBe(master)
+    expect(isRefShownNow(PLAIN)).toBe(true)
+  })
+
+  it('a slave: showing a host already listed (its wire id) is a no-op (same state object)', () => {
+    slaveOnScreen([WIRE])
+    const before = useLocalProfilesStore.getState()
+    expect(setHostShown(LOCAL, true)).toBe(true)
+    expect(useLocalProfilesStore.getState()).toBe(before)
+  })
+
+  it('the world unsettled: nothing written anywhere, false (coordinator decision 3)', () => {
+    slaveOnScreen([], [])
+    useTabStore.setState({ worldEpoch: 9 })
+    const local = useLocalProfilesStore.getState()
+    const master = useShownHostsStore.getState()
+    expect(setHostShown(LOCAL, true)).toBe(false)
+    useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 1 }) // tag master, pointer a slave
+    useWorkspaceStore.setState({ worldId: MASTER_PROFILE_ID })
+    expect(setHostShown(LOCAL, true)).toBe(false)
+    expect(useLocalProfilesStore.getState()).toBe(local)
+    expect(useShownHostsStore.getState()).toBe(master)
+  })
+
+  it('an unknown host → false, nothing written', () => {
+    expect(setHostShown('gone', true)).toBe(false)
+    expect(ids()).toEqual([])
+  })
+})

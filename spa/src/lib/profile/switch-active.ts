@@ -106,13 +106,14 @@ import { MASTER_PROFILE_ID, normalizeLocalProfileName, useLocalProfilesStore } f
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { masterAttachedInStorage, useProfileStore } from '../../stores/useProfileStore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { generateId } from '../id'
 import { STORAGE_KEYS } from '../storage/keys'
 import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
-import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
+import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld, RestampRollbackIncomplete } from './master-world'
 import type { MasterWorldRead } from './master-world'
 import { withWorldLock } from '../storage/world-lock'
 import { repairTabOwnership } from './sections'
@@ -135,14 +136,16 @@ function captureLocal(): LocalSnapshot {
   return { slaves: s.slaves, slaveOrder: s.slaveOrder, activeProfileId: s.activeProfileId, parkedMaster: s.parkedMaster, worldEpoch: s.worldEpoch, relabelCount: s.relabelCount, master: s.master } // `master`: a promote moves the looks too
 }
 
-/** As master-world.ts's `restore`: memory is back before persist's storage write can throw. */
-function restoreLocal(old: LocalSnapshot): void {
+/** As master-world.ts's `restore`: memory is back before persist's storage write can throw. `false` = the restore
+ *  itself threw (a switch and a copy ignore it — best effort; a promote reports it: `rollback-incomplete`). */
+function restoreLocal(old: LocalSnapshot): boolean {
   const now = captureLocal()
-  if ((Object.keys(old) as (keyof LocalSnapshot)[]).every((k) => now[k] === old[k])) return // refused, or threw before it wrote
+  if ((Object.keys(old) as (keyof LocalSnapshot)[]).every((k) => now[k] === old[k])) return true // refused, or threw before it wrote
   try {
     useLocalProfilesStore.setState(old)
+    return true
   } catch {
-    // best effort
+    return false
   }
 }
 
@@ -444,7 +447,15 @@ export function saveScreenAsSlave(name: string): CopyResult {
 
 // === The move ===
 
-export type PromoteResult = { ok: true; demotedId: string } | Refused<'master-attached' | 'busy' | 'unsettled' | 'superseded' | 'not-found' | 'bad-name' | 'bad-epoch'> | WriteFailed
+/** A write threw AND putting everything back did not fully work either: some store may hold half a promote. Distinct
+ *  from `write-failed` on purpose — the user is told to reload and check (wizard-run.ts, a persistent notice). */
+type RollbackIncomplete = { ok: false; reason: 'rollback-incomplete' }
+
+export type PromoteResult =
+  | { ok: true; demotedId: string }
+  | Refused<'master-attached' | 'busy' | 'unsettled' | 'superseded' | 'not-found' | 'bad-name' | 'bad-epoch'>
+  | WriteFailed
+  | RollbackIncomplete
 
 /**
  * A MOVE, never a copy (decision 10: there is no "copy as master"): the slave's
@@ -480,28 +491,57 @@ export function promoteToMaster(slaveId: string, demotedName: string): Promise<P
   )
 }
 
-/** THE SYNCHRONOUS BLOCK of a promote. Not `async`, on purpose — as `exchange`. */
+/**
+ * THE SYNCHRONOUS BLOCK of a promote. Not `async`, on purpose — as `exchange`.
+ *
+ * THE SHOWN-HOSTS LIST FOLLOWS THE WORKBENCH (per-workbench shown hosts, plan A3). The master's list lives in
+ * `useShownHostsStore`, a local workbench's on its record. So a promote writes TWO stores besides the tags, in this
+ * order: the parking lot (`promoteSlave` — the demoted workbench gets the store's list, in its one `set`), then the
+ * shown store (the promoted workbench's list, stamped with the new `relabelCount`: a window that has one of the two
+ * and not the other reads `[]` — lib/shown-hosts.ts), then the tags. Both before-states are captured before the first
+ * write; a throw anywhere — a persist storage write after the in-memory set included — puts every touched store back
+ * in reverse. A restore that throws as well (restampWorld's own two included) is `rollback-incomplete`, never folded
+ * into `write-failed`.
+ */
 function relabel(slaveId: string, demotedName: string): PromoteResult {
   if (useProfileStore.getState().masterHostId !== null || masterAttachedInStorage()) return { ok: false, reason: 'master-attached' }
   if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
   const old = captureLocal()
+  const shownBefore = useShownHostsStore.getState()
+  const oldShown = { ids: shownBefore.ids, relabelStamp: shownBefore.relabelStamp }
   let lowerFence = (): void => {}
   try {
     const epoch = openEpoch()
     if (epoch === null) return { ok: false, reason: 'busy' }
     const { worldEpoch } = epoch
     lowerFence = epoch.lowerFence
-    const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch)
+    const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch, oldShown.ids)
     if (!promoted.ok) {
       lowerFence()
       return promoted
     }
+    useShownHostsStore.setState({ ids: promoted.promotedShownHostIds, relabelStamp: useLocalProfilesStore.getState().relabelCount })
     restampWorld({ worldId: promoted.activeProfileId, worldEpoch, beforeRollback: lowerFence })
     return superseded(worldEpoch) ? { ok: false, reason: 'superseded' } : { ok: true, demotedId: promoted.demotedId }
   } catch (err) {
     lowerFence()
-    restoreLocal(old)
-    return writeFailed(err)
+    // restampWorld has put its own two stores back (or said it could not); then the shown store, then the parking lot.
+    let complete = !(err instanceof RestampRollbackIncomplete)
+    if (!restoreShown(oldShown)) complete = false
+    if (!restoreLocal(old)) complete = false
+    return complete ? writeFailed(err) : { ok: false, reason: 'rollback-incomplete' }
+  }
+}
+
+/** The shown store's two fields back; `true` when there was nothing to put back. `false` = the restore threw. */
+function restoreShown(old: { ids: string[]; relabelStamp: number }): boolean {
+  const now = useShownHostsStore.getState()
+  if (now.ids === old.ids && now.relabelStamp === old.relabelStamp) return true
+  try {
+    useShownHostsStore.setState(old)
+    return true
+  } catch {
+    return false
   }
 }
 

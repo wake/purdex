@@ -187,18 +187,29 @@ export function usePaneHostShown(content: PaneContent): boolean {
 // === The writer (the Hosts page switch, H2d-2) ===
 
 /**
- * Show / hide ONE local host in the workbench: shown → its wire id appended; hidden → every form of it removed
- * (`shownFormsOf`). Never touches another id; an unknown host is a no-op.
+ * Show / hide ONE local host in the workbench ON SCREEN: shown → its wire id appended; hidden → every form of it
+ * removed (`shownFormsOf`). Never touches another id. Which list: the one the reader reads — the tab tag's world: the
+ * master → `useShownHostsStore`; a local workbench → its record (`setSlaveShownHosts`), never the master's store (which
+ * syncs). `false` = nothing written: an unknown host, a world that is not settled (the reader shows `[]` then, and a
+ * write could land in the wrong workbench's list), or a slave record that is gone.
  */
-export function setHostShown(hostId: string, shown: boolean): void {
+export function setHostShown(hostId: string, shown: boolean): boolean {
   const host = localHostOf(useHostStore.getState().hosts, hostId)
-  if (host === undefined) return
-  const store = useShownHostsStore.getState()
-  if (shown) {
-    store.show(wireIdOfHost(host))
-    return
+  if (host === undefined || !readMasterWorld().settled) return false
+  const worldId = useTabStore.getState().worldId
+  if (worldId === MASTER_PROFILE_ID) {
+    const store = useShownHostsStore.getState()
+    if (shown) store.show(wireIdOfHost(host))
+    else for (const form of shownFormsOf(host)) useShownHostsStore.getState().hide(form)
+    return true
   }
-  for (const form of shownFormsOf(host)) useShownHostsStore.getState().hide(form)
+  const wire = wireIdOfHost(host)
+  const forms = shownFormsOf(host)
+  const written = useLocalProfilesStore.getState().setSlaveShownHosts(worldId, (ids) => {
+    if (shown) return ids.includes(wire) ? ids : [...ids, wire]
+    return ids.some((id) => forms.includes(id)) ? ids.filter((id) => !forms.includes(id)) : ids
+  })
+  return written.ok
 }
 
 // === Re-key (spec §4.3, plan §0.12; run by the re-resolve pass) ===
