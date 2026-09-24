@@ -9,6 +9,7 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { useHostLookStore } from '../stores/useHostLookStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { __resetMasterWorldForTest } from './profile/master-world'
 import { syncIdOfSync } from './profile/host-identity'
@@ -26,6 +27,7 @@ import {
   startHostReresolve,
 } from './host-reresolve'
 import { hostLookOf } from './host-look'
+import { rekeyShownHosts } from './shown-hosts'
 
 const DAEMON = 'air-lab:26aaaa'
 const WIRE = syncIdOfSync(DAEMON)
@@ -94,6 +96,7 @@ beforeEach(() => {
   __resetHostReresolveForTest()
   useRebuildStore.setState({ lockedBy: null, lockGrant: null })
   useHostLookStore.setState({ looks: {} })
+  useShownHostsStore.setState({ ids: [] })
   seed()
 })
 
@@ -301,6 +304,112 @@ describe('the look re-key (H2c-2)', () => {
     expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'x' } })
     expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
     vi.restoreAllMocks()
+  })
+})
+
+// H2d-1 T4 (spec §4.3, plan §0.11 / §0.12): the shown-hosts ids are WIRE ids, so the pass moves a listed local id to
+// the host's `d1_…` once its daemonId is known — in place, deduped keeping the first — as its own step next to the look
+// re-key, never inside the ref rewrite a deletion reuses.
+describe('the shown-hosts re-key (H2d-1)', () => {
+  const shownNow = () => ({ ids: useShownHostsStore.getState().ids })
+
+  it('a listed local id becomes the d1_ id of the host whose daemonId is known, in place; memory and storage agree', () => {
+    useShownHostsStore.setState({ ids: [UNKNOWN, LOCAL, 'tail'] })
+    expect(runHostReresolve()).toBe('done')
+    expect(shownNow()).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOSTS)!).state).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
+  })
+
+  it('the d1_ id already listed: the local id is dropped (deduped, the first kept)', () => {
+    useShownHostsStore.setState({ ids: [WIRE, UNKNOWN, LOCAL] })
+    runHostReresolve()
+    expect(shownNow()).toEqual({ ids: [WIRE, UNKNOWN] })
+  })
+
+  it('a host without a daemonId keeps its local id; an unknown id is untouched; nothing written', () => {
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }), plain: host('plain') }, hostOrder: [LOCAL, 'plain'] })
+    useShownHostsStore.setState({ ids: ['plain', UNKNOWN, WIRE] })
+    const before = useShownHostsStore.getState()
+    runHostReresolve()
+    expect(useShownHostsStore.getState()).toBe(before)
+  })
+
+  it('under an identity conflict nothing moves', () => {
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }), dup: host('dup', { daemonId: DAEMON }) }, hostOrder: [LOCAL, 'dup'] })
+    useShownHostsStore.setState({ ids: [LOCAL, 'dup'] })
+    const before = useShownHostsStore.getState()
+    expect(runHostReresolve()).toBe('conflict')
+    expect(useShownHostsStore.getState()).toBe(before)
+  })
+
+  it('takes the operation lock for the shown-id move alone; the lock held elsewhere → busy, nothing moved', () => {
+    runHostReresolve() // every ref moved: nothing else to write
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+    expect(runHostReresolve()).toBe('busy')
+    expect(shownNow().ids).toEqual([LOCAL])
+    useRebuildStore.getState().releaseOperationLock(grant)
+    const seen: (string | null)[] = []
+    const unsub = useRebuildStore.subscribe((st) => seen.push(st.lockedBy))
+    runHostReresolve()
+    unsub()
+    expect(seen).toContain(HOST_RERESOLVE_LOCK_OWNER)
+    expect(shownNow().ids).toEqual([WIRE])
+  })
+
+  it('idempotent: a second run writes nothing', () => {
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    runHostReresolve()
+    const writes = vi.fn()
+    const unsub = useShownHostsStore.subscribe(writes)
+    runHostReresolve()
+    unsub()
+    expect(writes).not.toHaveBeenCalled()
+  })
+
+  it('nothing listed that moves → rekeyShownHosts is null and the pass takes no lock for it', () => {
+    runHostReresolve() // every ref moved: nothing else to write
+    for (const ids of [[], [UNKNOWN, WIRE]]) {
+      useShownHostsStore.setState({ ids })
+      expect(rekeyShownHosts(useHostStore.getState().hosts)).toBeNull()
+      const seen: (string | null)[] = []
+      const unsub = useRebuildStore.subscribe((st) => seen.push(st.lockedBy))
+      expect(runHostReresolve()).toBe('done')
+      unsub()
+      expect(seen).toEqual([])
+      expect(shownNow().ids).toEqual(ids)
+    }
+  })
+
+  it('an id another window listed (storage only) still moves: the store is re-read first', () => {
+    localStorage.setItem(STORAGE_KEYS.SHOWN_HOSTS, JSON.stringify({ state: { ids: [LOCAL] }, version: 1 }))
+    runHostReresolve()
+    expect(shownNow()).toEqual({ ids: [WIRE] })
+  })
+
+  it('a failed shown-hosts write puts every store back (all or nothing); the retry lands', () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    const tabs = useTabStore.getState().tabs
+    const real = Storage.prototype.setItem
+    let left = 1
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.SHOWN_HOSTS && left > 0) {
+        left--
+        throw new DOMException('quota', 'QuotaExceededError')
+      }
+      real.call(this, k, v)
+    })
+    try {
+      requestHostReresolve()
+      expect(shownNow().ids).toEqual([LOCAL])
+      expect(useTabStore.getState().tabs).toEqual(tabs)
+      vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+      expect(shownNow().ids).toEqual([WIRE])
+    } finally {
+      vi.restoreAllMocks() // a failure must not leave the setItem spy on the next test
+    }
   })
 })
 
@@ -689,6 +798,43 @@ describe('startHostReresolve (the triggers)', () => {
     })
   })
 
+  it('learning a daemonId moves the host\'s listed local id to its d1_ id (H2d-1)', () => {
+    addHostX({ daemonId: undefined })
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    stop = startHostReresolve()
+    expect(useShownHostsStore.getState().ids).toEqual([LOCAL])
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
+    expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+  })
+
+  it('waits for the shown-hosts store: nothing runs while purdex-shown-hosts has not hydrated, then it does (H2d-1)', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useShownHostsStore.persist, 'hasHydrated').mockReturnValue(false)
+    vi.spyOn(useShownHostsStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useShownHostsStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    expect(runs).toBe(0)
+    hydrated.mockReturnValue(true)
+    finish?.()
+    expect(runs).toBe(1)
+  })
+
+  it('the shown-hosts store hydrating AFTER the first pass with a local id ends on the d1_ id (H2d-1)', () => {
+    let finish: (() => void) | undefined
+    vi.spyOn(useShownHostsStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useShownHostsStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    useShownHostsStore.setState({ ids: [LOCAL] }) // another window's write landed
+    finish?.()
+    expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+  })
+
   it('changing syncAliases triggers (a legacy id becomes resolvable)', () => {
     addHostX()
     useTabStore.setState({ tabs: { l: tab('l', leaf('pl', tmux('legacy1'))) }, tabOrder: ['l'] })
@@ -818,6 +964,20 @@ describe('rewriteHostRefs (explicit map — the deletion direction)', () => {
     unsub()
     expect(hostIdsIn(useTabStore.getState().tabs)).toContain(WIRE)
     expect(useHostLookStore.getState().looks).toBe(looks)
+    expect(writes).not.toHaveBeenCalled()
+  })
+
+  it('moves no shown id: the shown-hosts store is keyed by wire id and only the re-resolve pass re-keys it (H2d-1 M7)', () => {
+    // A deletion rewrites refs local → wire; a listed local id must stay exactly as it is — the shown-id re-key belongs
+    // to `passBody`, never to `planRewrite`, which this explicit-map rewrite reuses.
+    useShownHostsStore.setState({ ids: [LOCAL, UNKNOWN] })
+    const before = useShownHostsStore.getState()
+    const writes = vi.fn()
+    const unsub = useShownHostsStore.subscribe(writes)
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    unsub()
+    expect(hostIdsIn(useTabStore.getState().tabs)).toContain(WIRE)
+    expect(useShownHostsStore.getState()).toBe(before)
     expect(writes).not.toHaveBeenCalled()
   })
 

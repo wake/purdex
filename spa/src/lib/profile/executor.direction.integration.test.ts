@@ -27,6 +27,7 @@ import { identityOfSync, syncIdOfSync } from './host-identity'
 import { clearSectionStore, saveConflict } from './section-store'
 import { PROJECTIONS, SECTION_SCHEMA_ORDINAL, fingerprintOf, sectionFingerprint } from './projections'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { FakeDaemon, type FakeRow as Row } from './test-fake-daemon'
 
 const h = vi.hoisted(() => ({
@@ -491,7 +492,7 @@ const LAYOUT_B: Layout = { '3col': { enabled: true, columns: [['b'], [], []] }, 
 async function realSettingsShapes(): Promise<{ current: [string, number]; legacy: [string, number] }> {
   const legacyList = PROJECTIONS.settings.map((p) => (p === `${NEWTAB}.presets` ? `${NEWTAB}.profiles` : p))
   expect(legacyList).not.toEqual(PROJECTIONS.settings)
-  expect(SECTION_SCHEMA_ORDINAL.settings).toBe(6) // 5: host-sync-identity (wire host ids) — the same paths as 4; 6: host looks (host ownership H2c)
+  expect(SECTION_SCHEMA_ORDINAL.settings).toBe(7) // 5: host-sync-identity (wire host ids) — the same paths as 4; 6: host looks (host ownership H2c); 7: shown hosts (H2d)
   return { current: [await sectionFingerprint('settings'), SECTION_SCHEMA_ORDINAL.settings], legacy: [await fingerprintOf(legacyList), 3] }
 }
 
@@ -1175,5 +1176,38 @@ describe('host-sync-identity: an alpha.434 client (ordinal-2-era shapes) meets O
     const quiet = daemon.writes.length
     await vi.advanceTimersByTimeAsync(60_000)
     expect(daemon.writes.length).toBe(quiet)
+  })
+})
+
+/* ─── host ownership H2d-1: concurrent shown-host toggles meet the existing per-section conflict (plan §0.6) ─── */
+
+// codex plan review task-mufjfxo4-h4e2rf item 3: `settings` is replaced whole, but it syncs under per-section
+// compare-and-swap. Two devices toggling different hosts from the same base → the second push gets the 409 and the
+// section locks (`locked:conflict`); a human picks a side. No silent merge, no silent loss.
+describe('host ownership H2d-1: two devices toggle different hosts from the same settings base', () => {
+  afterEach(() => useShownHostsStore.setState({ ids: [] }))
+
+  it('A hides a while B showed b → A\'s push is a conflict; each side keeps its own list; keep-sot lands B\'s', async () => {
+    world('named', [ws('w1', ['t1'])], [tab('t1')])
+    useShownHostsStore.setState({ ids: ['d1_a'] })
+    await attach(A, 'push')
+    expect(executor!.status().sections.settings).toBe('synced')
+    const base = daemon.rows.get('settings')!
+    expect(base.payload!['purdex-shown-hosts']).toEqual({ ids: ['d1_a'] })
+
+    // the other device (B) shows b from the same base; this client has not heard of it yet
+    const theirs = JSON.parse(JSON.stringify({ ...base.payload, 'purdex-shown-hosts': { ids: ['d1_a', 'd1_b'] } })) as Record<string, unknown>
+    daemon.rows.set('settings', { ...base, rev: base.rev + 1, hash: await hashSection(theirs), payload: theirs, writer: B })
+
+    useShownHostsStore.getState().hide('d1_a')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(executor!.status().sections.settings).toBe('locked:conflict')
+    expect(daemon.rows.get('settings')!.payload!['purdex-shown-hosts']).toEqual({ ids: ['d1_a', 'd1_b'] })
+    expect(useShownHostsStore.getState().ids).toEqual([])
+
+    executor!.resolve('settings', 'sot')
+    for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    expect(useShownHostsStore.getState().ids).toEqual(['d1_a', 'd1_b'])
+    expect(executor!.status().sections.settings).toBe('synced')
   })
 })

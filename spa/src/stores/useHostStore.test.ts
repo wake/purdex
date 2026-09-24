@@ -12,6 +12,7 @@ import {
   transferLookEntries,
 } from './useHostStore'
 import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
+import { useShownHostsStore } from './useShownHostsStore'
 import { hostLookOf } from '../lib/host-look'
 import { syncIdOfSync } from '../lib/profile/host-identity'
 
@@ -490,6 +491,52 @@ describe('useHostStore', () => {
     expect(Object.keys(useHostLookStore.getState().looks)).toHaveLength(1)
     useHostStore.getState().reset()
     expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  it('reset() also resets the shown-hosts store to { ids: [] } (plan §0.18)', () => {
+    useShownHostsStore.getState().show('d1_a')
+    useHostStore.getState().reset()
+    expect(useShownHostsStore.getState().ids).toEqual([])
+  })
+
+  // host ownership H2d-1 T1 (user rule 2, plan §0.7): a host added later is hidden in every workbench — an add writes
+  // NOTHING to the shown list (no seeding, no migration), in memory or in storage.
+  describe('adds write nothing to the shown-hosts store (plan §0.7)', () => {
+    const SEEDED = ['d1_unknown', 'd1_other']
+    let before: ReturnType<typeof useShownHostsStore.getState>
+    let stored: string | null
+
+    beforeEach(() => {
+      useShownHostsStore.getState().show(SEEDED[0])
+      useShownHostsStore.getState().show(SEEDED[1])
+      before = useShownHostsStore.getState()
+      stored = localStorage.getItem('purdex-shown-hosts')
+    })
+
+    const unchanged = () => {
+      expect(useShownHostsStore.getState()).toBe(before)
+      expect(useShownHostsStore.getState().ids).toEqual(SEEDED)
+      expect(localStorage.getItem('purdex-shown-hosts')).toBe(stored)
+    }
+
+    it('addHost', () => {
+      useHostStore.getState().addHost({ name: 'x', ip: '10.0.0.3', port: 1 })
+      unchanged()
+    })
+
+    it('registerLocalHost', () => {
+      useHostStore.getState().registerLocalHost({ url: 'http://127.0.0.1:7861', token: 't', hostname: 'mini' })
+      unchanged()
+    })
+
+    it('applyHostTransfer (a created row with a daemonId)', () => {
+      const res = useHostStore.getState().applyHostTransfer({
+        create: [{ name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', look: {} }],
+        overwrite: [],
+      })
+      expect(res.kind).toBe('applied')
+      unchanged()
+    })
   })
 
 

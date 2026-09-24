@@ -1,8 +1,9 @@
 # Spec — host ownership: hosts belong to the device, their look belongs to the workbench
 
 Status: user decisions 2026-09-23 and 2026-09-24 (below are not to be re-litigated). Revised 2026-09-24 after the
-codex spec review (§9). Supersedes kickoff decision 7 ("host token in the profile") and the host half of decision 9
-("the master is the only source of hosts"). Terms (zh-TW): profile = 工作台, master = 工作台主檔, slave = 本機工作台,
+codex spec review (§9); shown hosts revised 2026-09-24 to the user's final rules (§1.2, §4.1, §4.5, §7 H2d, §8).
+Supersedes kickoff decision 7 ("host token in the profile") and the host half of decision 9 ("the master is the only
+source of hosts"). Terms (zh-TW): profile = 工作台, master = 工作台主檔, slave = 本機工作台,
 a workbench's settings = 工作台設定檔.
 
 ## 1. Decisions (user, 2026-09-23)
@@ -15,7 +16,8 @@ a workbench's settings = 工作台設定檔.
 3. **A host's look (name, icon, colours) follows the workbench** — synced by Profile Sync, keyed by the daemon's wire
    id (`d1_…`), exactly as today's user experience.
 4. **A workbench has a synced "shown hosts" setting.** Hosts not listed still exist and stay connected; they are only
-   hidden in that workbench. Unset = all shown. Ids this device lacks are kept, never pruned.
+   hidden in that workbench. ~~Unset = all shown.~~ **Superseded 2026-09-24 (§1.2):** empty = every host hidden; a
+   new host is hidden. Ids this device lacks are kept, never pruned.
 5. **Daemon-side settings (projects, commands, resume templates, daemon config, hooks, monitor, peers) are already
    shared by every client** through the daemon — no sync, no change.
 
@@ -34,6 +36,27 @@ a workbench's settings = 工作台設定檔.
    no `terminated: 'host-removed'` mark is written, no tab is closed, and its `purdex-host-settings` entry, New Tab
    columns and look are kept. Other devices are not affected at all. H4's replace-all removes hosts the same way
    (§3.4).
+
+### 1.2 Decisions (user, 2026-09-24, shown hosts — final; supersede decision 4's "unset = all shown", §4.1's
+`ids: null` and the filter model of §4.5)
+
+10. **Hosts management page** lists EVERY host. Per the current workbench: a shown host renders as today; a hidden
+    host renders in a "hidden" style (muted, a 「未啟用／已隱藏」-type state), and can still be clicked and managed
+    (overview, sessions list, settings, etc.).
+11. **A newly added host is hidden in every workbench**; the user turns it on by hand. When the feature ships, every
+    existing host is hidden too (no migration seeding the list with the current hosts).
+12. Showing / hiding only changes presentation on the management page; its real effect is to **restrict the
+    workbench's tab ↔ tmux session link**.
+13. **Hiding a host never closes or changes tabs.** An open tab stays; each pane on the hidden host shows
+    「主機已於此工作台關閉」 (en: "This host is turned off in this workbench") and opens no connection. Turning the host
+    back on restores the same pane (reconnects, no reload). A split tab is not split and not restored: only the
+    pane(s) on the hidden host show the message; closing that pane is up to the user.
+14. **Block New Tab and every related way to open a tab** on a hidden host (New Tab sessions / headless blocks, the
+    terminated-pane session picker, Hosts page session "open", executions "open", deep links / notifications that
+    would open a tab — landing on the host's management page instead is fine).
+
+Model: each workbench keeps a plain shown list of wire ids; no "all" flag; showing / hiding adds / removes exactly that
+host; unknown ids are kept; empty = every host hidden; the list syncs in `settings`.
 
 ## 2. Where each piece of host data lives afterwards (measured on alpha.439)
 
@@ -164,7 +187,8 @@ every deletion path (Hosts page, H4 replace-all; before H3 also a `hosts` apply 
 
 - `purdex-host-looks`: `{ looks: { [wireId]: { name?, colors?, color?, icon?, iconWeight? } } }`, keys are wire ids
   in the store itself (no local↔wire mapping on build or apply; the identity decides which local host a key means).
-- `purdex-shown-hosts`: `{ ids: wireId[] | null }` (`null` = all shown). Unknown ids kept, order kept.
+- `purdex-shown-hosts`: `{ ids: wireId[] }` — the hosts SHOWN in the workbench; `[]` (the default, and the state at
+  ship time) = every host hidden; no `null`, no "all" (§1.2). Unknown ids kept, order kept.
 - Both are projected in `settings`; unknown ids are carried through apply and build untouched. Each store's arrival
   bumps the `settings` ordinal and adds a wire marker (`@wire:host-look=1`, `@wire:shown-hosts=1`), so an old client
   sees `settings` as newer and locks the whole profile (decision 7).
@@ -227,19 +251,27 @@ The `hosts` section still syncs, and decision 7 locks every old client, so only 
   build still sends them. Neither the apply nor the build ever touches the look store.
 - `HostConfig` look fields are read as a SOURCE only by the first-run migration and by the selector's fallback.
 
-### 4.5 Shown hosts — where the filter applies (finding 8)
+### 4.5 Shown hosts — what hiding does (finding 8; rewritten 2026-09-24 per §1.2)
 
-Hidden ≠ absent. The filter is applied ONLY in navigation / selection UI:
+Hidden ≠ absent, and hidden ≠ closed. Hiding host X in workbench W:
 
-- Hosts page sidebar (`HostSidebar`); session panel host groups (`SessionPanel`); `SessionPickerList`; New Tab page
-  rendering of `sessions:` / `headless:` blocks; the session launcher's host choice.
+- **gates X's panes**: every tmux / execution pane on X (in any tab, split or not, locked or not, synced in or local)
+  renders 「主機已於此工作台關閉」 and opens no connection (no terminal WS / ticket, no execution attach / SSE, no nex
+  ensure, no per-pane probe or revive); the other panes of a split tab work as usual; showing X again remounts the
+  same panes (same pane ids) and recovers X's sessions without a reload. No tab is closed, split, moved or written.
+- **blocks every way to open a tab on X**: New Tab `sessions:` / `headless:` blocks of X are not rendered (the column
+  stays in the layout); the terminated-pane session picker omits X; the Hosts page session "open" and the executions
+  "open" are not offered; a notification of X still fires but its click, an execution deep link and the
+  `/execution/…` route land on X's Hosts page instead of a tab.
+- **changes only the presentation of X on the Hosts page**: every host is listed; X in a hidden style, still fully
+  manageable (overview with the show / hide switch, sessions list incl. "new session", settings, logs, peers, nex).
 
-It is NOT applied to (the host keeps working): connections and health, `useMultiHostEventWs` subscriptions,
-`useSessionWatch` / session refresh, notifications, backup triggers, New Tab provider REGISTRATION and the layout
-(columns stay), pane liveness and the tab bar (a hidden host's tabs stay visible with their badge), `activeHostId` /
+NOT affected (the host keeps working): connections and health, `useMultiHostEventWs` subscriptions and its `sessions`
+reconcile, `useSessionWatch` / session refresh, notifications (delivery), backup triggers, New Tab provider
+REGISTRATION and the layout (columns stay), the tab bar (X's tabs stay with their badge), `activeHostId` /
 `hostOrder[0]` fallbacks (`HostPage`, `nex/resolve-host`, fs backends), device settings pickers
-(`DevEnvironmentSection`), and direct navigation to `/hosts/<hidden id>/…` (opens normally). The Settings › 工作台
-editor lists every local host plus unknown ids ("not on this device").
+(`DevEnvironmentSection`), and direct navigation to `/hosts/<hidden id>/…` (opens normally). There is no Settings ›
+工作台 editor; the switch is on the Hosts page.
 
 ## 5. The `hosts` section leaves Profile Sync (H3)
 
@@ -382,10 +414,12 @@ through a host you trust." The payload is never logged or written to disk; a dae
   re-run, a no-daemonId host's look re-keys to `d1_…` when the daemonId is learned (existing `d1_…` wins), host
   deletion keeps every look entry, a look arriving by `settings` relabels the New Tab provider, an old client
   locks on the new `settings`.
-- **H2d — shown hosts** (§4.5; ordinal +1, `@wire:shown-hosts=1`; ~12 files: store, projection, Settings › 工作台
-  editor, the filters, locales). "Hidden ≠ absent" tests: a hidden host stays connected and its event WS open; its
-  panes stay live and its tabs stay in the tab bar; notifications still fire; its New Tab provider stays registered
-  and its column is not pruned; `/hosts/<hidden>` opens; unknown ids survive apply + build; `null` shows all.
+- **H2d — shown hosts** (§1.2, §4.5; ordinal +1, `@wire:shown-hosts=1`; planned as five PRs, 64 files — store /
+  wire, Hosts page switch and hidden style, blocked open-a-tab surfaces and landings, the pane gate, tests).
+  "Hidden ≠ absent" tests: a hidden host stays connected and its event WS open; its tabs stay in the tab bar and
+  nothing closes, while its panes are gated and restored on show; notifications still fire; its New Tab provider stays
+  registered and its column is not pruned; `/hosts/<hidden>` opens; unknown ids survive apply + build + show / hide;
+  `[]` hides every host.
 - **H3a — stop syncing `hosts`** (§5.1 client, §5.3 guarantees; ~15 files: executor, start, collector, sections,
   applier, apply-to-stores, profile-state, sync-status / sync-view, tests). Tests: §5.3's never-PUT/DELETE list;
   `profileLock` ignores a `hosts` row; gates no longer wait on `hosts`; a device adding a host locally pushes nothing
@@ -408,8 +442,8 @@ through a host you trust." The payload is never logged or written to disk; a dae
 H1: A and B with independent host lists (B lacks host X): A opens a tab on X → B shows it as "no host X here", A
 still live, nothing marked; B then adds X → the pane goes live, no push from B; B deletes X → B's X tabs stay ("no
 host X here"), A notices nothing; B undoes → live again. H2: change mlab's colour on A → B
-follows; rename on A → B's New Tab label follows; hide a host in workbench W on A → hidden on B in W, still connected
-on both. H3: a device adds a host locally → no other device gets it; a pull never removes a local host. H4: A shares
+follows; rename on A → B's New Tab label follows; every host starts hidden; show / hide a host in workbench W on A → the same
+on B in W, still connected on both, its tabs kept on both with only its panes gated, restored without reload on show. H3: a device adds a host locally → no other device gets it; a pull never removes a local host. H4: A shares
 mlab + air26 through mlab → B enters the code → gets both (add-new mode), connected, looks from the workbench; a
 second redeem of the same code fails.
 
