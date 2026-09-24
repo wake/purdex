@@ -582,6 +582,8 @@ export function useFold(key: string): [boolean, () => void]
 
   `useFoldMemory` keeps a `useState<Record<string, boolean>>({})` plus a
   `useRef<Map<number, Map<string, number>>>` of the keys registered per turn
+  (`setTurn` iterates `keys.keys()`; iterating the Map itself yields
+  `[key, count]` pairs and would write entry arrays into `expanded`)
   **with a reference count** — nothing guarantees a key is unique across the
   pane, and an `unregister` that swept every turn let one turn's unmount
   strip a key another turn still had mounted (attack A4). `unregister`
@@ -610,6 +612,10 @@ export function useFold(key: string): [boolean, () => void]
   unmounts`; **`keeps a key registered in one turn when the same key
   unmounts in another`** (two turns each mount `useFold('op-1')`, turn 0's
   unmounts, `setTurn(1, true)` still reaches it — the A4 guard);
+  **`keeps a key registered while another component in the same turn still
+  holds it`** (the reference count's only guard: a per-turn `Set` passes the
+  A4 test above, so without this one the implementation can regress to a Set
+  and the suite stays green);
   `keeps state across a child remount`.
 
 ### T2.6 PR-2
