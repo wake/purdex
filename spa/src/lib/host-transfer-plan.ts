@@ -5,6 +5,7 @@
 import { canonicalEndpoint, canonicalHostPart, requestAtOf, type HostConfig } from '../stores/useHostStore'
 import { isValidDaemonId } from './daemon-id'
 import { sanitizeHostConfig } from './host-color'
+import type { HostLook } from './host-look'
 import type { TransferLook, TransferRow } from './host-transfer-api'
 
 const LOOK_FIELDS = ['colors', 'color', 'icon', 'iconWeight'] as const
@@ -101,15 +102,20 @@ export function parseTransferRows(hosts: unknown): { rows: TransferRow[]; droppe
   return { rows, dropped }
 }
 
-/** The share side (spec §6.4.1): one row per host that has a token; `daemonId` / look fields only when set. */
-export function payloadRowsOf(hosts: readonly HostConfig[]): TransferRow[] {
+/**
+ * The share side (spec §6.4.1): one row per host that has a token; `daemonId` / look fields only when set. Name and
+ * look are the WORKBENCH look (`lookOf` — the share dialog passes the selector, H2c-3), never `HostConfig`'s; a look
+ * without a name sends the ip (the receiver's own fallback).
+ */
+export function payloadRowsOf(hosts: readonly HostConfig[], lookOf: (hostId: string) => HostLook): TransferRow[] {
   const rows: TransferRow[] = []
   for (const h of hosts) {
     if (typeof h.token !== 'string' || h.token === '') continue
-    const r: TransferRow = { name: h.name, ip: h.ip, port: h.port, token: h.token }
+    const shown = lookOf(h.id)
+    const r: TransferRow = { name: shown.name ?? h.ip, ip: h.ip, port: h.port, token: h.token }
     if (h.daemonId) r.daemonId = h.daemonId
     const look: TransferLook = {}
-    for (const f of LOOK_FIELDS) if (h[f] !== undefined) (look as Record<string, unknown>)[f] = h[f]
+    for (const f of LOOK_FIELDS) if (shown[f] !== undefined) (look as Record<string, unknown>)[f] = shown[f]
     if (Object.keys(look).length > 0) r.look = look
     rows.push(r)
   }

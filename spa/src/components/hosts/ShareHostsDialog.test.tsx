@@ -4,6 +4,7 @@ import * as transferApi from '../../lib/host-transfer-api'
 import en from '../../locales/en.json'
 import zhTW from '../../locales/zh-TW.json'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { ShareHostsDialog } from './ShareHostsDialog'
 
@@ -11,6 +12,7 @@ const TRUST = /will hold the access tokens of the hosts you share, readable by t
 
 beforeEach(() => {
   cleanup()
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: {
       relay: { id: 'relay', name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0, token: 'relay-tok', daemonId: 'd1_m' },
@@ -50,6 +52,18 @@ describe('ShareHostsDialog', () => {
     expect(rows.map((r) => r.name)).toEqual(['mlab', 'air26'])
     expect(rows[0]).toMatchObject({ token: 'relay-tok', daemonId: 'd1_m' })
     expect(rows[1]).toMatchObject({ token: 'air-tok', look: { icon: 'Laptop' } })
+  })
+
+  it('sends the workbench look (H2c-3 T1): an entry that differs from HostConfig wins', async () => {
+    useHostLookStore.setState({ looks: { air: { name: 'air-workbench', icon: 'Desktop' } } })
+    const create = vi.spyOn(transferApi, 'createTransfer').mockResolvedValue({ kind: 'ok', code: 'ABCD2345', expiresAt: 0 })
+    render(<ShareHostsDialog onClose={() => {}} />)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create code' }))
+    })
+    const rows = create.mock.calls[0][1]
+    expect(rows.map((r) => r.name)).toEqual(['mlab', 'air-workbench'])
+    expect(rows[1].look).toEqual({ icon: 'Desktop' })
   })
 
   it('an unticked host is left out', async () => {

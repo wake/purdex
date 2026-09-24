@@ -19,8 +19,8 @@
 //
 // KNOWN FALSE NEGATIVES (the fixture half pins each one as "not flagged", so a
 // change of the detector is visible):
-//   - computed access with a non-literal key: `h[f]` (e.g. the look loop of
-//     `host-transfer-plan.ts`), and a destructuring key that is not a literal
+//   - computed access with a non-literal key: `h[f]` (e.g. a loop over the look
+//     field names), and a destructuring key that is not a literal
 //     (`const k = 'icon'; const { [k]: v } = h` — even when `k` is a constant);
 //   - a value first narrowed / copied into another type: `(h as { icon?: string }).icon`,
 //     `Pick<HostConfig, 'icon'>`, `Partial<HostConfig>`, a spread `({ ...h }).icon`;
@@ -63,7 +63,8 @@
 // `TEMPORARY_FILES` with the PR that removes it, and a test asserts the
 // allowlisted files are a subset of those four plus exactly that list.
 // H2a checked the colour / icon fields; H2b-1 adds `name`; H2b-2 moves the
-// last name surfaces onto the selector (only the share payload stays, until H2c-3).
+// last name surfaces onto the selector (only the share payload stays, until H2c-3);
+// H2c-3 sends the share payload through the selector, so no temporary file is left.
 import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
 
@@ -667,12 +668,7 @@ export const ALLOWLIST: Allowlist = {
     lookOfConfig: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
   },
 
-  // --- TEMPORARY (see `TEMPORARY_FILES`) ---
-
-  // the share payload's name, until H2c-3 (plan §0.9 / §0.10)
-  'lib/host-transfer-plan.ts': {
-    'payloadRowsOf.name': { name: 1 },
-  },
+  // --- TEMPORARY (see `TEMPORARY_FILES`) --- none since H2c-3 (the share payload reads the selector).
 }
 
 /**
@@ -683,11 +679,10 @@ const PERMANENT_FILES = ['stores/useHostStore.ts', 'lib/host-color.ts', 'lib/hos
 
 /**
  * Every other file the allowlist may name, and the PR that takes it out. Each
- * reads `name` only (colour / icon have no temporary reader).
+ * reads `name` only (colour / icon have no temporary reader). Empty since H2c-3
+ * took out the last one (`lib/host-transfer-plan.ts`, the share payload).
  */
-const TEMPORARY_FILES: Record<string, string> = {
-  'lib/host-transfer-plan.ts': 'H2c-3',
-}
+const TEMPORARY_FILES: Record<string, string> = {}
 
 describe('host-look guard — repo', { timeout: 60_000 }, () => {
   it('the look reads of HostConfig are exactly the allowlist (file, declaration, field, count)', () => {
@@ -709,14 +704,11 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
       'lib/host-look-migration.ts': {
         lookOfConfig: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
       },
-      'lib/host-transfer-plan.ts': { 'payloadRowsOf.name': { name: 1 } },
     })
   })
 
-  it('the temporary files are pinned verbatim, each with the PR that removes it', () => {
-    expect(TEMPORARY_FILES).toEqual({
-      'lib/host-transfer-plan.ts': 'H2c-3',
-    })
+  it('the temporary files are pinned verbatim, each with the PR that removes it (none left since H2c-3)', () => {
+    expect(TEMPORARY_FILES).toEqual({})
   })
 
   it('outside the permanent four (spec §4.2 three + the §4.4 migration), the allowlisted files are exactly the temporary list', () => {
@@ -728,6 +720,6 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
     const fields = Object.keys(TEMPORARY_FILES).flatMap((f) =>
       Object.values(ALLOWLIST[f] ?? {}).flatMap((counts) => Object.keys(counts)),
     )
-    expect(new Set(fields)).toEqual(new Set(['name']))
+    expect(fields.filter((f) => f !== 'name')).toEqual([])
   })
 })

@@ -71,7 +71,7 @@ export function ShareHostsDialog({ onClose }: Props) {
   const relayName = (relay && lookOf(relay.id).name) ?? t('hosts.transfer.relay_fallback')
   const picked = list.filter((h) => hasToken(h) && !unticked.has(h.id))
   const creating = phase.kind === 'creating'
-  const rows = payloadRowsOf(picked)
+  const rows = payloadRowsOf(picked, lookOf)
   const overRows = rows.length > MAX_TRANSFER_ROWS
   const overBytes = !overRows && transferBodyBytes(rows) > MAX_TRANSFER_BODY_BYTES
   const blocked = !relay || rows.length === 0 || overRows || overBytes || creating
