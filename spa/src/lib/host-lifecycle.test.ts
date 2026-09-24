@@ -656,7 +656,7 @@ describe('host delete cascade — a write fails half-way', () => {
 // holds the operation lock (useRebuildStore) — a rebuild in flight must not see its pane moved under it. Held
 // elsewhere, the deletion is retried every 250 ms for up to 4 s, then given up and said.
 describe('deleteHostWithUndoToast — the operation lock', () => {
-  const MESSAGES = { deleted: 'A deleted', busy: 'busy, try again' }
+  const MESSAGES = { deleted: 'A deleted', busy: 'busy, try again', stale: 'A changed or gone, not deleted' }
   const contentOf = (tabId: string) => getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
 
   beforeEach(resetAllStores)
@@ -676,7 +676,7 @@ describe('deleteHostWithUndoToast — the operation lock', () => {
     expect(useRebuildStore.getState().lockedBy).toBeNull()
     expect(useUndoToast.getState().toast).toMatchObject({ message: MESSAGES.deleted })
     expect(typeof useUndoToast.getState().toast?.action).toBe('function')
-    await expect(done).resolves.toBe(true)
+    await expect(done).resolves.toBe('deleted')
   })
 
   it('a rebuild holds the lock and never lets go: nothing is rewritten, nothing deleted — after ~4 s the user is told', async () => {
@@ -694,7 +694,7 @@ describe('deleteHostWithUndoToast — the operation lock', () => {
     expect(useUndoToast.getState().toast).toBeNull()
     await vi.advanceTimersByTimeAsync(400)
 
-    await expect(done).resolves.toBe(false)
+    await expect(done).resolves.toBe('busy')
     expect(useUndoToast.getState().toast).toEqual({ message: MESSAGES.busy, action: undefined, actionLabel: undefined })
     expect(useTabStore.getState().tabs).toBe(tabs)
     expect(contentOf(t.id)).toMatchObject({ hostId: HOST_A })
@@ -718,11 +718,85 @@ describe('deleteHostWithUndoToast — the operation lock', () => {
     await rebuild
     await vi.advanceTimersByTimeAsync(250)
 
-    await expect(done).resolves.toBe(true)
+    await expect(done).resolves.toBe('deleted')
     expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
     expect(contentOf(t.id)).toMatchObject({ hostId: WIRE_A })
     expect(useUndoToast.getState().toast).toMatchObject({ message: MESSAGES.deleted })
     expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  // PR #1413 critic (high): the deletion is of the host the user CONFIRMED. A retry that finds the id gone, gone and
+  // back (another window's undo re-adds it verbatim), or pointed elsewhere deletes nothing and says so — never
+  // "deleted" with an Undo for something that did not happen, never another entity under the same id.
+  describe('the host changed while the deletion waited for the lock', () => {
+    async function waitingDeletion(meanwhile: () => void) {
+      vi.useFakeTimers()
+      const t = makeSessionTab(HOST_A, 'dev001')
+      useTabStore.getState().addTab(t)
+      let finishRebuild!: () => void
+      const rebuild = withOperationLock('rebuild:batch', () => new Promise<void>((r) => { finishRebuild = r }), () => undefined)
+      const done = deleteHostWithUndoToast(HOST_A, MESSAGES)
+      await vi.advanceTimersByTimeAsync(500)
+      meanwhile()
+      const tabs = useTabStore.getState().tabs
+      finishRebuild()
+      await rebuild
+      await vi.advanceTimersByTimeAsync(250)
+      return { done, tabs }
+    }
+
+    it('gone: nothing deleted, no Undo — the stale notice', async () => {
+      const { done, tabs } = await waitingDeletion(() => useHostStore.getState().removeHost(HOST_A))
+      await expect(done).resolves.toBe('stale')
+      expect(useUndoToast.getState().toast).toEqual({ message: MESSAGES.stale, action: undefined, actionLabel: undefined })
+      expect(useTabStore.getState().tabs).toBe(tabs)
+      expect(useHostStore.getState().hostOrder).toEqual([HOST_B])
+      expect(useRebuildStore.getState().lockedBy).toBeNull()
+    })
+
+    it('gone and back under the same id, byte for byte (another window\'s undo): not deleted', async () => {
+      const row = useHostStore.getState().hosts[HOST_A]
+      const { done } = await waitingDeletion(() => {
+        useHostStore.getState().removeHost(HOST_A)
+        useHostStore.setState((st) => ({ hosts: { ...st.hosts, [HOST_A]: row }, hostOrder: [HOST_A, ...st.hostOrder] }))
+      })
+      await expect(done).resolves.toBe('stale')
+      expect(useHostStore.getState().hosts[HOST_A]).toEqual(row)
+      expect(useUndoToast.getState().toast?.message).toBe(MESSAGES.stale)
+    })
+
+    it('re-pointed (another endpoint): not deleted', async () => {
+      const { done } = await waitingDeletion(() => useHostStore.getState().updateHost(HOST_A, { ip: '9.9.9.9' }))
+      await expect(done).resolves.toBe('stale')
+      expect(useHostStore.getState().hosts[HOST_A]).toMatchObject({ ip: '9.9.9.9' })
+      expect(useUndoToast.getState().toast?.message).toBe(MESSAGES.stale)
+    })
+
+    it('another token (the daemonId unchanged): not deleted', async () => {
+      const { done } = await waitingDeletion(() => useHostStore.getState().updateHost(HOST_A, { token: 'other-token' }))
+      expect(useHostStore.getState().hosts[HOST_A]?.daemonId).toBe(DAEMON_A)
+      await expect(done).resolves.toBe('stale')
+      expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    })
+
+    it('renamed only (not another entity): still deleted', async () => {
+      const { done } = await waitingDeletion(() => useHostStore.getState().updateHost(HOST_A, { name: 'Renamed A' }))
+      await expect(done).resolves.toBe('deleted')
+      expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
+    })
+  })
+
+  it('the host is already gone at the click: stale at once, nothing taken', async () => {
+    await expect(deleteHostWithUndoToast('nope', MESSAGES)).resolves.toBe('stale')
+    expect(useUndoToast.getState().toast?.message).toBe(MESSAGES.stale)
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('the last host (the cascade refuses it): no success, no Undo — stale', async () => {
+    useHostStore.getState().removeHost(HOST_B)
+    await expect(deleteHostWithUndoToast(HOST_A, MESSAGES)).resolves.toBe('stale')
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useUndoToast.getState().toast?.action).toBeUndefined()
   })
 
   it('a deletion that fails releases the lock and rejects, with no toast', async () => {

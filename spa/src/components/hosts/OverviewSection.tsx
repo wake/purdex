@@ -101,7 +101,7 @@ export function OverviewSection({ hostId }: Props) {
   const handleDeleteHost = () => {
     const hostName = hostLabel(hostId, hostLookOf(hostId))
     setConfirmDelete(false)
-    void deleteHostWithUndoToast(hostId, { deleted: t('hosts.deleted_toast', { name: hostName }), busy: t('hosts.delete_busy', { name: hostName }) }).catch((err: unknown) => {
+    void deleteHostWithUndoToast(hostId, { deleted: t('hosts.deleted_toast', { name: hostName }), busy: t('hosts.delete_busy', { name: hostName }), stale: t('hosts.delete_stale', { name: hostName }) }).catch((err: unknown) => {
       console.error('[hosts] deleting a host failed; nothing was deleted', err)
     })
   }

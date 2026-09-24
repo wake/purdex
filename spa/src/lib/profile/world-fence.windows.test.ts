@@ -935,7 +935,7 @@ describe("C2' — undo in a window that has not heard of another window's promot
     const w1 = await openWindow()
     for (const w of [w1, w2]) twoHosts(w)
     QueuedBroadcastChannel.queue = []
-    w1.deleteHostWithUndoToast('h1', { deleted: 'h1 deleted', busy: 'busy' })
+    w1.deleteHostWithUndoToast('h1', { deleted: 'h1 deleted', busy: 'busy', stale: 'stale' })
     expect(w1.useTabStore.getState().tabs.mt1).toBeDefined() // nothing closes (spec §3.4)
     await deliverAll() // window 2 is level with the delete
     view.freeze() // from here on window 1's PROCESS sees nothing new until told
@@ -980,7 +980,7 @@ describe("C2' — undo in a window that has not heard of another window's promot
     const { w2, slaveId } = await seeded()
     const w1 = await openWindow()
     twoHosts(w1)
-    w1.deleteHostWithUndoToast('h1', { deleted: 'h1 deleted', busy: 'busy' })
+    w1.deleteHostWithUndoToast('h1', { deleted: 'h1 deleted', busy: 'busy', stale: 'stale' })
     await deliverAll()
     expect(await w2.switchActiveProfile(slaveId)).toEqual({ ok: true })
     const diskBefore = WORLD_KEYS.map(disk)
@@ -1007,7 +1007,7 @@ describe("C2' — undo in a window that has not heard of another window's promot
       w.useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, daemonId: 'lab-1:111111' } } }))
     }
     QueuedBroadcastChannel.queue = []
-    w1.deleteHostWithUndoToast('h1', { deleted: 'h1 deleted', busy: 'busy' })
+    w1.deleteHostWithUndoToast('h1', { deleted: 'h1 deleted', busy: 'busy', stale: 'stale' })
     expect(WORLD_KEYS.map(disk).join()).toContain(WIRE)
     await deliverAll()
     view.freeze()

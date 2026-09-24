@@ -895,6 +895,7 @@
   "hosts.confirm_delete": "Delete this host from this device?",
   "hosts.delete_keeps_tabs": "Its tabs stay, showing “no host here” on this device. Tabs on other devices are not affected.",
   "hosts.delete_busy": "Another operation is in progress — try deleting {{name}} again in a moment",
+  "hosts.delete_stale": "{{name}} was changed or removed meanwhile — it was not deleted",
   "hosts.daemon_config": "Daemon Config",
   "hosts.sizing_mode": "Sizing Mode",
   "hosts.sizing_mode_option.auto": "auto",

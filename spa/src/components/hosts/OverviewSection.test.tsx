@@ -182,7 +182,7 @@ describe('OverviewSection', () => {
       render(<OverviewSection hostId={HOST_ID} />)
       fireEvent.click(screen.getByText('Delete Host'))
       fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
-      expect(lifecycle.deleteHostWithUndoToast).toHaveBeenCalledWith(HOST_ID, { deleted: 'Test deleted', busy: 'Another operation is in progress — try deleting Test again in a moment' })
+      expect(lifecycle.deleteHostWithUndoToast).toHaveBeenCalledWith(HOST_ID, { deleted: 'Test deleted', busy: 'Another operation is in progress — try deleting Test again in a moment', stale: 'Test was changed or removed meanwhile — it was not deleted' })
     })
 
     it('the real call: the host is gone, the undo toast is up, and its action brings the host back', () => {

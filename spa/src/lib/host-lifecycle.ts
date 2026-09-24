@@ -282,29 +282,51 @@ export const HOST_DELETE_BUSY_RETRY_MS = 250
 /** …for this long from the click, then given up (as the profile switcher does with `busy`). */
 export const HOST_DELETE_BUSY_TOTAL_MS = 4_000
 
+/** What `deleteHostWithUndoToast` did: deleted (undo toast up); `busy` — the lock stayed held elsewhere; `stale` —
+ *  the host confirmed is not the one there any more (gone, gone and back, re-pointed) or cannot be deleted. */
+export type HostDeleteOutcome = 'deleted' | 'busy' | 'stale'
+
 /**
  * `deleteHostCascade` behind the app's undo toast — the Hosts page's deletion. It rewrites the tab tree, so it runs
  * holding the operation lock (owner `host-delete`), as everything that rewrites the tab tree does: a rebuild in flight
  * never sees its pane moved to a wire id under it. Held elsewhere, the deletion is retried every
  * `HOST_DELETE_BUSY_RETRY_MS` up to `HOST_DELETE_BUSY_TOTAL_MS` after the click, then left undone and `messages.busy`
- * said. With the lock free it happens at once, synchronously. The texts are the caller's (`t`). Resolves `true` once
- * deleted, `false` when given up; rejects when the deletion itself fails (nothing was deleted then — the cascade
- * put everything back).
+ * said. With the lock free it happens at once, synchronously.
+ *
+ * It deletes the host the user CONFIRMED: its endpoint identity (`hostIdentity` — ip, port, token — and its
+ * daemonId) is fixed at the click and watched until the lock is taken. The row gone — even gone and back under the
+ * same id, as another window's undo re-adds it — or re-pointed meanwhile: nothing is deleted and `messages.stale`
+ * said, never "deleted" with an Undo. A rename is not another host. The texts are the caller's (`t`). Rejects when
+ * the deletion itself fails (nothing was deleted then — the cascade put everything back).
  */
-export function deleteHostWithUndoToast(hostId: string, messages: { deleted: string; busy: string }): Promise<boolean> {
+export function deleteHostWithUndoToast(hostId: string, messages: { deleted: string; busy: string; stale: string }): Promise<HostDeleteOutcome> {
   const startedAt = Date.now()
-  return new Promise<boolean>((resolve, reject) => {
+  const confirmed = useHostStore.getState().hosts[hostId]
+  if (confirmed === undefined) {
+    useUndoToast.getState().show(messages.stale)
+    return Promise.resolve('stale')
+  }
+  const target = targetIdentity(confirmed)
+  let stale = false
+  const unwatch = useHostStore.subscribe((state) => {
+    const row = state.hosts[hostId]
+    if (row === undefined || targetIdentity(row) !== target) stale = true
+  })
+  return new Promise<HostDeleteOutcome>((resolve, reject) => {
+    const settle = (outcome: HostDeleteOutcome, message: string, undo?: () => void): void => {
+      unwatch()
+      useUndoToast.getState().show(message, undo)
+      resolve(outcome)
+    }
     const attempt = (): void => {
+      if (stale) return settle('stale', messages.stale)
       const grant = useRebuildStore.getState().acquireOperationLock(HOST_DELETE_LOCK_OWNER)
       if (grant === null) {
-        if (Date.now() - startedAt < HOST_DELETE_BUSY_TOTAL_MS) {
-          setTimeout(attempt, HOST_DELETE_BUSY_RETRY_MS)
-        } else {
-          useUndoToast.getState().show(messages.busy)
-          resolve(false)
-        }
+        if (Date.now() - startedAt < HOST_DELETE_BUSY_TOTAL_MS) setTimeout(attempt, HOST_DELETE_BUSY_RETRY_MS)
+        else settle('busy', messages.busy)
         return
       }
+      unwatch() // from here the host store is this deletion's own write
       let undo: () => void
       try {
         // No grant for the undo: it runs later, outside this lock, and takes the lock itself then.
@@ -315,11 +337,17 @@ export function deleteHostWithUndoToast(hostId: string, messages: { deleted: str
       } finally {
         useRebuildStore.getState().releaseOperationLock(grant)
       }
-      useUndoToast.getState().show(messages.deleted, undo)
-      resolve(true)
+      // The cascade refuses the last host (a no-op): nothing was deleted, so nothing to undo.
+      if (useHostStore.getState().hosts[hostId] !== undefined) return settle('stale', messages.stale)
+      settle('deleted', messages.deleted, undo)
     }
     attempt()
   })
+}
+
+/** What makes a host row the one the user confirmed: its endpoint identity and its daemon. Not its name or look. */
+function targetIdentity(h: HostConfig): string {
+  return JSON.stringify([hostIdentity(h), h.daemonId ?? null])
 }
 
 /** Endpoint identity of a host: what makes a cached answer still that host's. */
