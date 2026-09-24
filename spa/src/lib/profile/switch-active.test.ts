@@ -1244,3 +1244,47 @@ describe('promoteToMaster — the shown-hosts list follows the workbench (A3)', 
     })
   })
 })
+
+describe("the copies carry a shown-hosts list (per-workbench shown hosts A7)", () => {
+  const MASTER_LIST = ['d1_master']
+  const SLAVE_LIST = ['d1_slave']
+  const listOf = (result: { ok: boolean; id?: string }) => {
+    if (!result.ok || result.id === undefined) throw new Error('not copied')
+    return useLocalProfilesStore.getState().slaves[result.id].shownHostIds
+  }
+
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: MASTER_LIST, relabelStamp: useLocalProfilesStore.getState().relabelCount })
+  })
+
+  afterEach(() => {
+    useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
+  })
+
+  it("copyMasterAsSlave: the master's list, wherever the master is (a slave on screen here)", () => {
+    slaveOnScreen()
+    useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    const list = listOf(copyMasterAsSlave('Copy'))
+    expect(list).toEqual(MASTER_LIST)
+    expect(list).not.toBe(useShownHostsStore.getState().ids) // a copy, not the store's array
+  })
+
+  it("saveScreenAsSlave: the CURRENT list — the screen's workbench's", () => {
+    expect(listOf(saveScreenAsSlave('Saved master'))).toEqual(MASTER_LIST)
+    slaveOnScreen()
+    useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    expect(listOf(saveScreenAsSlave('Saved slave'))).toEqual(SLAVE_LIST)
+  })
+
+  it('saveScreenAsSlave of an unsettled screen: [] (the current list fails closed — accepted)', () => {
+    useTabStore.setState({ worldEpoch: 9 })
+    expect(listOf(saveScreenAsSlave('Saved'))).toEqual([])
+  })
+
+  it('writing the copy\'s list later leaves its source alone', () => {
+    const id = copyMasterAsSlave('Copy')
+    if (!id.ok) throw new Error(id.reason)
+    useLocalProfilesStore.getState().setSlaveShownHosts(id.id, () => ['d1_other'])
+    expect(useShownHostsStore.getState().ids).toEqual(MASTER_LIST)
+  })
+})

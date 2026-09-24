@@ -116,6 +116,7 @@ import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld, RestampRollbackIncomplete } from './master-world'
 import type { MasterWorldRead } from './master-world'
 import { withWorldLock } from '../storage/world-lock'
+import { currentShownIdsNow } from '../shown-hosts'
 import { repairTabOwnership } from './sections'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
@@ -392,7 +393,7 @@ export type CopyResult = { ok: true; id: string } | Refused<'unsettled' | 'bad-n
  * reach the SOT: the settings section projects the MASTER world's workspace ids
  * only (`masterWorkspaceIds`), and these ids are in no master world.
  */
-function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly string[] = []): CopyResult {
+function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly string[], shownHostIds: readonly string[]): CopyResult {
   if (normalizeLocalProfileName(name) === null) return { ok: false, reason: 'bad-name' } // before anything is built
   const old = captureLocal()
   const oldScoped = useWorkspaceSettingsStore.getState().workspaces
@@ -400,7 +401,9 @@ function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly st
     // A copy is a snapshot and its source stays where it is, so there is no wait here (see `exchange`): at
     // worst a tab whose workspace was still on its way is under Unsorted in the COPY.
     const { world, workspaceIds } = copyWorld(withOwnershipRepaired(source, tabOrder))
-    const added = useLocalProfilesStore.getState().addSlave(name, world)
+    // Its shown-hosts list too (per-workbench shown hosts A7): the source's, copied — `addSlave` sanitises it into a
+    // new array, so writing one never writes the other.
+    const added = useLocalProfilesStore.getState().addSlave(name, world, shownHostIds)
     if (!added.ok) return added
 
     const scoped: typeof oldScoped = {}
@@ -432,7 +435,7 @@ export function copyMasterAsSlave(name: string): CopyResult {
   const read = readMasterWorld()
   recoverUnsettledWorld(read, true)
   if (!read.settled) return { ok: false, reason: 'unsettled' }
-  return addCopyAsSlave(name, read.world)
+  return addCopyAsSlave(name, read.world, [], useShownHostsStore.getState().ids) // the master's list, wherever the master is
 }
 
 /**
@@ -442,7 +445,9 @@ export function copyMasterAsSlave(name: string): CopyResult {
  * while unsettled, too: it files nothing under an existing label.
  */
 export function saveScreenAsSlave(name: string): CopyResult {
-  return addCopyAsSlave(name, readScreen(), useTabStore.getState().tabOrder)
+  // The CURRENT shown list — the screen's workbench's (lib/shown-hosts.ts). While unsettled that list fails closed and
+  // is `[]`, so the copy starts with every host hidden: accepted (hiding closes no tab; the user turns hosts back on).
+  return addCopyAsSlave(name, readScreen(), useTabStore.getState().tabOrder, currentShownIdsNow())
 }
 
 // === The move ===
