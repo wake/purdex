@@ -209,7 +209,6 @@ import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, save
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
 import type { FlightToken, SectionConflict, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
 import type { ProfileSectionKey, SectionKind, Shape, TabsPayload } from './types'
-import type { ConfirmedHosts } from '../../stores/useProfileStore'
 
 export interface ExecutorDeps {
   hostId: string
@@ -227,10 +226,6 @@ export interface ExecutorDeps {
   initialDirection?: () => 'push' | 'pull' | null
   /** The first reconciliation has settled. Once per period; the callee clears the direction. */
   onInitialSettled?: () => void
-  /** NOT READ: the #1366 pull guard left the executor (host ownership H3a-1). The start layer stops passing both in
-   *  the next commit, which removes them. */
-  confirmedPullHosts?: () => ConfirmedHosts | null
-  onPullUnconfirmed?: () => void
   /**
    * One section as the collector would build it NOW (collector.ts `buildSectionPayload`): `{ payload }`, or `null`
    * while nobody can say what the stores hold. Synchronous. Asked right before a pull stashes the payload its apply
