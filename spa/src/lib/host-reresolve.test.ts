@@ -27,6 +27,7 @@ import {
   startHostReresolve,
 } from './host-reresolve'
 import { hostLookOf } from './host-look'
+import { rekeyShownHosts } from './shown-hosts'
 
 const DAEMON = 'air-lab:26aaaa'
 const WIRE = syncIdOfSync(DAEMON)
@@ -364,6 +365,20 @@ describe('the shown-hosts re-key (H2d-1)', () => {
     runHostReresolve()
     unsub()
     expect(writes).not.toHaveBeenCalled()
+  })
+
+  it('nothing listed that moves → rekeyShownHosts is null and the pass takes no lock for it', () => {
+    runHostReresolve() // every ref moved: nothing else to write
+    for (const ids of [[], [UNKNOWN, WIRE]]) {
+      useShownHostsStore.setState({ ids })
+      expect(rekeyShownHosts(useHostStore.getState().hosts)).toBeNull()
+      const seen: (string | null)[] = []
+      const unsub = useRebuildStore.subscribe((st) => seen.push(st.lockedBy))
+      expect(runHostReresolve()).toBe('done')
+      unsub()
+      expect(seen).toEqual([])
+      expect(shownNow().ids).toEqual(ids)
+    }
   })
 
   it('an id another window listed (storage only) still moves: the store is re-read first', () => {
