@@ -120,7 +120,8 @@ describe('buildSectionPayload — the collector\'s own builders over the MASTER 
   it('with the master on screen: its world', () => {
     expect(countPayload('workspaces', buildSectionPayload('workspaces')!.payload)).toBe(2)
     expect(countPayload('tabs.mws1', buildSectionPayload('tabs.mws1')!.payload)).toBe(3)
-    expect(countPayload('hosts', buildSectionPayload('hosts')!.payload)).toBe(3)
+    // host ownership H3a-2: `hosts` is retired — never built, whatever the host store holds
+    expect(buildSectionPayload('hosts')).toEqual({ payload: null })
   })
 
   it('a local profile on screen (a follower window after another switched): the PARKED master\'s, never the slave\'s', () => {
