@@ -168,6 +168,45 @@ describe('OperationBlock', () => {
     expect(diff.compareDocumentPosition(out) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('renders the diff stat with the diff', () => {
+    // Spec §3.1.1 #3: the old right column stacked duration, size and the diff
+    // stat; the stat's home in room is the diff, not the header row.
+    render(<OperationBlock tool="Edit" input={{ file_path: '/x' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
+      facts={{ diff: { path: '/x', added: 5, removed: 0, hunks: [hunk], truncated: false } }}
+      result={ok('raw output')} />)
+    const stat = screen.getByTestId('diff-stat')
+    expect(stat).toHaveTextContent('+5 −0')
+    // Inside the diff, inside the rail — and not in the header row beside the
+    // tool name, which is where it used to be stacked.
+    expect(screen.getByTestId('tool-diff').contains(stat)).toBe(true)
+    expect(screen.getByTestId('op-rail').contains(stat)).toBe(true)
+    const header = screen.getByTestId('op-name').parentElement as HTMLElement
+    expect(header.contains(stat)).toBe(false)
+    expect(header.textContent).not.toContain('+5')
+  })
+
+  it('marks a result that held non-text content', () => {
+    // The other fact the dismantled facts span carried (spec §3.1.1 #3): a
+    // fold must not swallow "there was something here the transcript is not
+    // showing" in silence.
+    render(<OperationBlock tool="Read" input={{ file_path: '/x.png' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
+      facts={{ output: { totalLines: 1, totalBytes: 4, truncated: false, hasNonText: true } }}
+      result={ok('data')} />)
+    const marker = screen.getByTestId('op-non-text')
+    expect(marker).toHaveTextContent('non-text')
+    expect(screen.getByTestId('op-rail').contains(marker)).toBe(true)
+  })
+
+  it('does not mark a text-only result', () => {
+    render(<OperationBlock tool="Read" input={{ file_path: '/x.ts' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
+      facts={{ output: { totalLines: 1, totalBytes: 4, truncated: false, hasNonText: false } }}
+      result={ok('data')} />)
+    expect(screen.queryByTestId('op-non-text')).toBeNull()
+  })
+
   it('renders an unanswered call with no rail', () => {
     render(<OperationBlock tool="Bash" input={{ command: 'sleep 8' }} foldKey="tu1"
       activity={{ status: 'running', startedAt: 1_000, now: 1_200 }} result={null} />)

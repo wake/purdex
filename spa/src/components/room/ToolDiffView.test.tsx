@@ -41,6 +41,10 @@ function fixtureHunk(): DiffHunk {
 const diffOf = (hunks: DiffHunk[], truncated = false): Diff =>
   ({ path: '/x', added: 0, removed: 0, hunks, truncated })
 
+/** A diff that carries a real stat, which `diffOf` deliberately does not. */
+const statDiff = (added: number, removed: number, hunks: DiffHunk[], truncated = false): Diff =>
+  ({ path: '/srv/app.ts', added, removed, hunks, truncated })
+
 const hunk = (oldStart: number, oldLines: number, newStart: number, newLines: number, lines: string[]): DiffHunk =>
   ({ oldStart, oldLines, newStart, newLines, lines })
 
@@ -146,15 +150,18 @@ describe('ToolDiffView', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('codex R2 A1: hunks: [] + truncated: true → tool-diff with only the diff-truncated row (no diff-hunk)', () => {
+  it('codex R2 A1: hunks: [] + truncated: true → tool-diff with only the stat and the diff-truncated row (no diff-hunk)', () => {
     render(<ToolDiffView diff={diffOf([], true)} foldKey="d" />)
     const view = screen.getByTestId('tool-diff')
     const marker = screen.getByTestId('diff-truncated')
     expect(marker).toHaveTextContent('diff truncated by the daemon')
     expect(screen.queryByTestId('diff-hunk')).toBeNull()
     expect(screen.queryByTestId('diff-more')).toBeNull()
-    expect(view.children).toHaveLength(1)
-    expect(view.firstElementChild).toBe(marker)
+    // The daemon dropped every hunk, so the stat is the only thing left that
+    // says what the edit did — it is the row that must survive here, not go.
+    expect(view.children).toHaveLength(2)
+    expect(view.firstElementChild).toBe(screen.getByTestId('diff-stat'))
+    expect(view.children[1]).toBe(marker)
   })
 
   it('long line text wraps in place (whitespace-pre-wrap keeps leading spaces)', () => {
@@ -227,5 +234,37 @@ describe('ToolDiffView folding (#1227)', () => {
     expect(outputPlan.hiddenLines).toBe(24)
     expect(allRows()).toHaveLength(outputPlan.previewLines.length)
     expect(screen.getByTestId('diff-more')).toHaveTextContent(`+${outputPlan.hiddenLines} lines`)
+  })
+})
+
+// T3.3b / spec §3.1.1 #3 — the right column used to stack duration, size and
+// the diff stat in one place. Size went to the fold affordance and duration to
+// the header; `+N −M` belongs to the diff, and it went nowhere when
+// `ToolResultBlock`'s facts span was dismantled.
+describe('ToolDiffView stat (spec §3.1.1 #3)', () => {
+  it('shows the path and the +N −M stat', () => {
+    render(<ToolDiffView diff={statDiff(5, 0, [addedHunk(3)])} foldKey="d" />)
+    const stat = screen.getByTestId('diff-stat')
+    expect(stat).toHaveTextContent('/srv/app.ts')
+    expect(stat).toHaveTextContent('+5 −0')
+    // U+2212 MINUS, not the hyphen: it is the width of `+` under tabular-nums.
+    expect(stat.textContent).toContain('−0')
+    expect(stat.textContent).not.toContain('-0')
+    // It sits above the hunks, where the diff can be read with it.
+    const hunk0 = screen.getByTestId('diff-hunk')
+    expect(stat.compareDocumentPosition(hunk0) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows +0 −0 for an edit that changed nothing', () => {
+    // Contract rule 7: `+0 −0` is a normal edit result, not an absent stat.
+    render(<ToolDiffView diff={statDiff(0, 0, [addedHunk(3)])} foldKey="d" />)
+    expect(screen.getByTestId('diff-stat')).toHaveTextContent('+0 −0')
+  })
+
+  it('keeps the stat visible while the diff is folded', () => {
+    render(<ToolDiffView diff={statDiff(80, 12, [addedHunk(100)])} foldKey="d" />)
+    expect(allRows()).toHaveLength(3)
+    expect(screen.getByTestId('diff-more')).toBeInTheDocument()
+    expect(screen.getByTestId('diff-stat')).toHaveTextContent('+80 −12')
   })
 })

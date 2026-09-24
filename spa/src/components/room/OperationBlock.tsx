@@ -130,6 +130,10 @@ export default function OperationBlock({
 
   const diff = facts?.diff
   const hasDiff = diff !== undefined && (diff.hunks.length > 0 || diff.truncated)
+  // The second fact the dismantled facts span carried (spec §3.1.1 #3): the
+  // payload held something the transcript is not showing. A fold may hide
+  // lines; it may not hide that.
+  const hasNonText = facts?.output?.hasNonText === true
 
   // `error` and `denied` fold one step less: a failure you have to expand is a
   // failure you will miss (spec §4.2).
@@ -142,7 +146,7 @@ export default function OperationBlock({
   })
 
   const railFill = RAIL_FILL[status] ?? ''
-  const showRail = result !== null || hasDiff || (hasRawInput && inputExpanded)
+  const showRail = result !== null || hasDiff || hasNonText || (hasRawInput && inputExpanded)
 
   return (
     <div data-testid="operation-block" className="text-sm my-1">
@@ -213,6 +217,11 @@ export default function OperationBlock({
               onToggle={toggleOutput}
               tone={status === 'error' ? 'error' : 'normal'}
             />
+          )}
+          {hasNonText && (
+            <span data-testid="op-non-text" className="block text-xs text-text-muted">
+              {t('execution.tool.non_text')}
+            </span>
           )}
         </div>
       )}

@@ -16,6 +16,13 @@ interface Props {
   foldKey: string
 }
 
+/**
+ * U+2212 MINUS SIGN, not the hyphen: it is the width of `+` under tabular-nums,
+ * so `+5 −0` and `+80 −12` line up. Inherited from `tool-result-facts.ts`,
+ * whose facts span carried this stat before room dismantled it.
+ */
+const MINUS = '−'
+
 /** Sign column: the raw unified-diff characters, so a copied row reads as a diff. */
 const SIGN: Record<DiffRowKind, string> = { add: '+', del: '-', ctx: '', meta: '' }
 
@@ -81,6 +88,18 @@ export default function ToolDiffView({ diff, foldKey }: Props) {
 
   return (
     <div data-testid="tool-diff" className="font-mono text-xs">
+      {/*
+        Spec §3.1.1 #3: the stat travels with the diff, not in the header's
+        right column where it used to be stacked under the duration and the
+        size. It stays outside the fold — `+N −M` is the summary you read
+        *instead* of expanding — and it is drawn even when the daemon dropped
+        every hunk, where it is the only thing left that says what changed.
+        `+0 −0` is a normal edit result and renders (contract rule 7).
+      */}
+      <div data-testid="diff-stat" className="flex items-baseline gap-2 px-2 py-0.5 text-text-muted">
+        <span className="min-w-0 flex-1 break-all">{diff.path}</span>
+        <span className="shrink-0 tabular-nums">{`+${diff.added} ${MINUS}${diff.removed}`}</span>
+      </div>
       {visible.map(({ hunk, rows: hunkRows }, i) => {
         if (hunkRows.length === 0) return null
         return (

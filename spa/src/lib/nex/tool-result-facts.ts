@@ -1,11 +1,14 @@
-// spa/src/lib/nex/tool-result-facts.ts — the tool_result header facts span
-// (P-B3.2 spec §4.4 R4). Pure: no React, no store; `t` is injected.
+// spa/src/lib/nex/tool-result-facts.ts — the shape of the N2 tool_result facts
+// a caller hands to `OperationBlock`. Pure types: no React, no store.
 //
-// `ToolResultFacts` is OperationBlock's `facts` prop. `toolResultFacts()`
-// itself rendered ToolResultBlock's header segments and has had no caller
-// since T3.3 deleted that component; the new block shows the diff and the
-// fold count instead. Kept, with its tests, until spec §4.2's header decides
-// what the segments become.
+// `toolResultFacts()`, which built ToolResultBlock's header facts span, is
+// gone with that component (T3.3b). Every segment it produced now has a home
+// of its own: `+N −M` travels with the diff (`room/ToolDiffView`), `non-text`
+// sits on the operation's rail (`room/OperationBlock`), the line count is the
+// fold affordance's `+N lines` and `truncated` is its daemon-truncation note
+// (`room/FoldedOutput`) — spec §3.1.1 #3, which gives size to the fold and
+// keeps the stat with the diff. A helper with no caller grows a second,
+// disagreeing implementation, so it was deleted rather than kept.
 import type { ToolActivity } from './tool-activity'
 
 /**
@@ -14,28 +17,3 @@ import type { ToolActivity } from './tool-activity'
  * only have some of the facts (tests, or a raw block with no N2 overlay).
  */
 export type ToolResultFacts = Partial<Pick<ToolActivity, 'output' | 'file' | 'diff' | 'status'>>
-
-/** U+2212 MINUS SIGN — same width as `+` in tabular-nums, unlike the hyphen. */
-const MINUS = '−'
-
-/**
- * Header segments, in a fixed order: line count (from `file`, else from
- * `output` when there is more than one line and no `diff`), `+N −M` for a
- * diff (always — `+0 −0` is a normal edit result, contract rule 7), then the
- * `truncated` / `non-text` markers. `status` is not rendered here: the
- * denied override reads `facts.status` directly in the component.
- */
-export function toolResultFacts(
-  facts: ToolResultFacts | undefined,
-  t: (key: string, params?: Record<string, string | number>) => string,
-): string[] {
-  if (!facts) return []
-  const { file, diff, output } = facts
-  const out: string[] = []
-  if (file) out.push(t('execution.tool.lines', { n: file.lines }))
-  if (diff) out.push(`+${diff.added} ${MINUS}${diff.removed}`)
-  if (!file && !diff && output && output.totalLines > 1) out.push(t('execution.tool.lines', { n: output.totalLines }))
-  if (output?.truncated) out.push(t('execution.tool.truncated'))
-  if (output?.hasNonText) out.push(t('execution.tool.non_text'))
-  return out
-}
