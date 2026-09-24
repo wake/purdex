@@ -1706,5 +1706,10 @@
 
   "file_tree.select_workspace_first": "Select a workspace first",
   "file_tree.set_project_path": "Set the project path to show the file tree",
-  "file_tree.session_not_implemented": "Session file tree not yet implemented (needs daemon cwd API)"
+  "file_tree.session_not_implemented": "Session file tree not yet implemented (needs daemon cwd API)",
+
+  "room.fold.more": "+{{n}} lines",
+  "room.fold.less": "collapse",
+  "room.fold.show_all": "show all",
+  "room.fold.daemon_truncated": "the daemon cut this output at 8 KB"
 }
