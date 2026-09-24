@@ -21,7 +21,7 @@ vi.mock('../../lib/host-api', () => ({
 
 vi.mock('../../lib/host-lifecycle', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/host-lifecycle')>()
-  return { ...actual, deleteHostWithUndoToast: vi.fn() }
+  return { ...actual, deleteHostWithUndoToast: vi.fn(async () => true) }
 })
 
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
