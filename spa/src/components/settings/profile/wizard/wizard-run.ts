@@ -34,7 +34,7 @@
 // reason there is none, and it checks BOTH halves of what the user agreed to:
 //   this device   no master attached · the host in the store and connected · the chosen local profile still there
 //                 — before the host is asked, and AGAIN after it has answered (the ask takes up to 15 s).
-//   the SOT       the profile is RE-LISTED and its fingerprint (`sotFingerprint`: every live section's name, rev
+//   the SOT       the profile is RE-LISTED and its fingerprint (`sotFingerprint`: every live, non-retired section's name, rev
 //                 and hash — the index has them; no payload is fetched; a deleted section is simply not listed)
 //                 must be the one the user was looking at when they chose it. The attack this closes: a profile
 //                 seen EMPTY (or just created) is offered push only, without the "replaces what is there"
@@ -256,14 +256,26 @@ export type PrepareRefusal =
   /** `request`: the failure's class (wizard-shared.ts, `requestKey`) — never its message. */
   | { ok: false; reason: 'list-failed'; request: string }
 
-/** Every live section's name, rev and hash, in a fixed order. The index lists no tombstone: a deleted section is
- *  one that is missing. The profile's NAME is not part of it — a rename changes nothing a direction decides. */
-export function sotFingerprint(entry: Pick<ProfileIndexEntry, 'sections'>): string {
-  return JSON.stringify(entry.sections.map((m) => [m.section, m.rev, m.hash]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)))
+/** Sections the sync no longer carries (host ownership H3b, spec §5.1): a legacy `hosts` row stays on the SOT and is
+ *  no content any more — a pull brings nothing of it, a push does not replace it. H3a-2 adds the same set to
+ *  projections.ts (`isRetiredSection`); whichever of the two lands second makes this read that one. */
+const RETIRED_SECTIONS: ReadonlySet<string> = new Set(['hosts'])
+
+/** The sections a direction decides about: every live one but the retired. */
+function liveContent(entry: Pick<ProfileIndexEntry, 'sections'>): ProfileIndexEntry['sections'] {
+  return entry.sections.filter((m) => !RETIRED_SECTIONS.has(m.section))
 }
 
+/** Every live section's name, rev and hash, in a fixed order — the retired ones left out (a straggler's `hosts`
+ *  write must not bounce the wizard). The index lists no tombstone: a deleted section is one that is missing. The
+ *  profile's NAME is not part of it — a rename changes nothing a direction decides. */
+export function sotFingerprint(entry: Pick<ProfileIndexEntry, 'sections'>): string {
+  return JSON.stringify(liveContent(entry).map((m) => [m.section, m.rev, m.hash]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)))
+}
+
+/** `empty`: nothing but retired sections — a pull would bring nothing, so pull is not offered and push warns of nothing. */
 export function sotNow(entry: Pick<ProfileIndexEntry, 'sections'>): SotNow {
-  return { fingerprint: sotFingerprint(entry), empty: entry.sections.length === 0 }
+  return { fingerprint: sotFingerprint(entry), empty: liveContent(entry).length === 0 }
 }
 
 /** This device's half, read off the stores as they are this instant. Null = every premise holds. */

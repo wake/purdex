@@ -427,9 +427,10 @@ describe('step 4 — the direction', () => {
 
 describe('step 4 — a pull: the host verified (host-sync-identity §8, D3); no host list read, no host removed (host ownership H3b)', () => {
   const HOSTS_META = { section: 'hosts', rev: 4, hash: 'hh', fingerprint: 'f', ordinal: 3, writer: 'c', updatedAt: 1 }
+  const WS_META = { ...HOSTS_META, section: 'workspaces', rev: 2, hash: 'ww' }
   /** P1 holds a legacy `hosts` section with ONE row: mlab's daemon. h2 and h3 are only this device's — a pull leaves them be. */
   beforeEach(() => {
-    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META] }, entry(P2, 'empty one', 0)] })
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META, WS_META] }, entry(P2, 'empty one', 0)] })
     vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { d1_x: { name: 'mlab', daemonId: MLAB } }, hostOrder: ['d1_x'] } } })
   })
 
@@ -513,7 +514,7 @@ describe('step 4 — a pull: the host verified (host-sync-identity §8, D3); no 
     await choosePull()
     next()
     // the door's list passes; the ask before the attach cannot list
-    vi.mocked(listProfiles).mockResolvedValueOnce({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META] }] }).mockResolvedValueOnce(failed('timeout'))
+    vi.mocked(listProfiles).mockResolvedValueOnce({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META, WS_META] }] }).mockResolvedValueOnce(failed('timeout'))
     click('profile-wizard-start')
     await flush()
     expect(calls).toEqual(['copy-master'])
@@ -805,6 +806,40 @@ describe('another window changed things: every premise is checked again, and the
 })
 
 // === PR-B (review F1, F2, F5; acceptance F6) ===
+
+describe('a retired section is no content (host ownership H3b): `hosts` alone is an empty profile, and its moves change nothing', () => {
+  const meta = (section: string, rev: number) => ({ section, rev, hash: `h-${section}-${rev}`, fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 1 })
+  const withSections = (...sections: ReturnType<typeof meta>[]) => vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections }, entry(P2, 'empty one', 0)] })
+
+  it('a profile whose SOT holds ONLY a `hosts` row: push only, and no "replaces what is there" warning', async () => {
+    withSections(meta('hosts', 3))
+    await toDirection()
+    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled()
+    expect(screen.getByTestId('profile-wizard-pull-unavailable')).toHaveTextContent(en['settings.profile.wizard.direction.pull_empty'])
+    expect(screen.queryByTestId('profile-wizard-push-warning')).toBeNull()
+  })
+
+  it('a `hosts` rev change between choosing and Start: the run goes on; a `settings` rev change: profile-changed, nothing runs', async () => {
+    withSections(meta('hosts', 3), meta('settings', 1))
+    await toRun('push')
+    withSections(meta('hosts', 4), meta('settings', 1))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['attach'])
+
+    cleanup()
+    calls.length = 0
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
+    withSections(meta('hosts', 3), meta('settings', 1))
+    await toRun('push')
+    withSections(meta('hosts', 3), meta('settings', 2))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'profile-changed')
+  })
+})
 
 describe('Start asks the host ONCE MORE — the profile must still be what the user saw (review F1)', () => {
   const full = (id: string, name: string, rev = 1) => ({ ...entry(id, name), sections: [{ section: 'workspaces', rev, hash: `h${rev}`, fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 1 }] })

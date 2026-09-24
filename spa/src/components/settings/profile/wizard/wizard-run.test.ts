@@ -19,7 +19,7 @@ import en from '../../../../locales/en.json'
 import { createProfile, getSection, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { useUndoToast } from '../../../../stores/useUndoToast'
-import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, retargetPlan, runPlan, sotFingerprint, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, retargetPlan, runPlan, sotFingerprint, sotNow, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
 vi.mock('../../../../lib/profile/start', () => ({ attachMaster: vi.fn() }))
 vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn(), getSection: vi.fn() }))
@@ -263,6 +263,22 @@ describe('prepareRun — the ONE door before the run: this device\'s premises AN
     expect(sotFingerprint(indexEntry(P, 'x', []))).not.toBe(sotFingerprint(indexEntry(P, 'x', SEEN)))
     expect(sotFingerprint(indexEntry(P, 'x', [meta('hosts', 3), meta('workspaces', 8)]))).not.toBe(sotFingerprint(indexEntry(P, 'x', SEEN)))
     expect(sotFingerprint(indexEntry(P, 'x', [meta('hosts', 3), meta('workspaces', 7, 'other')]))).not.toBe(sotFingerprint(indexEntry(P, 'x', SEEN)))
+  })
+
+  it('a RETIRED section (`hosts`, host ownership H3b) is no content: not in the fingerprint, and a profile holding only it is empty', () => {
+    const withoutHosts = [meta('workspaces', 7)]
+    expect(sotFingerprint(indexEntry(P, 'x', [meta('hosts', 3), ...withoutHosts]))).toBe(sotFingerprint(indexEntry(P, 'x', withoutHosts)))
+    expect(sotFingerprint(indexEntry(P, 'x', [meta('hosts', 4), ...withoutHosts]))).toBe(sotFingerprint(indexEntry(P, 'x', [meta('hosts', 3), ...withoutHosts])))
+    expect(sotNow(indexEntry(P, 'x', [meta('hosts', 3)]))).toEqual(sotNow(indexEntry(P, 'x', [])))
+    expect(sotNow(indexEntry(P, 'x', [meta('hosts', 3)])).empty).toBe(true)
+    expect(sotNow(indexEntry(P, 'x', [meta('settings', 1)])).empty).toBe(false)
+  })
+
+  it('a `hosts` rev change between choosing and Start: no `profile-changed` — a `settings` rev change is one', async () => {
+    listed(indexEntry(P, 'default', [meta('hosts', 9), meta('workspaces', 7)]))
+    expect(await prepareRun(draft())).toMatchObject({ ok: true })
+    listed(indexEntry(P, 'default', [meta('hosts', 3), meta('workspaces', 7), meta('settings', 1)]))
+    expect(await prepareRun(draft())).toMatchObject({ ok: false, reason: 'profile-changed' })
   })
 
   it('THE ATTACK (review F1): seen EMPTY, another device has pushed a whole world since → refused, with what is there now', async () => {
