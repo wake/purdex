@@ -16,6 +16,7 @@ import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { startProfileSync } from './lib/profile/start'
 import { bootHostLooks } from './lib/host-look-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
+import { startHostReshowRecovery } from './lib/rebuild/host-reshow'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
@@ -61,6 +62,9 @@ void bootHostLooks().then(() => startProfileSync())
 // the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
 // runs with no master, too.
 startStandaloneAdoption()
+// Shown hosts (host ownership H2d-4): showing a host again — by its switch or a synced apply — recovers its sessions
+// once per daemon, so a revivable pane comes back without waiting for a `sessions` frame (app lifetime).
+startHostReshowRecovery()
 
 useLayoutStore.getState().reconcileViews()
 

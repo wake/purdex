@@ -7,6 +7,7 @@
 // network (`./api`), the digest and `shapeTable` are faked.
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
@@ -93,6 +94,7 @@ beforeEach(() => {
   __resetForTests()
   __resetRefreshForTests()
   useHostStore.setState({ hosts: { [M]: { id: M, name: M, ip: '10.0.0.1', port: 7860, token: 'tok', order: 0 } }, hostOrder: [M], activeHostId: M, runtime: {} })
+  useShownHostsStore.setState({ ids: [M] }) // shown in this workbench: the revive pass skips a hidden host (H2d-4)
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   useSessionStore.setState({ sessions: {} })
   useTabStore.setState({ tabs: { a1: tab('a1') }, tabOrder: ['a1'], activeTabId: 'a1', visitHistory: [], worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
