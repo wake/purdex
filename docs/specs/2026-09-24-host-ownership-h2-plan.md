@@ -2,7 +2,8 @@
 
 Status: **rev 4** (2026-09-24) — rev 2 revised after the codex plan review `task-muei1qbr-0hu3ol` (§Review); rev 3
 records the coordinator's decisions below; rev 4 replaces the "hidden tabs" model of §0.21 by the user's "disabling
-closes" model and re-plans H2d (H2d-2 … H2d-6), measured on this worktree at `4f8414ba`.
+closes" model and re-plans H2d (H2d-2 … H2d-6), measured on this worktree at `4f8414ba`; rev 5 (after H2a merged,
+`83a2cb59`) records the decisions on §0.22 – §0.29.
 
 **Coordinator decisions (2026-09-24) — these override every alternative written further down:**
 - §0.5 → **option A** (group fallback). Every **[B]** variant, `null` tombstone and "[B only]" case below is VOID;
@@ -18,8 +19,18 @@ closes" model and re-plans H2d (H2d-2 … H2d-6), measured on this worktree at `
   (zh-TW「未啟用」). What "disabled" means is the user's model of §0.21 (2026-09-24, **supersedes** the rev-3 "hidden
   tabs" model and spec §4.5 for H2d): **a tab is never hidden — disabling a host in a workbench CLOSES its tabs
   there** (mixed split tabs are split, the host's panes closed), once, on the device that pressed it, after a
-  confirmation; tmux sessions are untouched; an apply never closes anything. H2d-2 … H2d-6 are planned per §0.21;
-  §0.22 – §0.29 are open (NEEDS DECISION).
+  confirmation; tmux sessions are untouched; an apply never closes anything. H2d-2 … H2d-6 are planned per §0.21.
+- **§0.22 – §0.29 DECIDED (coordinator, 2026-09-24; §0.23 is the user's):** §0.22 (a) file panes are not
+  host-bearing; §0.23 (a) **plus** a pane state — locked tabs are neither closed nor split, the dialog lists them under
+  "kept (locked)", and — for EVERY tab, locked or not, kept or synced in — panes on a host disabled in W render
+  「此主機在這個工作台未啟用」 and do not connect (see §0.23 for the rule); §0.24 (a) no undo, no toast; §0.25 (a) `skipHistory: true`; §0.26 (a) no dialog
+  when the plan is empty; **§0.27 (b), widened** — the close also runs in every parked world (master and slaves),
+  because a slave borrows the master's settings, so the shown-hosts change applies to every world using them; it uses
+  the existing parked-world edit path (as the delete-host cascade marks parked worlds); if measuring shows it cannot
+  be done that way, or the file count of its PR blows past the limit, STOP and report before implementing; §0.28 plan
+  choice stands; §0.29 (a) keep "new session". The two points the rev-4 author was unsure of are confirmed: unticking
+  an id not on this device closes the `MissingHostPane` tabs on that id (closing is synced semantics); comparing
+  `closeTabInWorkspace` before / after H1c is done when H1c lands.
 - Order: H2a and H2b-1 / H2b-2 may start now; H2c-2 and H2d-1 wait for H1b (PR #1406).
 
 Spec: `docs/specs/2026-09-23-host-ownership-spec.md` (§4, decisions 3, 4, 7, 9; §3.3 re-resolve pass; §3.4; §6.4 steps
@@ -267,12 +278,13 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
        these tabs can no longer be Rebuilt (their rebuild records go with them).
     5. **While X is disabled** — see the table.
     6. **The close runs once, on the device that pressed.** Data that arrives later with tabs of X (a device that was
-       offline, an older SOT row, a restore) is shown as it is; no apply closes anything.
+       offline, an older SOT row, a restore) stays in the tab bar; no apply closes anything. "Not closed" is not "working":
+       its panes on X render the not-enabled placeholder (table, first row; §0.23 decision).
     7. **Switching workbench needs nothing** — no close, no filter on switch.
 
     | while X is disabled in W | behaviour |
     |---|---|
-    | Tabs of X that exist (arrived after the close — rule 6) | **shown and working** like any tab (badge, pane, terminal); never closed, filtered or re-focused by the disabled state |
+    | Tabs of X that exist (kept locked by the dialog, or arrived after the close — rule 6) | the tab **stays** in the tab bar (badge shown; never closed, filtered or re-focused by the disabled state), but **every pane of it on X renders the placeholder 「此主機在這個工作台未啟用」 / "This host is not enabled in this workbench" and opens no connection** (no terminal WS, no ticket, no execution subscribe); re-enabling X makes the same pane connect, no reload (§0.23 decision; H2d-4) |
     | New Tab `sessions:` / `headless:` blocks of X (and the launchers in them) | **not rendered**; provider stays REGISTERED, the column stays in every preset (H2d-4) |
     | Every other way to OPEN a tab on X — terminated-pane session picker, Hosts page session "open", Hosts page executions / Nex executions "open" | **not offered** (hidden or disabled with a hint) (H2d-4) |
     | Notification of X | **still fires**; activating it opens X's Hosts page (no tab created or focused) (H2d-5) |
@@ -296,8 +308,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     - `tmux-session` → `hostId` (terminated panes included: they are X's too);
     - `execution` → its effective host `host ?? hostOrder[0]` (the rule `resolveExecutionHostId` and the old
       `deleteHostCascade` use — a legacy hostless pane renders against the first host);
-    - `editor` / `image-preview` / `pdf-preview` with `source.type === 'daemon'` → **§0.22 NEEDS DECISION**
-      (recommended: not host-bearing);
+    - `editor` / `image-preview` / `pdf-preview` with `source.type === 'daemon'` → **not host-bearing** (§0.22 (a),
+      DECIDED);
     - every other kind (new-tab, browser, settings, hosts, dashboard, history, memory-monitor, editor-buffers, local /
       in-app files) → not host-bearing.
     A pane's host ref is a LOCAL id for a host this device has, or a wire id (`d1_…`) it has not resolved (H1a keeps
@@ -310,9 +322,9 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     unticking an id "not on this device" closes the `MissingHostPane` tabs on that id (they name that daemon).
 
     **Which tabs: the world on screen.** W is the workbench on screen = the tab world in `useTabStore` /
-    `useWorkspaceStore` (every workspace of it, plus a tab no workspace has adopted yet). Parked worlds are never
-    touched — the rule `host-lifecycle.ts` already follows ("a parked world is marked, never closed") and rule 7
-    (no work on switch). The device-global nature of settings stores makes one case visible: §0.27.
+    `useWorkspaceStore` (every workspace of it, plus a tab no workspace has adopted yet) — **and, per §0.27 (decided
+    (b), widened), every parked world (master and slaves), in the same action**. Rule 7 still holds: switching does no
+    work; the parked worlds are edited by the disable itself, not on switch.
 
     **A tab is closed or split, never partly hidden:**
     - every leaf host-bearing on a disabling host → the tab is **closed**;
@@ -364,7 +376,7 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     - (per §0.23 (a)) `keptLocked: { tabId, label }[]`, shown as "kept (locked)".
     Empty plan → §0.26.
 
-22. **Are file panes on X's disk "tabs of X"?** **NEEDS DECISION.** `editor` / `image-preview` / `pdf-preview` with
+22. **Are file panes on X's disk "tabs of X"?** **DECIDED: (a).** `editor` / `image-preview` / `pdf-preview` with
     `source: { type: 'daemon', hostId }` read and write X's file system.
     - **(a) not host-bearing — RECOMMENDED.** Only tmux and execution panes count. Reasons: New Tab has no per-host
       file block (the host blocks the user hides are `sessions:` / `headless:`); file tabs are opened from paths that
@@ -375,13 +387,24 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     - (b) host-bearing. + the matcher arm, a "N unsaved files will be discarded" line in the dialog, and the file entry
       points filtered (`EditorNewTabSection` recent entries of X: +2 files in H2d-4; `FileTreeView` / terminal-link
       opener would need a rule of their own — not planned).
-23. **Locked tabs.** **NEEDS DECISION.** Every close path refuses a locked tab (`closeTabInWorkspace`, `closeTab`).
+23. **Locked tabs.** **DECIDED (user): (a) plus a pane state** — see the note after (b). Every close path refuses a locked tab (`closeTabInWorkspace`, `closeTab`).
     - **(a) keep them — RECOMMENDED**: a locked tab of X is neither closed nor split; the dialog lists it under "kept
-      (locked)". It is then a rule-6 tab (shown, working). Lock means "do not close this by accident"; a bulk action
+      (locked)". It is then a rule-6 tab (kept; its X panes show the not-enabled placeholder). Lock means "do not close this by accident"; a bulk action
       is the accident it exists for.
     - (b) close / split them anyway (the dialog is the consent) — the executor unlocks first (`toggleLock`, as
       `WorkspaceSettingsPage` does for its settings tabs).
-24. **Undo.** **NEEDS DECISION.**
+
+    **Decision (user, 2026-09-24):** (a), and a kept locked tab does NOT keep working: each of its panes on a host
+    disabled in W renders a placeholder 「此主機在這個工作台未啟用」 / "This host is not enabled in this workbench" and
+    opens no connection (no terminal WS, no ticket, no execution attach; the tmux session is untouched). Re-enabling
+    the host makes the same pane connect again (no reload). **Scope (coordinator, 2026-09-24): one rule for every
+    pane** — in workbench W, any pane whose host (wire space, same matcher as §0.21) is disabled in W renders the
+    placeholder and does not connect, whether its tab is locked and kept by the dialog or arrived later by sync,
+    locked or not. Rule 6 only means "an apply never closes"; it does not mean "keeps working". This matches the
+    user's "a disabled host's session tabs are not usable in that workbench" without telling locked from unlocked.
+    Lands in H2d-4 (the pane gate sits next to "no way to open a tab on a disabled host"); its file count is
+    re-measured before H2d-4 starts and the PR is split if it passes 20.
+24. **Undo.** **DECIDED: (a).**
     - **(a) no undo, no toast — RECOMMENDED.** The dialog is the guard and lists everything; re-enabling X and
       reopening from the session list is the way back (rule 1). An undo would have to put back closed tabs AND
       re-join split tabs AND re-enable X, after the 500 ms debounce may already have pushed the closes — a second
@@ -390,32 +413,43 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     - (c) an undo toast: snapshot the closed tabs, the split tabs' original layouts and the previous shown value;
       undo restores them if every affected tab id is still as the action left it, else says it could not. ≈ +3 files,
       one more lock-guarded body, and its own mutation set.
-25. **History (reopen closed tab).** **NEEDS DECISION.** `closeTabInWorkspace` records the close in
+25. **History (reopen closed tab).** **DECIDED: (a).** `closeTabInWorkspace` records the close in
     `useHistoryStore` unless `skipHistory`.
     - **(a) `skipHistory: true` — RECOMMENDED**: reopening from history would be a way to open a tab on X while it is
       disabled (table: "not offered"), and it is how `deleteHostCascade` and `pane-move` close.
     - (b) record them (the History page lists them; reopening puts a tab of X back — a rule-6 tab).
-26. **Nothing to close.** **NEEDS DECISION.** Unticking a host that has no tab in W (or turning "all" off, or
+26. **Nothing to close.** **DECIDED: (a).** Unticking a host that has no tab in W (or turning "all" off, or
     re-ticking) closes nothing.
     - **(a) no dialog when the plan is empty — RECOMMENDED**: the dialog's purpose is the list; the tmux copy has
       nothing to warn about. Turning "all" off initialises `ids` to every candidate wire id (nothing becomes
       disabled, so the plan is always empty there); re-ticking and "all" on never close.
     - (b) always confirm a disable, even with an empty list.
-27. **Settings are device-global, tabs are per world.** **NEEDS DECISION** (edge). When a local profile (slave) is
+27. **Settings are device-global, tabs are per world.** **DECIDED: (b), widened** — see the note after (c). When a local profile (slave) is
     on screen, the Settings › 工作台 block edits the device's shown-hosts store, which is synced with the attached
     master (§0.17) — but the tabs on screen are the slave's. The action closes the SLAVE's tabs of X; the parked
     master's tabs of X are not touched here, and the other devices on the master do not close theirs (rule 6).
-    - **(a) as described — RECOMMENDED** (one rule: "the world on screen"; the master's tabs of X become rule-6 tabs,
+    - **(a) as described — RECOMMENDED** (one rule: "the world on screen"; the master's tabs of X become rule-6 tabs (kept, placeholder panes),
       which the user can close by hand; rule 7 says switching does nothing).
     - (b) also close in the parked master when this device is attached (`updateParkedWorlds`, the path the old
       cascade used for marks) — a close of tabs the user cannot see, in a world the dialog would have to list too.
     - (c) disable the block while a slave is on screen.
+
+    **Decision (coordinator, 2026-09-24): (b), widened.** A slave borrows the master's settings, and shown hosts live
+    in settings, so a disable changes every world that uses them: the action closes / splits in the world on screen
+    AND in every parked world — the parked master and every parked slave — through the existing parked-world edit path
+    (the one the delete-host cascade uses to mark parked worlds: `useLocalProfilesStore.updateParkedWorlds`, called from
+    `lib/host-lifecycle.ts:146,163`). The
+    dialog lists the parked worlds' closes and splits too, grouped per world (the world's profile name). Other devices
+    still never close on apply (rule 6). Precondition, checked when H2d-2 is measured: the parked-world edit path can
+    run the same close / split plan synchronously inside the operation lock and respects the world fence (unsettled →
+    the whole action refuses, as `promoteToMaster` / `copyMasterAsSlave` do). If it cannot, or H2d-2 (+ its dialog
+    changes in H2d-3) passes 20 files, STOP and report to the coordinator before implementing.
 28. **Split survivors that are only interface panes.** Plan choice, listed for visibility: a survivor that is a
     `new-tab` placeholder, a settings / hosts page or any other `DEVICE_LOCAL_PANE_KINDS` pane becomes a tab of its
     own like any survivor (rule 1 says every remaining pane). Such a tab is device-local (`tabs.*` build leaves it
     out), so on the other devices the original split tab simply disappears with the push. Alternative (not planned):
     drop blank `new-tab` survivors.
-29. **Hosts page "new session" on a disabled host.** **NEEDS DECISION.** `hosts/SessionsSection.tsx` has an "open"
+29. **Hosts page "new session" on a disabled host.** **DECIDED: (a).** `hosts/SessionsSection.tsx` has an "open"
     per session (creates a tab — **not offered**, H2d-4) and a "new session" launcher that creates a tmux session
     WITHOUT a tab ("Host page semantics: creating only").
     - **(a) keep "new session" — RECOMMENDED**: rule 5 forbids ways to add a TAB; the Hosts page is the management
@@ -1081,9 +1115,12 @@ behaviour test per "unchanged" row of the §0.21 table:
   `useSessionWatch` / session refresh (`lib/rebuild/refresh-sessions.ts`) fetches air26's sessions. Commit.
 - **T2 — tabs that exist (rule 6)** (file 2): an air26 tmux tab present in the store (as if synced in after the
   close) stays in the tab bar (`SortableTab` / `InlineTab` rendered) with its badge (`useTabHostBadge` non-null);
-  `SessionPaneContent` renders the terminal path (not `MissingHostPane`, ticket fetched); an air26 execution pane
-  subscribes; keyboard next / previous tab and "close others" treat it like any tab; nothing closes it over a
-  `settings` apply that keeps air26 disabled. Commit.
+  keyboard next / previous tab and "close others" treat it like any tab; nothing closes it over a `settings` apply
+  that keeps air26 disabled. This row is NOT compared with `{ all: true }` for the pane itself: with air26 disabled
+  `SessionPaneContent` renders the not-enabled placeholder (not the terminal, not `MissingHostPane`, no ticket
+  fetched) and an air26 execution pane does not subscribe; re-enabling renders the terminal path with the SAME pane
+  id and fetches the ticket, no remount of the tab (§0.23 decision; the gate itself is built and unit-tested in
+  H2d-4). Commit.
 - **T3 — fallbacks and direct navigation** (file 3): with air26 as `activeHostId` / `hostOrder[0]`:
   `nex/resolve-host.ts` returns air26 for a hostless id; the fs backends resolve air26; `backup-auto-trigger`
   targets air26; `HostPage` at `/hosts/<air26>/overview` renders `OverviewSection`; `DevEnvironmentSection` lists
@@ -1163,8 +1200,10 @@ session list (`GET /api/sessions` on `100.64.0.4:7860`, auth header from a varia
    the hint; air26 stays connected (status on its Hosts page, `requests` shows its event WS open).
 11. **Old data is not closed (rule 6).** Inject into W's SOT the `tabs.<ws>` payload recorded before step 6 (current
    rev as base, `PUT /api/profiles/{id}/sections/tabs.<ws>`) → both clients show T1 and the split T2 / T3 again, with
-   badges, and air26 still disabled; wait 5 s: the `tabs.<ws>` rev moved only by the injection (no client closed
-   anything and pushed). Close those tabs by hand afterwards.
+   badges, and air26 still disabled; their air26 panes show 「此主機在這個工作台未啟用」 and `requests` shows no
+   terminal WS / ticket for them (the locked T5 likewise); wait 5 s: the `tabs.<ws>` rev moved only by the injection
+   (no client closed anything and pushed). Tick air26 on A → the same panes attach without reload; untick again
+   (dialog) to leave the state for step 12, or close those tabs by hand.
 12. **Notification.** Trigger an agent notification in `acc-s1` on air26 (e.g. a short `claude -p` turn in that session
    ends) → the notification appears on A; clicking it opens air26's Hosts page, and no tab of `acc-s1` is created or
    focused. Navigate A to `/execution/<any id>/<air26 id>` → air26's Hosts page, no execution tab.
@@ -1172,8 +1211,10 @@ session list (`GET /api/sessions` on `100.64.0.4:7860`, auth header from a varia
    `acc-s1` → a tab attaches to the SAME session (same code), and if an agent runs there its provenance appears on the
    pane's rebuild record (backfill). Nothing re-merged automatically.
 14. On A turn "Enable all hosts" back on → B unchanged apart from the setting; no section locked.
-(Only if §0.27 is decided (a): with a local profile on screen on A, untick air26 → the dialog lists the local
-profile's tabs only; the parked master's air26 tabs are there after switching back.)
+(§0.27 decided (b), widened: with a local profile on screen on A and air26 tabs in the parked master too, untick
+air26 → the dialog lists both worlds' closes / splits, grouped per world; after switching back to the master its air26
+tabs are gone (split survivors present); B, attached to the same master, keeps its own air26 tabs until it pulls the
+master's `tabs.*` push — no close runs on B.)
 
 Not reachable before H3 (the `hosts` section still syncs — same reason as H1 plan §0.9):
 - A client that lacks a host the workbench has a look / shown id for: the host lists converge through `hosts`, so

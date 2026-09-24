@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { useHostStore } from '../stores/useHostStore'
+import { hostLabel, hostLookOf } from './host-look'
 import { HostSessionSection } from '../components/SessionSection'
 import type { NewTabProviderProps, NewTabProviderSource } from './new-tab-registry'
 
@@ -43,7 +44,7 @@ export function createHostSessionProviderSource(): NewTabProviderSource {
         .map((hostId) => ({
           id: sessionsProviderId(hostId),
           label: 'session.provider_label_host',
-          labelParams: { host: hosts[hostId].name },
+          labelParams: { host: hostLabel(hostId, hostLookOf(hostId, hosts)) },
           icon: 'List',
           order: 0,
           component: componentFor(hostId),

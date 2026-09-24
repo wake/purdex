@@ -10,6 +10,7 @@ import { Section, Field, EditableField, TokenField } from './form-fields'
 import { HostColorField } from './HostColorField'
 import { HostIconField } from './HostIconField'
 import type { HostColorMode } from '../../lib/host-color'
+import { hostLabel, hostLookOf, useHostLook } from '../../lib/host-look'
 
 interface Props {
   hostId: string
@@ -27,6 +28,7 @@ const STATUS_LABEL_KEYS: Record<HostRuntime['status'], string> = {
 export function OverviewSection({ hostId }: Props) {
   const t = useI18nStore((s) => s.t)
   const host = useHostStore((s) => s.hosts[hostId])
+  const look = useHostLook(hostId)
   const runtime = useHostStore((s) => s.runtime[hostId])
   const updateHost = useHostStore((s) => s.updateHost)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -98,7 +100,7 @@ export function OverviewSection({ hostId }: Props) {
   }
 
   const handleDeleteHost = () => {
-    const hostName = useHostStore.getState().hosts[hostId]?.name ?? hostId
+    const hostName = hostLabel(hostId, hostLookOf(hostId))
     setConfirmDelete(false)
     deleteHostWithUndoToast(hostId, closeTabs, { deleted: t('hosts.deleted_toast', { name: hostName }), worldSkipped: t('hosts.undo_world_skipped', { name: hostName }) })
   }
@@ -126,7 +128,7 @@ export function OverviewSection({ hostId }: Props) {
 
   return (
     <div className="max-w-2xl space-y-2">
-      <h2 className="text-lg font-semibold mb-4">{host.name}</h2>
+      <h2 className="text-lg font-semibold mb-4">{look.name}</h2>
 
       {runtime?.status === 'auth-error' && (
         <div className="flex items-start gap-3 px-3 py-2.5 rounded-md mb-4 bg-red-500/10 border border-red-500/20">
@@ -142,7 +144,7 @@ export function OverviewSection({ hostId }: Props) {
       <Section title={t('hosts.connection')}>
         <EditableField
           label={t('hosts.name')}
-          value={host.name}
+          value={look.name ?? ''}
           onSave={(v) => updateHost(hostId, { name: v })}
         />
         <EditableField

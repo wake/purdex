@@ -6,6 +6,7 @@ import { requestAtOf, selectDaemonIdMismatch, selectDaemonIdVerified, useHostSto
 import { useI18nStore } from '../../stores/useI18nStore'
 import { decodePairingCode, cleanPairingInput, generatePurdexToken } from '../../lib/pairing-codec'
 import { fetchInfoAt, fetchPairVerify, fetchPairSetup, fetchTokenAuth, PairingError } from '../../lib/host-api'
+import { hostLabel, hostLookOf } from '../../lib/host-look'
 
 interface Props {
   onClose: () => void
@@ -28,7 +29,7 @@ interface DuplicateDaemon {
 }
 
 /** An existing host claiming `daemonId` whose claim is not contradicted here (a mismatch-flagged host cannot tell). */
-function findHostByDaemon(daemonId: string): { id: string; name: string } | undefined {
+function findHostByDaemon(daemonId: string): { id: string } | undefined {
   const state = useHostStore.getState()
   return Object.values(state.hosts).find(
     (h) => h.daemonId === daemonId && !selectDaemonIdMismatch(state, h.id),
@@ -206,7 +207,7 @@ export function AddHostDialog({ onClose }: Props) {
         if (probe.signal.aborted || (!useToken && commitRef.current !== addNew)) return
         const same = observed ? findHostByDaemon(observed) : undefined
         if (same) {
-          const dup = { hostId: same.id, name: same.name, ip: trimmedIp, port: portNum, token: trimmedToken || undefined, observed }
+          const dup = { hostId: same.id, name: hostLabel(same.id, hostLookOf(same.id)), ip: trimmedIp, port: portNum, token: trimmedToken || undefined, observed }
           if (!useToken && selectDaemonIdVerified(useHostStore.getState(), same.id)) {
             // Same daemon, verified here, token just rotated: carry the new token over.
             commitRef.current = null

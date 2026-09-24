@@ -5,7 +5,7 @@
 // `pdx stop && pdx start` is owed.
 import { useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { useHostStore } from '../../../stores/useHostStore'
+import { hostLabel, useHostLook } from '../../../lib/host-look'
 import { hostFetch } from '../../../lib/host-api'
 import type { NexConfig, NexInfo, ConfigData } from '../../../lib/host-api'
 import { Field } from '../form-fields'
@@ -75,7 +75,7 @@ function FieldErrorText({ field, message }: { field: string; message: string | n
 
 export default function NexConfigForm({ hostId, config, info, onSaved }: NexConfigFormProps) {
   const t = useI18nStore((s) => s.t)
-  const hostName = useHostStore((s) => s.hosts[hostId]?.name ?? hostId)
+  const hostName = hostLabel(hostId, useHostLook(hostId))
 
   const [draft, setDraft] = useState<NexConfig>(config ?? emptyNexConfig())
   const [saving, setSaving] = useState(false)
