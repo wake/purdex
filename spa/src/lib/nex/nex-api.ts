@@ -145,6 +145,29 @@ export function releaseLease(hostId: string, executionId: string, leaseId: strin
   return postJson(hostId, execPath(executionId, '/attach'), { lease_id: leaseId }, 'DELETE', init).then(okVoid)
 }
 
+/**
+ * `releaseLease` for `hostId` as it is configured NOW: its endpoint and auth are read here, and the returned function
+ * sends to them whenever it is called — also after the host has left the store, which `nexFetch` refuses. For the
+ * host deletion, which may release a held lease only once the deletion has committed, and by then the row is gone
+ * (host ownership plan §0.8). `null` for a host that is not configured: never the fallback host.
+ */
+export function pinnedLeaseRelease(hostId: string): ((executionId: string, leaseId: string) => Promise<void>) | null {
+  const { hosts, getDaemonBase, getAuthHeaders } = useHostStore.getState()
+  if (!Object.hasOwn(hosts, hostId)) return null
+  const base = getDaemonBase(hostId)
+  const auth = getAuthHeaders(hostId)
+  return (executionId, leaseId) => {
+    const headers = new Headers(auth)
+    headers.set('X-Pdx-Client', getNexClientId())
+    headers.set('Content-Type', 'application/json')
+    return fetch(`${base}${PREFIX}${execPath(executionId, '/attach')}`, { method: 'DELETE', headers, body: JSON.stringify({ lease_id: leaseId }) })
+      .catch((e: unknown) => {
+        throw new NexApiError(0, 'network', e instanceof Error ? e.message : String(e))
+      })
+      .then(okVoid)
+  }
+}
+
 export function sendMessage(hostId: string, executionId: string, leaseId: string, text: string): Promise<SendResponse> {
   return postJson(hostId, execPath(executionId, '/messages'), { lease_id: leaseId, text }).then((r) => okJson<SendResponse>(r))
 }
