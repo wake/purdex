@@ -185,6 +185,7 @@ beforeEach(() => {
   store.saveSection.mockReturnValue('ok')
   store.saveConflict.mockReturnValue('ok')
   store.dropSection.mockReturnValue('ok')
+  store.pruneStash.mockReturnValue('ok')
   useWorkspaceStore.setState({ workspaces: [], worldId: 'master', worldEpoch: 0 })
   useTabStore.setState({ worldId: 'master', worldEpoch: 0 })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
@@ -2857,11 +2858,37 @@ describe('executor — a retired section (host ownership H3a-2: `hosts` leaves t
     expect(ex.status().sections).toEqual({})
   })
 
-  it('no retired record: nothing is dropped and the stash is not touched at startup', () => {
-    h.stored = { settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' } }
-    make()
+  // #1425 R1: the prune runs at EVERY start, not only when a record is dropped. A drop whose payload removal failed
+  // leaves no record behind — a prune tied to "a record was found" would never run again, and the tokens would stay.
+  it('the section record goes but the payload removal fails: a problem now, and the NEXT start prunes again', () => {
+    h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
+    store.pruneStash.mockReturnValueOnce('failed')
+    const first = make()
+    expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'hosts')
+    expect(first.problems).toEqual([{ kind: 'persist-failed', detail: expect.stringContaining('stash'), }])
+
+    // next start: the record is gone (dropSection succeeded), the payloads are not
+    first.ex.dispose()
+    vi.clearAllMocks()
+    h.stored = {}
+    const second = make()
     expect(store.dropSection).not.toHaveBeenCalled()
-    expect(store.pruneStash).not.toHaveBeenCalled()
+    expect(store.pruneStash).toHaveBeenCalledTimes(1)
+    expect(store.pruneStash).toHaveBeenCalledWith(PROFILE, new Set())
+    expect(second.problems).toEqual([])
+  })
+
+  it('no retired record: nothing is dropped; the start-up prune keeps every hash the restored sections retain', () => {
+    h.stored = {
+      settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S2' },
+      workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W2', conflict: { localHash: 'W2', sot: { rev: 3, hash: 'W9' } } },
+    }
+    const { problems } = make()
+    expect(store.dropSection).not.toHaveBeenCalled()
+    expect(store.pruneStash).toHaveBeenCalledTimes(1)
+    // what the executor holds payloads for: every current hash, and both sides of the stored conflict
+    expect([...store.pruneStash.mock.calls[0][1]].sort()).toEqual(['S2', 'W2', 'W9'])
+    expect(problems).toEqual([])
   })
 
   it('an index listing hosts — of a NEWER shape too — creates no state, locks nothing and pulls nothing', async () => {

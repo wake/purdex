@@ -1446,12 +1446,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   // Startup: what the section store holds, conflicts included (sync-state driver contract).
   // A retired section's record is dropped instead (see the header) — then the stash is pruned against what is left,
-  // or a `hosts` conflict's payloads (every host's token) would stay in localStorage until the next attach.
-  let droppedRetired = false
+  // or a `hosts` conflict's payloads (every host's token) would stay in localStorage until the next attach. The prune
+  // runs at EVERY start, record or not: a drop whose payload removal failed leaves no record to find next time (#1425).
   for (const [key, persisted] of Object.entries(loadSectionStore(profileId).sections)) {
     if (isRetiredSection(key)) {
       if (dropSection(profileId, key) !== 'ok') problem('persist-failed', 'the section store refused to drop a retired section', key)
-      droppedRetired = true
       continue
     }
     const s = restoreSectionState(persisted)
@@ -1459,7 +1458,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     attempted.set(key, persistedSignature(s))
     if (persisted.conflict !== undefined) storedConflict.add(key)
   }
-  if (droppedRetired) pruneStash(profileId, keepSet())
+  if (pruneStash(profileId, keepSet()) !== 'ok') problem('persist-failed', 'the section store refused to prune the stash at startup; retried at the next start')
     lastStatus = JSON.stringify(status())
   // Born without a direction = an ordinary run (a reload after the period): there is no period to open later.
   periodOver = storedDirection() === null
