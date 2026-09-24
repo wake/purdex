@@ -485,9 +485,10 @@ describe('buildSettingsSection', () => {
 // --- buildProfileDocument ----------------------------------------------------
 
 describe('buildProfileDocument', () => {
-  it('has hosts, settings, workspaces and one tabs.<id> per workspace — empty ones included', () => {
+  it('has settings, workspaces and one tabs.<id> per workspace — empty ones included — and no hosts (host ownership H3)', () => {
     const { document } = buildProfileDocument(baseInput())
-    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(Object.keys(document).sort()).toEqual(['settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(document).not.toHaveProperty('hosts')
     expect(document['tabs.wsEmpty']).toEqual({ order: [], tabs: {} })
     expect(document['tabs.wsA']).toMatchObject({ order: ['t1', 't2'] })
   })
@@ -500,7 +501,7 @@ describe('buildProfileDocument', () => {
       tabOrder: ['loose1', 't1', 'loose2', 't2', 't3'],
     }
     const { document } = buildProfileDocument(input)
-    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(Object.keys(document).sort()).toEqual(['settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
     expect(structuralKey(document)).not.toContain('loose')
   })
 
@@ -517,7 +518,7 @@ describe('buildProfileDocument', () => {
     input.workspaces = { workspaces: [...input.workspaces.workspaces, ws('bad id!', 'Bad', ['tBad'])] }
     input.tabs = { tabs: { ...input.tabs.tabs, tBad: tab('tBad', leaf('pBad', { kind: 'hosts' })) }, tabOrder: [...input.tabs.tabOrder, 'tBad'] }
     const { document } = buildProfileDocument(input)
-    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(Object.keys(document).sort()).toEqual(['settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
     expect(structuralKey(document)).not.toContain('bad id!')
     expect(structuralKey(document)).not.toContain('tBad')
     // Owned, if by a workspace that does not travel: nothing for `adoptStandaloneTabs` to move.
@@ -626,22 +627,22 @@ describe('section hashes: a change lands in exactly the sections it belongs to',
     expect(await changed(baseInput(), b)).toEqual(['tabs.wsA', 'tabs.wsB'])
   })
 
-  it('a host colour change changes only hosts', async () => {
+  it('a host colour change changes nothing: the host list is per device (host ownership H3)', async () => {
     const b = baseInput()
     b.hosts.hosts.h1 = { ...b.hosts.hosts.h1, color: '#abcdef' }
-    expect(await changed(baseInput(), b)).toEqual(['hosts'])
+    expect(await changed(baseInput(), b)).toEqual([])
   })
 
-  // host ownership §4.4: until H3 the `hosts` section still carries HostConfig name / colours / icon, and the look
+  // host ownership §4.4: HostConfig name / colours / icon stay on this device (H3: no `hosts` section), and the look
   // store travels in `settings` — the two never feed each other.
   describe('host looks (host ownership §4.4)', () => {
     const LOOKS = { 'purdex-host-looks': { looks: { h1: { name: 'look-one', colors: { console: { main: { color: '#445566', alpha: 100 } } } } } } }
     const withLooks = (input: CollectInput, looks: object = LOOKS): CollectInput => ({ ...input, settings: { ...input.settings, ...looks } })
 
-    it('a HostConfig rename + recolour changes only hosts — settings, looks included, does not move', async () => {
+    it('a HostConfig rename + recolour changes nothing — settings, looks included, does not move', async () => {
       const b = withLooks(baseInput())
       b.hosts.hosts.h1 = { ...b.hosts.hosts.h1, name: 'renamed', color: '#abcdef', icon: 'Laptop' }
-      expect(await changed(withLooks(baseInput()), b)).toEqual(['hosts'])
+      expect(await changed(withLooks(baseInput()), b)).toEqual([])
     })
 
     it('a look change changes only settings — hosts does not move', async () => {
@@ -908,7 +909,7 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(input['purdex-newtab-layout']).toEqual({ presets }) // the store state is never touched
   })
 
-  it('buildProfileDocument translates hosts, tabs and settings through ONE identity of its hosts', () => {
+  it('buildProfileDocument translates tabs and settings through ONE identity of its hosts', () => {
     const doc = buildProfileDocument({
       hosts: hostsSrc(),
       workspaces: { workspaces: [{ id: 'w1', name: 'W', tabs: ['t1'], activeTabId: 't1' }] },
