@@ -74,9 +74,12 @@ describe('foldPlan', () => {
   })
 
   it("uses N2's count to pick the fold level", () => {
-    const plan = foldPlan({ text: lines(3), totalLines: 900 })
-    expect(plan.collapsible).toBe(true)
+    // Ten lines locally would be a medium body (six preview lines). N2 says
+    // 900, which is a large one, so the preview is three.
+    const plan = foldPlan({ text: lines(10), totalLines: 900 })
     expect(plan.totalLines).toBe(900)
+    expect(plan.previewLines).toHaveLength(3)
+    expect(plan.collapsible).toBe(true)
   })
 
   it('hides nothing when it shows the body whole', () => {
@@ -86,6 +89,54 @@ describe('foldPlan', () => {
     const plan = foldPlan({ text: lines(3) })
     expect(plan.collapsible).toBe(false)
     expect(plan.hiddenLines).toBe(0)
+  })
+
+  it('does not offer to expand an empty daemon-truncated body', () => {
+    // The daemon cut the payload down to nothing. There is no preview, no
+    // hidden line and no clamp, so a button would open and close the same
+    // emptiness and advertise it as `+0 lines` (attack A1).
+    const plan = foldPlan({ text: '', truncated: true })
+    expect(plan.daemonTruncated).toBe(true)
+    expect(plan.collapsible).toBe(false)
+    expect(plan.hiddenLines).toBe(0)
+  })
+
+  it('does not offer to expand a truncated body the preview shows whole', () => {
+    // Four lines, folded one step less for being an error: the six-line
+    // preview already carries every line the body has (attack A1).
+    const plan = foldPlan({ text: 'a\nb\nc\nd', truncated: true, severity: 'error' })
+    expect(plan.daemonTruncated).toBe(true)
+    expect(plan.collapsible).toBe(false)
+  })
+
+  it('measures a Han body in UTF-8 bytes', () => {
+    // 400 Han characters are ~1200 bytes. `String.length` calls them 400 and
+    // shows the whole 1.2 KB body (attack A5), on a machine whose agent
+    // output is largely Chinese.
+    const plan = foldPlan({ text: '\u4e2d'.repeat(400) })
+    expect(plan.collapsible).toBe(true)
+    expect(plan.clamped).toBe(true)
+  })
+
+  it('measures an emoji body in UTF-8 bytes', () => {
+    // 300 astral code points: 600 UTF-16 units, 1200 UTF-8 bytes.
+    const plan = foldPlan({ text: '\u{1f600}'.repeat(300) })
+    expect(plan.collapsible).toBe(true)
+    expect(plan.clamped).toBe(true)
+  })
+
+  it('never cuts a surrogate pair', () => {
+    // The cut lands exactly where the emoji sits. Slicing by UTF-16 index
+    // leaves its high surrogate alone and the browser draws a replacement
+    // glyph (attack A5).
+    const text = `${'a'.repeat(399)}\u{1f600}${'x'.repeat(10)}`
+    const plan = foldPlan({ text, totalBytes: 2000 })
+    expect(plan.clamped).toBe(true)
+    const preview = plan.previewLines[0]
+    const tail = preview.charCodeAt(preview.length - 1)
+    expect(tail >= 0xd800 && tail <= 0xdbff).toBe(false)
+    expect([...preview].join('')).toBe(preview)
+    expect(preview.endsWith('\u{1f600}')).toBe(true)
   })
 
   it('handles an empty body', () => {
