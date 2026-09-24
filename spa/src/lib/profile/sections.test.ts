@@ -828,6 +828,24 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(JSON.stringify(plain)).not.toContain(WIRE)
   })
 
+  // host ownership H2c-1 (spec §4.1): look keys are wire ids IN the store — the build maps nothing, WITH an identity.
+  it('settings: host-look keys pass through verbatim — a local id the identity maps (bbbbbb → its sync id) is NOT translated', () => {
+    const identity = identityOfSync(hostsSrc().hosts)
+    expect(identity.toWire.get('bbbbbb')).toBe(WIRE) // the identity would map it
+    const looks = { [WIRE]: { name: 'a' }, bbbbbb: { name: 'x' }, d1_unknown: { name: 'far' } }
+    const input: SettingsBuildInput = { 'purdex-host-looks': { looks }, 'purdex-host-settings': { hosts: { bbbbbb: { a: 1 } } } }
+    const p = buildSettingsSection(input, NO_WS, identity)
+    expect(p['purdex-host-looks']).toEqual({ looks: { [WIRE]: { name: 'a' }, bbbbbb: { name: 'x' }, d1_unknown: { name: 'far' } } })
+    expect(Object.keys((p['purdex-host-looks'] as { looks: object }).looks)).toEqual([WIRE, 'bbbbbb', 'd1_unknown'])
+    expect(p['purdex-host-settings']).toEqual({ hosts: { [WIRE]: { a: 1 } } }) // …while host-settings keys ARE translated
+    expect(input['purdex-host-looks']).toEqual({ looks }) // the store state is never touched
+  })
+
+  it('settings: an EMPTY look store still builds `{ looks: {} }` — always present (plan §0.6)', () => {
+    const p = buildSettingsSection({ 'purdex-host-looks': { looks: {} } }, NO_WS, identityOfSync(hostsSrc().hosts))
+    expect(p).toEqual({ 'purdex-host-looks': { looks: {} } })
+  })
+
   it('settings: host-settings keys and `sessions:` / `headless:` preset columns are translated; other columns and fields are not', () => {
     const identity = identityOfSync(hostsSrc().hosts)
     const presets = {

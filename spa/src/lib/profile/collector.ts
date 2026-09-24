@@ -45,6 +45,7 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import type { Workspace } from '../../types/tab'
 import { hashSection } from './hash'
 import { identityOfSync, type HostIdentity } from './host-identity'
@@ -89,7 +90,7 @@ export interface Collector {
   stop(): void
 }
 
-// === The eight settings stores ===
+// === The nine settings stores ===
 
 interface SettingsStore {
   getState: () => object
@@ -107,6 +108,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, SettingsStore> = {
   'purdex-host-settings': useHostSettingsStore,
   'purdex-newtab-layout': useNewTabLayoutStore,
   'purdex-layout': useLayoutStore,
+  'purdex-host-looks': useHostLookStore,
 }
 
 const SETTINGS_KEYS = Object.keys(SETTINGS_STORES) as SettingsStorageKey[]
@@ -122,7 +124,7 @@ const WORKSPACE_FIELDS = PROJECTIONS.workspaces
   .filter((p) => p.startsWith('workspaces.*.'))
   .map((p) => p.slice('workspaces.*.'.length).split('.')[0]) as (keyof Workspace)[]
 
-/** ALL eight, always: a store left out reads as "not sent", and the receiving side would stay dirty forever. */
+/** ALL nine, always: a store left out reads as "not sent", and the receiving side would stay dirty forever. */
 function allSettings(): SettingsBuildInput {
   const input: SettingsBuildInput = {}
   for (const key of SETTINGS_KEYS) input[key] = SETTINGS_STORES[key].getState()
