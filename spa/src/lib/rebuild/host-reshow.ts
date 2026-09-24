@@ -8,16 +8,15 @@
 // the operation-lock release when the lock is held).
 //
 // - A store subscriber, not the switch's click handler: a show that arrives by a `settings` apply recovers too.
-// - Transitions are tracked per LOCAL id (`isRefShown`); only the call is deduped, by wire identity: two local rows
-//   claiming one daemon (an identity conflict) are shown together and are one daemon — ONE call, for the first of
-//   them in `hostOrder`.
+// - Transitions are tracked per LOCAL id (`isRefShown`), and each reshown local row gets its own call: two rows
+//   claiming one daemon (an identity conflict) are shown together, but reconcile / revive are scoped to the local id
+//   they are given, so deduping by daemon would leave the other row's panes on Rebuild.
 // - Not a transition: a host added (it has no "before"), a host removed, a daemonId learned (the local-id form keeps
 //   the host shown across the re-key).
 // - The baseline is taken once both stores have hydrated, so the boot hydration of a stored list is no transition.
 // - Never writes the tab / workspace / shown-hosts stores.
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
-import { wireIdOfHost } from '../profile/host-identity'
 import { isRefShown } from '../shown-hosts'
 import { recoverHostSessions } from './refresh-sessions'
 
@@ -41,16 +40,10 @@ function check(): void {
   const before = baseline
   baseline = now
   if (before === null) return
-  const { hosts, hostOrder } = useHostStore.getState()
   const reshown = [...now].filter(([id, shown]) => shown && before.get(id) === false).map(([id]) => id)
-  if (reshown.length === 0) return
-  // One call per daemon: the first local id of each wire identity, in `hostOrder` (ids not in it last).
-  const rank = (id: string) => { const i = hostOrder.indexOf(id); return i === -1 ? Infinity : i }
-  const seen = new Set<string>()
-  for (const id of reshown.sort((a, b) => rank(a) - rank(b))) {
-    const wire = wireIdOfHost(hosts[id])
-    if (seen.has(wire)) continue
-    seen.add(wire)
+  // One call per reshown LOCAL row, not per daemon: reconcile and revive filter panes by the local id they are given,
+  // so two rows claiming one daemon (an identity conflict) each need their own — the cost is one extra fetch.
+  for (const id of reshown) {
     recoverHostSessions(id).catch(() => { /* a host that cannot answer waits for its next frame */ })
   }
 }

@@ -139,17 +139,20 @@ describe('startHostReshowRecovery — one recovery per hidden → shown transiti
     expect(calls()).toEqual([X]) // later transitions count
   })
 
-  it('two local rows of one daemon shown by one write → ONE call, for the first in hostOrder; hidden and shown again → one more', () => {
+  // Reconcile and revive filter panes by the LOCAL host id they are given, so each local row of a daemon two rows
+  // claim (an identity conflict) needs its own call — one call for the daemon would leave the other row's panes on
+  // Rebuild (H2d-4b attacker review).
+  it('two local rows of one daemon shown by one write → one call per row; hidden and shown again → one more each', () => {
     useHostStore.setState((s) => ({
       hosts: { ...s.hosts, [X2]: host(X2, { daemonId: DAEMON_X, order: 3 }) },
       hostOrder: [M, X2, X, Y],
     }))
     start()
     useShownHostsStore.getState().show(X_WIRE)
-    expect(calls()).toEqual([X2])
+    expect(calls().sort()).toEqual([X, X2].sort())
     useShownHostsStore.getState().hide(X_WIRE)
     useShownHostsStore.getState().show(X_WIRE)
-    expect(calls()).toEqual([X2, X2])
+    expect(calls().sort()).toEqual([X, X, X2, X2].sort())
   })
 
   it('two different daemons shown by one write → one call each', () => {
@@ -207,6 +210,21 @@ describe('startHostReshowRecovery — integration with the real refresh (no sess
     await vi.waitFor(() => expect(onScreen()).toMatchObject({ sessionCode: 'late01', tmuxInstance: '222:2000' }))
     expect(onScreen().terminated).toBeUndefined()
     expect(listSessionsFresh).toHaveBeenCalledTimes(1)
+    expect(listSessionsFresh).toHaveBeenCalledWith(X)
+  })
+
+  it('a conflict pair whose FIRST row in hostOrder is not the pane\'s host → the pane on the second row still revives', async () => {
+    useHostStore.setState((s) => ({
+      hosts: { ...s.hosts, [X2]: host(X2, { daemonId: DAEMON_X, order: 3 }) },
+      hostOrder: [M, X2, X, Y],
+    }))
+    openAttachGate(X2)
+    noteReconciledSessions(X2, [])
+    note(X, { epoch: EPOCH, seq: 1 })
+    note(X2, { epoch: EPOCH, seq: 1 })
+    start()
+    useShownHostsStore.getState().show(X_WIRE)
+    await vi.waitFor(() => expect(onScreen()).toMatchObject({ sessionCode: 'late01', tmuxInstance: '222:2000' }))
     expect(listSessionsFresh).toHaveBeenCalledWith(X)
   })
 
