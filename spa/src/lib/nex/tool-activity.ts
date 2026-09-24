@@ -36,7 +36,7 @@ export interface DiffHunk {
 }
 
 /**
- * What ToolCallBlock renders beyond the tool name + input (P-B2.2 R1/R2).
+ * What OperationBlock renders beyond the tool name + input (P-B2.2 R1/R2).
  * One variant per lifecycle stage, each carrying only the fields that stage
  * can use; absent → today's Stream-mode DOM. `streaming` is the in-flight
  * partial block (PartialMessageGroup); the rest come from the durable

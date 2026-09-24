@@ -8,7 +8,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { isPartialBlockVisible, type PartialAssembly, type PartialBlock } from '../lib/nex/partial'
 import MessageBubble from './MessageBubble'
 import ThinkingBlock from './ThinkingBlock'
-import ToolCallBlock from './ToolCallBlock'
+import OperationBlock from './room/OperationBlock'
 
 /** Ascending index, visible blocks only — the same predicate that gates the ThinkingIndicator (R3). */
 function visiblePartialBlocks(partial: PartialAssembly): PartialBlock[] {
@@ -28,9 +28,12 @@ export default function PartialMessageGroup({ partial }: { partial: PartialAssem
           case 'thinking':
             return <ThinkingBlock key={block.index} content={block.thinking} streaming />
           case 'tool_use':
+            // The block reads the pane's fold memory through FoldContext, which
+            // ConversationMessages provides around this group too.
             return (
-              <ToolCallBlock key={block.index} tool={block.toolName ?? t('execution.tool.unknown')} input={{}}
-                activity={{ status: 'streaming', rawInput: block.partialJson }} />
+              <OperationBlock key={block.index} tool={block.toolName ?? t('execution.tool.unknown')} input={{}}
+                activity={{ status: 'streaming', rawInput: block.partialJson }}
+                result={null} foldKey={`partial-${block.index}`} />
             )
           default:
             return null

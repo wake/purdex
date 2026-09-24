@@ -1,9 +1,15 @@
-// spa/src/lib/nex/tool-result-facts.ts — the ToolResultBlock header facts
-// span (P-B3.2 spec §4.4 R4). Pure: no React, no store; `t` is injected.
+// spa/src/lib/nex/tool-result-facts.ts — the tool_result header facts span
+// (P-B3.2 spec §4.4 R4). Pure: no React, no store; `t` is injected.
+//
+// `ToolResultFacts` is OperationBlock's `facts` prop. `toolResultFacts()`
+// itself rendered ToolResultBlock's header segments and has had no caller
+// since T3.3 deleted that component; the new block shows the diff and the
+// fold count instead. Kept, with its tests, until spec §4.2's header decides
+// what the segments become.
 import type { ToolActivity } from './tool-activity'
 
 /**
- * The N2 tool_result facts a caller hands to ToolResultBlock. `Partial`
+ * The N2 tool_result facts a caller hands to OperationBlock. `Partial`
  * because `status` is required on the ToolActivity entry but a caller may
  * only have some of the facts (tests, or a raw block with no N2 overlay).
  */

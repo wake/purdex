@@ -336,7 +336,7 @@ describe('ExecutionView — thinking indicator truth table (R3)', () => {
     patchExec({ turnLive: true, partial: { messageId: 'm', finalized: 0, blocks: { 0: { index: 0, type: 'tool_use', text: '', thinking: '', partialJson: '', toolId: 'tu9', toolName: 'Bash' } } } })
     render(<ExecutionView {...base} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
-    expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
+    expect(screen.getByTestId('op-dot')).toHaveClass('animate-spin')
   })
 
   it('R3: pendingSend queued without turnLive → thinking indicator absent', () => {
@@ -355,12 +355,12 @@ describe('ExecutionView — thinking indicator truth table (R3)', () => {
     render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
     act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
-    expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
+    expect(screen.getByTestId('op-dot')).toHaveClass('animate-spin')
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
     // Turn still live, no partial: the model is silent again, so the dots come back.
     act(() => { useExecutionStore.getState().applyEvents(H, E, [toolResultFrame(2, 9_000)]) })
     expect(useExecutionStore.getState().executions[KEY].turnLive).toBe(true)
-    expect(screen.queryByTestId('tool-icon-spinner')).not.toBeInTheDocument()
+    expect(screen.getByTestId('op-dot')).not.toHaveClass('animate-spin')
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
   })
 })
@@ -369,13 +369,13 @@ describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
   it('R2: a running tool is marked aborted after execution.turn_orphaned', () => {
     render(<ExecutionView {...base} isActive />)
     act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
-    expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
+    expect(screen.getByTestId('op-dot')).toHaveClass('animate-spin')
     act(() => {
       useExecutionStore.getState().applyEvents(H, E, [{ seq: 2, execution_id: E, kind: 'execution.turn_orphaned', payload: { turn_id: 't1' }, created_at: 9_000 }])
     })
-    expect(screen.getByTestId('tool-aborted')).toBeInTheDocument()
-    expect(screen.queryByTestId('tool-icon-spinner')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('tool-elapsed')).not.toBeInTheDocument()
+    expect(screen.getByTestId('op-aborted')).toBeInTheDocument()
+    expect(screen.getByTestId('op-dot')).not.toHaveClass('animate-spin')
+    expect(screen.queryByTestId('op-elapsed')).not.toBeInTheDocument()
   })
 
   it('ticker: the elapsed badge advances every second while a tool runs and stops once its result lands', () => {
@@ -385,22 +385,24 @@ describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
       render(<ExecutionView {...base} isActive />)
       const idleTimers = vi.getTimerCount()
       act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 10_000)]) })
-      expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('0.0s')
+      // Sub-second elapsed is not shown at all (spec §3.1.1 #3), but the
+      // ticker is already running — that is what the timer count proves.
+      expect(screen.queryByTestId('op-elapsed')).not.toBeInTheDocument()
       expect(vi.getTimerCount()).toBe(idleTimers + 1)
       act(() => { vi.advanceTimersByTime(1_000) })
-      expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('1.0s')
+      expect(screen.getByTestId('op-elapsed')).toHaveTextContent('1.0s')
       act(() => { vi.advanceTimersByTime(1_000) })
-      expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('2.0s')
+      expect(screen.getByTestId('op-elapsed')).toHaveTextContent('2.0s')
       // Any one-shot timers from mount have fired by now; only the interval is left.
       expect(vi.getTimerCount()).toBe(1)
 
       act(() => { useExecutionStore.getState().applyEvents(H, E, [toolResultFrame(2, 16_200)]) })
-      expect(screen.queryByTestId('tool-elapsed')).not.toBeInTheDocument()
-      expect(screen.getByTestId('tool-duration')).toHaveTextContent('6.2s')
+      expect(screen.queryByTestId('op-elapsed')).not.toBeInTheDocument()
+      expect(screen.getByTestId('op-duration')).toHaveTextContent('6.2s')
       // The interval is cleared: no tool is running any more.
       expect(vi.getTimerCount()).toBe(0)
       act(() => { vi.advanceTimersByTime(5_000) })
-      expect(screen.getByTestId('tool-duration')).toHaveTextContent('6.2s')
+      expect(screen.getByTestId('op-duration')).toHaveTextContent('6.2s')
     } finally {
       vi.useRealTimers()
     }

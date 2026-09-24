@@ -31,8 +31,10 @@ export function getSummary(tool: string, input: Record<string, unknown>): string
 const R10_KEYS = 3
 
 /**
- * Header summary width. `ToolCallBlock` truncates to this many characters,
- * so the R10 preview never needs to serialise more than this (codex R2 A3).
+ * Header summary width. The R10 preview never serialises more than this
+ * (codex R2 A3). The operation block itself no longer truncates the header
+ * (spec §4.2: the argument wraps, it is not cut), so this bounds the preview
+ * only.
  */
 export const SUMMARY_LIMIT = 80
 
