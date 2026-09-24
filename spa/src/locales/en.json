@@ -856,6 +856,7 @@
   "hosts.shown.switch_hint": "Applies to the workbench on screen and syncs with it. A hidden host stays connected; its tabs stay and show “This host is turned off in this workbench”.",
   "hosts.shown.hidden_badge": "Hidden",
   "hosts.shown.open_hint": "Show this host in the workbench to open its sessions",
+  "hosts.shown.open_executions_hint": "Show this host in this workbench to open its executions",
   "hosts.name": "Name",
   "hosts.color.label": "Color",
   "hosts.color.clear": "No color",

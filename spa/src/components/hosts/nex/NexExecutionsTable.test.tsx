@@ -70,7 +70,7 @@ describe('NexExecutionsTable — a host hidden in this workbench (H2d-2)', () =>
     expect(screen.getByRole('button', { name: /terminate/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^archive$/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^open$/i })).toBeNull()
-    expect(screen.getByTestId('nex-executions-open-hint')).toHaveTextContent('Show this host in the workbench to open its sessions')
+    expect(screen.getByTestId('nex-executions-open-hint')).toHaveTextContent('Show this host in this workbench to open its executions')
     const tr = screen.getByText('exc_01234567').closest('tr')!
     fireEvent.click(tr)
     for (const cell of Array.from(tr.querySelectorAll('td'))) fireEvent.click(cell)

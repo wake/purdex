@@ -14,22 +14,19 @@ interface Props {
   /** The daemon's own host id (`capabilities.host_id`), not the client's host entry id — `origin` is stamped by the daemon. */
   daemonHostId: string | null
   now: number
-  onOpen: () => void
+  /** Absent → the row is not an action (its host is hidden in this workbench — plan H2d-2): a plain, listed row. */
+  onOpen?: () => void
 }
+
+const ROW_CLASS = 'flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left'
 
 export function ExecutionRowCompact({ row, daemonHostId, now, onOpen }: Props) {
   const t = useI18nStore((s) => s.t)
   const age = relativeAge(row.updated_at, now)
   const sessionCode = daemonHostId ? sameHostSessionCode(row.origin, daemonHostId) : null
 
-  return (
-    <button
-      type="button"
-      data-testid="executions-row"
-      onClick={onOpen}
-      title={row.id}
-      className="flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left cursor-pointer hover:bg-surface-hover"
-    >
+  const content = (
+    <>
       <span
         data-testid="executions-state-dot"
         className={`shrink-0 inline-block w-2 h-2 rounded-full ${STATE_DOT_CLASSES[row.state] ?? 'bg-text-muted'}`}
@@ -50,6 +47,25 @@ export function ExecutionRowCompact({ row, daemonHostId, now, onOpen }: Props) {
       <span data-testid="executions-age" className="shrink-0 text-xs text-text-muted tabular-nums">
         {t(`executions.age.${age.key}`, { n: age.n })}
       </span>
+    </>
+  )
+
+  if (!onOpen) {
+    return (
+      <div data-testid="executions-row" title={row.id} className={ROW_CLASS}>
+        {content}
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      data-testid="executions-row"
+      onClick={onOpen}
+      title={row.id}
+      className={`${ROW_CLASS} cursor-pointer hover:bg-surface-hover`}
+    >
+      {content}
     </button>
   )
 }

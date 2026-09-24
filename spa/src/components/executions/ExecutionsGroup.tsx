@@ -16,7 +16,8 @@ interface Props {
   /** The daemon's own host id (`capabilities.host_id`) — what it stamps into `origin`; null until known. */
   daemonHostId: string | null
   now: number
-  onOpen: (executionId: string) => void
+  /** Absent → the rows are listed but not openable (the host is hidden in this workbench — plan H2d-2). */
+  onOpen?: (executionId: string) => void
 }
 
 export function ExecutionsGroup({ group, daemonHostId, now, onOpen }: Props) {
@@ -28,7 +29,7 @@ export function ExecutionsGroup({ group, daemonHostId, now, onOpen }: Props) {
     <div data-testid={`executions-group-${group.source}`} className="flex flex-col">
       <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-text-muted truncate">{label}</div>
       {group.rows.map((row) => (
-        <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} onOpen={() => onOpen(row.id)} />
+        <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} onOpen={onOpen ? () => onOpen(row.id) : undefined} />
       ))}
     </div>
   )

@@ -50,7 +50,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
 
   const nexPhase: NexHostPhase = entry?.phase ?? 'loading'
   // A host hidden in this workbench keeps its executions listed; opening one (it creates a tab) is not offered
-  // (plan H2d-2, §0.21 user rules 1 / 5) — the row click does nothing and the hint says why.
+  // (plan H2d-2, §0.21 user rules 1 / 5) — its rows are plain, non-action rows and the hint says why.
   const open = (executionId: string) => {
     if (!isRefShownNow(id)) return
     useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host: id })
@@ -93,7 +93,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} onOpen={open} />
+          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} onOpen={shown ? open : undefined} />
         ))}
       </>
     )
@@ -106,7 +106,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
         <span className="text-sm font-bold text-text-primary truncate">{hostName ?? id}</span>
       </div>
       {!shown && (
-        <p data-testid="executions-open-hint" className="px-3 py-1 text-xs text-text-muted">{t('hosts.shown.open_hint')}</p>
+        <p data-testid="executions-open-hint" className="px-3 py-1 text-xs text-text-muted">{t('hosts.shown.open_executions_hint')}</p>
       )}
       {body}
     </div>

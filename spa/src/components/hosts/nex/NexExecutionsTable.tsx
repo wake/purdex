@@ -220,7 +220,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
         </p>
       )}
       {!shown && (
-        <p data-testid="nex-executions-open-hint" className="text-xs text-text-muted mb-2">{t('hosts.shown.open_hint')}</p>
+        <p data-testid="nex-executions-open-hint" className="text-xs text-text-muted mb-2">{t('hosts.shown.open_executions_hint')}</p>
       )}
       {actionError && (
         <p data-testid="nex-executions-action-error" className="text-xs text-red-400 mb-2">

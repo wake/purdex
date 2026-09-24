@@ -7,6 +7,7 @@ import { resetExecutionListForTests, useExecutionListStore } from '../../stores/
 import { useNexHostStore, type NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { subscriptionSlots } from '../../lib/nex/subscription-slots'
 import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
@@ -186,20 +187,43 @@ describe('ExecutionsView', () => {
 
   // H2d-2 T2 (plan §0.21, user rules 1 / 5): a host hidden in this workbench keeps its executions listed; opening one
   // (it creates a tab) is not offered.
-  it('hidden host: the executions stay listed with the hint, and a row click creates no tab', () => {
+  it('hidden host: the executions stay listed, but a row is not an action — no button, not focusable, no pointer / hover, no open', () => {
     useShownHostsStore.setState({ ids: [OTHER] })
     seedList([row({ id: 'exc_a', brief: 'first' }), row({ id: 'exc_b', brief: 'second' })])
     render(<ExecutionsView hostId={H} isActive />)
-    expect(screen.getAllByTestId('executions-row')).toHaveLength(2)
-    expect(screen.getByTestId('executions-open-hint')).toHaveTextContent('Show this host in the workbench to open its sessions')
-    for (const el of screen.getAllByTestId('executions-row')) fireEvent.click(el)
+    const rows = screen.getAllByTestId('executions-row')
+    expect(rows).toHaveLength(2)
+    expect(within(rows[0]).getByText('first')).toBeInTheDocument()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    for (const el of rows) {
+      expect(el.tagName).not.toBe('BUTTON')
+      expect(el).not.toHaveAttribute('tabindex')
+      expect(el).not.toHaveAttribute('role')
+      expect(el.className).not.toMatch(/cursor-pointer|hover:/)
+      fireEvent.click(el)
+      fireEvent.keyDown(el, { key: 'Enter' })
+    }
     expect(openSingletonTab).not.toHaveBeenCalled()
   })
 
-  it('shown host: no hint', () => {
+  it('hidden host: the executions hint (its own key), in en and zh-TW', () => {
+    useShownHostsStore.setState({ ids: [] })
+    seedList([row({ id: 'exc_a' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-open-hint')).toHaveTextContent('Show this host in this workbench to open its executions')
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      expect(screen.getByTestId('executions-open-hint')).toHaveTextContent('在此工作台顯示這台主機後，才能開啟它的 Execution')
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  it('shown host: rows stay buttons that open, no hint', () => {
     seedList([row({ id: 'exc_a' })])
     render(<ExecutionsView hostId={H} isActive />)
     expect(screen.queryByTestId('executions-open-hint')).toBeNull()
+    expect(screen.getByTestId('executions-row').tagName).toBe('BUTTON')
   })
 
   it('disabled', () => {
