@@ -3,7 +3,9 @@
 // A host reference this device cannot resolve is stored verbatim — the wire id, byte for byte (§3.2). When that host
 // later arrives here (added, its daemonId learned, an alias learned, a conflict cleared), every such reference must
 // point at the local host. This pass does that, over everything this device holds: the tab store on screen, every
-// parked world, `purdex-host-settings` keys and the New Tab host-bearing columns (presets and knownIds).
+// parked world, `purdex-host-settings` keys and the New Tab host-bearing columns (presets and knownIds). It also
+// re-keys the stores keyed by WIRE id (H2c-2: `purdex-host-looks`) the other way — local id → `d1_…` once a host's
+// daemonId is known (spec §4.3) — the one step that changes a payload (`settings`, one push; plan §0.13).
 //
 // No push follows: for a `d1_…` reference the build maps the new local id back to the same `d1_…` (§3.3 no-push
 // invariant). Only a reference resolved through a legacy alias is canonicalised by the next build — one push, as a
@@ -38,10 +40,12 @@ import type { LocalProfile, ParkedWorld } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { renameLayoutIds, useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
+import { useHostLookStore } from '../stores/useHostLookStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { readMasterWorld } from './profile/master-world'
 import { hostSettingsFromWire, presetColumnIdFromWire } from './profile/host-identity'
 import { hostResolverSignature, wireResolverOf } from './profile/sections'
+import { rekeyWireKeyedStores } from './host-look'
 
 export const HOST_RERESOLVE_LOCK_OWNER = 'host-reresolve'
 /** The retry interval while the lock is held elsewhere, and the first backoff step after a failed write. */
@@ -157,7 +161,7 @@ interface Rereadable {
 }
 
 /** The stores the pass rewrites, and the workspace store the world's settledness is read with. */
-const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore] as unknown as Rereadable[]
+const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore, useHostLookStore] as unknown as Rereadable[]
 
 /**
  * Bring every store in `REREAD` up to what storage holds NOW. A store whose persisted record is exactly what its
@@ -217,6 +221,12 @@ function passBody(): HostReresolveOutcome {
   // A world another window is mid-way through switching is nobody's to write: retried like a held lock.
   if (!readMasterWorld().settled) return 'busy'
   const writes = planRewrite(map)
+  // The look store is keyed by WIRE id, so its re-key runs the other way from `map` — a host's local id → its `d1_…`
+  // (spec §4.3, plan §0.12) — computed from the hosts alone, as its own step: never inside `planRewrite`, the
+  // explicit-map rewrite a deletion (local → wire) reuses and that must move no look (decision 9). It changes the
+  // `settings` payload: one push (plan §0.13).
+  const lookRekey = rekeyWireKeyedStores(hosts)
+  if (lookRekey !== null) writes.push({ key: 'host looks', ...lookRekey })
   if (writes.length > 0) {
     // Taking the lock is not free — every release reconciles every host's sessions — so only when something moves.
     const grant = useRebuildStore.getState().acquireOperationLock(HOST_RERESOLVE_LOCK_OWNER)
@@ -289,7 +299,7 @@ export function scheduleHostReresolve(): void {
 }
 
 /** Every persisted store the pass reads or rewrites: it runs only once ALL of them hold their real state. */
-const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore] as const
+const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore, useHostLookStore] as const
 
 /**
  * The pass's triggers, for the app's lifetime (`main.tsx`): once every store it touches has hydrated; again whenever

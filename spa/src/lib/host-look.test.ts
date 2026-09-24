@@ -3,7 +3,7 @@ import { act, renderHook } from '@testing-library/react'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useHostLookStore, type HostLookEntry } from '../stores/useHostLookStore'
 import { syncIdOfSync } from './profile/host-identity'
-import { hostLabel, hostLookOf, useHostLook, useHostLookResolver } from './host-look'
+import { hostLabel, hostLookOf, useHostLook, useHostLookResolver, wireKeyMovesOf } from './host-look'
 
 const hostA: HostConfig = {
   id: 'host-a',
@@ -313,5 +313,15 @@ describe('useHostLook / useHostLookResolver — the look store', () => {
     act(() => useHostLookStore.getState().putLook(WIRE_A, { name: 'W' }))
     expect(result.current).not.toBe(first)
     expect(result.current('host-a')).toEqual({ name: 'W' })
+  })
+})
+
+describe('wireKeyMovesOf (the re-key moves, plan §0.12)', () => {
+  it('local id → d1_ for a host with a valid daemonId; nothing for a host without one', () => {
+    expect(wireKeyMovesOf({ 'host-a': hostA, 'host-b': hostB })).toEqual([['host-a', WIRE_A]])
+  })
+
+  it('two rows claiming one daemon (conflict) move nothing', () => {
+    expect(wireKeyMovesOf({ 'host-a': hostA, dup: { ...hostB, id: 'dup', daemonId: hostA.daemonId } })).toEqual([])
   })
 })

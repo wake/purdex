@@ -18,7 +18,7 @@
 // nothing either of them imports may import this module.
 import { useCallback } from 'react'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
-import { useHostLookStore, type HostLookEntry } from '../stores/useHostLookStore'
+import { useHostLookStore, type HostLookEntry, type HostLookMove } from '../stores/useHostLookStore'
 import { wireIdOfHost } from './profile/host-identity'
 import type { IconWeight } from '../types/tab'
 
@@ -146,4 +146,40 @@ export function useHostLookResolver(): (ref: string) => HostLook {
 /** What to call a host: its look name, else the ref itself. */
 export function hostLabel(ref: string, look: HostLook): string {
   return look.name ?? ref
+}
+
+// === Re-key (spec §4.3, plan §0.12; run by the re-resolve pass) ===
+
+/**
+ * The wire-keyed stores' moves: `[host.id → d1_…]` for every local host with a valid daemonId (its wire id then is
+ * not its local id). The opposite direction of the pass's ref map, computed from the hosts alone. A daemon two rows
+ * claim (an identity conflict) moves nothing — the pass does not run then anyway. Pure.
+ */
+export function wireKeyMovesOf(hosts: Record<string, HostConfig>): HostLookMove[] {
+  const byWire = new Map<string, string[]>()
+  for (const id of Object.keys(hosts)) {
+    const host = hosts[id]
+    if (host === null || typeof host !== 'object') continue
+    const wire = wireIdOfHost(host)
+    if (wire === id) continue
+    byWire.set(wire, [...(byWire.get(wire) ?? []), id])
+  }
+  const moves: HostLookMove[] = []
+  for (const [wire, ids] of byWire) if (ids.length === 1) moves.push([ids[0], wire])
+  return moves
+}
+
+/**
+ * The pass's re-key step over every store keyed by wire id (H2c-2: the look store): the entry under a host's local
+ * id moves to its `d1_…` key; an entry already there wins and the local-id one is dropped (`useHostLookStore.rekey`).
+ * `null` when nothing would move; else the write and its way back, for the pass to commit under its lock.
+ */
+export function rekeyWireKeyedStores(hosts: Record<string, HostConfig>): { commit: () => void; undo: () => void } | null {
+  const looks = useHostLookStore.getState().looks
+  const moves = wireKeyMovesOf(hosts).filter(([from]) => Object.hasOwn(looks, from))
+  if (moves.length === 0) return null
+  return {
+    commit: () => useHostLookStore.getState().rekey(moves),
+    undo: () => useHostLookStore.setState({ looks }),
+  }
 }

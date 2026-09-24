@@ -30,6 +30,7 @@ const MLAB = 'mlab-daemon:111111'
 const DAEMON = 'air-lab:26cccc'
 const W = syncIdOfSync(DAEMON)
 const M = 'hm0001' // this device's master host (mlab)
+const WM = syncIdOfSync(MLAB) // M's wire id: its look lives under it (H2c-2)
 const X = 'hx0001' // the host that arrives
 const SLAVE = 'slave-1'
 const KEYS: ProfileSectionKey[] = ['hosts', 'workspaces', 'settings', 'tabs.wa']
@@ -120,9 +121,10 @@ describe('(a) the pass leaves every section hash exactly as it was — nothing i
   ])('%s', async (_label, place) => {
     place()
     seedSettings()
-    // H2c-1's looks are keyed by wire id in the store itself: the pass leaves them alone, and the settings section
+    // Looks are keyed by wire id in the store itself; every host here has its daemonId and its look under its `d1_…`
+    // (no local-id entry — H2c-2's re-key has nothing to move): the pass leaves them alone, and the settings section
     // that carries them hashes as before
-    useHostLookStore.setState({ looks: { [W]: { name: 'air26' }, [M]: { name: 'mlab' } } })
+    useHostLookStore.setState({ looks: { [W]: { name: 'air26' }, [WM]: { name: 'mlab' } } })
     addX() // the host arrives BEFORE the "before" snapshot: `hosts` moves because of the add, never the pass
     const looks = useHostLookStore.getState().looks
     const before = await hashes()
@@ -240,6 +242,34 @@ describe("(a'') H1b acceptance scenario 2: a host added without its daemonId fir
     } finally {
       bootstrap.unmount()
     }
+  })
+})
+
+// H2c-2 T5 (plan §0.13): the spec §4.3 exception to the no-push invariant. A look this device keyed by a host's LOCAL
+// id (added before its daemonId was known) moves to the host's `d1_…` key once the daemonId is learned — the
+// `settings` payload changes, once; every other section stays as it was. A host that arrives WITH its daemonId has
+// no local-id entry, and (a) above still holds.
+describe('(e) the look re-key: one push, settings only (H2c-2)', () => {
+  it.each([
+    ['the master on screen', masterOnScreen],
+    ['a slave on screen, the master parked', slaveOnScreen],
+  ])('%s: a local-id look + the daemonId learned → only settings differs, and a second pass changes nothing', async (_label, place) => {
+    place()
+    seedSettings()
+    addX({ daemonId: undefined })
+    useHostLookStore.setState({ looks: { [X]: { name: 'air26' }, [WM]: { name: 'mlab' } } })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [X]: { ...s.hosts[X], daemonId: DAEMON } } }))
+    const before = await hashes()
+    expect(runHostReresolve()).toBe('done')
+    expect(useHostLookStore.getState().looks).toEqual({ [W]: { name: 'air26' }, [WM]: { name: 'mlab' } })
+    const once = await hashes()
+    for (const key of KEYS) {
+      if (key === 'settings') expect(once[key], key).not.toBe(before[key])
+      else expect(once[key], key).toBe(before[key])
+    }
+    expect((buildSectionPayload('settings')!.payload as SettingsPayload)['purdex-host-looks']).toEqual({ looks: { [W]: { name: 'air26' }, [WM]: { name: 'mlab' } } })
+    expect(runHostReresolve()).toBe('done')
+    expect(await hashes()).toEqual(once)
   })
 })
 
