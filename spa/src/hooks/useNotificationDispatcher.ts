@@ -13,6 +13,7 @@ import { normalizeEventName } from '../lib/event-name'
 import { findTabBySessionCode } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
+import { hostLabel, hostLookOf } from '../lib/host-look'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
 
@@ -302,7 +303,7 @@ export function useNotificationDispatcher(): void {
       for (const hostId of state.hostOrder) {
         const rt = state.runtime[hostId]
         const prev = prevState[hostId]
-        const hostName = state.hosts[hostId]?.name ?? hostId
+        const hostName = hostLabel(hostId, hostLookOf(hostId, state.hosts))
 
         // L2: daemon refused (was connected, now refused)
         if (prev?.daemon === 'connected' && rt?.daemonState === 'refused') {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore, selectDevHostId } from '../../stores/useHostStore'
+import { hostLabel, hostLookOf } from '../../lib/host-look'
 import { DevBuildLogPanel } from './DevBuildLogPanel'
 import { LocalDaemonSection } from './LocalDaemonSection'
 
@@ -341,7 +342,7 @@ export function DevEnvironmentSection() {
             <option value="">{t('settings.dev.host.none')}</option>
             {hostOrder.map((id) => {
               const h = hosts[id]
-              return h ? <option key={id} value={id}>{`${h.name} (${h.ip}:${h.port})`}</option> : null
+              return h ? <option key={id} value={id}>{`${hostLabel(id, hostLookOf(id, hosts))} (${h.ip}:${h.port})`}</option> : null
             })}
           </select>
         </div>

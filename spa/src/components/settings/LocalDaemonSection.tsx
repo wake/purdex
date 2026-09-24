@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copy, Eye, EyeSlash } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { findHostByEndpoint, useHostStore } from '../../stores/useHostStore'
+import { hostLabel, useHostLook } from '../../lib/host-look'
 import { copyText } from '../../lib/copy-text'
 
 interface Props {
@@ -40,6 +41,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const cfgUrl = cfg ? `http://${cfg.bind}:${cfg.port}` : null
   // Spec §3.3: exact-endpoint membership only, via the same helper registerLocalHost uses.
   const registeredAs = cfg ? findHostByEndpoint(hosts, cfg.bind, cfg.port) : undefined
+  const registeredLook = useHostLook(registeredAs?.id ?? null)
 
   useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
 
@@ -183,7 +185,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               <div className="flex items-center justify-between">
                 <span>{t('settings.dev.local.host_list')}</span>
                 {registeredAs ? (
-                  <span className="text-text-primary">{t('settings.dev.local.in_hosts', { name: registeredAs.name })}</span>
+                  <span className="text-text-primary">{t('settings.dev.local.in_hosts', { name: hostLabel(registeredAs.id, registeredLook) })}</span>
                 ) : (
                   <button type="button" onClick={addToHosts} disabled={disabled || cfg.token === null} className={btnSecondary}>
                     {t('settings.dev.local.btn.add_host')}

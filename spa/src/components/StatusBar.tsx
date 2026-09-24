@@ -5,6 +5,7 @@ import { getPrimaryPane } from '../lib/pane-tree'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useHostLook } from '../lib/host-look'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useUploadStore } from '../stores/useUploadStore'
@@ -277,7 +278,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
       ? (s.sessions[agentHostId] ?? []).find((sess) => sess.code === agentSessionCode) ?? null
       : null,
   )
-  const hostConfig = useHostStore((s) => agentHostId ? s.hosts[agentHostId] : null)
+  const hostLook = useHostLook(agentHostId)
   const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
   const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
   const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
@@ -356,7 +357,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   // Session pane — show host, session name, status
   const sessionName = session?.name ?? content.sessionCode
   const paneTitle = showAgentTitleInStatusBar && agentType && !content.terminated ? session?.pane_title : null
-  const hostName = hostConfig?.name ?? 'Unknown'
+  const hostName = hostLook.name ?? 'Unknown'
   const status = hostRuntime?.status ?? 'disconnected'
 
   // The peer id shows the name with its ref and copies the full address with

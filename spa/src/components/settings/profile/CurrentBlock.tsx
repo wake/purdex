@@ -40,6 +40,7 @@ import { useDateLocale, useI18nStore } from '../../../stores/useI18nStore'
 import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
 import { clearPullUnconfirmed, pullUnconfirmedSnapshot, subscribePullUnconfirmed } from '../../../lib/profile/pull-unconfirmed'
 import { selectDaemonIdMismatch, useHostStore } from '../../../stores/useHostStore'
+import { hostLabel, hostLookOf, useHostLook } from '../../../lib/host-look'
 import { identityOfSync } from '../../../lib/profile/host-identity'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -172,6 +173,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const setAutoSync = useProfileStore((s) => s.setAutoSync)
   const attachedAt = useProfileStore((s) => s.masterEndpoint)
   const host = useHostStore((s) => s.hosts[master.hostId])
+  const hostLook = useHostLook(master.hostId)
   // Every host, for the sentence that names the one(s) the sync is paused on (`blocked: 'host-identity-*'`).
   const allHosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -227,7 +229,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
         const key = blocked.replace(/-/g, '_')
         // Host names are the user's own text: into the sentence as they are.
         return ids.length > 0
-          ? t(`settings.profile.current.blocked.${key}`, { hosts: ids.map((id) => allHosts[id]?.name ?? id).join(', ') })
+          ? t(`settings.profile.current.blocked.${key}`, { hosts: ids.map((id) => hostLabel(id, hostLookOf(id, allHosts))).join(', ') })
           : t(`settings.profile.current.blocked.${key}_unnamed`)
       }
       case 'suspended':
@@ -245,7 +247,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
             {masterName ?? master.profileId}
           </span>
           <span data-testid="profile-current-host" className="text-text-muted">
-            {t('settings.profile.current.on_host', { host: host?.name ?? master.hostId })}
+            {t('settings.profile.current.on_host', { host: hostLabel(master.hostId, hostLook) })}
           </span>
         </div>
       </SettingItem>
