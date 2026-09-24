@@ -29,7 +29,10 @@ export interface FoldPlan {
   previewLines: string[]
   /** The body's true line count (N2's when it has one). */
   totalLines: number
-  /** totalLines − previewLines.length, never below 0. */
+  /**
+   * How much this affordance is hiding: the lines the body carries minus the
+   * ones the preview shows, and exactly 0 when the body is shown whole.
+   */
   hiddenLines: number
   /** At least one preview line was cut at FOLD_LINE_MAX_CHARS. */
   clamped: boolean
@@ -89,16 +92,20 @@ export function foldPlan(src: FoldSource): FoldPlan {
 
   // Counted against the body we actually have: an affordance must be able to
   // reveal what it promises, whatever N2's total_lines claims.
-  const hiddenLines = Math.max(0, localLines - previewLines.length)
+  const folded = Math.max(0, localLines - previewLines.length)
   // When N2 counts more lines than the body carries, the daemon cut it
   // whatever the flag says.
   const daemonTruncated = src.truncated === true || totalLines > localLines
-  const collapsible = level > 0 && (hiddenLines > 0 || clamped || daemonTruncated)
+  const collapsible = level > 0 && (folded > 0 || clamped || daemonTruncated)
 
   return {
     previewLines: collapsible ? previewLines : [],
     totalLines,
-    hiddenLines,
+    // A body shown whole hides nothing. Without this the formula would hand
+    // back the body's own line count (the preview is empty there), which any
+    // consumer that renders the count before checking `collapsible` shows as
+    // `+3 lines` on a three-line body it is already showing in full.
+    hiddenLines: collapsible ? folded : 0,
     clamped,
     collapsible,
     daemonTruncated,

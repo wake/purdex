@@ -79,6 +79,15 @@ describe('foldPlan', () => {
     expect(plan.totalLines).toBe(900)
   })
 
+  it('hides nothing when it shows the body whole', () => {
+    // `hiddenLines` means "how much this affordance is hiding". A body shown
+    // whole draws no affordance, so it hides nothing — the field must not
+    // return the body's own line count just because the preview is empty.
+    const plan = foldPlan({ text: lines(3) })
+    expect(plan.collapsible).toBe(false)
+    expect(plan.hiddenLines).toBe(0)
+  })
+
   it('handles an empty body', () => {
     const plan = foldPlan({ text: '' })
     expect(plan.totalLines).toBe(0)
