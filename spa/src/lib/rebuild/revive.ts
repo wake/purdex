@@ -53,6 +53,7 @@
 // next `sessions` frame): no evidence, no action.
 import { bindingEquals } from './binding'
 import { canAttachTerminal } from './attach-gate'
+import { isRefShownNow } from '../shown-hosts'
 import { repointPane } from './engine'
 import { scanPaneTree } from '../pane-tree'
 import { useRebuildStore, type RebuildBinding, type RebuildOperation } from '../../stores/useRebuildStore'
@@ -170,6 +171,9 @@ export function collectCandidates(hostId: string): ReviveCandidate[] {
  */
 export function runRevivePass(hostId: string): void {
   if (!canAttachTerminal(hostId)) return
+  // A host hidden in this workbench (host ownership H2d-4, §0.21): its panes are gated and not swept here — the
+  // recovery on show (`host-reshow.ts`) revives them. Inside the pass, so every caller is covered.
+  if (!isRefShownNow(hostId)) return
   if (useRebuildStore.getState().lockedBy !== null) return
   const snapshot = reconciledSessions.get(hostId)
   if (snapshot === undefined) return

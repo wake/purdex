@@ -4,9 +4,9 @@ import { STORAGE_KEYS } from './storage/keys'
 // ---------------------------------------------------------------------------
 // Legacy residue cleanup (#1303)
 //
-// The old Sync module (P4a) and the device-state / workspace-snapshot features (P4b) were deleted, but the data
-// they wrote stays in every browser that ran them. Nothing opens or reads any of it any more; this removes it once
-// per boot. Every step is idempotent (removing a missing key or database is a no-op), so there is no "done" marker.
+// The old Sync module (P4a), the device-state / workspace-snapshot features (P4b) and the #1366 pull guard's notice
+// (host ownership H3b) were deleted, but the data they wrote stays in every browser that ran them. Nothing opens or
+// reads any of it any more; this removes it once per boot. Every step is idempotent (removing a missing key or database is a no-op), so there is no "done" marker.
 //
 // Boot never waits on it and it never throws or rejects: failures are collected and logged ONCE.
 //
@@ -14,8 +14,9 @@ import { STORAGE_KEYS } from './storage/keys'
 // (lib/storage/sync.ts) — both live, they only share a name.
 // ---------------------------------------------------------------------------
 
-/** Written by the deleted lib/snapshot (P4b); nothing reads them. */
-export const LEGACY_LOCAL_STORAGE_KEYS = ['purdex-workspace-snapshot', 'purdex-workspace-snapshot-prev'] as const
+/** Written by the deleted lib/snapshot (P4b), and the #1366 pull guard's stopped-pull notice (the deleted
+ *  lib/profile/pull-unconfirmed.ts, host ownership H3b); nothing reads them. */
+export const LEGACY_LOCAL_STORAGE_KEYS = ['purdex-workspace-snapshot', 'purdex-workspace-snapshot-prev', 'purdex-profile-pull-unconfirmed'] as const
 
 /** The deleted Sync module's snapshot store (object store `snapshots`); nothing opens it. */
 export const LEGACY_IDB_NAME = 'purdex-sync'

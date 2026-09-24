@@ -3,6 +3,7 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { TabContent } from './TabContent'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { createTab } from '../types/tab'
 import type { Tab, Pane } from '../types/tab'
 
@@ -19,6 +20,7 @@ beforeEach(() => {
   registerModule({ id: 'session', name: 'Session', panes: [{ kind: 'tmux-session', component: MockSessionRenderer }] })
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: MockDashboardRenderer }] })
   useUISettingsStore.setState({ keepAliveCount: 0 })
+  useShownHostsStore.setState({ ids: ['test-host'] }) // shown: a hidden host's pane is gated (H2d-4)
 })
 
 const sessionTab: Tab = {

@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import en from '../../../../locales/en.json'
+import zhTW from '../../../../locales/zh-TW.json'
 import { ProfileWizard } from './ProfileWizard'
 import { ATTACH_REASONS } from './wizard-run'
 import { reasonKey, requestKey } from './wizard-shared'
@@ -68,7 +69,7 @@ async function toDirection(localId = 'master', profile = P1): Promise<void> {
   next()
   expect(step()).toBe('direction')
 }
-/** Pull chosen, and the check of the profile's hosts it asks for (`previewPull`) answered. */
+/** Pull chosen (nothing is read for it: host ownership H3b). */
 async function choosePull(): Promise<void> {
   click('profile-wizard-direction-pull')
   await flush()
@@ -100,7 +101,7 @@ beforeEach(() => {
   useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDirection: null, suspension: null, pendingDetaches: [] })
   // h1 knows its daemon and this session confirmed it there: a pull from it is possible (host-sync-identity §8)
   useHostStore.setState({ hosts: { h1: { ...host('h1', 'mlab', '10.0.0.1'), daemonId: MLAB }, h2: host('h2', 'air', '10.0.0.2'), h3: host('h3', 'gone', '10.0.0.3') }, hostOrder: ['h1', 'h2', 'h3'], devHostId: 'h1', runtime: { h1: H1_VERIFIED, h2: { status: 'connected' }, h3: { status: 'disconnected' } } })
-  // the profiles listed hold no `hosts` section: a pull removes no host
+  // `getSection` answers, but nothing of the wizard may ask it (host ownership H3b)
   vi.mocked(getSection).mockReset().mockResolvedValue({ kind: 'ok', value: null })
   useDeviceNameStore.setState({ deviceName: 'Laptop' })
   useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: tabs(7), activeWorkspaceId: null, activeTabId: null } } }, slaveOrder: ['s1'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
@@ -369,6 +370,11 @@ describe('step 4 — the direction', () => {
     await toDirection()
     click('profile-wizard-direction-push')
     expect(screen.getByTestId('profile-wizard-push-warning')).toHaveTextContent(en['settings.profile.wizard.direction.push_replaces'].replace('{{profile}}', 'default'))
+    // host ownership H3: a push does not send this device's host list — the warning says what it replaces, and no more
+    expect(en['settings.profile.wizard.direction.push_replaces']).not.toMatch(/this device's hosts/)
+    expect(en['settings.profile.wizard.direction.push_replaces']).toMatch(/host list is not sent/)
+    expect(zhTW['settings.profile.wizard.direction.push_replaces']).not.toContain('主機、設定')
+    expect(zhTW['settings.profile.wizard.direction.push_replaces']).toContain('主機清單不會送出')
   })
 
   it('A NEW PROFILE OFFERS PUSH ONLY', async () => {
@@ -425,147 +431,61 @@ describe('step 4 — the direction', () => {
   })
 })
 
-describe('step 4 — a pull\'s hosts: the host verified, and the hosts it removes named first (host-sync-identity §8)', () => {
+describe('step 4 — a pull: the host verified (host-sync-identity §8, D3); no host list read, no host removed (host ownership H3b)', () => {
   const HOSTS_META = { section: 'hosts', rev: 4, hash: 'hh', fingerprint: 'f', ordinal: 3, writer: 'c', updatedAt: 1 }
-  /** P1 holds a `hosts` section with ONE row: mlab's daemon. h2 and h3 are only this device's — a pull removes them. */
+  const WS_META = { ...HOSTS_META, section: 'workspaces', rev: 2, hash: 'ww' }
+  /** P1 holds a legacy `hosts` section with ONE row: mlab's daemon. h2 and h3 are only this device's — a pull leaves them be. */
   beforeEach(() => {
-    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META] }, entry(P2, 'empty one', 0)] })
+    vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META, WS_META] }, entry(P2, 'empty one', 0)] })
     vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { d1_x: { name: 'mlab', daemonId: MLAB } }, hostOrder: ['d1_x'] } } })
   })
-  const removedShown = (): string[] => [...screen.getByTestId('profile-wizard-pull-removes').querySelectorAll('li')].map((li) => li.getAttribute('data-testid') ?? '')
 
-  it('names, one by one, the hosts the pull removes — read pinned to the host\'s address; Start runs with exactly that list', async () => {
+  it('the direction step lists no host and waits for no read: Next is open at once; Start attaches with three arguments; the hosts here are the same afterwards', async () => {
+    const hostsBefore = useHostStore.getState().hosts
     await toDirection()
-    await choosePull()
-    expect(getSection).toHaveBeenCalledWith('h1', P1, 'hosts', { expectEndpoint: '10.0.0.1:7860' })
-    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
-    expect(screen.getByTestId('profile-wizard-pull-removes-h2')).toHaveTextContent('air')
-    expect(screen.getByTestId('profile-wizard-pull-removes-h3')).toHaveTextContent('gone')
-    expect(screen.getByTestId('profile-wizard-pull-removes')).toHaveTextContent(en['settings.profile.wizard.pull.removes'])
+    click('profile-wizard-direction-pull')
+    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
+    expect(screen.queryByTestId('profile-wizard-pull-checking')).toBeNull()
+    expect(screen.queryByTestId('profile-wizard-pull-refused')).toBeNull()
+    // and it says so: settings are replaced, the host list is not
+    expect(screen.getByText(en['settings.profile.wizard.direction.pull_also'])).toBeInTheDocument()
+    expect(en['settings.profile.wizard.direction.pull_also']).toMatch(/host list is not/)
+    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
     next()
     click('profile-wizard-start')
     await flush()
     expect(calls).toEqual(['copy-master', 'attach'])
-  })
-
-  it('nothing to remove: no list', async () => {
-    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { a: { daemonId: MLAB }, b: { name: 'air' } }, hostOrder: [] } } })
-    useHostStore.setState({ hosts: { h1: useHostStore.getState().hosts.h1 }, hostOrder: ['h1'] })
-    await toDirection()
-    await choosePull()
-    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
-    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
+    expect(vi.mocked(attachMaster).mock.calls).toEqual([['h1', P1, 'pull']])
+    expect(getSection).not.toHaveBeenCalled()
+    expect(useHostStore.getState().hosts).toBe(hostsBefore)
   })
 
   it.each([
     ['not verified', { status: 'connected' as const }, 'master-unverified'],
     ['a mismatch', { status: 'connected' as const, daemonIdMismatch: { stored: MLAB, observed: 'other:zzzzzz', endpoint: '10.0.0.1:7860' } }, 'master-mismatch'],
-  ])('the host %s: pull is refused in words, Next stays shut, the host is not asked — push remains', async (_label, rt, reason) => {
+  ])('the host %s: pull is refused in words, Next stays shut — push remains', async (_label, rt, reason) => {
     useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: rt } })
     await toDirection()
     await choosePull()
     expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', reason)
     expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en[`settings.profile.wizard.pull.${reason.replace(/-/g, '_')}` as keyof typeof en])
+    // D3: the premise is said for what it guards now — the tabs and settings the profile names, not a host list
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent('the tabs and settings it names')
+    expect(screen.getByTestId('profile-wizard-pull-refused')).not.toHaveTextContent('host list')
     expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
-    expect(getSection).not.toHaveBeenCalled()
     click('profile-wizard-direction-push')
     expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
   })
 
-  it('verified while the step is open: the check runs then', async () => {
+  it('verified while the step is open: pull is offered then', async () => {
     useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: { status: 'connected' } } })
     await toDirection()
     await choosePull()
     expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unverified')
     act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: H1_VERIFIED } }))
     await flush()
-    expect(removedShown()).toHaveLength(2)
-  })
-
-  it('verification lost and back WHILE the first check is out: the first answer, arriving last, is not the one shown', async () => {
-    type SectionAnswer = Awaited<ReturnType<typeof getSection>>
-    const answers: Array<(v: SectionAnswer) => void> = []
-    vi.mocked(getSection).mockImplementation(() => new Promise<SectionAnswer>((r) => answers.push(r)))
-    const rows = (hosts: Record<string, unknown>): SectionAnswer => ({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts, hostOrder: Object.keys(hosts) } } }) as SectionAnswer
-    await toDirection()
-    await choosePull()
-    expect(answers).toHaveLength(1)
-    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: { status: 'connected' } } }))
-    act(() => useHostStore.setState({ runtime: { ...useHostStore.getState().runtime, h1: H1_VERIFIED } }))
-    await flush()
-    expect(answers).toHaveLength(2) // the same choice, asked again
-    // the second (current) answer: mlab only → air and gone are removed
-    await act(async () => answers[1](rows({ d1_x: { name: 'mlab', daemonId: MLAB } })))
-    await flush()
-    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
-    // the first, older answer arrives last, and says something else altogether
-    await act(async () => answers[0](rows({ a: { daemonId: MLAB }, b: { daemonId: MLAB } })))
-    await flush()
     expect(screen.queryByTestId('profile-wizard-pull-refused')).toBeNull()
-    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3'])
     expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
-  })
-
-  it('the profile\'s host list cannot be matched (one daemon twice): said, Next shut', async () => {
-    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { a: { daemonId: MLAB }, b: { daemonId: MLAB } }, hostOrder: [] } } })
-    await toDirection()
-    await choosePull()
-    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'duplicate-host-identity')
-    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
-  })
-
-  it('the profile has NO ROW for the attach host itself: pull refused in words naming it, Next shut — other hosts would not have stopped it', async () => {
-    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { b: { name: 'air-row', daemonId: 'air:999999' } }, hostOrder: ['b'] } } })
-    await toDirection()
-    await choosePull()
-    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unmatched')
-    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en['settings.profile.wizard.pull.master_unmatched'].replace('{{name}}', 'mlab'))
-    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
-    expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
-    click('profile-wizard-direction-push')
-    expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
-  })
-
-  it('START FINDS THE ATTACH HOST UNMATCHED (the profile\'s host list changed meanwhile): nothing runs — back to the direction step, which says why', async () => {
-    await toDirection()
-    await choosePull()
-    next()
-    vi.mocked(getSection).mockResolvedValue({ kind: 'ok', value: { ...HOSTS_META, payload: { hosts: { b: { name: 'air-row', daemonId: 'air:999999' } }, hostOrder: ['b'] } } })
-    click('profile-wizard-start')
-    await flush()
-    expect(calls).toEqual([])
-    expect(step()).toBe('direction')
-    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'pull-refused')
-    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unmatched')
-  })
-
-  it('the host list cannot be read: the class of the failure, and Try again asks again', async () => {
-    vi.mocked(getSection).mockResolvedValueOnce(failed('timeout'))
-    await toDirection()
-    await choosePull()
-    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en['settings.profile.wizard.request.timeout'])
-    expect(screen.getByTestId('profile-wizard-pull-refused')).not.toHaveTextContent('SECRET')
-    click('profile-wizard-pull-retry')
-    await flush()
-    expect(removedShown()).toHaveLength(2)
-  })
-
-  it('START FINDS ANOTHER LIST (a host was added here meanwhile): nothing runs — back to the direction step, the list as it is now', async () => {
-    await toDirection()
-    await choosePull()
-    next()
-    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] }))
-    click('profile-wizard-start')
-    await flush()
-    expect(calls).toEqual([])
-    expect(step()).toBe('direction')
-    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
-    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
-    // shown now: the next Start runs
-    next()
-    click('profile-wizard-start')
-    await flush()
-    expect(calls).toEqual(['copy-master', 'attach'])
   })
 
   it('START FINDS THE HOST UNVERIFIED: nothing runs — back to the direction step, which says why', async () => {
@@ -581,30 +501,29 @@ describe('step 4 — a pull\'s hosts: the host verified, and the hosts it remove
     expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', 'master-unverified')
   })
 
-  it('A HOST ADDED WHILE THE COPY IS MADE (after the door said yes): the attach is not made — back to the direction step, the list as it is now; the copy stays', async () => {
+  it('a host added here before Start, or while the copy is made: the run goes on — a pull removes no host', async () => {
     vi.mocked(copyMasterAsSlave).mockImplementationOnce(() => {
       calls.push('copy-master')
-      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] })
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h5: host('h5', 'later', '10.0.0.5') }, hostOrder: ['h1', 'h2', 'h3', 'h4', 'h5'] })
       return { ok: true, id: 'c1' }
     })
     await toDirection()
     await choosePull()
     next()
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] }))
     click('profile-wizard-start')
     await flush()
-    expect(calls).toEqual(['copy-master'])
-    expect(attachMaster).not.toHaveBeenCalled()
-    expect(step()).toBe('direction')
-    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
-    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
+    expect(calls).toEqual(['copy-master', 'attach'])
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+    expect(Object.keys(useHostStore.getState().hosts).sort()).toEqual(['h1', 'h2', 'h3', 'h4', 'h5'])
   })
 
   it('THE HOST CANNOT BE ASKED RIGHT BEFORE THE ATTACH: the attach step fails with the request\'s class; Try again asks again and attaches — no second copy', async () => {
     await toDirection()
     await choosePull()
     next()
-    // the door's two reads pass; the ask before the attach cannot list
-    vi.mocked(listProfiles).mockResolvedValueOnce({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META] }] }).mockResolvedValueOnce(failed('timeout'))
+    // the door's list passes; the ask before the attach cannot list
+    vi.mocked(listProfiles).mockResolvedValueOnce({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections: [HOSTS_META, WS_META] }] }).mockResolvedValueOnce(failed('timeout'))
     click('profile-wizard-start')
     await flush()
     expect(calls).toEqual(['copy-master'])
@@ -616,18 +535,13 @@ describe('step 4 — a pull\'s hosts: the host verified, and the hosts it remove
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
   })
 
-  /** The copy is made, and meanwhile h1 is re-pointed to 10.0.0.9 (and confirmed at its daemon there). */
-  const repointDuringCopy = (): void => {
+  it('THE HOST RE-POINTED WHILE THE COPY IS MADE: the attach waits; Retry reads the NEW address and attaches there — no second promote, no second copy', async () => {
     vi.mocked(copyMasterAsSlave).mockImplementationOnce(() => {
       calls.push('copy-master')
       const hosts = useHostStore.getState()
       useHostStore.setState({ hosts: { ...hosts.hosts, h1: { ...hosts.hosts.h1, ip: '10.0.0.9' } }, runtime: { ...hosts.runtime, h1: { status: 'connected', daemonIdVerified: { endpoint: '10.0.0.9:7860', daemonId: MLAB } } } })
       return { ok: true, id: 'c1' }
     })
-  }
-
-  it('THE HOST RE-POINTED WHILE THE COPY IS MADE: the attach waits; Retry reads the NEW address and attaches there — no second promote, no second copy', async () => {
-    repointDuringCopy()
     await toDirection('s1')
     await choosePull()
     next()
@@ -641,26 +555,8 @@ describe('step 4 — a pull\'s hosts: the host verified, and the hosts it remove
     expect(calls).toEqual(['promote', 'copy-master', 'attach'])
     expect(promoteToMaster).toHaveBeenCalledTimes(1)
     expect(copyMasterAsSlave).toHaveBeenCalledTimes(1)
-    expect(getSection).toHaveBeenLastCalledWith('h1', P1, 'hosts', { expectEndpoint: '10.0.0.9:7860' })
+    expect(listProfiles).toHaveBeenLastCalledWith('h1', { expectEndpoint: '10.0.0.9:7860' })
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
-  })
-
-  it('… and when Retry finds OTHER hosts to remove (one added meanwhile): back to the direction step with the list as it is now — no attach', async () => {
-    repointDuringCopy()
-    await toDirection('s1')
-    await choosePull()
-    next()
-    click('profile-wizard-start')
-    await flush()
-    expect(screen.getByTestId('profile-wizard-failure')).toHaveAttribute('data-step', 'attach')
-    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h4: host('h4', 'fresh', '10.0.0.4') }, hostOrder: ['h1', 'h2', 'h3', 'h4'] }))
-    click('profile-wizard-retry')
-    await flush()
-    expect(calls).toEqual(['promote', 'copy-master'])
-    expect(attachMaster).not.toHaveBeenCalled()
-    expect(step()).toBe('direction')
-    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'removes-changed')
-    expect(removedShown()).toEqual(['profile-wizard-pull-removes-h2', 'profile-wizard-pull-removes-h3', 'profile-wizard-pull-removes-h4'])
   })
 
   it('ANOTHER host at a daemon other than its record: not in the way, but said — the sync will pause on it', async () => {
@@ -691,7 +587,7 @@ describe('step 5 — the run', () => {
     expect(calls).toEqual(['promote', 'copy-master', 'attach'])
     expect(promoteToMaster).toHaveBeenCalledWith('s1', 'Laptop 2')
     expect(copyMasterAsSlave).toHaveBeenCalledWith('Laptop')
-    expect(attachMaster).toHaveBeenCalledWith('h1', P1, 'pull', { confirmedHosts: 'absent' }) // the SOT has no `hosts` here
+    expect(vi.mocked(attachMaster).mock.calls).toEqual([['h1', P1, 'pull']]) // three arguments (host ownership H3b)
     expect(saveScreenAsSlave).not.toHaveBeenCalled()
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
     expect(screen.queryByTestId('profile-wizard-start')).toBeNull()
@@ -919,6 +815,40 @@ describe('another window changed things: every premise is checked again, and the
 })
 
 // === PR-B (review F1, F2, F5; acceptance F6) ===
+
+describe('a retired section is no content (host ownership H3b): `hosts` alone is an empty profile, and its moves change nothing', () => {
+  const meta = (section: string, rev: number) => ({ section, rev, hash: `h-${section}-${rev}`, fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 1 })
+  const withSections = (...sections: ReturnType<typeof meta>[]) => vi.mocked(listProfiles).mockResolvedValue({ kind: 'ok', value: [{ ...entry(P1, 'default'), sections }, entry(P2, 'empty one', 0)] })
+
+  it('a profile whose SOT holds ONLY a `hosts` row: push only, and no "replaces what is there" warning', async () => {
+    withSections(meta('hosts', 3))
+    await toDirection()
+    expect(screen.getByTestId('profile-wizard-direction-pull')).toBeDisabled()
+    expect(screen.getByTestId('profile-wizard-pull-unavailable')).toHaveTextContent(en['settings.profile.wizard.direction.pull_empty'])
+    expect(screen.queryByTestId('profile-wizard-push-warning')).toBeNull()
+  })
+
+  it('a `hosts` rev change between choosing and Start: the run goes on; a `settings` rev change: profile-changed, nothing runs', async () => {
+    withSections(meta('hosts', 3), meta('settings', 1))
+    await toRun('push')
+    withSections(meta('hosts', 4), meta('settings', 1))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual(['attach'])
+
+    cleanup()
+    calls.length = 0
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
+    withSections(meta('hosts', 3), meta('settings', 1))
+    await toRun('push')
+    withSections(meta('hosts', 3), meta('settings', 2))
+    click('profile-wizard-start')
+    await flush()
+    expect(calls).toEqual([])
+    expect(step()).toBe('direction')
+    expect(screen.getByTestId('profile-wizard-notice')).toHaveAttribute('data-reason', 'profile-changed')
+  })
+})
 
 describe('Start asks the host ONCE MORE — the profile must still be what the user saw (review F1)', () => {
   const full = (id: string, name: string, rev = 1) => ({ ...entry(id, name), sections: [{ section: 'workspaces', rev, hash: `h${rev}`, fingerprint: 'f', ordinal: 1, writer: 'c', updatedAt: 1 }] })

@@ -6,6 +6,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useHostLook } from '../lib/host-look'
+import { useIsRefShown } from '../lib/shown-hosts'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useUploadStore } from '../stores/useUploadStore'
@@ -297,10 +298,15 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   // The third argument is this pane's tmux generation, read from the session the
   // daemon most recently described; the hook returns a row only when the two
   // agree. `undefined` — a session not reconciled yet — is unknown, not a match.
+  //
+  // A pane on a host hidden in this workbench (host ownership H2d-4, §0.21) renders a placeholder and opens no
+  // connection; the bar declines to ask about it in the same way, live.
   const primaryTerminated = !!(primaryContent && primaryContent.kind === 'tmux-session' && primaryContent.terminated)
+  const primaryHostShown = useIsRefShown(agentHostId)
+  const noPeer = primaryTerminated || !primaryHostShown
   const peer = usePeerInfo(
-    primaryTerminated ? null : agentHostId,
-    primaryTerminated ? null : agentSessionCode,
+    noPeer ? null : agentHostId,
+    noPeer ? null : agentSessionCode,
     session?.tmux_instance ?? '',
   )
 

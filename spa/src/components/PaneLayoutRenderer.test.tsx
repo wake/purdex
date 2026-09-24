@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, createEvent, type RenderResult } from '@testing-library/react'
+import { useEffect } from 'react'
+import { render, screen, cleanup, fireEvent, createEvent, act, type RenderResult } from '@testing-library/react'
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { countLeaves } from '../lib/pane-tree'
@@ -11,13 +12,45 @@ import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { compositeKey } from '../lib/composite-key'
 import { handToNex } from '../lib/nex/handoff'
-import type { PaneLayout, Tab, TmuxSessionContent } from '../types/tab'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { useHostStore } from '../stores/useHostStore'
+import { useExecutionStore } from '../stores/useExecutionStore'
+import { SessionPaneContent } from './SessionPaneContent'
+import { fetchWsTicket } from '../lib/host-api'
+import { attachControl, releaseLease, renewLease } from '../lib/nex/nex-api'
+import { useExecutionLease, type ExecutionLeaseApi } from '../hooks/useExecutionLease'
+import { syncIdOfSync } from '../lib/profile/host-identity'
+import { setHostShown } from '../lib/shown-hosts'
+import type { ExecutionContent, Pane, PaneContent, PaneLayout, Tab, TmuxSessionContent } from '../types/tab'
 
 vi.mock('../lib/nex/handoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/nex/handoff')>()),
   handToNex: vi.fn(),
 }))
 const mockedHandToNex = vi.mocked(handToNex)
+
+// The pane gate (H2d-4) renders the REAL `SessionPaneContent` for tmux leaves in its own suite; the terminal view
+// asks for its ticket on mount like the real one, so "no ticket" means "nothing tried to attach".
+vi.mock('./TerminalView', () => ({
+  default: (props: { getTicket: () => Promise<string> }) => {
+    void props.getTicket()
+    return <div data-testid="terminal-view" />
+  },
+}))
+vi.mock('./TerminatedPane', () => ({
+  TerminatedPane: () => (
+    <div data-testid="terminated-pane"><button>Rebuild</button><div data-testid="session-picker" /></div>
+  ),
+}))
+vi.mock('../lib/host-api', async (orig) => ({
+  ...(await orig<typeof import('../lib/host-api')>()),
+  fetchWsTicket: vi.fn(async () => 'ticket'),
+}))
+vi.mock('../lib/nex/nex-api', async (orig) => ({
+  ...(await orig<typeof import('../lib/nex/nex-api')>()),
+  attachControl: vi.fn(), renewLease: vi.fn(), releaseLease: vi.fn(),
+}))
+vi.mock('../lib/nex/lease-ttl', () => ({ getLeaseTtlSeconds: vi.fn(async () => 30), DEFAULT_LEASE_TTL_S: 120 }))
 
 beforeEach(() => {
   cleanup()
@@ -553,6 +586,7 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     useNexHostStore.setState({ byHost: {}, ensure } as never)
     useAgentStore.setState({ agentTypes: {} })
     useUndoToast.setState({ toast: null })
+    useShownHostsStore.setState({ ids: [H] }) // the host is shown (H2d-4: a hidden host's leaf is gated)
   })
 
   it('shows "Hand to nex" when the live agent is cc and the host is ready', () => {
@@ -623,6 +657,9 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     }
     seedTab(split)
     seedReady()
+    // The dialog hands off only on a host shown in the workbench (host ownership H2d-3).
+    const { useShownHostsStore } = await import('../stores/useShownHostsStore')
+    useShownHostsStore.setState({ ids: [H] })
     mockedHandToNex.mockResolvedValueOnce({ result: { execution_id: 'exc_1', state: 'running', session_id: 's', cwd: '/' }, swapped: true })
     const { act } = await import('react')
     render(<PaneLayoutRenderer layout={split} tabId="t1" isActive={true} />)
@@ -659,6 +696,23 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     expect(mockedHandToNex).not.toHaveBeenCalled()
   })
 
+  it('hiding the host closes an open handoff dialog (the pane is gated; nothing is sent)', async () => {
+    const recorded = tmux('p1', { rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', updatedAt: 1 }, capturedAt: 1 } })
+    seedTab(recorded)
+    seedReady()
+    const { act } = await import('react')
+    render(<PaneLayoutRenderer layout={recorded} tabId="t1" isActive={true} />)
+    rightClick('tmux-p1')
+    fireEvent.click(screen.getByText('Hand to nex'))
+    expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()
+    await act(async () => { useShownHostsStore.setState({ ids: [] }) })
+    expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    // Shown again: the dialog does not come back by itself.
+    await act(async () => { useShownHostsStore.setState({ ids: [H] }) })
+    expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
+  })
+
   it('does not open the dialog when the pane left the live layout while the menu was open', async () => {
     const split: PaneLayout = {
       type: 'split', id: 's1', direction: 'h',
@@ -678,5 +732,250 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     expect(useTabStore.getState().tabs['t1'].layout).toEqual(dash('p2'))
     fireEvent.click(screen.getByText('Hand to nex'))
     expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('PaneLayoutRenderer — the pane gate: a pane on a hidden host (host ownership H2d-4, §0.21)', () => {
+  const M = 'hm' // mlab: a local host, no daemonId
+  const X = 'hx' // air26: a local host with a daemonId
+  const X_WIRE = syncIdOfSync('air-lab:26aaaa')
+  const FAR = syncIdOfSync('nowhere:000000') // a daemon this device has no host for
+  const host = (id: string, over: object = {}) => ({ id, name: id, ip: '10.0.0.1', port: 7860, order: 0, ...over })
+  const tmuxC = (hostId: string, over: Partial<TmuxSessionContent> = {}): PaneContent =>
+    ({ kind: 'tmux-session', hostId, sessionCode: 'c1', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i1', ...over })
+  const execC = (hostRef?: string): PaneContent =>
+    ({ kind: 'execution', executionId: 'ex1', ...(hostRef === undefined ? {} : { host: hostRef }) })
+  const leaf = (id: string, content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id, content } })
+  const split = (a: PaneLayout, b: PaneLayout): PaneLayout =>
+    ({ type: 'split', id: 's1', direction: 'h', children: [a, b], sizes: [50, 50] })
+  const HIDDEN_TEXT = 'This host is turned off in this workbench'
+
+  const mounts = { tmux: [] as Pane[], exec: [] as Pane[], editor: 0 }
+  const unmounts = { tmux: [] as string[] }
+  const lease: { api: ExecutionLeaseApi | null } = { api: null }
+  let ensure: ReturnType<typeof vi.fn>
+
+  // The tmux renderer is the REAL SessionPaneContent (probe effect, terminated branch, MissingHostPane, ticket),
+  // wrapped to count mounts. The execution renderer holds the REAL `useExecutionLease`.
+  function TmuxProbe({ pane, isActive }: { pane: Pane; isActive: boolean }) {
+    useEffect(() => {
+      mounts.tmux.push(pane)
+      return () => { unmounts.tmux.push(pane.id) }
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    return <div data-testid={`tmux-${pane.id}`}><SessionPaneContent pane={pane} isActive={isActive} /></div>
+  }
+  function ExecProbe({ pane }: { pane: Pane }) {
+    const c = pane.content as ExecutionContent
+    const hostId = c.host || useHostStore.getState().hostOrder[0]
+    lease.api = useExecutionLease(hostId, c.executionId)
+    useEffect(() => { mounts.exec.push(pane) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    return <div data-testid={`exec-${pane.id}`} />
+  }
+  function EditorProbe({ pane }: { pane: Pane }) {
+    useEffect(() => { mounts.editor++ }, [])
+    return <div data-testid={`ed-${pane.id}`} />
+  }
+
+  function seedTab(layout: PaneLayout): void {
+    const tab: Tab = { id: 't1', pinned: false, locked: false, createdAt: 0, layout }
+    useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1', visitHistory: [] })
+  }
+  function show(ids: string[]): void {
+    act(() => { useShownHostsStore.setState({ ids }) })
+  }
+
+  beforeEach(() => {
+    // An earlier suite spies on the stores' actions (setActiveTab, insertTab) and `setState` copies the spies along.
+    useTabStore.setState({ ...useTabStore.getInitialState(), tabs: {}, tabOrder: [], activeTabId: null })
+    useWorkspaceStore.setState({ ...useWorkspaceStore.getInitialState(), workspaces: [], activeWorkspaceId: null })
+    mounts.tmux = []; mounts.exec = []; mounts.editor = 0; unmounts.tmux = []; lease.api = null
+    registerModule({ id: 'tmux', name: 'Tmux', panes: [{ kind: 'tmux-session', component: TmuxProbe }] })
+    registerModule({ id: 'exec', name: 'Exec', panes: [{ kind: 'execution', component: ExecProbe }] })
+    registerModule({ id: 'editor', name: 'Editor', panes: [{ kind: 'editor', component: EditorProbe }] })
+    useHostStore.setState({
+      hosts: { [X]: host(X, { daemonId: 'air-lab:26aaaa' }), [M]: host(M, { order: 1 }) },
+      hostOrder: [X, M],
+      activeHostId: M,
+      runtime: { [X]: { status: 'connected', attachReady: true }, [M]: { status: 'connected', attachReady: true } },
+    })
+    useShownHostsStore.setState({ ids: [M] }) // mlab shown, air26 hidden
+    useAgentStore.setState({ agentTypes: {} })
+    ensure = vi.fn().mockResolvedValue(undefined)
+    useNexHostStore.setState({ byHost: {}, ensure } as never)
+    useExecutionStore.setState({ executions: {} } as never)
+    vi.mocked(fetchWsTicket).mockClear()
+    vi.mocked(attachControl).mockReset().mockResolvedValue({ mode: 'control', lease_id: 'ls_new', expires_at: Date.now() + 30_000 })
+    vi.mocked(renewLease).mockReset().mockResolvedValue({ mode: 'control', lease_id: 'ls_1', expires_at: Date.now() + 30_000 })
+    vi.mocked(releaseLease).mockReset().mockResolvedValue(undefined)
+  })
+
+  it('a tmux leaf on hidden X → the placeholder; no renderer, no ticket, no nex ensure, no "Hand to nex"', () => {
+    const l = leaf('p1', tmuxC(X))
+    seedTab(l)
+    useAgentStore.setState({ agentTypes: { [compositeKey(X, 'c1')]: 'cc' } })
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+    expect(screen.queryByTestId('tmux-p1')).toBeNull()
+    expect(mounts.tmux).toHaveLength(0)
+    expect(fetchWsTicket).not.toHaveBeenCalled()
+    expect(ensure).not.toHaveBeenCalled()
+    fireEvent.contextMenu(screen.getByText(HIDDEN_TEXT))
+    expect(screen.queryByText('Hand to nex')).toBeNull()
+  })
+
+  it('X shown → the tmux renderer as today (ticket fetched, ensure called)', () => {
+    show([M, X_WIRE])
+    const l = leaf('p1', tmuxC(X))
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.queryByText(HIDDEN_TEXT)).toBeNull()
+    expect(screen.getByTestId('terminal-view')).toBeInTheDocument()
+    expect(fetchWsTicket).toHaveBeenCalledWith(X)
+    expect(ensure).toHaveBeenCalledWith(X)
+  })
+
+  it('a terminated tmux leaf on hidden X → the placeholder, no Rebuild, no session picker; shown → the terminated pane', () => {
+    const l = leaf('p1', tmuxC(X, { terminated: 'session-closed' }))
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+    expect(screen.queryByText('Rebuild')).toBeNull()
+    expect(screen.queryByTestId('session-picker')).toBeNull()
+    show([X_WIRE])
+    expect(screen.getByText('Rebuild')).toBeInTheDocument()
+  })
+
+  it('an execution leaf with host X → the placeholder, the execution renderer not mounted', () => {
+    const l = leaf('p1', execC(X))
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+    expect(mounts.exec).toHaveLength(0)
+  })
+
+  it('a HOSTLESS execution leaf with hostOrder[0] = X → the placeholder; X shown → the renderer', () => {
+    const l = leaf('p1', execC())
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+    expect(mounts.exec).toHaveLength(0)
+    show([X_WIRE])
+    expect(screen.getByTestId('exec-p1')).toBeInTheDocument()
+  })
+
+  it('a pane on an unresolved d1_ ref: not listed → the placeholder; listed → MissingHostPane as today', () => {
+    const l = leaf('p1', tmuxC(FAR))
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+    expect(screen.queryByTestId('missing-host-pane')).toBeNull()
+    show([M, FAR])
+    expect(screen.queryByText(HIDDEN_TEXT)).toBeNull()
+    expect(screen.getByTestId('missing-host-pane')).toBeInTheDocument()
+    expect(fetchWsTicket).not.toHaveBeenCalled()
+  })
+
+  it('a daemon-source editor on hidden X renders normally (not host-bearing, §0.22)', () => {
+    const l = leaf('p1', { kind: 'editor', source: { type: 'daemon', hostId: X }, filePath: '/a.txt' })
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByTestId('ed-p1')).toBeInTheDocument()
+    expect(mounts.editor).toBe(1)
+    expect(screen.queryByText(HIDDEN_TEXT)).toBeNull()
+  })
+
+  it('the placeholder names the host and its link opens that host\'s Hosts page', () => {
+    const l = leaf('p1', tmuxC(X))
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByTestId('host-hidden-pane').textContent).toContain(X)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Hosts' }))
+    const s = useTabStore.getState()
+    const opened = s.tabs[s.activeTabId!]
+    expect(opened.layout.type === 'leaf' && opened.layout.pane.content.kind).toBe('hosts')
+    expect(useHostStore.getState().activeHostId).toBe(X)
+  })
+
+  it('in a split [mlab | X] only the X leaf is gated; the mlab renderer stays mounted through hide and show', () => {
+    const l = split(leaf('pm', tmuxC(M)), leaf('px', tmuxC(X)))
+    seedTab(l)
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(screen.getByTestId('tmux-pm')).toBeInTheDocument()
+    expect(screen.queryByTestId('tmux-px')).toBeNull()
+    expect(screen.getAllByText(HIDDEN_TEXT)).toHaveLength(1)
+    show([M, X_WIRE])
+    expect(screen.getByTestId('tmux-px')).toBeInTheDocument()
+    show([M])
+    expect(screen.queryByTestId('tmux-px')).toBeNull()
+    expect(mounts.tmux.map((p) => p.id)).toEqual(['pm', 'px'])
+    expect(unmounts.tmux).toEqual(['px']) // mlab never remounted
+  })
+
+  it('live: hiding X unmounts the renderer without a tab-store write; showing mounts it again with the SAME pane', () => {
+    show([M, X_WIRE])
+    const l = leaf('p1', tmuxC(X))
+    seedTab(l)
+    const tabsBefore = useTabStore.getState().tabs
+    render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+    expect(mounts.tmux).toHaveLength(1)
+    vi.mocked(fetchWsTicket).mockClear()
+    act(() => { setHostShown(X, false) })
+    expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+    expect(unmounts.tmux).toEqual(['p1'])
+    expect(useTabStore.getState().tabs).toBe(tabsBefore)
+    act(() => { setHostShown(X, true) })
+    expect(screen.queryByText(HIDDEN_TEXT)).toBeNull()
+    expect(mounts.tmux).toHaveLength(2)
+    expect(mounts.tmux[1]).toBe(mounts.tmux[0]) // same pane object: same id, same content
+    expect(mounts.tmux[1].id).toBe('p1')
+    expect(fetchWsTicket).toHaveBeenCalledTimes(1)
+    expect(useTabStore.getState().tabs).toBe(tabsBefore)
+  })
+
+  describe('the execution lease, for real', () => {
+    const E = 'ex1'
+    const mountExec = () => {
+      show([M, X_WIRE])
+      const l = leaf('p1', execC(X))
+      seedTab(l)
+      render(<PaneLayoutRenderer layout={l} tabId="t1" isActive={true} />)
+      expect(mounts.exec).toHaveLength(1)
+    }
+
+    it('lease held → hiding X releases it exactly once (X, the execution, the lease id)', async () => {
+      mountExec()
+      act(() => { useExecutionStore.getState().setLease(X, E, { leaseId: 'ls_1', expiresAt: Date.now() + 60_000 }) })
+      await act(async () => { setHostShown(X, false) })
+      expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+      expect(releaseLease).toHaveBeenCalledTimes(1)
+      expect(releaseLease).toHaveBeenCalledWith(X, E, 'ls_1')
+    })
+
+    it('no lease held → hiding X releases nothing', async () => {
+      mountExec()
+      await act(async () => { setHostShown(X, false) })
+      expect(releaseLease).not.toHaveBeenCalled()
+    })
+
+    it('releaseLease rejecting → the placeholder still renders, nothing unhandled', async () => {
+      vi.mocked(releaseLease).mockRejectedValue(new Error('offline'))
+      mountExec()
+      act(() => { useExecutionStore.getState().setLease(X, E, { leaseId: 'ls_1', expiresAt: Date.now() + 60_000 }) })
+      await act(async () => { setHostShown(X, false) })
+      expect(screen.getByText(HIDDEN_TEXT)).toBeInTheDocument()
+      expect(releaseLease).toHaveBeenCalledTimes(1)
+    })
+
+    it('while hidden nothing attaches; after show the lease stays lazy until ensureLease()', async () => {
+      mountExec()
+      await act(async () => { setHostShown(X, false) })
+      expect(attachControl).not.toHaveBeenCalled()
+      await act(async () => { setHostShown(X, true) })
+      expect(mounts.exec).toHaveLength(2)
+      expect(attachControl).not.toHaveBeenCalled()
+      await act(async () => { await lease.api!.ensureLease() })
+      expect(attachControl).toHaveBeenCalledTimes(1)
+      expect(attachControl).toHaveBeenCalledWith(X, E)
+    })
   })
 })

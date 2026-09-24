@@ -7,6 +7,7 @@ import { parseRoute, tabToUrl } from '../lib/route-utils'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useWorkspaceStore } from '../features/workspace'
 import { resolveExecutionHostId } from '../lib/nex/resolve-host'
+import { landOnHostsPageIfHidden } from '../lib/shown-hosts'
 
 type TabStoreState = ReturnType<typeof useTabStore.getState>
 
@@ -102,13 +103,18 @@ export function useRouteSync() {
         }
         break
       }
-      case 'execution':
+      case 'execution': {
         // Execution pane (spec §4.3.3), singleton per (host, execution id).
         // It owns its own observe subscription, so a direct URL /
         // back-forward never dead-ends. The host segment (or its absence) is
         // resolved at open time so the pane always has a concrete host.
-        openSingletonTab({ kind: 'execution', executionId: parsed.executionId, host: resolveExecutionHostId(parsed.host) })
+        // Host ownership H2d-3: a host not shown in this workbench (hidden, or
+        // a ref neither local nor listed) lands on the Hosts page — no tab.
+        const host = resolveExecutionHostId(parsed.host)
+        if (landOnHostsPageIfHidden(host)) break
+        openSingletonTab({ kind: 'execution', executionId: parsed.executionId, host })
         break
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openSingletonTab, setActiveTab: stable Zustand selectors
   }, [location, hydrated])

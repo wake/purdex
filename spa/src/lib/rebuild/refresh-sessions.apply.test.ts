@@ -5,6 +5,7 @@
 // only the fetch is faked.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
@@ -74,6 +75,7 @@ beforeEach(() => {
   __resetRefreshForTests()
   listSessionsFresh.mockReset()
   useHostStore.setState({ hosts: { [M]: { id: M, name: M, ip: '10.0.0.1', port: 7860, token: 'tok', order: 0 } }, hostOrder: [M], activeHostId: M, runtime: {} })
+  useShownHostsStore.setState({ ids: [M] }) // shown in this workbench: the revive pass skips a hidden host (H2d-4)
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   useSessionStore.setState({ sessions: {} })
   masterOnScreen()

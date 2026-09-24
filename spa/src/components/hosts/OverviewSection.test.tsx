@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { OverviewSection } from './OverviewSection'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
+import { syncIdOfSync } from '../../lib/profile/host-identity'
+import { STORAGE_KEYS } from '../../lib/storage'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 // HostIconField renders a Phosphor icon whose weight loader fetches
@@ -671,5 +676,78 @@ describe('TokenField', () => {
     expect(screen.getByTestId('host-badge-preview-badge-active').style.getPropertyValue('--hb-main')).toBe('rgba(59, 130, 246, 1)')
     fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
     expect(screen.getByTestId('host-badge-preview-badge-active').style.getPropertyValue('--hb-main')).toBe('rgba(239, 68, 68, 1)')
+  })
+})
+
+// Host ownership H2d-2 T1 (plan §0.21): the switch "Show in this workbench" is the ONLY writer of the shown list; it
+// writes exactly this host's forms and nothing else — no tab, no workspace, no other id.
+describe('OverviewSection — the show in this workbench switch (H2d-2)', () => {
+  const DAEMON = 'air-lab:26aaaa'
+  const WIRE = syncIdOfSync(DAEMON)
+  const UNKNOWN = syncIdOfSync('nowhere:000000') // a host only another device has
+  const theSwitch = () => screen.getByRole('switch', { name: 'Show in this workbench' })
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 't', daemonId: DAEMON } },
+      hostOrder: [HOST_ID],
+      runtime: { [HOST_ID]: { status: 'connected' } },
+    })
+    useShownHostsStore.setState({ ids: [] })
+  })
+
+  it('reflects the store: off while hidden (the default), on when listed by its d1_ id or its local id', () => {
+    const { unmount } = render(<OverviewSection hostId={HOST_ID} />)
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText(/A hidden host stays connected/)).toBeInTheDocument()
+    act(() => useShownHostsStore.setState({ ids: [WIRE] }))
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'true')
+    unmount()
+    useShownHostsStore.setState({ ids: [HOST_ID] })
+    render(<OverviewSection hostId={HOST_ID} />)
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('ON appends exactly the host wire id; an unknown id stays first', () => {
+    useShownHostsStore.setState({ ids: [UNKNOWN] })
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(theSwitch())
+    expect(useShownHostsStore.getState().ids).toEqual([UNKNOWN, WIRE])
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('OFF removes every form of the host (d1_ id and local id); other ids stay, in order', () => {
+    useShownHostsStore.setState({ ids: [UNKNOWN, WIRE, 'other', HOST_ID] })
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(theSwitch())
+    expect(useShownHostsStore.getState().ids).toEqual([UNKNOWN, 'other'])
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('opening the overview writes nothing to the shown list', async () => {
+    useShownHostsStore.setState({ ids: [UNKNOWN] })
+    const setState = vi.spyOn(useShownHostsStore, 'setState')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const changed = vi.fn() // catches the store's own internal `set` too, which the setState spy does not see
+    const unsubscribe = useShownHostsStore.subscribe(changed)
+    render(<OverviewSection hostId={HOST_ID} />)
+    await waitFor(() => expect(screen.getByText('darwin / arm64')).toBeInTheDocument())
+    unsubscribe()
+    expect(changed).not.toHaveBeenCalled()
+    expect(setState).not.toHaveBeenCalled()
+    expect(setItem.mock.calls.filter(([key]) => key === STORAGE_KEYS.SHOWN_HOSTS)).toEqual([])
+    expect(useShownHostsStore.getState().ids).toEqual([UNKNOWN])
+    setState.mockRestore()
+    setItem.mockRestore()
+  })
+
+  it('toggling writes no tab or workspace store', () => {
+    const tabs = useTabStore.getState().tabs
+    const workspaces = useWorkspaceStore.getState().workspaces
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(theSwitch())
+    fireEvent.click(theSwitch())
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(useWorkspaceStore.getState().workspaces).toBe(workspaces)
   })
 })

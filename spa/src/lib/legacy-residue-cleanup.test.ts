@@ -43,7 +43,7 @@ afterEach(() => {
 
 describe('cleanupLegacyResidue', () => {
   it('names exactly the residue keys and database', () => {
-    expect([...LEGACY_LOCAL_STORAGE_KEYS]).toEqual(['purdex-workspace-snapshot', 'purdex-workspace-snapshot-prev'])
+    expect([...LEGACY_LOCAL_STORAGE_KEYS]).toEqual(['purdex-workspace-snapshot', 'purdex-workspace-snapshot-prev', 'purdex-profile-pull-unconfirmed'])
     expect(LEGACY_IDB_NAME).toBe('purdex-sync')
   })
 
@@ -59,6 +59,15 @@ describe('cleanupLegacyResidue', () => {
     expect(localStorage.getItem('purdex-device-state')).toBe('{"live":true}')
     expect(localStorage.getItem('purdex-tabs')).toBe('{"live":true}')
     expect(localStorage.getItem('purdex-workspace-snapshot-x')).toBe('not ours')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('removes the stopped-pull notice the #1366 pull guard wrote (host ownership H3b: nothing writes or reads it any more)', async () => {
+    localStorage.setItem('purdex-profile-pull-unconfirmed', JSON.stringify({ hostId: 'h1', profileId: 'p_000000000001', at: 1 }))
+    localStorage.setItem('purdex-profile', '{"live":true}')
+    await cleanupLegacyResidue()
+    expect(localStorage.getItem('purdex-profile-pull-unconfirmed')).toBeNull()
+    expect(localStorage.getItem('purdex-profile')).toBe('{"live":true}')
     expect(warn).not.toHaveBeenCalled()
   })
 

@@ -13,6 +13,7 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import type { Session } from '../host-api'
 import { scanPaneTree } from '../pane-tree'
+import { isRefShownNow } from '../shown-hosts'
 import { openAttachGate } from './attach-gate'
 import { probeMissingCwds } from './cwd-probe'
 import { probeSessionProvenance } from './provenance-probe'
@@ -38,6 +39,9 @@ export function provenanceBindings(
   hostId: string,
   sessionCode?: string,
 ): Array<{ sessionCode: string; tmuxInstance: string }> {
+  // A host hidden in this workbench (host ownership H2d-4, §0.21): its panes are gated, so neither trigger (the
+  // sweep below, the hook event in `useMultiHostEventWs`) asks about them. The reconcile itself is unaffected.
+  if (!isRefShownNow(hostId)) return []
   // NUL separates the parts of the dedup key: it cannot occur in a session code
   // or an instance stamp, so no two distinct pairs collide. Written as the
   // `\u0000` escape rather than as a raw byte — a literal NUL makes the file

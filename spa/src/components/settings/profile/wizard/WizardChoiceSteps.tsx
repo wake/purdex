@@ -242,22 +242,6 @@ export function LocalStep({ localId, onLocal, worldReason }: { localId: string; 
 
 // === Step 4 ===
 
-/**
- * What a pull would do to this device's HOSTS (host-sync-identity spec §8), for the pull warning:
- *   refused   the attach host is not verified / is at a daemon other than its record (`PullPremiseReason`);
- *   loading   the profile's host list is being read;
- *   ok        read: `removes` — local hosts no row of the profile matches, which the pull removes;
- *   failed    `reason`: a `PullPreview` refusal (`list-failed` with the request's class, or a match error).
- */
-export type PullCheck =
-  | { state: 'refused'; reason: PullPremiseReason }
-  | { state: 'loading' }
-  | { state: 'ok'; removes: readonly string[] }
-  | { state: 'failed'; reason: string; request?: string }
-
-/** Sentences for a pull that cannot be made; anything else read from the host is `check_failed` + the request's class. */
-const PULL_REFUSED = new Set(['master-unverified', 'master-mismatch', 'master-unmatched', 'duplicate-host-identity', 'host-identity-conflict'])
-
 interface DirectionStepProps {
   profileName: string
   /** Why pull is not offered; null = it is. */
@@ -270,14 +254,11 @@ interface DirectionStepProps {
   saveName: string
   onSaveName: (name: string) => void
   saveNameOk: boolean
-  /** Null unless the direction is pull. */
-  pullCheck: PullCheck | null
-  onRetryPullCheck: () => void
-  /** The host the pull is made through — named when the profile has no row for it (`master-unmatched`). */
-  attachHostId: string | null
+  /** Why a pull cannot be made through this host (host-sync-identity spec §8, D3); null = it can. Said with pull chosen. */
+  pullRefused: PullPremiseReason | null
 }
 
-export function DirectionStep({ profileName, pullUnavailable, direction, onDirection, localId, saveFirst, onSaveFirst, saveName, onSaveName, saveNameOk, pullCheck, onRetryPullCheck, attachHostId }: DirectionStepProps) {
+export function DirectionStep({ profileName, pullUnavailable, direction, onDirection, localId, saveFirst, onSaveFirst, saveName, onSaveName, saveNameOk, pullRefused }: DirectionStepProps) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -326,32 +307,10 @@ export function DirectionStep({ profileName, pullUnavailable, direction, onDirec
             {counts === null ? t('settings.profile.wizard.direction.pull_replaces_unknown') : t('settings.profile.wizard.direction.pull_replaces', { workspaces: counts.workspaces, tabs: counts.tabs })}
           </p>
           <p className="text-text-secondary">{t('settings.profile.wizard.direction.pull_also')}</p>
-          {pullCheck?.state === 'loading' && (
-            <p data-testid="profile-wizard-pull-checking" role="status" className="text-text-muted">{t('settings.profile.wizard.pull.checking')}</p>
-          )}
-          {pullCheck?.state === 'ok' && pullCheck.removes.length > 0 && (
-            <div data-testid="profile-wizard-pull-removes" className="text-yellow-500">
-              <p>{t('settings.profile.wizard.pull.removes')}</p>
-              <ul className="ml-4 list-disc">
-                {/* A host's name is the user's own text: shown as it is. */}
-                {pullCheck.removes.map((id) => <li key={id} data-testid={`profile-wizard-pull-removes-${id}`}>{hostName(id)}</li>)}
-              </ul>
-            </div>
-          )}
-          {(pullCheck?.state === 'refused' || pullCheck?.state === 'failed') && (
-            <div className="flex flex-wrap items-center gap-2">
-              <p data-testid="profile-wizard-pull-refused" data-reason={pullCheck.reason} role="alert" className="text-red-500">
-                {PULL_REFUSED.has(pullCheck.reason)
-                  ? t(`settings.profile.wizard.pull.${pullCheck.reason.replace(/-/g, '_')}`, { name: attachHostId === null ? '' : hostName(attachHostId) })
-                  : `${t('settings.profile.wizard.pull.check_failed')} ${t(requestKey(pullCheck.state === 'failed' ? (pullCheck.request ?? 'thrown') : 'thrown'))}`}
-              </p>
-              {pullCheck.state === 'failed' && (
-                <button type="button" data-testid="profile-wizard-pull-retry" onClick={onRetryPullCheck} className={BTN}>
-                  <ArrowsClockwise size={14} />
-                  {t('settings.profile.wizard.run.retry')}
-                </button>
-              )}
-            </div>
+          {pullRefused !== null && (
+            <p data-testid="profile-wizard-pull-refused" data-reason={pullRefused} role="alert" className="text-red-500">
+              {t(`settings.profile.wizard.pull.${pullRefused.replace(/-/g, '_')}`)}
+            </p>
           )}
           <label className={CHOICE}>
             <input type="checkbox" data-testid="profile-wizard-save-first" className={RADIO} checked={saveFirst} onChange={(e) => onSaveFirst(e.target.checked)} />
