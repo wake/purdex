@@ -706,17 +706,37 @@ export interface OperationBlockProps {
   review #12 — these are P-B2 / P-B3 behaviours whose only guards are the
   test files T3.3 removes, so they are re-asserted here or they are gone):
   `falls back to the unknown-tool label when the block has no name`
-  (`execution.tool.unknown`); `looks tools up by own key`
-  (a `tools` map whose key is `constructor` must not reach
-  `Object.prototype` — the same hostile-id case `ToolUseBlock.tsx:21` and
-  `ConversationMessages.tsx:105` guard today); `an N2 status outranks the raw
-  frame's is_error` (`facts.status: 'ok'` with `isError: true` → the ok dot);
+  (`execution.tool.unknown` — **note the real fallback lives at the call
+  site**, `ToolUseBlock.tsx:26`'s `block.name ?? t(…)`, and `OperationBlock`
+  receives an already-resolved `tool: string`. The block keeps an empty-string
+  guard of its own, but **T3.3's call site still needs the `??`**: `??` fires
+  on an absent name, the block's guard on an empty one);
+  `an N2 status outranks the raw frame's is_error`
+  (**`facts.status: 'done'`** with `isError: true` → the ok dot. An earlier
+  draft wrote `'ok'`, which is not a member of `ToolActivity['status']` at
+  all — it is `ToolResultBlock`'s internal *tone*);
   `a raw result does not downgrade a denial` (`facts.status: 'denied'` with
-  `isError: false` stays denied); `shows no duration when both clocks are
-  unknown` (`startedAt: 0`, no `durationMs`); `prefers the daemon's
-  durationMs over the clock difference`; `shows the aborted badge`;
+  `isError: false` stays denied — asserted on the dot colour, the rail's
+  warning fill and the struck-through name, since the new DOM has no denied
+  badge); `shows no duration when **either** clock is unknown`
+  (`startedAt: 0` **and**, separately, `endedAt: 0`; the existing tests guard
+  each one, and "both" would leave half the contract uncovered);
+  `prefers the daemon's durationMs over the clock difference` (**the two
+  numbers have to straddle the 1 s threshold**: a clock difference of 6.2 s
+  against `durationMs: 1200` shows `1.2s`. The existing test's 26 ms against
+  100 ms would be invisible either way and assert nothing);
+  `shows the aborted badge` (the wrench icon it also checked today is gone —
+  the status dot replaced it);
   `renders a truncated diff that has no hunks` (the daemon dropped them all,
-  so only the note shows); `renders the elapsed timer only while running`.
+  so only the note shows); `renders the elapsed timer only while running` (two test ids,
+  `op-elapsed` and `op-duration`, which is how the existing tests tell the
+  running badge from the finished one).
+
+  **A negative assertion needs a positive control.** Three of these read
+  "shows no X"; against a stub that renders nothing they pass without
+  touching the implementation. Each is paired with the case that *does* show
+  X (1000 ms shows a duration, a second input key shows the toggle, a known
+  clock shows the badge), and the pair is what makes the guard real.
 
 ### T3.2 the diff display budget and the last theme tokens (#1227) (TDD)
 
@@ -768,6 +788,12 @@ defect, and R1's whole claim is "one folding rule for every block type".
     `result={index.resultForCall.get(blockKey(i, j)) ?? null}` and the
     `facts` looked up the same own-key way `ToolResultBlock` is looked up
     today (`Object.hasOwn(tools, id)`);
+  - **the own-key lookup contract lands here** (it has no home in
+    `OperationBlock`, which takes no `tools` map): `ConversationMessages.test.tsx`
+    must assert that a `tools` map keyed `constructor` does not reach
+    `Object.prototype`, and that a prototype-chain entry is ignored. Those are
+    the two guards `ToolUseBlock.test.tsx` holds today, and deleting that file
+    without re-asserting them here loses them for good.
   - a `tool_result` block whose `blockKey(i, j)` is in
     `index.consumedResults` renders `null` (its call already showed it); one
     that is not renders an orphan
