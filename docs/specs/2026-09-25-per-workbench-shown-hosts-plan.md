@@ -68,10 +68,18 @@ Q1 upgrade default = `[]` (§0.5). Q2 promote = the list follows the workbench (
   promote stamps). `worldId === 'master'` → `useShownHostsStore.ids`; a slave id → that slave's `shownHostIds`;
   unknown id → `[]` (fail closed: gated, never connected). Keyed on the tab tag, not `activeProfileId`, so panes are
   judged by the list of the world they belong to while another window's switch rehydrates store by store.
-- **Fail closed (codex #4)**: the reader returns `[]` (every host hidden → gated, no connection) whenever it cannot
-  be sure which list applies: `useTabStore.worldId` differs from `useLocalProfilesStore.activeProfileId` (a
-  cross-window switch / promote mid-rehydrate), or any of the tab / local-profiles / shown-hosts stores has not
-  hydrated. A hidden pane opens no connection (spec §4.5), so a transient `[]` can only delay a connection, never
+- **Fail closed (codex #4, tightened by the delta review)**: the reader returns `[]` (every host hidden → gated, no
+  connection) unless ALL of these hold, checked on every read (not only at first hydration — cross-window
+  rehydrates arrive store by store and `hasHydrated()` never goes back to false):
+  1. the live world is settled: the same check `readMasterWorld` uses (tab + workspace tag = `activeProfileId`, epoch
+     = `worldEpoch`, not behind the persisted fence) — reuse that function, do not re-implement it;
+  2. on the master: `useShownHostsStore.relabelStamp === useLocalProfilesStore.relabelCount` — **new**: the shown
+     store persists a device-local `relabelStamp` (NOT projected, not in `settings`) written in the same block as the
+     promote's list write; `relabelCount` already increments on every promote / relabel. A shown store that has not
+     yet rehydrated a promote in another window therefore reads `[]`, as does a local-profiles store that has not;
+  3. on a slave: the slave record exists (its list is read from `useLocalProfilesStore`, which the settled check in 1
+     already covers).
+  A store missing `relabelStamp` (pre-upgrade data) is stamped with the current `relabelCount` once at hydration. A hidden pane opens no connection (spec §4.5), so a transient `[]` can only delay a connection, never
   open a wrong one. Tested for every rehydrate order of a promote (A2).
 
 ## 3. PR split (≤ 20 files each — codex #8; the executor measures the real list before each PR and splits
@@ -91,7 +99,9 @@ A1 **Store field** — `useLocalProfilesStore.ts`: `LocalProfile.shownHostIds: s
    `sanitizeShownIds(v.shownHostIds)` when it is an array and **defaults to `[]`** when the persisted record has
    none (§0.5 — this IS the upgrade; no separate step). **Every path that rebuilds a `LocalProfile` keeps the list**
    (codex #1, critical): `setProfileAppearance` (~:417), rename, `sanitiseSlave`, `addSlave`, `promoteSlave` — a
-   regression test per path (appearance patch, rename, reload) asserts the same array survives; `addSlave(name, world, shownHostIds = [])`; new action
+   regression test per path (appearance patch, rename, reload) asserts the same array survives; **and every path
+   that creates one states its list**: `sanitiseData`'s recovered-master rescue (~:350-353) creates the rescued slave
+   with `[]` (§0.5), tested; `addSlave(name, world, shownHostIds = [])`; new action
    `setSlaveShownHosts(id, fn: (ids) => string[]) → {ok} | not-found` (no-op when unchanged: same reference, no set).
    The persisted-keys test (:608) is unchanged (field is inside `slaves`). Import `sanitizeShownIds` from
    `useShownHostsStore` (pure function; check the import guard allows a store→store type/function import, else move
@@ -113,6 +123,15 @@ A3 **Writer + promote** — `setHostShown`: target = current world by the tab ta
    itself throws, report a distinct `rollback-incomplete` outcome (not swallowed — `restoreLocal` today swallows) and
    leave a problem the UI shows. Failure-injection tests: local write fails / shown write fails / `restampWorld`
    fails, and each of their rollback writes failing.
+   **`restampWorld` must report its own restores (delta review)**: today its tab / workspace restores swallow
+   exceptions (`master-world.ts` ~:189, ~:258). Change it to attempt BOTH restores even if the first throws and to
+   return / throw a result that says whether each restore succeeded; promote folds that into its outcome. Tests inject
+   a failure into each of the two internal restores.
+   **The outcome, typed and shown**: `PromoteResult` gains `{ ok: false, reason: 'rollback-incomplete' }` (distinct from
+   `write-failed`; `relabel` stops collapsing it). The caller (Settings › Profile's promote action) shows it with the
+   persistent notice from H1c (`useUndoToast` `notice`, `persistent: true`): en "Making this the workbench master did
+   not finish and could not be fully undone — reload and check this device's workbenches." / zh-TW 「設為工作台主檔
+   沒有完成，也無法完整還原——請重新載入並檢查這台裝置的工作台。」 Test: the notice appears for `rollback-incomplete` only.
 A4 **(dropped)** — Q1 = `[]` makes the upgrade a `sanitiseSlave` default (A1); codex #2 (cross-key upgrade race)
    no longer applies. **Known residual (codex #6, accepted)**: a window still running the pre-upgrade build that writes
    `purdex-local-profiles` drops `shownHostIds` → the next read defaults to `[]` = every host hidden in that local
@@ -122,8 +141,9 @@ A5 **Re-key** — `rekeyShownHosts` also re-keys each slave's `shownHostIds` wit
    `useLocalProfilesStore.getState().slaves` AT COMMIT, maps, sets, and remembers that value for its undo; undos run
    in reverse, so the parked-worlds undo still restores the pre-state. Deletion (`rewriteHostRefs`) never re-keys lists.
    **Two stores, one step (codex #5)**: the step captures BOTH before-states (master `ids`, `slaves`), writes both,
-   and its own undo restores both — including when its own commit threw after the first write; a failing undo reports
-   through the pass's existing `rollback-failed` path (H1b). Tests: second write fails → both restored; undo fails →
+   and its own undo restores both — including when its own commit threw after the first write. **The undo attempts
+   BOTH restores even if the first throws**, then throws one combined error if either failed (`commitAll` calls a
+   step's `undo()` once); that surfaces through the pass's existing `rollback-failed` path (H1b). Tests: second write fails → both restored; undo fails →
    `rollback-failed` + retry.
 A6 **Reshow** — `host-reshow.ts` snapshots with the current list and also subscribes to `useLocalProfilesStore`
    (the current slave's list) and to `useTabStore` `worldId` changes; hydration gate covers **four** stores — host, shown-hosts, local-profiles, tab (codex #7: identity resolution
@@ -142,7 +162,9 @@ switch-active.ts/.test, host-reresolve.ts? (only if A5 needs it; the step lives 
 .integration.test, host-reshow.ts/.test, new `lib/profile/shown-hosts-upgrade.ts`/.test, main.tsx, en.json, zh-TW.json,
 2 spec files + this plan, host-overview switch test if the return type matters. Over 20 → split A8 docs into a docs PR.
 
-Mutation (delivery item): (m5) `setProfileAppearance` drops the list → A1 red; (m6) promote skips the rollback of
+Mutation (delivery item): (m5) `setProfileAppearance` drops the list → A1 red; (m10) reader ignores
+`relabelStamp` → A2 cross-window promote test red; (m11) `restampWorld` stops after the first failing restore → A3
+red; (m12) A5 undo stops after the first failing restore → A5 red; (m6) promote skips the rollback of
 the second store → A3 red; (m7) reader not fail closed on worldId ≠ activeProfileId → A2 red; (m8) re-key undo
 restores one store → A5 red; (m9) reshow gate without the host store → A6 red; (m1) reader ignores the tab tag (reads the store always) → A2 tests red; (m2) slave toggle
 writes the store → A3 red + a collector test "slave toggle builds no new settings hash" red; (m3) re-key plans the
@@ -180,4 +202,8 @@ moot (Q1 = `[]`, A4 dropped). 3 promote two-store rollback → A3 defined + fail
 promote may open a wrong connection → §2 fail closed + m7. 5 re-key two-store atomicity → A5 + m8. 6 old-shape
 window overwrite → accepted residual (A4 note; fail closed). 7 reshow gate needs the host store → A6 four stores + m9.
 8 file count → §3 split (docs / A1 / A2 / B).
+
+Delta review task-muftmhf3-kht0g4 (5): critical fail-closed only at first hydration → §2 per-read settled check +
+`relabelStamp`; `restampWorld` swallows restores → A3; `rollback-incomplete` untyped / not shown → A3 type + notice;
+`sanitiseData` rescue path → A1 `[]`; A5 undo stops at first failure → A5 both-then-throw.
 
