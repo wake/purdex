@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { SessionPaneContent } from './SessionPaneContent'
 import { useHostStore } from '../stores/useHostStore'
+import { useHostLookStore } from '../stores/useHostLookStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useConfigStore } from '../stores/useConfigStore'
@@ -350,6 +351,31 @@ describe('SessionPaneContent', () => {
       expect(screen.getByText(/This device has no host d1_unknownhost/)).toBeInTheDocument()
       expect(screen.queryByTestId('terminal-view')).not.toBeInTheDocument()
       expect(terminalViewProps.last).toBeUndefined()
+    })
+
+    // H2c-2 T4: the look store names a host by wire id even when this device has no such host.
+    it('names the host by the workbench look for that id when there is one', () => {
+      useHostLookStore.setState({ looks: { d1_unknownhost: { name: 'air26' } } })
+      try {
+        const pane = missing()
+        setupTabStore(pane)
+        render(<SessionPaneContent pane={pane} isActive={true} />)
+        expect(screen.getByText('This device has no host air26')).toBeInTheDocument()
+      } finally {
+        useHostLookStore.setState({ looks: {} })
+      }
+    })
+
+    it('without a look entry for that id it names the id', () => {
+      useHostLookStore.setState({ looks: { d1_otherhost: { name: 'air26' } } })
+      try {
+        const pane = missing()
+        setupTabStore(pane)
+        render(<SessionPaneContent pane={pane} isActive={true} />)
+        expect(screen.getByText('This device has no host d1_unknownhost')).toBeInTheDocument()
+      } finally {
+        useHostLookStore.setState({ looks: {} })
+      }
     })
 
     it('asks for no ticket and runs no probe, even with a gate entry for that id', () => {
