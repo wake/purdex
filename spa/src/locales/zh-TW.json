@@ -896,6 +896,8 @@
   "hosts.delete_keeps_tabs": "它的分頁會保留，在這台裝置上顯示「沒有此主機」；其他裝置上的分頁不受影響。",
   "hosts.delete_busy": "正在進行其他操作，請稍後再試刪除 {{name}}",
   "hosts.delete_stale": "主機 {{name}} 已被變更或移除，未刪除",
+  "hosts.delete_failed": "無法刪除 {{name}}，未做任何變更",
+  "hosts.delete_failed_incomplete": "刪除 {{name}} 失敗且無法完全復原——請重新載入 Purdex 並檢查主機設定",
   "hosts.daemon_config": "Daemon 設定",
   "hosts.sizing_mode": "大小模式",
   "hosts.sizing_mode_option.auto": "自動",

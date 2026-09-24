@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { GlobalUndoToast } from './GlobalUndoToast'
 import { useUndoToast } from '../stores/useUndoToast'
 
@@ -33,3 +33,30 @@ describe('GlobalUndoToast — render rules (codex round-1 B4)', () => {
     expect(screen.getByRole('status')).toBeInTheDocument()
   })
 })
+
+// PR #1413 critic: a failure the user must act on (a host deletion that could not put everything back) stays until
+// they close it — it is not gone in 5 s like an undo offer.
+describe('GlobalUndoToast — persistent notices', () => {
+  beforeEach(() => {
+    useUndoToast.setState({ toast: null })
+    vi.useFakeTimers()
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('an ordinary toast is dismissed after 5 s', () => {
+    useUndoToast.getState().show('Deleted host', () => {})
+    render(<GlobalUndoToast />)
+    act(() => { vi.advanceTimersByTime(5_000) })
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
+  it('a persistent one is not — it stays until its Close button is pressed', () => {
+    useUndoToast.getState().show('Reload and check the host settings', undefined, undefined, { persistent: true })
+    render(<GlobalUndoToast />)
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(screen.getByText('Reload and check the host settings')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+})
+

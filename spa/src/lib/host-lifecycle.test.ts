@@ -15,7 +15,7 @@ import { useWorkspaceStore } from '../features/workspace/store'
 import { useUndoToast } from '../stores/useUndoToast'
 import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
-import { HOST_DELETE_LOCK_OWNER, deleteHostCascade, deleteHostWithUndoToast, startPeerCacheInvalidation } from './host-lifecycle'
+import { HOST_DELETE_LOCK_OWNER, HostDeleteRollbackIncompleteError, deleteHostCascade, deleteHostWithUndoToast, startPeerCacheInvalidation } from './host-lifecycle'
 import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
@@ -633,13 +633,19 @@ describe('host delete cascade — a write fails half-way', () => {
     seedEverything()
     // `removeHost` fails; putting the tab store back (its second write — the first was the rewrite) fails too
     const real = Storage.prototype.setItem
-    let tabWrites = 0
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
-      if (k === STORAGE_KEYS.HOSTS) throw new DOMException('quota', 'QuotaExceededError')
-      if (k === STORAGE_KEYS.TABS && ++tabWrites >= 2) throw new DOMException('tabs quota', 'QuotaExceededError')
-      real.call(this, k, v)
-    })
+    const failAgain = (): void => {
+      let tabWrites = 0
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+        if (k === STORAGE_KEYS.HOSTS) throw new DOMException('quota', 'QuotaExceededError')
+        if (k === STORAGE_KEYS.TABS && ++tabWrites >= 2) throw new DOMException('tabs quota', 'QuotaExceededError')
+        real.call(this, k, v)
+      })
+    }
+    failAgain()
     expect(() => deleteHostCascade(HOST_A)).toThrow(/^quota \(rollback incomplete — tabs quota\)$/)
+    vi.restoreAllMocks()
+    seedEverything()
+    expect(() => { failAgain(); deleteHostCascade(HOST_A) }).toThrow(HostDeleteRollbackIncompleteError)
   })
 
   it('a clear that throws (a store action, not a persist) is rolled back the same way', () => {

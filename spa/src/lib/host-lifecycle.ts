@@ -111,7 +111,7 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
     }
     if (unfinished.length === 0) throw err
     console.error(`[host-lifecycle] deleting host ${hostId} failed, and putting it back failed too: ${unfinished.join('; ')}`)
-    throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
+    throw new HostDeleteRollbackIncompleteError(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
   }
 
   if (afterCommit) afterCommit.push(...releases)
@@ -139,6 +139,14 @@ function leaseReleasesOf(hostId: string): Array<() => void> {
       // best-effort: a release that throws synchronously stops nothing
     }
   })
+}
+
+/**
+ * A deletion failed AND putting the stores back failed too: this device may hold part of the deletion (memory and
+ * storage possibly apart). The UI says so until dismissed — reload, check the host settings.
+ */
+export class HostDeleteRollbackIncompleteError extends Error {
+  override name = 'HostDeleteRollbackIncompleteError'
 }
 
 /** An error's message — a `DOMException` (a persist's quota error) included, which is not always an `Error` here. */

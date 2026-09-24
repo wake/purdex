@@ -896,6 +896,8 @@
   "hosts.delete_keeps_tabs": "Its tabs stay, showing “no host here” on this device. Tabs on other devices are not affected.",
   "hosts.delete_busy": "Another operation is in progress — try deleting {{name}} again in a moment",
   "hosts.delete_stale": "{{name}} was changed or removed meanwhile — it was not deleted",
+  "hosts.delete_failed": "{{name}} could not be deleted — nothing was changed",
+  "hosts.delete_failed_incomplete": "Deleting {{name}} failed and could not be fully undone — reload Purdex and check the host settings",
   "hosts.daemon_config": "Daemon Config",
   "hosts.sizing_mode": "Sizing Mode",
   "hosts.sizing_mode_option.auto": "auto",

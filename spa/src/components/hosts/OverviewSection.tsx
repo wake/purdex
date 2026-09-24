@@ -3,7 +3,8 @@ import { ArrowsClockwise, Trash, Plugs, LockSimple } from '@phosphor-icons/react
 import { requestAtOf, useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
-import { deleteHostWithUndoToast } from '../../lib/host-lifecycle'
+import { HostDeleteRollbackIncompleteError, deleteHostWithUndoToast } from '../../lib/host-lifecycle'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { connectionErrorMessage } from '../../lib/host-utils'
 import type { ConfigData } from '../../lib/host-api'
 import { Section, Field, EditableField, TokenField } from './form-fields'
@@ -102,7 +103,14 @@ export function OverviewSection({ hostId }: Props) {
     const hostName = hostLabel(hostId, hostLookOf(hostId))
     setConfirmDelete(false)
     void deleteHostWithUndoToast(hostId, { deleted: t('hosts.deleted_toast', { name: hostName }), busy: t('hosts.delete_busy', { name: hostName }), stale: t('hosts.delete_stale', { name: hostName }) }).catch((err: unknown) => {
-      console.error('[hosts] deleting a host failed; nothing was deleted', err)
+      // Said, not only logged: a deletion that failed was put back (nothing changed); one whose put-back failed too
+      // may have left part of it behind — that notice stays until closed.
+      console.error('[hosts] deleting a host failed', err)
+      if (err instanceof HostDeleteRollbackIncompleteError) {
+        useUndoToast.getState().show(t('hosts.delete_failed_incomplete', { name: hostName }), undefined, undefined, { persistent: true })
+      } else {
+        useUndoToast.getState().show(t('hosts.delete_failed', { name: hostName }))
+      }
     })
   }
 

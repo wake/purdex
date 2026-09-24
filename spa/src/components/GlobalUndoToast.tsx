@@ -9,7 +9,7 @@ export function GlobalUndoToast() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    if (!toast) return
+    if (!toast || toast.persistent) return
     timerRef.current = setTimeout(() => dismiss(), 5000)
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current)
@@ -34,6 +34,11 @@ export function GlobalUndoToast() {
           }}
         >
           {toast.actionLabel ?? t('hosts.undo')}
+        </button>
+      )}
+      {toast.persistent && (
+        <button className="text-sm text-zinc-400 hover:text-zinc-200 cursor-pointer" onClick={dismiss}>
+          {t('common.close')}
         </button>
       )}
     </div>
