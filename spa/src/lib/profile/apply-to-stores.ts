@@ -426,7 +426,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
         const leaving: Record<string, HostConfig> = {}
         for (const id of removedHostIds) leaving[id] = state.hosts[id]
         store.setState({ hosts: { ...next.hosts, ...leaving }, hostOrder: [...next.hostOrder, ...removedHostIds] })
-        for (const id of removedHostIds) undos.push(deleteHostCascade(id, false))
+        for (const id of removedHostIds) undos.push(deleteHostCascade(id))
       }
       // Focus is whatever the cascade left (it moves `activeHostId` to the first host, as a manual delete does) while that host survives.
       const now = useHostStore.getState()

@@ -20,6 +20,11 @@ import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
 import { STORAGE_KEYS } from './storage/keys'
+import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
+import { useRebuildStore } from '../stores/useRebuildStore'
+import { syncIdOfSync } from './profile/host-identity'
+import { __resetMasterWorldForTest } from './profile/master-world'
+import { __resetHostReresolveForTest } from './host-reresolve'
 import type { Tab } from '../types/tab'
 import type { Session } from './host-api'
 
@@ -31,6 +36,9 @@ function makeSession(code: string, name: string = code): Session {
 
 const HOST_A = 'host-a'
 const HOST_B = 'host-b'
+/** HOST_A has a verified daemon: its wire id is `WIRE_A`. HOST_B has none: its wire id is its local id. */
+const DAEMON_A = 'lab-a:aaaaaa'
+const WIRE_A = syncIdOfSync(DAEMON_A)
 
 function makeSessionTab(hostId: string, code: string, mode: 'terminal' = 'terminal'): Tab {
   return createTab({ kind: 'tmux-session', hostId, sessionCode: code, mode, cachedName: '', tmuxInstance: '' })
@@ -38,10 +46,14 @@ function makeSessionTab(hostId: string, code: string, mode: 'terminal' = 'termin
 
 function resetAllStores() {
   localStorage.clear()
+  __resetMasterWorldForTest()
+  __resetHostReresolveForTest()
   vi.mocked(nexApi.releaseLease).mockReset().mockResolvedValue(undefined)
+  useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+  useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
   useHostStore.setState({
     hosts: {
-      [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 },
+      [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0, daemonId: DAEMON_A },
       [HOST_B]: { id: HOST_B, name: 'Host B', ip: '5.6.7.8', port: 7860, order: 1 },
     },
     hostOrder: [HOST_A, HOST_B],
@@ -61,99 +73,113 @@ function resetAllStores() {
   useUndoToast.setState({ toast: null })
 }
 
-describe('host delete cascade', () => {
+describe('host delete cascade — this device only (host ownership spec §3.4)', () => {
   beforeEach(resetAllStores)
 
-  it('closeTabs=true closes matching tabs', () => {
-    const tab1 = makeSessionTab(HOST_A, 'dev001')
-    const tab2 = makeSessionTab(HOST_B, 'dev002')
-    useTabStore.getState().addTab(tab1)
-    useTabStore.getState().addTab(tab2)
+  const contentOf = (tabId: string) => getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
 
-    deleteHostCascade(HOST_A, true)
-
-    expect(useTabStore.getState().tabs[tab1.id]).toBeUndefined()
-    expect(useTabStore.getState().tabs[tab2.id]).toBeDefined()
-  })
-
-  it('closeTabs=false marks tabs as terminated', () => {
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-
-    deleteHostCascade(HOST_A, false)
-
-    const content = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
-    expect(content.kind).toBe('tmux-session')
-    if (content.kind === 'tmux-session') {
-      expect(content.terminated).toBe('host-removed')
-    }
-  })
-
-  it('closeTabs=true also closes execution-pane tabs owned by this host (spec §4.3.4), leaving other hosts alone', () => {
-    const execA = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
-    const execB = createTab({ kind: 'execution', executionId: 'exc_2', host: HOST_B })
-    useTabStore.getState().addTab(execA)
-    useTabStore.getState().addTab(execB)
-
-    deleteHostCascade(HOST_A, true)
-
-    expect(useTabStore.getState().tabs[execA.id]).toBeUndefined()
-    expect(useTabStore.getState().tabs[execB.id]).toBeDefined()
-  })
-
-  it('closeTabs=false leaves execution-pane tabs alone', () => {
+  it('the host\'s panes (tmux, daemon file source, execution) are rewritten to its wire id — none marked, no tab closed', () => {
+    const tmux = makeSessionTab(HOST_A, 'dev001')
+    const editor = createTab({ kind: 'editor', source: { type: 'daemon', hostId: HOST_A }, filePath: '/a' } as never)
     const exec = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
-    useTabStore.getState().addTab(exec)
+    for (const t of [tmux, editor, exec]) useTabStore.getState().addTab(t)
 
-    deleteHostCascade(HOST_A, false)
+    deleteHostCascade(HOST_A)
 
-    expect(useTabStore.getState().tabs[exec.id]).toBeDefined()
-    const content = getPrimaryPane(useTabStore.getState().tabs[exec.id].layout).content
-    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+    expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([tmux.id, editor.id, exec.id].sort())
+    expect(contentOf(tmux.id)).toEqual({ kind: 'tmux-session', hostId: WIRE_A, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    expect(contentOf(editor.id)).toMatchObject({ source: { type: 'daemon', hostId: WIRE_A } })
+    expect(contentOf(exec.id)).toEqual({ kind: 'execution', executionId: 'exc_1', host: WIRE_A })
+    expect(JSON.stringify(useTabStore.getState().tabs)).not.toContain('host-removed')
   })
 
-  it('closeTabs=true closes a hostless execution pane bound to the removed first host', () => {
-    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
-    useTabStore.getState().addTab(legacy)
+  it('another host\'s panes are untouched — the same objects', () => {
+    const tabB = makeSessionTab(HOST_B, 'stg001')
+    useTabStore.getState().addTab(tabB)
+    const before = useTabStore.getState().tabs[tabB.id]
 
-    deleteHostCascade(HOST_A, true)
+    deleteHostCascade(HOST_A)
 
-    expect(useTabStore.getState().tabs[legacy.id]).toBeUndefined()
+    expect(useTabStore.getState().tabs[tabB.id]).toBe(before)
   })
 
-  it('closeTabs=false pins a hostless execution pane to the removed first host instead of rebinding it', () => {
-    const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
-    useTabStore.getState().addTab(legacy)
+  it('a host with no daemonId: its wire id is its local id — nothing is rewritten, nothing marked', () => {
+    const tabB = makeSessionTab(HOST_B, 'stg001')
+    useTabStore.getState().addTab(tabB)
+    useHostSettingsStore.getState().set(HOST_B, 'editor', { homePath: '/b' })
+    const tabs = useTabStore.getState().tabs
+    const settings = useHostSettingsStore.getState().hosts
 
-    deleteHostCascade(HOST_A, false)
+    deleteHostCascade(HOST_B)
 
-    expect(useTabStore.getState().tabs[legacy.id]).toBeDefined()
-    const content = getPrimaryPane(useTabStore.getState().tabs[legacy.id].layout).content
-    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+    expect(useHostStore.getState().hosts[HOST_B]).toBeUndefined()
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(useHostSettingsStore.getState().hosts).toBe(settings)
   })
 
-  it.each([true, false])('removing a non-first host leaves a hostless execution pane untouched (closeTabs=%s)', (closeTabs) => {
+  it('a duplicate of another host (identity conflict): its refs get the sync id of its daemon, not its local id (plan §0.7)', () => {
+    const DUP = 'host-d'
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [DUP]: { id: DUP, name: 'dup', ip: '9.9.9.9', port: 7860, order: 2, daemonId: DAEMON_A } }, hostOrder: [...s.hostOrder, DUP] }))
+    const t = makeSessionTab(DUP, 'dup001')
+    useTabStore.getState().addTab(t)
+
+    deleteHostCascade(DUP)
+
+    expect(contentOf(t.id)).toMatchObject({ hostId: WIRE_A })
+  })
+
+  it('a legacy hostless execution pane is left alone — deleting the first host pins nothing', () => {
     const legacy = createTab({ kind: 'execution', executionId: 'exc_1' })
     useTabStore.getState().addTab(legacy)
+    const before = useTabStore.getState().tabs[legacy.id]
 
-    deleteHostCascade(HOST_B, closeTabs)
+    deleteHostCascade(HOST_A) // HOST_A is hostOrder[0]
 
-    expect(useTabStore.getState().tabs[legacy.id]).toBeDefined()
-    const content = getPrimaryPane(useTabStore.getState().tabs[legacy.id].layout).content
-    expect(content).toEqual({ kind: 'execution', executionId: 'exc_1' })
+    expect(useTabStore.getState().tabs[legacy.id]).toBe(before)
+    expect(contentOf(legacy.id)).toEqual({ kind: 'execution', executionId: 'exc_1' })
+  })
+
+  it('host settings and New Tab columns are kept — re-keyed to the wire id', () => {
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
+    useHostSettingsStore.getState().set(HOST_B, 'editor', { homePath: '/tmp/b' })
+    useNewTabLayoutStore.setState({
+      presets: {
+        '3col': { enabled: true, columns: [[`sessions:${HOST_A}`], [`headless:${HOST_A}`], [`sessions:${HOST_B}`]] },
+        '2col': { enabled: false, columns: [[], []] },
+        '1col': { enabled: true, columns: [[`sessions:${HOST_A}`]] },
+      },
+      knownIds: [`sessions:${HOST_A}`, `headless:${HOST_A}`, `sessions:${HOST_B}`],
+    })
+
+    deleteHostCascade(HOST_A)
+
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [WIRE_A]: { editor: { homePath: '/tmp/a' } }, [HOST_B]: { editor: { homePath: '/tmp/b' } } })
+    const persisted = JSON.parse(localStorage.getItem(STORAGE_KEYS.HOST_SETTINGS)!)
+    expect(persisted.state.hosts[WIRE_A]).toEqual({ editor: { homePath: '/tmp/a' } })
+    const { presets, knownIds } = useNewTabLayoutStore.getState()
+    expect(presets['3col'].columns).toEqual([[`sessions:${WIRE_A}`], [`headless:${WIRE_A}`], [`sessions:${HOST_B}`]])
+    expect(presets['1col'].columns).toEqual([[`sessions:${WIRE_A}`]])
+    expect(knownIds).toEqual([`sessions:${WIRE_A}`, `headless:${WIRE_A}`, `sessions:${HOST_B}`])
+  })
+
+  it('the refs are rewritten BEFORE the host row goes (the build maps them to the same wire id throughout)', () => {
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    const seen: string[] = []
+    const unsub = useHostStore.subscribe((s) => {
+      if (!s.hosts[HOST_A]) seen.push((contentOf(t.id) as { hostId: string }).hostId)
+    })
+    deleteHostCascade(HOST_A)
+    unsub()
+    expect(seen).toEqual([WIRE_A])
   })
 
   it('cascade cleans AgentStore entries', () => {
-    const event: NormalizedEvent = {
-      agent_type: 'cc',
-      status: 'idle',
-      raw_event_name: 'PdxStop',
-      broadcast_ts: Date.now(),
-    }
+    const event: NormalizedEvent = { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: Date.now() }
     useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBe('idle')
 
-    deleteHostCascade(HOST_A, true)
+    deleteHostCascade(HOST_A)
 
     expect(useAgentStore.getState().lastEvents[`${HOST_A}:dev001`]).toBeUndefined()
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBeUndefined()
@@ -169,7 +195,7 @@ describe('host delete cascade', () => {
     const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1, fingerprint: '' }
     useNexHostStore.setState({ byHost: { [HOST_A]: nexEntry, [HOST_B]: nexEntry } })
 
-    deleteHostCascade(HOST_A, false)
+    deleteHostCascade(HOST_A)
 
     expect(Object.keys(useExecutionStore.getState().executions)).toEqual([`${HOST_B}:exc_1`])
     expect(Object.keys(useNexHostStore.getState().byHost)).toEqual([HOST_B])
@@ -179,112 +205,112 @@ describe('host delete cascade', () => {
     const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2 }
     useExecutionListStore.setState({ byHost: { [HOST_A]: listCache, [HOST_B]: listCache } })
 
-    deleteHostCascade(HOST_A, false)
+    deleteHostCascade(HOST_A)
 
     expect(Object.keys(useExecutionListStore.getState().byHost)).toEqual([HOST_B])
     expect(useExecutionListStore.getState().byHost[HOST_B]).toBe(listCache)
   })
 
-  it('closeTabs releases held leases on the removed host before clearing execution state (I13)', () => {
+  it('a held lease on the host is released best-effort while the host (and its auth) is still there (plan §0.8)', () => {
     useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
     useExecutionStore.getState().setLease(HOST_A, 'exc_2', null) // no lease held — must not call releaseLease
-    useExecutionStore.getState().applyEvents(HOST_B, 'exc_3', [
-      { seq: 1, execution_id: 'exc_3', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 },
-    ])
+    useExecutionStore.getState().setLease(HOST_B, 'exc_3', { leaseId: 'ls_3', expiresAt: Date.now() + 30_000 })
+    let hostPresent: boolean | null = null
+    vi.mocked(nexApi.releaseLease).mockImplementation(async () => {
+      hostPresent = useHostStore.getState().hosts[HOST_A] !== undefined
+    })
 
-    deleteHostCascade(HOST_A, true)
+    deleteHostCascade(HOST_A)
 
     expect(nexApi.releaseLease).toHaveBeenCalledTimes(1)
     expect(nexApi.releaseLease).toHaveBeenCalledWith(HOST_A, 'exc_1', 'ls_1')
-  })
-
-  it('closeTabs=false drops held leases locally without a release call (I13)', () => {
-    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
-
-    deleteHostCascade(HOST_A, false)
-
-    expect(nexApi.releaseLease).not.toHaveBeenCalled()
+    expect(hostPresent).toBe(true)
     expect(useExecutionStore.getState().executions[`${HOST_A}:exc_1`]).toBeUndefined()
   })
 
-  it('cascade cleans SessionStore entries', () => {
-    const sessions: Session[] = [makeSession('dev001', 'Dev')]
-    useSessionStore.getState().replaceHost(HOST_A, sessions)
-    expect(useSessionStore.getState().sessions[HOST_A]).toBeDefined()
+  it('a release that rejects (or throws) does not stop the deletion', () => {
+    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: Date.now() + 30_000 })
+    useExecutionStore.getState().setLease(HOST_A, 'exc_2', { leaseId: 'ls_2', expiresAt: Date.now() + 30_000 })
+    vi.mocked(nexApi.releaseLease).mockImplementationOnce(() => { throw new Error('sync throw') }).mockRejectedValueOnce(new Error('offline'))
 
-    deleteHostCascade(HOST_A, true)
-
-    expect(useSessionStore.getState().sessions[HOST_A]).toBeUndefined()
-  })
-
-  it('cascade clears persisted host settings for the deleted host', () => {
-    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
-    useHostSettingsStore.getState().set(HOST_B, 'editor', { homePath: '/tmp/b' })
-
-    deleteHostCascade(HOST_A, true)
-
-    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toBeUndefined()
-    expect(useHostSettingsStore.getState().get(HOST_B, 'editor')).toEqual({ homePath: '/tmp/b' })
-
-    const raw = localStorage.getItem(STORAGE_KEYS.HOST_SETTINGS)
-    expect(raw).toBeTruthy()
-    const parsed = JSON.parse(raw!)
-    expect(parsed.state.hosts[HOST_A]).toBeUndefined()
-    expect(parsed.state.hosts[HOST_B].editor).toEqual({ homePath: '/tmp/b' })
-  })
-
-  it('undo restores host settings cleared by the cascade', () => {
-    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
-
-    const restore = deleteHostCascade(HOST_A, true)
-    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toBeUndefined()
-
-    restore()
-    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
-  })
-
-  it('undo skips restore when the same host id was recreated during the undo window', () => {
-    // Simulate user writing settings, then deleting the host.
-    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/old' })
-
-    const restore = deleteHostCascade(HOST_A, true)
+    expect(() => deleteHostCascade(HOST_A)).not.toThrow()
     expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
-    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toBeUndefined()
-
-    // Simulate cross-window BroadcastChannel sync or import re-creating a
-    // distinct host with the same id during the undo window, and the user
-    // writing new settings for that recreated host.
-    useHostStore.setState((s) => ({
-      hosts: {
-        ...s.hosts,
-        [HOST_A]: { id: HOST_A, name: 'Host A (recreated)', ip: '9.9.9.9', port: 7860, order: 2 },
-      },
-      hostOrder: [...s.hostOrder, HOST_A],
-    }))
-    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/new' })
-
-    restore()
-
-    // Stale snapshot settings must NOT overwrite the user's new settings
-    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/new' })
-    // Recreated host entry must survive (not be clobbered by snapshot)
-    expect(useHostStore.getState().hosts[HOST_A]?.name).toBe('Host A (recreated)')
-    expect(useHostStore.getState().hosts[HOST_A]?.ip).toBe('9.9.9.9')
   })
 
-  it('undo skips session restore when host was recreated during the undo window', () => {
-    const sessions: Session[] = [makeSession('dev001', 'Dev')]
-    useSessionStore.getState().replaceHost(HOST_A, sessions)
-
-    const restore = deleteHostCascade(HOST_A, true)
+  it('cascade cleans SessionStore entries', () => {
+    useSessionStore.getState().replaceHost(HOST_A, [makeSession('dev001', 'Dev')])
+    deleteHostCascade(HOST_A)
     expect(useSessionStore.getState().sessions[HOST_A]).toBeUndefined()
+  })
 
-    // Recreate host with same id and a fresh (different) sessions list
+  it('does not record to the history store', () => {
+    useTabStore.getState().addTab(makeSessionTab(HOST_A, 'dev001'))
+    deleteHostCascade(HOST_A)
+    expect(useHistoryStore.getState().closedTabs).toHaveLength(0)
+  })
+
+  it('keeps workspace membership: nothing closes', () => {
+    const ws = useWorkspaceStore.getState().addWorkspace('Dev WS')
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+
+    deleteHostCascade(HOST_A)
+
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)?.id).toBe(ws.id)
+  })
+
+  it('aborts with a no-op undo when the removal would be vetoed (last host) — nothing rewritten', () => {
+    useHostStore.setState({ hosts: { [HOST_A]: useHostStore.getState().hosts[HOST_A] }, hostOrder: [HOST_A], activeHostId: HOST_A, runtime: {} })
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+    const tabs = useTabStore.getState().tabs
+
+    const restore = deleteHostCascade(HOST_A)
+
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(() => restore()).not.toThrow()
+    expect(useTabStore.getState().tabs).toBe(tabs)
+  })
+
+  it('an unknown host: a no-op', () => {
+    const tabs = useTabStore.getState().tabs
+    const restore = deleteHostCascade('nope')
+    expect(useHostStore.getState().hostOrder).toEqual([HOST_A, HOST_B])
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(() => restore()).not.toThrow()
+  })
+
+  it('a rewrite that cannot be written stops the deletion before anything is cleared: it throws, the host stays', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const tab = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(tab)
+    useSessionStore.getState().replaceHost(HOST_A, [makeSession('dev001')])
+    const real = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.TABS) throw new DOMException('quota', 'QuotaExceededError')
+      real.call(this, k, v)
+    })
+    try {
+      expect(() => deleteHostCascade(HOST_A)).toThrow()
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useSessionStore.getState().sessions[HOST_A]).toBeDefined()
+    expect(contentOf(tab.id)).toMatchObject({ hostId: HOST_A })
+  })
+
+  // --- undo: the device-local state the cascade cleared ---
+
+  it('undo skips every restore when the same host id was recreated during the undo window', () => {
+    useSessionStore.getState().replaceHost(HOST_A, [makeSession('dev001', 'Dev')])
+    const restore = deleteHostCascade(HOST_A)
     useHostStore.setState((s) => ({
-      hosts: {
-        ...s.hosts,
-        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 2 },
-      },
+      hosts: { ...s.hosts, [HOST_A]: { id: HOST_A, name: 'Host A (recreated)', ip: '9.9.9.9', port: 7860, order: 2 } },
       hostOrder: [...s.hostOrder, HOST_A],
     }))
     const freshSessions: Session[] = [makeSession('dev999', 'Fresh')]
@@ -292,14 +318,14 @@ describe('host delete cascade', () => {
 
     restore()
 
-    // Stale snapshot sessions must NOT overwrite the freshly written list
+    expect(useHostStore.getState().hosts[HOST_A]?.name).toBe('Host A (recreated)')
+    expect(useHostStore.getState().hosts[HOST_A]?.ip).toBe('9.9.9.9')
     expect(useSessionStore.getState().sessions[HOST_A]).toEqual(freshSessions)
   })
 
-  it('undo restores host at original position', () => {
-    const restore = deleteHostCascade(HOST_A, true)
+  it('undo restores the host at its original position', () => {
+    const restore = deleteHostCascade(HOST_A)
     expect(useHostStore.getState().hostOrder).toEqual([HOST_B])
-
     restore()
     expect(useHostStore.getState().hostOrder).toEqual([HOST_A, HOST_B])
     expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
@@ -308,194 +334,28 @@ describe('host delete cascade', () => {
   it('undo restores sessions', () => {
     const sessions: Session[] = [makeSession('dev001', 'Dev')]
     useSessionStore.getState().replaceHost(HOST_A, sessions)
-
-    const restore = deleteHostCascade(HOST_A, true)
+    const restore = deleteHostCascade(HOST_A)
     expect(useSessionStore.getState().sessions[HOST_A]).toBeUndefined()
-
     restore()
     expect(useSessionStore.getState().sessions[HOST_A]).toEqual(sessions)
   })
 
-  it('undo restores AgentStore data', () => {
-    const event: NormalizedEvent = {
-      agent_type: 'cc',
-      status: 'running',
-      raw_event_name: 'PdxUserPromptSubmit',
-      broadcast_ts: Date.now(),
-    }
+  it('undo restores AgentStore data and models', () => {
+    const event: NormalizedEvent = { agent_type: 'cc', status: 'running', model: 'claude-sonnet-4-20250514', raw_event_name: 'PdxUserPromptSubmit', broadcast_ts: Date.now() }
     useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
-
-    const restore = deleteHostCascade(HOST_A, true)
+    const restore = deleteHostCascade(HOST_A)
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBeUndefined()
-
     restore()
     expect(useAgentStore.getState().statuses[`${HOST_A}:dev001`]).toBe('running')
     expect(useAgentStore.getState().lastEvents[`${HOST_A}:dev001`]).toBeDefined()
-  })
-
-  it('undo restores AgentStore models', () => {
-    // Seed a model entry via handleNormalizedEvent with model field
-    const event: NormalizedEvent = {
-      agent_type: 'cc',
-      status: 'running',
-      model: 'claude-sonnet-4-20250514',
-      raw_event_name: 'PdxUserPromptSubmit',
-      broadcast_ts: Date.now(),
-    }
-    useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', event)
     expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBe('claude-sonnet-4-20250514')
-
-    const restore = deleteHostCascade(HOST_A, true)
-    expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBeUndefined()
-
-    restore()
-    expect(useAgentStore.getState().models[`${HOST_A}:dev001`]).toBe('claude-sonnet-4-20250514')
-  })
-
-  it('undo restores closed tabs (closeTabs=true)', () => {
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-
-    const restore = deleteHostCascade(HOST_A, true)
-    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
-
-    restore()
-    expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
-  })
-
-  it('undo clears terminated marking (closeTabs=false)', () => {
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-
-    const restore = deleteHostCascade(HOST_A, false)
-    const terminated = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
-    if (terminated.kind === 'tmux-session') {
-      expect(terminated.terminated).toBe('host-removed')
-    }
-
-    restore()
-    const restored = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
-    if (restored.kind === 'tmux-session') {
-      expect(restored.terminated).toBeUndefined()
-    }
-  })
-
-  it('aborts cascade with no-op undo when host removal would be vetoed (last host)', () => {
-    // Leave only one host so useHostStore.removeHost() will no-op.
-    useHostStore.setState({
-      hosts: { [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0 } },
-      hostOrder: [HOST_A],
-      activeHostId: HOST_A,
-      runtime: {},
-    })
-    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-
-    const restore = deleteHostCascade(HOST_A, true)
-
-    // Cascade must be inert: host entry, settings and tabs are untouched.
-    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
-    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
-    expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
-
-    // Undo is a safe no-op.
-    expect(() => restore()).not.toThrow()
-    expect(useHostSettingsStore.getState().get(HOST_A, 'editor')).toEqual({ homePath: '/tmp/a' })
-  })
-
-  it('undo does not restore closed tabs onto a recreated same-id host (closeTabs=true)', () => {
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-
-    const restore = deleteHostCascade(HOST_A, true)
-    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
-    expect(useHostStore.getState().hosts[HOST_A]).toBeUndefined()
-
-    // Same-id host recreated during undo window — it is a different entity.
-    useHostStore.setState((s) => ({
-      hosts: {
-        ...s.hosts,
-        [HOST_A]: { id: HOST_A, name: 'Host A (new)', ip: '9.9.9.9', port: 7860, order: 2 },
-      },
-      hostOrder: [...s.hostOrder, HOST_A],
-    }))
-
-    restore()
-
-    // Stale tabs with old hostId/sessionCode must not be bound to the new host.
-    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
-  })
-
-  it('undo does not clear terminated markers when host was recreated (closeTabs=false)', () => {
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-
-    const restore = deleteHostCascade(HOST_A, false)
-    const marked = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
-    if (marked.kind === 'tmux-session') {
-      expect(marked.terminated).toBe('host-removed')
-    }
-
-    // Recreate same-id host during undo window.
-    useHostStore.setState((s) => ({
-      hosts: {
-        ...s.hosts,
-        [HOST_A]: { id: HOST_A, name: 'Host A (new)', ip: '9.9.9.9', port: 7860, order: 2 },
-      },
-      hostOrder: [...s.hostOrder, HOST_A],
-    }))
-
-    restore()
-
-    // Terminated marking must stay — those panes belonged to the deleted host.
-    const after = getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content
-    if (after.kind === 'tmux-session') {
-      expect(after.terminated).toBe('host-removed')
-    }
   })
 
   it('does not affect other hosts during cascade', () => {
-    const tabB = makeSessionTab(HOST_B, 'stg001')
-    useTabStore.getState().addTab(tabB)
-    const eventB: NormalizedEvent = {
-      agent_type: 'cc',
-      status: 'running',
-      raw_event_name: 'PdxUserPromptSubmit',
-      broadcast_ts: Date.now(),
-    }
+    const eventB: NormalizedEvent = { agent_type: 'cc', status: 'running', raw_event_name: 'PdxUserPromptSubmit', broadcast_ts: Date.now() }
     useAgentStore.getState().handleNormalizedEvent(HOST_B, 'stg001', eventB)
-
-    deleteHostCascade(HOST_A, true)
-
-    // HOST_B data should be untouched
-    expect(useTabStore.getState().tabs[tabB.id]).toBeDefined()
+    deleteHostCascade(HOST_A)
     expect(useAgentStore.getState().statuses[`${HOST_B}:stg001`]).toBe('running')
-  })
-
-  it('cascade (closeTabs=true) does not record to history store', () => {
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-
-    deleteHostCascade(HOST_A, true)
-
-    expect(useHistoryStore.getState().closedTabs).toHaveLength(0)
-  })
-
-  it('undo restores workspace membership (closeTabs=true)', () => {
-    const ws = useWorkspaceStore.getState().addWorkspace('Dev WS')
-    const tab = makeSessionTab(HOST_A, 'dev001')
-    useTabStore.getState().addTab(tab)
-    useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
-    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)).not.toBeNull()
-
-    const restore = deleteHostCascade(HOST_A, true)
-    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
-    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)).toBeNull()
-
-    restore()
-    expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
-    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab.id)?.id).toBe(ws.id)
   })
 })
 
@@ -696,18 +556,17 @@ describe('#541 cross-store rehydrate order invariants', () => {
 
   // ── Case 1: Rehydrate order A — both stores rehydrated ───────────────────
 
-  it('A: both rehydrated — removeHost clears hostSettings; undo restores both', () => {
+  it('A: both rehydrated — removeHost keeps hostSettings (spec §3.4); undo restores the host, settings as they are', () => {
     seedBothRehydrated()
 
-    const restore = deleteHostCascade(hA, true)
+    const restore = deleteHostCascade(hA)
 
-    // Cascade: hA gone from both stores
+    // Cascade: hA gone from the host store; its settings are the workbench's and stay (no daemonId: same key)
     expect(useHostStore.getState().hosts[hA]).toBeUndefined()
-    expect(useHostSettingsStore.getState().hosts[hA]).toBeUndefined()
+    expect(useHostSettingsStore.getState().hosts[hA]).toEqual({ editor: { homePath: '/tmp/a' } })
     // hB untouched
     expect(useHostStore.getState().hosts[hB]).toBeDefined()
 
-    // Undo: both restored
     restore()
     expect(useHostStore.getState().hosts[hA]).toBeDefined()
     expect(useHostSettingsStore.getState().hosts[hA]).toEqual({ editor: { homePath: '/tmp/a' } })
@@ -719,7 +578,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
     seedSettingsOnly()
 
     // hA is NOT in hostStore.hosts, so deleteHostCascade's pre-check aborts
-    const restore = deleteHostCascade(hA, true)
+    const restore = deleteHostCascade(hA)
 
     // Settings must be untouched — cascade aborted before touching anything
     expect(useHostSettingsStore.getState().hosts[hA]).toEqual({ editor: { homePath: '/tmp/a' } })
@@ -735,7 +594,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
   it('C: host-only rehydrate — removeHost cascades; undo restores host, hostSettings stays empty', () => {
     seedHostOnly()
 
-    const restore = deleteHostCascade(hA, true)
+    const restore = deleteHostCascade(hA)
 
     // Cascade ran: hA removed from hostStore, hostSettings was already empty (no-op clear)
     expect(useHostStore.getState().hosts[hA]).toBeUndefined()
@@ -754,8 +613,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
   it('interleaved write: fresh hostSettings write during undo window is preserved by undo gate', () => {
     seedBothRehydrated()
 
-    const restore = deleteHostCascade(hA, true)
-    expect(useHostSettingsStore.getState().hosts[hA]).toBeUndefined()
+    const restore = deleteHostCascade(hA)
 
     // Simulate a BroadcastChannel sync or re-add writing fresh settings for hA
     // (recreate host first so hostWasRecreated guard kicks in)
@@ -804,7 +662,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
     useTabStore.getState().addTab(tab6)
     useWorkspaceStore.getState().addTabToWorkspace(ws6.id, tab6.id)
 
-    const restore = deleteHostCascade(hA, true)
+    const restore = deleteHostCascade(hA)
 
     // Recreate hA as a different entity during undo window
     useHostStore.setState((s) => ({
@@ -820,15 +678,15 @@ describe('#541 cross-store rehydrate order invariants', () => {
     // hostWasRecreated = true → all 5 restore categories must be blocked:
     // 1. host position/order — recreated entry stays, snapshot hostOrder NOT applied
     expect(useHostStore.getState().hosts[hA]?.name).toBe('Recreated A')
-    // 2. hostSettings — not restored (stays undefined)
-    expect(useHostSettingsStore.getState().hosts[hA]).toBeUndefined()
+    // 2. hostSettings — never cleared by the cascade (spec §3.4), so nothing to restore
+    expect(useHostSettingsStore.getState().hosts[hA]).toEqual({ editor: { homePath: '/tmp/a' } })
     // 3. sessions — not restored
     expect(useSessionStore.getState().sessions[hA]).toBeUndefined()
     // 4. agentStore statuses — not restored (seeded directly above; snapshot captured it; gate must block)
     expect(useAgentStore.getState().statuses[`${hA}:dev001`]).toBeUndefined()
-    // 5. tab/workspace-membership restore — tab must NOT be re-added to the workspace
-    expect(useTabStore.getState().tabs[tab6.id]).toBeUndefined()
-    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab6.id)).toBeNull()
+    // 5. tabs — never closed (spec §3.4): the tab and its workspace membership are as they were
+    expect(useTabStore.getState().tabs[tab6.id]).toBeDefined()
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(tab6.id)?.id).toBe(ws6.id)
   })
 
   // ── Case 6: Last-host veto ────────────────────────────────────────────────
@@ -846,7 +704,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
     })
     useHostSettingsStore.setState({ hosts: { [hA]: { editor: { homePath: '/tmp/a' } } } })
 
-    const restore = deleteHostCascade(hA, true)
+    const restore = deleteHostCascade(hA)
 
     // Host still present (veto)
     expect(useHostStore.getState().hosts[hA]).toBeDefined()
@@ -858,12 +716,12 @@ describe('#541 cross-store rehydrate order invariants', () => {
 
   // ── Case 7: Cascade regression — PR-1 contract ───────────────────────────
 
-  it('cascade regression: removeHost clears hostSettings.hA (PR-1 contract)', () => {
+  it('cascade regression: removeHost keeps hostSettings.hA (host ownership spec §3.4 replaces the PR-1 contract)', () => {
     seedBothRehydrated()
 
-    deleteHostCascade(hA, true)
+    deleteHostCascade(hA)
 
-    expect(useHostSettingsStore.getState().hosts[hA]).toBeUndefined()
+    expect(useHostSettingsStore.getState().hosts[hA]).toEqual({ editor: { homePath: '/tmp/a' } })
     // hB settings not affected (hB had no settings — stays undefined)
     expect(useHostStore.getState().hosts[hB]).toBeDefined()
   })
@@ -873,10 +731,9 @@ describe('#541 cross-store rehydrate order invariants', () => {
   it('undo regression: cascade then undo restores hosts + hostSettings (PR-1 contract)', () => {
     seedBothRehydrated()
 
-    const restore = deleteHostCascade(hA, true)
+    const restore = deleteHostCascade(hA)
     // Verify cascade ran
     expect(useHostStore.getState().hosts[hA]).toBeUndefined()
-    expect(useHostSettingsStore.getState().hosts[hA]).toBeUndefined()
 
     restore()
 
@@ -896,7 +753,7 @@ describe('#541 cross-store rehydrate order invariants', () => {
     // Merge-mode: preserve action methods
     useWorkspaceSettingsStore.setState({ workspaces: { [WS_ID]: { 'some-module': { hostId: hA, value: 42 } } } })
 
-    deleteHostCascade(hA, true)
+    deleteHostCascade(hA)
 
     // deleteHostCascade only uses useWorkspaceStore (tab membership), NOT useWorkspaceSettingsStore
     // — the module-settings store for workspaces must remain untouched as collateral-clear regression
@@ -948,14 +805,14 @@ describe('peer cache invalidation', () => {
 
   it('removing a host clears its peer rows through the cascade, leaving other hosts alone', () => {
     seedPeers(HOST_A, HOST_B)
-    deleteHostCascade(HOST_A, true)
+    deleteHostCascade(HOST_A)
     expect(usePeerStore.getState().byHost[HOST_A]).toBeUndefined()
     expect(usePeerStore.getState().byHost[HOST_B]).toBeDefined()
   })
 
   it('removing a host clears its cwd readings through the cascade too', () => {
     seedPeers(HOST_A, HOST_B)
-    deleteHostCascade(HOST_A, true)
+    deleteHostCascade(HOST_A)
     expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeUndefined()
     expect(useSessionCwdStore.getState().byHost[HOST_B]).toBeDefined()
   })
@@ -1017,8 +874,8 @@ describe('peer cache invalidation', () => {
 })
 
 // Profile Sync P3b: the tabs on screen are ONE world; the master's and every other
-// local profile's are parked in `useLocalProfilesStore`. A host is gone for all of
-// them (a slave borrows the hosts), so the cascade reaches the parked worlds too.
+// local profile's are parked in `useLocalProfilesStore`. They all use this device's
+// hosts, so the deletion's rewrite reaches the parked worlds too (spec §3.4).
 describe('host delete cascade — parked worlds', () => {
   beforeEach(resetAllStores)
 
@@ -1028,10 +885,7 @@ describe('host delete cascade — parked worlds', () => {
     return { workspaces: [{ id: `ws-${tabs[0].id}`, name: 'W', tabs: tabs.map((t) => t.id), activeTabId: tabs[0].id }], tabs: record, activeWorkspaceId: `ws-${tabs[0].id}`, activeTabId: tabs[0].id }
   }
 
-  const terminatedOf = (world: ParkedWorld | null | undefined, tabId: string): string | undefined => {
-    const content = world ? getPrimaryPane(world.tabs[tabId].layout).content : undefined
-    return content?.kind === 'tmux-session' ? content.terminated : 'not-a-session'
-  }
+  const contentIn = (world: ParkedWorld | null | undefined, tabId: string) => (world ? getPrimaryPane(world.tabs[tabId].layout).content : undefined)
 
   /** A slave `on` on screen (its tab is live), the master and the slave `off` parked — every world has a tab on A and one on B. */
   function threeWorlds() {
@@ -1052,73 +906,37 @@ describe('host delete cascade — parked worlds', () => {
     return { live, master, off }
   }
 
-  it.each([false, true])('closeTabs=%s: the host\'s panes are marked host-removed in the parked master and in every parked slave; other hosts\' are not', (closeTabs) => {
+  it('the host\'s panes carry its wire id in the parked master and in every parked slave — none marked, none closed; other hosts\' untouched', () => {
     const { master, off } = threeWorlds()
+    const masterB = useLocalProfilesStore.getState().parkedMaster!.tabs[master.b.id]
 
-    deleteHostCascade(HOST_A, closeTabs)
+    deleteHostCascade(HOST_A)
 
     const lp = useLocalProfilesStore.getState()
-    expect(terminatedOf(lp.parkedMaster, master.a.id)).toBe('host-removed')
-    expect(terminatedOf(lp.parkedMaster, master.b.id)).toBeUndefined()
-    expect(terminatedOf(lp.slaves.off.world, off.a.id)).toBe('host-removed')
-    expect(terminatedOf(lp.slaves.off.world, off.b.id)).toBeUndefined()
-    // closeTabs is a choice about the tabs the user is looking at: a parked world keeps its tabs, marked.
+    expect(contentIn(lp.parkedMaster, master.a.id)).toMatchObject({ hostId: WIRE_A })
+    expect(contentIn(lp.slaves.off.world, off.a.id)).toMatchObject({ hostId: WIRE_A })
+    expect(lp.parkedMaster!.tabs[master.b.id]).toBe(masterB)
+    expect(contentIn(lp.slaves.off.world, off.b.id)).toMatchObject({ hostId: HOST_B })
+    expect(JSON.stringify([lp.parkedMaster, lp.slaves])).not.toContain('terminated')
     expect(Object.keys(lp.parkedMaster!.tabs)).toEqual([master.a.id, master.b.id])
     expect(lp.slaves.on.world).toBeNull()
   })
 
-  it.each([false, true])('closeTabs=%s: undo clears exactly the marks this delete made, in every parked world', (closeTabs) => {
-    const { master, off } = threeWorlds()
-    // Already terminated before the delete, for another reason: not this delete's to clear.
-    const dead = createTab({ kind: 'tmux-session', hostId: HOST_A, sessionCode: 'dead', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'session-closed' })
-    const pm = useLocalProfilesStore.getState().parkedMaster!
-    useLocalProfilesStore.setState({ parkedMaster: { ...pm, tabs: { ...pm.tabs, [dead.id]: dead } } })
-
-    const undo = deleteHostCascade(HOST_A, closeTabs)
-    undo()
-
-    const lp = useLocalProfilesStore.getState()
-    expect(terminatedOf(lp.parkedMaster, master.a.id)).toBeUndefined()
-    expect(terminatedOf(lp.slaves.off.world, off.a.id)).toBeUndefined()
-    expect(terminatedOf(lp.parkedMaster, dead.id)).toBe('session-closed')
-    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
-  })
-
-  it('undo finds a marked pane wherever its world is by then: a world parked at delete time that is on screen at undo time, and the other way round', () => {
-    const { live, master } = threeWorlds()
-    const undo = deleteHostCascade(HOST_A, false)
-
-    // The user switches to the master in between (what Task 5's switch does to the three stores).
-    const t = useTabStore.getState()
-    const w = useWorkspaceStore.getState()
-    const swapped = useLocalProfilesStore.getState().swapActive('master', { tabs: t.tabs, workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId, activeTabId: t.activeTabId }, 2)
-    if (!swapped.ok) throw new Error(swapped.reason)
-    useTabStore.setState({ tabs: swapped.world.tabs, tabOrder: Object.keys(swapped.world.tabs), activeTabId: swapped.world.activeTabId, worldId: 'master', worldEpoch: 2 })
-    useWorkspaceStore.setState({ workspaces: swapped.world.workspaces, activeWorkspaceId: swapped.world.activeWorkspaceId, worldId: 'master', worldEpoch: 2 })
-
-    undo()
-
-    const onScreen = getPrimaryPane(useTabStore.getState().tabs[master.a.id].layout).content
-    expect(onScreen.kind === 'tmux-session' && onScreen.terminated).toBeUndefined()
-    expect(terminatedOf(useLocalProfilesStore.getState().slaves.on.world, live.a.id)).toBeUndefined()
-  })
-
-  it('a hostless execution pane in a parked world is pinned to the removed FIRST host, as on screen', () => {
+  it('a legacy hostless execution pane in a parked world is left alone', () => {
     threeWorlds()
     const exec = createTab({ kind: 'execution', executionId: 'e1' } as never)
     const pm = useLocalProfilesStore.getState().parkedMaster!
     useLocalProfilesStore.setState({ parkedMaster: { ...pm, tabs: { ...pm.tabs, [exec.id]: exec } } })
 
-    deleteHostCascade(HOST_A, false) // HOST_A is hostOrder[0]
+    deleteHostCascade(HOST_A) // HOST_A is hostOrder[0]
 
-    const content = getPrimaryPane(useLocalProfilesStore.getState().parkedMaster!.tabs[exec.id].layout).content
-    expect(content).toMatchObject({ kind: 'execution', host: HOST_A })
+    expect(contentIn(useLocalProfilesStore.getState().parkedMaster, exec.id)).toEqual({ kind: 'execution', executionId: 'e1' })
   })
 
   it('no parked world: the local-profiles store is not written at all', () => {
     useTabStore.getState().addTab(makeSessionTab(HOST_A, 'x'))
     const before = useLocalProfilesStore.getState()
-    const undo = deleteHostCascade(HOST_A, false)
+    const undo = deleteHostCascade(HOST_A)
     undo()
     expect(useLocalProfilesStore.getState()).toBe(before)
   })
@@ -1127,7 +945,7 @@ describe('host delete cascade — parked worlds', () => {
     threeWorlds()
     useHostStore.setState({ hosts: { [HOST_A]: useHostStore.getState().hosts[HOST_A] }, hostOrder: [HOST_A] })
     const before = useLocalProfilesStore.getState()
-    deleteHostCascade(HOST_A, false)
+    deleteHostCascade(HOST_A)
     expect(useLocalProfilesStore.getState()).toBe(before)
   })
 })

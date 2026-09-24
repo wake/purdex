@@ -102,7 +102,7 @@ export function OverviewSection({ hostId }: Props) {
   const handleDeleteHost = () => {
     const hostName = hostLabel(hostId, hostLookOf(hostId))
     setConfirmDelete(false)
-    deleteHostWithUndoToast(hostId, closeTabs, { deleted: t('hosts.deleted_toast', { name: hostName }), worldSkipped: t('hosts.undo_world_skipped', { name: hostName }) })
+    deleteHostWithUndoToast(hostId, t('hosts.deleted_toast', { name: hostName }))
   }
 
   const statusLabel = (r?: HostRuntime) => {

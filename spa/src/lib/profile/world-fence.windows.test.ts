@@ -908,14 +908,14 @@ describe('S1 — another PROCESS: the broadcast arrives before the write is visi
 
 // ---------------------------------------------------------------------------
 // C2' — the undo of a host delete, pressed in a window that has NOT HEARD of
-// another window's promote yet. Its memory says nothing was relabelled; storage
-// says otherwise, twice: the fence is above this window (`behind-fence`), and
-// the persisted `relabelCount` has moved.
+// another window's promote (or switch) yet. A deletion takes nothing from any
+// world (host ownership spec §3.4 — no tab closed, no mark), so its undo has
+// nothing of a world to put back: the host row returns, and no world is written
+// by this window — whatever it believes the worlds to be.
 // ---------------------------------------------------------------------------
 
 describe("C2' — undo in a window that has not heard of another window's promote", () => {
   const WORLD_KEYS = [STORAGE_KEYS.LOCAL_PROFILES, STORAGE_KEYS.TABS, STORAGE_KEYS.WORKSPACES]
-  const MESSAGES = { deleted: 'h1 deleted', worldSkipped: 'h1 is back, its tabs are not' }
   let view: LaggedView
 
   beforeEach(() => {
@@ -925,16 +925,18 @@ describe("C2' — undo in a window that has not heard of another window's promot
 
   const memoryOf = (w: Win): string => JSON.stringify([w.useTabStore.getState().tabs, w.useTabStore.getState().tabOrder, w.useWorkspaceStore.getState().workspaces, w.useLocalProfilesStore.getState().parkedMaster, w.useLocalProfilesStore.getState().slaves])
 
-  /** Window 1 deletes host h1 (closing the master's tab on it); window 2 hears of it, and promotes the slave. Nothing of that is delivered to window 1. */
+  const twoHosts = (w: Win): void => {
+    w.useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, order: 0 }, h2: { id: 'h2', name: 'h2', ip: '10.0.0.2', port: 7860, order: 1 } }, hostOrder: ['h2', 'h1'], activeHostId: 'h2', runtime: {} })
+  }
+
+  /** Window 1 deletes host h1 (the master's tab on it stays); window 2 hears of it, and promotes the slave. Nothing of that is delivered to window 1. */
   async function deletedThenPromotedElsewhere(): Promise<{ w1: Win; w2: Win }> {
     const { w2, slaveId } = await seeded()
     const w1 = await openWindow()
-    for (const w of [w1, w2]) {
-      w.useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, order: 0 }, h2: { id: 'h2', name: 'h2', ip: '10.0.0.2', port: 7860, order: 1 } }, hostOrder: ['h2', 'h1'], activeHostId: 'h2', runtime: {} })
-    }
+    for (const w of [w1, w2]) twoHosts(w)
     QueuedBroadcastChannel.queue = []
-    w1.deleteHostWithUndoToast('h1', true, MESSAGES)
-    expect(w1.useTabStore.getState().tabs.mt1).toBeUndefined()
+    w1.deleteHostWithUndoToast('h1', 'h1 deleted')
+    expect(w1.useTabStore.getState().tabs.mt1).toBeDefined() // nothing closes (spec §3.4)
     await deliverAll() // window 2 is level with the delete
     view.freeze() // from here on window 1's PROCESS sees nothing new until told
     expect(await w2.promoteToMaster(slaveId, 'Old master')).toMatchObject({ ok: true })
@@ -957,14 +959,13 @@ describe("C2' — undo in a window that has not heard of another window's promot
 
   it.each([
     ['the promote is visible to this process — fence and stores — but no event has been delivered: the door says `behind-fence`', undefined],
-    ['only `purdex-local-profiles` is visible yet (not the fence): the persisted `relabelCount` says so', STORAGE_KEYS.LOCAL_PROFILES],
-  ])('%s → the host is back, NO world is touched, and the user is told', async (_name, visible) => {
+    ['only `purdex-local-profiles` is visible yet (not the fence)', STORAGE_KEYS.LOCAL_PROFILES],
+  ])('%s → the host is back, and NO world is touched', async (_name, visible) => {
     const { w1, w2 } = await deletedThenPromotedElsewhere()
     view.catchUp(visible)
     const diskBefore = WORLD_KEYS.map(disk)
     const memoryBefore = memoryOf(w1)
     const otherBefore = memoryOf(w2)
-    expect(w1.useLocalProfilesStore.getState().relabelCount).toBe(0) // this window's memory knows of no promote
 
     const { memoryRightAfter } = await clickUndoInWindow1(w1)
 
@@ -972,14 +973,14 @@ describe("C2' — undo in a window that has not heard of another window's promot
     expect(WORLD_KEYS.map(disk)).toEqual(diskBefore)
     expect(memoryOf(w2)).toBe(otherBefore)
     expect(w1.useHostStore.getState().hosts.h1).toBeDefined()
-    expect(w1.useUndoToast.getState().toast).toMatchObject({ message: MESSAGES.worldSkipped })
+    expect(w1.useUndoToast.getState().toast).toBeNull() // nothing was left out: nothing more to say
   })
 
-  it('another window\'s SWITCH, not heard of yet — no label moved, no count moved, but nobody here can name the worlds (`behind-fence`): skipped and said, too', async () => {
+  it('another window\'s SWITCH, not heard of yet: the host is back, no world touched', async () => {
     const { w2, slaveId } = await seeded()
     const w1 = await openWindow()
-    w1.useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'h1', ip: '10.0.0.1', port: 7860, order: 0 }, h2: { id: 'h2', name: 'h2', ip: '10.0.0.2', port: 7860, order: 1 } }, hostOrder: ['h2', 'h1'], activeHostId: 'h2', runtime: {} })
-    w1.deleteHostWithUndoToast('h1', true, MESSAGES)
+    twoHosts(w1)
+    w1.deleteHostWithUndoToast('h1', 'h1 deleted')
     await deliverAll()
     expect(await w2.switchActiveProfile(slaveId)).toEqual({ ok: true })
     const diskBefore = WORLD_KEYS.map(disk)
@@ -990,15 +991,6 @@ describe("C2' — undo in a window that has not heard of another window's promot
     expect(memoryRightAfter).toBe(memoryBefore)
     expect(WORLD_KEYS.map(disk)).toEqual(diskBefore)
     expect(w1.useHostStore.getState().hosts.h1).toBeDefined()
-    expect(w1.useUndoToast.getState().toast).toMatchObject({ message: MESSAGES.worldSkipped })
-  })
-
-  it('…and the window is asked to catch up: with storage visible it is level with the promote a turn later', async () => {
-    const { w1, w2 } = await deletedThenPromotedElsewhere()
-    view.catchUp()
-    await clickUndoInWindow1(w1)
-    expect(w1.readMasterWorld().settled).toBe(true)
-    expect(memoryOf(w1)).toBe(memoryOf(w2))
+    expect(w1.useUndoToast.getState().toast).toBeNull()
   })
 })
-

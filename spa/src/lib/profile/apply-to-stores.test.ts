@@ -423,7 +423,7 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
   it('ends in the same state as deleting that host by hand (keep-tabs mode)', async () => {
     seedHostWorld()
     const before = world()
-    deleteHostCascade(H2, false)
+    deleteHostCascade(H2)
     const byHand = world()
     expect(byHand).not.toEqual(before)
 
@@ -438,23 +438,26 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
     const w = byHand as { sessions: object; executions: string[]; hostSettings: object; nex: object; executionList: object; hosts: { activeHostId: string } }
     expect(Object.keys(w.sessions)).toEqual([M])
     expect(w.executions).toEqual([`${M}:exc_1`])
-    expect(Object.keys(w.hostSettings)).toEqual([M])
+    expect(Object.keys(w.hostSettings)).toEqual([M, H2]) // the workbench's: kept (host ownership spec §3.4)
     expect(Object.keys(w.nex)).toEqual([M])
     expect(Object.keys(w.executionList)).toEqual([M])
     expect(w.hosts.activeHostId).toBe(M)
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
-  it('marks the panes already here that sit on the removed host, and only those', async () => {
+  it('marks nothing: the panes on the removed host keep their tabs and carry its wire id (host ownership spec §3.4)', async () => {
     seedHostWorld()
+    const DAEMON_2 = 'two-lab:222222'
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: DAEMON_2 } } }))
     await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
     const { tabs } = useTabStore.getState()
+    expect(Object.keys(tabs)).toEqual(['t1', 't2', 't3'])
     const split = tabs.t1.layout as Extract<PaneLayout, { type: 'split' }>
-    expect(split.children[0]).toMatchObject({ pane: { content: { hostId: H2, terminated: 'host-removed' } } })
-    expect((split.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
+    expect(split.children[0]).toMatchObject({ pane: { content: { hostId: syncIdOfSync(DAEMON_2) } } })
+    expect(split.children[1]).toMatchObject({ pane: { content: { hostId: M } } })
     expect(split.sizes).toEqual([60, 40])
-    expect(tabs.t2.layout).toMatchObject({ pane: { content: { terminated: 'host-removed' } } })
-    expect((tabs.t3.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
+    expect(tabs.t2.layout).toMatchObject({ pane: { content: { hostId: syncIdOfSync(DAEMON_2) } } })
+    expect(JSON.stringify(tabs)).not.toContain('terminated')
   })
 
   it('busy: removing a host needs the operation lock — held elsewhere, NOTHING is written', async () => {
@@ -1341,7 +1344,7 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
-  it('hosts: a removed host is marked host-removed in the PARKED master too (and on screen), through the app\'s own cascade', async () => {
+  it('hosts: a removed host marks nothing in the PARKED master (nor on screen) — its panes there carry its wire id, through the app\'s own cascade', async () => {
     seedTabWorld()
     useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, b1: tab('b1', tmuxLeaf('p-b1', H2)) } })
     parkMasterShowSlaveFromCurrent()
@@ -1350,11 +1353,13 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
 
     expect((await applySectionToStores('hosts', payload, ctx)).ok).toBe(true)
 
-    const terminated = (layout: PaneLayout): unknown => (layout.type === 'leaf' && layout.pane.content.kind === 'tmux-session' ? layout.pane.content.terminated : 'n/a')
+    const paneOf = (layout: PaneLayout): unknown => (layout.type === 'leaf' ? layout.pane.content : 'n/a')
     const parked = useLocalProfilesStore.getState().parkedMaster!
-    expect(terminated(parked.tabs.b1.layout)).toBe('host-removed')
-    expect(terminated(parked.tabs.a2.layout)).toBeUndefined()
-    expect(terminated(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).toBe('host-removed')
+    expect(paneOf(parked.tabs.b1.layout)).toMatchObject({ hostId: H2 }) // H2 has no daemonId: its wire id is its local id
+    expect(paneOf(parked.tabs.b1.layout)).not.toHaveProperty('terminated')
+    expect(paneOf(parked.tabs.a2.layout)).not.toHaveProperty('terminated')
+    expect(paneOf(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).toMatchObject({ hostId: H2 })
+    expect(paneOf(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).not.toHaveProperty('terminated')
   })
 
   it.each(['workspaces', 'tabs.wa', 'settings'] as const)('%s while the master world is UNSETTLED: busy, nothing written, the lock released', async (key) => {
