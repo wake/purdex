@@ -75,8 +75,11 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     // the builder and the applier pass them through verbatim — no local↔wire mapping (unlike host-settings keys);
     // the entries are sanitised by the store's `merge`. NOT `purdex-host-looks-migrated` (a device-local marker).
     ...settingsPaths('purdex-host-looks', ['looks']),
-    // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — nine
-    // stores, not eleven. useModuleEnabledStore
+    // The hosts shown in this workbench (host ownership H2d, plan §0.6): a plain list `{ ids }`, always sent (`[]` =
+    // every host hidden) — WIRE ids in the store itself, passed through verbatim like the look keys.
+    ...settingsPaths('purdex-shown-hosts', ['ids']),
+    // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — ten
+    // stores, not twelve. useModuleEnabledStore
     // says so itself: toggling a module on or off "is a device-local preference
     // (a host with limited resources can turn off modules it doesn't want to
     // run), not a config to sync between devices". P2a listed `.enabled` here;
@@ -109,7 +112,10 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   // 4: newtab `profiles` → `presets` (an ordinal-3 payload is upcast on apply: applier.ts `upcastLegacySettings`);
   // 5: host ids in `purdex-host-settings.hosts` keys and `sessions:` / `headless:` preset columns are WIRE ids (host-sync-identity)
   // 6: purdex-host-looks.looks (host looks keyed by wire id; host ownership H2c)
-  settings: 6,
+  // 7: purdex-shown-hosts.ids (wire ids of the hosts shown in the workbench; host ownership H2d)
+  // 8: `hosts` retired from the sync loop (host ownership H3a-2) — no projection change; the `@wire:hosts-retired=1`
+  //    marker locks an H2-era client, which would otherwise keep pulling / pushing `hosts` (plan D1)
+  settings: 8,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.
@@ -133,6 +139,19 @@ const TABS_PREFIX = 'tabs.'
 export function sectionKind(key: string): SectionKind | null {
   if (key === 'hosts' || key === 'settings' || key === 'workspaces') return key
   return workspaceIdOf(key) === null ? null : 'tabs'
+}
+
+/**
+ * Section keys this client no longer syncs (host ownership H3a-2, spec §5.1): still KNOWN kinds — the daemon keeps
+ * them (validate.go), their shape stays in the tables and their builder stays for the wire resolver — but the sync
+ * loop never reads, writes or deletes them. The executor refuses them at `dispatch` and drops their persisted record
+ * at startup, `profileLock` skips them, the collector never builds them.
+ */
+export const RETIRED_SECTIONS: readonly string[] = ['hosts']
+
+/** Is `key` a retired section (see `RETIRED_SECTIONS`)? */
+export function isRetiredSection(key: string): boolean {
+  return RETIRED_SECTIONS.includes(key)
 }
 
 /** The section key of a workspace's tabs. Throws rather than build a key the daemon will 400. */
@@ -171,12 +190,15 @@ export async function fingerprintOf(paths: readonly string[]): Promise<string> {
  * older client would drop both on its next write, so it must see the tabs shape as newer and lock.
  * host ownership H2c: `settings` carries the workbench's host looks keyed by wire id (spec §4.1) — an older client
  * must see `settings` as newer and lock the whole profile (decision 7), so the arrival brings a marker of its own.
+ * host ownership H2d: `settings` carries the hosts shown in the workbench (`purdex-shown-hosts`) — same rule, its own marker.
+ * host ownership H3a-2: `hosts` left the sync loop with no projection change — an H2-era client would compute the same
+ * shapes and keep syncing `hosts` (tokens included), so `settings` carries a marker that locks it (plan D1).
  * A marker is only ever ADDED with an ordinal bump (the guard test's snapshot enforces it).
  */
 export const WIRE_MARKERS: Record<SectionKind, readonly string[]> = {
   hosts: ['@wire:host-id=d1'],
   tabs: ['@wire:host-id=d1', '@tabs:device-local=v1', '@wire:rebuild-agent-state=1'],
-  settings: ['@wire:host-id=d1', '@wire:host-look=1'],
+  settings: ['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'],
   workspaces: [],
 }
 

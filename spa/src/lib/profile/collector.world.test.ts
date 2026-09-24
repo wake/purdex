@@ -171,12 +171,12 @@ describe('another window switches to a slave: this window\'s three rehydrates, i
     }
   })
 
-  it('a hosts edit is reported all the same: hosts are live whatever is on screen', async () => {
+  it('a hosts edit reports nothing, settled or not: `hosts` is retired (host ownership H3a-2)', async () => {
     await primed()
     await rehydrate(STORAGE_KEYS.TABS) // unsettled
     useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'renamed', ip: '10.0.0.1', port: 7860, order: 0 } } })
     await vi.advanceTimersByTimeAsync(SETTLE)
-    expect(reports.map((r) => r.key)).toEqual(['hosts'])
+    expect(reports).toEqual([])
   })
 })
 
@@ -225,7 +225,7 @@ describe('a slave is on screen (settled)', () => {
     slaveOnScreen()
     useWorkspaceSettingsStore.setState({ workspaces: { mws: { a: 1 }, sws: { a: 2 } } } as never)
     await start().primeAll()
-    expect(reports.map((r) => r.key).sort()).toEqual(['hosts', 'settings', 'tabs.mws', 'workspaces'])
+    expect(reports.map((r) => r.key).sort()).toEqual(['settings', 'tabs.mws', 'workspaces'])
     const all = JSON.stringify(reports)
     expect(all).toContain(MASTER_SENTINEL)
     expect(all).not.toContain(SLAVE_SENTINEL)
@@ -240,7 +240,7 @@ describe('a slave is on screen (settled)', () => {
     const m = masterWorld()
     useLocalProfilesStore.setState({ parkedMaster: { ...m, tabs: { ...m.tabs, solo: tab('solo', MASTER_SENTINEL) } } })
     await start().primeAll()
-    expect(reports.map((r) => r.key).sort()).toEqual(['hosts', 'settings', 'tabs.mws', 'workspaces'])
+    expect(reports.map((r) => r.key).sort()).toEqual(['settings', 'tabs.mws', 'workspaces'])
     expect(JSON.stringify(reports)).not.toContain('"solo"')
     expect(problems).toEqual([])
   })
@@ -300,10 +300,10 @@ describe('unsettled → settled: the master world is looked at again, whole', ()
     expect(JSON.stringify(reports[0].payload)).toContain(`${MASTER_SENTINEL}-edited`)
   })
 
-  it('primed while unsettled: only hosts; the rest follows by itself the moment the world settles', async () => {
+  it('primed while unsettled: nothing (`hosts` is retired, H3a-2); the rest follows by itself the moment the world settles', async () => {
     useTabStore.setState({ worldEpoch: 9 })
     await start().primeAll()
-    expect(reports.map((r) => r.key)).toEqual(['hosts'])
+    expect(reports).toEqual([])
     reports = []
     useTabStore.setState({ worldEpoch: 0 })
     await vi.advanceTimersByTimeAsync(SETTLE)

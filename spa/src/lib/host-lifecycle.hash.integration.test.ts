@@ -1,7 +1,7 @@
 // spa/src/lib/host-lifecycle.hash.integration.test.ts — a host deletion and its undo against the REAL collector
 // builders and hashes (host ownership spec §3.4 no-push invariant, plan H1c T6, §0.11, §0.13): deleting a host
-// affects this device only, so no section the collector builds may change but `hosts` — the pre-H3 exception, still
-// synced until H3 retires it. Every section is compared, not just the host-bearing ones.
+// affects this device only, so no section the collector builds may change. Since H3a-2 there is no exception: `hosts`
+// is retired and never built (it was the pre-H3 exception). Every section is compared, not just the host-bearing ones.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import type { HostConfig } from '../stores/useHostStore'
@@ -30,9 +30,8 @@ const W = syncIdOfSync(DAEMON)
 const M = 'hm0001' // this device's master host (mlab)
 const X = 'hx0001' // the host deleted
 const SLAVE = 'slave-1'
-/** EVERY section the collector builds for these fixtures (plan §0.13). */
-const KEYS: ProfileSectionKey[] = ['hosts', 'workspaces', 'settings', 'tabs.wa', 'tabs.wb']
-const NON_HOSTS = KEYS.filter((k) => k !== 'hosts')
+/** EVERY section the collector builds for these fixtures (plan §0.13) — `hosts` is not one (host ownership H3a-2). */
+const KEYS: ProfileSectionKey[] = ['workspaces', 'settings', 'tabs.wa', 'tabs.wb']
 
 const host = (id: string, over: Partial<HostConfig> = {}): HostConfig => ({ id, name: id, ip: '10.0.0.1', port: 7860, token: 'tok', order: 0, ...over })
 const leaf = (id: string, content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id, content } })
@@ -89,8 +88,6 @@ async function hashes(): Promise<Record<string, string>> {
   return out
 }
 
-const pick = (h: Record<string, string>, keys: readonly string[]): Record<string, string> => Object.fromEntries(keys.map((k) => [k, h[k]]))
-
 function hostIdsEverywhere(): string {
   return JSON.stringify([useTabStore.getState().tabs, useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves, useHostSettingsStore.getState().hosts, useNewTabLayoutStore.getState()])
 }
@@ -118,11 +115,11 @@ afterEach(() => {
   localStorage.clear()
 })
 
-describe('a deletion and its undo change no section but `hosts` (pre-H3)', () => {
+describe('a deletion and its undo change no section at all (host ownership H3a-2: `hosts` is never built)', () => {
   it.each([
     ['the master on screen', masterOnScreen],
     ['a slave on screen, the master parked', slaveOnScreen],
-  ])('a host with a daemon (%s): every reference moves to the wire id and back; every non-hosts hash stays', async (_label, place) => {
+  ])('a host with a daemon (%s): every reference moves to the wire id and back; every hash stays', async (_label, place) => {
     place()
     seedSettings()
     withX()
@@ -134,19 +131,19 @@ describe('a deletion and its undo change no section but `hosts` (pre-H3)', () =>
     expect(hostIdsEverywhere()).not.toContain(`"${X}"`) // every ref moved, on screen and parked …
     expect(hostIdsEverywhere()).not.toContain(`:${X}"`) // … the columns too
     expect(hostIdsEverywhere()).toContain(W)
-    const afterDelete = await hashes()
-    expect(pick(afterDelete, NON_HOSTS)).toEqual(pick(before, NON_HOSTS))
-    expect(afterDelete.hosts).not.toBe(before.hosts) // the pre-H3 exception, asserted so H3 flips it
+    expect(await hashes()).toEqual(before) // no exception any more: the pre-H3 `hosts` change is gone with the section
+    expect(buildSectionPayload('hosts')).toEqual({ payload: null })
     expect(useHostLookStore.getState().looks).toBe(looks) // wire-keyed: never touched
 
     undo()
 
     expect(hostIdsEverywhere()).not.toContain(W)
-    expect(await hashes()).toEqual(before) // `hosts` included: the row comes back verbatim, daemonId and all (#1396)
+    expect(await hashes()).toEqual(before)
+    expect(useHostStore.getState().hosts[X]).toMatchObject({ daemonId: DAEMON }) // the row comes back verbatim (#1396)
     expect(useHostLookStore.getState().looks).toBe(looks)
   })
 
-  it('a host without a daemon: nothing is rewritten; non-hosts hashes stay; undo gives back `hosts` too', async () => {
+  it('a host without a daemon: nothing is rewritten; every hash stays; undo gives the host back', async () => {
     masterOnScreen()
     seedSettings()
     useHostStore.setState({ hosts: { [M]: host(M, { daemonId: MLAB }), [X]: host(X, { ip: '10.0.0.4', order: 1 }) }, hostOrder: [M, X], activeHostId: M, runtime: {} })
@@ -156,12 +153,12 @@ describe('a deletion and its undo change no section but `hosts` (pre-H3)', () =>
     const undo = deleteHostCascade(X)
 
     expect(hostIdsEverywhere()).toBe(refs)
-    const afterDelete = await hashes()
-    expect(pick(afterDelete, NON_HOSTS)).toEqual(pick(before, NON_HOSTS))
-    expect(afterDelete.hosts).not.toBe(before.hosts)
+    expect(await hashes()).toEqual(before)
+    expect(useHostStore.getState().hosts).not.toHaveProperty(X)
 
     undo()
     expect(await hashes()).toEqual(before)
+    expect(useHostStore.getState().hosts).toHaveProperty(X)
   })
 })
 
@@ -193,7 +190,7 @@ describe('both forms of one host (plan §0.11)', () => {
     expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${W}`], [], [`headless:${W}`]])
     expect(useNewTabLayoutStore.getState().knownIds).toEqual([`sessions:${W}`])
     expect(buildSectionPayload('settings')!.payload).toEqual(settingsBefore)
-    expect(pick(await hashes(), NON_HOSTS)).toEqual(pick(before, NON_HOSTS))
+    expect(await hashes()).toEqual(before)
 
     undo()
 

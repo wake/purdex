@@ -5,6 +5,7 @@ import { isValidDaemonId } from '../lib/daemon-id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { syncIdOfSync, wireIdOfHost } from '../lib/profile/host-identity'
 import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
+import { useShownHostsStore } from './useShownHostsStore'
 import {
   clampHostAlpha,
   HOST_COLOR_ALPHA_DEFAULTS,
@@ -760,6 +761,7 @@ export const useHostStore = create<HostState>()(
         warnedMismatch.clear()
         set(createDefaultState())
         useHostLookStore.setState({ looks: {} })
+        useShownHostsStore.setState({ ids: [] }) // plan §0.18
       },
     }),
     {

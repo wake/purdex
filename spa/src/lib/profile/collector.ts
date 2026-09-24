@@ -22,17 +22,20 @@
 //     really moved, so a switch does not re-send a single section;
 //   - a slave on screen → its edits change nothing the master world is made of,
 //     and `subscribeMasterWorld` does not even call.
-// `hosts` is live whatever is on screen (a slave borrows them, decision 9).
+// `hosts` is never built (host ownership H3a-2, spec §5.1): the host list is this
+// device's, it left Profile Sync. `buildSectionPayload('hosts')` answers "does not
+// exist"; no timer, subscriber or prime ever names it.
 // (The two live tab stores are still SUBSCRIBED to, for one thing only: a moment
 // at which to ask whether an unsettled stretch is stuck. Their content is not read.)
 //
-// HOST IDS ARE BUILT AS WIRE IDS (host-sync-identity §5, §11.3). `hosts`, `settings`
-// and every `tabs.*` name hosts; each build takes the identity of the host store AT
-// THAT MOMENT (`identityOfSync`, memoised per `hosts` object). What keeps the sections
-// agreeing with each other is invalidation, not a shared pass: the host-store
-// subscriber compares the identity's `signature` and, when it moved (a daemonId
-// learned, a host added / removed), schedules EVERY host-bearing section. Under an
-// identity `conflict` none of them is built (problem `host-identity-conflict`, once
+// HOST IDS ARE BUILT AS WIRE IDS (host-sync-identity §5, §11.3). `settings` and every
+// `tabs.*` name hosts; each build takes the identity of the host store AT THAT MOMENT
+// (`identityOfSync`, memoised per `hosts` object). What keeps the sections agreeing
+// with each other is invalidation, not a shared pass: the host-store subscriber
+// compares the identity's `signature` and, when it moved (a daemonId learned, a host
+// added / removed), schedules EVERY host-bearing section — and nothing else: a host
+// change that leaves the identity alone (a rename, a reorder) moves no section. Under
+// an identity `conflict` none of them is built (problem `host-identity-conflict`, once
 // per conflict) — the profile-level pause is start.ts's business.
 import { useHostStore } from '../../stores/useHostStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
@@ -46,14 +49,14 @@ import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { Workspace } from '../../types/tab'
 import { hashSection } from './hash'
 import { identityOfSync, type HostIdentity } from './host-identity'
 import { masterWorldStuck, readMasterWorld, subscribeMasterWorld } from './master-world'
 import type { MasterWorld } from './master-world'
-import { PROJECTIONS, tabsSectionKey, workspaceIdOf } from './projections'
+import { PROJECTIONS, isRetiredSection, tabsSectionKey, workspaceIdOf } from './projections'
 import {
-  buildHostsSection,
   buildSettingsSection,
   buildTabsSection,
   buildWorkspacesSection,
@@ -109,6 +112,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, SettingsStore> = {
   'purdex-newtab-layout': useNewTabLayoutStore,
   'purdex-layout': useLayoutStore,
   'purdex-host-looks': useHostLookStore,
+  'purdex-shown-hosts': useShownHostsStore,
 }
 
 const SETTINGS_KEYS = Object.keys(SETTINGS_STORES) as SettingsStorageKey[]
@@ -173,9 +177,10 @@ const CONFLICT = Symbol('host-identity-conflict')
 /** THE builder: what the collector reports and what `buildSectionPayload` answers are this one function's result.
  *  Never `buildProfileDocument`: it throws as a whole on one bad workspace id. Each section is built alone. */
 function buildSection(key: ProfileSectionKey): unknown | typeof ABSENT | typeof UNSETTLED | typeof CONFLICT {
+  // host ownership H3a-2: a retired section does not exist here — whatever the identity says
+  if (isRetiredSection(key)) return ABSENT
   const identity = key === 'workspaces' ? null : currentIdentity()
   if (identity !== null && identity.conflict !== null) return CONFLICT
-  if (key === 'hosts') return buildHostsSection(useHostStore.getState(), identity as HostIdentity)
   const read = readMasterWorld()
   if (!read.settled) return UNSETTLED
   const { workspaces, tabs } = read.world
@@ -317,12 +322,11 @@ export function startCollector(opts: CollectorOptions): Collector {
   }
 
   /**
-   * The identity moved: every section that names hosts is rebuilt — `hosts` always, `settings` and every `tabs.*`
-   * of the master world when it is settled (unsettled: settling schedules the whole world anyway), plus every
-   * `tabs.*` reported earlier. Layer 2 then reports only what really changed.
+   * The identity moved: every section that names hosts is rebuilt — `settings` and every `tabs.*` of the master
+   * world when it is settled (unsettled: settling schedules the whole world anyway), plus every `tabs.*` reported
+   * earlier. Layer 2 then reports only what really changed.
    */
   function scheduleHostBearing(): void {
-    schedule('hosts')
     const read = readMasterWorld()
     if (!read.settled) return
     schedule('settings')
@@ -330,15 +334,12 @@ export function startCollector(opts: CollectorOptions): Collector {
     for (const [key, hash] of lastHash) if (hash !== null && workspaceIdOf(key) !== null) schedule(key)
   }
 
-  /** The slots that are made of the master's tab world (everything but `hosts`). */
-  const isWorldSlot = (slot: Slot): boolean => slot !== 'hosts'
-
   /** Everything of `world`, plus every section reported earlier and possibly gone now (`run` reports those as vanished). */
   function scheduleWholeWorld(world: MasterWorld): void {
     schedule('workspaces')
     schedule('settings')
     for (const id of byId(world.workspaces).keys()) scheduleTabs(id)
-    for (const [key, hash] of lastHash) if (hash !== null && key !== 'hosts') schedule(key)
+    for (const [key, hash] of lastHash) if (hash !== null) schedule(key)
   }
 
   /** Hand-diff of two settled master worlds, by reference — layer 1, allowed to over-schedule. */
@@ -392,18 +393,15 @@ export function startCollector(opts: CollectorOptions): Collector {
   }
 
   /**
-   * The master world moved, went out of sight, or came back (`subscribeMasterWorld`). Unsettled: every timer of a world slot is dropped — what it
-   * would have built is unreadable now — and the world is forgotten, so that settling schedules ALL of it.
+   * The master world moved, went out of sight, or came back (`subscribeMasterWorld`). Unsettled: every timer is dropped — every
+   * slot is made of that world, and what it would have built is unreadable now — and the world is forgotten, so that settling
+   * schedules ALL of it.
    */
   function onMasterWorld(): void {
     if (stopped) return
     const read = readMasterWorld()
     if (!read.settled) {
-      for (const [slot, timer] of [...timers]) {
-        if (!isWorldSlot(slot)) continue
-        clearTimeout(timer)
-        timers.delete(slot)
-      }
+      clearTimers()
       lastWorld = null
       checkStuck() // starts the stretch's clock
       return
@@ -421,15 +419,11 @@ export function startCollector(opts: CollectorOptions): Collector {
 
   const unsubscribers: (() => void)[] = [
     useHostStore.subscribe((next, prev) => {
-      if (next.hosts !== prev.hosts) {
-        const signature = currentIdentity().signature
-        if (signature !== identitySignature) {
-          identitySignature = signature
-          scheduleHostBearing()
-          return
-        }
-      }
-      if (next.hosts !== prev.hosts || next.hostOrder !== prev.hostOrder) schedule('hosts')
+      if (next.hosts === prev.hosts) return
+      const signature = currentIdentity().signature
+      if (signature === identitySignature) return
+      identitySignature = signature
+      scheduleHostBearing()
     }),
 
     subscribeMasterWorld(onMasterWorld),
@@ -450,7 +444,7 @@ export function startCollector(opts: CollectorOptions): Collector {
     async primeAll() {
       if (stopped) return
       clearTimers()
-      const live = new Set<ProfileSectionKey>(['hosts'])
+      const live = new Set<ProfileSectionKey>()
       const read = readMasterWorld()
       if (read.settled) {
         live.add('settings')

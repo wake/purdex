@@ -137,7 +137,7 @@ describe('the wizard, through its controls, against a daemon', () => {
 
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
     expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: M, profileId: PROFILE })
-    expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.wa', 'workspaces'])
+    expect(daemon.live()).toEqual(['settings', 'tabs.wa', 'workspaces']) // never `hosts` (host ownership H3a-2)
     expect(JSON.stringify(daemon.rows.get('workspaces')!.payload)).toContain('SENTINEL-A')
     expect(profileSyncState().status?.profile).toBe('synced')
     expect(onScreen()).toEqual(['SENTINEL-A']) // a push replaces nothing here
@@ -198,7 +198,8 @@ describe('the wizard, through its controls, against a daemon', () => {
     expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
     await settle()
     expect(await detachMaster()).toEqual({ ok: true })
-    expect(daemon.live()).toContain('hosts')
+    // the legacy `hosts` row an older client wrote (an H3 client never writes one: host ownership H3a-2)
+    daemon.rows.set('hosts', { rev: 1, hash: 'a'.repeat(64), payload: { hosts: { [M]: { id: M, name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: [M] }, fingerprint: 'fp-hosts', ordinal: 1, writer: 'c_oooooooooooo' })
     vi.clearAllMocks()
     api.listProfiles.mockImplementation(async () => daemon.list())
     api.getSection.mockImplementation(async (_h, _p, key) => daemon.get(key))
