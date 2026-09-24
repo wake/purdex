@@ -58,7 +58,7 @@
 // gives every POST a new id and allows equal names, so a POST that succeeded with its answer lost, pressed
 // again, leaves an orphan per press. Unknown = timeout · network · aborted · thrown — and `server` / `malformed`
 // too (a 5xx or an unreadable 2xx may follow the commit; the cost of counting them in is one list request).
-// Then the host is listed and "ours" is looked for: same name, no section, no device attached, and an id that
+// Then the host is listed and "ours" is looked for: same name, no live section (`hasLiveSections`), no device attached, and an id that
 // was NOT in the BASELINE — the ids of the last list this wizard visit had read from that host BEFORE its first
 // POST (the component keeps it; ids, not `createdAt`: the daemon's clock is not this device's). Found → it MAY
 // be ours, and that is all anybody can say: another device starting from the same list may have created a
@@ -264,6 +264,12 @@ function liveContent(entry: Pick<ProfileIndexEntry, 'sections'>): ProfileIndexEn
   return entry.sections.filter((m) => !isRetiredSection(m.section))
 }
 
+/** THE one rule for "does this profile hold anything" — `sotNow`'s `empty` and the create recovery's "blank"
+ *  (`lookForCreated`) both ask it, so a profile holding only a retired section is empty to both. */
+export function hasLiveSections(entry: Pick<ProfileIndexEntry, 'sections'>): boolean {
+  return liveContent(entry).length > 0
+}
+
 /** Every live section's name, rev and hash, in a fixed order — the retired ones left out (a straggler's `hosts`
  *  write must not bounce the wizard). The index lists no tombstone: a deleted section is one that is missing. The
  *  profile's NAME is not part of it — a rename changes nothing a direction decides. */
@@ -273,7 +279,7 @@ export function sotFingerprint(entry: Pick<ProfileIndexEntry, 'sections'>): stri
 
 /** `empty`: nothing but retired sections — a pull would bring nothing, so pull is not offered and push warns of nothing. */
 export function sotNow(entry: Pick<ProfileIndexEntry, 'sections'>): SotNow {
-  return { fingerprint: sotFingerprint(entry), empty: liveContent(entry).length === 0 }
+  return { fingerprint: sotFingerprint(entry), empty: !hasLiveSections(entry) }
 }
 
 /** This device's half, read off the stores as they are this instant. Null = every premise holds. */
@@ -400,7 +406,8 @@ type Looked = { kind: 'found'; id: string } | { kind: 'absent' } | { kind: 'same
 async function lookForCreated(hostId: string, name: string, baseline: readonly string[] | null): Promise<Looked> {
   const listedNow = await listOrClass(hostId)
   if (!listedNow.ok) return { kind: 'list-failed', request: listedNow.request }
-  const blank = listedNow.rows.filter((row) => row.name === name && row.sections.length === 0 && row.attachments.length === 0)
+  // Blank = holds nothing by `hasLiveSections` (a retired `hosts` row an older client wrote meanwhile is not content).
+  const blank = listedNow.rows.filter((row) => row.name === name && !hasLiveSections(row) && row.attachments.length === 0)
   if (baseline === null) return blank.length > 0 ? { kind: 'same-name' } : { kind: 'absent' }
   const known = new Set(baseline)
   const ours = blank.filter((row) => !known.has(row.id)).sort((a, b) => b.createdAt - a.createdAt)

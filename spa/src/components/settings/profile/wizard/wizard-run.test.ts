@@ -20,7 +20,7 @@ import { createProfile, getSection, listProfiles } from '../../../../lib/profile
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { useUndoToast } from '../../../../stores/useUndoToast'
 import { isRetiredSection } from '../../../../lib/profile/projections'
-import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, retargetPlan, runPlan, sotFingerprint, sotNow, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
+import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, hasLiveSections, prepareRun, retargetPlan, runPlan, sotFingerprint, sotNow, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
 vi.mock('../../../../lib/profile/start', () => ({ attachMaster: vi.fn() }))
 vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn(), getSection: vi.fn() }))
@@ -539,8 +539,18 @@ describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for
 
   it('new since, same name — but it HOLDS something, or a device is attached to it: somebody else\'s, not ours', async () => {
     vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
-    listed(indexEntry('p_00000000000c', 'Work', [meta('hosts', 1)]), indexEntry('p_00000000000d', 'Work', [], { attachments: [{ clientId: 'c', profileId: 'p_00000000000d', deviceName: 'd', attachedAt: 1, lastSeen: 1 }] }), indexEntry('p_00000000000e', 'Other'))
+    listed(indexEntry('p_00000000000c', 'Work', [meta('workspaces', 1)]), indexEntry('p_00000000000d', 'Work', [], { attachments: [{ clientId: 'c', profileId: 'p_00000000000d', deviceName: 'd', attachedAt: 1, lastSeen: 1 }] }), indexEntry('p_00000000000e', 'Other'))
     expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: false, outcome: 'not-created' })
+  })
+
+  it('A RETIRED SECTION IS NO CONTENT HERE EITHER (host ownership H3b, as `sotNow`): the create timed out, and an older client has since written only a `hosts` row into the new profile — still ours-maybe, never sent again', async () => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
+    const hostsOnly = indexEntry('p_00000000000b', 'Work', [meta('hosts', 1)], { createdAt: 50 })
+    listed(before, hostsOnly)
+    expect(await createSotProfile('h1', 'Work', BASE, false)).toMatchObject({ ok: false, outcome: 'maybe', candidateId: hostsOnly.id })
+    listed(before, hostsOnly)
+    expect(await createSotProfile('h1', 'Work', BASE, true)).toMatchObject({ ok: false, outcome: 'maybe', candidateId: hostsOnly.id })
+    expect(createProfile).toHaveBeenCalledTimes(1) // no second POST
   })
 
   it('two candidates (an earlier lost attempt of this visit, too): the newest', async () => {
@@ -578,6 +588,22 @@ describe('createSotProfile — a create whose outcome is NOT KNOWN is looked for
     expect(createProfile).toHaveBeenCalledTimes(1)
     listed()
     expect(await createSotProfile('h1', 'Work', null, false)).toMatchObject({ ok: false, outcome: 'not-created' })
+  })
+
+  it('NO BASELINE, and the same-name profile holds only a `hosts` row: it counts as empty — `same-name`, not doubled', async () => {
+    vi.mocked(createProfile).mockResolvedValue(transportFailure('timeout'))
+    listed(indexEntry('p_00000000000b', 'Work', [meta('hosts', 1)]))
+    expect(await createSotProfile('h1', 'Work', null, false)).toEqual({ ok: false, outcome: 'same-name', request: 'timeout' })
+    expect(await createSotProfile('h1', 'Work', null, true)).toEqual({ ok: false, outcome: 'same-name', request: 'thrown' })
+    expect(createProfile).toHaveBeenCalledTimes(1)
+  })
+
+  it('one rule for "empty": what `sotNow` calls empty is what the create-recovery calls blank', () => {
+    for (const sections of [[], [meta('hosts', 1)], [meta('workspaces', 1)], [meta('hosts', 1), meta('settings', 2)]]) {
+      expect(hasLiveSections(indexEntry(P, 'x', sections))).toBe(!sotNow(indexEntry(P, 'x', sections)).empty)
+    }
+    expect(hasLiveSections(indexEntry(P, 'x', [meta('hosts', 1)]))).toBe(false)
+    expect(hasLiveSections(indexEntry(P, 'x', [meta('tabs.w1', 1)]))).toBe(true)
   })
 })
 
