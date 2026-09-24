@@ -2,7 +2,7 @@
 import { create } from 'zustand'
 import { getActiveSessionInfo } from '../lib/active-session'
 import { compositeKey } from '../lib/composite-key'
-import { parseProvenance } from '../lib/rebuild/provenance'
+import { parseExit, parseProvenance } from '../lib/rebuild/provenance'
 import { useTabStore } from './useTabStore'
 import { scanPaneTree } from '../lib/pane-tree'
 
@@ -92,12 +92,33 @@ function writeProvenanceRecord(
         type: prov.agentType,
         sessionId: prov.sessionId || undefined,
         tmuxPaneId: prov.tmuxPaneId || undefined,
+        frameId: prov.frameId || undefined,
         updatedAt: now,
       },
       capturedAt: now,
     },
   })
   return true
+}
+
+/**
+ * Mark the recorded agent exited from a `pdx_exit` envelope (agent-last-state
+ * spec §2). The store applies it only to a record whose `agent.frameId` and
+ * `agent.sessionId` are the exit's — so this may be called for every event without a pane check here.
+ */
+function writeExitRecord(
+  hostId: string,
+  sessionCode: string,
+  detail: Record<string, unknown> | undefined,
+): void {
+  const exit = parseExit(detail)
+  if (!exit) return
+  useTabStore.getState().setPaneRebuild(hostId, sessionCode, exit.tmuxInstance, {
+    kind: 'agent-exit',
+    frameId: exit.frameId,
+    sessionId: exit.sessionId,
+    exited: { at: exit.at, reason: exit.reason },
+  })
 }
 
 /**
@@ -194,6 +215,11 @@ export const useAgentStore = create<AgentState>()(
 
     handleNormalizedEvent: (hostId, sessionCode, event) => {
       const key = compositeKey(hostId, sessionCode)
+
+      // BEFORE the clear return: a root's SessionEnd (or the sweep clearing
+      // it) is exactly the event that empties the session, so an exit read
+      // after that return would almost never be read at all.
+      writeExitRecord(hostId, sessionCode, event.detail)
 
       if (event.status === 'clear') {
         get().clearSession(hostId, sessionCode)

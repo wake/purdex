@@ -11,6 +11,8 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { PROJECTIONS } from './projections'
 import { syncIdOfSync } from './host-identity'
@@ -52,12 +54,12 @@ const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash
 
 const SETTINGS_STORES = [
   useUISettingsStore, useThemeStore, useI18nStore, useNotificationSettingsStore,
-  useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore,
+  useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore, useHostLookStore, useShownHostsStore,
 ] as const
 
-const EIGHT_KEYS = [
-  'purdex-host-settings', 'purdex-i18n', 'purdex-layout', 'purdex-newtab-layout',
-  'purdex-notification-settings', 'purdex-themes', 'purdex-ui-settings', 'purdex-workspace-settings',
+const TEN_KEYS = [
+  'purdex-host-looks', 'purdex-host-settings', 'purdex-i18n', 'purdex-layout', 'purdex-newtab-layout',
+  'purdex-notification-settings', 'purdex-shown-hosts', 'purdex-themes', 'purdex-ui-settings', 'purdex-workspace-settings',
 ]
 
 function host(id: string, name = id) {
@@ -147,55 +149,52 @@ afterEach(() => {
 describe('startCollector — debounce', () => {
   it('reports at 500 ms, not at 499', async () => {
     start()
-    useHostStore.setState({ hosts: { h1: host('h1', 'renamed') } })
+    useUISettingsStore.setState({ keepAliveCount: 7 })
     await vi.advanceTimersByTimeAsync(499)
     expect(reports).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
-    expect(keys()).toEqual(['hosts'])
-    expect((reports[0].payload as { hosts: Record<string, { name: string }> }).hosts.h1.name).toBe('renamed')
+    expect(keys()).toEqual(['settings'])
+    expect((reports.find((r) => r.key === 'settings')!.payload as Record<string, Record<string, unknown>>)['purdex-ui-settings'].keepAliveCount).toBe(7)
   })
 
   it('a second change inside the window restarts it (trailing)', async () => {
     start()
-    useHostStore.setState({ hosts: { h1: host('h1', 'a') } })
+    useUISettingsStore.setState({ keepAliveCount: 1 })
     await vi.advanceTimersByTimeAsync(400)
-    useHostStore.setState({ hosts: { h1: host('h1', 'b') } })
+    useUISettingsStore.setState({ keepAliveCount: 2 })
     await vi.advanceTimersByTimeAsync(499)
     expect(reports).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
     expect(reports).toHaveLength(1)
-    expect((reports[0].payload as { hosts: Record<string, { name: string }> }).hosts.h1.name).toBe('b')
+    expect((reports.find((r) => r.key === 'settings')!.payload as Record<string, Record<string, unknown>>)['purdex-ui-settings'].keepAliveCount).toBe(2)
   })
 
-  it('a learned daemonId schedules `hosts` and travels in its payload (host-daemon-id D6)', async () => {
+  it('a learned daemonId reschedules every section that names hosts — never `hosts` itself (host ownership H3a-2)', async () => {
     start()
     useHostStore.getState().observeDaemonId('h1', 'mini:abc123', requestAtOf(useHostStore.getState().hosts.h1))
     await vi.advanceTimersByTimeAsync(500)
-    // …and, the identity having moved, every other section that names hosts (host-sync-identity §11.3)
-    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B'])
-    // …keyed by its wire id from then on (host-sync-identity)
-    const wire = syncIdOfSync('mini:abc123')
-    expect((reports[0].payload as { hosts: Record<string, { daemonId?: string }> }).hosts[wire].daemonId).toBe('mini:abc123')
+    // the identity having moved, every section that names hosts (host-sync-identity §11.3) — `hosts` is retired
+    expect(keys()).toEqual(['settings', 'tabs.A', 'tabs.B'])
   })
 
   it('honours debounceMs', async () => {
     collector = startCollector({ onSection: (r) => reports.push(r), debounceMs: 50 })
-    useHostStore.setState({ hostOrder: [] })
+    useUISettingsStore.setState({ keepAliveCount: 3 })
     await vi.advanceTimersByTimeAsync(50)
-    expect(keys()).toEqual(['hosts'])
+    expect(keys()).toEqual(['settings'])
   })
 
-  it('is per section: a busy `hosts` does not postpone a scheduled `settings`', async () => {
+  it('is per section: a busy `settings` does not postpone a scheduled `workspaces`', async () => {
     start()
-    useUISettingsStore.setState({ keepAliveCount: 5 })
+    setWorkspaces((l) => l.map((w) => (w.id === 'A' ? { ...w, name: 'renamed' } : w)))
     for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(100)
-      useHostStore.setState({ hosts: { h1: host('h1', `n${i}`) } })
+      useUISettingsStore.setState({ keepAliveCount: 10 + i })
     }
-    await vi.advanceTimersByTimeAsync(100) // t=500: settings is due, hosts last moved at t=400
-    expect(keys()).toEqual(['settings'])
+    await vi.advanceTimersByTimeAsync(100) // t=500: workspaces is due, settings last moved at t=400
+    expect(keys()).toEqual(['workspaces'])
     await vi.advanceTimersByTimeAsync(400)
-    expect(keys()).toEqual(['hosts', 'settings'])
+    expect(keys()).toEqual(['settings', 'workspaces'])
   })
 })
 
@@ -341,7 +340,7 @@ describe('startCollector — tabs and workspaces', () => {
     expect(JSON.stringify(after?.payload)).not.toContain('bad id!')
     await c.primeAll()
     await c.primeAll()
-    expect([...new Set(keys())]).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B', 'workspaces'])
+    expect([...new Set(keys())]).toEqual(['settings', 'tabs.A', 'tabs.B', 'workspaces'])
     patchTab('t2', { locked: true })
     await vi.advanceTimersByTimeAsync(500)
     expect(problems.filter((p) => p.kind === 'invalid-workspace-id')).toEqual([
@@ -380,6 +379,8 @@ describe('startCollector — settings', () => {
       () => useHostSettingsStore.setState({ hosts: {} }),
       () => useNewTabLayoutStore.setState({ presets: { ...useNewTabLayoutStore.getState().presets } }),
       () => useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' }),
+      () => useHostLookStore.getState().putLook('d1_a', { name: 'mlab' }),
+      () => useShownHostsStore.getState().show('d1_a'),
     ]
     start()
     for (const change of changes) {
@@ -396,17 +397,43 @@ describe('startCollector — settings', () => {
     expect(await pendingTimers()).toBe(0)
   })
 
-  it('always carries all eight stores, whichever one changed', async () => {
+  it('always carries all ten stores, whichever one changed', async () => {
     start()
     useUISettingsStore.setState({ keepAliveCount: 5 })
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, Record<string, unknown>>
-    expect(Object.keys(payload).sort()).toEqual(EIGHT_KEYS)
+    expect(Object.keys(payload).sort()).toEqual(TEN_KEYS)
     expect(payload['purdex-ui-settings'].keepAliveCount).toBe(5)
     expect(payload).not.toHaveProperty('purdex-editor-settings')
     expect(payload['purdex-ui-settings']).not.toHaveProperty('terminalSettingsVersion')
     expect(payload['purdex-layout']).toEqual({ tabPosition: 'top' })
+    // host ownership §0.6: the look store is ALWAYS built, empty or not — an absent store reads "not sent" on the other side
+    expect(payload['purdex-host-looks']).toEqual({ looks: {} })
+    // host ownership H2d-1 (§0.6): the shown-hosts store too — the EMPTY default { ids: [] } included
+    expect(payload['purdex-shown-hosts']).toEqual({ ids: [] })
+  })
+
+  it('a shown-hosts write schedules `settings` and travels, its ids verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: 'mini-lab:278cbm' } } })
+    start()
+    useShownHostsStore.getState().show('d1_unknown')
+    useShownHostsStore.getState().show('h1')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['settings'])
+    const payload = reports[0].payload as Record<string, unknown>
+    expect(payload['purdex-shown-hosts']).toEqual({ ids: ['d1_unknown', 'h1'] })
+  })
+
+  it('a look write schedules `settings` and travels, its keys verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: 'mini-lab:278cbm' } } })
+    start()
+    useHostLookStore.getState().putLook('d1_a', { name: 'mlab', icon: 'Laptop' })
+    useHostLookStore.getState().putLook('h1', { name: 'local id key' })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['settings'])
+    const payload = reports[0].payload as Record<string, unknown>
+    expect(payload['purdex-host-looks']).toEqual({ looks: { d1_a: { name: 'mlab', icon: 'Laptop' }, h1: { name: 'local id key' } } })
   })
 })
 
@@ -460,14 +487,14 @@ describe('startCollector — primeAll', () => {
   it('reports every section, changed or not, and cancels pending timers', async () => {
     const c = start()
     await c.primeAll()
-    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B', 'workspaces'])
+    expect(keys()).toEqual(['settings', 'tabs.A', 'tabs.B', 'workspaces']) // never `hosts` (host ownership H3a-2)
     for (const r of reports) expect(r.hash).toBe(structuralKey(r.payload))
     reports = []
-    useHostStore.setState({ hostOrder: [] })
+    useUISettingsStore.setState({ keepAliveCount: 9 })
     expect(await pendingTimers()).toBe(1)
     await c.primeAll()
     expect(await pendingTimers()).toBe(0)
-    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B', 'workspaces'])
+    expect(keys()).toEqual(['settings', 'tabs.A', 'tabs.B', 'workspaces'])
     reports = []
     await vi.advanceTimersByTimeAsync(5000)
     expect(reports).toEqual([])
@@ -482,7 +509,7 @@ describe('startCollector — primeAll', () => {
     expect(reports.find((r) => r.key === 'tabs.B')).toEqual({ key: 'tabs.B', hash: null, payload: null })
     reports = []
     await c.primeAll()
-    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'workspaces'])
+    expect(keys()).toEqual(['settings', 'tabs.A', 'workspaces'])
   })
 })
 
@@ -491,36 +518,37 @@ describe('startCollector — async hash', () => {
     let release = (): void => {}
     h.gate = () => new Promise<void>((r) => (release = r))
     start()
-    useHostStore.setState({ hosts: { h1: host('h1', 'first') } })
+    useUISettingsStore.setState({ keepAliveCount: 11 })
     await vi.advanceTimersByTimeAsync(500)
     expect(reports).toEqual([])
     h.gate = null
-    useHostStore.setState({ hosts: { h1: host('h1', 'second') } })
+    useUISettingsStore.setState({ keepAliveCount: 22 })
     release()
     await vi.advanceTimersByTimeAsync(0)
     expect(reports).toHaveLength(1)
-    expect((reports[0].payload as { hosts: Record<string, { name: string }> }).hosts.h1.name).toBe('first')
+    const ui = (i: number): unknown => (reports[i].payload as Record<string, Record<string, unknown>>)['purdex-ui-settings'].keepAliveCount
+    expect(ui(0)).toBe(11)
     expect(reports[0].hash).toBe(structuralKey(reports[0].payload))
     await vi.advanceTimersByTimeAsync(500)
     expect(reports).toHaveLength(2)
     expect(reports[1].hash).toBe(structuralKey(reports[1].payload))
-    expect(reports[1].hash).toContain('second')
+    expect(ui(1)).toBe(22)
   })
 
   it('an older hash that completes after a newer one is dropped', async () => {
     let releaseOld = (): void => {}
     h.gate = (payload) =>
-      JSON.stringify(payload).includes('"old"') ? new Promise<void>((r) => (releaseOld = r)) : undefined
+      JSON.stringify(payload).includes('"keepAliveCount":111') ? new Promise<void>((r) => (releaseOld = r)) : undefined
     start()
-    useHostStore.setState({ hosts: { h1: host('h1', 'old') } })
+    useUISettingsStore.setState({ keepAliveCount: 111 })
     await vi.advanceTimersByTimeAsync(500) // old: in flight, held
-    useHostStore.setState({ hosts: { h1: host('h1', 'new') } })
+    useUISettingsStore.setState({ keepAliveCount: 222 })
     await vi.advanceTimersByTimeAsync(500) // new: reported
     expect(reports).toHaveLength(1)
     releaseOld()
     await vi.advanceTimersByTimeAsync(0)
     expect(reports).toHaveLength(1)
-    expect(reports[0].hash).toContain('new')
+    expect(reports[0].hash).toContain('"keepAliveCount":222')
   })
 })
 
@@ -529,8 +557,8 @@ describe('startCollector — stop', () => {
     let release = (): void => {}
     h.gate = (payload) => (JSON.stringify(payload).includes('"held"') ? new Promise<void>((r) => (release = r)) : undefined)
     const c = start()
-    useHostStore.setState({ hosts: { h1: host('h1', 'held') } })
-    await vi.advanceTimersByTimeAsync(500) // hosts hash in flight
+    setWorkspaces((l) => l.map((w) => (w.id === 'A' ? { ...w, name: 'held' } : w)))
+    await vi.advanceTimersByTimeAsync(500) // workspaces hash in flight
     useUISettingsStore.setState({ keepAliveCount: 4 }) // a pending timer
     expect(await pendingTimers()).toBe(1)
     c.stop()
@@ -565,7 +593,7 @@ describe('watchUnsyncedStores', () => {
   it('UNSYNCED_SETTINGS_KEYS is exactly the projected stores that never registered with syncManager — none today', () => {
     // Fails the day a projected store starts (or stops) calling syncManager.register.
     const projected = [...new Set(PROJECTIONS.settings.map((p) => p.slice(0, p.indexOf('.'))))]
-    expect(projected.sort()).toEqual(EIGHT_KEYS)
+    expect(projected.sort()).toEqual(TEN_KEYS)
     expect(h.registered).toContain('purdex-ui-settings') // the recorder is live
     expect([...UNSYNCED_SETTINGS_KEYS].sort()).toEqual(projected.filter((k) => !h.registered.includes(k)).sort())
     expect(UNSYNCED_SETTINGS_KEYS).toEqual([])
@@ -574,7 +602,7 @@ describe('watchUnsyncedStores', () => {
   it('rehydrates nothing: neither a registered store a second time, nor the device-local editor store', () => {
     const spies = [...SETTINGS_STORES, useEditorSettingsStore].map((s) => vi.spyOn(s.persist, 'rehydrate'))
     unwatch = watchUnsyncedStores()
-    for (const key of [...EIGHT_KEYS, 'purdex-editor-settings', 'something-else', null]) storageEvent(key)
+    for (const key of [...TEN_KEYS, 'purdex-editor-settings', 'something-else', null]) storageEvent(key)
     for (const spy of spies) expect(spy).not.toHaveBeenCalled()
   })
 
@@ -603,22 +631,26 @@ describe('startCollector — host identity', () => {
 
   const payloadOf = (key: string): string => JSON.stringify(reports.filter((r) => r.key === key).at(-1)?.payload)
 
-  it('a learned daemonId changes the identity: hosts, settings and EVERY tabs.* are rebuilt with the wire id — workspaces is not', async () => {
+  it('a learned daemonId changes the identity: settings and EVERY tabs.* are rebuilt with the wire id — workspaces is not, `hosts` never', async () => {
     start()
     useHostStore.getState().observeDaemonId('h1', DAEMON, requestAtOf(useHostStore.getState().hosts.h1))
     await vi.advanceTimersByTimeAsync(500)
-    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B'])
+    expect(keys()).toEqual(['settings', 'tabs.A', 'tabs.B'])
     expect(payloadOf('tabs.A')).toContain(`"hostId":"${WIRE}"`)
     expect(payloadOf('settings')).toContain(`sessions:${WIRE}`)
-    expect(payloadOf('hosts')).toContain(`"${WIRE}":`)
   })
 
-  it('a host-store change that does not move the identity (a rename) schedules `hosts` only', async () => {
-    start()
-    useHostStore.setState({ hosts: { h1: host('h1', 'renamed') } })
-    await vi.advanceTimersByTimeAsync(500)
-    expect(keys()).toEqual(['hosts'])
+  it('a rename + recolour schedules nothing and notifies no look-store subscriber (host ownership §4.4, H3a-2)', async () => {
+    useHostLookStore.getState().putLook('h1', { name: 'look' })
+    const spy = vi.fn()
+    const unsub = useHostLookStore.subscribe(spy)
+    await expectIgnored(() => useHostStore.setState({ hosts: { h1: { ...host('h1', 'renamed'), color: '#abcdef', icon: 'Laptop' } } }))
+    unsub()
+    expect(spy).not.toHaveBeenCalled()
   })
+
+  it('a host-store change that does not move the identity (a rename) schedules nothing (host ownership H3a-2)', () =>
+    expectIgnored(() => useHostStore.setState({ hosts: { h1: host('h1', 'renamed') } })))
 
   it('primeAll builds every host-bearing section through the identity of the moment', async () => {
     useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: DAEMON } } })
@@ -633,7 +665,7 @@ describe('startCollector — host identity', () => {
     await start().primeAll()
     expect(keys()).toEqual(['workspaces'])
     expect(problems).toEqual([{ kind: 'host-identity-conflict', detail: 'h1, h2' }])
-    expect(buildSectionPayload('hosts')).toBeNull()
+    expect(buildSectionPayload('hosts')).toEqual({ payload: null }) // retired: nothing to build, conflict or not
     expect(buildSectionPayload('settings')).toBeNull()
     expect(buildSectionPayload('tabs.A')).toBeNull()
     expect(buildSectionPayload('workspaces')).not.toBeNull()
@@ -641,7 +673,43 @@ describe('startCollector — host identity', () => {
     reports = []
     useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: DAEMON } }, hostOrder: ['h1'] })
     await vi.advanceTimersByTimeAsync(500)
-    expect(keys()).toEqual(['hosts', 'settings', 'tabs.A', 'tabs.B'])
+    expect(keys()).toEqual(['settings', 'tabs.A', 'tabs.B'])
     expect(problems).toHaveLength(1)
+  })
+})
+
+// === host ownership H3a-2 (spec §5.1): the collector never builds `hosts` ===
+
+describe('startCollector — `hosts` is retired (host ownership H3a-2)', () => {
+  const noHosts = (): void => expect(keys()).not.toContain('hosts')
+
+  it('buildSectionPayload(hosts) answers "does not exist": { payload: null }', () => {
+    expect(buildSectionPayload('hosts')).toEqual({ payload: null })
+  })
+
+  it('a host reorder schedules nothing', () => expectIgnored(() => useHostStore.setState({ hostOrder: [] })))
+
+  it('a host added or removed reports no `hosts` (only a host-bearing section whose content moved)', async () => {
+    const c = start()
+    await c.primeAll()
+    noHosts()
+    reports = []
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h2: host('h2') }, hostOrder: ['h1', 'h2'] })
+    await vi.advanceTimersByTimeAsync(5000)
+    noHosts()
+    expect(reports).toEqual([]) // nothing names h2: every rebuilt section hashes as before
+    useHostStore.setState({ hosts: { h1: host('h1') }, hostOrder: ['h1'] })
+    await vi.advanceTimersByTimeAsync(5000)
+    noHosts()
+    expect(reports).toEqual([])
+  })
+
+  it('a rename after primeAll: no report at all', async () => {
+    const c = start()
+    await c.primeAll()
+    reports = []
+    useHostStore.setState({ hosts: { h1: host('h1', 'renamed') } })
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(reports).toEqual([])
   })
 })

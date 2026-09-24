@@ -2,14 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { HostConfig } from '../../stores/useHostStore'
 import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import {
-  applyHosts,
   applySettings,
   applyTabs,
   applyWorkspaces,
   deriveTabOrder,
-  duplicateHostAlias,
   isWellFormedSection,
-  planHostsApply,
   restoreSizes,
   settingsFromWire,
   tabsFromWire,
@@ -17,7 +14,7 @@ import {
   upcastLegacyTabs,
 } from './applier'
 import { hashSection } from './hash'
-import { NEW_HOST, identityOfSync, makeWireResolver, syncIdOfSync } from './host-identity'
+import { identityOfSync, makeWireResolver, syncIdOfSync } from './host-identity'
 import { PROJECTIONS, project } from './projections'
 import {
   buildHostsSection,
@@ -29,8 +26,6 @@ import {
   type SettingsBuildInput,
 } from './sections'
 import type {
-  HostsPayload,
-  HostsSlice,
   SettingsPayload,
   StrippedLayout,
   TabsPayload,
@@ -81,151 +76,6 @@ function copy<T>(value: T): T {
 function tabRecord(...tabs: Tab[]): Record<string, Tab> {
   return Object.fromEntries(tabs.map((t) => [t.id, t]))
 }
-
-// --- hosts -------------------------------------------------------------------
-
-const EMPTY_HOSTS: HostsSlice = { hosts: {}, hostOrder: [], activeHostId: null, devHostId: null }
-
-
-/** `applyHosts` works on LOCAL ids (apply-to-stores translates the wire first): the hosts builder with an identity that maps nothing. */
-function buildLocalHosts(s: Parameters<typeof buildHostsSection>[0]): ReturnType<typeof buildHostsSection> {
-  return buildHostsSection(s, identityOfSync({}))
-}
-
-function hostsPayload(): HostsPayload {
-  return buildLocalHosts({
-    hosts: {
-      h1: host('h1', { token: 'tok', color: '#112233', icon: 'Laptop', iconWeight: 'bold' }),
-      h2: host('h2', { order: 1, token: null, colors: { console: { main: { color: '#112233', alpha: 100 } } } }),
-    },
-    hostOrder: ['h1', 'h2'],
-  })
-}
-
-function hostsLocals(): HostsSlice[] {
-  return [
-    EMPTY_HOSTS,
-    { hosts: { x: host('x', { icon: 'Cube' }) }, hostOrder: ['x'], activeHostId: 'x', devHostId: 'x' },
-    { hosts: { h1: host('h1', { name: 'old', icon: 'Old', token: 'other' }), z: host('z') }, hostOrder: ['z', 'h1'], activeHostId: 'h1', devHostId: 'z' },
-  ]
-}
-
-describe('applyHosts', () => {
-  // The one deliberate exception: a local daemonId under a host id the payload
-  // carries without one — the ordinal-1 upcast below, which pushes once.
-  it('round trip: hash(build(apply(local, p))) === hash(p) for any local', async () => {
-    const p = deepFreeze(hostsPayload())
-    for (const local of hostsLocals()) {
-      const { next } = applyHosts(deepFreeze(local), p)
-      expect(await hashSection(buildLocalHosts(next))).toBe(await hashSection(p))
-    }
-  })
-
-  it('round trip from empty over a built world, including the empty world', async () => {
-    for (const world of [hostsPayload(), buildLocalHosts({ hosts: {}, hostOrder: [] })]) {
-      const { next } = applyHosts(EMPTY_HOSTS, world)
-      expect(await hashSection(buildLocalHosts(next))).toBe(await hashSection(world))
-    }
-  })
-
-  it('replaces hosts and order, and reports the hosts that vanished', () => {
-    const local = hostsLocals()[2]
-    const { next, removedHostIds } = applyHosts(local, hostsPayload())
-    expect(Object.keys(next.hosts).sort()).toEqual(['h1', 'h2'])
-    expect(next.hostOrder).toEqual(['h1', 'h2'])
-    expect(next.hosts.h1.name).toBe('host-h1')
-    expect(removedHostIds).toEqual(['z'])
-  })
-
-  it('keeps activeHostId / devHostId while their host survives', () => {
-    const local: HostsSlice = { hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], activeHostId: 'h2', devHostId: 'h1' }
-    const { next } = applyHosts(local, hostsPayload())
-    expect(next.activeHostId).toBe('h2')
-    expect(next.devHostId).toBe('h1')
-  })
-
-  it('nulls activeHostId / devHostId when their host is gone', () => {
-    const local: HostsSlice = { hosts: { x: host('x'), y: host('y') }, hostOrder: ['x', 'y'], activeHostId: 'x', devHostId: 'y' }
-    const { next, removedHostIds } = applyHosts(local, hostsPayload())
-    expect(next.activeHostId).toBeNull()
-    expect(next.devHostId).toBeNull()
-    expect(removedHostIds).toEqual(['x', 'y'])
-  })
-
-  describe('daemonId (hosts ordinal 2, host-daemon-id D6)', () => {
-    const local = (): HostsSlice => ({
-      hosts: { h1: host('h1', { name: 'old', token: 'other', daemonId: 'mini:local' }), z: host('z', { daemonId: 'mini:z' }) },
-      hostOrder: ['z', 'h1'],
-      activeHostId: 'h1',
-      devHostId: null,
-    })
-
-    it('UPCAST: an incoming host WITHOUT daemonId (ordinal-1 payload) keeps the local host\'s — every other field is the incoming one', () => {
-      const p = deepFreeze(hostsPayload())
-      const { next } = applyHosts(deepFreeze(local()), p)
-      expect(next.hosts.h1).toEqual({ ...p.hosts.h1, daemonId: 'mini:local' })
-      expect(next.hosts.h2).toEqual(p.hosts.h2) // not local: nothing to keep
-      expect(Object.hasOwn(next.hosts.h2, 'daemonId')).toBe(false)
-    })
-
-    // The upcast keeps the local claim only for the SAME incarnation as far as the
-    // address can tell (codex R1 P1): a payload host without daemonId at another
-    // ip or port is a re-point (an ordinal-2 client clears daemonId by re-pointing;
-    // an old client re-points without knowing the field) or a host deleted and
-    // recreated under the same id — the local id belongs to another daemon.
-    it('a re-pointed host (another ip) arriving without daemonId does NOT keep the local one — an ordinal-2 clear stays cleared', () => {
-      const p = deepFreeze(buildLocalHosts({ hosts: { h1: host('h1', { ip: '10.9.9.9' }) }, hostOrder: ['h1'] }))
-      const { next } = applyHosts(deepFreeze(local()), p)
-      expect(next.hosts.h1).toEqual(p.hosts.h1)
-      expect(Object.hasOwn(next.hosts.h1, 'daemonId')).toBe(false)
-    })
-
-    it('another port is another endpoint: the local daemonId is NOT kept', () => {
-      const p = deepFreeze(buildLocalHosts({ hosts: { h1: host('h1', { port: 7861 }) }, hostOrder: ['h1'] }))
-      const { next } = applyHosts(deepFreeze(local()), p)
-      expect(Object.hasOwn(next.hosts.h1, 'daemonId')).toBe(false)
-    })
-
-    it('a host deleted and recreated under the same id at a different address does not inherit the old incarnation\'s daemonId', () => {
-      const recreated = host('h1', { name: 'new one', ip: 'other.example', port: 9000, order: 3 })
-      const p = deepFreeze(buildLocalHosts({ hosts: { h1: recreated }, hostOrder: ['h1'] }))
-      const { next } = applyHosts(deepFreeze(local()), p)
-      expect(next.hosts.h1).toEqual(recreated)
-      expect(buildLocalHosts(next)).toEqual(p) // nothing to push back: the wrong id never goes out
-    })
-
-    it('an incoming host WITH daemonId wins over the local one (SOT wins, D2)', () => {
-      const p = deepFreeze(buildLocalHosts({ hosts: { h1: host('h1', { daemonId: 'mini:sot' }) }, hostOrder: ['h1'] }))
-      const { next } = applyHosts(deepFreeze(local()), p)
-      expect(next.hosts.h1.daemonId).toBe('mini:sot')
-    })
-
-    it('the upcast state builds the ordinal-2 payload (the one upgrade push), which then round-trips as is', async () => {
-      const p = deepFreeze(hostsPayload())
-      const { next } = applyHosts(deepFreeze(local()), p)
-      const upgraded = buildLocalHosts(next)
-      expect(upgraded.hosts.h1.daemonId).toBe('mini:local')
-      expect(await hashSection(upgraded)).not.toBe(await hashSection(p))
-      const again = applyHosts(next, deepFreeze(upgraded)).next
-      expect(await hashSection(buildLocalHosts(again))).toBe(await hashSection(upgraded))
-    })
-
-    it('keeps no local daemonId for a host whose id is not in the payload, and copies nothing else of the local host', () => {
-      const p = deepFreeze(hostsPayload())
-      const { next } = applyHosts(deepFreeze(local()), p)
-      expect(Object.keys(next.hosts).sort()).toEqual(['h1', 'h2'])
-      expect(next.hosts.h1.name).toBe('host-h1')
-      expect(next.hosts.h1.token).toBe('tok')
-    })
-  })
-
-  it('does not hand out the incoming order array itself', () => {
-    const p = hostsPayload()
-    const { next } = applyHosts(EMPTY_HOSTS, p)
-    expect(next.hostOrder).not.toBe(p.hostOrder)
-    expect(next.hosts).not.toBe(p.hosts)
-  })
-})
 
 // --- workspaces --------------------------------------------------------------
 
@@ -753,6 +603,14 @@ describe('applySettings', () => {
     expect(Object.hasOwn(patches, 'purdex-themes')).toBe(false)
   })
 
+  it('host looks are replaced whole: an entry the payload lacks is dropped, one it has lands as sent', () => {
+    const local: SettingsBuildInput = { 'purdex-host-looks': { looks: { d1_a: { name: 'old' }, d1_gone: { name: 'gone' } } } }
+    const incoming: SettingsPayload = { 'purdex-host-looks': { looks: { d1_a: { name: 'new' }, d1_unknown: { icon: 'Laptop' } } } }
+    const { patches, rejected } = applySettings(deepFreeze(local), deepFreeze(copy(incoming)), NO_WS)
+    expect(rejected).toEqual([])
+    expect(patches).toEqual({ 'purdex-host-looks': { looks: { d1_a: { name: 'new' }, d1_unknown: { icon: 'Laptop' } } } })
+  })
+
   it('identical settings produce no patch at all', () => {
     const local = settingsLocal()
     expect(applySettings(local, buildSettingsSection(local, NO_WS), NO_WS)).toEqual({ patches: {}, rejected: [] })
@@ -1088,8 +946,6 @@ describe('deriveTabOrder', () => {
 describe('isWellFormedSection', () => {
   it('accepts everything the builders produce', () => {
     const world = tabsWorld()
-    expect(isWellFormedSection('hosts', hostsPayload())).toBe(true)
-    expect(isWellFormedSection('hosts', buildHostsSection({ hosts: {}, hostOrder: [] }))).toBe(true)
     expect(isWellFormedSection('workspaces', workspacesPayload())).toBe(true)
     expect(isWellFormedSection('workspaces', buildWorkspacesSection([]))).toBe(true)
     expect(isWellFormedSection('tabs', tabsPayload())).toBe(true)
@@ -1100,7 +956,6 @@ describe('isWellFormedSection', () => {
 
   it('accepts a payload that came through JSON', () => {
     expect(isWellFormedSection('tabs', copy(tabsPayload()))).toBe(true)
-    expect(isWellFormedSection('hosts', copy(hostsPayload()))).toBe(true)
   })
 
   it('never throws on garbage, for any kind', () => {
@@ -1115,6 +970,16 @@ describe('isWellFormedSection', () => {
       for (const g of garbage) expect(isWellFormedSection(kind, g)).toBe(false)
     }
     expect(isWellFormedSection('nope' as never, {})).toBe(false)
+  })
+
+  // host ownership H3a-4: `hosts` is a KNOWN kind (older clients still write it, `sectionKind('hosts')` stays), but
+  // no payload of it is accepted — nothing applies one, so nothing is checked as one.
+  it('hosts: the kind is known, not accepted — false for any payload, a builder\'s own output included', () => {
+    const built = buildHostsSection({ hosts: { bbbbbb: host('bbbbbb', { daemonId: DAEMON, syncAliases: ['aaaaaa'] }), h2: host('h2', { order: 1, token: 'tok' }) }, hostOrder: ['bbbbbb', 'h2'] })
+    const legacy = buildHostsSection({ hosts: { h1: host('h1', { token: 'tok' }) }, hostOrder: ['h1'] }, identityOfSync({}))
+    for (const payload of [built, copy(built), legacy, buildHostsSection({ hosts: {}, hostOrder: [] }), { hosts: {}, hostOrder: [] }]) {
+      expect(isWellFormedSection('hosts', payload)).toBe(false)
+    }
   })
 
   describe('tabs', () => {
@@ -1226,59 +1091,6 @@ describe('isWellFormedSection', () => {
     })
   })
 
-  describe('hosts', () => {
-    const bad = (mutate: (p: { hostOrder: unknown; hosts: Record<string, Record<string, unknown>> } & Record<string, unknown>) => void): boolean => {
-      const p = copy(hostsPayload()) as never
-      mutate(p)
-      return isWellFormedSection('hosts', p)
-    }
-
-    it('hostOrder: strings, no duplicates, every id a known host', () => {
-      expect(bad((p) => { (p.hostOrder as string[]).push('ghost') })).toBe(false)
-      expect(bad((p) => { (p.hostOrder as string[]).push('h1') })).toBe(false)
-      expect(bad((p) => { p.hostOrder = [1] })).toBe(false)
-      expect(bad((p) => { delete p.hostOrder })).toBe(false)
-      expect(bad((p) => { delete (p as Record<string, unknown>).hosts })).toBe(false)
-      expect(bad((p) => { p.extra = 1 })).toBe(false)
-    })
-
-    it('a host missing from hostOrder is allowed — useHostStore.reorderHosts permits it today', () => {
-      expect(bad((p) => { (p.hostOrder as string[]).pop() })).toBe(true)
-    })
-
-    it('each host is typed, keyed by its id, and carries no unlisted field', () => {
-      expect(bad((p) => { p.hosts.h1.id = 'h2' })).toBe(false)
-      expect(bad((p) => { delete p.hosts.h1.name })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.ip = 1 })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.port = 78.5 })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.port = '7860' })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.order = null })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.token = 5 })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.color = 5 })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.colors = [] })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.runtime = {} })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.token = null })).toBe(true)
-      expect(bad((p) => { delete p.hosts.h1.token })).toBe(true)
-    })
-
-    it('daemonId (hosts ordinal 2) is optional — an ordinal-1 payload without it is well-formed — and a non-empty string when present', () => {
-      expect(Object.hasOwn(hostsPayload().hosts.h1, 'daemonId')).toBe(false) // the fixture IS an ordinal-1-shaped payload
-      expect(isWellFormedSection('hosts', copy(hostsPayload()))).toBe(true)
-      expect(bad((p) => { p.hosts.h1.daemonId = 'mini-lab:abc123' })).toBe(true)
-      expect(bad((p) => { p.hosts.h1.daemonId = '' })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.daemonId = 5 })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.daemonId = null })).toBe(false)
-      expect(bad((p) => { p.hosts.h1.daemonId = { id: 'x' } })).toBe(false)
-    })
-
-    it('daemonId must pass isValidDaemonId — a hostile row is not well-formed (codex attacker)', () => {
-      for (const good of ['mini-lab:278cbm', 'unknown:abc123', 'Mini-Lab:278cbm', 'host name:abc123', 'a:b:c']) expect(bad((p) => { p.hosts.h1.daemonId = good }), good).toBe(true)
-      for (const evil of ['a'.repeat(513), 'mini:abc123\n', 'mini:abc\u0000123', 'mini:abc123\t', 'mini\u202e:abc123', 'mini:abc\u200b']) {
-        expect(bad((p) => { p.hosts.h1.daemonId = evil }), JSON.stringify(evil)).toBe(false)
-      }
-    })
-  })
-
   describe('settings', () => {
     it('every store value must be a plain object', () => {
       expect(isWellFormedSection('settings', { 'purdex-ui-settings': null })).toBe(false)
@@ -1314,11 +1126,25 @@ describe('isWellFormedSection', () => {
         const dot = path.indexOf('.')
         byStore.set(path.slice(0, dot), [...(byStore.get(path.slice(0, dot)) ?? []), path.slice(dot + 1)])
       }
-      expect(byStore.size).toBe(8)
+      expect(byStore.size).toBe(10)
       for (const [store, fields] of byStore) {
         for (const field of fields) expect(isWellFormedSection('settings', { [store]: { [field]: 1 } })).toBe(true)
         expect(isWellFormedSection('settings', { [store]: { [`${fields[0]}X`]: 1 } })).toBe(false)
       }
+    })
+
+    it('host looks (host ownership H2c): the store is known, `looks` its only field', () => {
+      expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: {} } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: { d1_a: { name: 'a', icon: 'Laptop' }, localX: {} } } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: {}, migrated: true } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-host-looks-migrated': { x: 1 } })).toBe(false)
+    })
+
+    it('shown hosts (host ownership H2d): the store is known, `ids` its only field (a legacy `all` is unlisted)', () => {
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [] } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: ['d1_a', 'localX'] } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [], all: true } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [], hidden: [] } })).toBe(false)
     })
 
     it('a known store that is empty is refused — the builder omits such a store, and it would clear every listed field', () => {
@@ -1364,7 +1190,6 @@ describe('isWellFormedSection', () => {
 describe('no function mutates its input', () => {
   it('apply* over deep-frozen local and incoming', () => {
     expect(() => {
-      applyHosts(deepFreeze(hostsLocals()[2]), deepFreeze(hostsPayload()))
       applyWorkspaces(deepFreeze(workspacesLocals()[2]), deepFreeze(workspacesPayload()))
       applyTabs(deepFreeze(tabsWorld()), 'wsA', deepFreeze(tabsPayload()))
       applyTabs(deepFreeze(tabsWorld()), 'nope', deepFreeze(tabsPayload()))
@@ -1431,118 +1256,6 @@ describe('upcastLegacySettings — an ordinal-3 settings payload (newtab `profil
 const DAEMON = 'mini-lab:278cbm'
 const WIRE = syncIdOfSync(DAEMON)
 
-describe('isWellFormedSection(hosts) — wire ids and aliases (host-sync-identity)', () => {
-  const canonical = (): Record<string, unknown> => copy<unknown>(buildHostsSection({ hosts: { bbbbbb: host('bbbbbb', { daemonId: DAEMON, syncAliases: ['aaaaaa'] }), h2: host('h2') }, hostOrder: ['bbbbbb', 'h2'] })) as Record<string, unknown>
-  const ok = (edit: (p: { hosts: Record<string, Record<string, unknown>>; hostOrder: string[] }) => void): boolean => {
-    const p = canonical() as { hosts: Record<string, Record<string, unknown>>; hostOrder: string[] }
-    edit(p)
-    return isWellFormedSection('hosts', p)
-  }
-
-  it('a canonical row (sync-id key, its daemonId, aliases) is well-formed', () => {
-    expect(isWellFormedSection('hosts', canonical())).toBe(true)
-  })
-
-  it('a sync-id key must be THE sync id of the row\'s own daemonId — a builder cannot produce anything else', () => {
-    expect(ok((p) => { delete p.hosts[WIRE].daemonId })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].daemonId = 'other:daemon' })).toBe(false)
-    const d2 = 'd2_0000000000000001'
-    expect(ok((p) => { p.hosts[d2] = { ...p.hosts[WIRE], id: d2 }; delete p.hosts[WIRE]; p.hostOrder[0] = d2 })).toBe(false)
-  })
-
-  it('aliases: only on a canonical row, only in mergeAliases\' form (strings, no sync ids, each once, ≤ 16, never empty)', () => {
-    expect(ok((p) => { p.hosts.h2.aliases = ['x'] })).toBe(false) // a legacy row carries none
-    expect(ok((p) => { p.hosts[WIRE].aliases = [] })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].aliases = ['a', 'a'] })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].aliases = ['a', 5] })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].aliases = [WIRE] })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].aliases = 'aaaaaa' })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 17 }, (_, i) => `a${i}`) })).toBe(false)
-    expect(ok((p) => { p.hosts[WIRE].aliases = Array.from({ length: 16 }, (_, i) => `a${i.toString(36).padStart(2, '0')}`) })).toBe(true)
-    // any ORDER is accepted (a build of e9e24625 wrote insertion order); the apply and every build sort it
-    expect(ok((p) => { p.hosts[WIRE].aliases = ['b', 'a'] })).toBe(true)
-  })
-
-  it('a legacy (local-id) key carrying a daemonId — an ordinal-2 row — stays well-formed', () => {
-    expect(isWellFormedSection('hosts', copy(buildLocalHosts({ hosts: { aaaaaa: host('aaaaaa', { daemonId: DAEMON }) }, hostOrder: ['aaaaaa'] })))).toBe(true)
-  })
-})
-
-describe('planHostsApply — incoming wire rows onto local hosts (spec §6, §11.5/§11.6)', () => {
-  const ids = (...list: string[]) => {
-    const queue = [...list]
-    return () => queue.shift() ?? 'zzzzzz'
-  }
-  const wire = (hosts: Record<string, HostConfig>, hostOrder = Object.keys(hosts)): HostsPayload => buildHostsSection({ hosts, hostOrder })
-  const plan = (local: Record<string, HostConfig>, incoming: HostsPayload, newId = ids('nnnnnn')) => {
-    const out = planHostsApply(local, incoming, newId)
-    if ('error' in out) throw new Error(out.error)
-    return out.plan
-  }
-
-  it('INDEPENDENT ids, one daemon: A\'s canonical row updates B\'s host IN PLACE — B\'s id kept; B\'s host that A lacks is not in the payload', () => {
-    const incoming = wire({ aaaaaa: host('aaaaaa', { name: 'mlab by A', daemonId: DAEMON }) })
-    const p = plan({ bbbbbb: host('bbbbbb', { daemonId: DAEMON }), onlyb: host('onlyb') }, incoming)
-    expect(p.payload.hosts).toEqual({ bbbbbb: { ...host('bbbbbb', { name: 'mlab by A', daemonId: DAEMON }) } })
-    expect(p.payload.hostOrder).toEqual(['bbbbbb'])
-    expect([...p.byRow]).toEqual([[WIRE, 'bbbbbb']])
-    expect(p.created).toEqual([])
-    expect(p.aliases).toEqual({ bbbbbb: ['aaaaaa'] }) // A's own id, from A's canonical row (the SOT wins)
-  })
-
-  it('a canonical row nobody here matches is CREATED under a NEW random id; its aliases come back for syncAliases', () => {
-    const incoming = wire({ aaaaaa: host('aaaaaa', { daemonId: DAEMON, syncAliases: ['old1'] }) })
-    const p = plan({ h1: host('h1') }, incoming, ids('newid1'))
-    expect(p.created).toEqual(['newid1'])
-    expect(p.payload.hosts.newid1).toEqual({ ...host('aaaaaa', { daemonId: DAEMON }), id: 'newid1' })
-    expect(p.aliases).toEqual({ newid1: ['aaaaaa', 'old1'] }) // the row's aliases, sorted (A's own id among them)
-  })
-
-  it('a LEGACY row (ordinal 2: another device\'s local id) with a daemonId matches by daemonId, and its key becomes an alias', () => {
-    const incoming = buildLocalHosts({ hosts: { aaaaaa: host('aaaaaa', { daemonId: DAEMON }) }, hostOrder: ['aaaaaa'] })
-    const p = plan({ bbbbbb: host('bbbbbb', { daemonId: DAEMON, syncAliases: ['older'] }) }, incoming)
-    expect(Object.keys(p.payload.hosts)).toEqual(['bbbbbb'])
-    expect(p.aliases).toEqual({ bbbbbb: ['aaaaaa', 'older'] }) // normalised: sorted
-  })
-
-  it('a legacy row WITHOUT daemonId keeps its id when this device has none by that id — it syncs "as today", never under a random id (no ping-pong)', () => {
-    const incoming = buildLocalHosts({ hosts: { cccccc: host('cccccc') }, hostOrder: ['cccccc'] })
-    const p = plan({ h1: host('h1') }, incoming, ids('random'))
-    expect(p.created).toEqual(['cccccc'])
-    expect(Object.keys(p.payload.hosts)).toEqual(['cccccc'])
-    // and it is its own wire id again: the next build reproduces the row
-    expect(buildHostsSection({ hosts: p.payload.hosts, hostOrder: p.payload.hostOrder })).toEqual(incoming)
-  })
-
-  it('a legacy key already taken HERE (by a host with a claim) is not reused: a new random id', () => {
-    const incoming = buildLocalHosts({ hosts: { h1: host('h1', { ip: '10.9.9.9' }) }, hostOrder: ['h1'] })
-    const p = plan({ h1: host('h1', { daemonId: DAEMON }) }, incoming, ids('fresh1'))
-    expect(p.created).toEqual(['fresh1'])
-  })
-
-  it('D6 upcast BEFORE matching: a no-daemonId row under a local id whose host has a claim at the SAME address is that host (the claim kept)', () => {
-    const incoming = buildLocalHosts({ hosts: { h1: host('h1', { name: 'renamed' }) }, hostOrder: ['h1'] })
-    const p = plan({ h1: host('h1', { daemonId: DAEMON }) }, incoming)
-    expect(p.created).toEqual([])
-    expect(p.payload.hosts.h1).toEqual(host('h1', { name: 'renamed', daemonId: DAEMON }))
-    expect(p.aliases).toEqual({ h1: ['h1'] })
-  })
-
-  it('refuses a payload with two rows for one daemon, and one whose daemon two local hosts claim', () => {
-    const two = buildLocalHosts({ hosts: { a1: host('a1', { daemonId: DAEMON }), a2: host('a2', { daemonId: DAEMON }) }, hostOrder: ['a1', 'a2'] })
-    expect(planHostsApply({}, two, ids())).toEqual({ error: 'duplicate-host-identity' })
-    const one = wire({ a1: host('a1', { daemonId: DAEMON }) })
-    expect(planHostsApply({ b1: host('b1', { daemonId: DAEMON }), b2: host('b2', { daemonId: DAEMON }) }, one, ids())).toEqual({ error: 'host-identity-conflict' })
-  })
-
-  it('never hands NEW_HOST out as an id, and never mutates its inputs', () => {
-    const local = deepFreeze({ h1: host('h1') })
-    const incoming = deepFreeze(wire({ x: host('x', { daemonId: DAEMON }) }))
-    const p = plan(local, incoming, ids('abcdef'))
-    expect([...p.byRow.values()]).not.toContain(NEW_HOST)
-  })
-})
-
 describe('tabsFromWire / settingsFromWire — wire → local for the sections that name hosts', () => {
   const identity = identityOfSync({ bbbbbb: { id: 'bbbbbb', daemonId: DAEMON } })
   const resolve = makeWireResolver({ identity, rows: { [WIRE]: { daemonId: DAEMON, aliases: ['aaaaaa'] } } })
@@ -1560,9 +1273,9 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
     expect(out.order).toEqual(['t1'])
   })
 
-  it('settings: host-settings keys and preset columns are resolved; a host-bearing column whose host is NOT live here is left out (never handed to the New Tab prune)', () => {
+  it('settings: host-settings keys and preset columns are resolved; a host-bearing column or key whose host is not here is kept verbatim (host ownership §3.2)', () => {
     const p: SettingsPayload = deepFreeze({
-      'purdex-host-settings': { hosts: { [WIRE]: { a: 1 }, gone00: { b: 2 } } },
+      'purdex-host-settings': { hosts: { [WIRE]: { a: 1 }, gone00: { b: 2 }, [syncIdOfSync('other:x')]: { c: 3 } } },
       'purdex-newtab-layout': {
         presets: {
           '3col': { enabled: true, columns: [[`sessions:${WIRE}`, 'files'], ['headless:aaaaaa', `headless:${syncIdOfSync('other:x')}`], ['sessions:gone00']] },
@@ -1572,11 +1285,11 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
       },
       'purdex-layout': { tabPosition: 'top' },
     })
-    const out = settingsFromWire(p, resolve, new Set(['bbbbbb']))
-    expect(out['purdex-host-settings']).toEqual({ hosts: { bbbbbb: { a: 1 }, gone00: { b: 2 } } })
+    const out = settingsFromWire(p, resolve)
+    expect(out['purdex-host-settings']).toEqual({ hosts: { bbbbbb: { a: 1 }, gone00: { b: 2 }, [syncIdOfSync('other:x')]: { c: 3 } } })
     expect(out['purdex-newtab-layout']).toEqual({
       presets: {
-        '3col': { enabled: true, columns: [['sessions:bbbbbb', 'files'], ['headless:bbbbbb'], []] },
+        '3col': { enabled: true, columns: [['sessions:bbbbbb', 'files'], ['headless:bbbbbb', `headless:${syncIdOfSync('other:x')}`], ['sessions:gone00']] },
         '2col': { enabled: true, columns: [[], []] },
         '1col': { enabled: true, columns: [['files']] },
       },
@@ -1584,20 +1297,15 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
     expect(out['purdex-layout']).toBe(p['purdex-layout'])
   })
 
+  it('settings: host-look keys are NOT resolved — a sync id of a host here stays the sync id (the store is keyed by wire id)', () => {
+    const p: SettingsPayload = deepFreeze({ 'purdex-host-looks': { looks: { [WIRE]: { name: 'a' }, aaaaaa: { name: 'b' }, d1_unknown: {} } } })
+    const out = settingsFromWire(p, resolve)
+    expect(out['purdex-host-looks']).toEqual({ looks: { [WIRE]: { name: 'a' }, aaaaaa: { name: 'b' }, d1_unknown: {} } })
+  })
+
   it('settings: a live host that the resolver leaves unchanged (a legacy id that IS the local id) keeps its column', () => {
     const p: SettingsPayload = { 'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['sessions:h1']] } } } }
-    const out = settingsFromWire(p, resolve, new Set(['h1']))
+    const out = settingsFromWire(p, resolve)
     expect(out['purdex-newtab-layout']).toEqual(p['purdex-newtab-layout'])
-  })
-})
-
-describe('duplicateHostAlias (A2)', () => {
-  const row = (id: string, extra: Record<string, unknown> = {}) => ({ ...host(id), ...extra })
-  it('an alias on two rows, or equal to another row\'s key, is named; distinct aliases are fine', () => {
-    const w1 = syncIdOfSync('one:a')
-    const w2 = syncIdOfSync('two:b')
-    expect(duplicateHostAlias({ hosts: { [w1]: row(w1, { aliases: ['a', 'b'] }), [w2]: row(w2, { aliases: ['c'] }) }, hostOrder: [] } as unknown as HostsPayload)).toBeNull()
-    expect(duplicateHostAlias({ hosts: { [w1]: row(w1, { aliases: ['a', 'b'] }), [w2]: row(w2, { aliases: ['b'] }) }, hostOrder: [] } as unknown as HostsPayload)).toBe('b')
-    expect(duplicateHostAlias({ hosts: { [w1]: row(w1, { aliases: ['h9'] }), h9: row('h9') }, hostOrder: [] } as unknown as HostsPayload)).toBe('h9')
   })
 })

@@ -12,7 +12,8 @@ export interface NexExecutionRowProps {
   row: ExecutionSummary
   confirmingTerminate: boolean
   pending: boolean
-  onOpen: () => void
+  /** Absent → no "Open" (the host is hidden in this workbench — plan H2d-2). */
+  onOpen?: () => void
   onTerminateClick: () => void
   onTerminateConfirm: () => void
   onArchiveToggle: () => void
@@ -87,13 +88,15 @@ export default function NexExecutionRow({
       <td className="px-3 py-2 text-xs text-text-muted whitespace-nowrap">{formatRelativeTime(t, row.updated_at)}</td>
       <td className="px-3 py-2 text-right">
         <div className="flex items-center justify-end gap-1.5">
-          <button
-            type="button"
-            onClick={onOpen}
-            className="px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-surface-tertiary cursor-pointer"
-          >
-            {t('hosts.nex.executions.open')}
-          </button>
+          {onOpen && (
+            <button
+              type="button"
+              onClick={onOpen}
+              className="px-2 py-1 rounded text-xs text-text-secondary hover:text-accent hover:bg-surface-tertiary cursor-pointer"
+            >
+              {t('hosts.nex.executions.open')}
+            </button>
+          )}
           <button
             type="button"
             disabled={pending}

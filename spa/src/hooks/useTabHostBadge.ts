@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { IconWeight, Tab } from '../types/tab'
-import { useHostStore } from '../stores/useHostStore'
+import { useHostLook } from '../lib/host-look'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
 import {
@@ -30,8 +30,9 @@ export interface TabHostBadge {
  * pane) pick that pane's host under the wrong mode (P2 Task 1 review finding,
  * PR #1153).
  *
- * Primitive selectors plus the `colors` object (identity changes only on a write),
- * resolved under `useMemo` so tab rows do not re-render on unrelated store writes.
+ * The host's look comes from `useHostLook` (one host object subscribed; the look
+ * object is memoised per host), resolved under `useMemo` so tab rows do not
+ * re-render on unrelated store writes.
  */
 export function useTabHostBadge(tab: Tab): TabHostBadge | null {
   const badgePane = getTabBadgePane(tab)
@@ -41,17 +42,11 @@ export function useTabHostBadge(tab: Tab): TabHostBadge | null {
       ? compositeKey(badgePane.hostId, badgePane.sessionCode)
       : undefined
   // Hooks run unconditionally (Rules of Hooks); the `hostId` bail-out happens after.
-  const colors = useHostStore((s) => (hostId ? s.hosts[hostId]?.colors : undefined))
-  const legacyColor = useHostStore((s) => (hostId ? s.hosts[hostId]?.color : undefined))
-  const icon = useHostStore((s) => (hostId ? s.hosts[hostId]?.icon : undefined))
-  const iconWeight = useHostStore((s) => (hostId ? s.hosts[hostId]?.iconWeight : undefined))
+  const look = useHostLook(hostId)
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const mode: HostColorMode = agentType ? 'terminal' : 'console'
 
-  const resolved = useMemo(
-    () => resolveHostColors({ colors, color: legacyColor }, mode),
-    [colors, legacyColor, mode],
-  )
+  const resolved = useMemo(() => resolveHostColors({ colors: look.colors, color: look.color }, mode), [look, mode])
 
   if (!hostId) return null
   return {
@@ -59,7 +54,7 @@ export function useTabHostBadge(tab: Tab): TabHostBadge | null {
     // Last line of defence: a value stored before the guard existed (or written by
     // a stranger) must never reach `WorkspaceIcon`, which renders an unknown name
     // as literal text inside the badge.
-    icon: isPhosphorIconName(icon) ? icon : undefined,
-    iconWeight: isIconWeight(iconWeight) ? iconWeight : undefined,
+    icon: isPhosphorIconName(look.icon) ? look.icon : undefined,
+    iconWeight: isIconWeight(look.iconWeight) ? look.iconWeight : undefined,
   }
 }

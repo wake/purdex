@@ -55,8 +55,24 @@ export interface PaneRebuildRecord {
     sessionId?: string
     /** tmux pane the owning SessionStart came from (spec §4.4). */
     tmuxPaneId?: string
+    /**
+     * The daemon frame that IS this agent run (agent-last-state spec, review
+     * decision 2). An exit applies only when its frame id equals this one, so
+     * a late exit of an older run with the same session id can never mark the
+     * current run exited. Absent on records written before the daemon sent it:
+     * exits never apply to those until their next SessionStart.
+     */
+    frameId?: string
     updatedAt: number
   }
+  /**
+   * The recorded agent has exited (agent-last-state spec §2). Absent means "the
+   * agent was running when last seen" — which is also what an exit the SPA
+   * never heard (it was disconnected) leaves behind. The agent identity is
+   * kept, so "resume anyway" stays possible; `at` is the daemon's Unix ms,
+   * for display only.
+   */
+  agentExited?: { at: number; reason: AgentExitReason }
   /**
    * User override for this pane only. Absent means "compose from the agent's
    * templates" (spec §4.2), which is the normal case: the record stores the
@@ -80,6 +96,9 @@ export interface PaneRebuildRecord {
   unverified?: boolean
   capturedAt: number
 }
+
+/** Why the recorded agent is gone: its own SessionEnd, or the daemon's pid sweep. */
+export type AgentExitReason = 'session-end' | 'process-dead'
 
 export type PaneContent =
   | { kind: 'new-tab' }
@@ -134,7 +153,12 @@ export type TmuxSessionContent = Extract<PaneContent, { kind: 'tmux-session' }>
  * - `agent-backfill` — the daemon's answer to "who owns this pane" (spec §5.5).
  *   Ranks BELOW `agent-group`, which is a first-hand SessionStart: this one is
  *   inferred from a process tree, so it fills a gap, corrects a record already
- *   flagged `unverified`, or confirms one — and otherwise does nothing.
+ *   flagged `unverified` or `agentExited`, or confirms one — and otherwise does
+ *   nothing.
+ * - `agent-exit` — the daemon's `pdx_exit` envelope. Sets `agentExited` only on
+ *   a record whose `agent.frameId` AND `agent.sessionId` equal the exit's, and is the one
+ *   session-scoped write a TERMINATED pane still takes (agent-last-state spec,
+ *   review decision 4): termination can arrive before the exit broadcast.
  */
 export type RebuildPatch =
   | { kind: 'agent-group'; record: Omit<PaneRebuildRecord, 'sessionName'> }
@@ -149,6 +173,13 @@ export type RebuildPatch =
   | { kind: 'field'; field: 'cwd' | 'resumeCommandOverride' | 'sessionName'; value: string }
   | { kind: 'probe-cwd'; cwd: string }
   | { kind: 'unverified'; unverified: boolean }
+  | {
+      kind: 'agent-exit'
+      frameId: string
+      /** The ENDING run's session id, from the SessionEnd payload ('' when it carried none). */
+      sessionId: string
+      exited: NonNullable<PaneRebuildRecord['agentExited']>
+    }
 
 // === Workspace ===
 export type IconWeight = 'bold' | 'regular' | 'thin' | 'light' | 'fill' | 'duotone'

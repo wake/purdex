@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { CheckSquare, Square } from '@phosphor-icons/react'
 import { useLayoutStore } from '../stores/useLayoutStore'
 import { useI18nStore } from '../stores/useI18nStore'
-import { getAllViews } from '../lib/module-registry'
+import { getAllViews, viewLabel } from '../lib/module-registry'
 import type { SidebarRegion } from '../types/layout'
 
 interface Props {
@@ -90,7 +90,7 @@ export function RegionContextMenu({ region, position, onClose }: Props) {
             ) : (
               <Square size={14} className="text-text-muted shrink-0" />
             )}
-            <span className="flex-1 text-left">{viewDef.label}</span>
+            <span className="flex-1 text-left">{viewLabel(viewDef, t)}</span>
           </button>
         )
       })}

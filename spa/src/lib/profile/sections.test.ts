@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
@@ -390,26 +391,23 @@ describe('buildHostsSection', () => {
     expect(structuralKey(buildHostsSection(state as unknown as HostsSource))).not.toContain(S)
   })
 
-  it('drops a hostOrder id that has no host (reorderHosts does not check ids), so the receiver accepts the section', () => {
+  it('drops a hostOrder id that has no host (reorderHosts does not check ids)', () => {
     const source = deepFreeze({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['a', 'ghost', 'b'] })
     const out = buildHostsSection(source)
     expect(out.hostOrder).toEqual(['a', 'b'])
     expect(Object.keys(out.hosts).sort()).toEqual(['a', 'b'])
-    expect(isWellFormedSection('hosts', out)).toBe(true)
     expect(source.hostOrder).toEqual(['a', 'ghost', 'b']) // input untouched
   })
 
   it('keeps a repeated hostOrder id once, at its first occurrence', () => {
     const out = buildHostsSection(deepFreeze({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['b', 'a', 'b', 'a'] }))
     expect(out.hostOrder).toEqual(['b', 'a'])
-    expect(isWellFormedSection('hosts', out)).toBe(true)
   })
 
   it('does not add a host that hostOrder never mentions (the store state is reflected, not repaired)', () => {
     const out = buildHostsSection({ hosts: { a: host('a'), b: host('b') }, hostOrder: ['b'] })
     expect(out.hostOrder).toEqual(['b'])
     expect(Object.keys(out.hosts).sort()).toEqual(['a', 'b'])
-    expect(isWellFormedSection('hosts', out)).toBe(true)
   })
 })
 
@@ -487,9 +485,10 @@ describe('buildSettingsSection', () => {
 // --- buildProfileDocument ----------------------------------------------------
 
 describe('buildProfileDocument', () => {
-  it('has hosts, settings, workspaces and one tabs.<id> per workspace — empty ones included', () => {
+  it('has settings, workspaces and one tabs.<id> per workspace — empty ones included — and no hosts (host ownership H3)', () => {
     const { document } = buildProfileDocument(baseInput())
-    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(Object.keys(document).sort()).toEqual(['settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(document).not.toHaveProperty('hosts')
     expect(document['tabs.wsEmpty']).toEqual({ order: [], tabs: {} })
     expect(document['tabs.wsA']).toMatchObject({ order: ['t1', 't2'] })
   })
@@ -502,7 +501,7 @@ describe('buildProfileDocument', () => {
       tabOrder: ['loose1', 't1', 'loose2', 't2', 't3'],
     }
     const { document } = buildProfileDocument(input)
-    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(Object.keys(document).sort()).toEqual(['settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
     expect(structuralKey(document)).not.toContain('loose')
   })
 
@@ -519,7 +518,7 @@ describe('buildProfileDocument', () => {
     input.workspaces = { workspaces: [...input.workspaces.workspaces, ws('bad id!', 'Bad', ['tBad'])] }
     input.tabs = { tabs: { ...input.tabs.tabs, tBad: tab('tBad', leaf('pBad', { kind: 'hosts' })) }, tabOrder: [...input.tabs.tabOrder, 'tBad'] }
     const { document } = buildProfileDocument(input)
-    expect(Object.keys(document).sort()).toEqual(['hosts', 'settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
+    expect(Object.keys(document).sort()).toEqual(['settings', 'tabs.wsA', 'tabs.wsB', 'tabs.wsEmpty', 'workspaces'])
     expect(structuralKey(document)).not.toContain('bad id!')
     expect(structuralKey(document)).not.toContain('tBad')
     // Owned, if by a workspace that does not travel: nothing for `adoptStandaloneTabs` to move.
@@ -628,10 +627,54 @@ describe('section hashes: a change lands in exactly the sections it belongs to',
     expect(await changed(baseInput(), b)).toEqual(['tabs.wsA', 'tabs.wsB'])
   })
 
-  it('a host colour change changes only hosts', async () => {
+  it('a host colour change changes nothing: the host list is per device (host ownership H3)', async () => {
     const b = baseInput()
     b.hosts.hosts.h1 = { ...b.hosts.hosts.h1, color: '#abcdef' }
-    expect(await changed(baseInput(), b)).toEqual(['hosts'])
+    expect(await changed(baseInput(), b)).toEqual([])
+  })
+
+  // host ownership §4.4: HostConfig name / colours / icon stay on this device (H3: no `hosts` section), and the look
+  // store travels in `settings` — the two never feed each other.
+  describe('host looks (host ownership §4.4)', () => {
+    const LOOKS = { 'purdex-host-looks': { looks: { h1: { name: 'look-one', colors: { console: { main: { color: '#445566', alpha: 100 } } } } } } }
+    const withLooks = (input: CollectInput, looks: object = LOOKS): CollectInput => ({ ...input, settings: { ...input.settings, ...looks } })
+
+    it('a HostConfig rename + recolour changes nothing — settings, looks included, does not move', async () => {
+      const b = withLooks(baseInput())
+      b.hosts.hosts.h1 = { ...b.hosts.hosts.h1, name: 'renamed', color: '#abcdef', icon: 'Laptop' }
+      expect(await changed(withLooks(baseInput()), b)).toEqual([])
+    })
+
+    it('a look change changes only settings — hosts does not move', async () => {
+      const b = withLooks(baseInput(), { 'purdex-host-looks': { looks: { h1: { name: 'other' }, d1_far: { icon: 'Laptop' } } } })
+      expect(await changed(withLooks(baseInput()), b)).toEqual(['settings'])
+    })
+
+    it('buildHostsSection is identical whatever the look store holds, and building it notifies no look-store subscriber', () => {
+      const src = baseInput().hosts
+      useHostLookStore.setState({ looks: {} })
+      const empty = JSON.stringify(buildHostsSection(src))
+      useHostLookStore.setState({ looks: { h1: { name: 'look-one', icon: 'Laptop' }, d1_far: { name: 'far' } } })
+      const spy = vi.fn()
+      const unsub = useHostLookStore.subscribe(spy)
+      const full = JSON.stringify(buildHostsSection(src))
+      buildProfileDocument(baseInput())
+      unsub()
+      expect(full).toBe(empty)
+      expect(full).not.toContain('look-one')
+      expect(spy).not.toHaveBeenCalled()
+      useHostLookStore.setState({ looks: {} })
+    })
+
+    it('buildSettingsSection does not change when a HostConfig name / colour changes (the identity it builds through is the same)', () => {
+      const a = baseInput()
+      const b = baseInput()
+      b.hosts.hosts.h1 = { ...b.hosts.hosts.h1, name: 'renamed', color: '#abcdef', colors: { console: { main: { color: '#abcdef', alpha: 100 } } } }
+      const settings = withLooks(a).settings
+      expect(JSON.stringify(buildSettingsSection(settings, NO_WS, identityOfSync(b.hosts.hosts)))).toBe(
+        JSON.stringify(buildSettingsSection(settings, NO_WS, identityOfSync(a.hosts.hosts))),
+      )
+    })
   })
 
   it('a UI setting change changes only settings', async () => {
@@ -771,7 +814,6 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(p.hosts[WIRE]).toEqual({ id: WIRE, name: 'N-bbbbbb', ip: '10.0.0.1', port: 7860, order: 0, daemonId: DAEMON, aliases: ['aaaaaa', 'bbbbbb'] }) // sorted
     expect(p.hosts.legacy).toEqual({ id: 'legacy', name: 'N-legacy', ip: '10.0.0.1', port: 7860, order: 0 })
     expect(JSON.stringify(p)).not.toContain('syncAliases')
-    expect(isWellFormedSection('hosts', p)).toBe(true)
   })
 
   it('hosts: a canonical row\'s aliases are the SORTED unique union of the remembered ones and its own id, the first 16 (A1: one list every client computes)', () => {
@@ -784,8 +826,6 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(at('zzzzzz', sixteen)).toEqual(sixteen)
     // full, own id sorts first: it goes in, the LARGEST goes out
     expect(at('aaaaaa', sixteen)).toEqual(['aaaaaa', ...sixteen.slice(0, 15)])
-    const s = { hosts: { aaaaaa: hostCfg('aaaaaa', { daemonId: DAEMON, syncAliases: sixteen }) }, hostOrder: ['aaaaaa'] }
-    expect(isWellFormedSection('hosts', buildHostsSection(s))).toBe(true)
   })
 
   it('hosts: a stray local `aliases` field never travels (only syncAliases, and only on a canonical row)', () => {
@@ -828,6 +868,24 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(JSON.stringify(plain)).not.toContain(WIRE)
   })
 
+  // host ownership H2c-1 (spec §4.1): look keys are wire ids IN the store — the build maps nothing, WITH an identity.
+  it('settings: host-look keys pass through verbatim — a local id the identity maps (bbbbbb → its sync id) is NOT translated', () => {
+    const identity = identityOfSync(hostsSrc().hosts)
+    expect(identity.toWire.get('bbbbbb')).toBe(WIRE) // the identity would map it
+    const looks = { [WIRE]: { name: 'a' }, bbbbbb: { name: 'x' }, d1_unknown: { name: 'far' } }
+    const input: SettingsBuildInput = { 'purdex-host-looks': { looks }, 'purdex-host-settings': { hosts: { bbbbbb: { a: 1 } } } }
+    const p = buildSettingsSection(input, NO_WS, identity)
+    expect(p['purdex-host-looks']).toEqual({ looks: { [WIRE]: { name: 'a' }, bbbbbb: { name: 'x' }, d1_unknown: { name: 'far' } } })
+    expect(Object.keys((p['purdex-host-looks'] as { looks: object }).looks)).toEqual([WIRE, 'bbbbbb', 'd1_unknown'])
+    expect(p['purdex-host-settings']).toEqual({ hosts: { [WIRE]: { a: 1 } } }) // …while host-settings keys ARE translated
+    expect(input['purdex-host-looks']).toEqual({ looks }) // the store state is never touched
+  })
+
+  it('settings: an EMPTY look store still builds `{ looks: {} }` — always present (plan §0.6)', () => {
+    const p = buildSettingsSection({ 'purdex-host-looks': { looks: {} } }, NO_WS, identityOfSync(hostsSrc().hosts))
+    expect(p).toEqual({ 'purdex-host-looks': { looks: {} } })
+  })
+
   it('settings: host-settings keys and `sessions:` / `headless:` preset columns are translated; other columns and fields are not', () => {
     const identity = identityOfSync(hostsSrc().hosts)
     const presets = {
@@ -851,7 +909,7 @@ describe('host-sync-identity: local → wire at build', () => {
     expect(input['purdex-newtab-layout']).toEqual({ presets }) // the store state is never touched
   })
 
-  it('buildProfileDocument translates hosts, tabs and settings through ONE identity of its hosts', () => {
+  it('buildProfileDocument translates tabs and settings through ONE identity of its hosts', () => {
     const doc = buildProfileDocument({
       hosts: hostsSrc(),
       workspaces: { workspaces: [{ id: 'w1', name: 'W', tabs: ['t1'], activeTabId: 't1' }] },

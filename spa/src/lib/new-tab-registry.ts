@@ -42,6 +42,14 @@ export interface NewTabProviderSource {
    */
   isReady?: () => boolean
   /**
+   * Ids this source owns that are never stale, whether or not it currently
+   * produces them — a host-bearing column (`sessions:<id>` / `headless:<id>`)
+   * naming a host this device does not have is kept verbatim, so it comes back
+   * when the host is added here and a device lacking a host never prunes it
+   * for every device (host ownership spec §3.2). Omitted = none retained.
+   */
+  retainsId?: (providerId: string) => boolean
+  /**
    * Retired ids this source replaces (e.g. legacy `sessions` → every
    * `sessions:<hostId>`). Applied by the bootstrap before stale pruning, and
    * only while the source is ready so `to` reflects the real state.
@@ -177,7 +185,8 @@ export function subscribeNewTabProviders(listener: () => void): () => void {
 
 /**
  * Ids owned by a registered source that its current providers no longer
- * include. An id owned by any not-yet-ready source is never reported stale.
+ * include. An id owned by any not-yet-ready source, or retained by any owner
+ * (`retainsId`), is never reported stale.
  */
 export function getStaleNewTabProviderIds(ids: string[]): string[] {
   const live = new Set(snapshot().map((p) => p.id))
@@ -185,6 +194,7 @@ export function getStaleNewTabProviderIds(ids: string[]): string[] {
   return ids.filter((id) => {
     if (live.has(id)) return false
     const owners = all.filter((s) => s.ownsId(id))
+    if (owners.some((s) => s.retainsId?.(id) === true)) return false
     return owners.length > 0 && owners.every(isSourceReady)
   })
 }

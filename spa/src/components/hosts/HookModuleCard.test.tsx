@@ -3,6 +3,7 @@ import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-libra
 import { HookModuleCard } from './HookModuleCard'
 import { useHostStore } from '../../stores/useHostStore'
 import { useAgentStore } from '../../stores/useAgentStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import type { HookModule, HookModuleStatus } from '../../lib/hook-modules'
 
 const HOST_ID = 'test-host'
@@ -219,6 +220,18 @@ describe('HookModuleCard', () => {
     // Count of FutureOnly labels should match the 6 FutureOnly events.
     const labels = screen.getAllByText(/FutureOnly/i)
     expect(labels.length).toBeGreaterThanOrEqual(6)
+  })
+
+  it('renders the FutureOnly label in zh-TW for the zh-TW locale', async () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    try {
+      const mod = mockModule({ fetchStatus: () => Promise.resolve(LEGACY_WITH_UPGRADES) })
+      render(<HookModuleCard module={mod} hostId={HOST_ID} refreshKey={0} />)
+      await waitFor(() => expect(screen.getAllByText('未來版本').length).toBeGreaterThanOrEqual(6))
+      expect(screen.queryByText('FutureOnly')).not.toBeInTheDocument()
+    } finally {
+      useI18nStore.getState().setLocale('en')
+    }
   })
 
   it('calls setup on button click', async () => {

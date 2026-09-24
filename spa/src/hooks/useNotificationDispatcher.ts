@@ -13,6 +13,8 @@ import { normalizeEventName } from '../lib/event-name'
 import { findTabBySessionCode } from '../lib/pane-tree'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
+import { hostLabel, hostLookOf } from '../lib/host-look'
+import { landOnHostsPageIfHidden } from '../lib/shown-hosts'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
 
@@ -302,7 +304,7 @@ export function useNotificationDispatcher(): void {
       for (const hostId of state.hostOrder) {
         const rt = state.runtime[hostId]
         const prev = prevState[hostId]
-        const hostName = state.hosts[hostId]?.name ?? hostId
+        const hostName = hostLabel(hostId, hostLookOf(hostId, state.hosts))
 
         // L2: daemon refused (was connected, now refused)
         if (prev?.daemon === 'connected' && rt?.daemonState === 'refused') {
@@ -337,7 +339,11 @@ export function handleNotificationClick(action: NotificationAction): void {
       const agentSettings = useNotificationSettingsStore.getState().getSettingsForAgent(event?.agent_type || '')
 
       let handled = false
-      if (tabId) {
+      if (landOnHostsPageIfHidden(hostId)) {
+        // Host ownership H2d-3: the notification of a host hidden in this workbench still fired; its click lands on
+        // the Hosts page — no tab created, and none focused even when a tab of that session exists (its pane is gated).
+        handled = true
+      } else if (tabId) {
         useTabStore.getState().setActiveTab(tabId)
         const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
         // No workspace = nobody has adopted the tab yet (features/workspace/lib/adopt-standalone.ts waits before

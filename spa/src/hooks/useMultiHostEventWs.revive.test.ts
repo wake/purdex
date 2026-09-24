@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
@@ -166,6 +167,7 @@ beforeEach(() => {
     runtime: {},
     activeHostId: HOST,
   })
+  useShownHostsStore.setState({ ids: [HOST, 'h2'] }) // shown in this workbench: the revive pass skips a hidden host (H2d-4)
   // The real session store, `fetchHost` stubbed out; S17 restores the real one.
   useSessionStore.setState({ sessions: {}, fetchHost: vi.fn(async () => {}) } as never)
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })

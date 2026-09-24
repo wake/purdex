@@ -86,7 +86,10 @@ const bindingKey = (hostId: string, sessionCode: string, tmuxInstance: string) =
  * eligible, and either agent-less or flagged `unverified`.
  *
  * Nothing else makes a pane eligible. A record with a confirmed agent never
- * asks again, which is what makes the whole thing terminate (spec §5.5).
+ * asks again, which is what makes the whole thing terminate (spec §5.5). An
+ * EXITED agent does not make it eligible either (#1382): the answer is
+ * session-scoped, so with a live agent in a sibling tmux pane it names that
+ * sibling. A new run in the pane clears the exit through its own SessionStart.
  */
 function wantsProbe(
   hostId: string,
@@ -241,7 +244,11 @@ function startRequest(
             type: ans.agentType,
             sessionId: ans.sessionId || undefined,
             tmuxPaneId: ans.tmuxPaneId || undefined,
-            updatedAt: ans.lastSeenAt || Date.now(),
+            frameId: ans.frameId || undefined,
+            // When THIS client saw the agent live — what the Rebuild panel
+            // shows as "running when last seen". Not the daemon's
+            // `last_seen_at`: frames stamp that in nanoseconds.
+            updatedAt: Date.now(),
           },
           ...(ans.cwd ? { cwd: ans.cwd } : {}),
         },

@@ -118,7 +118,7 @@ describe('SidebarRegion', () => {
     useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
     render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
     expect(screen.getByTestId('manage-button')).toBeInTheDocument()
-    expect(screen.getByText('加入 views')).toBeInTheDocument()
+    expect(screen.getByText('加入檢視')).toBeInTheDocument()
   })
 
   it('renders collapsed empty region with plus button', () => {
@@ -193,13 +193,13 @@ describe('SidebarRegion', () => {
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
       const btn = screen.getByTestId('add-view-button')
       expect(btn).toHaveAttribute('title', 'Manage views')
-      expect(btn.getAttribute('title')).not.toBe('管理 views')
+      expect(btn.getAttribute('title')).not.toBe('管理檢視')
     })
 
     it('collapsed add-view button title is zh-TW for the zh-TW locale', () => {
       useI18nStore.getState().setLocale('zh-TW')
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
-      expect(screen.getByTestId('add-view-button')).toHaveAttribute('title', '管理 views')
+      expect(screen.getByTestId('add-view-button')).toHaveAttribute('title', '管理檢視')
     })
 
     it('expanded manage button title is English for the en locale', () => {
@@ -220,7 +220,7 @@ describe('SidebarRegion', () => {
       useI18nStore.getState().setLocale('zh-TW')
 
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
-      expect(screen.getByTestId('manage-button')).toHaveAttribute('title', '管理 views')
+      expect(screen.getByTestId('manage-button')).toHaveAttribute('title', '管理檢視')
     })
 
     it('empty pinned region shows the English empty-state text for the en locale', () => {
@@ -228,7 +228,7 @@ describe('SidebarRegion', () => {
       useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
       expect(screen.getByText('Add views')).toBeInTheDocument()
-      expect(screen.queryByText('加入 views')).not.toBeInTheDocument()
+      expect(screen.queryByText('加入檢視')).not.toBeInTheDocument()
     })
 
     it('empty pinned region shows the zh-TW empty-state text for the zh-TW locale', () => {
@@ -236,7 +236,29 @@ describe('SidebarRegion', () => {
       useLayoutStore.getState().setRegionViews('primary-sidebar', [])
       useLayoutStore.getState().setRegionMode('primary-sidebar', 'pinned')
       render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
-      expect(screen.getByText('加入 views')).toBeInTheDocument()
+      expect(screen.getByText('加入檢視')).toBeInTheDocument()
+    })
+
+    it('a view with a labelKey is titled in the active locale; one without keeps its label', () => {
+      registerModule({
+        id: 'files-like',
+        name: 'Files',
+        views: [
+          { id: 'keyed', label: 'Files (Workspace)', labelKey: 'sidebar.view.files_workspace', icon: List, scope: 'system', component: DummyView },
+          { id: 'plain', label: 'Plain View', icon: List, scope: 'system', component: DummyView },
+        ],
+      })
+      useLayoutStore.getState().setRegionViews('primary-sidebar', ['keyed', 'plain'])
+      const titles = () => Array.from(screen.getByTestId('collapsed-bar').querySelectorAll('[title]')).map((el) => el.getAttribute('title'))
+
+      const { unmount } = render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(titles()).toEqual(expect.arrayContaining(['Files (Workspace)', 'Plain View']))
+      unmount()
+
+      useI18nStore.getState().setLocale('zh-TW')
+      render(<SidebarRegion region="primary-sidebar" resizeEdge="right" />)
+      expect(titles()).toEqual(expect.arrayContaining(['檔案（工作區）', 'Plain View']))
+      expect(titles()).not.toContain('Files (Workspace)')
     })
   })
 })

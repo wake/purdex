@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { HostBadgePreview } from './HostBadgePreview'
 import { useHostStore } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { getIconPath } from '../../features/workspace/lib/icon-path-cache'
 
@@ -21,6 +22,7 @@ const BLUE = { color: '#3b82f6', alpha: 100 }
 const RED = { color: '#ef4444', alpha: 100 }
 
 beforeEach(() => {
+  useHostLookStore.setState({ looks: {} })
   vi.clearAllMocks()
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },

@@ -31,11 +31,15 @@
 //     data. The executor stops instead (`profileGone`): no action runs again,
 //     nothing is applied, nothing is dropped, and `status().profile` reports
 //     `locked:reset` for P3's wizard.
-//   - No `tabs.*` pull while `hosts` or `workspaces` is not UP TO DATE — clean,
-//     index fresh, SOT not moved, no action of its own running — (apply-to-stores'
-//     CALLER CONTRACT: a pane of a host not known yet would be branded
-//     `host-removed`, and that brand is synced back), nor while its workspace
-//     does not exist locally (the apply would be `unrendered`).
+//   - A RETIRED SECTION (`hosts`, host ownership H3a-2; projections.ts
+//     `RETIRED_SECTIONS`) NEVER ENTERS THE EXECUTOR. `dispatch` refuses its key
+//     before any state exists — so no index entry, remote event, collector report
+//     or `resolve` makes one, and no request ever names it; its persisted record is
+//     dropped at startup and the stash pruned of its payloads (they held tokens).
+//     It stays on the SOT, untouched, for older clients (spec §5.3).
+//   - No `tabs.*` pull while `workspaces` is not UP TO DATE — clean, index
+//     fresh, SOT not moved, no action of its own running — nor while its
+//     workspace does not exist locally (the apply would be `unrendered`).
 //   - `settings` WAITS FOR `workspaces`, IN BOTH DIRECTIONS. Its workspace-scoped
 //     entries are built and applied for the master's workspace set only
 //     (sections.ts, applier.ts), so the section means nothing apart from the
@@ -55,15 +59,11 @@
 //         locked or failing, no setting of any kind travels.)
 //     An entry whose workspace is on NO client is an orphan an older build
 //     pushed: it is dropped by the apply and pushed back without it, once.
-//   - `settings` WAITS FOR `hosts` TOO, IN BOTH DIRECTIONS (host-sync-identity
-//     §6, §11.8). It names hosts by WIRE id (`purdex-host-settings.hosts` keys,
-//     `sessions:` / `headless:` New Tab columns), resolved on apply through the
-//     hosts as they are here: applied while `hosts` is behind, the id of a host
-//     that has not arrived resolves to nothing, its column is left out and the
-//     section is pushed back without it. Sent before the `hosts` that lists a
-//     host added here, the same happens on every other client. So `settings`
-//     waits for the conjunction — `hosts` AND `workspaces` up to date — and a
-//     release of either one decides it again.
+//   - `hosts` IS NO GATE (host ownership H3a-2). Until H3 a `tabs.*` pull and
+//     `settings` (both directions) also waited for `hosts`: a host id they name
+//     had to arrive through it first. The host list is this device's now and
+//     never arrives through the sync; a host id this device does not know is
+//     kept as it is (host ownership H1), not branded or dropped.
 //   - AN EMPTY `tabs.<id>` THAT WAS NEVER AGREED ON, WHILE THE SOT HAS CONTENT,
 //     IS NOT AN EDIT — IT HAS NOT ARRIVED YET. Applying `workspaces` from another
 //     client makes an empty workspace appear here; 500 ms later the collector
@@ -138,7 +138,7 @@
 //     client does not know never enter the executor at all: carried, not deleted.
 //   - `pull` means nothing of this machine's should reach the SOT before the
 //     SOT's `workspaces` has been taken: a local `tabs.<id>` is not pushed until
-//     `hosts` and `workspaces` are up to date, nor once its workspace is no
+//     `workspaces` is up to date, nor once its workspace is no
 //     longer here — its workspace may be about to be replaced, and the push
 //     would plant an orphan only to delete it again. (An
 //     empty SOT has nothing to take: `workspaces` is pushed by the ordinary
@@ -168,49 +168,6 @@
 //     whenever the first attempt was cut short. The cost of the choice made
 //     here: a conflict that arises while the period is still open (another
 //     client writing meanwhile) is settled by the direction, not by the user.
-//
-// THE PULL GUARD (#1366) — built with the direction `pull` and a `confirmedPullHosts()` (a snapshot: see A SNAPSHOT)
-//   Before a pull the wizard showed the user which local hosts it removes, computed from ONE `hosts` row of the
-//   SOT, and re-checked that row right before the attach. The guard is that row (`'absent'`: there was none).
-//   Another device may write `hosts` between that check and the first pull — and the pull would then remove
-//   hosts nobody announced. So the guard is checked FIRST, before anything else of this period happens:
-//   - A BARRIER, NOT A GATE PER PULL. While it is up, `pump()` starts NOTHING for any section but `hosts` — no
-//     pull, push, delete, restore-local — and the direction answers no lock but `hosts`'. Gating the `hosts` pull
-//     alone is not enough: `workspaces` has no pull gate and could land first (a refusal would then come after a
-//     half-pulled world); a restore-local needs no network and comes before the index; a section the SOT does not
-//     hold is PUSHED by the decision table — with the guard `'absent'` the local `hosts` itself would go out.
-//   - THE CHECK AND THE APPLY ARE ONE STEP. There is no separate read to compare and then a pull that reads again
-//     (a write could land between the two). After each index (`checkConfirmedHosts`):
-//       the index does not list `hosts` → the guard `'absent'` matches, and there is nothing to apply: RELEASED.
-//         Any row guard → MISMATCH. (The index is the authority on liveness; a GET 404 alone is not.) The profile
-//         not on the list at all → `profileGone`, as ever: not a verdict.
-//       the index lists `hosts` → the guard `'absent'` is a MISMATCH; a row guard leaves the verdict to THE
-//         GUARDED PULL: the one action the barrier lets through is `hosts`' own — its lock, answered `sot` by the
-//         direction, and its pull. `pull('hosts')` fetches, compares the fetched HASH with the guard's (a higher
-//         rev with the same hash is the same wire payload written again — what the user saw) and applies only on
-//         a match; a mismatch halts before anything is written. A 404 while listed is not "absent" (`pull()`'s
-//         `pull-absent-but-listed`: the index is asked again); a failed read, an apply that is busy, refused or
-//         throws, go the ordinary ways (backoff / `locked:invalid`) — with the barrier up.
-//   - RELEASED only once `hosts` IS APPLIED — `pull-applied` taken for the matching row — or, when there is nothing
-//     to apply, once `hosts` is up to date on the guard's hash (this device already held exactly that: the index
-//     folds the agreement). Then standing locks are answered, every section decides again, and the period goes
-//     on exactly as without a guard; the guard is not consulted again.
-//   - MISMATCH → HALTED, at once and for good: no action starts afterwards (a queued one is dropped, a pump does
-//     nothing, no timer is left), `pull-hosts-unconfirmed` is reported and `onPullUnconfirmed()` called ONCE. The
-//     start layer stops the sync. Nothing of this machine was replaced and nothing was sent.
-//   - The period cannot end while the barrier is up (`checkSettled`). An executor born without a direction has no
-//     period, so no barrier; `push` has none either (it removes nothing here).
-//   - A SNAPSHOT (codex R2 #2). `{direction, confirmedHosts}` is read ONCE, when the executor is built, and every
-//     guard judgement — the barrier, the guarded `hosts`, the index verdict, the agreement, the guarded pull's
-//     compare — asks that copy until released / halted / disposed. Read live, another window clearing the pair
-//     while the guarded GET is out (same master, `onInitialSettled` of a stale driver, a junk rehydrate) lowered
-//     the barrier and the GET's answer was applied unconfirmed; replacing it made the compare use a row the user
-//     never saw. A live value cleared or changed is therefore neither a downgrade nor a halt: the snapshot is
-//     what the user confirmed for THIS attach, and a real new attach (master or `attachId` moved) gets a
-//     new executor from the start layer anyway. A guard that turns up after the build raises nothing (like a
-//     direction: no period of this executor). What still reads the direction LIVE is unchanged — the answer to a
-//     lock (`answerFor`) and the stale-direction check; so with the live direction gone the `hosts` lock is left
-//     to the user, the barrier still up: nothing moves unconfirmed either way.
 //
 // WHAT THE START LAYER (Task 11) OWES THIS FILE
 //   - `onReconnected()` whenever the master host's event stream (re)connects —
@@ -246,13 +203,13 @@ import { readMasterWorld } from './master-world'
 import { compareShape, profileLock, profileStatus, reconcileSectionSet } from './profile-state'
 import type { ProfileStatus, SchemaLock } from './profile-state'
 import type { ProfileRemoteEvent } from './profile-ws-dispatch'
-import { sectionKind, shapeTable, workspaceIdOf } from './projections'
+import { isRetiredSection, sectionKind, shapeTable, workspaceIdOf } from './projections'
 import { isSyncableWorkspaceId } from './sections'
-import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
+import { dropSection, dropStash, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
+import type { PersistedSection } from './section-store'
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
 import type { FlightToken, SectionConflict, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
 import type { ProfileSectionKey, SectionKind, Shape, TabsPayload } from './types'
-import type { ConfirmedHosts } from '../../stores/useProfileStore'
 
 export interface ExecutorDeps {
   hostId: string
@@ -270,11 +227,6 @@ export interface ExecutorDeps {
   initialDirection?: () => 'push' | 'pull' | null
   /** The first reconciliation has settled. Once per period; the callee clears the direction. */
   onInitialSettled?: () => void
-  /** THE PULL GUARD (see the header): the SOT `hosts` row a `pull` was confirmed against. Absent / null = none. Read
-   *  ONCE, when the executor is built, together with `initialDirection()` — a snapshot, not a live value. */
-  confirmedPullHosts?: () => ConfirmedHosts | null
-  /** The guard did not match: this executor has halted. Called once. */
-  onPullUnconfirmed?: () => void
   /**
    * One section as the collector would build it NOW (collector.ts `buildSectionPayload`): `{ payload }`, or `null`
    * while nobody can say what the stores hold. Synchronous. Asked right before a pull stashes the payload its apply
@@ -353,11 +305,11 @@ export const BUSY_RETRY_MS = 500
 const DEFAULT_CONTENDED_MS = 1_000
 /** A deleted `tabs.<id>` whose workspace stays: said once after this many retries. */
 const STUCK_DELETION_ATTEMPTS = 4
-/** The sections every `tabs.*` pull waits for (apply-to-stores' CALLER CONTRACT). */
-const GATES: readonly string[] = ['hosts', 'workspaces']
-/** The sections `settings` waits for, pull and push (see the header) — BOTH: `workspaces` for its scoped entries,
- *  `hosts` for the host ids it names (host-sync-identity §6, §11.8). Each one's release pumps it (`pumpGatedBy`). */
-const SETTINGS_GATES: readonly string[] = ['hosts', 'workspaces']
+/** The sections every `tabs.*` pull waits for (see the header). Not `hosts`: it is retired (host ownership H3a-2). */
+const GATES: readonly string[] = ['workspaces']
+/** The sections `settings` waits for, pull and push (see the header): `workspaces`, for its scoped entries. Its
+ *  release pumps it (`pumpGatedBy`). Not `hosts` any more (host ownership H3a-2). */
+const SETTINGS_GATES: readonly string[] = ['workspaces']
 
 /** What must be up to date before `key` is pulled. */
 function pullGatesOf(key: string): readonly string[] {
@@ -386,13 +338,6 @@ function isEmptyTabs(payload: unknown): boolean {
   if (!isPayload(payload)) return false
   const { order, tabs } = payload
   return Array.isArray(order) && order.length === 0 && isPayload(tabs) && Object.keys(tabs).length === 0
-}
-
-/** Is `row` (null = no live section) the one the guard names? By HASH: the hash is of the canonical wire payload,
- *  so a higher rev with the same hash is the same content written again. */
-function matchesGuard(guard: ConfirmedHosts, row: { rev: number; hash: string | null } | null): boolean {
-  if (guard === 'absent') return row === null || row.hash === null
-  return row !== null && row.hash === guard.hash
 }
 
 function message(err: unknown): string {
@@ -472,12 +417,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   const orphanTried = new Set<string>()
   /** Not sent, or sent and failed without an answer: not again before the next index (a sweep runs every round). */
   const orphanDeferred = new Set<string>()
-
-  /** THE PULL GUARD (see the header). Released: `hosts` is applied (or agreed) on the guard's hash. Halted: a mismatch — terminal. */
-  let guardReleased = false
-  /** The snapshot `{direction: pull, confirmedHosts}` taken at startup (below) and never read again; null = no barrier. */
-  let pullGuard: Readonly<ConfirmedHosts> | null = null
-  let halted = false
 
   let shapesPromise: Promise<Shapes> | null = null
   let previousWorkspaceIds = localWorkspaceIds() ?? []
@@ -674,7 +613,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /** `true` iff the state changed. A section nobody knows starts from `initialSectionState(null)`. */
   function dispatch(key: string, event: SectionEvent, pumpAfter = true): boolean {
-    if (disposed) return false
+    // A retired section never gets a state (see the header): the one door every path to `sections.set` goes through.
+    if (disposed || isRetiredSection(key)) return false
     const prev = sections.get(key) ?? initialSectionState(null)
     const next = reduceSection(prev, event)
     if (next === prev) return false
@@ -683,14 +623,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     pruneMemoryStash()
     forgetIfGone(key, next)
     emitStatus()
-    const keep = answerFor(key, next)
+    const keep = answerFor(next)
     if (keep !== null) {
       dispatch(key, { type: 'resolved', keep }, pumpAfter)
       return true
     }
     if (pumpAfter) {
       pump(key)
-      // `hosts` / `workspaces` gate every `tabs.*` pull and `settings`
+      // `workspaces` gates every `tabs.*` pull and `settings`
       pumpGatedBy(key)
       checkSettled()
     }
@@ -711,9 +651,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   /** What the direction answers to this lock, or null: not locked, not its to answer, or no direction. */
-  function answerFor(key: string, s: SectionSyncState): 'local' | 'sot' | null {
+  function answerFor(s: SectionSyncState): 'local' | 'sot' | null {
     if (s.status !== 'locked:conflict' && s.status !== 'locked:reset') return null
-    if (barrierUp() && !guardedHosts(key)) return null // nothing but the guarded `hosts` before the release (see the header)
     const d = direction()
     if (d === null) return null
     if (d === 'pull') return 'sot'
@@ -725,83 +664,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /** Locks that were not made under this direction: restored from the store, or older than the attach. */
   function answerStandingLocks(): void {
     for (const [key, s] of [...sections]) {
-      const keep = answerFor(key, s)
+      const keep = answerFor(s)
       if (keep !== null) dispatch(key, { type: 'resolved', keep }, false)
-    }
-  }
-
-  /* ─── the pull guard ─── */
-
-  /** The guard as `deps.confirmedPullHosts()` answers NOW: a well-formed one, copied and frozen, or null. Read ONCE,
-   *  when the executor is built (`pullGuard`). */
-  function readGuard(): Readonly<ConfirmedHosts> | null {
-    const g = deps.confirmedPullHosts?.() ?? null
-    if (g === 'absent') return 'absent'
-    return typeof g === 'object' && g !== null && typeof g.hash === 'string' && typeof g.rev === 'number' ? Object.freeze({ rev: g.rev, hash: g.hash }) : null
-  }
-
-  /** THE snapshot: every guard judgement asks this, never the live dep (see the header, A SNAPSHOT). */
-  function guard(): Readonly<ConfirmedHosts> | null {
-    return pullGuard
-  }
-
-  /** Nothing but the index may happen: the verdict is pending — or it was a mismatch. On the snapshot alone: a live
-   *  direction or guard that is cleared or changed meanwhile does not lower it. */
-  function barrierUp(): boolean {
-    return halted || (!guardReleased && pullGuard !== null)
-  }
-
-  /** `key` is the one section the barrier lets through: `hosts`, while a row guard waits for its guarded pull. */
-  function guardedHosts(key: string): boolean {
-    if (key !== 'hosts' || halted || guardReleased || !indexSeen) return false
-    const g = guard()
-    return g !== null && g !== 'absent'
-  }
-
-  /** After an index, while the barrier is up: what the index alone decides (see the header). The rest is the
-   *  guarded pull's (`pull('hosts')`), and the agreement's (`judgeAgreedHosts`). */
-  function checkConfirmedHosts(listsHosts: boolean): void {
-    if (disposed || halted || guardReleased || !barrierUp()) return
-    const g = guard()
-    if (g === null) return
-    if (!listsHosts) return g === 'absent' ? releaseBarrier() : halt()
-    if (g === 'absent') return halt()
-    judgeAgreedHosts()
-  }
-
-  /** Nothing to apply: this device already agrees with the SOT on `hosts`. On the guard's hash → released; on any
-   *  other → the SOT is not what the user confirmed: halted. Asked at the end of every round while the barrier is up. */
-  function judgeAgreedHosts(): void {
-    if (!guardedHosts('hosts') || !upToDate('hosts')) return
-    const g = guard()
-    const agreed = sections.get('hosts')!.base
-    if (g === null || g === 'absent') return
-    if (matchesGuard(g, agreed)) releaseBarrier()
-    else halt()
-  }
-
-  /** `awaitingPayload`: a section the release must NOT pump — the guarded `hosts`, when its apply left it dirty on a
-   *  hash whose payload only the collector holds (`pull()`'s own rule: that report pumps it). */
-  function releaseBarrier(awaitingPayload?: string): void {
-    if (disposed || halted || guardReleased) return
-    guardReleased = true
-    answerStandingLocks()
-    for (const key of [...sections.keys()]) if (key !== awaitingPayload) pump(key)
-    checkSettled()
-  }
-
-  /** The mismatch: terminal (see the header). */
-  function halt(): void {
-    if (disposed || halted) return
-    halted = true
-    clearTimers()
-    queue.length = 0
-    problem('pull-hosts-unconfirmed', 'the SOT `hosts` is not the one this pull was confirmed against: nothing was pulled or pushed, and this driver has stopped', 'hosts')
-    emitStatus()
-    try {
-      deps.onPullUnconfirmed?.()
-    } catch {
-      // a listener's bug is not the driver's
     }
   }
 
@@ -892,7 +756,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /** The end of the first reconciliation (see the header). Runs at the end of EVERY round — one with no action too. */
   function checkSettled(): void {
-    if (disposed || halted) return
+    if (disposed) return
     if (periodOver) {
       // A direction that is (still, or again) stored belongs to no period of this
       // executor. It answers nothing here; say so and hand it back to be cleared.
@@ -903,11 +767,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         handBack()
       }
       return
-    }
-    // Ending the period here would drop the direction, and the barrier with it, without a verdict.
-    if (barrierUp()) {
-      judgeAgreedHosts()
-      if (barrierUp()) return
     }
     if (!indexSeen || profileGone || schemaLock !== null || blocked) return
     sweepOrphans() // `push`: what it queues keeps the period open (`orphanPending`)
@@ -1001,7 +860,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       })
   }
 
-  /** The section's gates are UP TO DATE (`tabs.*` and `settings`: `hosts` and `workspaces`), and a
+  /** The section's gates are UP TO DATE (`tabs.*` and `settings`: `workspaces`), and a
    *  `tabs.*` has its workspace here. `status === 'synced'` alone is not that: it means clean, and a clean section
    *  that is behind the SOT (its pull decided or still out) reads `synced` too. */
   function mayPull(key: string): boolean {
@@ -1015,7 +874,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   function pump(key: string): void {
-    if (disposed || profileGone || halted) return
+    if (disposed || profileGone) return
     if (running.has(key)) {
       repump.add(key)
       return
@@ -1023,9 +882,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const s = sections.get(key)
     if (s === undefined) return
     const action = decideSection(s, { reachable: deps.isReachable(), autoSync: manual || deps.autoSync() })
-    // THE PULL GUARD: only the index, until the verdict (see the header). A lock is not even taken — the direction
-    // answers it once released, and a lock taken now would sit unanswered in the UI.
-    if (action.do !== 'reindex' && action.do !== 'nothing' && barrierUp() && !(guardedHosts(key) && (action.do === 'pull' || action.do === 'lock-conflict' || action.do === 'lock-reset'))) return
     if (action.do !== 'restore-local') parkedRestore.delete(key)
     switch (action.do) {
       case 'nothing':
@@ -1071,7 +927,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /* ─── reindex ─── */
 
   function requestReindex(force = false): void {
-    if (disposed || profileGone || blocked || halted) return
+    if (disposed || profileGone || blocked) return
     if (force) reindexForced = true
     if (reindexing || now() < reindexNotBefore) return
     reindexing = true
@@ -1150,7 +1006,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     settleHeldPlaceholders()
     reportSectionSet(entry.sections.map((m) => m.section))
     answered()
-    checkConfirmedHosts(listed.has('hosts'))
   }
 
   /* ─── collector reports ─── */
@@ -1243,7 +1098,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (draining) return
     draining = true
     try {
-      while (queue.length > 0 && !disposed && !halted) {
+      while (queue.length > 0 && !disposed) {
         const job = queue.shift()!
         let finish: Finish
         try {
@@ -1276,8 +1131,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   async function send(key: string, token: FlightToken): Promise<Finish> {
     const mine = await shapes()
     if (disposed) return WAIT
-    // Nothing is open yet, so nothing is owed. (The barrier: decided again once it is lifted.)
-    if (schemaLock !== null || profileGone || blocked || barrierUp()) return WAIT
+    // Nothing is open yet, so nothing is owed.
+    if (schemaLock !== null || profileGone || blocked) return WAIT
 
     dispatch(key, { type: 'push-started', token }, false)
     // The reducer takes a token only from the state it was decided in. Same OBJECT, or nothing goes out.
@@ -1372,7 +1227,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
     // Decided on the CURRENT state, not on the one that asked.
     const s = sections.get(key)
-    if (s === undefined || profileGone || schemaLock !== null || halted || (barrierUp() && !guardedHosts(key)) || !canApplyPull(s)) return AGAIN
+    if (s === undefined || profileGone || schemaLock !== null || !canApplyPull(s)) return AGAIN
     if (!mayPull(key)) return WAIT
 
     const fetched = result.value
@@ -1420,15 +1275,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       }
       // 'i-am-newer' is applied like 'ok' — see "AN OLDER SHAPE ON THE SOT" in the header.
     }
-    // THE GUARDED PULL: the fetched row IS the verdict, and nothing is written unless it is the confirmed one.
-    const guarded = guardedHosts(key)
-    if (guarded) {
-      const g = guard()
-      if (g !== null && !matchesGuard(g, fetched)) {
-        halt()
-        return WAIT
-      }
-    }
     const payload = fetched === null ? null : fetched.payload
     const rev = fetched === null ? s.sot.rev : fetched.rev
 
@@ -1464,8 +1310,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const sotHash = fetched === null ? null : fetched.hash
     const mismatch = outcome.hash !== sotHash
     // `rewrite` = the only difference is a designed write-back after a pull (one push, then every build agrees):
-    // this device's own id on a canonical `hosts` row (#1369), or an ordinal-2 `tabs.*` without its interface-only
-    // tabs (tabs-local-only §3.5). Pushed like any mismatch, but not a problem.
+    // an ordinal-2 `tabs.*` without its interface-only tabs (tabs-local-only §3.5). Pushed like any mismatch, but
+    // not a problem.
     if (mismatch && outcome.rewrite === undefined) {
       problem('pull-hash-mismatch', `the stores did not keep what arrived (fetched ${String(sotHash)}, they hold ${String(outcome.hash)}): the section is dirty and will be pushed back`, key)
     }
@@ -1489,9 +1335,6 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // the collector reports what the stores hold now, and that is what goes out.
     if (outcome.hash !== null && outcome.payload !== undefined && storesStillBuild(key, outcome.payload)) stash.set(outcome.hash, outcome.payload)
     const awaitsCollector = mismatch && outcome.hash !== null && !stash.has(outcome.hash)
-    // `hosts` is applied, on the confirmed row: only now may anything else move (see the header). Not `hosts` itself
-    // ahead of that report, though: pumped now (it is still running), `run()` would repump it into a payload-less push.
-    if (guarded && taken) releaseBarrier(awaitsCollector ? key : undefined)
     if (awaitsCollector) {
       clearBackoff(key)
       return WAIT
@@ -1558,7 +1401,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       }
     }
     const s = sections.get(key)
-    if (s === undefined || barrierUp() || !canRestoreLocal(s, hash)) return AGAIN
+    if (s === undefined || !canRestoreLocal(s, hash)) return AGAIN
 
     let outcome: ApplyOutcome
     try {
@@ -1603,18 +1446,38 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   // Startup: what the section store holds, conflicts included (sync-state driver contract).
+  // A retired section's record is dropped instead (see the header), and first its OWN payloads — a `hosts` conflict's
+  // hold every host's token. By name, never a prune: a prune here could remove a SENT payload another leader has just
+  // written for a conflict whose record is not stored yet (section-store.ts header, spec §4.6.2). The record goes only
+  // once every payload has; a refused removal keeps it, so the next start comes back here and tries again (#1425).
+  // RESIDUAL (#1256 — localStorage has no transactions): a payload another leader has written under the SAME content
+  // hash, for a conflict whose record is not stored yet, is not in this window's keep-set and IS removed. This build
+  // never writes a `hosts` payload, so that hash can only come from a pre-H3 tab of the same browser, still open,
+  // storing a `hosts` conflict at that moment; its conflict is then dropped at its next load, like any damaged one.
+  const retired: Array<[string, PersistedSection]> = []
   for (const [key, persisted] of Object.entries(loadSectionStore(profileId).sections)) {
+    if (isRetiredSection(key)) {
+      retired.push([key, persisted])
+      continue
+    }
     const s = restoreSectionState(persisted)
     sections.set(key, s)
     attempted.set(key, persistedSignature(s))
     if (persisted.conflict !== undefined) storedConflict.add(key)
   }
-  lastStatus = JSON.stringify(status())
+  for (const [key, persisted] of retired) {
+    const keep = keepSet() // a hash a live section holds too is that section's
+    const own = [persisted.base.hash, persisted.currentHash, persisted.conflict?.localHash, persisted.conflict?.sot.hash]
+    const hashes = [...new Set(own.filter((h): h is string => typeof h === 'string' && !keep.has(h)))]
+    if (dropStash(profileId, hashes) !== 'ok') {
+      problem('persist-failed', 'the section store refused to remove a retired section\'s payloads; its record is kept and the next start tries again', key)
+      continue
+    }
+    if (dropSection(profileId, key) !== 'ok') problem('persist-failed', 'the section store refused to drop a retired section', key)
+  }
+    lastStatus = JSON.stringify(status())
   // Born without a direction = an ordinary run (a reload after the period): there is no period to open later.
   periodOver = storedDirection() === null
-  // THE PULL GUARD's snapshot (see the header): the direction and the guard of THIS attach, read once. A guard that
-  // turns up later belongs to no period of this executor, like a direction (the start layer rebuilds on every attach).
-  pullGuard = !periodOver && storedDirection() === 'pull' ? readGuard() : null
 
   return {
     onSection(r) {

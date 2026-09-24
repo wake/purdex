@@ -8,6 +8,9 @@
 //   - invalid → no "Take the host's", and a forged `sot` command changes nothing;
 //   - a pairless lock whose host rev moved on → the open confirmation closes itself, and its stale command is dropped;
 //   - a conflict edited here since → "Keep this device's" pushes the SENT snapshot, and the confirmation said so.
+//
+// The section locked is `workspaces` (`locked:invalid` through a malformed copy). It was `hosts` until host ownership
+// H3a-2 retired that one from the sync loop — a real executor never locks it any more.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import en from '../../../locales/en.json'
@@ -25,7 +28,7 @@ import { clearSectionStore } from '../../../lib/profile/section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, requestResolve, startProfileSync } from '../../../lib/profile/start'
 import { masterTagOf } from '../../../lib/profile/sync-status'
 import { FakeDaemon } from '../../../lib/profile/test-fake-daemon'
-import type { HostsPayload } from '../../../lib/profile/types'
+import type { WorkspacesPayload } from '../../../lib/profile/types'
 import { CurrentBlock } from './CurrentBlock'
 
 vi.mock('../../../lib/profile/hash', async (importOriginal) => {
@@ -82,12 +85,13 @@ const click = async (id: string): Promise<void> => {
   })
 }
 
-function renameH2(name: string): void {
-  const { hosts } = useHostStore.getState()
-  useHostStore.setState({ hosts: { ...hosts, [H2]: { ...hosts[H2], name } } })
+/** A local edit of `workspaces`: workspace `wa` renamed. */
+function renameWa(name: string): void {
+  useWorkspaceStore.setState((s) => ({ workspaces: s.workspaces.map((w) => (w.id === 'wa' ? { ...w, name } : w)) }))
 }
-const h2Name = (): string => useHostStore.getState().hosts[H2].name
-const hostsLock = (): SectionLock | undefined => profileSyncState().status?.locks.hosts
+const waName = (): string | undefined => useWorkspaceStore.getState().workspaces.find((w) => w.id === 'wa')?.name
+const wsIds = (): string[] => useWorkspaceStore.getState().workspaces.map((w) => w.id)
+const wsLock = (): SectionLock | undefined => profileSyncState().status?.locks.workspaces
 const tagNow = (): string => masterTagOf({ hostId: M, profileId: PROFILE }, useProfileStore.getState().attachGeneration)
 
 /** The master host goes away and comes back: the executor reindexes (start.ts: `onReconnected`). */
@@ -98,15 +102,16 @@ async function reconnect(): Promise<void> {
   await settle()
 }
 
-/** Another client writes `hosts` on the daemon: this payload, at this rev (a rev BELOW ours = the section was recreated). */
-async function hostWrites(rev: number, mutate: (p: HostsPayload) => void): Promise<string> {
-  const row = daemon.rows.get('hosts')!
-  const payload = JSON.parse(JSON.stringify(row.payload)) as HostsPayload
+/** Another client writes `workspaces` on the daemon: this payload, at this rev (a rev BELOW ours = the section was recreated). */
+async function sotWrites(rev: number, mutate: (p: WorkspacesPayload) => void): Promise<string> {
+  const row = daemon.rows.get('workspaces')!
+  const payload = JSON.parse(JSON.stringify(row.payload)) as WorkspacesPayload
   mutate(payload)
   const hash = await hashSection(payload)
-  daemon.rows.set('hosts', { ...row, rev, hash, payload: payload as unknown as Record<string, unknown>, writer: OTHER })
+  daemon.rows.set('workspaces', { ...row, rev, hash, payload: payload as unknown as Record<string, unknown>, writer: OTHER })
   return hash
 }
+const sotWorkspaces = (): WorkspacesPayload => daemon.rows.get('workspaces')!.payload as unknown as WorkspacesPayload
 
 let daemon: FakeDaemon
 let stop: () => void = () => {}
@@ -128,7 +133,10 @@ beforeEach(() => {
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [], worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
-  useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null, worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+  useWorkspaceStore.setState({
+    workspaces: [{ id: 'wa', name: 'wa', tabs: [], activeTabId: null }, { id: 'wb', name: 'wb', tabs: [], activeTabId: null }],
+    activeWorkspaceId: 'wa', worldId: MASTER_PROFILE_ID, worldEpoch: 0,
+  })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -143,16 +151,16 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-/** Attached with `push`, the first reconciliation over, `hosts` agreed at `hostsRev` (each extra rev is an edit pushed). */
-async function attachedAt(hostsRev: number): Promise<void> {
+/** Attached with `push`, the first reconciliation over, `workspaces` agreed at `wsRev` (each extra rev is an edit pushed). */
+async function attachedAt(wsRev: number): Promise<void> {
   stop = startProfileSync()
   expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
   await settle()
-  for (let i = 1; i < hostsRev; i += 1) {
-    act(() => renameH2(`edit-${i}`))
+  for (let i = 1; i < wsRev; i += 1) {
+    act(() => renameWa(`edit-${i}`))
     await settle()
   }
-  expect(daemon.rows.get('hosts')!.rev).toBe(hostsRev)
+  expect(daemon.rows.get('workspaces')!.rev).toBe(wsRev)
   expect(profileSyncState().status?.profile).toBe('synced')
   render(<CurrentBlock masterName="default" />)
 }
@@ -160,14 +168,14 @@ async function attachedAt(hostsRev: number): Promise<void> {
 describe('Resolve, end to end (R7)', () => {
   it('locked:reset → "Keep this device\'s": this device\'s copy goes back to the host, over the recreated one', async () => {
     await attachedAt(2)
-    const mine = h2Name()
-    await hostWrites(1, (p) => void (p.hosts[H2].name = 'recreated'))
+    const mine = waName()
+    await sotWrites(1, (p) => void (p.workspaces.wa.name = 'recreated'))
     await reconnect()
-    expect(screen.getByTestId('profile-resolve-row-hosts')).toHaveAttribute('data-lock', 'locked:reset')
-    expect(screen.getByTestId('profile-resolve-why-hosts')).toHaveTextContent(en['settings.profile.resolve.why.reset'])
+    expect(screen.getByTestId('profile-resolve-row-workspaces')).toHaveAttribute('data-lock', 'locked:reset')
+    expect(screen.getByTestId('profile-resolve-why-workspaces')).toHaveTextContent(en['settings.profile.resolve.why.reset'])
 
-    await click('profile-resolve-keep-local-hosts')
-    // this device: what is built now (2 hosts); the host: one read-only GET of its copy (2 hosts), at the lock's rev
+    await click('profile-resolve-keep-local-workspaces')
+    // this device: what is built now (2 workspaces); the host: one read-only GET of its copy (2 workspaces), at the lock's rev
     expect(screen.getByTestId('profile-resolve-count-local')).toHaveAttribute('data-state', 'read')
     expect(screen.getByTestId('profile-resolve-count-local')).toHaveTextContent('2')
     expect(screen.getByTestId('profile-resolve-count-sot')).toHaveAttribute('data-state', 'read')
@@ -175,137 +183,130 @@ describe('Resolve, end to end (R7)', () => {
     await click('profile-resolve-confirm')
     await settle()
 
-    expect(screen.queryByTestId('profile-resolve-row-hosts')).toBeNull()
-    expect(profileSyncState().status?.sections.hosts).toBe('synced')
-    expect(h2Name()).toBe(mine)
-    const row = daemon.rows.get('hosts')!
-    expect((row.payload as unknown as HostsPayload).hosts[H2].name).toBe(mine)
-    expect(row.writer).toBe('c_aaaaaaaaaaaa')
+    expect(screen.queryByTestId('profile-resolve-row-workspaces')).toBeNull()
+    expect(profileSyncState().status?.sections.workspaces).toBe('synced')
+    expect(waName()).toBe(mine)
+    expect(sotWorkspaces().workspaces.wa.name).toBe(mine)
+    expect(daemon.rows.get('workspaces')!.writer).toBe('c_aaaaaaaaaaaa')
   })
 
   it('locked:reset → "Take the host\'s": the recreated copy lands here', async () => {
     await attachedAt(2)
-    await hostWrites(1, (p) => void (p.hosts[H2].name = 'recreated'))
+    await sotWrites(1, (p) => void (p.workspaces.wa.name = 'recreated'))
     await reconnect()
-    await click('profile-resolve-take-sot-hosts')
+    await click('profile-resolve-take-sot-workspaces')
     expect(screen.getByTestId('profile-resolve-dialog')).toHaveTextContent(en['settings.profile.resolve.take_sot_body'])
     await click('profile-resolve-confirm')
     await settle()
 
-    expect(screen.queryByTestId('profile-resolve-row-hosts')).toBeNull()
-    expect(h2Name()).toBe('recreated')
-    expect(profileSyncState().status?.sections.hosts).toBe('synced')
-    expect(daemon.rows.get('hosts')!.writer).toBe(OTHER) // nothing was written over it
+    expect(screen.queryByTestId('profile-resolve-row-workspaces')).toBeNull()
+    expect(waName()).toBe('recreated')
+    expect(profileSyncState().status?.sections.workspaces).toBe('synced')
+    expect(daemon.rows.get('workspaces')!.writer).toBe(OTHER) // nothing was written over it
   })
 
   it('locked:invalid → no "Take the host\'s"; a forged `sot` command changes nothing; "Keep this device\'s" puts this device\'s copy back', async () => {
     await attachedAt(1)
-    const mine = h2Name()
-    await hostWrites(2, (p) => {
-      delete p.hosts[M]
-      p.hostOrder = p.hostOrder.filter((id) => id !== M)
-    })
+    const mine = waName()
+    await sotWrites(2, (p) => void ((p as unknown as Record<string, unknown>).order = 'not-a-list')) // a copy this build cannot read
     await reconnect()
-    expect(screen.getByTestId('profile-resolve-row-hosts')).toHaveAttribute('data-lock', 'locked:invalid')
-    expect(screen.getByTestId('profile-resolve-why-hosts')).toHaveAttribute('data-reason', 'removes-master-host')
-    expect(screen.getByTestId('profile-resolve-why-hosts')).toHaveTextContent(en['settings.profile.resolve.why.invalid.removes_master_host'])
-    expect(screen.queryByTestId('profile-resolve-take-sot-hosts')).toBeNull()
+    expect(screen.getByTestId('profile-resolve-row-workspaces')).toHaveAttribute('data-lock', 'locked:invalid')
+    expect(screen.getByTestId('profile-resolve-why-workspaces')).toHaveAttribute('data-reason', 'malformed')
+    expect(screen.getByTestId('profile-resolve-why-workspaces')).toHaveTextContent(en['settings.profile.resolve.why.invalid.malformed'])
+    expect(screen.queryByTestId('profile-resolve-take-sot-workspaces')).toBeNull()
 
     // the command no button sends, with the very lock on screen: the reducer refuses it
-    const lock = hostsLock()!
+    const lock = wsLock()!
     const reads = api.getSection.mock.calls.length
     const problems = profileSyncState().problems.length
-    expect(requestResolve('hosts', 'sot', lock, tagNow())).toBe(true)
+    expect(requestResolve('workspaces', 'sot', lock, tagNow())).toBe(true)
     await settle()
-    expect(profileSyncState().status?.sections.hosts).toBe('locked:invalid')
+    expect(profileSyncState().status?.sections.workspaces).toBe('locked:invalid')
     // not even asked for again: no pull of the refused copy, no new verdict
     expect(api.getSection.mock.calls.length).toBe(reads)
     expect(profileSyncState().problems.length).toBe(problems)
-    expect(Object.keys(useHostStore.getState().hosts)).toContain(M)
-    expect(daemon.rows.get('hosts')!.writer).toBe(OTHER)
+    expect(wsIds()).toEqual(['wa', 'wb'])
+    expect(daemon.rows.get('workspaces')!.writer).toBe(OTHER)
 
-    await click('profile-resolve-keep-local-hosts')
+    await click('profile-resolve-keep-local-workspaces')
     await click('profile-resolve-confirm')
     await settle()
-    expect(screen.queryByTestId('profile-resolve-row-hosts')).toBeNull()
-    const row = daemon.rows.get('hosts')!
-    expect(row.writer).toBe('c_aaaaaaaaaaaa')
-    expect(Object.keys((row.payload as unknown as HostsPayload).hosts)).toContain(M)
-    expect(h2Name()).toBe(mine)
+    expect(screen.queryByTestId('profile-resolve-row-workspaces')).toBeNull()
+    expect(daemon.rows.get('workspaces')!.writer).toBe('c_aaaaaaaaaaaa')
+    expect(Object.keys(sotWorkspaces().workspaces)).toEqual(['wa', 'wb'])
+    expect(waName()).toBe(mine)
   })
 
   it('a pairless lock whose host rev moves on while the confirmation is open: it closes itself, and the stale command is dropped', async () => {
     await attachedAt(3)
-    await hostWrites(1, (p) => void (p.hosts[H2].name = 'recreated'))
+    await sotWrites(1, (p) => void (p.workspaces.wa.name = 'recreated'))
     await reconnect()
-    await click('profile-resolve-keep-local-hosts')
-    const frozen = hostsLock()!
+    await click('profile-resolve-keep-local-workspaces')
+    const frozen = wsLock()!
     expect(screen.getByTestId('profile-resolve-dialog')).toBeInTheDocument()
 
     // another client writes again — still below this device's rev: still `locked:reset`, another lock
-    await hostWrites(2, (p) => void (p.hosts[H2].name = 'recreated-again'))
+    await sotWrites(2, (p) => void (p.workspaces.wa.name = 'recreated-again'))
     await reconnect()
-    expect(hostsLock()?.status).toBe('locked:reset')
-    expect(hostsLock()?.sot.rev).toBe(2)
+    expect(wsLock()?.status).toBe('locked:reset')
+    expect(wsLock()?.sot.rev).toBe(2)
     expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
-    expect(screen.getByTestId('profile-resolve-changed-hosts')).toHaveTextContent(en['settings.profile.resolve.changed'])
+    expect(screen.getByTestId('profile-resolve-changed-workspaces')).toHaveTextContent(en['settings.profile.resolve.changed'])
 
     // what a late click would have sent: dropped by the channel's binding, nothing written
     const writes = daemon.writes.length
-    expect(requestResolve('hosts', 'local', frozen, tagNow())).toBe(false) // dropped by the lock binding (review A2)
+    expect(requestResolve('workspaces', 'local', frozen, tagNow())).toBe(false) // dropped by the lock binding (review A2)
     await settle()
-    expect(hostsLock()?.sot.rev).toBe(2)
+    expect(wsLock()?.sot.rev).toBe(2)
     expect(daemon.writes.length).toBe(writes)
-    expect(daemon.rows.get('hosts')!.writer).toBe(OTHER)
+    expect(daemon.rows.get('workspaces')!.writer).toBe(OTHER)
   })
 
   it('a conflict edited here since it arose: "Keep this device\'s" pushes the SENT snapshot — and the confirmation said so', async () => {
     await attachedAt(1)
-    // another client moves `hosts` while this one edits it: the push is refused (409) and the sent snapshot kept
-    await hostWrites(2, (p) => void (p.hosts[H2].name = 'theirs'))
-    act(() => renameH2('sent-here'))
+    // another client moves `workspaces` while this one edits it: the push is refused (409) and the sent snapshot kept
+    await sotWrites(2, (p) => void (p.workspaces.wa.name = 'theirs'))
+    act(() => renameWa('sent-here'))
     await settle()
-    expect(hostsLock()?.status).toBe('locked:conflict')
-    // edited again, under the lock: a third host
+    expect(wsLock()?.status).toBe('locked:conflict')
+    // edited again, under the lock: a third workspace
     act(() => {
-      const { hosts, hostOrder } = useHostStore.getState()
-      useHostStore.setState({ hosts: { ...hosts, h3: host('h3', { ip: '10.0.0.3', order: 2 }) }, hostOrder: [...hostOrder, 'h3'] })
+      useWorkspaceStore.setState((s) => ({ workspaces: [...s.workspaces, { id: 'wc', name: 'wc', tabs: [], activeTabId: null }] }))
     })
     await settle()
-    const lock = hostsLock()!
+    const lock = wsLock()!
     expect(lock.currentHash).not.toBe(lock.conflict!.localHash)
 
-    expect(screen.getByTestId('profile-resolve-undoes-hosts')).toHaveTextContent(en['settings.profile.resolve.undoes'])
-    await click('profile-resolve-keep-local-hosts')
+    expect(screen.getByTestId('profile-resolve-undoes-workspaces')).toHaveTextContent(en['settings.profile.resolve.undoes'])
+    await click('profile-resolve-keep-local-workspaces')
     expect(screen.getByTestId('profile-resolve-dialog-undoes')).toHaveTextContent(en['settings.profile.resolve.dialog_undoes'])
-    // this device's side is the SENT snapshot, read from the stash: 2 hosts — not the 3 here now
+    // this device's side is the SENT snapshot, read from the stash: 2 workspaces — not the 3 here now
     expect(screen.getByTestId('profile-resolve-count-local')).toHaveAttribute('data-state', 'read')
-    expect(screen.getByTestId('profile-resolve-count-local')).toHaveTextContent(en['settings.profile.resolve.unit.hosts'].replace('{{count}}', '2'))
+    expect(screen.getByTestId('profile-resolve-count-local')).toHaveTextContent(en['settings.profile.resolve.unit.workspaces'].replace('{{count}}', '2'))
     await click('profile-resolve-confirm')
     await settle()
 
-    expect(screen.queryByTestId('profile-resolve-row-hosts')).toBeNull()
-    expect(h2Name()).toBe('sent-here')
-    expect(Object.keys(useHostStore.getState().hosts)).toEqual([M, H2]) // the edit made since is undone, as said
-    const row = daemon.rows.get('hosts')!
-    expect((row.payload as unknown as HostsPayload).hosts[H2].name).toBe('sent-here')
-    expect(Object.keys((row.payload as unknown as HostsPayload).hosts)).toEqual([M, H2])
-    expect(row.writer).toBe('c_aaaaaaaaaaaa')
+    expect(screen.queryByTestId('profile-resolve-row-workspaces')).toBeNull()
+    expect(waName()).toBe('sent-here')
+    expect(wsIds()).toEqual(['wa', 'wb']) // the edit made since is undone, as said
+    expect(sotWorkspaces().workspaces.wa.name).toBe('sent-here')
+    expect(Object.keys(sotWorkspaces().workspaces)).toEqual(['wa', 'wb'])
+    expect(daemon.rows.get('workspaces')!.writer).toBe('c_aaaaaaaaaaaa')
   })
 
   it('the same master is attached AGAIN while the confirmation is open (review A1): it closes itself; the old tag is refused, nothing written', async () => {
     await attachedAt(2)
-    await hostWrites(1, (p) => void (p.hosts[H2].name = 'recreated'))
+    await sotWrites(1, (p) => void (p.workspaces.wa.name = 'recreated'))
     await reconnect()
-    await click('profile-resolve-keep-local-hosts')
-    const frozen = hostsLock()!
+    await click('profile-resolve-keep-local-workspaces')
+    const frozen = wsLock()!
     const shownUnder = tagNow()
     expect(await attachMaster(M, PROFILE, 'pull')).toEqual({ ok: true })
     expect(tagNow()).not.toBe(shownUnder)
     await act(async () => {})
     expect(screen.queryByTestId('profile-resolve-dialog')).toBeNull()
     const writes = daemon.writes.length
-    expect(requestResolve('hosts', 'local', frozen, shownUnder)).toBe(false)
+    expect(requestResolve('workspaces', 'local', frozen, shownUnder)).toBe(false)
     await settle()
     expect(daemon.writes.length).toBe(writes)
   })

@@ -37,7 +37,10 @@ export interface ViewProps {
 
 export interface ViewDefinition {
   id: string
+  /** Fallback display name, used when `labelKey` is absent. */
   label: string
+  /** i18n key for the display name; wins over `label` when set. */
+  labelKey?: string
   icon: React.ComponentType<{ size?: number; className?: string }>
   scope: 'system' | 'workspace' | 'tab'
   component: React.ComponentType<ViewProps>
@@ -180,6 +183,11 @@ export function getViewDefinition(viewId: string): ViewDefinition | undefined {
     if (view) return view
   }
   return undefined
+}
+
+/** A view's display name in the active locale. */
+export function viewLabel(view: ViewDefinition, t: (key: string) => string): string {
+  return view.labelKey ? t(view.labelKey) : view.label
 }
 
 export function getAllViews(): ViewDefinition[] {

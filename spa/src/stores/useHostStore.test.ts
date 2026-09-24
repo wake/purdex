@@ -1,5 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useHostStore, selectDevHostId, findHostByEndpoint, selectDaemonIdMismatch, selectDaemonIdVerified, requestAtOf } from './useHostStore'
+import type { TransferChange } from '../lib/host-transfer-plan'
+import {
+  useHostStore,
+  selectDevHostId,
+  findHostByEndpoint,
+  selectDaemonIdMismatch,
+  selectDaemonIdVerified,
+  requestAtOf,
+  applyTransferLooks,
+  lookKeyOf,
+  transferLookEntries,
+} from './useHostStore'
+import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
+import { useShownHostsStore } from './useShownHostsStore'
+import { hostLookOf } from '../lib/host-look'
+import { syncIdOfSync } from '../lib/profile/host-identity'
+
+const NO_ENTRY: HostLookEntry = Object.freeze({}) as HostLookEntry
+/** The look store's entry under `key`, `{}` when absent. */
+const lookEntry = (key: string): HostLookEntry => useHostLookStore.getState().looks[key] ?? NO_ENTRY
+const hasEntry = (key: string) => Object.hasOwn(useHostLookStore.getState().looks, key)
 
 describe('useHostStore', () => {
   beforeEach(() => {
@@ -66,9 +86,12 @@ describe('useHostStore', () => {
     expect(updated.hosts[defaultId].port).toBe(8080)
   })
 
+  // H2c-2: every look write lands in the look store (the default host has no daemonId → its key is its local id);
+  // `HostConfig` is only the seed of an absent entry.
   describe('host colors (spec 2026-09-18 §4.1)', () => {
     const id = () => useHostStore.getState().activeHostId!
-    const host = () => useHostStore.getState().hosts[id()]
+    const host = () => lookEntry(id())
+    const config = () => useHostStore.getState().hosts[id()]
 
     it('setHostColor writes colors.console.main with alpha 100 and no legacy color key', () => {
       useHostStore.getState().setHostColor(id(), '#3b82f6')
@@ -134,11 +157,12 @@ describe('useHostStore', () => {
       expect(host().colors).toBeUndefined()
     })
 
-    it('a rejected write leaves a legacy color untouched', () => {
+    it('a rejected write leaves a legacy color untouched (no entry written)', () => {
       useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
       useHostStore.getState().setHostColorLayer(id(), 'console', 'main', { color: 'red', alpha: 100 })
       useHostStore.getState().setHostColorLayer(id(), 'console', 'middle', { alpha: 50 })   // no set yet → no-op
-      expect(host().color).toBe('#22c55e')
+      expect(hasEntry(id())).toBe(false)
+      expect(hostLookOf(id()).color).toBe('#22c55e')
     })
 
     it('setHostColor(null) on a legacy-only host removes the legacy color (the "No color" button)', () => {
@@ -151,7 +175,8 @@ describe('useHostStore', () => {
     it('clearHostColorMode on a non-console mode that has no set is a no-op (legacy color kept)', () => {
       useHostStore.setState((s) => ({ hosts: { ...s.hosts, [id()]: { ...s.hosts[id()], color: '#22c55e' } } }))
       useHostStore.getState().clearHostColorMode(id(), 'terminal')
-      expect(host().color).toBe('#22c55e')
+      expect(hasEntry(id())).toBe(false)
+      expect(hostLookOf(id()).color).toBe('#22c55e')
     })
 
     it('setHostColorLayer(null) on middle/light removes the layer; on main clears the mode', () => {
@@ -178,11 +203,12 @@ describe('useHostStore', () => {
           [id()]: { ...s.hosts[id()], color: '#22c55e', colors: { console: { main: { color: '#3b82f6', alpha: 100 } } } },
         },
       }))
-      const before = host()
+      const before = useHostLookStore.getState().looks
       useHostStore.getState().setHostColorLayer(id(), 'console', 'middle', null)
-      expect(host()).toBe(before)
-      expect(host().color).toBe('#22c55e')
-      expect(host().colors).toEqual({ console: { main: { color: '#3b82f6', alpha: 100 } } })
+      expect(useHostLookStore.getState().looks).toBe(before)
+      expect(hasEntry(id())).toBe(false)
+      expect(hostLookOf(id()).color).toBe('#22c55e')
+      expect(hostLookOf(id()).colors).toEqual({ console: { main: { color: '#3b82f6', alpha: 100 } } })
     })
 
     it('clearHostColorMode(console) on a legacy host with only other mode sets removes the legacy color and keeps the other sets', () => {
@@ -195,13 +221,14 @@ describe('useHostStore', () => {
       useHostStore.getState().clearHostColorMode(id(), 'console')
       expect('color' in host()).toBe(false)
       expect(host().colors).toEqual({ terminal: { main: { color: '#ef4444', alpha: 100 } } })
+      expect(config().color).toBe('#22c55e') // HostConfig is never written
     })
   })
 
   it('setHostIcon stores an icon name', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostIcon(id, 'Laptop')
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect(host.icon).toBe('Laptop')
     expect('iconWeight' in host).toBe(false)
   })
@@ -209,7 +236,7 @@ describe('useHostStore', () => {
   it('setHostIcon stores an icon name with a weight', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostIcon(id, 'Laptop', 'duotone')
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect(host.icon).toBe('Laptop')
     expect(host.iconWeight).toBe('duotone')
   })
@@ -217,7 +244,7 @@ describe('useHostStore', () => {
   it('setHostIcon ignores an invalid weight but still stores the icon', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostIcon(id, 'Laptop', 'evil' as never)
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect(host.icon).toBe('Laptop')
     expect('iconWeight' in host).toBe(false)
   })
@@ -226,7 +253,7 @@ describe('useHostStore', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
     useHostStore.getState().setHostIcon(id, null)
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect('icon' in host).toBe(false)
     expect('iconWeight' in host).toBe(false)
     expect(host.name).toBe('mlab')
@@ -236,7 +263,7 @@ describe('useHostStore', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
     useHostStore.getState().setHostIcon(id, blank)
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect('icon' in host).toBe(false)
     expect('iconWeight' in host).toBe(false)
   })
@@ -249,34 +276,34 @@ describe('useHostStore', () => {
     'Laptop; background:url(x)',
   ])('setHostIcon(%j) is rejected and stores nothing', (bad) => {
     const id = useHostStore.getState().activeHostId!
-    const before = useHostStore.getState().hosts
+    const before = useHostLookStore.getState().looks
     useHostStore.getState().setHostIcon(id, bad, 'fill')
-    expect(useHostStore.getState().hosts).toBe(before)
-    expect('icon' in useHostStore.getState().hosts[id]).toBe(false)
-    expect('iconWeight' in useHostStore.getState().hosts[id]).toBe(false)
+    expect(useHostLookStore.getState().looks).toBe(before)
+    expect(hasEntry(id)).toBe(false)
   })
 
   it('setHostIcon with a non-Phosphor name leaves an existing icon untouched', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
     useHostStore.getState().setHostIcon(id, 'NotARealPhosphorIcon', 'bold')
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect(host.icon).toBe('Laptop')
     expect(host.iconWeight).toBe('fill')
   })
 
   it('setHostIcon on an unknown host is a no-op', () => {
     const before = useHostStore.getState().hosts
+    const looksBefore = useHostLookStore.getState().looks
     useHostStore.getState().setHostIcon('nope', 'Laptop')
     expect(useHostStore.getState().hosts).toBe(before)
-    expect(useHostStore.getState().hosts.nope).toBeUndefined()
+    expect(useHostLookStore.getState().looks).toBe(looksBefore)
   })
 
   it('setHostIcon leaves the host color untouched', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostColor(id, '#3b82f6')
     useHostStore.getState().setHostIcon(id, 'Laptop', 'bold')
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect(host.colors?.console?.main.color).toBe('#3b82f6')
     expect(host.icon).toBe('Laptop')
   })
@@ -285,7 +312,7 @@ describe('useHostStore', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostIcon(id, 'Laptop', 'fill')
     useHostStore.getState().setHostIcon(id, 'Desktop')
-    const host = useHostStore.getState().hosts[id]
+    const host = lookEntry(id)
     expect(host.icon).toBe('Desktop')
     expect(host.iconWeight).toBe('fill')
   })
@@ -294,10 +321,224 @@ describe('useHostStore', () => {
     const id = useHostStore.getState().activeHostId!
     useHostStore.getState().setHostColor(id, '#ec4899')
     useHostStore.getState().updateHost(id, { name: 'renamed' })
-    const host = useHostStore.getState().hosts[id]
-    expect(host.name).toBe('renamed')
-    expect(host.colors?.console?.main.color).toBe('#ec4899')
+    expect(useHostStore.getState().hosts[id].name).toBe('renamed')
+    expect(lookEntry(id).colors?.console?.main.color).toBe('#ec4899')
   })
+
+  describe('look writers → the look store (H2c-2 T2)', () => {
+    const DAEMON = 'mini-lab:278cbm'
+    const WIRE = syncIdOfSync(DAEMON)
+    let hid: string
+
+    beforeEach(() => {
+      hid = useHostStore.getState().addHost({ name: 'A', ip: '10.0.0.9', port: 7860 })
+      useHostStore.setState((s) => ({
+        hosts: {
+          ...s.hosts,
+          [hid]: { ...s.hosts[hid], daemonId: DAEMON, color: '#22c55e', icon: 'Laptop', iconWeight: 'duotone' },
+        },
+      }))
+    })
+
+    it('every writer lands in looks[wireIdOfHost(host)] and leaves hosts the same object', () => {
+      const hosts = useHostStore.getState().hosts
+      const s = useHostStore.getState()
+      s.setHostColor(hid, '#3b82f6')
+      s.setHostColorLayer(hid, 'terminal', 'main', { color: '#ef4444', alpha: 50 })
+      s.clearHostColorMode(hid, 'terminal')
+      s.setHostIcon(hid, 'Cloud', 'bold')
+      s.setHostName(hid, 'Renamed')
+      expect(useHostStore.getState().hosts).toBe(hosts)
+      expect(Object.keys(useHostLookStore.getState().looks)).toEqual([WIRE])
+      expect(lookEntry(WIRE)).toEqual({
+        name: 'Renamed',
+        colors: { console: { main: { color: '#3b82f6', alpha: 100 } } },
+        icon: 'Cloud',
+        iconWeight: 'bold',
+      })
+    })
+
+    it('the first write seeds the entry from HostConfig: set the icon → the old colour and name are kept', () => {
+      useHostStore.getState().setHostIcon(hid, 'Cloud')
+      expect(lookEntry(WIRE)).toEqual({ name: 'A', color: '#22c55e', icon: 'Cloud', iconWeight: 'duotone' })
+    })
+
+    it('a later write builds on the entry, not on HostConfig', () => {
+      useHostLookStore.setState({ looks: { [WIRE]: { name: 'W' } } })
+      useHostStore.getState().setHostIcon(hid, 'Cloud')
+      expect(lookEntry(WIRE)).toEqual({ name: 'W', icon: 'Cloud' })
+    })
+
+    it('setHostColor keeps the alpha of the colour the selector shows (the entry)', () => {
+      useHostLookStore.setState({ looks: { [WIRE]: { colors: { console: { main: { color: '#000000', alpha: 40 } } } } } })
+      useHostStore.getState().setHostColor(hid, '#ef4444')
+      expect(lookEntry(WIRE).colors?.console?.main).toEqual({ color: '#ef4444', alpha: 40 })
+    })
+
+    it('[A] "No color" on a legacy-colour host removes the colour keys; the selector shows none although HostConfig keeps it', () => {
+      useHostStore.getState().setHostColor(hid, null)
+      expect(hasEntry(WIRE)).toBe(true)
+      expect('color' in lookEntry(WIRE)).toBe(false)
+      expect('colors' in lookEntry(WIRE)).toBe(false)
+      expect(hostLookOf(hid).color).toBeUndefined()
+      expect(hostLookOf(hid).colors).toBeUndefined()
+      expect(useHostStore.getState().hosts[hid].color).toBe('#22c55e')
+    })
+
+    it('[A] icon reset removes the icon keys; the selector shows the default icon although HostConfig keeps one', () => {
+      useHostStore.getState().setHostIcon(hid, null)
+      expect(hasEntry(WIRE)).toBe(true)
+      expect('icon' in lookEntry(WIRE)).toBe(false)
+      expect('iconWeight' in lookEntry(WIRE)).toBe(false)
+      expect(hostLookOf(hid).icon).toBeUndefined()
+      expect(useHostStore.getState().hosts[hid].icon).toBe('Laptop')
+    })
+
+    it('a write that changes nothing writes nothing', () => {
+      useHostLookStore.setState({ looks: { [WIRE]: { name: 'W', icon: 'Cloud' } } })
+      const looks = useHostLookStore.getState().looks
+      const s = useHostStore.getState()
+      s.setHostIcon(hid, 'NotAnIcon')
+      s.setHostColorLayer(hid, 'console', 'middle', { alpha: 5 }) // no console set
+      s.clearHostColorMode(hid, 'console') // nothing to clear in the entry
+      s.setHostName(hid, '  W  ')
+      expect(useHostLookStore.getState().looks).toBe(looks)
+    })
+
+    it('setHostName trims; a blank name and an unknown host are no-ops; HostConfig.name is untouched', () => {
+      const looks = useHostLookStore.getState().looks
+      useHostStore.getState().setHostName(hid, '   ')
+      useHostStore.getState().setHostName('nope', 'X')
+      expect(useHostLookStore.getState().looks).toBe(looks)
+      useHostStore.getState().setHostName(hid, '  air26  ')
+      expect(lookEntry(WIRE).name).toBe('air26')
+      expect(hostLookOf(hid).name).toBe('air26')
+      expect(useHostStore.getState().hosts[hid].name).toBe('A')
+    })
+
+    it('a host without daemonId writes under its local id', () => {
+      const other = useHostStore.getState().addHost({ name: 'B', ip: '10.0.0.10', port: 7860 })
+      useHostStore.getState().setHostName(other, 'Bee')
+      expect(lookEntry(other)).toEqual({ name: 'Bee' })
+    })
+
+    // Codex critic review-mufd6v5g-2gh633: the daemonId is known, but the re-resolve pass has not yet moved the
+    // local-id entry to the d1_ key (lock busy / stores not hydrated). A write in that window must land in the
+    // local-id entry — the pass then moves it intact — never seed a new d1_ entry that would win and drop it.
+    describe('the window before the re-key (a local-id entry, no d1_ entry)', () => {
+      const RED = { console: { main: { color: '#ef4444', alpha: 60 } } }
+
+      beforeEach(() => {
+        useHostLookStore.setState({ looks: { [hid]: { name: 'L', colors: RED } } })
+      })
+
+      it('setHostIcon lands in looks[localId], colour kept; no d1_ entry is created', () => {
+        useHostStore.getState().setHostIcon(hid, 'Cloud')
+        expect(lookEntry(hid)).toEqual({ name: 'L', colors: RED, icon: 'Cloud' })
+        expect(hasEntry(WIRE)).toBe(false)
+      })
+
+      it('setHostColor builds on the local entry (its alpha), in the local entry', () => {
+        useHostStore.getState().setHostColor(hid, '#3b82f6')
+        expect(lookEntry(hid).colors?.console?.main).toEqual({ color: '#3b82f6', alpha: 60 })
+        expect(hasEntry(WIRE)).toBe(false)
+      })
+
+      it('seedHostLook seeds nothing: the local entry is the look', () => {
+        const looks = useHostLookStore.getState().looks
+        useHostStore.getState().seedHostLook(hid)
+        expect(useHostLookStore.getState().looks).toBe(looks)
+      })
+
+      it('a d1_ entry present (e.g. synced from another device) wins: the write lands there, the local entry untouched', () => {
+        useHostLookStore.setState({ looks: { [hid]: { name: 'L', colors: RED }, [WIRE]: { name: 'W' } } })
+        useHostStore.getState().setHostIcon(hid, 'Cloud')
+        expect(lookEntry(WIRE)).toEqual({ name: 'W', icon: 'Cloud' })
+        expect(lookEntry(hid)).toEqual({ name: 'L', colors: RED })
+      })
+    })
+  })
+
+  describe('registerLocalHost seeds the look (plan §0.19)', () => {
+    it('creating a host seeds its entry from the new HostConfig', () => {
+      const id = useHostStore.getState().registerLocalHost({ url: 'http://127.0.0.1:7861', token: 't', hostname: 'mini' })
+      expect(lookEntry(id)).toEqual({ name: 'mini' })
+    })
+
+    it('re-registering the same endpoint seeds nothing', () => {
+      const id = useHostStore.getState().registerLocalHost({ url: 'http://127.0.0.1:7861', token: 't', hostname: 'mini' })
+      useHostLookStore.setState({ looks: {} })
+      expect(useHostStore.getState().registerLocalHost({ url: 'http://127.0.0.1:7861', token: 't', hostname: 'other' })).toBe(id)
+      expect(useHostLookStore.getState().looks).toEqual({})
+    })
+
+    it('an existing entry under the key is never overwritten', () => {
+      useHostLookStore.setState({ looks: { fixed: { name: 'kept' } } })
+      useHostStore.getState().seedHostLook('fixed') // unknown host → no-op
+      const id = useHostStore.getState().addHost({ id: 'fixed', name: 'x', ip: '10.1.1.1', port: 1 })
+      useHostStore.getState().seedHostLook(id)
+      expect(lookEntry('fixed')).toEqual({ name: 'kept' })
+    })
+  })
+
+  it('addHost alone creates no look entry (it is also the undo of a deletion — plan §0.19)', () => {
+    useHostStore.getState().addHost({ name: 'x', ip: '10.0.0.3', port: 1 })
+    expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  it('reset() also resets the look store', () => {
+    useHostStore.getState().setHostName(useHostStore.getState().activeHostId!, 'named')
+    expect(Object.keys(useHostLookStore.getState().looks)).toHaveLength(1)
+    useHostStore.getState().reset()
+    expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  it('reset() also resets the shown-hosts store to { ids: [] } (plan §0.18)', () => {
+    useShownHostsStore.getState().show('d1_a')
+    useHostStore.getState().reset()
+    expect(useShownHostsStore.getState().ids).toEqual([])
+  })
+
+  // host ownership H2d-1 T1 (user rule 2, plan §0.7): a host added later is hidden in every workbench — an add writes
+  // NOTHING to the shown list (no seeding, no migration), in memory or in storage.
+  describe('adds write nothing to the shown-hosts store (plan §0.7)', () => {
+    const SEEDED = ['d1_unknown', 'd1_other']
+    let before: ReturnType<typeof useShownHostsStore.getState>
+    let stored: string | null
+
+    beforeEach(() => {
+      useShownHostsStore.getState().show(SEEDED[0])
+      useShownHostsStore.getState().show(SEEDED[1])
+      before = useShownHostsStore.getState()
+      stored = localStorage.getItem('purdex-shown-hosts')
+    })
+
+    const unchanged = () => {
+      expect(useShownHostsStore.getState()).toBe(before)
+      expect(useShownHostsStore.getState().ids).toEqual(SEEDED)
+      expect(localStorage.getItem('purdex-shown-hosts')).toBe(stored)
+    }
+
+    it('addHost', () => {
+      useHostStore.getState().addHost({ name: 'x', ip: '10.0.0.3', port: 1 })
+      unchanged()
+    })
+
+    it('registerLocalHost', () => {
+      useHostStore.getState().registerLocalHost({ url: 'http://127.0.0.1:7861', token: 't', hostname: 'mini' })
+      unchanged()
+    })
+
+    it('applyHostTransfer (a created row with a daemonId)', () => {
+      const res = useHostStore.getState().applyHostTransfer({
+        create: [{ name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', look: {} }],
+        overwrite: [],
+      })
+      expect(res.kind).toBe('applied')
+      unchanged()
+    })
+  })
+
 
   it('setRuntime updates runtime status for a host', () => {
     const state = useHostStore.getState()
@@ -712,5 +953,260 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
       const partialize = useHostStore.persist.getOptions().partialize!
       expect(JSON.stringify(partialize(useHostStore.getState()))).not.toContain('daemonIdVerified')
     })
+  })
+})
+
+describe('applyHostTransfer (host transfer H4b, spec §6.4.5, plan R2/R4)', () => {
+  let m: string
+  let defaultId: string
+
+  beforeEach(() => {
+    useHostStore.getState().reset()
+    defaultId = useHostStore.getState().hostOrder[0]
+    m = useHostStore.getState().addHost({ name: 'm', ip: '1.1.1.1', port: 1, token: 'old' })
+    const s = useHostStore.getState()
+    s.observeDaemonId(m, 'd1_m', requestAtOf(s.hosts[m]))
+    s.setRuntime(m, { status: 'connected' })
+    s.setDevHost(m)
+  })
+
+  // Before the next test's reset(): a spy left on the look store's state would be copied into every later state.
+  afterEach(() => vi.restoreAllMocks())
+
+  function change(over: Partial<TransferChange> = {}): TransferChange {
+    return {
+      create: [{ name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', look: { icon: 'Laptop', color: '#ff0000' } }],
+      overwrite: [
+        {
+          hostId: m,
+          expect: { endpoint: '1.1.1.1:1', token: 'old', daemonId: 'd1_m' },
+          name: 'mm',
+          ip: '2.2.2.2',
+          port: 7860,
+          token: 'new',
+          look: { icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } },
+        },
+      ],
+      ...over,
+    }
+  }
+
+  it('adds and overwrites in ONE set (a subscriber sees one change)', () => {
+    const seen = vi.fn()
+    const unsub = useHostStore.subscribe(seen)
+    const res = useHostStore.getState().applyHostTransfer(change())
+    unsub()
+    expect(seen).toHaveBeenCalledTimes(1)
+    expect(res.kind).toBe('applied')
+  })
+
+  it('a created row carries the observed daemonId, is verified; HostConfig gets the name only, the look store name + look', () => {
+    const res = useHostStore.getState().applyHostTransfer(change({ overwrite: [] }))
+    if (res.kind !== 'applied') throw new Error('not applied')
+    expect(res.looks).toBe('ok')
+    const [id] = res.created
+    const s = useHostStore.getState()
+    expect(s.hosts[id]).toEqual({ id, name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', order: 2 })
+    expect(s.hostOrder).toEqual([defaultId, m, id])
+    expect(selectDaemonIdVerified(s, id)).toBe(true)
+    expect(lookEntry(syncIdOfSync('d1_air'))).toEqual({ name: 'air26', icon: 'Laptop', color: '#ff0000' })
+  })
+
+  it('the received entry key (syncIdOfSync(daemonId)) is the key the selector reads for that host afterwards', () => {
+    const res = useHostStore.getState().applyHostTransfer(change())
+    if (res.kind !== 'applied') throw new Error('not applied')
+    const { hosts } = useHostStore.getState()
+    const looks = useHostLookStore.getState().looks
+    expect(lookKeyOf(hosts[res.created[0]], looks)).toBe(syncIdOfSync('d1_air'))
+    expect(lookKeyOf(hosts[m], looks)).toBe(syncIdOfSync('d1_m'))
+    expect(hostLookOf(res.created[0])).toEqual({ name: 'air26', icon: 'Laptop', color: '#ff0000' })
+    expect(hostLookOf(m)).toEqual({ name: 'mm', icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } })
+  })
+
+  it('an overwrite keeps the local id, replaces name / ip / port / token, leaves the HostConfig look fields, and is verified at the new endpoint', () => {
+    useHostStore.setState((st) => ({ hosts: { ...st.hosts, [m]: { ...st.hosts[m], icon: 'Cpu' } } }))
+    useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    const s = useHostStore.getState()
+    expect(s.hosts[m]).toEqual({ id: m, name: 'mm', ip: '2.2.2.2', port: 7860, token: 'new', daemonId: 'd1_m', order: 1, icon: 'Cpu' })
+    expect(s.hostOrder).toEqual([defaultId, m])
+    expect(selectDaemonIdVerified(s, m)).toBe(true)
+    // no entry before → the received look is written
+    expect(lookEntry(syncIdOfSync('d1_m'))).toEqual({ name: 'mm', icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } })
+  })
+
+  it('transferLookEntries: one entry per created / overwritten row under syncIdOfSync(daemonId), { name, ...look }; pure', () => {
+    const c = change()
+    expect(transferLookEntries(c)).toEqual({
+      [syncIdOfSync('d1_air')]: { name: 'air26', icon: 'Laptop', color: '#ff0000' },
+      [syncIdOfSync('d1_m')]: { name: 'mm', icon: 'Desktop', colors: { console: { main: { color: '#00ff00', alpha: 80 } } } },
+    })
+    expect(c).toEqual(change())
+    expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  it('a row without a look still gives the entry its name', () => {
+    const [c] = change().create
+    useHostStore.getState().applyHostTransfer({ create: [{ ...c, look: undefined }], overwrite: [] })
+    expect(lookEntry(syncIdOfSync('d1_air'))).toEqual({ name: 'air26' })
+  })
+
+  it('an existing d1_ entry is never changed by a received look (the workbench wins); HostConfig.name is still replaced', () => {
+    const mine = { name: 'mine', icon: 'Cpu' }
+    useHostLookStore.setState({ looks: { [syncIdOfSync('d1_m')]: mine } })
+    const res = useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    expect(res).toMatchObject({ kind: 'applied', looks: 'ok' })
+    expect(useHostLookStore.getState().looks).toEqual({ [syncIdOfSync('d1_m')]: mine })
+    expect(useHostStore.getState().hosts[m].name).toBe('mm')
+    expect(hostLookOf(m)).toEqual(mine)
+  })
+
+  it('a local-id entry still awaiting the re-key is the look: no d1_ entry is written over it', () => {
+    useHostLookStore.setState({ looks: { [m]: { name: 'mine-local' } } })
+    useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    expect(useHostLookStore.getState().looks).toEqual({ [m]: { name: 'mine-local' } })
+    expect(hostLookOf(m).name).toBe('mine-local')
+  })
+
+  it('a stale step 1 never runs step 2: host store and look store untouched', () => {
+    useHostStore.getState().removeHost(m)
+    const put = vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent')
+    const looksBefore = useHostLookStore.getState().looks
+    expect(useHostStore.getState().applyHostTransfer(change())).toEqual({ kind: 'stale' })
+    expect(put).not.toHaveBeenCalled()
+    expect(useHostLookStore.getState().looks).toBe(looksBefore)
+  })
+
+  it('a throw in step 1 is stale and never runs step 2', () => {
+    const before = useHostStore.getState().hosts
+    const put = vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent')
+    const boom = { ...change().create[0], get ip(): string { throw new Error('boom') } }
+    expect(useHostStore.getState().applyHostTransfer({ create: [boom], overwrite: [] })).toEqual({ kind: 'stale' })
+    expect(useHostStore.getState().hosts).toBe(before)
+    expect(put).not.toHaveBeenCalled()
+    expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  describe('step 2 fails (plan §0.20)', () => {
+    it('the hosts are committed as on success, the look store is unchanged, looks: failed; the Retry writes the entries', () => {
+      vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent').mockImplementation(() => {
+        throw new Error('quota')
+      })
+      const looksBefore = useHostLookStore.getState().looks
+      const seen = vi.fn()
+      const unsub = useHostLookStore.subscribe(seen)
+      const res = useHostStore.getState().applyHostTransfer(change())
+      unsub()
+      if (res.kind !== 'applied') throw new Error('not applied')
+      expect(res.looks).toBe('failed')
+      expect(res.overwritten).toEqual([m])
+      const s = useHostStore.getState()
+      expect(s.hosts[res.created[0]]).toEqual({ id: res.created[0], name: 'air26', ip: '100.64.0.4', port: 7860, token: 'tok-air', daemonId: 'd1_air', order: 2 })
+      expect(s.hosts[m]).toMatchObject({ name: 'mm', ip: '2.2.2.2', token: 'new' })
+      expect(selectDaemonIdVerified(s, res.created[0])).toBe(true)
+      expect(useHostLookStore.getState().looks).toBe(looksBefore)
+      expect(seen).not.toHaveBeenCalled()
+
+      vi.restoreAllMocks()
+      expect(applyTransferLooks(transferLookEntries(change()))).toBe('ok')
+      expect(lookEntry(syncIdOfSync('d1_air'))).toEqual({ name: 'air26', icon: 'Laptop', color: '#ff0000' })
+      expect(lookEntry(syncIdOfSync('d1_m'))).toMatchObject({ name: 'mm', icon: 'Desktop' })
+    })
+
+    it('a Retry after another device’s look arrived for that key leaves it untouched', () => {
+      vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent').mockImplementation(() => {
+        throw new Error('quota')
+      })
+      useHostStore.getState().applyHostTransfer(change())
+      vi.restoreAllMocks()
+      const synced = { name: 'from-another-device' }
+      useHostLookStore.setState({ looks: { [syncIdOfSync('d1_air')]: synced } })
+      expect(applyTransferLooks(transferLookEntries(change()))).toBe('ok')
+      expect(lookEntry(syncIdOfSync('d1_air'))).toBe(synced)
+      expect(lookEntry(syncIdOfSync('d1_m'))).toMatchObject({ name: 'mm' })
+    })
+  })
+
+  it('an overwrite to a new endpoint starts the runtime over: nothing of the old connection, only daemonIdVerified', () => {
+    const retry = vi.fn()
+    useHostStore.getState().setRuntime(m, {
+      status: 'connected', latency: 12, attachReady: true, daemonState: 'connected', tmuxState: 'ok', manualRetry: retry,
+    })
+    useHostStore.getState().applyHostTransfer(change({ create: [] }))
+    const rt = useHostStore.getState().runtime[m]
+    expect(rt.status).not.toBe('connected')
+    expect(rt.attachReady).toBeUndefined()
+    expect(rt).toEqual({ daemonIdVerified: { endpoint: '2.2.2.2:7860', daemonId: 'd1_m' } })
+  })
+
+  it('an overwrite that only changes the token also starts the runtime over', () => {
+    useHostStore.getState().setRuntime(m, { status: 'connected', attachReady: true })
+    const [o] = change().overwrite
+    useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ ...o, ip: '1.1.1.1', port: 1, token: 'rotated' }] })
+    expect(useHostStore.getState().runtime[m]).toEqual({ daemonIdVerified: { endpoint: '1.1.1.1:1', daemonId: 'd1_m' } })
+  })
+
+  it('an overwrite that keeps endpoint and token (look / name only) leaves the runtime as it was', () => {
+    useHostStore.getState().setRuntime(m, { status: 'connected', attachReady: true, latency: 12 })
+    const before = useHostStore.getState().runtime[m]
+    const [o] = change().overwrite
+    const res = useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ ...o, ip: '1.1.1.1', port: 1, token: 'old' }] })
+    expect(res.kind).toBe('applied')
+    const s = useHostStore.getState()
+    expect(s.hosts[m]).toMatchObject({ name: 'mm' })
+    expect(s.hosts[m].icon).toBeUndefined()
+    expect(lookEntry(syncIdOfSync('d1_m'))).toMatchObject({ name: 'mm', icon: 'Desktop' })
+    expect(s.runtime[m]).toEqual(before)
+    expect(s.runtime[m]).toMatchObject({ status: 'connected', attachReady: true, latency: 12 })
+  })
+
+  it.each<[string, () => void]>([
+    ['the overwrite target was deleted', () => useHostStore.getState().removeHost(m)],
+    [
+      "the target's daemonId changed",
+      () => useHostStore.setState((st) => ({ hosts: { ...st.hosts, [m]: { ...st.hosts[m], daemonId: 'd1_other' } } })),
+    ],
+    ["the target's token changed", () => useHostStore.getState().updateHost(m, { token: 'rotated' })],
+    ["the target's endpoint changed", () => useHostStore.getState().updateHost(m, { port: 2 })],
+    ["a new row's endpoint is now taken", () => { useHostStore.getState().addHost({ name: 'x', ip: '100.64.0.4', port: 7860 }) }],
+    ["the overwrite's new endpoint is now taken", () => { useHostStore.getState().addHost({ name: 'x', ip: '2.2.2.2', port: 7860 }) }],
+    [
+      "a new row's daemonId is now claimed locally",
+      () => useHostStore.setState((st) => ({ hosts: { ...st.hosts, [defaultId]: { ...st.hosts[defaultId], daemonId: 'd1_air' } } })),
+    ],
+  ])('a stale plan (%s) is refused whole: the store is untouched', (_label, drift) => {
+    drift()
+    const before = useHostStore.getState()
+    const seen = vi.fn()
+    const unsub = useHostStore.subscribe(seen)
+    const res = useHostStore.getState().applyHostTransfer(change())
+    unsub()
+    const after = useHostStore.getState()
+    expect(res).toEqual({ kind: 'stale' })
+    expect(seen).not.toHaveBeenCalled()
+    expect(after.hosts).toBe(before.hosts)
+    expect(after.hostOrder).toBe(before.hostOrder)
+    expect(after.activeHostId).toBe(before.activeHostId)
+    expect(after.devHostId).toBe(before.devHostId)
+    expect(after.runtime).toBe(before.runtime)
+  })
+
+  // H4b PR #1397 critic: a created row's ip is canonical (parseTransferRows), a local row's may be any spelling the
+  // add-host dialog stored — the uniqueness check compares canonical endpoints.
+  it.each([
+    ['[0:0:0:0:0:0:0:1]', '[::1]'],
+    ['[::ffff:100.64.0.2]', '[::ffff:6440:2]'],
+    ['MLAB.example', 'mlab.example'],
+  ])('a new row at %s-equivalent %s is refused whole', (localIp, newIp) => {
+    useHostStore.getState().addHost({ name: 'x', ip: localIp, port: 7860 })
+    const before = useHostStore.getState()
+    const res = useHostStore.getState().applyHostTransfer(change({ create: [{ ...change().create[0], ip: newIp }], overwrite: [] }))
+    expect(res).toEqual({ kind: 'stale' })
+    expect(useHostStore.getState().hosts).toBe(before.hosts)
+  })
+
+  it('two new rows at one endpoint are refused', () => {
+    const one = change().create[0]
+    const res = useHostStore.getState().applyHostTransfer({ create: [one, { ...one, daemonId: 'd1_twin' }], overwrite: [] })
+    expect(res).toEqual({ kind: 'stale' })
   })
 })

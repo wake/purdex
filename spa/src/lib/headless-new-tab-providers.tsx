@@ -4,6 +4,8 @@
 // tears it down.
 import type { ComponentType } from 'react'
 import { useHostStore } from '../stores/useHostStore'
+import { useHostLookStore } from '../stores/useHostLookStore'
+import { hostLabel, hostLookOf } from './host-look'
 import { HeadlessLauncher } from '../components/headless/HeadlessLauncher'
 import type { NewTabProviderProps, NewTabProviderSource } from './new-tab-registry'
 
@@ -48,7 +50,7 @@ export function createHeadlessProviderSource(): NewTabProviderSource {
         .map((hostId) => ({
           id: headlessProviderId(hostId),
           label: 'newtab.headless.title',
-          labelParams: { host: hosts[hostId].name },
+          labelParams: { host: hostLabel(hostId, hostLookOf(hostId, hosts)) },
           icon: 'Lightning',
           order: ORDER,
           component: componentFor(hostId),
@@ -59,12 +61,19 @@ export function createHeadlessProviderSource(): NewTabProviderSource {
       const unsubState = useHostStore.subscribe((state, prev) => {
         if (state.hosts !== prev.hosts || state.hostOrder !== prev.hostOrder) listener()
       })
+      // The label is the workbench look's name (H2c-3): a rename — local or applied from a synced `settings`
+      // payload — writes the look store only, so it must re-notify too.
+      const unsubLooks = useHostLookStore.subscribe((state, prev) => {
+        if (state.looks !== prev.looks) listener()
+      })
       // persist sets state BEFORE flipping hasHydrated, so the state change
       // above is seen while still unready — re-notify once hydration is done.
       const unsubHydration = useHostStore.persist.onFinishHydration(() => listener())
-      return () => { unsubState(); unsubHydration() }
+      return () => { unsubState(); unsubLooks(); unsubHydration() }
     },
     ownsId: (id) => id.startsWith(PREFIX),
+    // A block of a host this device lacks is kept, never pruned (host ownership §3.2).
+    retainsId: (id) => id.startsWith(PREFIX),
     // Until the persisted host list is loaded, hostOrder is a transient
     // default — never prune or place per-host blocks from it.
     isReady: () => useHostStore.persist.hasHydrated(),

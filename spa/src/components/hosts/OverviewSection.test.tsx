@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { OverviewSection } from './OverviewSection'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
+import { syncIdOfSync } from '../../lib/profile/host-identity'
+import { STORAGE_KEYS } from '../../lib/storage'
+import { useI18nStore } from '../../stores/useI18nStore'
 
 // HostIconField renders a Phosphor icon whose weight loader fetches
 // /icons/<weight>.json — that would consume this suite's fetch mocks.
@@ -18,7 +25,16 @@ vi.mock('../../lib/host-api', () => ({
   fetchHealth: vi.fn(),
 }))
 
+vi.mock('../../lib/host-lifecycle', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/host-lifecycle')>()
+  return { ...actual, deleteHostWithUndoToast: vi.fn(async () => true) }
+})
+
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
+import * as lifecycle from '../../lib/host-lifecycle'
+import { useUndoToast } from '../../stores/useUndoToast'
+
+const realDeleteWithUndo = (await vi.importActual<typeof import('../../lib/host-lifecycle')>('../../lib/host-lifecycle')).deleteHostWithUndoToast
 
 const mockHostFetch = vi.mocked(hostFetch)
 const mockFetchInfo = vi.mocked(fetchInfo)
@@ -28,6 +44,7 @@ const HOST_ID = 'test-host'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'purdex_testtoken' } },
     hostOrder: [HOST_ID],
@@ -65,6 +82,17 @@ describe('OverviewSection', () => {
   it('renders host name heading', async () => {
     render(<OverviewSection hostId={HOST_ID} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Test' })).toBeInTheDocument()
+  })
+
+  it('rename writes the look store (H2c-2): the heading follows, HostConfig.name is untouched', async () => {
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('Test', { selector: 'span.cursor-pointer' }))
+    const input = screen.getByDisplayValue('Test')
+    fireEvent.change(input, { target: { value: '  Renamed  ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(useHostLookStore.getState().looks[HOST_ID]?.name).toBe('Renamed')
+    expect(useHostStore.getState().hosts[HOST_ID].name).toBe('Test')
+    expect(await screen.findByRole('heading', { level: 2, name: 'Renamed' })).toBeInTheDocument()
   })
 
   it('renders the host icon field right below the host color field', async () => {
@@ -144,7 +172,74 @@ describe('OverviewSection', () => {
 
     fireEvent.click(screen.getByText('Delete Host'))
 
-    expect(screen.getByText('Are you sure you want to delete this host? All tabs connected to this host will be affected.')).toBeInTheDocument()
+    expect(screen.getByText('Delete this host from this device?')).toBeInTheDocument()
+    expect(screen.getByText('Its tabs stay, showing “no host here” on this device. Tabs on other devices are not affected.')).toBeInTheDocument()
+  })
+
+  // Host ownership spec §3.4 (H1c T5): a deletion affects this device only and closes nothing — no choice to offer.
+  describe('the delete confirmation', () => {
+    beforeEach(() => {
+      useHostStore.setState({
+        hosts: {
+          [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'purdex_testtoken' },
+          'other-host': { id: 'other-host', name: 'Other', ip: '5.6.7.8', port: 7860, order: 1 },
+        },
+        hostOrder: [HOST_ID, 'other-host'],
+      })
+      useUndoToast.setState({ toast: null })
+    })
+    afterEach(() => { vi.mocked(lifecycle.deleteHostWithUndoToast).mockClear() })
+
+    it('offers no "close tabs" checkbox', () => {
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      expect(screen.queryByRole('checkbox')).toBeNull()
+    })
+
+    it('confirming deletes through the cascade behind the undo toast, with the deleted-toast text', () => {
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      expect(lifecycle.deleteHostWithUndoToast).toHaveBeenCalledWith(HOST_ID, { deleted: 'Test deleted', busy: 'Another operation is in progress — try deleting Test again in a moment', stale: 'Test was changed or removed meanwhile — it was not deleted' })
+    })
+
+    // PR #1413 critic: a deletion that failed is said, not only logged — and when it could not even put everything
+    // back, said so that it stays: reload, check the host settings.
+    it('a deletion that failed (and was put back): a failure toast, not persistent', async () => {
+      useUndoToast.setState({ toast: null, notice: null })
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.mocked(lifecycle.deleteHostWithUndoToast).mockRejectedValueOnce(new Error('quota'))
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      await waitFor(() => expect(useUndoToast.getState().toast).toMatchObject({ message: 'Test could not be deleted — nothing was changed' }))
+      expect(useUndoToast.getState().notice).toBeNull()
+    })
+
+    it('a deletion whose rollback was incomplete: a persistent notice to reload and check the host settings', async () => {
+      useUndoToast.setState({ toast: null, notice: null })
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.mocked(lifecycle.deleteHostWithUndoToast).mockRejectedValueOnce(new lifecycle.HostDeleteRollbackIncompleteError('quota (rollback incomplete — x)'))
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      await waitFor(() => expect(useUndoToast.getState().notice).toMatchObject({
+        message: 'Deleting Test failed and could not be fully undone — reload Purdex and check the host settings',
+      }))
+      expect(useUndoToast.getState().toast).toBeNull()
+    })
+
+    it('the real call: the host is gone, the undo toast is up, and its action brings the host back', () => {
+      vi.mocked(lifecycle.deleteHostWithUndoToast).mockImplementationOnce(realDeleteWithUndo)
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      expect(useHostStore.getState().hosts[HOST_ID]).toBeUndefined()
+      const toast = useUndoToast.getState().toast
+      expect(toast).toMatchObject({ message: 'Test deleted' })
+      toast?.action?.()
+      expect(useHostStore.getState().hosts[HOST_ID]).toBeDefined()
+    })
   })
 
   it('sizing mode dropdown has correct options', async () => {
@@ -227,6 +322,42 @@ describe('OverviewSection', () => {
 
     // Success pill should still be visible
     expect(screen.getByText(/Connected/)).toBeInTheDocument()
+  })
+})
+
+describe('OverviewSection — locale-aware status values', () => {
+  afterEach(() => { useI18nStore.getState().setLocale('en') })
+
+  const setStatus = (status: HostRuntime['status'] | undefined) =>
+    useHostStore.setState({ runtime: status ? { [HOST_ID]: { status } } : {} })
+
+  it.each([
+    ['connected', 'connected', '已連線'],
+    ['disconnected', 'disconnected', '未連線'],
+    ['reconnecting', 'reconnecting', '重新連線中'],
+    ['auth-error', 'auth-error', '驗證失敗'],
+    [undefined, 'unknown', '未知'],
+  ] as const)('connection status %s renders %s in en and %s in zh-TW', (status, en, zh) => {
+    setStatus(status)
+    const { unmount } = render(<OverviewSection hostId={HOST_ID} />)
+    expect(screen.getByText(en)).toBeInTheDocument()
+    unmount()
+
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<OverviewSection hostId={HOST_ID} />)
+    expect(screen.getByText(zh)).toBeInTheDocument()
+    expect(screen.queryByText(en)).not.toBeInTheDocument()
+  })
+
+  it('sizing mode options are labelled in zh-TW but keep their daemon values', async () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<OverviewSection hostId={HOST_ID} />)
+    const select = (await screen.findByDisplayValue('自動')) as HTMLSelectElement
+    expect(Array.from(select.options).map((o) => [o.value, o.text])).toEqual([
+      ['auto', '自動'],
+      ['terminal-first', '終端機優先'],
+      ['minimal-first', '最小優先'],
+    ])
   })
 })
 
@@ -545,5 +676,78 @@ describe('TokenField', () => {
     expect(screen.getByTestId('host-badge-preview-badge-active').style.getPropertyValue('--hb-main')).toBe('rgba(59, 130, 246, 1)')
     fireEvent.click(screen.getByRole('button', { name: 'Terminal' }))
     expect(screen.getByTestId('host-badge-preview-badge-active').style.getPropertyValue('--hb-main')).toBe('rgba(239, 68, 68, 1)')
+  })
+})
+
+// Host ownership H2d-2 T1 (plan §0.21): the switch "Show in this workbench" is the ONLY writer of the shown list; it
+// writes exactly this host's forms and nothing else — no tab, no workspace, no other id.
+describe('OverviewSection — the show in this workbench switch (H2d-2)', () => {
+  const DAEMON = 'air-lab:26aaaa'
+  const WIRE = syncIdOfSync(DAEMON)
+  const UNKNOWN = syncIdOfSync('nowhere:000000') // a host only another device has
+  const theSwitch = () => screen.getByRole('switch', { name: 'Show in this workbench' })
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 't', daemonId: DAEMON } },
+      hostOrder: [HOST_ID],
+      runtime: { [HOST_ID]: { status: 'connected' } },
+    })
+    useShownHostsStore.setState({ ids: [] })
+  })
+
+  it('reflects the store: off while hidden (the default), on when listed by its d1_ id or its local id', () => {
+    const { unmount } = render(<OverviewSection hostId={HOST_ID} />)
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText(/A hidden host stays connected/)).toBeInTheDocument()
+    act(() => useShownHostsStore.setState({ ids: [WIRE] }))
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'true')
+    unmount()
+    useShownHostsStore.setState({ ids: [HOST_ID] })
+    render(<OverviewSection hostId={HOST_ID} />)
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('ON appends exactly the host wire id; an unknown id stays first', () => {
+    useShownHostsStore.setState({ ids: [UNKNOWN] })
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(theSwitch())
+    expect(useShownHostsStore.getState().ids).toEqual([UNKNOWN, WIRE])
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('OFF removes every form of the host (d1_ id and local id); other ids stay, in order', () => {
+    useShownHostsStore.setState({ ids: [UNKNOWN, WIRE, 'other', HOST_ID] })
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(theSwitch())
+    expect(useShownHostsStore.getState().ids).toEqual([UNKNOWN, 'other'])
+    expect(theSwitch()).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('opening the overview writes nothing to the shown list', async () => {
+    useShownHostsStore.setState({ ids: [UNKNOWN] })
+    const setState = vi.spyOn(useShownHostsStore, 'setState')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const changed = vi.fn() // catches the store's own internal `set` too, which the setState spy does not see
+    const unsubscribe = useShownHostsStore.subscribe(changed)
+    render(<OverviewSection hostId={HOST_ID} />)
+    await waitFor(() => expect(screen.getByText('darwin / arm64')).toBeInTheDocument())
+    unsubscribe()
+    expect(changed).not.toHaveBeenCalled()
+    expect(setState).not.toHaveBeenCalled()
+    expect(setItem.mock.calls.filter(([key]) => key === STORAGE_KEYS.SHOWN_HOSTS)).toEqual([])
+    expect(useShownHostsStore.getState().ids).toEqual([UNKNOWN])
+    setState.mockRestore()
+    setItem.mockRestore()
+  })
+
+  it('toggling writes no tab or workspace store', () => {
+    const tabs = useTabStore.getState().tabs
+    const workspaces = useWorkspaceStore.getState().workspaces
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(theSwitch())
+    fireEvent.click(theSwitch())
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(useWorkspaceStore.getState().workspaces).toBe(workspaces)
   })
 })

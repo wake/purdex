@@ -16,6 +16,15 @@ export const STORAGE_KEYS = {
   BROWSER_HISTORY: 'purdex-browser-history',
   LAYOUT: 'purdex-layout',
   NEW_TAB_LAYOUT: 'purdex-newtab-layout',
+  /** 工作台的主機外觀（useHostLookStore，host ownership H2c）：`{ looks: { [wireId]: { name?, colors?, color?, icon?, iconWeight? } } }`，
+   *  key 是 wire id；投影進 `settings`（PROJECTIONS.settings），走 syncManager */
+  HOST_LOOKS: 'purdex-host-looks',
+  /** 手動管理（非 Zustand store）：主機外觀首次遷移（HostConfig → HOST_LOOKS）已跑過的標記，值是 `'1'`；
+   *  device-local、**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、刻意不註冊 syncManager、直接操作 localStorage（讀寫皆 try/catch） */
+  HOST_LOOKS_MIGRATED: 'purdex-host-looks-migrated',
+  /** 工作台顯示的主機（useShownHostsStore，host ownership H2d）：`{ ids: string[] }`，純清單、沒有 `all`；
+   *  `[]` ＝ 所有主機都隱藏（預設）；`ids` 是 wire id（未知的 id 與順序照留）；投影進 `settings`（PROJECTIONS.settings），走 syncManager */
+  SHOWN_HOSTS: 'purdex-shown-hosts',
   /** 手動管理（非 Zustand store），直接操作 localStorage，不走 browserStorage/syncManager */
   NOTIFICATION_SEEN: 'purdex-notification-seen',
   MODULE_CONFIG: 'purdex-module-config',
@@ -49,9 +58,8 @@ export const STORAGE_KEYS = {
   /** 手動管理（非 Zustand store）：這是 key 的**前綴** —— lib/profile/sync-status.ts 組出 `<前綴><encodeURIComponent(masterTag)>:<id>`，一個指令一個 key、依 master 分命名空間
    *  （follower 寫、leader 執行後刪；陣列是 read-modify-write，必然掉指令）。沒有 master 時不存在任何這類 key */
   PROFILE_COMMAND_PREFIX: 'purdex-profile-cmd:',
-  /** 手動管理（非 Zustand store）：lib/profile/pull-unconfirmed.ts —— 「pull 因 SOT 的 hosts 在確認後變了而被停下」的通知
-   *  `{hostId, profileId, at}`（#1366）；device-local、不進 SOT、刻意不註冊 syncManager、直接操作 localStorage（讀寫皆 try/catch）。
-   *  **不放進 useProfileStore**：寫通知的視窗記憶可能是舊的，經 persist 寫會把整份舊 control plane（master／generation／
-   *  direction／guard）蓋回 storage。跨視窗靠原生 `storage` 事件；Dismiss 或下一次 attach 成功時刪除。沒有通知時這個 key 不存在 */
+  /** **Legacy**（host ownership H3b 起沒有任何程式讀寫）：#1366 pull guard 的「pull 被停下」通知 `{hostId, profileId, at}`，
+   *  原由已刪除的 lib/profile/pull-unconfirmed.ts 管理。舊版留下的值由 lib/legacy-residue-cleanup.ts 在開機時刪除；
+   *  保留這個名字只為記錄它曾被使用、不得挪作他用 */
   PROFILE_PULL_UNCONFIRMED: 'purdex-profile-pull-unconfirmed',
 } as const

@@ -8,11 +8,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Circle, Spinner } from '@phosphor-icons/react'
 import type { ViewProps } from '../../lib/module-registry'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostLook } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useNexHostStore, type NexHostPhase } from '../../stores/useNexHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { groupBySource } from '../../lib/nex/execution-groups'
+import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
 import { ExecutionsGroup } from './ExecutionsGroup'
 
 export const AGE_TICK_MS = 60_000
@@ -37,18 +38,23 @@ function useNowTicker(): number {
 export function ExecutionsView({ hostId }: ViewProps) {
   const id = hostId ?? ''
   const t = useI18nStore((s) => s.t)
-  const hostName = useHostStore((s) => s.hosts[id]?.name)
+  const hostName = useHostLook(id).name
   const entry = useNexHostStore((s) => s.byHost[id])
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const { items, phase, error, refetch } = useHostExecutions(id, { enabled: id !== '' })
   const now = useNowTicker()
   const groups = useMemo(() => groupBySource(items), [items])
+  const shown = useIsRefShown(id === '' ? null : id)
 
   if (id === '') return null
 
   const nexPhase: NexHostPhase = entry?.phase ?? 'loading'
-  const open = (executionId: string) =>
+  // A host hidden in this workbench keeps its executions listed; opening one (it creates a tab) is not offered
+  // (plan H2d-2, §0.21 user rules 1 / 5) — its rows are plain, non-action rows and the hint says why.
+  const open = (executionId: string) => {
+    if (!isRefShownNow(id)) return
     useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host: id })
+  }
 
   let body: React.ReactNode
   if (nexPhase === 'disabled') {
@@ -87,7 +93,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} onOpen={open} />
+          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} onOpen={shown ? open : undefined} />
         ))}
       </>
     )
@@ -99,6 +105,9 @@ export function ExecutionsView({ hostId }: ViewProps) {
         <PhaseDot phase={nexPhase} />
         <span className="text-sm font-bold text-text-primary truncate">{hostName ?? id}</span>
       </div>
+      {!shown && (
+        <p data-testid="executions-open-hint" className="px-3 py-1 text-xs text-text-muted">{t('hosts.shown.open_executions_hint')}</p>
+      )}
       {body}
     </div>
   )

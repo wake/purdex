@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { LayoutPreset, PresetKey } from '../lib/resolve-preset'
+import { mapColumnsKeepingOne } from '../lib/profile/host-identity'
 
 export type { LayoutPreset, PresetKey }
 
@@ -32,7 +33,14 @@ interface State {
   placeModule: (preset: PresetKey, providerId: string, colIdx: number, rowIdx: number) => void
   placeModuleInShortest: (preset: PresetKey, providerId: string) => void
   removeModule: (preset: PresetKey, providerId: string) => void
-  ensureDefaults: (providers: ProviderInfo[]) => void
+  /**
+   * Place every provider not yet known, in each preset's shortest column.
+   * `placedAs(id)` names another id the same block may already be under (a
+   * host's block kept under its wire id — host ownership §3.3): a provider
+   * whose `placedAs` id is known or placed is not placed. Judged here, on the
+   * state this action writes — never on a snapshot the caller took before.
+   */
+  ensureDefaults: (providers: ProviderInfo[], placedAs?: (id: string) => string) => void
   /** Remove ids from every preset and from knownIds (e.g. a removed host's block). */
   pruneIds: (ids: string[]) => void
   /**
@@ -42,6 +50,14 @@ interface State {
    * unplaced, preserving the removal. Targets already present are not duplicated.
    */
   migrateId: (from: string, to: string[]) => void
+  /**
+   * Rename ids through `map` in every preset and in knownIds, in place (the
+   * host re-resolve pass: `sessions:<wire id>` → `sessions:<local id>`). Where
+   * a renamed id lands on one already present, ONE is kept in that preset —
+   * or in knownIds — at its own place: the wire-form one (`sessions:d1_…`),
+   * else the first (host ownership plan §0.11). Nothing renamed → no `set`.
+   */
+  renameIds: (map: (id: string) => string) => void
   reset: () => void
 }
 
@@ -184,6 +200,35 @@ function placeIn(preset: LayoutPreset, id: string, colIdx: number, rowIdx: numbe
   return next
 }
 
+/**
+ * `renameIds` as a pure step: the presets and knownIds with every id renamed
+ * through `map`, where two land on one target only one kept (the wire-form
+ * one, else the first — `mapColumnsKeepingOne`); `null` when nothing is renamed. An untouched preset
+ * keeps its object.
+ */
+export function renameLayoutIds(
+  state: Pick<State, 'presets' | 'knownIds'>,
+  map: (id: string) => string,
+): Pick<State, 'presets' | 'knownIds'> | null {
+  const keys = ['3col', '2col', '1col'] as const
+  // Anything to rename at all? Nothing → no new state.
+  const targets = new Set<string>()
+  for (const id of [...state.knownIds, ...keys.flatMap((k) => state.presets[k].columns.flat())]) {
+    const to = map(id)
+    if (to !== id) targets.add(to)
+  }
+  if (targets.size === 0) return null
+  // Renamed per list; two different ids renamed onto one target keep one — the wire-form source, else the first.
+  const presets = { ...state.presets }
+  for (const key of keys) {
+    const src = state.presets[key]
+    const columns = mapColumnsKeepingOne(src.columns, map)
+    const same = columns.every((col, i) => col.length === src.columns[i].length && col.every((id, j) => id === src.columns[i][j]))
+    if (!same) presets[key] = { enabled: src.enabled, columns }
+  }
+  return { presets, knownIds: mapColumnsKeepingOne([state.knownIds], map)[0] }
+}
+
 export const useNewTabLayoutStore = create<State>()(
   persist(
     (set) => ({
@@ -237,19 +282,33 @@ export const useNewTabLayoutStore = create<State>()(
           return { presets: { ...state.presets, [preset]: next } }
         }),
 
-      ensureDefaults: (providers) =>
+      ensureDefaults: (providers, placedAs) =>
         set((state) => {
           const known = new Set(state.knownIds)
-          const newcomers = providers
-            .filter((p) => !known.has(p.id) && !p.disabled)
+          const placed = new Set<string>()
+          for (const key of ['3col', '2col', '1col'] as const) {
+            for (const col of state.presets[key].columns) col.forEach((id) => placed.add(id))
+          }
+          const present = new Set([...known, ...placed])
+          const elsewhere = (id: string): boolean => {
+            if (placedAs === undefined) return false
+            const alt = placedAs(id)
+            return alt !== id && present.has(alt)
+          }
+          const unknown = providers.filter((p) => !known.has(p.id) && !p.disabled)
+          // knownIds is device-local and never synced: a block that arrived in a preset (or that the re-resolve pass
+          // renamed there from its wire id) is placed without being known. Placed is placed — it only becomes known.
+          const alreadyPlaced = unknown.filter((p) => placed.has(p.id))
+          const newcomers = unknown
+            .filter((p) => !placed.has(p.id) && !elsewhere(p.id))
             .sort((a, b) => a.order - b.order)
-          if (newcomers.length === 0) return state
+          if (newcomers.length === 0 && alreadyPlaced.length === 0) return state
 
           const presets = { ...state.presets }
           for (const key of ['3col', '2col', '1col'] as const) {
             presets[key] = clonePreset(presets[key])
           }
-          const knownIds = [...state.knownIds]
+          const knownIds = [...state.knownIds, ...alreadyPlaced.map((p) => p.id)]
 
           for (const p of newcomers) {
             for (const key of ['3col', '2col', '1col'] as const) {
@@ -303,6 +362,9 @@ export const useNewTabLayoutStore = create<State>()(
           for (const id of to) if (!knownIds.includes(id)) knownIds.push(id)
           return { presets, knownIds }
         }),
+
+      renameIds: (map) =>
+        set((state) => renameLayoutIds(state, map) ?? state),
 
       reset: () => set({ ...initialState() }),
     }),

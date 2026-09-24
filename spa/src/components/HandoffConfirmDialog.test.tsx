@@ -10,6 +10,9 @@ import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
 import { createTab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
+import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { setHostShown } from '../lib/shown-hosts'
 
 vi.mock('../lib/nex/handoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/nex/handoff')>()),
@@ -51,6 +54,7 @@ beforeEach(() => {
   mockedHandToNex.mockReset()
   useUndoToast.setState({ toast: null })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  useShownHostsStore.setState({ ids: ['h1'] }) // the host is shown (H2d-3 re-checks it)
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -199,6 +203,46 @@ describe('HandoffConfirmDialog — confirm', () => {
       host: 'h1',
       from: { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' },
     })
+  })
+})
+
+// Host ownership H2d-3 T5 — the dialog re-checks the shown state at click, at completion and in the toast's opener.
+describe('HandoffConfirmDialog — a host hidden in the workbench (H2d-3)', () => {
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 7860, order: 0 } }, hostOrder: ['h1'], activeHostId: null })
+    useShownHostsStore.setState({ ids: ['h1'] })
+  })
+
+  it('hidden at click → the dialog closes, handToNex is not called', async () => {
+    setHostShown('h1', false)
+    const { onClose } = renderDialog()
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('hidden during the flight → the toast has no "Open execution" action', async () => {
+    const d = deferred<{ result: typeof ok; swapped: boolean }>()
+    mockedHandToNex.mockReturnValueOnce(d.promise)
+    const { onClose } = renderDialog()
+    fireEvent.click(confirmBtn())
+    setHostShown('h1', false)
+    await act(async () => { d.resolve({ result: ok, swapped: false }) })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(toast()?.message).toBe('Handed to nex.')
+    expect(toast()?.action).toBeUndefined()
+  })
+
+  it('shown at completion, hidden before the action is clicked → the click opens the Hosts page on that host, no execution tab', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: false })
+    renderDialog()
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(toast()?.action).toBeTypeOf('function')
+    const open = vi.spyOn(useTabStore.getState(), 'openSingletonTab')
+    setHostShown('h1', false)
+    toast()!.action!()
+    expect(open.mock.calls.map((c) => c[0].kind)).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe('h1')
   })
 })
 

@@ -21,13 +21,6 @@
 // offered beside it (the wizard's first step is that very call); `StopSyncControl` stays mounted, because the
 // notice of a host that was not told is its to show — the wizard must not hide that outcome.
 //
-// A PULL STOPPED BECAUSE THE HOSTS MOVED (#1366; lib/profile/pull-unconfirmed.ts): one sentence with a Dismiss,
-// above whatever half is shown — after the stop that is the no-master half, whose "Set up sync…" is the way on. It
-// is device-local and outlives the stop; it goes with Dismiss, with a new attach (start.ts clears it), and out of
-// sight while the wizard — setting sync up again — is open. Its own key, not a store: read through
-// `useSyncExternalStore` — this window's writes by the module's listeners, another window's by the native
-// `storage` event (the listener exists only while this block is mounted).
-//
 // WHAT THE EXECUTOR PUBLISHES BEYOND THE STATUS (P3d-4a) — `detail`, `indexFailures`, `lastSuccessAt`,
 // `profileGone` — is shown as it is: the AGREED rev on every row (a locked row keeps the host's beside it), a
 // failing row's next try, "in sync as of", why settings wait. A record from an older build has none of them and
@@ -36,11 +29,10 @@
 // no clock runs on this page — except a "sent" Resolve row's, bounded by the command's TTL (ResolveRow.tsx).
 import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
-import { useI18nStore } from '../../../stores/useI18nStore'
-import { getLocale } from '../../../lib/locale-registry'
+import { useDateLocale, useI18nStore } from '../../../stores/useI18nStore'
 import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
-import { clearPullUnconfirmed, pullUnconfirmedSnapshot, subscribePullUnconfirmed } from '../../../lib/profile/pull-unconfirmed'
 import { selectDaemonIdMismatch, useHostStore } from '../../../stores/useHostStore'
+import { hostLabel, hostLookOf, useHostLook } from '../../../lib/host-look'
 import { identityOfSync } from '../../../lib/profile/host-identity'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../../stores/useTabStore'
@@ -102,19 +94,6 @@ const WORLD_KEY: Record<UnsettledReason, string> = {
   'no-parked-master': 'settings.profile.current.world.no_parked_master',
 }
 
-/**
- * The UI language as a tag `Date#toLocale*` takes. A built-in locale's id IS one (`en`, `zh-TW`); a user-imported
- * locale's id is random and names no language, and its missing keys fall back to English — so do its times. Never
- * `undefined`: that is the browser's language, which is not the one the page is written in.
- */
-function dateLocaleOf(localeId: string): string {
-  return getLocale(localeId)?.builtin === true ? localeId : 'en'
-}
-
-function useDateLocale(): string {
-  return dateLocaleOf(useI18nStore((s) => s.activeLocaleId))
-}
-
 interface Props {
   /** The SOT profile's name, from the host's list when it has answered; null → the id stands in. */
   masterName: string | null
@@ -125,20 +104,11 @@ export function CurrentBlock({ masterName }: Props) {
   const dateLocale = useDateLocale()
   const sync = useProfileSync()
   const [wizardOpen, setWizardOpen] = useState(false)
-  const pullUnconfirmed = useSyncExternalStore(subscribePullUnconfirmed, pullUnconfirmedSnapshot, pullUnconfirmedSnapshot)
   const problems = sync.master === null ? [] : sync.problems.slice(-PROBLEMS_SHOWN).reverse()
 
   return (
     <section data-testid="profile-current-block" data-state={sync.master === null ? 'none' : 'attached'} className="mt-6">
       <h3 className="text-sm text-text-primary">{t('settings.profile.current.title')}</h3>
-      {pullUnconfirmed !== null && !wizardOpen && (
-        <div data-testid="profile-pull-unconfirmed" className="mt-2 flex items-start justify-between gap-3">
-          <p className="text-xs text-yellow-500">{t('settings.profile.current.pull_unconfirmed')}</p>
-          <button type="button" data-testid="profile-pull-unconfirmed-dismiss" onClick={clearPullUnconfirmed} className={BTN}>
-            {t('settings.profile.current.pull_unconfirmed_dismiss')}
-          </button>
-        </div>
-      )}
       {wizardOpen ? (
         <ProfileWizard onClose={() => setWizardOpen(false)} />
       ) : sync.master === null ? (
@@ -186,6 +156,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const setAutoSync = useProfileStore((s) => s.setAutoSync)
   const attachedAt = useProfileStore((s) => s.masterEndpoint)
   const host = useHostStore((s) => s.hosts[master.hostId])
+  const hostLook = useHostLook(master.hostId)
   // Every host, for the sentence that names the one(s) the sync is paused on (`blocked: 'host-identity-*'`).
   const allHosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -241,7 +212,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
         const key = blocked.replace(/-/g, '_')
         // Host names are the user's own text: into the sentence as they are.
         return ids.length > 0
-          ? t(`settings.profile.current.blocked.${key}`, { hosts: ids.map((id) => allHosts[id]?.name ?? id).join(', ') })
+          ? t(`settings.profile.current.blocked.${key}`, { hosts: ids.map((id) => hostLabel(id, hostLookOf(id, allHosts))).join(', ') })
           : t(`settings.profile.current.blocked.${key}_unnamed`)
       }
       case 'suspended':
@@ -259,7 +230,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
             {masterName ?? master.profileId}
           </span>
           <span data-testid="profile-current-host" className="text-text-muted">
-            {t('settings.profile.current.on_host', { host: host?.name ?? master.hostId })}
+            {t('settings.profile.current.on_host', { host: hostLabel(master.hostId, hostLook) })}
           </span>
         </div>
       </SettingItem>

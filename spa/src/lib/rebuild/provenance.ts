@@ -5,6 +5,7 @@
 // event the outer `agent_type` names the session-projection winner while the
 // rest of the detail describes the sender; re-deriving the agent from that
 // field is exactly the mis-attribution the envelope exists to prevent.
+import type { AgentExitReason } from '../../types/tab'
 
 /** A validated envelope. Optional fields are '' when the daemon omitted them. */
 export interface ParsedProvenance {
@@ -13,6 +14,8 @@ export interface ParsedProvenance {
   cwd: string
   tmuxPaneId: string
   tmuxInstance: string
+  /** The daemon frame that is this agent run — the key an exit is matched on. */
+  frameId: string
 }
 
 /** A payload field that is not a string is treated as absent, never coerced. */
@@ -45,5 +48,50 @@ export function parseProvenance(
     cwd: str(env.cwd),
     tmuxPaneId: str(env.tmux_pane_id),
     tmuxInstance,
+    frameId: str(env.frame_id),
+  }
+}
+
+/** A validated `pdx_exit` envelope (agent-last-state spec §1). */
+export interface ParsedExit {
+  agentType: string
+  sessionId: string
+  tmuxPaneId: string
+  tmuxInstance: string
+  frameId: string
+  reason: AgentExitReason
+  /** Unix ms on the daemon's clock — display only, never used for ordering. */
+  at: number
+}
+
+const EXIT_REASONS: ReadonlySet<string> = new Set<AgentExitReason>(['session-end', 'process-dead'])
+
+/**
+ * Read `detail.pdx_exit`, the daemon's "this root agent run ended" envelope.
+ *
+ * Returns null unless it names a frame (the ONLY key an exit is applied by — an
+ * exit that cannot say which run ended must change nothing), a generation (the
+ * same reuse guard as provenance), a known reason and a positive time.
+ */
+export function parseExit(detail: Record<string, unknown> | undefined): ParsedExit | null {
+  const raw = detail?.pdx_exit
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const env = raw as Record<string, unknown>
+
+  const frameId = str(env.frame_id)
+  const tmuxInstance = str(env.tmux_instance)
+  const reason = str(env.reason)
+  const at = env.at
+  if (!frameId || !tmuxInstance || !EXIT_REASONS.has(reason)) return null
+  if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) return null
+
+  return {
+    agentType: str(env.agent_type),
+    sessionId: str(env.session_id),
+    tmuxPaneId: str(env.tmux_pane_id),
+    tmuxInstance,
+    frameId,
+    reason: reason as AgentExitReason,
+    at,
   }
 }

@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AddHostDialog } from './AddHostDialog'
 import { useHostStore } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { hostLookOf } from '../../lib/host-look'
+import { syncIdOfSync } from '../../lib/profile/host-identity'
 import * as hostApi from '../../lib/host-api'
 import * as pairingCodec from '../../lib/pairing-codec'
 
@@ -9,6 +12,7 @@ beforeEach(() => {
   vi.restoreAllMocks()
   // Default: the post-confirm /api/info is unreachable (never a real network call).
   vi.spyOn(hostApi, 'fetchInfoAt').mockRejectedValue(new Error('unreachable'))
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: {},
     hostOrder: [],
@@ -283,6 +287,39 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
     expect('daemonId' in hosts[0]).toBe(false)
   })
 
+  // H2c-2 (plan §0.19): the add path seeds the look store under the new host's wire id — only when absent.
+  it('an add seeds a look entry under the new local id with the typed name', async () => {
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+    confirmTokenRoute()
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    const [added] = Object.values(useHostStore.getState().hosts)
+    expect(useHostLookStore.getState().looks).toEqual({ [added.id]: { name: '10.0.0.1' } })
+  })
+
+  it('an existing d1_ entry is never overwritten by a later add of that daemon', async () => {
+    const wire = syncIdOfSync(X)
+    useHostLookStore.setState({ looks: { [wire]: { name: 'workbench', icon: 'Cloud' } } })
+    vi.mocked(hostApi.fetchInfoAt).mockResolvedValue(info(X))
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+    confirmTokenRoute()
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    const [added] = Object.values(useHostStore.getState().hosts)
+    expect(added.daemonId).toBe(X)
+    expect(useHostLookStore.getState().looks[wire]).toEqual({ name: 'workbench', icon: 'Cloud' })
+    expect(hostLookOf(added.id)).toEqual({ name: 'workbench', icon: 'Cloud' })
+  })
+
+  it('updating an existing host’s token seeds nothing', async () => {
+    useHostStore.setState({ hosts: { H: existing({ ip: '10.0.0.1' }) }, hostOrder: ['H'] })
+    const onClose = vi.fn()
+    render(<AddHostDialog onClose={onClose} />)
+    confirmTokenRoute()
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
   it('same ip+port as an existing host still just updates its token', async () => {
     useHostStore.setState({ hosts: { H: existing({ ip: '10.0.0.1' }) }, hostOrder: ['H'] })
     const onClose = vi.fn()
@@ -393,6 +430,7 @@ describe('AddHostDialog — daemon identity (spec 2026-09-23 D4.1 / D5)', () => 
       expect(hosts.H).toEqual(existing())
       const added = Object.values(hosts).find((h) => h.id !== 'H')!
       expect(added).toMatchObject({ ip: '10.0.0.1', port: 7860, token: TOKEN, daemonId: X }) // as if no duplicate
+      expect(useHostLookStore.getState().looks[added.id]).toEqual({ name: '10.0.0.1' }) // seeded like any add
     })
 
     it.each([

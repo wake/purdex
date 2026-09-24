@@ -8,7 +8,7 @@
 // there precisely so it survives the remount that clearing `terminated`
 // causes (spec §4.8) — component state could not.
 import { useEffect, useRef, useState } from 'react'
-import { useI18nStore } from '../stores/useI18nStore'
+import { useDateLocale, useI18nStore } from '../stores/useI18nStore'
 import { usePaneOperation, type RebuildBinding } from '../stores/useRebuildStore'
 import { useResumeTemplateLookup } from '../lib/resume-templates'
 import { resolveResumeCommand } from '../lib/rebuild/composer'
@@ -212,6 +212,7 @@ export function RebuildActionSet({
   onAttachAnyway,
 }: Props) {
   const t = useI18nStore((s) => s.t)
+  const dateLocale = useDateLocale()
   const storedOperation = usePaneOperation(paneId, binding)
   const op: RebuildOperationView | undefined = operation ?? storedOperation
   // Subscribed, not read once: the panel shows what the next Rebuild would
@@ -260,13 +261,28 @@ export function RebuildActionSet({
   const plan: RebuildPlan = {
     createSession: createLocked ? true : (override.createSession ?? true),
     applyCwd: hasCwd && (override.applyCwd ?? true),
-    // An unverified record still shows its exact command, but off by default (§9.1).
-    runResume: hasResume && (override.runResume ?? !record.unverified),
+    // An unverified record still shows its exact command, but off by default
+    // (§9.1); so does one whose agent has EXITED (agent-last-state spec §3) —
+    // the pane was a shell by then. Either way the user can still tick it.
+    runResume: hasResume && (override.runResume ?? (!record.unverified && !record.agentExited)),
   }
 
   const rowId = (row: string) => `rebuild-${tabId}-${paneId}-${row}`
   const edit = (field: RebuildEditableField) => (value: string) => onEdit?.(field, value)
   const agentLabel = record.agent ? (AGENT_NAMES[record.agent.type] ?? record.agent.type) : ''
+  // The pane's last agent state (agent-last-state spec §3), in the UI language.
+  // "Running when last seen" is the honest wording for a record without an
+  // exit: an exit the SPA was not connected for never reached it (decision 3).
+  const agentState = !record.agent
+    ? ''
+    : record.agentExited
+      ? t(
+        record.agentExited.reason === 'session-end'
+          ? 'rebuild.agent_state_exited_session_end'
+          : 'rebuild.agent_state_exited_process_dead',
+        { agent: agentLabel, time: new Date(record.agentExited.at).toLocaleString(dateLocale) },
+      )
+      : t('rebuild.agent_state_running', { agent: agentLabel, time: new Date(record.agent.updatedAt).toLocaleString(dateLocale) })
 
   return (
     <div data-testid="rebuild-action-set" className="w-full rounded-md border border-border-subtle bg-surface-secondary p-3 text-left">
@@ -326,8 +342,8 @@ export function RebuildActionSet({
         />
       </ActionRow>
 
-      {agentLabel && (
-        <p className="pl-[1.65rem] text-[11px] text-text-muted">{agentLabel}</p>
+      {agentState && (
+        <p data-testid="rebuild-agent-state" className="pl-[1.65rem] text-[11px] text-text-muted">{agentState}</p>
       )}
       {!hasResume && (
         <p data-testid="rebuild-no-agent-hint" className="pl-[1.65rem] pt-1 text-[11px] text-text-muted">

@@ -10,9 +10,9 @@
 //              the last step; here it is only said.
 //   direction  push / pull. A new profile — and one that holds nothing — offers push only. Pull shows what it
 //              replaces (counts) and offers to keep a copy first: ticked by default, named after this device.
-//              A pull also needs the host VERIFIED (no mismatch) and names, one by one, the local hosts it removes
-//              (`previewPull`, host-sync-identity spec §8); Next waits for that list, and Start runs only if
-//              `prepareRun` finds the same one. A host whose daemon is not its record's is said here too.
+//              A pull also needs the host VERIFIED (no mismatch; host-sync-identity spec §8, D3). It reads no
+//              host list and removes no host (host ownership H3b): the host list is this device's. A host whose
+//              daemon is not its record's is said here too.
 //   run        a summary, Start, then the sub-steps of wizard-run.ts. A failure stops the run where it is.
 // There is no way to a step but through the one before it: the step list is text, and Next is the only door.
 //
@@ -51,6 +51,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../../stores/useI18nStore'
 import { selectDevHostId, useHostStore } from '../../../../stores/useHostStore'
+import { hostLabel, hostLookOf, useHostLook } from '../../../../lib/host-look'
 import { MASTER_PROFILE_ID, normalizeLocalProfileName, useLocalProfilesStore } from '../../../../stores/useLocalProfilesStore'
 import { useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
 import { ensureDefaultDeviceName } from '../../../../stores/useDeviceNameStore'
@@ -62,15 +63,14 @@ import { useSotDelete } from '../useSotDelete'
 import { wizardSotScopeOf } from '../profile-rules'
 import { ConfirmDialog } from '../../../ConfirmDialog'
 import { DirectionStep, LocalStep, SotStep, type SotChoice } from './WizardChoiceSteps'
-import { announceRun, brokenLocalPremise, brokenPullPremise, createSotProfile, offeredProfileName, prepareRun, previewPull, retargetPlan, runPlan, sotNow, subStepsOf, type CreateResult, type PrepareRefusal, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
-import type { PullCheck } from './WizardChoiceSteps'
+import { announceRun, brokenLocalPremise, brokenPullPremise, createSotProfile, offeredProfileName, prepareRun, retargetPlan, runPlan, sotNow, subStepsOf, type CreateResult, type PrepareRefusal, type SotNow, type SubStepId, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 import { BTN, NOTICE, reasonKey, requestKey, useMasterWorldReason } from './wizard-shared'
 
 type StepId = 'stop' | 'sot' | 'local' | 'direction' | 'run'
 const ORDER: readonly StepId[] = ['stop', 'sot', 'local', 'direction', 'run']
 
 type Refusal = 'client-id' | 'junk-epoch' | 'no-parked-master'
-type NoticeReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone' | 'profile-changed' | 'profile-emptied' | 'profile-gone' | 'create-maybe' | 'pull-refused' | 'removes-changed'
+type NoticeReason = 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone' | 'profile-changed' | 'profile-emptied' | 'profile-gone' | 'create-maybe' | 'pull-refused'
 type PremiseReason = Extract<NoticeReason, 'attached-elsewhere' | 'stopped-elsewhere' | 'host-gone' | 'host-offline' | 'local-gone'>
 
 /** Which step a broken premise sends the wizard back to. */
@@ -155,21 +155,13 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const [saveFirst, setSaveFirst] = useState(true)
   const [saveName, setSaveName] = useState<{ value: string; touched: boolean }>(() => ({ value: offeredProfileName(), touched: false }))
   const [run, setRun] = useState<RunState | null>(null)
-  /** A pull's check of the SOT's hosts (`previewPull`), and the choice (`pullKey`) it was read for. */
-  const [pullRead, setPullRead] = useState<{ key: string; check: PullCheck } | null>(null)
-  const [pullRetry, setPullRetry] = useState(0)
-  /** The choice a check is out (or in) for: asked once per choice, and an answer for another one is dropped. */
-  const pullAsked = useRef<string | null>(null)
-  /** Bumped by every check sent (and by every answer set from elsewhere): only the latest one's answer is taken. The
-   *  key alone is not enough — the same choice is asked again when the host's verification drops and comes back,
-   *  and the older answer may arrive last (review R1). */
-  const pullGen = useRef(0)
   const alive = useRef(true)
 
   const sot = useSotProfiles(refusal === null && step !== 'stop' ? hostId : null)
   // Subscribed so that a change re-renders — and with it the premise check below.
   const masterNow = useProfileStore((s) => s.masterHostId !== null && s.masterProfileId !== null && s.masterEndpoint !== null)
   const hosts = useHostStore((s) => s.hosts)
+  const hostLook = useHostLook(hostId)
   const runtime = useHostStore((s) => s.runtime)
   const slaves = useLocalProfilesStore((s) => s.slaves)
   /** The profile this device syncs with on the chosen host — never offered for deletion (none on step 2, by its premises). */
@@ -312,38 +304,16 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   const worldReason = useMasterWorldReason()
   const saveNameOk = normalizeLocalProfileName(saveName.value) !== null
 
-  // === a pull's hosts (host-sync-identity spec §8) ===
+  // === a pull's premise (host-sync-identity spec §8, D3) ===
   // Read off the host store at render — `runtime` above is subscribed, so a verification that lands re-renders.
   const pullPremise = hostId === null ? null : brokenPullPremise(hostId)
-  /** The choice a pull check belongs to: another host, profile or content is another check. */
-  const pullKey = hostId !== null && profileId !== null && seen !== null ? `${hostId}|${profileId}|${seen.fingerprint}` : null
-  const wantPull = refusal === null && step === 'direction' && effectiveDirection === 'pull' && pullKey !== null && pullPremise === null
-  useEffect(() => {
-    if (pullPremise !== null) pullAsked.current = null // once it holds again, it is asked again
-    if (!wantPull || pullKey === null || hostId === null || profileId === null || pullAsked.current === pullKey) return
-    pullAsked.current = pullKey
-    const gen = ++pullGen.current
-    setPullRead({ key: pullKey, check: { state: 'loading' } })
-    void previewPull(hostId, profileId).then((r) => {
-      if (!alive.current || pullGen.current !== gen || pullAsked.current !== pullKey) return
-      setPullRead({ key: pullKey, check: r.ok ? { state: 'ok', removes: r.removes } : { state: 'failed', reason: r.reason, ...('request' in r ? { request: r.request } : {}) } })
-    })
-  }, [wantPull, pullKey, pullPremise, hostId, profileId, pullRetry])
-  const pullCheck: PullCheck | null =
-    effectiveDirection !== 'pull' ? null : pullPremise !== null ? { state: 'refused', reason: pullPremise } : pullRead !== null && pullRead.key === pullKey ? pullRead.check : { state: 'loading' }
-  /** The hosts the user is shown a pull removes: what `prepareRun` must find again. */
-  const removesSeen = pullCheck?.state === 'ok' ? pullCheck.removes : null
-  const retryPullCheck = (): void => {
-    pullAsked.current = null
-    setPullRetry((n) => n + 1)
-  }
 
-  const directionReady = effectiveDirection === 'push' || (effectiveDirection === 'pull' && (!saveFirst || saveNameOk) && removesSeen !== null)
+  const directionReady = effectiveDirection === 'push' || (effectiveDirection === 'pull' && (!saveFirst || saveNameOk) && pullPremise === null)
 
   const confirmDirection = (): void => {
     if (!directionReady || hostId === null || profileId === null || effectiveDirection === null) return
     // What the summary shows; the run takes `prepareRun`'s own plan (its address and fingerprint are read there).
-    const plan: WizardPlan = { hostId, profileId, localId, direction: effectiveDirection, saveAs: effectiveDirection === 'pull' && saveFirst ? saveName.value : null, removesHosts: effectiveDirection === 'pull' ? (removesSeen ?? []) : [], hostsRow: null, at: '', seen: seen?.fingerprint ?? '' }
+    const plan: WizardPlan = { hostId, profileId, localId, direction: effectiveDirection, saveAs: effectiveDirection === 'pull' && saveFirst ? saveName.value : null, at: '', seen: seen?.fingerprint ?? '' }
     if (recheck('run')) return
     setRun({ plan, states: subStepsOf(plan).map(() => 'pending'), phase: 'idle', failure: null, checkFailed: null, localName: localId === MASTER_PROFILE_ID ? null : (slaves[localId]?.name ?? null) })
     setNotice(null)
@@ -354,20 +324,21 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     if (run === null || run.phase === 'running' || run.phase === 'checking' || run.phase === 'done') return
     const before = run.phase
     const promoted = run.states[subStepsOf(run.plan).indexOf('promote')] === 'done'
-    const labels = { profile: profileName, host: hostId === null ? '' : (hosts[hostId]?.name ?? hostId) }
+    const labels = { profile: profileName, host: hostId === null ? '' : hostLabel(hostId, hostLookOf(hostId, hosts)) }
     // A first run asks with what the steps show; a retry with what its run was made for (the door's plan).
     const first = from === 0 && before === 'idle'
-    const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: first ? (seen?.fingerprint ?? null) : run.plan.seen, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs, removesSeen: first ? removesSeen : run.plan.removesHosts }
+    const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: first ? (seen?.fingerprint ?? null) : run.plan.seen, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs }
     setRun((r) => (r === null ? r : { ...r, phase: 'checking', checkFailed: null }))
     // THE door: nothing irreversible happens before it has answered with a plan.
     const prepared = await prepareRun(draft, promoted)
     if (!alive.current) return
     if (!prepared.ok) return refused(prepared, promoted, () => setRun((r) => (r === null ? r : { ...r, phase: before, checkFailed: prepared.reason === 'list-failed' ? prepared.request : null })))
     // A first run takes the door's plan. A retry keeps its own (its sub-steps' states are indexed by it), re-aimed
-    // at the address, fingerprint and removals the door just read — else the ask before the attach, made against
-    // the old address, would refuse every retry after a re-point. Another plan altogether: choose again.
+    // at the address and fingerprint the door just read — else the ask before the attach, made against the old
+    // address, would refuse every retry after a re-point. Another plan altogether (the door is asked with the run's
+    // own draft, so this does not happen): choose again, as for a profile that changed.
     const plan = first ? prepared.plan : retargetPlan(run.plan, prepared.plan)
-    if (plan === null) return refused({ ok: false, reason: 'removes-changed', removes: [...prepared.plan.removesHosts] }, promoted, () => undefined)
+    if (plan === null) return refused({ ok: false, reason: 'profile-changed', now: { fingerprint: prepared.plan.seen, empty: prepared.plan.seen === sotNow({ sections: [] }).fingerprint } }, promoted, () => undefined)
     setRun((r) => (r === null ? r : { ...r, plan, phase: 'running', failure: null }))
     const result = await runPlan(plan, from, (index, state) => {
       if (alive.current) setRun((r) => (r === null ? r : { ...r, states: r.states.map((s, i) => (i === index ? state : s)) }))
@@ -412,17 +383,11 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
       sot.reload()
       return setStep('sot')
     }
-    // A pull that cannot be made, or that would remove other hosts than the ones shown: back to the direction
-    // step, which says why (or names the hosts as they are now) — push stays offered.
-    if (prepared.reason === 'removes-changed' || prepared.reason === 'master-unverified' || prepared.reason === 'master-mismatch' || prepared.reason === 'master-unmatched' || prepared.reason === 'duplicate-host-identity' || prepared.reason === 'host-identity-conflict') {
-      if (pullKey !== null) {
-        pullAsked.current = pullKey
-        pullGen.current += 1 // a check still out for this choice is older than what the door just found
-        setPullRead({ key: pullKey, check: prepared.reason === 'removes-changed' ? { state: 'ok', removes: prepared.removes } : { state: 'failed', reason: prepared.reason } })
-      }
+    // A pull that cannot be made: back to the direction step, which says why (read live there) — push stays offered.
+    if (prepared.reason === 'master-unverified' || prepared.reason === 'master-mismatch') {
       if (promoted) setLocalId(MASTER_PROFILE_ID)
       setRun(null)
-      setNotice(prepared.reason === 'removes-changed' ? 'removes-changed' : 'pull-refused')
+      setNotice('pull-refused')
       return setStep('direction')
     }
     if (promoted) setLocalId(MASTER_PROFILE_ID)
@@ -539,13 +504,11 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
               saveName={saveName.value}
               onSaveName={(value) => setSaveName({ value, touched: true })}
               saveNameOk={saveNameOk}
-              pullCheck={pullCheck}
-              onRetryPullCheck={retryPullCheck}
-              attachHostId={hostId}
+              pullRefused={effectiveDirection === 'pull' ? pullPremise : null}
             />
           )}
 
-          {step === 'run' && run !== null && <RunStep run={run} profileName={profileName} hostName={hostId === null ? '' : (hosts[hostId]?.name ?? hostId)} />}
+          {step === 'run' && run !== null && <RunStep run={run} profileName={profileName} hostName={hostId === null ? '' : hostLabel(hostId, hostLook)} />}
 
           {step !== 'stop' && (
             <div className="mt-3 flex flex-wrap items-center gap-2">

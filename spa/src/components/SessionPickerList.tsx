@@ -1,7 +1,9 @@
 import { useHostStore } from '../stores/useHostStore'
+import { useHostLookResolver } from '../lib/host-look'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useSessionWatch } from '../hooks/useSessionWatch'
+import { useShownRefFilter } from '../lib/shown-hosts'
 
 export interface SessionSelection {
   hostId: string
@@ -20,9 +22,13 @@ export function SessionPickerList({ onSelect }: Props) {
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
+  const lookOf = useHostLookResolver()
   const sessions = useSessionStore((s) => s.sessions)
 
-  const connectedHosts = hostOrder.filter((id) => runtime[id]?.status === 'connected')
+  // Host ownership H2d-3: a host hidden in this workbench is not offered (the one opener rule, `isRefShown`).
+  const isShown = useShownRefFilter()
+
+  const connectedHosts = hostOrder.filter((id) => runtime[id]?.status === 'connected').filter(isShown)
 
   if (connectedHosts.length === 0) {
     return <div className="text-center text-zinc-500 py-8">{t('terminated.no_sessions')}</div>
@@ -37,7 +43,7 @@ export function SessionPickerList({ onSelect }: Props) {
         if (!host || hostSessions.length === 0) return null
         return (
           <div key={hostId}>
-            <div className="text-xs text-zinc-500 mb-1">{host.name}</div>
+            <div className="text-xs text-zinc-500 mb-1">{lookOf(hostId).name}</div>
             <div className="space-y-1">
               {hostSessions.map((s) => (
                 <button

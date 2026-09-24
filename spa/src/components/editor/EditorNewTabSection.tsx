@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { FilePlus, FileText, Image as ImageIcon, FilePdf } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useRecentFilesStore, type RecentFileKind } from '../../stores/useRecentFilesStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { hostLabel, useHostLookResolver } from '../../lib/host-look'
 import { usePlaceholderFilesStore } from '../../stores/usePlaceholderFilesStore'
 import { openRecentEntry } from '../../lib/recent-files/open-recent-entry'
 import { createUniqueInAppFile } from '../../lib/inapp-namer'
@@ -32,7 +32,7 @@ function KindIcon({ kind }: { kind: RecentFileKind }) {
 export function EditorNewTabSection({ onSelect }: Props) {
   const t = useI18nStore((s) => s.t)
   const files = useRecentFilesStore((s) => s.files)
-  const hosts = useHostStore((s) => s.hosts)
+  const lookOf = useHostLookResolver()
   const [filter, setFilter] = useState<FilterKey>('all')
 
   // T1b-2: eager reservation. Both buttons map their label to a bare extension
@@ -103,7 +103,7 @@ export function EditorNewTabSection({ onSelect }: Props) {
             {visible.map((entry) => {
               const badge =
                 entry.source.type === 'daemon'
-                  ? hosts[entry.source.hostId]?.name ?? entry.source.hostId
+                  ? hostLabel(entry.source.hostId, lookOf(entry.source.hostId))
                   : null
               return (
                 <li key={`${entry.source.type}:${entry.source.type === 'daemon' ? entry.source.hostId : ''}:${entry.path}`}>

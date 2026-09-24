@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
+	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -595,5 +597,132 @@ func TestNewOuterHandler_PeerChainObservesHostMatchUnderCfgRLock(t *testing.T) {
 	doRequest(t, outer, "GET", "/api/sessions", "host-a-token") // general chain, not PeerAuth
 	if len(seen) != 1 {
 		t.Fatalf("observer called for a non-host-match: %+v", seen)
+	}
+}
+
+// TestOuterChain_HostTransferBehindTokenAuth (H4a test 15): the two host
+// transfer routes are on the general chain, so with an admin token
+// configured a request without the bearer — or with a peer's host token —
+// is 401 and never reaches the module; with the bearer it does.
+func TestOuterChain_HostTransferBehindTokenAuth(t *testing.T) {
+	cfg := &config.Config{
+		Token: "admin-token",
+		Peers: config.PeersConfig{
+			Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}},
+		},
+	}
+	c := newTestCore(cfg)
+	mod := hosttransfermod.New()
+	if err := mod.Init(c); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	outer := newOuterHandler(c, mux, nil)
+
+	post := func(path, body, bearer string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		return rec
+	}
+	const hosts = `{"hosts":[{"ip":"10.0.0.1","token":"t"}]}`
+
+	for _, bearer := range []string{"", "host-a-token", "nope"} {
+		if res := post("/api/host-transfer", hosts, bearer); res.Code != http.StatusUnauthorized {
+			t.Fatalf("create with bearer %q: want 401, got %d", bearer, res.Code)
+		}
+		if res := post("/api/host-transfer/redeem", `{"code":"ZZZZZZZZ"}`, bearer); res.Code != http.StatusUnauthorized {
+			t.Fatalf("redeem with bearer %q: want 401, got %d", bearer, res.Code)
+		}
+	}
+
+	res := post("/api/host-transfer", hosts, "admin-token")
+	if res.Code != http.StatusOK {
+		t.Fatalf("create with bearer: want 200, got %d %s", res.Code, res.Body.String())
+	}
+	var created struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil || len(created.Code) != 8 {
+		t.Fatalf("create body %s: %v", res.Body.String(), err)
+	}
+	if res := post("/api/host-transfer/redeem", `{"code":"ZZZZZZZZ"}`, "admin-token"); res.Code != http.StatusNotFound {
+		t.Fatalf("redeem of a wrong code with bearer: want 404 from the module, got %d", res.Code)
+	}
+	res = post("/api/host-transfer/redeem", `{"code":"`+created.Code+`"}`, "admin-token")
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"10.0.0.1"`) {
+		t.Fatalf("redeem with bearer: want 200 with the rows, got %d %s", res.Code, res.Body.String())
+	}
+}
+
+// TestOuterChain_HostTransferFailsClosedWithoutAdminToken (H4a attacker
+// finding): with no admin token configured TokenAuth lets every request
+// through, so the module itself refuses — 403 no_token, not 200 — rather
+// than park or hand out host credentials unauthenticated.
+func TestOuterChain_HostTransferFailsClosedWithoutAdminToken(t *testing.T) {
+	c := newTestCore(&config.Config{Token: ""})
+	mod := hosttransfermod.New()
+	if err := mod.Init(c); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	mux := http.NewServeMux()
+	mod.RegisterRoutes(mux)
+	outer := newOuterHandler(c, mux, nil)
+
+	for path, body := range map[string]string{
+		"/api/host-transfer":        `{"hosts":[{"ip":"10.0.0.1","token":"t"}]}`,
+		"/api/host-transfer/redeem": `{"code":"ZZZZZZZZ"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"no_token"`) {
+			t.Fatalf("%s without admin token: want 403 no_token, got %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestOuterChain_HostTransferTokenSetAfterOuterAuth (PR #1394 critic,
+// TOCTOU): the outer TokenAuth reads an empty admin token and lets the
+// request through; the token is set before the module handler reads it. The
+// handler re-authenticates against its own snapshot, so a request with no
+// bearer is 401 — not 200 (credentials parked or handed out) nor 403.
+//
+// The outer chain reads c.Cfg.Token directly, so the window is reproduced by
+// an inner handler that sets the token between the outer check and the
+// module's mux (equivalent to a tokenFn that returns "" then "T").
+func TestOuterChain_HostTransferTokenSetAfterOuterAuth(t *testing.T) {
+	for path, body := range map[string]string{
+		"/api/host-transfer":        `{"hosts":[{"ip":"10.0.0.1","token":"t"}]}`,
+		"/api/host-transfer/redeem": `{"code":"ZZZZZZZZ"}`,
+	} {
+		t.Run(path, func(t *testing.T) {
+			c := newTestCore(&config.Config{Token: ""})
+			mod := hosttransfermod.New()
+			if err := mod.Init(c); err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			mux := http.NewServeMux()
+			mod.RegisterRoutes(mux)
+			setTokenThenServe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c.CfgMu.Lock()
+				c.Cfg.Token = "T"
+				c.CfgMu.Unlock()
+				mux.ServeHTTP(w, r)
+			})
+			outer := newOuterHandler(c, setTokenThenServe, nil)
+
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			outer.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"unauthorized"`) {
+				t.Fatalf("%s with the token set after outer auth: want 401 unauthorized, got %d %s", path, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

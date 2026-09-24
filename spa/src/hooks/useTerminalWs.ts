@@ -18,6 +18,21 @@ interface UseTerminalWsOpts {
   getTicket?: () => Promise<string>
 }
 
+/**
+ * Whether a terminal on `hostId` may open a socket again (every attempt after
+ * the first, and the re-check once a ticket arrives): the host is one this
+ * device has (`Object.hasOwn` — a prototype member name is not a host), it is
+ * connected, and its attach gate is open. The effect only runs while the host
+ * exists, so this is the check for the window before a deletion re-renders.
+ */
+export function canReconnectTerminal(hostId: string): boolean {
+  const state = useHostStore.getState()
+  if (!Object.hasOwn(state.hosts, hostId)) return false // host deleted — stop reconnecting
+  const runtime = state.runtime[hostId]
+  if (runtime && runtime.status !== 'connected') return false
+  return canAttachTerminal(hostId)
+}
+
 export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostId, onReady, onDisconnect, onReconnect, getTicket }: UseTerminalWsOpts) {
   const connRef = useRef<ReturnType<typeof connectTerminal> | null>(null)
   const revealDelayRef = useRef(useUISettingsStore.getState().terminalRevealDelay)
@@ -49,12 +64,18 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
   if (gateLatchRef.current.wsUrl !== wsUrl) gateLatchRef.current = { wsUrl, allowed: false }
   if (gateOpen) gateLatchRef.current.allowed = true
   const attachAllowed = gateLatchRef.current.allowed
+  // The host must be one this device has — `Object.hasOwn`, so a prototype
+  // member name is not a host. Checked before the FIRST connect exactly as
+  // `canReconnect` checks every later one: the ticket request and the socket
+  // would otherwise go through `getDaemonBase`'s fallback to another daemon.
+  const hostKnown = useHostStore((s) => (hostId ? Object.hasOwn(s.hosts, hostId) : true))
 
   useEffect(() => {
     const term = termRef.current
     const container = containerRef.current
     if (!term || !container) return
     if (!attachAllowed) return
+    if (!hostKnown) return
 
     let revealed = false
     const reveal = () => {
@@ -64,15 +85,7 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
       term.focus()
     }
 
-    const canReconnect = hostId
-      ? () => {
-          const state = useHostStore.getState()
-          if (!state.hosts[hostId]) return false // host deleted — stop reconnecting
-          const runtime = state.runtime[hostId]
-          if (runtime && runtime.status !== 'connected') return false
-          return canAttachTerminal(hostId)
-        }
-      : undefined
+    const canReconnect = hostId ? () => canReconnectTerminal(hostId) : undefined
 
     const conn = connectTerminal(
       wsUrl,
@@ -146,7 +159,7 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
   // Other deps (containerRef, fitAddonRef, getTicket, hostId, termRef) are stable refs or
   // props captured once at mount; callbacks stabilized via refs above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsUrl, attachAllowed])
+  }, [wsUrl, attachAllowed, hostKnown])
 
   return connRef
 }

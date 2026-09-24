@@ -23,14 +23,26 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
-import type { HostListCache } from '../../stores/useExecutionListStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
-import type { NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
+
+// A spy that runs the real cascade: an apply that must not cascade is checked by its calls.
+vi.mock('../host-lifecycle', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../host-lifecycle')>()
+  return { ...real, deleteHostCascade: vi.fn(real.deleteHostCascade) }
+})
+import { renderHook } from '@testing-library/react'
+import { HOST_RERESOLVE_LOCK_OWNER, HOST_RERESOLVE_RETRY_MS, __resetHostReresolveForTest, requestHostReresolve } from '../host-reresolve'
+import { useNewTabBootstrap } from '../../hooks/useNewTabBootstrap'
+import { clearNewTabRegistry, registerNewTabProviderSource } from '../new-tab-registry'
+import { createHostSessionProviderSource } from '../session-new-tab-providers'
+import { createHeadlessProviderSource } from '../headless-new-tab-providers'
 import { getTheme, unregisterTheme } from '../theme-registry'
 import { registerBuiltinThemes } from '../register-themes'
 import { getLocale, unregisterLocale } from '../locale-registry'
@@ -40,8 +52,9 @@ import { hashSection } from './hash'
 import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, stripSizes } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
-import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, markHostRemovedPanes, readSettingsSources } from './apply-to-stores'
+import { INVALID_REASONS, applySectionToStores, readSettingsSources } from './apply-to-stores'
 import { identityOfSync, syncIdOfSync } from './host-identity'
+import { isRefShownNow, setHostShown } from '../shown-hosts'
 
 // === fixtures ===
 
@@ -96,6 +109,10 @@ function resetStores(): void {
   useExecutionListStore.setState({ byHost: {} })
   useNexHostStore.setState({ byHost: {} })
   useHostSettingsStore.setState({ hosts: {} })
+  useHostLookStore.setState({ looks: {} })
+  useShownHostsStore.setState({ ids: [] })
+  // Reset too: since every apply ends with a re-resolve pass, a column one test left behind would move in the next.
+  useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
 }
 
 beforeAll(() => registerBuiltinThemes())
@@ -252,7 +269,6 @@ describe('applySectionToStores — guards', () => {
   it('writes no store at all when the well-formedness guard refuses the payload', async () => {
     seedTabWorld()
     const bad: Array<[Parameters<typeof applySectionToStores>[0], unknown]> = [
-      ['hosts', { hosts: { [M]: { ...host(M), extra: 1 } }, hostOrder: [M] }],
       ['settings', { 'purdex-unknown': { a: 1 } }],
       ['workspaces', { order: ['wa'], workspaces: {} }],
       ['tabs.wa', { order: ['zz'], tabs: {} }],
@@ -274,8 +290,8 @@ describe('applySectionToStores — guards', () => {
     expect(await applySectionToStores('tabs.' as never, { order: [], tabs: {} }, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'unknown-section' })
   })
 
-  it('a null payload is invalid for hosts, settings and workspaces, and writes nothing', async () => {
-    for (const key of ['hosts', 'settings', 'workspaces'] as const) {
+  it('a null payload is invalid for settings and workspaces, and writes nothing', async () => {
+    for (const key of ['settings', 'workspaces'] as const) {
       let outcome: unknown
       const writes = await countWrites(async () => {
         outcome = await applySectionToStores(key, null, ctx)
@@ -286,306 +302,66 @@ describe('applySectionToStores — guards', () => {
   })
 
   it('every invalid outcome carries a code from the closed list, and INVALID_REASONS is that list', async () => {
-    expect([...INVALID_REASONS].sort()).toEqual([
-      'changes-master-host', 'deleted', 'duplicate-host-alias', 'duplicate-host-identity', 'host-identity-conflict', 'malformed', 'no-host', 'rejected-settings',
-      'removes-master-host', 'unknown-section',
-    ])
+    // host ownership H3a-3: the five codes of the `hosts` apply went with it
+    expect([...INVALID_REASONS].sort()).toEqual(['deleted', 'host-identity-conflict', 'malformed', 'rejected-settings', 'unknown-section'])
   })
 })
 
-describe('applySectionToStores — hosts', () => {
-  it('replaces hosts + order, keeps device-local focus and the runtime of surviving hosts, drops removed runtime', async () => {
-    const h3 = host('host-three', { ip: '10.0.0.3', order: 1 })
-    useHostStore.getState().setRuntime(M, { status: 'connected' })
-    useHostStore.getState().setRuntime(H2, { status: 'connected' })
-    useHostStore.setState({ activeHostId: M, devHostId: H2 })
-    const payload = hostsPayloadOf([host(M, { name: 'renamed' }), h3])
-
-    const outcome = await applySectionToStores('hosts', payload, ctx)
-
-    const s = useHostStore.getState()
-    expect(Object.keys(s.hosts)).toEqual([M, 'host-three'])
-    expect(s.hosts[M].name).toBe('renamed')
-    expect(s.hostOrder).toEqual([M, 'host-three'])
-    expect(s.activeHostId).toBe(M)
-    expect(s.devHostId).toBeNull() // its host is gone
-    expect(s.runtime).toEqual({ [M]: { status: 'connected' } })
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildHostsSection(s)) })
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
-    expect(persistedOf(STORAGE_KEYS.HOSTS).hostOrder).toEqual([M, 'host-three'])
-  })
-
-  it('refuses a payload that removes the master host', async () => {
-    const before = useHostStore.getState().hosts
-    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(H2)]), ctx)
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'removes-master-host' })
-    expect(useHostStore.getState().hosts).toBe(before)
-  })
-
-  it.each([
-    ['ip', { ip: '10.9.9.9' }],
-    ['port', { port: 1 }],
-    ['token', { token: 'other' }],
-    ['token cleared', { token: null }],
-  ])("refuses a payload that changes the master host's %s", async (_name, over) => {
-    const before = useHostStore.getState().hosts
-    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, over as Partial<HostConfig>), host(H2)]), ctx)
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
-    expect(useHostStore.getState().hosts).toBe(before)
-  })
-
-  it('refuses a payload that leaves zero hosts', async () => {
-    const outcome = await applySectionToStores('hosts', { hosts: {}, hostOrder: [] }, ctx)
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'no-host' })
-    expect(Object.keys(useHostStore.getState().hosts)).toHaveLength(2)
-  })
-
-  it('returns the hash of what the store holds, not the SOT hash, when the sanitiser changed the payload', async () => {
-    const payload = hostsPayloadOf([host(M, { icon: 'NotARealIcon' }), host(H2)])
-    const outcome = await applySectionToStores('hosts', payload, ctx)
-    expect(useHostStore.getState().hosts[M].icon).toBeUndefined()
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildHostsSection(useHostStore.getState())) })
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
-    // and the sanitised value is what got persisted
-    expect((persistedOf(STORAGE_KEYS.HOSTS).hosts as Record<string, HostConfig>)[M].icon).toBeUndefined()
-  })
-})
-
-describe('applySectionToStores — hosts: removing a host is the app\'s own host removal', () => {
-  /** Both hosts own data in every per-host store, and there are live panes on each. */
-  function seedHostWorld(): void {
-    const split: PaneLayout = { type: 'split', id: 's1', direction: 'h', children: [tmuxLeaf('on-h2', H2), tmuxLeaf('on-m', M)], sizes: [60, 40] }
-    useTabStore.setState({ tabs: { t1: tab('t1', split), t2: tab('t2', tmuxLeaf('p-t2', H2)), t3: tab('t3') }, tabOrder: ['t1', 't2', 't3'], activeTabId: 't2', visitHistory: ['t1'] })
-    useWorkspaceStore.setState({ workspaces: [ws('wa', ['t1', 't2', 't3'], 't2')], activeWorkspaceId: 'wa' })
-    for (const h of [M, H2]) {
-      useHostStore.getState().setRuntime(h, { status: 'connected' })
-      useSessionStore.getState().replaceHost(h, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~' }] as never)
-      useAgentStore.getState().handleNormalizedEvent(h, 'dev001', { agent_type: 'cc', status: 'idle', subagents: [], raw_event_name: 'Stop', broadcast_ts: 1 } as never)
-      useExecutionStore.getState().applyEvents(h, 'exc_1', [{ seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }] as never)
-    }
-    const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1, fingerprint: '' }
-    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2 }
-    useNexHostStore.setState({ byHost: { [M]: nexEntry, [H2]: nexEntry } })
-    useExecutionListStore.setState({ byHost: { [M]: listCache, [H2]: listCache } })
-    useHostSettingsStore.setState({ hosts: { [M]: { editor: { homePath: '/m' } }, [H2]: { editor: { homePath: '/h2' } } } } as never)
-    useHostStore.setState({ activeHostId: H2, devHostId: H2 })
-  }
-
-  /** Everything a host removal is allowed to touch, as plain data. */
-  function world(): unknown {
-    const h = useHostStore.getState()
+// Host ownership H3a-3 (spec §5.1): the host list is per device. A `hosts` payload — the row an older client still
+// writes to the SOT — is never applied: no host added, renamed or removed, no cascade, no lock, no store written.
+describe('applySectionToStores — hosts is not synced (host ownership H3)', () => {
+  it('a valid payload that removes, renames and adds a host is refused as unknown-section and changes NOTHING', async () => {
+    seedTabWorld()
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, b1: tab('b1', tmuxLeaf('p-b1', H2)) } })
     const t = useTabStore.getState()
     const w = useWorkspaceStore.getState()
-    const a = useAgentStore.getState()
-    return JSON.parse(JSON.stringify({
-      hosts: { hosts: h.hosts, hostOrder: h.hostOrder, activeHostId: h.activeHostId, devHostId: h.devHostId, runtime: h.runtime },
-      tabs: { tabs: t.tabs, tabOrder: t.tabOrder, activeTabId: t.activeTabId, visitHistory: t.visitHistory },
-      workspaces: { workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId },
-      sessions: useSessionStore.getState().sessions,
-      agent: { lastEvents: a.lastEvents, statuses: a.statuses, unread: a.unread, models: a.models, agentTypes: a.agentTypes },
-      executions: Object.keys(useExecutionStore.getState().executions),
-      executionList: useExecutionListStore.getState().byHost,
-      nex: useNexHostStore.getState().byHost,
-      hostSettings: useHostSettingsStore.getState().hosts,
-    }))
-  }
+    const parked: ParkedWorld = { tabs: t.tabs, workspaces: w.workspaces, activeWorkspaceId: w.activeWorkspaceId, activeTabId: t.activeTabId }
+    const slaveWorld: ParkedWorld = { tabs: { s1: tab('s1', tmuxLeaf('p-s1', H2)) }, workspaces: [ws('sw', ['s1'])], activeWorkspaceId: 'sw', activeTabId: 's1' }
+    useLocalProfilesStore.setState({ slaves: { sl: { id: 'sl', name: 'Slave', createdAt: 1, world: slaveWorld } }, slaveOrder: ['sl'], parkedMaster: parked })
+    useHostSettingsStore.setState({ hosts: { [H2]: { files: { root: '/srv' } } } as never })
+    useHostLookStore.setState({ looks: { [H2]: { color: '#123456' } } as never })
+    // the master renamed, H2 removed, a new host added: a payload the pre-H3 apply would have landed in full
+    const payload = JSON.parse(JSON.stringify(hostsPayloadOf([host(M, { name: 'renamed' }), host('newone', { ip: '10.0.0.3', order: 1 })]))) as HostsPayload
+    const before = {
+      hosts: useHostStore.getState(), tabs: useTabStore.getState(), workspaces: useWorkspaceStore.getState(), profiles: useLocalProfilesStore.getState(),
+      hostSettings: useHostSettingsStore.getState(), looks: useHostLookStore.getState(), shown: useShownHostsStore.getState(),
+    }
+    vi.mocked(deleteHostCascade).mockClear()
+    const real = useRebuildStore.getState().acquireOperationLock
+    const lockAsks = vi.fn(real)
+    useRebuildStore.setState({ acquireOperationLock: lockAsks })
+    let outcome: unknown
+    let writes = -1
+    try {
+      writes = await countWrites(async () => {
+        outcome = await applySectionToStores('hosts', payload, ctx)
+      })
+    } finally {
+      useRebuildStore.setState({ acquireOperationLock: real })
+    }
 
-  it('ends in the same state as deleting that host by hand (keep-tabs mode)', async () => {
-    seedHostWorld()
-    const before = world()
-    deleteHostCascade(H2, false)
-    const byHand = world()
-    expect(byHand).not.toEqual(before)
-
-    resetStores()
-    seedHostWorld()
-    expect(world()).toEqual(before) // same starting point
-    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
-
-    expect(outcome).toMatchObject({ ok: true })
-    expect(world()).toEqual(byHand)
-    // …and the fixture is not vacuous
-    const w = byHand as { sessions: object; executions: string[]; hostSettings: object; nex: object; executionList: object; hosts: { activeHostId: string } }
-    expect(Object.keys(w.sessions)).toEqual([M])
-    expect(w.executions).toEqual([`${M}:exc_1`])
-    expect(Object.keys(w.hostSettings)).toEqual([M])
-    expect(Object.keys(w.nex)).toEqual([M])
-    expect(Object.keys(w.executionList)).toEqual([M])
-    expect(w.hosts.activeHostId).toBe(M)
+    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'unknown-section' })
+    expect(useHostStore.getState()).toBe(before.hosts)
+    expect(useTabStore.getState()).toBe(before.tabs)
+    expect(useWorkspaceStore.getState()).toBe(before.workspaces)
+    expect(useLocalProfilesStore.getState()).toBe(before.profiles) // the parked master and every slave world
+    expect(useHostSettingsStore.getState()).toBe(before.hostSettings)
+    expect(useHostLookStore.getState()).toBe(before.looks)
+    expect(useShownHostsStore.getState()).toBe(before.shown)
+    expect(writes).toBe(0)
+    expect(deleteHostCascade).not.toHaveBeenCalled()
+    expect(lockAsks).not.toHaveBeenCalled()
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
-  it('marks the panes already here that sit on the removed host, and only those', async () => {
-    seedHostWorld()
-    await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
-    const { tabs } = useTabStore.getState()
-    const split = tabs.t1.layout as Extract<PaneLayout, { type: 'split' }>
-    expect(split.children[0]).toMatchObject({ pane: { content: { hostId: H2, terminated: 'host-removed' } } })
-    expect((split.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
-    expect(split.sizes).toEqual([60, 40])
-    expect(tabs.t2.layout).toMatchObject({ pane: { content: { terminated: 'host-removed' } } })
-    expect((tabs.t3.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
-  })
-
-  it('busy: removing a host needs the operation lock — held elsewhere, NOTHING is written', async () => {
-    seedHostWorld()
-    const before = world()
-    const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
-    let outcome: unknown
-    const writes = await countWrites(async () => {
-      outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' })]), ctx)
-    })
-    expect(outcome).toEqual({ ok: false, reason: 'busy' })
-    expect(writes).toBe(0)
-    expect(world()).toEqual(before)
-    expect(useRebuildStore.getState().lockGrant).toBe(grant)
-  })
-
-  it('an apply that removes no host does not take the lock: it lands even while the lock is held', async () => {
-    seedHostWorld()
-    const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
-    const h3 = host('host-three', { ip: '10.0.0.3', order: 2 })
-    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' }), host(H2, { ip: '10.0.0.2', order: 1 }), h3]), ctx)
-    expect(outcome).toMatchObject({ ok: true })
-    expect(useHostStore.getState().hosts[M].name).toBe('renamed')
-    expect(Object.keys(useHostStore.getState().hosts)).toEqual([M, H2, 'host-three'])
-    expect(useRebuildStore.getState().lockGrant).toBe(grant)
-  })
-
-  describe('a store write fails AFTER the cascade ran', () => {
-    const realEnsure = useNexHostStore.getState().ensure
-    let ensure: ReturnType<typeof vi.fn<(hostId: string) => Promise<void>>>
-
-    beforeEach(() => {
-      ensure = vi.fn<(hostId: string) => Promise<void>>(() => Promise.resolve())
-      useNexHostStore.setState({ ensure })
-    })
-    afterEach(() => useNexHostStore.setState({ ensure: realEnsure }))
-
-    const hostSlice = () => {
-      const h = useHostStore.getState()
-      return JSON.parse(JSON.stringify({ hosts: h.hosts, hostOrder: h.hostOrder, activeHostId: h.activeHostId, devHostId: h.devHostId, runtime: h.runtime }))
-    }
-
-    /** The three stores the cascade clears and its own undo does NOT bring back — by reference, so "equal" means "the very same entries". */
-    const threeStores = () => ({
-      executions: useExecutionStore.getState().executions,
-      list: useExecutionListStore.getState().byHost,
-      nex: useNexHostStore.getState().byHost,
-    })
-
-    /** A richer H2: a second execution holding a lease, so the snapshot has more than one entry and more than default fields. */
-    function seedRich(): void {
-      seedHostWorld()
-      useExecutionStore.getState().applyEvents(H2, 'exc_2', [{ seq: 7, execution_id: 'exc_2', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }] as never)
-      useExecutionStore.getState().setLease(H2, 'exc_2', { leaseId: 'ls_1', expiresAt: 9_999_999_999_999 })
-    }
-
-    /** The n-th `useHostStore.setState` made by the apply throws (1 = staging, 2 = the final write, 3 = publish). */
-    function failHostWrite(n: number, message = 'host write failed'): void {
-      const real = useHostStore.setState
-      let calls = 0
-      vi.spyOn(useHostStore, 'setState').mockImplementation((...args) => {
-        if (++calls === n) throw new Error(message)
-        real(...(args as Parameters<typeof real>))
-      })
-    }
-
-    it('the host slice is back — the removed host\'s runtime row included — and so is what the cascade\'s own undo restores', async () => {
-      seedRich()
-      const before = hostSlice()
-      failHostWrite(2)
-      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
-      vi.mocked(useHostStore.setState).mockRestore()
-      expect(hostSlice()).toEqual(before)
-      expect(useHostStore.getState().runtime[H2]).toEqual({ status: 'connected' })
-      expect(useSessionStore.getState().sessions[H2]).toHaveLength(1)
-      expect(useRebuildStore.getState().lockedBy).toBeNull()
-    })
-
-    it('execution / execution-list / nex-host: the removed host\'s entries are back, the very same ones, and the other host\'s were never touched', async () => {
-      seedRich()
-      const before = threeStores()
-      expect(Object.keys(before.executions).sort()).toEqual([`${H2}:exc_1`, `${H2}:exc_2`, `${M}:exc_1`].sort())
-      failHostWrite(2)
-      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow(/^host write failed$/)
-      vi.mocked(useHostStore.setState).mockRestore()
-
-      const after = threeStores()
-      expect(after.executions).toEqual(before.executions)
-      expect(after.list).toEqual(before.list)
-      expect(after.nex).toEqual(before.nex)
-      for (const key of Object.keys(before.executions)) expect(after.executions[key], key).toBe(before.executions[key])
-      for (const h of [M, H2]) {
-        expect(after.list[h], h).toBe(before.list[h])
-        expect(after.nex[h], h).toBe(before.nex[h])
-      }
-      expect(after.executions[`${H2}:exc_2`].lease).toEqual({ leaseId: 'ls_1', expiresAt: 9_999_999_999_999 })
-      expect(ensure).not.toHaveBeenCalled() // restored as it was: nothing to re-fetch
-    })
-
-    it('an entry that appeared for the removed host DURING the cascade (a lease hook writing `lease: null`) does not survive the restore', async () => {
-      seedRich()
-      const before = threeStores()
-      // what a mounted useExecutionLease does, synchronously, the moment its host leaves the store
-      const unsub = useHostStore.subscribe((next, prev) => {
-        if (prev.hosts[H2] && !next.hosts[H2]) {
-          useExecutionStore.getState().setLease(H2, 'exc_2', null)
-          useExecutionStore.getState().setLease(H2, 'exc_ghost', null)
-        }
-      })
-      failHostWrite(2)
-      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('host write failed')
-      unsub()
-      vi.mocked(useHostStore.setState).mockRestore()
-      expect(threeStores().executions).toEqual(before.executions)
-    })
-
-    // Why `runtime[H]` may be restored verbatim (`connected` included): the
-    // connection layer tears a host's WS down from a React effect, and no effect
-    // can run inside a synchronous block. From the staging write to the end of the
-    // rollback there must therefore be NO await — this pins it on the last
-    // fallible step (publish).
-    it('from the cascade to the end of the rollback nothing is awaited: everything is back before the promise is even looked at', () => {
-      seedRich()
-      const before = hostSlice()
-      const three = threeStores()
-      failHostWrite(3)
-      const pending = applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
-      vi.mocked(useHostStore.setState).mockRestore()
-      expect(hostSlice()).toEqual(before) // synchronously
-      expect(threeStores()).toEqual(three)
-      return expect(pending).rejects.toThrow('host write failed')
-    })
-
-    it('a restore that throws is not swallowed: the original error survives and says the rollback is incomplete', async () => {
-      seedRich()
-      const before = hostSlice()
-      failHostWrite(2)
-      const realNexSet = useNexHostStore.setState
-      vi.spyOn(useNexHostStore, 'setState').mockImplementation((...args) => {
-        const patch = args[0] as { byHost?: unknown }
-        if (typeof patch === 'function') throw new Error('nex restore blew up') // the rollback's functional merge; afterEach's plain patch passes
-        realNexSet(...(args as Parameters<typeof realNexSet>))
-      })
-      const failure = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx).then(() => null, (e: Error) => e)
-      vi.mocked(useHostStore.setState).mockRestore()
-      vi.mocked(useNexHostStore.setState).mockRestore()
-      expect(failure?.message).toMatch(/^host write failed/)
-      expect(failure?.message).toMatch(/rollback incomplete/)
-      expect(failure?.message).toMatch(/nex restore blew up/)
-      expect(hostSlice()).toEqual(before)
-      expect(Object.keys(useExecutionStore.getState().executions)).toContain(`${H2}:exc_2`) // the others were still restored
-    })
-  })
-
-  it('removes the last local hosts too when the master is new here (removeHost\'s one-host veto does not apply to a replace)', async () => {
-    useHostStore.setState({ hosts: { [H2]: host(H2) }, hostOrder: [H2], activeHostId: H2, devHostId: null })
-    useSessionStore.getState().replaceHost(H2, [{ code: 'dev001', name: 'Dev', mode: 'terminal', cwd: '~' }] as never)
-    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
-    expect(outcome).toMatchObject({ ok: true })
-    expect(Object.keys(useHostStore.getState().hosts)).toEqual([M])
-    expect(useSessionStore.getState().sessions[H2]).toBeUndefined()
+  it.each([
+    ['null (deleted)', null],
+    ['malformed', { hosts: { [M]: { ...host(M), extra: 1 } }, hostOrder: [M] }],
+    ['empty', { hosts: {}, hostOrder: [] }],
+  ])('%s: the same answer — the payload is not looked at', async (_name, payload) => {
+    const before = useHostStore.getState()
+    expect(await applySectionToStores('hosts', payload, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'unknown-section' })
+    expect(useHostStore.getState()).toBe(before)
   })
 })
 
@@ -743,7 +519,7 @@ describe('applySectionToStores — settings', () => {
   })
 
   it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {
-    expect(Object.keys(readSettingsSources())).toHaveLength(8)
+    expect(Object.keys(readSettingsSources())).toHaveLength(10)
     expect(readSettingsSources()).not.toHaveProperty('purdex-editor-settings')
     const payload = { ...settingsNow(), 'purdex-editor-settings': { fontSize: 20 } }
     let outcome: unknown
@@ -797,6 +573,168 @@ describe('applySectionToStores — settings', () => {
   })
 })
 
+// host ownership H2c-1 (spec §4.1): the look store's keys are wire ids IN the store — an apply writes them verbatim,
+// whatever this device's hosts are, and replaces the record whole.
+describe('applySectionToStores — settings: host looks', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const WIRE = syncIdOfSync(DAEMON)
+  const RED = { console: { main: { color: '#ef4444', alpha: 100 } } }
+  const settingsNow = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2] })
+  })
+
+  it('a payload naming a host here AND one no host here claims → both land byte-for-byte; the hash is the payload\'s (nothing to push)', async () => {
+    const looks = {
+      [WIRE]: { name: 'mlab', colors: RED, icon: 'Laptop', iconWeight: 'bold' },
+      d1_unknown: { name: 'far away', color: '#00ff00' },
+      [H2]: { name: 'no daemon yet' },
+    }
+    const payload = { ...settingsNow(), 'purdex-host-looks': { looks } } as SettingsPayload
+
+    const outcome = await applySectionToStores('settings', payload, ctx)
+
+    expect(JSON.stringify(useHostLookStore.getState().looks)).toBe(JSON.stringify(looks))
+    expect(persistedOf(STORAGE_KEYS.HOST_LOOKS).looks).toEqual(looks)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('replace semantics: an entry the payload lacks is dropped here', async () => {
+    useHostLookStore.setState({ looks: { [WIRE]: { name: 'old' }, d1_gone: { name: 'gone' } } })
+    const payload = { ...settingsNow(), 'purdex-host-looks': { looks: { [WIRE]: { name: 'new' } } } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'new' } })
+  })
+
+  it('an entry the store sanitises lands cleaned, and the section is honestly dirty', async () => {
+    const payload = { ...settingsNow(), 'purdex-host-looks': { looks: { d1_x: { name: 'x', icon: 'NotAnIcon' } } } } as SettingsPayload
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(useHostLookStore.getState().looks).toEqual({ d1_x: { name: 'x' } })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('an ordinal-5 payload (no look store) leaves the look store untouched; the rebuild carries it, so the hash differs (pushed once)', async () => {
+    useHostLookStore.setState({ looks: { [WIRE]: { name: 'mine' } } })
+    const before = useHostLookStore.getState()
+    const legacy = settingsNow()
+    delete legacy['purdex-host-looks']
+    const outcome = await applySectionToStores('settings', legacy, ctx)
+    expect(useHostLookStore.getState()).toBe(before)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-host-looks': { looks: { [WIRE]: { name: 'mine' } } } }) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
+  })
+})
+
+// host ownership H2d-1 (spec §4.1, plan §0.6): the shown-hosts ids are wire ids IN the store — an apply writes them
+// verbatim, whatever this device's hosts are; `{ ids }` always travels (the empty list included), so every [] ↔ list
+// transition is a same-shape patch (never `rejected-settings`).
+describe('applySectionToStores — settings: shown hosts', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const WIRE = syncIdOfSync(DAEMON)
+  const settingsNow = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+  const ids = () => useShownHostsStore.getState().ids
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2] })
+  })
+
+  it('the store is always in the build, the empty default included', () => {
+    expect(settingsNow()['purdex-shown-hosts']).toEqual({ ids: [] })
+  })
+
+  it('{ ids: [d1_unknown, d1_a] } lands byte-for-byte and round-trips apply → build; the hash is the payload\'s (nothing to push)', async () => {
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: ['d1_unknown', 'd1_a'] } } as SettingsPayload
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(ids()).toEqual(['d1_unknown', 'd1_a'])
+    expect(persistedOf(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ ids: ['d1_unknown', 'd1_a'] })
+    expect(JSON.stringify(settingsNow()['purdex-shown-hosts'])).toBe(JSON.stringify(payload['purdex-shown-hosts']))
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('ids naming a host here (wire and local form) and one no host here claims land verbatim — no local↔wire mapping', async () => {
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: [WIRE, 'd1_unknown', H2] } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(ids()).toEqual([WIRE, 'd1_unknown', H2])
+  })
+
+  it.each([
+    ['[] → a list', [] as string[], [WIRE, 'd1_unknown']],
+    ['a list → []', [WIRE, 'd1_unknown'], [] as string[]],
+  ])('%s applies (no rejected-settings)', async (_label, local, incoming) => {
+    useShownHostsStore.setState({ ids: local })
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: incoming } } as SettingsPayload
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(ids()).toEqual(incoming)
+  })
+
+  it('applying a shown-hosts change closes nothing: the tab, workspace and local-profiles stores stay the same objects (§0.21)', async () => {
+    const tabs = useTabStore.getState()
+    const workspaces = useWorkspaceStore.getState()
+    const profiles = useLocalProfilesStore.getState()
+    useShownHostsStore.setState({ ids: [WIRE, H2] })
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: [H2] } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+    expect(ids()).toEqual([H2])
+    expect(useTabStore.getState()).toBe(tabs)
+    expect(useWorkspaceStore.getState()).toBe(workspaces)
+    expect(useLocalProfilesStore.getState()).toBe(profiles)
+  })
+
+  // The #1421 attacker finding, as a regression: two devices with different host lists share one synced list. A's
+  // hide must carry every id it does not know through; B, applying it, keeps its own host shown. Hosts added later are
+  // hidden on each device and write nothing.
+  it('two clients: A hides a → payload [d1_b, d1_c] (d1_c kept although A lacks c); on B c stays shown, a is hidden; later adds write nothing', async () => {
+    const d = (n: string) => `${n}-lab:${n.repeat(6).slice(0, 6)}`
+    const hostsOf = (names: string[]) => ({
+      [M]: host(M, { daemonId: DAEMON }),
+      ...Object.fromEntries(names.map((n, i) => [n, host(n, { ip: `10.0.1.${i + 1}`, order: i + 1, daemonId: d(n) })])),
+    })
+    const [A_HOSTS, B_HOSTS] = [hostsOf(['a', 'b']), hostsOf(['a', 'b', 'c'])]
+    const SYNCED = ['a', 'b', 'c'].map((n) => syncIdOfSync(d(n)))
+
+    // device A
+    useHostStore.setState({ hosts: A_HOSTS, hostOrder: [M, 'a', 'b'] })
+    useShownHostsStore.setState({ ids: SYNCED })
+    setHostShown('a', false)
+    const fromA = settingsNow()
+    expect(fromA['purdex-shown-hosts']).toEqual({ ids: [SYNCED[1], SYNCED[2]] })
+
+    // device B
+    useHostStore.setState({ hosts: B_HOSTS, hostOrder: [M, 'a', 'b', 'c'] })
+    useShownHostsStore.setState({ ids: SYNCED })
+    expect(await applySectionToStores('settings', fromA, ctx)).toMatchObject({ ok: true, hash: await hashSection(fromA) })
+    expect(isRefShownNow('c')).toBe(true)
+    expect(isRefShownNow('b')).toBe(true)
+    expect(isRefShownNow('a')).toBe(false)
+
+    // a host added later on B is hidden there; nothing is written, the payload rebuilds byte-identical
+    const onB = JSON.stringify(settingsNow())
+    const e = useHostStore.getState().addHost({ name: 'e', ip: '10.0.2.1', port: 7860 })
+    expect(isRefShownNow(e)).toBe(false)
+    expect(JSON.stringify(settingsNow())).toBe(onB)
+
+    // back on A (its store as it left it): a host d added is hidden; the payload rebuilds byte-identical
+    useHostStore.setState({ hosts: A_HOSTS, hostOrder: [M, 'a', 'b'] })
+    useShownHostsStore.setState({ ids: fromA['purdex-shown-hosts']!.ids as string[] })
+    const onA = JSON.stringify(settingsNow())
+    const dId = useHostStore.getState().addHost({ name: 'd', ip: '10.0.3.1', port: 7860 })
+    expect(isRefShownNow(dId)).toBe(false)
+    expect(JSON.stringify(settingsNow())).toBe(onA)
+  })
+
+  it('an ordinal-6 payload (no shown-hosts store) leaves the store untouched; the rebuild carries it, so the hash differs (pushed once)', async () => {
+    useShownHostsStore.getState().show(WIRE)
+    const before = useShownHostsStore.getState()
+    const legacy = settingsNow()
+    delete legacy['purdex-shown-hosts']
+    const outcome = await applySectionToStores('settings', legacy, ctx)
+    expect(useShownHostsStore.getState()).toBe(before)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-shown-hosts': { ids: [WIRE] } }) })
+  })
+})
+
 describe('applySectionToStores — settings: a failed apply rolls back registries, DOM and translator too', () => {
   const customTheme = () => ({ id: 'custom-1', name: 'Mine', tokens: getTheme('dark')!.tokens, builtin: false })
   const customLocale = { id: 'custom-loc', name: 'Dansk', translations: { 'common.cancel': 'Annuller' }, builtin: false }
@@ -826,7 +764,7 @@ describe('applySectionToStores — settings: a failed apply rolls back registrie
     cancel: useI18nStore.getState().t('common.cancel'),
   })
 
-  it('a later store throws → the eight stores, both registries, <html> theme/lang and `t` are all as before', async () => {
+  it('a later store throws → the nine stores, both registries, <html> theme/lang and `t` are all as before', async () => {
     const incoming = await seedCustom()
     const before = observed()
     expect(before).toMatchObject({ domTheme: 'custom-1', domLang: 'custom-loc', cancel: 'Annuller' })
@@ -1071,15 +1009,19 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(writes).toBe(0)
   })
 
-  it('marks an arriving pane of a host unknown here as host-removed, and reports the honest hash', async () => {
+  // Host ownership §3.1.1 / §3.2: a pane naming a host this device lacks is kept verbatim — never marked — so the
+  // stores hold exactly what arrived and nothing is pushed back.
+  it('keeps an arriving pane of a host unknown here byte-for-byte, unmarked, and reports the incoming payload\'s hash', async () => {
     seedTabWorld()
-    const split: PaneLayout = { type: 'split', id: 's9', direction: 'v', children: [tmuxLeaf('gone-pane', 'host-gone'), tmuxLeaf('ok-pane', M)], sizes: [50, 50] }
+    const unknown = syncIdOfSync('air-lab:0unkn0')
+    const split: PaneLayout = { type: 'split', id: 's9', direction: 'v', children: [tmuxLeaf('gone-pane', unknown), tmuxLeaf('ok-pane', M)], sizes: [50, 50] }
     const payload = incomingFor([tab('a5', split)])
     const outcome = await applySectionToStores('tabs.wa', payload, ctx)
     const layout = useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>
-    expect(layout.children[0]).toMatchObject({ pane: { content: { hostId: 'host-gone', terminated: 'host-removed' } } })
-    expect((layout.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
+    const wired = (payload.tabs.a5.layout as Extract<PaneLayout, { type: 'split' }>).children[0] as Extract<PaneLayout, { type: 'leaf' }>
+    expect((layout.children[0] as Extract<PaneLayout, { type: 'leaf' }>).pane).toEqual(wired.pane)
+    expect(JSON.stringify(useTabStore.getState().tabs.a5)).not.toContain('terminated')
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   describe('an ordinal-2 payload listing device-local tabs (tabs-local-only §3.5)', () => {
@@ -1135,17 +1077,6 @@ describe('applySectionToStores — tabs.<id>', () => {
     })
     expect(second).toEqual({ ok: true, hash: null })
     expect(writes).toBe(0)
-  })
-})
-
-describe('markHostRemovedPanes', () => {
-  it('returns the same object when every host is known, and never overwrites an existing reason', () => {
-    const live = tmuxLeaf('p1', M)
-    expect(markHostRemovedPanes(live, new Set([M]))).toBe(live)
-    const dead: PaneLayout = { type: 'leaf', pane: { id: 'p2', content: { kind: 'tmux-session', hostId: 'x', sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i', terminated: 'session-closed' } } }
-    expect(markHostRemovedPanes(dead, new Set())).toBe(dead)
-    const other: PaneLayout = { type: 'leaf', pane: { id: 'p3', content: { kind: 'new-tab' } as never } }
-    expect(markHostRemovedPanes(other, new Set())).toBe(other)
   })
 })
 
@@ -1211,6 +1142,17 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(JSON.stringify(parked)).not.toContain('SLAVE-ONLY')
   })
 
+  it('tabs.<id> naming a host unknown here marks nothing in the PARKED master (host ownership §3.2)', async () => {
+    parkMasterShowSlave()
+    const unknown = syncIdOfSync('air-lab:0unkn0')
+    const payload = JSON.parse(JSON.stringify(buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', tmuxLeaf('gone-pane', unknown)) }))) as TabsPayload
+    const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+    const parked = useLocalProfilesStore.getState().parkedMaster!
+    expect(parked.tabs.a5.layout).toEqual(payload.tabs.a5.layout)
+    expect(JSON.stringify(parked.tabs.a5)).not.toContain('terminated')
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
   // tabs-local-only §3.6 on the parked path: `writeMasterWorld` re-points the parked world's active tab by the same rule.
   it('tabs.<id> into the PARKED master: its active tab, a kept device-local tab, stays; a removed synced one moves', async () => {
     seedTabWorld()
@@ -1254,22 +1196,6 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
-  it('hosts: a removed host is marked host-removed in the PARKED master too (and on screen), through the app\'s own cascade', async () => {
-    seedTabWorld()
-    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, b1: tab('b1', tmuxLeaf('p-b1', H2)) } })
-    parkMasterShowSlaveFromCurrent()
-    useTabStore.setState({ tabs: { 'SLAVE-ONLY-t1': tab('SLAVE-ONLY-t1', tmuxLeaf('SLAVE-ONLY-p1', H2)) } })
-    const payload: HostsPayload = JSON.parse(JSON.stringify(buildHostsSection({ hosts: { [M]: host(M) }, hostOrder: [M] } as never)))
-
-    expect((await applySectionToStores('hosts', payload, ctx)).ok).toBe(true)
-
-    const terminated = (layout: PaneLayout): unknown => (layout.type === 'leaf' && layout.pane.content.kind === 'tmux-session' ? layout.pane.content.terminated : 'n/a')
-    const parked = useLocalProfilesStore.getState().parkedMaster!
-    expect(terminated(parked.tabs.b1.layout)).toBe('host-removed')
-    expect(terminated(parked.tabs.a2.layout)).toBeUndefined()
-    expect(terminated(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).toBe('host-removed')
-  })
-
   it.each(['workspaces', 'tabs.wa', 'settings'] as const)('%s while the master world is UNSETTLED: busy, nothing written, the lock released', async (key) => {
     parkMasterShowSlave()
     useWorkspaceStore.setState({ worldEpoch: 0 }) // the workspace store's rehydrate has not arrived
@@ -1290,95 +1216,10 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
   const DAEMON = 'mini-lab:278cbm'
   const WIRE = syncIdOfSync(DAEMON)
   const OTHER = 'other-lab:abc123'
-  /** The same daemon under ANOTHER device's local id, as that device's canonical build sends it. */
-  const canonicalFromA = (over: Partial<HostConfig> = {}, extra: HostConfig[] = []): HostsPayload =>
-    buildHostsSection({ hosts: Object.fromEntries([host('aaaaaa', { daemonId: DAEMON, ...over }), ...extra].map((h) => [h.id, h])), hostOrder: ['aaaaaa', ...extra.map((h) => h.id)] })
 
   beforeEach(() => {
     // this device: its master IS that daemon, under its own id; plus a host only it has
     useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), onlyb: host('onlyb', { ip: '10.0.0.9', order: 1 }) }, hostOrder: [M, 'onlyb'], activeHostId: M, devHostId: null, runtime: {} })
-  })
-
-  it('hosts: the canonical row updates the master IN PLACE (its local id kept), the host only this device has is removed, and the hash is of the wire build', async () => {
-    const payload = canonicalFromA({ name: 'mlab by A' })
-    const outcome = await applySectionToStores('hosts', payload, ctx)
-    const s = useHostStore.getState()
-    expect(Object.keys(s.hosts)).toEqual([M])
-    expect(s.hosts[M]).toMatchObject({ id: M, name: 'mlab by A', daemonId: DAEMON, syncAliases: ['aaaaaa'] })
-    expect(s.hostOrder).toEqual([M])
-    // the wire build: A's row plus THIS device's own id as an alias (its ordinal-2-era key) — one push, then agreed
-    const rebuilt = buildHostsSection(s)
-    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(rebuilt) })
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
-  })
-
-  it('hosts: a canonical row nobody matches is created under a NEW random local id (never its sync id); its aliases land in syncAliases', async () => {
-    const other = { ...host('xxxxxx', { ip: '10.0.0.7', daemonId: OTHER, order: 1 }), syncAliases: ['legacy1'] }
-    const payload = canonicalFromA({}, [other])
-    const outcome = await applySectionToStores('hosts', payload, ctx)
-    const s = useHostStore.getState()
-    const created = s.hostOrder[1]
-    expect(created).toMatch(/^[0-9a-z]{6}$/)
-    expect(created).not.toBe('xxxxxx')
-    expect(s.hosts[created]).toMatchObject({ daemonId: OTHER, syncAliases: ['legacy1', 'xxxxxx'] })
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildHostsSection(s)) })
-  })
-
-  it('hosts: an ORDINAL-2 row (A\'s local id as key, with daemonId) is matched by daemonId; its key becomes an alias; the rebuilt hash is canonical (one push)', async () => {
-    const legacy: HostsPayload = { hosts: { aaaaaa: host('aaaaaa', { daemonId: DAEMON }) }, hostOrder: ['aaaaaa'] }
-    const outcome = await applySectionToStores('hosts', legacy, ctx)
-    const s = useHostStore.getState()
-    expect(Object.keys(s.hosts)).toEqual([M])
-    expect(s.hosts[M].syncAliases).toEqual(['aaaaaa'])
-    const rebuilt = buildHostsSection(s)
-    expect(Object.keys(rebuilt.hosts)).toEqual([WIRE])
-    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', M])
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(rebuilt) })
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
-  })
-
-  it('master by IDENTITY: a payload without the master daemon\'s row → removes-master-host; its row at another ip → changes-master-host; nothing written', async () => {
-    const before = useHostStore.getState().hosts
-    const without = buildHostsSection({ hosts: { zz: host('zz', { daemonId: OTHER }) }, hostOrder: ['zz'] })
-    expect(await applySectionToStores('hosts', without, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'removes-master-host' })
-    expect(await applySectionToStores('hosts', canonicalFromA({ ip: '10.9.9.9' }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
-    expect(await applySectionToStores('hosts', canonicalFromA({ token: 'other' }), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'changes-master-host' })
-    expect(useHostStore.getState().hosts).toBe(before)
-  })
-
-  // A2 (PR #1365): an alias listed by two rows (or equal to another row's key) would make every legacy id that
-  // goes through it ambiguous — tabs / presets resolved to nothing, panes branded host-removed. Refused whole.
-  it.each([
-    ['two canonical rows list the same alias', (p: HostsPayload) => {
-      const other = syncIdOfSync(OTHER)
-      ;(p.hosts[other] as HostConfig & { aliases?: string[] }).aliases = ['shared', 'zzzzzz']
-      ;(p.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['aaaaaa', 'shared']
-    }],
-    ['an alias is another row\'s (legacy) key', (p: HostsPayload) => {
-      p.hosts.legacy1 = { ...host('legacy1', { ip: '10.0.0.8', order: 2 }) }
-      p.hostOrder.push('legacy1')
-      ;(p.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['aaaaaa', 'legacy1']
-    }],
-  ])('duplicate-host-alias: %s → invalid before anything is applied; no store written', async (_name, edit) => {
-    seedTabWorld()
-    const payload = JSON.parse(JSON.stringify(canonicalFromA({}, [host('xxxxxx', { ip: '10.0.0.7', daemonId: OTHER, order: 1 })]))) as HostsPayload
-    edit(payload)
-    let outcome: unknown
-    const writes = await countWrites(async () => {
-      outcome = await applySectionToStores('hosts', payload, ctx)
-    })
-    expect(outcome).toMatchObject({ ok: false, reason: 'invalid', code: 'duplicate-host-alias' })
-    expect(writes).toBe(0) // hosts, tabs, settings: all as they were
-  })
-
-  it('duplicate-host-identity: two rows for one daemon; host-identity-conflict: two LOCAL hosts claim the row\'s daemon — nothing written', async () => {
-    const two: HostsPayload = { hosts: { a1: host('a1', { daemonId: DAEMON }), a2: host('a2', { daemonId: DAEMON }) }, hostOrder: ['a1', 'a2'] }
-    expect(await applySectionToStores('hosts', two, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'duplicate-host-identity' })
-    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), twin: host('twin', { daemonId: DAEMON }) }, hostOrder: [M, 'twin'] })
-    const before = useHostStore.getState().hosts
-    expect(await applySectionToStores('hosts', canonicalFromA(), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'host-identity-conflict' })
-    expect(useHostStore.getState().hosts).toBe(before)
   })
 
   it('tabs: a sync id and an alias resolve to the local host; nothing is marked host-removed; the hash is of the wire build', async () => {
@@ -1395,7 +1236,7 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(wire) })
   })
 
-  it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is left out (the hash says so)', async () => {
+  it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is KEPT verbatim (host ownership §3.2)', async () => {
     const other = syncIdOfSync(OTHER)
     const presets = {
       '3col': { enabled: true, columns: [[`sessions:${WIRE}`], [`headless:${other}`], []] },
@@ -1406,11 +1247,140 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     const outcome = await applySectionToStores('settings', payload, ctx)
     expect(outcome).toMatchObject({ ok: true })
     expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } } })
-    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [], []])
+    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${M}`], [`headless:${other}`], []])
     expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([[`sessions:${M}`]])
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) }) // the unknown column: pushed back without it, once
     const identity = identityOfSync(useHostStore.getState().hosts)
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)) })
+  })
+
+  // Host ownership §3.2: every reference to a host this device lacks is stored verbatim and built verbatim, so a
+  // payload carrying them comes back byte-for-byte — its hash is the incoming one and nothing is pushed.
+  it('settings: an unknown column and an unknown host-settings key round-trip apply → stores → build byte-for-byte', async () => {
+    const unknown = syncIdOfSync(OTHER)
+    const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+    const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+    for (const preset of Object.values(layout.presets)) preset.columns[0] = [...preset.columns[0], `sessions:${unknown}`, `headless:${unknown}`]
+    const payload: SettingsPayload = {
+      ...now,
+      'purdex-host-settings': { hosts: { [WIRE]: { mod: { k: 1 } }, [unknown]: { editor: { homePath: '/srv' } } } },
+    }
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { mod: { k: 1 } }, [unknown]: { editor: { homePath: '/srv' } } })
+    for (const preset of Object.values(useNewTabLayoutStore.getState().presets)) {
+      expect(preset.columns[0]).toEqual(expect.arrayContaining([`sessions:${unknown}`, `headless:${unknown}`]))
+    }
+    const identity = identityOfSync(useHostStore.getState().hosts)
+    expect(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identity)).toEqual(payload)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('settings: an unknown column survives the New Tab bootstrap too — apply → bootstrap → build is byte-for-byte', async () => {
+    const unknown = syncIdOfSync(OTHER)
+    clearNewTabRegistry()
+    registerNewTabProviderSource(createHostSessionProviderSource())
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    try {
+      expect(useHostStore.persist.hasHydrated()).toBe(true)
+      renderHook(() => useNewTabBootstrap()).unmount() // the local host's own blocks placed: the steady state
+      const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+      const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+      for (const preset of Object.values(layout.presets)) preset.columns[0] = [...preset.columns[0], `sessions:${unknown}`, `headless:${unknown}`]
+      const payload: SettingsPayload = { ...now, 'purdex-host-settings': { hosts: { [unknown]: { editor: { homePath: '/srv' } } } } }
+      expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+
+      renderHook(() => useNewTabBootstrap()).unmount()
+      expect(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts))).toEqual(payload)
+    } finally {
+      clearNewTabRegistry()
+    }
+  })
+
+  // Host ownership plan §0.2 / H1b T4: every apply, however it settles, requests a re-resolve pass — a rollback may
+  // have put back a wire id the pass had resolved, and the pass is idempotent and cheap.
+  describe('an apply requests a re-resolve pass when it settles', () => {
+    it.each([
+      ['a resolved outcome', () => buildWorkspacesSection(useWorkspaceStore.getState().workspaces)],
+      ['an invalid outcome', () => ({ junk: true })],
+    ] as const)('%s → a store holding a resolvable wire id ends on the local id', async (_label, payloadOf) => {
+      useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/w' } } } })
+      await applySectionToStores('workspaces', payloadOf(), ctx)
+      expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { editor: { homePath: '/w' } } })
+    })
+
+    it('a busy outcome → the pass is requested too (and retried once the lock is free)', async () => {
+      vi.useFakeTimers()
+      try {
+        useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/w' } } } })
+        const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+        expect(await applySectionToStores('workspaces', buildWorkspacesSection(useWorkspaceStore.getState().workspaces), ctx)).toEqual({ ok: false, reason: 'busy' })
+        expect(Object.keys(useHostSettingsStore.getState().hosts)).toEqual([WIRE])
+        useRebuildStore.getState().releaseOperationLock(grant)
+        await vi.advanceTimersByTimeAsync(HOST_RERESOLVE_RETRY_MS)
+        expect(Object.keys(useHostSettingsStore.getState().hosts)).toEqual([M])
+      } finally {
+        __resetHostReresolveForTest()
+        vi.useRealTimers()
+      }
+    })
+
+    // PR #1406 attacker high #3: the pass runs after the apply has settled, never inside its `finally` — a pass that
+    // throws must not replace the apply's own outcome or error.
+    describe('the pass itself throws', () => {
+      function passThrows(): void {
+        // On the store API (restorable), not on a state object — zustand copies a state's own props into the next one.
+        const realGetState = useRebuildStore.getState
+        vi.spyOn(useRebuildStore, 'getState').mockImplementation(() => {
+          const st = realGetState()
+          return {
+            ...st,
+            acquireOperationLock: (owner, parent) => {
+              if (owner === HOST_RERESOLVE_LOCK_OWNER) throw new Error('pass exploded')
+              return st.acquireOperationLock(owner, parent)
+            },
+          }
+        })
+        vi.spyOn(console, 'error').mockImplementation(() => {})
+      }
+
+      it('a resolved outcome is returned as it was', async () => {
+        useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/w' } } } }) // something to move
+        passThrows()
+        const payload = buildWorkspacesSection(useWorkspaceStore.getState().workspaces)
+        await expect(applySectionToStores('workspaces', payload, ctx)).resolves.toMatchObject({ ok: true, hash: await hashSection(payload) })
+        await new Promise((r) => setTimeout(r, 0)) // the scheduled pass has run — and thrown, caught
+      })
+
+      it('the apply\'s own error is the one the caller gets', async () => {
+        useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/old' } } } })
+        const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+        const payload: SettingsPayload = { ...now, 'purdex-layout': { ...(now['purdex-layout'] as object), tabPosition: 'left' } }
+        passThrows()
+        vi.spyOn(useLayoutStore, 'setState').mockImplementationOnce(() => { throw new Error('layout write failed') })
+        await expect(applySectionToStores('settings', payload, ctx)).rejects.toThrow(/^layout write failed$/)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+    })
+
+    it('a settings apply that THROWS after its rollback restored a wire id still ends with it resolved', async () => {
+      // Another window's write landed `WIRE` here and the pass has not run yet; the apply rewrites the key, a later
+      // store fails, and the rollback puts `WIRE` back — whatever pass ran between the awaits is undone by it.
+      useHostSettingsStore.setState({ hosts: { [WIRE]: { editor: { homePath: '/old' } } } })
+      const now = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+      const payload: SettingsPayload = {
+        ...now,
+        'purdex-host-settings': { hosts: { [WIRE]: { editor: { homePath: '/new' } } } },
+        'purdex-layout': { ...(now['purdex-layout'] as object), tabPosition: 'left' },
+      }
+      const realRehydrate = useHostSettingsStore.persist.rehydrate
+      vi.spyOn(useHostSettingsStore.persist, 'rehydrate').mockImplementationOnce(async () => {
+        await realRehydrate()
+        requestHostReresolve() // a pass interleaved between the apply's awaits
+      })
+      vi.spyOn(useLayoutStore, 'setState').mockImplementationOnce(() => { throw new Error('layout write failed') })
+      await expect(applySectionToStores('settings', payload, ctx)).rejects.toThrow('layout write failed')
+      vi.restoreAllMocks()
+      await vi.waitFor(() => expect(useHostSettingsStore.getState().hosts).toEqual({ [M]: { editor: { homePath: '/old' } } }))
+    })
   })
 
   // R1 (PR #1365): the settings apply awaits a rehydrate per store. A host-store change in that gap means the part
@@ -1478,20 +1448,6 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
 
   // Follow-up to R1: the tabs apply resolves wire ids under the operation lock, with the write — a host-store change
   // while the lock is being taken cannot leave the panes resolved through the hosts as they were before it.
-  it('aliases in ANY order are accepted: applied sorted, the rebuild is the sorted fixed point — ONE write, then none', async () => {
-    const payload = JSON.parse(JSON.stringify(canonicalFromA())) as HostsPayload
-    ;(payload.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases = ['bbbbbb', 'aaaaaa'] // insertion order (e9e24625)
-    const outcome = await applySectionToStores('hosts', payload, ctx)
-    expect(outcome).toMatchObject({ ok: true })
-    expect(useHostStore.getState().hosts[M].syncAliases).toEqual(['aaaaaa', 'bbbbbb'])
-    const rebuilt = buildHostsSection(useHostStore.getState())
-    expect((rebuilt.hosts[WIRE] as HostConfig & { aliases?: string[] }).aliases).toEqual(['aaaaaa', 'bbbbbb', M])
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(rebuilt) }) // ≠ the payload's: the one write
-    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
-    // the sorted row applied back: the stores hold exactly it — nothing more to write
-    expect(await applySectionToStores('hosts', JSON.parse(JSON.stringify(rebuilt)), ctx)).toMatchObject({ ok: true, hash: await hashSection(rebuilt) })
-  })
-
   it('tabs: a daemonId learned while the operation lock is taken is the one the panes resolve through', async () => {
     useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), h2: host('h2', { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, 'h2'] })
     seedTabWorld()
@@ -1535,11 +1491,6 @@ describe('applySectionToStores — an ok outcome hands back the payload it hashe
     expect(o.hash).toBe(await hashSection(o.payload))
   }
 
-  it('hosts: the rebuilt section', async () => {
-    const outcome = await applySectionToStores('hosts', hostsPayloadOf([host(M, { name: 'renamed' }), host(H2)]), ctx)
-    await expectOwnPayload(outcome, buildHostsSection(useHostStore.getState()))
-  })
-
   it('settings: the rebuilt section', async () => {
     const payload = JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds()))) as SettingsPayload
     payload['purdex-layout'] = { ...payload['purdex-layout'], tabPosition: 'bottom' }
@@ -1565,129 +1516,5 @@ describe('applySectionToStores — an ok outcome hands back the payload it hashe
     const outcome = await applySectionToStores('tabs.nowhere', buildTabsSection(ws('nowhere', ['z1']), { z1: tab('z1') }), ctx)
     expect(outcome).toEqual({ ok: true, hash: null })
     expect(outcome).not.toHaveProperty('payload')
-  })
-})
-
-// #1369: a canonical row arriving without THIS device's own id is rebuilt with it (withOwnAlias) — the write-back is
-// designed, so the outcome says the difference is that and nothing else. Strict: anything else leaves it unset.
-describe('applySectionToStores — hosts: a difference in the own-alias write-back only is said so (#1369)', () => {
-  const DAEMON = 'mini-lab:278cbm'
-  const WIRE = syncIdOfSync(DAEMON)
-  const OTHER = 'other-lab:abc123'
-  type Row = HostConfig & { aliases?: string[] }
-  type Ok = { ok: true; hash: string | null; payload?: HostsPayload; rewrite?: 'aliases' | 'device-local-tabs' }
-  const fromA = (extra: HostConfig[] = [], over: Partial<HostConfig> = {}): HostsPayload =>
-    JSON.parse(JSON.stringify(buildHostsSection({ hosts: Object.fromEntries([host('aaaaaa', { daemonId: DAEMON, ...over }), ...extra].map((h) => [h.id, h])), hostOrder: ['aaaaaa', ...extra.map((h) => h.id)] }))) as HostsPayload
-  const withAliases = (p: HostsPayload, list: string[]): HostsPayload => {
-    ;(p.hosts[WIRE] as Row).aliases = list
-    return p
-  }
-  const other = (): HostConfig => host('xxxxxx', { ip: '10.0.0.7', daemonId: OTHER, order: 1 })
-
-  let unsubscribe: (() => void) | null = null
-  /** Edits the host store right after the apply's write: the stores then hold something other than what arrived. */
-  function afterTheWrite(edit: (s: ReturnType<typeof useHostStore.getState>) => Partial<ReturnType<typeof useHostStore.getState>>): void {
-    unsubscribe = useHostStore.subscribe(() => {
-      unsubscribe?.()
-      unsubscribe = null
-      useHostStore.setState(edit(useHostStore.getState()))
-    })
-  }
-
-  beforeEach(() => {
-    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }) }, hostOrder: [M], activeHostId: M, devHostId: null, runtime: {} })
-  })
-  afterEach(() => {
-    unsubscribe?.()
-    unsubscribe = null
-  })
-
-  async function apply(payload: HostsPayload): Promise<Ok> {
-    const outcome = await applySectionToStores('hosts', payload, ctx)
-    expect(outcome).toMatchObject({ ok: true })
-    return outcome as Ok
-  }
-
-  it('(a) a canonical row arriving without this device\'s own id → rewrite: aliases', async () => {
-    const payload = fromA()
-    const outcome = await apply(payload)
-    expect(outcome.hash).not.toBe(await hashSection(payload))
-    expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual(['aaaaaa', M])
-    expect(outcome.rewrite).toBe('aliases')
-  })
-
-  it('(b) an unsorted incoming list → rewrite: aliases; a duplicated one is refused by the guard before any of this', async () => {
-    expect((await apply(withAliases(fromA(), ['bbbbbb', 'aaaaaa']))).rewrite).toBe('aliases')
-    expect(await applySectionToStores('hosts', withAliases(fromA(), ['aaaaaa', 'aaaaaa']), ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'malformed' })
-  })
-
-  it('(b) the comparison itself normalises the incoming list: duplicated and unsorted pass', () => {
-    const incoming = withAliases(fromA(), ['bbbbbb', 'aaaaaa', 'bbbbbb'])
-    const built = withAliases(fromA(), ['aaaaaa', 'bbbbbb', M])
-    expect(isAliasWriteBackOnly(incoming, built, new Map([[WIRE, M]]))).toBe(true)
-  })
-
-  it('(c) 16 incoming aliases, the own id sorting among them → one displaced by the cap → rewrite: aliases', async () => {
-    const sixteen = [...Array.from({ length: 15 }, (_, i) => `a${String(i).padStart(2, '0')}`), 'zzzzzz']
-    const outcome = await apply(withAliases(fromA(), sixteen))
-    expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual([...sixteen.slice(0, 15), M]) // 'zzzzzz' displaced
-    expect(outcome.rewrite).toBe('aliases')
-  })
-
-  it('(d) an incoming alias the rebuilt row lacks without the cap → not set', async () => {
-    afterTheWrite((s) => ({ hosts: { ...s.hosts, [M]: { ...s.hosts[M], syncAliases: ['aaaaaa'] } } }))
-    const outcome = await apply(withAliases(fromA(), ['aaaaaa', 'bbbbbb']))
-    expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual(['aaaaaa', M]) // 'bbbbbb' lost
-    expect(outcome).not.toHaveProperty('rewrite')
-  })
-
-  it('(e) the rebuilt row carries an alias neither incoming nor its own id → not set', async () => {
-    afterTheWrite((s) => ({ hosts: { ...s.hosts, [M]: { ...s.hosts[M], syncAliases: ['aaaaaa', 'cccccc'] } } }))
-    const outcome = await apply(fromA())
-    expect((outcome.payload!.hosts[WIRE] as Row).aliases).toEqual(['aaaaaa', 'cccccc', M])
-    expect(outcome).not.toHaveProperty('rewrite')
-  })
-
-  it('(f) another field differs → not set', async () => {
-    const outcome = await apply(fromA([], { icon: 'NotARealIcon' })) // the sanitiser drops it
-    expect(outcome.payload!.hosts[WIRE].icon).toBeUndefined()
-    expect(outcome).not.toHaveProperty('rewrite')
-  })
-
-  it('(f) a row added → not set', async () => {
-    afterTheWrite((s) => ({ hosts: { ...s.hosts, extra: host('extra', { ip: '10.0.0.5', order: 1 }) }, hostOrder: [...s.hostOrder, 'extra'] }))
-    const outcome = await apply(fromA())
-    expect(Object.keys(outcome.payload!.hosts)).toHaveLength(2)
-    expect(outcome).not.toHaveProperty('rewrite')
-  })
-
-  it('(f) a row dropped → not set', async () => {
-    afterTheWrite((s) => {
-      const created = s.hostOrder.find((id) => id !== M)!
-      const { [created]: _gone, ...hosts } = s.hosts
-      return { hosts, hostOrder: s.hostOrder.filter((id) => id !== created) }
-    })
-    const outcome = await apply(fromA([other()]))
-    expect(Object.keys(outcome.payload!.hosts)).toEqual([WIRE])
-    expect(outcome).not.toHaveProperty('rewrite')
-  })
-
-  it('(f) hostOrder differs → not set', async () => {
-    afterTheWrite((s) => ({ hostOrder: [...s.hostOrder].reverse() }))
-    const outcome = await apply(fromA([other()]))
-    expect(outcome.payload!.hostOrder[0]).not.toBe(WIRE)
-    expect(outcome).not.toHaveProperty('rewrite')
-  })
-
-  it('(g) the build equals what arrived → not set (no mismatch, nothing to say)', async () => {
-    const first = await apply(fromA())
-    const again = await apply(JSON.parse(JSON.stringify(first.payload)) as HostsPayload)
-    expect(again.hash).toBe(first.hash)
-    expect(again).not.toHaveProperty('rewrite')
-  })
-
-  it('other sections never set it', async () => {
-    seedTabWorld()
-    expect(await applySectionToStores('workspaces', { order: ['wa'], workspaces: { wa: { name: 'X' } } }, ctx)).not.toHaveProperty('rewrite')
   })
 })

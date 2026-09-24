@@ -3,6 +3,8 @@ import { useTabStore } from '../stores/useTabStore'
 import { createTab } from '../types/tab'
 import type { PaneRendererProps } from '../lib/module-registry'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useHostStore } from '../stores/useHostStore'
+import { hostRefOf, landOnHostsPageIfHidden } from '../lib/shown-hosts'
 
  
 export function HistoryPage(_props: PaneRendererProps) {
@@ -31,6 +33,11 @@ export function HistoryPage(_props: PaneRendererProps) {
               if (isOpen) {
                 setActiveTab(record.tabId)
               } else {
+                // Host ownership H2d-3: creating a tab from the record opens its host — hidden in this workbench
+                // (checked now, against the live store) → the Hosts page on that host, no tab. Focusing an open tab
+                // above is left alone (hiding never changes existing tabs).
+                const ref = hostRefOf(record.paneContent, useHostStore.getState().hostOrder)
+                if (ref !== null && landOnHostsPageIfHidden(ref)) return
                 const tab = createTab(record.paneContent)
                 addTab(tab)
                 setActiveTab(tab.id)

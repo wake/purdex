@@ -4,6 +4,7 @@ import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { NexApiError } from '../../lib/nex/types'
 import { useSessionStore } from '../../stores/useSessionStore'
@@ -47,6 +48,8 @@ beforeEach(() => {
   vi.mocked(api.terminateExecution).mockReset().mockResolvedValue(undefined)
   useExecutionStore.getState().setSummary(H, E, summary() as never)
   useExecutionStore.getState().setHistoryLoaded(H, E, true)
+  // Take back / Take to terminal re-point the pane only on a host shown in the workbench (host ownership H2d-3).
+  useShownHostsStore.setState({ ids: [H] })
 })
 
 describe('ExecutionView', () => {
@@ -264,7 +267,7 @@ describe('ExecutionView', () => {
     expect(screen.getByText(/not found/i)).toBeInTheDocument()
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'host_removed', paused: false })
     rerender(<ExecutionView {...base} isActive />)
-    expect(screen.getByText(/host removed/i)).toBeInTheDocument()
+    expect(screen.getByText(/no host for this execution/i)).toBeInTheDocument()
     vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'nex_disabled', paused: false })
     rerender(<ExecutionView {...base} isActive />)
     expect(screen.getByText(/not enabled/i)).toBeInTheDocument()

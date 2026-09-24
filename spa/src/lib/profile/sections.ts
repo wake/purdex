@@ -27,6 +27,8 @@ import {
   makeWireResolver,
   mergeAliases,
   MAX_HOST_ALIASES,
+  mapColumnsKeepingOne,
+  presetColumnIdToWire,
   presetColumnsToWire,
   type HostIdentity,
   type WireResolver,
@@ -66,7 +68,8 @@ export interface CollectInput {
 
 /** A profile document. A tab that belongs to no workspace belongs to no section (§4.3); the app adopts it. */
 export interface ProfileDocumentResult {
-  document: Record<ProfileSectionKey, SectionPayload>
+  /** No `hosts` key: the host list is per device (host ownership H3). */
+  document: Record<Exclude<ProfileSectionKey, 'hosts'>, SectionPayload>
 }
 
 // A record key that cannot travel: `project` never copies it, and assigning it
@@ -198,18 +201,28 @@ function refuseConflict(identity: HostIdentity | undefined): void {
 }
 
 /**
- * wire → local for `tabs.*` / `settings`, from the host store as it is NOW —
- * after the `hosts` apply (spec §6, §11.2): a sync id → the local host of that
- * daemon; a legacy id → the host whose canonical row lists it in `aliases`
- * (persisted as `HostConfig.syncAliases`, so this survives a restart and an
- * interrupted transition); anything else unchanged (the existing unknown-host
- * handling). `null` under an identity conflict: nothing may be applied.
- * The rows are this device's own wire build of its hosts, which after a
- * `hosts` apply are the applied rows — `matched` is not needed.
+ * wire → local for `tabs.*` / `settings`, from this device's own hosts as they
+ * are NOW (spec §6, §11.2): a sync id → the local host of that daemon; a legacy
+ * id → the host whose canonical row lists it in `aliases` (persisted as
+ * `HostConfig.syncAliases` — what a pre-H3 `hosts` apply left behind — so this
+ * survives a restart and an interrupted transition); anything else unchanged
+ * (the existing unknown-host handling). `null` under an identity conflict:
+ * nothing may be applied. The rows are this device's own wire build of its
+ * hosts (`buildHostsSection`) — `matched` is not needed.
  */
 export function wireResolverOf(s: HostsSource, identity: HostIdentity = identityOfSync(s.hosts)): WireResolver | null {
   if (identity.conflict !== null) return null
   return makeWireResolver({ identity, rows: buildHostsSection(s, identity).hosts })
+}
+
+/**
+ * Everything the settings translation read from the host store: the identity (pairs + conflict), the live
+ * hosts (the New Tab columns kept), and the aliases (legacy ids resolved). Equal before and after an await →
+ * what was written is still what this apply would write now. A rename or a runtime change moves none of it.
+ */
+export function hostResolverSignature(state: HostsSource): string {
+  const aliases = Object.keys(state.hosts).sort().map((id) => [id, state.hosts[id].syncAliases ?? []])
+  return JSON.stringify([identityOfSync(state.hosts).signature, state.hostOrder.filter((id) => Object.hasOwn(state.hosts, id)), aliases])
 }
 
 // === Section builders ===
@@ -218,10 +231,12 @@ export function wireResolverOf(s: HostsSource, identity: HostIdentity = identity
  * `hosts`: each host's projected fields (`token: null` survives — it means
  * "cleared"), and the order. `hostOrder` is restricted to hosts that exist (an id
  * with no host is dropped — `reorderHosts` does not check ids — and a repeat is
- * kept once), because the applier's well-formedness guard rejects a section whose
- * order names an unknown host, and this client's hosts would then never sync. A
- * host the order never mentions is NOT added: the guard allows that state, and
- * the builder reflects the store rather than repairing it.
+ * kept once), because a pre-H3 receiver's well-formedness guard refuses a section
+ * whose order names an unknown host. A host the order never mentions is NOT
+ * added: the builder reflects the store rather than repairing it.
+ *
+ * Host ownership H3: no profile document carries this section any more (the host
+ * list is per device); its rows are what `wireResolverOf` resolves legacy ids by.
  */
 export function buildHostsSection(s: HostsSource, identity: HostIdentity = identityOfSync(s.hosts)): HostsPayload {
   refuseConflict(identity)
@@ -341,6 +356,26 @@ export const WORKSPACE_SCOPED_SETTINGS: { storageKey: SettingsStorageKey; field:
  * master's world. Filtered down to nothing the field is `{}`, exactly what a
  * store with no entry builds. `applySettings` is the other half.
  */
+/**
+ * local → wire over the presets, where a host's block held under its local id AND its wire id — the bootstrap placed
+ * the local one for a host added before its daemonId was known, the wire one arrived by sync, both held until the
+ * re-resolve pass renames the wire one (host ownership plan §0.11) — is built ONCE, at the wire-form one's place
+ * (`mapColumnsKeepingOne`, the rule the pass keeps too): the same bytes before, during and after the pass, nothing
+ * pushed. A preset that is not the expected shape is translated as before.
+ */
+function presetColumnsToWireOnce(presets: Record<string, unknown>, identity: HostIdentity): Record<string, unknown> {
+  const out = presetColumnsToWire(presets, identity)
+  const map = (id: string) => presetColumnIdToWire(id, identity)
+  for (const [key, preset] of Object.entries(presets)) {
+    const built = out[key]
+    if (!isRecord(preset) || !Array.isArray(preset.columns) || !isRecord(built)) continue
+    const columns = preset.columns as unknown[]
+    if (!columns.every((col) => Array.isArray(col) && col.every((id) => typeof id === 'string'))) continue
+    built.columns = mapColumnsKeepingOne(columns as string[][], map)
+  }
+  return out
+}
+
 export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspaceIds: ReadonlySet<string>, identity?: HostIdentity): SettingsPayload {
   refuseConflict(identity)
   const payload = project(stores, PROJECTIONS.settings) as SettingsPayload
@@ -349,7 +384,7 @@ export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspace
     const hostSettings = payload['purdex-host-settings']
     if (hostSettings !== undefined && isRecord(hostSettings.hosts)) hostSettings.hosts = hostSettingsToWire(hostSettings.hosts, identity)
     const newtab = payload['purdex-newtab-layout']
-    if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = presetColumnsToWire(newtab.presets, identity)
+    if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = presetColumnsToWireOnce(newtab.presets, identity)
   }
   const scoped = payload[WORKSPACE_SCOPED_SETTINGS.storageKey]?.[WORKSPACE_SCOPED_SETTINGS.field]
   // `project` returns fresh structure, so deleting from it touches no store.
@@ -368,25 +403,26 @@ function standaloneIds(workspaces: readonly Workspace[], tabs: Record<string, Ta
 }
 
 /**
- * The whole document: `hosts`, `settings`, `workspaces`, and one `tabs.<id>` for
+ * The whole document — what a profile syncs: `settings`, `workspaces`, and one `tabs.<id>` for
  * EVERY workspace in the `workspaces` section — an empty workspace still gets
  * `{order: [], tabs: {}}`, because `workspaces` is the authority on which
  * `tabs.*` exist (§4.6.3). A workspace whose id the daemon would reject is in
  * neither (see `buildWorkspacesSection`). A tab in no workspace enters no section.
+ * No `hosts`: the host list is per device (host ownership H3). Its hosts are
+ * still read — the ONE identity every section here is translated through.
  */
 export function buildProfileDocument(input: CollectInput): ProfileDocumentResult {
   const { workspaces } = input.workspaces
   const workspacesPayload = buildWorkspacesSection(workspaces)
   const identity = identityOfSync(input.hosts.hosts) // ONE identity for every section of the document
-  const document: Record<ProfileSectionKey, SectionPayload> = {
-    hosts: buildHostsSection(input.hosts, identity),
+  const document: ProfileDocumentResult['document'] = {
     // The master's workspaces ARE the ones this document's `workspaces` section lists.
     settings: buildSettingsSection(input.settings, new Set(workspacesPayload.order), identity),
     workspaces: workspacesPayload,
   }
   for (const id of workspacesPayload.order) {
     const ws = workspaces.find((w) => w.id === id) as Workspace
-    document[tabsSectionKey(id)] = buildTabsSection(ws, input.tabs.tabs, identity)
+    document[tabsSectionKey(id) as `tabs.${string}`] = buildTabsSection(ws, input.tabs.tabs, identity)
   }
   return { document }
 }

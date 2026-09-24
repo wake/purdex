@@ -56,15 +56,9 @@
 // WHY `attachId` (#1366, codex critic). A random 128-bit id written by every accepted `setMaster` (with the
 // master, in the same write) and cleared by `clearMaster`: it names ONE attach, and two attaches never share it,
 // however stale the windows that made them. It is the fence for everything that belongs to one attach and may
-// act late — the start layer rebuilds the master mode when it changes (the executor and its guard snapshot are
-// that attach's), and the pull guard's queued Stop sync goes ahead only while STORAGE still holds that id and
-// master (lib/profile/start.ts, `stopUnconfirmedPull`). Rehydrate keeps it only with a master and only as a
-// non-empty string; a master persisted before the field existed has none (null) until its next attach. A GUARD
-// NEVER EXISTS WITHOUT ITS ID (codex critic): `setMaster` writes both at once, but storage can hold a guard whose id
-// is missing or malformed (a dev build, a hand edit) — and a halted executor's Stop sync, fenced by the id, would
-// then refuse for ever: attached on the control plane, a driver that never moves. So rehydrate drops such a guard
-// and keeps the direction — a pull without a guard is exactly the first reconciliation of before #1366, which ends
-// by itself; dropping the direction too would turn the user's `pull` into the state machine's lock-and-ask.
+// act late — the start layer rebuilds the master mode when it changes (the executor is that attach's). Rehydrate
+// keeps it only with a master and only as a non-empty string; a master persisted before the field existed has none
+// (null) until its next attach.
 //
 // WHY `masterEndpoint` ("<ip>:<port>" of the master host AT ATTACH). The section
 // bases, the attachment, a schema lock — all of it belongs to ONE daemon, and the
@@ -123,24 +117,12 @@
 // is read by `merge` as a list of one (and added to `pendingDetaches` when a newer build wrote that beside it);
 // the old key is not written back.
 //
-// WHY `pendingPullHosts` = { rev, hash } | 'absent' (#1366). Before a pull the wizard shows which local hosts the
-// SOT's `hosts` section removes, and re-checks it right before the attach. The executor's first reconciliation
-// must then apply THAT `hosts` and no other: another device may push a `hosts` that removes more in the moment
-// between the wizard's last check and the first pull. So the row the user confirmed ('absent' = the profile had
-// no `hosts` section) goes with the direction — ONE PAIR of the same attach generation: set together by
-// `setMaster` (pull only), cleared together by `clearPendingDirection`, `clearMaster` and the next `setMaster`,
-// persisted and synced for the same reasons (the first reconciliation may continue after a reload, or in the
-// window that holds the lease). A guard without the direction `pull` means nothing and is sanitised away. The
-// executor holds every action until it has compared the SOT with it (executor.ts, THE PULL GUARD). It exists only
-// with an `attachId` as well (rehydrate drops it otherwise; see WHY `attachId`).
-//
-// WHY THE NOTICE OF A STOPPED PULL IS NOT HERE (#1366, codex R2 #1). It is written by the window whose executor
-// halted, whose memory of THIS store may be stale (another window attached anew a moment ago); a persisted store
-// writes its whole state on any `set`, and would put that stale master / generation / direction / guard back over
-// the other window's attach. So it lives under its own key: lib/profile/pull-unconfirmed.ts.
+// THE #1366 PULL GUARD IS GONE (host ownership H3a-1 / H3b). A pull no longer takes the SOT's host list, so no
+// `hosts` row is kept with the direction: an older build's `pendingPullHosts` in storage is dropped by rehydrate
+// (only the fields below come out of `merge`) and not written back.
 //
 // INVARIANTS: `masterHostId` and `masterProfileId` are both null or both
-// non-null, and non-null only together with `masterEndpoint`; `pendingDirection` and `suspension` are null whenever there is no master, `pendingPullHosts` whenever `pendingDirection` is not `pull`. `setMaster`
+// non-null, and non-null only together with `masterEndpoint`; `pendingDirection` and `suspension` are null whenever there is no master. `setMaster`
 // is the only way in and validates all three; the persist `merge` re-establishes
 // both for whatever storage hands back.
 import { create } from 'zustand'
@@ -151,9 +133,6 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 const PROFILE_ID_PATTERN = /^p_[0-9a-f]{12}$/
 
 export type SyncDirection = 'push' | 'pull'
-
-/** The SOT `hosts` row the user confirmed a pull against; `'absent'` = the profile had no `hosts` section. */
-export type ConfirmedHosts = { rev: number; hash: string } | 'absent'
 
 export interface Suspension {
   token: string
@@ -175,8 +154,6 @@ interface ProfileControl {
   masterProfileId: string | null
   /** Non-null from an attach until the first reconciliation has settled. */
   pendingDirection: SyncDirection | null
-  /** With `pendingDirection === 'pull'` only: the `hosts` row that pull was confirmed against. Null = no guard. */
-  pendingPullHosts: ConfirmedHosts | null
   /** `"<ip>:<port>"` of the master host when it was attached; null exactly when there is no master. */
   masterEndpoint: string | null
   /** While `now < suspension.until` (epoch ms) no window runs a driver: an attach — `token`'s — is in progress. */
@@ -197,9 +174,8 @@ export interface ProfileState extends ProfileControl {
    *  id, `direction` one of the two and `endpoint` a non-empty string; otherwise nothing changes and the answer
    *  is `false`. Attaching again to the same master starts a new first
    *  reconciliation in the direction given. `token`: the suspension this attach set is
-   *  lifted with it; one set by ANOTHER attach (a newer one, still in progress) stays. `confirmedHosts`: kept with
-   *  a `pull` only, and only when well-formed (`pendingPullHosts`); anything else is no guard. */
-  setMaster: (hostId: string, profileId: string, direction: SyncDirection, endpoint: string, token?: string, confirmedHosts?: ConfirmedHosts) => boolean
+   *  lifted with it; one set by ANOTHER attach (a newer one, still in progress) stays. */
+  setMaster: (hostId: string, profileId: string, direction: SyncDirection, endpoint: string, token?: string) => boolean
   /** Every driver stands still until `until` (epoch ms). Replaces any suspension there is. Ignored without a master. */
   suspend: (token: string, until: number) => void
   /** Lifts the suspension `token` set; any other token changes NOTHING (same state reference, no persist). */
@@ -244,14 +220,6 @@ function sanitiseSuspension(v: unknown): Suspension | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
   const { token, until } = v as Record<string, unknown>
   return isSuspension(token, until) ? { token: token as string, until: until as number } : null
-}
-
-/** A well-formed guard, copied (only `rev` and `hash`), or null. */
-export function sanitiseConfirmedHosts(v: unknown): ConfirmedHosts | null {
-  if (v === 'absent') return 'absent'
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
-  const { rev, hash } = v as Record<string, unknown>
-  return Number.isSafeInteger(rev) && (rev as number) >= 0 && typeof hash === 'string' && hash !== '' ? { rev: rev as number, hash } : null
 }
 
 /** 128 random bits, hex: no two attaches share one, whichever windows made them. */
@@ -327,8 +295,6 @@ function sanitiseControl(persisted: unknown): ProfileControl {
     masterHostId: attached ? (p.masterHostId as string) : null,
     masterProfileId: attached ? (p.masterProfileId as string) : null,
     pendingDirection,
-    // No `attachId`, no guard (codex critic): its only way out is a Stop sync fenced by that id — see WHY `attachId`.
-    pendingPullHosts: pendingDirection === 'pull' && attachId !== null ? sanitiseConfirmedHosts(p.pendingPullHosts) : null,
     masterEndpoint: attached ? (p.masterEndpoint as string) : null,
     suspension: attached ? sanitiseSuspension(p.suspension) : null,
     attachGeneration: Number.isSafeInteger(p.attachGeneration) && (p.attachGeneration as number) >= 0 ? (p.attachGeneration as number) : 0,
@@ -344,25 +310,22 @@ export const useProfileStore = create<ProfileState>()(
       masterHostId: null,
       masterProfileId: null,
       pendingDirection: null,
-      pendingPullHosts: null,
       masterEndpoint: null,
       suspension: null,
       attachGeneration: 0,
       attachId: null,
       autoSync: true,
       pendingDetaches: [],
-      setMaster: (hostId, profileId, direction, endpoint, token, confirmedHosts) => {
+      setMaster: (hostId, profileId, direction, endpoint, token) => {
         if (!isMasterPair(hostId, profileId) || !isSyncDirection(direction) || !isEndpoint(endpoint)) return false
-        const pendingPullHosts = direction === 'pull' ? sanitiseConfirmedHosts(confirmedHosts) : null
-        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, pendingPullHosts, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, attachId: newAttachId(), pendingDetaches: withoutKey(s.pendingDetaches, pendingDetachKey({ hostId, profileId, endpoint })) }))
+        set((s) => ({ masterHostId: hostId, masterProfileId: profileId, pendingDirection: direction, masterEndpoint: endpoint, suspension: s.suspension !== null && s.suspension.token === token ? null : s.suspension, attachGeneration: s.attachGeneration + 1, attachId: newAttachId(), pendingDetaches: withoutKey(s.pendingDetaches, pendingDetachKey({ hostId, profileId, endpoint })) }))
         return true
       },
       suspend: (token, until) => set((s) => (selectMaster(s) === null || !isSuspension(token, until) ? s : { suspension: { token, until } })),
       resume: (token) => set((s) => (s.suspension !== null && s.suspension.token === token ? { suspension: null } : s)),
       clearMaster: () =>
-        set((s) => ({ masterHostId: null, masterProfileId: null, pendingDirection: null, pendingPullHosts: null, masterEndpoint: null, suspension: null, attachGeneration: s.attachGeneration + 1, attachId: null })),
-      // ONE pair: the guard never outlives its direction (see the header, `pendingPullHosts`).
-      clearPendingDirection: () => set({ pendingDirection: null, pendingPullHosts: null }),
+        set((s) => ({ masterHostId: null, masterProfileId: null, pendingDirection: null, masterEndpoint: null, suspension: null, attachGeneration: s.attachGeneration + 1, attachId: null })),
+      clearPendingDirection: () => set({ pendingDirection: null }),
       setAutoSync: (value) => set({ autoSync: value === true }),
       addPendingDetach: (left) => {
         const clean = sanitisePendingDetach(left, true)
@@ -384,7 +347,6 @@ export const useProfileStore = create<ProfileState>()(
         masterHostId: state.masterHostId,
         masterProfileId: state.masterProfileId,
         pendingDirection: state.pendingDirection,
-        pendingPullHosts: state.pendingPullHosts,
         masterEndpoint: state.masterEndpoint,
         suspension: state.suspension,
         attachGeneration: state.attachGeneration,
@@ -392,7 +354,7 @@ export const useProfileStore = create<ProfileState>()(
         autoSync: state.autoSync,
         pendingDetaches: state.pendingDetaches,
       }),
-      // Only the ten sanitised fields ever come out of storage: persisted
+      // Only the nine sanitised fields ever come out of storage: persisted
       // junk can neither add a key nor replace an action.
       merge: (persisted, current) => ({ ...current, ...sanitiseControl(persisted) }),
     },

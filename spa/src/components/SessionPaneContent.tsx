@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import TerminalView from './TerminalView'
 import { TerminatedPane } from './TerminatedPane'
+import { MissingHostPane } from './MissingHostPane'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { fetchWsTicket } from '../lib/host-api'
@@ -18,6 +19,12 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   const terminated = content.kind === 'tmux-session' ? content.terminated : undefined
 
   const wsBase = useHostStore((s) => s.getWsBase(hostId))
+  // A reference this device cannot resolve (host ownership spec §3.2) is kept
+  // verbatim and rendered as missing. It must be checked before anything that
+  // reaches the network: `getWsBase` falls back to the active host for an
+  // unknown id, so attaching would open a terminal on the WRONG host.
+  // `Object.hasOwn`, not a lookup: `toString` / `__proto__` & co. are not hosts.
+  const hostKnown = useHostStore((s) => hostId !== '' && Object.hasOwn(s.hosts, hostId))
 
   // Second of the two cwd-probe triggers (spec §4.4): a pane opened after the
   // session list has settled gets no further `sessions` broadcast, so it would
@@ -32,6 +39,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   const attachGateOpen = useHostStore((s) => (hostId ? s.runtime[hostId]?.attachReady === true : true))
   useEffect(() => {
     if (terminated) return
+    if (!hostKnown) return
     if (!attachGateOpen) return
     probeSessionCwd(hostId, sessionCode, tmuxInstance)
     // The third provenance trigger (spec §5.4), under the same gate and the
@@ -40,7 +48,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     // would ever ask on its behalf. The probe itself decides whether this
     // binding still wants an answer.
     probeSessionProvenance(hostId, sessionCode, tmuxInstance)
-  }, [hostId, sessionCode, tmuxInstance, terminated, attachGateOpen])
+  }, [hostId, sessionCode, tmuxInstance, terminated, hostKnown, attachGateOpen])
 
   // Look up tabId from store (pane renderers don't receive tabId as a prop)
   const tabId = useTabStore((s) => {
@@ -61,6 +69,8 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
   }
 
   if (content.kind !== 'tmux-session') return null
+
+  if (!hostKnown) return <MissingHostPane hostId={hostId} />
 
   // Terminal is the only view a tmux-session pane has (P-D.3 tore down
   // Stream mode), so the key no longer carries a mode suffix: nothing about

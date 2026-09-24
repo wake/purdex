@@ -5,10 +5,11 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useAgentStore } from '../../stores/useAgentStore'
+import { useAgentStore, type AgentStatus } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
 import { connectionErrorMessage } from '../../lib/host-utils'
+import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
 import { SessionLauncher } from '../session-launcher/SessionLauncher'
 import type { Session } from '../../lib/host-api'
 
@@ -19,6 +20,15 @@ interface Props {
 // Shared fallback so the selector returns a stable reference when the host has
 // no sessions entry yet — a fresh `[]` per call makes useSyncExternalStore loop.
 const EMPTY_SESSIONS: Session[] = []
+
+// The store casts the wire value to AgentStatus, so an unknown one can still
+// arrive; the badge falls back to showing it raw.
+const AGENT_STATUS_LABEL_KEYS: Record<AgentStatus, string> = {
+  running: 'hosts.agent_status.running',
+  waiting: 'hosts.agent_status.waiting',
+  idle: 'hosts.agent_status.idle',
+  error: 'hosts.agent_status.error',
+}
 
 /* ─── Inline Rename ─── */
 
@@ -62,8 +72,12 @@ export function SessionsSection({ hostId }: Props) {
   const [renamingCode, setRenamingCode] = useState<string | null>(null)
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
   const agentStatuses = useAgentStore((s) => s.statuses)
+  // A host hidden in this workbench stays listed and manageable; only "open" (it creates a tab) is not offered
+  // (plan H2d-2, §0.21 user rules 1 / 5). "New session" creates no tab and stays (§0.29).
+  const shown = useIsRefShown(hostId)
 
   const handleOpen = (session: Session) => {
+    if (!isRefShownNow(hostId)) return
     const tabId = useTabStore.getState().openSingletonTab({
       kind: 'tmux-session',
       hostId,
@@ -121,6 +135,12 @@ export function SessionsSection({ hostId }: Props) {
         )
       })()}
 
+      {!shown && (
+        <p data-testid="sessions-open-hint" className="text-xs text-text-muted px-3 py-2 mb-2">
+          {t('hosts.shown.open_hint')}
+        </p>
+      )}
+
       {sessions.length === 0 ? (
         <p className="text-sm text-text-muted">{t('hosts.no_sessions')}</p>
       ) : (
@@ -153,7 +173,7 @@ export function SessionsSection({ hostId }: Props) {
                             : agent === 'error' ? 'bg-red-500/20 text-red-400'
                             : 'bg-surface-tertiary text-text-muted'
                         }`}>
-                          {agent}
+                          {AGENT_STATUS_LABEL_KEYS[agent] ? t(AGENT_STATUS_LABEL_KEYS[agent]) : agent}
                         </span>
                       ) : (
                         <span className="text-text-muted">—</span>
@@ -162,14 +182,16 @@ export function SessionsSection({ hostId }: Props) {
                     <td className="px-3 py-2 text-text-muted font-mono text-xs truncate max-w-[200px]">{session.cwd}</td>
                     <td className="px-3 py-2 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => handleOpen(session)}
-                          disabled={isOffline}
-                          title={t('hosts.open')}
-                          className="p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-accent cursor-pointer disabled:opacity-50"
-                        >
-                          <Play size={14} />
-                        </button>
+                        {shown && (
+                          <button
+                            onClick={() => handleOpen(session)}
+                            disabled={isOffline}
+                            title={t('hosts.open')}
+                            className="p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-accent cursor-pointer disabled:opacity-50"
+                          >
+                            <Play size={14} />
+                          </button>
+                        )}
                         <button
                           onClick={() => setRenamingCode(session.code)}
                           disabled={isOffline}

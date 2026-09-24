@@ -9,17 +9,23 @@ import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger
 import { ensureDefaultDeviceName } from './stores/useDeviceNameStore'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
+import { startHostReresolve } from './lib/host-reresolve'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { startExecutionListInvalidation } from './stores/useExecutionListStore'
 import { startProfileSync } from './lib/profile/start'
+import { bootHostLooks } from './lib/host-look-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
+import { startHostReshowRecovery } from './lib/rebuild/host-reshow'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { getActiveSessionInfo } from './lib/active-session'
 import { useTabStore } from './stores/useTabStore'
 import { useAgentStore } from './stores/useAgentStore'
 import { useLayoutStore } from './stores/useLayoutStore'
 
+// Locales / themes are also registered by useI18nStore / useThemeStore before their persist
+// hydrates (#1385) — by the time this line runs, those stores already exist. These calls are
+// idempotent Map sets, kept so the registries don't depend on which module imports a store first.
 registerBuiltinLocales()
 registerBuiltinThemes()
 registerBuiltinModules()
@@ -37,6 +43,9 @@ void ensureDefaultDeviceName()
 startHostConfigLoader()
 // Daemon identity: one /api/info per (re)connect / endpoint / token / stored-daemonId change → observeDaemonId.
 startHostDaemonIdVerification()
+// Host re-resolve (host ownership §3.3): a reference kept verbatim because this device lacked its host points at the
+// local host once that host is here — after hydration, on every host-identity change and every store rehydrate.
+startHostReresolve()
 // Peer cache: drop a host's cached peer rows when its daemon identity changes
 // (removed, re-pointed, token rotated) — a cached address belongs to a daemon.
 startPeerCacheInvalidation()
@@ -45,11 +54,17 @@ startNexHostInvalidation()
 // Execution lists: open/close a host's site-wide stream on nex readiness, drop its rows on identity change.
 startExecutionListInvalidation()
 // Profile Sync: with no master set this is one subscription to useProfileStore and nothing else (app lifetime).
-startProfileSync()
+// It starts behind the host-look gate (plan §0.16): after the host and look stores hydrated and the first-run look
+// migration returned — the collector exists only inside it, so no `settings` build precedes the migration. With
+// synchronous localStorage this is a microtask. `bootHostLooks` never rejects.
+void bootHostLooks().then(() => startProfileSync())
 // Every tab belongs to exactly one workspace: a tab found in none is moved into `Unsorted`, one found in two keeps
 // the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
 // runs with no master, too.
 startStandaloneAdoption()
+// Shown hosts (host ownership H2d-4): showing a host again — by its switch or a synced apply — recovers its sessions
+// once per daemon, so a revivable pane comes back without waiting for a `sessions` frame (app lifetime).
+startHostReshowRecovery()
 
 useLayoutStore.getState().reconcileViews()
 

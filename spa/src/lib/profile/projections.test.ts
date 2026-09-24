@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   PROJECTIONS,
   SECTION_SCHEMA_ORDINAL,
+  RETIRED_SECTIONS,
   WIRE_MARKERS,
   fingerprintOf,
+  isRetiredSection,
   project,
   sectionFingerprint,
   sectionKind,
@@ -24,6 +26,8 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { compareShape, profileLock } from './profile-state'
 import type { Shape, SotIndexEntry } from './types'
 
@@ -271,7 +275,7 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(8)
+    expect(prefixes).toHaveLength(10)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
   })
 
@@ -316,6 +320,8 @@ describe('PROJECTIONS', () => {
       [STORAGE_KEYS.HOST_SETTINGS]: useHostSettingsStore.getState,
       [STORAGE_KEYS.NEW_TAB_LAYOUT]: useNewTabLayoutStore.getState,
       [STORAGE_KEYS.LAYOUT]: useLayoutStore.getState,
+      [STORAGE_KEYS.HOST_LOOKS]: useHostLookStore.getState,
+      [STORAGE_KEYS.SHOWN_HOSTS]: useShownHostsStore.getState,
     }
     const fields = settingsFieldsByStore()
     expect(Object.keys(fields).sort()).toEqual(Object.keys(stores).sort())
@@ -372,6 +378,17 @@ describe('section keys', () => {
     for (const key of ['hosts', 'settings', 'workspaces', 'tabs.', 'tabs.a.b', 'tabs.a b', `tabs.${'x'.repeat(65)}`, 'tabs.a\n']) {
       expect(workspaceIdOf(key as ProfileSectionKey), JSON.stringify(key)).toBeNull()
     }
+  })
+
+  // host ownership H3a-2 (spec §5.1): `hosts` leaves the sync loop but stays a KNOWN kind — its shape is still the
+  // daemon's grammar (validate.go) and the wire builder's (plan §0.1 (b)). Retired = skipped, never unknown.
+  it('RETIRED_SECTIONS is exactly [hosts]; isRetiredSection says so for hosts only, and hosts is still a known kind', () => {
+    expect(RETIRED_SECTIONS).toEqual(['hosts'])
+    expect(isRetiredSection('hosts')).toBe(true)
+    for (const key of ['settings', 'workspaces', 'tabs.a', 'tabs.hosts', 'plugins', 'Hosts', 'hosts ', '']) {
+      expect(isRetiredSection(key), JSON.stringify(key)).toBe(false)
+    }
+    expect(sectionKind('hosts')).toBe('hosts')
   })
 
   it("generateId() stays inside the daemon's section-id alphabet and length", () => {
@@ -462,7 +479,8 @@ describe('shape: fingerprint and ordinal', () => {
       return {
         hosts: { fingerprint: await fingerprintOf(PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.aliases')), ordinal: 2 },
         tabs: { fingerprint: await fingerprintOf(PROJECTIONS.tabs), ordinal: 1 },
-        settings: { fingerprint: await fingerprintOf(PROJECTIONS.settings), ordinal: 4 },
+        // alpha.434 had no look store either (host ownership H2c added `purdex-host-looks.looks` later).
+        settings: { fingerprint: await fingerprintOf(PROJECTIONS.settings.filter((p) => p !== 'purdex-host-looks.looks' && !p.startsWith('purdex-shown-hosts.'))), ordinal: 4 },
         workspaces: { fingerprint: await fingerprintOf(PROJECTIONS.workspaces), ordinal: 1 },
       }
     }
@@ -470,8 +488,10 @@ describe('shape: fingerprint and ordinal', () => {
       section, rev: 1, hash: 'h', fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind],
     })
 
+    // (`hosts` is not in this list any more: it is retired (host ownership H3a-2), and THIS build's `profileLock`
+    // skips it. The old client's own code still locks on a new `hosts` row — but no build that retires `hosts` ever
+    // writes one, so there is nothing of ours for it to meet there.)
     it.each([
-      ['hosts', 'hosts'],
       ['tabs.w1', 'tabs'],
       ['settings', 'settings'],
     ] as const)('an index holding ONLY a new %s row → sot-is-newer (locked:schema) for the old client', async (section, kind) => {
@@ -494,7 +514,7 @@ describe('shape: fingerprint and ordinal', () => {
   // that leaves out its own interface tabs — and delete them. A marker moves the fingerprint, so it locks instead.
   it('coexistence by shape: the ordinal-2 tabs shape (host-id marker only) and this one order — the old client locks, this one pulls', async () => {
     expect(WIRE_MARKERS.tabs).toContain('@tabs:device-local=v1')
-    expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(3)
+    expect(SECTION_SCHEMA_ORDINAL.tabs).toBeGreaterThanOrEqual(3)
     const mine = { fingerprint: await sectionFingerprint('tabs'), ordinal: SECTION_SCHEMA_ORDINAL.tabs }
     const old = { fingerprint: await fingerprintOf([...PROJECTIONS.tabs, '@wire:host-id=d1']), ordinal: 2 }
     expect(old.fingerprint).not.toBe(mine.fingerprint)
@@ -502,10 +522,188 @@ describe('shape: fingerprint and ordinal', () => {
     expect(compareShape(old, mine)).toBe('sot-is-newer')
   })
 
+  // agent-last-state (review decision 1): `tabs.*.layout` gained a value domain — a rebuild record's
+  // `agent.frameId` and `agentExited` — with no path change, so the fingerprint moves through a second tabs
+  // marker and the ordinal goes 3 → 4. The ordinal-3 client (host-id + device-local markers) and this build, by shape:
+  // the old one locks on a row of ours, and we pull its rows without locking — never a ping-pong.
+  describe('agent-last-state: the ordinal-3 tabs client and this build coexist', () => {
+    const oldTabs = async (): Promise<Shape> => ({
+      fingerprint: await fingerprintOf([...PROJECTIONS.tabs, ...WIRE_MARKERS.tabs.filter((m) => m !== '@wire:rebuild-agent-state=1')]),
+      ordinal: 3,
+    })
+
+    it('the marker is there, and it is the only thing between the two shapes', async () => {
+      expect(WIRE_MARKERS.tabs).toEqual(['@wire:host-id=d1', '@tabs:device-local=v1', '@wire:rebuild-agent-state=1'])
+      expect(SECTION_SCHEMA_ORDINAL.tabs).toBe(4)
+      expect((await oldTabs()).fingerprint).toBe(await fingerprintOf([...PROJECTIONS.tabs, '@wire:host-id=d1', '@tabs:device-local=v1']))
+      expect((await oldTabs()).fingerprint).not.toBe(await sectionFingerprint('tabs'))
+    })
+
+    it('an index holding a new tabs row → sot-is-newer (locked:schema) for the old client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'tabs.w1', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('tabs'), ordinal: SECTION_SCHEMA_ORDINAL.tabs,
+      }
+      const old: Record<SectionKind, Shape> = {
+        hosts: { fingerprint: await sectionFingerprint('hosts'), ordinal: SECTION_SCHEMA_ORDINAL.hosts },
+        settings: { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings },
+        workspaces: { fingerprint: await sectionFingerprint('workspaces'), ordinal: SECTION_SCHEMA_ORDINAL.workspaces },
+        tabs: await oldTabs(),
+      }
+      expect(profileLock([entry], old)).toMatchObject({ section: 'tabs.w1', kind: 'tabs', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an old tabs row as i-am-newer (pulls it, no lock), and the old one meets ours as newer', async () => {
+      const mine = { fingerprint: await sectionFingerprint('tabs'), ordinal: SECTION_SCHEMA_ORDINAL.tabs }
+      expect(compareShape(mine, await oldTabs())).toBe('i-am-newer')
+      expect(compareShape(await oldTabs(), mine)).toBe('sot-is-newer')
+    })
+  })
+
+  // host ownership H2c-1 (spec §4.1, decision 7): `purdex-host-looks.looks` joins `settings` with ordinal 5 → 6 and the
+  // `@wire:host-look=1` marker. An ordinal-5 client (host-id marker only, no look store) must meet a `settings` row of
+  // this build as newer and LOCK — it would otherwise apply a payload whose looks it drops, and push them away.
+  describe('host ownership H2c: the ordinal-5 settings client and this build', () => {
+    const LOOKS = 'purdex-host-looks.looks'
+    /** What the ordinal-5 client computes: every kind as today, `settings` without the look store and its marker. */
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => p !== LOOKS && !p.startsWith('purdex-shown-hosts.')), '@wire:host-id=d1']), ordinal: 5 },
+      }
+    }
+
+    it('the look store is listed whole, its marker kept (ordinal ≥ 6)', () => {
+      expect(PROJECTIONS.settings).toContain(LOOKS)
+      expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-host-looks.'))).toEqual([LOOKS])
+      expect(WIRE_MARKERS.settings).toContain('@wire:host-look=1')
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBeGreaterThanOrEqual(6)
+    })
+
+    it('the two shapes differ (H2d-1 adds the shown-hosts paths and marker on top of the look ones)', async () => {
+      const old = (await oldShapes()).settings
+      expect(old.fingerprint).not.toBe(await sectionFingerprint('settings'))
+    })
+
+    it('an index holding ONLY a settings row of this build → sot-is-newer (locked:schema) for the old client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an old settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      const current: Record<SectionKind, Shape> = { ...(await oldShapes()), settings: mine }
+      expect(profileLock([oldRow], current)).toBeNull()
+    })
+
+    it('the migration marker is never projected: no path of any kind starts with purdex-host-looks-migrated', () => {
+      expect(STORAGE_KEYS.HOST_LOOKS_MIGRATED).toBe('purdex-host-looks-migrated')
+      for (const kind of KINDS) for (const path of PROJECTIONS[kind]) expect(path.replace(/^!/, '').startsWith(STORAGE_KEYS.HOST_LOOKS_MIGRATED), path).toBe(false)
+    })
+  })
+
+  // host ownership H2d-1 (spec §4.1, plan §0.6, decision 7): `purdex-shown-hosts.ids` (a plain list, no `all`) joins
+  // `settings` with ordinal 6 → 7 and the `@wire:shown-hosts=1` marker. The ordinal-6 client (host-id + host-look
+  // markers, no shown-hosts store) must meet a `settings` row of this build as newer and LOCK — it would otherwise apply
+  // a payload whose shown-host list it drops, and push it away. The ordinal-5 client (H2c-1's case above) still locks.
+  describe('host ownership H2d-1: the ordinal-6 settings client and this build', () => {
+    const SHOWN = ['purdex-shown-hosts.ids']
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => !SHOWN.includes(p)), '@wire:host-id=d1', '@wire:host-look=1']), ordinal: 6 },
+      }
+    }
+
+    it('the store is listed as its one field `ids` (no `all`), its marker kept (ordinal ≥ 7; H3a-2 pins the final array)', () => {
+      expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-shown-hosts.'))).toEqual(SHOWN)
+      expect(PROJECTIONS.settings).not.toContain('purdex-shown-hosts.all')
+      expect(WIRE_MARKERS.settings).toContain('@wire:shown-hosts=1')
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBeGreaterThanOrEqual(7)
+    })
+
+    it('the two shapes differ by exactly the shown-hosts paths, the shown-hosts marker and the H3a-2 marker', async () => {
+      expect(await sectionFingerprint('settings')).toBe(
+        await fingerprintOf([...PROJECTIONS.settings.filter((p) => !SHOWN.includes(p)), ...SHOWN, '@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1']),
+      )
+      expect((await oldShapes()).settings.fingerprint).not.toBe(await sectionFingerprint('settings'))
+    })
+
+    it('an index holding ONLY a settings row of this build → sot-is-newer (locked:schema) for the ordinal-6 client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an ordinal-6 settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      expect(profileLock([oldRow], { ...(await oldShapes()), settings: mine })).toBeNull()
+    })
+  })
+
+  // host ownership H3a-2 (plan D1, spec decision 7 / §5.4): `hosts` leaves the sync loop with NO projection change, so an
+  // H2-era client (ordinal 7: host-id + host-look + shown-hosts markers) would compute the very same shapes and keep
+  // pulling / pushing `hosts` — tokens included. `@wire:hosts-retired=1` moves the `settings` fingerprint and the ordinal
+  // goes 7 → 8: that client meets a `settings` row of this build as newer and locks the whole profile.
+  describe('host ownership H3a-2: the ordinal-7 (H2-era) settings client and this build', () => {
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings, ...WIRE_MARKERS.settings.filter((m) => m !== '@wire:hosts-retired=1')]), ordinal: 7 },
+      }
+    }
+
+    it('the final marker array pinned exactly, the ordinal 8', () => {
+      expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(8)
+    })
+
+    it('the marker is the only thing between the two shapes: no projection moved', async () => {
+      expect((await oldShapes()).settings.fingerprint).toBe(
+        await fingerprintOf([...PROJECTIONS.settings, '@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1']),
+      )
+      expect((await oldShapes()).settings.fingerprint).not.toBe(await sectionFingerprint('settings'))
+    })
+
+    it('lock regression: an index holding a settings row of this build → sot-is-newer (locked:schema) for the H2-era client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an ordinal-7 settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      expect(profileLock([oldRow], { ...(await oldShapes()), settings: mine })).toBeNull()
+    })
+  })
+
   // GUARD (spec §4.5). If this fails: a projection changed — bump
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
   // ordinal makes every other client lock the section (`locked:schema`).
+  // (One sanctioned exception: settings ordinal 7 was never released — PR #1421 open — so the H2d-1 rework from
+  // `{ all, ids }` to `{ ids }` changes the ordinal-7 fingerprint in place; plan H2d-1 "Wire".)
   it('guard: every projection change comes with an ordinal bump', async () => {
     expect(await shapeTable()).toMatchInlineSnapshot(`
       {
@@ -514,12 +712,12 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "dc4aa5a072306c61072f27189161c7b5852a84e320f68ac183b02341cd073c18",
-          5,
+          "0301080c343a5f7c680c3cbca74fa2986f17025178fdd56f211932dc10d33349",
+          8,
         ],
         "tabs": [
-          "710acf363361f894695def7c47aace4930c2b94fae623d710d4ee19761830f47",
-          3,
+          "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",
+          4,
         ],
         "workspaces": [
           "7986550194df9cf330ec521be44e68989a703ac1e90d433f73e9aab00410c87e",

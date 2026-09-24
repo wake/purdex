@@ -6,6 +6,9 @@
 // These are the sequences the PR review found (start.ts, EVERY ATTACH IS A NEW
 // ONE): they cross the start layer and the executor, so neither side's unit
 // tests can pin them.
+//
+// The sample edit is a `settings` one (`purdex-ui-settings.keepAliveCount`). It was a host rename until host
+// ownership H3a-2 retired `hosts` from the sync loop.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import type { HostConfig } from '../../stores/useHostStore'
@@ -13,11 +16,13 @@ import { useProfileStore } from '../../stores/useProfileStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
-import { readPullUnconfirmed } from './pull-unconfirmed'
+import { useLayoutStore } from '../../stores/useLayoutStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import { hashSection } from './hash'
 import { clearSectionStore, loadSectionStore } from './section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, startProfileSync } from './start'
 import { FakeDaemon } from './test-fake-daemon'
-import { STORAGE_KEYS } from '../storage/keys'
 
 vi.mock('./hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hash')>()
@@ -60,11 +65,11 @@ function host(id: string, over: Partial<HostConfig> = {}): HostConfig {
   return { id, name: id, ip: '10.0.0.1', port: 7860, token: 'tok', order: 0, ...over }
 }
 
-function renameH2(name: string): void {
-  const { hosts } = useHostStore.getState()
-  useHostStore.setState({ hosts: { ...hosts, [H2]: { ...hosts[H2], name } } })
+/** A local edit of `settings`. */
+const edit = (keepAliveCount: number): void => {
+  useUISettingsStore.setState({ keepAliveCount })
 }
-
+const keepAlive = (): number => useUISettingsStore.getState().keepAliveCount
 const h2Name = (): string => useHostStore.getState().hosts[H2].name
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 6; i += 1) await vi.advanceTimersByTimeAsync(1_000)
@@ -85,11 +90,12 @@ beforeEach(() => {
   api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
   api.putAttachment.mockResolvedValue({ kind: 'ok', value: { attached: true } })
   api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+  useUISettingsStore.setState({ keepAliveCount: 0 })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
@@ -106,7 +112,7 @@ async function attachedAndSettled(): Promise<void> {
   stop = startProfileSync()
   expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
   await settle()
-  expect(daemon.live()).toEqual(['hosts', 'settings', 'workspaces'])
+  expect(daemon.live()).toEqual(['settings', 'workspaces']) // never `hosts` (host ownership H3a-2)
   expect(profileSyncState().status?.profile).toBe('synced')
   expect(useProfileStore.getState().pendingDirection).toBeNull()
 }
@@ -123,26 +129,26 @@ describe('attachMaster, again, to the same master', () => {
     expect(daemon.writes.slice(writes).filter((w) => w.outcome === 'applied')).toEqual([]) // nothing had to be written
     expect(profileSyncState().status?.profile).toBe('synced')
 
-    // hours later: another client moves `hosts` while this one edits it
+    // hours later: another client moves `settings` while this one edits it
     await vi.advanceTimersByTimeAsync(3 * 3_600_000)
-    const row = daemon.rows.get('hosts')!
-    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' })
-    renameH2('edited-here')
+    const row = daemon.rows.get('settings')!
+    daemon.rows.set('settings', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' })
+    edit(5)
     await settle()
-    expect(profileSyncState().status?.sections.hosts).toBe('locked:conflict')
-    expect(h2Name()).toBe('edited-here')
-    expect(daemon.rows.get('hosts')!.writer).toBe('c_bbbbbbbbbbbb')
+    expect(profileSyncState().status?.sections.settings).toBe('locked:conflict')
+    expect(keepAlive()).toBe(5)
+    expect(daemon.rows.get('settings')!.writer).toBe('c_bbbbbbbbbbbb')
   })
 
   it('R1 — `pull` while a local edit is unsent and the SOT has not moved: the SOT wins, the daemon is not written', async () => {
     await attachedAndSettled()
-    const onTheSot = h2Name()
+    const onTheSot = keepAlive()
 
     // offline: the edit stays home
     useHostStore.getState().setRuntime(M, { status: 'disconnected' })
-    renameH2('edited-offline')
+    edit(6)
     await settle()
-    expect(loadSectionStore(PROFILE).sections.hosts.currentHash).not.toBe(loadSectionStore(PROFILE).sections.hosts.base.hash)
+    expect(loadSectionStore(PROFILE).sections.settings.currentHash).not.toBe(loadSectionStore(PROFILE).sections.settings.base.hash)
     const revs = daemon.revs()
     const writes = daemon.writes.length
 
@@ -150,7 +156,7 @@ describe('attachMaster, again, to the same master', () => {
     useHostStore.getState().setRuntime(M, { status: 'connected' })
     await settle()
 
-    expect(h2Name()).toBe(onTheSot)
+    expect(keepAlive()).toBe(onTheSot)
     expect(daemon.writes.slice(writes)).toEqual([])
     expect(daemon.revs()).toEqual(revs)
     expect(profileSyncState().status?.profile).toBe('synced')
@@ -158,54 +164,63 @@ describe('attachMaster, again, to the same master', () => {
   })
 })
 
-describe('THE PULL GUARD end to end (#1366): the `hosts` the user confirmed is not the one on the SOT any more', () => {
-  it('attach pull with the confirmed row (rev n), the daemon holds rev n+1: nothing changes here, the attachment is removed, the notice is set', async () => {
-    await attachedAndSettled()
-    const confirmed = { rev: daemon.rows.get('hosts')!.rev, hash: daemon.rows.get('hosts')!.hash! }
-    // another device writes `hosts` after the wizard's last check
-    const row = daemon.rows.get('hosts')!
-    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' })
-    renameH2('mine-only')
+describe('a pull attach starts pulling at once (host ownership H3a-1: the #1366 pull guard left the executor)', () => {
+  function leaf(paneId: string): PaneLayout {
+    return { type: 'leaf', pane: { id: paneId, content: { kind: 'tmux-session', hostId: M, sessionCode: `c-${paneId}`, mode: 'terminal', cachedName: paneId, tmuxInstance: 'inst' } } }
+  }
+
+  /** Another client writes `key`: the SOT's payload with `value` at `path`, a new rev, the payload's real hash. */
+  async function writtenElsewhere(key: string, path: string[], value: unknown): Promise<void> {
+    const cur = daemon.rows.get(key)!
+    const payload = JSON.parse(JSON.stringify(cur.payload)) as Record<string, unknown>
+    let at = payload
+    for (const step of path.slice(0, -1)) at = at[step] as Record<string, unknown>
+    at[path[path.length - 1]] = value
+    daemon.rows.set(key, { ...cur, rev: cur.rev + 1, hash: await hashSection(payload), payload, writer: 'c_bbbbbbbbbbbb' })
+  }
+
+  it('the SOT `hosts` moved after the wizard looked at it: no halt, no notice, the sync stands — `workspaces` / `settings` / `tabs.*` are pulled, `hosts` is not (H3a-2)', async () => {
+    const t1: Tab = { id: 't1', pinned: false, locked: false, createdAt: 1, layout: leaf('p-t1') }
+    const ws1: Workspace = { id: 'ws1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' }
+    useTabStore.setState({ tabs: { t1 }, tabOrder: ['t1'], activeTabId: 't1', visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [ws1], activeWorkspaceId: 'ws1' })
+    useLayoutStore.setState({ tabPosition: 'top' })
+    stop = startProfileSync()
+    expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
     await settle()
+    expect(daemon.live()).toEqual(['settings', 'tabs.ws1', 'workspaces'])
+    // the legacy `hosts` row an older client wrote — the one the wizard looked at
+    const legacy = { hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2] }
+    daemon.rows.set('hosts', { rev: 1, hash: await hashSection(legacy), payload: legacy, fingerprint: 'fp-hosts', ordinal: 1, writer: 'c_oooooooooooo' })
+
+    // after the wizard's last check, another device writes every section — `hosts` included
+    await writtenElsewhere('hosts', ['hosts', H2, 'name'], 'renamed-elsewhere')
+    await writtenElsewhere('workspaces', ['workspaces', 'ws1', 'name'], 'Renamed elsewhere')
+    await writtenElsewhere('tabs.ws1', ['tabs', 't1', 'pinned'], true)
+    await writtenElsewhere('settings', ['purdex-layout', 'tabPosition'], 'both')
+    const sot = daemon.revs()
     const writes = daemon.writes.length
     api.deleteAttachment.mockClear()
     api.getSection.mockClear()
-    const worldBefore = JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])
 
-    expect(await attachMaster(M, PROFILE, 'pull', { confirmedHosts: confirmed })).toEqual({ ok: true })
+    expect(await attachMaster(M, PROFILE, 'pull')).toEqual({ ok: true })
     await settle()
 
-    expect(JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])).toBe(worldBefore)
-    expect(daemon.writes.slice(writes)).toEqual([])
-    expect(api.getSection.mock.calls.filter((c) => c[2] !== 'hosts')).toEqual([]) // nothing but the verdict was read
-    expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null, pendingDetaches: [] })
-    expect(readPullUnconfirmed()).toMatchObject({ hostId: M, profileId: PROFILE })
-    expect(api.deleteAttachment).toHaveBeenCalledWith(M, PROFILE, 'c_aaaaaaaaaaaa')
-    expect(profileSyncState().problems.map((p) => p.kind)).toContain('pull-hosts-unconfirmed')
-  })
-})
-
-describe('a stored guard without its attachId (codex critic): no guard, never a halt nobody can stop', () => {
-  it('a reload: `hosts` differs from the stored guard, yet the first reconciliation runs as today — attached, settled, no notice, no detach', async () => {
-    await attachedAndSettled()
-    stop()
-    stop = () => {}
-    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { version: number; state: Record<string, unknown> }
-    const row = daemon.rows.get('hosts')!
-    const { attachId: _dropped, ...rest } = envelope.state
-    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...rest, pendingDirection: 'pull', pendingPullHosts: { rev: row.rev, hash: row.hash } } }))
-    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' }) // not the guard's row any more
-    await useProfileStore.persist.rehydrate()
-    expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, attachId: null, pendingDirection: 'pull', pendingPullHosts: null })
-    api.deleteAttachment.mockClear()
-
-    stop = startProfileSync()
-    await settle()
-
-    expect(readPullUnconfirmed()).toBeNull()
+    // nothing halted and nothing stopped
+    expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('pull-hosts-unconfirmed')
+    expect(localStorage.getItem('purdex-profile-pull-unconfirmed')).toBeNull() // the #1366 notice key, gone with it
     expect(api.deleteAttachment).not.toHaveBeenCalled()
     expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, masterProfileId: PROFILE, pendingDirection: null })
-    expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('pull-hosts-unconfirmed')
+    // every section was pulled — but `hosts`: retired from the sync loop (H3a-2), the host list stays this device's
+    expect(new Set(api.getSection.mock.calls.map((c) => c[2]))).toEqual(new Set(['settings', 'tabs.ws1', 'workspaces']))
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'ws1')?.name).toBe('Renamed elsewhere')
+    expect(useTabStore.getState().tabs.t1.pinned).toBe(true)
+    expect(useLayoutStore.getState().tabPosition).toBe('both')
+    expect(h2Name()).toBe(H2)
+    // the SOT won: nothing was written over it
+    expect(daemon.writes.slice(writes).filter((w) => w.outcome === 'applied')).toEqual([])
+    expect(daemon.revs()).toEqual(sot)
+    expect(profileSyncState().status?.profile).toBe('synced')
   })
 })
 
@@ -216,7 +231,7 @@ describe('the attachment comes first', () => {
     vi.clearAllMocks()
     let release: () => void = () => {}
     api.putAttachment.mockReturnValue(new Promise((r) => (release = () => r({ kind: 'ok', value: { attached: true } }))))
-    renameH2('edited-while-closed')
+    edit(7)
 
     stop = startProfileSync() // …and comes back: master in the store, bases in the section store, a dirty section
     await settle()
@@ -229,7 +244,7 @@ describe('the attachment comes first', () => {
     release()
     await settle()
     expect(api.listProfiles).toHaveBeenCalled()
-    expect((daemon.rows.get('hosts')!.payload as { hosts: Record<string, { name: string }> }).hosts[H2].name).toBe('edited-while-closed')
+    expect((daemon.rows.get('settings')!.payload as Record<string, Record<string, unknown>>)['purdex-ui-settings'].keepAliveCount).toBe(7)
   })
 })
 
@@ -238,8 +253,8 @@ describe('the master host is re-pointed in place', () => {
     await attachedAndSettled()
     vi.clearAllMocks()
     const { hosts } = useHostStore.getState()
-    useHostStore.setState({ hosts: { ...hosts, [M]: { ...hosts[M], ip: '10.9.9.9' } } }) // also an edit of the `hosts` section
-    renameH2('edited-after')
+    useHostStore.setState({ hosts: { ...hosts, [M]: { ...hosts[M], ip: '10.9.9.9' } } })
+    edit(3)
     await settle()
     await vi.advanceTimersByTimeAsync(120_000)
     for (const fn of Object.values(api)) expect(fn).not.toHaveBeenCalled()
@@ -249,11 +264,11 @@ describe('the master host is re-pointed in place', () => {
 
 describe('the old driver stands still while an attach is being made', () => {
   /** Attached and settled; then an edit made offline — dirty, unsent, the SOT not moved. */
-  async function dirtyAndOffline(): Promise<{ onTheSot: string; writes: number; revs: Record<string, number> }> {
+  async function dirtyAndOffline(): Promise<{ onTheSot: number; writes: number; revs: Record<string, number> }> {
     await attachedAndSettled()
-    const onTheSot = h2Name()
+    const onTheSot = keepAlive()
     useHostStore.getState().setRuntime(M, { status: 'disconnected' })
-    renameH2('edited-offline')
+    edit(6)
     await settle()
     return { onTheSot, writes: daemon.writes.length, revs: daemon.revs() }
   }
@@ -274,7 +289,7 @@ describe('the old driver stands still while an attach is being made', () => {
     release()
     expect(await attaching).toEqual({ ok: true })
     await settle()
-    expect(h2Name()).toBe(before.onTheSot)
+    expect(keepAlive()).toBe(before.onTheSot)
     expect(daemon.writes.slice(before.writes)).toEqual([])
     expect(daemon.revs()).toEqual(before.revs)
     expect(profileSyncState().status?.profile).toBe('synced')
@@ -288,20 +303,20 @@ describe('the old driver stands still while an attach is being made', () => {
     expect(useProfileStore.getState().suspension).toBeNull()
     useHostStore.getState().setRuntime(M, { status: 'connected' })
     await settle()
-    expect(daemon.writes.slice(before.writes).map((w) => [w.key, w.outcome])).toEqual([['hosts', 'applied']])
-    expect(h2Name()).toBe('edited-offline')
+    expect(daemon.writes.slice(before.writes).map((w) => [w.key, w.outcome])).toEqual([['settings', 'applied']])
+    expect(keepAlive()).toBe(6)
   })
 })
 
 describe('C-1a — the write that had not left yet', () => {
   /** Attached and settled, then an edit kept home by `autoSync: false`: dirty, decided on, not sent. */
-  async function dirtyAndHeld(): Promise<{ onTheSot: string; writes: number; revs: Record<string, number> }> {
+  async function dirtyAndHeld(): Promise<{ onTheSot: number; writes: number; revs: Record<string, number> }> {
     await attachedAndSettled()
-    const onTheSot = h2Name()
+    const onTheSot = keepAlive()
     useProfileStore.getState().setAutoSync(false)
-    renameH2('edited-here')
+    edit(4)
     await settle()
-    expect(profileSyncState().status?.sections.hosts).toBe('pending')
+    expect(profileSyncState().status?.sections.settings).toBe('pending')
     return { onTheSot, writes: daemon.writes.length, revs: daemon.revs() }
   }
 
@@ -320,7 +335,7 @@ describe('C-1a — the write that had not left yet', () => {
     release()
     expect(await attaching).toEqual({ ok: true })
     await settle()
-    expect(h2Name()).toBe(before.onTheSot)
+    expect(keepAlive()).toBe(before.onTheSot)
     expect(daemon.writes.slice(before.writes)).toEqual([])
     expect(daemon.revs()).toEqual(before.revs)
   })
@@ -332,10 +347,10 @@ describe('C-1a — the write that had not left yet', () => {
     localStorage.setItem('purdex-profile', JSON.stringify({ ...envelope, state: { ...envelope.state, suspension: { token: 'window-b', until: Date.now() + 30_000 } } }))
     expect(useProfileStore.getState().suspension).toBeNull()
 
-    renameH2('edited-here') // the collector reports it, the executor decides to push…
+    edit(4) // the collector reports it, the executor decides to push…
     await settle()
     expect(daemon.writes.slice(writes)).toEqual([]) // …and the request is not made
-    expect(profileSyncState().status?.sections.hosts).toBe('pending')
+    expect(profileSyncState().status?.sections.settings).toBe('pending')
 
     await useProfileStore.persist.rehydrate() // the broadcast arrives
     expect(profileSyncState().blocked).toBe('suspended')

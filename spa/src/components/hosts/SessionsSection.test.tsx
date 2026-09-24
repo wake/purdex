@@ -1,10 +1,12 @@
 // spa/src/components/hosts/SessionsSection.test.tsx
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { SessionsSection } from './SessionsSection'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useAgentStore } from '../../stores/useAgentStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { compositeKey } from '../../lib/composite-key'
 import type { HostProject } from '../../lib/host-config-api'
@@ -83,6 +85,7 @@ beforeEach(() => {
     runtime: { [HOST_ID]: { status: 'connected' } },
     activeHostId: HOST_ID,
   })
+  useShownHostsStore.setState({ ids: [HOST_ID] }) // shown in this workbench unless a test hides it (H2d-2)
   useAgentStore.setState({ statuses: {} })
   launcherProps.current = null
   real.value = false
@@ -148,6 +151,34 @@ describe('SessionsSection', () => {
     useAgentStore.setState({ statuses: { [ck]: 'running' } })
     render(<SessionsSection hostId={HOST_ID} />)
     expect(screen.getByText('running')).toBeInTheDocument()
+  })
+
+  describe('agent status badge is locale-aware', () => {
+    afterEach(() => { useI18nStore.getState().setLocale('en') })
+
+    it.each([
+      ['running', '執行中'],
+      ['waiting', '等待中'],
+      ['idle', '閒置'],
+      ['error', '錯誤'],
+    ] as const)('%s renders in English for en and as %s for zh-TW', (status, zh) => {
+      useAgentStore.setState({ statuses: { [compositeKey(HOST_ID, 'abc')]: status } })
+      const { unmount } = render(<SessionsSection hostId={HOST_ID} />)
+      expect(screen.getByText(status)).toBeInTheDocument()
+      unmount()
+
+      useI18nStore.getState().setLocale('zh-TW')
+      render(<SessionsSection hostId={HOST_ID} />)
+      expect(screen.getByText(zh)).toBeInTheDocument()
+      expect(screen.queryByText(status)).not.toBeInTheDocument()
+    })
+
+    it('an unknown status from the wire still shows raw', () => {
+      useAgentStore.setState({ statuses: { [compositeKey(HOST_ID, 'abc')]: 'compacting' as never } })
+      useI18nStore.getState().setLocale('zh-TW')
+      render(<SessionsSection hostId={HOST_ID} />)
+      expect(screen.getByText('compacting')).toBeInTheDocument()
+    })
   })
 
   it('renders dash when no agent status for session', () => {
@@ -240,5 +271,50 @@ describe('SessionsSection', () => {
     expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toHaveAttribute('data-disabled', 'false')
     act(() => { useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } }) })
     expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toHaveAttribute('data-disabled', 'true')
+  })
+})
+
+// Host ownership H2d-2 T2 (plan §0.21, user rules 1 / 5, §0.29): a hidden host's sessions stay listed and manageable;
+// only "open" (the one action that creates a tab) is not offered. "New session" (creates a tmux session, no tab) stays.
+describe('SessionsSection — a host hidden in this workbench (H2d-2)', () => {
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: [] })
+  })
+
+  it('the sessions stay listed, with rename / delete, but no Open and the hint instead', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    expect(screen.getByText('dev')).toBeInTheDocument()
+    expect(screen.getByText('/tmp')).toBeInTheDocument()
+    expect(screen.getByTitle('Rename')).toBeInTheDocument()
+    expect(screen.getByTitle('Delete Session')).toBeInTheDocument()
+    expect(screen.queryByTitle('Open')).toBeNull()
+    expect(screen.getByTestId('sessions-open-hint')).toHaveTextContent('Show this host in the workbench to open its sessions')
+  })
+
+  it('clicking anywhere on a row — every cell and every button in it — creates no tab', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    const row = screen.getByText('dev').closest('tr')!
+    fireEvent.click(row)
+    for (const cell of Array.from(row.querySelectorAll('td'))) fireEvent.click(cell)
+    for (const button of Array.from(row.querySelectorAll('button'))) fireEvent.click(button)
+    expect(mockOpenSingletonTab).not.toHaveBeenCalled()
+    expect(mockInsertTab).not.toHaveBeenCalled()
+    expect(mockSetActiveTab).not.toHaveBeenCalled()
+  })
+
+  it('"New Session" is still offered and still opens no tab (§0.29)', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('New Session'))
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toBeInTheDocument()
+    act(() => launcherProps.current!.onLaunched({ ...SESSIONS[0], code: 'new1' }))
+    expect(mockOpenSingletonTab).not.toHaveBeenCalled()
+  })
+
+  it('shown again: Open comes back and the hint goes', () => {
+    render(<SessionsSection hostId={HOST_ID} />)
+    act(() => useShownHostsStore.setState({ ids: [HOST_ID] }))
+    expect(screen.queryByTestId('sessions-open-hint')).toBeNull()
+    fireEvent.click(screen.getByTitle('Open'))
+    expect(mockOpenSingletonTab).toHaveBeenCalledTimes(1)
   })
 })

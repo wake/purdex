@@ -176,6 +176,44 @@ describe('layoutToWire / layoutFromWire', () => {
   })
 })
 
+// Host ownership plan §0.12: the re-resolve pass maps whole worlds through `layoutFromWire` and must leave an
+// untouched world — and every untouched subtree — the very object it was, so a no-op pass writes nothing.
+describe('layoutToWire / layoutFromWire keep object identity where nothing changes', () => {
+  const unchanged = (id: string) => id
+
+  it('a leaf of every kind whose id maps to itself comes back as the same object', () => {
+    for (const content of everyKind(L)) {
+      const l = leaf('p', content)
+      expect(layoutFromWire(l, unchanged)).toBe(l)
+      expect(layoutToWire(l, identityOfSync({}))).toBe(l)
+    }
+  })
+
+  it('a nested split whose ids all map to themselves comes back as the same object', () => {
+    const tree = nested(L)
+    expect(layoutFromWire(tree, unchanged)).toBe(tree)
+    expect(layoutToWire(tree, identityOfSync({}))).toBe(tree)
+    const wire = nested(W)
+    expect(layoutFromWire(wire, (id) => (id === W ? W : id))).toBe(wire)
+  })
+
+  it('only the path to the one changed deep leaf is new; every sibling keeps its identity', () => {
+    const deep = leaf('deep', tmux(W))
+    const sibling = leaf('sib', tmux('other1'))
+    const inner: PaneLayout = { type: 'split', id: 'in', direction: 'v', sizes: [50, 50], children: [sibling, deep] }
+    const top = leaf('top', tmux('other2'))
+    const tree: PaneLayout = { type: 'split', id: 'out', direction: 'h', sizes: [40, 60], children: [top, inner] }
+    const out = layoutFromWire(tree, resolve) as Extract<PaneLayout, { type: 'split' }>
+    expect(out).not.toBe(tree)
+    expect(out.children[0]).toBe(top)
+    const outInner = out.children[1] as Extract<PaneLayout, { type: 'split' }>
+    expect(outInner).not.toBe(inner)
+    expect(outInner.children[0]).toBe(sibling)
+    expect(outInner.children[1]).toEqual(leaf('deep', tmux(L)))
+    expect(out.sizes).toEqual([40, 60])
+  })
+})
+
 describe('hostSettingsToWire / hostSettingsFromWire', () => {
   const record = { [L]: { files: { a: 1 } }, loc002: { x: {} }, ghost1: { y: {} } }
 

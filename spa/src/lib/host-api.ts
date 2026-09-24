@@ -203,6 +203,22 @@ export function hostFetch(hostId: string, path: string, init?: RequestInit): Pro
 }
 
 /**
+ * `hostFetch` pinned to a host THIS device has: for any other id it rejects
+ * without sending anything. `hostFetch` resolves an unknown id to the active /
+ * first host (`getDaemonBase`), which is right for nothing that names a
+ * specific session — a pane whose host was just deleted, or whose reference
+ * names a host this device lacks (host ownership spec §3.2), would otherwise
+ * ask a different daemon. `getDaemonBase` itself keeps its fallback for the
+ * callers that rely on it.
+ */
+function pinnedHostFetch(hostId: string, path: string, init?: RequestInit): Promise<Response> {
+  if (!Object.hasOwn(useHostStore.getState().hosts, hostId)) {
+    return Promise.reject(new Error(`host ${hostId} is not configured`))
+  }
+  return hostFetch(hostId, path, init)
+}
+
+/**
  * The auth headers `hostFetch` attaches, exported for transports that cannot
  * go through `hostFetch` (the nex SSE reader builds its own fetch so it can
  * stream the body). One source of truth for "how do we authenticate to host X".
@@ -217,7 +233,7 @@ export function hostWsUrl(hostId: string, path: string): string {
 }
 
 export async function fetchWsTicket(hostId: string): Promise<string> {
-  const res = await hostFetch(hostId, '/api/ws-ticket', { method: 'POST' })
+  const res = await pinnedHostFetch(hostId, '/api/ws-ticket', { method: 'POST' })
   if (!res.ok) throw new Error(`ws-ticket failed: ${res.status}`)
   const data = await res.json()
   return data.ticket
@@ -536,7 +552,7 @@ export async function fetchSessionCwd(
   sessionCode: string,
   signal?: AbortSignal,
 ): Promise<SessionCwd> {
-  const res = await hostFetch(hostId, `/api/sessions/${sessionCode}/cwd`, { signal })
+  const res = await pinnedHostFetch(hostId, `/api/sessions/${sessionCode}/cwd`, { signal })
   if (!res.ok) throw new Error(`fetchSessionCwd failed: ${res.status}`)
   const body = await res.json()
   return { cwd: String(body.cwd ?? ''), tmuxInstance: String(body.tmux_instance ?? '') }
@@ -561,6 +577,11 @@ export interface SessionProvenance {
   tmuxPaneId: string
   tmuxInstance: string
   lastSeenAt: number
+  /**
+   * The answering agent run's daemon frame id ('' from a daemon that predates
+   * it). Optional so hand-built answers in older fixtures stay valid.
+   */
+  frameId?: string
 }
 
 export async function fetchSessionProvenance(
@@ -568,7 +589,7 @@ export async function fetchSessionProvenance(
   sessionCode: string,
   signal?: AbortSignal,
 ): Promise<SessionProvenance> {
-  const res = await hostFetch(hostId, `/api/sessions/${sessionCode}/provenance`, { signal })
+  const res = await pinnedHostFetch(hostId, `/api/sessions/${sessionCode}/provenance`, { signal })
   if (!res.ok) throw new Error(`fetchSessionProvenance failed: ${res.status}`)
   const body = await res.json()
   return {
@@ -579,6 +600,7 @@ export async function fetchSessionProvenance(
     tmuxPaneId: String(body.tmux_pane_id ?? ''),
     tmuxInstance: String(body.tmux_instance ?? ''),
     lastSeenAt: Number(body.last_seen_at ?? 0),
+    frameId: String(body.frame_id ?? ''),
   }
 }
 

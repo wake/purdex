@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorStatusBar } from './EditorStatusBar'
 import { useHostStore } from '../../stores/useHostStore'
@@ -53,6 +53,30 @@ describe('EditorStatusBar', () => {
     )
 
     expect(screen.getByText('mlab')).toBeInTheDocument()
+  })
+
+  describe('daemon source label (read through the host-look selector — H2b-2)', () => {
+    const renderDaemon = (hostId: string) => render(
+      <EditorStatusBar source={{ type: 'daemon', hostId }} line={1} column={1} language="plaintext"
+        eol="lf" encoding="utf8" isMarkdown={false} editorMode="raw" />,
+    )
+
+    it('an unknown host (incl. an Object.prototype key) is "Unknown", as before', () => {
+      const { unmount } = renderDaemon('no-such-host')
+      expect(screen.getByText('Unknown')).toBeInTheDocument()
+      unmount()
+      renderDaemon('__proto__')
+      expect(screen.getByText('Unknown')).toBeInTheDocument()
+    })
+
+    it('follows a rename of the host', () => {
+      const hostId = useHostStore.getState().activeHostId!
+      renderDaemon(hostId)
+      expect(screen.getByText('mlab')).toBeInTheDocument()
+      act(() => useHostStore.getState().updateHost(hostId, { name: 'renamed' }))
+      expect(screen.getByText('renamed')).toBeInTheDocument()
+      expect(screen.queryByText('mlab')).not.toBeInTheDocument()
+    })
   })
 
   it('shows document metadata values in the status bar', () => {

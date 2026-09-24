@@ -5,6 +5,7 @@ import {
   MAX_STASH_PAYLOAD_BYTES,
   clearSectionStore,
   dropSection,
+  dropStash,
   getStash,
   loadSectionStore,
   pruneStash,
@@ -388,6 +389,56 @@ describe('section-store', () => {
       expect(getStash(P1, 'abc')).toBeUndefined()
       expect(getStash(P1, H('A'))).toBeUndefined()
       expect(dropSection(P1, 'bogus')).toBe('failed')
+    })
+  })
+
+  // host ownership H3a-2 (#1425): the executor drops a RETIRED section's own payloads by name — never a prune.
+  describe('dropStash — removes exactly the named payloads', () => {
+    it('removes the named payload keys of this profile, and nothing else', () => {
+      putStash(P1, H('b'), { mine: 1 })
+      putStash(P1, H('d'), { theirs: 1 })
+      putStash(P1, H('e'), { other: 1 })
+      putStash(P2, H('b'), { p2: 1 })
+      saveSection(P1, 'settings', SETTINGS)
+      expect(dropStash(P1, [H('b'), H('d')])).toBe('ok')
+      expect(storedKeys()).toEqual([pKey(P1, H('e')), sKey(P1, 'settings'), pKey(P2, H('b'))].sort())
+    })
+
+    it('a hash that is not stored is already gone: ok, nothing written', () => {
+      putStash(P1, H('e'), { other: 1 })
+      const before = snapshot()
+      expect(dropStash(P1, [H('b')])).toBe('ok')
+      expect(dropStash(P1, [])).toBe('ok')
+      expect(snapshot()).toBe(before)
+    })
+
+    it('does not spare a payload a stored conflict refers to — the caller names what goes (unlike pruneStash)', () => {
+      expect(saveConflict(P1, 'hosts', LOCKED, LOCKED_PAYLOADS)).toBe('ok')
+      expect(dropStash(P1, [H('b'), H('d')])).toBe('ok')
+      expect(getStash(P1, H('b'))).toBeUndefined()
+      expect(getStash(P1, H('d'))).toBeUndefined()
+      expect(localStorage.getItem(sKey(P1, 'hosts'))).not.toBeNull() // the record is the caller's to drop, after
+    })
+
+    it('a partial failure is reported: failed — the removals that could happen still happened', () => {
+      putStash(P1, H('b'), { mine: 1 })
+      putStash(P1, H('d'), { theirs: 1 })
+      const real = Storage.prototype.removeItem
+      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, k: string) {
+        if (k === pKey(P1, H('b'))) throw new DOMException('blocked', 'SecurityError')
+        real.call(this, k)
+      })
+      expect(dropStash(P1, [H('b'), H('d')])).toBe('failed')
+      expect(getStash(P1, H('b'))).toEqual({ mine: 1 })
+      expect(getStash(P1, H('d'))).toBeUndefined()
+    })
+
+    it('a malformed profile id or hash is failed, and nothing is removed', () => {
+      putStash(P1, H('b'), { mine: 1 })
+      const before = snapshot()
+      expect(dropStash('nope', [H('b')])).toBe('failed')
+      expect(dropStash(P1, [H('b'), 'not-a-hash'])).toBe('failed')
+      expect(snapshot()).toBe(before)
     })
   })
 

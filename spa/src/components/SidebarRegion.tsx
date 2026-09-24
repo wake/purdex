@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react'
 import { CaretLeft, CaretRight, GearSix, Plus } from '@phosphor-icons/react'
 import { useLayoutStore } from '../stores/useLayoutStore'
-import { getViewDefinition } from '../lib/module-registry'
+import { getViewDefinition, viewLabel } from '../lib/module-registry'
 import { RegionResize } from './RegionResize'
 import { RegionManager } from './RegionManager'
 import { RegionContextMenu } from './RegionContextMenu'
@@ -69,7 +69,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
                 className={`w-5 h-5 flex items-center justify-center rounded ${
                   viewId === resolvedActiveViewId ? 'text-text-primary' : 'text-text-muted'
                 }`}
-                title={viewDef.label}
+                title={viewLabel(viewDef, t)}
               >
                 <Icon size={14} />
               </div>
@@ -129,7 +129,7 @@ export function SidebarRegion({ region, resizeEdge }: Props) {
                 }`}
                 onClick={() => setActiveView(region, viewId)}
               >
-                {viewDef.label}
+                {viewLabel(viewDef, t)}
               </button>
             )
           })}
