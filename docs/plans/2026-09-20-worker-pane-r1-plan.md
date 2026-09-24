@@ -332,6 +332,13 @@ export function foldPlan(src: FoldSource): FoldPlan
     `previewLines` is `[]`.
   - `firstLine(text)` = `text.split('\n', 1)[0] ?? ''`, cut to
     `FOLD_LINE_MAX_CHARS` — **never** the lines joined by a space (#1265).
+    **It has no caller in R1 and that is expected.** R1's previews are
+    multi-line (6 or 3 lines in a `<pre>`, newlines intact), which is what
+    actually fixes #1265; `firstLine` exists for the previews that really are
+    one line — the subagent summary in PR-5 (§4.5) and chat's collapsed tool
+    line in R2 (§5). Spec §4.2's italic row was written for the old
+    single-line preview and contradicted the "first 6 / first 3 lines" rows
+    around it; it has been reworded to say which case each rule governs.
 
 - Test `spa/src/lib/nex/fold.test.ts`:
   `shows a short body whole` (3 lines → `collapsible === false`,

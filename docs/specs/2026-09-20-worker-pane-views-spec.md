@@ -273,7 +273,7 @@ N2 already gives (`output.total_lines`, `output.total_bytes`, `truncated`):
 | volume | default |
 |---|---|
 | ≤ 6 lines and ≤ 1 KB | shown whole, no affordance |
-| — | *the collapsed preview is the output's **first line**, never the lines joined together (#1265)* |
+| — | *a preview never joins lines together (#1265): the lines it shows keep their newlines. Where a preview is **one** line — chat's collapsed tool line (§5), a subagent's folded summary (§4.5) — that line is the output's **first** line, not its lines flattened into one.* |
 | ≤ 40 lines | first 6 lines + `… +N lines [expand]` |
 | > 40 lines, or `truncated` | first 3 lines + `… +N lines [expand]`, and the expand state says whether the daemon itself cut it at 8 KB |
 | any `error` / `denied` | one step less folded than the table says |
