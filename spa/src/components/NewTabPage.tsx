@@ -12,7 +12,16 @@ import { colsClass } from '../lib/cols-class'
 import { countLeaves, getPrimaryPane } from '../lib/pane-tree'
 import { getPaneLabel } from '../lib/pane-labels'
 import { moveTabContentIntoPane, MOVABLE_KINDS } from '../lib/pane-move'
+import { HOST_BEARING_COLUMN_PREFIXES } from '../lib/profile/host-identity'
+import { useShownRefFilter } from '../lib/shown-hosts'
 import type { PaneContent } from '../types/tab'
+
+/** The host a New Tab block stands on (`sessions:<hostId>` / `headless:<hostId>`), or `null` for a non-host block. */
+function hostRefOfColumn(id: string): string | null {
+  const colon = id.indexOf(':')
+  if (colon < 0) return null
+  return (HOST_BEARING_COLUMN_PREFIXES as readonly string[]).includes(id.slice(0, colon)) ? id.slice(colon + 1) : null
+}
 
 interface Props {
   onSelect: (content: PaneContent) => void
@@ -57,12 +66,20 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   // mount-time snapshot, never the current toggle state.
   const [pinnedEnabled] = useState(() => useModuleEnabledStore.getState().enabled)
   const allProviders = useNewTabProviders()
+  // Host ownership H2d-3: the blocks of a host hidden in this workbench are not rendered — LIVE, by the one opener
+  // rule (`isRefShown`). Only the rendering skips them: the provider stays registered and the column stays in every
+  // preset and in `knownIds` (nothing here writes the layout store), so showing the host brings the block back.
+  const isShown = useShownRefFilter()
   const providers = useMemo(
     // A2-4 / A2-5: providers carrying a `moduleId` are hidden when the owning
     // module is disabled. Legacy providers with no `moduleId` are always
     // visible (back-compat, spec §4.9.3).
-    () => allProviders.filter((p) => !p.moduleId || isModuleEnabledIn(pinnedEnabled, p.moduleId)),
-    [allProviders, pinnedEnabled],
+    () => allProviders.filter((p) => {
+      if (p.moduleId && !isModuleEnabledIn(pinnedEnabled, p.moduleId)) return false
+      const ref = hostRefOfColumn(p.id)
+      return ref === null || isShown(ref)
+    }),
+    [allProviders, pinnedEnabled, isShown],
   )
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
