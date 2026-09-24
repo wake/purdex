@@ -12,7 +12,17 @@ import { colsClass } from '../lib/cols-class'
 import { countLeaves, getPrimaryPane } from '../lib/pane-tree'
 import { getPaneLabel } from '../lib/pane-labels'
 import { moveTabContentIntoPane, MOVABLE_KINDS } from '../lib/pane-move'
+import { HOST_BEARING_COLUMN_PREFIXES } from '../lib/profile/host-identity'
+import { hostRefOf, isRefShownNow, useShownRefFilter } from '../lib/shown-hosts'
+import { useHostStore } from '../stores/useHostStore'
 import type { PaneContent } from '../types/tab'
+
+/** The host a New Tab block stands on (`sessions:<hostId>` / `headless:<hostId>`), or `null` for a non-host block. */
+function hostRefOfColumn(id: string): string | null {
+  const colon = id.indexOf(':')
+  if (colon < 0) return null
+  return (HOST_BEARING_COLUMN_PREFIXES as readonly string[]).includes(id.slice(0, colon)) ? id.slice(colon + 1) : null
+}
 
 interface Props {
   onSelect: (content: PaneContent) => void
@@ -57,12 +67,20 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   // mount-time snapshot, never the current toggle state.
   const [pinnedEnabled] = useState(() => useModuleEnabledStore.getState().enabled)
   const allProviders = useNewTabProviders()
+  // Host ownership H2d-3: the blocks of a host hidden in this workbench are not rendered — LIVE, by the one opener
+  // rule (`isRefShown`). Only the rendering skips them: the provider stays registered and the column stays in every
+  // preset and in `knownIds` (nothing here writes the layout store), so showing the host brings the block back.
+  const isShown = useShownRefFilter()
   const providers = useMemo(
     // A2-4 / A2-5: providers carrying a `moduleId` are hidden when the owning
     // module is disabled. Legacy providers with no `moduleId` are always
     // visible (back-compat, spec §4.9.3).
-    () => allProviders.filter((p) => !p.moduleId || isModuleEnabledIn(pinnedEnabled, p.moduleId)),
-    [allProviders, pinnedEnabled],
+    () => allProviders.filter((p) => {
+      if (p.moduleId && !isModuleEnabledIn(pinnedEnabled, p.moduleId)) return false
+      const ref = hostRefOfColumn(p.id)
+      return ref === null || isShown(ref)
+    }),
+    [allProviders, pinnedEnabled, isShown],
   )
   const byId = useMemo(() => Object.fromEntries(providers.map((p) => [p.id, p])), [providers])
 
@@ -73,6 +91,7 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
   const tabs = useTabStore((s) => s.tabs)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
   const sessions = useSessionStore((s) => s.sessions)
+  const hostOrder = useHostStore((s) => s.hostOrder)
   const bringInCandidates = useMemo(() => {
     const currentTab = currentTabId ? tabs[currentTabId] : undefined
     // Gate on the owning tab being a split (>1 pane). A full-page new tab is a
@@ -90,6 +109,10 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
         if (countLeaves(tab.layout) !== 1) continue
         const content = getPrimaryPane(tab.layout).content
         if (!movable.includes(content.kind)) continue
+        // Host ownership H2d-3: bringing a tab in opens its content in this pane — a hidden host's tab is not offered
+        // (the one opener rule, LIVE via `isShown`). The source tab itself is left alone (rule 4).
+        const ref = hostRefOf(content, hostOrder)
+        if (ref !== null && !isShown(ref)) continue
         // Scope the session lookup to THIS content's own host — session codes
         // are only unique per host, so a flat cross-host code→session map would
         // mislabel one tab with another host's session name.
@@ -107,7 +130,16 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
       }
     }
     return out
-  }, [currentTabId, currentPaneId, tabs, workspaces, sessions, t])
+  }, [currentTabId, currentPaneId, tabs, workspaces, sessions, t, hostOrder, isShown])
+
+  // The click re-checks the LIVE store (TOCTOU: hidden after the list rendered) → no move, the source tab stays.
+  const bringIn = (sourceTabId: string) => {
+    const source = useTabStore.getState().tabs[sourceTabId]
+    if (!source) return
+    const ref = hostRefOf(getPrimaryPane(source.layout).content, useHostStore.getState().hostOrder)
+    if (ref !== null && !isRefShownNow(ref)) return
+    moveTabContentIntoPane(sourceTabId, currentTabId!, currentPaneId!)
+  }
 
   if (!hydrated) {
     return <div className="h-full w-full" />
@@ -185,7 +217,7 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
             <button
               key={c.tabId}
               type="button"
-              onClick={() => moveTabContentIntoPane(c.tabId, currentTabId!, currentPaneId!)}
+              onClick={() => bringIn(c.tabId)}
               className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-sm text-text-primary hover:bg-white/5 cursor-pointer"
             >
               <span className="truncate">{c.label}</span>

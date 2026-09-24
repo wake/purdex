@@ -16,6 +16,9 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import type { HostProject } from '../host-config-api'
 import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal } from './handoff-api'
 import { checkHostPath } from '../host-config-api'
+import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { setHostShown } from '../shown-hosts'
 import {
   handToNex,
   takeBack,
@@ -130,6 +133,7 @@ beforeEach(() => {
   mockedToTerminal.mockReset()
   fetchHost = vi.fn().mockResolvedValue(undefined)
   useSessionStore.setState({ sessions: {}, fetchHost } as never)
+  useShownHostsStore.setState({ ids: [H] }) // the host is shown in the workbench (H2d-3 re-checks it at completion)
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -570,6 +574,85 @@ describe('takeToTerminal (exec-to-terminal spec §4.2)', () => {
     expect(mockedToTerminal).toHaveBeenCalledTimes(1)
     d2.resolve(takebackOk)
     await second
+  })
+})
+
+// Host ownership H2d-3 T5 — a call in flight when its host is hidden writes no pane at completion (`swapped: false`):
+// the daemon-side action happened and is not undone; the pane keeps its old content, gated (H2d-4).
+describe('in-flight handoffs re-check the shown state at completion (H2d-3)', () => {
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'mlab', ip: '1', port: 7860, order: 0 } }, hostOrder: [H], activeHostId: H })
+    useShownHostsStore.setState({ ids: [] })
+    setHostShown(H, true)
+    seedHostFor([], [])
+  })
+
+  type Case = {
+    name: string
+    start: () => { tabId: string; run: Promise<{ swapped: boolean }> }
+    resolve: () => void
+    calls: () => number
+  }
+  const cases = (): Case[] => {
+    const dh = deferred<typeof handoffOk>()
+    const dt = deferred<typeof takebackOk>()
+    const dx = deferred<typeof toTerminalOk>()
+    return [
+      {
+        name: 'handToNex',
+        start: () => {
+          mockedHandoff.mockReturnValueOnce(dh.promise)
+          const t = sessionTab()
+          return { tabId: t.tabId, run: handToNex({ hostId: H, sessionCode: from.sessionCode, tmuxInstance: from.tmuxInstance, cachedName: from.cachedName, ...t }) }
+        },
+        resolve: () => dh.resolve(handoffOk),
+        calls: () => mockedHandoff.mock.calls.length,
+      },
+      {
+        name: 'takeBack',
+        start: () => {
+          mockedTakeback.mockReturnValueOnce(dt.promise)
+          const t = executionTab()
+          return { tabId: t.tabId, run: takeBack({ hostId: H, executionId: 'exc_1', from, forgetLease: vi.fn(), ...t }) }
+        },
+        resolve: () => dt.resolve(takebackOk),
+        calls: () => mockedTakeback.mock.calls.length,
+      },
+      {
+        name: 'takeToTerminal',
+        start: () => {
+          mockedToTerminal.mockReturnValueOnce(dx.promise)
+          const t = executionTab(false)
+          return { tabId: t.tabId, run: takeToTerminal({ hostId: H, executionId: 'exc_1', cwd: '/w', forgetLease: vi.fn(), ...t }) }
+        },
+        resolve: () => dx.resolve(toTerminalOk),
+        calls: () => mockedToTerminal.mock.calls.length,
+      },
+    ]
+  }
+
+  it.each([0, 1, 2])('case %i: hidden before the daemon answers → the tab store is the same object, swapped:false, one daemon call', async (i) => {
+    const c = cases()[i]
+    const { run } = c.start()
+    await vi.waitFor(() => expect(c.calls()).toBe(1))
+    setHostShown(H, false)
+    const tabsBefore = useTabStore.getState().tabs
+    c.resolve()
+    const out = await run
+    expect(out.swapped, c.name).toBe(false)
+    expect(useTabStore.getState().tabs, c.name).toBe(tabsBefore)
+    expect(c.calls(), c.name).toBe(1)
+  })
+
+  it.each([0, 1, 2])('case %i: still shown at completion → the pane is re-pointed as today', async (i) => {
+    const c = cases()[i]
+    const { tabId, run } = c.start()
+    await vi.waitFor(() => expect(c.calls()).toBe(1))
+    const kindBefore = paneContent(tabId).kind
+    c.resolve()
+    const out = await run
+    expect(out.swapped, c.name).toBe(true)
+    expect(paneContent(tabId).kind, c.name).not.toBe(kindBefore)
   })
 })
 

@@ -18,7 +18,13 @@
 //   the daemon just created would be reachable only from the Executions
 //   list. `trySetPaneContent` is a compare-and-swap on the content the call
 //   started from; it reports a miss, and the caller offers "open execution".
+// - **Shown re-check** (host ownership H2d-3). The host can be hidden in the
+//   workbench while the request is in flight. Each swap re-checks
+//   `isRefShownNow(hostId)` AFTER the daemon answered: hidden → no pane
+//   write, `swapped: false`. The daemon-side action is not undone; the pane
+//   keeps its old content (gated) and the true state shows on re-show.
 import { useTabStore } from '../../stores/useTabStore'
+import { isRefShownNow } from '../shown-hosts'
 import { useNexHostStore, selectHandoffReady } from '../../stores/useNexHostStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { checkHostPath, type HostProject } from '../host-config-api'
@@ -97,7 +103,7 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
       rollback_command: resumeTemplateFor(resumeLookupFor(hostId), 'cc'),
       keep_session: keepSession,
     })
-    const swapped = useTabStore.getState().trySetPaneContent(
+    const swapped = isRefShownNow(hostId) && useTabStore.getState().trySetPaneContent(
       tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result)),
       (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
     )
@@ -157,7 +163,7 @@ export async function takeBack(args: TakeBackArgs): Promise<TakeBackOutcome> {
       ...(leaseId ? { lease_id: leaseId } : {}),
     })
     forgetLease()
-    const swapped = useTabStore.getState().trySetPaneContent(
+    const swapped = isRefShownNow(hostId) && useTabStore.getState().trySetPaneContent(
       tabId, paneId,
       { kind: 'tmux-session', hostId, sessionCode: from.sessionCode, mode: 'terminal', cachedName: from.cachedName, tmuxInstance: from.tmuxInstance },
       (c) => c.kind === 'execution' && c.executionId === executionId && (c.host ?? hostId) === hostId,
@@ -237,7 +243,7 @@ export async function takeToTerminal(args: TakeToTerminalArgs): Promise<TakeToTe
     const result = await request()
     forgetLease()
     const { session } = result
-    const swapped = useTabStore.getState().trySetPaneContent(
+    const swapped = isRefShownNow(hostId) && useTabStore.getState().trySetPaneContent(
       tabId, paneId,
       { kind: 'tmux-session', hostId, sessionCode: session.code, mode: 'terminal', cachedName: session.name, tmuxInstance: session.tmux_instance ?? '' },
       (c) => c.kind === 'execution' && c.executionId === executionId && (c.host ?? hostId) === hostId,

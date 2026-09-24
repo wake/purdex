@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { useTabStore } from '../stores/useTabStore'
+import { getPrimaryPane } from './pane-tree'
 import { syncIdOfSync } from './profile/host-identity'
 import type { PaneContent } from '../types/tab'
 import * as shownHosts from './shown-hosts'
@@ -12,6 +14,7 @@ import {
   isPaneHostShown,
   isRefShown,
   isRefShownNow,
+  landOnHostsPageIfHidden,
   setHostShown,
   shownFormsOf,
   usePaneHostShown,
@@ -266,5 +269,62 @@ describe('setHostShown — the writer (one host, its own forms only)', () => {
     setHostShown('gone', true)
     setHostShown('gone', false)
     expect(useShownHostsStore.getState()).toBe(before)
+  })
+})
+
+// H2d-3 T2 — the landing of every opener that would create / focus a tab (notification, deep link, route, toast).
+describe('landOnHostsPageIfHidden — the landing (one opener rule)', () => {
+  const kindsOf = () => Object.values(useTabStore.getState().tabs).map((t) => getPrimaryPane(t.layout).content.kind)
+  const hostsTabActive = () => {
+    const { tabs, activeTabId } = useTabStore.getState()
+    return activeTabId !== null && getPrimaryPane(tabs[activeTabId].layout).content.kind === 'hosts'
+  }
+
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useHostStore.setState({ activeHostId: PLAIN })
+  })
+
+  it('shown → false, nothing done', () => {
+    useShownHostsStore.setState({ ids: [WIRE] })
+    const tabs = useTabStore.getState().tabs
+    expect(landOnHostsPageIfHidden(LOCAL)).toBe(false)
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(useHostStore.getState().activeHostId).toBe(PLAIN)
+  })
+
+  it('a hidden local host → the Hosts tab opened on that host, true, no tab of the host', () => {
+    expect(landOnHostsPageIfHidden(LOCAL)).toBe(true)
+    expect(kindsOf()).toEqual(['hosts'])
+    expect(hostsTabActive()).toBe(true)
+    expect(useHostStore.getState().activeHostId).toBe(LOCAL)
+  })
+
+  it('a hidden local host with the Hosts tab already open → focused, not duplicated', () => {
+    const first = useTabStore.getState().openSingletonTab({ kind: 'hosts' })
+    useTabStore.getState().openSingletonTab({ kind: 'settings', scope: 'global' })
+    expect(landOnHostsPageIfHidden(LOCAL)).toBe(true)
+    expect(useTabStore.getState().activeTabId).toBe(first)
+    expect(kindsOf().filter((k) => k === 'hosts')).toHaveLength(1)
+  })
+
+  it('an unlisted d1_X (not a local host) → the Hosts tab, activeHostId unchanged, true, no tab', () => {
+    useShownHostsStore.setState({ ids: [WIRE] })
+    expect(landOnHostsPageIfHidden(FAR)).toBe(true)
+    expect(kindsOf()).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe(PLAIN)
+  })
+
+  it('a deleted host\'s id and \'\' (a hostless link, no host) → the Hosts tab, activeHostId unchanged, true', () => {
+    expect(landOnHostsPageIfHidden('gone')).toBe(true)
+    expect(landOnHostsPageIfHidden('')).toBe(true)
+    expect(kindsOf()).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe(PLAIN)
+  })
+
+  it('a listed d1_X → false (openable: its pane shows MissingHostPane as today)', () => {
+    useShownHostsStore.setState({ ids: [FAR] })
+    expect(landOnHostsPageIfHidden(FAR)).toBe(false)
+    expect(kindsOf()).toEqual([])
   })
 })

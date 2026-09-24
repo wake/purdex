@@ -657,6 +657,9 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     }
     seedTab(split)
     seedReady()
+    // The dialog hands off only on a host shown in the workbench (host ownership H2d-3).
+    const { useShownHostsStore } = await import('../stores/useShownHostsStore')
+    useShownHostsStore.setState({ ids: [H] })
     mockedHandToNex.mockResolvedValueOnce({ result: { execution_id: 'exc_1', state: 'running', session_id: 's', cwd: '/' }, swapped: true })
     const { act } = await import('react')
     render(<PaneLayoutRenderer layout={split} tabId="t1" isActive={true} />)
