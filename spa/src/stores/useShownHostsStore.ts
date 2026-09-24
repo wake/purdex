@@ -60,6 +60,18 @@ export function sanitizeShownIds(raw: unknown): string[] {
   return out
 }
 
+/** `ids` with each move applied in turn: `from` replaced in place by `to`, or dropped when `to` is already listed.
+ *  The same array back when nothing moves. Pure — the store's `rekey`, and a local workbench's own list
+ *  (lib/shown-hosts.ts `rekeyShownHosts`), by one rule. */
+export function rekeyShownIds(ids: string[], moves: readonly ShownHostMove[]): string[] {
+  let out = ids
+  for (const [from, to] of moves) {
+    if (from === to || !out.includes(from)) continue
+    out = out.includes(to) ? out.filter((id) => id !== from) : out.map((id) => (id === from ? to : id))
+  }
+  return out
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -95,13 +107,8 @@ export const useShownHostsStore = create<ShownHostsState>()(
 
       rekey: (moves) =>
         set((state) => {
-          let ids: string[] | null = null
-          for (const [from, to] of moves) {
-            const cur: string[] = ids ?? state.ids
-            if (from === to || !cur.includes(from)) continue
-            ids = cur.includes(to) ? cur.filter((id) => id !== from) : cur.map((id) => (id === from ? to : id))
-          }
-          return ids === null ? state : { ids }
+          const ids = rekeyShownIds(state.ids, moves)
+          return ids === state.ids ? state : { ids }
         }),
     }),
     {

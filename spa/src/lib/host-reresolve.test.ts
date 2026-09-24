@@ -28,6 +28,8 @@ import {
 } from './host-reresolve'
 import { hostLookOf } from './host-look'
 import { rekeyShownHosts } from './shown-hosts'
+import { promoteToMaster } from './profile/switch-active'
+import { buildSectionPayload } from './profile/collector'
 
 const DAEMON = 'air-lab:26aaaa'
 const WIRE = syncIdOfSync(DAEMON)
@@ -410,6 +412,124 @@ describe('the shown-hosts re-key (H2d-1)', () => {
     } finally {
       vi.restoreAllMocks() // a failure must not leave the setItem spy on the next test
     }
+  })
+})
+
+// Per-workbench shown hosts (2026-09-25 plan, A5): each local workbench's own list is re-keyed with the master's, by
+// the same moves, in the same step — two stores, one step, one undo that restores both.
+describe('the shown-hosts re-key — every workbench\'s list (A5)', () => {
+  const lists = () => Object.fromEntries(Object.entries(useLocalProfilesStore.getState().slaves).map(([id, s]) => [id, s.shownHostIds]))
+  const setLists = (byId: Record<string, string[]>) =>
+    useLocalProfilesStore.setState((st) => ({ slaves: Object.fromEntries(Object.entries(st.slaves).map(([id, s]) => [id, { ...s, shownHostIds: byId[id] ?? s.shownHostIds }])) }))
+
+  it("a slave's listed local id becomes the d1_ id, in place, dedup as the master's; memory and storage agree", () => {
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    setLists({ on: [UNKNOWN, LOCAL, 'tail'], s1: [WIRE, LOCAL] })
+    expect(runHostReresolve()).toBe('done')
+    expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+    expect(lists()).toEqual({ on: [UNKNOWN, WIRE, 'tail'], s1: [WIRE] })
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.LOCAL_PROFILES)!).state.slaves
+    expect(stored.on.shownHostIds).toEqual([UNKNOWN, WIRE, 'tail'])
+  })
+
+  it('only a slave lists the id: it still moves (the step exists for the slaves alone)', () => {
+    setLists({ s1: [LOCAL] })
+    expect(rekeyShownHosts(useHostStore.getState().hosts)).not.toBeNull()
+    runHostReresolve()
+    expect(lists().s1).toEqual([WIRE])
+    expect(useShownHostsStore.getState().ids).toEqual([])
+  })
+
+  it("the slave write is read AT COMMIT: the parked-worlds write of the same pass is kept, not clobbered (m3)", () => {
+    setLists({ s1: [LOCAL] }) // s1's parked world holds WIRE refs: planRewrite's 'parked worlds' write rewrites them
+    expect(runHostReresolve()).toBe('done')
+    const s1 = useLocalProfilesStore.getState().slaves.s1
+    expect(hostIdsIn(s1.world)).toEqual([LOCAL]) // the world rewritten (WIRE → LOCAL)…
+    expect(s1.shownHostIds).toEqual([WIRE]) // …and the list re-keyed (LOCAL → WIRE), both
+  })
+
+  it('a deletion (rewriteHostRefs) never re-keys a list — the master\'s or a slave\'s', () => {
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    setLists({ s1: [LOCAL], on: [WIRE] })
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    expect(useShownHostsStore.getState().ids).toEqual([LOCAL])
+    expect(lists()).toEqual({ on: [WIRE], s1: [LOCAL] })
+  })
+
+  describe('two stores, one step', () => {
+    /** Nothing else moves: the shown-hosts step is the only one (a first pass moved every other ref). */
+    beforeEach(() => {
+      runHostReresolve()
+      useShownHostsStore.setState({ ids: [LOCAL] })
+      setLists({ s1: [LOCAL] })
+    })
+    afterEach(() => { vi.restoreAllMocks() })
+
+    /** The step's slave write (a `setState` of `slaves` alone) sets memory and then throws, as persist does. */
+    function failSlaveWrite(times: number): void {
+      const real = useLocalProfilesStore.setState
+      let left = times
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation((...args) => {
+        real(...(args as Parameters<typeof real>))
+        const patch = args[0] as unknown as Record<string, unknown>
+        if (left > 0 && typeof patch === 'object' && Object.keys(patch).join() === 'slaves') {
+          left--
+          throw new Error('slaves write failed')
+        }
+      })
+    }
+
+    it('the second write (the slaves) fails → both stores restored; write-failed; the retry lands (m8)', () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      failSlaveWrite(1)
+      requestHostReresolve()
+      expect(useShownHostsStore.getState().ids).toEqual([LOCAL])
+      expect(lists().s1).toEqual([LOCAL])
+      vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+      expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+      expect(lists().s1).toEqual([WIRE])
+    })
+
+    it('the undo fails on its first restore → it still attempts the second, then throws one error: rollback-failed; the rerun rolls forward (m12)', () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      failSlaveWrite(1)
+      const real = useShownHostsStore.setState
+      let failRestore = true
+      vi.spyOn(useShownHostsStore, 'setState').mockImplementation((...args) => {
+        if (failRestore) {
+          failRestore = false
+          throw new Error('master restore failed')
+        }
+        real(...(args as Parameters<typeof real>))
+      })
+      expect(runHostReresolve()).toBe('rollback-failed')
+      expect(lists().s1).toEqual([LOCAL]) // the second restore was attempted although the first threw
+      expect(String(vi.mocked(console.error).mock.calls[0][0])).toMatch(/shown hosts/)
+      requestHostReresolve()
+      expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+      expect(lists().s1).toEqual([WIRE])
+    })
+  })
+
+  // The critic's cross-device case: a list naming a host by its LOCAL id must reach the SOT as the d1_ id once the
+  // workbench becomes the master — the other device only knows the host by its daemon.
+  it('a slave list with a local id → daemonId learned → re-keyed to d1_ → promoted → the master list and the settings payload carry the d1_ id', async () => {
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL) }, hostOrder: [LOCAL] }) // no daemonId yet
+    runHostReresolve()
+    setLists({ s1: [LOCAL] })
+    expect(runHostReresolve()).toBe('done')
+    expect(lists().s1).toEqual([LOCAL]) // nothing to move: its daemon is not known
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }) } })
+    expect(runHostReresolve()).toBe('done')
+    expect(lists().s1).toEqual([WIRE])
+    const promoted = await promoteToMaster('s1', 'Old master')
+    expect(promoted.ok).toBe(true)
+    expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+    const payload = buildSectionPayload('settings')?.payload as Record<string, unknown> | undefined
+    expect(payload?.['purdex-shown-hosts']).toEqual({ ids: [WIRE] })
   })
 })
 

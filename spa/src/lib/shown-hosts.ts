@@ -25,7 +25,7 @@ import { useCallback, useSyncExternalStore } from 'react'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore, type LocalProfile } from '../stores/useLocalProfilesStore'
-import { useShownHostsStore, type ShownHosts } from '../stores/useShownHostsStore'
+import { rekeyShownIds, useShownHostsStore, type ShownHosts } from '../stores/useShownHostsStore'
 import { useTabStore } from '../stores/useTabStore'
 import { readMasterWorld } from './profile/master-world'
 import { wireIdOfHost } from './profile/host-identity'
@@ -250,16 +250,57 @@ export function setHostShown(hostId: string, shown: boolean): boolean {
 
 /**
  * The pass's shown-hosts step: a listed local id of a host whose daemonId is known becomes its `d1_…` id, in place;
- * when that `d1_…` is already listed the local id is dropped (`useShownHostsStore.rekey`). Same moves as the look
- * re-key (`wireKeyMovesOf` — a daemon two rows claim moves nothing). `null` when nothing would move; else the write
- * and its way back, for the pass to commit under its lock. Never part of the explicit-map rewrite a deletion reuses.
+ * when that `d1_…` is already listed the local id is dropped (`rekeyShownIds`). Same moves as the look re-key
+ * (`wireKeyMovesOf` — a daemon two rows claim moves nothing). EVERY workbench's list (per-workbench shown hosts A5):
+ * the master's (`useShownHostsStore`) and each local workbench's (`LocalProfile.shownHostIds`), by the same moves.
+ * `null` when nothing would move in any of them; else the write and its way back, for the pass to commit under its
+ * lock. Never part of the explicit-map rewrite a deletion reuses: a deletion re-keys no list.
+ *
+ * TWO STORES, ONE STEP. The slaves are read AT COMMIT, never planned here: the pass's 'parked worlds' write (earlier
+ * in the same commit) sets `slaves` too, and a value planned from before it would put the old worlds back. The commit
+ * remembers both stores as it found them, before its first write; the undo — `commitAll` calls it once, also when this
+ * commit threw half-way — attempts BOTH restores even if the first throws, then throws one combined error (the pass's
+ * `rollback-failed`). Undos run newest first, so the parked-worlds undo still restores the pass's pre-state after it.
  */
 export function rekeyShownHosts(hosts: Hosts): { commit: () => void; undo: () => void } | null {
   const { ids } = useShownHostsStore.getState()
-  const moves = wireKeyMovesOf(hosts).filter(([from]) => ids.includes(from))
+  const { slaves } = useLocalProfilesStore.getState()
+  const listed = (id: string): boolean => ids.includes(id) || Object.values(slaves).some((s) => s.shownHostIds.includes(id))
+  const moves = wireKeyMovesOf(hosts).filter(([from]) => listed(from))
   if (moves.length === 0) return null
+  let found: { ids: string[]; slaves: Record<string, LocalProfile> } | null = null
   return {
-    commit: () => useShownHostsStore.getState().rekey(moves),
-    undo: () => useShownHostsStore.setState({ ids }),
+    commit: () => {
+      const slavesNow = useLocalProfilesStore.getState().slaves
+      found = { ids: useShownHostsStore.getState().ids, slaves: slavesNow }
+      useShownHostsStore.getState().rekey(moves)
+      let slavesNext = slavesNow
+      for (const [id, slave] of Object.entries(slavesNow)) {
+        const next = rekeyShownIds(slave.shownHostIds, moves)
+        if (next === slave.shownHostIds) continue
+        if (slavesNext === slavesNow) slavesNext = { ...slavesNow }
+        slavesNext[id] = { ...slave, shownHostIds: next }
+      }
+      if (slavesNext !== slavesNow) useLocalProfilesStore.setState({ slaves: slavesNext })
+    },
+    undo: () => {
+      if (found === null) return // the commit never began
+      const failed: string[] = []
+      if (useShownHostsStore.getState().ids !== found.ids) {
+        try {
+          useShownHostsStore.setState({ ids: found.ids })
+        } catch (err) {
+          failed.push(`the master's list: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      if (useLocalProfilesStore.getState().slaves !== found.slaves) {
+        try {
+          useLocalProfilesStore.setState({ slaves: found.slaves })
+        } catch (err) {
+          failed.push(`the local workbenches' lists: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      if (failed.length > 0) throw new Error(`shown hosts undo incomplete — ${failed.join('; ')}`)
+    },
   }
 }
