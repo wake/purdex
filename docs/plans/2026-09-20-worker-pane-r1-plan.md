@@ -818,6 +818,42 @@ defect, and R1's whole claim is "one folding rule for every block type".
 - New locale key in **both** `src/locales/en.json` and `zh-TW.json`:
   `room.op.show_input` (`"input"` / `"輸入"`).
 
+### T3.3b the facts the header span used to carry need homes (TDD)
+
+Dismantling `ToolResultBlock` took its facts span with it, and
+`toolResultFacts()` is now called from nowhere. Spec §3.1.1 #3 says where
+each of those facts goes — "size to the fold affordance, **the diff stat with
+the diff**, duration only when it is worth reading" — and two of them ended
+up nowhere at all.
+
+- **`+N −M` goes with the diff.** `room/ToolDiffView.tsx` gains a header line
+  carrying `diff.path` and `+{added} −{removed}` (U+2212 MINUS, as
+  `tool-result-facts.ts` uses, so it lines up under `tabular-nums`), rendered
+  above the hunks and **visible while the diff is folded**. `+0 −0` is a
+  normal edit result and still renders (contract rule 7).
+- **`non-text` goes on the operation's rail.** When
+  `facts.output.hasNonText`, `OperationBlock` renders a muted
+  `data-testid="op-non-text"` marker beside the fold control with
+  `t('execution.tool.non_text')`. It says the payload held something the
+  transcript is not showing, which is exactly the kind of thing a fold must
+  not swallow silently.
+- `total_lines` needs no home: `FoldedOutput`'s `+N lines` is that fact, and
+  `truncated` is the `fold-daemon-truncated` note.
+- `toolResultFacts()` and its test are **deleted** — every segment it built
+  now has a home, and a helper with no caller is the kind of thing that grows
+  a second, disagreeing implementation. `ToolResultFacts` (the type) stays;
+  it is `OperationBlock`'s `facts` prop.
+
+- Tests: in `ToolDiffView.test.tsx`, `shows the path and the +N −M stat`,
+  `shows +0 −0 for an edit that changed nothing`, `keeps the stat visible
+  while the diff is folded`; in `OperationBlock.test.tsx`, `marks a result
+  that held non-text content` and its negative pair `does not mark a text-only
+  result`.
+
+Two branches T3.1 left unguarded get their tests in the same commit:
+`renders no diff for an empty, untruncated diff` (the other half of
+`hasDiff`), and `never looks up tools for a block with no id`.
+
 ### T3.4 PR-3
 
 - `npx vitest run`, `pnpm run lint`, `npx tsc --noEmit -p tsconfig.app.json`,
