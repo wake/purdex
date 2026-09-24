@@ -9,6 +9,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { emptyPeerHostEntry, usePeerStore, type PeerHostEntry, type PeerRow } from '../stores/usePeerStore'
 import { emptySessionCwdEntry, useSessionCwdStore, type SessionCwdEntry } from '../stores/useSessionCwdStore'
 import { copyText } from '../lib/copy-text'
@@ -61,6 +62,7 @@ function setupStores() {
   copyTextMock.mockResolvedValue(undefined)
   usePeerStore.setState({ byHost: {}, refresh: peerRefresh })
   useSessionCwdStore.setState({ byHost: {}, refresh: cwdRefresh })
+  useShownHostsStore.setState({ ids: [HOST_ID] }) // shown in this workbench (H2d-4)
 }
 
 const PEER_ROW: PeerRow = {
@@ -807,5 +809,47 @@ describe('StatusBar peer generation', () => {
     setSessionGeneration('4242:1700000000')
     render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
+  })
+})
+
+// Host ownership H2d-4 (§0.21): a pane on a host hidden in this workbench renders a placeholder and opens no
+// connection — the status bar asks nothing about it either, as for a terminated pane.
+describe('StatusBar peer info for a pane on a hidden host', () => {
+  beforeEach(() => {
+    setupStores()
+    useUploadStore.setState({ sessions: {} })
+  })
+
+  it('hidden → usePeerInfo gets no host: no peer / cwd refresh', () => {
+    // The host was never asked: a shown pane would fetch its peers and this session's cwd right away.
+    useShownHostsStore.setState({ ids: [] })
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(peerRefresh).not.toHaveBeenCalled()
+    expect(cwdRefresh).not.toHaveBeenCalled()
+  })
+
+  it('hidden with a cached row → no peer row renders', () => {
+    seedPeers()
+    useShownHostsStore.setState({ ids: [] })
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(screen.queryByText(/purdex-b0/)).toBeNull()
+  })
+
+  it('shown → as today: the host is asked, and a cached row renders', () => {
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(peerRefresh).toHaveBeenCalledWith(HOST_ID)
+    expect(cwdRefresh).toHaveBeenCalledWith(HOST_ID, 'dev001')
+    cleanup()
+    seedPeers()
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
+  })
+
+  it('hiding the host while the bar is mounted drops the peer row live', () => {
+    seedPeers()
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
+    act(() => { useShownHostsStore.setState({ ids: [] }) })
+    expect(screen.queryByText(/purdex-b0/)).toBeNull()
   })
 })
