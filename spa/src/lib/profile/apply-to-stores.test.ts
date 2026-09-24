@@ -29,6 +29,8 @@ import type { NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { emptyPeerHostEntry, usePeerStore } from '../../stores/usePeerStore'
+import { useSessionCwdStore } from '../../stores/useSessionCwdStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
@@ -423,7 +425,7 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
   it('ends in the same state as deleting that host by hand (keep-tabs mode)', async () => {
     seedHostWorld()
     const before = world()
-    deleteHostCascade(H2, false)
+    deleteHostCascade(H2)
     const byHand = world()
     expect(byHand).not.toEqual(before)
 
@@ -438,23 +440,26 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
     const w = byHand as { sessions: object; executions: string[]; hostSettings: object; nex: object; executionList: object; hosts: { activeHostId: string } }
     expect(Object.keys(w.sessions)).toEqual([M])
     expect(w.executions).toEqual([`${M}:exc_1`])
-    expect(Object.keys(w.hostSettings)).toEqual([M])
+    expect(Object.keys(w.hostSettings)).toEqual([M, H2]) // the workbench's: kept (host ownership spec §3.4)
     expect(Object.keys(w.nex)).toEqual([M])
     expect(Object.keys(w.executionList)).toEqual([M])
     expect(w.hosts.activeHostId).toBe(M)
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
-  it('marks the panes already here that sit on the removed host, and only those', async () => {
+  it('marks nothing: the panes on the removed host keep their tabs and carry its wire id (host ownership spec §3.4)', async () => {
     seedHostWorld()
+    const DAEMON_2 = 'two-lab:222222'
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: DAEMON_2 } } }))
     await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
     const { tabs } = useTabStore.getState()
+    expect(Object.keys(tabs)).toEqual(['t1', 't2', 't3'])
     const split = tabs.t1.layout as Extract<PaneLayout, { type: 'split' }>
-    expect(split.children[0]).toMatchObject({ pane: { content: { hostId: H2, terminated: 'host-removed' } } })
-    expect((split.children[1] as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
+    expect(split.children[0]).toMatchObject({ pane: { content: { hostId: syncIdOfSync(DAEMON_2) } } })
+    expect(split.children[1]).toMatchObject({ pane: { content: { hostId: M } } })
     expect(split.sizes).toEqual([60, 40])
-    expect(tabs.t2.layout).toMatchObject({ pane: { content: { terminated: 'host-removed' } } })
-    expect((tabs.t3.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).not.toHaveProperty('terminated')
+    expect(tabs.t2.layout).toMatchObject({ pane: { content: { hostId: syncIdOfSync(DAEMON_2) } } })
+    expect(JSON.stringify(tabs)).not.toContain('terminated')
   })
 
   it('busy: removing a host needs the operation lock — held elsewhere, NOTHING is written', async () => {
@@ -586,6 +591,116 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
       expect(hostSlice()).toEqual(before) // synchronously
       expect(threeStores()).toEqual(three)
       return expect(pending).rejects.toThrow('host write failed')
+    })
+
+    // Host ownership H1c T4: the cascade rewrote H2's references to its wire id; the rollback runs the cascade's
+    // undo, whose re-resolve runs UNDER THE APPLY'S GRANT — synchronously, before the promise is looked at.
+    it('the removed host\'s references are back on its local id by the end of the rollback — nothing awaited, the lock still the apply\'s', () => {
+      seedRich()
+      const D2 = 'two-lab:222222'
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: D2 } } }))
+      const tabsBefore = JSON.stringify(useTabStore.getState().tabs)
+      let lockDuringRollback: string | null = null
+      const unsub = useTabStore.subscribe((st) => {
+        if (JSON.stringify(st.tabs) === tabsBefore) lockDuringRollback = useRebuildStore.getState().lockedBy
+      })
+      failHostWrite(2)
+      const pending = applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
+      vi.mocked(useHostStore.setState).mockRestore()
+      unsub()
+      expect(JSON.stringify(useTabStore.getState().tabs)).toBe(tabsBefore) // synchronously
+      expect(useHostStore.getState().hosts[H2].daemonId).toBe(D2) // #1396
+      expect(lockDuringRollback).toBe('profile-sync')
+      return expect(pending).rejects.toThrow('host write failed')
+    })
+
+    it('a rollback from a STAGED host list resolves nothing onto a host the payload was adding — only the removed host\'s references move back', async () => {
+      seedRich()
+      const D2 = 'two-lab:222222'
+      const D3 = 'three-lab:333333'
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: D2 } } }))
+      useTabStore.setState((st) => ({ tabs: { ...st.tabs, t9: tab('t9', tmuxLeaf('p9', syncIdOfSync(D3))) }, tabOrder: [...st.tabOrder, 't9'] }))
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M), host('host-three', { ip: '10.0.0.3', order: 1, daemonId: D3 })]), ctx)).rejects.toThrow('host write failed')
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(Object.keys(useHostStore.getState().hosts).sort()).toEqual([M, H2].sort())
+      expect(useTabStore.getState().tabs.t9.layout).toMatchObject({ pane: { content: { hostId: syncIdOfSync(D3) } } })
+      expect(useTabStore.getState().tabs.t2.layout).toMatchObject({ pane: { content: { hostId: H2 } } })
+    })
+
+    // PR #1413 attacker (high #1): the cascade itself fails — the host store's persist at `removeHost`, after the
+    // rewrite and every clear already ran. It puts back what it touched; the apply's rollback does the rest.
+    it('the cascade\'s own write fails half-way (removeHost\'s persist): panes, settings, sessions, agent, peers, cwd, caches and the host slice are all back', async () => {
+      seedRich()
+      const D2 = 'two-lab:222222'
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: D2 } } }))
+      usePeerStore.setState({ byHost: { [H2]: { ...emptyPeerHostEntry(), fetchedAt: 1 }, [M]: { ...emptyPeerHostEntry(), fetchedAt: 2 } } })
+      useSessionCwdStore.setState({ byHost: { [H2]: { s1: { cwd: '/h2', fetchedAt: 1, loading: false, error: null } } } })
+      useNewTabLayoutStore.setState({ presets: { ...useNewTabLayoutStore.getState().presets, '1col': { enabled: true, columns: [[`sessions:${H2}`]] } }, knownIds: [`sessions:${H2}`] })
+      const everything = () => JSON.stringify({
+        world: world(),
+        newtab: [useNewTabLayoutStore.getState().presets, useNewTabLayoutStore.getState().knownIds],
+        peers: usePeerStore.getState().byHost,
+        cwd: useSessionCwdStore.getState().byHost,
+        executions: useExecutionStore.getState().executions,
+      })
+      const before = everything()
+      expect(before).toContain(`"hostId":"${H2}"`)
+      const real = Storage.prototype.setItem
+      let failed = 0
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+        // the first host-store write without H2 is `removeHost`'s, inside the cascade (the staging write keeps H2)
+        if (k === STORAGE_KEYS.HOSTS && failed === 0 && !v.includes(`"${H2}"`)) {
+          failed++
+          throw new DOMException('quota', 'QuotaExceededError')
+        }
+        real.call(this, k, v)
+      })
+      const removeHost = vi.spyOn(useHostStore.getState(), 'removeHost')
+
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('quota')
+
+      vi.mocked(Storage.prototype.setItem).mockRestore()
+      expect(removeHost).toHaveBeenCalledWith(H2) // it failed IN the cascade
+      expect(failed).toBe(1)
+      expect(everything()).toBe(before)
+      expect(everything()).not.toContain(syncIdOfSync(D2))
+      expect(useRebuildStore.getState().lockedBy).toBeNull()
+    })
+
+    // PR #1413 attacker (high #2): the lease release is a daemon side effect no rollback can take back — it is sent
+    // only after the whole apply committed, and a rollback restores a lease that was never released.
+    const attachDeletes = () => vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith('/attach') && (init as RequestInit | undefined)?.method === 'DELETE')
+
+    it('a failed apply sends no release: the lease comes back exactly as it was, still held at the daemon', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
+      try {
+        seedRich()
+        const leaseBefore = useExecutionStore.getState().executions[`${H2}:exc_2`].lease
+        failHostWrite(2)
+        await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('host write failed')
+        vi.mocked(useHostStore.setState).mockRestore()
+        await new Promise((r) => setTimeout(r, 0))
+        expect(attachDeletes()).toEqual([])
+        expect(useExecutionStore.getState().executions[`${H2}:exc_2`].lease).toEqual(leaseBefore)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('a committed apply sends the release exactly once, to the removed host\'s own daemon', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
+      try {
+        seedRich()
+        expect((await applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).ok).toBe(true)
+        await new Promise((r) => setTimeout(r, 0))
+        const sent = attachDeletes()
+        expect(sent).toHaveLength(1)
+        expect(String(sent[0][0])).toBe('http://10.0.0.2:7860/api/nex/v1/executions/exc_2/attach')
+        expect(JSON.parse(String((sent[0][1] as RequestInit).body))).toEqual({ lease_id: 'ls_1' })
+      } finally {
+        vi.unstubAllGlobals()
+      }
     })
 
     it('a restore that throws is not swallowed: the original error survives and says the rollback is incomplete', async () => {
@@ -1341,7 +1456,7 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
-  it('hosts: a removed host is marked host-removed in the PARKED master too (and on screen), through the app\'s own cascade', async () => {
+  it('hosts: a removed host marks nothing in the PARKED master (nor on screen) — its panes there carry its wire id, through the app\'s own cascade', async () => {
     seedTabWorld()
     useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, b1: tab('b1', tmuxLeaf('p-b1', H2)) } })
     parkMasterShowSlaveFromCurrent()
@@ -1350,11 +1465,13 @@ describe('applySectionToStores — a local profile (slave) is on screen', () => 
 
     expect((await applySectionToStores('hosts', payload, ctx)).ok).toBe(true)
 
-    const terminated = (layout: PaneLayout): unknown => (layout.type === 'leaf' && layout.pane.content.kind === 'tmux-session' ? layout.pane.content.terminated : 'n/a')
+    const paneOf = (layout: PaneLayout): unknown => (layout.type === 'leaf' ? layout.pane.content : 'n/a')
     const parked = useLocalProfilesStore.getState().parkedMaster!
-    expect(terminated(parked.tabs.b1.layout)).toBe('host-removed')
-    expect(terminated(parked.tabs.a2.layout)).toBeUndefined()
-    expect(terminated(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).toBe('host-removed')
+    expect(paneOf(parked.tabs.b1.layout)).toMatchObject({ hostId: H2 }) // H2 has no daemonId: its wire id is its local id
+    expect(paneOf(parked.tabs.b1.layout)).not.toHaveProperty('terminated')
+    expect(paneOf(parked.tabs.a2.layout)).not.toHaveProperty('terminated')
+    expect(paneOf(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).toMatchObject({ hostId: H2 })
+    expect(paneOf(useTabStore.getState().tabs['SLAVE-ONLY-t1'].layout)).not.toHaveProperty('terminated')
   })
 
   it.each(['workspaces', 'tabs.wa', 'settings'] as const)('%s while the master world is UNSETTLED: busy, nothing written, the lock released', async (key) => {
