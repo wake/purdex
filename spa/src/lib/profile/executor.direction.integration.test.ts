@@ -10,6 +10,9 @@
 // brand new, nothing local — attached, and B's `workspaces` went straight to
 // `locked:conflict`, because an empty list is a payload too and B had never
 // agreed with anyone. The attach has a direction now.
+//
+// host ownership H3a-2: `hosts` is retired from the sync loop — never built, pushed, pulled or listed as a section
+// here. The host list is each device's own: B keeps its hosts whatever A's are.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import type { HostConfig } from '../../stores/useHostStore'
@@ -22,8 +25,8 @@ import { buildSectionPayload, startCollector, type Collector } from './collector
 import type { ProfileSectionKey } from './types'
 import { createExecutor, type Executor } from './executor'
 import { hashSection } from './hash'
-import { buildHostsSection, buildWorkspacesSection } from './sections'
-import { identityOfSync, syncIdOfSync } from './host-identity'
+import { buildWorkspacesSection } from './sections'
+import { syncIdOfSync } from './host-identity'
 import { clearSectionStore, saveConflict } from './section-store'
 import { PROJECTIONS, SECTION_SCHEMA_ORDINAL, fingerprintOf, sectionFingerprint } from './projections'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
@@ -161,7 +164,7 @@ async function clientAHasPushed(): Promise<void> {
   world('named-by-A', [ws('wa1', ['ta1']), ws('wa2', ['ta2'])], [tab('ta1'), tab('ta2')])
   const run = await attach(A, 'push')
   expect(run.settled).toHaveBeenCalledTimes(1)
-  expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.wa1', 'tabs.wa2', 'workspaces'])
+  expect(daemon.live()).toEqual(['settings', 'tabs.wa1', 'tabs.wa2', 'workspaces'])
   leave()
   problems.length = 0
 }
@@ -178,12 +181,12 @@ describe('a second client attaches', () => {
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1', 'wa2'])
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.tabs)).toEqual([['ta1'], ['ta2']])
     expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual(['ta1', 'ta2'])
-    expect(useHostStore.getState().hosts[H2].name).toBe('named-by-A')
+    expect(useHostStore.getState().hosts[H2].name).toBe(H2) // B's host list is B's (H3a-2): A's names do not travel
 
     const status = executor!.status()
     expect(status.profile).toBe('synced')
     expect(Object.values(status.sections).filter((s) => s !== 'synced')).toEqual([])
-    expect(Object.keys(status.sections).sort()).toEqual(['hosts', 'settings', 'tabs.wa1', 'tabs.wa2', 'workspaces'])
+    expect(Object.keys(status.sections).sort()).toEqual(['settings', 'tabs.wa1', 'tabs.wa2', 'workspaces'])
 
     expect(daemon.writes.slice(writesBefore)).toEqual([])
     expect(daemon.revs()).toEqual(revsBefore)
@@ -212,12 +215,11 @@ describe('a second client attaches', () => {
     world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
     const run = await attach(B, 'push')
 
-    expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.wb1', 'workspaces'])
+    expect(daemon.live()).toEqual(['settings', 'tabs.wb1', 'workspaces'])
     expect(daemon.rows.get('tabs.wa1')).toMatchObject({ hash: null, writer: B })
     expect(daemon.rows.get('tabs.wa2')).toMatchObject({ hash: null, writer: B })
     expect((daemon.rows.get('workspaces')!.payload as { order: string[] }).order).toEqual(['wb1'])
     expect(daemon.rows.get('workspaces')!.writer).toBe(B)
-    expect(daemon.rows.get('hosts')!.writer).toBe(B)
     expect(daemon.writes.filter((w) => w.clientId === B && w.outcome === 'conflict')).toEqual([])
 
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wb1'])
@@ -226,7 +228,7 @@ describe('a second client attaches', () => {
 
     const status = executor!.status()
     expect(status.profile).toBe('synced')
-    expect(Object.keys(status.sections).sort()).toEqual(['hosts', 'settings', 'tabs.wb1', 'workspaces'])
+    expect(Object.keys(status.sections).sort()).toEqual(['settings', 'tabs.wb1', 'workspaces'])
     expect(run.settled).toHaveBeenCalledTimes(1)
   })
 
@@ -237,13 +239,13 @@ describe('a second client attaches', () => {
     expect(run.direction.value).toBeNull()
 
     // B edits offline-ish: the SOT moves under it (A writes) before B's push goes out
-    const hosts = daemon.rows.get('hosts')!
-    daemon.rows.set('hosts', { ...hosts, rev: hosts.rev + 1, hash: 'f'.repeat(64), writer: A })
-    const { hosts: mine } = useHostStore.getState()
-    useHostStore.setState({ hosts: { ...mine, [H2]: { ...mine[H2], name: 'edited-by-B' } } })
+    const row = daemon.rows.get('workspaces')!
+    daemon.rows.set('workspaces', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: A })
+    const { workspaces } = useWorkspaceStore.getState()
+    useWorkspaceStore.setState({ workspaces: workspaces.map((w, i) => (i === 0 ? { ...w, name: 'edited-by-B' } : w)) })
     await vi.advanceTimersByTimeAsync(2_000)
 
-    expect(executor!.status().sections.hosts).toBe('locked:conflict')
+    expect(executor!.status().sections.workspaces).toBe('locked:conflict')
     expect(run.settled).toHaveBeenCalledTimes(1)
   })
 })
@@ -369,9 +371,9 @@ describe('another client removes a workspace, and the tabs deletion gets here be
     expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['wa1'])
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(['ta1'])
     expect(executor!.status()).toMatchObject({ profile: 'synced' })
-    expect(Object.keys(executor!.status().sections).sort()).toEqual(['hosts', 'settings', 'tabs.wa1', 'workspaces'])
+    expect(Object.keys(executor!.status().sections).sort()).toEqual(['settings', 'tabs.wa1', 'workspaces'])
     expect(daemon.writes.slice(writesBefore)).toEqual([]) // no orphan re-created, no second delete
-    expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.wa1', 'workspaces'])
+    expect(daemon.live()).toEqual(['settings', 'tabs.wa1', 'workspaces'])
     expect(problems).toEqual([])
   })
 })
@@ -747,253 +749,9 @@ describe('P3e OLD side: an ordinal-3 client (the real old pair) meets the settin
   })
 })
 
-/* ─── host-daemon-id D6: hosts ordinal 1 → 2 (`hosts.*.daemonId`) — coexistence, upcast, no ping-pong ─── */
-
-/** The two REAL hosts shapes: this build's, and the ordinal-1 one (the same list without `daemonId`). */
-async function realHostsShapes(): Promise<{ current: [string, number]; legacy: [string, number] }> {
-  const legacyList = PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.daemonId' && p !== 'hosts.*.aliases')
-  expect(legacyList).toHaveLength(PROJECTIONS.hosts.length - 2)
-  expect(SECTION_SCHEMA_ORDINAL.hosts).toBe(3)
-  return { current: [await sectionFingerprint('hosts'), SECTION_SCHEMA_ORDINAL.hosts], legacy: [await fingerprintOf(legacyList), 1] }
-}
-
-const hostsPuts = (from: number, clientId?: string) =>
-  daemon.writes.slice(from).filter((w) => w.op === 'put' && w.key === 'hosts' && (clientId === undefined || w.clientId === clientId))
-
-const hostsProblems = () => problems.filter((p) => p.section === 'hosts')
-
-type HostsRow = { hosts: Record<string, Partial<HostConfig> & { aliases?: string[] }>; hostOrder: string[] }
-const sotHosts = (): HostsRow => daemon.rows.get('hosts')!.payload as unknown as HostsRow
-
-/** The wire key of a host claiming `daemonId` (host-sync-identity: canonical rows are keyed by it). */
-const wireOf = (daemonId: string): string => syncIdOfSync(daemonId)
-
-/** Give the local host `id` a claimed daemon identity, as `observeDaemonId` would have. */
-function claim(id: string, daemonId: string): void {
-  const { hosts } = useHostStore.getState()
-  useHostStore.setState({ hosts: { ...hosts, [id]: { ...hosts[id], daemonId } } })
-}
-
-/** Over the next 60 s of fake time nothing more is written and the profile (hosts included) is synced. */
-async function expectHostsQuiet(): Promise<void> {
-  const before = daemon.writes.length
-  await vi.advanceTimersByTimeAsync(60_000)
-  expect(hostsPuts(before)).toEqual([])
-  expect(daemon.writes.slice(before)).toEqual([])
-  expect(executor!.status().profile).toBe('synced')
-  expect(executor!.status().sections.hosts).toBe('synced')
-}
-
-describe('D6 NEW side: this build (hosts ordinal 3, wire ids) meets hosts an ordinal-1 client wrote (local ids, no daemonId)', () => {
-  let shapes: Awaited<ReturnType<typeof realHostsShapes>>
-
-  beforeEach(async () => {
-    shapes = await realHostsShapes()
-  })
-
-  /** The SOT's hosts row: this build's ordinal and fingerprint, written by `writer`. */
-  function expectSotUpgraded(writer: string): void {
-    expect(daemon.rows.get('hosts')).toMatchObject({ fingerprint: shapes.current[0], ordinal: shapes.current[1], writer })
-  }
-
-  /** What an ordinal-1 client holds of this world: local-id keys, no daemonId, no aliases (host-sync-identity: it never translated). */
-  function legacyRowOfStore(): HostsRow {
-    const payload = buildHostsSection(useHostStore.getState(), identityOfSync({})) as unknown as HostsRow
-    const copy = JSON.parse(JSON.stringify(payload)) as HostsRow
-    for (const row of Object.values(copy.hosts)) delete row.daemonId
-    return copy
-  }
-
-  it('ATTACH (pull): A\'s hosts land, the LOCAL daemonId is kept (D6 upcast, before matching), ONE canonical hosts PUT, the tabs that name it go canonical once, then silence', async () => {
-    h.shape = shapeWith({ hosts: shapes.legacy }) // A is an old client: its hosts carry no daemonId
-    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
-    await attach(A, 'push')
-    leave()
-    expect(daemon.rows.get('hosts')).toMatchObject({ ordinal: 1, fingerprint: shapes.legacy[0] })
-    expect(Object.hasOwn(sotHosts().hosts[M], 'daemonId')).toBe(false)
-    problems.length = 0
-    const writesBefore = daemon.writes.length
-
-    h.shape = shapeWith({ hosts: shapes.current })
-    world(H2, [], [])
-    claim(M, 'mini:b') // B verified the master daemon before attaching
-    await attach(B, 'pull')
-
-    expect(useHostStore.getState().hosts[H2].name).toBe('named-by-A') // A's hosts landed
-    expect(useHostStore.getState().hosts[M].daemonId).toBe('mini:b') // …and B's claim survived the pull
-    expect(Object.hasOwn(useHostStore.getState().hosts[H2], 'daemonId')).toBe(false)
-    expect(executor!.status().profile).toBe('synced') // never locked:schema / locked:invalid
-    expect(hostsProblems().map((p) => p.kind)).toEqual(['pull-hash-mismatch'])
-    expect(hostsPuts(writesBefore, B).map((w) => w.outcome)).toEqual(['applied'])
-    // A's pane on the master (a legacy id) resolved through the alias, and its section went canonical ONCE
-    const paneHost = (useTabStore.getState().tabs.ta1.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content
-    expect(paneHost).toMatchObject({ hostId: M })
-    expect(paneHost).not.toHaveProperty('terminated')
-    expect(daemon.writes.slice(writesBefore).filter((w) => w.key !== 'hosts').map((w) => [w.key, w.outcome])).toEqual([['tabs.wa1', 'applied']])
-    expectSotUpgraded(B)
-    expect(sotHosts().hosts[wireOf('mini:b')]).toMatchObject({ daemonId: 'mini:b', aliases: [M] })
-    expect(sotHosts().hosts[H2].name).toBe('named-by-A')
-    await expectHostsQuiet()
-    expect(useHostStore.getState().hosts[M].daemonId).toBe('mini:b')
-  })
-
-  it('REMOTE EVENT while clean: an old client\'s hosts edit (local-id keys) is pulled (i-am-newer), the local daemonId kept, ONE PUT, then silence', async () => {
-    h.shape = shapeWith({ hosts: shapes.current })
-    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
-    claim(M, 'mini:b')
-    await attach(B, 'push')
-    expect(executor!.status().profile).toBe('synced')
-    expect(sotHosts().hosts[wireOf('mini:b')].daemonId).toBe('mini:b')
-    problems.length = 0
-    const writesBefore = daemon.writes.length
-
-    // an ordinal-1 client renames host-two: it never knew `daemonId`, and it keys by its (shared, pre-fix) local ids
-    const old = legacyRowOfStore()
-    old.hosts[H2].name = 'renamed-by-old'
-    const payload = old as unknown as Record<string, unknown>
-    const cur = daemon.rows.get('hosts')!
-    const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: shapes.legacy[0], ordinal: 1, writer: 'c_cccccccccccc' }
-    daemon.rows.set('hosts', row)
-    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'hosts', rev: row.rev, hash: row.hash!, writerClientId: 'c_cccccccccccc' })
-    for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000)
-
-    expect(useHostStore.getState().hosts[H2].name).toBe('renamed-by-old')
-    expect(useHostStore.getState().hosts[M].daemonId).toBe('mini:b')
-    expect(executor!.status().profile).toBe('synced')
-    expect(hostsProblems().map((p) => p.kind)).toEqual(['pull-hash-mismatch'])
-    expect(hostsPuts(writesBefore).map((w) => w.outcome)).toEqual(['applied'])
-    expectSotUpgraded(B)
-    expect(sotHosts().hosts[wireOf('mini:b')].daemonId).toBe('mini:b')
-    expect(sotHosts().hosts[H2].name).toBe('renamed-by-old')
-    await expectHostsQuiet()
-  })
-
-  // host-sync-identity §11.6: a row carrying a daemonId matches BY daemonId ONLY. Two devices that claim DIFFERENT
-  // daemons for the master's address disagree about what the master is; the pull no longer adopts the other claim
-  // (D6's "SOT wins" on daemonId) — the master's daemon has no row, so it is `removes-master-host`: locked:invalid,
-  // nothing written, B's claim untouched (PR 3's mismatch pause is the user-facing half).
-  it('TWO new clients with DIFFERENT daemonIds for the master: B\'s upgrade PUT loses to C\'s, the pull of C\'s row is refused (removes-master-host) — bounded, no loop', async () => {
-    h.shape = shapeWith({ hosts: shapes.legacy })
-    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
-    await attach(A, 'push')
-    leave()
-    problems.length = 0
-    const writesBefore = daemon.writes.length
-
-    const C = 'c_cccccccccccc'
-    const put = api.putSection.getMockImplementation()!
-    let cWrote = false
-    api.putSection.mockImplementation(async (hostId, profileId, key, body) => {
-      if (key === 'hosts' && !cWrote) {
-        cWrote = true
-        const cur = daemon.rows.get('hosts')!
-        const theirs = JSON.parse(JSON.stringify(cur.payload)) as HostsRow
-        theirs.hosts[M].daemonId = 'mini:c'
-        const payload = theirs as unknown as Record<string, unknown>
-        daemon.put('hosts', { baseRev: cur.rev, hash: await hashSection(payload), payload, fingerprint: shapes.current[0], ordinal: shapes.current[1], clientId: C })
-      }
-      return put(hostId, profileId, key, body)
-    })
-
-    h.shape = shapeWith({ hosts: shapes.current })
-    world(H2, [], [])
-    claim(M, 'mini:b')
-    await attach(B, 'pull')
-    for (let i = 0; i < 10; i += 1) await vi.advanceTimersByTimeAsync(1_000)
-
-    expect(daemon.writes.slice(writesBefore).filter((w) => w.key === 'hosts').map((w) => [w.clientId, w.outcome])).toEqual([[C, 'applied'], [B, 'conflict']])
-    expect(executor!.status().sections.hosts).toBe('locked:invalid')
-    expect(executor!.status().detail.hosts.invalidReason).toBe('removes-master-host')
-    expect(useHostStore.getState().hosts[M].daemonId).toBe('mini:b')
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(hostsPuts(writesBefore, B)).toHaveLength(1) // bounded: the one upgrade attempt, no loop
-    expect(sotHosts().hosts[M].daemonId).toBe('mini:c') // C's row is left as it is
-  })
-
-  // codex R1 P1 (D6): the upcast must not carry this device's claim onto another incarnation. host-sync-identity:
-  // a re-point arriving under the writer's LOCAL id (its claim dropped by the re-point, spec D3) does not match a
-  // local host that holds a claim (§11.6) — the host is recreated under a new local id, the old one cascaded. Either
-  // way the old claim is never PUT, and nothing loops.
-  for (const writer of [{ name: 'a NEW client (daemonId cleared, keyed by its local id)', legacy: false }, { name: 'an OLD client (ordinal 1)', legacy: true }]) {
-    it(`a re-point by ${writer.name} lands WITHOUT the local daemonId, and the old claim is never PUT`, async () => {
-      h.shape = shapeWith({ hosts: shapes.current })
-      world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
-      claim(H2, 'mini:b')
-      await attach(B, 'push')
-      expect(sotHosts().hosts[wireOf('mini:b')].daemonId).toBe('mini:b')
-      problems.length = 0
-      const putCallsBefore = api.putSection.mock.calls.length
-
-      const moved = legacyRowOfStore()
-      moved.hosts[H2].ip = '10.7.7.7'
-      const payload = moved as unknown as Record<string, unknown>
-      const cur = daemon.rows.get('hosts')!
-      const shape = writer.legacy ? shapes.legacy : shapes.current
-      const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: shape[0], ordinal: shape[1], writer: 'c_eeeeeeeeeeee' }
-      daemon.rows.set('hosts', row)
-      executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'hosts', rev: row.rev, hash: row.hash!, writerClientId: 'c_eeeeeeeeeeee' })
-      for (let i = 0; i < 5; i += 1) await vi.advanceTimersByTimeAsync(1_000)
-      await vi.advanceTimersByTimeAsync(60_000)
-
-      const hosts = Object.values(useHostStore.getState().hosts)
-      const moved7 = hosts.filter((h) => h.ip === '10.7.7.7')
-      expect(moved7).toHaveLength(1)
-      expect(Object.hasOwn(moved7[0], 'daemonId')).toBe(false)
-      expect(hosts.filter((h) => h.daemonId === 'mini:b')).toEqual([]) // the old claim is gone with its incarnation
-      const hostsBodies = api.putSection.mock.calls.slice(putCallsBefore).filter((c) => c[2] === 'hosts').map((c) => JSON.stringify(c[3]))
-      expect(hostsBodies.filter((b) => b.includes('mini:b'))).toEqual([]) // the wrong daemonId never goes out
-      expect(hostsBodies.length).toBeLessThanOrEqual(1) // at most the one re-key of the recreated host
-      expect(executor!.status().profile).toBe('synced')
-    })
-  }
-})
-
-describe('D6 OLD side: an ordinal-1 hosts client meets the hosts row this build writes (ordinal 3)', () => {
-  let shapes: Awaited<ReturnType<typeof realHostsShapes>>
-
-  beforeEach(async () => {
-    shapes = await realHostsShapes()
-  })
-
-  it('locks the whole profile (locked:schema, sot-is-newer) and writes NOTHING — after the event, after onReconnected, after a hosts edit', async () => {
-    h.shape = shapeWith({ hosts: shapes.legacy }) // the old client
-    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
-    await attach(A, 'push')
-    expect(executor!.status().profile).toBe('synced')
-    const writesBefore = daemon.writes.length
-
-    // this build (another machine) writes hosts: its real pair, a daemonId inside
-    const cur = daemon.rows.get('hosts')!
-    const theirs = JSON.parse(JSON.stringify(cur.payload)) as HostsRow
-    theirs.hosts[M].daemonId = 'mini:new'
-    const payload = theirs as unknown as Record<string, unknown>
-    const row: Row = { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: shapes.current[0], ordinal: shapes.current[1], writer: B }
-    daemon.rows.set('hosts', row)
-    const revsAfterNewWrite = daemon.revs()
-
-    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'hosts', rev: row.rev, hash: row.hash!, writerClientId: B })
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(executor!.status()).toMatchObject({
-      profile: 'locked:schema',
-      schemaLock: { section: 'hosts', verdict: 'sot-is-newer', mine: { fingerprint: shapes.legacy[0], ordinal: 1 }, sot: { fingerprint: shapes.current[0], ordinal: shapes.current[1] } },
-    })
-    expect(daemon.writes.slice(writesBefore)).toEqual([])
-
-    executor!.onReconnected()
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(executor!.status().profile).toBe('locked:schema')
-    expect(daemon.writes.slice(writesBefore)).toEqual([])
-
-    const { hosts } = useHostStore.getState()
-    useHostStore.setState({ hosts: { ...hosts, [H2]: { ...hosts[H2], name: 'renamed-under-the-lock' } } })
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(executor!.status().profile).toBe('locked:schema')
-    expect(daemon.writes.slice(writesBefore)).toEqual([])
-    expect(daemon.revs()).toEqual(revsAfterNewWrite)
-    expect(daemon.rows.get('hosts')).toEqual(row) // the ordinal-2 row is left exactly as written
-    expect(Object.hasOwn(useHostStore.getState().hosts[M], 'daemonId')).toBe(false) // nothing was applied
-  })
-})
+/* ─── host-daemon-id D6 (hosts ordinal 1 → 2) and its NEW / OLD sides: gone with host ownership H3a-2. They drove the
+   `hosts` section through the executor (pull, upcast, canonical PUT, the old client's lock on a new `hosts` row); the
+   sync loop never reads or writes `hosts` any more (hosts-retired.integration.test.ts pins that). ─── */
 
 /* ─── host-sync-identity PR 2: two clients, one daemon, INDEPENDENT local ids — through the real executor ─── */
 
@@ -1002,14 +760,17 @@ describe('host-sync-identity: B added the SAME daemon under its own id (the case
   const mlab = (id: string): HostConfig => ({ ...host(id), ip: '100.64.0.2', daemonId: DAEMON })
   const paneOn = (hostId: string): PaneLayout => ({ type: 'leaf', pane: { id: 'p1', content: { kind: 'tmux-session', hostId, sessionCode: 'c1', mode: 'terminal', cachedName: 'one', tmuxInstance: 'inst' } } })
 
-  it('PULL: B keeps its id, nothing is locked or branded host-removed, its own extra host goes; B writes ONE hosts PUT (its own id as an alias), then silence — and A, back, writes nothing', async () => {
+  // host ownership H3a-2: `hosts` no longer travels, so B learns no alias and loses no host. What still must hold is
+  // the reference half: A's tabs name the daemon by its wire id, and B resolves it to ITS OWN id through its daemonId.
+  it('PULL: B keeps its id and its own hosts, the pane resolves to B\'s id, nothing is locked or branded host-removed; B writes NOTHING — and A, back, writes nothing', async () => {
     h.shape = null
     useHostStore.setState({ hosts: { aaaaaa: mlab('aaaaaa') }, hostOrder: ['aaaaaa'], activeHostId: 'aaaaaa', runtime: {} })
     useTabStore.setState({ tabs: { ta1: { ...tab('ta1'), layout: paneOn('aaaaaa') } }, tabOrder: ['ta1'], activeTabId: null, visitHistory: [] })
     useWorkspaceStore.setState({ workspaces: [ws('wa1', ['ta1'])], activeWorkspaceId: 'wa1' })
     useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
     await attach(A, 'push', 'aaaaaa')
-    expect(Object.keys(sotHosts().hosts)).toEqual([syncIdOfSync(DAEMON)])
+    expect(daemon.live()).toEqual(['settings', 'tabs.wa1', 'workspaces'])
+    expect(JSON.stringify(daemon.rows.get('tabs.wa1')!.payload)).toContain(syncIdOfSync(DAEMON))
     leave()
     problems.length = 0
     const writesBefore = daemon.writes.length
@@ -1022,19 +783,15 @@ describe('host-sync-identity: B added the SAME daemon under its own id (the case
 
     expect(executor!.status().profile).toBe('synced')
     expect(Object.values(executor!.status().sections).filter((st) => st !== 'synced')).toEqual([])
-    expect(Object.keys(useHostStore.getState().hosts)).toEqual(['bbbbbb'])
+    expect(Object.keys(useHostStore.getState().hosts)).toEqual(['bbbbbb', 'onlyb1']) // B's host list is B's
     const content = (useTabStore.getState().tabs.ta1.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content
     expect(content).toMatchObject({ hostId: 'bbbbbb' })
     expect(content).not.toHaveProperty('terminated')
-    // every section B built hashes as A's did, but hosts: B's row adds B's own id as an alias (spec §11.7)
-    expect(daemon.writes.slice(writesBefore).map((w) => [w.key, w.clientId, w.outcome])).toEqual([['hosts', B, 'applied']])
-    expect(sotHosts().hosts[syncIdOfSync(DAEMON)].aliases).toEqual(['aaaaaa', 'bbbbbb'])
-    expect(problems.filter((p) => p.kind !== 'sections-unrendered')).toEqual([]) // no pull-hash-mismatch either (#1369)
-    const quiet = daemon.writes.length
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(daemon.writes.length).toBe(quiet)
+    // every section B builds hashes as A's did: nothing to write back
+    expect(daemon.writes.slice(writesBefore)).toEqual([])
+    expect(problems.filter((p) => p.kind !== 'sections-unrendered')).toEqual([])
 
-    // A reattaches (pull) with its own world: it takes B's row, whose aliases already list A's id — nothing to write
+    // A reattaches (pull) with its own world: nothing to write either
     leave()
     useHostStore.setState({ hosts: { aaaaaa: mlab('aaaaaa') }, hostOrder: ['aaaaaa'], activeHostId: 'aaaaaa', runtime: {} })
     useTabStore.setState({ tabs: { ta1: { ...tab('ta1'), layout: paneOn('aaaaaa') } }, tabOrder: ['ta1'], activeTabId: null, visitHistory: [] })
@@ -1045,64 +802,15 @@ describe('host-sync-identity: B added the SAME daemon under its own id (the case
     expect(daemon.writes.slice(beforeA)).toEqual([])
     expect(executor!.status().profile).toBe('synced')
   })
-
-  // #1369 (real machine, #1366 acceptance): B's only problem after that pull was `pull-hash-mismatch · hosts` — for
-  // the designed own-alias write-back. It is not a problem: the log stays empty, and the write-back goes once.
-  it('PULL: B\'s problem log stays EMPTY — the own-alias write-back is one hosts PUT, not a problem; the SOT row lists both ids; a second pass pushes nothing', async () => {
-    h.shape = null
-    useHostStore.setState({ hosts: { aaaaaa: mlab('aaaaaa') }, hostOrder: ['aaaaaa'], activeHostId: 'aaaaaa', runtime: {} })
-    useTabStore.setState({ tabs: { ta1: { ...tab('ta1'), layout: paneOn('aaaaaa') } }, tabOrder: ['ta1'], activeTabId: null, visitHistory: [] })
-    useWorkspaceStore.setState({ workspaces: [ws('wa1', ['ta1'])], activeWorkspaceId: 'wa1' })
-    useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
-    await attach(A, 'push', 'aaaaaa')
-    expect(sotHosts().hosts[syncIdOfSync(DAEMON)].aliases).toEqual(['aaaaaa'])
-    leave()
-    problems.length = 0
-    const writesBefore = daemon.writes.length
-
-    useHostStore.setState({ hosts: { bbbbbb: mlab('bbbbbb') }, hostOrder: ['bbbbbb'], activeHostId: 'bbbbbb', runtime: {} })
-    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-    useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
-    await attach(B, 'pull', 'bbbbbb')
-    await vi.advanceTimersByTimeAsync(60_000)
-
-    // (a brand-new B lists `tabs.wa1` before its workspace arrives: the once-only notice the attach tests above allow too)
-    const logged = () => problems.filter((p) => p.kind !== 'sections-unrendered')
-    expect(logged()).toEqual([])
-    expect(hostsProblems()).toEqual([])
-    expect(executor!.status().profile).toBe('synced')
-    expect(daemon.writes.slice(writesBefore).map((w) => [w.key, w.clientId, w.outcome])).toEqual([['hosts', B, 'applied']])
-    expect(sotHosts().hosts[syncIdOfSync(DAEMON)].aliases).toEqual(['aaaaaa', 'bbbbbb'])
-    await expectHostsQuiet()
-    expect(logged()).toEqual([])
-  })
-})
-
-/* ─── host-sync-identity: an alpha.434 client (hosts ordinal 2, no `aliases`, local-id keys) meets this build's rows ─── */
-
-describe('host-sync-identity OLD side: an ordinal-2 hosts client meets the hosts row this build writes (ordinal 3)', () => {
-  it('locks the whole profile (locked:schema, sot-is-newer) and writes nothing — so it never applies a wire id', async () => {
-    const legacyList = PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.aliases')
-    const old: [string, number] = [await fingerprintOf(legacyList), 2]
-    const current: [string, number] = [await sectionFingerprint('hosts'), SECTION_SCHEMA_ORDINAL.hosts]
-    h.shape = shapeWith({ hosts: old })
-    world('named-by-A', [ws('wa1', ['ta1'])], [tab('ta1')])
-    await attach(A, 'push')
-    const writesBefore = daemon.writes.length
-
-    const cur = daemon.rows.get('hosts')!
-    const wire = syncIdOfSync('mini:new')
-    const payload = { hosts: { [wire]: { ...host(M), id: wire, daemonId: 'mini:new' } }, hostOrder: [wire] } as unknown as Record<string, unknown>
-    daemon.rows.set('hosts', { rev: cur.rev + 1, hash: await hashSection(payload), payload, fingerprint: current[0], ordinal: current[1], writer: B })
-    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'hosts', rev: cur.rev + 1, hash: daemon.rows.get('hosts')!.hash!, writerClientId: B })
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(executor!.status()).toMatchObject({ profile: 'locked:schema', schemaLock: { section: 'hosts', verdict: 'sot-is-newer' } })
-    expect(daemon.writes.slice(writesBefore)).toEqual([])
-    expect(Object.keys(useHostStore.getState().hosts)).toEqual([M, H2]) // nothing applied
-  })
 })
 
 /* ─── host-sync-identity: the wire marker in the fingerprint — tabs and settings lock an old client ON THEIR OWN ─── */
+
+/** Give the local host `id` a claimed daemon identity, as `observeDaemonId` would have. */
+function claim(id: string, daemonId: string): void {
+  const { hosts } = useHostStore.getState()
+  useHostStore.setState({ hosts: { ...hosts, [id]: { ...hosts[id], daemonId } } })
+}
 
 describe('host-sync-identity: an alpha.434 client (ordinal-2-era shapes) meets ONE section this build writes', () => {
   /** The real shape tables: alpha.434's (no marker, no `aliases`) and this build's. */

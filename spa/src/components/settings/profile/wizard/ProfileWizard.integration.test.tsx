@@ -137,7 +137,7 @@ describe('the wizard, through its controls, against a daemon', () => {
 
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
     expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: M, profileId: PROFILE })
-    expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.wa', 'workspaces'])
+    expect(daemon.live()).toEqual(['settings', 'tabs.wa', 'workspaces']) // never `hosts` (host ownership H3a-2)
     expect(JSON.stringify(daemon.rows.get('workspaces')!.payload)).toContain('SENTINEL-A')
     expect(profileSyncState().status?.profile).toBe('synced')
     expect(onScreen()).toEqual(['SENTINEL-A']) // a push replaces nothing here
