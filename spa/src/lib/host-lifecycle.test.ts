@@ -359,6 +359,154 @@ describe('host delete cascade — this device only (host ownership spec §3.4)',
   })
 })
 
+// Plan H1c T3 (§0.6): the undo puts the host row back VERBATIM (#1396 — daemonId and aliases included) and runs the
+// re-resolve pass's body for that host at once, synchronously: every reference that names it by its wire id — the ones
+// the deletion wrote and any that arrived meanwhile (`d1_X` means X on every device) — points at it again.
+describe('host delete undo — the references come back (host ownership spec §3.4)', () => {
+  beforeEach(resetAllStores)
+  afterEach(() => { vi.useRealTimers() })
+
+  const contentOf = (tabId: string) => getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
+
+  it('#1396: the row comes back verbatim — daemonId and syncAliases included — at its place, active again', () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [HOST_A]: { ...s.hosts[HOST_A], syncAliases: ['old-id'], token: 'tok' } } }))
+    const before = useHostStore.getState().hosts[HOST_A]
+    const undo = deleteHostCascade(HOST_A)
+    expect(useHostStore.getState().activeHostId).toBe(HOST_B)
+
+    undo()
+
+    expect(useHostStore.getState().hosts[HOST_A]).toEqual(before)
+    expect(useHostStore.getState().hostOrder).toEqual([HOST_A, HOST_B])
+    expect(useHostStore.getState().activeHostId).toBe(HOST_A)
+  })
+
+  it('a host added meanwhile keeps its place; the restored one goes back after the hosts it followed', () => {
+    const undo = deleteHostCascade(HOST_B)
+    useHostStore.getState().addHost({ id: 'host-c', name: 'C', ip: '7.7.7.7', port: 7860 })
+    undo()
+    expect(useHostStore.getState().hostOrder).toEqual([HOST_A, HOST_B, 'host-c'])
+    expect(useHostStore.getState().hostOrder.map((id) => useHostStore.getState().hosts[id].order)).toEqual([0, 1, 2])
+  })
+
+  it('every reference on the wire id is back on the local id — panes, host settings, New Tab columns', () => {
+    const tmux = makeSessionTab(HOST_A, 'dev001')
+    const exec = createTab({ kind: 'execution', executionId: 'exc_1', host: HOST_A })
+    useTabStore.getState().addTab(tmux)
+    useTabStore.getState().addTab(exec)
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/tmp/a' })
+    useNewTabLayoutStore.setState({
+      presets: { '3col': { enabled: true, columns: [[`sessions:${HOST_A}`], [`headless:${HOST_A}`], []] }, '2col': { enabled: false, columns: [[], []] }, '1col': { enabled: true, columns: [[`sessions:${HOST_A}`]] } },
+      knownIds: [`sessions:${HOST_A}`, `headless:${HOST_A}`],
+    })
+    const undo = deleteHostCascade(HOST_A)
+    expect(contentOf(tmux.id)).toMatchObject({ hostId: WIRE_A })
+
+    undo()
+
+    expect(contentOf(tmux.id)).toMatchObject({ hostId: HOST_A })
+    expect(contentOf(exec.id)).toMatchObject({ host: HOST_A })
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [HOST_A]: { editor: { homePath: '/tmp/a' } } })
+    expect(useNewTabLayoutStore.getState().presets['3col'].columns).toEqual([[`sessions:${HOST_A}`], [`headless:${HOST_A}`], []])
+    expect(useNewTabLayoutStore.getState().knownIds).toEqual([`sessions:${HOST_A}`, `headless:${HOST_A}`])
+  })
+
+  it('a reference on the wire id that ARRIVED inside the undo window resolves too — d1_X is X everywhere', () => {
+    const undo = deleteHostCascade(HOST_A)
+    const arrived = makeSessionTab(WIRE_A, 'pulled')
+    useTabStore.getState().addTab(arrived)
+    undo()
+    expect(contentOf(arrived.id)).toMatchObject({ hostId: HOST_A })
+  })
+
+  it('a reference on another wire id, and an unresolvable legacy id, are left alone', () => {
+    const WIRE_Y = syncIdOfSync('lab-y:yyyyyy')
+    const other = makeSessionTab(WIRE_Y, 'y')
+    const legacy = makeSessionTab('gone01', 'l')
+    useTabStore.getState().addTab(other)
+    useTabStore.getState().addTab(legacy)
+    const undo = deleteHostCascade(HOST_A)
+    undo()
+    expect(contentOf(other.id)).toMatchObject({ hostId: WIRE_Y })
+    expect(contentOf(legacy.id)).toMatchObject({ hostId: 'gone01' })
+  })
+
+  it('a host recreated with the same id in the window is not overwritten, and nothing is rewritten for it by the undo', () => {
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    const undo = deleteHostCascade(HOST_A)
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [HOST_A]: { id: HOST_A, name: 'Recreated', ip: '9.9.9.9', port: 7860, order: 2 } }, hostOrder: [...s.hostOrder, HOST_A] }))
+    undo()
+    expect(useHostStore.getState().hosts[HOST_A]).toEqual({ id: HOST_A, name: 'Recreated', ip: '9.9.9.9', port: 7860, order: 2 })
+    expect(contentOf(t.id)).toMatchObject({ hostId: WIRE_A })
+  })
+
+  it('a duplicate re-added by the undo (identity conflict again) rewrites nothing', () => {
+    const DUP = 'host-d'
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [DUP]: { id: DUP, name: 'dup', ip: '9.9.9.9', port: 7860, order: 2, daemonId: DAEMON_A } }, hostOrder: [...s.hostOrder, DUP] }))
+    const t = makeSessionTab(DUP, 'dup001')
+    useTabStore.getState().addTab(t)
+    const undo = deleteHostCascade(DUP)
+    expect(contentOf(t.id)).toMatchObject({ hostId: WIRE_A })
+    const tabs = useTabStore.getState().tabs
+
+    undo()
+
+    expect(useHostStore.getState().hosts[DUP]).toBeDefined()
+    expect(useTabStore.getState().tabs).toBe(tabs)
+  })
+
+  it('under a held grant (the hosts apply) the undo is synchronous: resolved before it returns, the lock still the holder\'s', () => {
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    const grant = useRebuildStore.getState().acquireOperationLock('profile-sync')
+    const undo = deleteHostCascade(HOST_A, grant)
+
+    undo()
+
+    expect(contentOf(t.id)).toMatchObject({ hostId: HOST_A })
+    expect(useRebuildStore.getState().lockGrant).toBe(grant)
+    useRebuildStore.getState().releaseOperationLock(grant)
+  })
+
+  it('no grant, the lock free: resolved before the undo returns, and the lock released', () => {
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    const undo = deleteHostCascade(HOST_A)
+    undo()
+    expect(contentOf(t.id)).toMatchObject({ hostId: HOST_A })
+    expect(useRebuildStore.getState().lockedBy).toBeNull()
+  })
+
+  it('no grant, the lock held elsewhere (UI undo during a rebuild): the host is back at once, a scheduled pass finishes the refs', async () => {
+    vi.useFakeTimers()
+    const t = makeSessionTab(HOST_A, 'dev001')
+    useTabStore.getState().addTab(t)
+    const undo = deleteHostCascade(HOST_A)
+    const other = useRebuildStore.getState().acquireOperationLock('rebuild:batch')
+
+    undo()
+
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(contentOf(t.id)).toMatchObject({ hostId: WIRE_A })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(contentOf(t.id)).toMatchObject({ hostId: WIRE_A }) // still held
+    useRebuildStore.getState().releaseOperationLock(other)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(contentOf(t.id)).toMatchObject({ hostId: HOST_A })
+  })
+
+  it('a no-daemonId host: nothing was rewritten, nothing is', () => {
+    const t = makeSessionTab(HOST_B, 'b')
+    useTabStore.getState().addTab(t)
+    const tabs = useTabStore.getState().tabs
+    const undo = deleteHostCascade(HOST_B)
+    undo()
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    expect(useHostStore.getState().hosts[HOST_B]).toBeDefined()
+  })
+})
+
 describe('session-closed detection', () => {
   beforeEach(resetAllStores)
 
@@ -947,5 +1095,15 @@ describe('host delete cascade — parked worlds', () => {
     const before = useLocalProfilesStore.getState()
     deleteHostCascade(HOST_A)
     expect(useLocalProfilesStore.getState()).toBe(before)
+  })
+
+  it('undo: the parked master and the parked slave are back on the local id too', () => {
+    const { master, off, live } = threeWorlds()
+    const undo = deleteHostCascade(HOST_A)
+    undo()
+    const lp = useLocalProfilesStore.getState()
+    expect(contentIn(lp.parkedMaster, master.a.id)).toMatchObject({ hostId: HOST_A })
+    expect(contentIn(lp.slaves.off.world, off.a.id)).toMatchObject({ hostId: HOST_A })
+    expect(getPrimaryPane(useTabStore.getState().tabs[live.a.id].layout).content).toMatchObject({ hostId: HOST_A })
   })
 })

@@ -10,7 +10,8 @@ import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { wireIdOfHost } from './profile/host-identity'
-import { rewriteHostRefs, scheduleHostReresolve } from './host-reresolve'
+import { reresolveRestoredHost, rewriteHostRefs, scheduleHostReresolve } from './host-reresolve'
+import type { OperationLockGrant } from '../stores/useRebuildStore'
 import type { Session } from './host-api'
 
 // === Deleting a host affects only this device (host ownership spec §3.4, decision 9) ===
@@ -32,8 +33,11 @@ import type { Session } from './host-api'
  * Remove a host from this device: its references become its wire id, its device-local state is cleared, the row
  * goes. Returns the undo. A host that does not exist, or the last one (`removeHost` refuses it), is left alone —
  * with a no-op undo. Throws, having changed nothing, when the rewrite cannot be written.
+ *
+ * `grant` — the operation-lock grant the caller holds (the hosts apply), which the UNDO runs its re-resolve under:
+ * that apply rolls back through the undo with nothing awaited, so the undo must finish then and there.
  */
-export function deleteHostCascade(hostId: string): () => void {
+export function deleteHostCascade(hostId: string, grant: OperationLockGrant | null = null): () => void {
   const hostStore = useHostStore.getState()
   const sessionStore = useSessionStore.getState()
   const agentStore = useAgentStore.getState()
@@ -66,6 +70,7 @@ export function deleteHostCascade(hostId: string): () => void {
     hostOrder: [...hostStore.hostOrder],
     sessions: sessionStore.sessions[hostId] as Session[] | undefined,
     activeHostId: hostStore.activeHostId,
+    devHostId: hostStore.devHostId,
     // AgentStore data (exclude transient activeSubagents)
     agentEvents: {} as Record<string, NormalizedEvent>,
     agentStatuses: {} as Record<string, AgentStatus>,
@@ -121,10 +126,10 @@ export function deleteHostCascade(hostId: string): () => void {
     // would overwrite the user's freshly written state.
     if (useHostStore.getState().hosts[hostId] !== undefined) return
 
-    // --- Restore host + hostOrder position ---
-    useHostStore.getState().addHost(snapshot.host)
-    useHostStore.getState().reorderHosts(snapshot.hostOrder)
-    if (snapshot.activeHostId === hostId) useHostStore.getState().setActiveHost(hostId)
+    // --- Restore the host row, verbatim, at its place ---
+    // Not `addHost`: it strips `daemonId` and `syncAliases` (#1396), and without them the host's wire id — and so
+    // every reference the deletion rewrote to it — would not resolve back to it.
+    useHostStore.setState((s) => restoredHostSlice(s, hostId, snapshot))
 
     // --- Restore sessions ---
     if (snapshot.sessions) useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
@@ -139,6 +144,41 @@ export function deleteHostCascade(hostId: string): () => void {
         models: { ...ag.models, ...snapshot.agentModels },
       })
     }
+
+    // --- References back on the local id (plan §0.6) ---
+    // The deletion's reverse: the re-resolve pass's body for this host, now — under the caller's grant, else the
+    // lock taken here. Refused (a rebuild holds the lock, the world is mid-switch) or failed: the pass is scheduled,
+    // and retries until it lands; the host is already back, so it finds every reference to resolve. A host whose wire
+    // id is its local id had nothing rewritten, and nothing names it any other way: no pass.
+    if (wireId !== hostId && reresolveRestoredHost(hostId, grant) !== 'done') scheduleHostReresolve()
+  }
+}
+
+type HostSlice = Pick<ReturnType<typeof useHostStore.getState>, 'hosts' | 'hostOrder' | 'activeHostId' | 'devHostId'>
+
+/**
+ * The host store with `hostId`'s row back as it was: right after the hosts it followed that are still here (a host
+ * added meanwhile keeps its place), every row's `order` renumbered as `reorderHosts` does, and focus / dev host back
+ * on it when it had them.
+ */
+function restoredHostSlice(
+  s: HostSlice,
+  hostId: string,
+  snap: { host: HostConfig; hostOrder: readonly string[]; activeHostId: string | null; devHostId: string | null },
+): Partial<HostSlice> {
+  const followed = snap.hostOrder.slice(0, snap.hostOrder.indexOf(hostId)).filter((id) => Object.hasOwn(s.hosts, id))
+  const order = s.hostOrder.filter((id) => id !== hostId)
+  const at = followed.length === 0 ? 0 : order.indexOf(followed[followed.length - 1]) + 1
+  order.splice(at, 0, hostId)
+  const hosts: Record<string, HostConfig> = { ...s.hosts, [hostId]: snap.host }
+  order.forEach((id, i) => {
+    if (Object.hasOwn(hosts, id) && hosts[id].order !== i) hosts[id] = { ...hosts[id], order: i }
+  })
+  return {
+    hosts,
+    hostOrder: order,
+    ...(snap.activeHostId === hostId ? { activeHostId: hostId } : {}),
+    ...(snap.devHostId === hostId ? { devHostId: hostId } : {}),
   }
 }
 

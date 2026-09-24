@@ -14,8 +14,8 @@ import type { Tab } from '../types/tab'
 import { deleteHostCascade } from './host-lifecycle'
 import { getPrimaryPane } from './pane-tree'
 import { startCollector, type Collector, type SectionReport } from './profile/collector'
-import { __resetMasterWorldForTest } from './profile/master-world'
-import { switchActiveProfile } from './profile/switch-active'
+import { __resetMasterWorldForTest, readMasterWorld } from './profile/master-world'
+import { deleteSlave, promoteToMaster, switchActiveProfile } from './profile/switch-active'
 import { syncIdOfSync } from './profile/host-identity'
 import { __resetHostReresolveForTest } from './host-reresolve'
 
@@ -139,3 +139,88 @@ describe('the deletion reaches every world, and pushes nothing of any', () => {
     expect(paneIn(slaveWorld().tabs, 'st-b')).toMatchObject({ hostId: HOST_B })
   })
 })
+
+// Plan H1c T3 (§0.6): the undo runs the re-resolve pass's body for the restored host. `d1_X` names X on every
+// device and in every world, so whoever's world a reference is in by undo time — after a switch, after a promote that
+// relabelled the worlds, two worlds sharing tab and pane ids — it resolves to X. No per-reference record is kept.
+describe('the undo brings every world back, whatever happened to the worlds meanwhile', () => {
+  const hostOf = (tabs: Record<string, Tab>, tabId: string): unknown => (paneIn(tabs, tabId) as { hostId?: string }).hostId
+  const everyHostId = (): string => JSON.stringify([useTabStore.getState().tabs, useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves])
+
+  it('a switch inside the undo window: the slave (parked now) and the master (on screen now) are both back on the local id', async () => {
+    slaveOnScreen(world(SLAVE, [tab('st-a', HOST_A, SLAVE), tab('st-b', HOST_B, SLAVE)], 'ws-slave'), world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]))
+    const undo = deleteHostCascade(HOST_A)
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+
+    undo()
+
+    expect(hostOf(useTabStore.getState().tabs, 'mt-a')).toBe(HOST_A)
+    expect(hostOf(slaveWorld().tabs, 'st-a')).toBe(HOST_A)
+    expect(everyHostId()).not.toContain(WIRE_A)
+    expect(screen()).not.toContain(SLAVE)
+  })
+
+  it.each([
+    ['the master on screen, the slave promoted', 'master'],
+    ['the slave on screen, THAT slave promoted', 'slave'],
+  ] as const)('a PROMOTE inside the undo window (%s — the worlds relabelled): every world back on the local id, no tab moved between worlds', async (_name, onScreen) => {
+    const m = world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)])
+    const sl = world(SLAVE, [tab('st-a', HOST_A, SLAVE), tab('st-b', HOST_B, SLAVE)], 'ws-slave')
+    if (onScreen === 'master') masterOnScreen(m, sl)
+    else slaveOnScreen(sl, m)
+    const undo = deleteHostCascade(HOST_A)
+    expect(await promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    const tabIdsBefore = JSON.stringify([Object.keys(useTabStore.getState().tabs), Object.keys(useLocalProfilesStore.getState().parkedMaster?.tabs ?? {}), Object.values(useLocalProfilesStore.getState().slaves).map((x) => Object.keys(x.world?.tabs ?? {}))])
+
+    undo()
+
+    expect(everyHostId()).not.toContain(WIRE_A)
+    expect(everyHostId()).toContain(`"hostId":"${HOST_A}"`)
+    expect(JSON.stringify([Object.keys(useTabStore.getState().tabs), Object.keys(useLocalProfilesStore.getState().parkedMaster?.tabs ?? {}), Object.values(useLocalProfilesStore.getState().slaves).map((x) => Object.keys(x.world?.tabs ?? {}))])).toBe(tabIdsBefore)
+    expect(useHostStore.getState().hostOrder).toEqual([HOST_B, HOST_A])
+  })
+
+  it('the SAME tab and pane ids in two worlds, both on the wire id: both resolved — d1_X is X in every world', async () => {
+    masterOnScreen(world(MASTER, [tab('t1', HOST_A, MASTER), tab('t2', HOST_B, MASTER)]), world(SLAVE, [tab('t1', HOST_A, SLAVE), tab('t2', HOST_B, SLAVE)]))
+    const undo = deleteHostCascade(HOST_A)
+    expect(await promoteToMaster(S, 'Old master')).toMatchObject({ ok: true })
+    undo()
+    expect(hostOf(useTabStore.getState().tabs, 't1')).toBe(HOST_A)
+    const parked = useLocalProfilesStore.getState().parkedMaster ?? Object.values(useLocalProfilesStore.getState().slaves).find((x) => x.world)?.world
+    expect(parked && hostOf(parked.tabs, 't1')).toBe(HOST_A)
+    expect(everyHostId()).not.toContain(WIRE_A)
+  })
+
+  it('the slave was DELETED inside the undo window: the rest comes back, nothing lands on screen from it', async () => {
+    slaveOnScreen(world(SLAVE, [tab('st-a', HOST_A, SLAVE)]), world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]))
+    const undo = deleteHostCascade(HOST_A)
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+    expect(deleteSlave(S)).toEqual({ ok: true })
+    const tabsBefore = Object.keys(useTabStore.getState().tabs)
+
+    expect(() => undo()).not.toThrow()
+
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(tabsBefore)
+    expect(hostOf(useTabStore.getState().tabs, 'mt-a')).toBe(HOST_A)
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+  })
+
+  it('half-way through another window\'s switch (the tags disagree): the undo writes no world then — the scheduled pass does once it settles', async () => {
+    vi.useFakeTimers()
+    slaveOnScreen(world(SLAVE, [tab('st-a', HOST_A, SLAVE)]), world(MASTER, [tab('mt-b', HOST_B, MASTER)]))
+    const undo = deleteHostCascade(HOST_A)
+    const w = useTabStore.getState()
+    useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 2 }) // the other window's `tabs` tag arrived, the rest not yet
+    expect(readMasterWorld().settled).toBe(false)
+    const tabs = useTabStore.getState().tabs
+
+    undo()
+
+    expect(useHostStore.getState().hosts[HOST_A]).toBeDefined()
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    useTabStore.setState({ worldId: S, worldEpoch: w.worldEpoch }) // settled again
+    await vi.advanceTimersByTimeAsync(500)
+    expect(hostOf(useTabStore.getState().tabs, 'st-a')).toBe(HOST_A)
+  })
+})
+

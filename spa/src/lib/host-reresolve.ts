@@ -37,7 +37,7 @@ import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
 import type { LocalProfile, ParkedWorld } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { renameLayoutIds, useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
-import { useRebuildStore } from '../stores/useRebuildStore'
+import { useRebuildStore, type OperationLockGrant } from '../stores/useRebuildStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { readMasterWorld } from './profile/master-world'
 import { hostSettingsFromWire, presetColumnIdFromWire } from './profile/host-identity'
@@ -200,28 +200,46 @@ let inPass = false
 
 /** One pass, now. Never throws: a busy lock, a conflict and a failed write are outcomes. */
 export function runHostReresolve(): HostReresolveOutcome {
+  return guarded(() => passBody(null, null))
+}
+
+/**
+ * The pass's body for ONE host that has just come back — the undo of a host deletion (spec §3.4, plan §0.6): every
+ * reference that resolves to `hostId` (its wire id, whichever world holds it and however it got there — `d1_X` is X
+ * on every device) moves to it, now, synchronously. Under `parent` — the caller's operation-lock grant (the hosts
+ * apply rolling back) — it runs inside that grant; without one it takes the lock itself. Only this host's references
+ * move: the hosts apply rolls back from a STAGED host list, and a reference resolved onto a row of that stage would
+ * point at a host this device is about to drop; every other host is the plain pass's (`requestHostReresolve`).
+ * `busy` (the lock held elsewhere, the world unsettled) and a failed write are the caller's to reschedule. Never throws.
+ */
+export function reresolveRestoredHost(hostId: string, parent: OperationLockGrant | null = null): HostReresolveOutcome {
+  return guarded(() => passBody(hostId, parent))
+}
+
+function guarded(body: () => HostReresolveOutcome): HostReresolveOutcome {
   if (inPass) return 'busy'
   inPass = true
   try {
-    return passBody()
+    return body()
   } finally {
     inPass = false
   }
 }
 
-function passBody(): HostReresolveOutcome {
+/** `only` — the one host references may move onto (`reresolveRestoredHost`), or `null`: every local host (the pass). */
+function passBody(only: string | null, parent: OperationLockGrant | null): HostReresolveOutcome {
   const { hosts, hostOrder } = useHostStore.getState()
   const signature = hostResolverSignature({ hosts, hostOrder })
   const resolve = wireResolverOf({ hosts, hostOrder })
   if (resolve === null) {
-    settledSignature = signature
+    if (only === null) settledSignature = signature
     return 'conflict'
   }
-  // Only an id that is NOT a local host moves, and only onto a local host.
+  // Only an id that is NOT a local host moves, and only onto a local host (onto `only`, when set).
   const map: HostMap = (id) => {
     if (Object.hasOwn(hosts, id)) return id
     const local = resolve(id)
-    return Object.hasOwn(hosts, local) ? local : id
+    return Object.hasOwn(hosts, local) && (only === null || local === only) ? local : id
   }
   // Everything from here to the last write is synchronous (the #1256 narrowing above).
   rereadFromStorage()
@@ -230,7 +248,7 @@ function passBody(): HostReresolveOutcome {
   const writes = planRewrite(map)
   if (writes.length > 0) {
     // Taking the lock is not free — every release reconciles every host's sessions — so only when something moves.
-    const grant = useRebuildStore.getState().acquireOperationLock(HOST_RERESOLVE_LOCK_OWNER)
+    const grant = useRebuildStore.getState().acquireOperationLock(HOST_RERESOLVE_LOCK_OWNER, parent)
     if (grant === null) return 'busy'
     try {
       const committed = commitAll(writes)
@@ -239,7 +257,7 @@ function passBody(): HostReresolveOutcome {
       useRebuildStore.getState().releaseOperationLock(grant)
     }
   }
-  settledSignature = signature
+  if (only === null) settledSignature = signature
   return 'done'
 }
 

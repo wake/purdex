@@ -19,6 +19,7 @@ import {
   HOST_RERESOLVE_RETRY_MS,
   __resetHostReresolveForTest,
   requestHostReresolve,
+  reresolveRestoredHost,
   rewriteHostRefs,
   runHostReresolve,
   startHostReresolve,
@@ -693,3 +694,38 @@ describe('rewriteHostRefs (explicit map — the deletion direction)', () => {
     expect(useHostSettingsStore.getState().hosts).toBe(before.hostSettings)
   })
 })
+
+// Plan H1c T3 (§0.6): the undo's re-resolve — the pass body, for the ONE host that came back.
+describe('reresolveRestoredHost', () => {
+  const Y_DAEMON = 'why-lab:yyyyyy'
+  const WIRE_Y = syncIdOfSync(Y_DAEMON)
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }), yloc: host('yloc', { daemonId: Y_DAEMON, order: 1 }) }, hostOrder: [LOCAL, 'yloc'] })
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, y: tab('y', leaf('py', tmux(WIRE_Y))) } })
+  })
+
+  it('moves the references onto that host only — another host\'s wire id is the plain pass\'s', () => {
+    expect(reresolveRestoredHost(LOCAL)).toBe('done')
+    const ids = hostIdsIn(useTabStore.getState().tabs)
+    expect(ids).not.toContain(WIRE)
+    expect(ids).toContain(WIRE_Y)
+  })
+
+  it('runs inside the caller\'s grant (nested), leaving the lock to its holder', () => {
+    const grant = useRebuildStore.getState().acquireOperationLock('profile-sync')
+    expect(reresolveRestoredHost(LOCAL, grant)).toBe('done')
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(WIRE)
+    expect(useRebuildStore.getState().lockGrant).toBe(grant)
+    useRebuildStore.getState().releaseOperationLock(grant)
+  })
+
+  it('without the grant, the lock held elsewhere: busy, nothing written', () => {
+    const grant = useRebuildStore.getState().acquireOperationLock('profile-sync')
+    const tabs = useTabStore.getState().tabs
+    expect(reresolveRestoredHost(LOCAL)).toBe('busy')
+    expect(useTabStore.getState().tabs).toBe(tabs)
+    useRebuildStore.getState().releaseOperationLock(grant)
+  })
+})
+

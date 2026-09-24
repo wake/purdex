@@ -993,4 +993,33 @@ describe("C2' — undo in a window that has not heard of another window's promot
     expect(w1.useHostStore.getState().hosts.h1).toBeDefined()
     expect(w1.useUndoToast.getState().toast).toBeNull()
   })
+
+  // Host ownership plan §0.6: with a daemon, the deletion DID rewrite the worlds (h1 → its wire id), and the undo's
+  // re-resolve re-reads storage before it plans — so it resolves the references in the worlds as they are NOW, the
+  // promote's relabelling included, and moves no tab between worlds. `d1_X` is X in every world.
+  it('a host with a daemon: the undo re-reads the promoted worlds and resolves the wire id in them — the bytes otherwise untouched', async () => {
+    const { syncIdOfSync } = await import('./host-identity')
+    const WIRE = syncIdOfSync('lab-1:111111')
+    const { w2, slaveId } = await seeded()
+    const w1 = await openWindow()
+    for (const w of [w1, w2]) {
+      twoHosts(w)
+      w.useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, daemonId: 'lab-1:111111' } } }))
+    }
+    QueuedBroadcastChannel.queue = []
+    w1.deleteHostWithUndoToast('h1', 'h1 deleted')
+    expect(WORLD_KEYS.map(disk).join()).toContain(WIRE)
+    await deliverAll()
+    view.freeze()
+    expect(await w2.promoteToMaster(slaveId, 'Old master')).toMatchObject({ ok: true })
+    view.catchUp()
+    const diskBefore = WORLD_KEYS.map(disk)
+    expect(diskBefore.join()).toContain(WIRE)
+
+    await clickUndoInWindow1(w1)
+
+    expect(w1.useHostStore.getState().hosts.h1).toMatchObject({ daemonId: 'lab-1:111111' })
+    expect(WORLD_KEYS.map(disk)).toEqual(diskBefore.map((raw) => raw.replaceAll(WIRE, 'h1')))
+  })
 })
+
