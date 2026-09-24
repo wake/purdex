@@ -251,9 +251,24 @@ describe('CostPanel', () => {
       mockFetchNexHost.mockResolvedValue(withQuota)
       renderPanel(fixtureSummary)
       const row = await screen.findByTestId('cost-quota')
-      expect(row.textContent).toContain('Host quota — wake@x')
+      // #1264: the label masks the address.
+      expect(row.textContent).toContain('Host quota — wa\u2026@x')
       expect(row.textContent).toContain('5h 34.4% · 7d 12% · usage_api')
       expect(mockFetchNexHost).toHaveBeenCalledWith('h1')
+    })
+
+    // #1264: the panel is a screenshot surface, so the address never reaches
+    // the DOM whole — not as text, and not inside an attribute either (a
+    // `title` would still show on hover and still be scraped).
+    it('does not render the raw account address', async () => {
+      mockFetchNexHost.mockResolvedValue({ ...withQuota, active_account: 'wake.gs@gmail.com' })
+      renderPanel(fixtureSummary)
+      const row = await screen.findByTestId('cost-quota')
+      expect(screen.queryByText(/wake\.gs@gmail\.com/)).toBeNull()
+      expect(row.textContent).toContain('wa\u2026@gmail.com')
+      // FloatingPanel portals into document.body, so the render `container`
+      // holds none of the panel — body is the only root that covers it.
+      expect(document.body.innerHTML).not.toContain('wake.gs@gmail.com')
     })
 
     it('percentages are not rounded: 0.4 stays 0.4%, 99.6 stays 99.6%', async () => {

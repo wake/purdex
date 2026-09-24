@@ -19,6 +19,8 @@ export interface ContentBlock {
 
 export interface AssistantMessage {
   type: 'assistant'
+  /** CC `parent_tool_use_id` — non-null on a subagent's own frames. */
+  parent_tool_use_id?: string | null
   message: {
     id?: string
     role: 'assistant'
@@ -29,6 +31,8 @@ export interface AssistantMessage {
 
 export interface UserMessage {
   type: 'user'
+  /** CC `parent_tool_use_id` — non-null on a subagent's own frames. */
+  parent_tool_use_id?: string | null
   message: {
     role: 'user'
     content: ContentBlock[]

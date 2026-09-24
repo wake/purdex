@@ -1711,5 +1711,10 @@
 
   "file_tree.select_workspace_first": "請先選擇 Workspace",
   "file_tree.set_project_path": "設定專案路徑以顯示檔案樹",
-  "file_tree.session_not_implemented": "Session file tree 尚未實作（需 daemon cwd API）"
+  "file_tree.session_not_implemented": "Session file tree 尚未實作（需 daemon cwd API）",
+
+  "room.fold.more": "還有 {{n}} 行",
+  "room.fold.less": "收合",
+  "room.fold.show_all": "顯示全部",
+  "room.fold.daemon_truncated": "輸出在 8 KB 處被 daemon 截斷"
 }

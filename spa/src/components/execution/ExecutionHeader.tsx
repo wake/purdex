@@ -82,12 +82,12 @@ export default function ExecutionHeader({ summary, cost, hostId, sse, isMine, on
         <span data-testid="execution-lease">{leaseText}</span>
         {summary?.turn_count != null && <span>{summary.turn_count} {t('execution.turns')}</span>}
         <button type="button" data-testid="execution-cost" disabled={!cost} ref={costRef}
-          aria-describedby={cost ? costTipId : undefined}
+          aria-describedby={cost && !costOpen ? costTipId : undefined}
           aria-expanded={cost ? costOpen : undefined}
           onClick={() => setCostOpen((v) => !v)}
           className="relative tabular-nums hover:underline disabled:no-underline disabled:cursor-default">
           {cost ? formatUsd(cost.totalUsd, 2) : t('execution.cost.loading')}
-          {cost && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
+          {cost && !costOpen && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
         </button>
         {cost && costOpen && <CostPanel summary={cost} hostId={hostId} anchorRef={costRef} onClose={() => setCostOpen(false)} />}
         <div className="flex-1" />
