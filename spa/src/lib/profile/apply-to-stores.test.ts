@@ -591,6 +591,41 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
       return expect(pending).rejects.toThrow('host write failed')
     })
 
+    // Host ownership H1c T4: the cascade rewrote H2's references to its wire id; the rollback runs the cascade's
+    // undo, whose re-resolve runs UNDER THE APPLY'S GRANT — synchronously, before the promise is looked at.
+    it('the removed host\'s references are back on its local id by the end of the rollback — nothing awaited, the lock still the apply\'s', () => {
+      seedRich()
+      const D2 = 'two-lab:222222'
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: D2 } } }))
+      const tabsBefore = JSON.stringify(useTabStore.getState().tabs)
+      let lockDuringRollback: string | null = null
+      const unsub = useTabStore.subscribe((st) => {
+        if (JSON.stringify(st.tabs) === tabsBefore) lockDuringRollback = useRebuildStore.getState().lockedBy
+      })
+      failHostWrite(2)
+      const pending = applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)
+      vi.mocked(useHostStore.setState).mockRestore()
+      unsub()
+      expect(JSON.stringify(useTabStore.getState().tabs)).toBe(tabsBefore) // synchronously
+      expect(useHostStore.getState().hosts[H2].daemonId).toBe(D2) // #1396
+      expect(lockDuringRollback).toBe('profile-sync')
+      return expect(pending).rejects.toThrow('host write failed')
+    })
+
+    it('a rollback from a STAGED host list resolves nothing onto a host the payload was adding — only the removed host\'s references move back', async () => {
+      seedRich()
+      const D2 = 'two-lab:222222'
+      const D3 = 'three-lab:333333'
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: D2 } } }))
+      useTabStore.setState((st) => ({ tabs: { ...st.tabs, t9: tab('t9', tmuxLeaf('p9', syncIdOfSync(D3))) }, tabOrder: [...st.tabOrder, 't9'] }))
+      failHostWrite(2)
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M), host('host-three', { ip: '10.0.0.3', order: 1, daemonId: D3 })]), ctx)).rejects.toThrow('host write failed')
+      vi.mocked(useHostStore.setState).mockRestore()
+      expect(Object.keys(useHostStore.getState().hosts).sort()).toEqual([M, H2].sort())
+      expect(useTabStore.getState().tabs.t9.layout).toMatchObject({ pane: { content: { hostId: syncIdOfSync(D3) } } })
+      expect(useTabStore.getState().tabs.t2.layout).toMatchObject({ pane: { content: { hostId: H2 } } })
+    })
+
     it('a restore that throws is not swallowed: the original error survives and says the rollback is incomplete', async () => {
       seedRich()
       const before = hostSlice()
