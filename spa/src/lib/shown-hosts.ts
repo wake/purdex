@@ -75,25 +75,57 @@ export function isRefShown(ref: string, hosts: Hosts, ids: Ids): boolean {
 /** The fail-closed answer: one frozen reference, so a selector that returns it is stable. */
 const NONE: Ids = Object.freeze([])
 
+type LocalView = { slaves: Record<string, LocalProfile>; relabelCount: number }
+
+/** Where a workbench's list lives: the master's in `useShownHostsStore`, a local workbench's on its record. */
+export type ShownOwner = { kind: 'master' } | { kind: 'slave'; id: string }
+
+/**
+ * THE ONE ANSWER to "whose list is this, and can it be read or written right now" (pure) — the reader, the writer
+ * (`setHostShown`) and the copies (switch-active.ts) all ask it, so none of them can be laxer than another. `worldId` —
+ * the world asked about: the live tab tag for the workbench on screen, `'master'` for the master's own list.
+ *   the master → `master` only while `shown.relabelStamp === local.relabelCount` (a promote in another window that
+ *                has reached one of the two stores but not the other: neither list is the master's for sure);
+ *   a slave    → that slave, while its record exists;
+ *   else — not settled (`readMasterWorld`), a tag that is no string, an unknown id → `null`: nobody can say.
+ */
+export function resolveShownOwner(settled: boolean, worldId: unknown, local: LocalView, shown: ShownHosts): ShownOwner | null {
+  if (!settled || typeof worldId !== 'string') return null
+  if (worldId === MASTER_PROFILE_ID) return shown.relabelStamp === local.relabelCount ? { kind: 'master' } : null
+  return Object.hasOwn(local.slaves, worldId) ? { kind: 'slave', id: worldId } : null
+}
+
+/** `resolveShownOwner` over the stores as they are now: for `worldId`, or — omitted — the workbench on screen. */
+export function resolveShownOwnerNow(worldId: unknown = useTabStore.getState().worldId): ShownOwner | null {
+  return resolveShownOwner(readMasterWorld().settled, worldId, useLocalProfilesStore.getState(), useShownHostsStore.getState())
+}
+
+function listOf(owner: ShownOwner | null, local: LocalView, shown: ShownHosts): Ids {
+  if (owner === null) return NONE
+  return owner.kind === 'master' ? shown.ids : local.slaves[owner.id].shownHostIds
+}
+
 /**
  * The shown list of the workbench on screen. Pure. `settled` — `readMasterWorld().settled`; `tabWorldId` — the live tab
- * store's world tag. The master → `shown.ids` while `shown.relabelStamp === local.relabelCount`; a slave → its record's
- * list; anything else → `[]`. Always a reference one of the stores holds, or `NONE`: never a fresh array.
+ * store's world tag. The list of `resolveShownOwner`'s answer, or `[]` when it is `null`. Always a reference one of the
+ * stores holds, or `NONE`: never a fresh array.
  */
-export function currentShownIds(
-  settled: boolean,
-  tabWorldId: unknown,
-  local: { slaves: Record<string, LocalProfile>; relabelCount: number },
-  shown: ShownHosts,
-): Ids {
-  if (!settled || typeof tabWorldId !== 'string') return NONE
-  if (tabWorldId === MASTER_PROFILE_ID) return shown.relabelStamp === local.relabelCount ? shown.ids : NONE
-  return Object.hasOwn(local.slaves, tabWorldId) ? local.slaves[tabWorldId].shownHostIds : NONE
+export function currentShownIds(settled: boolean, tabWorldId: unknown, local: LocalView, shown: ShownHosts): Ids {
+  return listOf(resolveShownOwner(settled, tabWorldId, local, shown), local, shown)
 }
 
 /** `currentShownIds` over the stores as they are now — the settled check made again on every call. */
 export function currentShownIdsNow(): Ids {
   return currentShownIds(readMasterWorld().settled, useTabStore.getState().worldId, useLocalProfilesStore.getState(), useShownHostsStore.getState())
+}
+
+/** THE MASTER'S list, wherever the master is — `null` when nobody can say (`resolveShownOwner` for `'master'`). For a
+ *  copy of the master: the list of another label must never be copied as its own. */
+export function masterShownIdsNow(): Ids | null {
+  const local = useLocalProfilesStore.getState()
+  const shown = useShownHostsStore.getState()
+  const owner = resolveShownOwner(readMasterWorld().settled, MASTER_PROFILE_ID, local, shown)
+  return owner === null ? null : listOf(owner, local, shown)
 }
 
 /** Every store the current list depends on: the tab and workspace tags, the local profiles, the master's list. */
@@ -188,16 +220,18 @@ export function usePaneHostShown(content: PaneContent): boolean {
 
 /**
  * Show / hide ONE local host in the workbench ON SCREEN: shown → its wire id appended; hidden → every form of it
- * removed (`shownFormsOf`). Never touches another id. Which list: the one the reader reads — the tab tag's world: the
- * master → `useShownHostsStore`; a local workbench → its record (`setSlaveShownHosts`), never the master's store (which
- * syncs). `false` = nothing written: an unknown host, a world that is not settled (the reader shows `[]` then, and a
- * write could land in the wrong workbench's list), or a slave record that is gone.
+ * removed (`shownFormsOf`). Never touches another id. Which list: exactly the one the reader reads
+ * (`resolveShownOwnerNow`): the master → `useShownHostsStore`; a local workbench → its record (`setSlaveShownHosts`),
+ * never the master's store (which syncs). `false` = nothing written: an unknown host, or no owner — a world that is not
+ * settled, a promote half-arrived from another window, a slave record that is gone (the reader shows `[]` then, and a
+ * write could land in the wrong workbench's list).
  */
 export function setHostShown(hostId: string, shown: boolean): boolean {
   const host = localHostOf(useHostStore.getState().hosts, hostId)
-  if (host === undefined || !readMasterWorld().settled) return false
-  const worldId = useTabStore.getState().worldId
-  if (worldId === MASTER_PROFILE_ID) {
+  if (host === undefined) return false
+  const owner = resolveShownOwnerNow()
+  if (owner === null) return false
+  if (owner.kind === 'master') {
     const store = useShownHostsStore.getState()
     if (shown) store.show(wireIdOfHost(host))
     else for (const form of shownFormsOf(host)) useShownHostsStore.getState().hide(form)
@@ -205,7 +239,7 @@ export function setHostShown(hostId: string, shown: boolean): boolean {
   }
   const wire = wireIdOfHost(host)
   const forms = shownFormsOf(host)
-  const written = useLocalProfilesStore.getState().setSlaveShownHosts(worldId, (ids) => {
+  const written = useLocalProfilesStore.getState().setSlaveShownHosts(owner.id, (ids) => {
     if (shown) return ids.includes(wire) ? ids : [...ids, wire]
     return ids.some((id) => forms.includes(id)) ? ids.filter((id) => !forms.includes(id)) : ids
   })

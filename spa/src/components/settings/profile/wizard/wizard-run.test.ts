@@ -19,6 +19,7 @@ import en from '../../../../locales/en.json'
 import { createProfile, getSection, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { useUndoToast } from '../../../../stores/useUndoToast'
+import { useShownHostsStore } from '../../../../stores/useShownHostsStore'
 import { isRetiredSection } from '../../../../lib/profile/projections'
 import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, hasLiveSections, prepareRun, retargetPlan, runPlan, sotFingerprint, sotNow, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
@@ -96,6 +97,9 @@ beforeEach(() => {
   useWorkspaceSettingsStore.setState({ workspaces: {} })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   masterOnScreen()
+  // The master's shown list readable (its stamp = relabelCount): a promote earlier in this file moved the count.
+  useLocalProfilesStore.setState({ relabelCount: 0 })
+  useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
 })
 
 afterEach(() => {

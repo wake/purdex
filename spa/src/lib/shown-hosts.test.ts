@@ -12,9 +12,12 @@ import { getPrimaryPane } from './pane-tree'
 import { syncIdOfSync } from './profile/host-identity'
 import type { PaneContent } from '../types/tab'
 import * as shownHosts from './shown-hosts'
+import { copyMasterAsSlave, saveScreenAsSlave } from './profile/switch-active'
 import {
   currentShownIds,
   currentShownIdsNow,
+  resolveShownOwner,
+  resolveShownOwnerNow,
   hostRefOf,
   isPaneHostShown,
   isRefShown,
@@ -352,6 +355,27 @@ function slaveOnScreen(list: string[], masterIds: string[] = [], epoch = 1): voi
   useShownHostsStore.setState({ ids: masterIds })
 }
 
+describe('resolveShownOwner — who owns a list, and can it be read / written now (pure)', () => {
+  const shown = { ids: [WIRE], relabelStamp: 2 }
+  const local = { slaves: { [SLAVE]: slaveRecord([PLAIN]) }, relabelCount: 2 }
+
+  it('the master, stamp = relabelCount → master; stamp ≠ → null', () => {
+    expect(resolveShownOwner(true, MASTER_PROFILE_ID, local, shown)).toEqual({ kind: 'master' })
+    expect(resolveShownOwner(true, MASTER_PROFILE_ID, { ...local, relabelCount: 3 }, shown)).toBeNull()
+  })
+
+  it('a slave with a record → that slave; without → null', () => {
+    expect(resolveShownOwner(true, SLAVE, local, shown)).toEqual({ kind: 'slave', id: SLAVE })
+    expect(resolveShownOwner(true, 'gone', local, shown)).toBeNull()
+  })
+
+  it('unsettled, or a tag that is not a string → null', () => {
+    expect(resolveShownOwner(false, MASTER_PROFILE_ID, local, shown)).toBeNull()
+    expect(resolveShownOwner(false, SLAVE, local, shown)).toBeNull()
+    expect(resolveShownOwner(true, 7, local, shown)).toBeNull()
+  })
+})
+
 describe('currentShownIds — pure', () => {
   const shown = { ids: [WIRE], relabelStamp: 2 }
   const local = { slaves: { [SLAVE]: slaveRecord([PLAIN]) }, relabelCount: 2 }
@@ -434,12 +458,15 @@ describe('the current list — every reader (A2)', () => {
 // matter: local profiles (pointer, epoch, relabelCount, the slaves' lists), tab + workspace (tag, epoch), shown (the
 // master's list + its stamp). For every subset that has arrived, the answer is the right list or [] — never the wrong
 // workbench's list (m10). No fence written: the stamp alone must close the gap.
-describe('a promote in another window, every rehydrate order (A2, m10)', () => {
+describe('a promote in another window, every rehydrate order (A2, m10; review fix: writer and copy too)', () => {
   const OLD = [WIRE] // the master's list before
   const SL = [PLAIN] // the promoted slave's list
+  const D = 'demoted'
   type Snap = { local: object; tab: object; ws: object; shown: object }
 
   const subsets = (): boolean[][] => Array.from({ length: 16 }, (_, n) => [0, 1, 2, 3].map((b) => ((n >> b) & 1) === 1))
+  const label = (arrived: boolean[]): string => `arrived local,tab,ws,shown = ${arrived.join(',')}`
+  const whole = (arrived: boolean[]): boolean => arrived.every(Boolean) || arrived.every((a) => !a)
 
   function apply(before: Snap, after: Snap, arrived: boolean[]): void {
     useLocalProfilesStore.setState((arrived[0] ? after : before).local)
@@ -448,44 +475,104 @@ describe('a promote in another window, every rehydrate order (A2, m10)', () => {
     useShownHostsStore.setState((arrived[3] ? after : before).shown)
   }
 
-  it('master on screen, a parked slave promoted: the screen becomes the demoted workbench — its list (OLD) or [], never SL', () => {
-    const D = 'demoted'
-    const before: Snap = {
+  /** Master on screen, a parked slave promoted: the screen becomes the demoted workbench. */
+  /** `stampOnly`: the order in which the world is SETTLED on the master and only the stamp tells the lists apart —
+   *  the order the review found the writer and the copy getting wrong. */
+  type Scenario = { before: Snap; after: Snap; right: string[][]; stampOnly: string }
+  const masterOnScreenPromote = (): Scenario => ({
+    before: {
       local: { slaves: { [SLAVE]: { ...slaveRecord(SL), world: EMPTY } }, slaveOrder: [SLAVE], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 5, relabelCount: 0 },
       tab: { worldId: MASTER_PROFILE_ID, worldEpoch: 5 },
       ws: { worldId: MASTER_PROFILE_ID, worldEpoch: 5 },
       shown: { ids: OLD, relabelStamp: 0 },
-    }
-    const after: Snap = {
+    },
+    after: {
       local: { slaves: { [D]: { id: D, name: 'D', createdAt: 1, shownHostIds: OLD, world: null } }, slaveOrder: [D], activeProfileId: D, parkedMaster: EMPTY, worldEpoch: 6, relabelCount: 1 },
       tab: { worldId: D, worldEpoch: 6 },
       ws: { worldId: D, worldEpoch: 6 },
       shown: { ids: SL, relabelStamp: 1 },
-    }
-    for (const arrived of subsets()) {
-      apply(before, after, arrived)
-      const got = currentShownIdsNow()
-      expect([[], OLD], `arrived ${arrived.join(',')}`).toContainEqual(got)
-    }
+    },
+    right: [[], OLD], // its list (OLD) or [], never SL
+    stampOnly: 'false,false,false,true', // the old master still on screen here; the store already holds SL
   })
 
-  it('the promoted slave on screen: the screen becomes the master — SL or [], never the old master list', () => {
-    const D = 'demoted'
-    const before: Snap = {
+  /** The promoted slave on screen: the screen becomes the master. */
+  const slaveOnScreenPromote = (): Scenario => ({
+    before: {
       local: { slaves: { [SLAVE]: slaveRecord(SL) }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: EMPTY, worldEpoch: 5, relabelCount: 0 },
       tab: { worldId: SLAVE, worldEpoch: 5 },
       ws: { worldId: SLAVE, worldEpoch: 5 },
       shown: { ids: OLD, relabelStamp: 0 },
-    }
-    const after: Snap = {
+    },
+    after: {
       local: { slaves: { [D]: { id: D, name: 'D', createdAt: 1, shownHostIds: OLD, world: EMPTY } }, slaveOrder: [D], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 6, relabelCount: 1 },
       tab: { worldId: MASTER_PROFILE_ID, worldEpoch: 6 },
       ws: { worldId: MASTER_PROFILE_ID, worldEpoch: 6 },
       shown: { ids: SL, relabelStamp: 1 },
-    }
+    },
+    right: [[], SL], // SL or [], never the old master list
+    stampOnly: 'true,true,true,false', // the screen is the master now; the store still holds OLD
+  })
+
+  const SCENARIOS = [
+    ['master on screen, a parked slave promoted', masterOnScreenPromote],
+    ['the promoted slave on screen', slaveOnScreenPromote],
+  ] as const
+
+  const fourStores = () => [useLocalProfilesStore.getState(), useTabStore.getState(), useWorkspaceStore.getState(), useShownHostsStore.getState()]
+
+  it.each(SCENARIOS)('%s — the reader: the right list or [], never the other workbench\'s', (_name, scenario) => {
+    const { before, after, right } = scenario()
     for (const arrived of subsets()) {
       apply(before, after, arrived)
-      expect([[], SL], `arrived ${arrived.join(',')}`).toContainEqual(currentShownIdsNow())
+      expect(right, label(arrived)).toContainEqual(currentShownIdsNow())
+      // [] here means "nobody can say" (both lists are non-empty): the resolver agrees
+      expect(currentShownIdsNow().length === 0, label(arrived)).toBe(resolveShownOwnerNow() === null)
+    }
+  })
+
+  it.each(SCENARIOS)('%s — the writer: wherever the reader reads [], it answers false and changes no store', (_name, scenario) => {
+    const { before, after, stampOnly } = scenario()
+    const refused: string[] = []
+    for (const arrived of subsets()) {
+      apply(before, after, arrived)
+      if (currentShownIdsNow().length > 0) continue
+      refused.push(arrived.join(','))
+      const stores = fourStores()
+      expect(setHostShown(PLAIN, true), label(arrived)).toBe(false)
+      expect(setHostShown(LOCAL, false), label(arrived)).toBe(false)
+      fourStores().forEach((s, i) => expect(s, label(arrived)).toBe(stores[i]))
+    }
+    expect(refused).toContain(stampOnly)
+  })
+
+  it.each(SCENARIOS)("%s — copyMasterAsSlave: only a whole state copies (the master's own list); every partial order is `unsettled`, no slave added", (_name, scenario) => {
+    const { before, after } = scenario()
+    for (const arrived of subsets()) {
+      apply(before, after, arrived)
+      const slaves = useLocalProfilesStore.getState().slaves
+      const r = copyMasterAsSlave('Copy')
+      if (!whole(arrived)) {
+        expect(r, label(arrived)).toEqual({ ok: false, reason: 'unsettled' })
+        expect(useLocalProfilesStore.getState().slaves, label(arrived)).toBe(slaves)
+        continue
+      }
+      if (!r.ok) throw new Error(`${label(arrived)}: ${r.reason}`)
+      expect(useLocalProfilesStore.getState().slaves[r.id].shownHostIds, label(arrived)).toEqual(arrived[0] ? SL : OLD)
+    }
+  })
+
+  it.each(SCENARIOS)('%s — saveScreenAsSlave copies exactly what the reader says (the right list, or [])', (_name, scenario) => {
+    const { before, after, right, stampOnly } = scenario()
+    for (const arrived of subsets()) {
+      apply(before, after, arrived)
+      const reads = [...currentShownIdsNow()]
+      const r = saveScreenAsSlave('Saved')
+      if (!r.ok) throw new Error(`${label(arrived)}: ${r.reason}`)
+      const saved = useLocalProfilesStore.getState().slaves[r.id].shownHostIds
+      expect(saved, label(arrived)).toEqual(reads)
+      expect(right, label(arrived)).toContainEqual(saved)
+      if (arrived.join(',') === stampOnly) expect(saved, label(arrived)).toEqual([])
     }
   })
 })

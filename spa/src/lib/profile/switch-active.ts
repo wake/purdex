@@ -116,7 +116,7 @@ import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence
 import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld, RestampRollbackIncomplete } from './master-world'
 import type { MasterWorldRead } from './master-world'
 import { withWorldLock } from '../storage/world-lock'
-import { currentShownIdsNow } from '../shown-hosts'
+import { currentShownIdsNow, masterShownIdsNow } from '../shown-hosts'
 import { repairTabOwnership } from './sections'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
@@ -435,7 +435,11 @@ export function copyMasterAsSlave(name: string): CopyResult {
   const read = readMasterWorld()
   recoverUnsettledWorld(read, true)
   if (!read.settled) return { ok: false, reason: 'unsettled' }
-  return addCopyAsSlave(name, read.world, [], useShownHostsStore.getState().ids) // the master's list, wherever the master is
+  // The master's list, wherever the master is — or nobody can say (a promote half-arrived from another window: the
+  // store may still hold the OLD master's list), and then no copy either: `unsettled`, as for the world.
+  const shownIds = masterShownIdsNow()
+  if (shownIds === null) return { ok: false, reason: 'unsettled' }
+  return addCopyAsSlave(name, read.world, [], shownIds)
 }
 
 /**
