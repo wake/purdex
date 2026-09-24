@@ -61,7 +61,8 @@
 // exception); every other allowlisted file is TEMPORARY, named in
 // `TEMPORARY_FILES` with the PR that removes it, and a test asserts the
 // allowlisted files are a subset of those three plus exactly that list.
-// H2a checked the colour / icon fields; H2b-1 adds `name`.
+// H2a checked the colour / icon fields; H2b-1 adds `name`; H2b-2 moves the
+// last name surfaces onto the selector (only the share payload stays, until H2c-3).
 import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
 
@@ -670,42 +671,6 @@ export const ALLOWLIST: Allowlist = {
   'lib/host-transfer-plan.ts': {
     'payloadRowsOf.name': { name: 1 },
   },
-
-  // name surfaces not yet on the selector — emptied by H2b-2
-  'components/StatusBar.tsx': {
-    StatusBar: { name: 1 },
-  },
-  'components/MemoryMonitorPage.tsx': {
-    MemoryMonitorPage: { name: 1 },
-  },
-  'components/executions/ExecutionsView.tsx': {
-    'ExecutionsView.useHostStore(arg0)': { name: 1 },
-  },
-  'hooks/useNotificationDispatcher.ts': {
-    'useNotificationDispatcher.useEffect(arg0)#3.subscribe(arg0)': { name: 1 },
-  },
-  'components/settings/DevEnvironmentSection.tsx': {
-    'DevEnvironmentSection.map(arg0)': { name: 1 },
-  },
-  'components/settings/LocalDaemonSection.tsx': {
-    'LocalDaemonSection.name': { name: 1 },
-  },
-  'components/settings/profile/CurrentBlock.tsx': {
-    'Attached.blockedText.hosts.map(arg0)': { name: 1 },
-    'Attached.host': { name: 1 },
-  },
-  'components/settings/profile/StopSyncControl.tsx': {
-    LeftoverItem: { name: 1 },
-  },
-  'components/settings/profile/wizard/ProfileWizard.tsx': {
-    ProfileWizard: { name: 1 },
-    'ProfileWizard.execute.host': { name: 1 },
-  },
-  'components/settings/profile/wizard/WizardChoiceSteps.tsx': {
-    'DirectionStep.hostName': { name: 1 },
-    'SotStep.map(arg0)#1': { name: 1 },
-    'SotStep.map(arg0)#1.name': { name: 1 },
-  },
 }
 
 /** The spec §4.2 exception: the only files the allowlist may name for good. */
@@ -717,16 +682,6 @@ const PERMANENT_FILES = ['stores/useHostStore.ts', 'lib/host-color.ts', 'lib/hos
  */
 const TEMPORARY_FILES: Record<string, string> = {
   'lib/host-transfer-plan.ts': 'H2c-3',
-  'components/StatusBar.tsx': 'emptied by H2b-2',
-  'components/MemoryMonitorPage.tsx': 'emptied by H2b-2',
-  'components/executions/ExecutionsView.tsx': 'emptied by H2b-2',
-  'hooks/useNotificationDispatcher.ts': 'emptied by H2b-2',
-  'components/settings/DevEnvironmentSection.tsx': 'emptied by H2b-2',
-  'components/settings/LocalDaemonSection.tsx': 'emptied by H2b-2',
-  'components/settings/profile/CurrentBlock.tsx': 'emptied by H2b-2',
-  'components/settings/profile/StopSyncControl.tsx': 'emptied by H2b-2',
-  'components/settings/profile/wizard/ProfileWizard.tsx': 'emptied by H2b-2',
-  'components/settings/profile/wizard/WizardChoiceSteps.tsx': 'emptied by H2b-2',
 }
 
 describe('host-look guard — repo', { timeout: 60_000 }, () => {
@@ -749,42 +704,12 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
         lookOfHost: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
       },
       'lib/host-transfer-plan.ts': { 'payloadRowsOf.name': { name: 1 } },
-      'components/StatusBar.tsx': { StatusBar: { name: 1 } },
-      'components/MemoryMonitorPage.tsx': { MemoryMonitorPage: { name: 1 } },
-      'components/executions/ExecutionsView.tsx': { 'ExecutionsView.useHostStore(arg0)': { name: 1 } },
-      'hooks/useNotificationDispatcher.ts': { 'useNotificationDispatcher.useEffect(arg0)#3.subscribe(arg0)': { name: 1 } },
-      'components/settings/DevEnvironmentSection.tsx': { 'DevEnvironmentSection.map(arg0)': { name: 1 } },
-      'components/settings/LocalDaemonSection.tsx': { 'LocalDaemonSection.name': { name: 1 } },
-      'components/settings/profile/CurrentBlock.tsx': {
-        'Attached.blockedText.hosts.map(arg0)': { name: 1 },
-        'Attached.host': { name: 1 },
-      },
-      'components/settings/profile/StopSyncControl.tsx': { LeftoverItem: { name: 1 } },
-      'components/settings/profile/wizard/ProfileWizard.tsx': {
-        ProfileWizard: { name: 1 },
-        'ProfileWizard.execute.host': { name: 1 },
-      },
-      'components/settings/profile/wizard/WizardChoiceSteps.tsx': {
-        'DirectionStep.hostName': { name: 1 },
-        'SotStep.map(arg0)#1': { name: 1 },
-        'SotStep.map(arg0)#1.name': { name: 1 },
-      },
     })
   })
 
   it('the temporary files are pinned verbatim, each with the PR that removes it', () => {
     expect(TEMPORARY_FILES).toEqual({
       'lib/host-transfer-plan.ts': 'H2c-3',
-      'components/StatusBar.tsx': 'emptied by H2b-2',
-      'components/MemoryMonitorPage.tsx': 'emptied by H2b-2',
-      'components/executions/ExecutionsView.tsx': 'emptied by H2b-2',
-      'hooks/useNotificationDispatcher.ts': 'emptied by H2b-2',
-      'components/settings/DevEnvironmentSection.tsx': 'emptied by H2b-2',
-      'components/settings/LocalDaemonSection.tsx': 'emptied by H2b-2',
-      'components/settings/profile/CurrentBlock.tsx': 'emptied by H2b-2',
-      'components/settings/profile/StopSyncControl.tsx': 'emptied by H2b-2',
-      'components/settings/profile/wizard/ProfileWizard.tsx': 'emptied by H2b-2',
-      'components/settings/profile/wizard/WizardChoiceSteps.tsx': 'emptied by H2b-2',
     })
   })
 
