@@ -445,7 +445,9 @@ export function pruneStash(profileId: string, keep: ReadonlySet<string>): WriteR
 }
 
 /** Remove exactly the payloads named by `hashes` — no listing, no prune, so a payload another leader has just written
- *  for a conflict whose record is not stored yet is never touched (see the header). Unlike `pruneStash` it does NOT
+ *  for a conflict whose record is not stored yet is not touched (see the header) UNLESS it has one of these very
+ *  hashes: same content, same key — this file cannot tell the two writers apart (#1256, no transactions; the caller
+ *  says when that can happen). Unlike `pruneStash` it does NOT
  *  spare a payload a stored conflict refers to: the caller names what goes, and drops the referring record after
  *  (host ownership H3a-2: a retired section's own payloads — they held tokens). A hash not stored is already gone.
  *    `'failed'` = a malformed profile id or hash (nothing is removed), or a removal was refused (the others still

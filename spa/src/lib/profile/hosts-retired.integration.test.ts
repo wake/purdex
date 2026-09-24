@@ -289,6 +289,7 @@ describe('the sync loop never reads, writes or deletes the SOT `hosts` row (host
   // #1425 (b): a reload finds a `hosts` conflict persisted by a pre-H3 run — its payloads hold tokens. They go, by
   // name, and the record after them. Another window's leader has meanwhile written the SENT payload of a conflict whose
   // record is not stored yet (saveConflict: payloads first, record last): that payload is NOT touched — no prune runs.
+  // (Only a payload under a DIFFERENT hash is safe so; one with the same content hash would go too — #1256, see executor.ts.)
   it('(b) a reload drops the persisted hosts conflict and ITS payloads only — another leader\'s in-flight conflict payload stays', async () => {
     await attached('push')
     stop() // the window goes away…

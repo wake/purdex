@@ -1450,6 +1450,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   // hold every host's token. By name, never a prune: a prune here could remove a SENT payload another leader has just
   // written for a conflict whose record is not stored yet (section-store.ts header, spec §4.6.2). The record goes only
   // once every payload has; a refused removal keeps it, so the next start comes back here and tries again (#1425).
+  // RESIDUAL (#1256 — localStorage has no transactions): a payload another leader has written under the SAME content
+  // hash, for a conflict whose record is not stored yet, is not in this window's keep-set and IS removed. This build
+  // never writes a `hosts` payload, so that hash can only come from a pre-H3 tab of the same browser, still open,
+  // storing a `hosts` conflict at that moment; its conflict is then dropped at its next load, like any damaged one.
   const retired: Array<[string, PersistedSection]> = []
   for (const [key, persisted] of Object.entries(loadSectionStore(profileId).sections)) {
     if (isRetiredSection(key)) {
