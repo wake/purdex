@@ -20,6 +20,7 @@
 // resolves back through `wireResolverOf`.
 import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import {
+  HOST_BEARING_COLUMN_PREFIXES,
   hostSettingsToWire,
   hostsToWire,
   identityOfSync,
@@ -351,6 +352,35 @@ export const WORKSPACE_SCOPED_SETTINGS: { storageKey: SettingsStorageKey; field:
  * master's world. Filtered down to nothing the field is `{}`, exactly what a
  * store with no entry builds. `applySettings` is the other half.
  */
+const isHostColumn = (id: unknown): boolean =>
+  typeof id === 'string' && (HOST_BEARING_COLUMN_PREFIXES as readonly string[]).some((prefix) => id.startsWith(`${prefix}:`) && id.length > prefix.length + 1)
+
+/**
+ * Every preset with a repeated host-bearing column id dropped after its first occurrence (column by column, top to
+ * bottom). Local → wire can make two ids one: a host's block under its local id AND under its wire id — a block the
+ * New Tab bootstrap placed for a host added before its daemonId was known, next to the one that arrived by sync,
+ * both held until the re-resolve pass renames the wire one (host ownership plan §0.11). The pass keeps the first
+ * occurrence (`renameLayoutIds`); so does this, so what is built is what the pass will leave — the same bytes before,
+ * during and after it, and nothing pushed. Input is `presetColumnsToWire`'s fresh structure.
+ */
+function firstHostColumnOnly(presets: Record<string, unknown>): Record<string, unknown> {
+  for (const preset of Object.values(presets)) {
+    if (!isRecord(preset) || !Array.isArray(preset.columns)) continue
+    const seen = new Set<string>()
+    preset.columns = preset.columns.map((col: unknown) =>
+      Array.isArray(col)
+        ? col.filter((id) => {
+            if (!isHostColumn(id)) return true
+            if (seen.has(id as string)) return false
+            seen.add(id as string)
+            return true
+          })
+        : col,
+    )
+  }
+  return presets
+}
+
 export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspaceIds: ReadonlySet<string>, identity?: HostIdentity): SettingsPayload {
   refuseConflict(identity)
   const payload = project(stores, PROJECTIONS.settings) as SettingsPayload
@@ -359,7 +389,7 @@ export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspace
     const hostSettings = payload['purdex-host-settings']
     if (hostSettings !== undefined && isRecord(hostSettings.hosts)) hostSettings.hosts = hostSettingsToWire(hostSettings.hosts, identity)
     const newtab = payload['purdex-newtab-layout']
-    if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = presetColumnsToWire(newtab.presets, identity)
+    if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = firstHostColumnOnly(presetColumnsToWire(newtab.presets, identity))
   }
   const scoped = payload[WORKSPACE_SCOPED_SETTINGS.storageKey]?.[WORKSPACE_SCOPED_SETTINGS.field]
   // `project` returns fresh structure, so deleting from it touches no store.

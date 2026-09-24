@@ -81,9 +81,13 @@ as proposed (2026-09-24) — they are now **DECIDED**.
     column by column, so the payload holds `sessions:d1_X` TWICE. Rule, both directions (pass and deletion / undo):
     - host-settings: the sync-id entry wins (the `rekeyEntries` rule) → the payload is unchanged, the invariant holds;
       the local entry's value is lost here, and undo gives back `d1_X`'s value (what every other device already had);
-    - New Tab columns and `knownIds`: first occurrence per preset kept, the later duplicate dropped → the payload
-      loses one duplicate: ONE push, the documented exception to the no-push invariant; undo gives back a single
-      column.
+    - New Tab columns and `knownIds`: first occurrence per preset kept, the later duplicate dropped. **Amended
+      during H1b (real-device acceptance, scenario 2):** the settings BUILD drops a repeated host-bearing column the
+      same way after local → wire (first occurrence per preset, column by column), so the payload already equals what
+      the pass leaves — no push, no exception to the no-push invariant; undo gives back a single column. Known and
+      absorbed by that build rule, not changed: the add-host dialog writes a host before its daemonId is known, so the
+      New Tab bootstrap places `sessions:<local>` / `headless:<local>` next to a received `…:d1_X` until the pass
+      (which may be held off by the operation lock) renames it.
 12. **`layoutFromWire` never returns the same object.** `mapContent` spreads a new content for every host-bearing
     pane and `mapLayout` rebuilds every split (`host-identity.ts` `mapContent` / `mapLayout`), even when the mapped
     id is unchanged — so "unchanged → same object" (needed to keep the pass a no-op for untouched worlds and stores)

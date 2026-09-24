@@ -127,23 +127,71 @@ describe('(a) the pass leaves every section hash exactly as it was — nothing i
 })
 
 describe("(a') both forms of one host (plan §0.11)", () => {
-  it('host settings: the payload is unchanged (sync-id entry wins); New Tab: the duplicate column goes — one push', async () => {
+  // H1b acceptance, scenario 2: the build de-duplicates a preset's host-bearing columns AFTER local → wire, keeping
+  // the first — the order the pass's rename keeps — so the both-forms state builds exactly what the pass leaves.
+  it('host settings: the sync-id entry wins; New Tab: the build already drops the duplicate — the pass changes no hash', async () => {
     masterOnScreen()
     addX()
     useHostSettingsStore.setState({ hosts: { [X]: { editor: { homePath: '/local' } }, [W]: { editor: { homePath: '/wire' } } } })
     useNewTabLayoutStore.setState({
-      presets: { '3col': { enabled: false, columns: [[], [], []] }, '2col': { enabled: false, columns: [[], []] }, '1col': { enabled: true, columns: [[`sessions:${X}`, `sessions:${W}`]] } },
+      presets: {
+        '3col': { enabled: false, columns: [[`sessions:${W}`], [`headless:${X}`], [`sessions:${X}`, `headless:${W}`]] },
+        '2col': { enabled: false, columns: [[], [`sessions:${X}`]] },
+        '1col': { enabled: true, columns: [[`sessions:${X}`, 'browser', `sessions:${W}`]] },
+      },
       knownIds: [`sessions:${X}`, `sessions:${W}`],
     })
     const settingsBefore = buildSectionPayload('settings')!.payload as SettingsPayload
     expect((settingsBefore['purdex-host-settings'] as { hosts: object }).hosts).toEqual({ [W]: { editor: { homePath: '/wire' } } })
-    expect(JSON.stringify(settingsBefore['purdex-newtab-layout']).match(new RegExp(`sessions:${W}`, 'g'))).toHaveLength(2)
+    expect((settingsBefore['purdex-newtab-layout'] as { presets: object }).presets).toEqual({
+      '3col': { enabled: false, columns: [[`sessions:${W}`], [`headless:${W}`], []] },
+      '2col': { enabled: false, columns: [[], [`sessions:${W}`]] },
+      '1col': { enabled: true, columns: [[`sessions:${W}`, 'browser']] },
+    })
 
     runHostReresolve()
     const settingsAfter = buildSectionPayload('settings')!.payload as SettingsPayload
-    expect(settingsAfter['purdex-host-settings']).toEqual(settingsBefore['purdex-host-settings'])
-    expect(JSON.stringify(settingsAfter['purdex-newtab-layout']).match(new RegExp(`sessions:${W}`, 'g'))).toHaveLength(1)
-    expect(await hashSection(settingsAfter)).not.toBe(await hashSection(settingsBefore))
+    expect(settingsAfter).toEqual(settingsBefore)
+    expect(await hashSection(settingsAfter)).toBe(await hashSection(settingsBefore))
+  })
+})
+
+describe("(a'') H1b acceptance scenario 2: a host added without its daemonId first, the pass held off", () => {
+  it('the local blocks the bootstrap placed never reach the wire twice: settings hashes as before, during and after', async () => {
+    masterOnScreen()
+    registerNewTabProviderSource(createHostSessionProviderSource())
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    renderHook(() => useNewTabBootstrap()).unmount() // steady state for M
+
+    // received: X's blocks under its wire id, at the top of the first column of every preset
+    const now = JSON.parse(JSON.stringify(buildSectionPayload('settings')!.payload)) as SettingsPayload
+    const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+    for (const preset of Object.values(layout.presets)) preset.columns[0].unshift(`sessions:${W}`, `headless:${W}`)
+    expect(await applySectionToStores('settings', now, { masterHostId: M })).toMatchObject({ ok: true })
+    const original = await hashSection(buildSectionPayload('settings')!.payload)
+    expect(original).toBe(await hashSection(now))
+
+    // the add-host dialog writes X without a daemonId; the bootstrap places X's blocks under the local id
+    const bootstrap = renderHook(() => useNewTabBootstrap())
+    try {
+      act(() => { addX({ daemonId: undefined }) })
+      expect(JSON.stringify(useNewTabLayoutStore.getState().presets)).toContain(`sessions:${X}`)
+      expect(JSON.stringify(useNewTabLayoutStore.getState().presets)).toContain(`sessions:${W}`)
+
+      // the daemonId is learned while the operation lock is held: the pass is refused, the collector builds anyway
+      const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+      act(() => { useHostStore.setState((st) => ({ hosts: { ...st.hosts, [X]: { ...st.hosts[X], daemonId: DAEMON } } })) })
+      expect(runHostReresolve()).toBe('busy')
+      expect(JSON.stringify(useNewTabLayoutStore.getState().presets)).toContain(`sessions:${X}`) // both forms held
+      expect(await hashSection(buildSectionPayload('settings')!.payload)).toBe(original)
+
+      useRebuildStore.getState().releaseOperationLock(grant)
+      expect(runHostReresolve()).toBe('done')
+      expect(JSON.stringify(useNewTabLayoutStore.getState().presets)).not.toContain(W)
+      expect(await hashSection(buildSectionPayload('settings')!.payload)).toBe(original)
+    } finally {
+      bootstrap.unmount()
+    }
   })
 })
 
