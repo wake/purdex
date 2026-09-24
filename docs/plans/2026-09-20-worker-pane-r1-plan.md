@@ -7,9 +7,15 @@ R2 (chat + the `mode` field), R3 (search / quick replies) and R4 (the §9 wire
 batch) get their own plans, in that order, and nothing here may depend on new
 wire data (spec §10 Q5).
 
-Anchors measured on `242937a5` (`worktree-pane-design`, which contains all of
-`origin/main` at alpha.415). Every path below is relative to the worktree root;
-SPA paths are under `spa/`.
+Anchors measured on `242937a5` (alpha.415) and **re-verified on `84a11276`
+(alpha.446, 2026-09-25)**: `git diff --stat 242937a5 origin/main` over every
+component and `lib/nex` module this plan names returns no change to any of
+them, so every line number below still holds. The two files that did move are
+`spa/src/locales/{en,zh-TW}.json` (heavy i18n churn on other lines — new keys
+are appended against the current content, never onto a remembered position)
+and `spa/src/types/tab.ts` (+37, R2's `mode` field territory, untouched by
+R1). Every path below is relative to the worktree root; SPA paths are under
+`spa/`.
 
 ## Working rules for every task
 
