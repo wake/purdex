@@ -7,7 +7,9 @@ pre-measurement, split the pane gate out and took the codex plan review `task-mu
 closing model of rev 4 – rev 6** (it was never the user's decision — see "Superseded" below) and re-plans H2d as five
 PRs, H2d-1 … H2d-5, counted from the code at the branch base of PR #1421 (`b680e092`, H2c-3 merged) plus the four
 H2d-1 commits already on that branch (`151f8bf8` … `6858fb1f`, written for the old `{ all, ids }` store — H2d-1 is
-reworked, see H2d-1). H2a … H2c-3 are merged and unchanged by rev 7.
+reworked, see H2d-1). H2a … H2c-3 are merged and unchanged by rev 7. Rev 7 then took the codex plan review
+`task-mufjfxo4-h4e2rf` (Review log): one opener rule (the wire-space matcher), Handoff / Take back / Take to terminal
+re-checks in H2d-3, recovery deduped per daemon, every §0.30 question DECIDED.
 
 **User rules (2026-09-24, final — confirmed by the user directly; they override everything below that disagrees):**
 
@@ -85,7 +87,7 @@ H1b (T3 pass, T4 triggers/hydration, T6 integration) ───┴── merged b
 - H2c-3 is the H4b sender / receiver switch of §6.4 step 7 (H4b merged first, so H2c owns it — §0.9).
 - H2d (rev 7): H2d-1 store / wire / selectors / re-key (ordinal 6 → 7) → H2d-2 the Hosts page (hidden style, the
   per-host show / hide switch — the only writer — and no "open" on a hidden host) → H2d-3 no New Tab / picker entry
-  and the landings (notification, deep link, route) → H2d-4 the pane gate, per-pane sweeps, StatusBar, re-show
+  and the landings (notification, deep link, route), in-flight handoff re-checks → H2d-4 the pane gate, per-pane sweeps, StatusBar, re-show
   recovery → H2d-5 tests only (not-filtered behaviour + import guard). The writer (H2d-2) merges BEFORE any
   restriction (H2d-3, H2d-4), so the main checkout's live SPA (:5174 HMR) always has the switch to show a host before
   anything is hidden from it.
@@ -179,6 +181,12 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
    although nobody hid it. With a plain list every write adds or removes exactly one host's ids and carries every
    other id — unknown ones included — through untouched, so the case cannot arise. `ids` keeps unknown ids and their
    order through `merge`, apply, build, show / hide and re-key.
+   **Concurrent toggles on two devices** (review `task-mufjfxo4-h4e2rf` item 3) are not a new defect: the `settings`
+   section is replaced whole, but it syncs under the existing per-section compare-and-swap. Two devices changing it
+   from the same base (A hides `a`, B shows `b`) → the second push gets a 409 and its section goes `locked:conflict`
+   (`sync-state.ts:58`); a human picks a side (spec decisions 4–5; the P2b rules). That is the model of every
+   `settings` store (the look store included), not something the shown list adds; there is no silent loss. H2d-1 T2
+   pins it with a test.
 7. **Every host starts hidden (rev 7, user rule 2; supersedes the rev-4 "(b) stay hidden only while a list exists").**
    A host added later (add-host dialog, `registerLocalHost`, transfer receive) is hidden in every workbench — nothing
    is written on add; the user shows it from the Hosts page (H2d-2). At ship time the store starts at `[]`, so every
@@ -254,13 +262,15 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     H2c-3 (transfer + New Tab labels). **H2d (rev 7) is 64 files** → H2d-1 (store, wire, selectors incl. the pane
     matcher, re-key, `reset`; **19** — the four commits on PR #1421 touch exactly these files, the rework adds none) /
     H2d-2 (the Hosts page: hidden style, the show / hide switch, no "open" on a hidden host; **12**) / H2d-3 (no New
-    Tab / picker entry; landings: notification, execution deep link, route; **12**) / H2d-4 (pane gate, per-pane
-    sweeps, StatusBar, re-show recovery; **16**) / H2d-5 (not-filtered behaviour tests + import guard; **5**, tests
-    only). Rev 6's H2d was 78 files in seven PRs; the closing model's planner, executor, parked-world editor, store
-    actions, editor block and dialog (H2d-2 / H2d-3 of rev 6, 20 files) are gone. Lines: H2d-1 at `6858fb1f` is +952
-    / −30 over 19 files (≈ 2/3 tests); the rework removes `all` / `showAll` / `setShown` / `addShown` / the
-    known-ids `toggle` and adds the two-client regression — it is expected to stay around 850 – 900 lines, above the
-    800 target, test-heavy; see §0.30 (open question 4). The other H2d PRs are expected well under 800. Ordinals:
+    Tab / picker entry; landings: notification, execution deep link, route; Handoff / Take back / Take to terminal
+    re-checks; **16**) / H2d-4 (pane gate, per-pane sweeps, StatusBar, re-show recovery; **16**) / H2d-5 (not-filtered
+    behaviour tests + import guard; **5**, tests only) — **68** files. Rev 6's H2d was 78 files in seven PRs; the
+    closing model's planner, executor, parked-world editor, store actions, editor block and dialog (H2d-2 / H2d-3 of
+    rev 6, 20 files) are gone. Lines: H2d-1 at `6858fb1f` is +952 / −30 over 19 files (≈ 2/3 tests); the rework
+    removes `all` / `showAll` / `setShown` / `addShown` / the known-ids `toggle` and adds the two-client regression and
+    the conflict test — it is expected to stay around 850 – 900 lines, above the 800 target, test-heavy. **DECIDED
+    (§0.30 item 4): one PR** — the user authorised H2d end to end, the store, wire and matcher are one contract, and the
+    overage is tests. The other H2d PRs are expected well under 800. Ordinals:
     `settings` is **5** before H2 (`projections.ts:107`); H2c-1 → **6** with `@wire:host-look=1`; H2d-1 → **7** with
     `@wire:shown-hosts=1` (`WIRE_MARKERS.settings`, `projections.ts:172`) — nothing with 7 has been released, so the
     shape change of the rework keeps ordinal 7 and the marker.
@@ -282,7 +292,7 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     puts the state on the management page and rule 3 says showing / hiding is a management-page presentation whose
     effect is on tabs; the overview page is where a host is managed. The switch's copy says the choice is for the
     workbench on screen and synced with it. Unknown ids (hosts this device lacks) have no row anywhere — they are kept,
-    invisible, and act on the device that has the host (open question 2, §0.30). Opening the Hosts page writes nothing
+    invisible, and act on the device that has the host (DECIDED, §0.30 item 2). Opening the Hosts page writes nothing
     (tested in H2d-2).
 18. **Test isolation.** The look store is module state; tests that write a colour and later expect none for the same
     host id would leak inside one file. `useHostStore.reset()` has no production caller and 29 test files use it —
@@ -320,13 +330,17 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
        same pane id, same content, the renderer REMOUNTS (a new xterm, WS and ticket; tmux redraws the screen; the xterm
        scrollback from before the gate is lost — accepted, it is a client-side buffer of a session still running; an
        execution pane re-subscribes). On the hidden → shown transition the EXISTING `recoverHostSessions(hostId)`
-       (`lib/rebuild/refresh-sessions.ts:264`) runs once for that host, from a store subscriber (not from the switch's
-       click handler), so a show that ARRIVES by a `settings` apply recovers too. Reason: the daemon pushes a
+       (`lib/rebuild/refresh-sessions.ts:264`) runs once per daemon (deduped by wire identity: two local rows claiming
+       one daemon — an identity conflict — shown together give ONE call, for the first of them in `hostOrder`), from a
+       store subscriber (not from the switch's click handler), so a show that ARRIVES by a `settings` apply recovers
+       too. Reason: the daemon pushes a
        `sessions` frame only when its session list changes, so an idle host would otherwise leave a revivable pane on
        Rebuild. `recoverHostSessions` needs no attach gate, defers to the operation-lock release when the lock is held
        (`needsRecovery`), and runs `refreshHost` → the `sessions` reconcile → `runRevivePass`, all fenced as today.
     4. **Sync.** The shown list travels in `settings`; B applies it and B's panes gate / ungate live. No `tabs.*`,
-       `workspaces` or `hosts` section moves because of a hide / show (tested, H2d-1 T2 and H2d-5 T2).
+       `workspaces` or `hosts` section moves because of a hide / show (tested, H2d-1 T2 and H2d-5 T2). Two devices
+       toggling different hosts from the same base meet the existing per-section conflict (`locked:conflict`, a human
+       picks a side — §0.6; tested, H2d-1 T2); nothing is merged or lost silently.
     5. **Worlds.** Nothing is done per world: a parked world's panes are gated when it is switched in (the gate reads
        the live store at render). Switching workbench needs nothing.
 
@@ -337,7 +351,9 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     | Terminated-pane session picker (`SessionPickerList`) | X **not offered** (H2d-3) |
     | Hosts page session "open", Hosts page Nex executions "open", the sidebar Executions view "open" | **not offered** (hidden, with the hint "Show this host in the workbench to open its sessions") (H2d-2) |
     | Notification of X | **still fires**; activating it opens X's Hosts page (no tab created or focused — also when a tab of that session exists) (H2d-3) |
-    | Execution deep link (`purdex://`) / route `/execution/…` naming X (hostless: `hostOrder[0]` = X) | lands on X's Hosts page, no tab (H2d-3) |
+    | Execution deep link (`purdex://`) / route `/execution/<host>/<execution id>` naming X (hostless: `hostOrder[0]` = X) | lands on X's Hosts page, no tab (H2d-3) |
+    | Deep link / route / notification naming a ref that is neither a local host nor listed (an unresolved `d1_X`, a deleted host's id, a hostless link with an empty `hostOrder`) | **not openable**: lands on the Hosts page (no host selected), no tab (H2d-3) — one opener rule, below |
+    | Handoff ("Hand to nex"), Take back, Take to terminal on X | **not offered** (the entries live in the gated leaf — H2d-4); a call already in flight when X is hidden writes no pane at completion, and the Handoff success toast offers no "open" / its opener lands on X's Hosts page (H2d-3) |
     | Hosts page sidebar / overview | **every host listed**, in every workbench; a hidden host in the hidden style (muted, 「已隱藏」 / "Hidden"), still selectable, expandable and manageable (overview, sessions list, settings, logs, peers, nex); the overview carries the show / hide switch (H2d-2) |
     | Hosts page "new session" (creates a tmux session, no tab) | **kept** (§0.29) |
     | New host added | hidden (§0.7) — nothing written |
@@ -348,19 +364,28 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     - `execution` → its effective host `host || hostOrder[0]` (the `resolveExecutionHostId` rule — a legacy hostless
       pane renders against the first host; `null` when there is no host);
     - `editor` / `image-preview` / `pdf-preview` with `source.type === 'daemon'` → **not host-bearing** (§0.22 —
-      open question 1);
+      DECIDED, §0.30 item 1);
     - every other kind → not host-bearing.
     The shown list holds WIRE ids; a pane's ref is a LOCAL id, or a wire id (`d1_…`) this device has not resolved (H1a
     keeps those; the re-resolve pass maps them once the host exists). The pane matcher works in wire space:
     `wireOfRef(ref, hosts) = Object.hasOwn(hosts, ref) ? wireIdOfHost(hosts[ref]) : ref`, and a pane is shown when
-    `wireOfRef(ref) ∈ ids` — **or**, for a local host, its local id `host.id ∈ ids` (rev 7 addition: the local id is the
-    pre-re-key form of the same entry; without it a host shown before its daemonId was learned would read as hidden
+    `wireOfRef(ref) ∈ ids` — **or**, for a local host, its local id `host.id ∈ ids` (**the local-id form**, part of the
+    model — user rules: "a local id until the daemonId is known and the re-resolve pass re-keys it"; the local id is
+    the pre-re-key form of the same entry; without it a host shown before its daemonId was learned would read as hidden
     between the daemonId write and the pass's re-key, and the gate would unmount / remount its panes and fire a
     spurious recovery). Hiding a host removes both forms; showing adds `wireIdOfHost(host)`. Consequences: a pane on an
     unresolved `d1_X` is gated (hidden placeholder) unless `d1_X` is listed, in which case it renders `MissingHostPane`
-    as today (open question 3); two local rows claiming one daemon (identity conflict) are shown / hidden together.
-    The "open a tab" surfaces use `isHostShown(hostId)` — the same rule for a local host; an id that is not a local
-    host → `true` (navigation to it is not this module's business; whatever it opens is gated by the pane rule).
+    as today (DECIDED, §0.30 item 3); two local rows claiming one daemon (identity conflict) are shown / hidden
+    together.
+    **One rule for every opener too** (review `task-mufjfxo4-h4e2rf` item 1). Every "open a tab" surface — New Tab,
+    the session picker, the Hosts page "open", the Executions "open", the notification click, the `purdex://` deep link
+    (`lib/deeplink/deeplinkResolver.ts:18`), the `/execution/<host>/<execution id>` route (`hooks/useRouteSync.ts:105`,
+    hostless via `lib/nex/resolve-host.ts:11`), the Handoff toast opener — uses the SAME wire-space predicate as the
+    pane gate: `isRefShown(ref)` = `wireOfRef(ref) ∈ ids`, or the local-id form. A ref that is neither a local host nor
+    listed is **not openable**: a landing (deep link, route, notification) goes to the Hosts page instead, a list
+    (New Tab, picker) does not offer it. There is **no** helper answering "not a local host → shown": rev 7's first
+    draft had one (`isHostShown`), and with it `/execution/d1_X/<id>` opened a tab that the gate then placeholdered —
+    an opener and the gate disagreeing. So an opener never creates a tab whose pane the gate would hide.
 
     **Where the gate sits (measured, rev 6, re-checked at `6858fb1f`).** Not in `SessionPaneContent`: gating there would
     miss the execution pane (`ExecutionPaneWrapper`, `register-modules/index.tsx:102-119` — history fetch, attach, SSE,
@@ -392,7 +417,7 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
 22. **File panes on X's disk.** `editor` / `image-preview` / `pdf-preview` with `source: { type: 'daemon', hostId }`
     are **not host-bearing** in rev 7 (the rev-5 decision (a), carried over): they are not gated and New Tab has no
     per-host file block. Rule 3 ("restrict the tab ↔ tmux session link") supports it; rule 4's "each pane on the
-    hidden host" could be read to include them — **open question 1** (§0.30). Gating them would add the matcher arm
+    hidden host" could be read to include them — **DECIDED: not gated** (§0.30 item 1). Gating them would add the matcher arm
     (+0 files: `hostRefOf`), a dirty-buffer question (a gated editor unmounts its Monaco) and the file entry points
     (`EditorNewTabSection` recent entries, `FileTreeView`, the terminal-link opener — +2 files at least in H2d-3).
 23. **Locked tabs.** Rev 6's "a locked tab is kept by the dialog" is void (nothing closes). The one rule that remains:
@@ -410,24 +435,20 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     has an "open" per session (creates a tab — **not offered**, H2d-2) and a "new session" launcher that creates a tmux
     session WITHOUT a tab ("Host page semantics: creating only"). Rule 5 forbids ways to add a TAB; rule 1 keeps the
     host manageable; the session appears in the list, openable once X is shown.
-30. **Open questions (rev 7) — the plan is written for the stated default; each needs the user's / coordinator's
-    confirmation before the PR that implements it.**
-    1. **File panes** (§0.22): not gated (default) vs gated. Affects H2d-1 T3 (`hostRefOf`) and H2d-3 / H2d-4 file
-       lists if gated.
-    2. **Unknown ids have no UI.** With the switch on the Hosts page (§0.17), an id of a host this device lacks cannot
-       be seen or removed here; it acts on the device that has the host. Default: accepted (rule "unknown ids are
-       kept"). Alternative: a small list in Settings › 工作台 ("not on this device", remove only) — +4 files.
-    3. **A pane on a host this device does not have** (unresolved `d1_…`): default (the coordinator's brief — the
-       wire-space matcher) — not listed → the hidden placeholder 「主機已於此工作台關閉」; listed → `MissingHostPane`
-       ("this device has no host ‹name›", H1a). Alternative: always `MissingHostPane` for a host this device lacks (it
-       connects nothing either way; the message says the more basic fact). Also: the local-id form accepted beside the
-       wire id (§0.21 "What is a pane on X") is a rev-7 addition to the brief's `wireOfRef(ref) ∈ ids` — to confirm.
-    4. **H2d-1 size.** The reworked H2d-1 is expected at ≈ 850 – 900 lines (≈ 2/3 tests) against the 800 target, 19
-       files. Default: review as one PR (the store, wire and matcher are one contract). Alternative: move the pane
-       matcher (`hostRefOf`, `isPaneHostShown`, `usePaneHostShown`) and its tests into H2d-4 (H2d-1 −≈ 120 lines;
-       H2d-4 gains `shown-hosts.ts` + its test, 16 → 18 files).
-    5. **Copy.** The badge 「已隱藏」 / "Hidden" and the switch 「在此工作台顯示」 / "Show in this workbench" are the
-       plan's; rule 1 names 「未啟用／已隱藏」 as the kind of state. Default as written.
+30. **Former open questions (rev 7) — all DECIDED** (coordinator, after the codex plan review `task-mufjfxo4-h4e2rf`,
+    items 4 and 7; the defaults below are the decisions).
+    1. **File panes** (§0.22): **DECIDED — not gated.** `hostRefOf` returns `null` for them; no file entry point is
+       filtered.
+    2. **Unknown ids have no UI.** **DECIDED — accepted.** An id of a host this device lacks has no row (Hosts page or
+       elsewhere); it is kept and acts on the device that has the host (rule "unknown ids are kept"). No Settings ›
+       工作台 list.
+    3. **A pane on a host this device does not have** (unresolved `d1_…`): **DECIDED — the wire-space matcher.** Not
+       listed → the hidden placeholder 「主機已於此工作台關閉」; listed → `MissingHostPane` ("this device has no host
+       ‹name›", H1a). (The local-id form is not a question: it is part of the model — §0.21 "What is a pane on X".)
+    4. **H2d-1 size.** **DECIDED — one PR** (≈ 850 – 900 lines, ≈ 2/3 tests, 19 files; the user authorised H2d end to
+       end; the overage is tests).
+    5. **Copy.** **DECIDED — as written:** the state 「已隱藏」 / "Hidden", the switch 「在此工作台顯示」 / "Show in this
+       workbench", the pane placeholder 「主機已於此工作台關閉」 / "This host is turned off in this workbench".
 
 ## H2a — the look selector, colour / icon surfaces (10 files)
 
@@ -834,20 +855,23 @@ Selectors, matcher and writer (`lib/shown-hosts.ts`; imports `useHostStore`, `us
 `host-look` (`wireKeyMovesOf`); none of them may import it):
 - `shownFormsOf(host): string[]` — `[wireIdOfHost(host), host.id]`, deduped (one element when the host has no
   daemonId);
-- `isHostShown(hostId, hosts, ids)` — a local host → some form ∈ `ids`; an id that is not a local host → `true`;
-  `useIsHostShown(hostId)` (live on the host object and `ids`), `useShownHostFilter(): (hostId) => boolean`,
-  `isHostShownNow(hostId)` (non-hook, `getState()` of both stores);
+- **ONE predicate** (§0.21 "One rule for every opener too"): `isRefShown(ref, hosts, ids)` = a local host → some form
+  of it (`shownFormsOf`) ∈ `ids`; any other ref (an unresolved `d1_…`, a deleted host's id, `''`) → `ref ∈ ids` (`''`
+  never is). There is NO `isHostShown` with a "not a local host → `true`" arm, and no other pure predicate: the hooks
+  and the non-hook read below all evaluate `isRefShown`:
+  `useIsRefShown(ref)` (live on that host object and `ids`), `useShownRefFilter(): (ref) => boolean` (for lists),
+  `isRefShownNow(ref)` (non-hook, `getState()` of both stores — the openers, the sweeps, the in-flight re-checks);
 - pane matcher (§0.21 "What is a pane on X"): `hostRefOf(content, hostOrder)` (tmux → `hostId`; execution →
   `host || hostOrder[0]`, `null` without a host; every other kind → `null`); `wireOfRef(ref, hosts)`;
-  `isRefShown(ref, hosts, ids)` = local host → some form ∈ `ids`, else `ref ∈ ids`; `isPaneHostShown(content, hosts,
-  hostOrder, ids)` = `hostRefOf` null → `true`, else `isRefShown`; `usePaneHostShown(content): boolean` (live on
-  hosts + `hostOrder` + `ids`, a primitive per selector); `isRefShownNow(ref)` for the sweeps;
+  `isPaneHostShown(content, hosts, hostOrder, ids)` = `hostRefOf` null → `true`, else `isRefShown`;
+  `usePaneHostShown(content): boolean` (live on hosts + `hostOrder` + `ids`, a primitive per selector);
 - `setHostShown(hostId, shown: boolean)` — the only writer the UI calls (H2d-2): unknown host → no-op; `shown` →
   `show(wireIdOfHost(host))`; hidden → `hide(form)` for each of `shownFormsOf(host)`. Never touches another id.
 - `rekeyShownHosts(hosts)` — as on the branch: moves from `wireKeyMovesOf(hosts)` filtered to listed ids; `null` when
   nothing moves, else `{ commit, undo }` (undo restores `{ ids }`) for `passBody` to commit under its grant.
 (Rev 7 renames the rev-6 "enabled" names — `isPaneHostEnabled` / `usePaneHostEnabled` / `isHostRefEnabledNow` /
-`isRefEnabled` — to "shown"; the rev-6 `ShownHostsView` with `all` goes.)
+`isRefEnabled` — to "shown"; the rev-6 `ShownHostsView` with `all` goes, and so do the rev-6 `isHostShown` /
+`useIsHostShown` / `useShownHostFilter` with their "not a local host → `true`" arm.)
 
 Tasks:
 - **T1 — store.** Tests (`useShownHostsStore.test.ts`, rewritten): default `{ ids: [] }`; `merge` — non-strings
@@ -870,22 +894,31 @@ Tasks:
   'd1_a'] }` → the store holds both byte-for-byte, the returned hash equals the payload's (nothing pushed); `[]` ↔ a
   list applies without `rejected-settings`; applying a shown-hosts change leaves the tab, workspace and local-profiles
   stores the same objects (nothing closes on apply — §0.21 rule 1). `executor.direction.integration.test.ts`: ordinal
-  pin 7. **The two-client regression (the #1421 finding)** — `apply-to-stores.test.ts`, two simulated devices through
+  pin 7; **concurrent toggles meet the existing conflict** (review item 3, §0.6): from a synced base `{ ids: ['d1_a'] }`
+  another device writes the SOT with `b` shown (`{ ids: ['d1_a', 'd1_b'] }`, same base rev), then this client hides
+  `a` (`{ ids: [] }`) → its push gets the 409 and `settings` is `locked:conflict`; the SOT still holds the other
+  device's ids and this client's store its own (no silent merge, no silent loss); `resolve('settings', 'sot')` lands
+  `['d1_a', 'd1_b']`. **The two-client regression (the #1421 finding)** — `apply-to-stores.test.ts`, two simulated devices through
   real builders and `applySectionToStores`: device A has local hosts `a`, `b` (daemonIds → `d1_a`, `d1_b`), device B
   has `a`, `b`, `c`; the synced `settings` holds `{ ids: ['d1_a', 'd1_b', 'd1_c'] }` on both; on A
   `setHostShown(a, false)` → A's built payload is `{ ids: ['d1_b', 'd1_c'] }` (`d1_c` kept although A does not know
-  `c`); B applies it → on B `isHostShown(c)` is still `true` and `isHostShown(a)` is `false`; then a host `d` added on
+  `c`); B applies it → on B `isRefShown(c)` is still `true` and `isRefShown(a)` is `false`; then a host `d` added on
   A and a host `e` added on B are each hidden on their device and nothing is written (the payloads rebuild
   byte-identical). Commit.
 - **T3 — selectors, matcher, writer.** Tests (`shown-hosts.test.ts`, rewritten): `[]` → every local host hidden;
   listed `d1_…` → the local host of that daemon shown; a no-daemonId host by its local id; **the local-id form**: a
   host listed under its local id and whose daemonId is then learned (before any re-key) is still shown, both by
-  `isHostShown` and `isPaneHostShown`; an id that is not a local host → `isHostShown` `true`; conflict (two rows,
-  one daemon) → shown / hidden together. Pane matcher: `hostRefOf` for tmux / terminated tmux / execution with `host`
-  / hostless execution (→ `hostOrder[0]`; empty `hostOrder` → `null`) / daemon-source editor (→ `null`) / new-tab (→
-  `null`); `isPaneHostShown` — a pane on an unresolved `d1_X` with `ids` lacking `d1_X` → `false` where
-  `isHostShown('d1_X')` says `true` (pinned side by side); with `d1_X` listed → `true`; a non-host-bearing pane →
-  `true`; `usePaneHostShown` re-renders on a `show` / `hide` and on a daemonId learned (the host's wire id moves), and
+  `isRefShown` and `isPaneHostShown`; a host listed under neither form → hidden; conflict (two rows, one daemon) →
+  shown / hidden together. **One rule for refs that are not local hosts:** `isRefShown('d1_X')` with `d1_X` unlisted
+  → `false` (NOT `true`), listed → `true`; a deleted host's local id unlisted → `false`; `''` → `false`; and the
+  module exports no other predicate (an export-list pin: no `isHostShown`, no `useIsHostShown`, no
+  `useShownHostFilter`). `useIsRefShown` / `useShownRefFilter` / `isRefShownNow` agree with `isRefShown` on every case
+  above (one table, `it.each` over the four readers). Pane matcher: `hostRefOf` for tmux / terminated tmux /
+  execution with `host` / hostless execution (→ `hostOrder[0]`; empty `hostOrder` → `null`) / daemon-source editor (→
+  `null`) / new-tab (→ `null`); `isPaneHostShown` — a pane on an unresolved `d1_X` with `ids` lacking `d1_X` →
+  `false`; with `d1_X` listed → `true`; a hostless execution pane with `hostOrder[0]` = a hidden host → `false`, = a
+  shown host → `true`; a non-host-bearing pane → `true`; a host added after the list was written (its wire id not
+  listed) → hidden by every reader; `usePaneHostShown` re-renders on a `show` / `hide` and on a daemonId learned (the host's wire id moves), and
   NOT on an unrelated id's write when the result is unchanged (render counter). Writer: `setHostShown(a, true)` on a
   host with daemonId appends `d1_a` only; `setHostShown(a, false)` on a host listed under BOTH forms removes both and
   nothing else (unknown ids and order intact); unknown host → no-op (same state object). Commit.
@@ -896,18 +929,21 @@ Tasks:
   daemonId learned → the pass changes only the `settings` hash, a second pass changes nothing; with both a look entry
   and a shown id on that local id, still exactly one `settings` change. Commit.
 
-Invariants: the store is a plain list — no write ever adds or removes an id other than the host's own forms; unknown
+Invariants: one predicate (`isRefShown`) — no export answers "not a local host → shown"; the store is a plain list —
+no write ever adds or removes an id other than the host's own forms; unknown
 ids survive merge, apply, build, show / hide and re-key; `[]` hides every host; an add path writes nothing; an apply
 of shown hosts writes no tab / workspace / local-profiles store; old clients (ordinal 5 and 6) lock.
 
-Mutations: M1 `hide` rebuilt from the ids this device knows (the two-client regression red — `d1_c` lost); M2 `merge`
-drops ids that are not local hosts (unknown-id tests red); M3 default `ids` seeded from `hostOrder` / a migration that
-lists the current hosts (default + adds-write-nothing tests red); M4 ordinal not bumped (snapshot red); M5 marker
-missing (marker pin + lock regression red); M6 selector compares local ids only (daemonId case red); M7 the local-id
-form ignored (the learned-daemonId-before-re-key test red); M8 `setHostShown(false)` removes only the wire form (the
-both-forms writer test red); M9 re-key keeps both forms (dedupe test red); M10 re-key runs in `rewriteHostRefs`
-(deletion test red); M11 `isPaneHostShown` delegates to `isHostShown` (the `d1_X` pane test red); M12 `hostRefOf`
-ignores the hostless-execution fallback (fallback test red).
+Mutations: M1 `toggle` / `hide` materialise the ids this device knows (the list rebuilt from the local hosts' wire
+ids — the two-client regression red, `d1_c` lost); M2 `merge` drops ids that are not local hosts (unknown-id tests
+red); M3 ordinal not bumped (snapshot red); M4 marker missing (marker pin + lock regression red); M5 the selector
+compares the local id only (daemonId case red); M6 re-key keeps both forms (dedupe test red); M7 re-key moved into
+`planRewrite` (the `rewriteHostRefs` deletion test red); M8 the matcher answers a non-local ref through a "not a local
+host → `true`" helper (the `d1_X` unlisted tests red); M9 `hostRefOf` ignores the hostless-execution fallback
+`hostOrder[0]` (fallback tests red); M10 a new host shown by default (the store seeds its wire id on add, or a
+missing-from-list host reads as shown — the adds-write-nothing and host-added-later tests red); M11 the local-id form
+ignored (the learned-daemonId-before-re-key test red); M12 `setHostShown(false)` removes only the wire form (the
+both-forms writer test red).
 
 ## H2d-2 — the Hosts page: hidden style, the show / hide switch, no "open" (12 files)
 
@@ -933,7 +969,8 @@ Files:
     `hosts.shown.open_hint`)
 12. `spa/src/locales/zh-TW.json`
 
-All read `useIsHostShown(hostId)` / `useShownHostFilter()` and write only through `setHostShown` (H2d-1).
+All read `useIsRefShown(hostId)` / `useShownRefFilter()` (the one predicate, H2d-1) and write only through
+`setHostShown` (H2d-1).
 
 Tasks:
 - **T1 — sidebar and switch.** Tests: `HostSidebar` lists every host with `ids: []` (none filtered), each hidden one
@@ -955,7 +992,10 @@ both-forms OFF test red when the host is listed under its local id too); M3 the 
 red); M4 `SessionsSection` "open" still creates a tab for a hidden host (no-tab test red); M5 the tag reads a local id
 (daemonId-host test red); M6 the sessions list itself hidden for a hidden host (list-still-rendered test red — rule 1).
 
-## H2d-3 — no New Tab / picker entry; landings: notification, deep link, route (12 files)
+## H2d-3 — no New Tab / picker entry; landings: notification, deep link, route; in-flight handoffs (16 files)
+
+Every opener uses the one predicate `isRefShown` (§0.21 "One rule for every opener too"; review `task-mufjfxo4-h4e2rf`
+item 1): a ref that is neither a local host nor listed is not openable.
 
 Files:
 1. `spa/src/components/NewTabPage.tsx` (skip `sessions:<id>` / `headless:<id>` blocks of a hidden host — prefixes from
@@ -963,40 +1003,78 @@ Files:
 2. `spa/src/components/NewTabPage.test.tsx`
 3. `spa/src/components/SessionPickerList.tsx` (`connectedHosts.filter(isShown)`)
 4. `spa/src/components/SessionPickerList.test.tsx`
-5. `spa/src/lib/shown-hosts.ts` (`landOnHostsPageIfHidden(hostId): boolean` — hidden → open the Hosts page on that
-   host (`openSingletonTab({ kind: 'hosts' })` + `setActiveHost`, the `open-host` action's body) and `true`)
+5. `spa/src/lib/shown-hosts.ts` (`landOnHostsPageIfHidden(ref): boolean` — `isRefShownNow(ref)` → `false`, nothing
+   done; hidden and a local host → open the Hosts page on that host (`openSingletonTab({ kind: 'hosts' })` +
+   `setActiveHost`, the `open-host` action's body — `useNotificationDispatcher.ts:375-377`) and `true`; hidden and NOT
+   a local host (an unlisted `d1_X`, a deleted host's id, `''` from a hostless link with an empty `hostOrder`) → open
+   the Hosts page without changing `activeHostId` and `true` — not openable, never a tab)
 6. `spa/src/lib/shown-hosts.test.ts`
 7. `spa/src/hooks/useNotificationDispatcher.ts` (`open-session` for a hidden host → the landing; no tab focused or
    created — also when a tab of that session exists)
 8. `spa/src/hooks/useNotificationDispatcher.test.ts`
-9. `spa/src/lib/deeplink/deeplinkResolver.ts` (`openExecutionDetailTab` → the landing first; covers `purdex://` deep
-   links)
+9. `spa/src/lib/deeplink/deeplinkResolver.ts` (`openExecutionDetailTab` (`:18`) → the landing first; covers
+   `purdex://` deep links, whose host is resolved by `resolveExecutionHostId` (`lib/nex/resolve-host.ts:11` — a present
+   hint verbatim, else `hostOrder[0]`, else `''`))
 10. `spa/src/lib/deeplink/deeplinkResolver.test.ts`
-11. `spa/src/hooks/useRouteSync.ts` (`execution` route on a hidden host — incl. the hostless fallback
-    `resolveExecutionHostId` → `hostOrder[0]` — → the landing, no tab)
+11. `spa/src/hooks/useRouteSync.ts` (the `execution` case, `:105-110`: parsed `/execution/<host>/<execution id>`
+    (`lib/route-utils.ts:84-92`) or the legacy hostless `/execution/<execution id>` → `resolveExecutionHostId` → the
+    landing when not shown, no tab)
 12. `spa/src/hooks/useRouteSync.test.ts`
+13. `spa/src/lib/nex/handoff.ts` (the in-flight re-check: `handToNex` (`:83`), `takeBack` (`:146`) and
+    `takeToTerminal` (`:204`) evaluate `isRefShownNow(hostId)` AFTER the daemon answers and BEFORE
+    `trySetPaneContent` (`:100`, `:160`, `:240`); hidden → no pane write, `swapped: false`. The daemon-side action has
+    happened and is not undone: the pane keeps its old content, gated; on re-show the existing `sessions` reconcile /
+    the execution pane's own fetch show the true state (a handed-off tmux session ended → terminated; an archived
+    execution → its problem state), and the execution / session is listed on the Hosts page)
+14. `spa/src/lib/nex/handoff.test.ts`
+15. `spa/src/components/HandoffConfirmDialog.tsx` (`confirm` (`:39`): hidden at click → close without calling
+    `handToNex`; the success toast (`:46-54`) offers "open execution" only when the host is still shown at completion,
+    and its opener re-checks at click — hidden then → `landOnHostsPageIfHidden(hostId)`, no `openSingletonTab`)
+16. `spa/src/components/HandoffConfirmDialog.test.tsx`
+
+Not offered (no file here): "Hand to nex" needs the SHOWN `tmuxHostId` in `PaneLayoutRenderer` (H2d-4 — the nex
+`ensure` / `selectHandoffReady` key on the shown host only) and Take back / Take to terminal live in `ExecutionView`,
+which a gated leaf never mounts (H2d-4). `ExecutionView.runTakeBack`'s toast (`ExecutionView.tsx:85`) opens nothing;
+with the re-check it says `takeback.archived_no_pane` — accurate (no pane was re-pointed). H2d-1 … H2d-4 ship in one
+bump, so no release has the re-checks without the gate.
 
 Tasks:
 - **T1 — New Tab and the picker.** Tests: a hidden host's `sessions:` / `headless:` blocks (and the launchers in them)
   not rendered while other columns render; the preset and `knownIds` still hold the columns afterwards; a shown host's
   blocks as today; `ids: []` → no host block at all, the non-host columns still render; an unknown id listed shows
   nothing local; the terminated-pane picker omits the hidden host. Commit.
-- **T2 — the landing helper.** Tests: hidden → Hosts tab opened / focused, `activeHostId` = the host, returns `true`,
-  no tab of that host created; shown / unknown id → `false`, nothing done. Commit.
+- **T2 — the landing helper.** Tests: shown → `false`, nothing done; hidden local host → Hosts tab opened / focused,
+  `activeHostId` = the host, returns `true`, no tab of that host created; an unlisted `d1_X` → Hosts tab opened,
+  `activeHostId` unchanged, `true`, no tab; a listed `d1_X` → `false` (openable: the pane shows `MissingHostPane` as
+  today); `''` → Hosts tab, `true`. Commit.
 - **T3 — notifications still fire, clicks land on the Hosts page.** Tests: an agent notification of a hidden host is
   dispatched (the not-filtered half); its `open-session` click opens the Hosts page for that host, creates no tab, does
   NOT focus an existing tab of that session, still marks it read; shown host unchanged. Commit.
 - **T4 — execution deep link and route.** Tests: `resolveDeeplink` / `openExecutionDetailTab` for a hidden host →
-  Hosts page, no execution tab; the `/execution/<id>/<host>` route likewise, and a hostless route whose fallback
-  `hostOrder[0]` is hidden; shown host → the tab as today. Commit.
+  Hosts page, no execution tab; the `/execution/<host>/<execution id>` route likewise, and a hostless route whose
+  fallback `hostOrder[0]` is hidden; **`/execution/d1_X/<execution id>` with `d1_X` not a local host and not listed →
+  Hosts page, no tab** (the review's case), and the equivalent deep link `{ executionId, host: 'd1_X' }` likewise;
+  with `d1_X` listed → the tab as today; shown host → the tab as today. Commit.
+- **T5 — in-flight handoffs** (review item 2). Tests (`handoff.test.ts`, daemon calls mocked with a deferred promise):
+  for each of `handToNex`, `takeBack`, `takeToTerminal` — start the call with the host shown, hide it
+  (`setHostShown(host, false)`) before the deferred answer resolves → the tab store is the SAME object after
+  completion (no `trySetPaneContent` write), the outcome has `swapped: false`, the daemon call happened once; the same
+  with the host still shown → the pane re-pointed as today. `HandoffConfirmDialog.test.tsx`: hidden at click →
+  `handToNex` not called, the dialog closes; hidden during the flight → the toast has no "open execution" action;
+  shown at completion then hidden before the toast's action is clicked → the click opens the Hosts page on that host,
+  no execution tab (`openSingletonTab` not called with an execution). Commit.
 
-Invariants: no New Tab / picker / landing path creates or focuses a tab on a hidden host; a notification of a hidden
-host is always delivered; the New Tab layout data is never changed by the filter.
+Invariants: no New Tab / picker / landing / toast path creates or focuses a tab whose pane the gate would hide; every
+opener evaluates `isRefShown` (one rule — a non-local unlisted ref is not openable); a handoff answered after its host
+was hidden re-points no pane; a notification of a hidden host is always delivered; the New Tab layout data is never
+changed by the filter.
 
 Mutations: M1 `NewTabPage` removes the column from the preset instead of skipping it (preset-kept test red); M2 the
 filter compares local ids (daemonId-host test red); M3 the dispatcher drops notifications of hidden hosts (delivery
 test red); M4 the click focuses the existing tab (no-focus test red); M5 the route ignores the fallback host
-(hostless-route test red).
+(hostless-route test red); M6 the landing treats a non-local ref as shown (the `/execution/d1_X/…` route and deep-link
+tests red); M7 one of the three handoff functions writes the pane without the re-check (its hide-during-flight test
+red — run once per function); M8 the toast opener opens the execution without the re-check (toast test red).
 
 ## H2d-4 — pane gate, per-pane sweeps, StatusBar, re-show recovery (16 files; §0.21)
 
@@ -1004,7 +1082,7 @@ The rule of §0.21 — in W, a pane on a hidden host renders 「主機已於此�
 host again restores the same pane — plus the per-pane sweeps and the StatusBar peer info that would otherwise keep
 talking to X about those panes, and the recovery on show. Host-level connections (event WS, health, session watch /
 refresh, the `sessions` reconcile itself) are NOT touched (H2d-5 T1). Uses the H2d-1 matcher (`usePaneHostShown`,
-`isRefShownNow`, `isHostShownNow`).
+`isRefShownNow`, `isRefShown`).
 
 Files (counted at `6858fb1f`):
 1. `spa/src/components/PaneLayoutRenderer.tsx` (the leaf gate; the nex `ensure` effect keyed on the shown host)
@@ -1042,8 +1120,11 @@ The gate (`PaneLayoutRenderer`, leaf branch, `:67-90`):
 - the gate never writes the tab store; the module-enabled `pinnedEnabled` snapshot (`:43`) is unchanged.
 
 Re-show recovery (`host-reshow.ts`): a subscriber over `useShownHostsStore` + `useHostStore` computes the set of LOCAL
-host ids shown (`isHostShown`), and for each id hidden before and shown now calls `recoverHostSessions(id)` once. A
-host merely added (hidden, rule 2), a host removed, or a daemonId learned (the local-id form keeps it shown — §0.21) is
+host ids shown (`isRefShown`); the local ids hidden before and shown now are grouped by wire identity
+(`wireIdOfHost`), and each group gets ONE `recoverHostSessions(id)` call, for its first id in `hostOrder` (review
+`task-mufjfxo4-h4e2rf` item 5: two local rows claiming one daemon are shown together and are one daemon — two calls
+would refresh it twice). The transition is tracked per local id and only the call is deduped, so a daemonId learned
+(the host's wire id moves, its local id stays shown) is still no transition. A host merely added (hidden, rule 2), a host removed, or a daemonId learned (the local-id form keeps it shown — §0.21) is
 not a transition. It never writes the tab / workspace / shown stores. The baseline is taken after both stores have
 hydrated (the `onFinishHydration` pattern of `startHostReresolve`), so the boot hydration of a stored list is not a
 transition. If it needs more than "subscribe + call the existing function", or pushes this PR past 20 files, STOP and
@@ -1055,7 +1136,7 @@ Tasks:
   mounted, `fetchWsTicket` not called, `useNexHostStore.ensure` not called, no "Hand to nex" item; a terminated X tmux
   leaf → placeholder, no Rebuild button, no picker; an execution leaf with `host: X` → placeholder, the execution
   renderer not mounted; a HOSTLESS execution leaf with `hostOrder[0]` = X → placeholder; a pane on an unresolved
-  `d1_X` not listed → placeholder (the matcher, not `isHostShown`), listed → `MissingHostPane` as today; a
+  `d1_X` not listed → placeholder (the one wire-space predicate), listed → `MissingHostPane` as today; a
   daemon-source editor on X → renders normally (§0.22); X shown → every renderer as today; in a split `[mlab | X]`
   only the X leaf is gated and the mlab renderer stays mounted through hide and show (mount / unmount spies: no
   remount); **live**: hide X while mounted → the renderer unmounts and the placeholder shows, the tab store is the SAME
@@ -1079,7 +1160,9 @@ Tasks:
   → `show(d1_x)` → one call with X's local id; the same write again → no call; X shown → hidden → no call; a
   `settings` apply path (store `setState` as `apply-to-stores` does) showing X → one call; a host added (hidden) → no
   call; a daemonId learned for a host shown under its local id → no call; a boot hydration of a stored list holding X
-  → no call; two local rows of one daemon → one call each; installing twice → one call per transition. Integration
+  → no call; **two local rows of one daemon (a conflict pair) shown by one write → ONE call, with the id first in
+  `hostOrder`** (and, the pair hidden and shown again, one more call); two different daemons shown by one write → one
+  call each; installing twice → one call per transition. Integration
   (same file, `refresh-sessions` real, `fetch` mocked): a pane on X marked terminated while X was hidden whose session
   is alive → after `show`, within the same test tick sequence, the pane is repointed live (revive ran), no `sessions`
   frame needed; with the operation lock held the call defers to its release. Install in `main.tsx`. Commit.
@@ -1088,10 +1171,11 @@ Invariants: in W, no pane on a hidden host mounts a renderer, fetches a ticket, 
 stream, calls the nex `ensure`, or is probed / revived by a sweep; hiding and showing never write the tab, workspace or
 local-profiles store (pane id and content survive); other panes of a split tab are never remounted by it; host-level
 connections and the `sessions` reconcile are unchanged; a non-host-bearing pane is never gated; a show — local or
-synced — recovers the host's sessions once.
+synced — recovers the host's sessions once per daemon.
 
 Mutations: M1 the gate placed in `SessionPaneContent` (execution / hostless-execution / ensure tests red); M2 the gate
-reads a snapshot like `pinnedEnabled` (live hide / show test red); M3 the gate uses `isHostShown` (`d1_X` test red);
+reads a snapshot like `pinnedEnabled` (live hide / show test red); M3 the gate answers a non-local ref "shown" (a
+"not a local host → `true`" helper; `d1_X` test red);
 M4 the `ensure` effect keyed on `tmux?.hostId` regardless of the gate (ensure-not-called test red); M5 show rewrites
 the pane (new id / `detachPane`) or hide removes it from the layout (same-pane / tab-store-same-object tests red); M6
 the whole tab gated instead of the leaf (split test red — mlab remounted); M7 StatusBar still passes the host to
@@ -1100,7 +1184,7 @@ test red); M9 `provenanceBindings` unguarded (hook-event test red); M10 the guar
 (terminated-marking test red); M11 recovery called from the switch's click handler only (the apply-path test red);
 M12 `runRevivePass` called instead of `recoverHostSessions` (the lock-held defer test red); M13 the gate keeps the
 execution renderer mounted and only hides it (the real-lease `releaseLease`-once test red); M14 no baseline after
-hydration (boot-hydration test red).
+hydration (boot-hydration test red); M15 recovery not deduped by wire identity (the conflict-pair one-call test red).
 
 ## H2d-5 — hidden ≠ absent: behaviour tests for the not-filtered list (5 files, tests only)
 
@@ -1138,7 +1222,8 @@ test per "unchanged" row of the §0.21 table:
   `lib/profile/collector.ts`, `lib/profile/apply-to-stores.ts` and `lib/rebuild/host-reshow.ts`; `lib/shown-hosts`
   only by the H2d-2 / H2d-3 / H2d-4 production files (`HostSidebar.tsx`, `OverviewSection.tsx`,
   `SessionsSection.tsx`, `ExecutionsView.tsx`, `NexExecutionsTable.tsx`, `NewTabPage.tsx`, `SessionPickerList.tsx`,
-  `useNotificationDispatcher.ts`, `deeplinkResolver.ts`, `useRouteSync.ts`, `PaneLayoutRenderer.tsx`, `StatusBar.tsx`,
+  `useNotificationDispatcher.ts`, `deeplinkResolver.ts`, `useRouteSync.ts`, `handoff.ts`, `HandoffConfirmDialog.tsx`,
+  `PaneLayoutRenderer.tsx`, `StatusBar.tsx`,
   `revive.ts`, `cwd-probe.ts`, `reconcile-host.ts`, `host-reshow.ts`) and `host-reresolve.ts`; none of those files
   imports a tab-closing API (`closeTabInWorkspace`, `closeTab`, `useTabStore.getState().closeTab`) that it did not
   import at `6858fb1f` (the static half of "hiding never closes"). Commit.
@@ -1218,7 +1303,9 @@ from a variable).
    daemon in `requests`).
 9. **Notification and landings.** Trigger an agent notification in `acc-s1` on air26 (e.g. a short `claude -p` turn in
    that session ends) → the notification appears on A; clicking it opens air26's Hosts page, and T1 is neither
-   focused nor duplicated. Navigate A to `/execution/<T3's id>/<air26 id>` → air26's Hosts page, no new tab.
+   focused nor duplicated. Navigate A to `/execution/<air26 id>/<T3's execution id>` (the parser's order —
+   `lib/route-utils.ts:84-92`, canonical form `:148-149`) → air26's Hosts page, no new tab. Then `/execution/d1_ffff…/<any
+   execution id>` (a wire id no host of A has and W does not list) → the Hosts page, no new tab.
 10. **Show air26 again → restore without reload.** Keep `acc-s2` idle during the hide (create / kill no session on
     air26, so no `sessions` frame is pushed). On A → ON. Within 5 s on BOTH clients (B through the `settings` apply)
     every air26 pane attaches — the same pane ids, the terminal shows the session's current screen (earlier scrollback
@@ -1243,7 +1330,7 @@ Not reachable before H3 (the `hosts` section still syncs — same reason as H1 p
   `settings` payload (current rev as base, `PUT /api/profiles/{id}/sections/settings`) whose `looks` and `ids` carry
   an extra `d1_ffff…` → both clients keep it through apply and their next build (`settings` rev moves only by the
   injection); a pane injected on that id shows the hidden placeholder while unlisted and `MissingHostPane` while
-  listed (§0.30 question 3); a hide / show of mlab keeps `d1_ffff…` in `ids`.
+  listed (§0.30 item 3, DECIDED); a hide / show of mlab keeps `d1_ffff…` in `ids`.
 - "B deletes a host, A unaffected": pre-H3 A loses the host through `hosts`; what IS checked is that the look entry
   and shown id survive on both.
 - Independent host lists with different add orders / names per device: the `HostConfig` fallback differs per device
@@ -1294,7 +1381,41 @@ transition from a store subscriber, the blocked open-a-tab surfaces, the notific
 the not-filtered behaviour tests and the import guard.
 
 Open questions: §0.30 (file panes; unknown ids have no UI; which placeholder for a host this device lacks, and the
-local-id form; H2d-1 size vs the 800-line target; copy).
+local-id form; H2d-1 size vs the 800-line target; copy) — all DECIDED by the review below.
+
+### 2026-09-24 — rev 7 plan review `task-mufjfxo4-h4e2rf`
+
+codex plan review of rev 7 (`3d49d278`), seven findings; triage by the coordinator: 1, 2, 4, 5, 6, 7 ADOPTED; 3
+DOCUMENTED + test.
+1. [important 0.98] An unresolved wire ref bypassed the opener gate: rev 7's `isHostShown` said `true` for a non-local
+   id while the pane matcher said hidden for an unlisted `d1_…`, so `/execution/d1_X/<id>` created a tab that the gate
+   then placeholdered — ADOPTED. One predicate for every opener and the gate: `isRefShown` (wire-space; the local-id
+   form for a local host). A ref that is neither local nor listed is not openable → the Hosts page (landings) / not
+   offered (lists). `isHostShown` / `useIsHostShown` / `useShownHostFilter` removed (§0.21 "One rule for every opener
+   too"; H2d-1 selectors, T3 tests, M8; H2d-3 file 5, T2, T4 with the `/execution/d1_X/<id>` route and deep link, M6).
+   Code refs re-verified at `3d49d278`: `lib/nex/resolve-host.ts:11`, `lib/deeplink/deeplinkResolver.ts:18`,
+   `hooks/useRouteSync.ts:105-110`.
+2. [important 0.96] Handoff / Take back / Take to terminal write the pane after the daemon answers, and the Handoff
+   toast can open an execution tab; hiding the host during the flight did not stop either — ADOPTED into H2d-3 (+4
+   files, 12 → 16): the re-check `isRefShownNow(hostId)` before each `trySetPaneContent` (`lib/nex/handoff.ts:100`,
+   `:160`, `:240`; functions at `:83`, `:146`, `:204`), the dialog's confirm (`HandoffConfirmDialog.tsx:39`) and the
+   toast's opener (`:46-54`); the entries themselves are unreachable through the H2d-4 gate. T5, M7 / M8.
+3. [important 0.94] Concurrent toggles of different hosts on two devices overwrite each other — evidence against it as
+   a new defect: `settings` syncs under per-section CAS (`applier.ts:560`, `sync-state.ts:58`), so the second push is
+   `locked:conflict` and a human picks a side, as for every settings store. DOCUMENTED in §0.6 and §0.21 step 4;
+   H2d-1 T2 adds the conflict test (`executor.direction.integration.test.ts`).
+4. [important 1.00] §0.30 kept the local-id form open although the model decided it — ADOPTED: removed from the
+   questions; it is part of the model (§0.21 "What is a pane on X").
+5. [minor 0.91] Two local rows of one daemon → `recoverHostSessions` twice on one show — ADOPTED: the re-show
+   subscriber tracks transitions per local id and calls once per wire identity (first id in `hostOrder`); H2d-4 T4
+   conflict-pair test, M15.
+6. [important 1.00] Acceptance step 9 had the route segments reversed — ADOPTED: `/execution/<host>/<execution id>`
+   (`lib/route-utils.ts:84-92`, canonical `:148-149`), plus an unlisted `d1_…` route.
+7. [minor 0.99] The H2d-1 800-line question was still open — DECIDED: one PR. Every §0.30 item is DECIDED with its
+   default (file panes not gated; unknown ids have no UI; a pane on a host this device lacks: unlisted → the hidden
+   placeholder, listed → `MissingHostPane`; copy 「已隱藏」 / 「在此工作台顯示」 / 「主機已於此工作台關閉」).
+
+H2d totals after this review: H2d-1 19, H2d-2 12, H2d-3 16, H2d-4 16, H2d-5 5 — 68 files.
 
 ### 2026-09-24 — rev 6 plan review `task-mufbtxpn-8p1egj`
 
