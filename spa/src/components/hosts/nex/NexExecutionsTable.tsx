@@ -14,6 +14,7 @@ import { openExecutionDetailTab } from '../../../lib/deeplink/deeplinkResolver'
 import { archiveExecution, attachControl, listExecutions, releaseLease, terminateExecution } from '../../../lib/nex/nex-api'
 import { NexApiError, type ExecutionSummary } from '../../../lib/nex/types'
 import { sanitizeExecutionsPage } from '../../../lib/nex/validate-executions'
+import { isRefShownNow, useIsRefShown } from '../../../lib/shown-hosts'
 import NexExecutionRow from './NexExecutionRow'
 
 export interface NexExecutionsTableProps {
@@ -44,6 +45,9 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   const [actionError, setActionError] = useState<ActionError | null>(null)
   const [confirmTerminateId, setConfirmTerminateId] = useState<string | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
+  // A host hidden in this workbench keeps its executions listed and manageable; only "open" (it creates a tab) is
+  // not offered (plan H2d-2, §0.21 user rules 1 / 5).
+  const shown = useIsRefShown(hostId)
 
   // Same gate as before the store migration: a host that is not nex-ready
   // subscribes nothing (the store would refuse to open anyway, but staying
@@ -132,6 +136,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   const loadError = showArchived ? (shared.error ?? archived.error) : shared.error
 
   const handleOpen = (row: ExecutionSummary) => {
+    if (!isRefShownNow(hostId)) return
     // Spec §4.4.3: go through the same helper the deeplink resolver uses
     // (spa/src/lib/deeplink/deeplinkResolver.ts) rather than re-implementing
     // openSingletonTab here — it already activates the tab, so no separate
@@ -214,6 +219,9 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
           {t('hosts.load_failed')}: {loadError}
         </p>
       )}
+      {!shown && (
+        <p data-testid="nex-executions-open-hint" className="text-xs text-text-muted mb-2">{t('hosts.shown.open_hint')}</p>
+      )}
       {actionError && (
         <p data-testid="nex-executions-action-error" className="text-xs text-red-400 mb-2">
           {t('hosts.nex.executions.action_failed', { action: actionError.action, code: actionError.code })}
@@ -246,7 +254,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
                   row={row}
                   confirmingTerminate={confirmTerminateId === row.id}
                   pending={pendingId === row.id}
-                  onOpen={() => handleOpen(row)}
+                  onOpen={shown ? () => handleOpen(row) : undefined}
                   onTerminateClick={() => setConfirmTerminateId(row.id)}
                   onTerminateConfirm={() => void handleTerminateConfirm(row)}
                   onArchiveToggle={() => void handleArchiveToggle(row)}

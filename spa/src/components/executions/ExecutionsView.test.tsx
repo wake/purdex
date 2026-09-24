@@ -6,6 +6,7 @@ import NexExecutionsTable from '../hosts/nex/NexExecutionsTable'
 import { resetExecutionListForTests, useExecutionListStore } from '../../stores/useExecutionListStore'
 import { useNexHostStore, type NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { subscriptionSlots } from '../../lib/nex/subscription-slots'
 import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
@@ -56,6 +57,7 @@ beforeEach(() => {
     },
     hostOrder: [H, OTHER], activeHostId: H, runtime: {},
   })
+  useShownHostsStore.setState({ ids: [H, OTHER] }) // shown in this workbench unless a test hides one (H2d-2)
   openSingletonTab = vi.fn<OpenSingletonTab>().mockReturnValue('tab-1')
   useTabStore.setState({ openSingletonTab })
   vi.mocked(sse.openNexSse).mockReset().mockImplementation(() => ({ close: vi.fn() }))
@@ -180,6 +182,24 @@ describe('ExecutionsView', () => {
     fireEvent.click(screen.getByTestId('executions-row'))
     expect(openSingletonTab).toHaveBeenCalledTimes(1)
     expect(openSingletonTab).toHaveBeenCalledWith({ kind: 'execution', executionId: 'exc_click', host: H })
+  })
+
+  // H2d-2 T2 (plan §0.21, user rules 1 / 5): a host hidden in this workbench keeps its executions listed; opening one
+  // (it creates a tab) is not offered.
+  it('hidden host: the executions stay listed with the hint, and a row click creates no tab', () => {
+    useShownHostsStore.setState({ ids: [OTHER] })
+    seedList([row({ id: 'exc_a', brief: 'first' }), row({ id: 'exc_b', brief: 'second' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getAllByTestId('executions-row')).toHaveLength(2)
+    expect(screen.getByTestId('executions-open-hint')).toHaveTextContent('Show this host in the workbench to open its sessions')
+    for (const el of screen.getAllByTestId('executions-row')) fireEvent.click(el)
+    expect(openSingletonTab).not.toHaveBeenCalled()
+  })
+
+  it('shown host: no hint', () => {
+    seedList([row({ id: 'exc_a' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByTestId('executions-open-hint')).toBeNull()
   })
 
   it('disabled', () => {

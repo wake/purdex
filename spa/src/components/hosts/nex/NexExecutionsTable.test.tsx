@@ -9,6 +9,7 @@ import * as api from '../../../lib/nex/nex-api'
 import * as sse from '../../../lib/nex/nex-sse'
 import type { NexSseOptions } from '../../../lib/nex/nex-sse'
 import { NexApiError } from '../../../lib/nex/types'
+import { useShownHostsStore } from '../../../stores/useShownHostsStore'
 
 const { mockOpenExecutionDetailTab } = vi.hoisted(() => ({ mockOpenExecutionDetailTab: vi.fn() }))
 vi.mock('../../../lib/deeplink/deeplinkResolver', () => ({ openExecutionDetailTab: mockOpenExecutionDetailTab }))
@@ -54,8 +55,40 @@ beforeEach(() => {
   vi.mocked(api.releaseLease).mockReset().mockResolvedValue(undefined)
   vi.mocked(api.archiveExecution).mockReset().mockResolvedValue(undefined)
   mockOpenExecutionDetailTab.mockClear()
+  useShownHostsStore.setState({ ids: ['h', 'h2'] }) // shown in this workbench unless a test hides one (H2d-2)
 })
 afterEach(() => vi.useRealTimers())
+
+// H2d-2 T2 (plan §0.21, user rules 1 / 5): a host hidden in this workbench keeps its executions listed and manageable
+// (terminate / archive); only "open" (it creates a tab) is not offered.
+describe('NexExecutionsTable — a host hidden in this workbench (H2d-2)', () => {
+  it('rows stay listed with terminate / archive, but no Open and the hint instead; clicking creates no tab', async () => {
+    useShownHostsStore.setState({ ids: ['h2'] })
+    render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText('exc_01234567')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /terminate/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^archive$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^open$/i })).toBeNull()
+    expect(screen.getByTestId('nex-executions-open-hint')).toHaveTextContent('Show this host in the workbench to open its sessions')
+    const tr = screen.getByText('exc_01234567').closest('tr')!
+    fireEvent.click(tr)
+    for (const cell of Array.from(tr.querySelectorAll('td'))) fireEvent.click(cell)
+    for (const button of Array.from(tr.querySelectorAll('button'))) fireEvent.click(button)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(mockOpenExecutionDetailTab).not.toHaveBeenCalled()
+  })
+
+  it('shown again: Open comes back and the hint goes', async () => {
+    useShownHostsStore.setState({ ids: [] })
+    render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => useShownHostsStore.setState({ ids: ['h'] }))
+    expect(screen.queryByTestId('nex-executions-open-hint')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^open$/i }))
+    expect(mockOpenExecutionDetailTab).toHaveBeenCalledWith('exc_0123456789abcdef', 'h')
+  })
+})
 
 describe('NexExecutionsTable', () => {
   it('lists executions with (you) on my lease and opens a host-scoped execution pane via the deeplink helper', async () => {
