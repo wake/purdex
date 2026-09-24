@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowsClockwise, CheckCircle, WarningCircle, Circle } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
+import { hostLabel, hostLookOf, useHostLook } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { ConfirmDialog } from '../ConfirmDialog'
 import {
@@ -42,6 +43,7 @@ export function PeersSection({ hostId }: Props) {
   const hosts = useHostStore((s) => s.hosts)
   const xUrl = useHostStore((s) => s.getDaemonBase(hostId))
   const host = hosts[hostId]
+  const hostName = hostLabel(hostId, useHostLook(hostId))
 
   const [snap, setSnap] = useState<PairingSnapshot | null>(null)
   const [busy, setBusy] = useState(false)
@@ -70,7 +72,7 @@ export function PeersSection({ hostId }: Props) {
     const my = ++gen.current
     setBusy(true)
     const { hosts: hs, hostOrder: order, runtime: rt, getDaemonBase } = useHostStore.getState()
-    const toApp = (id: string): PairingAppHost => ({ hostId: id, name: hs[id]?.name ?? id, url: getDaemonBase(id), status: rt[id]?.status })
+    const toApp = (id: string): PairingAppHost => ({ hostId: id, name: hostLabel(id, hostLookOf(id, hs)), url: getDaemonBase(id), status: rt[id]?.status })
     const others = order.filter((id) => id !== hostId).map(toApp)
     const emit = (s: PairingSnapshot) => { if (gen.current === my) setSnap(s) }
     // Built per run, not at module load: tests that fully mock host-api
@@ -153,7 +155,7 @@ export function PeersSection({ hostId }: Props) {
       {/* The selected host's own identity (the third of the three names, spec §2.1) and its
           self-alias editor (#1196). Keyed by host so the editor's state dies with a host change. */}
       {snap?.self && (
-        <SelfAliasLine key={hostId} hostId={hostId} hostName={host.name} self={snap.self}
+        <SelfAliasLine key={hostId} hostId={hostId} hostName={hostName} self={snap.self}
           busy={locked} flow={flow} runFlow={(fn) => runFlow(selfKey, fn)} />
       )}
 
@@ -175,7 +177,7 @@ export function PeersSection({ hostId }: Props) {
             // Keyed by host + alias: in production HostPage remounts the section
             // per host, this makes the prop-change path safe too, and the
             // unmounted DirectionLine's late setState is a no-op in React 19.
-            <PeerRow key={`${hostId}:${row.entry.alias}`} hostId={hostId} hostName={host.name} xUrl={xUrl} self={snap.self!} row={row}
+            <PeerRow key={`${hostId}:${row.entry.alias}`} hostId={hostId} hostName={hostName} xUrl={xUrl} self={snap.self!} row={row}
               busy={locked} flow={flow} runFlow={(fn) => runFlow(rowKey(row.entry.alias), fn)} />
           ))}
         </div>

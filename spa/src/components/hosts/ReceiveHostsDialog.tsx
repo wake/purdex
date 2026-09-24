@@ -6,6 +6,7 @@ import { ArrowsClockwise, X } from '@phosphor-icons/react'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { fetchInfoAt } from '../../lib/host-api'
+import { hostLabel, useHostLookResolver } from '../../lib/host-look'
 import { redeemTransfer, transferFailureText, type TransferFailure, type TransferRow } from '../../lib/host-transfer-api'
 import {
   commitSet,
@@ -43,6 +44,7 @@ export function ReceiveHostsDialog({ onClose }: Props) {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
   const activeHostId = useHostStore((s) => s.activeHostId)
+  const lookOf = useHostLookResolver()
 
   const connected = hostOrder
     .map((id) => hosts[id])
@@ -93,7 +95,7 @@ export function ReceiveHostsDialog({ onClose }: Props) {
 
   const handleRedeem = async () => {
     if (!relay || code.trim() === '' || busy) return
-    const relayName = relay.name
+    const relayName = hostLabel(relay.id, lookOf(relay.id))
     setPhase({ kind: 'redeeming' })
     const signal = probes.current.signal
     const res = await redeemTransfer(relay.id, code)
@@ -219,7 +221,7 @@ export function ReceiveHostsDialog({ onClose }: Props) {
                     className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary"
                   >
                     {connected.map((h) => (
-                      <option key={h.id} value={h.id}>{h.name}</option>
+                      <option key={h.id} value={h.id}>{lookOf(h.id).name}</option>
                     ))}
                   </select>
                 )}

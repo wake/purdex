@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { listContributions } from '../../lib/settings-contribution-registry'
 import { isModuleOwnedContribution } from '../../lib/settings-contribution-types'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
+import { useHostLookResolver } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 interface Props {
@@ -30,6 +31,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
+  const lookOf = useHostLookResolver()
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({
     [selectedHostId]: true,
   }))
@@ -90,7 +92,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                 <span
                   className={`truncate flex-1 ${runtime[hostId]?.status === 'auth-error' ? 'text-red-400' : ''}`}
                 >
-                  {host.name}
+                  {lookOf(hostId).name}
                 </span>
               </button>
               {isExpanded && (
