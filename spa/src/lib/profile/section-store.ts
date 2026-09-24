@@ -444,6 +444,17 @@ export function pruneStash(profileId: string, keep: ReadonlySet<string>): WriteR
   }))
 }
 
+/** Remove exactly the payloads named by `hashes` — no listing, no prune, so a payload another leader has just written
+ *  for a conflict whose record is not stored yet is never touched (see the header). Unlike `pruneStash` it does NOT
+ *  spare a payload a stored conflict refers to: the caller names what goes, and drops the referring record after
+ *  (host ownership H3a-2: a retired section's own payloads — they held tokens). A hash not stored is already gone.
+ *    `'failed'` = a malformed profile id or hash (nothing is removed), or a removal was refused (the others still
+ *  happened). */
+export function dropStash(profileId: string, hashes: readonly string[]): WriteResult {
+  if (!isProfileId(profileId) || !hashes.every(isHash)) return 'failed'
+  return removeAll(hashes.map((hash) => `${payloadPrefix(profileId)}${hash}`))
+}
+
 /** Detach / a change of master. With a profile id: every key of that profile
  *  and of no other. Without: every key under `purdex-profile-sections:`,
  *  whichever profile. `'failed'` = a malformed profile id (nothing is removed),

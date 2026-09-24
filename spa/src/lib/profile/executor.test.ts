@@ -41,6 +41,7 @@ vi.mock('./section-store', () => ({
   saveSection: vi.fn(() => 'ok'),
   saveConflict: vi.fn(() => 'ok'),
   dropSection: vi.fn(() => 'ok'),
+  dropStash: vi.fn(() => 'ok'),
   getStash: vi.fn((_p: string, hash: string) => h.persistedStash.get(hash)),
   pruneStash: vi.fn(() => 'ok'),
 }))
@@ -185,6 +186,7 @@ beforeEach(() => {
   store.saveSection.mockReturnValue('ok')
   store.saveConflict.mockReturnValue('ok')
   store.dropSection.mockReturnValue('ok')
+  store.dropStash.mockReturnValue('ok')
   useWorkspaceStore.setState({ workspaces: [], worldId: 'master', worldEpoch: 0 })
   useTabStore.setState({ worldId: 'master', worldEpoch: 0 })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0 })
@@ -2823,27 +2825,31 @@ describe('executor — a retired section (host ownership H3a-2: `hosts` leaves t
     expect(projections.isRetiredSection('settings')).toBe(false)
   })
 
-  it('a persisted plain / dirty record is dropped at startup, then the stash is pruned against what is left', () => {
+  // #1425: the retired record's OWN payloads are dropped by name, then the record — never a prune of the whole stash
+  // (a prune at a leader's start can remove a SENT payload another leader has written for a conflict whose record is
+  // not stored yet: section-store.ts header, spec §4.6.2).
+  it('a persisted plain / dirty record: its own payloads are dropped by name, THEN the record; no prune', () => {
     h.stored = {
       hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2' },
       settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' },
     }
-    const { ex } = make()
+    const { ex, problems } = make()
+    expect(store.dropStash.mock.calls).toEqual([[PROFILE, ['H1', 'H2']]])
     expect(store.dropSection.mock.calls).toEqual([[PROFILE, 'hosts']])
-    expect(store.pruneStash).toHaveBeenCalledTimes(1)
-    expect(store.pruneStash.mock.calls[0][0]).toBe(PROFILE)
-    expect([...store.pruneStash.mock.calls[0][1]].sort()).toEqual(['S1'])
-    expect(store.dropSection.mock.invocationCallOrder[0]).toBeLessThan(store.pruneStash.mock.invocationCallOrder[0])
+    expect(store.dropStash.mock.invocationCallOrder[0]).toBeLessThan(store.dropSection.mock.invocationCallOrder[0])
+    expect(store.pruneStash).not.toHaveBeenCalled()
+    expect(problems).toEqual([])
     expect(ex.status().sections).toEqual({ settings: 'synced' })
     expect(Object.keys(ex.status().detail)).toEqual(['settings'])
   })
 
-  it('a persisted CONFLICT (its payloads — tokens — in the stash) is dropped: its hashes leave the keep-set; no lock, nothing restored', async () => {
+  it('a persisted CONFLICT (its payloads — tokens — in the stash): both sides dropped by name, then the record; no lock, nothing restored', async () => {
     h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
     h.persistedStash.set('H2', { hosts: { h1: { token: 'secret' } } })
     const { ex } = make()
+    expect(store.dropStash.mock.calls).toEqual([[PROFILE, ['H1', 'H2', 'H9']]])
     expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'hosts')
-    expect(store.pruneStash).toHaveBeenCalledWith(PROFILE, new Set())
+    expect(store.pruneStash).not.toHaveBeenCalled()
     expect(ex.status()).toMatchObject({ profile: 'synced', sections: {}, locks: {} })
 
     api.listProfiles.mockResolvedValue(index([meta('hosts', 5, 'H9')]))
@@ -2857,9 +2863,41 @@ describe('executor — a retired section (host ownership H3a-2: `hosts` leaves t
     expect(ex.status().sections).toEqual({})
   })
 
-  it('no retired record: nothing is dropped and the stash is not touched at startup', () => {
-    h.stored = { settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' } }
+  it('a hash a live section also holds is NOT dropped (the keep-set of the restored sections)', () => {
+    h.stored = {
+      hosts: { base: { rev: 4, hash: 'SAME' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'W9' } } },
+      settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'SAME' },
+      workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W2', conflict: { localHash: 'W2', sot: { rev: 3, hash: 'W9' } } },
+    }
     make()
+    expect(store.dropStash.mock.calls).toEqual([[PROFILE, ['H2']]])
+    expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'hosts')
+  })
+
+  it('(a) a payload removal fails: the record is KEPT, persist-failed is reported, and the next start drops it all', () => {
+    h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
+    store.dropStash.mockReturnValueOnce('failed')
+    const first = make()
+    expect(store.dropStash).toHaveBeenCalledTimes(1)
+    expect(store.dropSection).not.toHaveBeenCalled() // the record stays: it is what brings the next start back here
+    expect(first.problems).toEqual([{ kind: 'persist-failed', section: 'hosts', detail: expect.stringContaining('payload') }])
+    expect(first.ex.status().sections).toEqual({}) // not restored either
+
+    first.ex.dispose()
+    vi.clearAllMocks()
+    const second = make() // h.stored still holds the record
+    expect(store.dropStash.mock.calls).toEqual([[PROFILE, ['H1', 'H2', 'H9']]])
+    expect(store.dropSection.mock.calls).toEqual([[PROFILE, 'hosts']])
+    expect(second.problems).toEqual([])
+  })
+
+  it('(c) no retired record: the stash is not touched at startup — no drop, no prune', () => {
+    h.stored = {
+      settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' },
+      workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W2', conflict: { localHash: 'W2', sot: { rev: 3, hash: 'W9' } } },
+    }
+    make()
+    expect(store.dropStash).not.toHaveBeenCalled()
     expect(store.dropSection).not.toHaveBeenCalled()
     expect(store.pruneStash).not.toHaveBeenCalled()
   })

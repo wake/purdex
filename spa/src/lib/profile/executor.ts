@@ -205,7 +205,8 @@ import type { ProfileStatus, SchemaLock } from './profile-state'
 import type { ProfileRemoteEvent } from './profile-ws-dispatch'
 import { isRetiredSection, sectionKind, shapeTable, workspaceIdOf } from './projections'
 import { isSyncableWorkspaceId } from './sections'
-import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
+import { dropSection, dropStash, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
+import type { PersistedSection } from './section-store'
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
 import type { FlightToken, SectionConflict, SectionEvent, SectionStatus, SectionSyncState } from './sync-state'
 import type { ProfileSectionKey, SectionKind, Shape, TabsPayload } from './types'
@@ -1445,13 +1446,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   // Startup: what the section store holds, conflicts included (sync-state driver contract).
-  // A retired section's record is dropped instead (see the header) — then the stash is pruned against what is left,
-  // or a `hosts` conflict's payloads (every host's token) would stay in localStorage until the next attach.
-  let droppedRetired = false
+  // A retired section's record is dropped instead (see the header), and first its OWN payloads — a `hosts` conflict's
+  // hold every host's token. By name, never a prune: a prune here could remove a SENT payload another leader has just
+  // written for a conflict whose record is not stored yet (section-store.ts header, spec §4.6.2). The record goes only
+  // once every payload has; a refused removal keeps it, so the next start comes back here and tries again (#1425).
+  const retired: Array<[string, PersistedSection]> = []
   for (const [key, persisted] of Object.entries(loadSectionStore(profileId).sections)) {
     if (isRetiredSection(key)) {
-      if (dropSection(profileId, key) !== 'ok') problem('persist-failed', 'the section store refused to drop a retired section', key)
-      droppedRetired = true
+      retired.push([key, persisted])
       continue
     }
     const s = restoreSectionState(persisted)
@@ -1459,7 +1461,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     attempted.set(key, persistedSignature(s))
     if (persisted.conflict !== undefined) storedConflict.add(key)
   }
-  if (droppedRetired) pruneStash(profileId, keepSet())
+  for (const [key, persisted] of retired) {
+    const keep = keepSet() // a hash a live section holds too is that section's
+    const own = [persisted.base.hash, persisted.currentHash, persisted.conflict?.localHash, persisted.conflict?.sot.hash]
+    const hashes = [...new Set(own.filter((h): h is string => typeof h === 'string' && !keep.has(h)))]
+    if (dropStash(profileId, hashes) !== 'ok') {
+      problem('persist-failed', 'the section store refused to remove a retired section\'s payloads; its record is kept and the next start tries again', key)
+      continue
+    }
+    if (dropSection(profileId, key) !== 'ok') problem('persist-failed', 'the section store refused to drop a retired section', key)
+  }
     lastStatus = JSON.stringify(status())
   // Born without a direction = an ordinary run (a reload after the period): there is no period to open later.
   periodOver = storedDirection() === null

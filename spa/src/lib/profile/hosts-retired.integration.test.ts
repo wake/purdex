@@ -18,7 +18,7 @@ import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { deleteHostCascade } from '../host-lifecycle'
 import { hashSection } from './hash'
-import { clearSectionStore, loadSectionStore } from './section-store'
+import { clearSectionStore, getStash, loadSectionStore, putStash, saveConflict } from './section-store'
 import { __resetProfileSyncForTest, attachMaster, detachMaster, profileSyncState, requestResolve, startProfileSync } from './start'
 import { masterTagOf } from './sync-status'
 import { FakeDaemon } from './test-fake-daemon'
@@ -283,6 +283,31 @@ describe('the sync loop never reads, writes or deletes the SOT `hosts` row (host
     expect(Object.keys(afterEdits).sort()).toEqual([M, added].sort())
     expect(requests().filter((r) => r.startsWith('put:') || r.startsWith('delete:'))).not.toContain('put:hosts')
     expect(profileSyncState().status?.profile).toBe('synced')
+    expectHostsUntouched()
+  })
+
+  // #1425 (b): a reload finds a `hosts` conflict persisted by a pre-H3 run — its payloads hold tokens. They go, by
+  // name, and the record after them. Another window's leader has meanwhile written the SENT payload of a conflict whose
+  // record is not stored yet (saveConflict: payloads first, record last): that payload is NOT touched — no prune runs.
+  it('(b) a reload drops the persisted hosts conflict and ITS payloads only — another leader\'s in-flight conflict payload stays', async () => {
+    await attached('push')
+    stop() // the window goes away…
+    const [mine, theirs, inFlight] = ['1', '2', '3'].map((c) => c.repeat(64))
+    expect(saveConflict(PROFILE, 'hosts', { base: { rev: 3, hash: legacy.hash }, currentHash: mine, conflict: { localHash: mine, sot: { rev: 4, hash: theirs } } }, {
+      [mine]: { hosts: { [M]: { token: LEGACY_TOKEN } } },
+      [theirs]: { hosts: { [M]: { token: LEGACY_TOKEN } } },
+    })).toBe('ok')
+    expect(putStash(PROFILE, inFlight, { order: [], workspaces: {}, sentBy: 'the other leader' })).toBe('ok')
+    vi.clearAllMocks()
+
+    stop = startProfileSync() // …and comes back: the master in the store, a hosts record in the section store
+    await settle()
+
+    expect(loadSectionStore(PROFILE).sections).not.toHaveProperty('hosts')
+    expect(getStash(PROFILE, mine)).toBeUndefined()
+    expect(getStash(PROFILE, theirs)).toBeUndefined()
+    expect(getStash(PROFILE, inFlight)).toEqual({ order: [], workspaces: {}, sentBy: 'the other leader' })
+    expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('persist-failed')
     expectHostsUntouched()
   })
 })
