@@ -268,7 +268,13 @@ export function foldPlan(src: FoldSource): FoldPlan
     hold: a body over 1 KB is never "shown whole", however few lines it has
     (codex plan review #10 — three 350-character lines used to pass the
     line-count test and come back `collapsible: false`).
-  - `hiddenLines = Math.max(0, localLines - previewLines.length)` — counted
+  - `hiddenLines = Math.max(0, localLines - previewLines.length)` when the
+    body is folded, and **exactly `0` when `collapsible` is false** — the
+    field means "how much this affordance is hiding", and a body shown whole
+    hides nothing. Without that clause the formula returns the body's own
+    line count for a short body (`previewLines` is `[]` there), which reads
+    as `+3 lines` to any consumer that renders the count before checking
+    `collapsible`. Counted
     against **the body we actually have**, never against N2's `total_lines`.
     An affordance must be able to reveal what it promises (codex plan review
     #11: a 3-line body with `total_lines: 900` used to advertise `+897 lines`
@@ -299,7 +305,8 @@ export function foldPlan(src: FoldSource): FoldPlan
   `totalLines: 900` → `hiddenLines === 0` and `daemonTruncated === true`,
   **not** `hiddenLines === 897` — the #11 guard); **`uses N2's count to pick
   the fold level`** (the same input still folds: `collapsible === true`);
-  `handles an empty
+  **`hides nothing when it shows the body whole`** (3-line body →
+  `collapsible === false` **and** `hiddenLines === 0`); `handles an empty
   body` (`''` → `totalLines === 0`, not collapsible); `does not count a
   trailing newline as a line` (`'a\n'` → `totalLines === 1`);
   `firstLine takes the first line, not the joined body`
@@ -345,9 +352,13 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex
   **Pairing is one-to-one and positional** (codex plan review #7). An
   id-keyed map pairs *every* call that shares an id with the *same* result,
   so a repeated `tool_use_id` renders one result twice while the second
-  result block vanishes. The rule instead is: walk the list once in order,
-  keep a queue of unanswered call positions per id, and give each
-  `tool_result` to the **oldest unanswered call with that id**. A call with
+  result block vanishes. The rule instead is: walk the list once in order
+  keeping **two** FIFOs per id — calls waiting for an answer, and results
+  waiting for an owner. Whichever side arrives first queues; whichever
+  arrives second pairs with the oldest entry on the opposite queue. A queue
+  of unanswered calls alone would be enough for the normal order, but it
+  would drop the case `pairs a result that arrives before its call` covers,
+  because the queue is empty when the result lands. A call with
   no result is simply absent from `resultForCall`; a result with no call is
   absent from `consumedResults` and renders as an orphan. The reducer's own
   duplicate-id merge (`tool-activity.ts:216`) keeps one `ToolActivity` for
