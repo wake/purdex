@@ -33,6 +33,7 @@ import {
   PROFILE_SWITCH_LOCK_OWNER,
   copyMasterAsSlave,
   createBlankSlave,
+  createSettingsCopySlave,
   deleteSlave,
   promoteToMaster,
   renameSlave,
@@ -963,6 +964,77 @@ describe('createBlankSlave', () => {
     expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
     expect(screen()).toEqual(masterWorld())
     expect(useLocalProfilesStore.getState().slaves[result.id].world).toEqual(parked)
+  })
+})
+
+// === C3. The three ways to a new workbench and their shown-hosts lists (per-workbench plan §0.2 / §0.3, B1) ===
+
+describe('the three creates — their shown-hosts lists (B1)', () => {
+  const CURRENT = ['d1_current']
+  const SLAVE_LIST = ['d1_slave']
+  const created = (result: { ok: boolean; id?: string; reason?: string }) => {
+    if (!result.ok || result.id === undefined) throw new Error(result.reason ?? 'refused')
+    return useLocalProfilesStore.getState().slaves[result.id]
+  }
+
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: CURRENT, relabelStamp: useLocalProfilesStore.getState().relabelCount })
+  })
+  afterEach(() => {
+    useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
+  })
+
+  it('createBlankSlave: [] — every host hidden, whatever the current list is (§0.3)', () => {
+    expect(created(createBlankSlave('Blank')).shownHostIds).toEqual([])
+  })
+
+  it('createSettingsCopySlave: ONE empty workspace named as a new one, no tab — and a copy of the CURRENT list', () => {
+    const slave = created(createSettingsCopySlave('Settings'))
+    const w = slave.world
+    if (w === null) throw new Error('not parked')
+    expect(w.workspaces).toHaveLength(1)
+    expect(w.workspaces[0]).toMatchObject({ name: 'Workspace 1', tabs: [], activeTabId: null })
+    expect(w.tabs).toEqual({})
+    expect(w).toMatchObject({ activeWorkspaceId: w.workspaces[0].id, activeTabId: null })
+    expect(JSON.stringify(w)).not.toContain('SENTINEL')
+    expect(slave.shownHostIds).toEqual(CURRENT)
+    expect(slave.shownHostIds).not.toBe(useShownHostsStore.getState().ids) // a fresh array
+  })
+
+  it("createSettingsCopySlave with a slave on screen: that slave's list; the screen does not move", () => {
+    slaveOnScreen()
+    useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    const before = threeStores().slice(LOCAL_FIELDS.length)
+    expect(created(createSettingsCopySlave('Settings')).shownHostIds).toEqual(SLAVE_LIST)
+    threeStores().slice(LOCAL_FIELDS.length).forEach((v, i) => expect(v).toBe(before[i]))
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: 1 })
+  })
+
+  it('createSettingsCopySlave while unsettled: [] — the current list fails closed, as saveScreenAsSlave', () => {
+    useTabStore.setState({ worldEpoch: 9 })
+    expect(created(createSettingsCopySlave('Settings')).shownHostIds).toEqual([])
+  })
+
+  it('no name, icon or colour is copied by any of the three; a blank name is refused', () => {
+    const local = useLocalProfilesStore.getState()
+    local.setProfileAppearance(MASTER_PROFILE_ID, { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
+    for (const make of [saveScreenAsSlave, createSettingsCopySlave, createBlankSlave]) {
+      const slave = created(make('Plain'))
+      expect(slave.name).toBe('Plain')
+      expect(slave).not.toHaveProperty('icon')
+      expect(slave).not.toHaveProperty('color')
+      expect(make('  ')).toEqual({ ok: false, reason: 'bad-name' })
+    }
+  })
+
+  it('saveScreenAsSlave ("Duplicate all"): the workspaces and tabs, tmux bindings verbatim, AND the current list', () => {
+    const slave = created(saveScreenAsSlave('All'))
+    expect(slave.shownHostIds).toEqual(CURRENT)
+    const w = slave.world
+    if (w === null) throw new Error('not parked')
+    expect(shapeOf(w)).toEqual(shapeOf(masterWorld()))
+    const bindings = (world: ParkedWorld) => Object.values(world.tabs).flatMap((t) => JSON.stringify(t.layout).match(/"sessionCode":"[^"]*","mode":"[^"]*","cachedName":"[^"]*","tmuxInstance":"[^"]*"/g) ?? [])
+    expect(bindings(w).sort()).toEqual(bindings(masterWorld()).sort())
   })
 })
 

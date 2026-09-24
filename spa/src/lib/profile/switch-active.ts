@@ -460,18 +460,34 @@ export function saveScreenAsSlave(name: string): CopyResult {
 }
 
 /**
- * A new parked slave whose world is ONE empty workspace — no tab, nothing
- * active in it — named as a workspace the user adds is (`nextWorkspaceName`,
- * App.tsx's `handleAddWorkspace`; the world has no other name to avoid). The
- * screen does not move. Hosts and settings are the device's, as for every
- * slave: a world holds only workspaces and tabs.
+ * "New blank workbench" (per-workbench plan §0.3): a new parked slave whose world is ONE empty workspace — no tab,
+ * nothing active in it — named as a workspace the user adds is (`nextWorkspaceName`, App.tsx's
+ * `handleAddWorkspace`; the world has no other name to avoid), and whose shown-hosts list is EMPTY: every host
+ * hidden, the user turns hosts on in Settings. The screen does not move. Host looks and every other setting are the
+ * master's, as for every slave; the list is the slave's own.
  */
 export function createBlankSlave(name: string): CopyResult {
+  return addEmptyWorldSlave(name, [])
+}
+
+/**
+ * "Duplicate settings only" (per-workbench plan §0.2): the blank world of `createBlankSlave` — one empty workspace,
+ * no tab — with a copy of the CURRENT shown-hosts list (`currentShownIdsNow`: the workbench on screen's). While
+ * nobody can say whose list applies that list is `[]`, and so is the copy's — the same answer `saveScreenAsSlave`
+ * ("Duplicate all") gives, and for the same reason: a copy files nothing under an existing label, so it is never
+ * refused for an unsettled world; hiding closes no tab, and the user turns hosts back on. The screen does not move.
+ */
+export function createSettingsCopySlave(name: string): CopyResult {
+  return addEmptyWorldSlave(name, currentShownIdsNow())
+}
+
+/** One empty workspace as a new parked slave, with `shownHostIds` (copied: `addSlave` sanitises into a new array). */
+function addEmptyWorldSlave(name: string, shownHostIds: readonly string[]): CopyResult {
   if (normalizeLocalProfileName(name) === null) return { ok: false, reason: 'bad-name' } // before anything is built
   const old = captureLocal()
   try {
     const workspace: Workspace = { ...createWorkspace(nextWorkspaceName([])), id: freshId(idsInUse()) }
-    return useLocalProfilesStore.getState().addSlave(name, { workspaces: [workspace], tabs: {}, activeWorkspaceId: workspace.id, activeTabId: null })
+    return useLocalProfilesStore.getState().addSlave(name, { workspaces: [workspace], tabs: {}, activeWorkspaceId: workspace.id, activeTabId: null }, shownHostIds)
   } catch (err) {
     restoreLocal(old)
     return writeFailed(err)
