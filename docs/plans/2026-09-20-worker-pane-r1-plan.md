@@ -813,8 +813,10 @@ defect, and R1's whole claim is "one folding rule for every block type".
   with its own result`** (the #7 guard at the render level: two blocks, two
   distinct bodies, and no leftover standalone result); **`renders every
   result exactly once`** over a list mixing paired, orphan and duplicate
-  cases. Update
-  `spa/src/components/PartialMessageGroup.test.tsx` for the new child.
+  cases. Update the partial group's tests for the new child — they live in
+  `ConversationMessages.test.tsx`'s `partial group (R1)` describe (the `R1:`
+  cases), **not** in a `PartialMessageGroup.test.tsx`: that file has never
+  existed.
 - New locale key in **both** `src/locales/en.json` and `zh-TW.json`:
   `room.op.show_input` (`"input"` / `"輸入"`).
 
@@ -1042,8 +1044,10 @@ export interface RoomTurnGroupProps {
   `ConversationMessages.test.tsx`, `MessageBubble.tsx`,
   `MessageBubble.test.tsx`, `ThinkingBlock.tsx`, `ThinkingBlock.test.tsx`
   (the last two live on as `room/RoomProse.tsx`, `room/RoomThinking.tsx`).
-- `spa/src/components/PartialMessageGroup.test.tsx` gains the partial
-  regression guards the rename would otherwise drop: `renders a streaming
+- `spa/src/components/PartialMessageGroup.test.tsx` is **created** here (the
+  partial group has never had a test file of its own) and takes over the
+  partial regression guards, which today live in `ConversationMessages.test.tsx`'s
+  `partial group (R1)` describe and would otherwise go with that file: `renders a streaming
   text block with the cursor`; `renders a streaming thinking block with the
   cursor`; `renders blocks in ascending index order`; `renders nothing for an
   invisible block`. Run `grep -rn "MessageBubble\|ThinkingBlock" src` after
