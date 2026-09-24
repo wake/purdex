@@ -12,6 +12,7 @@ import type { ParkedWorld } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
+import { useHostLookStore } from '../stores/useHostLookStore'
 import { useNewTabBootstrap } from '../hooks/useNewTabBootstrap'
 import { clearNewTabRegistry, registerNewTabProviderSource } from './new-tab-registry'
 import { createHostSessionProviderSource } from './session-new-tab-providers'
@@ -102,6 +103,7 @@ beforeEach(() => {
   useHostStore.setState({ hosts: { [M]: host(M, { daemonId: MLAB }) }, hostOrder: [M], activeHostId: M, runtime: {} })
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
   useHostSettingsStore.setState({ hosts: {} })
+  useHostLookStore.setState({ looks: {} })
 })
 
 afterEach(() => {
@@ -118,10 +120,16 @@ describe('(a) the pass leaves every section hash exactly as it was — nothing i
   ])('%s', async (_label, place) => {
     place()
     seedSettings()
+    // H2c-1's looks are keyed by wire id in the store itself: the pass leaves them alone, and the settings section
+    // that carries them hashes as before
+    useHostLookStore.setState({ looks: { [W]: { name: 'air26' }, [M]: { name: 'mlab' } } })
     addX() // the host arrives BEFORE the "before" snapshot: `hosts` moves because of the add, never the pass
+    const looks = useHostLookStore.getState().looks
     const before = await hashes()
+    expect((buildSectionPayload('settings')!.payload as SettingsPayload)['purdex-host-looks']).toEqual({ looks })
     expect(runHostReresolve()).toBe('done')
     expect(hostIdsEverywhere()).not.toContain(W) // every ref moved, on screen and parked
+    expect(useHostLookStore.getState().looks).toBe(looks)
     expect(await hashes()).toEqual(before)
   })
 })
