@@ -35,6 +35,7 @@ import { useRouteSync } from './useRouteSync'
 import { useTabStore } from '../stores/useTabStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useWorkspaceStore } from '../features/workspace'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { clearModuleRegistry, registerModule } from '../lib/module-registry'
@@ -260,6 +261,8 @@ describe('useRouteSync cold start: deep link vs persisted active tab (#1326)', (
     dispatchSettingsContributions([])
     useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
     useUISettingsStore.setState({ keepAliveCount: 0, keepAlivePinned: false })
+    // The /execution/h1/… deep link needs h1 shown in the workbench (host ownership H2d-3).
+    useShownHostsStore.setState({ ids: ['h1'] })
     seed() // persisted: global Settings is the active tab
   })
 
