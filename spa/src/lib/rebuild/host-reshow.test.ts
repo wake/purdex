@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { MASTER_PROFILE_ID, useLocalProfilesStore, type ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { STORAGE_KEYS } from '../storage/keys'
@@ -67,9 +69,20 @@ beforeEach(() => {
     activeHostId: M,
     runtime: {},
   })
-  useShownHostsStore.setState({ ids: [M] })
+  useShownHostsStore.setState({ ids: [M], relabelStamp: 0 })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
+  masterSettled()
 })
+
+const EMPTY: ParkedWorld = { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null }
+const S = 'slave1'
+
+/** The master on screen, settled; `S` parked with `list`. */
+function masterSettled(list: string[] = []): void {
+  useLocalProfilesStore.setState({ slaves: { [S]: { id: S, name: 'S', createdAt: 1, shownHostIds: list, world: EMPTY } }, slaveOrder: [S], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, relabelCount: 0 })
+  useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+  useWorkspaceStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+}
 
 afterEach(() => {
   for (const stop of stops) stop()
@@ -78,6 +91,9 @@ afterEach(() => {
   __resetHostReshowForTest()
   __resetRefreshForTests()
   useHostStore.getState().reset()
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, relabelCount: 0 })
+  useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+  useWorkspaceStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
 })
 
 describe('startHostReshowRecovery — one recovery per hidden → shown transition', () => {
@@ -174,6 +190,104 @@ describe('startHostReshowRecovery — one recovery per hidden → shown transiti
     setHostShown(X, true)
     setHostShown(X, false)
     expect(useTabStore.getState().tabs).toBe(tabs)
+  })
+})
+
+// Per-workbench shown hosts (2026-09-25 plan, A6): the list judged is the CURRENT one — the workbench on screen's.
+describe('startHostReshowRecovery — per workbench (A6)', () => {
+  /** `S` on screen, in the order a cross-window switch may arrive in: the pointer, then the tags. */
+  function switchToSlave(): void {
+    useLocalProfilesStore.setState({ slaves: { [S]: { ...useLocalProfilesStore.getState().slaves[S], world: null } }, activeProfileId: S, parkedMaster: EMPTY, worldEpoch: 1 })
+    useTabStore.setState({ worldId: S, worldEpoch: 1 })
+    useWorkspaceStore.setState({ worldId: S, worldEpoch: 1 })
+  }
+
+  it("a world switch that turns X from hidden to shown recovers X — once, although the stores arrive one by one", () => {
+    masterSettled([M, X_WIRE])
+    start()
+    switchToSlave()
+    expect(calls()).toEqual([X])
+  })
+
+  it('a host shown in both workbenches: a switch is no transition (the unsettled moments in between do not count)', () => {
+    useShownHostsStore.setState({ ids: [M, X_WIRE] })
+    masterSettled([M, X_WIRE])
+    start()
+    switchToSlave()
+    expect(recover).not.toHaveBeenCalled()
+  })
+
+  it('shown → hidden by a switch calls nothing; two local rows of one daemon get one call each', () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [X2]: host(X2, { daemonId: DAEMON_X, order: 3 }) }, hostOrder: [M, X2, X, Y] }))
+    useShownHostsStore.setState({ ids: [M, X_WIRE] })
+    masterSettled([M])
+    start()
+    switchToSlave()
+    expect(recover).not.toHaveBeenCalled()
+    useLocalProfilesStore.getState().setSlaveShownHosts(S, (ids) => [...ids, X_WIRE])
+    expect(calls().sort()).toEqual([X, X2].sort())
+  })
+
+  it("showing X in the slave on screen (its own list) recovers X; the master's store is untouched", () => {
+    masterSettled([M])
+    switchToSlave()
+    start()
+    const master = useShownHostsStore.getState()
+    expect(setHostShown(X, true)).toBe(true)
+    expect(calls()).toEqual([X])
+    expect(useShownHostsStore.getState()).toBe(master)
+  })
+
+  it('a write to a PARKED slave\'s list is no transition on screen', () => {
+    start()
+    useLocalProfilesStore.getState().setSlaveShownHosts(S, () => [M, X_WIRE])
+    expect(recover).not.toHaveBeenCalled()
+  })
+
+  // The gate: the baseline is taken once FOUR stores have hydrated — the host store (identity resolution: which local
+  // row a d1_ id means), the shown store, the local profiles and the tab store (whose list, and is it settled). Before
+  // hydration each holds a stale value; every order of their arrival must add no call; later transitions count.
+  describe('the hydration gate — every order of the four stores', () => {
+    type Gated = { hasHydrated: () => boolean; onFinishHydration: (cb: (s: never) => void) => () => void }
+    const GATED = { host: useHostStore, shown: useShownHostsStore, local: useLocalProfilesStore, tab: useTabStore } as const
+    type Key = keyof typeof GATED
+    const permutations = (keys: Key[]): Key[][] => (keys.length <= 1 ? [keys] : keys.flatMap((k) => permutations(keys.filter((x) => x !== k)).map((rest) => [k, ...rest])))
+
+    /** What each store holds before (stale) and after (stored) its hydration. */
+    const land: Record<Key, () => void> = {
+      host: () => useHostStore.setState((s) => ({ hosts: { ...s.hosts, [X]: host(X, { daemonId: DAEMON_X }) } })), // X's daemon learned from storage
+      shown: () => useShownHostsStore.setState({ ids: [M, X_WIRE] }),
+      local: () => useLocalProfilesStore.setState({ relabelCount: 0 }),
+      tab: () => useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 }),
+    }
+    const stale = () => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [X]: host(X) } })) // no daemonId in memory yet
+      useShownHostsStore.setState({ ids: [M] })
+    }
+
+    it.each(permutations(['host', 'shown', 'local', 'tab']).map((order) => [order.join(' → '), order] as const))('%s: no call; a later show counts', (_label, order) => {
+      const hydrated: Record<Key, boolean> = { host: false, shown: false, local: false, tab: false }
+      const finish: Partial<Record<Key, () => void>> = {}
+      for (const key of Object.keys(GATED) as Key[]) {
+        const persist = (GATED[key] as unknown as { persist: Gated }).persist
+        vi.spyOn(persist, 'hasHydrated').mockImplementation(() => hydrated[key])
+        vi.spyOn(persist, 'onFinishHydration').mockImplementation((cb) => {
+          finish[key] = () => cb(undefined as never)
+          return () => { delete finish[key] }
+        })
+      }
+      stale()
+      start()
+      for (const key of order) {
+        land[key]()
+        hydrated[key] = true
+        finish[key]?.()
+      }
+      expect(recover).not.toHaveBeenCalled()
+      setHostShown(X, false)
+      setHostShown(X, true)
+      expect(calls()).toEqual([X])
+    })
   })
 })
 
