@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { CaretUp, ArrowsInLineHorizontal, ArrowsOutLineHorizontal } from '@phosphor-icons/react'
 import { useClickOutside } from '../../hooks/useClickOutside'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostLook, type HostLook } from '../../lib/host-look'
 import type { FileSource } from '../../types/fs'
 import type { EditorEol, EditorEncoding } from '../../stores/useEditorStore'
 import type { ContentWidthOption } from '../../stores/useEditorSettingsStore'
@@ -43,14 +43,15 @@ const LANGUAGE_OPTIONS = [
   { value: 'shell', label: 'Shell' },
 ]
 
-function sourceLabel(source: FileSource, hosts: Record<string, { name: string }>): string {
+/** `look`: the daemon host's look (read through the host-look selector, never off `HostConfig`). */
+function sourceLabel(source: FileSource, look: HostLook): string {
   switch (source.type) {
     case 'inapp':
       return 'Purdex'
     case 'local':
       return 'Local'
     case 'daemon':
-      return hosts[source.hostId]?.name ?? 'Unknown'
+      return look.name ?? 'Unknown'
   }
 }
 
@@ -63,7 +64,7 @@ export function EditorStatusBar({ source, line, column, language, eol, encoding,
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
   const modeMenuRef = useRef<HTMLDivElement>(null)
   const languageMenuRef = useRef<HTMLDivElement>(null)
-  const hosts = useHostStore((s) => s.hosts)
+  const daemonLook = useHostLook(source.type === 'daemon' ? source.hostId : null)
   const closeModeMenu = useCallback(() => setModeMenuOpen(false), [])
   const closeLanguageMenu = useCallback(() => setLanguageMenuOpen(false), [])
   useClickOutside(modeMenuRef, closeModeMenu)
@@ -82,7 +83,7 @@ export function EditorStatusBar({ source, line, column, language, eol, encoding,
   }, [modeMenuOpen, languageMenuOpen, closeLanguageMenu, closeModeMenu])
 
   const currentModeLabel = editorMode === 'raw' ? 'Source' : 'Live Mode'
-  const currentSource = sourceLabel(source, hosts)
+  const currentSource = sourceLabel(source, daemonLook)
   const currentLanguageLabel = languageLabel(language)
   const canUseLiveMode = isMarkdown || language === 'markdown'
 

@@ -13,6 +13,7 @@ import {
   type MonitorSnapshot,
 } from '../lib/host-api'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
+import { useHostLook } from '../lib/host-look'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
@@ -52,6 +53,7 @@ export function MemoryMonitorPage() {
   const activeHostId = useHostStore((s) => s.activeHostId)
   const hosts = useHostStore((s) => s.hosts)
   const host = activeHostId ? hosts[activeHostId] : undefined
+  const hostLook = useHostLook(activeHostId)
   const activeHostKey = host ? snapshotHostTargetKey(host) : ''
   const tabs = useTabStore((s) => s.tabs)
   const tabOrder = useTabStore((s) => s.tabOrder)
@@ -280,7 +282,7 @@ export function MemoryMonitorPage() {
     <div className="flex-1 overflow-y-auto bg-bg-base">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 p-5">
         <header className="flex flex-col gap-1 border-b border-border-subtle pb-4">
-          <p className="text-xs uppercase tracking-[0.28em] text-text-muted">{host.name}</p>
+          <p className="text-xs uppercase tracking-[0.28em] text-text-muted">{hostLook.name}</p>
           <h2 className="text-2xl font-semibold text-text-primary">{t('performance_monitor.title')}</h2>
           <p className="text-sm text-text-muted">{t('performance_monitor.subtitle')}</p>
         </header>

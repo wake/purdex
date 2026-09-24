@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Circle, Spinner } from '@phosphor-icons/react'
 import type { ViewProps } from '../../lib/module-registry'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostLook } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useNexHostStore, type NexHostPhase } from '../../stores/useNexHostStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -37,7 +37,7 @@ function useNowTicker(): number {
 export function ExecutionsView({ hostId }: ViewProps) {
   const id = hostId ?? ''
   const t = useI18nStore((s) => s.t)
-  const hostName = useHostStore((s) => s.hosts[id]?.name)
+  const hostName = useHostLook(id).name
   const entry = useNexHostStore((s) => s.byHost[id])
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const { items, phase, error, refetch } = useHostExecutions(id, { enabled: id !== '' })

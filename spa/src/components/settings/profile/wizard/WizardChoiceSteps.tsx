@@ -4,6 +4,7 @@
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../../stores/useI18nStore'
 import { selectDaemonIdMismatch, useHostStore } from '../../../../stores/useHostStore'
+import { hostLabel, hostLookOf } from '../../../../lib/host-look'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../../../stores/useLocalProfilesStore'
 import type { SyncDirection } from '../../../../stores/useProfileStore'
 import type { UnsettledReason } from '../../../../lib/profile/master-world'
@@ -69,9 +70,10 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
           {hostId === null && <option value="">{t(anyConnected ? 'settings.profile.wizard.sot.host_choose' : 'settings.profile.wizard.sot.host_placeholder')}</option>}
           {listed.map((id) => {
             const connected = runtime[id]?.status === 'connected'
+            const name = hostLabel(id, hostLookOf(id, hosts))
             return (
               <option key={id} value={id} disabled={!connected} data-testid={`profile-wizard-host-option-${id}`}>
-                {connected ? hosts[id].name : t('settings.profile.wizard.sot.host_offline', { name: hosts[id].name })}
+                {connected ? name : t('settings.profile.wizard.sot.host_offline', { name })}
               </option>
             )
           })}
@@ -285,7 +287,7 @@ export function DirectionStep({ profileName, pullUnavailable, direction, onDirec
   // Hosts whose daemon is not the one they are recorded as: not in the way of starting, but the sync will pause
   // on them (start.ts, `host-identity-mismatch`) — said here, before it does.
   const mismatched = hostOrder.filter((id) => hosts[id] !== undefined && selectDaemonIdMismatch({ hosts, runtime }, id) !== undefined)
-  const hostName = (id: string): string => hosts[id]?.name ?? id
+  const hostName = (id: string): string => hostLabel(id, hostLookOf(id, hosts))
 
   return (
     <div className="mt-3 text-xs">
