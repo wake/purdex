@@ -187,19 +187,19 @@ describe('the wizard, through its controls, against a daemon', () => {
     expect(JSON.stringify([...daemon.rows.values()].map((r) => r.payload))).not.toContain('SENTINEL-B')
   })
 
-  // Host ownership H3b (spec §5.3, "the wizard's attach"): the WIZARD's own requests never name `hosts` — its door,
-  // its ask before the attach, nothing of it reads the SOT's host list any more. Scoped to what the wizard sends
-  // up to the attach: until H3a-2 retires `hosts` from the sync loop, the executor that the attach starts still
-  // pulls / pushes it (that half — "the whole run names no `hosts`" and "a pull leaves every local host" — is
-  // H3a-2's hosts-retired.integration.test.ts).
-  it.each(['push', 'pull'] as const)('THE WIZARD ITSELF NEVER NAMES `hosts` — %s: up to the attach, no GET, PUT or DELETE of it, although the SOT holds one', async (direction) => {
+  // Host ownership H3b + H3a-2 (spec §5.3, "the wizard's attach"): a whole wizard run — its door, its ask before the
+  // attach, AND the sync the attach starts, through its first reconciliation — never names `hosts`: no GET, PUT or
+  // DELETE of it. The legacy row an older client left on the SOT stays byte for byte.
+  it.each(['push', 'pull'] as const)('THE WHOLE RUN NEVER NAMES `hosts` — %s: the wizard and the sync it starts; the legacy row untouched', async (direction) => {
     exists = true
     useHostStore.setState({ hosts: { [M]: { ...useHostStore.getState().hosts[M], daemonId: 'mlab:278cbm' } }, runtime: { [M]: { status: 'connected', daemonIdVerified: { endpoint: '10.0.0.1:7860', daemonId: 'mlab:278cbm' } } } })
     expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
     await settle()
     expect(await detachMaster()).toEqual({ ok: true })
     // the legacy `hosts` row an older client wrote (an H3 client never writes one: host ownership H3a-2)
-    daemon.rows.set('hosts', { rev: 1, hash: 'a'.repeat(64), payload: { hosts: { [M]: { id: M, name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: [M] }, fingerprint: 'fp-hosts', ordinal: 1, writer: 'c_oooooooooooo' })
+    const legacy = { hosts: { [M]: { id: M, name: 'mlab', ip: '10.0.0.1', port: 7860, token: 'legacy-tok', order: 0 } }, hostOrder: [M] }
+    daemon.rows.set('hosts', { rev: 1, hash: 'a'.repeat(64), payload: legacy, fingerprint: 'fp-hosts', ordinal: 1, writer: 'c_oooooooooooo' })
+    const rowBefore = JSON.stringify(daemon.rows.get('hosts'))
     vi.clearAllMocks()
     api.listProfiles.mockImplementation(async () => daemon.list())
     api.getSection.mockImplementation(async (_h, _p, key) => daemon.get(key))
@@ -222,11 +222,16 @@ describe('the wizard, through its controls, against a daemon', () => {
     await click('profile-wizard-next')
     await click('profile-wizard-start')
     await settle()
+    await settle()
 
     expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+    expect(selectMaster(useProfileStore.getState())).toEqual({ hostId: M, profileId: PROFILE })
+    expect(useProfileStore.getState().pendingDirection).toBeNull() // the first reconciliation has run to its end
     expect(beforeAttach).not.toBeNull()
-    expect(beforeAttach!.filter((c) => c.endsWith(' hosts'))).toEqual([])
-    expect(api.listProfiles).toHaveBeenCalled() // the door and the ask before the attach did ask the host
+    expect(beforeAttach!.filter((c) => c.endsWith(' hosts'))).toEqual([]) // the wizard's own requests
+    expect(named().filter((c) => c.endsWith(' hosts'))).toEqual([]) // and the sync's, after the attach
+    expect(api.getSection.mock.calls.length + api.putSection.mock.calls.length).toBeGreaterThan(0) // the sync did talk to the host
+    expect(JSON.stringify(daemon.rows.get('hosts'))).toBe(rowBefore)
   })
 
   it('REVIEW F1 — seen EMPTY, and another device pushes its world into it before Start: NOTHING of this device reaches the host; the user is sent back to choose', async () => {
