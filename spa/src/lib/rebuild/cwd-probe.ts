@@ -21,6 +21,7 @@ import { generationMatchesLegacy } from './binding'
 import { useTabStore } from '../../stores/useTabStore'
 import { scanPaneTree } from '../pane-tree'
 import { canAttachTerminal } from './attach-gate'
+import { isRefShownNow } from '../shown-hosts'
 
 /** One probe per `(hostId, sessionCode, tmuxInstance)` binding at a time. */
 const inFlight = new Set<string>()
@@ -126,6 +127,8 @@ export function probeSessionCwd(hostId: string, sessionCode: string, tmuxInstanc
 
 /** Probe every distinct binding on `hostId` whose record still has no cwd. */
 export function probeMissingCwds(hostId: string): void {
+  // A host hidden in this workbench (host ownership H2d-4, §0.21): its panes are gated and not probed.
+  if (!isRefShownNow(hostId)) return
   const bindings = new Map<string, { sessionCode: string; tmuxInstance: string }>()
   for (const tab of Object.values(useTabStore.getState().tabs)) {
     scanPaneTree(tab.layout, (pane) => {

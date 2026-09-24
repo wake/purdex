@@ -10,6 +10,8 @@ import { useNotificationSettingsStore } from '../stores/useNotificationSettingsS
 import { useSessionStore } from '../stores/useSessionStore'
 import { createTab } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { getPrimaryPane } from '../lib/pane-tree'
 
 const defaultSettings: NotificationSettings = {
   enabled: true, events: {}, notifyWithoutTab: false, reopenTabOnClick: false,
@@ -194,6 +196,7 @@ describe('useNotificationDispatcher electron click listener', () => {
     useNotificationSettingsStore.setState({ agents: {} })
     useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
     useHostStore.setState({ hostOrder: ['host-a'] })
+    useShownHostsStore.setState({ ids: ['host-a'] }) // predates shown hosts (H2d-3): the host is shown
     Object.defineProperty(window, 'electronAPI', {
       value: {
         onNotificationClicked: (cb: typeof clickHandler) => { clickHandler = cb; return () => { clickHandler = null } },
@@ -244,6 +247,7 @@ describe('handleNotificationClick workspace switching', () => {
     useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
     useNotificationSettingsStore.setState({ agents: {} })
     useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    useShownHostsStore.setState({ ids: ['host-a', 'host-b'] }) // predates shown hosts (H2d-3): both shown
     // Mock window.electronAPI as undefined (not in Electron in tests)
     Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
   })
@@ -381,6 +385,87 @@ describe('handleNotificationClick workspace switching', () => {
     expect(tabId).toBeTruthy()
     expect(wsState.workspaces.filter((ws) => ws.tabs.includes(tabId)).map((ws) => ws.id)).toEqual([first.id])
     expect(wsState.activeWorkspaceId).toBe(first.id)
+  })
+})
+
+// Host ownership H2d-3 T3 — a notification of a host hidden in this workbench still fires; its click lands on the
+// Hosts page for that host: no tab created or focused, still marked read.
+describe('notifications of a hidden host (H2d-3)', () => {
+  const HOST = 'host-h'
+  const OTHER = 'host-o'
+  const CODE = 'ses001'
+  const ck = `${HOST}:${CODE}`
+  const kinds = () => Object.values(useTabStore.getState().tabs).map((t) => getPrimaryPane(t.layout).content.kind)
+
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+    useNotificationSettingsStore.setState({ agents: {} })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    useHostStore.setState({
+      hosts: {
+        [HOST]: { id: HOST, name: 'Hidden', ip: '1.1.1.1', port: 7860, order: 0 },
+        [OTHER]: { id: OTHER, name: 'Other', ip: '2.2.2.2', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST, OTHER],
+      activeHostId: OTHER,
+    })
+    useShownHostsStore.setState({ ids: [OTHER] }) // HOST hidden
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  it('is still dispatched (not filtered)', () => {
+    const showNotification = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+    localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [ck]: 1 }))
+    useNotificationSettingsStore.getState().setNotifyWithoutTab('cc', true)
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    useAgentStore.setState({
+      lastEvents: { [ck]: { agent_type: 'cc', status: 'waiting', raw_event_name: 'PermissionRequest', broadcast_ts: 2, detail: { tool_name: 'Bash' } } },
+    })
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    expect(showNotification.mock.calls[0][0].action).toEqual({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    unmount()
+  })
+
+  it('its click opens the Hosts page on that host and creates no tab (reopenTabOnClick on)', () => {
+    useNotificationSettingsStore.getState().setReopenTabOnClick('', true)
+    useAgentStore.setState({ unread: { [ck]: true } })
+    handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    expect(kinds()).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe(HOST)
+    expect(useAgentStore.getState().unread[ck]).toBeUndefined()
+  })
+
+  it('its click does NOT focus an existing tab of that session', () => {
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST, sessionCode: CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.setState({ activeTabId: null })
+    useAgentStore.setState({ unread: { [ck]: true } })
+    handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    const { activeTabId, tabs } = useTabStore.getState()
+    expect(activeTabId).not.toBe(tab.id)
+    expect(getPrimaryPane(tabs[activeTabId!].layout).content.kind).toBe('hosts')
+    expect(useHostStore.getState().activeHostId).toBe(HOST)
+    expect(useAgentStore.getState().unread[ck]).toBeUndefined()
+  })
+
+  it('a shown host: the click focuses its tab as today', () => {
+    useShownHostsStore.setState({ ids: [OTHER, HOST] })
+    const tab = createTab({ kind: 'tmux-session', hostId: HOST, sessionCode: CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.setState({ activeTabId: null })
+    handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+    expect(kinds()).toEqual(['tmux-session'])
+    expect(useHostStore.getState().activeHostId).toBe(OTHER)
   })
 })
 

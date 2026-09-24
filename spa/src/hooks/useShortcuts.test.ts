@@ -12,7 +12,10 @@ import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { UNSORTED_WORKSPACE_ID } from '../features/workspace/store'
 import { useHistoryStore } from '../stores/useHistoryStore'
-import { createTab } from '../types/tab'
+import { createTab, type PaneContent, type Tab } from '../types/tab'
+import { getPrimaryPane } from '../lib/pane-tree'
+import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useShortcuts } from './useShortcuts'
 import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../stores/useProfileSwitcherStore'
@@ -427,6 +430,78 @@ describe('useShortcuts', () => {
       const wsAState = useWorkspaceStore.getState().workspaces.find((w) => w.id === wsAId)
       expect(wsBState?.tabs).toContain(closedTab.id)
       expect(wsAState?.tabs).not.toContain(closedTab.id)
+    })
+
+    // Host ownership H2d-3 (review fix): reopening a closed tab opens its hosts — any host-bearing pane on a host
+    // hidden in this workbench → the Hosts page on that host; nothing reopened or focused, and the record is NOT
+    // consumed, so it reopens once the host is shown again.
+    describe('a hidden host (H2d-3)', () => {
+      const tmux = (hostId: string): PaneContent => ({
+        kind: 'tmux-session', hostId, sessionCode: `c-${hostId}`, mode: 'terminal', cachedName: hostId, tmuxInstance: 'default',
+      })
+
+      beforeEach(() => {
+        useHostStore.setState({
+          hosts: {
+            h1: { id: 'h1', name: 'mlab', ip: '1', port: 7860, order: 0 },
+            h2: { id: 'h2', name: 'air', ip: '2', port: 7860, order: 1 },
+          },
+          hostOrder: ['h1', 'h2'],
+          activeHostId: 'h1',
+        })
+      })
+
+      function closeSplit(): Tab {
+        // A split tab: h1 | h2.
+        const tab = createTab(tmux('h1'))
+        useTabStore.getState().addTab(tab)
+        useTabStore.getState().splitPane(tab.id, getPrimaryPane(tab.layout).id, 'h', tmux('h2'))
+        const closed = useTabStore.getState().tabs[tab.id]
+        useHistoryStore.getState().recordClose(closed)
+        useTabStore.getState().closeTab(tab.id)
+        return closed
+      }
+
+      it('one pane on a hidden host → not reopened, the Hosts page on that host, the record not consumed', () => {
+        useShownHostsStore.setState({ ids: ['h1'] })
+        const { fire } = mockElectronAPI()
+        const closed = closeSplit()
+        renderHook(() => useShortcuts())
+
+        fire('reopen-closed-tab')
+
+        expect(useTabStore.getState().tabs[closed.id]).toBeUndefined()
+        const active = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
+        expect(getPrimaryPane(active.layout).content.kind).toBe('hosts')
+        expect(useHostStore.getState().activeHostId).toBe('h2')
+        expect(useHistoryStore.getState().closedTabs.map((r) => r.reopenedAt)).toEqual([undefined])
+      })
+
+      it('reopens once the host is shown again (the record was kept)', () => {
+        useShownHostsStore.setState({ ids: ['h1'] })
+        const { fire } = mockElectronAPI()
+        const closed = closeSplit()
+        renderHook(() => useShortcuts())
+
+        fire('reopen-closed-tab')
+        useShownHostsStore.setState({ ids: ['h1', 'h2'] })
+        fire('reopen-closed-tab')
+
+        expect(useTabStore.getState().tabs[closed.id]).toBeDefined()
+        expect(useTabStore.getState().activeTabId).toBe(closed.id)
+      })
+
+      it('every host shown → reopens as before', () => {
+        useShownHostsStore.setState({ ids: ['h1', 'h2'] })
+        const { fire } = mockElectronAPI()
+        const closed = closeSplit()
+        renderHook(() => useShortcuts())
+
+        fire('reopen-closed-tab')
+
+        expect(useTabStore.getState().activeTabId).toBe(closed.id)
+        expect(useHistoryStore.getState().closedTabs[0].reopenedAt).toBeDefined()
+      })
     })
   })
 

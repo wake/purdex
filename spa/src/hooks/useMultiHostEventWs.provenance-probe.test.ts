@@ -13,6 +13,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { createTab, type TmuxSessionContent, type Tab } from '../types/tab'
 import { resetProvenanceProbes } from '../lib/rebuild/provenance-probe'
 import { fetchSessionProvenance, type SessionProvenance } from '../lib/host-api'
@@ -129,6 +130,7 @@ beforeEach(() => {
     replaceHost: vi.fn(),
   } as never)
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  useShownHostsStore.setState({ ids: [HOST] }) // shown in this workbench (H2d-4)
 })
 
 afterEach(() => {
@@ -264,6 +266,53 @@ describe('useMultiHostEventWs provenance on a hook broadcast', () => {
     expect(recordOf(tab.id)?.agent?.sessionId).toBe('sess-9')
     expect(recordOf(tab.id)?.unverified).toBeFalsy()
     expect(fetchSessionProvenance).not.toHaveBeenCalled()
+    view.unmount()
+  })
+})
+
+// Host ownership H2d-4 (§0.21): both provenance triggers skip the panes of a host hidden in this workbench — the guard
+// is in `provenanceBindings`, which feeds both. The `sessions` reconcile itself is host-level and unchanged: the
+// verdict (a vanished session marks its pane terminated) and the attach gate still happen.
+describe('useMultiHostEventWs provenance for a host hidden in this workbench', () => {
+  it('a sessions frame: no provenance probe, but the frame is reconciled and the attach gate opens', async () => {
+    const [live, gone] = seed({ sessionCode: 'aaa' }, { sessionCode: 'bbb' })
+    useShownHostsStore.setState({ ids: [] })
+    const view = await mountHook()
+
+    act(() => { sockets[0].emit(sessionsPayload(['aaa'])) })
+
+    expect(fetchSessionProvenance).not.toHaveBeenCalled()
+    const content = (id: string) => {
+      const l = useTabStore.getState().tabs[id].layout
+      return l.type === 'leaf' ? l.pane.content : null
+    }
+    expect(content(gone.id)).toMatchObject({ terminated: expect.any(String) })
+    expect(content(live.id)).not.toHaveProperty('terminated')
+    expect(useHostStore.getState().runtime[HOST]?.attachReady).toBe(true)
+    view.unmount()
+  })
+
+  it('a hook event: no provenance probe while hidden; shown → asked as today', async () => {
+    seed({ sessionCode: 'abc123' })
+    useShownHostsStore.setState({ ids: [] })
+    const view = await mountHook()
+    act(() => { openAttachGate(HOST) })
+
+    act(() => { sockets[0].emit(hookPayload('abc123')) })
+    expect(fetchSessionProvenance).not.toHaveBeenCalled()
+
+    useShownHostsStore.setState({ ids: [HOST] })
+    act(() => { sockets[0].emit(hookPayload('abc123')) })
+    expect(fetchSessionProvenance).toHaveBeenCalledTimes(1)
+    expect(fetchSessionProvenance).toHaveBeenCalledWith(HOST, 'abc123')
+    view.unmount()
+  })
+
+  it('a sessions frame for a shown host sweeps as today', async () => {
+    seed({ sessionCode: 'aaa' })
+    const view = await mountHook()
+    act(() => { sockets[0].emit(sessionsPayload(['aaa'])) })
+    expect(fetchSessionProvenance).toHaveBeenCalledWith(HOST, 'aaa')
     view.unmount()
   })
 })
