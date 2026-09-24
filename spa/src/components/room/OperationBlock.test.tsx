@@ -186,6 +186,17 @@ describe('OperationBlock', () => {
     expect(header.textContent).not.toContain('+5')
   })
 
+  it('the operation block itself has none', () => {
+    // Spec §3.1.1 #1 opens the container exception for the diff alone. The
+    // block around it stays frameless, so the container must land on the diff
+    // and not one level up.
+    render(<OperationBlock tool="Edit" input={{ file_path: '/x' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }} facts={diffFacts} result={ok('raw output')} />)
+    expect(screen.getByTestId('tool-diff').className).toContain('border')
+    expect(block().className).not.toContain('border')
+    expect(block().className).not.toContain('rounded')
+  })
+
   it('marks a result that held non-text content', () => {
     // The other fact the dismantled facts span carried (spec §3.1.1 #3): a
     // fold must not swallow "there was something here the transcript is not

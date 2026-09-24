@@ -87,8 +87,14 @@ export default function ToolDiffView({ diff, foldKey }: Props) {
 
   const visible = spendBudget(hunks, budget)
 
+  // Spec §3.1.1 #1: room drops the card from every operation and opens one
+  // exception — "only special blocks (diff) keep a container". A diff is a
+  // grid of its own with its own left edge (two number columns and a sign
+  // column), so it needs an edge to sit against; the rest of the block reads
+  // off the rail. Outline only: the fill is reserved for error and denied
+  // (#2), and an edit is not a failure.
   return (
-    <div data-testid="tool-diff" className="font-mono text-xs">
+    <div data-testid="tool-diff" className="font-mono text-xs rounded-lg border border-border-subtle">
       {/*
         Spec §3.1.1 #3: the stat travels with the diff, not in the header's
         right column where it used to be stacked under the duration and the
