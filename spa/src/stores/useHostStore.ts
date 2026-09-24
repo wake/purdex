@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { isValidDaemonId } from '../lib/daemon-id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
-import { wireIdOfHost } from '../lib/profile/host-identity'
+import { syncIdOfSync, wireIdOfHost } from '../lib/profile/host-identity'
 import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
 import {
   clampHostAlpha,
@@ -110,7 +110,10 @@ export interface HostInfo {
   nex?: NexInfo
 }
 
-export type TransferApplyResult = { kind: 'applied'; created: string[]; overwritten: string[] } | { kind: 'stale' }
+/** `looks`: whether step 2 (the look store, plan §0.20) was written; `'failed'` leaves the hosts added. */
+export type TransferApplyResult =
+  | { kind: 'applied'; created: string[]; overwritten: string[]; looks: 'ok' | 'failed' }
+  | { kind: 'stale' }
 
 /* ─── Store ─── */
 
@@ -140,7 +143,12 @@ interface HostState {
    * at the planned `{endpoint, token, daemonId}`, and no touched row may share an endpoint or a daemonId with another
    * row afterwards — any difference (or a throw) refuses the whole change and writes nothing (`stale`). Created rows
    * and overwritten rows learn their daemonId through `applyObservedDaemonId` with their own `{endpoint, token}`, so
-   * each ends verified. The payload's name and look are written to both (before H2c, spec §6.4.7).
+   * each ends verified. `HostConfig` gets the payload's NAME only (spec §6.4 step 7): a created row its name, an
+   * overwritten row its name / ip / port / token, its look fields untouched.
+   *
+   * Then, only when that set applied, step 2 (plan §0.20): `applyTransferLooks(transferLookEntries(change))` — the
+   * received `{ name, ...look }` goes to the look store where no entry exists. Its failure never undoes step 1: the
+   * result says `looks: 'failed'` and the caller may retry step 2 alone.
    */
   applyHostTransfer: (change: TransferChange) => TransferApplyResult
   /*
@@ -347,7 +355,7 @@ function transferPatch(
     if (!h || overwritten.includes(o.hostId)) return null
     const at = requestAtOf(h)
     if (at.endpoint !== o.expect.endpoint || at.token !== o.expect.token || h.daemonId !== o.expect.daemonId) return null
-    const next = sanitizeHostConfig({ ...h, ...o.look, name: o.name, ip: o.ip, port: o.port, token: o.token })
+    const next = sanitizeHostConfig({ ...h, name: o.name, ip: o.ip, port: o.port, token: o.token })
     hosts[o.hostId] = next
     overwritten.push(o.hostId)
     const nextAt = requestAtOf(next)
@@ -364,7 +372,7 @@ function transferPatch(
   const created: string[] = []
   for (const c of change.create) {
     const id = generateId()
-    const host = sanitizeHostConfig({ id, name: c.name, ip: c.ip, port: c.port, token: c.token, order: hostOrder.length, ...c.look })
+    const host = sanitizeHostConfig({ id, name: c.name, ip: c.ip, port: c.port, token: c.token, order: hostOrder.length })
     hosts[id] = host
     hostOrder.push(id)
     created.push(id)
@@ -412,6 +420,50 @@ export function lookKeyOf(host: HostConfig, looks: Record<string, HostLookEntry>
   const wire = wireIdOfHost(host)
   if (wire !== host.id && !Object.hasOwn(looks, wire) && Object.hasOwn(looks, host.id)) return host.id
   return wire
+}
+
+/* ─── Transfer step 2 (H2c-3, plan §0.20): the received looks ─── */
+
+/**
+ * The look entries a transfer brings: per created / overwritten row, `{ name, ...look }` (a row without a look still
+ * gives `{ name }`) under `syncIdOfSync(daemonId)` — the created row's observed id, the overwritten row's own. Every
+ * such host ends with that daemonId, so the key is its `wireIdOfHost` (what `lookKeyOf` reads). Pure.
+ *
+ * Lives here, not in `host-transfer-plan.ts`: that module imports this one at runtime, so importing it back would be
+ * a cycle.
+ */
+export function transferLookEntries(change: TransferChange): Record<string, HostLookEntry> {
+  const out: Record<string, HostLookEntry> = {}
+  const add = (daemonId: string, name: string, look: HostLookEntry | undefined) => {
+    const key = syncIdOfSync(daemonId)
+    if (!Object.hasOwn(out, key)) out[key] = { name, ...look }
+  }
+  for (const c of change.create) add(c.daemonId, c.name, c.look)
+  for (const o of change.overwrite) add(o.expect.daemonId, o.name, o.look)
+  return out
+}
+
+/**
+ * Step 2 of a transfer, alone (also the dialog's Retry): writes each entry whose key has none (skip-if-present, so
+ * it is idempotent and a look that arrived meanwhile is never overwritten). A key whose host still reads its look
+ * under its LOCAL id (`lookKeyOf`: the re-key has not moved that entry yet) is skipped too — that entry IS the
+ * workbench look, and a `d1_…` entry next to it would take its place. `'failed'` when the write throws.
+ */
+export function applyTransferLooks(entries: Record<string, HostLookEntry>): 'ok' | 'failed' {
+  try {
+    const looks = useHostLookStore.getState().looks
+    const readElsewhere = new Set<string>()
+    for (const host of Object.values(useHostStore.getState().hosts)) {
+      const wire = wireIdOfHost(host)
+      if (lookKeyOf(host, looks) !== wire) readElsewhere.add(wire)
+    }
+    const put: Record<string, HostLookEntry> = {}
+    for (const key of Object.keys(entries)) if (!readElsewhere.has(key)) put[key] = entries[key]
+    useHostLookStore.getState().putLooksIfAbsent(put)
+    return 'ok'
+  } catch {
+    return 'failed'
+  }
 }
 
 /** One look edit: the next entry, or `null` when the edit changes nothing (or is invalid) — nothing is written. */
@@ -573,19 +625,24 @@ export const useHostStore = create<HostState>()(
         set((state) => applyObservedDaemonId(state, hostId, observed, atRequest) ?? state),
 
       applyHostTransfer: (change) => {
-        let result: TransferApplyResult = { kind: 'stale' }
+        // `as`: assigned inside the updater, so the declaration must not narrow it to `null`.
+        let applied = null as { created: string[]; overwritten: string[] } | null
+        // Step 1: the host store, one set, all or nothing.
         set((state) => {
           try {
             const next = transferPatch(state, change)
             if (!next) return state
-            result = { kind: 'applied', created: next.created, overwritten: next.overwritten }
+            applied = { created: next.created, overwritten: next.overwritten }
             return next.patch
           } catch {
-            result = { kind: 'stale' }
+            applied = null
             return state
           }
         })
-        return result
+        if (applied === null) return { kind: 'stale' }
+        // Step 2: the look store — only after step 1 applied; its failure is reported, never propagated.
+        const { created, overwritten } = applied
+        return { kind: 'applied', created, overwritten, looks: applyTransferLooks(transferLookEntries(change)) }
       },
 
       setHostColor: (hostId, color) => {

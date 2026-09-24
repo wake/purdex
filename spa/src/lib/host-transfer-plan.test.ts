@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { HostConfig } from '../stores/useHostStore'
+import type { HostLookEntry } from '../stores/useHostLookStore'
 import type { TransferRow } from './host-transfer-api'
+import { hostLookOf } from './host-look'
+import { syncIdOfSync } from './profile/host-identity'
 import { commitSet, isPickable, parseTransferRows, payloadRowsOf, planReceive, type Observation } from './host-transfer-plan'
 
 function host(id: string, over: Partial<HostConfig> = {}): HostConfig {
@@ -167,24 +170,49 @@ describe('parseTransferRows (R5)', () => {
   })
 })
 
-describe('payloadRowsOf', () => {
-  it('sends only hosts with a token; daemonId and look fields only when set', () => {
-    const rows = payloadRowsOf([
+/** The selector over `list` and `looks` — what the share dialog passes as `lookOf`. */
+const lookOfIn = (list: HostConfig[], looks: Record<string, HostLookEntry> = {}) => (id: string) => hostLookOf(id, hostsOf(...list), looks)
+
+describe('payloadRowsOf (H2c-3 T1: the workbench look is sent)', () => {
+  it('sends only hosts with a token; daemonId and look fields only when set (no entry → the HostConfig look)', () => {
+    const list = [
       host('a', { daemonId: 'd1_a', icon: 'Laptop', color: '#ff0000' }),
       host('b', { token: null }),
       host('c', { token: '' }),
       host('dd'),
-    ])
-    expect(rows).toEqual([
+    ]
+    expect(payloadRowsOf(list, lookOfIn(list))).toEqual([
       { name: 'a', ip: '10.0.0.1', port: 7860, token: 'tok-a', daemonId: 'd1_a', look: { icon: 'Laptop', color: '#ff0000' } },
       { name: 'dd', ip: '10.0.0.2', port: 7860, token: 'tok-dd' },
+    ])
+  })
+
+  it('a look entry that differs from HostConfig wins: its name and its colour / icon groups (option A: no colour back)', () => {
+    const a = host('a', { daemonId: 'mini-lab:278cbm', name: 'config-name', icon: 'Laptop', color: '#ff0000' })
+    const looks = { [syncIdOfSync('mini-lab:278cbm')]: { name: 'workbench-name', icon: 'Desktop', iconWeight: 'bold' as const } }
+    expect(payloadRowsOf([a], lookOfIn([a], looks))).toEqual([
+      { name: 'workbench-name', ip: '10.0.0.1', port: 7860, token: 'tok-a', daemonId: 'mini-lab:278cbm', look: { icon: 'Desktop', iconWeight: 'bold' } },
+    ])
+  })
+
+  it('an entry without a name sends the HostConfig name; an entry without look fields sends no look', () => {
+    const a = host('a', { color: '#ff0000' })
+    expect(payloadRowsOf([a], lookOfIn([a], { a: {} }))).toEqual([{ name: 'a', ip: '10.0.0.1', port: 7860, token: 'tok-a' }])
+  })
+
+  it('reads name and look only through lookOf, never off HostConfig', () => {
+    const a = host('a', { name: 'config-name', icon: 'Laptop' })
+    const colors = { console: { main: { color: '#00ff00', alpha: 50 } } }
+    expect(payloadRowsOf([a], () => ({ name: 'from-lookOf', colors }))).toEqual([
+      { name: 'from-lookOf', ip: '10.0.0.1', port: 7860, token: 'tok-a', look: { colors } },
     ])
   })
 })
 
 describe('share → receive round trip', () => {
   it('a host whose ip is a bracketed IPv6 survives from payloadRowsOf through parseTransferRows (PR #1397 critic)', () => {
-    const sent = payloadRowsOf([host('v6', { ip: '[::1]' }), host('v4')])
+    const list = [host('v6', { ip: '[::1]' }), host('v4')]
+    const sent = payloadRowsOf(list, lookOfIn(list))
     const received = parseTransferRows(JSON.parse(JSON.stringify(sent)))
     expect(received.dropped).toBe(0)
     expect(received.rows).toEqual(sent)

@@ -3,7 +3,7 @@
 // Nothing is written before the confirm. Replace-all is shown disabled (plan R1, issue #1395).
 import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, X } from '@phosphor-icons/react'
-import { useHostStore, type HostConfig } from '../../stores/useHostStore'
+import { applyTransferLooks, transferLookEntries, useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { fetchInfoAt } from '../../lib/host-api'
 import { hostLabel, useHostLookResolver } from '../../lib/host-look'
@@ -16,6 +16,7 @@ import {
   type Observation,
   type ReceiveMode,
   type ReceiveStatus,
+  type TransferChange,
 } from '../../lib/host-transfer-plan'
 
 interface Props {
@@ -27,7 +28,7 @@ type Phase =
   | { kind: 'redeeming' }
   | { kind: 'failed'; failure: TransferFailure; relayName: string }
   | { kind: 'review' }
-  | { kind: 'done'; added: number; updated: number }
+  | { kind: 'done'; added: number; updated: number; looks: 'ok' | 'failed'; change: TransferChange }
 
 const STATUS_KEY: Record<ReceiveStatus, string> = {
   new: 'hosts.transfer.status.new',
@@ -59,6 +60,8 @@ export function ReceiveHostsDialog({ onClose }: Props) {
   const [mode, setMode] = useState<ReceiveMode>('add-only')
   const [unticked, setUnticked] = useState<ReadonlySet<number>>(new Set())
   const [stale, setStale] = useState(false)
+  // Asked to close while the look step failed: the transfer code is spent, so leaving loses the Retry (plan §0.20).
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   // Every request of this dialog ends with it (created per mount, so StrictMode's re-mount gets a live one).
   const probes = useRef<AbortController>(new AbortController())
 
@@ -68,13 +71,24 @@ export function ReceiveHostsDialog({ onClose }: Props) {
     return () => ctl.abort()
   }, [])
 
+  const looksFailed = phase.kind === 'done' && phase.looks === 'failed'
+  // Every close entry but the explicit discard goes through here.
+  const requestClose = () => {
+    if (looksFailed) setConfirmDiscard(true)
+    else onClose()
+  }
+  const requestCloseRef = useRef(requestClose)
+  useEffect(() => {
+    requestCloseRef.current = requestClose
+  })
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') requestCloseRef.current()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [])
 
   const relay =
     connected.find((h) => h.id === relayPick) ?? connected.find((h) => h.id === activeHostId) ?? connected[0] ?? null
@@ -133,22 +147,54 @@ export function ReceiveHostsDialog({ onClose }: Props) {
       setStale(true)
       return
     }
-    setPhase({ kind: 'done', added: res.created.length, updated: res.overwritten.length })
+    setPhase({ kind: 'done', added: res.created.length, updated: res.overwritten.length, looks: res.looks, change })
+  }
+
+  // Step 2 alone (plan §0.20): skip-if-present, so a retry never overwrites a look that arrived meanwhile.
+  const handleRetryLooks = () => {
+    if (phase.kind !== 'done') return
+    if (applyTransferLooks(transferLookEntries(phase.change)) === 'ok') {
+      setPhase({ ...phase, looks: 'ok' })
+      setConfirmDiscard(false)
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="receive-hosts-title" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" aria-labelledby="receive-hosts-title" onClick={requestClose}>
       <div className="bg-surface-primary border border-border-default rounded-lg shadow-xl w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
           <h2 id="receive-hosts-title" className="text-sm font-semibold">{t('hosts.transfer.receive_title')}</h2>
-          <button onClick={onClose} aria-label={t('common.close')} className="text-text-muted hover:text-text-primary cursor-pointer">
+          <button onClick={requestClose} aria-label={t('common.close')} className="text-text-muted hover:text-text-primary cursor-pointer">
             <X size={16} />
           </button>
         </div>
 
         <div className="p-4 space-y-3">
           {phase.kind === 'done' ? (
-            <p className="text-sm text-green-400">{t('hosts.transfer.done', { added: phase.added, updated: phase.updated })}</p>
+            <>
+              <p className="text-sm text-green-400">{t('hosts.transfer.done', { added: phase.added, updated: phase.updated })}</p>
+              {phase.looks === 'failed' && (
+                <div role="alert" className="flex items-center gap-2 text-xs text-yellow-400">
+                  <span>{t('hosts.transfer.looks_failed')}</span>
+                  <button onClick={handleRetryLooks} className="text-accent cursor-pointer">
+                    {t('hosts.transfer.looks_retry')}
+                  </button>
+                </div>
+              )}
+              {looksFailed && confirmDiscard && (
+                <div role="alertdialog" aria-label={t('hosts.transfer.looks_discard_prompt')} className="space-y-2 rounded border border-border-default p-3">
+                  <p className="text-xs text-text-primary">{t('hosts.transfer.looks_discard_prompt')}</p>
+                  <div className="flex justify-end gap-2">
+                    <button onClick={onClose} className="px-4 py-2 rounded text-xs text-text-secondary hover:text-text-primary cursor-pointer">
+                      {t('hosts.transfer.looks_discard_close')}
+                    </button>
+                    <button onClick={handleRetryLooks} className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer">
+                      {t('hosts.transfer.looks_discard_retry')}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           ) : phase.kind === 'review' ? (
             <>
               {dropped > 0 && <p className="text-xs text-yellow-400">{t('hosts.transfer.dropped', { count: dropped })}</p>}
@@ -247,7 +293,7 @@ export function ReceiveHostsDialog({ onClose }: Props) {
 
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-border-subtle">
           {phase.kind === 'done' ? (
-            <button onClick={onClose} className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer">
+            <button onClick={requestClose} className="px-4 py-2 rounded text-xs bg-accent text-white cursor-pointer">
               {t('common.close')}
             </button>
           ) : (
