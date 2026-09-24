@@ -728,8 +728,12 @@ describe('OverviewSection — the show in this workbench switch (H2d-2)', () => 
     useShownHostsStore.setState({ ids: [UNKNOWN] })
     const setState = vi.spyOn(useShownHostsStore, 'setState')
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const changed = vi.fn() // catches the store's own internal `set` too, which the setState spy does not see
+    const unsubscribe = useShownHostsStore.subscribe(changed)
     render(<OverviewSection hostId={HOST_ID} />)
     await waitFor(() => expect(screen.getByText('darwin / arm64')).toBeInTheDocument())
+    unsubscribe()
+    expect(changed).not.toHaveBeenCalled()
     expect(setState).not.toHaveBeenCalled()
     expect(setItem.mock.calls.filter(([key]) => key === STORAGE_KEYS.SHOWN_HOSTS)).toEqual([])
     expect(useShownHostsStore.getState().ids).toEqual([UNKNOWN])

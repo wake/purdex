@@ -424,7 +424,11 @@ describe('HostSidebar — shown / hidden hosts (H2d-2)', () => {
     useShownHostsStore.setState({ ids: ['unknown-id'] })
     const setState = vi.spyOn(useShownHostsStore, 'setState')
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const changed = vi.fn() // catches the store's own internal `set` too, which the setState spy does not see
+    const unsubscribe = useShownHostsStore.subscribe(changed)
     render(<HostSidebar {...props()} />)
+    unsubscribe()
+    expect(changed).not.toHaveBeenCalled()
     expect(setState).not.toHaveBeenCalled()
     expect(setItem).not.toHaveBeenCalled()
     expect(useShownHostsStore.getState().ids).toEqual(['unknown-id'])
