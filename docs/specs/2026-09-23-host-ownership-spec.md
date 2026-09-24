@@ -126,7 +126,11 @@ every deletion path (Hosts page, H4 replace-all; before H3 also a `hosts` apply 
 - **One step under the operation lock** (not the world lock — plan §0.1; the Hosts page acquires it as `host-delete`,
   retrying every 250 ms for up to ~4 s, then gives up with a toast, and deletes only the host confirmed — gone,
   gone-and-back or re-pointed meanwhile → nothing deleted, a stale notice; the hosts apply runs it under its own
-  grant): capture `wireId = identity.toWire(localId) ?? localId` BEFORE removal; rewrite
+  grant): capture the host's wire id BEFORE removal — `wireIdOfHost(host)`: the sync id of its daemon
+  (`syncIdOfSync(daemonId)`) when it has a valid `daemonId`, else its local id (plan §0.7). It reads that one row
+  only, so it is the same under an identity conflict (two rows claiming one daemon), where `identity.toWire` leaves
+  both duplicates out: a deleted duplicate's references get the shared `d1_…`, which names the survivor, and resolve
+  to it once the conflict clears (with no conflict it equals `identity.toWire(localId)`); rewrite
   every reference to `localId` into `wireId` in the on-screen tab store, every parked world
   (`updateParkedWorlds`), `purdex-host-settings` keys and New Tab `sessions:` / `headless:` columns (a no-daemonId
   host: wire id = local id, nothing changes); THEN remove the host and clear this device's own per-host state
