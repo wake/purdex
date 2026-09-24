@@ -18,9 +18,21 @@ as proposed (2026-09-24) — they are now **DECIDED**.
    cascade (`withOperationLock`, `stores/useRebuildStore.ts`); the settings apply takes neither and re-reads
    `resolverSignature` after each await; the UI host deletion (`deleteHostWithUndoToast`) takes no lock at all.
    **DECIDED** — the re-resolve pass is one synchronous body that acquires the operation lock
-   (owner `host-reresolve`, `acquireOperationLock` is synchronous) and retries on refusal (§H1b T3); the host deletion
-   stays lock-free and synchronous in the UI path and runs under the hosts apply's grant in that path, as today. Neither
-   takes the world lock.
+   (owner `host-reresolve`, `acquireOperationLock` is synchronous) and retries on refusal (§H1b T3). Neither the pass
+   nor a deletion takes the world lock.
+   **Amended (PR #1413 review)** — the host deletion rewrites the tab tree, so it runs under the operation lock on
+   every path; `deleteHostCascade` itself takes none, its callers hold it:
+   - the Hosts page (`deleteHostWithUndoToast`) acquires it (owner `host-delete`) for the whole cascade. Held
+     elsewhere (e.g. a batch rebuild): retried every 250 ms, for up to ~4 s from the click; still held → nothing is
+     deleted and a toast says so (`hosts.delete_busy`). The target is fixed at the click — endpoint identity (ip, port,
+     token) and daemonId — and watched until the lock is taken: the row gone, gone and back under the same id, or
+     re-pointed meanwhile → nothing is deleted, `hosts.delete_stale` is said (never "deleted" with an Undo); a
+     rename is not another host. With the lock free the deletion is synchronous, as before;
+   - the hosts apply keeps its own grant (`withOperationLock`, owner `profile-sync`) and passes it to the cascade,
+     whose undo re-resolves under it during a rollback.
+   The cascade is one unit: any step failing puts every store it wrote back and rethrows (a failing put-back is
+   `HostDeleteRollbackIncompleteError`; the Hosts page then shows a persistent notice to reload and check the host
+   settings, any other failure a plain one).
 2. **The pass cannot rely on host-identity changes alone (spec §3.3 trigger).** The settings apply rolls back by
    `setState(old)` when its scope or the hosts move mid-apply (`applySettingsSection`, `HOSTS_MOVED`), and `old` may hold
    wire ids the pass had already resolved — and when a store write or the rollback itself fails the apply THROWS
@@ -62,9 +74,11 @@ as proposed (2026-09-24) — they are now **DECIDED**.
    conflict), so once the conflict clears the pass maps them to the survivor.
 8. **Lease on deletion (spec §3.4 "a held lease is released best-effort as today").** "Today" differs by mode: closeTabs
    releases, keep-tabs drops the local lease WITHOUT a release call (comment in `deleteHostCascade`: "the host — and
-   its auth — is gone"). Under decision 9 no tab closes. **DECIDED** — release best-effort
-   before the host row is removed (auth is still there at that moment), so other devices are not blocked until the
-   lease expires.
+   its auth — is gone"). Under decision 9 no tab closes. **DECIDED** — release best-effort, so other devices are not
+   blocked until the lease expires. **Amended (PR #1413 review)** — the release is a daemon side effect no rollback can
+   take back, so it is sent only once the deletion has COMMITTED: its endpoint and auth are pinned while the row is
+   still there (`pinnedLeaseRelease`); the Hosts page sends it when the cascade has committed, the hosts apply after
+   its whole apply committed (a rollback drops it, so a restored lease is still held at the daemon).
 9. **H1 real-device acceptance cannot use independent host lists (spec §8 H1).** Until H3 the `hosts` section still
    syncs, so a client that lacks host X gets it from the next `hosts` pull, and a client that deletes X pushes the
    removal to the other client (spec §3.4 last bullet already says so). "A and B with independent host lists" and

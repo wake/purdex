@@ -3,7 +3,8 @@ import { ArrowsClockwise, Trash, Plugs, LockSimple } from '@phosphor-icons/react
 import { requestAtOf, useHostStore, type HostInfo, type HostRuntime } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
-import { deleteHostWithUndoToast } from '../../lib/host-lifecycle'
+import { HostDeleteRollbackIncompleteError, deleteHostWithUndoToast } from '../../lib/host-lifecycle'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { connectionErrorMessage } from '../../lib/host-utils'
 import type { ConfigData } from '../../lib/host-api'
 import { Section, Field, EditableField, TokenField } from './form-fields'
@@ -38,7 +39,6 @@ export function OverviewSection({ hostId }: Props) {
   const [testResult, setTestResult] = useState<{ ok: boolean; latency?: number; error?: string } | null>(null)
   const [testing, setTesting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [closeTabs, setCloseTabs] = useState(true)
   const [colorMode, setColorMode] = useState<HostColorMode>('console')
 
   const prevStatusRef = useRef(runtime?.status)
@@ -102,7 +102,16 @@ export function OverviewSection({ hostId }: Props) {
   const handleDeleteHost = () => {
     const hostName = hostLabel(hostId, hostLookOf(hostId))
     setConfirmDelete(false)
-    deleteHostWithUndoToast(hostId, closeTabs, { deleted: t('hosts.deleted_toast', { name: hostName }), worldSkipped: t('hosts.undo_world_skipped', { name: hostName }) })
+    void deleteHostWithUndoToast(hostId, { deleted: t('hosts.deleted_toast', { name: hostName }), busy: t('hosts.delete_busy', { name: hostName }), stale: t('hosts.delete_stale', { name: hostName }) }).catch((err: unknown) => {
+      // Said, not only logged: a deletion that failed was put back (nothing changed); one whose put-back failed too
+      // may have left part of it behind — that notice stays until closed.
+      console.error('[hosts] deleting a host failed', err)
+      if (err instanceof HostDeleteRollbackIncompleteError) {
+        useUndoToast.getState().show(t('hosts.delete_failed_incomplete', { name: hostName }), undefined, undefined, { persistent: true })
+      } else {
+        useUndoToast.getState().show(t('hosts.delete_failed', { name: hostName }))
+      }
+    })
   }
 
   const statusLabel = (r?: HostRuntime) => {
@@ -222,15 +231,7 @@ export function OverviewSection({ hostId }: Props) {
         {confirmDelete && (
           <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded">
             <p className="text-xs text-red-400 mb-2">{t('hosts.confirm_delete')}</p>
-            <label className="flex items-center gap-2 text-xs text-zinc-400 mb-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={closeTabs}
-                onChange={(e) => setCloseTabs(e.target.checked)}
-                className="rounded"
-              />
-              {t('hosts.confirm_delete_tabs')}
-            </label>
+            <p className="text-xs text-zinc-400 mb-3">{t('hosts.delete_keeps_tabs')}</p>
             <div className="flex gap-2">
               <button
                 onClick={handleDeleteHost}

@@ -19,7 +19,16 @@ vi.mock('../../lib/host-api', () => ({
   fetchHealth: vi.fn(),
 }))
 
+vi.mock('../../lib/host-lifecycle', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/host-lifecycle')>()
+  return { ...actual, deleteHostWithUndoToast: vi.fn(async () => true) }
+})
+
 import { hostFetch, fetchInfo, fetchHealth } from '../../lib/host-api'
+import * as lifecycle from '../../lib/host-lifecycle'
+import { useUndoToast } from '../../stores/useUndoToast'
+
+const realDeleteWithUndo = (await vi.importActual<typeof import('../../lib/host-lifecycle')>('../../lib/host-lifecycle')).deleteHostWithUndoToast
 
 const mockHostFetch = vi.mocked(hostFetch)
 const mockFetchInfo = vi.mocked(fetchInfo)
@@ -145,7 +154,74 @@ describe('OverviewSection', () => {
 
     fireEvent.click(screen.getByText('Delete Host'))
 
-    expect(screen.getByText('Are you sure you want to delete this host? All tabs connected to this host will be affected.')).toBeInTheDocument()
+    expect(screen.getByText('Delete this host from this device?')).toBeInTheDocument()
+    expect(screen.getByText('Its tabs stay, showing “no host here” on this device. Tabs on other devices are not affected.')).toBeInTheDocument()
+  })
+
+  // Host ownership spec §3.4 (H1c T5): a deletion affects this device only and closes nothing — no choice to offer.
+  describe('the delete confirmation', () => {
+    beforeEach(() => {
+      useHostStore.setState({
+        hosts: {
+          [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'purdex_testtoken' },
+          'other-host': { id: 'other-host', name: 'Other', ip: '5.6.7.8', port: 7860, order: 1 },
+        },
+        hostOrder: [HOST_ID, 'other-host'],
+      })
+      useUndoToast.setState({ toast: null })
+    })
+    afterEach(() => { vi.mocked(lifecycle.deleteHostWithUndoToast).mockClear() })
+
+    it('offers no "close tabs" checkbox', () => {
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      expect(screen.queryByRole('checkbox')).toBeNull()
+    })
+
+    it('confirming deletes through the cascade behind the undo toast, with the deleted-toast text', () => {
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      expect(lifecycle.deleteHostWithUndoToast).toHaveBeenCalledWith(HOST_ID, { deleted: 'Test deleted', busy: 'Another operation is in progress — try deleting Test again in a moment', stale: 'Test was changed or removed meanwhile — it was not deleted' })
+    })
+
+    // PR #1413 critic: a deletion that failed is said, not only logged — and when it could not even put everything
+    // back, said so that it stays: reload, check the host settings.
+    it('a deletion that failed (and was put back): a failure toast, not persistent', async () => {
+      useUndoToast.setState({ toast: null, notice: null })
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.mocked(lifecycle.deleteHostWithUndoToast).mockRejectedValueOnce(new Error('quota'))
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      await waitFor(() => expect(useUndoToast.getState().toast).toMatchObject({ message: 'Test could not be deleted — nothing was changed' }))
+      expect(useUndoToast.getState().notice).toBeNull()
+    })
+
+    it('a deletion whose rollback was incomplete: a persistent notice to reload and check the host settings', async () => {
+      useUndoToast.setState({ toast: null, notice: null })
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.mocked(lifecycle.deleteHostWithUndoToast).mockRejectedValueOnce(new lifecycle.HostDeleteRollbackIncompleteError('quota (rollback incomplete — x)'))
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      await waitFor(() => expect(useUndoToast.getState().notice).toMatchObject({
+        message: 'Deleting Test failed and could not be fully undone — reload Purdex and check the host settings',
+      }))
+      expect(useUndoToast.getState().toast).toBeNull()
+    })
+
+    it('the real call: the host is gone, the undo toast is up, and its action brings the host back', () => {
+      vi.mocked(lifecycle.deleteHostWithUndoToast).mockImplementationOnce(realDeleteWithUndo)
+      render(<OverviewSection hostId={HOST_ID} />)
+      fireEvent.click(screen.getByText('Delete Host'))
+      fireEvent.click(screen.getAllByText('Delete Host').at(-1)!)
+      expect(useHostStore.getState().hosts[HOST_ID]).toBeUndefined()
+      const toast = useUndoToast.getState().toast
+      expect(toast).toMatchObject({ message: 'Test deleted' })
+      toast?.action?.()
+      expect(useHostStore.getState().hosts[HOST_ID]).toBeDefined()
+    })
   })
 
   it('sizing mode dropdown has correct options', async () => {

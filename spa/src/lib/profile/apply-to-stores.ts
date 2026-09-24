@@ -43,7 +43,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import type { NexHostEntry } from '../../stores/useNexHostStore'
 import type { ExecutionState } from '../nex/event-reducer'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
-import { withOperationLock } from '../../stores/useRebuildStore'
+import { withOperationLock, type OperationLockGrant } from '../../stores/useRebuildStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
@@ -327,25 +327,23 @@ function restoreHostCaches(snap: HostCaches): string[] {
 
 /**
  * Replaces the host list. Additions, edits and reorders are one write. A host the
- * payload REMOVES goes through `deleteHostCascade(id, false)` — the app's own
- * "remove this host, keep its tabs" — so this device ends up exactly where it
- * would be had the user deleted that host here: sessions / agent / execution /
- * execution-list / nex / host-settings / peer / cwd state cleared, every pane on
- * it marked `terminated: 'host-removed'`, hostless execution panes pinned,
- * `runtime` dropped, focus moved off it. Its undo handle is kept only to roll back.
- * The cascade reaches EVERY tab world — the one on screen and the parked ones, the
- * master's included (host-lifecycle.ts, "Parked worlds") — and so does its undo:
- * hosts are live whichever profile is on screen, so this apply never asks
- * master-world.ts anything and is never `busy` for an unsettled world.
+ * payload REMOVES goes through `deleteHostCascade(id, grant)` — the app's own host
+ * deletion — so this device ends up exactly where it would be had the user deleted
+ * that host here (host ownership spec §3.4): every reference to it — on screen, in
+ * every parked world, host-settings keys, New Tab columns — rewritten to its wire
+ * id, nothing marked, no tab closed; sessions / agent / execution / execution-list /
+ * nex / peer / cwd state cleared, held leases released best-effort, `runtime`
+ * dropped, focus moved off it. Its undo handle is kept only to roll back. Hosts are
+ * live whichever profile is on screen, so this apply never asks master-world.ts
+ * anything and is never `busy` for an unsettled world.
  *
  * Two consequences, both intended:
- *   - the marked panes (and the cleared `purdex-host-settings.hosts` row) are
- *     synced fields, so those `tabs.<ws>` sections (and `settings`) go dirty and
- *     are pushed. That is correct — the host is gone from the profile, the device
- *     that removed it marked the same panes, and the two converge;
+ *   - no section but `hosts` changes: the build mapped the local id to the same wire
+ *     id the rewrite stores, so nothing of `tabs.*` / `settings` is pushed back;
  *   - the cascade writes the tab store, so a removal needs the operation lock and
  *     can come back `busy`. The lock is taken BEFORE anything is written; an apply
- *     that removes no host never asks for it.
+ *     that removes no host never asks for it. The cascade gets the apply's grant:
+ *     its undo re-resolves the references under it, synchronously (ROLLBACK below).
  *
  * The cascade ends in `useHostStore.removeHost`, which refuses to delete the last
  * host. So the write is staged: first `next` PLUS the hosts about to go (never
@@ -362,8 +360,11 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   const store = asPersisted(useHostStore)
   // ROLLBACK, and its edges. When a host-store write throws after the cascade ran
   // (persist: quota / SecurityError), the catch puts back, in this order:
-  //   1. what the cascade's own undo handles restore — sessions, agent state,
-  //      host settings, the marked panes (what "Undo" does after a manual delete);
+  //   1. what the cascade's own undo handles restore — the host row, sessions,
+  //      agent state, and every reference back on the local id (what "Undo" does
+  //      after a manual delete; its re-resolve runs under this apply's grant, and
+  //      moves only references onto the host it restores — never onto a host of
+  //      the STAGED list, which step 2 takes away again);
   //   2. the host slice, `runtime[H]` included;
   //   3. the three stores the cascade clears and its undo does NOT restore —
   //      execution, execution-list, nex-host — from `snapshotHostCaches`, taken
@@ -388,14 +389,17 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   //     re-acquires if not. Entries such a subscriber CREATED for the removed
   //     host during the cascade are dropped by the restore (it replaces the
   //     host's entries, it does not merge into them).
+  //   - a held lease on a removed host is released at the daemon only AFTER the
+  //     commit (`afterCommit`, run below the try): a rollback drops those
+  //     releases, so the lease it restores is still held at the daemon.
   //   - the per-pane SSE of `useExecutionSubscription` is torn down from a React
   //     effect, which never ran: it is still open and continues from the restored
   //     `lastSeq`.
-  //   - NOT covered: `deleteHostCascade` throwing half-way (its own persist
-  //     writes — tab store, host settings, host store — can fail too). It then
-  //     returns no undo handle, so step 1 has nothing for that host; steps 2–3
-  //     still run. Closing that needs an undo that survives a throw, in
-  //     host-lifecycle.ts.
+  //   - `deleteHostCascade` throwing half-way (one of its own writes — the
+  //     rewrite, a clear, `removeHost`'s persist — failing) returns no undo
+  //     handle: it has already put every store it touched back as it was before
+  //     the call (host-lifecycle.ts, ONE UNIT), so step 1 has nothing to do for
+  //     that host, and steps 2–3 run as for any other failure.
   // A restore step that throws is not swallowed: it is appended to the ORIGINAL
   // error as "rollback incomplete".
   //   `runtime[H]` is restored verbatim, `connected` included, and that is true
@@ -408,7 +412,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   // layer reconnected. Hence `persist.rehydrate()` is NOT awaited inside the try
   // (it is synchronous with this storage — premise (d) in the tests — and is
   // awaited after the last fallible step, for the day it is not).
-  const write = async (): Promise<ApplyOutcome> => {
+  const write = async (grant: OperationLockGrant | null = null): Promise<ApplyOutcome> => {
     const state = useHostStore.getState()
     // Planned again on the state under the lock (new local ids are drawn here, for good).
     const replanned = planOrRefuse(state.hosts, incoming, ctx.masterHostId)
@@ -419,6 +423,8 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
     const { removedHostIds } = applied
     const next = { ...applied.next, hosts: withSyncAliases(applied.next.hosts, plan.aliases) }
     const undos: Array<() => void> = []
+    /** The cascades' daemon side effects (lease releases): run once this apply has committed, dropped on a rollback. */
+    const afterCommit: Array<() => void> = []
     const caches = snapshotHostCaches(removedHostIds) // BEFORE the cascade clears them
     let hooks: void | Promise<void>
     try {
@@ -426,7 +432,7 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
         const leaving: Record<string, HostConfig> = {}
         for (const id of removedHostIds) leaving[id] = state.hosts[id]
         store.setState({ hosts: { ...next.hosts, ...leaving }, hostOrder: [...next.hostOrder, ...removedHostIds] })
-        for (const id of removedHostIds) undos.push(deleteHostCascade(id, false))
+        for (const id of removedHostIds) undos.push(deleteHostCascade(id, grant, afterCommit))
       }
       // Focus is whatever the cascade left (it moves `activeHostId` to the first host, as a manual delete does) while that host survives.
       const now = useHostStore.getState()
@@ -448,6 +454,8 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
       if (unfinished.length === 0) throw err
       throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
     }
+    // Committed: the removed hosts' daemon side effects may happen now (each is best-effort and never throws).
+    for (const action of afterCommit) action()
     await hooks
     const built = buildHostsSection(useHostStore.getState())
     const outcome = await rebuilt(built)
