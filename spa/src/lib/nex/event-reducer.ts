@@ -44,6 +44,14 @@ export interface ExecutionState {
   /** A turn is running per the event stream (observers see it too, unlike pendingSend). */
   turnLive: boolean
   /**
+   * Index into `messages` where each turn begins, in ascending order
+   * (spec §4.1). Written when the daemon says a turn opened
+   * (execution.message_accepted / execution.delegated), **before** the
+   * bubble those events may or may not append — so the boundary is exact
+   * even when the payload carried no text.
+   */
+  turnStarts: number[]
+  /**
    * Keyed by tool_use id; written only by the durable A-rules (raw
    * assistant / user frames) and the N-rules (derived tool_use / tool_result
    * events, which overlay the daemon's facts onto the same entry).
@@ -68,6 +76,7 @@ export function defaultExecutionState(): ExecutionState {
     lastTurn: null,
     partial: null,
     turnLive: false,
+    turnStarts: [],
     tools: {},
   }
 }
@@ -126,6 +135,17 @@ export function frameToEvent(frame: NexSseFrame): NexEvent | null {
 
 function userBubble(text: string): StreamMessage {
   return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } } as StreamMessage
+}
+
+/**
+ * The daemon said a turn opened: record where it begins, before the bubble
+ * the event may or may not append. A second boundary at the same index means
+ * the first appended nothing, and the two are one turn.
+ */
+function markTurnStart(s: ExecutionState): ExecutionState {
+  const at = s.messages.length
+  if (s.turnStarts[s.turnStarts.length - 1] === at) return s
+  return { ...s, turnStarts: [...s.turnStarts, at] }
 }
 
 function str(p: Record<string, unknown>, k: string): string | undefined {
@@ -188,6 +208,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // bubble, while an absent key means the site-wide stream stripped it
       // (spec §4.2.4). A truthy check would conflate the two.
       const brief = str(p, 'brief')
+      next = markTurnStart(next)
       if (brief !== undefined) next = { ...next, messages: [...next.messages, userBubble(brief)] }
       return patchSummary(next, {})
     }
@@ -196,7 +217,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // summary moved, so the hook refetches (summaryStale) like any other.
       // Same empty-vs-absent distinction as execution.delegated above.
       const text = str(p, 'text')
-      next = { ...next, pendingLocal: null, summaryStale: true }
+      next = markTurnStart({ ...next, pendingLocal: null, summaryStale: true })
       if (text !== undefined) next = { ...next, messages: [...next.messages, userBubble(text)] }
       return next
     }
