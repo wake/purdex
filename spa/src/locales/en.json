@@ -275,6 +275,9 @@
   "pane.detach": "Detach to tab",
   "pane.missing_host.title": "This device has no host {{host}}",
   "pane.missing_host.desc": "The tab stays as it is. It comes back when this host is added on this device; other devices are not affected.",
+  "pane.host_hidden.title": "This host is turned off in this workbench",
+  "pane.host_hidden.hint": "{{host}} is hidden in this workbench. Show it from the Hosts page to reconnect this pane.",
+  "pane.host_hidden.open_hosts": "Open Hosts",
 
   "nav.scroll_left": "Scroll left",
   "nav.scroll_right": "Scroll right",

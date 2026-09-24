@@ -275,6 +275,9 @@
   "pane.detach": "分離為分頁",
   "pane.missing_host.title": "這台裝置沒有主機 {{host}}",
   "pane.missing_host.desc": "分頁保持原樣；在這台裝置加入此主機後即會恢復，其他裝置不受影響。",
+  "pane.host_hidden.title": "主機已於此工作台關閉",
+  "pane.host_hidden.hint": "{{host}} 在此工作台已隱藏。到主機頁面將它顯示，這個窗格就會重新連線。",
+  "pane.host_hidden.open_hosts": "開啟主機頁面",
 
   "nav.scroll_left": "向左捲動",
   "nav.scroll_right": "向右捲動",
