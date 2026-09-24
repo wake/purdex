@@ -24,6 +24,7 @@ import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStor
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { compareShape, profileLock } from './profile-state'
 import type { Shape, SotIndexEntry } from './types'
 
@@ -271,7 +272,7 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(8)
+    expect(prefixes).toHaveLength(9)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
   })
 
@@ -316,6 +317,7 @@ describe('PROJECTIONS', () => {
       [STORAGE_KEYS.HOST_SETTINGS]: useHostSettingsStore.getState,
       [STORAGE_KEYS.NEW_TAB_LAYOUT]: useNewTabLayoutStore.getState,
       [STORAGE_KEYS.LAYOUT]: useLayoutStore.getState,
+      [STORAGE_KEYS.HOST_LOOKS]: useHostLookStore.getState,
     }
     const fields = settingsFieldsByStore()
     expect(Object.keys(fields).sort()).toEqual(Object.keys(stores).sort())
@@ -462,7 +464,8 @@ describe('shape: fingerprint and ordinal', () => {
       return {
         hosts: { fingerprint: await fingerprintOf(PROJECTIONS.hosts.filter((p) => p !== 'hosts.*.aliases')), ordinal: 2 },
         tabs: { fingerprint: await fingerprintOf(PROJECTIONS.tabs), ordinal: 1 },
-        settings: { fingerprint: await fingerprintOf(PROJECTIONS.settings), ordinal: 4 },
+        // alpha.434 had no look store either (host ownership H2c added `purdex-host-looks.looks` later).
+        settings: { fingerprint: await fingerprintOf(PROJECTIONS.settings.filter((p) => p !== 'purdex-host-looks.looks')), ordinal: 4 },
         workspaces: { fingerprint: await fingerprintOf(PROJECTIONS.workspaces), ordinal: 1 },
       }
     }
@@ -539,6 +542,59 @@ describe('shape: fingerprint and ordinal', () => {
     })
   })
 
+  // host ownership H2c-1 (spec §4.1, decision 7): `purdex-host-looks.looks` joins `settings` with ordinal 5 → 6 and the
+  // `@wire:host-look=1` marker. An ordinal-5 client (host-id marker only, no look store) must meet a `settings` row of
+  // this build as newer and LOCK — it would otherwise apply a payload whose looks it drops, and push them away.
+  describe('host ownership H2c: the ordinal-5 settings client and this build', () => {
+    const LOOKS = 'purdex-host-looks.looks'
+    /** What the ordinal-5 client computes: every kind as today, `settings` without the look store and its marker. */
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => p !== LOOKS), '@wire:host-id=d1']), ordinal: 5 },
+      }
+    }
+
+    it('the look store is listed whole, the marker pinned, the ordinal 6', () => {
+      expect(PROJECTIONS.settings).toContain(LOOKS)
+      expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-host-looks.'))).toEqual([LOOKS])
+      expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1'])
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(6)
+    })
+
+    it('the two shapes differ by exactly the look path and the look marker', async () => {
+      const old = (await oldShapes()).settings
+      expect(await sectionFingerprint('settings')).toBe(
+        await fingerprintOf([...PROJECTIONS.settings.filter((p) => p !== LOOKS), LOOKS, '@wire:host-id=d1', '@wire:host-look=1']),
+      )
+      expect(old.fingerprint).not.toBe(await sectionFingerprint('settings'))
+    })
+
+    it('an index holding ONLY a settings row of this build → sot-is-newer (locked:schema) for the old client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an old settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      const current: Record<SectionKind, Shape> = { ...(await oldShapes()), settings: mine }
+      expect(profileLock([oldRow], current)).toBeNull()
+    })
+
+    it('the migration marker is never projected: no path of any kind starts with purdex-host-looks-migrated', () => {
+      expect(STORAGE_KEYS.HOST_LOOKS_MIGRATED).toBe('purdex-host-looks-migrated')
+      for (const kind of KINDS) for (const path of PROJECTIONS[kind]) expect(path.replace(/^!/, '').startsWith(STORAGE_KEYS.HOST_LOOKS_MIGRATED), path).toBe(false)
+    })
+  })
+
   // GUARD (spec §4.5). If this fails: a projection changed — bump
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
@@ -551,8 +607,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "dc4aa5a072306c61072f27189161c7b5852a84e320f68ac183b02341cd073c18",
-          5,
+          "90e9a4dbfebcc5297e53ba3b105a31a04841584e8b0e69bb276a74f9b163b3dd",
+          6,
         ],
         "tabs": [
           "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",

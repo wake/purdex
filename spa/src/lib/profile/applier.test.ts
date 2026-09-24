@@ -1314,7 +1314,7 @@ describe('isWellFormedSection', () => {
         const dot = path.indexOf('.')
         byStore.set(path.slice(0, dot), [...(byStore.get(path.slice(0, dot)) ?? []), path.slice(dot + 1)])
       }
-      expect(byStore.size).toBe(8)
+      expect(byStore.size).toBe(9)
       for (const [store, fields] of byStore) {
         for (const field of fields) expect(isWellFormedSection('settings', { [store]: { [field]: 1 } })).toBe(true)
         expect(isWellFormedSection('settings', { [store]: { [`${fields[0]}X`]: 1 } })).toBe(false)
