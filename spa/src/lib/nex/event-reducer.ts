@@ -139,13 +139,16 @@ function userBubble(text: string): StreamMessage {
 
 /**
  * The daemon said a turn opened: record where it begins, before the bubble
- * the event may or may not append. A second boundary at the same index means
- * the first appended nothing, and the two are one turn.
+ * the event may or may not append. **Repeated indexes are kept.** Two
+ * boundaries at one index mean the first turn appended nothing — a payload
+ * with no text, which is the very case this field exists for (spec §4.1) —
+ * and collapsing them would merge two turns the daemon declared separately.
+ * The seq guard in `applyDurableEvent` already makes applying one event twice
+ * impossible, so a dedupe here would protect nothing. Consumers therefore
+ * have to tolerate an empty turn range (`start === end`).
  */
 function markTurnStart(s: ExecutionState): ExecutionState {
-  const at = s.messages.length
-  if (s.turnStarts[s.turnStarts.length - 1] === at) return s
-  return { ...s, turnStarts: [...s.turnStarts, at] }
+  return { ...s, turnStarts: [...s.turnStarts, s.messages.length] }
 }
 
 function str(p: Record<string, unknown>, k: string): string | undefined {

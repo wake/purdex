@@ -364,10 +364,15 @@ describe('turn starts (spec §4.1)', () => {
     expect(s.turnStarts).toEqual([0])
   })
 
-  it('does not record the same index twice', () => {
+  it('records two boundaries at the same index when the first turn appended nothing', () => {
+    // A turn whose payload carried no text, ended, and was followed by another
+    // turn: both boundaries sit at index 0, and collapsing them would merge two
+    // turns the daemon declared separately (spec §4.1).
     let s = applyDurableEvent(defaultExecutionState(), accepted(1))
-    s = applyDurableEvent(s, accepted(2))
-    expect(s.turnStarts).toEqual([0])
+    s = applyDurableEvent(s, ev(2, 'execution.terminal', { turn_id: 't1' }))
+    s = applyDurableEvent(s, accepted(3, { text: 'second' }))
+    expect(s.turnStarts).toEqual([0, 0])
+    expect(s.messages).toHaveLength(1)
   })
 
   it('keeps turn starts in ascending order across a history replay', () => {
