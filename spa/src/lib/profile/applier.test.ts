@@ -1336,10 +1336,11 @@ describe('isWellFormedSection', () => {
       expect(isWellFormedSection('settings', { 'purdex-host-looks-migrated': { x: 1 } })).toBe(false)
     })
 
-    it('shown hosts (host ownership H2d): the store is known, `all` and `ids` its only fields', () => {
-      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { all: true, ids: [] } })).toBe(true)
-      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { all: false, ids: ['d1_a', 'localX'] } })).toBe(true)
-      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { all: true, ids: [], hidden: [] } })).toBe(false)
+    it('shown hosts (host ownership H2d): the store is known, `ids` its only field (a legacy `all` is unlisted)', () => {
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [] } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: ['d1_a', 'localX'] } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [], all: true } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [], hidden: [] } })).toBe(false)
     })
 
     it('a known store that is empty is refused — the builder omits such a store, and it would clear every listed field', () => {

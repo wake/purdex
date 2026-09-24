@@ -29,21 +29,15 @@ const HOSTS: Record<string, HostConfig> = { [LOCAL]: host(LOCAL, { daemonId: DAE
 const ORDER = [LOCAL, PLAIN]
 const tmux = (hostId: string, over: object = {}): PaneContent => ({ kind: 'tmux-session', hostId, sessionCode: 'c', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i', ...over })
 const exec = (hostRef?: string): PaneContent => ({ kind: 'execution', executionId: 'e', ...(hostRef === undefined ? {} : { host: hostRef }) })
-const list = (...ids: string[]): ShownHosts => ({ all: false, ids })
-const ALL: ShownHosts = { all: true, ids: [] }
+const list = (...ids: string[]): ShownHosts => ({ ids })
 
 beforeEach(() => {
   localStorage.clear()
   useHostStore.setState({ hosts: HOSTS, hostOrder: ORDER, activeHostId: LOCAL })
-  useShownHostsStore.setState({ all: true, ids: [] })
+  useShownHostsStore.setState({ ids: [] })
 })
 
 describe('isHostShown (the "open a tab" surfaces — local hosts)', () => {
-  it('all → every host shown', () => {
-    expect(isHostShown(LOCAL, HOSTS, ALL)).toBe(true)
-    expect(isHostShown(PLAIN, HOSTS, ALL)).toBe(true)
-  })
-
   it('a list → by wireIdOfHost: a d1_ id shows the local host of that daemon; a no-daemonId host by its local id', () => {
     expect(isHostShown(LOCAL, HOSTS, list(WIRE))).toBe(true)
     expect(isHostShown(LOCAL, HOSTS, list(LOCAL))).toBe(false) // its wire id is its d1_, not its local id
@@ -59,25 +53,25 @@ describe('isHostShown (the "open a tab" surfaces — local hosts)', () => {
 
 describe('useIsHostShown / useShownHostFilter', () => {
   it('useIsHostShown follows a shown-hosts write and a daemonId learned', () => {
-    useShownHostsStore.setState({ all: false, ids: [WIRE] })
+    useShownHostsStore.setState({ ids: [WIRE] })
     useHostStore.setState({ hosts: { ...HOSTS, [LOCAL]: host(LOCAL) } }) // daemonId not known yet
     const { result } = renderHook(() => useIsHostShown(LOCAL))
     expect(result.current).toBe(false)
     act(() => useHostStore.setState({ hosts: HOSTS }))
     expect(result.current).toBe(true)
-    act(() => useShownHostsStore.getState().setShown([]))
+    act(() => useShownHostsStore.setState({ ids: [] }))
     expect(result.current).toBe(false)
   })
 
   it('useShownHostFilter answers per host from the current stores, stable while they are', () => {
-    useShownHostsStore.setState({ all: false, ids: [PLAIN] })
+    useShownHostsStore.setState({ ids: [PLAIN] })
     const { result, rerender } = renderHook(() => useShownHostFilter())
     const first = result.current
     expect(first(LOCAL)).toBe(false)
     expect(first(PLAIN)).toBe(true)
     rerender()
     expect(result.current).toBe(first)
-    act(() => useShownHostsStore.getState().showAll())
+    act(() => useShownHostsStore.getState().show(WIRE))
     expect(result.current(LOCAL)).toBe(true)
   })
 })
@@ -129,8 +123,7 @@ describe('wireOfRef / isRefEnabled / isPaneHostEnabled (wire space)', () => {
     expect(isPaneHostEnabled(exec(), HOSTS, [PLAIN, LOCAL], list(PLAIN))).toBe(true)
   })
 
-  it('all: true → true; a non-host-bearing pane → true', () => {
-    expect(isPaneHostEnabled(tmux(FAR), HOSTS, ORDER, ALL)).toBe(true)
+  it('a non-host-bearing pane → true', () => {
     expect(isPaneHostEnabled({ kind: 'new-tab' }, HOSTS, ORDER, list())).toBe(true)
     expect(isPaneHostEnabled(exec(), HOSTS, [], list())).toBe(true) // no host at all: nothing to disable
   })
@@ -138,23 +131,22 @@ describe('wireOfRef / isRefEnabled / isPaneHostEnabled (wire space)', () => {
   it('isRefEnabled is the ref-level rule', () => {
     expect(isRefEnabled(LOCAL, HOSTS, list(WIRE))).toBe(true)
     expect(isRefEnabled(FAR, HOSTS, list(WIRE))).toBe(false)
-    expect(isRefEnabled(FAR, HOSTS, ALL)).toBe(true)
   })
 })
 
 describe('usePaneHostEnabled / isHostRefEnabledNow (live)', () => {
   it('re-renders on a shown-hosts write', () => {
-    useShownHostsStore.setState({ all: false, ids: [WIRE] })
+    useShownHostsStore.setState({ ids: [WIRE] })
     const { result } = renderHook(() => usePaneHostEnabled(tmux(PLAIN)))
     expect(result.current).toBe(false)
-    act(() => useShownHostsStore.getState().addShown(PLAIN))
+    act(() => useShownHostsStore.getState().show(PLAIN))
     expect(result.current).toBe(true)
-    act(() => useShownHostsStore.getState().toggle(PLAIN, [WIRE, PLAIN]))
+    act(() => useShownHostsStore.getState().toggle(PLAIN))
     expect(result.current).toBe(false)
   })
 
   it('re-renders on a daemonId learned (the host\'s wire id moves)', () => {
-    useShownHostsStore.setState({ all: false, ids: [WIRE] })
+    useShownHostsStore.setState({ ids: [WIRE] })
     useHostStore.setState({ hosts: { ...HOSTS, [LOCAL]: host(LOCAL) } })
     const content = tmux(LOCAL)
     const { result } = renderHook(() => usePaneHostEnabled(content))
@@ -164,7 +156,7 @@ describe('usePaneHostEnabled / isHostRefEnabledNow (live)', () => {
   })
 
   it('re-renders on hostOrder for a hostless execution', () => {
-    useShownHostsStore.setState({ all: false, ids: [PLAIN] })
+    useShownHostsStore.setState({ ids: [PLAIN] })
     const content = exec()
     const { result } = renderHook(() => usePaneHostEnabled(content))
     expect(result.current).toBe(false)
@@ -173,11 +165,11 @@ describe('usePaneHostEnabled / isHostRefEnabledNow (live)', () => {
   })
 
   it('isHostRefEnabledNow reads both stores now', () => {
-    useShownHostsStore.setState({ all: false, ids: [WIRE] })
+    useShownHostsStore.setState({ ids: [WIRE] })
     expect(isHostRefEnabledNow(LOCAL)).toBe(true)
     expect(isHostRefEnabledNow(PLAIN)).toBe(false)
     expect(isHostRefEnabledNow(FAR)).toBe(false)
-    useShownHostsStore.getState().showAll()
+    useShownHostsStore.getState().show(FAR)
     expect(isHostRefEnabledNow(FAR)).toBe(true)
   })
 })

@@ -761,7 +761,7 @@ export const useHostStore = create<HostState>()(
         warnedMismatch.clear()
         set(createDefaultState())
         useHostLookStore.setState({ looks: {} })
-        useShownHostsStore.setState({ all: true, ids: [] }) // plan §0.18
+        useShownHostsStore.setState({ ids: [] }) // plan §0.18
       },
     }),
     {

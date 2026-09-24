@@ -383,7 +383,7 @@ describe('startCollector — settings', () => {
       () => useNewTabLayoutStore.setState({ presets: { ...useNewTabLayoutStore.getState().presets } }),
       () => useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' }),
       () => useHostLookStore.getState().putLook('d1_a', { name: 'mlab' }),
-      () => useShownHostsStore.getState().setShown(['d1_a']),
+      () => useShownHostsStore.getState().show('d1_a'),
     ]
     start()
     for (const change of changes) {
@@ -413,18 +413,19 @@ describe('startCollector — settings', () => {
     expect(payload['purdex-layout']).toEqual({ tabPosition: 'top' })
     // host ownership §0.6: the look store is ALWAYS built, empty or not — an absent store reads "not sent" on the other side
     expect(payload['purdex-host-looks']).toEqual({ looks: {} })
-    // host ownership H2d-1 (§0.6): the shown-hosts store too — both keys, the default { all: true, ids: [] } included
-    expect(payload['purdex-shown-hosts']).toEqual({ all: true, ids: [] })
+    // host ownership H2d-1 (§0.6): the shown-hosts store too — the EMPTY default { ids: [] } included
+    expect(payload['purdex-shown-hosts']).toEqual({ ids: [] })
   })
 
   it('a shown-hosts write schedules `settings` and travels, its ids verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {
     useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: 'mini-lab:278cbm' } } })
     start()
-    useShownHostsStore.getState().setShown(['d1_unknown', 'h1'])
+    useShownHostsStore.getState().show('d1_unknown')
+    useShownHostsStore.getState().show('h1')
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, unknown>
-    expect(payload['purdex-shown-hosts']).toEqual({ all: false, ids: ['d1_unknown', 'h1'] })
+    expect(payload['purdex-shown-hosts']).toEqual({ ids: ['d1_unknown', 'h1'] })
   })
 
   it('a look write schedules `settings` and travels, its keys verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {

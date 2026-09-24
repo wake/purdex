@@ -1,26 +1,24 @@
-// spa/src/stores/useShownHostsStore.ts — the hosts a workbench enables (host ownership spec §4.1 / §4.5; plan H2d-1,
-// §0.6, §0.21).
+// spa/src/stores/useShownHostsStore.ts — the hosts shown in a workbench (host ownership spec §1.2 / §4.1; plan H2d-1,
+// §0.6 / §0.7).
 //
-// `{ all: boolean; ids: string[] }`, both keys always present (plan §0.6, coordinator decision): `all: true` is the
-// spec's `ids: null` ("every host"). Encoding it as `null` could not travel — the settings apply rejects a field that
-// changes shape class (`null` ↔ array) — and an absent field reads as "not sent", which could never clear another
-// device's list. `ids` keeps its unknown ids and its order in BOTH modes.
+// `{ ids: string[] }` — a plain list, no "all" flag (plan §0.6, the user's rules). `[]` = every host hidden, and that is
+// the default: a host added later is hidden, and at ship time every existing host is hidden too — nothing seeds this
+// list (§0.7). Every action touches exactly ONE id and carries every other id through untouched, unknown ones
+// included: materialising "all" into the ids this device knows is what dropped hosts only another device knows
+// (PR #1421 attacker finding).
 //
-// The ids are WIRE ids in the store itself (`d1_…` for a host whose daemon is known, else that host's local id) — the
-// builder and the applier pass them through verbatim; which local host an id means is decided by the reader
-// (`lib/shown-hosts.ts`). So to this module an id is an opaque string: it imports no store, and it keeps an id no host
-// of this device claims (another device's daemon, a legacy local id) exactly as it arrived. The re-resolve pass moves
-// a local id to its `d1_…` once the host's daemonId is known (`rekey`, plan §0.12).
+// The ids are WIRE ids in the store itself (`d1_…` for a host whose daemon is known, else that host's local id until
+// the re-resolve pass re-keys it) — the builder and the applier pass them through verbatim; which local host an id means
+// is decided by the reader (`lib/shown-hosts.ts`). To this module an id is an opaque string: it imports no store.
 //
-// Projected in `settings` (`purdex-shown-hosts.all` / `.ids`, PROJECTIONS.settings) and registered with `syncManager`.
-// H2d-1 only creates, persists, syncs, applies and re-keys the store; nothing filters by it yet.
+// Projected in `settings` (`purdex-shown-hosts.ids`, PROJECTIONS.settings) and registered with `syncManager`.
+// H2d-1 only creates, persists, syncs, applies and re-keys the store; nothing reads it for UI yet.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
-/** The persisted value: `all: true` = every host enabled; else exactly the wire ids in `ids`. */
+/** The persisted value: exactly the wire ids of the shown hosts. */
 export interface ShownHosts {
-  all: boolean
   ids: string[]
 }
 
@@ -28,18 +26,13 @@ export interface ShownHosts {
 export type ShownHostMove = readonly [from: string, to: string]
 
 interface ShownHostsState extends ShownHosts {
-  /** `all: true`; the list is kept. */
-  showAll: () => void
-  /** `all: false`, exactly `ids` (strings, deduped keeping the first). */
-  setShown: (ids: readonly string[]) => void
-  /**
-   * Flip one wire id. From `all: true` → `all: false` with every id of `knownWireIds` but `wireId` (the ids already
-   * listed — unknown ones included — kept first, in their order); from a list → `wireId` leaves, or is appended.
-   */
-  toggle: (wireId: string, knownWireIds: readonly string[]) => void
-  /** Appends `wireId` when absent; `all` is left as it is. */
-  addShown: (wireId: string) => void
-  /** Per step: `from` is replaced in place by `to`, or dropped when `to` is already listed. `all` is left alone. */
+  /** Appends `id` when absent. */
+  show: (id: string) => void
+  /** Removes `id` when present; every other id keeps its place. */
+  hide: (id: string) => void
+  /** `hide` when listed, else `show`. */
+  toggle: (id: string) => void
+  /** Per step: `from` is replaced in place by `to`, or dropped when `to` is already listed. */
   rekey: (moves: readonly ShownHostMove[]) => void
 }
 
@@ -63,32 +56,22 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export const useShownHostsStore = create<ShownHostsState>()(
   persist(
     (set) => ({
-      all: true,
       ids: [],
 
-      showAll: () => set((state) => (state.all ? state : { all: true })),
+      // A no-op returns the same state: no persist, no notify.
+      show: (id) => set((state) => (state.ids.includes(id) ? state : { ids: [...state.ids, id] })),
 
-      setShown: (ids) => set({ all: false, ids: sanitizeShownIds(ids) }),
+      hide: (id) => set((state) => (state.ids.includes(id) ? { ids: state.ids.filter((x) => x !== id) } : state)),
 
-      toggle: (wireId, knownWireIds) =>
-        set((state) => {
-          if (state.all) {
-            const ids = state.ids.filter((id) => id !== wireId)
-            for (const id of knownWireIds) if (id !== wireId && !ids.includes(id)) ids.push(id)
-            return { all: false, ids }
-          }
-          return { ids: state.ids.includes(wireId) ? state.ids.filter((id) => id !== wireId) : [...state.ids, wireId] }
-        }),
-
-      addShown: (wireId) => set((state) => (state.ids.includes(wireId) ? state : { ids: [...state.ids, wireId] })),
+      toggle: (id) =>
+        set((state) => ({ ids: state.ids.includes(id) ? state.ids.filter((x) => x !== id) : [...state.ids, id] })),
 
       rekey: (moves) =>
         set((state) => {
           let ids: string[] | null = null
           for (const [from, to] of moves) {
             const cur: string[] = ids ?? state.ids
-            const at = cur.indexOf(from)
-            if (from === to || at < 0) continue
+            if (from === to || !cur.includes(from)) continue
             ids = cur.includes(to) ? cur.filter((id) => id !== from) : cur.map((id) => (id === from ? to : id))
           }
           return ids === null ? state : { ids }
@@ -98,13 +81,11 @@ export const useShownHostsStore = create<ShownHostsState>()(
       name: STORAGE_KEYS.SHOWN_HOSTS,
       storage: purdexStorage,
       version: 1,
-      partialize: (state) => ({ all: state.all, ids: state.ids }),
+      partialize: (state) => ({ ids: state.ids }),
       // Every arrival — this device's storage, another window, a `settings` apply (apply-to-stores rehydrates after
-      // its write) — passes through here. A non-boolean `all` keeps memory's; nothing stored keeps memory as it is.
-      merge: (persisted, current) =>
-        isRecord(persisted)
-          ? { ...current, all: typeof persisted.all === 'boolean' ? persisted.all : current.all, ids: sanitizeShownIds(persisted.ids) }
-          : current,
+      // its write) — passes through here. Only `ids` is read (a legacy `all` key is ignored and never written back);
+      // nothing stored keeps memory as it is.
+      merge: (persisted, current) => (isRecord(persisted) ? { ...current, ids: sanitizeShownIds(persisted.ids) } : current),
     },
   ),
 )

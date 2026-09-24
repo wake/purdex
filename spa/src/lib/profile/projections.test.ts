@@ -594,12 +594,12 @@ describe('shape: fingerprint and ordinal', () => {
     })
   })
 
-  // host ownership H2d-1 (spec §4.1 / §4.5, plan §0.6, decision 7): `purdex-shown-hosts.all` / `.ids` join `settings`
-  // with ordinal 6 → 7 and the `@wire:shown-hosts=1` marker. The ordinal-6 client (host-id + host-look markers, no
-  // shown-hosts store) must meet a `settings` row of this build as newer and LOCK — it would otherwise apply a payload
-  // whose enabled-host list it drops, and push it away. The ordinal-5 client (H2c-1's case above) still locks.
+  // host ownership H2d-1 (spec §4.1, plan §0.6, decision 7): `purdex-shown-hosts.ids` (a plain list, no `all`) joins
+  // `settings` with ordinal 6 → 7 and the `@wire:shown-hosts=1` marker. The ordinal-6 client (host-id + host-look
+  // markers, no shown-hosts store) must meet a `settings` row of this build as newer and LOCK — it would otherwise apply
+  // a payload whose shown-host list it drops, and push it away. The ordinal-5 client (H2c-1's case above) still locks.
   describe('host ownership H2d-1: the ordinal-6 settings client and this build', () => {
-    const SHOWN = ['purdex-shown-hosts.all', 'purdex-shown-hosts.ids']
+    const SHOWN = ['purdex-shown-hosts.ids']
     async function oldShapes(): Promise<Record<SectionKind, Shape>> {
       const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
       return {
@@ -610,8 +610,9 @@ describe('shape: fingerprint and ordinal', () => {
       }
     }
 
-    it('the store is listed as its two fields, the final marker array pinned exactly, the ordinal 7', () => {
+    it('the store is listed as its one field `ids` (no `all`), the final marker array pinned exactly, the ordinal 7', () => {
       expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-shown-hosts.'))).toEqual(SHOWN)
+      expect(PROJECTIONS.settings).not.toContain('purdex-shown-hosts.all')
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1'])
       expect(SECTION_SCHEMA_ORDINAL.settings).toBe(7)
     })
@@ -643,6 +644,8 @@ describe('shape: fingerprint and ordinal', () => {
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
   // ordinal makes every other client lock the section (`locked:schema`).
+  // (One sanctioned exception: settings ordinal 7 was never released — PR #1421 open — so the H2d-1 rework from
+  // `{ all, ids }` to `{ ids }` changes the ordinal-7 fingerprint in place; plan H2d-1 "Wire".)
   it('guard: every projection change comes with an ordinal bump', async () => {
     expect(await shapeTable()).toMatchInlineSnapshot(`
       {
@@ -651,7 +654,7 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "67870fce842ed927b6a7de54b7859f2e9aabdbec1621fcb6dde18507e42fc5ee",
+          "fc539e33ec71b934d1dd6e43979be2c7aaa45bf57a73ee7db6e400892d6c0abf",
           7,
         ],
         "tabs": [

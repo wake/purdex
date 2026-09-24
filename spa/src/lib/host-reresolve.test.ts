@@ -95,7 +95,7 @@ beforeEach(() => {
   __resetHostReresolveForTest()
   useRebuildStore.setState({ lockedBy: null, lockGrant: null })
   useHostLookStore.setState({ looks: {} })
-  useShownHostsStore.setState({ all: true, ids: [] })
+  useShownHostsStore.setState({ ids: [] })
   seed()
 })
 
@@ -310,33 +310,24 @@ describe('the look re-key (H2c-2)', () => {
 // the host's `d1_…` once its daemonId is known — in place, deduped keeping the first — as its own step next to the look
 // re-key, never inside the ref rewrite a deletion reuses.
 describe('the shown-hosts re-key (H2d-1)', () => {
-  const shownNow = () => {
-    const { all, ids } = useShownHostsStore.getState()
-    return { all, ids }
-  }
+  const shownNow = () => ({ ids: useShownHostsStore.getState().ids })
 
   it('a listed local id becomes the d1_ id of the host whose daemonId is known, in place; memory and storage agree', () => {
-    useShownHostsStore.setState({ all: false, ids: [UNKNOWN, LOCAL, 'tail'] })
+    useShownHostsStore.setState({ ids: [UNKNOWN, LOCAL, 'tail'] })
     expect(runHostReresolve()).toBe('done')
-    expect(shownNow()).toEqual({ all: false, ids: [UNKNOWN, WIRE, 'tail'] })
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOSTS)!).state).toEqual({ all: false, ids: [UNKNOWN, WIRE, 'tail'] })
+    expect(shownNow()).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOSTS)!).state).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
   })
 
   it('the d1_ id already listed: the local id is dropped (deduped, the first kept)', () => {
-    useShownHostsStore.setState({ all: false, ids: [WIRE, UNKNOWN, LOCAL] })
+    useShownHostsStore.setState({ ids: [WIRE, UNKNOWN, LOCAL] })
     runHostReresolve()
-    expect(shownNow()).toEqual({ all: false, ids: [WIRE, UNKNOWN] })
-  })
-
-  it('all: true keeps its list re-keyed too (ids keep their meaning in both modes)', () => {
-    useShownHostsStore.setState({ all: true, ids: [LOCAL] })
-    runHostReresolve()
-    expect(shownNow()).toEqual({ all: true, ids: [WIRE] })
+    expect(shownNow()).toEqual({ ids: [WIRE, UNKNOWN] })
   })
 
   it('a host without a daemonId keeps its local id; an unknown id is untouched; nothing written', () => {
     useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }), plain: host('plain') }, hostOrder: [LOCAL, 'plain'] })
-    useShownHostsStore.setState({ all: false, ids: ['plain', UNKNOWN, WIRE] })
+    useShownHostsStore.setState({ ids: ['plain', UNKNOWN, WIRE] })
     const before = useShownHostsStore.getState()
     runHostReresolve()
     expect(useShownHostsStore.getState()).toBe(before)
@@ -344,7 +335,7 @@ describe('the shown-hosts re-key (H2d-1)', () => {
 
   it('under an identity conflict nothing moves', () => {
     useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }), dup: host('dup', { daemonId: DAEMON }) }, hostOrder: [LOCAL, 'dup'] })
-    useShownHostsStore.setState({ all: false, ids: [LOCAL, 'dup'] })
+    useShownHostsStore.setState({ ids: [LOCAL, 'dup'] })
     const before = useShownHostsStore.getState()
     expect(runHostReresolve()).toBe('conflict')
     expect(useShownHostsStore.getState()).toBe(before)
@@ -352,7 +343,7 @@ describe('the shown-hosts re-key (H2d-1)', () => {
 
   it('takes the operation lock for the shown-id move alone; the lock held elsewhere → busy, nothing moved', () => {
     runHostReresolve() // every ref moved: nothing else to write
-    useShownHostsStore.setState({ all: false, ids: [LOCAL] })
+    useShownHostsStore.setState({ ids: [LOCAL] })
     const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
     expect(runHostReresolve()).toBe('busy')
     expect(shownNow().ids).toEqual([LOCAL])
@@ -366,7 +357,7 @@ describe('the shown-hosts re-key (H2d-1)', () => {
   })
 
   it('idempotent: a second run writes nothing', () => {
-    useShownHostsStore.setState({ all: false, ids: [LOCAL] })
+    useShownHostsStore.setState({ ids: [LOCAL] })
     runHostReresolve()
     const writes = vi.fn()
     const unsub = useShownHostsStore.subscribe(writes)
@@ -376,15 +367,15 @@ describe('the shown-hosts re-key (H2d-1)', () => {
   })
 
   it('an id another window listed (storage only) still moves: the store is re-read first', () => {
-    localStorage.setItem(STORAGE_KEYS.SHOWN_HOSTS, JSON.stringify({ state: { all: false, ids: [LOCAL] }, version: 1 }))
+    localStorage.setItem(STORAGE_KEYS.SHOWN_HOSTS, JSON.stringify({ state: { ids: [LOCAL] }, version: 1 }))
     runHostReresolve()
-    expect(shownNow()).toEqual({ all: false, ids: [WIRE] })
+    expect(shownNow()).toEqual({ ids: [WIRE] })
   })
 
   it('a failed shown-hosts write puts every store back (all or nothing); the retry lands', () => {
     vi.useFakeTimers()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    useShownHostsStore.setState({ all: false, ids: [LOCAL] })
+    useShownHostsStore.setState({ ids: [LOCAL] })
     const tabs = useTabStore.getState().tabs
     const real = Storage.prototype.setItem
     let left = 1
@@ -794,7 +785,7 @@ describe('startHostReresolve (the triggers)', () => {
 
   it('learning a daemonId moves the host\'s listed local id to its d1_ id (H2d-1)', () => {
     addHostX({ daemonId: undefined })
-    useShownHostsStore.setState({ all: false, ids: [LOCAL] })
+    useShownHostsStore.setState({ ids: [LOCAL] })
     stop = startHostReresolve()
     expect(useShownHostsStore.getState().ids).toEqual([LOCAL])
     useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
@@ -824,7 +815,7 @@ describe('startHostReresolve (the triggers)', () => {
     })
     addHostX()
     stop = startHostReresolve()
-    useShownHostsStore.setState({ all: false, ids: [LOCAL] }) // another window's write landed
+    useShownHostsStore.setState({ ids: [LOCAL] }) // another window's write landed
     finish?.()
     expect(useShownHostsStore.getState().ids).toEqual([WIRE])
   })
@@ -964,7 +955,7 @@ describe('rewriteHostRefs (explicit map — the deletion direction)', () => {
   it('moves no shown id: the shown-hosts store is keyed by wire id and only the re-resolve pass re-keys it (H2d-1 M7)', () => {
     // A deletion rewrites refs local → wire; a listed local id must stay exactly as it is — the shown-id re-key belongs
     // to `passBody`, never to `planRewrite`, which this explicit-map rewrite reuses.
-    useShownHostsStore.setState({ all: false, ids: [LOCAL, UNKNOWN] })
+    useShownHostsStore.setState({ ids: [LOCAL, UNKNOWN] })
     const before = useShownHostsStore.getState()
     const writes = vi.fn()
     const unsub = useShownHostsStore.subscribe(writes)

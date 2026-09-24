@@ -21,7 +21,7 @@ import { wireKeyMovesOf } from './host-look'
 import type { PaneContent } from '../types/tab'
 
 /** What the rules read of the store: `all` and the listed wire ids. */
-export type ShownHostsView = Pick<ShownHosts, 'all'> & { readonly ids: readonly string[] }
+export type ShownHostsView = { readonly ids: ShownHosts['ids'] | readonly string[] }
 
 function localHostOf(hosts: Record<string, HostConfig>, id: string): HostConfig | undefined {
   if (!Object.hasOwn(hosts, id)) return undefined
@@ -33,7 +33,6 @@ function localHostOf(hosts: Record<string, HostConfig>, id: string): HostConfig 
 
 /** A LOCAL host is shown when `all`, or its wire id is listed; an id that is not a local host → `true`. Pure. */
 export function isHostShown(hostId: string, hosts: Record<string, HostConfig>, shown: ShownHostsView): boolean {
-  if (shown.all) return true
   const host = localHostOf(hosts, hostId)
   return host === undefined || shown.ids.includes(wireIdOfHost(host))
 }
@@ -42,15 +41,14 @@ export function isHostShown(hostId: string, hosts: Record<string, HostConfig>, s
 export function useIsHostShown(hostId: string | null): boolean {
   const host = useHostStore((s) => (hostId === null ? undefined : localHostOf(s.hosts, hostId)))
   const wire = host === undefined ? null : wireIdOfHost(host)
-  return useShownHostsStore((s) => wire === null || s.all || s.ids.includes(wire))
+  return useShownHostsStore((s) => wire === null || s.ids.includes(wire))
 }
 
 /** For lists: `(hostId) => isHostShown(…)` over the current stores, stable while they are. */
 export function useShownHostFilter(): (hostId: string) => boolean {
   const hosts = useHostStore((s) => s.hosts)
-  const all = useShownHostsStore((s) => s.all)
   const ids = useShownHostsStore((s) => s.ids)
-  return useCallback((hostId: string) => isHostShown(hostId, hosts, { all, ids }), [hosts, all, ids])
+  return useCallback((hostId: string) => isHostShown(hostId, hosts, { ids }), [hosts, ids])
 }
 
 // === The pane matcher (wire space; §0.21 "What is a tab of X", §0.23) ===
@@ -79,7 +77,7 @@ export function wireOfRef(ref: string, hosts: Record<string, HostConfig>): strin
 
 /** A host ref is enabled when `all`, or its wire id is listed. Pure. */
 export function isRefEnabled(ref: string, hosts: Record<string, HostConfig>, shown: ShownHostsView): boolean {
-  return shown.all || shown.ids.includes(wireOfRef(ref, hosts))
+  return shown.ids.includes(wireOfRef(ref, hosts))
 }
 
 /** A pane is enabled when it is not host-bearing, or its host ref is enabled. Pure. */
@@ -103,7 +101,7 @@ export function usePaneHostEnabled(content: PaneContent): boolean {
     const ref = hostRefOf(content, s.hostOrder)
     return ref === null ? null : wireOfRef(ref, s.hosts)
   })
-  return useShownHostsStore((s) => wire === null || s.all || s.ids.includes(wire))
+  return useShownHostsStore((s) => wire === null || s.ids.includes(wire))
 }
 
 /** The non-hook read for the per-pane sweeps: `isRefEnabled` over both stores' current state. */
@@ -120,11 +118,11 @@ export function isHostRefEnabledNow(ref: string): boolean {
  * and its way back, for the pass to commit under its lock. Never part of the explicit-map rewrite a deletion reuses.
  */
 export function rekeyShownHosts(hosts: Record<string, HostConfig>): { commit: () => void; undo: () => void } | null {
-  const { all, ids } = useShownHostsStore.getState()
+  const { ids } = useShownHostsStore.getState()
   const moves = wireKeyMovesOf(hosts).filter(([from]) => ids.includes(from))
   if (moves.length === 0) return null
   return {
     commit: () => useShownHostsStore.getState().rekey(moves),
-    undo: () => useShownHostsStore.setState({ all, ids }),
+    undo: () => useShownHostsStore.setState({ ids }),
   }
 }

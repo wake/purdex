@@ -107,7 +107,7 @@ function resetStores(): void {
   useNexHostStore.setState({ byHost: {} })
   useHostSettingsStore.setState({ hosts: {} })
   useHostLookStore.setState({ looks: {} })
-  useShownHostsStore.setState({ all: true, ids: [] })
+  useShownHostsStore.setState({ ids: [] })
   // Reset too: since every apply ends with a re-resolve pass, a column one test left behind would move in the next.
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
 }
@@ -998,60 +998,69 @@ describe('applySectionToStores — settings: host looks', () => {
 })
 
 // host ownership H2d-1 (spec §4.1, plan §0.6): the shown-hosts ids are wire ids IN the store — an apply writes them
-// verbatim, whatever this device's hosts are; `{ all, ids }` travels with both keys, so every all ↔ list transition
-// is a same-shape patch (never `rejected-settings`), and the store is always in the build.
+// verbatim, whatever this device's hosts are; `{ ids }` always travels (the empty list included), so every [] ↔ list
+// transition is a same-shape patch (never `rejected-settings`).
 describe('applySectionToStores — settings: shown hosts', () => {
   const DAEMON = 'mini-lab:278cbm'
   const WIRE = syncIdOfSync(DAEMON)
   const settingsNow = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
-  const shown = () => {
-    const { all, ids } = useShownHostsStore.getState()
-    return { all, ids }
-  }
+  const ids = () => useShownHostsStore.getState().ids
 
   beforeEach(() => {
     useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2] })
   })
 
-  it('the store is always in the build, the default included', () => {
-    expect(settingsNow()['purdex-shown-hosts']).toEqual({ all: true, ids: [] })
+  it('the store is always in the build, the empty default included', () => {
+    expect(settingsNow()['purdex-shown-hosts']).toEqual({ ids: [] })
   })
 
-  it('{ all: true, ids: [d1_unknown] } round-trips apply → build byte-for-byte; the hash is the payload\'s (nothing to push)', async () => {
-    const payload = { ...settingsNow(), 'purdex-shown-hosts': { all: true, ids: ['d1_unknown'] } } as SettingsPayload
+  it('{ ids: [d1_unknown, d1_a] } lands byte-for-byte and round-trips apply → build; the hash is the payload\'s (nothing to push)', async () => {
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: ['d1_unknown', 'd1_a'] } } as SettingsPayload
     const outcome = await applySectionToStores('settings', payload, ctx)
-    expect(shown()).toEqual({ all: true, ids: ['d1_unknown'] })
-    expect(persistedOf(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ all: true, ids: ['d1_unknown'] })
+    expect(ids()).toEqual(['d1_unknown', 'd1_a'])
+    expect(persistedOf(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ ids: ['d1_unknown', 'd1_a'] })
     expect(JSON.stringify(settingsNow()['purdex-shown-hosts'])).toBe(JSON.stringify(payload['purdex-shown-hosts']))
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   it('ids naming a host here (wire and local form) and one no host here claims land verbatim — no local↔wire mapping', async () => {
-    const payload = { ...settingsNow(), 'purdex-shown-hosts': { all: false, ids: [WIRE, 'd1_unknown', H2] } } as SettingsPayload
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: [WIRE, 'd1_unknown', H2] } } as SettingsPayload
     expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
-    expect(shown()).toEqual({ all: false, ids: [WIRE, 'd1_unknown', H2] })
+    expect(ids()).toEqual([WIRE, 'd1_unknown', H2])
   })
 
   it.each([
-    ['a list → all', () => useShownHostsStore.getState().setShown([WIRE, 'd1_unknown']), { all: true, ids: [WIRE, 'd1_unknown'] }],
-    ['all → a list', () => { useShownHostsStore.getState().setShown([WIRE, 'd1_unknown']); useShownHostsStore.getState().showAll() }, { all: false, ids: [WIRE] }],
-    ['all (empty list) → a list', () => useShownHostsStore.setState({ all: true, ids: [] }), { all: false, ids: ['d1_unknown'] }],
-  ] as const)('%s applies (no rejected-settings)', async (_label, local, incoming) => {
-    local()
-    const payload = { ...settingsNow(), 'purdex-shown-hosts': incoming } as SettingsPayload
+    ['[] → a list', [] as string[], [WIRE, 'd1_unknown']],
+    ['a list → []', [WIRE, 'd1_unknown'], [] as string[]],
+  ])('%s applies (no rejected-settings)', async (_label, local, incoming) => {
+    useShownHostsStore.setState({ ids: local })
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: incoming } } as SettingsPayload
     const outcome = await applySectionToStores('settings', payload, ctx)
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
-    expect(shown()).toEqual(incoming)
+    expect(ids()).toEqual(incoming)
+  })
+
+  it('applying a shown-hosts change closes nothing: the tab, workspace and local-profiles stores stay the same objects (§0.21)', async () => {
+    const tabs = useTabStore.getState()
+    const workspaces = useWorkspaceStore.getState()
+    const profiles = useLocalProfilesStore.getState()
+    useShownHostsStore.setState({ ids: [WIRE, H2] })
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: [H2] } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+    expect(ids()).toEqual([H2])
+    expect(useTabStore.getState()).toBe(tabs)
+    expect(useWorkspaceStore.getState()).toBe(workspaces)
+    expect(useLocalProfilesStore.getState()).toBe(profiles)
   })
 
   it('an ordinal-6 payload (no shown-hosts store) leaves the store untouched; the rebuild carries it, so the hash differs (pushed once)', async () => {
-    useShownHostsStore.getState().setShown([WIRE])
+    useShownHostsStore.getState().show(WIRE)
     const before = useShownHostsStore.getState()
     const legacy = settingsNow()
     delete legacy['purdex-shown-hosts']
     const outcome = await applySectionToStores('settings', legacy, ctx)
     expect(useShownHostsStore.getState()).toBe(before)
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-shown-hosts': { all: false, ids: [WIRE] } }) })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-shown-hosts': { ids: [WIRE] } }) })
   })
 })
 

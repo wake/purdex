@@ -106,7 +106,7 @@ beforeEach(() => {
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
   useHostSettingsStore.setState({ hosts: {} })
   useHostLookStore.setState({ looks: {} })
-  useShownHostsStore.setState({ all: true, ids: [] })
+  useShownHostsStore.setState({ ids: [] })
 })
 
 afterEach(() => {
@@ -286,20 +286,19 @@ describe('(f) the shown-hosts re-key: one push, settings only (H2d-1)', () => {
     masterOnScreen()
     seedSettings()
     addX({ daemonId: undefined })
-    useShownHostsStore.setState({ all: false, ids: [WM, X] })
+    useShownHostsStore.setState({ ids: [WM, X] })
     if (withLook) useHostLookStore.setState({ looks: { [X]: { name: 'air26' } } })
     useHostStore.setState((s) => ({ hosts: { ...s.hosts, [X]: { ...s.hosts[X], daemonId: DAEMON } } }))
     const before = await hashes()
     expect(runHostReresolve()).toBe('done')
-    const { all, ids } = useShownHostsStore.getState()
-    expect({ all, ids }).toEqual({ all: false, ids: [WM, W] })
+    expect(useShownHostsStore.getState().ids).toEqual([WM, W])
     if (withLook) expect(useHostLookStore.getState().looks).toEqual({ [W]: { name: 'air26' } })
     const once = await hashes()
     for (const key of KEYS) {
       if (key === 'settings') expect(once[key], key).not.toBe(before[key])
       else expect(once[key], key).toBe(before[key])
     }
-    expect((buildSectionPayload('settings')!.payload as SettingsPayload)['purdex-shown-hosts']).toEqual({ all: false, ids: [WM, W] })
+    expect((buildSectionPayload('settings')!.payload as SettingsPayload)['purdex-shown-hosts']).toEqual({ ids: [WM, W] })
     expect(runHostReresolve()).toBe('done')
     expect(await hashes()).toEqual(once)
   })
@@ -307,7 +306,7 @@ describe('(f) the shown-hosts re-key: one push, settings only (H2d-1)', () => {
   it('a host arriving WITH its daemonId, listed by its d1_ id: the pass leaves every section hash as it was', async () => {
     masterOnScreen()
     seedSettings()
-    useShownHostsStore.setState({ all: false, ids: [W] })
+    useShownHostsStore.setState({ ids: [W] })
     addX()
     const before = await hashes()
     expect(runHostReresolve()).toBe('done')
