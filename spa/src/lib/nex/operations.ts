@@ -47,58 +47,49 @@ function blocksOf(message: StreamMessage): ContentBlock[] {
 }
 
 /**
- * Pairing is one-to-one and positional. An id-keyed map would pair every
- * call sharing an id with the same result, showing one result twice while
- * the other vanishes; instead each id keeps a FIFO queue of calls waiting
- * for an answer and of results waiting for a caller (a history page can be
- * applied around a live frame, so a result can precede its call). A call
- * with no result is absent from `resultForCall`; a result with no call is
- * absent from `consumedResults` and renders as an orphan.
+ * Pairing is one-to-one, positional and **forward-only**. An id-keyed map
+ * would pair every call sharing an id with the same result, showing one
+ * result twice while the other vanishes; instead each id keeps a FIFO queue
+ * of calls still waiting for an answer, and each `tool_result` goes to the
+ * oldest unanswered call with that id.
+ *
+ * Nothing waits the other way. History is paged in full from `after=0`
+ * before the SSE opens (`useExecutionSubscription.ts:173-192`) and
+ * `applyDurableEvent` only accepts a strictly increasing seq, so a
+ * `tool_result` is never in this array ahead of its own `tool_use`. A result
+ * that does precede a same-id call is the tail of a page whose call is off
+ * the list; letting the later call claim it hands that call a stale body and
+ * floats its real answer off as an orphan. So a result that arrives with no
+ * waiting call is an orphan, and stays one.
+ *
+ * A call with no result is absent from `resultForCall`; an orphan result is
+ * absent from `consumedResults` and renders on its own.
  */
 export function indexOperations(messages: StreamMessage[]): OperationIndex {
   const resultForCall = new Map<BlockKey, OperationResult>()
   const consumedResults = new Set<BlockKey>()
   const waitingCalls = new Map<string, BlockKey[]>()
-  const waitingResults = new Map<string, { key: BlockKey; result: OperationResult }[]>()
-
-  const queue = <T>(map: Map<string, T[]>, id: string): T[] => {
-    const existing = map.get(id)
-    if (existing) return existing
-    const created: T[] = []
-    map.set(id, created)
-    return created
-  }
 
   messages.forEach((message, mi) => {
     blocksOf(message).forEach((block, bi) => {
       if (block.type === 'tool_use') {
         const id = block.id
         if (!id) return
-        const pending = waitingResults.get(id)
-        const answer = pending?.shift()
-        if (answer) {
-          resultForCall.set(blockKey(mi, bi), answer.result)
-          consumedResults.add(answer.key)
-          return
-        }
-        queue(waitingCalls, id).push(blockKey(mi, bi))
+        const queue = waitingCalls.get(id)
+        if (queue) queue.push(blockKey(mi, bi))
+        else waitingCalls.set(id, [blockKey(mi, bi)])
         return
       }
       if (block.type === 'tool_result') {
         const id = block.tool_use_id
         if (!id) return
-        const key = blockKey(mi, bi)
-        const result: OperationResult = {
+        const callKey = waitingCalls.get(id)?.shift()
+        if (callKey === undefined) return
+        resultForCall.set(callKey, {
           text: toolResultText((block as { content?: unknown }).content),
           isError: block.is_error === true,
-        }
-        const callKey = waitingCalls.get(id)?.shift()
-        if (callKey !== undefined) {
-          resultForCall.set(callKey, result)
-          consumedResults.add(key)
-          return
-        }
-        queue(waitingResults, id).push({ key, result })
+        })
+        consumedResults.add(blockKey(mi, bi))
       }
     })
   })

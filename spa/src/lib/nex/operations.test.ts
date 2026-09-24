@@ -55,12 +55,21 @@ describe('indexOperations', () => {
     expect(idx.resultForCall.size).toBe(1)
   })
 
-  it('pairs a result that arrives before its call', () => {
-    // The reducer applies frames in seq order, but a history page can be
-    // applied around a live frame.
-    const idx = indexOperations([msg('user', [result('X', 'early')]), msg('assistant', [call('X')])])
-    expect(idx.resultForCall.get(blockKey(1, 0))).toEqual({ text: 'early', isError: false })
-    expect(idx.consumedResults.has(blockKey(0, 0))).toBe(true)
+  it('leaves a result that precedes its call as an orphan and gives the call the result that follows it', () => {
+    // Pairing is forward-only. History is paged in full before the SSE opens
+    // and the reducer only accepts increasing seq, so a result can never
+    // legitimately precede its own call; a result that does is the tail of a
+    // page whose call is off the list, and claiming it would hand the call a
+    // stale body while its real answer floated off as an orphan.
+    const idx = indexOperations([
+      msg('user', [result('X', 'stale')]),
+      msg('assistant', [call('X')]),
+      msg('user', [result('X', 'fresh')]),
+    ])
+    expect(idx.resultForCall.get(blockKey(1, 0))).toEqual({ text: 'fresh', isError: false })
+    expect(idx.consumedResults.has(blockKey(2, 0))).toBe(true)
+    expect(idx.consumedResults.has(blockKey(0, 0))).toBe(false)
+    expect(idx.resultForCall.size).toBe(1)
   })
 
   it('consumes every result exactly once', () => {
