@@ -29,6 +29,8 @@ import type { NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { emptyPeerHostEntry, usePeerStore } from '../../stores/usePeerStore'
+import { useSessionCwdStore } from '../../stores/useSessionCwdStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
@@ -624,6 +626,46 @@ describe('applySectionToStores — hosts: removing a host is the app\'s own host
       expect(Object.keys(useHostStore.getState().hosts).sort()).toEqual([M, H2].sort())
       expect(useTabStore.getState().tabs.t9.layout).toMatchObject({ pane: { content: { hostId: syncIdOfSync(D3) } } })
       expect(useTabStore.getState().tabs.t2.layout).toMatchObject({ pane: { content: { hostId: H2 } } })
+    })
+
+    // PR #1413 attacker (high #1): the cascade itself fails — the host store's persist at `removeHost`, after the
+    // rewrite and every clear already ran. It puts back what it touched; the apply's rollback does the rest.
+    it('the cascade\'s own write fails half-way (removeHost\'s persist): panes, settings, sessions, agent, peers, cwd, caches and the host slice are all back', async () => {
+      seedRich()
+      const D2 = 'two-lab:222222'
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H2]: { ...s.hosts[H2], daemonId: D2 } } }))
+      usePeerStore.setState({ byHost: { [H2]: { ...emptyPeerHostEntry(), fetchedAt: 1 }, [M]: { ...emptyPeerHostEntry(), fetchedAt: 2 } } })
+      useSessionCwdStore.setState({ byHost: { [H2]: { s1: { cwd: '/h2', fetchedAt: 1, loading: false, error: null } } } })
+      useNewTabLayoutStore.setState({ presets: { ...useNewTabLayoutStore.getState().presets, '1col': { enabled: true, columns: [[`sessions:${H2}`]] } }, knownIds: [`sessions:${H2}`] })
+      const everything = () => JSON.stringify({
+        world: world(),
+        newtab: [useNewTabLayoutStore.getState().presets, useNewTabLayoutStore.getState().knownIds],
+        peers: usePeerStore.getState().byHost,
+        cwd: useSessionCwdStore.getState().byHost,
+        executions: useExecutionStore.getState().executions,
+      })
+      const before = everything()
+      expect(before).toContain(`"hostId":"${H2}"`)
+      const real = Storage.prototype.setItem
+      let failed = 0
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+        // the first host-store write without H2 is `removeHost`'s, inside the cascade (the staging write keeps H2)
+        if (k === STORAGE_KEYS.HOSTS && failed === 0 && !v.includes(`"${H2}"`)) {
+          failed++
+          throw new DOMException('quota', 'QuotaExceededError')
+        }
+        real.call(this, k, v)
+      })
+      const removeHost = vi.spyOn(useHostStore.getState(), 'removeHost')
+
+      await expect(applySectionToStores('hosts', hostsPayloadOf([host(M)]), ctx)).rejects.toThrow('quota')
+
+      vi.mocked(Storage.prototype.setItem).mockRestore()
+      expect(removeHost).toHaveBeenCalledWith(H2) // it failed IN the cascade
+      expect(failed).toBe(1)
+      expect(everything()).toBe(before)
+      expect(everything()).not.toContain(syncIdOfSync(D2))
+      expect(useRebuildStore.getState().lockedBy).toBeNull()
     })
 
     it('a restore that throws is not swallowed: the original error survives and says the rollback is incomplete', async () => {

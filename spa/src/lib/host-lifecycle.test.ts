@@ -507,6 +507,106 @@ describe('host delete undo — the references come back (host ownership spec §3
   })
 })
 
+// PR #1413 attacker (high #1): the cascade is ONE unit. A write that fails anywhere in it — the host store's own persist
+// (`removeHost` → `purdex-hosts` quota), after the rewrite and every clear already ran — puts every store it touched
+// back exactly as it was before the call, and throws: no reference left on the wire id, no device-local cache lost.
+describe('host delete cascade — a write fails half-way', () => {
+  beforeEach(resetAllStores)
+  afterEach(() => { vi.restoreAllMocks() })
+
+  /** Every store the cascade touches holds HOST_A data (and HOST_B's). */
+  function seedEverything(): void {
+    useTabStore.getState().addTab(makeSessionTab(HOST_A, 'dev001'))
+    useTabStore.getState().addTab(makeSessionTab(HOST_B, 'stg001'))
+    useHostSettingsStore.getState().set(HOST_A, 'editor', { homePath: '/a' })
+    useNewTabLayoutStore.setState({
+      presets: { '3col': { enabled: true, columns: [[`sessions:${HOST_A}`], [`sessions:${HOST_B}`], []] }, '2col': { enabled: false, columns: [[], []] }, '1col': { enabled: true, columns: [[`headless:${HOST_A}`]] } },
+      knownIds: [`sessions:${HOST_A}`, `sessions:${HOST_B}`, `headless:${HOST_A}`],
+    })
+    useSessionStore.getState().replaceHost(HOST_A, [makeSession('dev001')])
+    useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', { agent_type: 'cc', status: 'running', model: 'm', raw_event_name: 'PdxUserPromptSubmit', broadcast_ts: 1 })
+    useExecutionStore.getState().applyEvents(HOST_A, 'exc_1', [{ seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }])
+    useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: 9_999_999_999_999 })
+    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2 }
+    useExecutionListStore.setState({ byHost: { [HOST_A]: listCache, [HOST_B]: listCache } })
+    const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1, fingerprint: '' }
+    useNexHostStore.setState({ byHost: { [HOST_A]: nexEntry, [HOST_B]: nexEntry } })
+    seedPeers(HOST_A, HOST_B)
+    useHostStore.setState({ runtime: { [HOST_A]: { status: 'connected' } } })
+  }
+
+  const PERSISTED = [STORAGE_KEYS.TABS, STORAGE_KEYS.HOSTS, STORAGE_KEYS.HOST_SETTINGS, STORAGE_KEYS.NEW_TAB_LAYOUT, STORAGE_KEYS.LOCAL_PROFILES]
+
+  function everything(): string {
+    const h = useHostStore.getState()
+    const a = useAgentStore.getState()
+    return JSON.stringify({
+      tabs: useTabStore.getState().tabs,
+      parked: [useLocalProfilesStore.getState().parkedMaster, useLocalProfilesStore.getState().slaves],
+      hostSettings: useHostSettingsStore.getState().hosts,
+      newtab: [useNewTabLayoutStore.getState().presets, useNewTabLayoutStore.getState().knownIds],
+      sessions: useSessionStore.getState().sessions,
+      agent: [a.lastEvents, a.statuses, a.unread, a.models, a.agentTypes, a.subagents],
+      executions: useExecutionStore.getState().executions,
+      lists: useExecutionListStore.getState().byHost,
+      nex: useNexHostStore.getState().byHost,
+      peers: usePeerStore.getState().byHost,
+      cwd: useSessionCwdStore.getState().byHost,
+      host: [h.hosts, h.hostOrder, h.activeHostId, h.devHostId, h.runtime],
+      storage: PERSISTED.map((k) => localStorage.getItem(k)),
+    })
+  }
+
+  /** `purdex-hosts`' next `times` writes throw — the first is `removeHost`'s, the cascade's last step. */
+  function failHostsWrites(times: number): void {
+    const real = Storage.prototype.setItem
+    let left = times
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.HOSTS && left > 0) {
+        left--
+        throw new DOMException('quota', 'QuotaExceededError')
+      }
+      real.call(this, k, v)
+    })
+  }
+
+  it('the host store\'s persist fails at removeHost: it throws, and EVERY store is back as it was — memory and storage', () => {
+    seedEverything()
+    const before = everything()
+    expect(before).toContain(`"hostId":"${HOST_A}"`)
+    failHostsWrites(1)
+
+    expect(() => deleteHostCascade(HOST_A)).toThrow('quota')
+
+    vi.restoreAllMocks()
+    expect(everything()).toBe(before)
+    expect(JSON.stringify(useTabStore.getState().tabs)).not.toContain(WIRE_A)
+  })
+
+  it('the rollback fails too: the error says so, and keeps the original', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    seedEverything()
+    // `removeHost` fails; putting the tab store back (its second write — the first was the rewrite) fails too
+    const real = Storage.prototype.setItem
+    let tabWrites = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.HOSTS) throw new DOMException('quota', 'QuotaExceededError')
+      if (k === STORAGE_KEYS.TABS && ++tabWrites >= 2) throw new DOMException('tabs quota', 'QuotaExceededError')
+      real.call(this, k, v)
+    })
+    expect(() => deleteHostCascade(HOST_A)).toThrow(/^quota \(rollback incomplete — tabs quota\)$/)
+  })
+
+  it('a clear that throws (a store action, not a persist) is rolled back the same way', () => {
+    seedEverything()
+    const before = everything()
+    vi.spyOn(useSessionCwdStore.getState(), 'forgetHost').mockImplementation(() => { throw new Error('cwd blew up') })
+    expect(() => deleteHostCascade(HOST_A)).toThrow('cwd blew up')
+    vi.restoreAllMocks()
+    expect(everything()).toBe(before)
+  })
+})
+
 describe('session-closed detection', () => {
   beforeEach(resetAllStores)
 

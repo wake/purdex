@@ -396,11 +396,11 @@ async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<A
   //   - the per-pane SSE of `useExecutionSubscription` is torn down from a React
   //     effect, which never ran: it is still open and continues from the restored
   //     `lastSeq`.
-  //   - NOT covered: `deleteHostCascade` throwing half-way (its own persist
-  //     writes — tab store, host settings, host store — can fail too). It then
-  //     returns no undo handle, so step 1 has nothing for that host; steps 2–3
-  //     still run. Closing that needs an undo that survives a throw, in
-  //     host-lifecycle.ts.
+  //   - `deleteHostCascade` throwing half-way (one of its own writes — the
+  //     rewrite, a clear, `removeHost`'s persist — failing) returns no undo
+  //     handle: it has already put every store it touched back as it was before
+  //     the call (host-lifecycle.ts, ONE UNIT), so step 1 has nothing to do for
+  //     that host, and steps 2–3 run as for any other failure.
   // A restore step that throws is not swallowed: it is appended to the ORIGINAL
   // error as "rollback incomplete".
   //   `runtime[H]` is restored verbatim, `connected` included, and that is true

@@ -1,6 +1,10 @@
 // spa/src/lib/host-lifecycle.ts — Cascade delete logic for host removal with undo support
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
+import { useTabStore } from '../stores/useTabStore'
+import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
+import { useHostSettingsStore } from '../stores/useHostSettingsStore'
+import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
 import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
@@ -54,28 +58,20 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
   // Its wire id — also under an identity conflict, where `identity.toWire` leaves both duplicates out: the sync id
   // of its daemon, which names the survivor once the conflict clears (plan §0.7).
   const wireId = wireIdOfHost(host)
-  if (wireId !== hostId) {
-    const rewritten = rewriteHostRefs({ [hostId]: wireId })
-    if (rewritten !== 'ok') {
-      // Nothing else has been touched. A partial rewrite is rolled back by the next pass: the host is still here.
-      if (rewritten === 'rollback-failed') scheduleHostReresolve()
-      throw new Error(`host ${hostId}: its references could not be rewritten (${rewritten}); nothing was deleted`)
-    }
-  }
 
   const prefix = `${hostId}:`
   // --- Snapshot for undo (serializable data only) ---
-  const snapshot = {
+  const snapshot: UndoSnapshot = {
     host,
     hostOrder: [...hostStore.hostOrder],
-    sessions: sessionStore.sessions[hostId] as Session[] | undefined,
+    sessions: sessionStore.sessions[hostId],
     activeHostId: hostStore.activeHostId,
     devHostId: hostStore.devHostId,
     // AgentStore data (exclude transient activeSubagents)
-    agentEvents: {} as Record<string, NormalizedEvent>,
-    agentStatuses: {} as Record<string, AgentStatus>,
-    agentUnread: {} as Record<string, boolean>,
-    agentModels: {} as Record<string, string>,
+    agentEvents: {},
+    agentStatuses: {},
+    agentUnread: {},
+    agentModels: {},
   }
   for (const [k, v] of Object.entries(agentStore.lastEvents)) {
     if (k.startsWith(prefix)) snapshot.agentEvents[k] = v
@@ -88,6 +84,65 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
   }
   for (const [k, v] of Object.entries(agentStore.models)) {
     if (k.startsWith(prefix)) snapshot.agentModels[k] = v
+  }
+
+  // ONE UNIT: every store the cascade writes, as it is now. A step that throws — a store action, or a persist's
+  // `setItem` (quota, SecurityError) after zustand already changed memory, `removeHost`'s own included — puts every
+  // one of them back, newest first, and the cascade throws: the caller gets no undo, because nothing happened.
+  const before = CASCADE_STORES.map((store) => store.getState())
+  try {
+    cascadeSteps(hostId, wireId)
+  } catch (err) {
+    const unfinished: string[] = []
+    for (let i = CASCADE_STORES.length - 1; i >= 0; i--) {
+      if (CASCADE_STORES[i].getState() === before[i]) continue
+      try {
+        CASCADE_STORES[i].setState(before[i] as never, true)
+      } catch (undoErr) {
+        unfinished.push(messageOf(undoErr))
+      }
+    }
+    if (unfinished.length === 0) throw err
+    console.error(`[host-lifecycle] deleting host ${hostId} failed, and putting it back failed too: ${unfinished.join('; ')}`)
+    throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
+  }
+
+  return makeUndo(hostId, wireId, snapshot, grant)
+}
+
+/** An error's message — a `DOMException` (a persist's quota error) included, which is not always an `Error` here. */
+const messageOf = (err: unknown): string => {
+  const message = (err as { message?: unknown } | null)?.message
+  return typeof message === 'string' ? message : String(err)
+}
+
+/** A store as far as the cascade's all-or-nothing needs it: its whole state, read and put back. */
+interface WholeStore {
+  getState: () => unknown
+  setState: (state: never, replace: true) => void
+}
+
+/** Every store `cascadeSteps` writes: those `rewriteHostRefs` rewrites, each per-host store it clears, the host store. */
+const CASCADE_STORES: readonly WholeStore[] = [
+  useTabStore,
+  useLocalProfilesStore,
+  useHostSettingsStore,
+  useNewTabLayoutStore,
+  useSessionStore,
+  useAgentStore,
+  useExecutionStore,
+  useExecutionListStore,
+  useNexHostStore,
+  usePeerStore,
+  useSessionCwdStore,
+  useHostStore,
+] as unknown as WholeStore[]
+
+/** The cascade's writes, in order. Throws at the first that fails — `deleteHostCascade` puts everything back. */
+function cascadeSteps(hostId: string, wireId: string): void {
+  if (wireId !== hostId) {
+    const rewritten = rewriteHostRefs({ [hostId]: wireId })
+    if (rewritten !== 'ok') throw new Error(`host ${hostId}: its references could not be rewritten (${rewritten})`)
   }
 
   // A held lease: released best-effort now, while the host row — and its auth — is still here, so other devices are
@@ -103,8 +158,8 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
     }
   }
 
-  sessionStore.removeHost(hostId)
-  agentStore.removeHost(hostId)
+  useSessionStore.getState().removeHost(hostId)
+  useAgentStore.getState().removeHost(hostId)
   // Nexen execution view state for this host: its panes stay, and render "no host here" from now on.
   useExecutionStore.getState().clearHost(hostId)
   useExecutionListStore.getState().clearHost(hostId)
@@ -116,8 +171,22 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
   // from one daemon says nothing about another.
   usePeerStore.getState().forgetHost(hostId)
   useSessionCwdStore.getState().forgetHost(hostId)
-  hostStore.removeHost(hostId)
+  useHostStore.getState().removeHost(hostId)
+}
 
+interface UndoSnapshot {
+  host: HostConfig
+  hostOrder: string[]
+  sessions: Session[] | undefined
+  activeHostId: string | null
+  devHostId: string | null
+  agentEvents: Record<string, NormalizedEvent>
+  agentStatuses: Record<string, AgentStatus>
+  agentUnread: Record<string, boolean>
+  agentModels: Record<string, string>
+}
+
+function makeUndo(hostId: string, wireId: string, snapshot: UndoSnapshot, grant: OperationLockGrant | null): () => void {
   return () => {
     // Guard against host-recreation race: if another code path (import,
     // cross-window BroadcastChannel sync, user re-add) re-created a host
