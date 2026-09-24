@@ -14,6 +14,14 @@ interface Props {
   diff: NonNullable<ToolActivity['diff']>
   /** The operation's fold key; the diff registers under `${foldKey}:diff`. */
   foldKey: string
+  /**
+   * Draw `diff.path` beside the stat. Off by default: for Edit and Write the
+   * path is the header's own `primary_arg`, and the block that owns the header
+   * is the only one that knows whether it drew one (spec §3.1.1 #3 — one fact,
+   * one place). An orphan result has no call and so no argument, which is the
+   * case this exists for.
+   */
+  showPath?: boolean
 }
 
 /**
@@ -61,7 +69,7 @@ function spendBudget(hunks: HunkRows[], budget: number): HunkRows[] {
   return out
 }
 
-export default function ToolDiffView({ diff, foldKey }: Props) {
+export default function ToolDiffView({ diff, foldKey, showPath = false }: Props) {
   const t = useI18nStore((s) => s.t)
   const [expanded, toggle] = useFold(`${foldKey}:diff`)
 
@@ -103,13 +111,16 @@ export default function ToolDiffView({ diff, foldKey }: Props) {
         every hunk, where it is the only thing left that says what changed.
         `+0 −0` is a normal edit result and renders (contract rule 7).
 
-        The stat is the numbers alone. `diff.path` is the same string the
-        header already draws as the operation's `primary_arg`, so printing it
-        again here would rebuild, one column over, the stacking spec §3.1.1 #3
-        objects to.
+        The numbers always show. The path only joins them when the caller says
+        the header has no argument of its own: for Edit and Write `diff.path`
+        is that argument, and printing it again here would rebuild, one column
+        over, the stacking spec §3.1.1 #3 objects to.
       */}
-      <div data-testid="diff-stat" className="px-2 py-0.5 text-text-muted tabular-nums">
-        {`+${diff.added} ${MINUS}${diff.removed}`}
+      <div data-testid="diff-stat" className="flex items-baseline gap-2 px-2 py-0.5 text-text-muted">
+        {showPath && (
+          <span data-testid="diff-path" className="min-w-0 flex-1 break-all">{diff.path}</span>
+        )}
+        <span className="shrink-0 tabular-nums">{`+${diff.added} ${MINUS}${diff.removed}`}</span>
       </div>
       {visible.map(({ hunk, rows: hunkRows }, i) => {
         if (hunkRows.length === 0) return null

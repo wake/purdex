@@ -261,13 +261,14 @@ describe('ToolDiffView container (spec §3.1.1 #1)', () => {
 })
 
 describe('ToolDiffView stat (spec §3.1.1 #3)', () => {
-  it('shows the +N −M stat, and not the path', () => {
+  it('shows the +N −M stat, and omits the path the header already says', () => {
     render(<ToolDiffView diff={statDiff(5, 0, [addedHunk(3)])} foldKey="d" />)
     const stat = screen.getByTestId('diff-stat')
     expect(stat).toHaveTextContent('+5 −0')
     // The path is the header's `primary_arg`, already drawn once above this
     // block. Repeating it here would be the same stacking spec §3.1.1 #3
     // objects to, one column over.
+    expect(screen.queryByTestId('diff-path')).toBeNull()
     expect(stat.textContent).not.toContain('/srv/app.ts')
     // U+2212 MINUS, not the hyphen: it is the width of `+` under tabular-nums.
     expect(stat.textContent).toContain('−0')
@@ -287,6 +288,23 @@ describe('ToolDiffView stat (spec §3.1.1 #3)', () => {
     render(<ToolDiffView diff={statDiff(80, 12, [addedHunk(100)])} foldKey="d" />)
     expect(allRows()).toHaveLength(3)
     expect(screen.getByTestId('diff-more')).toBeInTheDocument()
+    expect(screen.getByTestId('diff-stat')).toHaveTextContent('+80 −12')
+  })
+
+  // `+N −M` is never a duplicate and always shows. The path is one only when
+  // the header draws it too, which is the Edit / Write case and not the orphan
+  // one — an orphan result has no call, so its header has no argument and the
+  // stat is the only place left that can say which file was touched.
+  it('shows the path when the header has none', () => {
+    render(<ToolDiffView diff={statDiff(5, 0, [addedHunk(3)])} foldKey="d" showPath />)
+    expect(screen.getByTestId('diff-path')).toHaveTextContent('/srv/app.ts')
+    expect(screen.getByTestId('diff-stat')).toHaveTextContent('+5 −0')
+  })
+
+  it('keeps the path with the numbers while the diff is folded', () => {
+    render(<ToolDiffView diff={statDiff(80, 12, [addedHunk(100)])} foldKey="d" showPath />)
+    expect(screen.getByTestId('diff-more')).toBeInTheDocument()
+    expect(screen.getByTestId('diff-path')).toHaveTextContent('/srv/app.ts')
     expect(screen.getByTestId('diff-stat')).toHaveTextContent('+80 −12')
   })
 })

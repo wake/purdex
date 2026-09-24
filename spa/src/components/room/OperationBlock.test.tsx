@@ -197,6 +197,27 @@ describe('OperationBlock', () => {
     expect(block().className).not.toContain('rounded')
   })
 
+  it('the diff stat repeats the path only when the header has none', () => {
+    // Spec §3.1.1 #3 is about one fact drawn twice. For Edit and Write the
+    // path *is* the header's argument, so the stat must not say it again;
+    // for an orphan result — no call, therefore no argument — the stat is the
+    // only place the file can be named. `+N −M` shows either way.
+    const pathFacts: ToolResultFacts =
+      { diff: { path: '/srv/app.ts', added: 5, removed: 0, hunks: [hunk], truncated: false } }
+
+    const { unmount } = render(<OperationBlock tool="Edit" input={{ file_path: '/srv/app.ts' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }} facts={pathFacts} result={ok('ok')} />)
+    expect(screen.getByTestId('op-arg')).toHaveTextContent('/srv/app.ts')
+    expect(screen.queryByTestId('diff-path')).toBeNull()
+    expect(screen.getByTestId('diff-stat')).toHaveTextContent('+5 −0')
+    unmount()
+
+    render(<OperationBlock tool="tool" input={{}} foldKey="tu1" facts={pathFacts} result={ok('ok')} />)
+    expect(screen.queryByTestId('op-arg')).toBeNull()
+    expect(screen.getByTestId('diff-path')).toHaveTextContent('/srv/app.ts')
+    expect(screen.getByTestId('diff-stat')).toHaveTextContent('+5 −0')
+  })
+
   it('marks a result that held non-text content', () => {
     // The other fact the dismantled facts span carried (spec §3.1.1 #3): a
     // fold must not swallow "there was something here the transcript is not

@@ -208,7 +208,14 @@ export default function OperationBlock({
               {JSON.stringify(input, null, 2)}
             </pre>
           )}
-          {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} />}
+          {/*
+            The diff names the file only when this header did not: for Edit and
+            Write `summary` is that same path, and two copies of it in one block
+            is the stacking spec §3.1.1 #3 objects to. An orphan result has no
+            call and so no argument, and there the stat is the only account of
+            which file was touched.
+          */}
+          {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary === ''} />}
           {result !== null && (
             <FoldedOutput
               text={result.text}
