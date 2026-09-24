@@ -1,6 +1,7 @@
 # Per-workbench shown hosts + the three create buttons — spec delta and plan
 
-Date: 2026-09-25. Owner: mlab/purdex-48 (handed over from 7d). Status: DRAFT — three user decisions pending (§1.4).
+Date: 2026-09-25. Spec owner: coordinator mlab/purdex-13 (user: "規格由你送審，其他 session 只跑執行"). Executor: mlab/purdex-48.
+Status: **FINAL** — user decisions §0 and §1.4 answered; codex plan review task-muft8kwp-9pyicy handled in §7.
 
 ## 0. The user's decisions (2026-09-25, final — do not reopen)
 
@@ -11,6 +12,14 @@ Date: 2026-09-25. Owner: mlab/purdex-48 (handed over from 7d). Status: DRAFT —
    copied verbatim — both workbenches share the same sessions); **"duplicate settings only"** = the shown list only, one
    empty workspace, no tab.
 3. **"New blank workbench"** = shown list empty (0 hosts); the user turns hosts on in Settings.
+4. The user's model (restated 2026-09-25): the **host list** is one per device and moves only by the one-time
+   transfer code — whichever workbench syncs, the host list is the same device list. The **shown-hosts list** is one
+   per workbench; whichever workbench is the master is the one whose list syncs.
+5. Upgrade: EXISTING local workbenches start with **every host hidden** (`[]`) — hiding never closes a tab (H2 rule),
+   so turning a host on brings its panes back.
+6. Promote: **the list follows the workbench** — the workbench made master syncs its own list.
+7. UI: **three separate buttons** — "Duplicate all", "Duplicate settings only", "New blank workbench". Duplicates
+   carry no name / icon / colour (existing rule).
 
 ## 1. Spec delta
 
@@ -38,14 +47,9 @@ own shown-hosts list; it borrows every other setting of the master (host looks i
 Not rewritten (as-built record). A one-line note at the top of §0.17 / §0.21 item 5 / §0.27 / acceptance 13:
 "superseded 2026-09-25 by per-workbench lists — see 2026-09-25-per-workbench-shown-hosts-plan.md".
 
-### 1.4 PENDING user decisions (asked through 13, 2026-09-25; placeholders below)
+### 1.4 User decisions (answered 2026-09-25 — see §0 items 5–7)
 
-- **Q1 upgrade default for EXISTING local workbenches**: (a) copy the list they see today (= the device list, i.e.
-  the master's) — nothing changes on screen; (b) `[]`. Plan assumes **(a)** until answered (task A4).
-- **Q2 promote**: (a) the list follows the workbench (as appearance does); (b) stays with the master slot. Plan
-  assumes **(a)** (task A3).
-- **Q3 UI**: proposed "Duplicate current workbench" → name field + two radios ("duplicate all" default / "settings
-  only"); "New blank workbench" unchanged; duplicates carry no name/icon/colour (existing rule). Task B2 waits.
+Q1 upgrade default = `[]` (§0.5). Q2 promote = the list follows the workbench (§0.6). Q3 = three buttons (§0.7).
 
 ## 2. Design (chosen: "Design 2") and why
 
@@ -64,21 +68,30 @@ Not rewritten (as-built record). A one-line note at the top of §0.17 / §0.21 i
   promote stamps). `worldId === 'master'` → `useShownHostsStore.ids`; a slave id → that slave's `shownHostIds`;
   unknown id → `[]` (fail closed: gated, never connected). Keyed on the tab tag, not `activeProfileId`, so panes are
   judged by the list of the world they belong to while another window's switch rehydrates store by store.
-  Residual (stated, not defended): during a cross-window promote the tag, the record and the shown store rehydrate
-  separately — a pane can be gated / ungated for one rehydrate.
+- **Fail closed (codex #4)**: the reader returns `[]` (every host hidden → gated, no connection) whenever it cannot
+  be sure which list applies: `useTabStore.worldId` differs from `useLocalProfilesStore.activeProfileId` (a
+  cross-window switch / promote mid-rehydrate), or any of the tab / local-profiles / shown-hosts stores has not
+  hydrated. A hidden pane opens no connection (spec §4.5), so a transient `[]` can only delay a connection, never
+  open a wrong one. Tested for every rehydrate order of a promote (A2).
 
-## 3. PR split (≤ 20 files each)
+## 3. PR split (≤ 20 files each — codex #8; the executor measures the real list before each PR and splits
+further at a task boundary if needed)
 
-- **PR-A `worktree-per-workbench-shown-hosts`** (from `origin/main`): data model, readers, writer, re-key, reshow,
-  promote, upgrade step, copy variants' list plumbing in `addCopyAsSlave`, spec delta, hint copy. No UI button change.
-- **PR-B = this branch `worktree-profile-create-buttons`** (merges origin/main after PR-A): `createBlankSlave` with
-  `[]`, new `createSettingsCopySlave`, the buttons per Q3, locale text. Its six existing files stay.
+- **Docs PR** (no code, no codex): this plan + the spec delta §1.1–§1.3.
+- **PR-A1 `worktree-per-workbench-shown-hosts`**: A1 store field, A2 reader (fail closed), A3 writer + promote,
+  A7 copies' list plumbing.
+- **PR-A2** (stacked on A1): A5 re-key, A6 reshow, A8 locale copy.
+- **PR-B = `worktree-profile-create-buttons`** (merges origin/main after A2): the three buttons.
+- PR-A1 + PR-A2 + PR-B ship in ONE bump (a slave list that nothing can set, or buttons without per-workbench lists,
+  is not a release).
 
 ## 4. PR-A tasks (TDD; one commit per task; `git commit --only`)
 
 A1 **Store field** — `useLocalProfilesStore.ts`: `LocalProfile.shownHostIds: string[]`; `sanitiseSlave` keeps
-   `sanitizeShownIds(v.shownHostIds)` when it is an array and leaves it **absent** (`undefined`) when the persisted
-   record has none (A4 fills it); `addSlave(name, world, shownHostIds = [])`; new action
+   `sanitizeShownIds(v.shownHostIds)` when it is an array and **defaults to `[]`** when the persisted record has
+   none (§0.5 — this IS the upgrade; no separate step). **Every path that rebuilds a `LocalProfile` keeps the list**
+   (codex #1, critical): `setProfileAppearance` (~:417), rename, `sanitiseSlave`, `addSlave`, `promoteSlave` — a
+   regression test per path (appearance patch, rename, reload) asserts the same array survives; `addSlave(name, world, shownHostIds = [])`; new action
    `setSlaveShownHosts(id, fn: (ids) => string[]) → {ok} | not-found` (no-op when unchanged: same reference, no set).
    The persisted-keys test (:608) is unchanged (field is inside `slaves`). Import `sanitizeShownIds` from
    `useShownHostsStore` (pure function; check the import guard allows a store→store type/function import, else move
@@ -94,17 +107,27 @@ A3 **Writer + promote** — `setHostShown`: target = current world by the tab ta
    promoted slave's list → `useShownHostsStore.setState({ids})`, the demoted slave's record gets the old store ids;
    rollback restores the store (extend `captureLocal`/`restoreLocal` or a local undo). Store-level `promoteSlave`
    takes the demoted list as an argument so the record is written in its one `set`.
-A4 **Upgrade step** (Q1=a) — once `useLocalProfilesStore` and `useShownHostsStore` have both hydrated
-   (`onFinishHydration`, same pattern as host-reshow), every slave whose `shownHostIds` is absent gets a copy of
-   `useShownHostsStore.ids` in ONE `set` (deterministic: every window computes the same value; a later window finds
-   nothing absent). Installed from `main.tsx` next to `startHostReshowRecovery`. If Q1=b this task is `sanitiseSlave`
-   defaulting to `[]` and nothing else.
+   **Two-store write, defined (codex #3)**: capture both before-states (local-profiles `slaves` + shown-store `ids`)
+   before the first write; write local-profiles, then the shown store, then `restampWorld`; if any write throws
+   (including a persist `setItem` after the in-memory set), restore every touched store in reverse; if a restore
+   itself throws, report a distinct `rollback-incomplete` outcome (not swallowed — `restoreLocal` today swallows) and
+   leave a problem the UI shows. Failure-injection tests: local write fails / shown write fails / `restampWorld`
+   fails, and each of their rollback writes failing.
+A4 **(dropped)** — Q1 = `[]` makes the upgrade a `sanitiseSlave` default (A1); codex #2 (cross-key upgrade race)
+   no longer applies. **Known residual (codex #6, accepted)**: a window still running the pre-upgrade build that writes
+   `purdex-local-profiles` drops `shownHostIds` → the next read defaults to `[]` = every host hidden in that local
+   workbench (fail closed, no tab closed). Both clients upgrade together (same :5174), as for every schema bump.
 A5 **Re-key** — `rekeyShownHosts` also re-keys each slave's `shownHostIds` with the same moves. It must NOT plan the
    slave write from the pre-state (the 'parked worlds' write of `planRewrite` also sets `slaves`): its commit reads
    `useLocalProfilesStore.getState().slaves` AT COMMIT, maps, sets, and remembers that value for its undo; undos run
    in reverse, so the parked-worlds undo still restores the pre-state. Deletion (`rewriteHostRefs`) never re-keys lists.
+   **Two stores, one step (codex #5)**: the step captures BOTH before-states (master `ids`, `slaves`), writes both,
+   and its own undo restores both — including when its own commit threw after the first write; a failing undo reports
+   through the pass's existing `rollback-failed` path (H1b). Tests: second write fails → both restored; undo fails →
+   `rollback-failed` + retry.
 A6 **Reshow** — `host-reshow.ts` snapshots with the current list and also subscribes to `useLocalProfilesStore`
-   (the current slave's list) and to `useTabStore` `worldId` changes; hydration gate covers the three stores. A world
+   (the current slave's list) and to `useTabStore` `worldId` changes; hydration gate covers **four** stores — host, shown-hosts, local-profiles, tab (codex #7: identity resolution
+   needs the host store); a test per hydration order. A world
    switch that turns host X from hidden to shown recovers X's sessions (one call per local row, unchanged rule).
 A7 **Copies' list plumbing** — `addCopyAsSlave(name, source, tabOrder, shownHostIds)`: `saveScreenAsSlave` passes the
    CURRENT list; `copyMasterAsSlave` (wizard) passes `useShownHostsStore.ids` (the master's list). `copyWorld` unchanged.
@@ -119,17 +142,21 @@ switch-active.ts/.test, host-reresolve.ts? (only if A5 needs it; the step lives 
 .integration.test, host-reshow.ts/.test, new `lib/profile/shown-hosts-upgrade.ts`/.test, main.tsx, en.json, zh-TW.json,
 2 spec files + this plan, host-overview switch test if the return type matters. Over 20 → split A8 docs into a docs PR.
 
-Mutation (delivery item): (m1) reader ignores the tab tag (reads the store always) → A2 tests red; (m2) slave toggle
+Mutation (delivery item): (m5) `setProfileAppearance` drops the list → A1 red; (m6) promote skips the rollback of
+the second store → A3 red; (m7) reader not fail closed on worldId ≠ activeProfileId → A2 red; (m8) re-key undo
+restores one store → A5 red; (m9) reshow gate without the host store → A6 red; (m1) reader ignores the tab tag (reads the store always) → A2 tests red; (m2) slave toggle
 writes the store → A3 red + a collector test "slave toggle builds no new settings hash" red; (m3) re-key plans the
 slave write from the pre-state → A5 integration red; (m4) promote leaves the list in the slot → A3 red.
 
-## 5. PR-B tasks (this branch, after PR-A merges and origin/main is merged in)
+## 5. PR-B tasks (buttons branch, after PR-A2 merges and origin/main is merged in)
 
 B1 `createBlankSlave` → `addSlave(name, world, [])`; comment "Hosts and settings are the device's" rewritten.
-   `createSettingsCopySlave(name)` = the blank world + the current list.
-B2 UI per Q3; tests pin: duplicate-all copies tabs + list; settings-only has one empty workspace + list; blank has
-   `[]`; the screen never moves; zh-TW labels.
-B3 en/zh-TW labels; `local.desc` consistency test.
+   `createSettingsCopySlave(name)` = the blank world (one empty workspace, no tab) + a copy of the CURRENT list.
+   "Duplicate all" = today's copy of the screen world + a copy of the CURRENT list.
+B2 UI (§0.7): three separate buttons "Duplicate all" / "Duplicate settings only" / "New blank workbench", each with
+   the existing name field flow; tests pin: duplicate-all copies workspaces + tabs + list (tmux bindings verbatim);
+   settings-only has one empty workspace + list; blank has `[]`; the screen never moves; no name/icon/colour copied.
+B3 en / zh-TW labels (zh: 「全部複製」「只複製設定」「新增空白工作台」); `local.desc` en/zh consistency test.
 
 ## 6. Real-device acceptance (two clients, independent host ids — feedback_acceptance_distinct_host_ids)
 
@@ -140,4 +167,17 @@ A and B attached to one master; hosts mlab, air26 shown in the master.
 3. A: blank → L3: every host hidden; New Tab offers no host; turn mlab on in L3 → only L3 changes.
 4. B: hide mlab in master → A's master follows; A's L1/L2/L3 unaffected.
 5. Reload A on L1 → list kept. Promote L1 (detached) → per Q2.
-6. Upgrade: a pre-upgrade build with a slave → upgraded → per Q1.
+6. Upgrade: a pre-upgrade build with a slave that has tabs on mlab → upgraded → that slave shows every host hidden;
+   its tabs stay (placeholder "主機已於此工作台關閉", no connection); turning mlab on in it brings the panes back live;
+   the master's list unchanged.
+7. Promote a slave with only air26 shown → the SOT `settings` now carries that list; the demoted workbench keeps
+   the old master list.
+
+## 7. Codex plan review task-muft8kwp-9pyicy (8 findings) — handled
+
+1 critical `setProfileAppearance` drops the list → A1 every rebuild path + m5. 2 critical cross-key upgrade race →
+moot (Q1 = `[]`, A4 dropped). 3 promote two-store rollback → A3 defined + failure injection + m6. 4 cross-window
+promote may open a wrong connection → §2 fail closed + m7. 5 re-key two-store atomicity → A5 + m8. 6 old-shape
+window overwrite → accepted residual (A4 note; fail closed). 7 reshow gate needs the host store → A6 four stores + m9.
+8 file count → §3 split (docs / A1 / A2 / B).
+
