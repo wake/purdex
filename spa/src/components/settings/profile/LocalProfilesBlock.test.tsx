@@ -1,17 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
+import zhTW from '../../../locales/zh-TW.json'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { LocalProfilesBlock } from './LocalProfilesBlock'
 import { useLocalProfilesStore, type LocalProfile } from '../../../stores/useLocalProfilesStore'
 import { __resetProfileSwitcherForTest, useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useDeviceNameStore } from '../../../stores/useDeviceNameStore'
 import { useUndoToast } from '../../../stores/useUndoToast'
-import { copyMasterAsSlave, deleteSlave, reorderSlaves, saveScreenAsSlave, switchActiveProfile } from '../../../lib/profile/switch-active'
+import { copyMasterAsSlave, createBlankSlave, deleteSlave, reorderSlaves, saveScreenAsSlave, switchActiveProfile } from '../../../lib/profile/switch-active'
+import { useTabStore } from '../../../stores/useTabStore'
+import { useWorkspaceStore } from '../../../features/workspace/store'
+import type { Tab } from '../../../types/tab'
 
 vi.mock('../../../lib/profile/switch-active', () => ({
   switchActiveProfile: vi.fn(),
   copyMasterAsSlave: vi.fn(),
   saveScreenAsSlave: vi.fn(),
+  createBlankSlave: vi.fn(),
   deleteSlave: vi.fn(),
   reorderSlaves: vi.fn(),
 }))
@@ -42,7 +48,7 @@ const rowIds = () => screen.getAllByTestId(/^profile-row-(master|s\d)$/).map((el
 const flush = () => act(async () => { await Promise.resolve() })
 
 beforeEach(() => {
-  for (const fn of [switchActiveProfile, copyMasterAsSlave, saveScreenAsSlave, deleteSlave, reorderSlaves]) vi.mocked(fn).mockReset()
+  for (const fn of [switchActiveProfile, copyMasterAsSlave, saveScreenAsSlave, createBlankSlave, deleteSlave, reorderSlaves]) vi.mocked(fn).mockReset()
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
   useDeviceNameStore.setState({ deviceName: 'Mini', defaultDeviceName: 'Browser' })
   __resetProfileSwitcherForTest()
@@ -196,58 +202,185 @@ describe('the order of the slaves', () => {
 })
 
 describe('the two ways to a new local profile', () => {
-  const open = (which: 'copy' | 'save') => fireEvent.click(screen.getByTestId(`profile-new-${which}`))
+  const open = (which: 'duplicate' | 'blank') => fireEvent.click(screen.getByTestId(`profile-new-${which}`))
   const nameInput = () => screen.getByTestId('profile-new-name') as HTMLInputElement
+
+  it('the two buttons: Duplicate current, New blank', () => {
+    render(<LocalProfilesBlock />)
+    expect(screen.getByTestId('profile-new-duplicate')).toHaveTextContent('Duplicate current')
+    expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('New blank')
+    expect(screen.queryByTestId('profile-new-copy')).toBeNull()
+    expect(screen.queryByTestId('profile-new-save')).toBeNull()
+    // exactly two: no third way (the master's copy is the wizard's)
+    expect(within(screen.getByTestId('profile-local-block')).getAllByTestId(/^profile-new-/)).toHaveLength(2)
+  })
+
+  it('zh-TW: 複製目前工作台, 新增空白工作台', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      render(<LocalProfilesBlock />)
+      expect(screen.getByTestId('profile-new-duplicate')).toHaveTextContent('複製目前工作台')
+      expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('新增空白工作台')
+      open('duplicate')
+      expect(screen.getByTestId('profile-new-form')).toHaveTextContent(zhTW['settings.profile.local.new_duplicate_hint'])
+      open('blank')
+      expect(screen.getByTestId('profile-new-form')).toHaveTextContent(zhTW['settings.profile.local.new_blank_hint'])
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  it('the block says what a local profile holds, and what it shares with the master', () => {
+    render(<LocalProfilesBlock />)
+    expect(screen.getByTestId('profile-local-block')).toHaveTextContent(
+      'A local workbench keeps its own workspaces, tabs and shown hosts, and stays on this device — it is never synced. Host looks and every other setting are shared with the master; only the master syncs.',
+    )
+  })
+
+  it('each form says what it is naming', () => {
+    render(<LocalProfilesBlock />)
+    open('duplicate')
+    expect(screen.getByTestId('profile-new-form')).toHaveAttribute('data-kind', 'duplicate')
+    expect(screen.getByTestId('profile-new-form')).toHaveTextContent('Name for the copy:')
+    open('blank')
+    expect(screen.getByTestId('profile-new-form')).toHaveAttribute('data-kind', 'blank')
+    expect(screen.getByTestId('profile-new-form')).toHaveTextContent('Name for the new profile:')
+  })
 
   it('the name offered is the device name', () => {
     render(<LocalProfilesBlock />)
-    open('copy')
+    open('duplicate')
     expect(nameInput().value).toBe('Mini')
   })
 
   it('… and never one a profile already has', () => {
     useLocalProfilesStore.setState({ slaves: { s1: slave('s1', 'Mini'), s2: slave('s2', 'Mini 2') }, slaveOrder: ['s1', 's2'] })
     render(<LocalProfilesBlock />)
-    open('save')
+    open('blank')
     expect(nameInput().value).toBe('Mini 3')
   })
 
   it('… the master\'s name counts as taken too', () => {
     useLocalProfilesStore.setState({ master: { name: 'Mini' } })
     render(<LocalProfilesBlock />)
-    open('copy')
+    open('duplicate')
     expect(nameInput().value).toBe('Mini 2')
   })
 
-  it('copy: copies the master under the name typed, then the form goes', () => {
-    vi.mocked(copyMasterAsSlave).mockReturnValue({ ok: true, id: 'n1' })
+  it('duplicate: copies what is on screen under the name typed, then the form goes', () => {
+    vi.mocked(saveScreenAsSlave).mockReturnValue({ ok: true, id: 'n1' })
     render(<LocalProfilesBlock />)
-    open('copy')
+    open('duplicate')
     fireEvent.change(nameInput(), { target: { value: 'Experiment' } })
     fireEvent.click(screen.getByTestId('profile-new-create'))
-    expect(copyMasterAsSlave).toHaveBeenCalledWith('Experiment')
+    expect(saveScreenAsSlave).toHaveBeenCalledWith('Experiment')
+    expect(createBlankSlave).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('profile-new-name')).toBeNull()
+  })
+
+  it('blank: creates a blank profile; Enter submits', () => {
+    vi.mocked(createBlankSlave).mockReturnValue({ ok: true, id: 'n1' })
+    render(<LocalProfilesBlock />)
+    open('blank')
+    fireEvent.keyDown(nameInput(), { key: 'Enter' })
+    expect(createBlankSlave).toHaveBeenCalledWith('Mini')
     expect(saveScreenAsSlave).not.toHaveBeenCalled()
     expect(screen.queryByTestId('profile-new-name')).toBeNull()
   })
 
-  it('save: saves the screen; Enter submits', () => {
+  describe('with the real functions behind the buttons', () => {
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('../../../lib/profile/switch-active')>('../../../lib/profile/switch-active')
+      vi.mocked(saveScreenAsSlave).mockImplementation(actual.saveScreenAsSlave)
+      vi.mocked(createBlankSlave).mockImplementation(actual.createBlankSlave)
+      const tab: Tab = { id: 't1', pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: 'p1', content: { kind: 'new-tab' } } } }
+      useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1' })
+      useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'On screen', tabs: ['t1'], activeTabId: 't1', moduleConfig: {} }], activeWorkspaceId: 'w1' })
+    })
+    afterEach(() => {
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+      useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+    })
+    const created = () => {
+      const { slaves, slaveOrder } = useLocalProfilesStore.getState()
+      expect(slaveOrder).toHaveLength(1)
+      const w = slaves[slaveOrder[0]].world
+      if (w === null) throw new Error('not parked')
+      return { name: slaves[slaveOrder[0]].name, world: w }
+    }
+
+    it('Duplicate current: the new profile is what is on screen — same workspaces and tabs, fresh ids', () => {
+      render(<LocalProfilesBlock />)
+      open('duplicate')
+      fireEvent.click(screen.getByTestId('profile-new-create'))
+      const { name, world } = created()
+      expect(name).toBe('Mini')
+      expect(world.workspaces.map((ws) => ws.name)).toEqual(['On screen'])
+      const [ws] = world.workspaces
+      const tabIds = Object.keys(world.tabs)
+      expect(tabIds).toHaveLength(1)
+      expect(ws.tabs).toEqual(tabIds)
+      expect(ws.id).not.toBe('w1')
+      expect(tabIds[0]).not.toBe('t1')
+      expect(world.tabs[tabIds[0]].layout).toMatchObject({ type: 'leaf', pane: { content: { kind: 'new-tab' } } })
+      expect(world.activeWorkspaceId).toBe(ws.id)
+      expect(world.activeTabId).toBe(tabIds[0])
+      // the screen did not move
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['w1'])
+      expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
+      expect(useLocalProfilesStore.getState().activeProfileId).toBe('master')
+    })
+
+    it('New blank: the new profile is one empty workspace', () => {
+      render(<LocalProfilesBlock />)
+      open('blank')
+      fireEvent.click(screen.getByTestId('profile-new-create'))
+      const { name, world } = created()
+      expect(name).toBe('Mini')
+      expect(world.tabs).toEqual({})
+      expect(world.workspaces).toHaveLength(1)
+      expect(world.workspaces[0]).toMatchObject({ name: 'Workspace 1', tabs: [], activeTabId: null })
+      expect(world.workspaces[0].id).not.toBe('w1')
+      expect(world.activeWorkspaceId).toBe(world.workspaces[0].id)
+      expect(world.activeTabId).toBeNull()
+      // the screen did not move
+      expect(useWorkspaceStore.getState().workspaces.map((ws) => ws.id)).toEqual(['w1'])
+      expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
+      expect(useLocalProfilesStore.getState().activeProfileId).toBe('master')
+    })
+
+    it.each(['duplicate', 'blank'] as const)('%s with a blank name: bad-name, nothing is created, the form stays', (which) => {
+      render(<LocalProfilesBlock />)
+      open(which)
+      fireEvent.change(nameInput(), { target: { value: '   ' } })
+      fireEvent.click(screen.getByTestId('profile-new-create'))
+      expect(screen.getByTestId('profile-new-error')).toHaveTextContent(en['settings.profile.local.error.bad_name'])
+      expect(useLocalProfilesStore.getState().slaveOrder).toEqual([])
+      expect(nameInput()).toBeInTheDocument()
+    })
+  })
+
+  it('nothing on the block copies the master: every button, every form, every create', () => {
     vi.mocked(saveScreenAsSlave).mockReturnValue({ ok: true, id: 'n1' })
+    vi.mocked(createBlankSlave).mockReturnValue({ ok: true, id: 'n2' })
     render(<LocalProfilesBlock />)
-    open('save')
-    fireEvent.keyDown(nameInput(), { key: 'Enter' })
-    expect(saveScreenAsSlave).toHaveBeenCalledWith('Mini')
+    for (const which of ['duplicate', 'blank'] as const) {
+      open(which)
+      fireEvent.click(screen.getByTestId('profile-new-create'))
+    }
+    for (const button of within(screen.getByTestId('profile-local-block')).getAllByRole('button')) fireEvent.click(button)
     expect(copyMasterAsSlave).not.toHaveBeenCalled()
   })
 
   it('Cancel (and Escape) create nothing', () => {
     render(<LocalProfilesBlock />)
-    open('copy')
+    open('duplicate')
     fireEvent.click(screen.getByTestId('profile-new-cancel'))
     expect(screen.queryByTestId('profile-new-name')).toBeNull()
-    open('save')
+    open('blank')
     fireEvent.keyDown(nameInput(), { key: 'Escape' })
     expect(screen.queryByTestId('profile-new-name')).toBeNull()
-    expect(copyMasterAsSlave).not.toHaveBeenCalled()
+    expect(createBlankSlave).not.toHaveBeenCalled()
     expect(saveScreenAsSlave).not.toHaveBeenCalled()
   })
 
@@ -256,9 +389,9 @@ describe('the two ways to a new local profile', () => {
     ['bad-name', 'settings.profile.local.error.bad_name', 'error'],
     ['bad-world', 'settings.profile.local.error.bad_world', 'error'],
   ] as const)('%s has its own sentence and the form stays', (reason, key, tone) => {
-    vi.mocked(copyMasterAsSlave).mockReturnValue({ ok: false, reason })
+    vi.mocked(createBlankSlave).mockReturnValue({ ok: false, reason })
     render(<LocalProfilesBlock />)
-    open('copy')
+    open('blank')
     fireEvent.click(screen.getByTestId('profile-new-create'))
     const status = screen.getByTestId('profile-new-error')
     expect(status).toHaveTextContent(en[key])
@@ -269,7 +402,7 @@ describe('the two ways to a new local profile', () => {
   it('write-failed says what the storage said', () => {
     vi.mocked(saveScreenAsSlave).mockReturnValue({ ok: false, reason: 'write-failed', detail: 'QuotaExceededError' })
     render(<LocalProfilesBlock />)
-    open('save')
+    open('duplicate')
     fireEvent.click(screen.getByTestId('profile-new-create'))
     expect(screen.getByTestId('profile-new-error')).toHaveTextContent('QuotaExceededError')
   })

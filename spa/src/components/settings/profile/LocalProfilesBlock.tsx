@@ -1,6 +1,7 @@
 // spa/src/components/settings/profile/LocalProfilesBlock.tsx — Settings › Profile › Profiles: every profile of
 // THIS device. The master first (it is the one that can sync), then the slaves in `slaveOrder`; per row the look,
-// a switch, and for a slave its place in the order and Delete; below, the two ways to a new one.
+// a switch, and for a slave its place in the order and Delete; below, the two ways to a new one: a copy of what is on
+// screen (`saveScreenAsSlave`) or a blank one (`createBlankSlave`). Copying the master has no button: that is the wizard's.
 //
 // The stores are read; the worlds are moved by lib/profile/switch-active.ts and nothing else (P3 plan, P3b "As
 // built"). A SWITCH goes through `useProfileSwitcherStore.chooseProfile` — the Home menu's own path, with its
@@ -12,7 +13,7 @@ import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../../stores/useLoc
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { ensureDefaultDeviceName, useDeviceNameStore } from '../../../stores/useDeviceNameStore'
 import { effectiveDeviceName } from '../../../lib/device-name'
-import { copyMasterAsSlave, deleteSlave, reorderSlaves, saveScreenAsSlave, type CopyResult } from '../../../lib/profile/switch-active'
+import { createBlankSlave, deleteSlave, reorderSlaves, saveScreenAsSlave, type CopyResult } from '../../../lib/profile/switch-active'
 import { LocalProfileRow } from './LocalProfileRow'
 import { defaultSlaveName } from './profile-rules'
 
@@ -24,7 +25,7 @@ const TONE_COLOR: Record<Tone, string> = { info: 'text-text-secondary', error: '
 const BTN =
   'shrink-0 rounded-md border border-border-default px-2.5 py-1 text-xs text-text-secondary hover:text-text-primary hover:border-border-active cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed'
 
-type NewKind = 'copy' | 'save'
+type NewKind = 'duplicate' | 'blank'
 
 export function LocalProfilesBlock() {
   const t = useI18nStore((s) => s.t)
@@ -89,7 +90,7 @@ export function LocalProfilesBlock() {
 
   const create = () => {
     if (creating === null) return
-    const r: CopyResult = creating.kind === 'copy' ? copyMasterAsSlave(creating.name) : saveScreenAsSlave(creating.name)
+    const r: CopyResult = creating.kind === 'duplicate' ? saveScreenAsSlave(creating.name) : createBlankSlave(creating.name)
     if (r.ok) {
       setCreating(null)
       setCreateNote(null)
@@ -142,11 +143,11 @@ export function LocalProfilesBlock() {
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border-default pt-3">
-        <button type="button" data-testid="profile-new-copy" aria-pressed={creating?.kind === 'copy'} onClick={() => openCreate('copy')} className={BTN}>
-          {t('settings.profile.local.copy_master')}
+        <button type="button" data-testid="profile-new-duplicate" aria-pressed={creating?.kind === 'duplicate'} onClick={() => openCreate('duplicate')} className={BTN}>
+          {t('settings.profile.local.duplicate')}
         </button>
-        <button type="button" data-testid="profile-new-save" aria-pressed={creating?.kind === 'save'} onClick={() => openCreate('save')} className={BTN}>
-          {t('settings.profile.local.save_screen')}
+        <button type="button" data-testid="profile-new-blank" aria-pressed={creating?.kind === 'blank'} onClick={() => openCreate('blank')} className={BTN}>
+          {t('settings.profile.local.new_blank')}
         </button>
       </div>
 
