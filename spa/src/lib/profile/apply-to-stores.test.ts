@@ -29,6 +29,7 @@ import type { NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { emptyPeerHostEntry, usePeerStore } from '../../stores/usePeerStore'
 import { useSessionCwdStore } from '../../stores/useSessionCwdStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
@@ -51,6 +52,7 @@ import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspa
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
 import { INVALID_REASONS, applySectionToStores, isAliasWriteBackOnly, readSettingsSources } from './apply-to-stores'
 import { identityOfSync, syncIdOfSync } from './host-identity'
+import { isRefShownNow, setHostShown } from '../shown-hosts'
 
 // === fixtures ===
 
@@ -106,6 +108,7 @@ function resetStores(): void {
   useNexHostStore.setState({ byHost: {} })
   useHostSettingsStore.setState({ hosts: {} })
   useHostLookStore.setState({ looks: {} })
+  useShownHostsStore.setState({ ids: [] })
   // Reset too: since every apply ends with a re-resolve pass, a column one test left behind would move in the next.
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
 }
@@ -888,7 +891,7 @@ describe('applySectionToStores — settings', () => {
   })
 
   it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {
-    expect(Object.keys(readSettingsSources())).toHaveLength(9)
+    expect(Object.keys(readSettingsSources())).toHaveLength(10)
     expect(readSettingsSources()).not.toHaveProperty('purdex-editor-settings')
     const payload = { ...settingsNow(), 'purdex-editor-settings': { fontSize: 20 } }
     let outcome: unknown
@@ -992,6 +995,115 @@ describe('applySectionToStores — settings: host looks', () => {
     expect(useHostLookStore.getState()).toBe(before)
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-host-looks': { looks: { [WIRE]: { name: 'mine' } } } }) })
     expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
+  })
+})
+
+// host ownership H2d-1 (spec §4.1, plan §0.6): the shown-hosts ids are wire ids IN the store — an apply writes them
+// verbatim, whatever this device's hosts are; `{ ids }` always travels (the empty list included), so every [] ↔ list
+// transition is a same-shape patch (never `rejected-settings`).
+describe('applySectionToStores — settings: shown hosts', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const WIRE = syncIdOfSync(DAEMON)
+  const settingsNow = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+  const ids = () => useShownHostsStore.getState().ids
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2] })
+  })
+
+  it('the store is always in the build, the empty default included', () => {
+    expect(settingsNow()['purdex-shown-hosts']).toEqual({ ids: [] })
+  })
+
+  it('{ ids: [d1_unknown, d1_a] } lands byte-for-byte and round-trips apply → build; the hash is the payload\'s (nothing to push)', async () => {
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: ['d1_unknown', 'd1_a'] } } as SettingsPayload
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(ids()).toEqual(['d1_unknown', 'd1_a'])
+    expect(persistedOf(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ ids: ['d1_unknown', 'd1_a'] })
+    expect(JSON.stringify(settingsNow()['purdex-shown-hosts'])).toBe(JSON.stringify(payload['purdex-shown-hosts']))
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('ids naming a host here (wire and local form) and one no host here claims land verbatim — no local↔wire mapping', async () => {
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: [WIRE, 'd1_unknown', H2] } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(ids()).toEqual([WIRE, 'd1_unknown', H2])
+  })
+
+  it.each([
+    ['[] → a list', [] as string[], [WIRE, 'd1_unknown']],
+    ['a list → []', [WIRE, 'd1_unknown'], [] as string[]],
+  ])('%s applies (no rejected-settings)', async (_label, local, incoming) => {
+    useShownHostsStore.setState({ ids: local })
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: incoming } } as SettingsPayload
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(ids()).toEqual(incoming)
+  })
+
+  it('applying a shown-hosts change closes nothing: the tab, workspace and local-profiles stores stay the same objects (§0.21)', async () => {
+    const tabs = useTabStore.getState()
+    const workspaces = useWorkspaceStore.getState()
+    const profiles = useLocalProfilesStore.getState()
+    useShownHostsStore.setState({ ids: [WIRE, H2] })
+    const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: [H2] } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true })
+    expect(ids()).toEqual([H2])
+    expect(useTabStore.getState()).toBe(tabs)
+    expect(useWorkspaceStore.getState()).toBe(workspaces)
+    expect(useLocalProfilesStore.getState()).toBe(profiles)
+  })
+
+  // The #1421 attacker finding, as a regression: two devices with different host lists share one synced list. A's
+  // hide must carry every id it does not know through; B, applying it, keeps its own host shown. Hosts added later are
+  // hidden on each device and write nothing.
+  it('two clients: A hides a → payload [d1_b, d1_c] (d1_c kept although A lacks c); on B c stays shown, a is hidden; later adds write nothing', async () => {
+    const d = (n: string) => `${n}-lab:${n.repeat(6).slice(0, 6)}`
+    const hostsOf = (names: string[]) => ({
+      [M]: host(M, { daemonId: DAEMON }),
+      ...Object.fromEntries(names.map((n, i) => [n, host(n, { ip: `10.0.1.${i + 1}`, order: i + 1, daemonId: d(n) })])),
+    })
+    const [A_HOSTS, B_HOSTS] = [hostsOf(['a', 'b']), hostsOf(['a', 'b', 'c'])]
+    const SYNCED = ['a', 'b', 'c'].map((n) => syncIdOfSync(d(n)))
+
+    // device A
+    useHostStore.setState({ hosts: A_HOSTS, hostOrder: [M, 'a', 'b'] })
+    useShownHostsStore.setState({ ids: SYNCED })
+    setHostShown('a', false)
+    const fromA = settingsNow()
+    expect(fromA['purdex-shown-hosts']).toEqual({ ids: [SYNCED[1], SYNCED[2]] })
+
+    // device B
+    useHostStore.setState({ hosts: B_HOSTS, hostOrder: [M, 'a', 'b', 'c'] })
+    useShownHostsStore.setState({ ids: SYNCED })
+    expect(await applySectionToStores('settings', fromA, ctx)).toMatchObject({ ok: true, hash: await hashSection(fromA) })
+    expect(isRefShownNow('c')).toBe(true)
+    expect(isRefShownNow('b')).toBe(true)
+    expect(isRefShownNow('a')).toBe(false)
+
+    // a host added later on B is hidden there; nothing is written, the payload rebuilds byte-identical
+    const onB = JSON.stringify(settingsNow())
+    const e = useHostStore.getState().addHost({ name: 'e', ip: '10.0.2.1', port: 7860 })
+    expect(isRefShownNow(e)).toBe(false)
+    expect(JSON.stringify(settingsNow())).toBe(onB)
+
+    // back on A (its store as it left it): a host d added is hidden; the payload rebuilds byte-identical
+    useHostStore.setState({ hosts: A_HOSTS, hostOrder: [M, 'a', 'b'] })
+    useShownHostsStore.setState({ ids: fromA['purdex-shown-hosts']!.ids as string[] })
+    const onA = JSON.stringify(settingsNow())
+    const dId = useHostStore.getState().addHost({ name: 'd', ip: '10.0.3.1', port: 7860 })
+    expect(isRefShownNow(dId)).toBe(false)
+    expect(JSON.stringify(settingsNow())).toBe(onA)
+  })
+
+  it('an ordinal-6 payload (no shown-hosts store) leaves the store untouched; the rebuild carries it, so the hash differs (pushed once)', async () => {
+    useShownHostsStore.getState().show(WIRE)
+    const before = useShownHostsStore.getState()
+    const legacy = settingsNow()
+    delete legacy['purdex-shown-hosts']
+    const outcome = await applySectionToStores('settings', legacy, ctx)
+    expect(useShownHostsStore.getState()).toBe(before)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-shown-hosts': { ids: [WIRE] } }) })
   })
 })
 

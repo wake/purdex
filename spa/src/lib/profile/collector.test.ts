@@ -12,6 +12,7 @@ import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { PROJECTIONS } from './projections'
 import { syncIdOfSync } from './host-identity'
@@ -53,12 +54,12 @@ const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash
 
 const SETTINGS_STORES = [
   useUISettingsStore, useThemeStore, useI18nStore, useNotificationSettingsStore,
-  useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore, useHostLookStore,
+  useWorkspaceSettingsStore, useHostSettingsStore, useNewTabLayoutStore, useLayoutStore, useHostLookStore, useShownHostsStore,
 ] as const
 
-const NINE_KEYS = [
+const TEN_KEYS = [
   'purdex-host-looks', 'purdex-host-settings', 'purdex-i18n', 'purdex-layout', 'purdex-newtab-layout',
-  'purdex-notification-settings', 'purdex-themes', 'purdex-ui-settings', 'purdex-workspace-settings',
+  'purdex-notification-settings', 'purdex-shown-hosts', 'purdex-themes', 'purdex-ui-settings', 'purdex-workspace-settings',
 ]
 
 function host(id: string, name = id) {
@@ -382,6 +383,7 @@ describe('startCollector — settings', () => {
       () => useNewTabLayoutStore.setState({ presets: { ...useNewTabLayoutStore.getState().presets } }),
       () => useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' }),
       () => useHostLookStore.getState().putLook('d1_a', { name: 'mlab' }),
+      () => useShownHostsStore.getState().show('d1_a'),
     ]
     start()
     for (const change of changes) {
@@ -398,19 +400,32 @@ describe('startCollector — settings', () => {
     expect(await pendingTimers()).toBe(0)
   })
 
-  it('always carries all nine stores, whichever one changed', async () => {
+  it('always carries all ten stores, whichever one changed', async () => {
     start()
     useUISettingsStore.setState({ keepAliveCount: 5 })
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, Record<string, unknown>>
-    expect(Object.keys(payload).sort()).toEqual(NINE_KEYS)
+    expect(Object.keys(payload).sort()).toEqual(TEN_KEYS)
     expect(payload['purdex-ui-settings'].keepAliveCount).toBe(5)
     expect(payload).not.toHaveProperty('purdex-editor-settings')
     expect(payload['purdex-ui-settings']).not.toHaveProperty('terminalSettingsVersion')
     expect(payload['purdex-layout']).toEqual({ tabPosition: 'top' })
     // host ownership §0.6: the look store is ALWAYS built, empty or not — an absent store reads "not sent" on the other side
     expect(payload['purdex-host-looks']).toEqual({ looks: {} })
+    // host ownership H2d-1 (§0.6): the shown-hosts store too — the EMPTY default { ids: [] } included
+    expect(payload['purdex-shown-hosts']).toEqual({ ids: [] })
+  })
+
+  it('a shown-hosts write schedules `settings` and travels, its ids verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {
+    useHostStore.setState({ hosts: { h1: { ...host('h1'), daemonId: 'mini-lab:278cbm' } } })
+    start()
+    useShownHostsStore.getState().show('d1_unknown')
+    useShownHostsStore.getState().show('h1')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['settings'])
+    const payload = reports[0].payload as Record<string, unknown>
+    expect(payload['purdex-shown-hosts']).toEqual({ ids: ['d1_unknown', 'h1'] })
   })
 
   it('a look write schedules `settings` and travels, its keys verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {
@@ -580,7 +595,7 @@ describe('watchUnsyncedStores', () => {
   it('UNSYNCED_SETTINGS_KEYS is exactly the projected stores that never registered with syncManager — none today', () => {
     // Fails the day a projected store starts (or stops) calling syncManager.register.
     const projected = [...new Set(PROJECTIONS.settings.map((p) => p.slice(0, p.indexOf('.'))))]
-    expect(projected.sort()).toEqual(NINE_KEYS)
+    expect(projected.sort()).toEqual(TEN_KEYS)
     expect(h.registered).toContain('purdex-ui-settings') // the recorder is live
     expect([...UNSYNCED_SETTINGS_KEYS].sort()).toEqual(projected.filter((k) => !h.registered.includes(k)).sort())
     expect(UNSYNCED_SETTINGS_KEYS).toEqual([])
@@ -589,7 +604,7 @@ describe('watchUnsyncedStores', () => {
   it('rehydrates nothing: neither a registered store a second time, nor the device-local editor store', () => {
     const spies = [...SETTINGS_STORES, useEditorSettingsStore].map((s) => vi.spyOn(s.persist, 'rehydrate'))
     unwatch = watchUnsyncedStores()
-    for (const key of [...NINE_KEYS, 'purdex-editor-settings', 'something-else', null]) storageEvent(key)
+    for (const key of [...TEN_KEYS, 'purdex-editor-settings', 'something-else', null]) storageEvent(key)
     for (const spy of spies) expect(spy).not.toHaveBeenCalled()
   })
 

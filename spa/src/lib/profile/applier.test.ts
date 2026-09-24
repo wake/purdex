@@ -1322,7 +1322,7 @@ describe('isWellFormedSection', () => {
         const dot = path.indexOf('.')
         byStore.set(path.slice(0, dot), [...(byStore.get(path.slice(0, dot)) ?? []), path.slice(dot + 1)])
       }
-      expect(byStore.size).toBe(9)
+      expect(byStore.size).toBe(10)
       for (const [store, fields] of byStore) {
         for (const field of fields) expect(isWellFormedSection('settings', { [store]: { [field]: 1 } })).toBe(true)
         expect(isWellFormedSection('settings', { [store]: { [`${fields[0]}X`]: 1 } })).toBe(false)
@@ -1334,6 +1334,13 @@ describe('isWellFormedSection', () => {
       expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: { d1_a: { name: 'a', icon: 'Laptop' }, localX: {} } } })).toBe(true)
       expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: {}, migrated: true } })).toBe(false)
       expect(isWellFormedSection('settings', { 'purdex-host-looks-migrated': { x: 1 } })).toBe(false)
+    })
+
+    it('shown hosts (host ownership H2d): the store is known, `ids` its only field (a legacy `all` is unlisted)', () => {
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [] } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: ['d1_a', 'localX'] } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [], all: true } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-shown-hosts': { ids: [], hidden: [] } })).toBe(false)
     })
 
     it('a known store that is empty is refused — the builder omits such a store, and it would clear every listed field', () => {

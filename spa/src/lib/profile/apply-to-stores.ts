@@ -35,6 +35,7 @@ import type { HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { splitExecutionKey, useExecutionStore } from '../../stores/useExecutionStore'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
@@ -143,6 +144,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, PersistedStore> = {
   'purdex-newtab-layout': asPersisted(useNewTabLayoutStore),
   'purdex-layout': asPersisted(useLayoutStore),
   'purdex-host-looks': asPersisted(useHostLookStore),
+  'purdex-shown-hosts': asPersisted(useShownHostsStore),
 }
 
 /** The nine settings stores' current states, by storage key: the input of `buildSettingsSection` and `applySettings`. */
