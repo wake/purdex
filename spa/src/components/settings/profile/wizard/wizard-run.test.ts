@@ -19,10 +19,16 @@ import en from '../../../../locales/en.json'
 import { createProfile, getSection, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { useUndoToast } from '../../../../stores/useUndoToast'
+import { isRetiredSection } from '../../../../lib/profile/projections'
 import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, prepareRun, retargetPlan, runPlan, sotFingerprint, sotNow, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
 vi.mock('../../../../lib/profile/start', () => ({ attachMaster: vi.fn() }))
 vi.mock('../../../../lib/profile/api', () => ({ listProfiles: vi.fn(), createProfile: vi.fn(), getSection: vi.fn() }))
+// The real retired set, spied: the wizard must ask projections.ts, not keep a list of its own.
+vi.mock('../../../../lib/profile/projections', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../lib/profile/projections')>()
+  return { ...actual, isRetiredSection: vi.fn(actual.isRetiredSection) }
+})
 
 const MASTER = 'SENTINEL-MASTER'
 const S1 = 'SENTINEL-ONE'
@@ -272,6 +278,17 @@ describe('prepareRun — the ONE door before the run: this device\'s premises AN
     expect(sotNow(indexEntry(P, 'x', [meta('hosts', 3)]))).toEqual(sotNow(indexEntry(P, 'x', [])))
     expect(sotNow(indexEntry(P, 'x', [meta('hosts', 3)])).empty).toBe(true)
     expect(sotNow(indexEntry(P, 'x', [meta('settings', 1)])).empty).toBe(false)
+  })
+
+  it('the retired set is projections.ts\' `isRetiredSection` — one list for the sync loop and the wizard', () => {
+    const real = vi.mocked(isRetiredSection).getMockImplementation()!
+    vi.mocked(isRetiredSection).mockImplementation((key) => key === 'workspaces' || real(key))
+    try {
+      expect(sotNow(indexEntry(P, 'x', [meta('workspaces', 7)])).empty).toBe(true)
+      expect(sotFingerprint(indexEntry(P, 'x', [meta('workspaces', 7), meta('settings', 1)]))).toBe(sotFingerprint(indexEntry(P, 'x', [meta('settings', 1)])))
+    } finally {
+      vi.mocked(isRetiredSection).mockImplementation(real)
+    }
   })
 
   it('a `hosts` rev change between choosing and Start: no `profile-changed` — a `settings` rev change is one', async () => {

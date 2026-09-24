@@ -84,6 +84,7 @@ import { useWorkspaceStore } from '../../../../features/workspace/store'
 import { effectiveDeviceName } from '../../../../lib/device-name'
 import { createProfile, listProfiles, type ProfileIndexEntry } from '../../../../lib/profile/api'
 import { readMasterWorld } from '../../../../lib/profile/master-world'
+import { isRetiredSection } from '../../../../lib/profile/projections'
 import { attachMaster } from '../../../../lib/profile/start'
 import { copyMasterAsSlave, promoteToMaster } from '../../../../lib/profile/switch-active'
 import { useDeviceNameStore } from '../../../../stores/useDeviceNameStore'
@@ -256,14 +257,11 @@ export type PrepareRefusal =
   /** `request`: the failure's class (wizard-shared.ts, `requestKey`) — never its message. */
   | { ok: false; reason: 'list-failed'; request: string }
 
-/** Sections the sync no longer carries (host ownership H3b, spec §5.1): a legacy `hosts` row stays on the SOT and is
- *  no content any more — a pull brings nothing of it, a push does not replace it. H3a-2 adds the same set to
- *  projections.ts (`isRetiredSection`); whichever of the two lands second makes this read that one. */
-const RETIRED_SECTIONS: ReadonlySet<string> = new Set(['hosts'])
-
-/** The sections a direction decides about: every live one but the retired. */
+/** The sections a direction decides about: every live one but the retired (projections.ts `isRetiredSection`, the
+ *  sync loop's own list — host ownership H3a-2 / H3b, spec §5.1). A legacy `hosts` row stays on the SOT and is no
+ *  content: a pull brings nothing of it, a push does not replace it. */
 function liveContent(entry: Pick<ProfileIndexEntry, 'sections'>): ProfileIndexEntry['sections'] {
-  return entry.sections.filter((m) => !RETIRED_SECTIONS.has(m.section))
+  return entry.sections.filter((m) => !isRetiredSection(m.section))
 }
 
 /** Every live section's name, rev and hash, in a fixed order — the retired ones left out (a straggler's `hosts`
