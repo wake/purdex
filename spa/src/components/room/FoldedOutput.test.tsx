@@ -1,7 +1,7 @@
 // spa/src/components/room/FoldedOutput.test.tsx — the fold affordance.
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { foldPlan } from '../../lib/nex/fold'
+import { foldPlan, type FoldPlan } from '../../lib/nex/fold'
 import { FoldedOutput } from './FoldedOutput'
 
 const body = (n: number): string =>
@@ -42,19 +42,25 @@ describe('FoldedOutput', () => {
     expect(onToggle).toHaveBeenCalledTimes(2)
   })
 
-  it('shows the daemon-truncation note only when expanded', () => {
+  it('shows the daemon-truncation note even when there is no button', () => {
+    // After A1 a daemon-truncated body the preview shows whole is not
+    // collapsible, so there is no expanded view to hang the note on. The note
+    // states a fact about the payload, not about the fold.
     const text = body(4)
-    const plan = foldPlan({ text, truncated: true })
-    expect(plan.daemonTruncated).toBe(true)
-    const { rerender } = render(
-      <FoldedOutput text={text} plan={plan} expanded={false} onToggle={() => {}} />,
-    )
-    expect(screen.queryByTestId('fold-daemon-truncated')).toBeNull()
-
-    rerender(<FoldedOutput text={text} plan={plan} expanded onToggle={() => {}} />)
+    const plan: FoldPlan = {
+      previewLines: [],
+      totalLines: 4,
+      hiddenLines: 0,
+      clamped: false,
+      collapsible: false,
+      daemonTruncated: true,
+    }
+    render(<FoldedOutput text={text} plan={plan} expanded={false} onToggle={() => {}} />)
     expect(screen.getByTestId('fold-daemon-truncated')).toHaveTextContent(
       'the daemon cut this output at 8 KB',
     )
+    expect(screen.queryByTestId('fold-more')).toBeNull()
+    expect(screen.queryByTestId('fold-less')).toBeNull()
   })
 
   it('says "show all" when only a clamp is hiding content', () => {

@@ -26,23 +26,31 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal' }
   const t = useI18nStore((s) => s.t)
   const bodyClass = `${BODY_CLASS} ${tone === 'error' ? 'text-status-error' : 'text-text-secondary'}`
 
+  // A fact about the payload, not about the fold: the daemon cut the output
+  // whether or not anything here is foldable. A truncated body the preview
+  // shows whole draws no button at all, so the note cannot live behind one.
+  const truncationNote = plan.daemonTruncated ? (
+    <span data-testid="fold-daemon-truncated" className="block text-xs text-text-muted">
+      {t('room.fold.daemon_truncated')}
+    </span>
+  ) : null
+
   // Not collapsible: the body is all there is, so there is nothing for a
   // button to promise. Drawing one anyway would open and close the same text.
   if (!plan.collapsible) {
-    return <pre data-testid="fold-body" className={bodyClass}>{text}</pre>
+    return (
+      <div>
+        <pre data-testid="fold-body" className={bodyClass}>{text}</pre>
+        {truncationNote}
+      </div>
+    )
   }
 
   if (expanded) {
     return (
       <div>
         <pre data-testid="fold-body" className={bodyClass}>{text}</pre>
-        {plan.daemonTruncated && (
-          // Only worth saying once the body is open: this IS the whole body,
-          // and it is still not the whole output.
-          <span data-testid="fold-daemon-truncated" className="block text-xs text-text-muted">
-            {t('room.fold.daemon_truncated')}
-          </span>
-        )}
+        {truncationNote}
         <button type="button" data-testid="fold-less" className={BUTTON_CLASS} onClick={onToggle}>
           {t('room.fold.less')}
         </button>
@@ -60,6 +68,7 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal' }
   return (
     <div>
       <pre data-testid="fold-body" className={bodyClass}>{plan.previewLines.join('\n')}</pre>
+      {truncationNote}
       <button type="button" data-testid="fold-more" className={BUTTON_CLASS} onClick={onToggle}>
         {label}
       </button>
