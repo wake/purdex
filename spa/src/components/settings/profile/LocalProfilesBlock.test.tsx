@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
+import zhTW from '../../../locales/zh-TW.json'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { LocalProfilesBlock } from './LocalProfilesBlock'
 import { useLocalProfilesStore, type LocalProfile } from '../../../stores/useLocalProfilesStore'
 import { __resetProfileSwitcherForTest, useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
@@ -214,6 +216,47 @@ describe('the three ways to a new local workbench (per-workbench plan §0.7)', (
     expect(screen.queryByTestId('profile-new-copy')).toBeNull()
     expect(screen.queryByTestId('profile-new-save')).toBeNull()
     expect(within(screen.getByTestId('profile-local-block')).getAllByTestId(/^profile-new-/)).toHaveLength(3)
+  })
+
+  it('en: Duplicate all, Duplicate settings only, New blank workbench — and a hint per form', () => {
+    render(<LocalProfilesBlock />)
+    expect(screen.getByTestId('profile-new-duplicate')).toHaveTextContent('Duplicate all')
+    expect(screen.getByTestId('profile-new-settings')).toHaveTextContent('Duplicate settings only')
+    expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('New blank workbench')
+    open('duplicate')
+    expect(screen.getByTestId('profile-new-form')).toHaveTextContent('Name for the full copy:')
+    open('settings')
+    expect(screen.getByTestId('profile-new-form')).toHaveTextContent('Name for the copy of the settings:')
+    open('blank')
+    expect(screen.getByTestId('profile-new-form')).toHaveTextContent('Name for the new workbench:')
+  })
+
+  it('zh-TW: 全部複製, 只複製設定, 新增空白工作台 — and a hint per form', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      render(<LocalProfilesBlock />)
+      expect(screen.getByTestId('profile-new-duplicate')).toHaveTextContent('全部複製')
+      expect(screen.getByTestId('profile-new-settings')).toHaveTextContent('只複製設定')
+      expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('新增空白工作台')
+      for (const kind of KINDS) {
+        open(kind)
+        expect(screen.getByTestId('profile-new-form')).toHaveTextContent(zhTW[`settings.profile.local.new_${kind}_hint`])
+      }
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  // B3: en and zh-TW say the same thing — a local workbench keeps its own shown hosts; neither says hosts and settings
+  // are simply "shared with the master" (the pre-2026-09-25 copy).
+  it('local.desc: both locales present, both name the shown hosts as the workbench\'s own, neither says all of it is shared', () => {
+    const [enDesc, zhDesc] = [en['settings.profile.local.desc'], zhTW['settings.profile.local.desc']]
+    expect(enDesc.length).toBeGreaterThan(0)
+    expect(zhDesc.length).toBeGreaterThan(0)
+    expect(enDesc).toMatch(/its own workspaces, tabs and shown hosts/)
+    expect(zhDesc).toMatch(/自己的工作區、分頁與顯示的主機/)
+    expect(enDesc).not.toMatch(/hosts and settings are shared/i)
+    expect(zhDesc).not.toMatch(/設定跟工作台主檔共用/)
   })
 
   it('the block says what a local profile holds, and what it shares with the master', () => {
