@@ -239,6 +239,11 @@ function makeUndo(hostId: string, wireId: string, snapshot: UndoSnapshot, grant:
     // lock taken here. Refused (a rebuild holds the lock, the world is mid-switch) or failed: the pass is scheduled,
     // and retries until it lands; the host is already back, so it finds every reference to resolve. A host whose wire
     // id is its local id had nothing rewritten, and nothing names it any other way: no pass.
+    //   The fallback is the WHOLE pass, not one scoped to this host, on purpose (PR #1413 review): resolving every
+    // resolvable reference is the steady state — any trigger (a host added, a hydration, an apply settling) does the
+    // same — so it moves nothing that would not move anyway. And the scope exists only for the hosts apply's rollback
+    // from a STAGED host list; the scheduled pass needs the operation lock, which that apply holds until its rollback
+    // is over, so it can only run once the host list is final.
     if (wireId !== hostId && reresolveRestoredHost(hostId, grant) !== 'done') scheduleHostReresolve()
   }
 }
