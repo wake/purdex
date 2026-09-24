@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isSyncId, SYNC_ID_PREFIX, syncIdOf, syncIdOfSync } from './host-identity'
+import { identityOfSync, isSyncId, SYNC_ID_PREFIX, syncIdOf, syncIdOfSync, wireIdOfHost } from './host-identity'
 
 // Golden vectors — computed ONCE with Python's hashlib (independent of the code
 // under test and of any JS SHA-256), then pinned:
@@ -56,5 +56,56 @@ describe('isSyncId', () => {
     }
     expect(isSyncId(undefined)).toBe(false)
     expect(isSyncId(42)).toBe(false)
+  })
+})
+
+describe('wireIdOfHost (H2 plan §0.4)', () => {
+  it('a host with a valid daemonId travels under syncIdOfSync(daemonId)', () => {
+    expect(wireIdOfHost({ id: 'abc123', daemonId: 'mini-lab:278cbm' })).toBe('d1_2u8ajsho6ji7nk6h')
+  })
+
+  it('a host with no / an empty / an invalid daemonId travels under its local id', () => {
+    expect(wireIdOfHost({ id: 'abc123' })).toBe('abc123')
+    expect(wireIdOfHost({ id: 'abc123', daemonId: '' })).toBe('abc123')
+    expect(wireIdOfHost({ id: 'abc123', daemonId: 'bad\u0000id' })).toBe('abc123')
+    expect(wireIdOfHost({ id: 'abc123', daemonId: 'x'.repeat(513) })).toBe('abc123')
+  })
+
+  it('equals identityOfSync(hosts).toWire for every host of a conflict-free snapshot', () => {
+    const hosts = {
+      aaa111: { id: 'aaa111', daemonId: 'mini-lab:278cbm' },
+      bbb222: { id: 'bbb222' },
+      ccc333: { id: 'ccc333', daemonId: 'My Mac Book:abc123' },
+      ddd444: { id: 'ddd444', daemonId: '' },
+    }
+    const identity = identityOfSync(hosts)
+    expect(identity.conflict).toBeNull()
+    for (const [id, host] of Object.entries(hosts)) {
+      expect(wireIdOfHost(host), id).toBe(identity.toWire.get(id))
+    }
+  })
+
+  it('under a conflict (two rows, one daemon) both rows still get the same d1_ id', () => {
+    const hosts = {
+      aaa111: { id: 'aaa111', daemonId: 'mini-lab:278cbm' },
+      bbb222: { id: 'bbb222', daemonId: 'mini-lab:278cbm' },
+    }
+    // toWire leaves both conflicting hosts out; the per-host rule does not.
+    expect(identityOfSync(hosts).conflict).toEqual(['aaa111', 'bbb222'])
+    expect(wireIdOfHost(hosts.aaa111)).toBe('d1_2u8ajsho6ji7nk6h')
+    expect(wireIdOfHost(hosts.bbb222)).toBe('d1_2u8ajsho6ji7nk6h')
+  })
+
+  it('memoises per daemonId: the hash runs once per daemonId', () => {
+    const hash = vi.fn((daemonId: string) => `d1_${daemonId.length}`)
+    expect(wireIdOfHost({ id: 'aaa111', daemonId: 'memo-a:1' }, { hash })).toBe('d1_8')
+    expect(wireIdOfHost({ id: 'bbb222', daemonId: 'memo-a:1' }, { hash })).toBe('d1_8')
+    expect(wireIdOfHost({ id: 'aaa111', daemonId: 'memo-a:1' }, { hash })).toBe('d1_8')
+    expect(hash).toHaveBeenCalledTimes(1)
+    expect(wireIdOfHost({ id: 'ccc333', daemonId: 'memo-b:22' }, { hash })).toBe('d1_9')
+    expect(hash).toHaveBeenCalledTimes(2)
+    // a host without a claim never hashes
+    wireIdOfHost({ id: 'ddd444' }, { hash })
+    expect(hash).toHaveBeenCalledTimes(2)
   })
 })

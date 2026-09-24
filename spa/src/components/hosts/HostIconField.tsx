@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostLook } from '../../lib/host-look'
 import { DEFAULT_HOST_ICON, isIconWeight, type HostColorMode } from '../../lib/host-color'
 import { WorkspaceIcon } from '../../features/workspace/components/WorkspaceIcon'
 import { WorkspaceIconPicker } from '../../features/workspace/components/WorkspaceIconPicker'
@@ -18,8 +19,9 @@ import { FloatingPanel } from '../FloatingPanel'
  */
 export function HostIconField({ hostId, mode }: { hostId: string; mode?: HostColorMode }) {
   const t = useI18nStore((s) => s.t)
-  const icon = useHostStore((s) => s.hosts[hostId]?.icon)
-  const storedWeight = useHostStore((s) => s.hosts[hostId]?.iconWeight)
+  const look = useHostLook(hostId)
+  const icon = look.icon
+  const storedWeight = look.iconWeight
   const setHostIcon = useHostStore((s) => s.setHostIcon)
   const [open, setOpen] = useState(false)
   const buttonsRef = useRef<HTMLDivElement>(null)

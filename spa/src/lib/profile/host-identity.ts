@@ -153,6 +153,36 @@ export async function identityOf(hosts: Record<string, IdentityHost>, opts: Asyn
   return buildIdentity(hosts, claimWire)
 }
 
+// === Per-host wire id (H2 plan §0.4) ===
+
+/** daemonId → sync id, one memo per hash function (the default `syncIdOfSync`, or a test seam). */
+const wireIdMemo = new WeakMap<(daemonId: string) => string, Map<string, string>>()
+
+/**
+ * ONE host's wire id, without looking at the other hosts: `syncIdOfSync(daemonId)`
+ * when the host has a valid claim, else its local id. Equal to
+ * `identityOfSync(hosts).toWire.get(host.id)` whenever the snapshot has no
+ * conflict; under a conflict (two rows claiming one daemon) both rows get the
+ * same `d1_…` — which `toWire` omits — so a look keyed by wire id is not lost
+ * while the user resolves the duplicate. Memoised per daemonId.
+ */
+export function wireIdOfHost(host: IdentityHost, opts: IdentityOptions = {}): string {
+  const daemonId = host.daemonId
+  if (!isValidDaemonId(daemonId)) return host.id
+  const hash = opts.hash ?? syncIdOfSync
+  let memo = wireIdMemo.get(hash)
+  if (memo === undefined) {
+    memo = new Map()
+    wireIdMemo.set(hash, memo)
+  }
+  let wire = memo.get(daemonId)
+  if (wire === undefined) {
+    wire = hash(daemonId)
+    memo.set(daemonId, wire)
+  }
+  return wire
+}
+
 // === Apply-side matching (spec §6, §11.5, §11.6) ===
 
 /**

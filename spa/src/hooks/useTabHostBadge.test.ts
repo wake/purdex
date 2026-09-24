@@ -179,6 +179,11 @@ describe('useTabHostBadge', () => {
     expect(result.current?.colors?.main).toBe('rgba(34, 197, 94, 1)')
   })
 
+  it('a pane naming an unresolvable d1_ wire id → no colour, default icon, no throw', () => {
+    const { result } = renderHook(() => useTabHostBadge(tmuxTab('d1_2u8ajsho6ji7nk6h')))
+    expect(result.current).toEqual({ colors: null, icon: undefined, iconWeight: undefined })
+  })
+
   it('returns empty fields when the host is missing from the store', () => {
     const { result } = renderHook(() => useTabHostBadge(tmuxTab('ghost')))
     expect(result.current).toEqual({ colors: null, icon: undefined, iconWeight: undefined })
