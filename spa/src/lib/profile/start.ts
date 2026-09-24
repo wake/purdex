@@ -107,7 +107,6 @@ import { contendForLeadership, leaderWindowId, readLeaderLease } from './leader'
 import type { Leadership } from './leader'
 import { subscribeProfileEvents } from './profile-ws-dispatch'
 import { readMasterWorld } from './master-world'
-import { clearPullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore } from './section-store'
 import type { ProfileSectionKey } from './types'
 import { withNamedLock } from '../storage/world-lock'
@@ -1109,7 +1108,6 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): P
   // One write: master, direction (with a pull's confirmed `hosts`), endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
   if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token)) return asYouWere('invalid-profile-id')
   ownGenerationMove()
-  clearPullUnconfirmed() // the user has set sync up anew: the notice of a stopped pull is said (pull-unconfirmed.ts)
   // The attach has succeeded whatever comes of this: the ghost is the OLD master's, and it is said where a failed
   // detach is said (`pendingDetaches`, Settings › Profile). A stand-down after the drop does not get here — the
   // previous master is then still the master (or the winner's business), and its leader writes the attachment again.

@@ -16,7 +16,6 @@ import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { hashSection } from './hash'
-import { readPullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore, loadSectionStore } from './section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, startProfileSync } from './start'
 import { FakeDaemon } from './test-fake-daemon'
@@ -201,7 +200,7 @@ describe('a pull attach starts pulling at once (host ownership H3a-1: the #1366 
 
     // nothing halted and nothing stopped
     expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('pull-hosts-unconfirmed')
-    expect(readPullUnconfirmed()).toBeNull()
+    expect(localStorage.getItem('purdex-profile-pull-unconfirmed')).toBeNull() // the #1366 notice key, gone with it
     expect(api.deleteAttachment).not.toHaveBeenCalled()
     expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, masterProfileId: PROFILE, pendingDirection: null })
     // every section was pulled — `hosts` too, until H3a-2 retires it from the sync loop

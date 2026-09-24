@@ -132,11 +132,6 @@ vi.mock('./api', () => ({
 }))
 
 vi.mock('./section-store', () => ({ clearSectionStore: vi.fn(() => 'ok') }))
-// The real notice store, its writer spied: nothing of the start layer may write it any more (H3a-1).
-vi.mock('./pull-unconfirmed', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./pull-unconfirmed')>()
-  return { ...actual, writePullUnconfirmed: vi.fn(actual.writePullUnconfirmed) }
-})
 
 vi.mock('../client-identity', () => ({
   getClientId: () => 'client-1',
@@ -150,7 +145,6 @@ import { useTabStore } from '../../stores/useTabStore'
 import { pendingDetachKey, selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { STORAGE_KEYS } from '../storage/keys'
-import { readPullUnconfirmed, writePullUnconfirmed } from './pull-unconfirmed'
 import { deleteAttachment, listProfiles, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
@@ -1731,19 +1725,13 @@ describe('the pull guard is gone (host ownership H3a-1 / H3b): nothing of the SO
     await flush()
     await detachMaster()
     await flush()
-    expect(writePullUnconfirmed).not.toHaveBeenCalled()
-    expect(readPullUnconfirmed()).toBeNull()
+    expect(localStorage.getItem('purdex-profile-pull-unconfirmed')).toBeNull()
   })
 
-  it('an attach that succeeds clears a notice left by an older build; one that fails leaves it', async () => {
-    localStorage.setItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED, JSON.stringify({ hostId: 'h1', profileId: P1, at: 1 }))
-    expect(readPullUnconfirmed()).not.toBeNull()
-    vi.mocked(putAttachment).mockResolvedValueOnce(failed('network'))
-    expect(await attachMaster('h1', P1, 'pull')).toMatchObject({ ok: false })
-    expect(readPullUnconfirmed()).not.toBeNull()
+  it('an attach leaves an older build\'s notice key alone: the boot cleanup removes it (legacy-residue-cleanup.ts)', async () => {
+    localStorage.setItem('purdex-profile-pull-unconfirmed', JSON.stringify({ hostId: 'h1', profileId: P1, at: 1 }))
     expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
-    expect(readPullUnconfirmed()).toBeNull()
-    expect(localStorage.getItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED)).toBeNull()
+    expect(localStorage.getItem('purdex-profile-pull-unconfirmed')).not.toBeNull()
   })
 })
 

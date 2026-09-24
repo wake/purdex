@@ -5,8 +5,6 @@ import zhTW from '../../../locales/zh-TW.json'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { CurrentBlock } from './CurrentBlock'
 import { useProfileStore } from '../../../stores/useProfileStore'
-import { readPullUnconfirmed, writePullUnconfirmed } from '../../../lib/profile/pull-unconfirmed'
-import { STORAGE_KEYS } from '../../../lib/storage/keys'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useWorkspaceStore } from '../../../features/workspace/store'
@@ -54,7 +52,7 @@ beforeEach(() => {
   vi.mocked(detachMaster).mockResolvedValue({ ok: true })
   vi.mocked(readMasterWorld).mockReturnValue(SETTLED)
   useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860', pendingDirection: null, suspension: null, autoSync: true, pendingDetaches: [] })
-  localStorage.removeItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED)
+  localStorage.removeItem('purdex-profile-pull-unconfirmed')
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '10.0.0.1', port: 7860, order: 0 } }, hostOrder: ['h1'] })
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 })
@@ -638,65 +636,28 @@ describe('the three controls', () => {
   })
 })
 
-describe('a pull stopped because the hosts moved after it was confirmed (#1366)', () => {
-  const NOTICE = { hostId: 'h1', profileId: 'p_000000000001', at: 1 }
+describe('the stopped-pull notice is gone (host ownership H3b): an older build\'s key is not read', () => {
+  const NOTICE = JSON.stringify({ hostId: 'h1', profileId: 'p_000000000001', at: 1 })
 
-  it('one sentence, with Dismiss — beside the existing "Set up sync…", and beside a pending-detach notice', () => {
-    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null, pendingDetaches: [{ hostId: 'h1', profileId: 'p_000000000001', endpoint: '10.0.0.1:7860', detail: 'timeout', at: 1 }] })
-    writePullUnconfirmed(NOTICE)
+  it('with the old key in localStorage: nothing is said, with a master or without', () => {
+    localStorage.setItem('purdex-profile-pull-unconfirmed', NOTICE)
+    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
     show(NO_MASTER)
-    expect(screen.getByTestId('profile-pull-unconfirmed')).toHaveTextContent(en['settings.profile.current.pull_unconfirmed'])
+    expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
     expect(screen.getByTestId('profile-setup-start')).toBeInTheDocument()
-    expect(screen.getByTestId('profile-detach-leftover')).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId('profile-pull-unconfirmed-dismiss'))
-    expect(readPullUnconfirmed()).toBeNull()
-    expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
-    expect(screen.getByTestId('profile-detach-leftover')).toBeInTheDocument() // the other notice is not dismissed with it
-  })
-
-  it('in the UI language', () => {
-    useI18nStore.getState().setLocale('zh-TW')
-    try {
-      useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
-      writePullUnconfirmed(NOTICE)
-      show(NO_MASTER)
-      expect(screen.getByTestId('profile-pull-unconfirmed')).toHaveTextContent(zhTW['settings.profile.current.pull_unconfirmed'])
-    } finally {
-      useI18nStore.getState().setLocale('en')
-    }
-  })
-
-  it('nothing is said without the notice', () => {
-    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
+    cleanup()
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: 'p1', masterEndpoint: '10.0.0.1:7860' })
     show(NO_MASTER)
     expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
   })
 
-  it('its own key, not a store: another window writing or clearing it is heard (the `storage` event), and so is this one', () => {
+  it('another window writing the old key is not heard either', () => {
     useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
     show(NO_MASTER)
-    expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
     act(() => {
-      localStorage.setItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED, JSON.stringify(NOTICE)) // another window's write
-      window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED }))
+      localStorage.setItem('purdex-profile-pull-unconfirmed', NOTICE)
+      window.dispatchEvent(new StorageEvent('storage', { key: 'purdex-profile-pull-unconfirmed' }))
     })
-    expect(screen.getByTestId('profile-pull-unconfirmed')).toBeInTheDocument()
-    act(() => {
-      localStorage.removeItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED)
-      window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED }))
-    })
-    expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
-    act(() => {
-      writePullUnconfirmed(NOTICE) // this window's own
-    })
-    expect(screen.getByTestId('profile-pull-unconfirmed')).toBeInTheDocument()
-  })
-
-  it('opening the wizard (setting sync up again) puts the sentence away', () => {
-    useProfileStore.setState({ masterHostId: null, masterProfileId: null, masterEndpoint: null })
-    writePullUnconfirmed(NOTICE)
-    show(NO_MASTER)
-    fireEvent.click(screen.getByTestId('profile-setup-start'))
     expect(screen.queryByTestId('profile-pull-unconfirmed')).toBeNull()
   })
 })

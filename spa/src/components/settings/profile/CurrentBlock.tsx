@@ -21,13 +21,6 @@
 // offered beside it (the wizard's first step is that very call); `StopSyncControl` stays mounted, because the
 // notice of a host that was not told is its to show — the wizard must not hide that outcome.
 //
-// A PULL STOPPED BECAUSE THE HOSTS MOVED (#1366; lib/profile/pull-unconfirmed.ts): one sentence with a Dismiss,
-// above whatever half is shown — after the stop that is the no-master half, whose "Set up sync…" is the way on. It
-// is device-local and outlives the stop; it goes with Dismiss, with a new attach (start.ts clears it), and out of
-// sight while the wizard — setting sync up again — is open. Its own key, not a store: read through
-// `useSyncExternalStore` — this window's writes by the module's listeners, another window's by the native
-// `storage` event (the listener exists only while this block is mounted).
-//
 // WHAT THE EXECUTOR PUBLISHES BEYOND THE STATUS (P3d-4a) — `detail`, `indexFailures`, `lastSuccessAt`,
 // `profileGone` — is shown as it is: the AGREED rev on every row (a locked row keeps the host's beside it), a
 // failing row's next try, "in sync as of", why settings wait. A record from an older build has none of them and
@@ -38,7 +31,6 @@ import { useState, useSyncExternalStore } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useDateLocale, useI18nStore } from '../../../stores/useI18nStore'
 import { endpointOfHost, useProfileStore } from '../../../stores/useProfileStore'
-import { clearPullUnconfirmed, pullUnconfirmedSnapshot, subscribePullUnconfirmed } from '../../../lib/profile/pull-unconfirmed'
 import { selectDaemonIdMismatch, useHostStore } from '../../../stores/useHostStore'
 import { hostLabel, hostLookOf, useHostLook } from '../../../lib/host-look'
 import { identityOfSync } from '../../../lib/profile/host-identity'
@@ -112,20 +104,11 @@ export function CurrentBlock({ masterName }: Props) {
   const dateLocale = useDateLocale()
   const sync = useProfileSync()
   const [wizardOpen, setWizardOpen] = useState(false)
-  const pullUnconfirmed = useSyncExternalStore(subscribePullUnconfirmed, pullUnconfirmedSnapshot, pullUnconfirmedSnapshot)
   const problems = sync.master === null ? [] : sync.problems.slice(-PROBLEMS_SHOWN).reverse()
 
   return (
     <section data-testid="profile-current-block" data-state={sync.master === null ? 'none' : 'attached'} className="mt-6">
       <h3 className="text-sm text-text-primary">{t('settings.profile.current.title')}</h3>
-      {pullUnconfirmed !== null && !wizardOpen && (
-        <div data-testid="profile-pull-unconfirmed" className="mt-2 flex items-start justify-between gap-3">
-          <p className="text-xs text-yellow-500">{t('settings.profile.current.pull_unconfirmed')}</p>
-          <button type="button" data-testid="profile-pull-unconfirmed-dismiss" onClick={clearPullUnconfirmed} className={BTN}>
-            {t('settings.profile.current.pull_unconfirmed_dismiss')}
-          </button>
-        </div>
-      )}
       {wizardOpen ? (
         <ProfileWizard onClose={() => setWizardOpen(false)} />
       ) : sync.master === null ? (
