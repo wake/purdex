@@ -670,7 +670,7 @@ describe('a follower reads what the leader published', () => {
   })
 
   it('the new fields, well-formed, are read as they were written', async () => {
-    const status = { ...SYNCED, profileGone: true, indexFailures: 3, lastSuccessAt: 999, detail: { hosts: { rev: 3, failures: 1, retryAt: 4000, invalidReason: 'removes-master-host' } } }
+    const status = { ...SYNCED, profileGone: true, indexFailures: 3, lastSuccessAt: 999, detail: { hosts: { rev: 3, failures: 1, retryAt: 4000, invalidReason: 'rejected-settings' } } }
     localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
     const b = await openWindow('B')
     expect(b.snapshot().status).toEqual(status)
@@ -682,7 +682,7 @@ describe('a follower reads what the leader published', () => {
       sections: { hosts: 'locked:invalid', settings: 'locked:invalid', workspaces: 'locked:invalid', 'tabs.w1': 'locked:invalid' },
       locks: {},
       detail: {
-        hosts: { rev: 3, failures: 0, retryAt: null, invalidReason: 'changes-master-host' },
+        hosts: { rev: 3, failures: 0, retryAt: null, invalidReason: 'host-identity-conflict' },
         settings: { rev: 3, failures: 0, retryAt: null },
         workspaces: { rev: 3, failures: 0, retryAt: null, invalidReason: 'a-code-of-a-newer-build' },
         'tabs.w1': { rev: 3, failures: 0, retryAt: null, invalidReason: 7 },
@@ -691,10 +691,19 @@ describe('a follower reads what the leader published', () => {
     localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
     const b = await openWindow('B')
     const detail = b.snapshot().status!.detail
-    expect(detail.hosts.invalidReason).toBe('changes-master-host')
+    expect(detail.hosts.invalidReason).toBe('host-identity-conflict')
     expect(detail.settings).toEqual({ rev: 3, failures: 0, retryAt: null, invalidReason: null })
     expect(detail.workspaces.invalidReason).toBeNull()
     expect(detail['tabs.w1'].invalidReason).toBeNull()
+  })
+
+  // host ownership H3a-3: the `hosts` apply's five codes went with it. A window of an older build may still publish
+  // one (cross-window, same origin): read leniently, like any code this build does not know — null, entry kept.
+  it.each(['no-host', 'removes-master-host', 'changes-master-host', 'duplicate-host-identity', 'duplicate-host-alias'])('invalidReason: %s (removed in H3) → null, the entry kept', async (code) => {
+    const status = { ...SYNCED, detail: { hosts: { rev: 1, failures: 0, retryAt: null, invalidReason: code } } }
+    localStorage.setItem(STATUS, JSON.stringify({ at: 1, leader: 'A', master: TAG1, status, blocked: null, problems: [] }))
+    const b = await openWindow('B')
+    expect(b.snapshot().status!.detail.hosts).toEqual({ rev: 1, failures: 0, retryAt: null, invalidReason: null })
   })
 
   it.each(INVALID_REASONS)('invalidReason: %s is a code the parser knows', async (code) => {

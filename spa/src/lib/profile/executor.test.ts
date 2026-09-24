@@ -979,22 +979,22 @@ describe('executor — pull', () => {
   it('invalid: the section locks on the FETCHED rev, is reported, and is never fetched again on a timer', async () => {
     const { ex, problems } = await synced({ hosts: 'H1' })
     api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'removes-master-host', detail: 'removes the master host' })
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'rejected-settings', detail: 'settings this build refuses' })
     ex.onRemoteEvent(remote('hosts', 2, 'H2'))
     await flush()
     expect(eventsOf('locked')).toEqual([{ type: 'locked', reason: 'invalid', rev: 2 }])
     expect(ex.status().sections.hosts).toBe('locked:invalid')
     // a lock WITHOUT a pair has a fingerprint too: what a resolve from the UI is checked against (sync-status.ts)
     expect(ex.status().locks).toEqual({ hosts: { status: 'locked:invalid', currentHash: 'H1', sot: { rev: 2, hash: 'H2' }, conflict: null } })
-    expect(problems).toEqual([{ kind: 'pull-invalid', section: 'hosts', detail: 'removes the master host' }])
+    expect(problems).toEqual([{ kind: 'pull-invalid', section: 'hosts', detail: 'settings this build refuses' }])
     // WHY is published as the apply's code, never its text (P3d-4b)
-    expect(ex.status().detail.hosts.invalidReason).toBe('removes-master-host')
+    expect(ex.status().detail.hosts.invalidReason).toBe('rejected-settings')
     await vi.advanceTimersByTimeAsync(600_000)
     expect(api.getSection).toHaveBeenCalledTimes(1)
     // resolve('sot') is refused by the reducer on locked:invalid — nothing to handle
     ex.resolve('hosts', 'sot')
     expect(ex.status().sections.hosts).toBe('locked:invalid')
-    expect(ex.status().detail.hosts.invalidReason).toBe('removes-master-host')
+    expect(ex.status().detail.hosts.invalidReason).toBe('rejected-settings')
     // unlocked → the reason goes with the lock
     ex.resolve('hosts', 'local')
     expect(ex.status().sections.hosts).not.toBe('locked:invalid')
@@ -1227,32 +1227,13 @@ describe('executor — pull', () => {
     expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-clean', payload: { v: 2 } })
   })
 
-  // #1369: a `hosts` pull comes back with this device's own id added to a canonical row's aliases — the designed
-  // write-back. Not a problem; and the apply hands back the payload, so the push needs no collector report.
-  describe('#1369 — the own-alias write-back after a pull', () => {
+  // #1369: a pull whose rebuild differs from what arrived only by a designed write-back (`rewrite`) — not a problem;
+  // and the apply hands back the payload, so the push needs no collector report. (The own-alias write-back of the
+  // `hosts` apply went with it in host ownership H3a-3; `device-local-tabs` is the one left, `hosts` a sample key.)
+  describe('#1369 — a designed write-back after a pull', () => {
     const OWN = { v: 2, aliases: ['aaaaaa', 'bbbbbb'] }
     /** The stores, read at the stash, still build exactly what the apply hashed (a copy: compared by canonical form). */
     const stillOwn: Partial<ExecutorDeps> = { buildNow: () => ({ payload: structuredClone(OWN) }) }
-
-    it('(a) rewrite: aliases — no problem, the section is dirty, the push sends THAT payload without any collector report', async () => {
-      const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
-      api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
-      api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
-      ex.onRemoteEvent(remote('hosts', 2, 'H2'))
-      await flush()
-      expect(problems).toEqual([])
-      expect(eventsOf('pull-applied')).toEqual([{ type: 'pull-applied', rev: 2, hash: 'H2', localHash: 'H2-own' }])
-      expect(store.saveSection).toHaveBeenCalledWith(PROFILE, 'hosts', { base: { rev: 2, hash: 'H2' }, currentHash: 'H2-own' })
-      expect(api.putSection).toHaveBeenCalledTimes(1)
-      expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 2, hash: 'H2-own', payload: OWN })
-      expect(ex.status().profile).toBe('synced')
-      // the collector's later report of the same content is harmless: nothing more is sent
-      ex.onSection({ key: 'hosts', hash: 'H2-own', payload: OWN })
-      await vi.advanceTimersByTimeAsync(60_000)
-      expect(api.putSection).toHaveBeenCalledTimes(1)
-      expect(problems).toEqual([])
-    })
 
     // tabs-local-only §3.5: a legacy `tabs.*` (an ordinal-2 client's interface tabs in it) is upcast on the pull; the
     // rebuild is the upcast payload, not the SOT's — the migration, pushed once, not a problem.
@@ -1294,7 +1275,7 @@ describe('executor — pull', () => {
       await flush()
       expect(applySectionToStores).toHaveBeenCalledTimes(1)
       ex.syncNow() // pumps `hosts` while its pull is still running → `repump`
-      applying.resolve({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
+      applying.resolve({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'device-local-tabs' })
       await vi.advanceTimersByTimeAsync(60_000)
       expect(problems).toEqual([])
       expect(api.putSection).toHaveBeenCalledTimes(1)
@@ -1305,7 +1286,7 @@ describe('executor — pull', () => {
     it('(d) an outcome without a payload (a test double, a future branch) pushes nothing of its own — the collector’s report is what goes out', async () => {
       const { ex, problems } = await synced({ hosts: 'H1' })
       api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', rewrite: 'aliases' })
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', rewrite: 'device-local-tabs' })
       api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
       ex.onRemoteEvent(remote('hosts', 2, 'H2'))
       await vi.advanceTimersByTimeAsync(60_000)
@@ -1326,7 +1307,7 @@ describe('executor — pull', () => {
       async function expectWaitsForTheCollector(over: Partial<ExecutorDeps>): Promise<void> {
         const { ex, problems } = await synced({ hosts: 'H1' }, over)
         api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
+        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'device-local-tabs' })
         api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
         ex.onRemoteEvent(remote('hosts', 2, 'H2'))
         await vi.advanceTimersByTimeAsync(60_000)
@@ -1365,7 +1346,7 @@ describe('executor — pull', () => {
       it('the stores still build it → pushed at once, no collector report needed (T3)', async () => {
         const { ex, problems } = await synced({ hosts: 'H1' }, stillOwn)
         api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'aliases' })
+        applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2-own', payload: OWN, rewrite: 'device-local-tabs' })
         api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
         ex.onRemoteEvent(remote('hosts', 2, 'H2'))
         await flush()
@@ -2075,7 +2056,7 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' } }
     api.listProfiles.mockResolvedValue(index([meta('hosts', 2, 'H9')]))
     api.getSection.mockResolvedValue(sectionOf(meta('hosts', 2, 'H9'), { theirs: true }))
-    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'removes-master-host', detail: 'removes the master host' })
+    applySectionToStores.mockResolvedValue({ ok: false, reason: 'invalid', code: 'rejected-settings', detail: 'settings this build refuses' })
     const { ex, settled } = first(direction)
     ex.onSection({ key: 'hosts', hash: 'H1', payload: { mine: true } })
     ex.onReconnected()

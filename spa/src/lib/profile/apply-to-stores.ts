@@ -3,7 +3,7 @@
 // of the applier: applier.ts computes `(local, incoming) → next`, this file reads
 // the slices, writes `next`, and reports the hash the stores hold AFTERWARDS.
 //
-// How a write lands (hosts and the nine settings stores). A bare `store.setState(patch)` skips the invariants that
+// How a write lands (the settings stores). A bare `store.setState(patch)` skips the invariants that
 // live in each store's persist `merge` / `onRehydrateStorage` (sanitise, heal,
 // theme DOM attribute, the i18n translator `t`). So every write is followed by
 // `store.persist.rehydrate()` — the path a cross-window sync already takes. That
@@ -23,48 +23,37 @@
 // The returned hash is rebuilt from the stores, never copied from the SOT: when a
 // sanitiser changed what arrived, the section is honestly dirty.
 //
-// HOST IDS ARRIVE AS WIRE IDS (host-sync-identity spec §6, §11). `hosts` is matched
-// onto the local hosts (`planHostsApply`: updated in place under their local id,
-// created, or cascaded away); `tabs.*` and `settings` are translated wire → local
-// through `wireResolverOf` over the host store as it is when they land — after the
-// `hosts` apply, which the executor orders. The hash reported back is of the WIRE
-// build (the builders translate), so it compares with the SOT's.
+// HOST IDS ARRIVE AS WIRE IDS (host-sync-identity spec §6, §11). `tabs.*` and
+// `settings` are translated wire → local through `wireResolverOf` over THIS
+// device's host store as it is when they land. The host list itself is per device
+// (host ownership spec §5.1): a `hosts` payload is never applied. The hash reported
+// back is of the WIRE build (the builders translate), so it compares with the SOT's.
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useHostStore } from '../../stores/useHostStore'
-import type { HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
-import { splitExecutionKey, useExecutionStore } from '../../stores/useExecutionStore'
-import { useExecutionListStore } from '../../stores/useExecutionListStore'
-import type { HostListCache } from '../../stores/useExecutionListStore'
-import { useNexHostStore } from '../../stores/useNexHostStore'
-import type { NexHostEntry } from '../../stores/useNexHostStore'
-import type { ExecutionState } from '../nex/event-reducer'
 import { useNotificationSettingsStore } from '../../stores/useNotificationSettingsStore'
-import { withOperationLock, type OperationLockGrant } from '../../stores/useRebuildStore'
+import { withOperationLock } from '../../stores/useRebuildStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { Tab } from '../../types/tab'
-import { deleteHostCascade } from '../host-lifecycle'
 import { scheduleHostReresolve } from '../host-reresolve'
-import { generateId } from '../id'
 import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
 import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
-import { applyHosts, applySettings, applyTabs, applyWorkspaces, duplicateHostAlias, isWellFormedSection, planHostsApply, settingsFromWire, tabsFromWire, upcastLegacySettings, upcastLegacyTabs } from './applier'
-import type { HostsPlan } from './applier'
-import { identityOfSync, MAX_HOST_ALIASES } from './host-identity'
-import { hashSection, structuralKey } from './hash'
+import { applySettings, applyTabs, applyWorkspaces, isWellFormedSection, settingsFromWire, tabsFromWire, upcastLegacySettings, upcastLegacyTabs } from './applier'
+import { identityOfSync } from './host-identity'
+import { hashSection } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
 import { sectionKind, workspaceIdOf } from './projections'
-import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, hostResolverSignature, normaliseAliases, wireResolverOf } from './sections'
+import { buildSettingsSection, buildTabsSection, buildWorkspacesSection, hostResolverSignature, wireResolverOf } from './sections'
 import type { SettingsBuildInput } from './sections'
-import type { HostsPayload, ProfileSectionKey, SettingsPayload, SettingsStorageKey, TabsPayload, WorkspacesPayload } from './types'
+import type { ProfileSectionKey, SettingsPayload, SettingsStorageKey, TabsPayload, WorkspacesPayload } from './types'
 
 // === Contract ===
 
@@ -73,10 +62,9 @@ export type ApplyOutcome =
    *  `payload` is the section `hash` was computed from (absent with a `null` hash): when it differs from the SOT's,
    *  the executor pushes it back without waiting for the collector to report it (#1369).
    *  `rewrite`: the hash differs from the payload's, and ONLY by a designed write — pushed back once, not a problem:
-   *    'aliases' (hosts): the own-alias write-back every canonical build makes (`isAliasWriteBackOnly`, #1369);
    *    'device-local-tabs' (tabs.*): an ordinal-2 payload's interface-only tabs, left out by `upcastLegacyTabs`
    *    (tabs-local-only §3.5) — the rebuild equals the upcast payload. */
-  | { ok: true; hash: string | null; payload?: unknown; rewrite?: 'aliases' | 'device-local-tabs' }
+  | { ok: true; hash: string | null; payload?: unknown; rewrite?: 'device-local-tabs' }
   /** Not now, retry later, never lock the section: the operation lock is held by someone else — or the master's
    *  tab world is unsettled (master-world.ts: a switch is half-way through this window's rehydrates), so there is
    *  nowhere to write `workspaces` / `tabs.*` and no master workspace set to scope `settings` by. */
@@ -88,33 +76,22 @@ export type ApplyOutcome =
 /**
  * Why a payload is refused — one code per refusal below, and nothing else (P3d-4b). It is published per section
  * (`SectionDetail.invalidReason`) and shown in words, so it never carries the payload's or the transport's text.
- *   deleted              the host deleted `hosts` / `settings` / `workspaces` — sections this device cannot be without
+ *   deleted              the host deleted `settings` / `workspaces` — sections this device cannot be without
  *   malformed            not a payload the builders could have produced (`isWellFormedSection`)
- *   no-host              a `hosts` payload that leaves no host at all
- *   removes-master-host  a `hosts` payload without the host this device syncs through
- *   changes-master-host  … that changes that host's address, port or token (the credentials known to work)
  *   rejected-settings    `settings` entries this build refuses (`applySettings`' `rejected`)
- *   unknown-section      a key this build does not know as a section
- *   duplicate-host-identity   a `hosts` payload with two rows for one daemon (host-sync-identity §11.5)
- *   host-identity-conflict    two local hosts claim one daemon, so which one a row / an id means is ambiguous (§11.4)
- *   duplicate-host-alias      a `hosts` payload whose rows share an alias (or an alias is another row's key) (A2, PR #1365)
+ *   unknown-section      a key this build does not apply as a section — `hosts` included (host ownership H3)
+ *   host-identity-conflict    two local hosts claim one daemon, so which one an id means is ambiguous (§11.4)
+ * The `hosts` apply's own five (`no-host`, `removes-master-host`, `changes-master-host`, `duplicate-host-identity`,
+ * `duplicate-host-alias`) went with it (host ownership H3a-3); an older window publishing one is read as `null`.
  */
 export type InvalidReason =
   | 'deleted'
   | 'malformed'
-  | 'no-host'
-  | 'removes-master-host'
-  | 'changes-master-host'
   | 'rejected-settings'
   | 'unknown-section'
-  | 'duplicate-host-identity'
   | 'host-identity-conflict'
-  | 'duplicate-host-alias'
 
-export const INVALID_REASONS: readonly InvalidReason[] = [
-  'deleted', 'malformed', 'no-host', 'removes-master-host', 'changes-master-host', 'rejected-settings', 'unknown-section',
-  'duplicate-host-identity', 'host-identity-conflict', 'duplicate-host-alias',
-]
+export const INVALID_REASONS: readonly InvalidReason[] = ['deleted', 'malformed', 'rejected-settings', 'unknown-section', 'host-identity-conflict']
 
 export interface ApplyContext {
   /** The host whose daemon served this payload. Its credentials are the ones known to work. */
@@ -164,15 +141,6 @@ function publish(store: PersistedStore): void {
   store.setState({})
 }
 
-/** Best-effort restore of fields captured before a write; a rollback that throws must not stop the next one. */
-function restore(store: PersistedStore, old: Record<string, unknown>): void {
-  try {
-    store.setState(old)
-  } catch {
-    // the in-memory state is restored before persist's storage write can throw
-  }
-}
-
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 const invalid = (code: InvalidReason, detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid', code, detail })
@@ -186,291 +154,7 @@ const BUSY: ApplyOutcome = { ok: false, reason: 'busy' }
  */
 const rebuilt = async (payload: unknown): Promise<Extract<ApplyOutcome, { ok: true }>> => ({ ok: true, hash: await hashSection(payload), payload })
 
-// === hosts ===
-
-const tokenOf = (h: HostConfig): string | null => h.token ?? null
-
 const IDENTITY_CONFLICT = (): ApplyOutcome => invalid('host-identity-conflict', 'two local hosts claim one daemon: which one a host id means is ambiguous')
-
-/**
- * The plan for this payload on these local hosts, or why it must not replace the host list. The master is compared
- * BY IDENTITY (spec §6): the row that lands on the master's local id must exist, and its address / port / token are
- * the ones known to work.
- */
-function planOrRefuse(local: Record<string, HostConfig>, incoming: HostsPayload, masterHostId: string): { plan: HostsPlan } | { outcome: ApplyOutcome } {
-  if (Object.keys(incoming.hosts).length === 0) return { outcome: invalid('no-host', 'payload leaves no host') }
-  const shared = duplicateHostAlias(incoming)
-  if (shared !== null) return { outcome: invalid('duplicate-host-alias', `two hosts list the alias ${JSON.stringify(shared)}`) }
-  const planned = planHostsApply(local, incoming, generateId)
-  if ('error' in planned) {
-    return { outcome: planned.error === 'duplicate-host-identity' ? invalid('duplicate-host-identity', 'payload has two rows for one daemon') : IDENTITY_CONFLICT() }
-  }
-  const { plan } = planned
-  // Hosts nobody here claims twice after the apply — a row's daemon and a created one's cannot collide past the matcher,
-  // but the identity is what every later build and apply goes by, so it is checked, not assumed.
-  if (identityOfSync(plan.payload.hosts).conflict !== null) return { outcome: IDENTITY_CONFLICT() }
-  const refusal = hostsRefusal(local, plan, masterHostId)
-  return refusal === null ? { plan } : { outcome: refusal }
-}
-
-/** Why this plan must not replace the host list, or `null`. */
-function hostsRefusal(local: Record<string, HostConfig>, plan: HostsPlan, masterHostId: string): ApplyOutcome | null {
-  if (![...plan.byRow.values()].includes(masterHostId)) return invalid('removes-master-host', `payload removes the master host ${masterHostId}`)
-  if (!Object.hasOwn(local, masterHostId)) return null // nothing to compare with
-  const mine = local[masterHostId]
-  const theirs = plan.payload.hosts[masterHostId]
-  // The credentials in hand are the ones that just fetched this payload, so they are known to work.
-  const changed = [mine.ip !== theirs.ip && 'ip', mine.port !== theirs.port && 'port', tokenOf(mine) !== tokenOf(theirs) && 'token'].filter(Boolean)
-  return changed.length > 0 ? invalid('changes-master-host', `payload changes the master host's ${changed.join(', ')}`) : null
-}
-
-const aliasListOf = (row: unknown): unknown[] => {
-  const a = (row as { aliases?: unknown } | undefined)?.aliases
-  return Array.isArray(a) ? a : []
-}
-
-const withoutAliases = (p: HostsPayload): HostsPayload => ({
-  ...p,
-  hosts: Object.fromEntries(Object.entries(p.hosts).map(([key, row]) => {
-    const { aliases: _aliases, ...rest } = row as HostConfig & { aliases?: unknown }
-    return [key, rest as HostConfig]
-  })),
-})
-
-/**
- * Does `built` (rebuilt from the stores after applying `incoming`) differ from `incoming` ONLY by the own-alias
- * write-back a canonical build makes (#1369)? Strict — erring costs a problem line, never data:
- *   1. with `aliases` removed from every row of both, the two are equal (row keys, every other field, `hostOrder`);
- *   2. per row, `aliases` changed only the way `withOwnAlias` changes them: an alias gained is the local id that
- *      row was applied to (`byRow`), an alias lost was displaced by the cap (the built list is full and every
- *      entry sorts before it). The incoming list is normalised first (order and repeats are not a difference).
- * Equal payloads are `false`: no mismatch, nothing to say.
- */
-export function isAliasWriteBackOnly(incoming: HostsPayload, built: HostsPayload, byRow: ReadonlyMap<string, string>): boolean {
-  if (structuralKey(incoming) === structuralKey(built)) return false
-  if (structuralKey(withoutAliases(incoming)) !== structuralKey(withoutAliases(built))) return false
-  for (const [key, row] of Object.entries(built.hosts)) {
-    const local = byRow.get(key)
-    if (local === undefined) return false
-    const inn = normaliseAliases(aliasListOf(incoming.hosts[key]))
-    const out = aliasListOf(row)
-    if (!out.every((a) => inn.includes(a as string) || a === local)) return false
-    const full = out.length === MAX_HOST_ALIASES
-    if (!inn.every((a) => out.includes(a) || (full && out.every((o) => typeof o === 'string' && o < a)))) return false
-  }
-  return true
-}
-
-/** Each host with exactly the `syncAliases` the plan gives it (none → the field absent). */
-function withSyncAliases(hosts: Record<string, HostConfig>, aliases: Record<string, string[]>): Record<string, HostConfig> {
-  const out: Record<string, HostConfig> = {}
-  for (const [id, h] of Object.entries(hosts)) {
-    const { syncAliases: _dropped, ...rest } = h
-    out[id] = Object.hasOwn(aliases, id) && aliases[id].length > 0 ? { ...rest, syncAliases: aliases[id] } : rest
-  }
-  return out
-}
-
-/** What `deleteHostCascade` clears for a host and its undo does not bring back — exactly the scope of the three `clearHost`s. */
-interface HostCaches {
-  hostIds: ReadonlySet<string>
-  /** `useExecutionStore.executions` entries whose key names one of the hosts. */
-  executions: Record<string, ExecutionState>
-  /** `useExecutionListStore.byHost[id]`, where present. */
-  lists: Record<string, HostListCache>
-  /** `useNexHostStore.byHost[id]`, where present. */
-  nex: Record<string, NexHostEntry>
-}
-
-function snapshotHostCaches(hostIds: readonly string[]): HostCaches {
-  const ids = new Set(hostIds)
-  const pick = <T>(record: Record<string, T>): Record<string, T> => {
-    const out: Record<string, T> = {}
-    for (const id of ids) if (Object.hasOwn(record, id)) out[id] = record[id]
-    return out
-  }
-  const executions: Record<string, ExecutionState> = {}
-  for (const [key, value] of Object.entries(useExecutionStore.getState().executions)) {
-    if (ids.has(splitExecutionKey(key).hostId)) executions[key] = value
-  }
-  return { hostIds: ids, executions, lists: pick(useExecutionListStore.getState().byHost), nex: pick(useNexHostStore.getState().byHost) }
-}
-
-/**
- * Writes the snapshot back: for THOSE hosts, the entries become exactly what they
- * were (anything that appeared for them meanwhile is dropped); every other host's
- * entries are left as they are now. None of the three stores persists, so a
- * throw here is unexpected — it is still reported, never swallowed. Returns what
- * could not be restored. Order matters: see ROLLBACK in `applyHostsSection`.
- */
-function restoreHostCaches(snap: HostCaches): string[] {
-  if (snap.hostIds.size === 0) return []
-  const others = <T>(record: Record<string, T>, hostOf: (key: string) => string): Record<string, T> => {
-    const out: Record<string, T> = {}
-    for (const [key, value] of Object.entries(record)) if (!snap.hostIds.has(hostOf(key))) out[key] = value
-    return out
-  }
-  const self = (key: string): string => key
-  const steps: Array<[string, () => void]> = [
-    ['execution', () => useExecutionStore.setState((s) => ({ executions: { ...others(s.executions, (k) => splitExecutionKey(k).hostId), ...snap.executions } }))],
-    ['execution-list', () => useExecutionListStore.setState((s) => ({ byHost: { ...others(s.byHost, self), ...snap.lists } }))],
-    ['nex-host', () => useNexHostStore.setState((s) => ({ byHost: { ...others(s.byHost, self), ...snap.nex } }))],
-  ]
-  const unfinished: string[] = []
-  for (const [name, step] of steps) {
-    try {
-      step()
-    } catch (err) {
-      unfinished.push(`${name}: ${messageOf(err)}`)
-    }
-  }
-  return unfinished
-}
-
-/**
- * Replaces the host list. Additions, edits and reorders are one write. A host the
- * payload REMOVES goes through `deleteHostCascade(id, grant)` — the app's own host
- * deletion — so this device ends up exactly where it would be had the user deleted
- * that host here (host ownership spec §3.4): every reference to it — on screen, in
- * every parked world, host-settings keys, New Tab columns — rewritten to its wire
- * id, nothing marked, no tab closed; sessions / agent / execution / execution-list /
- * nex / peer / cwd state cleared, held leases released best-effort, `runtime`
- * dropped, focus moved off it. Its undo handle is kept only to roll back. Hosts are
- * live whichever profile is on screen, so this apply never asks master-world.ts
- * anything and is never `busy` for an unsettled world.
- *
- * Two consequences, both intended:
- *   - no section but `hosts` changes: the build mapped the local id to the same wire
- *     id the rewrite stores, so nothing of `tabs.*` / `settings` is pushed back;
- *   - the cascade writes the tab store, so a removal needs the operation lock and
- *     can come back `busy`. The lock is taken BEFORE anything is written; an apply
- *     that removes no host never asks for it. The cascade gets the apply's grant:
- *     its undo re-resolves the references under it, synchronously (ROLLBACK below).
- *
- * The cascade ends in `useHostStore.removeHost`, which refuses to delete the last
- * host. So the write is staged: first `next` PLUS the hosts about to go (never
- * fewer than `next`, which the guard made non-empty), then the cascades, then
- * `next` exactly. All synchronous — no other writer sees the staging.
- */
-async function applyHostsSection(payload: unknown, ctx: ApplyContext): Promise<ApplyOutcome> {
-  if (payload === null) return invalid('deleted', 'the hosts section cannot be deleted')
-  if (!isWellFormedSection('hosts', payload)) return invalid('malformed', 'malformed hosts payload')
-  const incoming = payload as HostsPayload
-  const decided = planOrRefuse(useHostStore.getState().hosts, incoming, ctx.masterHostId)
-  if ('outcome' in decided) return decided.outcome
-
-  const store = asPersisted(useHostStore)
-  // ROLLBACK, and its edges. When a host-store write throws after the cascade ran
-  // (persist: quota / SecurityError), the catch puts back, in this order:
-  //   1. what the cascade's own undo handles restore — the host row, sessions,
-  //      agent state, and every reference back on the local id (what "Undo" does
-  //      after a manual delete; its re-resolve runs under this apply's grant, and
-  //      moves only references onto the host it restores — never onto a host of
-  //      the STAGED list, which step 2 takes away again);
-  //   2. the host slice, `runtime[H]` included;
-  //   3. the three stores the cascade clears and its undo does NOT restore —
-  //      execution, execution-list, nex-host — from `snapshotHostCaches`, taken
-  //      before the cascade. Nothing here counts on a re-fetch: the removal and
-  //      the restore happen inside ONE synchronous block (see below), so React
-  //      never sees the host go, no `hostPresent` / `hostId` effect re-runs, and
-  //      what is not written back stays lost. (No `ensure` either: the nex-host
-  //      entry returns as it was, `fetchedAt` included, so there is nothing to
-  //      re-ask — on a fresh entry `ensure` is a no-op, on a stale one a TTL
-  //      refresh that the next reader triggers anyway.)
-  // What writing state back cannot undo, and why that is acceptable:
-  //   - execution-list: `clearHost` CLOSES that host's site-wide SSE and frees its
-  //     lane. The cache comes back; the stream is reopened by the app's own
-  //     watcher (`startExecutionListInvalidation`), which sees nex-host go from
-  //     absent to ready when step 3 restores it, and re-fetches the list. The
-  //     list is restored BEFORE nex-host for that reason.
-  //   - a mounted `useExecutionLease` reacts to the host leaving the store in a
-  //     zustand subscriber (synchronous, so it does run): it stops its heartbeat
-  //     and writes `lease: null`. The restore puts the lease back without a
-  //     heartbeat — the state that hook already calls "idle": its next
-  //     `ensureLease` re-arms the timer if the lease is still valid and
-  //     re-acquires if not. Entries such a subscriber CREATED for the removed
-  //     host during the cascade are dropped by the restore (it replaces the
-  //     host's entries, it does not merge into them).
-  //   - a held lease on a removed host is released at the daemon only AFTER the
-  //     commit (`afterCommit`, run below the try): a rollback drops those
-  //     releases, so the lease it restores is still held at the daemon.
-  //   - the per-pane SSE of `useExecutionSubscription` is torn down from a React
-  //     effect, which never ran: it is still open and continues from the restored
-  //     `lastSeq`.
-  //   - `deleteHostCascade` throwing half-way (one of its own writes — the
-  //     rewrite, a clear, `removeHost`'s persist — failing) returns no undo
-  //     handle: it has already put every store it touched back as it was before
-  //     the call (host-lifecycle.ts, ONE UNIT), so step 1 has nothing to do for
-  //     that host, and steps 2–3 run as for any other failure.
-  // A restore step that throws is not swallowed: it is appended to the ORIGINAL
-  // error as "rollback incomplete".
-  //   `runtime[H]` is restored verbatim, `connected` included, and that is true
-  // rather than stale ONLY because nothing is awaited between the staging write
-  // and the end of the rollback: the connection layer (`useMultiHostEventWs`)
-  // closes a host's WS from a React effect keyed on the host list, no effect runs
-  // inside a synchronous block, and by the time one can, the list is what it was
-  // — the WS never noticed. An `await` in that stretch would let the effect tear
-  // the connection down, and the restored `connected` would be a lie until the
-  // layer reconnected. Hence `persist.rehydrate()` is NOT awaited inside the try
-  // (it is synchronous with this storage — premise (d) in the tests — and is
-  // awaited after the last fallible step, for the day it is not).
-  const write = async (grant: OperationLockGrant | null = null): Promise<ApplyOutcome> => {
-    const state = useHostStore.getState()
-    // Planned again on the state under the lock (new local ids are drawn here, for good).
-    const replanned = planOrRefuse(state.hosts, incoming, ctx.masterHostId)
-    if ('outcome' in replanned) return replanned.outcome
-    const { plan } = replanned
-    const old = { hosts: state.hosts, hostOrder: state.hostOrder, activeHostId: state.activeHostId, devHostId: state.devHostId, runtime: state.runtime }
-    const applied = applyHosts(old, plan.payload)
-    const { removedHostIds } = applied
-    const next = { ...applied.next, hosts: withSyncAliases(applied.next.hosts, plan.aliases) }
-    const undos: Array<() => void> = []
-    /** The cascades' daemon side effects (lease releases): run once this apply has committed, dropped on a rollback. */
-    const afterCommit: Array<() => void> = []
-    const caches = snapshotHostCaches(removedHostIds) // BEFORE the cascade clears them
-    let hooks: void | Promise<void>
-    try {
-      if (removedHostIds.length > 0) {
-        const leaving: Record<string, HostConfig> = {}
-        for (const id of removedHostIds) leaving[id] = state.hosts[id]
-        store.setState({ hosts: { ...next.hosts, ...leaving }, hostOrder: [...next.hostOrder, ...removedHostIds] })
-        for (const id of removedHostIds) undos.push(deleteHostCascade(id, grant, afterCommit))
-      }
-      // Focus is whatever the cascade left (it moves `activeHostId` to the first host, as a manual delete does) while that host survives.
-      const now = useHostStore.getState()
-      const survives = (id: string | null): string | null => (id !== null && Object.hasOwn(next.hosts, id) ? id : null)
-      store.setState({ hosts: next.hosts, hostOrder: next.hostOrder, activeHostId: survives(now.activeHostId), devHostId: survives(now.devHostId) })
-      hooks = store.persist.rehydrate() // not awaited here — see ROLLBACK above
-      publish(store)
-    } catch (err) {
-      const unfinished: string[] = []
-      for (const undo of undos.reverse()) {
-        try {
-          undo()
-        } catch (undoErr) {
-          unfinished.push(`undo: ${messageOf(undoErr)}`) // the host slice below is restored regardless
-        }
-      }
-      restore(store, old)
-      unfinished.push(...restoreHostCaches(caches))
-      if (unfinished.length === 0) throw err
-      throw new Error(`${messageOf(err)} (rollback incomplete — ${unfinished.join('; ')})`, { cause: err })
-    }
-    // Committed: the removed hosts' daemon side effects may happen now (each is best-effort and never throws).
-    for (const action of afterCommit) action()
-    await hooks
-    const built = buildHostsSection(useHostStore.getState())
-    const outcome = await rebuilt(built)
-    // #1369: a canonical row arriving without this device's own id comes back with it (withOwnAlias) — the one
-    // designed write-back after a pull. Said so, so the executor pushes it without calling it a problem.
-    return isAliasWriteBackOnly(incoming, built, plan.byRow) ? { ...outcome, rewrite: 'aliases' } : outcome
-  }
-
-  // Decided on the state as it is now; `write` re-reads under the lock, and nothing can run in between (no await).
-  const removesAHost = Object.keys(useHostStore.getState().hosts).some((id) => !Object.hasOwn(decided.plan.payload.hosts, id))
-  if (!removesAHost) return write()
-  return withOperationLock<ApplyOutcome>(PROFILE_SYNC_LOCK_OWNER, write, () => ({ ok: false, reason: 'busy' }))
-}
 
 // === settings ===
 
@@ -697,16 +381,16 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
 /**
  * Applies one section from the SOT to the stores. `payload === null` means the
  * section does not exist on the SOT (deleted): meaningful for `tabs.<id>` only —
- * `hosts` / `settings` / `workspaces` are never deleted, so `null` is `invalid`
- * there. Returns `invalid` or `busy` without having written anything; throws
- * (after rolling back what it wrote) only when a store write itself throws.
- * `busy` can come from `workspaces`, `tabs.<id>`, and a `hosts` apply that removes
- * a host.
+ * `settings` / `workspaces` are never deleted, so `null` is `invalid` there.
+ * Returns `invalid` or `busy` without having written anything; throws (after
+ * rolling back what it wrote) only when a store write itself throws. `busy` can
+ * come from `workspaces`, `tabs.<id>` and `settings`.
+ *
+ * `hosts` is not synced (host ownership spec §5.1): whatever its payload, the
+ * answer is `invalid` / `unknown-section`, and nothing is written.
  *
  * An arriving pane whose host is unknown here is kept verbatim, unmarked (host
- * ownership spec §3.2): applying a `tabs.<id>` while `hosts` is behind writes
- * nothing synced about it. The executor still orders the pulls (no `tabs.*`
- * before `hosts` is synced) until H3 retires `hosts`.
+ * ownership spec §3.2): applying a `tabs.<id>` writes nothing synced about it.
  *
  * When `settings` is applied the `workspaces` section must already be
  * synced. A workspace-scoped entry is written for a master workspace only
@@ -715,11 +399,13 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
  * pushed back without it: the setting is deleted for every device. The executor
  * orders that too (no `settings` pull, and no push, before `workspaces` is synced).
  */
-export async function applySectionToStores(key: ProfileSectionKey, payload: unknown | null, ctx: ApplyContext): Promise<ApplyOutcome> {
+export async function applySectionToStores(key: ProfileSectionKey, payload: unknown | null, _ctx: ApplyContext): Promise<ApplyOutcome> {
   try {
     switch (sectionKind(key)) {
       case 'hosts':
-        return await applyHostsSection(payload, ctx)
+        // Host ownership H3 (spec §5.1): the host list is per device. The kind is still known (older clients write
+        // it), but no payload of it is ever applied — not even looked at.
+        return invalid('unknown-section', 'hosts is not synced')
       case 'settings':
         return await applySettingsSection(payload)
       case 'workspaces':

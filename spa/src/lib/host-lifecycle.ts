@@ -25,27 +25,31 @@ import type { Session } from './host-api'
 // from the workbench: every reference to the host — on screen, in every parked world (the master's and each local
 // profile's), the `purdex-host-settings` key and the New Tab `sessions:` / `headless:` columns — is rewritten from its
 // local id to its wire id, and only THEN is the host removed. The build mapped the local id to that same wire id
-// before and passes it through after, so no section but `hosts` changes (pre-H3) and nothing is pushed. The panes
+// before and passes it through after, so no synced section changes and nothing is pushed. The panes
 // render "this device has no host" (`MissingHostPane`); no `terminated` mark is written, no tab is closed, nothing
 // is pinned (a legacy hostless execution pane keeps resolving to the first host — spec §3.4). What IS cleared is this
 // device's own per-host state: sessions, agent state, execution views, caches, runtime.
 //
 // The lock: the deletion rewrites the tab tree, so it runs under the operation lock like everything that does — the
 // cascade itself takes none; its callers hold it: the Hosts page's `deleteHostWithUndoToast` (owner `host-delete`,
-// retried while busy — PR #1413 review), the hosts apply its own grant.
+// retried while busy — PR #1413 review).
 
 /**
  * Remove a host from this device: its references become its wire id, its device-local state is cleared, the row
  * goes. Returns the undo. A host that does not exist, or the last one (`removeHost` refuses it), is left alone —
  * with a no-op undo. Throws, having changed nothing, when the rewrite cannot be written.
  *
- * `grant` — the operation-lock grant the caller holds (the hosts apply), which the UNDO runs its re-resolve under:
- * that apply rolls back through the undo with nothing awaited, so the undo must finish then and there.
+ * `grant` and `afterCommit` are for a caller that deletes hosts inside its OWN transaction and may roll it back —
+ * today none: the Hosts page passes neither. They were the `hosts` apply's, which host ownership H3 removed; they
+ * are kept (H3 plan D2) for the replace-all receive of host transfer (spec §6.4 step 6, not built — #1395).
+ *
+ * `grant` — the operation-lock grant that caller holds, which the UNDO runs its re-resolve under: a caller that
+ * rolls back through the undo with nothing awaited needs the undo to finish then and there.
  *
  * `afterCommit` — what may happen only once the caller's whole transaction has committed: the release of each lease
- * this device holds on the host, a daemon side effect no store rollback can take back (plan §0.8). Given (the hosts
- * apply), those actions are pushed there for the caller to run after its commit, or to drop on its rollback; not
- * given (the Hosts page), they run as soon as this deletion has committed.
+ * this device holds on the host, a daemon side effect no store rollback can take back (plan §0.8). Given, those
+ * actions are pushed there for the caller to run after its commit, or to drop on its rollback; not given (the Hosts
+ * page), they run as soon as this deletion has committed.
  */
 export function deleteHostCascade(hostId: string, grant: OperationLockGrant | null = null, afterCommit?: Array<() => void>): () => void {
   const hostStore = useHostStore.getState()
@@ -249,9 +253,9 @@ function makeUndo(hostId: string, wireId: string, snapshot: UndoSnapshot, grant:
     // id is its local id had nothing rewritten, and nothing names it any other way: no pass.
     //   The fallback is the WHOLE pass, not one scoped to this host, on purpose (PR #1413 review): resolving every
     // resolvable reference is the steady state — any trigger (a host added, a hydration, an apply settling) does the
-    // same — so it moves nothing that would not move anyway. And the scope exists only for the hosts apply's rollback
-    // from a STAGED host list; the scheduled pass needs the operation lock, which that apply holds until its rollback
-    // is over, so it can only run once the host list is final.
+    // same — so it moves nothing that would not move anyway. And the scope exists only for a transactional caller's
+    // rollback from a STAGED host list (the `hosts` apply's until H3; a replace-all's, #1395); the scheduled pass needs
+    // the operation lock, which that caller holds until its rollback is over, so it can only run once the list is final.
     if (wireId !== hostId && reresolveRestoredHost(hostId, grant) !== 'done') scheduleHostReresolve()
   }
 }
