@@ -51,6 +51,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../../stores/useI18nStore'
 import { selectDevHostId, useHostStore } from '../../../../stores/useHostStore'
+import { hostLabel, hostLookOf, useHostLook } from '../../../../lib/host-look'
 import { MASTER_PROFILE_ID, normalizeLocalProfileName, useLocalProfilesStore } from '../../../../stores/useLocalProfilesStore'
 import { useProfileStore, type SyncDirection } from '../../../../stores/useProfileStore'
 import { ensureDefaultDeviceName } from '../../../../stores/useDeviceNameStore'
@@ -170,6 +171,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
   // Subscribed so that a change re-renders — and with it the premise check below.
   const masterNow = useProfileStore((s) => s.masterHostId !== null && s.masterProfileId !== null && s.masterEndpoint !== null)
   const hosts = useHostStore((s) => s.hosts)
+  const hostLook = useHostLook(hostId)
   const runtime = useHostStore((s) => s.runtime)
   const slaves = useLocalProfilesStore((s) => s.slaves)
   /** The profile this device syncs with on the chosen host — never offered for deletion (none on step 2, by its premises). */
@@ -354,7 +356,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
     if (run === null || run.phase === 'running' || run.phase === 'checking' || run.phase === 'done') return
     const before = run.phase
     const promoted = run.states[subStepsOf(run.plan).indexOf('promote')] === 'done'
-    const labels = { profile: profileName, host: hostId === null ? '' : (hosts[hostId]?.name ?? hostId) }
+    const labels = { profile: profileName, host: hostId === null ? '' : hostLabel(hostId, hostLookOf(hostId, hosts)) }
     // A first run asks with what the steps show; a retry with what its run was made for (the door's plan).
     const first = from === 0 && before === 'idle'
     const draft: WizardDraft = { hostId: run.plan.hostId, profileId: run.plan.profileId, seen: first ? (seen?.fingerprint ?? null) : run.plan.seen, localId: run.plan.localId, direction: run.plan.direction, saveAs: run.plan.saveAs, removesSeen: first ? removesSeen : run.plan.removesHosts }
@@ -545,7 +547,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
             />
           )}
 
-          {step === 'run' && run !== null && <RunStep run={run} profileName={profileName} hostName={hostId === null ? '' : (hosts[hostId]?.name ?? hostId)} />}
+          {step === 'run' && run !== null && <RunStep run={run} profileName={profileName} hostName={hostId === null ? '' : hostLabel(hostId, hostLook)} />}
 
           {step !== 'stop' && (
             <div className="mt-3 flex flex-wrap items-center gap-2">

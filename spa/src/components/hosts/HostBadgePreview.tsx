@@ -1,6 +1,6 @@
 import { TerminalWindow } from '@phosphor-icons/react'
 import { useMemo } from 'react'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostLook } from '../../lib/host-look'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HostBadge } from '../HostBadge'
@@ -22,22 +22,19 @@ export interface HostBadgePreviewProps {
  */
 export function HostBadgePreview({ hostId, mode }: HostBadgePreviewProps) {
   const t = useI18nStore((s) => s.t)
-  const name = useHostStore((s) => s.hosts[hostId]?.name ?? '')
-  const colors = useHostStore((s) => s.hosts[hostId]?.colors)
-  const legacy = useHostStore((s) => s.hosts[hostId]?.color)
-  const rawIcon = useHostStore((s) => s.hosts[hostId]?.icon)
-  const rawWeight = useHostStore((s) => s.hosts[hostId]?.iconWeight)
+  const look = useHostLook(hostId)
+  const name = look.name ?? ''
   const enabled = useUISettingsStore((s) => s.hostBadgeSidebarEnabled)
   const lineColor = useUISettingsStore((s) => s.hostBadgeSidebarLineColor)
   const box = useUISettingsStore((s) => s.hostBadgeSidebarBox)
   const inset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
   const radius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
 
-  const resolved = useMemo(() => resolveHostColors({ colors, color: legacy }, mode), [colors, legacy, mode])
+  const resolved = useMemo(() => resolveHostColors({ colors: look.colors, color: look.color }, mode), [look, mode])
   const badge = {
     colors: resolved,
-    icon: isPhosphorIconName(rawIcon) ? rawIcon : undefined,
-    iconWeight: isIconWeight(rawWeight) ? rawWeight : undefined,
+    icon: isPhosphorIconName(look.icon) ? look.icon : undefined,
+    iconWeight: isIconWeight(look.iconWeight) ? look.iconWeight : undefined,
   }
   const show = enabled && hasHostBadge(badge)
 

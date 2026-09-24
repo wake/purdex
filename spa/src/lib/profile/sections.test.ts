@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
@@ -634,6 +635,50 @@ describe('section hashes: a change lands in exactly the sections it belongs to',
     expect(await changed(baseInput(), b)).toEqual(['hosts'])
   })
 
+  // host ownership §4.4: until H3 the `hosts` section still carries HostConfig name / colours / icon, and the look
+  // store travels in `settings` — the two never feed each other.
+  describe('host looks (host ownership §4.4)', () => {
+    const LOOKS = { 'purdex-host-looks': { looks: { h1: { name: 'look-one', colors: { console: { main: { color: '#445566', alpha: 100 } } } } } } }
+    const withLooks = (input: CollectInput, looks: object = LOOKS): CollectInput => ({ ...input, settings: { ...input.settings, ...looks } })
+
+    it('a HostConfig rename + recolour changes only hosts — settings, looks included, does not move', async () => {
+      const b = withLooks(baseInput())
+      b.hosts.hosts.h1 = { ...b.hosts.hosts.h1, name: 'renamed', color: '#abcdef', icon: 'Laptop' }
+      expect(await changed(withLooks(baseInput()), b)).toEqual(['hosts'])
+    })
+
+    it('a look change changes only settings — hosts does not move', async () => {
+      const b = withLooks(baseInput(), { 'purdex-host-looks': { looks: { h1: { name: 'other' }, d1_far: { icon: 'Laptop' } } } })
+      expect(await changed(withLooks(baseInput()), b)).toEqual(['settings'])
+    })
+
+    it('buildHostsSection is identical whatever the look store holds, and building it notifies no look-store subscriber', () => {
+      const src = baseInput().hosts
+      useHostLookStore.setState({ looks: {} })
+      const empty = JSON.stringify(buildHostsSection(src))
+      useHostLookStore.setState({ looks: { h1: { name: 'look-one', icon: 'Laptop' }, d1_far: { name: 'far' } } })
+      const spy = vi.fn()
+      const unsub = useHostLookStore.subscribe(spy)
+      const full = JSON.stringify(buildHostsSection(src))
+      buildProfileDocument(baseInput())
+      unsub()
+      expect(full).toBe(empty)
+      expect(full).not.toContain('look-one')
+      expect(spy).not.toHaveBeenCalled()
+      useHostLookStore.setState({ looks: {} })
+    })
+
+    it('buildSettingsSection does not change when a HostConfig name / colour changes (the identity it builds through is the same)', () => {
+      const a = baseInput()
+      const b = baseInput()
+      b.hosts.hosts.h1 = { ...b.hosts.hosts.h1, name: 'renamed', color: '#abcdef', colors: { console: { main: { color: '#abcdef', alpha: 100 } } } }
+      const settings = withLooks(a).settings
+      expect(JSON.stringify(buildSettingsSection(settings, NO_WS, identityOfSync(b.hosts.hosts)))).toBe(
+        JSON.stringify(buildSettingsSection(settings, NO_WS, identityOfSync(a.hosts.hosts))),
+      )
+    })
+  })
+
   it('a UI setting change changes only settings', async () => {
     const b = baseInput()
     b.settings = { ...b.settings, 'purdex-ui-settings': { terminalRenderer: 'dom', keepAliveCount: 3 } }
@@ -826,6 +871,24 @@ describe('host-sync-identity: local → wire at build', () => {
     // no identity: nothing is translated (the pure builder's old behaviour — production passes one)
     const plain = buildTabsSection({ id: 'w', name: 'W', tabs: ['t1'], activeTabId: 't1' }, { t1: tab('t1', layout) })
     expect(JSON.stringify(plain)).not.toContain(WIRE)
+  })
+
+  // host ownership H2c-1 (spec §4.1): look keys are wire ids IN the store — the build maps nothing, WITH an identity.
+  it('settings: host-look keys pass through verbatim — a local id the identity maps (bbbbbb → its sync id) is NOT translated', () => {
+    const identity = identityOfSync(hostsSrc().hosts)
+    expect(identity.toWire.get('bbbbbb')).toBe(WIRE) // the identity would map it
+    const looks = { [WIRE]: { name: 'a' }, bbbbbb: { name: 'x' }, d1_unknown: { name: 'far' } }
+    const input: SettingsBuildInput = { 'purdex-host-looks': { looks }, 'purdex-host-settings': { hosts: { bbbbbb: { a: 1 } } } }
+    const p = buildSettingsSection(input, NO_WS, identity)
+    expect(p['purdex-host-looks']).toEqual({ looks: { [WIRE]: { name: 'a' }, bbbbbb: { name: 'x' }, d1_unknown: { name: 'far' } } })
+    expect(Object.keys((p['purdex-host-looks'] as { looks: object }).looks)).toEqual([WIRE, 'bbbbbb', 'd1_unknown'])
+    expect(p['purdex-host-settings']).toEqual({ hosts: { [WIRE]: { a: 1 } } }) // …while host-settings keys ARE translated
+    expect(input['purdex-host-looks']).toEqual({ looks }) // the store state is never touched
+  })
+
+  it('settings: an EMPTY look store still builds `{ looks: {} }` — always present (plan §0.6)', () => {
+    const p = buildSettingsSection({ 'purdex-host-looks': { looks: {} } }, NO_WS, identityOfSync(hostsSrc().hosts))
+    expect(p).toEqual({ 'purdex-host-looks': { looks: {} } })
   })
 
   it('settings: host-settings keys and `sessions:` / `headless:` preset columns are translated; other columns and fields are not', () => {

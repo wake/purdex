@@ -491,7 +491,7 @@ const LAYOUT_B: Layout = { '3col': { enabled: true, columns: [['b'], [], []] }, 
 async function realSettingsShapes(): Promise<{ current: [string, number]; legacy: [string, number] }> {
   const legacyList = PROJECTIONS.settings.map((p) => (p === `${NEWTAB}.presets` ? `${NEWTAB}.profiles` : p))
   expect(legacyList).not.toEqual(PROJECTIONS.settings)
-  expect(SECTION_SCHEMA_ORDINAL.settings).toBe(5) // 5: host-sync-identity (wire host ids) — the same paths as 4
+  expect(SECTION_SCHEMA_ORDINAL.settings).toBe(6) // 5: host-sync-identity (wire host ids) — the same paths as 4; 6: host looks (host ownership H2c)
   return { current: [await sectionFingerprint('settings'), SECTION_SCHEMA_ORDINAL.settings], legacy: [await fingerprintOf(legacyList), 3] }
 }
 

@@ -753,6 +753,14 @@ describe('applySettings', () => {
     expect(Object.hasOwn(patches, 'purdex-themes')).toBe(false)
   })
 
+  it('host looks are replaced whole: an entry the payload lacks is dropped, one it has lands as sent', () => {
+    const local: SettingsBuildInput = { 'purdex-host-looks': { looks: { d1_a: { name: 'old' }, d1_gone: { name: 'gone' } } } }
+    const incoming: SettingsPayload = { 'purdex-host-looks': { looks: { d1_a: { name: 'new' }, d1_unknown: { icon: 'Laptop' } } } }
+    const { patches, rejected } = applySettings(deepFreeze(local), deepFreeze(copy(incoming)), NO_WS)
+    expect(rejected).toEqual([])
+    expect(patches).toEqual({ 'purdex-host-looks': { looks: { d1_a: { name: 'new' }, d1_unknown: { icon: 'Laptop' } } } })
+  })
+
   it('identical settings produce no patch at all', () => {
     const local = settingsLocal()
     expect(applySettings(local, buildSettingsSection(local, NO_WS), NO_WS)).toEqual({ patches: {}, rejected: [] })
@@ -1314,11 +1322,18 @@ describe('isWellFormedSection', () => {
         const dot = path.indexOf('.')
         byStore.set(path.slice(0, dot), [...(byStore.get(path.slice(0, dot)) ?? []), path.slice(dot + 1)])
       }
-      expect(byStore.size).toBe(8)
+      expect(byStore.size).toBe(9)
       for (const [store, fields] of byStore) {
         for (const field of fields) expect(isWellFormedSection('settings', { [store]: { [field]: 1 } })).toBe(true)
         expect(isWellFormedSection('settings', { [store]: { [`${fields[0]}X`]: 1 } })).toBe(false)
       }
+    })
+
+    it('host looks (host ownership H2c): the store is known, `looks` its only field', () => {
+      expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: {} } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: { d1_a: { name: 'a', icon: 'Laptop' }, localX: {} } } })).toBe(true)
+      expect(isWellFormedSection('settings', { 'purdex-host-looks': { looks: {}, migrated: true } })).toBe(false)
+      expect(isWellFormedSection('settings', { 'purdex-host-looks-migrated': { x: 1 } })).toBe(false)
     })
 
     it('a known store that is empty is refused — the builder omits such a store, and it would clear every listed field', () => {
@@ -1582,6 +1597,12 @@ describe('tabsFromWire / settingsFromWire — wire → local for the sections th
       },
     })
     expect(out['purdex-layout']).toBe(p['purdex-layout'])
+  })
+
+  it('settings: host-look keys are NOT resolved — a sync id of a host here stays the sync id (the store is keyed by wire id)', () => {
+    const p: SettingsPayload = deepFreeze({ 'purdex-host-looks': { looks: { [WIRE]: { name: 'a' }, aaaaaa: { name: 'b' }, d1_unknown: {} } } })
+    const out = settingsFromWire(p, resolve)
+    expect(out['purdex-host-looks']).toEqual({ looks: { [WIRE]: { name: 'a' }, aaaaaa: { name: 'b' }, d1_unknown: {} } })
   })
 
   it('settings: a live host that the resolver leaves unchanged (a legacy id that IS the local id) keeps its column', () => {

@@ -14,6 +14,7 @@ import {
   type TransferFailure,
 } from '../../lib/host-transfer-api'
 import { payloadRowsOf } from '../../lib/host-transfer-plan'
+import { hostLabel, useHostLookResolver } from '../../lib/host-look'
 
 interface Props {
   onClose: () => void
@@ -36,6 +37,7 @@ export function ShareHostsDialog({ onClose }: Props) {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
   const activeHostId = useHostStore((s) => s.activeHostId)
+  const lookOf = useHostLookResolver()
 
   const list = hostOrder.map((id) => hosts[id]).filter((h): h is HostConfig => h !== undefined)
   const connected = list.filter((h) => runtime[h.id]?.status === 'connected')
@@ -66,7 +68,7 @@ export function ShareHostsDialog({ onClose }: Props) {
     connected.find((h) => h.id === activeHostId) ??
     connected[0] ??
     null
-  const relayName = relay?.name ?? t('hosts.transfer.relay_fallback')
+  const relayName = (relay && lookOf(relay.id).name) ?? t('hosts.transfer.relay_fallback')
   const picked = list.filter((h) => hasToken(h) && !unticked.has(h.id))
   const creating = phase.kind === 'creating'
   const rows = payloadRowsOf(picked)
@@ -91,7 +93,7 @@ export function ShareHostsDialog({ onClose }: Props) {
 
   const handleCreate = async () => {
     if (blocked || !relay) return
-    const name = relay.name
+    const name = hostLabel(relay.id, lookOf(relay.id))
     setPhase({ kind: 'creating' })
     const res = await createTransfer(relay.id, rows)
     if (!mounted.current) return
@@ -147,7 +149,7 @@ export function ShareHostsDialog({ onClose }: Props) {
                             disabled={!usable || creating}
                             onChange={() => toggle(h.id)}
                           />
-                          <span className="truncate">{h.name}</span>
+                          <span className="truncate">{lookOf(h.id).name}</span>
                           <span className="text-xs text-text-muted font-mono">{h.ip}:{h.port}</span>
                           {!usable && <span className="text-xs text-text-muted">{t('hosts.transfer.no_token')}</span>}
                         </label>
@@ -170,7 +172,7 @@ export function ShareHostsDialog({ onClose }: Props) {
                     className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary"
                   >
                     {connected.map((h) => (
-                      <option key={h.id} value={h.id}>{h.name}</option>
+                      <option key={h.id} value={h.id}>{lookOf(h.id).name}</option>
                     ))}
                   </select>
                 )}

@@ -3,7 +3,7 @@
 // of the applier: applier.ts computes `(local, incoming) → next`, this file reads
 // the slices, writes `next`, and reports the hash the stores hold AFTERWARDS.
 //
-// How a write lands (hosts and the eight settings stores). A bare `store.setState(patch)` skips the invariants that
+// How a write lands (hosts and the nine settings stores). A bare `store.setState(patch)` skips the invariants that
 // live in each store's persist `merge` / `onRehydrateStorage` (sanitise, heal,
 // theme DOM attribute, the i18n translator `t`). So every write is followed by
 // `store.persist.rehydrate()` — the path a cross-window sync already takes. That
@@ -34,6 +34,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import type { HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { splitExecutionKey, useExecutionStore } from '../../stores/useExecutionStore'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
@@ -141,9 +142,10 @@ const SETTINGS_STORES: Record<SettingsStorageKey, PersistedStore> = {
   'purdex-host-settings': asPersisted(useHostSettingsStore),
   'purdex-newtab-layout': asPersisted(useNewTabLayoutStore),
   'purdex-layout': asPersisted(useLayoutStore),
+  'purdex-host-looks': asPersisted(useHostLookStore),
 }
 
-/** The eight settings stores' current states, by storage key: the input of `buildSettingsSection` and `applySettings`. */
+/** The nine settings stores' current states, by storage key: the input of `buildSettingsSection` and `applySettings`. */
 export function readSettingsSources(): SettingsBuildInput {
   const out: SettingsBuildInput = {}
   for (const key of Object.keys(SETTINGS_STORES) as SettingsStorageKey[]) out[key] = SETTINGS_STORES[key].getState()

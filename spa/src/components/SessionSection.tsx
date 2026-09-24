@@ -7,6 +7,7 @@ import { useSessionAgentIndicator } from '../hooks/useSessionAgentIndicator'
 import { TabIcon } from './TabIcon'
 import type { NewTabProviderProps } from '../lib/new-tab-registry'
 import { isHostLive } from '../lib/host-live'
+import { useHostLook } from '../lib/host-look'
 import type { Session } from '../lib/host-api'
 import { SessionLauncher } from './session-launcher/SessionLauncher'
 import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
@@ -73,6 +74,7 @@ export interface HostSessionSectionProps extends NewTabProviderProps {
 export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps) {
   useSessionWatch()
   const host = useHostStore((s) => s.hosts[hostId])
+  const look = useHostLook(hostId)
   const hostRuntime = useHostStore((s) => s.runtime[hostId])
   const sessions = useSessionStore((s) => s.sessions[hostId]) ?? EMPTY_SESSIONS
   const t = useI18nStore((s) => s.t)
@@ -108,7 +110,7 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
             ? <CaretDown size={12} className="text-text-secondary hover:text-text-primary" />
             : <CaretRight size={12} className="text-text-secondary hover:text-text-primary" />}
           {statusDot}
-          <span className="text-sm font-bold text-text-primary truncate">{host.name}</span>
+          <span className="text-sm font-bold text-text-primary truncate">{look.name}</span>
         </button>
         {isOffline && (
           <span className="text-xs text-text-muted">{t('session.reconnecting')}</span>

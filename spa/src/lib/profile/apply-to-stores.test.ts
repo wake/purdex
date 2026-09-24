@@ -28,6 +28,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import type { NexHostEntry } from '../../stores/useNexHostStore'
 import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
@@ -102,6 +103,7 @@ function resetStores(): void {
   useExecutionListStore.setState({ byHost: {} })
   useNexHostStore.setState({ byHost: {} })
   useHostSettingsStore.setState({ hosts: {} })
+  useHostLookStore.setState({ looks: {} })
   // Reset too: since every apply ends with a re-resolve pass, a column one test left behind would move in the next.
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
 }
@@ -356,6 +358,26 @@ describe('applySectionToStores — hosts', () => {
     expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
     // and the sanitised value is what got persisted
     expect((persistedOf(STORAGE_KEYS.HOSTS).hosts as Record<string, HostConfig>)[M].icon).toBeUndefined()
+  })
+})
+
+// host ownership §4.4: `hosts` apply still updates HostConfig name / colours / icon (the device fallback) and never
+// touches the workbench's look store.
+describe('applySectionToStores — hosts never touch the look store (host ownership §4.4)', () => {
+  it('an apply that renames and recolours a host leaves the look store the SAME object, and no subscriber of it is called', async () => {
+    useHostLookStore.setState({ looks: { [M]: { name: 'look-name', icon: 'Laptop' }, d1_far: { name: 'far' } } })
+    const before = useHostLookStore.getState()
+    const spy = vi.fn()
+    const unsub = useHostLookStore.subscribe(spy)
+    const payload = hostsPayloadOf([host(M, { name: 'renamed', colors: { console: { main: { color: '#abcdef', alpha: 100 } } }, icon: 'Cube' }), host(H2, { ip: '10.0.0.2', order: 1 })])
+
+    const outcome = await applySectionToStores('hosts', payload, ctx)
+    unsub()
+
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useHostStore.getState().hosts[M]).toMatchObject({ name: 'renamed', icon: 'Cube' }) // HostConfig IS updated (the fallback)
+    expect(useHostLookStore.getState()).toBe(before)
+    expect(spy).not.toHaveBeenCalled()
   })
 })
 
@@ -751,7 +773,7 @@ describe('applySectionToStores — settings', () => {
   })
 
   it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {
-    expect(Object.keys(readSettingsSources())).toHaveLength(8)
+    expect(Object.keys(readSettingsSources())).toHaveLength(9)
     expect(readSettingsSources()).not.toHaveProperty('purdex-editor-settings')
     const payload = { ...settingsNow(), 'purdex-editor-settings': { fontSize: 20 } }
     let outcome: unknown
@@ -805,6 +827,59 @@ describe('applySectionToStores — settings', () => {
   })
 })
 
+// host ownership H2c-1 (spec §4.1): the look store's keys are wire ids IN the store — an apply writes them verbatim,
+// whatever this device's hosts are, and replaces the record whole.
+describe('applySectionToStores — settings: host looks', () => {
+  const DAEMON = 'mini-lab:278cbm'
+  const WIRE = syncIdOfSync(DAEMON)
+  const RED = { console: { main: { color: '#ef4444', alpha: 100 } } }
+  const settingsNow = (): SettingsPayload => JSON.parse(JSON.stringify(buildSettingsSection(readSettingsSources(), masterWorkspaceIds(), identityOfSync(useHostStore.getState().hosts)))) as SettingsPayload
+
+  beforeEach(() => {
+    useHostStore.setState({ hosts: { [M]: host(M, { daemonId: DAEMON }), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2] })
+  })
+
+  it('a payload naming a host here AND one no host here claims → both land byte-for-byte; the hash is the payload\'s (nothing to push)', async () => {
+    const looks = {
+      [WIRE]: { name: 'mlab', colors: RED, icon: 'Laptop', iconWeight: 'bold' },
+      d1_unknown: { name: 'far away', color: '#00ff00' },
+      [H2]: { name: 'no daemon yet' },
+    }
+    const payload = { ...settingsNow(), 'purdex-host-looks': { looks } } as SettingsPayload
+
+    const outcome = await applySectionToStores('settings', payload, ctx)
+
+    expect(JSON.stringify(useHostLookStore.getState().looks)).toBe(JSON.stringify(looks))
+    expect(persistedOf(STORAGE_KEYS.HOST_LOOKS).looks).toEqual(looks)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('replace semantics: an entry the payload lacks is dropped here', async () => {
+    useHostLookStore.setState({ looks: { [WIRE]: { name: 'old' }, d1_gone: { name: 'gone' } } })
+    const payload = { ...settingsNow(), 'purdex-host-looks': { looks: { [WIRE]: { name: 'new' } } } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'new' } })
+  })
+
+  it('an entry the store sanitises lands cleaned, and the section is honestly dirty', async () => {
+    const payload = { ...settingsNow(), 'purdex-host-looks': { looks: { d1_x: { name: 'x', icon: 'NotAnIcon' } } } } as SettingsPayload
+    const outcome = await applySectionToStores('settings', payload, ctx)
+    expect(useHostLookStore.getState().looks).toEqual({ d1_x: { name: 'x' } })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(payload) })
+  })
+
+  it('an ordinal-5 payload (no look store) leaves the look store untouched; the rebuild carries it, so the hash differs (pushed once)', async () => {
+    useHostLookStore.setState({ looks: { [WIRE]: { name: 'mine' } } })
+    const before = useHostLookStore.getState()
+    const legacy = settingsNow()
+    delete legacy['purdex-host-looks']
+    const outcome = await applySectionToStores('settings', legacy, ctx)
+    expect(useHostLookStore.getState()).toBe(before)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-host-looks': { looks: { [WIRE]: { name: 'mine' } } } }) })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
+  })
+})
+
 describe('applySectionToStores — settings: a failed apply rolls back registries, DOM and translator too', () => {
   const customTheme = () => ({ id: 'custom-1', name: 'Mine', tokens: getTheme('dark')!.tokens, builtin: false })
   const customLocale = { id: 'custom-loc', name: 'Dansk', translations: { 'common.cancel': 'Annuller' }, builtin: false }
@@ -834,7 +909,7 @@ describe('applySectionToStores — settings: a failed apply rolls back registrie
     cancel: useI18nStore.getState().t('common.cancel'),
   })
 
-  it('a later store throws → the eight stores, both registries, <html> theme/lang and `t` are all as before', async () => {
+  it('a later store throws → the nine stores, both registries, <html> theme/lang and `t` are all as before', async () => {
     const incoming = await seedCustom()
     const before = observed()
     expect(before).toMatchObject({ domTheme: 'custom-1', domLang: 'custom-loc', cancel: 'Annuller' })

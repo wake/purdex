@@ -4,6 +4,7 @@
 // tears it down.
 import type { ComponentType } from 'react'
 import { useHostStore } from '../stores/useHostStore'
+import { hostLabel, hostLookOf } from './host-look'
 import { HeadlessLauncher } from '../components/headless/HeadlessLauncher'
 import type { NewTabProviderProps, NewTabProviderSource } from './new-tab-registry'
 
@@ -48,7 +49,7 @@ export function createHeadlessProviderSource(): NewTabProviderSource {
         .map((hostId) => ({
           id: headlessProviderId(hostId),
           label: 'newtab.headless.title',
-          labelParams: { host: hosts[hostId].name },
+          labelParams: { host: hostLabel(hostId, hostLookOf(hostId, hosts)) },
           icon: 'Lightning',
           order: ORDER,
           component: componentFor(hostId),
