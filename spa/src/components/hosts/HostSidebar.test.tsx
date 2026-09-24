@@ -1,8 +1,10 @@
 // spa/src/components/hosts/HostSidebar.test.tsx
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { HostSidebar } from './HostSidebar'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { syncIdOfSync } from '../../lib/profile/host-identity'
 import { clearContributions, registerSettingsContribution } from '../../lib/settings-contribution-registry'
 import { clearModuleRegistry } from '../../lib/module-registry'
 import { registerBuiltinModules } from '../../lib/register-modules'
@@ -359,5 +361,74 @@ describe('HostSidebar', () => {
     for (const el of disabledNow) {
       expect(el.textContent).not.toContain('runtime-gated')
     }
+  })
+})
+
+// Host ownership H2d-2 T1 (plan §0.21, user rule 1): every host is listed in every workbench; a hidden one is muted and
+// tagged 「已隱藏」 / "Hidden", and still selects / expands / opens its sub-pages.
+describe('HostSidebar — shown / hidden hosts (H2d-2)', () => {
+  const DAEMON = 'air-lab:26aaaa'
+  const WIRE = syncIdOfSync(DAEMON)
+  const onSelect = vi.fn()
+  const props = () => ({ selectedHostId: HOST_ID, selectedSubPage: 'overview', onSelect, onAddHost: vi.fn() })
+  const hostButton = (name: string) => screen.getByText(name).closest('button')!
+
+  beforeEach(() => {
+    onSelect.mockReset()
+    useHostStore.setState({
+      hosts: {
+        [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 },
+        [HOST_B]: { id: HOST_B, name: 'Second Host', ip: '5.6.7.8', port: 7860, order: 1, daemonId: DAEMON },
+      },
+      hostOrder: [HOST_ID, HOST_B],
+      runtime: {},
+    })
+  })
+
+  it('ids [] (the default): every host is listed, each muted and tagged Hidden', () => {
+    useShownHostsStore.setState({ ids: [] })
+    render(<HostSidebar {...props()} />)
+    for (const name of ['Test Host', 'Second Host']) {
+      const button = hostButton(name)
+      expect(within(button).getByTestId('host-hidden-tag')).toHaveTextContent('Hidden')
+      expect(button).toHaveAttribute('data-host-hidden', 'true')
+    }
+    // Muted: the unselected row's name is muted text; the selected row (accent background) is dimmed.
+    expect(screen.getByText('Second Host').className).toContain('text-text-muted')
+    expect(hostButton('Test Host').className).toContain('opacity-70')
+  })
+
+  it('a shown host has no tag and is not muted; a daemonId host is shown by its d1_ id (not only its local id)', () => {
+    useShownHostsStore.setState({ ids: [HOST_ID, WIRE] })
+    render(<HostSidebar {...props()} />)
+    for (const name of ['Test Host', 'Second Host']) {
+      expect(within(hostButton(name)).queryByTestId('host-hidden-tag')).toBeNull()
+      expect(hostButton(name)).not.toHaveAttribute('data-host-hidden')
+    }
+  })
+
+  it('a hidden host still selects, expands and opens its sub-pages', () => {
+    useShownHostsStore.setState({ ids: [HOST_ID] })
+    render(<HostSidebar {...props()} />)
+    expect(within(hostButton('Second Host')).getByTestId('host-hidden-tag')).toBeInTheDocument()
+    fireEvent.click(hostButton('Second Host'))
+    expect(onSelect).toHaveBeenLastCalledWith(HOST_B, 'overview')
+    // Both hosts are expanded now: the second host's "Sessions" row is the second one.
+    const sessionsRows = screen.getAllByText('Sessions')
+    expect(sessionsRows).toHaveLength(2)
+    fireEvent.click(sessionsRows[1])
+    expect(onSelect).toHaveBeenLastCalledWith(HOST_B, 'sessions')
+  })
+
+  it('rendering the sidebar writes nothing to the shown-hosts store', () => {
+    useShownHostsStore.setState({ ids: ['unknown-id'] })
+    const setState = vi.spyOn(useShownHostsStore, 'setState')
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    render(<HostSidebar {...props()} />)
+    expect(setState).not.toHaveBeenCalled()
+    expect(setItem).not.toHaveBeenCalled()
+    expect(useShownHostsStore.getState().ids).toEqual(['unknown-id'])
+    setState.mockRestore()
+    setItem.mockRestore()
   })
 })
