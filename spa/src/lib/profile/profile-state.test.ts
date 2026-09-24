@@ -103,7 +103,8 @@ describe('profileLock (spec §4.4: any moved shape locks the whole profile)', ()
     const offenders = [entry('workspaces', FP_B, 3), entry('tabs.zz', FP_B, 2), entry('hosts', FP_B, 3), entry('tabs.aa', FP_B, 3)]
     const forward = profileLock(offenders, MINE)
     const backward = profileLock([...offenders].reverse(), MINE)
-    expect(forward?.section).toBe('hosts')
+    // `hosts` sorts first but is retired (host ownership H3a-2): the first offender is the next one
+    expect(forward?.section).toBe('tabs.aa')
     expect(backward).toEqual(forward)
   })
 
@@ -115,8 +116,20 @@ describe('profileLock (spec §4.4: any moved shape locks the whole profile)', ()
   })
 
   it('does not mutate its inputs', () => {
-    const index = deepFreeze([entry('workspaces', FP_B, 3), entry('hosts', FP_B, 3)])
-    expect(profileLock(index, deepFreeze({ ...MINE }))?.section).toBe('hosts')
+    const index = deepFreeze([entry('workspaces', FP_B, 3), entry('settings', FP_B, 3)])
+    expect(profileLock(index, deepFreeze({ ...MINE }))?.section).toBe('settings')
+  })
+
+  // host ownership H3a-2 (spec §5.1): `hosts` is a retired kind — this client never reads, writes or deletes it, so
+  // whatever shape the SOT's row has cannot concern it. Still a KNOWN kind (sectionKind), only skipped here.
+  it('a retired section (hosts) never locks: newer ordinal, or unorderable, alike', () => {
+    expect(profileLock([entry('hosts', FP_B, 3)], MINE)).toBeNull()
+    expect(profileLock([entry('hosts', FP_B, 2)], MINE)).toBeNull()
+    expect(profileLock([entry('hosts', FP_B, 99), entry('workspaces', FP_A, 2)], MINE)).toBeNull()
+  })
+
+  it('a retired section does not shield a real offender next to it', () => {
+    expect(profileLock([entry('hosts', FP_B, 3), entry('settings', FP_B, 3)], MINE)).toMatchObject({ section: 'settings', verdict: 'sot-is-newer' })
   })
 
   it('acceptance 7: an older client against the real shape table is locked, naming the section', async () => {

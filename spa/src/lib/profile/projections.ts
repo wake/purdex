@@ -113,7 +113,9 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   // 5: host ids in `purdex-host-settings.hosts` keys and `sessions:` / `headless:` preset columns are WIRE ids (host-sync-identity)
   // 6: purdex-host-looks.looks (host looks keyed by wire id; host ownership H2c)
   // 7: purdex-shown-hosts.ids (wire ids of the hosts shown in the workbench; host ownership H2d)
-  settings: 7,
+  // 8: `hosts` retired from the sync loop (host ownership H3a-2) — no projection change; the `@wire:hosts-retired=1`
+  //    marker locks an H2-era client, which would otherwise keep pulling / pushing `hosts` (plan D1)
+  settings: 8,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.
@@ -137,6 +139,19 @@ const TABS_PREFIX = 'tabs.'
 export function sectionKind(key: string): SectionKind | null {
   if (key === 'hosts' || key === 'settings' || key === 'workspaces') return key
   return workspaceIdOf(key) === null ? null : 'tabs'
+}
+
+/**
+ * Section keys this client no longer syncs (host ownership H3a-2, spec §5.1): still KNOWN kinds — the daemon keeps
+ * them (validate.go), their shape stays in the tables and their builder stays for the wire resolver — but the sync
+ * loop never reads, writes or deletes them. The executor refuses them at `dispatch` and drops their persisted record
+ * at startup, `profileLock` skips them, the collector never builds them.
+ */
+export const RETIRED_SECTIONS: readonly string[] = ['hosts']
+
+/** Is `key` a retired section (see `RETIRED_SECTIONS`)? */
+export function isRetiredSection(key: string): boolean {
+  return RETIRED_SECTIONS.includes(key)
 }
 
 /** The section key of a workspace's tabs. Throws rather than build a key the daemon will 400. */
@@ -176,12 +191,14 @@ export async function fingerprintOf(paths: readonly string[]): Promise<string> {
  * host ownership H2c: `settings` carries the workbench's host looks keyed by wire id (spec §4.1) — an older client
  * must see `settings` as newer and lock the whole profile (decision 7), so the arrival brings a marker of its own.
  * host ownership H2d: `settings` carries the hosts shown in the workbench (`purdex-shown-hosts`) — same rule, its own marker.
+ * host ownership H3a-2: `hosts` left the sync loop with no projection change — an H2-era client would compute the same
+ * shapes and keep syncing `hosts` (tokens included), so `settings` carries a marker that locks it (plan D1).
  * A marker is only ever ADDED with an ordinal bump (the guard test's snapshot enforces it).
  */
 export const WIRE_MARKERS: Record<SectionKind, readonly string[]> = {
   hosts: ['@wire:host-id=d1'],
   tabs: ['@wire:host-id=d1', '@tabs:device-local=v1', '@wire:rebuild-agent-state=1'],
-  settings: ['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1'],
+  settings: ['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'],
   workspaces: [],
 }
 

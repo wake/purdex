@@ -46,10 +46,16 @@ vi.mock('./section-store', () => ({
 }))
 
 // `shapeTable` is a crypto.subtle digest: fake timers cannot flush it.
+// `isRetiredSection` is mocked to `false` (host ownership H3a-2): `hosts` is retired from the sync loop, but it stays
+// THE generic, ungated sample key of these unit tests — an opaque section the executor drives like any other (it is not
+// a gate any more). Rewriting them onto `workspaces` is not mechanical: that one IS a gate, with its own side effects
+// (`previousWorkspaceIds`, `pumpTabs`, `sweepOrphans`). `describe('a retired section')` restores the real predicate and
+// tests what retirement does; the mock applies to every importer of `./projections` here (profile-state's `profileLock` too).
 vi.mock('./projections', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./projections')>()
   return {
     ...actual,
+    isRetiredSection: vi.fn(() => false),
     shapeTable: vi.fn(async () => ({ hosts: ['fp-hosts', 1], settings: ['fp-settings', 3], workspaces: ['fp-workspaces', 1], tabs: ['fp-tabs', 1] })),
   }
 })
