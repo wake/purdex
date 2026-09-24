@@ -19,26 +19,9 @@
 //
 // No fetching, no clocks, no stores, no id generation. Nothing is mutated;
 // results may share structure with `local` and `incoming`.
-import type { HostConfig } from '../../stores/useHostStore'
-import { isValidDaemonId } from '../daemon-id'
 import type { PaneLayout, SplitLayout, Tab, Workspace } from '../../types/tab'
 import { structuralKey } from './hash'
-import {
-  MAX_HOST_ALIASES,
-  NEW_HOST,
-  SYNC_ID_PREFIX,
-  hostSettingsFromWire,
-  hostsFromWire,
-  isSyncId,
-  layoutFromWire,
-  matchIncomingHosts,
-  mergeAliases,
-  presetColumnsFromWire,
-  syncIdOfSync,
-  type HostMatchError,
-  type WireHostsPayload,
-  type WireResolver,
-} from './host-identity'
+import { hostSettingsFromWire, layoutFromWire, presetColumnsFromWire, type WireResolver } from './host-identity'
 import { PROJECTIONS, workspaceIdOf } from './projections'
 import {
   WORKSPACE_SCOPED_SETTINGS,
@@ -48,12 +31,9 @@ import {
   isPlainObject,
   isSyncableTab,
   isSyncableWorkspaceId,
-  normaliseAliases,
 } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type {
-  HostsPayload,
-  HostsSlice,
   SectionKind,
   SettingsPayload,
   SettingsStorageKey,
@@ -66,12 +46,6 @@ import type {
 } from './types'
 
 // === Results ===
-
-export interface ApplyHostsResult {
-  next: HostsSlice
-  /** Hosts that existed locally and are not in the payload — the hosts apply removes each through `deleteHostCascade`. */
-  removedHostIds: string[]
-}
 
 export interface ApplyWorkspacesResult {
   next: WorkspacesSlice
@@ -110,144 +84,11 @@ function unique(ids: readonly string[]): string[] {
   return [...new Set(ids)]
 }
 
-// === hosts ===
-
-/**
- * Replaces `hosts` + `hostOrder`; the device's `activeHostId` / `devHostId` survive while their host does.
- *
- * Hosts ordinal 1 → 2 added `daemonId` (host-daemon-id D6). An incoming host
- * WITHOUT one (an ordinal-1 writer, or a host nobody has verified yet) keeps the
- * local host's `daemonId` — the only local field that does — but ONLY for the
- * same incarnation as far as the address can tell: same id AND same ip + port.
- * Another address is a re-point (an ordinal-2 client clears `daemonId` exactly
- * by re-pointing; an ordinal-1 client re-points without knowing the field) or a
- * host deleted and recreated under the same id: the local claim belongs to
- * another daemon and is dropped. (The row's ordinal is not an input here — the
- * address rule covers both writers.) One that carries `daemonId` wins (SOT
- * wins, D2). The upcast state then builds a
- * payload that differs from the one pulled, and that difference is the one
- * upgrade push. The runtime `daemonIdMismatch` lives outside `hosts` and is
- * never touched here.
- */
-export function applyHosts(local: HostsSlice, incoming: HostsPayload): ApplyHostsResult {
-  const hosts: Record<string, HostConfig> = {}
-  for (const id of Object.keys(incoming.hosts)) {
-    if (id === PROTO_KEY) continue
-    const h = incoming.hosts[id]
-    const mine = Object.hasOwn(local.hosts, id) ? local.hosts[id] : undefined
-    const sameIncarnation = mine !== undefined && mine.ip === h.ip && mine.port === h.port
-    const kept = h.daemonId === undefined && sameIncarnation ? mine.daemonId : undefined
-    hosts[id] = kept ? { ...h, daemonId: kept } : h
-  }
-  const survives = (id: string | null): string | null => (id !== null && Object.hasOwn(hosts, id) ? id : null)
-  return {
-    next: {
-      hosts,
-      hostOrder: [...incoming.hostOrder],
-      activeHostId: survives(local.activeHostId),
-      devHostId: survives(local.devHostId),
-    },
-    removedHostIds: Object.keys(local.hosts).filter((id) => !Object.hasOwn(hosts, id)),
-  }
-}
-
-// === hosts: wire → local (host-sync-identity spec §6, §11.5/§11.6) ===
-
-export interface HostsPlan {
-  /** The incoming payload in LOCAL ids — what `applyHosts` takes. */
-  payload: HostsPayload
-  /** Per local id, the `syncAliases` that host must hold after the apply; a host absent here holds none. */
-  aliases: Record<string, string[]>
-  /** Incoming row key → the local id it lands on (created ones included; never `NEW_HOST`). */
-  byRow: Map<string, string>
-  /** Local ids this apply creates, in row order. */
-  created: string[]
-}
+// === wire → local (host-sync-identity spec §6) ===
 
 /** `record[key] = value` as an own data property (a wire key may be anything the guard let through). */
 function setOwn<T>(record: Record<string, T>, key: string, value: T): void {
   Object.defineProperty(record, key, { value, enumerable: true, writable: true, configurable: true })
-}
-
-/**
- * How an incoming `hosts` payload (WIRE ids) lands on this device's hosts.
- *   - D6 FIRST: a row under a legacy key with no `daemonId` whose local host of
- *     that id holds a claim at the SAME ip + port is that host — the claim is put
- *     on the row before matching (`applyHosts`' ordinal-1 upcast, moved in front
- *     of the matcher, whose §11.6 rule would otherwise refuse the local-id match
- *     and recreate the host — cascading its panes to `host-removed`).
- *   - `matchIncomingHosts` (codec): daemonId, then sync id, then legacy local id.
- *   - A row nobody matches is CREATED: under its own key when that key is a legacy
- *     local id not taken here (a host without a claim has no other wire identity
- *     — under a random id its next build would name another host, and the two
- *     devices would recreate it from each other for ever), else under `newId()`.
- *   - `aliases`: a canonical row's own (the SOT wins); a LEGACY row carrying a
- *     `daemonId` adds its key to the matched host's aliases (the next build is
- *     canonical, and other devices resolve that legacy key through it).
- * Pure: `newId` is the only source of new ids; nothing is mutated.
- */
-export function planHostsApply(
-  localHosts: Record<string, HostConfig>,
-  incoming: HostsPayload,
-  newId: () => string,
-): { plan: HostsPlan } | { error: HostMatchError } {
-  const rows: Record<string, HostConfig> = {}
-  for (const [key, row] of Object.entries(incoming.hosts)) {
-    const mine = !isSyncId(key) && Object.hasOwn(localHosts, key) ? localHosts[key] : undefined
-    const upcast = row.daemonId === undefined && mine !== undefined && isValidDaemonId(mine.daemonId) && mine.ip === row.ip && mine.port === row.port
-    setOwn(rows, key, upcast ? { ...row, daemonId: mine.daemonId } : row)
-  }
-
-  const match = matchIncomingHosts(localHosts, rows)
-  if (match.error !== undefined) return { error: match.error }
-
-  const taken = new Set(Object.keys(localHosts))
-  const byRow = new Map<string, string>()
-  const created: string[] = []
-  for (const [key, local] of match.byRow) {
-    if (local !== NEW_HOST) {
-      byRow.set(key, local)
-      continue
-    }
-    let id = !isSyncId(key) && key !== PROTO_KEY && key !== NEW_HOST && !taken.has(key) ? key : newId()
-    while (taken.has(id) || id === NEW_HOST || isSyncId(id)) id = newId()
-    taken.add(id)
-    created.push(id)
-    byRow.set(key, id)
-  }
-
-  const resolve: WireResolver = (key) => byRow.get(key) ?? key
-  const { hosts: payload, aliasesByLocal } = hostsFromWire({ hosts: rows, hostOrder: incoming.hostOrder } as WireHostsPayload, resolve)
-  const aliases: Record<string, string[]> = {}
-  for (const [local, list] of Object.entries(aliasesByLocal)) aliases[local] = normaliseAliases(list)
-  for (const [key, row] of Object.entries(rows)) {
-    if (isSyncId(key) || !isValidDaemonId(row.daemonId)) continue
-    const local = byRow.get(key) as string
-    const before = created.includes(local) ? [] : localHosts[local]?.syncAliases
-    const merged = normaliseAliases([...(aliases[local] ?? (Array.isArray(before) ? before : [])), key])
-    if (merged.length > 0) aliases[local] = merged
-  }
-  return { plan: { payload, aliases, byRow, created } }
-}
-
-/**
- * The first alias that is not unique across the payload's rows — listed by two rows, or equal to another row's
- * key — or `null` (A2, PR #1365). Such an alias makes every legacy id that goes through it ambiguous: the
- * resolver maps it to nothing, and the tabs / presets naming it would read as a removed host. No builder
- * produces one (a local id is one host's, and a legacy key is matched to one host), so the hosts apply refuses
- * the payload whole, before anything is written. Only called on a well-formed payload.
- */
-export function duplicateHostAlias(incoming: HostsPayload): string | null {
-  const seen = new Set<string>()
-  for (const [, row] of Object.entries(incoming.hosts)) {
-    const aliases = (row as { aliases?: unknown }).aliases
-    if (!Array.isArray(aliases)) continue
-    for (const alias of aliases as string[]) {
-      if (seen.has(alias) || Object.hasOwn(incoming.hosts, alias)) return alias
-      seen.add(alias)
-    }
-  }
-  return null
 }
 
 /** wire → local over every tab of a `tabs.<ws>` payload (host-identity `layoutFromWire`). Input untouched. */
@@ -698,55 +539,6 @@ function isWorkspacesPayload(p: Rec): boolean {
 }
 
 /**
- * hosts ordinal 3 (host-sync-identity): a key shaped like a sync id is THIS
- * version's (`d1_`) and the sync id of the row's own `daemonId` — nothing else
- * is a builder's output (a no-claim host travels under its local id, which is
- * never sync-id shaped). `aliases` rides on such a canonical row only, in
- * `mergeAliases`' form. A legacy key with a `daemonId` is an ordinal-2 row: allowed.
- */
-function isWireKeyOf(id: string, h: Rec): boolean {
-  if (isSyncId(id)) {
-    if (!id.startsWith(SYNC_ID_PREFIX) || !isValidDaemonId(h.daemonId) || syncIdOfSync(h.daemonId) !== id) return false
-  }
-  if (h.aliases === undefined) return true
-  const a = h.aliases
-  if (!isSyncId(id) || !Array.isArray(a) || a.length === 0 || a.length > MAX_HOST_ALIASES) return false
-  // Normalised and unique; ANY order (the apply and every build sort it — sections.ts `normaliseAliases`).
-  const canonical = mergeAliases(a, [])
-  return canonical.length === a.length && canonical.every((alias, i) => alias === a[i])
-}
-
-function isHostsPayload(p: Rec): boolean {
-  const record = p.hosts
-  const order = p.hostOrder
-  if (!hasOnlyKeys(p, ['hosts', 'hostOrder']) || !isPlainObject(record) || !isStringArray(order)) return false
-  // `order ⊆ keys` only: useHostStore.reorderHosts stores whatever list it is
-  // given, so a host missing from hostOrder is a state the store can hold today.
-  if (new Set(order).size !== order.length || !order.every((id) => Object.hasOwn(record, id) && record[id] !== undefined)) return false
-  const fields = entryFields('hosts', 'hosts')
-  return definedKeys(record).every((id) => {
-    const h = record[id]
-    return (
-      isPlainObject(h) &&
-      hasOnlyKeys(h, fields) &&
-      h.id === id &&
-      typeof h.name === 'string' &&
-      typeof h.ip === 'string' &&
-      Number.isInteger(h.port) &&
-      isFiniteNumber(h.order) &&
-      (h.token === undefined || h.token === null || typeof h.token === 'string') &&
-      isOptional(h.color, isString) &&
-      isOptional(h.colors, isPlainObject) &&
-      isOptional(h.icon, isString) &&
-      isOptional(h.iconWeight, isString) &&
-      // hosts ordinal 2 (host-daemon-id D6); absent in an ordinal-1 payload. The shared validator: never "", never hostile text.
-      isOptional(h.daemonId, isValidDaemonId) &&
-      isWireKeyOf(id, h)
-    )
-  })
-}
-
-/**
  * Every top-level key must be one of the storage keys `PROJECTIONS.settings`
  * covers, and its store may carry only the fields listed for it, and at least
  * one of them:
@@ -839,14 +631,14 @@ export function upcastLegacyTabs(payload: TabsPayload): TabsPayload {
  * The structural guard run on a payload from the daemon BEFORE any apply. It
  * accepts what the builders can produce and nothing else, and never throws —
  * whatever it is handed. A payload that fails is not applied at all; the caller
- * locks the section.
+ * locks the section. `hosts` is always refused: the kind is known (an older
+ * client still writes it), but the host list is per device (host ownership H3).
  */
 export function isWellFormedSection(kind: SectionKind, payload: unknown): boolean {
   try {
     if (!isPlainObject(payload) || !isSafeJson(payload, 0, new Set(), new Set())) return false
     switch (kind) {
-      case 'hosts':
-        return isHostsPayload(payload)
+      // `hosts` is a known kind but not accepted (host ownership H3): nothing applies it, so nothing checks it.
       case 'workspaces':
         return isWorkspacesPayload(payload)
       case 'tabs':
