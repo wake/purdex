@@ -1411,6 +1411,8 @@
   "settings.profile.local.delete_body": "Its workspaces and tabs are removed from this device. Sessions on the hosts keep running. This cannot be undone.",
   "settings.profile.local.duplicate": "Duplicate current",
   "settings.profile.local.new_blank": "New blank",
+  "settings.profile.local.duplicate_settings": "Duplicate settings only",
+  "settings.profile.local.new_settings_hint": "Name for the copy of the settings:",
   "settings.profile.local.new_duplicate_hint": "Name for the copy:",
   "settings.profile.local.new_blank_hint": "Name for the new profile:",
   "settings.profile.local.create": "Create",

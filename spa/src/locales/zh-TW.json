@@ -1410,6 +1410,8 @@
   "settings.profile.local.delete_title": "刪除「{{name}}」？",
   "settings.profile.local.delete_body": "它的工作區與分頁會從這台裝置移除，主機上的 session 照常執行。這個動作無法復原。",
   "settings.profile.local.duplicate": "複製目前工作台",
+  "settings.profile.local.duplicate_settings": "只複製設定",
+  "settings.profile.local.new_settings_hint": "只複製設定的新工作台名稱：",
   "settings.profile.local.new_blank": "新增空白工作台",
   "settings.profile.local.new_duplicate_hint": "副本名稱：",
   "settings.profile.local.new_blank_hint": "新工作台名稱：",

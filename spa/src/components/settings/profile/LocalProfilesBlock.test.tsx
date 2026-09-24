@@ -1,14 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import en from '../../../locales/en.json'
-import zhTW from '../../../locales/zh-TW.json'
-import { useI18nStore } from '../../../stores/useI18nStore'
 import { LocalProfilesBlock } from './LocalProfilesBlock'
 import { useLocalProfilesStore, type LocalProfile } from '../../../stores/useLocalProfilesStore'
 import { __resetProfileSwitcherForTest, useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
 import { useDeviceNameStore } from '../../../stores/useDeviceNameStore'
 import { useUndoToast } from '../../../stores/useUndoToast'
-import { copyMasterAsSlave, createBlankSlave, deleteSlave, reorderSlaves, saveScreenAsSlave, switchActiveProfile } from '../../../lib/profile/switch-active'
+import { copyMasterAsSlave, createBlankSlave, createSettingsCopySlave, deleteSlave, reorderSlaves, saveScreenAsSlave, switchActiveProfile } from '../../../lib/profile/switch-active'
+import { useShownHostsStore } from '../../../stores/useShownHostsStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../../../features/workspace/store'
 import type { Tab } from '../../../types/tab'
@@ -18,6 +17,7 @@ vi.mock('../../../lib/profile/switch-active', () => ({
   copyMasterAsSlave: vi.fn(),
   saveScreenAsSlave: vi.fn(),
   createBlankSlave: vi.fn(),
+  createSettingsCopySlave: vi.fn(),
   deleteSlave: vi.fn(),
   reorderSlaves: vi.fn(),
 }))
@@ -48,7 +48,7 @@ const rowIds = () => screen.getAllByTestId(/^profile-row-(master|s\d)$/).map((el
 const flush = () => act(async () => { await Promise.resolve() })
 
 beforeEach(() => {
-  for (const fn of [switchActiveProfile, copyMasterAsSlave, saveScreenAsSlave, createBlankSlave, deleteSlave, reorderSlaves]) vi.mocked(fn).mockReset()
+  for (const fn of [switchActiveProfile, copyMasterAsSlave, saveScreenAsSlave, createSettingsCopySlave, createBlankSlave, deleteSlave, reorderSlaves]) vi.mocked(fn).mockReset()
   useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
   useDeviceNameStore.setState({ deviceName: 'Mini', defaultDeviceName: 'Browser' })
   __resetProfileSwitcherForTest()
@@ -201,55 +201,38 @@ describe('the order of the slaves', () => {
   })
 })
 
-describe('the two ways to a new local profile', () => {
-  const open = (which: 'duplicate' | 'blank') => fireEvent.click(screen.getByTestId(`profile-new-${which}`))
+describe('the three ways to a new local workbench (per-workbench plan §0.7)', () => {
+  type Kind = 'duplicate' | 'settings' | 'blank'
+  const KINDS: readonly Kind[] = ['duplicate', 'settings', 'blank']
+  const open = (which: Kind) => fireEvent.click(screen.getByTestId(`profile-new-${which}`))
   const nameInput = () => screen.getByTestId('profile-new-name') as HTMLInputElement
+  const CREATE: Record<Kind, typeof saveScreenAsSlave> = { duplicate: saveScreenAsSlave, settings: createSettingsCopySlave, blank: createBlankSlave }
 
-  it('the two buttons: Duplicate current, New blank', () => {
+  it('three separate buttons, and no fourth (the master\'s copy is the wizard\'s)', () => {
     render(<LocalProfilesBlock />)
-    expect(screen.getByTestId('profile-new-duplicate')).toHaveTextContent('Duplicate current')
-    expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('New blank')
+    for (const kind of KINDS) expect(screen.getByTestId(`profile-new-${kind}`)).toBeInTheDocument()
     expect(screen.queryByTestId('profile-new-copy')).toBeNull()
     expect(screen.queryByTestId('profile-new-save')).toBeNull()
-    // exactly two: no third way (the master's copy is the wizard's)
-    expect(within(screen.getByTestId('profile-local-block')).getAllByTestId(/^profile-new-/)).toHaveLength(2)
-  })
-
-  it('zh-TW: 複製目前工作台, 新增空白工作台', () => {
-    act(() => { useI18nStore.getState().setLocale('zh-TW') })
-    try {
-      render(<LocalProfilesBlock />)
-      expect(screen.getByTestId('profile-new-duplicate')).toHaveTextContent('複製目前工作台')
-      expect(screen.getByTestId('profile-new-blank')).toHaveTextContent('新增空白工作台')
-      open('duplicate')
-      expect(screen.getByTestId('profile-new-form')).toHaveTextContent(zhTW['settings.profile.local.new_duplicate_hint'])
-      open('blank')
-      expect(screen.getByTestId('profile-new-form')).toHaveTextContent(zhTW['settings.profile.local.new_blank_hint'])
-    } finally {
-      act(() => { useI18nStore.getState().setLocale('en') })
-    }
+    expect(within(screen.getByTestId('profile-local-block')).getAllByTestId(/^profile-new-/)).toHaveLength(3)
   })
 
   it('the block says what a local profile holds, and what it shares with the master', () => {
     render(<LocalProfilesBlock />)
-    expect(screen.getByTestId('profile-local-block')).toHaveTextContent(
-      'A local workbench keeps its own workspaces, tabs and shown hosts, and stays on this device — it is never synced. Host looks and every other setting are shared with the master; only the master syncs.',
-    )
+    expect(screen.getByTestId('profile-local-block')).toHaveTextContent(en['settings.profile.local.desc'])
   })
 
-  it('each form says what it is naming', () => {
+  it('each form says what it is naming — its own hint', () => {
     render(<LocalProfilesBlock />)
-    open('duplicate')
-    expect(screen.getByTestId('profile-new-form')).toHaveAttribute('data-kind', 'duplicate')
-    expect(screen.getByTestId('profile-new-form')).toHaveTextContent('Name for the copy:')
-    open('blank')
-    expect(screen.getByTestId('profile-new-form')).toHaveAttribute('data-kind', 'blank')
-    expect(screen.getByTestId('profile-new-form')).toHaveTextContent('Name for the new profile:')
+    for (const kind of KINDS) {
+      open(kind)
+      expect(screen.getByTestId('profile-new-form')).toHaveAttribute('data-kind', kind)
+      expect(screen.getByTestId('profile-new-form')).toHaveTextContent(en[`settings.profile.local.new_${kind}_hint`])
+    }
   })
 
   it('the name offered is the device name', () => {
     render(<LocalProfilesBlock />)
-    open('duplicate')
+    open('settings')
     expect(nameInput().value).toBe('Mini')
   })
 
@@ -267,54 +250,65 @@ describe('the two ways to a new local profile', () => {
     expect(nameInput().value).toBe('Mini 2')
   })
 
-  it('duplicate: copies what is on screen under the name typed, then the form goes', () => {
-    vi.mocked(saveScreenAsSlave).mockReturnValue({ ok: true, id: 'n1' })
+  it.each(KINDS)('%s: its own create under the name typed, no other; then the form goes', (kind) => {
+    vi.mocked(CREATE[kind]).mockReturnValue({ ok: true, id: 'n1' })
     render(<LocalProfilesBlock />)
-    open('duplicate')
+    open(kind)
     fireEvent.change(nameInput(), { target: { value: 'Experiment' } })
     fireEvent.click(screen.getByTestId('profile-new-create'))
-    expect(saveScreenAsSlave).toHaveBeenCalledWith('Experiment')
-    expect(createBlankSlave).not.toHaveBeenCalled()
+    expect(CREATE[kind]).toHaveBeenCalledWith('Experiment')
+    for (const other of KINDS.filter((k) => k !== kind)) expect(CREATE[other]).not.toHaveBeenCalled()
     expect(screen.queryByTestId('profile-new-name')).toBeNull()
   })
 
-  it('blank: creates a blank profile; Enter submits', () => {
-    vi.mocked(createBlankSlave).mockReturnValue({ ok: true, id: 'n1' })
+  it('Enter submits', () => {
+    vi.mocked(createSettingsCopySlave).mockReturnValue({ ok: true, id: 'n1' })
     render(<LocalProfilesBlock />)
-    open('blank')
+    open('settings')
     fireEvent.keyDown(nameInput(), { key: 'Enter' })
-    expect(createBlankSlave).toHaveBeenCalledWith('Mini')
-    expect(saveScreenAsSlave).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('profile-new-name')).toBeNull()
+    expect(createSettingsCopySlave).toHaveBeenCalledWith('Mini')
   })
 
   describe('with the real functions behind the buttons', () => {
+    const LIST = ['d1_shown']
+    const TMUX = { kind: 'tmux-session', hostId: 'h1', sessionCode: 'code01', mode: 'terminal', cachedName: 'dev', tmuxInstance: '111:1000' } as const
     beforeEach(async () => {
       const actual = await vi.importActual<typeof import('../../../lib/profile/switch-active')>('../../../lib/profile/switch-active')
       vi.mocked(saveScreenAsSlave).mockImplementation(actual.saveScreenAsSlave)
+      vi.mocked(createSettingsCopySlave).mockImplementation(actual.createSettingsCopySlave)
       vi.mocked(createBlankSlave).mockImplementation(actual.createBlankSlave)
-      const tab: Tab = { id: 't1', pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: 'p1', content: { kind: 'new-tab' } } } }
-      useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1' })
-      useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'On screen', tabs: ['t1'], activeTabId: 't1', moduleConfig: {} }], activeWorkspaceId: 'w1' })
+      const tab: Tab = { id: 't1', pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: 'p1', content: { ...TMUX } } } }
+      useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1', worldId: 'master', worldEpoch: 0 })
+      useWorkspaceStore.setState({ workspaces: [{ id: 'w1', name: 'On screen', tabs: ['t1'], activeTabId: 't1', moduleConfig: {} }], activeWorkspaceId: 'w1', worldId: 'master', worldEpoch: 0 })
+      useShownHostsStore.setState({ ids: LIST, relabelStamp: 0 })
+      useLocalProfilesStore.setState({ master: { name: 'Work', icon: 'Briefcase', color: '#ef4444' } })
     })
     afterEach(() => {
       useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
       useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
+      useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
     })
     const created = () => {
       const { slaves, slaveOrder } = useLocalProfilesStore.getState()
       expect(slaveOrder).toHaveLength(1)
-      const w = slaves[slaveOrder[0]].world
-      if (w === null) throw new Error('not parked')
-      return { name: slaves[slaveOrder[0]].name, world: w }
+      const slave = slaves[slaveOrder[0]]
+      if (slave.world === null) throw new Error('not parked')
+      return { slave, world: slave.world }
+    }
+    const createVia = (kind: Kind) => {
+      render(<LocalProfilesBlock />)
+      open(kind)
+      fireEvent.click(screen.getByTestId('profile-new-create'))
+      return created()
+    }
+    const screenDidNotMove = () => {
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['w1'])
+      expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
+      expect(useLocalProfilesStore.getState().activeProfileId).toBe('master')
     }
 
-    it('Duplicate current: the new profile is what is on screen — same workspaces and tabs, fresh ids', () => {
-      render(<LocalProfilesBlock />)
-      open('duplicate')
-      fireEvent.click(screen.getByTestId('profile-new-create'))
-      const { name, world } = created()
-      expect(name).toBe('Mini')
+    it('Duplicate all: workspaces and tabs under fresh ids, the tmux binding verbatim, and the shown list', () => {
+      const { slave, world } = createVia('duplicate')
       expect(world.workspaces.map((ws) => ws.name)).toEqual(['On screen'])
       const [ws] = world.workspaces
       const tabIds = Object.keys(world.tabs)
@@ -322,34 +316,39 @@ describe('the two ways to a new local profile', () => {
       expect(ws.tabs).toEqual(tabIds)
       expect(ws.id).not.toBe('w1')
       expect(tabIds[0]).not.toBe('t1')
-      expect(world.tabs[tabIds[0]].layout).toMatchObject({ type: 'leaf', pane: { content: { kind: 'new-tab' } } })
-      expect(world.activeWorkspaceId).toBe(ws.id)
-      expect(world.activeTabId).toBe(tabIds[0])
-      // the screen did not move
-      expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual(['w1'])
-      expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
-      expect(useLocalProfilesStore.getState().activeProfileId).toBe('master')
+      expect(world.tabs[tabIds[0]].layout).toMatchObject({ type: 'leaf', pane: { content: TMUX } })
+      expect(slave.shownHostIds).toEqual(LIST)
+      screenDidNotMove()
     })
 
-    it('New blank: the new profile is one empty workspace', () => {
-      render(<LocalProfilesBlock />)
-      open('blank')
-      fireEvent.click(screen.getByTestId('profile-new-create'))
-      const { name, world } = created()
-      expect(name).toBe('Mini')
+    it('Duplicate settings only: one empty workspace, no tab — and the shown list', () => {
+      const { slave, world } = createVia('settings')
       expect(world.tabs).toEqual({})
       expect(world.workspaces).toHaveLength(1)
       expect(world.workspaces[0]).toMatchObject({ name: 'Workspace 1', tabs: [], activeTabId: null })
       expect(world.workspaces[0].id).not.toBe('w1')
-      expect(world.activeWorkspaceId).toBe(world.workspaces[0].id)
       expect(world.activeTabId).toBeNull()
-      // the screen did not move
-      expect(useWorkspaceStore.getState().workspaces.map((ws) => ws.id)).toEqual(['w1'])
-      expect(Object.keys(useTabStore.getState().tabs)).toEqual(['t1'])
-      expect(useLocalProfilesStore.getState().activeProfileId).toBe('master')
+      expect(slave.shownHostIds).toEqual(LIST)
+      screenDidNotMove()
     })
 
-    it.each(['duplicate', 'blank'] as const)('%s with a blank name: bad-name, nothing is created, the form stays', (which) => {
+    it('New blank workbench: one empty workspace, and every host hidden', () => {
+      const { slave, world } = createVia('blank')
+      expect(world.tabs).toEqual({})
+      expect(world.workspaces).toHaveLength(1)
+      expect(world.workspaces[0]).toMatchObject({ name: 'Workspace 1', tabs: [], activeTabId: null })
+      expect(slave.shownHostIds).toEqual([])
+      screenDidNotMove()
+    })
+
+    it.each(KINDS)('%s copies no name, icon or colour — the name is the one typed', (kind) => {
+      const { slave } = createVia(kind)
+      expect(slave.name).toBe('Mini')
+      expect(slave).not.toHaveProperty('icon')
+      expect(slave).not.toHaveProperty('color')
+    })
+
+    it.each(KINDS)('%s with a blank name: bad-name, nothing is created, the form stays', (which) => {
       render(<LocalProfilesBlock />)
       open(which)
       fireEvent.change(nameInput(), { target: { value: '   ' } })
@@ -361,10 +360,9 @@ describe('the two ways to a new local profile', () => {
   })
 
   it('nothing on the block copies the master: every button, every form, every create', () => {
-    vi.mocked(saveScreenAsSlave).mockReturnValue({ ok: true, id: 'n1' })
-    vi.mocked(createBlankSlave).mockReturnValue({ ok: true, id: 'n2' })
+    for (const kind of KINDS) vi.mocked(CREATE[kind]).mockReturnValue({ ok: true, id: `n-${kind}` })
     render(<LocalProfilesBlock />)
-    for (const which of ['duplicate', 'blank'] as const) {
+    for (const which of KINDS) {
       open(which)
       fireEvent.click(screen.getByTestId('profile-new-create'))
     }
@@ -377,11 +375,10 @@ describe('the two ways to a new local profile', () => {
     open('duplicate')
     fireEvent.click(screen.getByTestId('profile-new-cancel'))
     expect(screen.queryByTestId('profile-new-name')).toBeNull()
-    open('blank')
+    open('settings')
     fireEvent.keyDown(nameInput(), { key: 'Escape' })
     expect(screen.queryByTestId('profile-new-name')).toBeNull()
-    expect(createBlankSlave).not.toHaveBeenCalled()
-    expect(saveScreenAsSlave).not.toHaveBeenCalled()
+    for (const kind of KINDS) expect(CREATE[kind]).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -400,9 +397,9 @@ describe('the two ways to a new local profile', () => {
   })
 
   it('write-failed says what the storage said', () => {
-    vi.mocked(saveScreenAsSlave).mockReturnValue({ ok: false, reason: 'write-failed', detail: 'QuotaExceededError' })
+    vi.mocked(createSettingsCopySlave).mockReturnValue({ ok: false, reason: 'write-failed', detail: 'QuotaExceededError' })
     render(<LocalProfilesBlock />)
-    open('duplicate')
+    open('settings')
     fireEvent.click(screen.getByTestId('profile-new-create'))
     expect(screen.getByTestId('profile-new-error')).toHaveTextContent('QuotaExceededError')
   })
