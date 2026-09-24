@@ -1310,8 +1310,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const sotHash = fetched === null ? null : fetched.hash
     const mismatch = outcome.hash !== sotHash
     // `rewrite` = the only difference is a designed write-back after a pull (one push, then every build agrees):
-    // this device's own id on a canonical `hosts` row (#1369), or an ordinal-2 `tabs.*` without its interface-only
-    // tabs (tabs-local-only §3.5). Pushed like any mismatch, but not a problem.
+    // an ordinal-2 `tabs.*` without its interface-only tabs (tabs-local-only §3.5). Pushed like any mismatch, but
+    // not a problem.
     if (mismatch && outcome.rewrite === undefined) {
       problem('pull-hash-mismatch', `the stores did not keep what arrived (fetched ${String(sotHash)}, they hold ${String(outcome.hash)}): the section is dirty and will be pushed back`, key)
     }

@@ -62,10 +62,9 @@ export type ApplyOutcome =
    *  `payload` is the section `hash` was computed from (absent with a `null` hash): when it differs from the SOT's,
    *  the executor pushes it back without waiting for the collector to report it (#1369).
    *  `rewrite`: the hash differs from the payload's, and ONLY by a designed write — pushed back once, not a problem:
-   *    'aliases' (hosts): the own-alias write-back every canonical build makes (`isAliasWriteBackOnly`, #1369);
    *    'device-local-tabs' (tabs.*): an ordinal-2 payload's interface-only tabs, left out by `upcastLegacyTabs`
    *    (tabs-local-only §3.5) — the rebuild equals the upcast payload. */
-  | { ok: true; hash: string | null; payload?: unknown; rewrite?: 'aliases' | 'device-local-tabs' }
+  | { ok: true; hash: string | null; payload?: unknown; rewrite?: 'device-local-tabs' }
   /** Not now, retry later, never lock the section: the operation lock is held by someone else — or the master's
    *  tab world is unsettled (master-world.ts: a switch is half-way through this window's rehydrates), so there is
    *  nowhere to write `workspaces` / `tabs.*` and no master workspace set to scope `settings` by. */
@@ -77,28 +76,20 @@ export type ApplyOutcome =
 /**
  * Why a payload is refused — one code per refusal below, and nothing else (P3d-4b). It is published per section
  * (`SectionDetail.invalidReason`) and shown in words, so it never carries the payload's or the transport's text.
- *   deleted              the host deleted `hosts` / `settings` / `workspaces` — sections this device cannot be without
+ *   deleted              the host deleted `settings` / `workspaces` — sections this device cannot be without
  *   malformed            not a payload the builders could have produced (`isWellFormedSection`)
- *   no-host              a `hosts` payload that leaves no host at all
- *   removes-master-host  a `hosts` payload without the host this device syncs through
- *   changes-master-host  … that changes that host's address, port or token (the credentials known to work)
  *   rejected-settings    `settings` entries this build refuses (`applySettings`' `rejected`)
- *   unknown-section      a key this build does not know as a section
- *   duplicate-host-identity   a `hosts` payload with two rows for one daemon (host-sync-identity §11.5)
- *   host-identity-conflict    two local hosts claim one daemon, so which one a row / an id means is ambiguous (§11.4)
- *   duplicate-host-alias      a `hosts` payload whose rows share an alias (or an alias is another row's key) (A2, PR #1365)
+ *   unknown-section      a key this build does not apply as a section — `hosts` included (host ownership H3)
+ *   host-identity-conflict    two local hosts claim one daemon, so which one an id means is ambiguous (§11.4)
+ * The `hosts` apply's own five (`no-host`, `removes-master-host`, `changes-master-host`, `duplicate-host-identity`,
+ * `duplicate-host-alias`) went with it (host ownership H3a-3); an older window publishing one is read as `null`.
  */
 export type InvalidReason =
   | 'deleted'
   | 'malformed'
-  | 'no-host'
-  | 'removes-master-host'
-  | 'changes-master-host'
   | 'rejected-settings'
   | 'unknown-section'
-  | 'duplicate-host-identity'
   | 'host-identity-conflict'
-  | 'duplicate-host-alias'
 
 export const INVALID_REASONS: readonly InvalidReason[] = ['deleted', 'malformed', 'rejected-settings', 'unknown-section', 'host-identity-conflict']
 
