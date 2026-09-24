@@ -53,6 +53,25 @@ carry the rule everything else inherits and the rewrite of the renderer;
 R1 returns a critical. Ask the user before PR-2 is opened; if they want the
 book followed, the plan is unchanged apart from the number of dispatches.
 
+## Codex plan review (`task-mufvbewy-wlbk4h`, 2026-09-25)
+
+One round against this plan plus the spec, `gpt-5.6-sol`. Fourteen findings,
+two critical, every one at confidence ≥ 0.91, so all of them entered the main
+table. **All fourteen are folded into the plan below** — the two critical ones
+would have made PR-4 fail to compile (#1: `PartialMessageGroup` still imports
+the components PR-4 deletes) and left a whole class of turn silently merged
+into its neighbour (#2: a `message_accepted` with no text leaves no trace in
+`messages`). The rest are recorded where they land: #3 moved the
+`parent_tool_use_id` declaration into PR-2, #4 put thinking through the fold
+rule, #5 replaced an invented 20-row diff budget with the shared ladder, #6
+replaced the turn's `foldKeys` prop with registration, #7 made pairing
+positional so a repeated `tool_use_id` cannot show one result twice, #8 added
+the out-of-order and exactly-once pairing tests, #9 added the four ticker
+integration tests, #10 gave the preview a byte budget, #11 stopped the fold
+affordance promising lines it cannot reveal, #12 re-asserted the contracts of
+the three deleted components, #13 fixed a self-contradiction about #1227, and
+#14 dropped the `title` attribute PR-1 was going to keep the address in.
+
 ## Design decisions this plan makes (not in the spec)
 
 1. **Two affordances per operation, not one.** The spec drops the card but
@@ -64,10 +83,12 @@ book followed, the plan is unchanged apart from the number of dispatches.
 2. **`expand all` / `collapse all` lives on the turn's hover strip.** Spec
    §4.2 puts it "on the turn separator", but Q1 removed the separator. A
    control that only appears on hover draws nothing at rest, so Q1 holds.
-3. **Fold levels use one clamp mechanism.** A 4 KB single line is as
-   unreadable as 400 lines, so preview lines are clamped to
-   `FOLD_LINE_MAX_CHARS` and that clamp counts as "something is hidden". No
-   second `max-height` mechanism anywhere.
+3. **The preview has one budget, in lines and in bytes.** A 4 KB single line
+   is as unreadable as 400 lines, and three 350-character lines are over the
+   spec's 1 KB bar while being under its 6-line bar. So the preview takes
+   lines until either budget runs out, cuts the line that crosses it, and
+   counts any cut as "something is hidden". No second `max-height` mechanism
+   anywhere, and no separate diff budget either (T3.2).
 4. **Duration is shown at ≥ 1 s** (spec §3.1.1 #3) until #1229 lands.
 5. **Byte length is `text.length`** (UTF-16 units) when N2 gives no
    `total_bytes`. It never under-reports ASCII, and it keeps `foldPlan` free
@@ -78,9 +99,23 @@ book followed, the plan is unchanged apart from the number of dispatches.
 7. **Responsive behaviour uses Tailwind 4 container queries**, not a resize
    listener. The pane is the container; jsdom has no `ResizeObserver`, and a
    CSS-only rule needs no stub.
-8. **`#1264` masks, it does not remove.** The row's job is to say *which*
-   account the quota belongs to, so `wake.gs@gmail.com` renders as
-   `wa…@gmail.com` with the full value in `title`.
+8. **`#1264` masks, and the full value goes nowhere.** The row's job is to
+   say *which* account the quota belongs to, so `wake.gs@gmail.com` renders
+   as `wa…@gmail.com` — and the address is **not** kept in a `title`
+   attribute. A leak into the DOM is still a leak: hover shows it and any
+   capture reads it, which is the whole of what #1264 is about (codex plan
+   review #14).
+
+9. **A turn's boundaries are recorded, not inferred.** The reducer writes
+   `turnStarts` when the daemon says a turn opened, so a boundary survives an
+   `execution.message_accepted` whose payload carried no text. Deriving the
+   boundary from "the next user-looking message" was the first draft and it
+   lost exactly those turns (codex plan review #2).
+
+10. **Every foldable thing registers itself.** Expand-all operates on what
+    the fold store was told is inside a turn, not on a list of keys a caller
+    remembered to pass down — which is how a diff or a thinking block ends up
+    silently exempt (codex plan review #6).
 
 ---
 
@@ -111,7 +146,16 @@ export function maskAccount(account: string): string {
   `wa…@gmail.com`), `keeps a short local part whole` (`ab@x.io` → `ab@x.io`),
   `masks a bare handle` (`wakeliu` → `wa…`), `leaves a short bare handle`
   (`abcd` → `abcd`), `leaves an empty string` (`''` → `''`), `treats the last
-  @ as the separator` (`a@b@c.io` → `a@b@c.io`).
+  @ as the separator` (`a@b@c.io` → `a@…@c.io`: the local part is `a@b`,
+  which is over the two-character floor, so it masks — an earlier draft of
+  this line wrote `a@b@c.io`, which is what splitting on the *first* `@`
+  would give and therefore contradicted the case's own name).
+
+  Wherever a test claims the address is nowhere in the DOM, assert on
+  `document.body.innerHTML`, not on the `container` that `render` returns:
+  `FloatingPanel` portals into the body
+  (`spa/src/components/FloatingPanel.tsx:262`), so a container-scoped
+  assertion passes while the panel leaks.
 
 ### T1.2 wire it into `CostPanel` (TDD)
 
@@ -208,7 +252,7 @@ export function foldPlan(src: FoldSource): FoldPlan
   Implementation rules, in order:
   - `lines = text.length === 0 ? [] : text.split('\n')`; a single trailing
     `'\n'` does not add an empty last line (`'a\n'` is one line).
-  - `totalLines = src.totalLines ?? lines.length`,
+  - `localLines = lines.length`, `totalLines = src.totalLines ?? localLines`,
     `bytes = src.totalBytes ?? src.text.length`.
   - `level = src.truncated || totalLines > FOLD_MEDIUM_MAX_LINES ? 2
       : totalLines > FOLD_WHOLE_MAX_LINES || bytes > FOLD_WHOLE_MAX_BYTES ? 1
@@ -216,9 +260,22 @@ export function foldPlan(src: FoldSource): FoldPlan
   - `if (src.severity === 'error' && level > 0) level -= 1` — one step less
     folded, never below 0.
   - `take = level === 2 ? FOLD_PREVIEW_LARGE : level === 1 ? FOLD_PREVIEW_MEDIUM : 0`.
-  - `previewLines` = first `take` lines, each cut to `FOLD_LINE_MAX_CHARS`
-    (`clamped` true if any was cut).
-  - `hiddenLines = Math.max(0, totalLines - previewLines.length)`.
+  - **The preview has a byte budget as well as a line budget.** Lines are
+    taken until either `take` lines or `FOLD_WHOLE_MAX_BYTES` characters are
+    consumed; the line that crosses the byte budget is cut at the remaining
+    room, and any line longer than `FOLD_LINE_MAX_CHARS` is cut there first.
+    Every cut sets `clamped`. This is what makes the spec table's first row
+    hold: a body over 1 KB is never "shown whole", however few lines it has
+    (codex plan review #10 — three 350-character lines used to pass the
+    line-count test and come back `collapsible: false`).
+  - `hiddenLines = Math.max(0, localLines - previewLines.length)` — counted
+    against **the body we actually have**, never against N2's `total_lines`.
+    An affordance must be able to reveal what it promises (codex plan review
+    #11: a 3-line body with `total_lines: 900` used to advertise `+897 lines`
+    and then expand to three lines).
+  - `daemonTruncated = src.truncated === true || totalLines > localLines` —
+    when N2 counts more lines than the body carries, the daemon cut it
+    whatever the flag says, and the expanded view has to say so.
   - `collapsible = level > 0 && (hiddenLines > 0 || clamped || daemonTruncated)`;
     when false, `previewLines` is `[]`.
   - `firstLine(text)` = `text.split('\n', 1)[0] ?? ''`, cut to
@@ -235,8 +292,14 @@ export function foldPlan(src: FoldSource): FoldPlan
   cap is shown whole` (20 lines + error → `collapsible === false`); `a single
   huge line is clamped` (one 5000-char line → `clamped === true`,
   `collapsible === true`, preview line is 400 chars, `hiddenLines === 0`);
-  `prefers N2's line count over the local one` (`text` of 3 lines with
-  `totalLines: 900` → 3 preview, `hiddenLines === 897`); `handles an empty
+  **`folds a body that is over a kilobyte in six lines`** (three 350-char
+  lines → `collapsible === true`, `clamped === true`, the preview is at most
+  1024 characters — the #10 guard, and it must fail before the byte budget is
+  written); **`counts only the lines it can reveal`** (3-line `text` with
+  `totalLines: 900` → `hiddenLines === 0` and `daemonTruncated === true`,
+  **not** `hiddenLines === 897` — the #11 guard); **`uses N2's count to pick
+  the fold level`** (the same input still folds: `collapsible === true`);
+  `handles an empty
   body` (`''` → `totalLines === 0`, not collapsible); `does not count a
   trailing newline as a line` (`'a\n'` → `totalLines === 1`);
   `firstLine takes the first line, not the joined body`
@@ -263,11 +326,15 @@ export interface OperationResult {
   isError: boolean
 }
 
+/** `${messageIndex}:${blockIndex}` — a block's position, which is unique even when a tool_use_id is not. */
+export type BlockKey = string
+export const blockKey = (m: number, b: number): BlockKey => `${m}:${b}`
+
 export interface OperationIndex {
-  /** tool_use_id → the result that answered it. */
-  resultsById: Map<string, OperationResult>
-  /** tool_use ids that appear as a tool_use block somewhere in the list. */
-  callIds: Set<string>
+  /** The call block's own position → the result that answers THAT call. */
+  resultForCall: Map<BlockKey, OperationResult>
+  /** Result blocks already shown by a call; the renderer skips exactly these. */
+  consumedResults: Set<BlockKey>
 }
 
 /** `string` → itself; `[{type:'text',text}]` → the texts joined by '\n'; anything else → JSON. */
@@ -275,20 +342,87 @@ export function toolResultText(content: unknown): string
 export function indexOperations(messages: StreamMessage[]): OperationIndex
 ```
 
+  **Pairing is one-to-one and positional** (codex plan review #7). An
+  id-keyed map pairs *every* call that shares an id with the *same* result,
+  so a repeated `tool_use_id` renders one result twice while the second
+  result block vanishes. The rule instead is: walk the list once in order,
+  keep a queue of unanswered call positions per id, and give each
+  `tool_result` to the **oldest unanswered call with that id**. A call with
+  no result is simply absent from `resultForCall`; a result with no call is
+  absent from `consumedResults` and renders as an orphan. The reducer's own
+  duplicate-id merge (`tool-activity.ts:216`) keeps one `ToolActivity` for
+  both calls — that is the N2 overlay's business and is left alone; only the
+  raw body is paired positionally.
+
   `toolResultText` is the fix for the raw-JSON hand-back in #1263: today
   `ConversationMessages.tsx:102` does `JSON.stringify(block.content)` for any
   non-string content, which is exactly what a subagent hand-back is.
 
 - Test `spa/src/lib/nex/operations.test.ts`: `pairs a call with the result in
-  the next message`; `leaves an unanswered call unpaired` (`resultsById` has
-  no entry, `callIds` does); `records a result whose call is not in the list`
-  (history page boundary: `resultsById` has it, `callIds` does not);
-  `takes the last result when an id repeats`; `flattens a text-block content
+  the next message`; `leaves an unanswered call unpaired` (no
+  `resultForCall` entry); `records a result whose call is not in the list`
+  (history page boundary: not in `consumedResults`, so it renders as an
+  orphan); **`gives each of two calls sharing an id its own result`**
+  (two `tool_use` blocks with id `X`, two results → the first call gets the
+  first result, the second the second, and **both** result blocks are
+  consumed — the #7 guard); **`leaves the second of two same-id calls
+  unanswered when only one result arrives`**; **`pairs a result that arrives
+  before its call`** (the reducer applies frames in seq order, but a history
+  page can be applied around a live frame — the #8 guard); **`consumes every
+  result exactly once`** (property over a mixed list:
+  `consumedResults.size + orphanCount === total tool_result blocks`);
+  `flattens a text-block content
   array` (`[{type:'text',text:'done'}]` → `'done'`); `joins several text
   blocks with a newline`; `falls back to JSON for an unknown content shape`;
   `keeps a string content as is`; `ignores a block with no tool_use_id`.
 
-### T2.3 `FoldedOutput` — the fold affordance (TDD)
+### T2.3 the reducer records turn starts; the message types learn `parent_tool_use_id` (TDD)
+
+Spec §4.1 says turn boundaries are **explicit in the data, not inferred**.
+Deriving them from "the next visible user line" is an inference, and codex
+plan review #2 found where it breaks: `execution.message_accepted` and
+`execution.delegated` only append a bubble when the payload carries `text` /
+`brief` (`event-reducer.ts:190,198` — a site-wide stream strips them), so a
+real turn boundary can leave no trace in `messages` at all. The reducer is
+already looking at those events, so it records the boundary itself. This is
+not new wire data (spec §10 Q5): it is an event the SPA has always received.
+
+- `spa/src/lib/nex/event-reducer.ts` — `ExecutionState` gains
+
+```ts
+  /**
+   * Index into `messages` where each turn begins, in ascending order
+   * (spec §4.1). Written when the daemon says a turn opened
+   * (execution.message_accepted / execution.delegated), **before** the
+   * bubble those events may or may not append — so the boundary is exact
+   * even when the payload carried no text.
+   */
+  turnStarts: number[]
+```
+
+  `defaultExecutionState()` seeds it `[]`. Both arms push
+  `next.messages.length` before appending their bubble; a duplicate index is
+  never pushed twice (a second `message_accepted` at the same length means
+  the first appended nothing, and the two are one boundary).
+
+- `spa/src/lib/nex/message-types.ts:20-37` — `AssistantMessage` and
+  `UserMessage` each gain
+  `/** CC parent_tool_use_id — non-null on a subagent's own frames. */
+  parent_tool_use_id?: string | null`, matching `ResultMessage:55`. The field
+  lands here, in PR-2, rather than in PR-5: `turns.ts` (PR-4) and
+  `indexOperations` both read it, so leaving the declaration until PR-5 would
+  make PR-4 depend on a contract that does not exist yet (codex plan review
+  #3).
+
+- Tests in `spa/src/lib/nex/event-reducer.test.ts`: `records a turn start on
+  message_accepted`; `records a turn start even when the payload has no text`
+  (the boundary the message list cannot show); `records a turn start on
+  delegated`; `does not record the same index twice`; `keeps turn starts in
+  ascending order across a history replay`; `a subagent frame does not record
+  a turn start`; `turn starts survive a duplicate seq` (the seq guard returns
+  the same state).
+
+### T2.4 `FoldedOutput` — the fold affordance (TDD)
 
 - Create `spa/src/components/room/FoldedOutput.tsx`:
 
@@ -327,7 +461,7 @@ export interface FoldedOutputProps {
   with a space` (a 3-line body's preview contains `'\n'` — the #1265
   regression guard).
 
-### T2.4 pane-level fold memory (TDD)
+### T2.5 pane-level fold memory (TDD)
 
 Component-local `useState` dies on remount (spec §3.2). The memory lives in
 the transcript and is read through a context.
@@ -338,22 +472,46 @@ the transcript and is read through a context.
 export interface FoldStore {
   isExpanded(key: string): boolean
   toggle(key: string): void
-  setAll(keys: string[], expanded: boolean): void
+  /** Every foldable thing announces itself, so expand-all knows what "all" is. */
+  register(turnIndex: number, key: string): void
+  unregister(key: string): void
+  setTurn(turnIndex: number, expanded: boolean): void
 }
 export const FoldContext = createContext<FoldStore | null>(null)
+/** Provided by RoomTurnGroup so a nested block does not have to be told its turn. */
+export const TurnIndexContext = createContext<number>(-1)
 export function useFoldStore(): FoldStore   // throws outside a provider
 export function useFoldMemory(): FoldStore  // the provider's implementation hook
+/** Registers `key` under the surrounding turn for the component's lifetime and returns [expanded, toggle]. */
+export function useFold(key: string): [boolean, () => void]
 ```
 
-  `useFoldMemory` keeps a `useState<Record<string, boolean>>({})`; unknown
-  keys read `false`. `setAll` writes every key in one update (expand-all /
-  collapse-all).
+  `useFoldMemory` keeps a `useState<Record<string, boolean>>({})` plus a
+  `useRef<Map<number, Set<string>>>` of the keys registered per turn;
+  unknown keys read `false`. `setTurn` writes every key registered under that
+  turn in one update.
+
+  **Registration, not a precomputed key list** (codex plan review #6). A turn
+  holds more foldable things than its operations: each operation's output,
+  its raw input, its diff (`${key}:diff`), each thinking block, and later
+  each subagent. A `foldKeys: string[]` prop passed down from the turn would
+  have to enumerate all of them and would silently miss the ones added later
+  — which is exactly how expand-all would come to move the outputs and leave
+  the diffs closed. Every foldable component calls `useFold`, which registers
+  under `TurnIndexContext` on mount and unregisters on unmount, so
+  "everything in this turn" is a fact the store holds rather than a list a
+  caller maintains.
 
 - Test `spa/src/components/room/fold-context.test.tsx` with
-  `renderHook`: `defaults to collapsed`; `toggles one key`; `setAll expands
-  every key in one update`; `keeps state across a child remount`.
+  `renderHook` and a small harness component: `defaults to collapsed`;
+  `toggles one key`; `setTurn expands every key registered in that turn in
+  one update`; `setTurn leaves another turn alone`; **`expands a diff key and
+  a thinking key registered by nested components`** (the #6 guard: the
+  harness renders an operation, a diff and a thinking block, and one
+  `setTurn` opens all three); `unregisters a key when its component
+  unmounts`; `keeps state across a child remount`.
 
-### T2.5 PR-2
+### T2.6 PR-2
 
 - `npx vitest run`, `pnpm run lint`, `npx tsc --noEmit -p tsconfig.app.json`.
 - Nothing is wired yet: this PR adds the pure layer and one leaf component,
@@ -431,22 +589,47 @@ export interface OperationBlockProps {
   demand`; `renders a diff above the output`; `renders an unanswered call
   with no rail`.
 
+  **Contracts inherited from the three components PR-3 deletes** (codex plan
+  review #12 — these are P-B2 / P-B3 behaviours whose only guards are the
+  test files T3.3 removes, so they are re-asserted here or they are gone):
+  `falls back to the unknown-tool label when the block has no name`
+  (`execution.tool.unknown`); `looks tools up by own key`
+  (a `tools` map whose key is `constructor` must not reach
+  `Object.prototype` — the same hostile-id case `ToolUseBlock.tsx:21` and
+  `ConversationMessages.tsx:105` guard today); `an N2 status outranks the raw
+  frame's is_error` (`facts.status: 'ok'` with `isError: true` → the ok dot);
+  `a raw result does not downgrade a denial` (`facts.status: 'denied'` with
+  `isError: false` stays denied); `shows no duration when both clocks are
+  unknown` (`startedAt: 0`, no `durationMs`); `prefers the daemon's
+  durationMs over the clock difference`; `shows the aborted badge`;
+  `renders a truncated diff that has no hunks` (the daemon dropped them all,
+  so only the note shows); `renders the elapsed timer only while running`.
+
 ### T3.2 the diff display budget and the last theme tokens (#1227) (TDD)
 
 Spec §4.4 asks for `ToolDiffView` "with the display budget from #1227
 applied: fold hunks beyond the first N lines, per §4.2's rule". Today it
 renders every hunk it is given, up to the daemon's 2000-line cap.
 
+**The budget is `foldPlan`, not a second set of numbers** (codex plan review
+#5). An earlier draft of this task invented `DIFF_PREVIEW_ROWS = 20`, which
+would have been exactly the third truncation mechanism spec §3.2 lists as the
+defect, and R1's whole claim is "one folding rule for every block type".
+
 - `spa/src/components/ToolDiffView.tsx` moves to
   `spa/src/components/room/ToolDiffView.tsx` and gains:
-  - a budget: rows are emitted until `DIFF_PREVIEW_ROWS = 20` is reached
-    (counting every `diffRows` row across hunks, header rows excluded); the
-    remainder collapses behind one `data-testid="diff-more"` button reading
-    `t('room.fold.more', { n: remaining })`, using the same copy as every
-    other fold. A diff at or under the budget draws no button.
-  - expansion is remembered through the same `useFoldStore`, keyed
-    `` `${foldKey}:diff` `` — so a diff's state survives a remount like every
-    other block's.
+  - a budget taken from the shared ladder: flatten the hunks to their
+    `diffRows` rows (hunk headers excluded from the count, kept with their
+    hunk), then call `foldPlan({ text: rows.map(r => r.text).join('\n'),
+    totalLines: rows.length, truncated: diff.truncated })` and render the
+    first `plan.previewLines.length` **rows** — so a diff of ≤ 6 rows shows
+    whole, ≤ 40 shows 6, more shows 3, and a daemon-truncated diff shows 3,
+    identically to every output in the pane. The remainder collapses behind
+    one `data-testid="diff-more"` button reading
+    `t('room.fold.more', { n: plan.hiddenLines })`. `foldPlan` decides the
+    rows; only the rendering of a row is this component's business.
+  - expansion goes through `useFold(`${foldKey}:diff`)`, so the key is
+    registered with the surrounding turn and expand-all reaches it (T2.5).
   - the two hard-coded row tints become `bg-status-success/10` and
     `bg-status-error/10`, which clears the last `TODO: theme token`
     (`ToolDiffView.tsx:4,17,18`) and finishes spec §3.2's theme debt list.
@@ -454,10 +637,14 @@ renders every hunk it is given, up to the daemon's 2000-line cap.
   `OperationBlock` imports the new path.
 - Tests in `spa/src/components/room/ToolDiffView.test.tsx` (moved from
   `components/`): the existing rendering tests unchanged, plus `renders every
-  row of a small diff with no button`; `folds a diff past the budget`
-  (30 rows → 20 rendered, button says 10); `expands to the full diff`;
-  `keeps the daemon-truncation note visible while collapsed`; `tints add and
-  del rows with theme tokens` (no `bg-[#` in the className).
+  row of a diff of six rows with no button`; `folds a 30-row diff to six
+  rows` (button says 24 — the same ladder as an output of 30 lines);
+  `folds a 100-row diff to three rows`; `folds a daemon-truncated diff to
+  three rows whatever its size`; `expands to the full diff`; `keeps the
+  daemon-truncation note visible while collapsed`; `tints add and del rows
+  with theme tokens` (no `bg-[#` in the className); **`folds a diff and an
+  output of the same size identically`** (the one-rule guard: 30 rows and 30
+  lines produce the same `hiddenLines`).
 
 ### T3.3 swap the block into `ConversationMessages` (TDD)
 
@@ -465,11 +652,12 @@ renders every hunk it is given, up to the daemon's 2000-line cap.
   - call `indexOperations(messages)` in a `useMemo`;
   - wrap the list in `<FoldContext.Provider value={useFoldMemory()}>`;
   - a `tool_use` block renders `OperationBlock` with
-    `result={index.resultsById.get(block.id) ?? null}` and the `facts` looked
-    up the same own-key way `ToolResultBlock` is looked up today
-    (`Object.hasOwn(tools, id)`);
-  - a `tool_result` block whose `tool_use_id` is in `index.callIds` renders
-    `null` (its call already showed it); one that is not renders an orphan
+    `result={index.resultForCall.get(blockKey(i, j)) ?? null}` and the
+    `facts` looked up the same own-key way `ToolResultBlock` is looked up
+    today (`Object.hasOwn(tools, id)`);
+  - a `tool_result` block whose `blockKey(i, j)` is in
+    `index.consumedResults` renders `null` (its call already showed it); one
+    that is not renders an orphan
     `OperationBlock` with `tool={facts?.file?.path ?? t('execution.tool.unknown')}`
     and `input={{}}`.
   - `ToolUseBlock.tsx`, `ToolCallBlock.tsx`, `ToolResultBlock.tsx` and their
@@ -482,7 +670,11 @@ renders every hunk it is given, up to the daemon's 2000-line cap.
 - Tests: update `spa/src/components/ConversationMessages.test.tsx` — `pairs a
   call with its result into one block` (one `operation-block`, no
   `tool-result-block`); `renders an orphan result on its own`; `remembers a
-  block's expansion across a re-render`. Update
+  block's expansion across a re-render`; **`renders each of two same-id calls
+  with its own result`** (the #7 guard at the render level: two blocks, two
+  distinct bodies, and no leftover standalone result); **`renders every
+  result exactly once`** over a list mixing paired, orphan and duplicate
+  cases. Update
   `spa/src/components/PartialMessageGroup.test.tsx` for the new child.
 - New locale key in **both** `src/locales/en.json` and `zh-TW.json`:
   `room.op.show_input` (`"input"` / `"輸入"`).
@@ -506,23 +698,26 @@ renders every hunk it is given, up to the daemon's 2000-line cap.
 
 ## PR-4 — one left edge and the turn container
 
-### T4.1 `lib/nex/turns.ts` — turn boundaries from the message list (TDD)
+### T4.1 `lib/nex/turns.ts` — turns from the boundaries the reducer recorded (TDD)
 
-Turn boundaries are derivable from `messages` alone, so R1 needs no new wire
-data: a turn opens on the user line that `execution.message_accepted` (or the
-delegate brief) appended, and runs to the next one.
+The boundaries come from `state.turnStarts` (PR-2 T2.3), which the reducer
+wrote when the daemon said a turn opened. `turns.ts` only shapes them into
+ranges and finds each range's opening line. Nothing is inferred from "the
+next user-looking message", so the exceptions codex plan review #2 found
+(an `execution.message_accepted` whose payload carried no `text`, a
+site-wide stream that strips `brief`) keep their boundary.
 
 - Create `spa/src/lib/nex/turns.ts`:
 
 ```ts
 // spa/src/lib/nex/turns.ts — spec §4.1: a turn is a container, not a
-// decoration. Derived from the durable message list alone (R1 may not depend
-// on new wire data): a turn opens at the user text line the daemon appended
-// for message_accepted / the delegate brief, and ends where the next one
-// begins. Pure: no React, no store.
+// decoration, and its boundaries are explicit in the data. The reducer
+// records them in ExecutionState.turnStarts when execution.message_accepted
+// / execution.delegated arrive; this module turns that list into ranges and
+// locates each range's opening user line. Pure: no React, no store.
 import type { StreamMessage } from './message-types'
 
-/** The sentinel CC sends for an interrupt; it is a user text block but not a turn opener. */
+/** The sentinel CC sends for an interrupt; it is a user text block but not an opening line. */
 export const INTERRUPT_TEXT = '[Request interrupted by user]'
 
 export interface RoomTurn {
@@ -530,26 +725,40 @@ export interface RoomTurn {
   start: number
   /** Exclusive end. */
   end: number
-  /** The opening user line's index, or null for a leading orphan group. */
+  /**
+   * The opening user line's index, or null when the turn has none — a
+   * leading group before the first boundary, or a boundary whose payload
+   * carried no text. The turn container exists either way.
+   */
   openerIndex: number | null
 }
 
-export function isTurnOpener(msg: StreamMessage): boolean
-export function groupTurns(messages: StreamMessage[]): RoomTurn[]
+/** A user message that reads as the human's own line (not a tool result, not the interrupt sentinel, not a subagent's prompt). */
+export function isOpeningLine(msg: StreamMessage): boolean
+export function groupTurns(messages: StreamMessage[], turnStarts: readonly number[]): RoomTurn[]
 ```
 
-  `isTurnOpener`: `msg.type === 'user'`, `msg.parent_tool_use_id == null`
-  (a subagent's prompt never opens a turn — #1263), and its content has a
-  `text` block whose text is not `INTERRUPT_TEXT`. A slash command **does**
-  open a turn.
+  `groupTurns`: the ranges are `turnStarts` (clamped to
+  `[0, messages.length]`, de-duplicated, sorted) with `end` = the next start
+  or `messages.length`; a leading range is prepended when the first start is
+  not 0. `openerIndex` is the first index in the range for which
+  `isOpeningLine` holds, else null. `isOpeningLine` requires
+  `msg.type === 'user'`, `msg.parent_tool_use_id == null` (a subagent's
+  prompt is never the human's line — #1263), and a `text` block whose text is
+  not `INTERRUPT_TEXT`. A slash command **is** an opening line.
 
 - Test `spa/src/lib/nex/turns.test.ts`: `groups a single turn`; `starts a new
-  turn at each user line`; `puts leading assistant messages in an opener-less
-  group`; `does not open a turn on a tool_result-only user message`; `does not
-  open a turn on the interrupt sentinel`; `opens a turn on a slash command`;
-  `does not open a turn on a subagent prompt` (`parent_tool_use_id` set);
-  `returns an empty array for an empty list`; `covers every index exactly once`
-  (property: the turns' ranges partition `[0, messages.length)`).
+  turn at each recorded boundary`; `puts messages before the first boundary
+  in a leading group`; **`keeps a boundary whose payload had no text`** (a
+  start index with no opening line → a turn with `openerIndex: null`, **not**
+  a merge into the previous turn — the #2 guard); `does not treat a
+  tool_result-only user message as the opening line`; `does not treat the
+  interrupt sentinel as the opening line`; `treats a slash command as the
+  opening line`; `does not treat a subagent prompt as the opening line`
+  (`parent_tool_use_id` set); `returns an empty array for an empty list`;
+  `ignores a boundary past the end of the list`; `de-duplicates repeated
+  boundaries`; `covers every index exactly once` (property: the ranges
+  partition `[0, messages.length)`).
 
 ### T4.2 `RoomTurn` — the container and its hover strip (TDD)
 
@@ -558,20 +767,25 @@ export function groupTurns(messages: StreamMessage[]): RoomTurn[]
 ```tsx
 export interface RoomTurnGroupProps {
   index: number
-  /** Fold keys of every operation in this turn (for expand-all / collapse-all). */
-  foldKeys: string[]
   children: ReactNode
 }
 ```
 
-  A `<section data-testid="room-turn" data-turn-index={index}>` with
-  **no border, no rule, no per-turn duration or cost** (spec Q1). A
+  A `<section data-testid="room-turn" data-turn-index={index}>` that provides
+  `TurnIndexContext` (T2.5) to everything inside it, with **no border, no
+  rule, no per-turn duration or cost** (spec Q1). A
   `group-hover:opacity-100 opacity-0` strip in the top-right carries
-  `expand all` / `collapse all`, wired to `useFoldStore().setAll`.
+  `expand all` / `collapse all`, wired to `useFoldStore().setTurn(index, …)`.
+  It takes **no** `foldKeys` prop: the store learns the keys from the blocks
+  that register them, which is the only way the diffs and thinking blocks are
+  reached too (codex plan review #6).
 
 - Test `spa/src/components/room/RoomTurnGroup.test.tsx`: `draws no separator`
   (root className has no `border-t` and no `divide`); `shows no per-turn cost
-  or duration`; `expand all sets every fold key`; `collapse all clears them`.
+  or duration`; **`expand all opens an operation, its diff and a thinking
+  block inside the turn`** (render all three as real children, click once,
+  assert all three expanded); `collapse all closes them`; `leaves a
+  neighbouring turn untouched`.
 
 ### T4.3 `RoomTranscript` — one left edge (TDD)
 
@@ -603,11 +817,17 @@ export interface RoomTurnGroupProps {
     the same left edge with the same gutter mark, styled as a user line with
     `opacity-60`;
   - thinking renders **only** when `block.thinking` is non-empty (spec §4.3 —
-    it already does; the change is that `RoomThinking` shows
-    `t('room.thinking', { words })` instead of a bare caret, and nothing at
-    all for an empty block). `ThinkingBlock.tsx` is renamed
-    `room/RoomThinking.tsx` and gains the word count; `ThinkingIndicator`
-    is untouched.
+    it already does; the change is what happens when it is not empty).
+    `ThinkingBlock.tsx` becomes `room/RoomThinking.tsx` and is folded by the
+    same rule as everything else (codex plan review #4): its header reads
+    `t('room.thinking', { words })`, its default state comes from
+    `foldPlan({ text: content })` — a two-line thought is simply shown, a
+    long one folds to six or three lines with the usual `+N lines` — and its
+    expansion goes through `useFold(`${key}:thinking`)` so it survives a
+    remount and answers expand-all. Today's `useState(false)` is the third
+    of the three ad-hoc fold mechanisms spec §3.2 lists, and renaming it
+    without this change would leave that defect in place.
+    `ThinkingIndicator` is untouched.
 
 - Test `spa/src/components/room/RoomTranscript.test.tsx` (adapted from
   `ConversationMessages.test.tsx`, which is deleted with its component):
@@ -619,16 +839,41 @@ export interface RoomTurnGroupProps {
   `room-turn`); `renders the interrupt sentinel without a bubble`;
   `renders a slash command at the left edge`; `renders nothing for an empty
   thinking block`; `renders a word count for a thinking block with text`;
-  `keeps the optimistic pending line at the left edge`.
+  **`shows a short thought whole and folds a long one`** (the #4 guard: a
+  2-line thought has no `fold-more`, a 100-line thought shows three lines);
+  **`keeps the optimistic pending line inside a turn container`** (the
+  pendingLocal line is not in `messages` and has no recorded boundary, so
+  `RoomTranscript` renders it inside a provisional `room-turn` whose
+  `data-turn-index` is one past the last real turn — otherwise the line sits
+  outside every container and expand-all cannot see anything it holds, and
+  the container would jump when `message_accepted` lands); `swaps the
+  provisional turn for the real one when the accepted message arrives`
+  (re-render with the durable bubble → still one turn, not two).
 
 ### T4.4 point the pane at `RoomTranscript` (TDD)
 
 - `spa/src/components/execution/ExecutionView.tsx:11,175-186` — import and
   render `RoomTranscript`; the `children` slot keeps the `pendingLocal` line.
-- Delete `spa/src/components/ConversationMessages.tsx`,
+- **Rewire `PartialMessageGroup` before deleting anything** (codex plan
+  review #1, the one that would have made this PR fail to compile):
+  `PartialMessageGroup.tsx:9,11` still imports `MessageBubble` and
+  `ThinkingBlock`, and `:27,29` render them — PR-3 only replaced its
+  `ToolCallBlock`. Point `:27` at `RoomProse` (dropping the `role` prop) and
+  `:29` at `RoomThinking`, keeping `streaming` on both so the typewriter and
+  its cursor behave exactly as P-B2 built them (spec §3: the typewriter is
+  on the "do not touch" list).
+- Only then delete `spa/src/components/ConversationMessages.tsx`,
   `ConversationMessages.test.tsx`, `MessageBubble.tsx`,
   `MessageBubble.test.tsx`, `ThinkingBlock.tsx`, `ThinkingBlock.test.tsx`
   (the last two live on as `room/RoomProse.tsx`, `room/RoomThinking.tsx`).
+- `spa/src/components/PartialMessageGroup.test.tsx` gains the partial
+  regression guards the rename would otherwise drop: `renders a streaming
+  text block with the cursor`; `renders a streaming thinking block with the
+  cursor`; `renders blocks in ascending index order`; `renders nothing for an
+  invisible block`. Run `grep -rn "MessageBubble\|ThinkingBlock" src` after
+  the deletions and paste the (empty) output into the task report — an import
+  left behind is a compile error, not a test failure, and `tsc` is the only
+  thing that catches it.
 - `spa/src/components/execution/ExecutionView.test.tsx`: the assertions that
   name `user-bubble` become `room-user-line`.
 - New locale keys (both files): `room.thinking`
@@ -647,15 +892,11 @@ export interface RoomTurnGroupProps {
 
 ## PR-5 — subagent attribution and nesting (#1263, #1228)
 
-### T5.1 `parent_tool_use_id` on the message types (TDD)
+`parent_tool_use_id` is already declared on `AssistantMessage` /
+`UserMessage` — PR-2 T2.3 added it, because `turns.ts` in PR-4 reads it too
+(codex plan review #3).
 
-- `spa/src/lib/nex/message-types.ts:20-37` — `AssistantMessage` and
-  `UserMessage` each gain
-  `/** CC parent_tool_use_id — non-null on a subagent's own frames. */
-  parent_tool_use_id?: string | null`, matching `ResultMessage:55`.
-- Test: a type-level test is not meaningful here; T5.2's index tests cover it.
-
-### T5.2 `indexOperations` learns the parent link (TDD)
+### T5.1 `indexOperations` learns the parent link (TDD)
 
 - `spa/src/lib/nex/operations.ts` — `OperationIndex` gains
   `childrenByParent: Map<string, number[]>` (message indexes, ascending, whose
@@ -665,10 +906,10 @@ export interface RoomTurnGroupProps {
   `keeps child indexes out of the top level`; `handles a child whose parent id
   matches no call in the list`; `keeps children in seq order`.
 
-### T5.3 `SubagentBlock` — the nested rail (TDD)
+### T5.2 `SubagentBlock` — the nested rail (TDD)
 
 - Create `spa/src/components/room/SubagentBlock.tsx`. Rendered by
-  `OperationBlock` when `childIndexes` for its `foldKey` is non-empty (the
+  `OperationBlock` when `childrenByParent` has entries for its tool_use id (the
   `Task` / `Agent` case). Collapsed: one line —
   `t('room.subagent.summary', { name, tools, duration })` →
   `Task · analyse notes.md · 8 tools · 12s`. Expanded: the child's own
@@ -687,7 +928,7 @@ export interface RoomTurnGroupProps {
   `renders the child's prompt as a subagent line, not the user's`;
   `puts the hand-back after the child's own output`.
 
-### T5.4 the reducer stops dropping a subagent's tool events (#1228) (TDD)
+### T5.3 the reducer stops dropping a subagent's tool events (#1228) (TDD)
 
 - `spa/src/lib/nex/event-reducer.ts:150-160` — the guard at :154 currently
   returns `s` for **every** non-lifecycle frame with a non-null
@@ -717,10 +958,26 @@ if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
   main partial`; `a subagent's N2 facts land on its own tool entry`;
   `endTurn still aborts a child's running tool` (the parent turn ended, so the
   child cannot still be running).
+
+- **`ExecutionView`'s ticker now sees child tools, and that is a behaviour
+  change no reducer test can catch** (codex plan review #9). `anyRunning` is
+  `Object.values(st.tools).some(status === 'running')` over the whole map
+  (`ExecutionView.tsx:114`), and it drives both `useElapsedTicker` and —
+  through `showThinking` — the dots. Four integration tests in
+  `spa/src/components/execution/ExecutionView.test.tsx`, each driving the
+  store through real frames:
+  `the ticker stops when a child's tool result arrives`;
+  `the main result stops the ticker even when a child tool never reported`
+  (the abort inside `endTurn` is the backstop);
+  `a child's own result frame does not stop the ticker while the parent turn
+  is still running`;
+  `a running child tool suppresses the thinking dots` — which is the intended
+  reading of `showThinking`: something is visibly happening, it is just
+  happening one rail down.
 - New locale key (both files): `room.subagent.summary`
   (`"{{name}} · {{tools}} tools"` / `"{{name}} · {{tools}} 個工具"`).
 
-### T5.5 PR-5
+### T5.4 PR-5
 
 - Full gate plus a real-machine run that delegates a `Task`, confirming the
   child's prompt is not a user line, its tools sit on the nested rail, and the
@@ -822,6 +1079,7 @@ if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
 
 - Plan R2 (chat + `mode` on `ExecutionContent`), then R3 (search, quick
   replies), then R4 once the §9 batch has been sent to Nexen and shipped.
-- Follow-ups this plan deliberately leaves open: #1226, #1227 (diff display
-  budget — `ToolDiffView` is reused as is), #1229 (ms durations; the ≥ 1 s
-  rule above is the interim), #1234, #1235.
+- Follow-ups this plan deliberately leaves open: #1226, #1229 (ms durations;
+  the ≥ 1 s rule above is the interim), #1234, #1235. **#1227 is closed by
+  PR-3 T3.2**, not deferred — an earlier draft of this section said both
+  (codex plan review #13).

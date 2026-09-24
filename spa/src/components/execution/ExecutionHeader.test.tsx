@@ -228,6 +228,21 @@ describe('ExecutionHeader', () => {
       expect(screen.getByTestId('cost-totals').textContent).toContain('$0.2577')
     })
 
+    // Spec §3.1.1 #8: the panel repeats the line the tooltip carries, so the
+    // tooltip must not linger behind it.
+    it('hides the hover summary while the cost panel is open', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+      expect(screen.getByRole('tooltip')).toBeInTheDocument()
+      fireEvent.click(costBtn())
+      expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      expect(costBtn().hasAttribute('aria-describedby')).toBe(false)
+      // Closing the panel brings the hover affordance back.
+      fireEvent.click(costBtn())
+      expect(screen.getByRole('tooltip')).toBeInTheDocument()
+      expect(costBtn().getAttribute('aria-describedby')).toBe(screen.getByRole('tooltip').id)
+    })
+
     it('cost=null → no aria-expanded and click does nothing', () => {
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={null} />)
       expect(costBtn().hasAttribute('aria-expanded')).toBe(false)
