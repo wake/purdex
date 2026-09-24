@@ -13,11 +13,13 @@ import { useProfileStore } from '../../stores/useProfileStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { useLayoutStore } from '../../stores/useLayoutStore'
+import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import { hashSection } from './hash'
 import { readPullUnconfirmed } from './pull-unconfirmed'
 import { clearSectionStore, loadSectionStore } from './section-store'
 import { __resetProfileSyncForTest, attachMaster, profileSyncState, startProfileSync } from './start'
 import { FakeDaemon } from './test-fake-daemon'
-import { STORAGE_KEYS } from '../storage/keys'
 
 vi.mock('./hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./hash')>()
@@ -158,54 +160,61 @@ describe('attachMaster, again, to the same master', () => {
   })
 })
 
-describe('THE PULL GUARD end to end (#1366): the `hosts` the user confirmed is not the one on the SOT any more', () => {
-  it('attach pull with the confirmed row (rev n), the daemon holds rev n+1: nothing changes here, the attachment is removed, the notice is set', async () => {
-    await attachedAndSettled()
-    const confirmed = { rev: daemon.rows.get('hosts')!.rev, hash: daemon.rows.get('hosts')!.hash! }
-    // another device writes `hosts` after the wizard's last check
-    const row = daemon.rows.get('hosts')!
-    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' })
-    renameH2('mine-only')
+describe('a pull attach starts pulling at once (host ownership H3a-1: the #1366 pull guard left the executor)', () => {
+  function leaf(paneId: string): PaneLayout {
+    return { type: 'leaf', pane: { id: paneId, content: { kind: 'tmux-session', hostId: M, sessionCode: `c-${paneId}`, mode: 'terminal', cachedName: paneId, tmuxInstance: 'inst' } } }
+  }
+
+  /** Another client writes `key`: the SOT's payload with `value` at `path`, a new rev, the payload's real hash. */
+  async function writtenElsewhere(key: string, path: string[], value: unknown): Promise<void> {
+    const cur = daemon.rows.get(key)!
+    const payload = JSON.parse(JSON.stringify(cur.payload)) as Record<string, unknown>
+    let at = payload
+    for (const step of path.slice(0, -1)) at = at[step] as Record<string, unknown>
+    at[path[path.length - 1]] = value
+    daemon.rows.set(key, { ...cur, rev: cur.rev + 1, hash: await hashSection(payload), payload, writer: 'c_bbbbbbbbbbbb' })
+  }
+
+  it('the SOT `hosts` moved after the wizard confirmed it: no halt, no notice, the sync stands — `workspaces` / `settings` / `tabs.*` are pulled', async () => {
+    const t1: Tab = { id: 't1', pinned: false, locked: false, createdAt: 1, layout: leaf('p-t1') }
+    const ws1: Workspace = { id: 'ws1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' }
+    useTabStore.setState({ tabs: { t1 }, tabOrder: ['t1'], activeTabId: 't1', visitHistory: [] })
+    useWorkspaceStore.setState({ workspaces: [ws1], activeWorkspaceId: 'ws1' })
+    useLayoutStore.setState({ tabPosition: 'top' })
+    stop = startProfileSync()
+    expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
     await settle()
+    expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.ws1', 'workspaces'])
+    const confirmed = { rev: daemon.rows.get('hosts')!.rev, hash: daemon.rows.get('hosts')!.hash! }
+
+    // after the wizard's last check, another device writes every section — `hosts` included
+    await writtenElsewhere('hosts', ['hosts', H2, 'name'], 'renamed-elsewhere')
+    await writtenElsewhere('workspaces', ['workspaces', 'ws1', 'name'], 'Renamed elsewhere')
+    await writtenElsewhere('tabs.ws1', ['tabs', 't1', 'pinned'], true)
+    await writtenElsewhere('settings', ['purdex-layout', 'tabPosition'], 'both')
+    const sot = daemon.revs()
     const writes = daemon.writes.length
     api.deleteAttachment.mockClear()
     api.getSection.mockClear()
-    const worldBefore = JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])
 
     expect(await attachMaster(M, PROFILE, 'pull', { confirmedHosts: confirmed })).toEqual({ ok: true })
     await settle()
 
-    expect(JSON.stringify([useHostStore.getState().hosts, useWorkspaceStore.getState().workspaces, useTabStore.getState().tabs])).toBe(worldBefore)
-    expect(daemon.writes.slice(writes)).toEqual([])
-    expect(api.getSection.mock.calls.filter((c) => c[2] !== 'hosts')).toEqual([]) // nothing but the verdict was read
-    expect(useProfileStore.getState()).toMatchObject({ masterHostId: null, pendingDirection: null, pendingPullHosts: null, pendingDetaches: [] })
-    expect(readPullUnconfirmed()).toMatchObject({ hostId: M, profileId: PROFILE })
-    expect(api.deleteAttachment).toHaveBeenCalledWith(M, PROFILE, 'c_aaaaaaaaaaaa')
-    expect(profileSyncState().problems.map((p) => p.kind)).toContain('pull-hosts-unconfirmed')
-  })
-})
-
-describe('a stored guard without its attachId (codex critic): no guard, never a halt nobody can stop', () => {
-  it('a reload: `hosts` differs from the stored guard, yet the first reconciliation runs as today — attached, settled, no notice, no detach', async () => {
-    await attachedAndSettled()
-    stop()
-    stop = () => {}
-    const envelope = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE)!) as { version: number; state: Record<string, unknown> }
-    const row = daemon.rows.get('hosts')!
-    const { attachId: _dropped, ...rest } = envelope.state
-    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify({ ...envelope, state: { ...rest, pendingDirection: 'pull', pendingPullHosts: { rev: row.rev, hash: row.hash } } }))
-    daemon.rows.set('hosts', { ...row, rev: row.rev + 1, hash: 'f'.repeat(64), writer: 'c_bbbbbbbbbbbb' }) // not the guard's row any more
-    await useProfileStore.persist.rehydrate()
-    expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, attachId: null, pendingDirection: 'pull', pendingPullHosts: null })
-    api.deleteAttachment.mockClear()
-
-    stop = startProfileSync()
-    await settle()
-
+    // nothing halted and nothing stopped
+    expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('pull-hosts-unconfirmed')
     expect(readPullUnconfirmed()).toBeNull()
     expect(api.deleteAttachment).not.toHaveBeenCalled()
     expect(useProfileStore.getState()).toMatchObject({ masterHostId: M, masterProfileId: PROFILE, pendingDirection: null })
-    expect(profileSyncState().problems.map((p) => p.kind)).not.toContain('pull-hosts-unconfirmed')
+    // every section was pulled — `hosts` too, until H3a-2 retires it from the sync loop
+    expect(new Set(api.getSection.mock.calls.map((c) => c[2]))).toEqual(new Set(['hosts', 'settings', 'tabs.ws1', 'workspaces']))
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'ws1')?.name).toBe('Renamed elsewhere')
+    expect(useTabStore.getState().tabs.t1.pinned).toBe(true)
+    expect(useLayoutStore.getState().tabPosition).toBe('both')
+    expect(h2Name()).toBe('renamed-elsewhere')
+    // the SOT won: nothing was written over it
+    expect(daemon.writes.slice(writes).filter((w) => w.outcome === 'applied')).toEqual([])
+    expect(daemon.revs()).toEqual(sot)
+    expect(profileSyncState().status?.profile).toBe('synced')
   })
 })
 
