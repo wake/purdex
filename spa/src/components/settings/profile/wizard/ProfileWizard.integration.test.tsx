@@ -165,7 +165,7 @@ describe('the wizard, through its controls, against a daemon', () => {
     await click('profile-wizard-next')
     await click('profile-wizard-next')
     await click('profile-wizard-direction-pull')
-    // the host list on the daemon is this device's own: the pull removes no host, and says none
+    // a pull lists no host (host ownership H3b): nothing is removed here
     expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull()
     expect(screen.queryByTestId('profile-wizard-pull-refused')).toBeNull()
     expect((screen.getByTestId('profile-wizard-save-first') as HTMLInputElement).checked).toBe(true)
@@ -185,6 +185,47 @@ describe('the wizard, through its controls, against a daemon', () => {
     // the host's copy was read, not written: SENTINEL-B never reached it
     expect(daemon.writes.slice(writes).filter((w) => w.outcome === 'applied')).toEqual([])
     expect(JSON.stringify([...daemon.rows.values()].map((r) => r.payload))).not.toContain('SENTINEL-B')
+  })
+
+  // Host ownership H3b (spec §5.3, "the wizard's attach"): the WIZARD's own requests never name `hosts` — its door,
+  // its ask before the attach, nothing of it reads the SOT's host list any more. Scoped to what the wizard sends
+  // up to the attach: until H3a-2 retires `hosts` from the sync loop, the executor that the attach starts still
+  // pulls / pushes it (that half — "the whole run names no `hosts`" and "a pull leaves every local host" — is
+  // H3a-2's hosts-retired.integration.test.ts).
+  it.each(['push', 'pull'] as const)('THE WIZARD ITSELF NEVER NAMES `hosts` — %s: up to the attach, no GET, PUT or DELETE of it, although the SOT holds one', async (direction) => {
+    exists = true
+    useHostStore.setState({ hosts: { [M]: { ...useHostStore.getState().hosts[M], daemonId: 'mlab:278cbm' } }, runtime: { [M]: { status: 'connected', daemonIdVerified: { endpoint: '10.0.0.1:7860', daemonId: 'mlab:278cbm' } } } })
+    expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
+    await settle()
+    expect(await detachMaster()).toEqual({ ok: true })
+    expect(daemon.live()).toContain('hosts')
+    vi.clearAllMocks()
+    api.listProfiles.mockImplementation(async () => daemon.list())
+    api.getSection.mockImplementation(async (_h, _p, key) => daemon.get(key))
+    api.putSection.mockImplementation(async (_h, _p, key, body) => daemon.put(key, body))
+    api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
+    api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
+    let beforeAttach: string[] | null = null
+    const named = (): string[] => [...api.getSection.mock.calls.map((c) => `GET ${c[2]}`), ...api.putSection.mock.calls.map((c) => `PUT ${c[2]}`), ...api.deleteSection.mock.calls.map((c) => `DELETE ${c[2]}`)]
+    api.putAttachment.mockImplementation(async () => {
+      beforeAttach = named()
+      return { kind: 'ok', value: { attached: true } }
+    })
+
+    render(<ProfileWizard onClose={() => {}} />)
+    await settle()
+    await click(`profile-wizard-profile-${PROFILE}`)
+    await click('profile-wizard-next')
+    await click('profile-wizard-next')
+    await click(`profile-wizard-direction-${direction}`)
+    await click('profile-wizard-next')
+    await click('profile-wizard-start')
+    await settle()
+
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+    expect(beforeAttach).not.toBeNull()
+    expect(beforeAttach!.filter((c) => c.endsWith(' hosts'))).toEqual([])
+    expect(api.listProfiles).toHaveBeenCalled() // the door and the ask before the attach did ask the host
   })
 
   it('REVIEW F1 — seen EMPTY, and another device pushes its world into it before Start: NOTHING of this device reaches the host; the user is sent back to choose', async () => {
