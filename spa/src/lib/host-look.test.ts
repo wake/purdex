@@ -237,9 +237,34 @@ describe('hostLookOf — the look store (option A)', () => {
     expect(hostLookOf('host-b')).toEqual({ name: 'Bee', icon: 'Cloud' })
   })
 
-  it('a host with a daemonId does NOT read an entry under its local id', () => {
-    putLooks({ 'host-a': { name: 'stale local' } })
-    expect(hostLookOf('host-a').name).toBe('A')
+  // Codex critic review-mufd6v5g-2gh633: between learning the daemonId and the re-resolve pass moving the entry
+  // (lock busy / not hydrated), the local-id entry IS the look — not HostConfig.
+  it('a host with a daemonId whose d1_ entry is absent reads its local-id entry (not moved yet)', () => {
+    const red = { console: { main: { color: '#ef4444', alpha: 60 } } }
+    putLooks({ 'host-a': { name: 'L', colors: red } })
+    expect(hostLookOf('host-a')).toEqual({ name: 'L', colors: red })
+  })
+
+  it('a host with a daemonId whose d1_ entry exists reads the d1_ entry, not its local-id one', () => {
+    putLooks({ 'host-a': { name: 'L', icon: 'Laptop' }, [WIRE_A]: { name: 'W', icon: 'Cloud' } })
+    expect(hostLookOf('host-a')).toEqual({ name: 'W', icon: 'Cloud' })
+  })
+
+  it('the endpoint changes (daemonId cleared): reads looks[localId] / HostConfig; the d1_ entry is kept, not deleted', () => {
+    // Deliberate (not changed by the fix above): the look under the d1_ key belongs to that daemon, not this row.
+    putLooks({ [WIRE_A]: { name: 'W', icon: 'Cloud' } })
+    useHostStore.getState().updateHost('host-a', { ip: '10.9.9.9' })
+    expect(useHostStore.getState().hosts['host-a'].daemonId).toBeUndefined()
+    expect(hostLookOf('host-a')).toEqual({
+      name: 'A',
+      colors: { console: { main: { color: '#3b82f6', alpha: 100 } } },
+      color: '#22c55e',
+      icon: 'Laptop',
+      iconWeight: 'duotone',
+    })
+    expect(useHostLookStore.getState().looks[WIRE_A]).toEqual({ name: 'W', icon: 'Cloud' })
+    putLooks({ ...useHostLookStore.getState().looks, 'host-a': { name: 'L' } })
+    expect(hostLookOf('host-a')).toEqual({ name: 'L' })
   })
 
   it('an unresolvable d1_ ref → its entry’s fields; no entry → {}', () => {
@@ -298,6 +323,28 @@ describe('useHostLook / useHostLookResolver — the look store', () => {
     expect(result.current.name).toBe('B')
     act(() => useHostStore.setState((s) => ({ hosts: { ...s.hosts, 'host-b': { ...s.hosts['host-b'], daemonId: hostA.daemonId } } })))
     expect(result.current.name).toBe('by wire')
+  })
+
+  it('learning a daemonId before the re-key keeps showing the local-id entry; the move and a later d1_ write follow', () => {
+    putLooks({ 'host-b': { name: 'Bee', icon: 'Cloud' } })
+    const { result } = renderHook(() => useHostLook('host-b'))
+    expect(result.current).toEqual({ name: 'Bee', icon: 'Cloud' })
+    act(() => useHostStore.setState((s) => ({ hosts: { ...s.hosts, 'host-b': { ...s.hosts['host-b'], daemonId: hostA.daemonId } } })))
+    expect(result.current).toEqual({ name: 'Bee', icon: 'Cloud' }) // the window: not HostConfig's { name: 'B' }
+    act(() => useHostLookStore.getState().rekey([['host-b', WIRE_A]]))
+    expect(result.current).toEqual({ name: 'Bee', icon: 'Cloud' })
+    act(() => useHostLookStore.getState().putLook(WIRE_A, { name: 'moved' }))
+    expect(result.current).toEqual({ name: 'moved' })
+  })
+
+  it('the hook flips to a d1_ entry that arrives while the local-id entry is still there (synced wins)', () => {
+    seedHosts({ ...hostB, id: 'host-c', daemonId: 'mini-lab:333ccc' })
+    const wireC = syncIdOfSync('mini-lab:333ccc')
+    putLooks({ 'host-c': { name: 'local' } })
+    const { result } = renderHook(() => useHostLook('host-c'))
+    expect(result.current.name).toBe('local')
+    act(() => useHostLookStore.getState().putLook(wireC, { name: 'synced' }))
+    expect(result.current.name).toBe('synced')
   })
 
   it('the hook on an unresolvable ref reads that ref’s entry', () => {

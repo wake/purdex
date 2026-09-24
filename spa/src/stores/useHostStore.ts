@@ -144,8 +144,8 @@ interface HostState {
    */
   applyHostTransfer: (change: TransferChange) => TransferApplyResult
   /*
-   * The look writers (H2c-2, spec §4.2 / §4.4): each writes the look store's entry under the host's CURRENT wire id
-   * (`wireIdOfHost`) and never `HostConfig`. An absent entry is first seeded from the host's `HostConfig` look, so a
+   * The look writers (H2c-2, spec §4.2 / §4.4): each writes the look store's entry under `lookKeyOf` (the host's
+   * CURRENT wire id, or its local id while that entry awaits the re-key) and never `HostConfig`. An absent entry is first seeded from the host's `HostConfig` look, so a
    * first edit of one field keeps the others; clearing removes the group's keys (plan §0.5 option A — no tombstone).
    * An unknown host, an invalid value, or a write that changes nothing writes nothing.
    */
@@ -400,17 +400,32 @@ function lookSeedOf(host: HostConfig): HostLookEntry {
   return seed
 }
 
+/**
+ * THE key a local host's look lives under — shared by the selector (`host-look.ts`) and the writers below, so both
+ * always agree. Normally the host's wire id (`d1_…` once its daemonId is known, else its local id). One exception:
+ * the host knows its daemonId, `looks[d1_…]` is absent and `looks[host.id]` is present — the re-resolve pass has not
+ * moved that entry yet (lock busy, stores not hydrated). The local-id entry IS the look then: read there and write
+ * there, and the pass later moves it to `d1_…` intact (codex critic review-mufd6v5g-2gh633). An existing `d1_…` entry
+ * (e.g. synced from another device) always wins. Pure.
+ */
+export function lookKeyOf(host: HostConfig, looks: Record<string, HostLookEntry>): string {
+  const wire = wireIdOfHost(host)
+  if (wire !== host.id && !Object.hasOwn(looks, wire) && Object.hasOwn(looks, host.id)) return host.id
+  return wire
+}
+
 /** One look edit: the next entry, or `null` when the edit changes nothing (or is invalid) — nothing is written. */
 type LookEdit = (look: HostLookEntry) => HostLookEntry | null
 
 /**
- * Applies `edit` to the look of `hostId` in the look store: key = the host's current wire id; base = the entry, or
+ * Applies `edit` to the look of `hostId` in the look store: key = `lookKeyOf` (the host's current wire id, or its
+ * local id while that entry awaits the re-key); base = the entry, or
  * the `HostConfig` seed when there is none. Unknown host / `null` edit → no write. Never writes `HostConfig`.
  */
 function editHostLook(hosts: Record<string, HostConfig>, hostId: string, edit: LookEdit): void {
   const host = Object.hasOwn(hosts, hostId) ? hosts[hostId] : undefined
   if (!host) return
-  useHostLookStore.getState().patchLook(wireIdOfHost(host), (current) => {
+  useHostLookStore.getState().patchLook(lookKeyOf(host, useHostLookStore.getState().looks), (current) => {
     const base = current ?? lookSeedOf(host)
     const next = edit(base)
     // The same object back from `patchLook`'s callback writes nothing: an edit that changes nothing is no write.
@@ -433,7 +448,7 @@ function currentLookOf(hosts: Record<string, HostConfig>, hostId: string): HostL
   const host = Object.hasOwn(hosts, hostId) ? hosts[hostId] : undefined
   if (!host) return undefined
   const looks = useHostLookStore.getState().looks
-  const key = wireIdOfHost(host)
+  const key = lookKeyOf(host, looks)
   return Object.hasOwn(looks, key) ? looks[key] : lookSeedOf(host)
 }
 
@@ -597,7 +612,7 @@ export const useHostStore = create<HostState>()(
         const hosts = get().hosts
         const host = Object.hasOwn(hosts, hostId) ? hosts[hostId] : undefined
         if (!host) return
-        useHostLookStore.getState().putLooksIfAbsent({ [wireIdOfHost(host)]: lookSeedOf(host) })
+        useHostLookStore.getState().putLooksIfAbsent({ [lookKeyOf(host, useHostLookStore.getState().looks)]: lookSeedOf(host) })
       },
 
       // Idempotent registration used by the local-daemon installer

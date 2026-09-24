@@ -410,6 +410,42 @@ describe('useHostStore', () => {
       useHostStore.getState().setHostName(other, 'Bee')
       expect(lookEntry(other)).toEqual({ name: 'Bee' })
     })
+
+    // Codex critic review-mufd6v5g-2gh633: the daemonId is known, but the re-resolve pass has not yet moved the
+    // local-id entry to the d1_ key (lock busy / stores not hydrated). A write in that window must land in the
+    // local-id entry — the pass then moves it intact — never seed a new d1_ entry that would win and drop it.
+    describe('the window before the re-key (a local-id entry, no d1_ entry)', () => {
+      const RED = { console: { main: { color: '#ef4444', alpha: 60 } } }
+
+      beforeEach(() => {
+        useHostLookStore.setState({ looks: { [hid]: { name: 'L', colors: RED } } })
+      })
+
+      it('setHostIcon lands in looks[localId], colour kept; no d1_ entry is created', () => {
+        useHostStore.getState().setHostIcon(hid, 'Cloud')
+        expect(lookEntry(hid)).toEqual({ name: 'L', colors: RED, icon: 'Cloud' })
+        expect(hasEntry(WIRE)).toBe(false)
+      })
+
+      it('setHostColor builds on the local entry (its alpha), in the local entry', () => {
+        useHostStore.getState().setHostColor(hid, '#3b82f6')
+        expect(lookEntry(hid).colors?.console?.main).toEqual({ color: '#3b82f6', alpha: 60 })
+        expect(hasEntry(WIRE)).toBe(false)
+      })
+
+      it('seedHostLook seeds nothing: the local entry is the look', () => {
+        const looks = useHostLookStore.getState().looks
+        useHostStore.getState().seedHostLook(hid)
+        expect(useHostLookStore.getState().looks).toBe(looks)
+      })
+
+      it('a d1_ entry present (e.g. synced from another device) wins: the write lands there, the local entry untouched', () => {
+        useHostLookStore.setState({ looks: { [hid]: { name: 'L', colors: RED }, [WIRE]: { name: 'W' } } })
+        useHostStore.getState().setHostIcon(hid, 'Cloud')
+        expect(lookEntry(WIRE)).toEqual({ name: 'W', icon: 'Cloud' })
+        expect(lookEntry(hid)).toEqual({ name: 'L', colors: RED })
+      })
+    })
   })
 
   describe('registerLocalHost seeds the look (plan §0.19)', () => {

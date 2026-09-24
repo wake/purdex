@@ -23,6 +23,7 @@ import {
   runHostReresolve,
   startHostReresolve,
 } from './host-reresolve'
+import { hostLookOf } from './host-look'
 
 const DAEMON = 'air-lab:26aaaa'
 const WIRE = syncIdOfSync(DAEMON)
@@ -638,6 +639,52 @@ describe('startHostReresolve (the triggers)', () => {
     useHostLookStore.setState({ looks: { [LOCAL]: { name: 'late' } } }) // another window's write landed
     finish?.()
     expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'late' } })
+  })
+
+  // Codex critic review-mufd6v5g-2gh633: the pass that moves looks[localId] → looks[d1_] can be delayed after the
+  // daemonId is learned. In that window the UI shows the local-id entry and an edit lands there; the pass then moves
+  // it — the edit included — and nothing is lost.
+  describe('a look edited before the delayed re-key is kept (H2c-2)', () => {
+    const RED = { console: { main: { color: '#ef4444', alpha: 60 } } }
+    const learn = () => useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
+
+    it('the operation lock held elsewhere: the UI keeps the local look, the edit lands in it, the pass moves it intact', () => {
+      vi.useFakeTimers()
+      addHostX({ daemonId: undefined })
+      useHostLookStore.setState({ looks: { [LOCAL]: { name: 'L', colors: RED, icon: 'Cloud' } } })
+      stop = startHostReresolve()
+      const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+      learn()
+      expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'L', colors: RED, icon: 'Cloud' } }) // busy
+      expect(hostLookOf(LOCAL)).toEqual({ name: 'L', colors: RED, icon: 'Cloud' })
+      useHostStore.getState().setHostColor(LOCAL, '#3b82f6')
+      const edited = { name: 'L', colors: { console: { main: { color: '#3b82f6', alpha: 60 } } }, icon: 'Cloud' }
+      expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: edited })
+      useRebuildStore.getState().releaseOperationLock(grant)
+      vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+      expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: edited })
+      expect(hostLookOf(LOCAL)).toEqual(edited)
+    })
+
+    it('the look store not hydrated yet: same — the edit lands in the local entry and the pass moves it once hydrated', () => {
+      let finish: (() => void) | undefined
+      const hydrated = vi.spyOn(useHostLookStore.persist, 'hasHydrated').mockReturnValue(false)
+      vi.spyOn(useHostLookStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+        finish = () => cb(useHostLookStore.getState())
+        return () => { finish = undefined }
+      })
+      addHostX({ daemonId: undefined })
+      useHostLookStore.setState({ looks: { [LOCAL]: { name: 'L', colors: RED } } })
+      stop = startHostReresolve()
+      learn()
+      expect(runs).toBe(0)
+      expect(hostLookOf(LOCAL)).toEqual({ name: 'L', colors: RED })
+      useHostStore.getState().setHostIcon(LOCAL, 'Cloud')
+      expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'L', colors: RED, icon: 'Cloud' } })
+      hydrated.mockReturnValue(true)
+      finish?.()
+      expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'L', colors: RED, icon: 'Cloud' } })
+    })
   })
 
   it('changing syncAliases triggers (a legacy id becomes resolvable)', () => {

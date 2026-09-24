@@ -4,8 +4,9 @@
 // A screen never reads `HostConfig.name / colors / color / icon / iconWeight`
 // directly; it asks this selector. From H2c-2 the per-workbench look store
 // (`useHostLookStore`, keyed by wire id) is the SOT: a local host reads the
-// entry under `wireIdOfHost(host)` (its `d1_…` when it has a valid daemonId,
-// else its local id — plan §0.4); a ref that is no local host reads the entry
+// entry under `lookKeyOf(host, looks)` (`useHostStore`, shared with the
+// writers): its `d1_…` when it has a valid daemonId, else its local id — plan
+// §0.4 — or its local id while that entry awaits the pass's re-key; a ref that is no local host reads the entry
 // under the ref itself. `host-look.guard.test.ts` holds the line.
 //
 // Fallback (plan §0.5, option A — a deviation from spec §4.2's "field by
@@ -17,7 +18,7 @@
 // Placement: this module imports `useHostStore` and `useHostLookStore`;
 // nothing either of them imports may import this module.
 import { useCallback } from 'react'
-import { useHostStore, type HostConfig } from '../stores/useHostStore'
+import { lookKeyOf, useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useHostLookStore, type HostLookEntry, type HostLookMove } from '../stores/useHostLookStore'
 import { wireIdOfHost } from './profile/host-identity'
 import type { IconWeight } from '../types/tab'
@@ -97,9 +98,9 @@ function lookOfEntry(entry: HostLookEntry, host: HostConfig | undefined): HostLo
   return look
 }
 
-/** The key a ref's look lives under: a local host's wire id, else the ref itself. */
-function keyOf(host: HostConfig | undefined, ref: string | null): string | null {
-  return host === undefined ? ref : wireIdOfHost(host)
+/** The key a ref's look lives under: a local host's `lookKeyOf` (shared with the writers), else the ref itself. */
+function keyOf(host: HostConfig | undefined, ref: string | null, looks: Record<string, HostLookEntry>): string | null {
+  return host === undefined ? ref : lookKeyOf(host, looks)
 }
 
 function resolveLook(host: HostConfig | undefined, entry: HostLookEntry | undefined): HostLook {
@@ -118,18 +119,19 @@ export function hostLookOf(
   looks: Record<string, HostLookEntry> = useHostLookStore.getState().looks,
 ): HostLook {
   const host = hostOf(hosts, ref)
-  return resolveLook(host, entryOf(looks, keyOf(host, ref)))
+  return resolveLook(host, entryOf(looks, keyOf(host, ref, looks)))
 }
 
 /**
  * `hostLookOf` as a hook. Subscribes to the ONE host object and the ONE entry
- * under its key (recomputed from the host), so it re-renders on those writes
+ * under its key (recomputed from the host and the looks), so it re-renders on those writes
  * only — not on another host's or entry's, nor on `runtime`.
  */
 export function useHostLook(ref: string | null): HostLook {
   const host = useHostStore((s) => hostOf(s.hosts, ref))
-  const key = keyOf(host, ref)
-  const entry = useHostLookStore((s) => entryOf(s.looks, key))
+  // The key is recomputed from the looks inside the selector: it flips when the re-key moves the local-id entry
+  // (the same object, so no re-render) or a d1_ entry arrives.
+  const entry = useHostLookStore((s) => entryOf(s.looks, keyOf(host, ref, s.looks)))
   return resolveLook(host, entry)
 }
 
