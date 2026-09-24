@@ -87,7 +87,7 @@ beforeEach(() => {
   api.deleteSection.mockImplementation(async (_h, _p, key, params) => daemon.delete(key, params))
   api.putAttachment.mockResolvedValue({ kind: 'ok', value: { attached: true } })
   api.deleteAttachment.mockResolvedValue({ kind: 'ok', value: { detached: true } })
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { [M]: host(M), [H2]: host(H2, { ip: '10.0.0.2', order: 1 }) }, hostOrder: [M, H2], activeHostId: M, runtime: { [M]: { status: 'connected' } } })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
@@ -175,7 +175,7 @@ describe('a pull attach starts pulling at once (host ownership H3a-1: the #1366 
     daemon.rows.set(key, { ...cur, rev: cur.rev + 1, hash: await hashSection(payload), payload, writer: 'c_bbbbbbbbbbbb' })
   }
 
-  it('the SOT `hosts` moved after the wizard confirmed it: no halt, no notice, the sync stands — `workspaces` / `settings` / `tabs.*` are pulled', async () => {
+  it('the SOT `hosts` moved after the wizard looked at it: no halt, no notice, the sync stands — `workspaces` / `settings` / `tabs.*` are pulled', async () => {
     const t1: Tab = { id: 't1', pinned: false, locked: false, createdAt: 1, layout: leaf('p-t1') }
     const ws1: Workspace = { id: 'ws1', name: 'WS1', tabs: ['t1'], activeTabId: 't1' }
     useTabStore.setState({ tabs: { t1 }, tabOrder: ['t1'], activeTabId: 't1', visitHistory: [] })
@@ -185,7 +185,6 @@ describe('a pull attach starts pulling at once (host ownership H3a-1: the #1366 
     expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
     await settle()
     expect(daemon.live()).toEqual(['hosts', 'settings', 'tabs.ws1', 'workspaces'])
-    const confirmed = { rev: daemon.rows.get('hosts')!.rev, hash: daemon.rows.get('hosts')!.hash! }
 
     // after the wizard's last check, another device writes every section — `hosts` included
     await writtenElsewhere('hosts', ['hosts', H2, 'name'], 'renamed-elsewhere')
@@ -197,7 +196,7 @@ describe('a pull attach starts pulling at once (host ownership H3a-1: the #1366 
     api.deleteAttachment.mockClear()
     api.getSection.mockClear()
 
-    expect(await attachMaster(M, PROFILE, 'pull', { confirmedHosts: confirmed })).toEqual({ ok: true })
+    expect(await attachMaster(M, PROFILE, 'pull')).toEqual({ ok: true })
     await settle()
 
     // nothing halted and nothing stopped

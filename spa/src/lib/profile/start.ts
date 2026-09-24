@@ -68,11 +68,8 @@
 // settled (`onInitialSettled`), at which point it is cleared here and conflicts
 // are the user's again. Never cleared by a timeout — see executor.ts.
 //
-// THE PULL GUARD (#1366) LEFT THE SYNC LOOP (host ownership H3a-1). No executor is given the SOT `hosts` row a
-// wizard pull confirmed, and nothing here stops a sync over it. What is left of it is inert and goes in H3b:
-// `attachMaster(…, 'pull', { confirmedHosts })` still stores the row next to the direction
-// (`useProfileStore.pendingPullHosts`, read by nobody), and a successful attach still clears the stopped-pull
-// notice an older build may have left (pull-unconfirmed.ts).
+// THE #1366 PULL GUARD IS GONE (host ownership H3a-1 / H3b). A pull takes no host list, so nothing of the SOT's
+// `hosts` is handed to `attachMaster`, stored with the direction, given to an executor, or stopped on.
 //
 // EVERY ATTACH IS A NEW ONE — to the master already set as well. `attachMaster`
 // clears the bases and `setMaster` bumps `attachGeneration` and writes a new `attachId`; this file watches
@@ -100,7 +97,7 @@ import { selectDaemonIdMismatch, useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { LocalProfilesState, MasterAppearance, ProfileAppearancePatch } from '../../stores/useLocalProfilesStore'
 import { endpointOfHost, isMasterPair, isSyncDirection, pendingDetachKey, selectMaster, storedControl, useProfileStore } from '../../stores/useProfileStore'
-import type { ConfirmedHosts, SyncDirection } from '../../stores/useProfileStore'
+import type { SyncDirection } from '../../stores/useProfileStore'
 import { deleteAttachment, putAttachment } from './api'
 import { buildSectionPayload, startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
@@ -940,18 +937,14 @@ export function dismissPendingDetach(key: string): Promise<void> {
  * `tabs.*` of workspaces that are not here are deleted from it); `'pull'` = the
  * SOT overwrites this machine.
  *
- * `opts.confirmedHosts` — `'pull'` only: the SOT `hosts` row the user was shown the removals of (`'absent'`: none).
- * Stored with the direction and read by nothing since the pull guard left the sync loop (see the header); H3b
- * removes it.
- *
- * SAFETY — `'pull'` REPLACES THIS MACHINE'S workspaces, tabs, hosts and
- * settings with the SOT's. The user's decision 12 requires that the local state
+ * SAFETY — `'pull'` REPLACES THIS MACHINE'S workspaces, tabs and settings
+ * with the SOT's (not its hosts: they are this device's, host ownership H3). The user's decision 12 requires that the local state
  * is first saved as a slave profile, and that the user confirms. Slaves arrive
  * with P3, so UNTIL P3'S WIZARD IS WIRED UP THE ONLY CALLER OF THIS PATH IS THE
  * DEV HOOK; P3 must have completed that step BEFORE it calls
  * `attachMaster(…, 'pull')`. Nothing in here does it for the caller.
  */
-export function attachMaster(hostId: string, profileId: string, direction: SyncDirection, opts: { confirmedHosts?: ConfirmedHosts } = {}): Promise<AttachResult> {
+export function attachMaster(hostId: string, profileId: string, direction: SyncDirection): Promise<AttachResult> {
   const refusal = (): AttachResult | null => {
     if (!isSyncDirection(direction)) return { ok: false, reason: 'invalid-direction' }
     if (!isClientIdPersisted()) return { ok: false, reason: 'client-id-not-persisted' }
@@ -977,7 +970,7 @@ export function attachMaster(hostId: string, profileId: string, direction: SyncD
         return late
       }
       hold.extend() // the wait in the queue is not part of the first request's budget
-      return await attachHeld({ hostId, profileId }, direction, hold, opts.confirmedHosts)
+      return await attachHeld({ hostId, profileId }, direction, hold)
     } finally {
       hold.stop()
     }
@@ -1062,7 +1055,7 @@ function holdStill(): Hold {
   return hold
 }
 
-async function attachHeld(next: Master, direction: SyncDirection, hold: Hold, confirmedHosts?: ConfirmedHosts): Promise<AttachResult> {
+async function attachHeld(next: Master, direction: SyncDirection, hold: Hold): Promise<AttachResult> {
   const { hostId, profileId } = next
   const previous = selectMaster(useProfileStore.getState())
   // Where the PREVIOUS master's attachment is: read now, `setMaster` below replaces it.
@@ -1114,7 +1107,7 @@ async function attachHeld(next: Master, direction: SyncDirection, hold: Hold, co
   clearSectionStore()
   hold.stop() // `setMaster` lifts our suspension on purpose
   // One write: master, direction (with a pull's confirmed `hosts`), endpoint, a new generation — and OUR suspension lifted (not a newer attach's).
-  if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token, confirmedHosts)) return asYouWere('invalid-profile-id')
+  if (!useProfileStore.getState().setMaster(hostId, profileId, direction, at.at, hold.token)) return asYouWere('invalid-profile-id')
   ownGenerationMove()
   clearPullUnconfirmed() // the user has set sync up anew: the notice of a stopped pull is said (pull-unconfirmed.ts)
   // The attach has succeeded whatever comes of this: the ghost is the OLD master's, and it is said where a failed
