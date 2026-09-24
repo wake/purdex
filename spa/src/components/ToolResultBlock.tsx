@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { CheckCircle, XCircle, Prohibit, CaretRight, CaretDown } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { toolResultFacts, type ToolResultFacts } from '../lib/nex/tool-result-facts'
-import ToolDiffView from './ToolDiffView'
+import ToolDiffView from './room/ToolDiffView'
+import { FoldContext, useFoldMemory } from './room/fold-context'
 
 interface Props {
   content: string
@@ -26,6 +27,10 @@ type Tone = 'ok' | 'error' | 'denied'
 export default function ToolResultBlock({ content, isError, facts }: Props) {
   const t = useI18nStore((s) => s.t)
   const [expanded, setExpanded] = useState(false)
+  // ToolDiffView folds through the pane's fold memory now; this block is not
+  // inside one (T3.3 replaces it with OperationBlock), so it owns a private
+  // one for its own diff. Renders no DOM of its own.
+  const foldStore = useFoldMemory()
   const summary = content.slice(0, 80) + (content.length > 80 ? '...' : '')
   // R3 / codex R2 A1: the raw frame's is_error is the pre-N2 fallback only;
   // an N2 status (denial flagged as error, or an error the frame missed) wins.
@@ -73,7 +78,9 @@ export default function ToolResultBlock({ content, isError, facts }: Props) {
               text node so the no-diff body is byte-identical to the baseline. */}
           {facts?.diff && (facts.diff.hunks.length > 0 || facts.diff.truncated) && (
             <div className="mb-2 border-b border-border-subtle">
-              <ToolDiffView diff={facts.diff} />
+              <FoldContext.Provider value={foldStore}>
+                <ToolDiffView diff={facts.diff} foldKey="tool-result" />
+              </FoldContext.Provider>
             </div>
           )}
           {content}
