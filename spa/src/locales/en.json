@@ -1711,5 +1711,6 @@
   "room.fold.more": "+{{n}} lines",
   "room.fold.less": "collapse",
   "room.fold.show_all": "show all",
-  "room.fold.daemon_truncated": "the daemon cut this output at 8 KB"
+  "room.fold.daemon_truncated": "the daemon cut this output at 8 KB",
+  "room.op.show_input": "input"
 }
