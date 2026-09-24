@@ -158,6 +158,33 @@ describe("(a') both forms of one host (plan §0.11)", () => {
   })
 })
 
+describe("(a''') duplicates that no mapping made (PR #1406 critic)", () => {
+  // Only two DIFFERENT ids that come to name one block collide. A column repeated as it is — a wire id twice, an
+  // unknown id twice, a local id twice — is left exactly as older builds sent it, by the build and by the pass.
+  it('are neither merged by the build nor by the pass: the payload is what it was, before and after', async () => {
+    masterOnScreen()
+    addX()
+    const U = syncIdOfSync('nowhere:999999')
+    useNewTabLayoutStore.setState({
+      presets: {
+        '3col': { enabled: false, columns: [[`sessions:${X}`], [`sessions:${X}`], []] },
+        '2col': { enabled: false, columns: [[`headless:${W}`], [`headless:${W}`]] },
+        '1col': { enabled: true, columns: [[`sessions:${U}`, 'browser', `sessions:${U}`]] },
+      },
+      knownIds: [],
+    })
+    const before = buildSectionPayload('settings')!.payload as SettingsPayload
+    expect((before['purdex-newtab-layout'] as { presets: object }).presets).toEqual({
+      '3col': { enabled: false, columns: [[`sessions:${W}`], [`sessions:${W}`], []] },
+      '2col': { enabled: false, columns: [[`headless:${W}`], [`headless:${W}`]] },
+      '1col': { enabled: true, columns: [[`sessions:${U}`, 'browser', `sessions:${U}`]] },
+    })
+    runHostReresolve()
+    expect(useNewTabLayoutStore.getState().presets['2col'].columns).toEqual([[`headless:${X}`], [`headless:${X}`]])
+    expect(buildSectionPayload('settings')!.payload).toEqual(before)
+  })
+})
+
 describe("(a'') H1b acceptance scenario 2: a host added without its daemonId first, the pass held off", () => {
   it.each([
     ['the received wire blocks at the top of the first column (the local ones land after them)', 'first'],

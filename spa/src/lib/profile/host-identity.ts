@@ -584,27 +584,31 @@ export function isSyncColumnId(id: string): boolean {
 }
 
 /**
- * `lists` (one preset's columns, or `[knownIds]`) with every id mapped, and where two ids map to one target that
- * `collides` accepts, only ONE kept, at its own place: the first whose SOURCE id is a wire-form column
- * (`isSyncColumnId`), else the first (host ownership plan §0.11 — the rule of host settings, where the sync-id entry
- * wins: the wire form is what the SOT already has; a local-id copy is this device's stopgap). Lists and ids are
- * walked in order, column by column. The re-resolve pass (renaming) and the settings build (local → wire) both use
- * it, so what the build sends is what the pass leaves.
+ * `lists` (one preset's columns, or `[knownIds]`) with every id mapped. Where two DIFFERENT ids map to one target —
+ * a host's block under its local id and under its wire id — only ONE is kept, at its own place: the first whose
+ * source is a wire-form column (`isSyncColumnId`), else the first (host ownership plan §0.11 — the rule of host
+ * settings, where the sync-id entry wins: the wire form is what the SOT already has; a local-id copy is this
+ * device's stopgap). An id repeated as it is, with nothing else mapping onto it, is left repeated: no mapping made
+ * that, and older builds sent it so. Lists and ids are walked in order, column by column. The re-resolve pass
+ * (renaming) and the settings build (local → wire) both use it, so what the build sends is what the pass leaves.
  */
-export function mapColumnsKeepingOne(lists: readonly (readonly string[])[], map: (id: string) => string, collides: (target: string) => boolean): string[][] {
+export function mapColumnsKeepingOne(lists: readonly (readonly string[])[], map: (id: string) => string): string[][] {
+  const sources = new Map<string, Set<string>>()
   const winner = new Map<string, { index: number; wire: boolean }>()
   let index = 0
   for (const list of lists) {
     for (const id of list) {
       const target = map(id)
-      if (collides(target)) {
-        const wire = isSyncColumnId(id)
-        const had = winner.get(target)
-        if (had === undefined || (wire && !had.wire)) winner.set(target, { index, wire })
-      }
+      let from = sources.get(target)
+      if (from === undefined) sources.set(target, (from = new Set()))
+      from.add(id)
+      const wire = isSyncColumnId(id)
+      const had = winner.get(target)
+      if (had === undefined || (wire && !had.wire)) winner.set(target, { index, wire })
       index++
     }
   }
+  const collides = (target: string) => (sources.get(target)?.size ?? 0) > 1
   index = 0
   return lists.map((list) =>
     list.flatMap((id) => {

@@ -211,23 +211,22 @@ export function renameLayoutIds(
   map: (id: string) => string,
 ): Pick<State, 'presets' | 'knownIds'> | null {
   const keys = ['3col', '2col', '1col'] as const
-  // Every id that moves, and where to: the targets are what can collide.
+  // Anything to rename at all? Nothing → no new state.
   const targets = new Set<string>()
   for (const id of [...state.knownIds, ...keys.flatMap((k) => state.presets[k].columns.flat())]) {
     const to = map(id)
     if (to !== id) targets.add(to)
   }
   if (targets.size === 0) return null
-  // Renamed per list; two ids renamed onto one target keep one — the wire-form source, else the first.
-  const collides = (id: string) => targets.has(id)
+  // Renamed per list; two different ids renamed onto one target keep one — the wire-form source, else the first.
   const presets = { ...state.presets }
   for (const key of keys) {
     const src = state.presets[key]
-    const columns = mapColumnsKeepingOne(src.columns, map, collides)
+    const columns = mapColumnsKeepingOne(src.columns, map)
     const same = columns.every((col, i) => col.length === src.columns[i].length && col.every((id, j) => id === src.columns[i][j]))
     if (!same) presets[key] = { enabled: src.enabled, columns }
   }
-  return { presets, knownIds: mapColumnsKeepingOne([state.knownIds], map, collides)[0] }
+  return { presets, knownIds: mapColumnsKeepingOne([state.knownIds], map)[0] }
 }
 
 export const useNewTabLayoutStore = create<State>()(

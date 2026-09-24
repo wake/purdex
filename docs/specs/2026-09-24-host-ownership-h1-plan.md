@@ -83,7 +83,9 @@ as proposed (2026-09-24) — they are now **DECIDED**.
       the local entry's value is lost here, and undo gives back `d1_X`'s value (what every other device already had);
     - New Tab columns and `knownIds`: **amended during H1b (real-device acceptance, scenario 2)** — where two ids of
       a preset (or of `knownIds`) become one, the WIRE-form one (`…:d1_…`, what the SOT already has) wins its place,
-      whichever comes first — the host-settings rule; only duplicates of one form keep the first. The settings BUILD
+      whichever comes first — the host-settings rule; within such a group, duplicates of one form keep the first. Only
+      two DIFFERENT ids becoming one collide: an id repeated as it is (a wire id twice, an unknown id twice) is left
+      as it is, by the pass and the build alike, as older builds sent it. The settings BUILD
       applies the same rule after local → wire (`mapColumnsKeepingOne`, shared with the pass's rename), so the payload
       equals the SOT's before, during and after the pass in every arrangement — no push, no exception to the no-push
       invariant; undo gives back a single column. Known and

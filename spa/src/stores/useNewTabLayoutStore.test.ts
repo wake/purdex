@@ -378,6 +378,16 @@ describe('useNewTabLayoutStore', () => {
       expect(s.knownIds).toEqual(['browser', 'sessions:loc1'])
     })
 
+    it('one id repeated as it is is renamed in each place — only two DIFFERENT ids becoming one collide', () => {
+      useNewTabLayoutStore.setState({
+        presets: { '3col': makePreset(false, 3), '2col': makePreset(false, 2), '1col': { enabled: true, columns: [[W, 'browser', W]] } },
+        knownIds: [W, W],
+      })
+      useNewTabLayoutStore.getState().renameIds(map)
+      expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([['sessions:loc1', 'browser', 'sessions:loc1']])
+      expect(useNewTabLayoutStore.getState().knownIds).toEqual(['sessions:loc1', 'sessions:loc1'])
+    })
+
     it('duplicates of one form only: the first is kept', () => {
       const legacy = (id: string) => (id === 'sessions:old1' || id === 'sessions:old2' ? 'sessions:loc1' : id)
       useNewTabLayoutStore.setState({

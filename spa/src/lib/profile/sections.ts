@@ -20,7 +20,6 @@
 // resolves back through `wireResolverOf`.
 import type { PaneContent, PaneLayout, Tab, Workspace } from '../../types/tab'
 import {
-  HOST_BEARING_COLUMN_PREFIXES,
   hostSettingsToWire,
   hostsToWire,
   identityOfSync,
@@ -354,9 +353,6 @@ export const WORKSPACE_SCOPED_SETTINGS: { storageKey: SettingsStorageKey; field:
  * master's world. Filtered down to nothing the field is `{}`, exactly what a
  * store with no entry builds. `applySettings` is the other half.
  */
-const isHostColumn = (id: string): boolean =>
-  (HOST_BEARING_COLUMN_PREFIXES as readonly string[]).some((prefix) => id.startsWith(`${prefix}:`) && id.length > prefix.length + 1)
-
 /**
  * local → wire over the presets, where a host's block held under its local id AND its wire id — the bootstrap placed
  * the local one for a host added before its daemonId was known, the wire one arrived by sync, both held until the
@@ -372,7 +368,7 @@ function presetColumnsToWireOnce(presets: Record<string, unknown>, identity: Hos
     if (!isRecord(preset) || !Array.isArray(preset.columns) || !isRecord(built)) continue
     const columns = preset.columns as unknown[]
     if (!columns.every((col) => Array.isArray(col) && col.every((id) => typeof id === 'string'))) continue
-    built.columns = mapColumnsKeepingOne(columns as string[][], map, isHostColumn)
+    built.columns = mapColumnsKeepingOne(columns as string[][], map)
   }
   return out
 }
