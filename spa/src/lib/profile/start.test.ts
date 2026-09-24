@@ -132,11 +132,6 @@ vi.mock('./api', () => ({
 }))
 
 vi.mock('./section-store', () => ({ clearSectionStore: vi.fn(() => 'ok') }))
-// The real notice store, its writer spied: nothing of the start layer may write it any more (H3a-1).
-vi.mock('./pull-unconfirmed', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./pull-unconfirmed')>()
-  return { ...actual, writePullUnconfirmed: vi.fn(actual.writePullUnconfirmed) }
-})
 
 vi.mock('../client-identity', () => ({
   getClientId: () => 'client-1',
@@ -150,7 +145,6 @@ import { useTabStore } from '../../stores/useTabStore'
 import { pendingDetachKey, selectMaster, useProfileStore } from '../../stores/useProfileStore'
 import { __resetDefaultDeviceNameForTest, useDeviceNameStore } from '../../stores/useDeviceNameStore'
 import { STORAGE_KEYS } from '../storage/keys'
-import { readPullUnconfirmed, writePullUnconfirmed } from './pull-unconfirmed'
 import { deleteAttachment, listProfiles, putAttachment } from './api'
 import { startCollector, watchUnsyncedStores } from './collector'
 import { createExecutor } from './executor'
@@ -207,7 +201,7 @@ beforeEach(() => {
   vi.mocked(deleteAttachment).mockReset().mockResolvedValue(okDetach)
   vi.mocked(clearSectionStore).mockReset().mockReturnValue('ok')
   localStorage.clear()
-  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, pendingPullHosts: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
+  useProfileStore.setState({ masterHostId: null, masterProfileId: null, autoSync: true, pendingDirection: null, attachGeneration: 0, attachId: null, masterEndpoint: null, suspension: null, pendingDetaches: [] })
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {} })
   useDeviceNameStore.setState({ deviceName: 'Test device' })
   __resetProfileSyncForTest()
@@ -1691,27 +1685,26 @@ describe('the direction of an attach', () => {
   })
 })
 
-describe('the pull guard left the executor (host ownership H3a-1): the start layer wires none of it', () => {
-  const ROW = { rev: 7, hash: 'a'.repeat(64) }
-
-  it('attachMaster(pull, { confirmedHosts }): no executor is given a guard or a way to stop on it (the keys are absent)', async () => {
+describe('the pull guard is gone (host ownership H3a-1 / H3b): nothing of the SOT `hosts` is stored, wired or stopped on', () => {
+  it('attachMaster(h, p, \'pull\'): the direction `pull` is stored and nothing else of hosts; no executor is given a guard or a way to stop on it', async () => {
     connect('h1')
     stop = startProfileSync()
-    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toEqual({ ok: true })
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
     await flush()
-    // the store half is inert and goes in H3b: still stored with the direction, read by nobody
-    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: 'pull', pendingPullHosts: ROW })
+    const s = useProfileStore.getState()
+    expect(s.pendingDirection).toBe('pull')
+    expect('pendingPullHosts' in s).toBe(false)
     expect(h.executors).toHaveLength(1)
     expect(h.executors[0].deps.initialDirection()).toBe('pull')
     expect('confirmedPullHosts' in h.executors[0].deps).toBe(false)
     expect('onPullUnconfirmed' in h.executors[0].deps).toBe(false)
   })
 
-  it('a leader handoff with a stored guard: the new leader\'s executor is given none either', async () => {
+  it('a leader handoff mid-pull: the new leader\'s executor is given none either', async () => {
     h.initialLeader = false
     connect('h1')
     stop = startProfileSync()
-    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', pendingPullHosts: ROW, attachGeneration: 1, attachId: 'a'.repeat(32) })
+    useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P1, masterEndpoint: EP, pendingDirection: 'pull', attachGeneration: 1, attachId: 'a'.repeat(32) })
     await flush()
     h.leaderships[0].set(true)
     await flush()
@@ -1724,41 +1717,21 @@ describe('the pull guard left the executor (host ownership H3a-1): the start lay
   it('a pull attach, settled or torn down: the stopped-pull notice is never written', async () => {
     connect('h1')
     stop = startProfileSync()
-    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
+    await attachMaster('h1', P1, 'pull')
     await flush()
     h.executors[0].deps.onInitialSettled()
-    await attachMaster('h2', P2, 'pull', { confirmedHosts: 'absent' })
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
+    await attachMaster('h2', P2, 'pull')
     await flush()
     await detachMaster()
     await flush()
-    expect(writePullUnconfirmed).not.toHaveBeenCalled()
-    expect(readPullUnconfirmed()).toBeNull()
+    expect(localStorage.getItem('purdex-profile-pull-unconfirmed')).toBeNull()
   })
 
-  it('push: nothing is stored; without the option: nothing either', async () => {
-    await attachMaster('h1', P1, 'push', { confirmedHosts: ROW })
-    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
-    await attachMaster('h1', P1, 'pull')
-    expect(useProfileStore.getState().pendingPullHosts).toBeNull()
-  })
-
-  it('settling clears the direction AND the stored row at once', async () => {
-    stop = startProfileSync()
-    await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })
-    await flush()
-    h.executors[0].deps.onInitialSettled()
-    expect(useProfileStore.getState()).toMatchObject({ pendingDirection: null, pendingPullHosts: null })
-  })
-
-  it('an attach that succeeds clears a notice left by an older build; one that fails leaves it', async () => {
-    localStorage.setItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED, JSON.stringify({ hostId: 'h1', profileId: P1, at: 1 }))
-    expect(readPullUnconfirmed()).not.toBeNull()
-    vi.mocked(putAttachment).mockResolvedValueOnce(failed('network'))
-    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toMatchObject({ ok: false })
-    expect(readPullUnconfirmed()).not.toBeNull()
-    expect(await attachMaster('h1', P1, 'pull', { confirmedHosts: ROW })).toEqual({ ok: true })
-    expect(readPullUnconfirmed()).toBeNull()
-    expect(localStorage.getItem(STORAGE_KEYS.PROFILE_PULL_UNCONFIRMED)).toBeNull()
+  it('an attach leaves an older build\'s notice key alone: the boot cleanup removes it (legacy-residue-cleanup.ts)', async () => {
+    localStorage.setItem('purdex-profile-pull-unconfirmed', JSON.stringify({ hostId: 'h1', profileId: P1, at: 1 }))
+    expect(await attachMaster('h1', P1, 'pull')).toEqual({ ok: true })
+    expect(localStorage.getItem('purdex-profile-pull-unconfirmed')).not.toBeNull()
   })
 })
 

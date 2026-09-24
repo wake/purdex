@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   PROJECTIONS,
   SECTION_SCHEMA_ORDINAL,
+  RETIRED_SECTIONS,
   WIRE_MARKERS,
   fingerprintOf,
+  isRetiredSection,
   project,
   sectionFingerprint,
   sectionKind,
@@ -378,6 +380,17 @@ describe('section keys', () => {
     }
   })
 
+  // host ownership H3a-2 (spec §5.1): `hosts` leaves the sync loop but stays a KNOWN kind — its shape is still the
+  // daemon's grammar (validate.go) and the wire builder's (plan §0.1 (b)). Retired = skipped, never unknown.
+  it('RETIRED_SECTIONS is exactly [hosts]; isRetiredSection says so for hosts only, and hosts is still a known kind', () => {
+    expect(RETIRED_SECTIONS).toEqual(['hosts'])
+    expect(isRetiredSection('hosts')).toBe(true)
+    for (const key of ['settings', 'workspaces', 'tabs.a', 'tabs.hosts', 'plugins', 'Hosts', 'hosts ', '']) {
+      expect(isRetiredSection(key), JSON.stringify(key)).toBe(false)
+    }
+    expect(sectionKind('hosts')).toBe('hosts')
+  })
+
   it("generateId() stays inside the daemon's section-id alphabet and length", () => {
     for (let i = 0; i < 200; i++) {
       const id = generateId()
@@ -475,8 +488,10 @@ describe('shape: fingerprint and ordinal', () => {
       section, rev: 1, hash: 'h', fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind],
     })
 
+    // (`hosts` is not in this list any more: it is retired (host ownership H3a-2), and THIS build's `profileLock`
+    // skips it. The old client's own code still locks on a new `hosts` row — but no build that retires `hosts` ever
+    // writes one, so there is nothing of ours for it to meet there.)
     it.each([
-      ['hosts', 'hosts'],
       ['tabs.w1', 'tabs'],
       ['settings', 'settings'],
     ] as const)('an index holding ONLY a new %s row → sot-is-newer (locked:schema) for the old client', async (section, kind) => {
@@ -610,16 +625,16 @@ describe('shape: fingerprint and ordinal', () => {
       }
     }
 
-    it('the store is listed as its one field `ids` (no `all`), the final marker array pinned exactly, the ordinal 7', () => {
+    it('the store is listed as its one field `ids` (no `all`), its marker kept (ordinal ≥ 7; H3a-2 pins the final array)', () => {
       expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-shown-hosts.'))).toEqual(SHOWN)
       expect(PROJECTIONS.settings).not.toContain('purdex-shown-hosts.all')
-      expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1'])
-      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(7)
+      expect(WIRE_MARKERS.settings).toContain('@wire:shown-hosts=1')
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBeGreaterThanOrEqual(7)
     })
 
-    it('the two shapes differ by exactly the shown-hosts paths and the shown-hosts marker', async () => {
+    it('the two shapes differ by exactly the shown-hosts paths, the shown-hosts marker and the H3a-2 marker', async () => {
       expect(await sectionFingerprint('settings')).toBe(
-        await fingerprintOf([...PROJECTIONS.settings.filter((p) => !SHOWN.includes(p)), ...SHOWN, '@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1']),
+        await fingerprintOf([...PROJECTIONS.settings.filter((p) => !SHOWN.includes(p)), ...SHOWN, '@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1']),
       )
       expect((await oldShapes()).settings.fingerprint).not.toBe(await sectionFingerprint('settings'))
     })
@@ -632,6 +647,49 @@ describe('shape: fingerprint and ordinal', () => {
     })
 
     it('this build meets an ordinal-6 settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      expect(profileLock([oldRow], { ...(await oldShapes()), settings: mine })).toBeNull()
+    })
+  })
+
+  // host ownership H3a-2 (plan D1, spec decision 7 / §5.4): `hosts` leaves the sync loop with NO projection change, so an
+  // H2-era client (ordinal 7: host-id + host-look + shown-hosts markers) would compute the very same shapes and keep
+  // pulling / pushing `hosts` — tokens included. `@wire:hosts-retired=1` moves the `settings` fingerprint and the ordinal
+  // goes 7 → 8: that client meets a `settings` row of this build as newer and locks the whole profile.
+  describe('host ownership H3a-2: the ordinal-7 (H2-era) settings client and this build', () => {
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings, ...WIRE_MARKERS.settings.filter((m) => m !== '@wire:hosts-retired=1')]), ordinal: 7 },
+      }
+    }
+
+    it('the final marker array pinned exactly, the ordinal 8', () => {
+      expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(8)
+    })
+
+    it('the marker is the only thing between the two shapes: no projection moved', async () => {
+      expect((await oldShapes()).settings.fingerprint).toBe(
+        await fingerprintOf([...PROJECTIONS.settings, '@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1']),
+      )
+      expect((await oldShapes()).settings.fingerprint).not.toBe(await sectionFingerprint('settings'))
+    })
+
+    it('lock regression: an index holding a settings row of this build → sot-is-newer (locked:schema) for the H2-era client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an ordinal-7 settings row as i-am-newer (pulls it, no lock)', async () => {
       const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
       const old = (await oldShapes()).settings
       expect(compareShape(mine, old)).toBe('i-am-newer')
@@ -654,8 +712,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "fc539e33ec71b934d1dd6e43979be2c7aaa45bf57a73ee7db6e400892d6c0abf",
-          7,
+          "0301080c343a5f7c680c3cbca74fa2986f17025178fdd56f211932dc10d33349",
+          8,
         ],
         "tabs": [
           "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",

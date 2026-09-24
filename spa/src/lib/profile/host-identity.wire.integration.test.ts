@@ -103,7 +103,11 @@ const deviceB = (): Device => ({
 async function buildAll(keys: ProfileSectionKey[] = KEYS): Promise<Record<string, { payload: unknown; hash: string }>> {
   const out: Record<string, { payload: unknown; hash: string }> = {}
   for (const key of keys) {
-    const built = buildSectionPayload(key)
+    // host ownership H3a-2: the collector never builds `hosts` any more (retired). These tests still model the
+    // pre-H3 hosts row — the wire builder is kept (spec §5.2) — until H3a-3 rewrites them without the hosts apply.
+    const built = key === 'hosts'
+      ? { payload: buildHostsSection(useHostStore.getState(), identityOfSync(useHostStore.getState().hosts)) }
+      : buildSectionPayload(key)
     if (built === null || built.payload === null) throw new Error(`${key}: nothing built`)
     out[key] = { payload: JSON.parse(JSON.stringify(built.payload)) as unknown, hash: await hashSection(built.payload) }
   }

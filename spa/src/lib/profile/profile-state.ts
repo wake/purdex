@@ -7,7 +7,7 @@
 // No fetching, no clocks, no stores — every input is a parameter, nothing is
 // mutated, and every list that comes out is sorted, so the same inputs in any
 // order give the same answer.
-import { sectionKind, tabsSectionKey, workspaceIdOf } from './projections'
+import { isRetiredSection, sectionKind, tabsSectionKey, workspaceIdOf } from './projections'
 import type { SectionSyncState } from './sync-state'
 import type { ProfileSectionKey, SectionKind, Shape, SotIndexEntry } from './types'
 
@@ -50,12 +50,15 @@ function byKey(a: string, b: string): number {
  * A section whose kind this client does not know is skipped: it is carried and
  * never rewritten (§4.6.3), so this client cannot damage it. All `tabs.*`
  * sections are compared against `mine.tabs`.
+ *
+ * A RETIRED section (`hosts`, host ownership H3a-2) is skipped too: this client never reads, writes or deletes it,
+ * so no shape of it can concern this client.
  */
 export function profileLock(index: readonly SotIndexEntry[], mine: Record<SectionKind, Shape>): SchemaLock | null {
   const sorted = [...index].sort((a, b) => byKey(a.section, b.section))
   for (const entry of sorted) {
     const kind = sectionKind(entry.section)
-    if (kind === null) continue
+    if (kind === null || isRetiredSection(entry.section)) continue
     const sot: Shape = { fingerprint: entry.fingerprint, ordinal: entry.ordinal }
     const verdict = compareShape(mine[kind], sot)
     if (verdict === 'ok' || verdict === 'i-am-newer') continue

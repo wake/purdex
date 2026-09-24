@@ -103,7 +103,7 @@ afterEach(() => {
 })
 
 describe('the deletion reaches every world, and pushes nothing of any', () => {
-  it('a slave on screen: its panes and the parked master\'s carry the wire id, nothing closes, and the collector reports `hosts` only', async () => {
+  it('a slave on screen: its panes and the parked master\'s carry the wire id, nothing closes, and the collector reports nothing (host ownership H3a-2: not even `hosts`)', async () => {
     vi.useFakeTimers()
     slaveOnScreen(world(SLAVE, [tab('st-a', HOST_A, SLAVE), tab('st-b', HOST_B, SLAVE)], 'ws-slave'), world(MASTER, [tab('mt-a', HOST_A, MASTER), tab('mt-b', HOST_B, MASTER)]))
     collector = startCollector({ onSection: (r) => reports.push(r), onProblem: () => {}, now: () => 0 })
@@ -116,8 +116,7 @@ describe('the deletion reaches every world, and pushes nothing of any', () => {
     expect(paneIn(useLocalProfilesStore.getState().parkedMaster!.tabs, 'mt-a')).toMatchObject({ hostId: WIRE_A })
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(['st-a', 'st-b'])
     await vi.advanceTimersByTimeAsync(5_000)
-    expect(reports.map((r) => r.key)).toEqual(['hosts']) // pre-H3: the host list still syncs; nothing else moved
-    expect(JSON.stringify(reports)).not.toContain(SLAVE)
+    expect(reports).toEqual([]) // the host list is this device's (H3a-2), and no reference moved in any section's build
   })
 
   it('the master, switched back to, shows its pane on the deleted host un-marked, on the wire id', async () => {

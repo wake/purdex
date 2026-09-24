@@ -34,7 +34,8 @@ const M = 'hm0001' // this device's master host (mlab)
 const WM = syncIdOfSync(MLAB) // M's wire id: its look lives under it (H2c-2)
 const X = 'hx0001' // the host that arrives
 const SLAVE = 'slave-1'
-const KEYS: ProfileSectionKey[] = ['hosts', 'workspaces', 'settings', 'tabs.wa']
+/** Every section the collector builds here — not `hosts`: it is retired (host ownership H3a-2). */
+const KEYS: ProfileSectionKey[] = ['workspaces', 'settings', 'tabs.wa']
 
 const host = (id: string, over: Partial<HostConfig> = {}): HostConfig => ({ id, name: id, ip: '10.0.0.1', port: 7860, token: 'tok', order: 0, ...over })
 const leaf = (id: string, content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id, content } })
