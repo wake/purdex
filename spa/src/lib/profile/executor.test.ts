@@ -77,6 +77,8 @@ vi.mock('./sync-state', async (importOriginal) => {
 const api = vi.mocked(await import('./api'))
 const store = vi.mocked(await import('./section-store'))
 const { applySectionToStores } = vi.mocked(await import('./apply-to-stores'))
+const projections = vi.mocked(await import('./projections'))
+const actualProjections = await vi.importActual<typeof import('./projections')>('./projections')
 
 const HOST = 'host-1'
 const PROFILE = 'p_0123456789ab'
@@ -1041,56 +1043,39 @@ describe('executor — pull', () => {
     expect(eventsOf('pull-applied')).toHaveLength(1)
   })
 
-  it('ORDER: hosts BEHIND (clean, so its status still reads synced) holds every tabs.* pull back; applying hosts releases them', async () => {
-    useWorkspaceStore.setState({ workspaces: [ws('w1'), ws('w2')] })
-    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1', 'tabs.w2': 'U1' })
-    const hostsGet = deferred<Result<Section | null>>()
-    api.getSection.mockImplementation((_h, _p, section) => {
-      if (section === 'hosts') return hostsGet.promise
-      if (section === 'tabs.w2') return Promise.resolve(sectionOf(meta(section, 2, 'U2'), { order: [] }))
-      w1Fetches += 1
-      return Promise.resolve(sectionOf(meta(section, w1Fetches + 1, `T${w1Fetches + 1}`), { order: [] }))
-    })
-    let w1Fetches = 0
-    const applied: string[] = []
-    applySectionToStores.mockImplementation(async (key) => {
-      applied.push(key)
-      return { ok: true, hash: key === 'hosts' ? 'H2' : key === 'tabs.w1' ? `T${w1Fetches + 1}` : 'U2' }
-    })
-    ex.onRemoteEvent(remote('tabs.w1', 2, 'T2')) // hosts is up to date here: this one may go…
-    await flush()
-    expect(applied).toEqual(['tabs.w1'])
-    ex.onRemoteEvent(remote('hosts', 2, 'H2')) // …now hosts is behind, its fetch is out
-    ex.onRemoteEvent(remote('tabs.w2', 2, 'U2'))
-    ex.onRemoteEvent(remote('tabs.w1', 3, 'T3'))
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(ex.status().sections.hosts).toBe('synced') // clean ≠ up to date
-    expect(api.getSection.mock.calls.map((c) => c[2])).toEqual(['tabs.w1', 'hosts'])
-    hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-    await flush()
-    expect(applied.slice(0, 2)).toEqual(['tabs.w1', 'hosts'])
-    expect(applied.slice(2).sort()).toEqual(['tabs.w1', 'tabs.w2'])
-  })
-
-  it('ORDER: hosts dirty (pending) holds the tabs.* pull back; its push landing releases it', async () => {
+  // host ownership H3a-2: `hosts` is no gate any more (it is retired; here, under the mock, an opaque section). A
+  // `tabs.*` pull waits for `workspaces` only — a section called `hosts` that is behind, or dirty, holds nothing back.
+  it('ORDER: a `hosts` section BEHIND (its fetch out) holds no tabs.* pull back — `workspaces` is the only gate', async () => {
     useWorkspaceStore.setState({ workspaces: [ws('w1')] })
     const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
-    const put = deferred<PutOutcome>()
-    api.putSection.mockReturnValue(put.promise)
+    api.getSection.mockImplementation((_h, _p, section) =>
+      section === 'hosts' ? new Promise(() => {}) : Promise.resolve(sectionOf(meta('tabs.w1', 2, 'T2'), { order: [] })),
+    )
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'T2' })
+    ex.onRemoteEvent(remote('hosts', 2, 'H2')) // behind, and its fetch never answers
+    await flush()
+    ex.onRemoteEvent(remote('tabs.w1', 2, 'T2'))
+    await flush()
+    expect(api.getSection.mock.calls.map((c) => c[2])).toEqual(['hosts', 'tabs.w1'])
+    expect(applySectionToStores).toHaveBeenCalledWith('tabs.w1', { order: [] }, { masterHostId: HOST })
+  })
+
+  it('ORDER: a `hosts` section DIRTY (its push out) holds no tabs.* pull back', async () => {
+    useWorkspaceStore.setState({ workspaces: [ws('w1')] })
+    const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', 'tabs.w1': 'T1' })
+    api.putSection.mockReturnValue(new Promise(() => {}))
     api.getSection.mockResolvedValue(sectionOf(meta('tabs.w1', 2, 'T2'), { order: [] }))
     applySectionToStores.mockResolvedValue({ ok: true, hash: 'T2' })
     ex.onSection({ key: 'hosts', hash: 'HL', payload: { local: 1 } })
     ex.onRemoteEvent(remote('tabs.w1', 2, 'T2'))
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(api.getSection).not.toHaveBeenCalled()
-    put.resolve({ kind: 'applied', rev: 2 })
     await flush()
     expect(applySectionToStores).toHaveBeenCalledWith('tabs.w1', { order: [] }, { masterHostId: HOST })
   })
 
-  // host-sync-identity §6 / §11.8: `settings` names hosts (host-settings keys, sessions: / headless: columns) by WIRE
-  // id, resolved through the hosts as they are — so it waits for `hosts` AND `workspaces`, each release pumping it.
-  describe('ORDER: settings waits for hosts AND workspaces (conjunction)', () => {
+  // `settings` waits for `workspaces`, pull and push (see the executor's header). It used to wait for `hosts` too
+  // (host-sync-identity §6 / §11.8) — `hosts` is retired (host ownership H3a-2): here, under the mock, an opaque
+  // section whose being behind holds `settings` back no more.
+  describe('ORDER: settings waits for workspaces — and no longer for hosts (host ownership H3a-2)', () => {
     /** hosts and workspaces each behind, their fetches held; a settings event; returns the controls. */
     async function bothBehind() {
       const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', settings: 'S1' })
@@ -1112,69 +1097,55 @@ describe('executor — pull', () => {
     }
     const settingsFetches = () => api.getSection.mock.calls.filter((c) => c[2] === 'settings').length
 
-    it('hosts lands first: settings still waits for workspaces; workspaces lands: settings is pulled', async () => {
-      const { hostsGet, wsGet, applied } = await bothBehind()
-      expect(settingsFetches()).toBe(0)
-      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-      await flush()
-      expect(applied).toEqual(['hosts'])
+    it('workspaces lands: settings is pulled — while hosts is still behind, its fetch out', async () => {
+      const { wsGet, applied } = await bothBehind()
       expect(settingsFetches()).toBe(0)
       wsGet.resolve(sectionOf(meta('workspaces', 2, 'W2'), { order: [] }))
       await flush()
-      expect(applied).toEqual(['hosts', 'workspaces', 'settings'])
+      expect(applied).toEqual(['workspaces', 'settings'])
     })
 
-    it('workspaces lands first: settings still waits for hosts; hosts lands: settings is pulled', async () => {
-      const { hostsGet, wsGet, applied } = await bothBehind()
-      wsGet.resolve(sectionOf(meta('workspaces', 2, 'W2'), { order: [] }))
-      await flush()
-      expect(applied).toEqual(['workspaces'])
-      expect(settingsFetches()).toBe(0)
-      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
-      await flush()
-      expect(applied).toEqual(['workspaces', 'hosts', 'settings'])
-    })
-
-    it('hosts moves again AFTER the settings pull was fetched: not applied; pulled again once hosts has landed', async () => {
-      const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', settings: 'S1' })
+    it('workspaces moves again AFTER the settings pull was fetched: not applied; pulled again once workspaces has landed', async () => {
+      const { ex } = await synced({ workspaces: 'W1', settings: 'S1' })
       const settingsGet = deferred<Result<Section | null>>()
-      const hostsGet = deferred<Result<Section | null>>()
+      const wsGet = deferred<Result<Section | null>>()
       api.getSection.mockImplementation((_h, _p, section) => {
-        if (section === 'hosts') return hostsGet.promise
+        if (section === 'workspaces') return wsGet.promise
         return settingsFetches() === 1 ? settingsGet.promise : Promise.resolve(sectionOf(meta('settings', 2, 'S2'), { s: 2 }))
       })
       const applied: string[] = []
       applySectionToStores.mockImplementation(async (key) => {
         applied.push(key)
-        return { ok: true, hash: key === 'hosts' ? 'H2' : 'S2' }
+        return { ok: true, hash: key === 'workspaces' ? 'W2' : 'S2' }
       })
       ex.onRemoteEvent(remote('settings', 2, 'S2'))
       await flush()
       expect(settingsFetches()).toBe(1) // on the wire
-      ex.onRemoteEvent(remote('hosts', 2, 'H2')) // the gate closes meanwhile
+      ex.onRemoteEvent(remote('workspaces', 2, 'W2')) // the gate closes meanwhile
       await flush()
       settingsGet.resolve(sectionOf(meta('settings', 2, 'S2'), { s: 2 }))
       await flush()
       expect(applied).toEqual([]) // judged again when it landed: not applied
-      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      wsGet.resolve(sectionOf(meta('workspaces', 2, 'W2'), { order: [] }))
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(applied).toEqual(['hosts', 'settings'])
+      expect(applied).toEqual(['workspaces', 'settings'])
       expect(settingsFetches()).toBe(2)
       expect(ex.status().profile).toBe('synced')
     })
 
-    it('a settings PUSH waits for hosts to be up to date too (a column naming a host the SOT does not list yet would be dropped elsewhere)', async () => {
+    it('a settings PUSH waits for workspaces to be up to date — and not for hosts', async () => {
       const { ex } = await synced({ hosts: 'H1', workspaces: 'W1', settings: 'S1' })
-      const hostsGet = deferred<Result<Section | null>>()
-      api.getSection.mockImplementation(() => hostsGet.promise)
-      applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2' })
+      const wsGet = deferred<Result<Section | null>>()
+      api.getSection.mockImplementation((_h, _p, section) => (section === 'workspaces' ? wsGet.promise : new Promise(() => {})))
+      applySectionToStores.mockResolvedValue({ ok: true, hash: 'W2' })
       api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
-      ex.onRemoteEvent(remote('hosts', 2, 'H2')) // hosts behind, its pull out
+      ex.onRemoteEvent(remote('hosts', 2, 'H2')) // behind for good: its fetch never answers
+      ex.onRemoteEvent(remote('workspaces', 2, 'W2')) // behind, its pull out
       await flush()
       ex.onSection({ key: 'settings', hash: 'SL', payload: { local: 2 } })
       await vi.advanceTimersByTimeAsync(10_000)
       expect(api.putSection).not.toHaveBeenCalled()
-      hostsGet.resolve(sectionOf(meta('hosts', 2, 'H2'), { v: 2 }))
+      wsGet.resolve(sectionOf(meta('workspaces', 2, 'W2'), { order: [] }))
       await flush()
       expect(api.putSection.mock.calls.map((c) => c[2])).toEqual(['settings'])
     })
@@ -2825,5 +2796,132 @@ describe('executor — the published detail, the counters and lastSuccessAt (P3d
       await flush()
       expect(ex.status()).toMatchObject({ profile: 'synced', lastSuccessAt: 6_000_000 })
     })
+  })
+})
+
+/* ─── host ownership H3a-2 (spec §5.1): a retired section — the REAL `isRetiredSection` ─── */
+
+describe('executor — a retired section (host ownership H3a-2: `hosts` leaves the sync loop)', () => {
+  beforeEach(() => {
+    projections.isRetiredSection.mockImplementation(actualProjections.isRetiredSection)
+  })
+  afterEach(() => {
+    projections.isRetiredSection.mockImplementation(() => false)
+  })
+
+  const remote = (section: string, rev: number, hash: string | null) => ({ hostId: HOST, profileId: PROFILE, section, rev, hash, writerClientId: OTHER_CLIENT })
+  /** Every request that named a section, by section key. */
+  const named = (): string[] => [
+    ...api.getSection.mock.calls.map((c) => `get:${c[2]}`),
+    ...api.putSection.mock.calls.map((c) => `put:${c[2]}`),
+    ...api.deleteSection.mock.calls.map((c) => `delete:${c[2]}`),
+  ]
+  const namesHosts = (): string[] => named().filter((n) => n.endsWith(':hosts'))
+
+  it('the mock is off here: the predicate is the real one', () => {
+    expect(projections.isRetiredSection('hosts')).toBe(true)
+    expect(projections.isRetiredSection('settings')).toBe(false)
+  })
+
+  it('a persisted plain / dirty record is dropped at startup, then the stash is pruned against what is left', () => {
+    h.stored = {
+      hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2' },
+      settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' },
+    }
+    const { ex } = make()
+    expect(store.dropSection.mock.calls).toEqual([[PROFILE, 'hosts']])
+    expect(store.pruneStash).toHaveBeenCalledTimes(1)
+    expect(store.pruneStash.mock.calls[0][0]).toBe(PROFILE)
+    expect([...store.pruneStash.mock.calls[0][1]].sort()).toEqual(['S1'])
+    expect(store.dropSection.mock.invocationCallOrder[0]).toBeLessThan(store.pruneStash.mock.invocationCallOrder[0])
+    expect(ex.status().sections).toEqual({ settings: 'synced' })
+    expect(Object.keys(ex.status().detail)).toEqual(['settings'])
+  })
+
+  it('a persisted CONFLICT (its payloads — tokens — in the stash) is dropped: its hashes leave the keep-set; no lock, nothing restored', async () => {
+    h.stored = { hosts: { base: { rev: 4, hash: 'H1' }, currentHash: 'H2', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
+    h.persistedStash.set('H2', { hosts: { h1: { token: 'secret' } } })
+    const { ex } = make()
+    expect(store.dropSection).toHaveBeenCalledWith(PROFILE, 'hosts')
+    expect(store.pruneStash).toHaveBeenCalledWith(PROFILE, new Set())
+    expect(ex.status()).toMatchObject({ profile: 'synced', sections: {}, locks: {} })
+
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 5, 'H9')]))
+    ex.onReconnected()
+    ex.resolve('hosts', 'local') // the answer a stored lock would have taken
+    ex.resolve('hosts', 'sot')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(applySectionToStores).not.toHaveBeenCalled()
+    expect(store.getStash).not.toHaveBeenCalled()
+    expect(named()).toEqual([])
+    expect(ex.status().sections).toEqual({})
+  })
+
+  it('no retired record: nothing is dropped and the stash is not touched at startup', () => {
+    h.stored = { settings: { base: { rev: 2, hash: 'S1' }, currentHash: 'S1' } }
+    make()
+    expect(store.dropSection).not.toHaveBeenCalled()
+    expect(store.pruneStash).not.toHaveBeenCalled()
+  })
+
+  it('an index listing hosts — of a NEWER shape too — creates no state, locks nothing and pulls nothing', async () => {
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 3, 'H3', ['fp-future', 9]), meta('workspaces', 1, 'W1')]))
+    const { ex } = make()
+    ex.onSection({ key: 'workspaces', hash: 'W1', payload: { order: [] } })
+    ex.onReconnected()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(ex.status()).toMatchObject({ profile: 'synced', schemaLock: null, sections: { workspaces: 'synced' } })
+    expect(ex.status().sections).not.toHaveProperty('hosts')
+    expect(named()).toEqual([])
+    expect(store.saveSection.mock.calls.filter((c) => c[1] === 'hosts')).toEqual([])
+  })
+
+  it('a remote event on hosts is ignored: no state, no index asked, no request', async () => {
+    const { ex } = make()
+    ex.onRemoteEvent(remote('hosts', 2, 'H2'))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(ex.status().sections).toEqual({})
+    expect(api.listProfiles).not.toHaveBeenCalled()
+    expect(named()).toEqual([])
+  })
+
+  it('a collector report of hosts is ignored: nothing persisted, nothing pushed', async () => {
+    api.listProfiles.mockResolvedValue(index([]))
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 1 })
+    const { ex } = make()
+    ex.onReconnected()
+    ex.onSection({ key: 'hosts', hash: 'HL', payload: { hosts: { h1: { token: 'secret' } } } })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(ex.status().sections).toEqual({})
+    expect(store.saveSection).not.toHaveBeenCalled()
+    expect(named()).toEqual([])
+  })
+
+  it('resolve(hosts, …) is a no-op', async () => {
+    const { ex, statuses } = make()
+    ex.resolve('hosts', 'local')
+    ex.resolve('hosts', 'sot')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.events).toEqual([])
+    expect(statuses).toEqual([])
+    expect(named()).toEqual([])
+  })
+
+  it.each(['push', 'pull'] as const)('the first reconciliation (%s) ends with hosts left on the SOT — never read, written or deleted', async (direction) => {
+    api.listProfiles.mockResolvedValue(index([meta('hosts', 7, 'H7'), meta('workspaces', 1, 'W1')]))
+    api.getSection.mockResolvedValue(sectionOf(meta('workspaces', 1, 'W1'), { order: [] }))
+    applySectionToStores.mockResolvedValue({ ok: true, hash: 'W1' })
+    api.putSection.mockResolvedValue({ kind: 'applied', rev: 2 })
+    const dir: { value: typeof direction | null } = { value: direction }
+    const settled = vi.fn(() => void (dir.value = null)) // what the start layer does: the direction is cleared
+    const { ex } = make({ initialDirection: () => dir.value, onInitialSettled: settled })
+    ex.onSection({ key: 'workspaces', hash: 'W1', payload: { order: [] } })
+    ex.onSection({ key: 'hosts', hash: 'HL', payload: { hosts: {} } }) // even if someone reported it
+    ex.onReconnected()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(namesHosts()).toEqual([])
+    expect(ex.status()).toMatchObject({ profile: 'synced', sections: { workspaces: 'synced' } })
+    expect(ex.status().sections).not.toHaveProperty('hosts')
   })
 })

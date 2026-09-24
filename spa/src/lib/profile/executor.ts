@@ -31,11 +31,15 @@
 //     data. The executor stops instead (`profileGone`): no action runs again,
 //     nothing is applied, nothing is dropped, and `status().profile` reports
 //     `locked:reset` for P3's wizard.
-//   - No `tabs.*` pull while `hosts` or `workspaces` is not UP TO DATE — clean,
-//     index fresh, SOT not moved, no action of its own running — (apply-to-stores'
-//     CALLER CONTRACT: a pane of a host not known yet would be branded
-//     `host-removed`, and that brand is synced back), nor while its workspace
-//     does not exist locally (the apply would be `unrendered`).
+//   - A RETIRED SECTION (`hosts`, host ownership H3a-2; projections.ts
+//     `RETIRED_SECTIONS`) NEVER ENTERS THE EXECUTOR. `dispatch` refuses its key
+//     before any state exists — so no index entry, remote event, collector report
+//     or `resolve` makes one, and no request ever names it; its persisted record is
+//     dropped at startup and the stash pruned of its payloads (they held tokens).
+//     It stays on the SOT, untouched, for older clients (spec §5.3).
+//   - No `tabs.*` pull while `workspaces` is not UP TO DATE — clean, index
+//     fresh, SOT not moved, no action of its own running — nor while its
+//     workspace does not exist locally (the apply would be `unrendered`).
 //   - `settings` WAITS FOR `workspaces`, IN BOTH DIRECTIONS. Its workspace-scoped
 //     entries are built and applied for the master's workspace set only
 //     (sections.ts, applier.ts), so the section means nothing apart from the
@@ -55,15 +59,11 @@
 //         locked or failing, no setting of any kind travels.)
 //     An entry whose workspace is on NO client is an orphan an older build
 //     pushed: it is dropped by the apply and pushed back without it, once.
-//   - `settings` WAITS FOR `hosts` TOO, IN BOTH DIRECTIONS (host-sync-identity
-//     §6, §11.8). It names hosts by WIRE id (`purdex-host-settings.hosts` keys,
-//     `sessions:` / `headless:` New Tab columns), resolved on apply through the
-//     hosts as they are here: applied while `hosts` is behind, the id of a host
-//     that has not arrived resolves to nothing, its column is left out and the
-//     section is pushed back without it. Sent before the `hosts` that lists a
-//     host added here, the same happens on every other client. So `settings`
-//     waits for the conjunction — `hosts` AND `workspaces` up to date — and a
-//     release of either one decides it again.
+//   - `hosts` IS NO GATE (host ownership H3a-2). Until H3 a `tabs.*` pull and
+//     `settings` (both directions) also waited for `hosts`: a host id they name
+//     had to arrive through it first. The host list is this device's now and
+//     never arrives through the sync; a host id this device does not know is
+//     kept as it is (host ownership H1), not branded or dropped.
 //   - AN EMPTY `tabs.<id>` THAT WAS NEVER AGREED ON, WHILE THE SOT HAS CONTENT,
 //     IS NOT AN EDIT — IT HAS NOT ARRIVED YET. Applying `workspaces` from another
 //     client makes an empty workspace appear here; 500 ms later the collector
@@ -138,7 +138,7 @@
 //     client does not know never enter the executor at all: carried, not deleted.
 //   - `pull` means nothing of this machine's should reach the SOT before the
 //     SOT's `workspaces` has been taken: a local `tabs.<id>` is not pushed until
-//     `hosts` and `workspaces` are up to date, nor once its workspace is no
+//     `workspaces` is up to date, nor once its workspace is no
 //     longer here — its workspace may be about to be replaced, and the push
 //     would plant an orphan only to delete it again. (An
 //     empty SOT has nothing to take: `workspaces` is pushed by the ordinary
@@ -203,7 +203,7 @@ import { readMasterWorld } from './master-world'
 import { compareShape, profileLock, profileStatus, reconcileSectionSet } from './profile-state'
 import type { ProfileStatus, SchemaLock } from './profile-state'
 import type { ProfileRemoteEvent } from './profile-ws-dispatch'
-import { sectionKind, shapeTable, workspaceIdOf } from './projections'
+import { isRetiredSection, sectionKind, shapeTable, workspaceIdOf } from './projections'
 import { isSyncableWorkspaceId } from './sections'
 import { dropSection, getStash, loadSectionStore, pruneStash, saveConflict, saveSection } from './section-store'
 import { canApplyPull, canRestoreLocal, decideSection, initialSectionState, reduceSection, restoreSectionState, retainedHashes, sotMoved } from './sync-state'
@@ -304,11 +304,11 @@ export const BUSY_RETRY_MS = 500
 const DEFAULT_CONTENDED_MS = 1_000
 /** A deleted `tabs.<id>` whose workspace stays: said once after this many retries. */
 const STUCK_DELETION_ATTEMPTS = 4
-/** The sections every `tabs.*` pull waits for (apply-to-stores' CALLER CONTRACT). */
-const GATES: readonly string[] = ['hosts', 'workspaces']
-/** The sections `settings` waits for, pull and push (see the header) — BOTH: `workspaces` for its scoped entries,
- *  `hosts` for the host ids it names (host-sync-identity §6, §11.8). Each one's release pumps it (`pumpGatedBy`). */
-const SETTINGS_GATES: readonly string[] = ['hosts', 'workspaces']
+/** The sections every `tabs.*` pull waits for (see the header). Not `hosts`: it is retired (host ownership H3a-2). */
+const GATES: readonly string[] = ['workspaces']
+/** The sections `settings` waits for, pull and push (see the header): `workspaces`, for its scoped entries. Its
+ *  release pumps it (`pumpGatedBy`). Not `hosts` any more (host ownership H3a-2). */
+const SETTINGS_GATES: readonly string[] = ['workspaces']
 
 /** What must be up to date before `key` is pulled. */
 function pullGatesOf(key: string): readonly string[] {
@@ -612,7 +612,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /** `true` iff the state changed. A section nobody knows starts from `initialSectionState(null)`. */
   function dispatch(key: string, event: SectionEvent, pumpAfter = true): boolean {
-    if (disposed) return false
+    // A retired section never gets a state (see the header): the one door every path to `sections.set` goes through.
+    if (disposed || isRetiredSection(key)) return false
     const prev = sections.get(key) ?? initialSectionState(null)
     const next = reduceSection(prev, event)
     if (next === prev) return false
@@ -628,7 +629,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
     if (pumpAfter) {
       pump(key)
-      // `hosts` / `workspaces` gate every `tabs.*` pull and `settings`
+      // `workspaces` gates every `tabs.*` pull and `settings`
       pumpGatedBy(key)
       checkSettled()
     }
@@ -858,7 +859,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       })
   }
 
-  /** The section's gates are UP TO DATE (`tabs.*` and `settings`: `hosts` and `workspaces`), and a
+  /** The section's gates are UP TO DATE (`tabs.*` and `settings`: `workspaces`), and a
    *  `tabs.*` has its workspace here. `status === 'synced'` alone is not that: it means clean, and a clean section
    *  that is behind the SOT (its pull decided or still out) reads `synced` too. */
   function mayPull(key: string): boolean {
@@ -1444,13 +1445,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   }
 
   // Startup: what the section store holds, conflicts included (sync-state driver contract).
+  // A retired section's record is dropped instead (see the header) — then the stash is pruned against what is left,
+  // or a `hosts` conflict's payloads (every host's token) would stay in localStorage until the next attach.
+  let droppedRetired = false
   for (const [key, persisted] of Object.entries(loadSectionStore(profileId).sections)) {
+    if (isRetiredSection(key)) {
+      if (dropSection(profileId, key) !== 'ok') problem('persist-failed', 'the section store refused to drop a retired section', key)
+      droppedRetired = true
+      continue
+    }
     const s = restoreSectionState(persisted)
     sections.set(key, s)
     attempted.set(key, persistedSignature(s))
     if (persisted.conflict !== undefined) storedConflict.add(key)
   }
-  lastStatus = JSON.stringify(status())
+  if (droppedRetired) pruneStash(profileId, keepSet())
+    lastStatus = JSON.stringify(status())
   // Born without a direction = an ordinary run (a reload after the period): there is no period to open later.
   periodOver = storedDirection() === null
 
