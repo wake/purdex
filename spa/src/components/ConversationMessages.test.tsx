@@ -225,6 +225,17 @@ describe('ConversationMessages', () => {
       expect(screen.getByTestId('fold-body')).toHaveTextContent('stray output')
     })
 
+    it('renders no argument for an orphan result', () => {
+      // An orphan has no call, so there is no input to summarise: it is
+      // rendered with `input={{}}`. The argument slot must stay empty —
+      // it used to print a literal `{}`, the serialiser's answer to a
+      // question the call never asked.
+      render(<ConversationMessages messages={[usr(res('tu9', 'stray output'))]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      expect(screen.queryByTestId('op-arg')).toBeNull()
+      expect(screen.getByTestId('operation-block').textContent).not.toContain('{}')
+    })
+
     it("remembers a block's expansion across a re-render", () => {
       const messages = [asst(use('tu1', 'Bash', { command: 'ls' })), usr(res('tu1', longBody))]
       const { rerender } = render(<ConversationMessages messages={messages}

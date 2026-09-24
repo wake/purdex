@@ -28,12 +28,25 @@ describe('getSummary (client table, moved from ToolCallBlock)', () => {
     expect(getSummary('Agent', { description: 'Find files', prompt: 'long' })).toBe('Find files')
   })
 
-  it('default → JSON of input sliced to 80 chars', () => {
+  // Spec §4.2: the header argument is the full value, "never truncated to an
+  // ellipsis in the middle" — and the old `.slice(0, 80)` here was worse than
+  // what that forbids, since it cut without even saying so. T3.1 removed the
+  // renderer's truncation; this is the last one on the path.
+  it('default → the whole JSON of input, not cut at 80 chars', () => {
     const input = { alpha: 'x'.repeat(100) }
     const json = JSON.stringify(input)
-    expect(getSummary('SomethingElse', input)).toBe(json.slice(0, 80))
-    expect(getSummary('SomethingElse', input)).toHaveLength(80)
-    expect(getSummary('Other', {})).toBe('{}')
+    expect(json.length).toBeGreaterThan(80)
+    expect(getSummary('SomethingElse', input)).toBe(json)
+    // No amputated tail: the value ends where the JSON ends.
+    expect(getSummary('SomethingElse', input).endsWith('"}')).toBe(true)
+  })
+
+  // An empty input has no argument to state. `{}` is the serialiser talking,
+  // not the call — and it is truthy, so the header printed a literal `{}` in
+  // the argument slot of every orphan result. R10's own empty-input answer is
+  // `''`; the default branch now says the same thing.
+  it('default → empty input has no argument at all', () => {
+    expect(getSummary('Other', {})).toBe('')
   })
 })
 

@@ -24,7 +24,18 @@ export function getSummary(tool: string, input: Record<string, unknown>): string
     case 'Agent':
       return (input.description as string) ?? ''
     default:
-      return JSON.stringify(input).slice(0, 80)
+      // No truncation. Spec §4.2 wants the full value in the header — "never
+      // truncated to an ellipsis in the middle" — and this slice was worse
+      // than the thing that forbids: it cut at 80 without even an ellipsis to
+      // admit it. The renderer wraps (`whitespace-pre-wrap break-all`), so
+      // length is its problem, not this table's; SUMMARY_LIMIT still bounds
+      // the R10 fallback below, which is a different path.
+      //
+      // An empty input has no argument at all, so say nothing rather than
+      // `{}` — that is the serialiser answering, not the call, and it is
+      // truthy enough to draw an argument span around it (every orphan
+      // result got one). `unknownToolSummary` already returns '' here.
+      return Object.keys(input).length === 0 ? '' : JSON.stringify(input)
   }
 }
 
