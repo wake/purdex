@@ -197,6 +197,49 @@ describe('(c) receive an unknown column → restart → add the daemon', () => {
   })
 })
 
+// H1b real-device acceptance (the failure it found): knownIds is device-local and never synced, so a device that
+// RECEIVED `sessions:<wire>` / `headless:<wire>` does not know them. The pass renames them to the local id; the new
+// host's providers become ready only AFTER that, and the bootstrap then saw neither the id in knownIds nor the wire
+// form in a preset — and placed each block a second time (pushed: the SOT's column count doubled).
+describe("(c') the providers become ready only AFTER the pass renamed the received columns", () => {
+  it.each([
+    ['received through a settings apply (knownIds untouched)', false],
+    ['on a device whose knownIds is empty (pulled fresh from the SOT)', true],
+  ])('%s: exactly one block per kind in every preset, and nothing to push', async (_label, emptyKnown) => {
+    masterOnScreen()
+    // the steady state for the hosts this device has; then the registry is empty again until X's providers are ready
+    registerNewTabProviderSource(createHostSessionProviderSource())
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    renderHook(() => useNewTabBootstrap()).unmount()
+    clearNewTabRegistry()
+    const now = JSON.parse(JSON.stringify(buildSectionPayload('settings')!.payload)) as SettingsPayload
+    const layout = now['purdex-newtab-layout'] as { presets: Record<string, { columns: string[][] }> }
+    for (const preset of Object.values(layout.presets)) preset.columns[0].push(`sessions:${W}`, `headless:${W}`)
+    expect(await applySectionToStores('settings', now, { masterHostId: M })).toMatchObject({ ok: true, hash: await hashSection(now) })
+    if (emptyKnown) useNewTabLayoutStore.setState({ knownIds: [] })
+    expect(useNewTabLayoutStore.getState().knownIds).not.toContain(`sessions:${W}`)
+
+    // the host arrives; the pass renames the received columns before any provider for it exists
+    addX()
+    expect(runHostReresolve()).toBe('done')
+    expect(JSON.stringify(useNewTabLayoutStore.getState().presets)).not.toContain(W)
+    const before = await hashes()
+
+    // only now do the host providers become ready, and the bootstrap runs
+    registerNewTabProviderSource(createHostSessionProviderSource())
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    renderHook(() => useNewTabBootstrap()).unmount()
+
+    for (const preset of Object.values(useNewTabLayoutStore.getState().presets)) {
+      const ids = preset.columns.flat()
+      expect(ids.filter((id) => id === `sessions:${X}`)).toHaveLength(1)
+      expect(ids.filter((id) => id === `headless:${X}`)).toHaveLength(1)
+    }
+    expect(useNewTabLayoutStore.getState().knownIds).toEqual(expect.arrayContaining([`sessions:${X}`, `headless:${X}`]))
+    expect(await hashes()).toEqual(before)
+  })
+})
+
 describe('(d) an identity conflict', () => {
   it('nothing moves while it lasts; when one duplicate is removed, the pass runs (the signature changed)', () => {
     masterOnScreen()

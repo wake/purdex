@@ -292,25 +292,30 @@ export const useNewTabLayoutStore = create<State>()(
       ensureDefaults: (providers, placedAs) =>
         set((state) => {
           const known = new Set(state.knownIds)
-          const present = new Set(state.knownIds)
+          const placed = new Set<string>()
           for (const key of ['3col', '2col', '1col'] as const) {
-            for (const col of state.presets[key].columns) col.forEach((id) => present.add(id))
+            for (const col of state.presets[key].columns) col.forEach((id) => placed.add(id))
           }
+          const present = new Set([...known, ...placed])
           const elsewhere = (id: string): boolean => {
             if (placedAs === undefined) return false
             const alt = placedAs(id)
             return alt !== id && present.has(alt)
           }
-          const newcomers = providers
-            .filter((p) => !known.has(p.id) && !p.disabled && !elsewhere(p.id))
+          const unknown = providers.filter((p) => !known.has(p.id) && !p.disabled)
+          // knownIds is device-local and never synced: a block that arrived in a preset (or that the re-resolve pass
+          // renamed there from its wire id) is placed without being known. Placed is placed — it only becomes known.
+          const alreadyPlaced = unknown.filter((p) => placed.has(p.id))
+          const newcomers = unknown
+            .filter((p) => !placed.has(p.id) && !elsewhere(p.id))
             .sort((a, b) => a.order - b.order)
-          if (newcomers.length === 0) return state
+          if (newcomers.length === 0 && alreadyPlaced.length === 0) return state
 
           const presets = { ...state.presets }
           for (const key of ['3col', '2col', '1col'] as const) {
             presets[key] = clonePreset(presets[key])
           }
-          const knownIds = [...state.knownIds]
+          const knownIds = [...state.knownIds, ...alreadyPlaced.map((p) => p.id)]
 
           for (const p of newcomers) {
             for (const key of ['3col', '2col', '1col'] as const) {

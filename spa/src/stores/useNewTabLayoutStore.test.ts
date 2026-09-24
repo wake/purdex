@@ -227,6 +227,19 @@ describe('useNewTabLayoutStore', () => {
       expect(s.presets['1col'].columns[0]).toEqual(['browser'])
     })
 
+    // knownIds is device-local: a block placed in a preset that arrived by sync is not in it. Placed is placed.
+    it('a provider already placed in a preset but not known is not placed again — and becomes known', () => {
+      useNewTabLayoutStore.setState({
+        presets: { '3col': { enabled: true, columns: [['browser'], ['sessions:h2'], []] }, '2col': { enabled: false, columns: [['sessions:h2'], []] }, '1col': { enabled: true, columns: [['sessions:h2']] } },
+        knownIds: [],
+      })
+      useNewTabLayoutStore.getState().ensureDefaults([{ id: 'sessions:h2', order: 0 }])
+      const s = useNewTabLayoutStore.getState()
+      expect(s.presets['3col'].columns).toEqual([['browser'], ['sessions:h2'], []])
+      expect(s.presets['1col'].columns).toEqual([['sessions:h2']])
+      expect(s.knownIds).toEqual(['sessions:h2'])
+    })
+
     it('respects order ascending', () => {
       useNewTabLayoutStore.getState().ensureDefaults([
         { id: 'b', order: 5 },
