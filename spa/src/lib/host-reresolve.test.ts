@@ -317,7 +317,7 @@ describe('the shown-hosts re-key (H2d-1)', () => {
     useShownHostsStore.setState({ ids: [UNKNOWN, LOCAL, 'tail'] })
     expect(runHostReresolve()).toBe('done')
     expect(shownNow()).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOSTS)!).state).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOSTS)!).state).toEqual({ ids: [UNKNOWN, WIRE, 'tail'], relabelStamp: 0 })
   })
 
   it('the d1_ id already listed: the local id is dropped (deduped, the first kept)', () => {

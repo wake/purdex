@@ -5,11 +5,16 @@ import { act, renderHook } from '@testing-library/react'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useWorkspaceStore } from '../features/workspace/store'
+import { MASTER_PROFILE_ID, useLocalProfilesStore, type LocalProfile, type ParkedWorld } from '../stores/useLocalProfilesStore'
+import { STORAGE_KEYS } from './storage/keys'
 import { getPrimaryPane } from './pane-tree'
 import { syncIdOfSync } from './profile/host-identity'
 import type { PaneContent } from '../types/tab'
 import * as shownHosts from './shown-hosts'
 import {
+  currentShownIds,
+  currentShownIdsNow,
   hostRefOf,
   isPaneHostShown,
   isRefShown,
@@ -39,7 +44,11 @@ const ids = () => useShownHostsStore.getState().ids
 beforeEach(() => {
   localStorage.clear()
   useHostStore.setState({ hosts: HOSTS, hostOrder: ORDER, activeHostId: LOCAL })
-  useShownHostsStore.setState({ ids: [] })
+  useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
+  // The master on screen, settled (the defaults, restated: a test below moves them).
+  useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0, relabelCount: 0 })
+  useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+  useWorkspaceStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
 })
 
 describe('shownFormsOf', () => {
@@ -326,5 +335,209 @@ describe('landOnHostsPageIfHidden — the landing (one opener rule)', () => {
     useShownHostsStore.setState({ ids: [FAR] })
     expect(landOnHostsPageIfHidden(FAR)).toBe(false)
     expect(kindsOf()).toEqual([])
+  })
+})
+
+// === Per-workbench shown hosts (2026-09-25 plan, A2): which list applies, and fail closed ===
+
+const EMPTY: ParkedWorld = { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null }
+const SLAVE = 'slave1'
+const slaveRecord = (shownHostIds: string[], world: ParkedWorld | null = null): LocalProfile => ({ id: SLAVE, name: 'S', createdAt: 1, shownHostIds, world })
+
+/** `SLAVE` on screen, settled at `epoch`, its list `list`; the master's list (the store) is `masterIds`. */
+function slaveOnScreen(list: string[], masterIds: string[] = [], epoch = 1): void {
+  useLocalProfilesStore.setState({ slaves: { [SLAVE]: slaveRecord(list) }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: EMPTY, worldEpoch: epoch })
+  useTabStore.setState({ worldId: SLAVE, worldEpoch: epoch })
+  useWorkspaceStore.setState({ worldId: SLAVE, worldEpoch: epoch })
+  useShownHostsStore.setState({ ids: masterIds })
+}
+
+describe('currentShownIds — pure', () => {
+  const shown = { ids: [WIRE], relabelStamp: 2 }
+  const local = { slaves: { [SLAVE]: slaveRecord([PLAIN]) }, relabelCount: 2 }
+
+  it('master, stamp = relabelCount → the store\'s ids, same reference', () => {
+    expect(currentShownIds(true, MASTER_PROFILE_ID, local, shown)).toBe(shown.ids)
+  })
+
+  it('master, stamp ≠ relabelCount → [] (a promote half-arrived: fail closed)', () => {
+    expect(currentShownIds(true, MASTER_PROFILE_ID, { ...local, relabelCount: 3 }, shown)).toEqual([])
+  })
+
+  it("a slave → its record's list, same reference", () => {
+    expect(currentShownIds(true, SLAVE, local, shown)).toBe(local.slaves[SLAVE].shownHostIds)
+  })
+
+  it('an unknown id, a non-string tag, or an unsettled world → [] — one stable reference', () => {
+    const none = currentShownIds(true, 'gone', local, shown)
+    expect(none).toEqual([])
+    expect(currentShownIds(true, 7, local, shown)).toBe(none)
+    expect(currentShownIds(false, MASTER_PROFILE_ID, local, shown)).toBe(none)
+    expect(currentShownIds(false, SLAVE, local, shown)).toBe(none)
+  })
+})
+
+describe('the current list — every reader (A2)', () => {
+  it("a slave on screen: every reader reads ITS list, not the master's (m1)", () => {
+    slaveOnScreen([PLAIN], [WIRE])
+    expect(currentShownIdsNow()).toEqual([PLAIN])
+    expect(isRefShownNow(PLAIN)).toBe(true)
+    expect(isRefShownNow(LOCAL)).toBe(false)
+    expect(renderHook(() => useIsRefShown(LOCAL)).result.current).toBe(false)
+    expect(renderHook(() => useShownRefFilter()).result.current(PLAIN)).toBe(true)
+    expect(renderHook(() => usePaneHostShown(tmux(LOCAL))).result.current).toBe(false)
+    expect(renderHook(() => usePaneHostShown(tmux(PLAIN))).result.current).toBe(true)
+    expect(landOnHostsPageIfHidden(PLAIN)).toBe(false)
+    expect(landOnHostsPageIfHidden(LOCAL)).toBe(true)
+  })
+
+  it('the master on screen: the store', () => {
+    useShownHostsStore.setState({ ids: [WIRE] })
+    expect(currentShownIdsNow()).toBe(useShownHostsStore.getState().ids)
+    expect(isRefShownNow(LOCAL)).toBe(true)
+  })
+
+  it('tab tag = a slave but the pointer still says master (another window\'s switch half-arrived) → [] (m7)', () => {
+    useShownHostsStore.setState({ ids: [WIRE, PLAIN] })
+    useLocalProfilesStore.setState({ slaves: { [SLAVE]: { ...slaveRecord([WIRE, PLAIN]), world: EMPTY } }, slaveOrder: [SLAVE] })
+    useTabStore.setState({ worldId: SLAVE })
+    useWorkspaceStore.setState({ worldId: SLAVE })
+    expect(currentShownIdsNow()).toEqual([])
+    expect(isRefShownNow(LOCAL)).toBe(false)
+  })
+
+  it('tab tag = master but the pointer says a slave → [] (m7)', () => {
+    slaveOnScreen([WIRE], [WIRE])
+    useTabStore.setState({ worldId: MASTER_PROFILE_ID })
+    useWorkspaceStore.setState({ worldId: MASTER_PROFILE_ID })
+    expect(isRefShownNow(LOCAL)).toBe(false)
+  })
+
+  it('epochs that disagree, or a world behind the fence → [] although tags agree', () => {
+    useShownHostsStore.setState({ ids: [WIRE] })
+    useTabStore.setState({ worldEpoch: 1 })
+    expect(isRefShownNow(LOCAL)).toBe(false)
+    useTabStore.setState({ worldEpoch: 0 })
+    expect(isRefShownNow(LOCAL)).toBe(true)
+    localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, '5')
+    expect(isRefShownNow(LOCAL)).toBe(false)
+  })
+
+  it('a slave on screen whose record is gone → []', () => {
+    slaveOnScreen([PLAIN])
+    useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [] })
+    expect(currentShownIdsNow()).toEqual([])
+  })
+})
+
+// A promote made in ANOTHER window reaches this one store by store, in any order (plan §2, fail closed). Four stores
+// matter: local profiles (pointer, epoch, relabelCount, the slaves' lists), tab + workspace (tag, epoch), shown (the
+// master's list + its stamp). For every subset that has arrived, the answer is the right list or [] — never the wrong
+// workbench's list (m10). No fence written: the stamp alone must close the gap.
+describe('a promote in another window, every rehydrate order (A2, m10)', () => {
+  const OLD = [WIRE] // the master's list before
+  const SL = [PLAIN] // the promoted slave's list
+  type Snap = { local: object; tab: object; ws: object; shown: object }
+
+  const subsets = (): boolean[][] => Array.from({ length: 16 }, (_, n) => [0, 1, 2, 3].map((b) => ((n >> b) & 1) === 1))
+
+  function apply(before: Snap, after: Snap, arrived: boolean[]): void {
+    useLocalProfilesStore.setState((arrived[0] ? after : before).local)
+    useTabStore.setState((arrived[1] ? after : before).tab)
+    useWorkspaceStore.setState((arrived[2] ? after : before).ws)
+    useShownHostsStore.setState((arrived[3] ? after : before).shown)
+  }
+
+  it('master on screen, a parked slave promoted: the screen becomes the demoted workbench — its list (OLD) or [], never SL', () => {
+    const D = 'demoted'
+    const before: Snap = {
+      local: { slaves: { [SLAVE]: { ...slaveRecord(SL), world: EMPTY } }, slaveOrder: [SLAVE], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 5, relabelCount: 0 },
+      tab: { worldId: MASTER_PROFILE_ID, worldEpoch: 5 },
+      ws: { worldId: MASTER_PROFILE_ID, worldEpoch: 5 },
+      shown: { ids: OLD, relabelStamp: 0 },
+    }
+    const after: Snap = {
+      local: { slaves: { [D]: { id: D, name: 'D', createdAt: 1, shownHostIds: OLD, world: null } }, slaveOrder: [D], activeProfileId: D, parkedMaster: EMPTY, worldEpoch: 6, relabelCount: 1 },
+      tab: { worldId: D, worldEpoch: 6 },
+      ws: { worldId: D, worldEpoch: 6 },
+      shown: { ids: SL, relabelStamp: 1 },
+    }
+    for (const arrived of subsets()) {
+      apply(before, after, arrived)
+      const got = currentShownIdsNow()
+      expect([[], OLD], `arrived ${arrived.join(',')}`).toContainEqual(got)
+    }
+  })
+
+  it('the promoted slave on screen: the screen becomes the master — SL or [], never the old master list', () => {
+    const D = 'demoted'
+    const before: Snap = {
+      local: { slaves: { [SLAVE]: slaveRecord(SL) }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: EMPTY, worldEpoch: 5, relabelCount: 0 },
+      tab: { worldId: SLAVE, worldEpoch: 5 },
+      ws: { worldId: SLAVE, worldEpoch: 5 },
+      shown: { ids: OLD, relabelStamp: 0 },
+    }
+    const after: Snap = {
+      local: { slaves: { [D]: { id: D, name: 'D', createdAt: 1, shownHostIds: OLD, world: EMPTY } }, slaveOrder: [D], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 6, relabelCount: 1 },
+      tab: { worldId: MASTER_PROFILE_ID, worldEpoch: 6 },
+      ws: { worldId: MASTER_PROFILE_ID, worldEpoch: 6 },
+      shown: { ids: SL, relabelStamp: 1 },
+    }
+    for (const arrived of subsets()) {
+      apply(before, after, arrived)
+      expect([[], SL], `arrived ${arrived.join(',')}`).toContainEqual(currentShownIdsNow())
+    }
+  })
+})
+
+describe('the hooks follow every input (A2)', () => {
+  it('useIsRefShown / usePaneHostShown re-render on a world switch and on a write to the slave\'s list', () => {
+    useShownHostsStore.setState({ ids: [PLAIN] })
+    const content = tmux(PLAIN)
+    const ref = renderHook(() => useIsRefShown(PLAIN))
+    const pane = renderHook(() => usePaneHostShown(content))
+    expect([ref.result.current, pane.result.current]).toEqual([true, true])
+    act(() => slaveOnScreen([], [PLAIN]))
+    expect([ref.result.current, pane.result.current]).toEqual([false, false])
+    act(() => { useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => [PLAIN]) })
+    expect([ref.result.current, pane.result.current]).toEqual([true, true])
+    act(() => useTabStore.setState({ worldEpoch: 9 })) // unsettled
+    expect([ref.result.current, pane.result.current]).toEqual([false, false])
+  })
+
+  it('re-renders on a stamp that moves (a promote half-arrived) and back', () => {
+    useShownHostsStore.setState({ ids: [PLAIN] })
+    const { result } = renderHook(() => useIsRefShown(PLAIN))
+    expect(result.current).toBe(true)
+    act(() => useLocalProfilesStore.setState({ relabelCount: 1 }))
+    expect(result.current).toBe(false)
+    act(() => useShownHostsStore.setState({ relabelStamp: 1 }))
+    expect(result.current).toBe(true)
+  })
+
+  it('useShownRefFilter: the same function while the current list is the same array; a new one when it moves', () => {
+    slaveOnScreen([PLAIN], [WIRE])
+    const { result } = renderHook(() => useShownRefFilter())
+    const first = result.current
+    act(() => useTabStore.setState({ activeTabId: null })) // an unrelated tab-store write
+    act(() => useShownHostsStore.getState().show('d1_other')) // the master's list: not the one on screen
+    expect(result.current).toBe(first)
+    act(() => { useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => [WIRE]) })
+    expect(result.current).not.toBe(first)
+    expect(result.current(LOCAL)).toBe(true)
+  })
+
+  it('a hook does not re-render for an unrelated store write when its answer is unchanged', () => {
+    slaveOnScreen([PLAIN])
+    const content = tmux(PLAIN)
+    let renders = 0
+    renderHook(() => {
+      renders += 1
+      return usePaneHostShown(content)
+    })
+    const after = renders
+    act(() => useTabStore.setState({ activeTabId: null }))
+    act(() => useShownHostsStore.getState().show('d1_unrelated'))
+    expect(renders).toBe(after)
   })
 })

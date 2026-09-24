@@ -10,12 +10,24 @@
 // There is deliberately no "not a local host → shown" helper: with one, `/execution/d1_X/<id>` opened a tab that the
 // gate then hid (codex plan review task-mufjfxo4-h4e2rf item 1).
 //
-// Placement: this module imports `useHostStore`, `useShownHostsStore`, `useTabStore` (the landing, H2d-3) and
-// `host-look` (`wireKeyMovesOf`); none of them may import this module.
-import { useCallback } from 'react'
+// WHICH LIST (per-workbench shown hosts, 2026-09-25 plan A2): every workbench has its own. The one that applies is the
+// list of the world the live tab stores hold — `useTabStore.worldId`, the tag every switch and promote stamps: the master
+// → `useShownHostsStore.ids`; a local workbench → its `LocalProfile.shownHostIds`. FAIL CLOSED: `[]` (every host hidden:
+// gated, never connected) unless, on EVERY read, the world is settled (`readMasterWorld` — the same check the collector
+// uses: tags, epochs, the fence), and on the master the shown store's `relabelStamp` is the local profiles'
+// `relabelCount` (a promote in another window that has reached one of the two stores but not the other). A hidden pane
+// opens no connection, so a transient `[]` can only delay one, never open a wrong one.
+//
+// Placement: this module imports `useHostStore`, `useShownHostsStore`, `useLocalProfilesStore`, `useTabStore` (the world
+// tag; the landing, H2d-3), `useWorkspaceStore` (its tag, for the hooks' subscription), `profile/master-world` (the
+// settled check) and `host-look` (`wireKeyMovesOf`); none of them may import this module.
+import { useCallback, useSyncExternalStore } from 'react'
+import { useWorkspaceStore } from '../features/workspace/store'
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
-import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { MASTER_PROFILE_ID, useLocalProfilesStore, type LocalProfile } from '../stores/useLocalProfilesStore'
+import { useShownHostsStore, type ShownHosts } from '../stores/useShownHostsStore'
 import { useTabStore } from '../stores/useTabStore'
+import { readMasterWorld } from './profile/master-world'
 import { wireIdOfHost } from './profile/host-identity'
 import { wireKeyMovesOf } from './host-look'
 import type { PaneContent } from '../types/tab'
@@ -58,22 +70,65 @@ export function isRefShown(ref: string, hosts: Hosts, ids: Ids): boolean {
   return listed(ids, wire, local)
 }
 
-/** `isRefShown` over both stores' current state — for openers, sweeps and in-flight re-checks. */
-export function isRefShownNow(ref: string): boolean {
-  return isRefShown(ref, useHostStore.getState().hosts, useShownHostsStore.getState().ids)
+// === Which list (the current workbench's) ===
+
+/** The fail-closed answer: one frozen reference, so a selector that returns it is stable. */
+const NONE: Ids = Object.freeze([])
+
+/**
+ * The shown list of the workbench on screen. Pure. `settled` — `readMasterWorld().settled`; `tabWorldId` — the live tab
+ * store's world tag. The master → `shown.ids` while `shown.relabelStamp === local.relabelCount`; a slave → its record's
+ * list; anything else → `[]`. Always a reference one of the stores holds, or `NONE`: never a fresh array.
+ */
+export function currentShownIds(
+  settled: boolean,
+  tabWorldId: unknown,
+  local: { slaves: Record<string, LocalProfile>; relabelCount: number },
+  shown: ShownHosts,
+): Ids {
+  if (!settled || typeof tabWorldId !== 'string') return NONE
+  if (tabWorldId === MASTER_PROFILE_ID) return shown.relabelStamp === local.relabelCount ? shown.ids : NONE
+  return Object.hasOwn(local.slaves, tabWorldId) ? local.slaves[tabWorldId].shownHostIds : NONE
 }
 
-/** `isRefShown` for one ref, live: re-renders on a shown-hosts write that changes it, or a daemonId learned. */
+/** `currentShownIds` over the stores as they are now — the settled check made again on every call. */
+export function currentShownIdsNow(): Ids {
+  return currentShownIds(readMasterWorld().settled, useTabStore.getState().worldId, useLocalProfilesStore.getState(), useShownHostsStore.getState())
+}
+
+/** Every store the current list depends on: the tab and workspace tags, the local profiles, the master's list. */
+function subscribeCurrentShown(fn: () => void): () => void {
+  const unsubs = [useTabStore.subscribe(fn), useWorkspaceStore.subscribe(fn), useLocalProfilesStore.subscribe(fn), useShownHostsStore.subscribe(fn)]
+  return () => {
+    for (const unsub of unsubs) unsub()
+  }
+}
+
+/** The current list, live. NOTE: a window that falls behind the epoch fence (another window's switch, before any of
+ *  its stores rehydrates here) is not re-read until one of the four stores changes — accepted (plan A2, like the
+ *  collector); `isRefShownNow` re-reads every time. */
+function useCurrentShownIds(): Ids {
+  return useSyncExternalStore(subscribeCurrentShown, currentShownIdsNow, currentShownIdsNow)
+}
+
+/** `isRefShown` over the current stores — for openers, sweeps and in-flight re-checks. */
+export function isRefShownNow(ref: string): boolean {
+  return isRefShown(ref, useHostStore.getState().hosts, currentShownIdsNow())
+}
+
+/** `isRefShown` for one ref, live: re-renders when its ANSWER changes — a write to the current list, a world switch,
+ *  a world that stops (or starts) being settled, a daemonId learned. */
 export function useIsRefShown(ref: string | null): boolean {
   const wire = useHostStore((s) => (ref === null ? null : formsOfRef(ref, s.hosts).wire))
   const local = useHostStore((s) => (ref === null ? null : formsOfRef(ref, s.hosts).local))
-  return useShownHostsStore((s) => wire !== null && listed(s.ids, wire, local))
+  const answer = (): boolean => wire !== null && listed(currentShownIdsNow(), wire, local)
+  return useSyncExternalStore(subscribeCurrentShown, answer, answer)
 }
 
-/** For lists: `(ref) => isRefShown(…)` over the current stores, stable while they are. */
+/** For lists: `(ref) => isRefShown(…)` over the current stores, stable while the hosts and the current list are. */
 export function useShownRefFilter(): (ref: string) => boolean {
   const hosts = useHostStore((s) => s.hosts)
-  const ids = useShownHostsStore((s) => s.ids)
+  const ids = useCurrentShownIds()
   return useCallback((ref: string) => isRefShown(ref, hosts, ids), [hosts, ids])
 }
 
@@ -117,15 +172,16 @@ export function isPaneHostShown(content: PaneContent, hosts: Hosts, hostOrder: r
 }
 
 /**
- * `isPaneHostShown` as a hook, subscribed LIVE to both stores (hosts + `hostOrder`, and the shown ids): it re-renders
- * when the pane's forms move (a daemonId learned, `hostOrder[0]` changed) or its answer changes. Each selector returns a
- * primitive — no new object per render.
+ * `isPaneHostShown` as a hook, subscribed LIVE to the host store (hosts + `hostOrder`) and to everything the current
+ * list depends on (`useCurrentShownIds`'s stores): it re-renders when the pane's forms move (a daemonId learned,
+ * `hostOrder[0]` changed) or its answer changes. Each selector returns a primitive — no new object per render.
  */
 export function usePaneHostShown(content: PaneContent): boolean {
   const ref = useHostStore((s) => hostRefOf(content, s.hostOrder))
   const wire = useHostStore((s) => (ref === null ? null : formsOfRef(ref, s.hosts).wire))
   const local = useHostStore((s) => (ref === null ? null : formsOfRef(ref, s.hosts).local))
-  return useShownHostsStore((s) => wire === null || listed(s.ids, wire, local))
+  const answer = (): boolean => wire === null || listed(currentShownIdsNow(), wire, local)
+  return useSyncExternalStore(subscribeCurrentShown, answer, answer)
 }
 
 // === The writer (the Hosts page switch, H2d-2) ===

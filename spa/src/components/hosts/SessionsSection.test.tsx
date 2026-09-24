@@ -20,7 +20,11 @@ vi.mock('../../stores/useTabStore', () => ({
     getState: () => ({
       openSingletonTab: mockOpenSingletonTab,
       setActiveTab: mockSetActiveTab,
+      // The master's world, settled (the shown-hosts reader reads the tag: per-workbench shown hosts A2).
+      worldId: 'master',
+      worldEpoch: 0,
     }),
+    subscribe: () => () => {},
   },
 }))
 

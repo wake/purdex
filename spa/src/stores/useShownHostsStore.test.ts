@@ -23,7 +23,7 @@ const persisted = () => (JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOST
 
 beforeEach(() => {
   localStorage.clear()
-  useShownHostsStore.setState({ ids: [] })
+  useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
 })
 
 describe('useShownHostsStore — shape (§0.6: { ids }, no `all`)', () => {
@@ -31,14 +31,15 @@ describe('useShownHostsStore — shape (§0.6: { ids }, no `all`)', () => {
     expect(useShownHostsStore.getInitialState().ids).toEqual([])
   })
 
-  it('the state holds ids and the four actions — no all / showAll / setShown / addShown', () => {
-    expect(Object.keys(useShownHostsStore.getState()).sort()).toEqual(['hide', 'ids', 'rekey', 'show', 'toggle'])
+  it('the state holds ids, relabelStamp and the four actions — no all / showAll / setShown / addShown', () => {
+    expect(Object.keys(useShownHostsStore.getState()).sort()).toEqual(['hide', 'ids', 'rekey', 'relabelStamp', 'show', 'toggle'])
   })
 
-  it('persists under purdex-shown-hosts, exactly { ids }', () => {
+  it('persists under purdex-shown-hosts, exactly { ids, relabelStamp }', () => {
     expect(STORAGE_KEYS.SHOWN_HOSTS).toBe('purdex-shown-hosts')
+    useShownHostsStore.setState({ relabelStamp: 3 })
     useShownHostsStore.getState().show('d1_a')
-    expect(persisted()).toEqual({ ids: ['d1_a'] })
+    expect(persisted()).toEqual({ ids: ['d1_a'], relabelStamp: 3 })
   })
 
   it('is registered with syncManager under its storage key', () => {
@@ -66,13 +67,65 @@ describe('useShownHostsStore — merge', () => {
     expect(Object.hasOwn(useShownHostsStore.getState(), 'all')).toBe(false)
     expect(ids()).toEqual(['d1_a'])
     useShownHostsStore.getState().show('d1_b')
-    expect(persisted()).toEqual({ ids: ['d1_a', 'd1_b'] })
+    expect(persisted()).toEqual({ ids: ['d1_a', 'd1_b'], relabelStamp: 0 })
   })
 
   it('nothing stored keeps memory as it is', async () => {
     useShownHostsStore.setState({ ids: ['d1_a'] })
     await useShownHostsStore.persist.rehydrate()
     expect(ids()).toEqual(['d1_a'])
+  })
+})
+
+// The master's list and a promote (per-workbench shown hosts plan §2, fail closed 2): the reader trusts `ids` only while
+// `relabelStamp` equals `useLocalProfilesStore.relabelCount`. Device-local, never projected.
+describe('useShownHostsStore — relabelStamp', () => {
+  const writeLocalProfiles = (state: unknown) => localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify({ state, version: 1 }))
+
+  it('a stored stamp is kept as it is', async () => {
+    writeLocalProfiles({ relabelCount: 9 })
+    await rehydrateFrom({ ids: ['d1_a'], relabelStamp: 4 })
+    expect(useShownHostsStore.getState()).toMatchObject({ ids: ['d1_a'], relabelStamp: 4 })
+  })
+
+  it("a record without one (pre-upgrade data) is stamped once with the local profiles' stored relabelCount", async () => {
+    writeLocalProfiles({ relabelCount: 7 })
+    await rehydrateFrom({ ids: ['d1_a'] })
+    expect(useShownHostsStore.getState()).toMatchObject({ ids: ['d1_a'], relabelStamp: 7 })
+  })
+
+  it.each([['a string', '3'], ['negative', -1], ['a fraction', 1.5], ['null', null]])('a junk stamp (%s) is stamped the same way', async (_label, junk) => {
+    writeLocalProfiles({ relabelCount: 2 })
+    await rehydrateFrom({ ids: [], relabelStamp: junk })
+    expect(useShownHostsStore.getState().relabelStamp).toBe(2)
+  })
+
+  it('empty storage (nothing of this store stored): memory keeps its ids and is stamped with the stored relabelCount', async () => {
+    writeLocalProfiles({ relabelCount: 5 })
+    useShownHostsStore.setState({ ids: ['d1_a'], relabelStamp: 0 })
+    localStorage.removeItem(STORAGE_KEYS.SHOWN_HOSTS) // setState persisted it
+    await useShownHostsStore.persist.rehydrate()
+    expect(useShownHostsStore.getState()).toMatchObject({ ids: ['d1_a'], relabelStamp: 5 })
+  })
+
+  it('nothing stored anywhere, or local profiles unreadable / junk → 0 (the relabelCount such storage reads as)', async () => {
+    useShownHostsStore.setState({ relabelStamp: 9 })
+    localStorage.clear()
+    await useShownHostsStore.persist.rehydrate()
+    expect(useShownHostsStore.getState().relabelStamp).toBe(0)
+    localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, '{not json')
+    await rehydrateFrom({ ids: [] })
+    expect(useShownHostsStore.getState().relabelStamp).toBe(0)
+    writeLocalProfiles({ relabelCount: 'x' })
+    await rehydrateFrom({ ids: [] })
+    expect(useShownHostsStore.getState().relabelStamp).toBe(0)
+  })
+
+  it('an action carries the stamp through untouched', () => {
+    useShownHostsStore.setState({ relabelStamp: 4 })
+    useShownHostsStore.getState().show('d1_a')
+    useShownHostsStore.getState().rekey([['d1_a', 'd1_b']])
+    expect(useShownHostsStore.getState().relabelStamp).toBe(4)
   })
 })
 

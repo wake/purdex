@@ -647,7 +647,7 @@ describe('applySectionToStores — settings: shown hosts', () => {
     const payload = { ...settingsNow(), 'purdex-shown-hosts': { ids: ['d1_unknown', 'd1_a'] } } as SettingsPayload
     const outcome = await applySectionToStores('settings', payload, ctx)
     expect(ids()).toEqual(['d1_unknown', 'd1_a'])
-    expect(persistedOf(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ ids: ['d1_unknown', 'd1_a'] })
+    expect(persistedOf(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ ids: ['d1_unknown', 'd1_a'], relabelStamp: 0 }) // the stamp is kept by the apply and never sent
     expect(JSON.stringify(settingsNow()['purdex-shown-hosts'])).toBe(JSON.stringify(payload['purdex-shown-hosts']))
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })

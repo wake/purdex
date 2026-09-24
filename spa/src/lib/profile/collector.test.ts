@@ -223,6 +223,8 @@ describe('startCollector — changes that schedule nothing', () => {
   it('knownIds', () => expectIgnored(() => useNewTabLayoutStore.setState({ knownIds: ['x'] })))
   it('layout regions', () =>
     expectIgnored(() => useLayoutStore.setState({ regions: { ...useLayoutStore.getState().regions } })))
+  // per-workbench shown hosts §2: the shown store's `relabelStamp` is device-local, never projected
+  it('the shown store\'s relabelStamp', () => expectIgnored(() => useShownHostsStore.setState({ relabelStamp: 7 })))
 })
 
 describe('startCollector — tabs and workspaces', () => {
@@ -423,6 +425,16 @@ describe('startCollector — settings', () => {
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, unknown>
     expect(payload['purdex-shown-hosts']).toEqual({ ids: ['d1_unknown', 'h1'] })
+  })
+
+  it('relabelStamp never reaches the payload, and moving it builds the same hash (per-workbench shown hosts §2)', async () => {
+    useShownHostsStore.setState({ ids: ['d1_a'], relabelStamp: 0 })
+    const before = buildSectionPayload('settings')?.payload
+    useShownHostsStore.setState({ relabelStamp: 42 })
+    const after = buildSectionPayload('settings')?.payload
+    expect(after).toBeDefined()
+    expect(structuralKey(after)).toBe(structuralKey(before))
+    expect((after as Record<string, unknown>)['purdex-shown-hosts']).toEqual({ ids: ['d1_a'] })
   })
 
   it('a look write schedules `settings` and travels, its keys verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {
