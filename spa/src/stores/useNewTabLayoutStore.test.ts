@@ -338,7 +338,7 @@ describe('useNewTabLayoutStore', () => {
   })
 
   // Host ownership plan H1b T1 / §0.11: the re-resolve pass renames host-bearing column ids in every preset and in
-  // knownIds. A rename whose target is already placed keeps the FIRST occurrence in that preset (what the build,
+  // knownIds. A rename whose target is already placed keeps the WIRE-form one (the sync-id rule of host settings; the build,
   // mapping column by column, would have sent twice).
   describe('renameIds', () => {
     const W = 'sessions:d1_aaaaaaaaaaaaaaaa'
@@ -361,7 +361,7 @@ describe('useNewTabLayoutStore', () => {
       expect(s.knownIds).toEqual(['browser', 'sessions:loc1', 'headless:loc1'])
     })
 
-    it('a target already placed in a preset: the first occurrence is kept, the later one dropped (knownIds too)', () => {
+    it('a target already placed in a preset: the WIRE-form one wins its place, whichever comes first (knownIds too)', () => {
       useNewTabLayoutStore.setState({
         presets: {
           '3col': { enabled: true, columns: [[W], ['sessions:loc1'], []] },
@@ -373,9 +373,19 @@ describe('useNewTabLayoutStore', () => {
       useNewTabLayoutStore.getState().renameIds(map)
       const s = useNewTabLayoutStore.getState()
       expect(s.presets['3col'].columns).toEqual([['sessions:loc1'], [], []])
-      expect(s.presets['2col'].columns).toEqual([['sessions:loc1'], []])
+      expect(s.presets['2col'].columns).toEqual([[], ['sessions:loc1']])
       expect(s.presets['1col'].columns).toEqual([['browser', 'sessions:loc1']])
-      expect(s.knownIds).toEqual(['sessions:loc1', 'browser'])
+      expect(s.knownIds).toEqual(['browser', 'sessions:loc1'])
+    })
+
+    it('duplicates of one form only: the first is kept', () => {
+      const legacy = (id: string) => (id === 'sessions:old1' || id === 'sessions:old2' ? 'sessions:loc1' : id)
+      useNewTabLayoutStore.setState({
+        presets: { '3col': makePreset(false, 3), '2col': makePreset(false, 2), '1col': { enabled: true, columns: [['sessions:old2', 'browser', 'sessions:old1']] } },
+        knownIds: [],
+      })
+      useNewTabLayoutStore.getState().renameIds(legacy)
+      expect(useNewTabLayoutStore.getState().presets['1col'].columns).toEqual([['sessions:loc1', 'browser']])
     })
 
     it('nothing to rename → the same state object', () => {

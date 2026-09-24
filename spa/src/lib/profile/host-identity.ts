@@ -577,6 +577,44 @@ export function presetColumnIdFromWire(id: string, resolve: WireResolver): strin
   return mapColumnId(id, resolve) as string
 }
 
+/** Whether a host-bearing New Tab column id names its host by a sync id (`sessions:d1_…`) — the wire form. */
+export function isSyncColumnId(id: string): boolean {
+  const colon = id.indexOf(':')
+  return colon >= 0 && (HOST_BEARING_COLUMN_PREFIXES as readonly string[]).includes(id.slice(0, colon)) && isSyncId(id.slice(colon + 1))
+}
+
+/**
+ * `lists` (one preset's columns, or `[knownIds]`) with every id mapped, and where two ids map to one target that
+ * `collides` accepts, only ONE kept, at its own place: the first whose SOURCE id is a wire-form column
+ * (`isSyncColumnId`), else the first (host ownership plan §0.11 — the rule of host settings, where the sync-id entry
+ * wins: the wire form is what the SOT already has; a local-id copy is this device's stopgap). Lists and ids are
+ * walked in order, column by column. The re-resolve pass (renaming) and the settings build (local → wire) both use
+ * it, so what the build sends is what the pass leaves.
+ */
+export function mapColumnsKeepingOne(lists: readonly (readonly string[])[], map: (id: string) => string, collides: (target: string) => boolean): string[][] {
+  const winner = new Map<string, { index: number; wire: boolean }>()
+  let index = 0
+  for (const list of lists) {
+    for (const id of list) {
+      const target = map(id)
+      if (collides(target)) {
+        const wire = isSyncColumnId(id)
+        const had = winner.get(target)
+        if (had === undefined || (wire && !had.wire)) winner.set(target, { index, wire })
+      }
+      index++
+    }
+  }
+  index = 0
+  return lists.map((list) =>
+    list.flatMap((id) => {
+      const target = map(id)
+      const at = index++
+      return !collides(target) || winner.get(target)?.index === at ? [target] : []
+    }),
+  )
+}
+
 function mapPresets<P>(presets: P, map: IdMap): P {
   if (!isRecord(presets)) return presets
   const out: Record<string, unknown> = {}

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { LayoutPreset, PresetKey } from '../lib/resolve-preset'
+import { mapColumnsKeepingOne } from '../lib/profile/host-identity'
 
 export type { LayoutPreset, PresetKey }
 
@@ -52,9 +53,9 @@ interface State {
   /**
    * Rename ids through `map` in every preset and in knownIds, in place (the
    * host re-resolve pass: `sessions:<wire id>` → `sessions:<local id>`). Where
-   * a renamed id lands on one already present, the FIRST occurrence in that
-   * preset (column by column) — or in knownIds — is kept and the later one
-   * dropped (host ownership plan §0.11). Nothing renamed → no `set`.
+   * a renamed id lands on one already present, ONE is kept in that preset —
+   * or in knownIds — at its own place: the wire-form one (`sessions:d1_…`),
+   * else the first (host ownership plan §0.11). Nothing renamed → no `set`.
    */
   renameIds: (map: (id: string) => string) => void
   reset: () => void
@@ -201,8 +202,8 @@ function placeIn(preset: LayoutPreset, id: string, colIdx: number, rowIdx: numbe
 
 /**
  * `renameIds` as a pure step: the presets and knownIds with every id renamed
- * through `map`, a target already present earlier in the same list dropped
- * (first occurrence kept); `null` when nothing is renamed. An untouched preset
+ * through `map`, where two land on one target only one kept (the wire-form
+ * one, else the first — `mapColumnsKeepingOne`); `null` when nothing is renamed. An untouched preset
  * keeps its object.
  */
 export function renameLayoutIds(
@@ -217,23 +218,16 @@ export function renameLayoutIds(
     if (to !== id) targets.add(to)
   }
   if (targets.size === 0) return null
-  // Renamed per list; a target already seen earlier in the same list is dropped.
-  const renameIn = (seen: Set<string>) => (id: string): string[] => {
-    const to = map(id)
-    if (!targets.has(to)) return [id]
-    if (seen.has(to)) return []
-    seen.add(to)
-    return [to]
-  }
+  // Renamed per list; two ids renamed onto one target keep one — the wire-form source, else the first.
+  const collides = (id: string) => targets.has(id)
   const presets = { ...state.presets }
   for (const key of keys) {
     const src = state.presets[key]
-    const next = renameIn(new Set())
-    const columns = src.columns.map((col) => col.flatMap(next))
+    const columns = mapColumnsKeepingOne(src.columns, map, collides)
     const same = columns.every((col, i) => col.length === src.columns[i].length && col.every((id, j) => id === src.columns[i][j]))
     if (!same) presets[key] = { enabled: src.enabled, columns }
   }
-  return { presets, knownIds: state.knownIds.flatMap(renameIn(new Set())) }
+  return { presets, knownIds: mapColumnsKeepingOne([state.knownIds], map, collides)[0] }
 }
 
 export const useNewTabLayoutStore = create<State>()(
