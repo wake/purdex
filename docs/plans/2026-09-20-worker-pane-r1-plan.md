@@ -350,7 +350,13 @@ export function foldPlan(src: FoldSource): FoldPlan
   written); **`counts only the lines it can reveal`** (3-line `text` with
   `totalLines: 900` → `hiddenLines === 0` and `daemonTruncated === true`,
   **not** `hiddenLines === 897` — the #11 guard); **`uses N2's count to pick
-  the fold level`** (the same input still folds: `collapsible === true`);
+  the fold level`** (a **10-line** body with `totalLines: 900` →
+  `previewLines.length === 3`: ten local lines alone would be medium and
+  preview six, so a preview of three proves the level came from N2's count.
+  The 3-line body an earlier draft used here could not tell level 1 from
+  level 2 at all — its preview was the whole body either way — and once
+  `collapsible` stopped counting `daemonTruncated` it could not even stay
+  collapsible. The case was named after something it never checked.);
   **`hides nothing when it shows the body whole`** (3-line body →
   `collapsible === false` **and** `hiddenLines === 0`);
   **`does not offer to expand an empty daemon-truncated body`**
