@@ -27,6 +27,8 @@ import {
   makeWireResolver,
   mergeAliases,
   MAX_HOST_ALIASES,
+  mapColumnsKeepingOne,
+  presetColumnIdToWire,
   presetColumnsToWire,
   type HostIdentity,
   type WireResolver,
@@ -212,6 +214,16 @@ export function wireResolverOf(s: HostsSource, identity: HostIdentity = identity
   return makeWireResolver({ identity, rows: buildHostsSection(s, identity).hosts })
 }
 
+/**
+ * Everything the settings translation read from the host store: the identity (pairs + conflict), the live
+ * hosts (the New Tab columns kept), and the aliases (legacy ids resolved). Equal before and after an await →
+ * what was written is still what this apply would write now. A rename or a runtime change moves none of it.
+ */
+export function hostResolverSignature(state: HostsSource): string {
+  const aliases = Object.keys(state.hosts).sort().map((id) => [id, state.hosts[id].syncAliases ?? []])
+  return JSON.stringify([identityOfSync(state.hosts).signature, state.hostOrder.filter((id) => Object.hasOwn(state.hosts, id)), aliases])
+}
+
 // === Section builders ===
 
 /**
@@ -341,6 +353,26 @@ export const WORKSPACE_SCOPED_SETTINGS: { storageKey: SettingsStorageKey; field:
  * master's world. Filtered down to nothing the field is `{}`, exactly what a
  * store with no entry builds. `applySettings` is the other half.
  */
+/**
+ * local → wire over the presets, where a host's block held under its local id AND its wire id — the bootstrap placed
+ * the local one for a host added before its daemonId was known, the wire one arrived by sync, both held until the
+ * re-resolve pass renames the wire one (host ownership plan §0.11) — is built ONCE, at the wire-form one's place
+ * (`mapColumnsKeepingOne`, the rule the pass keeps too): the same bytes before, during and after the pass, nothing
+ * pushed. A preset that is not the expected shape is translated as before.
+ */
+function presetColumnsToWireOnce(presets: Record<string, unknown>, identity: HostIdentity): Record<string, unknown> {
+  const out = presetColumnsToWire(presets, identity)
+  const map = (id: string) => presetColumnIdToWire(id, identity)
+  for (const [key, preset] of Object.entries(presets)) {
+    const built = out[key]
+    if (!isRecord(preset) || !Array.isArray(preset.columns) || !isRecord(built)) continue
+    const columns = preset.columns as unknown[]
+    if (!columns.every((col) => Array.isArray(col) && col.every((id) => typeof id === 'string'))) continue
+    built.columns = mapColumnsKeepingOne(columns as string[][], map)
+  }
+  return out
+}
+
 export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspaceIds: ReadonlySet<string>, identity?: HostIdentity): SettingsPayload {
   refuseConflict(identity)
   const payload = project(stores, PROJECTIONS.settings) as SettingsPayload
@@ -349,7 +381,7 @@ export function buildSettingsSection(stores: SettingsBuildInput, masterWorkspace
     const hostSettings = payload['purdex-host-settings']
     if (hostSettings !== undefined && isRecord(hostSettings.hosts)) hostSettings.hosts = hostSettingsToWire(hostSettings.hosts, identity)
     const newtab = payload['purdex-newtab-layout']
-    if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = presetColumnsToWire(newtab.presets, identity)
+    if (newtab !== undefined && isRecord(newtab.presets)) newtab.presets = presetColumnsToWireOnce(newtab.presets, identity)
   }
   const scoped = payload[WORKSPACE_SCOPED_SETTINGS.storageKey]?.[WORKSPACE_SCOPED_SETTINGS.field]
   // `project` returns fresh structure, so deleting from it touches no store.

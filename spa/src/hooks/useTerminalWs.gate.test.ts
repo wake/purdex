@@ -10,7 +10,7 @@ import { createElement, type RefObject } from 'react'
 import { render, act, waitFor } from '@testing-library/react'
 import type { Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
-import { useTerminalWs } from './useTerminalWs'
+import { canReconnectTerminal, useTerminalWs } from './useTerminalWs'
 import { useHostStore } from '../stores/useHostStore'
 
 const HOST = 'h1'
@@ -134,5 +134,46 @@ describe('useTerminalWs attach gate', () => {
     seedHost(true)
     renderTerminalPane(HOST, 'abc123')
     await waitFor(() => expect(ctor).toHaveBeenCalledTimes(1))
+  })
+
+  // Host ownership (#1400 attacker review, deferred to H1b): the first connect checks that the host exists BEFORE it
+  // asks for a ticket, as a reconnect does — a ticket for a host this device lacks would come from another daemon.
+  describe('a host this device does not have', () => {
+    it.each(['gone-host', 'toString', '__proto__'])('%s: the first connect asks for no ticket and opens no socket', async (id) => {
+      useHostStore.setState({
+        hosts: { [HOST]: { id: HOST, name: 'Host', ip: '1.2.3.4', port: 7860, order: 0 } },
+        hostOrder: [HOST],
+        activeHostId: HOST,
+        // a stale runtime row keeps the attach gate open for that id
+        runtime: { [HOST]: { status: 'connected', attachReady: true }, [id]: { status: 'connected', attachReady: true } } as never,
+      })
+      const getTicket = vi.fn(async () => 'tk')
+      renderTerminalPane(id, 'abc123', getTicket)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(getTicket).not.toHaveBeenCalled()
+      expect(ctor).not.toHaveBeenCalled()
+    })
+
+    it.each(['gone-host', 'toString', 'constructor', '__proto__'])('canReconnectTerminal(%s) is false for a host not configured, even with an open gate', (id) => {
+      useHostStore.setState({ hosts: {}, hostOrder: [], runtime: { [id]: { status: 'connected', attachReady: true } } as never })
+      expect(canReconnectTerminal(id)).toBe(false)
+    })
+
+    it('a host named like a prototype member, deleted while its ticket is in flight, is not attached', async () => {
+      const id = 'toString'
+      useHostStore.setState({
+        hosts: { [id]: { id, name: 'Odd', ip: '1.2.3.4', port: 7860, order: 0 } },
+        hostOrder: [id],
+        activeHostId: id,
+        runtime: { [id]: { status: 'connected', attachReady: true } } as never,
+      })
+      let releaseTicket!: (t: string) => void
+      const getTicket = () => new Promise<string>((r) => { releaseTicket = r })
+      renderTerminalPane(id, 'abc123', getTicket)
+      act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
+      releaseTicket('tk')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(ctor).not.toHaveBeenCalled()
+    })
   })
 })

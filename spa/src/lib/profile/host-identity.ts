@@ -502,23 +502,29 @@ type IdMap = (id: string) => string
 
 const FILE_SOURCE_KINDS: ReadonlySet<string> = new Set(['editor', 'image-preview', 'pdf-preview'])
 
-/** One pane's content with its host-bearing field mapped; the same object when nothing applies. */
+/**
+ * One pane's content with its host-bearing field mapped; the same object when nothing applies OR the mapped id is
+ * the one it already had — so a mapping that moves nothing leaves the tree untouched (host ownership plan §0.12).
+ */
 function mapContent(content: unknown, map: IdMap): unknown {
   if (!isRecord(content)) return content
   const kind = content.kind
   if (kind === 'tmux-session' && typeof content.hostId === 'string') {
-    return { ...content, hostId: map(content.hostId) }
+    const hostId = map(content.hostId)
+    return hostId === content.hostId ? content : { ...content, hostId }
   }
   if (typeof kind === 'string' && FILE_SOURCE_KINDS.has(kind)) {
     const source = content.source
     if (isRecord(source) && source.type === 'daemon' && typeof source.hostId === 'string') {
-      return { ...content, source: { ...source, hostId: map(source.hostId) } }
+      const hostId = map(source.hostId)
+      return hostId === source.hostId ? content : { ...content, source: { ...source, hostId } }
     }
     return content
   }
   // '' is "no hint", not a host.
   if (kind === 'execution' && typeof content.host === 'string' && content.host !== '') {
-    return { ...content, host: map(content.host) }
+    const host = map(content.host)
+    return host === content.host ? content : { ...content, host }
   }
   return content
 }
@@ -531,8 +537,10 @@ function mapLayout(layout: unknown, map: IdMap): unknown {
     const content = mapContent(pane.content, map)
     return content === pane.content ? layout : { ...layout, pane: { ...pane, content } }
   }
-  if (layout.type === 'split' && Array.isArray(layout.children)) {
-    return { ...layout, children: layout.children.map((child) => mapLayout(child, map)) }
+  const before = layout.children
+  if (layout.type === 'split' && Array.isArray(before)) {
+    const children = before.map((child) => mapLayout(child, map))
+    return children.every((child, i) => child === before[i]) ? layout : { ...layout, children }
   }
   return layout
 }
@@ -597,6 +605,48 @@ export function presetColumnIdToWire(id: string, identity: HostIdentity): string
 /** wire → local for one New Tab column id. */
 export function presetColumnIdFromWire(id: string, resolve: WireResolver): string {
   return mapColumnId(id, resolve) as string
+}
+
+/** Whether a host-bearing New Tab column id names its host by a sync id (`sessions:d1_…`) — the wire form. */
+export function isSyncColumnId(id: string): boolean {
+  const colon = id.indexOf(':')
+  return colon >= 0 && (HOST_BEARING_COLUMN_PREFIXES as readonly string[]).includes(id.slice(0, colon)) && isSyncId(id.slice(colon + 1))
+}
+
+/**
+ * `lists` (one preset's columns, or `[knownIds]`) with every id mapped. Where two DIFFERENT ids map to one target —
+ * a host's block under its local id and under its wire id — only ONE is kept, at its own place: the first whose
+ * source is a wire-form column (`isSyncColumnId`), else the first (host ownership plan §0.11 — the rule of host
+ * settings, where the sync-id entry wins: the wire form is what the SOT already has; a local-id copy is this
+ * device's stopgap). An id repeated as it is, with nothing else mapping onto it, is left repeated: no mapping made
+ * that, and older builds sent it so. Lists and ids are walked in order, column by column. The re-resolve pass
+ * (renaming) and the settings build (local → wire) both use it, so what the build sends is what the pass leaves.
+ */
+export function mapColumnsKeepingOne(lists: readonly (readonly string[])[], map: (id: string) => string): string[][] {
+  const sources = new Map<string, Set<string>>()
+  const winner = new Map<string, { index: number; wire: boolean }>()
+  let index = 0
+  for (const list of lists) {
+    for (const id of list) {
+      const target = map(id)
+      let from = sources.get(target)
+      if (from === undefined) sources.set(target, (from = new Set()))
+      from.add(id)
+      const wire = isSyncColumnId(id)
+      const had = winner.get(target)
+      if (had === undefined || (wire && !had.wire)) winner.set(target, { index, wire })
+      index++
+    }
+  }
+  const collides = (target: string) => (sources.get(target)?.size ?? 0) > 1
+  index = 0
+  return lists.map((list) =>
+    list.flatMap((id) => {
+      const target = map(id)
+      const at = index++
+      return !collides(target) || winner.get(target)?.index === at ? [target] : []
+    }),
+  )
 }
 
 function mapPresets<P>(presets: P, map: IdMap): P {

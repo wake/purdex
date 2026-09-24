@@ -6,6 +6,8 @@ import { useHostStore } from '../stores/useHostStore'
 import { clearNewTabRegistry, registerNewTabProvider, registerNewTabProviderSource } from '../lib/new-tab-registry'
 import { createHostSessionProviderSource } from '../lib/session-new-tab-providers'
 import { createHeadlessProviderSource } from '../lib/headless-new-tab-providers'
+import { syncIdOfSync } from '../lib/profile/host-identity'
+import { runHostReresolve } from '../lib/host-reresolve'
 
 vi.mock('./useSessionWatch', () => ({ useSessionWatch: vi.fn() }))
 
@@ -77,6 +79,68 @@ describe('useNewTabBootstrap — per-host session blocks', () => {
     const s = useNewTabLayoutStore.getState()
     expect(s.presets).toEqual(layout.presets)
     expect(s.knownIds).toEqual(layout.knownIds)
+  })
+
+  // Host ownership §3.3 / plan §0.3: the pass is asynchronous (lock, retry), so this bootstrap can see a new host
+  // before its column — kept verbatim under the host's wire id — is rewritten. It must not place a second one.
+  it('a host arrives whose sessions:/headless:<wire id> is already placed → no second column; after the pass, exactly one', () => {
+    registerNewTabProviderSource(createHeadlessProviderSource())
+    const DAEMON = 'air-lab:26bbbb'
+    const W = syncIdOfSync(DAEMON)
+    useNewTabLayoutStore.setState({
+      presets: {
+        '3col': { enabled: false, columns: [[`sessions:${W}`], [], [`headless:${W}`]] },
+        '2col': { enabled: false, columns: [[`sessions:${W}`], []] },
+        '1col': { enabled: true, columns: [['browser', 'sessions:h1', 'headless:h1', `sessions:${W}`]] },
+      },
+      knownIds: ['browser', 'sessions:h1', 'headless:h1', `sessions:${W}`, `headless:${W}`],
+    })
+    renderHook(() => useNewTabBootstrap())
+    act(() => {
+      useHostStore.setState({ hosts: { h1: host('h1', 'mlab', 0), h2: { ...host('h2', 'air', 1), daemonId: DAEMON } }, hostOrder: ['h1', 'h2'] })
+    })
+    const placed = () => (['3col', '2col', '1col'] as const).flatMap((k) => useNewTabLayoutStore.getState().presets[k].columns.flat())
+    expect(placed()).not.toContain('sessions:h2')
+    expect(placed()).not.toContain('headless:h2')
+    expect(useNewTabLayoutStore.getState().knownIds).not.toContain('sessions:h2')
+
+    act(() => { runHostReresolve() })
+    const s = useNewTabLayoutStore.getState()
+    expect(s.presets['1col'].columns).toEqual([['browser', 'sessions:h1', 'headless:h1', 'sessions:h2']])
+    expect(s.presets['3col'].columns).toEqual([['sessions:h2'], [], ['headless:h2']])
+    expect(s.knownIds.filter((id) => id.endsWith(':h2'))).toEqual(['sessions:h2', 'headless:h2'])
+    expect(JSON.stringify(s.presets)).not.toContain(W)
+  })
+
+  // PR #1406 attacker medium (TOCTOU): the wire column lands AFTER the bootstrap looked at the layout and before it
+  // placed — here from inside the registry read (the step between the two), as a write of another window's
+  // rehydrate would. The check runs inside the placing action, on the latest state: still no second block.
+  it('a wire column landing between the check and the placement: no second block', () => {
+    const DAEMON = 'air-lab:26dddd'
+    const W = syncIdOfSync(DAEMON)
+    let armed = false
+    let reads = 0
+    registerNewTabProviderSource({
+      id: 'lander',
+      getProviders: () => {
+        // the run's second registry read (after the stale scan) is its placement read
+        if (armed && ++reads === 2) {
+          const st = useNewTabLayoutStore.getState()
+          useNewTabLayoutStore.setState({ presets: { ...st.presets, '1col': { enabled: true, columns: [[...st.presets['1col'].columns[0], `sessions:${W}`]] } } })
+        }
+        return []
+      },
+      subscribe: () => () => {},
+      ownsId: () => false,
+    })
+    renderHook(() => useNewTabBootstrap())
+    armed = true
+    act(() => {
+      useHostStore.setState({ hosts: { h1: host('h1', 'mlab', 0), h2: { ...host('h2', 'air', 1), daemonId: DAEMON } }, hostOrder: ['h1', 'h2'] })
+    })
+    expect(reads).toBeGreaterThanOrEqual(2)
+    expect(all1col()).toContain(`sessions:${W}`)
+    expect(all1col()).not.toContain('sessions:h2')
   })
 
   it('does not prune or place host blocks until the host store has hydrated', () => {

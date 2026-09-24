@@ -49,6 +49,7 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { Tab } from '../../types/tab'
 import { deleteHostCascade } from '../host-lifecycle'
+import { scheduleHostReresolve } from '../host-reresolve'
 import { generateId } from '../id'
 import { registerLocale, unregisterLocale } from '../locale-registry'
 import type { LocaleDef } from '../locale-registry'
@@ -60,7 +61,7 @@ import { identityOfSync, MAX_HOST_ALIASES } from './host-identity'
 import { hashSection, structuralKey } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
 import { sectionKind, workspaceIdOf } from './projections'
-import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, normaliseAliases, wireResolverOf } from './sections'
+import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, hostResolverSignature, normaliseAliases, wireResolverOf } from './sections'
 import type { SettingsBuildInput } from './sections'
 import type { HostsPayload, ProfileSectionKey, SettingsPayload, SettingsStorageKey, TabsPayload, WorkspacesPayload } from './types'
 
@@ -494,15 +495,6 @@ const SCOPE_MOVED = Symbol('the master workspace set moved')
 /** Thrown — and caught — inside `applySettingsSection`: what the wire → local translation read moved under the apply. */
 const HOSTS_MOVED = Symbol('the host identity moved')
 
-/**
- * Everything the settings translation read from the host store: the identity (pairs + conflict), the live
- * hosts (the New Tab columns kept), and the aliases (legacy ids resolved). Equal before and after an await →
- * what was written is still what this apply would write now. A rename or a runtime change moves none of it.
- */
-function resolverSignature(state: { hosts: Record<string, HostConfig>; hostOrder: string[] }): string {
-  const aliases = Object.keys(state.hosts).sort().map((id) => [id, state.hosts[id].syncAliases ?? []])
-  return JSON.stringify([identityOfSync(state.hosts).signature, state.hostOrder.filter((id) => Object.hasOwn(state.hosts, id)), aliases])
-}
 
 const sameIds = (a: ReadonlySet<string> | null, b: ReadonlySet<string>): boolean => a !== null && a.size === b.size && [...a].every((id) => b.has(id))
 
@@ -534,7 +526,7 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
   if (!isWellFormedSection('settings', upcast)) return invalid('malformed', 'malformed settings payload')
   // wire → local, through the hosts as they are now (the executor pulls `settings` only once `hosts` is up to date).
   const hostState = useHostStore.getState()
-  const hostsSeen = resolverSignature(hostState)
+  const hostsSeen = hostResolverSignature(hostState)
   const resolve = wireResolverOf(hostState)
   if (resolve === null) return IDENTITY_CONFLICT()
   const payload = settingsFromWire(upcast as SettingsPayload, resolve)
@@ -562,7 +554,7 @@ async function applySettingsSection(incoming: unknown): Promise<ApplyOutcome> {
       if (!sameIds(masterWorkspaceIds(), masterIds)) throw SCOPE_MOVED
       // Same for the hosts (R1, PR #1365): a daemonId learned, a host added / removed, a conflict appearing — the
       // part written so far was resolved through a resolver that no longer holds.
-      if (resolverSignature(useHostStore.getState()) !== hostsSeen) throw HOSTS_MOVED
+      if (hostResolverSignature(useHostStore.getState()) !== hostsSeen) throw HOSTS_MOVED
     }
   } catch (err) {
     // A settings write is more than fields: registries, <html> theme / lang, the
@@ -714,16 +706,25 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
  * orders that too (no `settings` pull, and no push, before `workspaces` is synced).
  */
 export async function applySectionToStores(key: ProfileSectionKey, payload: unknown | null, ctx: ApplyContext): Promise<ApplyOutcome> {
-  switch (sectionKind(key)) {
-    case 'hosts':
-      return applyHostsSection(payload, ctx)
-    case 'settings':
-      return applySettingsSection(payload)
-    case 'workspaces':
-      return applyWorkspacesSection(payload)
-    case 'tabs':
-      return applyTabsSection(key, payload)
-    default:
-      return invalid('unknown-section', `unknown section key: ${String(key)}`)
+  try {
+    switch (sectionKind(key)) {
+      case 'hosts':
+        return await applyHostsSection(payload, ctx)
+      case 'settings':
+        return await applySettingsSection(payload)
+      case 'workspaces':
+        return await applyWorkspacesSection(payload)
+      case 'tabs':
+        return await applyTabsSection(key, payload)
+      default:
+        return invalid('unknown-section', `unknown section key: ${String(key)}`)
+    }
+  } finally {
+    // At the SETTLEMENT boundary, whatever the outcome — a throw included (host ownership plan §0.2): a rollback
+    // (`setState(old)`) may have put back a wire id the re-resolve pass had already resolved, and an applied payload
+    // may carry one this device can resolve. The pass is idempotent and writes nothing when nothing moves. Only
+    // SCHEDULED here — it runs in a microtask and cannot throw into this `finally`, so the outcome or error the
+    // caller gets is always the apply's own.
+    scheduleHostReresolve()
   }
 }

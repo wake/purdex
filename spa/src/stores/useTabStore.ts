@@ -8,6 +8,7 @@ import { contentMatches, isFilePaneContent } from '../lib/pane-utils'
 import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/binding'
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { UntitledDocumentState } from '../types/tab'
+import { layoutFromWire } from '../lib/profile/host-identity'
 
 // --- Persist migration helpers ---
 // These functions handle legacy persisted data whose shape no longer matches
@@ -556,6 +557,29 @@ interface TabState {
   markTerminatedForGeneration: (hostId: string, sessionCode: string, expectedTmuxInstance: string, reason: TerminatedReason) => void
   adoptTmuxInstance: (hostId: string, sessionCode: string, tmuxInstance: string) => void
   markHostTerminated: (hostId: string, reason: TerminatedReason) => void
+  /**
+   * Map every pane's host reference — `tmux-session.hostId`, a daemon file
+   * source's `hostId`, a non-empty `execution.host` — through `map`, in every
+   * tab (the host re-resolve pass, host ownership spec §3.3). An untouched tab
+   * keeps its object; nothing changed → no `set` at all.
+   */
+  rewritePaneHosts: (map: (hostId: string) => string) => void
+}
+
+/**
+ * `tabs` with every pane's host reference mapped (`rewritePaneHosts`, and the
+ * host re-resolve pass, which needs the next state before it writes). An
+ * untouched tab keeps its object; nothing changed → `tabs` itself.
+ */
+export function rewriteTabsHosts(tabs: Record<string, Tab>, map: (hostId: string) => string): Record<string, Tab> {
+  let next: Record<string, Tab> | null = null
+  for (const [id, tab] of Object.entries(tabs)) {
+    const layout = layoutFromWire(tab.layout, map)
+    if (layout === tab.layout) continue
+    next ??= { ...tabs }
+    next[id] = { ...tab, layout }
+  }
+  return next ?? tabs
 }
 
 export const useTabStore = create<TabState>()(
@@ -959,6 +983,12 @@ export const useTabStore = create<TabState>()(
             }
           }
           return changed ? { tabs } : state
+        }),
+
+      rewritePaneHosts: (map) =>
+        set((state) => {
+          const tabs = rewriteTabsHosts(state.tabs, map)
+          return tabs === state.tabs ? state : { tabs }
         }),
     }),
     {
