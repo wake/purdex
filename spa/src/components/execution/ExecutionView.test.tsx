@@ -4,6 +4,7 @@ import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { NexApiError } from '../../lib/nex/types'
 import { useSessionStore } from '../../stores/useSessionStore'
@@ -47,6 +48,8 @@ beforeEach(() => {
   vi.mocked(api.terminateExecution).mockReset().mockResolvedValue(undefined)
   useExecutionStore.getState().setSummary(H, E, summary() as never)
   useExecutionStore.getState().setHistoryLoaded(H, E, true)
+  // Take back / Take to terminal re-point the pane only on a host shown in the workbench (host ownership H2d-3).
+  useShownHostsStore.setState({ ids: [H] })
 })
 
 describe('ExecutionView', () => {

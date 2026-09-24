@@ -3,12 +3,16 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SessionPickerList } from './SessionPickerList'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { syncIdOfSync } from '../lib/profile/host-identity'
 
 const HOST_A = 'host-a'
 const HOST_B = 'host-b'
 
 beforeEach(() => {
   cleanup()
+  // The tests that predate shown hosts (H2d-3) show both hosts.
+  useShownHostsStore.setState({ ids: [HOST_A, HOST_B] })
   useHostStore.setState({
     hosts: {},
     hostOrder: [],
@@ -185,5 +189,44 @@ describe('SessionPickerList', () => {
     expect(screen.getByText('dev-session')).toBeInTheDocument()
     expect(screen.queryByText('Host B')).not.toBeInTheDocument()
     expect(screen.queryByText('cloud-session')).not.toBeInTheDocument()
+  })
+})
+
+// Host ownership H2d-3 T1 — the terminated-pane picker offers no host hidden in this workbench (the one opener rule,
+// `isRefShown`, in wire space).
+describe('SessionPickerList — hidden hosts (H2d-3)', () => {
+  const DAEMON = 'air-lab:26aaaa'
+
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: {
+        [HOST_A]: { id: HOST_A, name: 'Host A', ip: '1.2.3.4', port: 7860, order: 0, daemonId: DAEMON },
+        [HOST_B]: { id: HOST_B, name: 'Host B', ip: '5.6.7.8', port: 7860, order: 1 },
+      },
+      hostOrder: [HOST_A, HOST_B],
+      runtime: { [HOST_A]: { status: 'connected' }, [HOST_B]: { status: 'connected' } },
+    })
+    useSessionStore.setState({
+      sessions: {
+        [HOST_A]: [{ code: 'dev001', name: 'dev-session', cwd: '/tmp', mode: 'terminal' }],
+        [HOST_B]: [{ code: 'cld001', name: 'cloud-session', cwd: '/tmp', mode: 'terminal' }],
+      },
+    })
+  })
+
+  it('omits a hidden host; offers a shown one listed by its d1_ id', () => {
+    useShownHostsStore.setState({ ids: [syncIdOfSync(DAEMON)] })
+    render(<SessionPickerList onSelect={vi.fn()} />)
+    expect(screen.getByText('Host A')).toBeInTheDocument()
+    expect(screen.getByText('dev-session')).toBeInTheDocument()
+    expect(screen.queryByText('Host B')).not.toBeInTheDocument()
+    expect(screen.queryByText('cloud-session')).not.toBeInTheDocument()
+  })
+
+  it('every connected host hidden → the empty message', () => {
+    useShownHostsStore.setState({ ids: [] })
+    render(<SessionPickerList onSelect={vi.fn()} />)
+    expect(screen.getByText('No available connections')).toBeInTheDocument()
+    expect(screen.queryByText('dev-session')).not.toBeInTheDocument()
   })
 })

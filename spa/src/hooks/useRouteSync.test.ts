@@ -15,6 +15,8 @@ import { resetLastHostSelection } from '../components/HostPage'
 import { useRouteSync } from './useRouteSync'
 import { useTabStore } from '../stores/useTabStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { syncIdOfSync } from '../lib/profile/host-identity'
 import { getPrimaryPane } from '../lib/pane-tree'
 import type { Tab } from '../types/tab'
 
@@ -53,6 +55,7 @@ describe('useRouteSync', () => {
   beforeEach(() => {
     resetStore()
     resetLastHostSelection()
+    useShownHostsStore.setState({ ids: ['h1'] }) // predates shown hosts (H2d-3): h1 shown
   })
 
   it('singleton route /history opens a history tab', () => {
@@ -200,9 +203,65 @@ describe('useRouteSync', () => {
       hosts: { h1: { id: 'h1', name: 'H1', ip: '1', port: 1, order: 0 } } as never,
       hostOrder: ['h1'], activeHostId: 'h1', runtime: {},
     })
+    // H2d-3: a ref that is not a local host is openable only when listed.
+    useShownHostsStore.setState({ ids: ['h1', 'unknown-host'] })
     const mem = memoryLocation({ path: '/execution/unknown-host/exc_1', record: true })
     renderHook(() => useRouteSync(), { wrapper: createWrapper(mem) })
     const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
     expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'unknown-host' })
+  })
+})
+
+// Host ownership H2d-3 T4 — the `/execution/<host>/<execution id>` route naming a host that is not shown in this
+// workbench (hidden, or a ref that is neither a local host nor listed) lands on the Hosts page: no execution tab.
+describe('useRouteSync — /execution on a host not shown (H2d-3)', () => {
+  const DAEMON = 'air-lab:26aaaa'
+  const X = syncIdOfSync('nowhere:000000') // d1_X: not a local host
+  const kinds = () => Object.values(useTabStore.getState().tabs).map((t) => getPrimaryPane(t.layout).content.kind)
+  const run = (path: string) => renderHook(() => useRouteSync(), { wrapper: createWrapper(memoryLocation({ path, record: true })) })
+
+  beforeEach(() => {
+    resetStore()
+    resetLastHostSelection()
+    useHostStore.setState({
+      hosts: {
+        h1: { id: 'h1', name: 'H1', ip: '1', port: 1, order: 0, daemonId: DAEMON },
+        h2: { id: 'h2', name: 'H2', ip: '2', port: 1, order: 1 },
+      } as never,
+      hostOrder: ['h1', 'h2'], activeHostId: 'h2', runtime: {},
+    })
+    useShownHostsStore.setState({ ids: ['h2'] }) // h1 hidden
+  })
+
+  it('a hidden host → the Hosts page on that host, no execution tab', () => {
+    run('/execution/h1/exc_1')
+    expect(kinds()).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe('h1')
+  })
+
+  it('a hostless route whose fallback hostOrder[0] is hidden → the Hosts page, no execution tab', () => {
+    run('/execution/exc_1')
+    expect(kinds()).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe('h1')
+  })
+
+  it('/execution/d1_X/<id> with d1_X neither a local host nor listed → the Hosts page, no tab', () => {
+    run(`/execution/${X}/exc_1`)
+    expect(kinds()).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe('h2')
+  })
+
+  it('/execution/d1_X/<id> with d1_X listed → the execution tab as today', () => {
+    useShownHostsStore.setState({ ids: ['h2', X] })
+    run(`/execution/${X}/exc_1`)
+    const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
+    expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: X })
+  })
+
+  it('a shown host (listed by its d1_ id) → the execution tab as today', () => {
+    useShownHostsStore.setState({ ids: [syncIdOfSync(DAEMON)] })
+    run('/execution/h1/exc_1')
+    const tab = useTabStore.getState().tabs[useTabStore.getState().activeTabId!]
+    expect(getPrimaryPane(tab.layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
   })
 })
