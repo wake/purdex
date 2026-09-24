@@ -81,7 +81,8 @@ export default function ToolDiffView({ diff, foldKey }: Props) {
   const budget = expanded || !plan.collapsible ? rows.length : plan.previewLines.length
 
   // No hunks and nothing dropped → nothing to say. No hunks but truncated →
-  // the daemon dropped every hunk, and that note is the only thing worth showing.
+  // the daemon dropped every hunk, and what is left — the stat and the
+  // truncation note — is the only account of the edit there will be.
   if (diff.hunks.length === 0 && !diff.truncated) return null
 
   const visible = spendBudget(hunks, budget)
