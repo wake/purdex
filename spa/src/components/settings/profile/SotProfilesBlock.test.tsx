@@ -2,6 +2,8 @@ import { useLayoutEffect } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import en from '../../../locales/en.json'
+import zhTW from '../../../locales/zh-TW.json'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { SotProfilesBlock } from './SotProfilesBlock'
 import { useSotProfiles } from './useSotProfiles'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -142,6 +144,26 @@ describe('delete — only what the FETCHED index shows nobody attached to', () =
     fireEvent.click(screen.getByTestId('profile-sot-delete-cancel'))
     expect(screen.queryByTestId('profile-sot-delete-dialog')).toBeNull()
     expect(deleteProfile).not.toHaveBeenCalled()
+  })
+
+  it('the ask says the host addresses and access tokens older versions stored go with it (host ownership H3b) — in the UI language', async () => {
+    rows(profile('p2', 'experiment'))
+    render(<Harness />)
+    await ready()
+    fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+    expect(screen.getByTestId('profile-sot-delete-dialog')).toHaveTextContent(en['settings.profile.sot.delete_body'])
+    expect(en['settings.profile.sot.delete_body']).toBe('Every device loses this profile on the host. What each device holds locally stays. Host addresses and access tokens that older versions of Purdex stored in it are deleted with it. This cannot be undone.')
+    cleanup()
+    useI18nStore.getState().setLocale('zh-TW')
+    try {
+      render(<Harness />)
+      await ready()
+      fireEvent.click(screen.getByTestId('profile-sot-delete-p2'))
+      expect(screen.getByTestId('profile-sot-delete-dialog')).toHaveTextContent(zhTW['settings.profile.sot.delete_body'])
+      expect(zhTW['settings.profile.sot.delete_body']).toBe('所有裝置都會失去主機上的這份工作台，各裝置本機的內容不受影響。舊版 Purdex 存在裡面的主機位址與存取 token 也會一併刪除。這個動作無法復原。')
+    } finally {
+      useI18nStore.getState().setLocale('en')
+    }
   })
 
   it('Confirm deletes it on the host, busy meanwhile, and the list is fetched again', async () => {

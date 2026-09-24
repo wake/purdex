@@ -463,6 +463,9 @@ describe('step 4 — a pull: the host verified (host-sync-identity §8, D3); no 
     await choosePull()
     expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveAttribute('data-reason', reason)
     expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent(en[`settings.profile.wizard.pull.${reason.replace(/-/g, '_')}` as keyof typeof en])
+    // D3: the premise is said for what it guards now — the tabs and settings the profile names, not a host list
+    expect(screen.getByTestId('profile-wizard-pull-refused')).toHaveTextContent('the tabs and settings it names')
+    expect(screen.getByTestId('profile-wizard-pull-refused')).not.toHaveTextContent('host list')
     expect(screen.getByTestId('profile-wizard-next')).toBeDisabled()
     click('profile-wizard-direction-push')
     expect(screen.getByTestId('profile-wizard-next')).not.toBeDisabled()
