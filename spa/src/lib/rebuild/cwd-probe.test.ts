@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { probeSessionCwd, probeMissingCwds, resetCwdProbes } from './cwd-probe'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { createTab, type TmuxSessionContent } from '../../types/tab'
 import { fetchSessionCwd } from '../host-api'
 
@@ -69,6 +70,7 @@ beforeEach(() => {
   useHostStore.setState({ runtime: {} })
   setGate('h1', true)
   setGate('h2', true)
+  useShownHostsStore.setState({ ids: ['h1', 'h2'] }) // shown in this workbench (H2d-4)
 })
 
 describe('probeSessionCwd', () => {
@@ -280,6 +282,26 @@ describe('probeMissingCwds', () => {
     await vi.waitFor(() => expect(recordOf(b.id)?.cwd).toBe('/w/def456'))
     expect(recordOf(a.id)?.cwd).toBe('/w/abc123')
     expect(recordOf(foreign.id)?.cwd).toBeUndefined()
+    expect(fetchSessionCwd).toHaveBeenCalledTimes(2)
+  })
+})
+
+// Host ownership H2d-4 (§0.21): the sweep asks nothing about the panes of a host hidden in this workbench.
+describe('probeMissingCwds on a hidden host', () => {
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: [] })
+  })
+
+  it('hidden → no request; shown → one per binding', () => {
+    seed()
+    const tabs = useTabStore.getState().tabs
+    const t2 = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'zzz999', mode: 'terminal', cachedName: 'z', tmuxInstance: '222:2000' })
+    useTabStore.setState({ tabs: { ...tabs, [t2.id]: t2 }, tabOrder: [...Object.keys(tabs), t2.id] })
+    vi.mocked(fetchSessionCwd).mockReturnValue(new Promise(() => {}))
+    probeMissingCwds('h1')
+    expect(fetchSessionCwd).not.toHaveBeenCalled()
+    useShownHostsStore.setState({ ids: ['h1'] })
+    probeMissingCwds('h1')
     expect(fetchSessionCwd).toHaveBeenCalledTimes(2)
   })
 })
