@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { isValidDaemonId } from '../lib/daemon-id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
+import { wireIdOfHost } from '../lib/profile/host-identity'
+import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
 import {
   clampHostAlpha,
   HOST_COLOR_ALPHA_DEFAULTS,
@@ -141,6 +143,12 @@ interface HostState {
    * each ends verified. The payload's name and look are written to both (before H2c, spec §6.4.7).
    */
   applyHostTransfer: (change: TransferChange) => TransferApplyResult
+  /*
+   * The look writers (H2c-2, spec §4.2 / §4.4): each writes the look store's entry under the host's CURRENT wire id
+   * (`wireIdOfHost`) and never `HostConfig`. An absent entry is first seeded from the host's `HostConfig` look, so a
+   * first edit of one field keeps the others; clearing removes the group's keys (plan §0.5 option A — no tombstone).
+   * An unknown host, an invalid value, or a write that changes nothing writes nothing.
+   */
   /** Legacy entry point kept for the current color UI: writes `colors.console.main` (alpha preserved, default 100); `null` clears the console set. */
   setHostColor: (hostId: string, color: string | null) => void
   /**
@@ -165,6 +173,15 @@ interface HostState {
    * string to remove both keys. An invalid weight is ignored; unknown hosts are no-ops.
    */
   setHostIcon: (hostId: string, icon: string | null, weight?: IconWeight) => void
+  /** Rename in this workbench: trimmed; a blank name is a no-op. `HostConfig.name` is untouched. */
+  setHostName: (hostId: string, name: string) => void
+  /**
+   * "Hosts added later" (spec §4.3, plan §0.19): writes the host's `HostConfig` look into the look store under its
+   * current wire id — only when no entry is there (a workbench look already under that key wins). Called by the add
+   * paths (the add-host dialog, `registerLocalHost`), never by `addHost` (also the undo of a deletion).
+   */
+  seedHostLook: (hostId: string) => void
+  /** Seeds the look of a host it CREATES (`seedHostLook`); re-registering an endpoint seeds nothing. */
   registerLocalHost: (result: { url: string; token: string; hostname: string }) => string
   removeHost: (hostId: string) => void
   reorderHosts: (orderedIds: string[]) => void
@@ -174,6 +191,7 @@ interface HostState {
   getDaemonBase: (hostId: string) => string
   getWsBase: (hostId: string) => string
   getAuthHeaders: (hostId: string) => Record<string, string>
+  /** Test isolation: the default state, and an empty look store (plan §0.18). */
   reset: () => void
 }
 
@@ -368,6 +386,123 @@ function transferPatch(
   return { patch: { hosts: working.hosts, hostOrder, runtime: working.runtime }, created, overwritten }
 }
 
+/* ─── Look writes (H2c-2): pure over a look entry ─── */
+
+/** The look `HostConfig` holds, present fields only — the seed of an absent look entry (spec §4.3). */
+function lookSeedOf(host: HostConfig): HostLookEntry {
+  const { name, colors, color, icon, iconWeight } = host
+  const seed: HostLookEntry = {}
+  if (name !== undefined) seed.name = name
+  if (colors !== undefined) seed.colors = colors
+  if (color !== undefined) seed.color = color
+  if (icon !== undefined) seed.icon = icon
+  if (iconWeight !== undefined) seed.iconWeight = iconWeight
+  return seed
+}
+
+/** One look edit: the next entry, or `null` when the edit changes nothing (or is invalid) — nothing is written. */
+type LookEdit = (look: HostLookEntry) => HostLookEntry | null
+
+/**
+ * Applies `edit` to the look of `hostId` in the look store: key = the host's current wire id; base = the entry, or
+ * the `HostConfig` seed when there is none. Unknown host / `null` edit → no write. Never writes `HostConfig`.
+ */
+function editHostLook(hosts: Record<string, HostConfig>, hostId: string, edit: LookEdit): void {
+  const host = Object.hasOwn(hosts, hostId) ? hosts[hostId] : undefined
+  if (!host) return
+  useHostLookStore.getState().patchLook(wireIdOfHost(host), (current) => {
+    const base = current ?? lookSeedOf(host)
+    const next = edit(base)
+    // The same object back from `patchLook`'s callback writes nothing: an edit that changes nothing is no write.
+    return next === null || sameValue(next, base) ? current : next
+  })
+}
+
+/** Structural equality of two JSON-shaped values (key order ignored). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  const ka = Object.keys(a)
+  const kb = Object.keys(b)
+  if (ka.length !== kb.length) return false
+  return ka.every((k) => Object.hasOwn(b, k) && sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+}
+
+/** The look the colour / icon writers build on — the entry, else the seed (what the selector shows, option A). */
+function currentLookOf(hosts: Record<string, HostConfig>, hostId: string): HostLookEntry | undefined {
+  const host = Object.hasOwn(hosts, hostId) ? hosts[hostId] : undefined
+  if (!host) return undefined
+  const looks = useHostLookStore.getState().looks
+  const key = wireIdOfHost(host)
+  return Object.hasOwn(looks, key) ? looks[key] : lookSeedOf(host)
+}
+
+/** `setHostColorLayer`'s rules over a look (see the action's doc); `null` = no change. */
+function withColorLayer(look: HostLookEntry, mode: HostColorMode, layer: HostColorLayerName, value: HostColorLayer | null): HostLookEntry | null {
+  if (!isHostColorMode(mode) || !HOST_COLOR_LAYER_NAMES.includes(layer)) return null
+  const colors = { ...look.colors }
+  const existing = colors[mode]
+
+  if (value === null) {
+    if (layer === 'main') {
+      // Clearing a mode that has no set is a no-op — unless it is `console` on a
+      // look with a legacy color and no console set, where "clear" must drop
+      // the legacy color regardless of other mode sets.
+      if (!existing && !(mode === 'console' && 'color' in look)) return null
+      delete colors[mode]
+    } else if (existing && layer in existing) {
+      const { [layer]: _dropped, ...rest } = existing
+      colors[mode] = rest as HostColorSet
+    } else return null
+  } else {
+    if (typeof value !== 'object' || value === null) return null
+    const { alpha: rawAlpha, color: rawColor } = value as { alpha?: unknown; color?: unknown }
+    if (typeof rawAlpha !== 'number' || !Number.isFinite(rawAlpha)) return null
+    const alpha = clampHostAlpha(rawAlpha)
+    let color: string | undefined
+    if (rawColor !== undefined) {
+      if (!isValidHostColor(rawColor)) return null
+      color = rawColor.toLowerCase()
+    }
+    if (layer === 'main') {
+      if (!color) return null
+      colors[mode] = { ...existing, main: { color, alpha } }
+    } else {
+      if (!existing) return null
+      colors[mode] = { ...existing, [layer]: color ? { color, alpha } : { alpha } }
+    }
+  }
+
+  const { color: _legacy, ...next } = look
+  delete next.colors
+  if (Object.keys(colors).length > 0) next.colors = colors
+  return next
+}
+
+/** `setHostIcon`'s rules over a look; `null` = no change. */
+function withIcon(look: HostLookEntry, icon: string | null, weight: IconWeight | undefined): HostLookEntry | null {
+  if (icon === null || (typeof icon === 'string' && icon.trim() === '')) {
+    if (!('icon' in look) && !('iconWeight' in look)) return null
+    const { icon: _i, iconWeight: _w, ...rest } = look
+    return rest
+  }
+  // Anything that is not a real catalog name is dropped, not normalized:
+  // `WorkspaceIcon` would render it as literal text in the host badge.
+  if (!isPhosphorIconName(icon)) return null
+  const nextWeight = isIconWeight(weight) ? weight : look.iconWeight
+  if (look.icon === icon && look.iconWeight === nextWeight) return null
+  const next: HostLookEntry = { ...look, icon }
+  if (isIconWeight(weight)) next.iconWeight = weight
+  return next
+}
+
+/** The rename over a look; `null` = no change (blank, or the same name). */
+function withName(look: HostLookEntry, name: string): HostLookEntry | null {
+  const trimmed = typeof name === 'string' ? name.trim() : ''
+  if (trimmed === '' || look.name === trimmed) return null
+  return { ...look, name: trimmed }
+}
+
 /** Exact-endpoint lookup shared by registerLocalHost and the Local daemon UI
  *  (spec §3.3). Strict ip+port equality — 127.0.0.1 and a Tailscale IP are
  *  two endpoints, never merged. */
@@ -444,70 +579,26 @@ export const useHostStore = create<HostState>()(
           clearHostColorMode(hostId, 'console')
           return
         }
-        const alpha = hosts[hostId]?.colors?.console?.main.alpha ?? HOST_COLOR_ALPHA_DEFAULTS.main
+        // The alpha the user sees now: the look's (entry, else the HostConfig seed — what `hostLookOf` shows).
+        const alpha = currentLookOf(hosts, hostId)?.colors?.console?.main.alpha ?? HOST_COLOR_ALPHA_DEFAULTS.main
         setHostColorLayer(hostId, 'console', 'main', { color, alpha })
       },
 
       setHostColorLayer: (hostId, mode, layer, value) =>
-        set((state) => {
-          const host = state.hosts[hostId]
-          if (!host || !isHostColorMode(mode) || !HOST_COLOR_LAYER_NAMES.includes(layer)) return state
-          const colors = { ...host.colors }
-          const existing = colors[mode]
-
-          if (value === null) {
-            if (layer === 'main') {
-              // Clearing a mode that has no set is a no-op — unless it is `console` on a
-              // host with a legacy color and no console set, where "clear" must drop
-              // the legacy color regardless of other mode sets.
-              if (!existing && !(mode === 'console' && 'color' in host)) return state
-              delete colors[mode]
-            } else if (existing && layer in existing) {
-              const { [layer]: _dropped, ...rest } = existing
-              colors[mode] = rest as HostColorSet
-            } else return state
-          } else {
-            if (typeof value !== 'object' || value === null) return state
-            const { alpha: rawAlpha, color: rawColor } = value as { alpha?: unknown; color?: unknown }
-            if (typeof rawAlpha !== 'number' || !Number.isFinite(rawAlpha)) return state
-            const alpha = clampHostAlpha(rawAlpha)
-            let color: string | undefined
-            if (rawColor !== undefined) {
-              if (!isValidHostColor(rawColor)) return state
-              color = rawColor.toLowerCase()
-            }
-            if (layer === 'main') {
-              if (!color) return state
-              colors[mode] = { ...existing, main: { color, alpha } }
-            } else {
-              if (!existing) return state
-              colors[mode] = { ...existing, [layer]: color ? { color, alpha } : { alpha } }
-            }
-          }
-
-          const { color: _legacy, ...next } = host as HostConfig
-          delete next.colors
-          if (Object.keys(colors).length > 0) next.colors = colors
-          return { hosts: { ...state.hosts, [hostId]: next as HostConfig } }
-        }),
+        editHostLook(get().hosts, hostId, (look) => withColorLayer(look, mode, layer, value)),
 
       clearHostColorMode: (hostId, mode) => get().setHostColorLayer(hostId, mode, 'main', null),
 
-      setHostIcon: (hostId, icon, weight) =>
-        set((state) => {
-          const host = state.hosts[hostId]
-          if (!host) return state
-          if (icon === null || (typeof icon === 'string' && icon.trim() === '')) {
-            const { icon: _i, iconWeight: _w, ...rest } = host
-            return { hosts: { ...state.hosts, [hostId]: rest } }
-          }
-          // Anything that is not a real catalog name is dropped, not normalized:
-          // `WorkspaceIcon` would render it as literal text in the host badge.
-          if (!isPhosphorIconName(icon)) return state
-          const next: HostConfig = { ...host, icon }
-          if (isIconWeight(weight)) next.iconWeight = weight
-          return { hosts: { ...state.hosts, [hostId]: next } }
-        }),
+      setHostIcon: (hostId, icon, weight) => editHostLook(get().hosts, hostId, (look) => withIcon(look, icon, weight)),
+
+      setHostName: (hostId, name) => editHostLook(get().hosts, hostId, (look) => withName(look, name)),
+
+      seedHostLook: (hostId) => {
+        const hosts = get().hosts
+        const host = Object.hasOwn(hosts, hostId) ? hosts[hostId] : undefined
+        if (!host) return
+        useHostLookStore.getState().putLooksIfAbsent({ [wireIdOfHost(host)]: lookSeedOf(host) })
+      },
 
       // Idempotent registration used by the local-daemon installer
       // (spec 2026-09-14 §3.4): one host per endpoint, and a token is only
@@ -522,7 +613,9 @@ export const useHostStore = create<HostState>()(
           if (!existing.token) get().updateHost(existing.id, { token })
           return existing.id
         }
-        return get().addHost({ name: hostname, ip, port, token })
+        const id = get().addHost({ name: hostname, ip, port, token })
+        get().seedHostLook(id)
+        return id
       },
 
       removeHost: (hostId) =>
@@ -594,6 +687,7 @@ export const useHostStore = create<HostState>()(
       reset: () => {
         warnedMismatch.clear()
         set(createDefaultState())
+        useHostLookStore.setState({ looks: {} })
       },
     }),
     {

@@ -19,12 +19,15 @@ vi.mock('../../features/workspace/lib/icon-path-cache', () => ({
 
 import { HostIconField } from './HostIconField'
 import { useHostStore } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { hostLookOf } from '../../lib/host-look'
 import en from '../../locales/en.json'
 
 const HOST_ID = 'h1'
 
+// H2c-2: the icon is written to the look store — read what the selector shows.
 function host() {
-  return useHostStore.getState().hosts[HOST_ID]
+  return hostLookOf(HOST_ID)
 }
 
 function iconButtons() {
@@ -36,6 +39,7 @@ function openPicker() {
 }
 
 beforeEach(() => {
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'H', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],

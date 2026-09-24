@@ -31,6 +31,7 @@ export function OverviewSection({ hostId }: Props) {
   const look = useHostLook(hostId)
   const runtime = useHostStore((s) => s.runtime[hostId])
   const updateHost = useHostStore((s) => s.updateHost)
+  const setHostName = useHostStore((s) => s.setHostName)
   const hostOrder = useHostStore((s) => s.hostOrder)
 
   const [info, setInfo] = useState<HostInfo | null>(null)
@@ -145,7 +146,7 @@ export function OverviewSection({ hostId }: Props) {
         <EditableField
           label={t('hosts.name')}
           value={look.name ?? ''}
-          onSave={(v) => updateHost(hostId, { name: v })}
+          onSave={(v) => setHostName(hostId, v)}
         />
         <EditableField
           label={t('hosts.ip')}

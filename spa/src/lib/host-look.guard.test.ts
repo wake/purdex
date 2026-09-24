@@ -643,18 +643,15 @@ describe('host-look guard — declaration keys are unique', { timeout: 60_000 },
 /**
  * The only production reads of a look field off `HostConfig`: file →
  * declaration key → field → exact count. Colour / icon measured at H2a T4,
- * `name` at H2b-1 T1.
+ * `name` at H2b-1 T1; `stores/useHostStore.ts` re-measured at H2c-2 T2.
  * A widening also edits the pinned copy below — same file, so a tripwire made
  * visible in review, not an enforcement boundary (see the header).
  */
 export const ALLOWLIST: Allowlist = {
-  // the store: its writers read the current value to build the next one
+  // the store: since H2c-2 its writers edit the look store's entry and read `HostConfig` only to seed an absent
+  // entry — the one destructure in `lookSeedOf` (the writers' own reads are on the look entry, not `HostConfig`)
   'stores/useHostStore.ts': {
-    'useHostStore.persist(arg0).setHostColor': { colors: 1 }, // the current console alpha
-    // `{ ...host.colors }`, the `{ color: _legacy }` drop
-    'useHostStore.persist(arg0).setHostColorLayer.set(arg0)': { colors: 1, color: 1 },
-    // the `{ icon: _i, iconWeight: _w }` drop
-    'useHostStore.persist(arg0).setHostIcon.set(arg0)': { icon: 1, iconWeight: 1 },
+    lookSeedOf: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
   },
   // the persisted-state sanitiser
   'lib/host-color.ts': {
@@ -693,9 +690,7 @@ describe('host-look guard — repo', { timeout: 60_000 }, () => {
   it('the allowlist is pinned verbatim (a widening shows up as a second, explicit edit here)', () => {
     expect(ALLOWLIST).toEqual({
       'stores/useHostStore.ts': {
-        'useHostStore.persist(arg0).setHostColor': { colors: 1 },
-        'useHostStore.persist(arg0).setHostColorLayer.set(arg0)': { colors: 1, color: 1 },
-        'useHostStore.persist(arg0).setHostIcon.set(arg0)': { icon: 1, iconWeight: 1 },
+        lookSeedOf: { name: 1, colors: 1, color: 1, icon: 1, iconWeight: 1 },
       },
       'lib/host-color.ts': {
         sanitizeHostConfig: { colors: 1, color: 1, icon: 1, iconWeight: 1 },

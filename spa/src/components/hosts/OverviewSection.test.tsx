@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { OverviewSection } from './OverviewSection'
 import { useHostStore, type HostRuntime } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 // HostIconField renders a Phosphor icon whose weight loader fetches
@@ -29,6 +30,7 @@ const HOST_ID = 'test-host'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test', ip: '1.2.3.4', port: 7860, order: 0, token: 'purdex_testtoken' } },
     hostOrder: [HOST_ID],
@@ -66,6 +68,17 @@ describe('OverviewSection', () => {
   it('renders host name heading', async () => {
     render(<OverviewSection hostId={HOST_ID} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Test' })).toBeInTheDocument()
+  })
+
+  it('rename writes the look store (H2c-2): the heading follows, HostConfig.name is untouched', async () => {
+    render(<OverviewSection hostId={HOST_ID} />)
+    fireEvent.click(screen.getByText('Test', { selector: 'span.cursor-pointer' }))
+    const input = screen.getByDisplayValue('Test')
+    fireEvent.change(input, { target: { value: '  Renamed  ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(useHostLookStore.getState().looks[HOST_ID]?.name).toBe('Renamed')
+    expect(useHostStore.getState().hosts[HOST_ID].name).toBe('Test')
+    expect(await screen.findByRole('heading', { level: 2, name: 'Renamed' })).toBeInTheDocument()
   })
 
   it('renders the host icon field right below the host color field', async () => {

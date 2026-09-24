@@ -185,12 +185,15 @@ export function AddHostDialog({ onClose }: Props) {
       } else {
         const addNew = () => {
           commitRef.current = null
-          return addHost({
+          const id = addHost({
             name: trimmedIp,
             ip: trimmedIp,
             port: portNum,
             token: trimmedToken || undefined,
           })
+          // "Hosts added later" (spec §4.3, plan §0.19): the look entry under the new host's wire id, only when absent.
+          useHostStore.getState().seedHostLook(id)
+          return id
         }
         // Pairing route: from here on the rotated token is saved even if the dialog is dismissed.
         if (!useToken) commitRef.current = addNew

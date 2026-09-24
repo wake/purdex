@@ -2,15 +2,19 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { HostColorField } from './HostColorField'
 import { useHostStore } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
+import { hostLookOf } from '../../lib/host-look'
 import { HOST_COLOR_PRESETS } from '../../lib/host-color'
 
 const HOST_ID = 'h1'
-const host = () => useHostStore.getState().hosts[HOST_ID]
+// H2c-2: colours are written to the look store — read what the selector shows.
+const host = () => hostLookOf(HOST_ID)
 const layerBtn = (l: 'main' | 'middle' | 'light') => screen.getByTestId(`host-color-layer-${l}`)
 const modeBtn = (name: string) => screen.getByRole('button', { name })
 const BLUE = { color: '#3b82f6', alpha: 100 }
 
 beforeEach(() => {
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'H', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],
