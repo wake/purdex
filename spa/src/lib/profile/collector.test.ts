@@ -628,6 +628,19 @@ describe('startCollector — host identity', () => {
     expect(payloadOf('hosts')).toContain(`"${WIRE}":`)
   })
 
+  it('a rename + recolour reports `hosts` only and notifies no look-store subscriber (host ownership §4.4)', async () => {
+    useHostLookStore.getState().putLook('h1', { name: 'look' })
+    const spy = vi.fn()
+    const unsub = useHostLookStore.subscribe(spy)
+    start()
+    useHostStore.setState({ hosts: { h1: { ...host('h1', 'renamed'), color: '#abcdef', icon: 'Laptop' } } })
+    await vi.advanceTimersByTimeAsync(500)
+    unsub()
+    expect(keys()).toEqual(['hosts'])
+    expect(JSON.stringify(reports[0].payload)).not.toContain('"look"')
+    expect(spy).not.toHaveBeenCalled()
+  })
+
   it('a host-store change that does not move the identity (a rename) schedules `hosts` only', async () => {
     start()
     useHostStore.setState({ hosts: { h1: host('h1', 'renamed') } })

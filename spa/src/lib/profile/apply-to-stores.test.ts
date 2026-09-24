@@ -358,6 +358,26 @@ describe('applySectionToStores — hosts', () => {
   })
 })
 
+// host ownership §4.4: `hosts` apply still updates HostConfig name / colours / icon (the device fallback) and never
+// touches the workbench's look store.
+describe('applySectionToStores — hosts never touch the look store (host ownership §4.4)', () => {
+  it('an apply that renames and recolours a host leaves the look store the SAME object, and no subscriber of it is called', async () => {
+    useHostLookStore.setState({ looks: { [M]: { name: 'look-name', icon: 'Laptop' }, d1_far: { name: 'far' } } })
+    const before = useHostLookStore.getState()
+    const spy = vi.fn()
+    const unsub = useHostLookStore.subscribe(spy)
+    const payload = hostsPayloadOf([host(M, { name: 'renamed', colors: { console: { main: { color: '#abcdef', alpha: 100 } } }, icon: 'Cube' }), host(H2, { ip: '10.0.0.2', order: 1 })])
+
+    const outcome = await applySectionToStores('hosts', payload, ctx)
+    unsub()
+
+    expect(outcome).toMatchObject({ ok: true })
+    expect(useHostStore.getState().hosts[M]).toMatchObject({ name: 'renamed', icon: 'Cube' }) // HostConfig IS updated (the fallback)
+    expect(useHostLookStore.getState()).toBe(before)
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
 describe('applySectionToStores — hosts: removing a host is the app\'s own host removal', () => {
   /** Both hosts own data in every per-host store, and there are live panes on each. */
   function seedHostWorld(): void {
