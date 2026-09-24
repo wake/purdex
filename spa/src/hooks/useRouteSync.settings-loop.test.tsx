@@ -133,6 +133,7 @@ describe('useRouteSync × GlobalSettingsPage in the real TabContent shell (#1326
     clearSettingsSectionRegistry()
     clearContributions()
     clearModuleRegistry()
+    useShownHostsStore.setState({ ids: ['h'] }) // shown: a hidden host's pane is gated (H2d-4)
     registerModule({ id: 'settings', name: 'Settings', panes: [{ kind: 'settings', component: SettingsPage }] })
     registerModule({
       id: 'session',
@@ -251,6 +252,7 @@ describe('useRouteSync cold start: deep link vs persisted active tab (#1326)', (
     clearSettingsSectionRegistry()
     clearContributions()
     clearModuleRegistry()
+    useShownHostsStore.setState({ ids: ['h'] }) // shown: a hidden host's pane is gated (H2d-4)
     registerModule({ id: 'settings', name: 'Settings', panes: [{ kind: 'settings', component: SettingsPage }] })
     registerModule({
       id: 'session',

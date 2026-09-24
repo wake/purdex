@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { resolvePaneRenderer } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves, findPane } from '../lib/pane-tree'
 import { compositeKey } from '../lib/composite-key'
@@ -18,9 +18,13 @@ import {
   isModuleEnabledIn,
 } from '../stores/useModuleEnabledStore'
 import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
-import type { PaneLayout, Pane, TmuxSessionContent } from '../types/tab'
+import { HostHiddenPane } from './HostHiddenPane'
+import { usePaneHostShown } from '../lib/shown-hosts'
+import type { PaneLayout, Pane, PaneContent, TmuxSessionContent } from '../types/tab'
 
 const notReady = () => false
+/** What a split node hands the pane gate: not host-bearing, so always shown. */
+const NO_HOST: PaneContent = { kind: 'dashboard' }
 
 interface Props {
   layout: PaneLayout
@@ -52,8 +56,14 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   // live agent type and the host's readiness.
   // Non-session leaves and split nodes subscribe to constants.
   const leafContent = layout.type === 'leaf' ? layout.pane.content : null
+  // The pane gate (host ownership H2d-4, §0.21): a leaf whose host is hidden in this workbench renders
+  // `HostHiddenPane` instead of its renderer and opens no connection. LIVE (unlike `pinnedEnabled`): a shown-list
+  // write, a synced apply or a daemonId learned re-renders the leaf; showing the host mounts the renderer again with
+  // the same pane. Read before the nex subscriptions: a hidden tmux leaf has no host for them — no `ensure` fetch,
+  // no "Hand to nex" item.
+  const hostShown = usePaneHostShown(leafContent ?? NO_HOST)
   const tmux: TmuxSessionContent | null = leafContent?.kind === 'tmux-session' ? leafContent : null
-  const tmuxHostId = tmux?.hostId ?? null
+  const tmuxHostId = hostShown ? tmux?.hostId ?? null : null
   const tmuxCode = tmux?.sessionCode ?? ''
   const agentType = useAgentStore((s) => (tmuxHostId ? s.agentTypes[compositeKey(tmuxHostId, tmuxCode)] : undefined))
   const handoffReady = useNexHostStore(tmuxHostId ? selectHandoffReady(tmuxHostId) : notReady)
@@ -62,31 +72,45 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   useEffect(() => {
     if (tmuxHostId) void useNexHostStore.getState().ensure(tmuxHostId)
   }, [tmuxHostId])
-  const handoffCandidate = tmux ? isHandoffCandidate(tmux, { agentType, handoffReady }) : false
+  // Hiding the host closes a handoff dialog opened on this pane: the pane is gated, so nothing may be handed off
+  // from it. A request already confirmed is not abortable — `handToNex` re-checks before it writes the pane (H2d-3).
+  useEffect(() => {
+    if (!hostShown) setHandoff(null)
+  }, [hostShown])
+  const handoffCandidate = tmux && tmuxHostId ? isHandoffCandidate(tmux, { agentType, handoffReady }) : false
 
   if (layout.type === 'leaf') {
-    const resolution = resolvePaneRenderer(
-      layout.pane.content.kind,
-      isEnabledSnapshot,
-    )
-    if (resolution.kind === 'unknown') {
-      return (
-        <div className="flex-1 flex items-center justify-center text-text-muted">
-          No renderer for &quot;{resolution.paneKind}&quot;
-        </div>
-      )
-    }
-    let Component: ComponentType<{ pane: Pane; isActive: boolean }>
-    if (resolution.kind === 'render') {
-      Component = resolution.component
+    let body: ReactNode
+    if (!hostShown) {
+      // Gated: nothing of the renderer mounts (no terminal / ticket / WS, no probe effect, no Rebuild / picker, no
+      // execution history / attach / SSE / lease). The header and the context menu stay, so the pane can be closed
+      // or detached by hand; the tab store is never written here.
+      body = <HostHiddenPane content={layout.pane.content} />
     } else {
-      // resolution.kind === 'disabled' — render the module-supplied custom
-      // component or fall back to the generic placeholder, ignoring pane /
-      // isActive (the disabled state has nothing meaningful to do with them).
-      const Custom = resolution.customComponent ?? DisabledModulePlaceholder
-      const moduleId = resolution.moduleId
-      const paneKind = resolution.paneKind
-      Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
+      const resolution = resolvePaneRenderer(
+        layout.pane.content.kind,
+        isEnabledSnapshot,
+      )
+      if (resolution.kind === 'unknown') {
+        return (
+          <div className="flex-1 flex items-center justify-center text-text-muted">
+            No renderer for &quot;{resolution.paneKind}&quot;
+          </div>
+        )
+      }
+      let Component: ComponentType<{ pane: Pane; isActive: boolean }>
+      if (resolution.kind === 'render') {
+        Component = resolution.component
+      } else {
+        // resolution.kind === 'disabled' — render the module-supplied custom
+        // component or fall back to the generic placeholder, ignoring pane /
+        // isActive (the disabled state has nothing meaningful to do with them).
+        const Custom = resolution.customComponent ?? DisabledModulePlaceholder
+        const moduleId = resolution.moduleId
+        const paneKind = resolution.paneKind
+        Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
+      }
+      body = <Component pane={layout.pane} isActive={isActive} />
     }
     // Right-click interception: editor(Monaco) panes are never intercepted so
     // their native menu survives; Shift+right-click is a universal escape hatch
@@ -196,7 +220,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             }}
             swapTargets={swapTargets}
           />
-          <Component pane={layout.pane} isActive={isActive} />
+          {body}
           {paneMenu}
           {handoffDialog}
         </div>
@@ -212,7 +236,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
     // onContextMenu.
     return (
       <div className="h-full w-full" onContextMenu={handleContextMenu}>
-        <Component pane={layout.pane} isActive={isActive} />
+        {body}
         {paneMenu}
         {handoffDialog}
       </div>
