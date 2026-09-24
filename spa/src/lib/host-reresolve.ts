@@ -147,6 +147,17 @@ function commitAll(writes: readonly StoreWrite[]): 'ok' | 'write-failed' | 'roll
   }
 }
 
+/**
+ * The pass's core with an EXPLICIT map — a key of `map` is rewritten to its value, every other id is left alone —
+ * over the same stores and with the same collision rules (plan §0.11). The host deletion's direction, local id →
+ * wire id (host ownership spec §3.4; the reverse is the pass itself). Synchronous, and it takes no lock and re-reads
+ * nothing: the caller decides both (the deletion is lock-free — plan §0.1). `ok` when nothing needed writing too.
+ * Never throws.
+ */
+export function rewriteHostRefs(map: Readonly<Record<string, string>>): 'ok' | 'write-failed' | 'rollback-failed' {
+  return commitAll(planRewrite((id) => (Object.hasOwn(map, id) ? map[id] : id)))
+}
+
 /** A persisted store as far as the re-read needs it. */
 interface Rereadable {
   getState: () => unknown

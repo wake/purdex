@@ -19,6 +19,7 @@ import {
   HOST_RERESOLVE_RETRY_MS,
   __resetHostReresolveForTest,
   requestHostReresolve,
+  rewriteHostRefs,
   runHostReresolve,
   startHostReresolve,
 } from './host-reresolve'
@@ -570,5 +571,125 @@ describe('startHostReresolve (the triggers)', () => {
     stop = null
     addHostX()
     expect(hostIdsIn(useTabStore.getState().tabs)).toContain(WIRE)
+  })
+})
+
+// Plan H1c T1: the pass's core with an EXPLICIT map — the deletion direction (local id → wire id, host ownership spec
+// §3.4). Same stores, same collision rules as the pass (plan §0.11), no lock, no re-read: the caller decides.
+describe('rewriteHostRefs (explicit map — the deletion direction)', () => {
+  /** Every store holds refs on `LOCAL` (on screen, parked master, parked slave), plus `UNKNOWN` ones. */
+  function seedLocal(): void {
+    useTabStore.setState({
+      tabs: {
+        t1: tab('t1', { type: 'split', id: 's', direction: 'h', sizes: [50, 50], children: [leaf('p1', tmux(LOCAL)), leaf('p2', tmux(UNKNOWN))] }),
+        t2: tab('t2', leaf('p3', { kind: 'editor', source: { type: 'daemon', hostId: LOCAL }, filePath: '/a' })),
+        t3: tab('t3', leaf('p4', { kind: 'execution', executionId: 'e', host: LOCAL })),
+        t4: tab('t4', leaf('p5', { kind: 'execution', executionId: 'legacy', host: '' })),
+      },
+      tabOrder: ['t1', 't2', 't3', 't4'],
+    })
+    useLocalProfilesStore.setState({
+      parkedMaster: world({ m1: tab('m1', leaf('pm', tmux(LOCAL))), m2: tab('m2', leaf('pm2', tmux(UNKNOWN))) }),
+      slaves: {
+        on: { id: 'on', name: 'On', createdAt: 1, world: null },
+        s1: { id: 's1', name: 'S', createdAt: 1, world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: LOCAL })) }) },
+      },
+    })
+    useHostSettingsStore.setState({ hosts: { [LOCAL]: { editor: { homePath: '/l' } }, [UNKNOWN]: { editor: { homePath: '/u' } } } })
+    useNewTabLayoutStore.setState({
+      presets: {
+        '3col': { enabled: true, columns: [[`sessions:${LOCAL}`], [`headless:${LOCAL}`], [`sessions:${UNKNOWN}`]] },
+        '2col': { enabled: false, columns: [['browser'], []] },
+        '1col': { enabled: true, columns: [['browser', `sessions:${LOCAL}`, `headless:${UNKNOWN}`]] },
+      },
+      knownIds: ['browser', `sessions:${LOCAL}`, `headless:${LOCAL}`, `sessions:${UNKNOWN}`],
+    })
+  }
+
+  beforeEach(seedLocal)
+
+  it('moves every ref on the mapped id — on screen, parked master, parked slave — and nothing else', () => {
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    expect(hostIdsIn(useTabStore.getState().tabs).sort()).toEqual([WIRE, WIRE, WIRE, UNKNOWN, ''].sort())
+    const { parkedMaster, slaves } = useLocalProfilesStore.getState()
+    expect(hostIdsIn(parkedMaster).sort()).toEqual([WIRE, UNKNOWN].sort())
+    expect(hostIdsIn(slaves.s1.world)).toEqual([WIRE])
+  })
+
+  it('re-keys host settings and renames both column kinds in every preset and knownIds', () => {
+    rewriteHostRefs({ [LOCAL]: WIRE })
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [WIRE]: { editor: { homePath: '/l' } }, [UNKNOWN]: { editor: { homePath: '/u' } } })
+    const { presets, knownIds } = useNewTabLayoutStore.getState()
+    expect(presets['3col'].columns).toEqual([[`sessions:${WIRE}`], [`headless:${WIRE}`], [`sessions:${UNKNOWN}`]])
+    expect(presets['1col'].columns).toEqual([['browser', `sessions:${WIRE}`, `headless:${UNKNOWN}`]])
+    expect(knownIds).toEqual(['browser', `sessions:${WIRE}`, `headless:${WIRE}`, `sessions:${UNKNOWN}`])
+  })
+
+  it('both forms of one host (plan §0.11): the sync-id settings entry wins; the wire-form column wins its place', () => {
+    useHostSettingsStore.setState({ hosts: { [LOCAL]: { editor: { homePath: '/local' } }, [WIRE]: { editor: { homePath: '/wire' } } } })
+    useNewTabLayoutStore.setState({
+      presets: {
+        '3col': { enabled: true, columns: [[`sessions:${LOCAL}`], [`sessions:${WIRE}`], []] },
+        '2col': { enabled: false, columns: [[`headless:${WIRE}`, `headless:${LOCAL}`], []] },
+        '1col': { enabled: true, columns: [['browser']] },
+      },
+      knownIds: [`sessions:${LOCAL}`, `sessions:${WIRE}`],
+    })
+    rewriteHostRefs({ [LOCAL]: WIRE })
+    expect(useHostSettingsStore.getState().hosts).toEqual({ [WIRE]: { editor: { homePath: '/wire' } } })
+    const { presets, knownIds } = useNewTabLayoutStore.getState()
+    expect(presets['3col'].columns).toEqual([[], [`sessions:${WIRE}`], []])
+    expect(presets['2col'].columns).toEqual([[`headless:${WIRE}`], []])
+    expect(knownIds).toEqual([`sessions:${WIRE}`])
+  })
+
+  it('takes no lock and holds none (the deletion is lock-free — plan §0.1)', () => {
+    const seen: (string | null)[] = []
+    const unsub = useRebuildStore.subscribe((st) => { seen.push(st.lockedBy) })
+    rewriteHostRefs({ [LOCAL]: WIRE })
+    unsub()
+    expect(seen).toEqual([])
+  })
+
+  it('works while somebody else holds the operation lock', () => {
+    const grant = useRebuildStore.getState().acquireOperationLock('someone-else')
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    expect(hostIdsIn(useTabStore.getState().tabs)).not.toContain(LOCAL)
+    useRebuildStore.getState().releaseOperationLock(grant)
+  })
+
+  it('a map that moves nothing writes nothing: every store keeps its object', () => {
+    const before = snapshot()
+    expect(rewriteHostRefs({ [LOCAL]: LOCAL, other: WIRE })).toBe('ok')
+    const after = snapshot()
+    expect(after.tabs).toBe(before.tabs)
+    expect(after.profiles).toBe(before.profiles)
+    expect(after.hostSettings).toBe(before.hostSettings)
+    expect(after.newtab).toBe(before.newtab)
+  })
+
+  it('a key inherited from Object.prototype is not a mapping', () => {
+    useTabStore.setState({ tabs: { c: tab('c', leaf('pc', tmux('constructor'))) }, tabOrder: ['c'] })
+    const before = useTabStore.getState().tabs
+    rewriteHostRefs({ [LOCAL]: WIRE })
+    expect(useTabStore.getState().tabs.c).toBe(before.c)
+  })
+
+  it('a store write that throws is put back and reported — never thrown', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const real = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.HOST_SETTINGS) throw new DOMException('quota', 'QuotaExceededError')
+      real.call(this, k, v)
+    })
+    const before = snapshot()
+    try {
+      expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('write-failed')
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(useTabStore.getState().tabs).toBe(before.tabs)
+    expect(useLocalProfilesStore.getState().parkedMaster).toBe(before.profiles.parkedMaster)
+    expect(useHostSettingsStore.getState().hosts).toBe(before.hostSettings)
   })
 })
