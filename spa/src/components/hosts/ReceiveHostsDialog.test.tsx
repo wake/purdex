@@ -56,12 +56,24 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function redeem(code = 'abcd-2345') {
-  render(<ReceiveHostsDialog onClose={() => {}} />)
+async function redeem(code = 'abcd-2345', onClose: () => void = () => {}) {
+  render(<ReceiveHostsDialog onClose={onClose} />)
   fireEvent.change(screen.getByLabelText('Transfer code'), { target: { value: code } })
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Redeem' }))
   })
+}
+
+// The ways out of the dialog: Escape, the backdrop, the header X and (in the done phase) the footer Close.
+type CloseEntry = 'escape' | 'backdrop' | 'x' | 'footer'
+function closeVia(entry: CloseEntry) {
+  if (entry === 'escape') fireEvent.keyDown(document, { key: 'Escape' })
+  else if (entry === 'backdrop') fireEvent.click(screen.getByRole('dialog'))
+  else if (entry === 'x') fireEvent.click(document.querySelector('#receive-hosts-title')!.parentElement!.querySelector('button')!)
+  else {
+    const closes = screen.getAllByRole('button', { name: en['common.close'] })
+    fireEvent.click(closes[closes.length - 1])
+  }
 }
 
 function rowOf(name: string): HTMLElement {
@@ -179,9 +191,9 @@ describe('ReceiveHostsDialog', () => {
   describe('the received look goes to the look store (H2c-3 T2)', () => {
     const AIR_KEY = syncIdOfSync('d1_air')
 
-    async function confirmAir() {
+    async function confirmAir(onClose: () => void = () => {}) {
       vi.spyOn(transferApi, 'redeemTransfer').mockResolvedValue({ kind: 'ok', hosts: [{ ...PAYLOAD[0], look: { icon: 'Laptop' } }] })
-      await redeem()
+      await redeem('abcd-2345', onClose)
       fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
     }
 
@@ -210,6 +222,97 @@ describe('ReceiveHostsDialog', () => {
       expect(useHostLookStore.getState().looks[AIR_KEY]).toEqual({ name: 'air26', icon: 'Laptop' })
       expect(screen.queryByText(dict['hosts.transfer.looks_failed'])).toBeNull()
       expect(screen.queryByRole('button', { name: dict['hosts.transfer.looks_retry'] })).toBeNull()
+    })
+  })
+
+  describe('closing while the look step failed asks first (H2c-3 review)', () => {
+    const AIR_KEY = syncIdOfSync('d1_air')
+    const ENTRIES: CloseEntry[] = ['escape', 'backdrop', 'x', 'footer']
+
+    async function failedLooks(onClose: () => void) {
+      vi.spyOn(transferApi, 'redeemTransfer').mockResolvedValue({ kind: 'ok', hosts: [{ ...PAYLOAD[0], look: { icon: 'Laptop' } }] })
+      vi.spyOn(useHostLookStore.getState(), 'putLooksIfAbsent').mockImplementationOnce(() => {
+        throw new Error('quota')
+      })
+      await redeem('abcd-2345', onClose)
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+      expect(screen.getByText(en['hosts.transfer.looks_failed'])).toBeTruthy()
+    }
+
+    it.each(ENTRIES)('%s does not close; it shows the discard confirmation', async (entry) => {
+      const onClose = vi.fn()
+      await failedLooks(onClose)
+      expect(screen.queryByText(en['hosts.transfer.looks_discard_prompt'])).toBeNull()
+      closeVia(entry)
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.getByRole('dialog')).toBeTruthy()
+      expect(screen.getByText(en['hosts.transfer.looks_discard_prompt'])).toBeTruthy()
+    })
+
+    it('the confirmation Retry writes the entries, hides the confirmation, then X closes normally', async () => {
+      const onClose = vi.fn()
+      await failedLooks(onClose)
+      closeVia('escape')
+      fireEvent.click(screen.getByRole('button', { name: en['hosts.transfer.looks_discard_retry'] }))
+      expect(useHostLookStore.getState().looks[AIR_KEY]).toEqual({ name: 'air26', icon: 'Laptop' })
+      expect(screen.queryByText(en['hosts.transfer.looks_discard_prompt'])).toBeNull()
+      expect(screen.queryByText(en['hosts.transfer.looks_failed'])).toBeNull()
+      expect(onClose).not.toHaveBeenCalled()
+      closeVia('x')
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it('"Close without them" closes exactly once', async () => {
+      const onClose = vi.fn()
+      await failedLooks(onClose)
+      closeVia('backdrop')
+      fireEvent.click(screen.getByRole('button', { name: en['hosts.transfer.looks_discard_close'] }))
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(Object.hasOwn(useHostLookStore.getState().looks, AIR_KEY)).toBe(false)
+    })
+
+    it.each([
+      ['en', en],
+      ['zh-TW', zhTW],
+    ] as const)('the confirmation reads in %s', async (locale, dict) => {
+      await failedLooks(() => {})
+      act(() => useI18nStore.getState().setLocale(locale))
+      closeVia('escape')
+      expect(screen.getByText(dict['hosts.transfer.looks_discard_prompt'])).toBeTruthy()
+      expect(screen.getByRole('button', { name: dict['hosts.transfer.looks_discard_retry'] })).toBeTruthy()
+      expect(screen.getByRole('button', { name: dict['hosts.transfer.looks_discard_close'] })).toBeTruthy()
+    })
+
+    it.each(ENTRIES)('after a successful look step, %s closes immediately', async (entry) => {
+      const onClose = vi.fn()
+      vi.spyOn(transferApi, 'redeemTransfer').mockResolvedValue({ kind: 'ok', hosts: [{ ...PAYLOAD[0], look: { icon: 'Laptop' } }] })
+      await redeem('abcd-2345', onClose)
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+      closeVia(entry)
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['escape', 'backdrop', 'x'] as const)('in the input phase, %s closes immediately', (entry) => {
+      const onClose = vi.fn()
+      render(<ReceiveHostsDialog onClose={onClose} />)
+      closeVia(entry)
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['escape', 'backdrop', 'x'] as const)('in the review phase, %s closes immediately', async (entry) => {
+      const onClose = vi.fn()
+      vi.spyOn(transferApi, 'redeemTransfer').mockResolvedValue({ kind: 'ok', hosts: PAYLOAD })
+      await redeem('abcd-2345', onClose)
+      closeVia(entry)
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['escape', 'backdrop', 'x'] as const)('in the failed phase, %s closes immediately', async (entry) => {
+      const onClose = vi.fn()
+      vi.spyOn(transferApi, 'redeemTransfer').mockResolvedValue({ kind: 'failed', reason: 'invalid_code', status: 404 })
+      await redeem('abcd-2345', onClose)
+      closeVia(entry)
+      expect(onClose).toHaveBeenCalledTimes(1)
     })
   })
 })
