@@ -18,6 +18,8 @@ import { __resetMasterWorldForTest } from '../../../../lib/profile/master-world'
 import { clearSectionStore } from '../../../../lib/profile/section-store'
 import { __resetProfileSyncForTest, attachMaster, detachMaster, profileSyncState, startProfileSync } from '../../../../lib/profile/start'
 import { FakeDaemon } from '../../../../lib/profile/test-fake-daemon'
+import { hashSection } from '../../../../lib/profile/hash'
+import { buildHostsSection } from '../../../../lib/profile/sections'
 
 vi.mock('../../../../lib/profile/hash', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../../lib/profile/hash')>()
@@ -232,6 +234,41 @@ describe('the wizard, through its controls, against a daemon', () => {
     expect(named().filter((c) => c.endsWith(' hosts'))).toEqual([]) // and the sync's, after the attach
     expect(api.getSection.mock.calls.length + api.putSection.mock.calls.length).toBeGreaterThan(0) // the sync did talk to the host
     expect(JSON.stringify(daemon.rows.get('hosts'))).toBe(rowBefore)
+  })
+
+  // Host ownership H3 (spec decision 1, §5.1): the host list is this device's. A pull through the wizard — the sync
+  // it starts included — removes no local host, although the SOT's legacy `hosts` row does not list one of them.
+  it('A PULL KEEPS EVERY LOCAL HOST: the SOT\'s legacy `hosts` row lists mlab only, this device also has air — after the run, both, unchanged', async () => {
+    exists = true
+    useHostStore.setState({ hosts: { [M]: { ...useHostStore.getState().hosts[M], daemonId: 'mlab:278cbm' } }, runtime: { [M]: { status: 'connected', daemonIdVerified: { endpoint: '10.0.0.1:7860', daemonId: 'mlab:278cbm' } } } })
+    expect(await attachMaster(M, PROFILE, 'push')).toEqual({ ok: true })
+    await settle()
+    expect(await detachMaster()).toEqual({ ok: true })
+    // what a pre-H3 client pushed: a well-formed `hosts` payload under its real hash — one an older build WOULD apply
+    const legacy = buildHostsSection({ hosts: { [M]: { id: M, name: 'mlab', ip: '10.0.0.1', port: 7860, token: 'tok', order: 0, daemonId: 'mlab:278cbm' } }, hostOrder: [M] }) as unknown as Record<string, unknown>
+    daemon.rows.set('hosts', { rev: 1, hash: await hashSection(legacy), payload: legacy, fingerprint: 'fp-hosts', ordinal: 1, writer: 'c_oooooooooooo' })
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, 'host-air': { id: 'host-air', name: 'air', ip: '10.0.0.4', port: 7860, token: 'tok-air', order: 1 } }, hostOrder: [M, 'host-air'] })
+    const hostsBefore = JSON.stringify([useHostStore.getState().hosts, useHostStore.getState().hostOrder])
+
+    render(<ProfileWizard onClose={() => {}} />)
+    await settle()
+    await click(`profile-wizard-profile-${PROFILE}`)
+    await click('profile-wizard-next')
+    await click('profile-wizard-next')
+    await click('profile-wizard-direction-pull')
+    expect(screen.queryByTestId('profile-wizard-pull-removes')).toBeNull() // nothing is announced as removed…
+    await click('profile-wizard-next')
+    await click('profile-wizard-start')
+    await settle()
+    await settle()
+
+    // …and nothing is: both hosts, as they were
+    expect(JSON.stringify([useHostStore.getState().hosts, useHostStore.getState().hostOrder])).toBe(hostsBefore)
+    expect(screen.getByTestId('profile-wizard-done')).toBeInTheDocument()
+    expect(useProfileStore.getState().pendingDirection).toBeNull()
+    // and air reached no section of the SOT: its address and token are this device's alone
+    expect(JSON.stringify([...daemon.rows.values()].map((r) => r.payload))).not.toContain('10.0.0.4')
+    expect(JSON.stringify([...daemon.rows.values()].map((r) => r.payload))).not.toContain('tok-air')
   })
 
   it('REVIEW F1 — seen EMPTY, and another device pushes its world into it before Start: NOTHING of this device reaches the host; the user is sent back to choose', async () => {
