@@ -17,7 +17,8 @@ export interface FoldStore {
   toggle(key: string): void
   /** Every foldable thing announces itself, so expand-all knows what "all" is. */
   register(turnIndex: number, key: string): void
-  unregister(key: string): void
+  /** Takes the turn too: the same key can be live in two turns at once. */
+  unregister(turnIndex: number, key: string): void
   setTurn(turnIndex: number, expanded: boolean): void
 }
 
@@ -33,13 +34,20 @@ export function useFoldStore(): FoldStore {
 }
 
 /**
- * The provider's implementation hook. Expansion is plain state; the set of keys
- * belonging to each turn is a ref, because registering must never re-render the
+ * The provider's implementation hook. Expansion is plain state; the keys
+ * belonging to each turn are a ref, because registering must never re-render the
  * tree that is registering.
+ *
+ * The registry counts references per `(turnIndex, key)` rather than holding a
+ * set. A fold key is foreign data — a tool_use id or something derived from one
+ * — and nothing makes it unique inside a pane, let alone across turns. Two
+ * components can hold the same key in the same turn (and StrictMode's
+ * setup/cleanup/setup widens that window), so a key is only really gone once
+ * every holder has let go of it.
  */
 export function useFoldMemory(): FoldStore {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-  const turns = useRef<Map<number, Set<string>>>(new Map())
+  const turns = useRef<Map<number, Map<string, number>>>(new Map())
 
   // Own-key lookup: a key like `constructor` must not read off Object.prototype.
   const isExpanded = useCallback(
@@ -52,14 +60,25 @@ export function useFoldMemory(): FoldStore {
   }, [])
 
   const register = useCallback((turnIndex: number, key: string) => {
-    const keys = turns.current.get(turnIndex)
-    if (keys) keys.add(key)
-    else turns.current.set(turnIndex, new Set([key]))
+    let keys = turns.current.get(turnIndex)
+    if (!keys) {
+      keys = new Map()
+      turns.current.set(turnIndex, keys)
+    }
+    keys.set(key, (keys.get(key) ?? 0) + 1)
   }, [])
 
-  const unregister = useCallback((key: string) => {
-    for (const [turnIndex, keys] of turns.current) {
-      if (keys.delete(key) && keys.size === 0) turns.current.delete(turnIndex)
+  // Only this turn's count moves. Sweeping every turn used to strip a key that
+  // another turn still had mounted, and expand-all never reached that block
+  // again.
+  const unregister = useCallback((turnIndex: number, key: string) => {
+    const keys = turns.current.get(turnIndex)
+    const count = keys?.get(key)
+    if (!keys || count === undefined) return
+    if (count > 1) keys.set(key, count - 1)
+    else {
+      keys.delete(key)
+      if (keys.size === 0) turns.current.delete(turnIndex)
     }
   }, [])
 
@@ -70,7 +89,7 @@ export function useFoldMemory(): FoldStore {
     if (!keys || keys.size === 0) return
     setExpanded(prev => {
       const next = { ...prev }
-      for (const key of keys) next[key] = value
+      for (const key of keys.keys()) next[key] = value
       return next
     })
   }, [])
@@ -94,8 +113,12 @@ export function useFold(key: string): [boolean, () => void] {
   const { register, unregister } = store
 
   useEffect(() => {
-    register(turnIndex, key)
-    return () => unregister(key)
+    // The cleanup releases the turn it registered under, not whatever
+    // `TurnIndexContext` reads at cleanup time: the effect re-runs when the turn
+    // index changes, and by then the outer `turnIndex` is already the new one.
+    const registeredTurn = turnIndex
+    register(registeredTurn, key)
+    return () => unregister(registeredTurn, key)
   }, [register, unregister, turnIndex, key])
 
   const toggle = useCallback(() => store.toggle(key), [store, key])

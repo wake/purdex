@@ -11,11 +11,15 @@ import {
   type FoldStore,
 } from './fold-context'
 
-/** A leaf that registers itself with the surrounding turn, like a real fold. */
-function Foldable({ foldKey }: { foldKey: string }) {
+/**
+ * A leaf that registers itself with the surrounding turn, like a real fold.
+ * `testId` defaults to the key and is only passed when two leaves deliberately
+ * share one key — nothing in the pane guarantees fold keys are unique.
+ */
+function Foldable({ foldKey, testId = foldKey }: { foldKey: string; testId?: string }) {
   const [expanded, toggle] = useFold(foldKey)
   return (
-    <button data-testid={foldKey} onClick={toggle}>
+    <button data-testid={testId} onClick={toggle}>
       {expanded ? 'open' : 'closed'}
     </button>
   )
@@ -40,6 +44,25 @@ function Turn({
       <TurnIndexContext.Provider value={index}>{children}</TurnIndexContext.Provider>
     </FoldContext.Provider>
   )
+}
+
+/**
+ * One memory shared by several turns, the way the transcript will own it. The
+ * `Turn` harness above makes a store per turn, which cannot show a key living
+ * in two turns of the *same* pane.
+ */
+function Pane({
+  onStore,
+  children,
+}: {
+  onStore: (store: FoldStore) => void
+  children: ReactNode
+}) {
+  const store = useFoldMemory()
+  useEffect(() => {
+    onStore(store)
+  }, [store, onStore])
+  return <FoldContext.Provider value={store}>{children}</FoldContext.Provider>
 }
 
 describe('fold memory', () => {
@@ -142,6 +165,59 @@ describe('fold memory', () => {
 
     expect(screen.getByTestId('op-1')).toHaveTextContent('open')
     expect(seen.store!.isExpanded('op-1:diff')).toBe(false)
+  })
+
+  // A fold key is a tool_use id or something derived from one: foreign data,
+  // with nothing in the interface or the effect enforcing uniqueness across the
+  // pane. So an unregister that swept every turn let turn 0's unmount strip a
+  // key turn 1 still had mounted, and expand-all silently skipped that block
+  // from then on (attack A4).
+  it('keeps a key registered in one turn when the same key unmounts in another', () => {
+    const seen: { store: FoldStore | null } = { store: null }
+    const capture = (store: FoldStore) => {
+      seen.store = store
+    }
+    const tree = (withTurn0: boolean) => (
+      <Pane onStore={capture}>
+        <TurnIndexContext.Provider value={0}>
+          {withTurn0 ? <Foldable foldKey="op-1" testId="turn-0" /> : null}
+        </TurnIndexContext.Provider>
+        <TurnIndexContext.Provider value={1}>
+          <Foldable foldKey="op-1" testId="turn-1" />
+        </TurnIndexContext.Provider>
+      </Pane>
+    )
+    const { rerender } = render(tree(true))
+    rerender(tree(false))
+    expect(screen.queryByTestId('turn-0')).toBeNull()
+
+    act(() => seen.store!.setTurn(1, true))
+
+    expect(screen.getByTestId('turn-1')).toHaveTextContent('open')
+  })
+
+  // Same key, same turn, two mounted components: the count is what makes the
+  // first unmount a decrement rather than a removal. Without it the A4 test
+  // above still passes (a per-turn Set is enough for that), so this is the only
+  // guard on the reference count.
+  it('keeps a key registered while another component in the same turn still holds it', () => {
+    const seen: { store: FoldStore | null } = { store: null }
+    const capture = (store: FoldStore) => {
+      seen.store = store
+    }
+    const tree = (withFirst: boolean) => (
+      <Turn index={0} onStore={capture}>
+        {withFirst ? <Foldable foldKey="op-1" testId="first" /> : null}
+        <Foldable foldKey="op-1" testId="second" />
+      </Turn>
+    )
+    const { rerender } = render(tree(true))
+    rerender(tree(false))
+    expect(screen.queryByTestId('first')).toBeNull()
+
+    act(() => seen.store!.setTurn(0, true))
+
+    expect(screen.getByTestId('second')).toHaveTextContent('open')
   })
 
   it('keeps state across a child remount', () => {
