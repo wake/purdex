@@ -268,34 +268,51 @@ export function rekeyShownHosts(hosts: Hosts): { commit: () => void; undo: () =>
   const listed = (id: string): boolean => ids.includes(id) || Object.values(slaves).some((s) => s.shownHostIds.includes(id))
   const moves = wireKeyMovesOf(hosts).filter(([from]) => listed(from))
   if (moves.length === 0) return null
-  let found: { ids: string[]; slaves: Record<string, LocalProfile> } | null = null
+  /** What the commit wrote and what it found: the master's list, and per slave its list. Filled BEFORE each write, so
+   *  an undo after a write that threw half-way (memory set, storage refused) still knows. */
+  let master: { before: string[]; wrote: string[] } | null = null
+  const slaveBefore: Record<string, string[]> = {}
+  const slaveWrote: Record<string, string[]> = {}
   return {
+    // FIELD BY FIELD, ON WHAT STORAGE HOLDS NOW (PR-A2 review). Each store is first brought up to storage — a
+    // synchronous rehydrate when its record differs from memory (`catchUpWithStorage`) — so a write another renderer
+    // persisted after the pass began is the base, not overwritten; then only the lists are written: the master's
+    // `ids`, and each slave's `shownHostIds` through `mapSlaveShownHosts` (no other field, no other record). What is
+    // left is a write that lands INSIDE this synchronous block — the cross-renderer residual #1256 (no CAS on
+    // localStorage), as for every store the pass writes.
     commit: () => {
-      const slavesNow = useLocalProfilesStore.getState().slaves
-      found = { ids: useShownHostsStore.getState().ids, slaves: slavesNow }
-      useShownHostsStore.getState().rekey(moves)
-      let slavesNext = slavesNow
-      for (const [id, slave] of Object.entries(slavesNow)) {
-        const next = rekeyShownIds(slave.shownHostIds, moves)
-        if (next === slave.shownHostIds) continue
-        if (slavesNext === slavesNow) slavesNext = { ...slavesNow }
-        slavesNext[id] = { ...slave, shownHostIds: next }
+      catchUpWithStorage(useShownHostsStore)
+      const current = useShownHostsStore.getState().ids
+      const next = rekeyShownIds(current, moves)
+      if (next !== current) {
+        master = { before: current, wrote: next }
+        useShownHostsStore.setState({ ids: next })
       }
-      if (slavesNext !== slavesNow) useLocalProfilesStore.setState({ slaves: slavesNext })
+      catchUpWithStorage(useLocalProfilesStore)
+      useLocalProfilesStore.getState().mapSlaveShownHosts((list, id) => {
+        const moved = rekeyShownIds(list, moves)
+        if (moved !== list) {
+          slaveBefore[id] = list
+          slaveWrote[id] = moved
+        }
+        return moved
+      })
     },
+    // Conditional, per list: put back only a list that is still exactly (the same array) what the commit wrote — a
+    // list somebody changed since is theirs. Both stores are attempted even if the first throws; one combined error.
     undo: () => {
-      if (found === null) return // the commit never began
       const failed: string[] = []
-      if (useShownHostsStore.getState().ids !== found.ids) {
+      const m = master
+      if (m !== null && useShownHostsStore.getState().ids === m.wrote) {
         try {
-          useShownHostsStore.setState({ ids: found.ids })
+          useShownHostsStore.setState({ ids: m.before })
         } catch (err) {
           failed.push(`the master's list: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
-      if (useLocalProfilesStore.getState().slaves !== found.slaves) {
+      if (Object.keys(slaveWrote).length > 0) {
         try {
-          useLocalProfilesStore.setState({ slaves: found.slaves })
+          useLocalProfilesStore.getState().mapSlaveShownHosts((list, id) => (Object.hasOwn(slaveWrote, id) && list === slaveWrote[id] ? slaveBefore[id] : list))
         } catch (err) {
           failed.push(`the local workbenches' lists: ${err instanceof Error ? err.message : String(err)}`)
         }
@@ -303,4 +320,30 @@ export function rekeyShownHosts(hosts: Hosts): { commit: () => void; undo: () =>
       if (failed.length > 0) throw new Error(`shown hosts undo incomplete — ${failed.join('; ')}`)
     },
   }
+}
+
+/** A persisted store as far as `catchUpWithStorage` needs it. */
+interface Rereadable {
+  getState: () => unknown
+  persist: { getOptions: () => { name?: string; version?: number; partialize?: (state: never) => unknown }; rehydrate: () => unknown }
+}
+
+/**
+ * `store` brought up to what storage holds NOW: rehydrated when its persisted record is not exactly what its memory
+ * would write (the rule of host-reresolve.ts's `rereadFromStorage`). Synchronous — both stores persist to
+ * localStorage, and zustand's rehydrate over a synchronous storage completes inside the call.
+ */
+function catchUpWithStorage(target: unknown): void {
+  const store = target as Rereadable
+  const { name, version, partialize } = store.persist.getOptions()
+  if (name === undefined) return
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(name)
+  } catch {
+    return // unreadable storage: memory is all there is
+  }
+  if (raw === null) return
+  const state = store.getState()
+  if (raw !== JSON.stringify({ state: partialize ? partialize(state as never) : state, version })) void store.persist.rehydrate()
 }

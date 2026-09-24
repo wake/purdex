@@ -142,6 +142,11 @@ export interface LocalProfilesState extends LocalProfilesData {
   /** A slave's shown-hosts list, mapped (sanitised like the master's). `fn` returning the same reference → no `set`.
    *  Only a slave: the master's list is `useShownHostsStore`'s. */
   setSlaveShownHosts: (id: string, fn: (ids: string[]) => string[]) => { ok: true } | Refused<'not-found'>
+  /** Every slave's `shownHostIds` mapped on the CURRENT state, in one `set` — no other field, no other slave record
+   *  rebuilt; `fn` returning the same reference leaves that slave alone, and none moving means no `set`. The array
+   *  handed back is stored as it is (not sanitised), so a caller can tell later whether a list is still its own: hand
+   *  back only sanitised lists (the re-resolve pass's re-key — lib/shown-hosts.ts). */
+  mapSlaveShownHosts: (fn: (ids: string[], id: string) => string[]) => void
   /** Never the one on screen. The removed world is handed back (the caller may need its sessions, or an undo). */
   removeSlave: (id: string) => { ok: true; world: ParkedWorld } | Refused<'not-found' | 'on-screen'>
   /** `order` must be a permutation of the current ids. */
@@ -412,6 +417,18 @@ export const useLocalProfilesStore = create<LocalProfilesState>()(
         if (normalized === null) return { ok: false, reason: 'bad-name' }
         set({ slaves: { ...s.slaves, [id]: { ...s.slaves[id], name: normalized } } })
         return { ok: true }
+      },
+
+      mapSlaveShownHosts: (fn) => {
+        const s = get()
+        let slaves: Record<string, LocalProfile> | null = null
+        for (const [id, slave] of Object.entries(s.slaves)) {
+          const next = fn(slave.shownHostIds, id)
+          if (next === slave.shownHostIds || !Array.isArray(next)) continue
+          slaves ??= { ...s.slaves }
+          slaves[id] = { ...slave, shownHostIds: next }
+        }
+        if (slaves !== null) set({ slaves })
       },
 
       setSlaveShownHosts: (id, fn) => {

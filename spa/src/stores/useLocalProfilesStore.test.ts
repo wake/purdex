@@ -1275,6 +1275,30 @@ describe('shownHostIds — a local workbench keeps its own shown-hosts list', ()
     })
   })
 
+  describe('mapSlaveShownHosts — the field alone, on the current state', () => {
+    it('maps every slave\'s list in one set and touches nothing else; the same reference back = left alone', () => {
+      const a = add('alpha', world('alpha'), ['d1_a'])
+      const b = add('beta', world('beta'), ['d1_b'])
+      const before = get().slaves[b]
+      const sets = vi.fn()
+      const unsub = useLocalProfilesStore.subscribe(sets)
+      const next = ['d1_A']
+      get().mapSlaveShownHosts((ids, id) => (id === a ? next : ids))
+      unsub()
+      expect(sets).toHaveBeenCalledTimes(1)
+      expect(get().slaves[a].shownHostIds).toBe(next) // exactly the array handed back
+      expect(get().slaves[a].world).toEqual(world('alpha'))
+      expect(get().slaves[b]).toBe(before)
+    })
+
+    it('nothing moves → no set at all', () => {
+      add('alpha', world('alpha'), ['d1_a'])
+      const state = get()
+      get().mapSlaveShownHosts((ids) => ids)
+      expect(get()).toBe(state)
+    })
+  })
+
   describe('setSlaveShownHosts', () => {
     it("maps the slave's list and persists it", () => {
       const a = add('alpha', world('alpha'), ['d1_a'])
