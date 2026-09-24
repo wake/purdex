@@ -12,6 +12,7 @@ import {
   transferLookEntries,
 } from './useHostStore'
 import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
+import { useShownHostsStore } from './useShownHostsStore'
 import { hostLookOf } from '../lib/host-look'
 import { syncIdOfSync } from '../lib/profile/host-identity'
 
@@ -490,6 +491,13 @@ describe('useHostStore', () => {
     expect(Object.keys(useHostLookStore.getState().looks)).toHaveLength(1)
     useHostStore.getState().reset()
     expect(useHostLookStore.getState().looks).toEqual({})
+  })
+
+  it('reset() also resets the shown-hosts store (plan §0.18)', () => {
+    useShownHostsStore.getState().setShown(['d1_a'])
+    useHostStore.getState().reset()
+    const { all, ids } = useShownHostsStore.getState()
+    expect({ all, ids }).toEqual({ all: true, ids: [] })
   })
 
 

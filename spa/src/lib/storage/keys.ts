@@ -22,6 +22,9 @@ export const STORAGE_KEYS = {
   /** 手動管理（非 Zustand store）：主機外觀首次遷移（HostConfig → HOST_LOOKS）已跑過的標記，值是 `'1'`；
    *  device-local、**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、刻意不註冊 syncManager、直接操作 localStorage（讀寫皆 try/catch） */
   HOST_LOOKS_MIGRATED: 'purdex-host-looks-migrated',
+  /** 工作台啟用的主機（useShownHostsStore，host ownership H2d）：`{ all: boolean; ids: string[] }`，兩個 key 永遠都在；
+   *  `ids` 是 wire id（未知的 id 與順序照留）；投影進 `settings`（PROJECTIONS.settings），走 syncManager */
+  SHOWN_HOSTS: 'purdex-shown-hosts',
   /** 手動管理（非 Zustand store），直接操作 localStorage，不走 browserStorage/syncManager */
   NOTIFICATION_SEEN: 'purdex-notification-seen',
   MODULE_CONFIG: 'purdex-module-config',
