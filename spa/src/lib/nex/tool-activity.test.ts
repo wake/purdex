@@ -23,12 +23,16 @@ describe('applyDurableEvent: tool activity', () => {
     expect(s.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
   })
 
-  it('A1/A2: subagent assistant and user frames (non-null parent_tool_use_id) are skipped', () => {
+  // #1228 reversed what this used to assert ("subagent frames are skipped"):
+  // a subagent's own tools are timed like any other, since tool_use ids are
+  // globally unique and the same `tools` map is their home. What a child
+  // frame still may not do — end the turn, touch the partial — is guarded in
+  // event-reducer.test.ts.
+  it('A1/A2: subagent assistant and user frames (non-null parent_tool_use_id) time their own tools', () => {
     let s = applyDurableEvent(defaultExecutionState(), at(1, 'assistant', assistant([toolUse('toolu_sub')], MSG, 'toolu_parent')))
-    expect(s.tools).toEqual({})
-    s = { ...s, tools: running(TOOL) }
-    s = applyDurableEvent(s, at(2, 'user', toolResult(TOOL, false, 'toolu_parent')))
-    expect(s.tools[TOOL]).toEqual({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
+    expect(s.tools.toolu_sub).toMatchObject({ name: 'Bash', startedAt: 100, endedAt: null, status: 'running' })
+    s = applyDurableEvent(s, at(2, 'user', toolResult('toolu_sub', false, 'toolu_parent')))
+    expect(s.tools.toolu_sub).toMatchObject({ endedAt: 200, status: 'done' })
   })
 
   it('A2: a tool_result ends the activity as done, or error when is_error', () => {
