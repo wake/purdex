@@ -428,6 +428,14 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex
   each `tool_result` to the **oldest unanswered call with that id**. A result
   with no waiting call is an orphan and **stays** one.
 
+  **Pairing is per scope** (PR #1451 R2 attack A1). The queues are keyed by
+  the message's `parent_tool_use_id` as well as the id (null / absent = the
+  main flow): a subagent's `tool_result` that names the same `tool_use_id` as
+  a main-flow call still waiting would otherwise consume that call, and the
+  main flow's real answer would float off as an orphan. A call and a result
+  pair only within one scope; a subagent result with no same-scope call is an
+  orphan.
+
   **Pairing is forward-only.** An earlier draft queued results too, so a
   result could pair with a call that arrives *later*; the attack review found
   what that does to `[result X 'stale'], [call X], [result X 'fresh']` — the
@@ -671,9 +679,16 @@ export interface OperationBlockProps {
   - header row: the status dot (`<span data-testid="op-dot">`, 6 px, colours
     below), the tool name (`font-semibold text-text-primary`; `line-through
     text-text-muted` when denied, as today), the argument
-    (`text-text-muted whitespace-pre-wrap break-all`, **not** truncated —
-    spec §4.2 — so `SUMMARY_LIMIT` is no longer applied here), then the
-    duration on the right, rendered only when `>= 1000` ms.
+    (`text-text-muted whitespace-pre-wrap break-all`, **not** truncated by
+    the renderer — spec §4.2 — so `SUMMARY_LIMIT` is no longer applied
+    here), then the duration on the right, rendered only when `>= 1000` ms.
+    The N2 `primary_arg` is shown whole. A tool with no primary argument
+    falls to `getSummary`'s default branch, which is a **bounded** preview of
+    the input (`previewValue(input, SUMMARY_LIMIT)`, ending in `…` when cut;
+    `''` for an empty input): §4.2's guarantee is about `primary_arg`, and
+    serialising a MB-class input in full on every render is unbounded work
+    (PR #1451 R2 attack A3). The whole input stays one click away in
+    `op-input`.
   - `show input` toggle (`data-testid="op-input-toggle"`), rendered only when
     `Object.keys(input).length > 0 && !(summaryEntry?.primaryArg && Object.keys(input).length === 1)`.
     Expanded → `<pre data-testid="op-input">` on the rail with
@@ -764,10 +779,17 @@ defect, and R1's whole claim is "one folding rule for every block type".
     totalLines: rows.length, truncated: diff.truncated })` and render the
     first `plan.previewLines.length` **rows** — so a diff of ≤ 6 rows shows
     whole, ≤ 40 shows 6, more shows 3, and a daemon-truncated diff shows 3,
-    identically to every output in the pane. The remainder collapses behind
-    one `data-testid="diff-more"` button reading
-    `t('room.fold.more', { n: plan.hiddenLines })`. `foldPlan` decides the
-    rows; only the rendering of a row is this component's business.
+    identically to every output in the pane. While collapsed each of those
+    rows draws **its `plan.previewLines` entry, not its full text** — the
+    preview is bounded in bytes as well as rows (design decision 3), and
+    spending only the row count let one MB-class row reach the DOM whole
+    behind a one-row preview (PR #1451 R2 attack A2). Expanded rows draw their
+    full text. The remainder collapses behind one `data-testid="diff-more"`
+    button reading `t('room.fold.more', { n: plan.hiddenLines })`, or
+    `t('room.fold.show_all')` when the only thing folded is a cut row
+    (`hiddenLines === 0 && clamped`, as `FoldedOutput` says it). `foldPlan`
+    decides the rows and their cut; only the rendering of a row is this
+    component's business.
   - expansion goes through `useFold(`${foldKey}:diff`)`, so the key is
     registered with the surrounding turn and expand-all reaches it (T2.5).
   - the two hard-coded row tints become `bg-status-success/10` and
@@ -812,7 +834,8 @@ defect, and R1's whole claim is "one folding rule for every block type".
     `activity={{status:'streaming', rawInput: block.partialJson}}`,
     `result={null}`, `foldKey={`partial-${block.index}`}`.
     `SUMMARY_LIMIT` stays exported from `tool-summary.ts` (the R10 preview
-    still uses it); `SUMMARY_MAX` goes away with `ToolCallBlock`.
+    and `getSummary`'s default branch use it); `SUMMARY_MAX` goes away with
+    `ToolCallBlock`.
 - Tests: update `spa/src/components/ConversationMessages.test.tsx` — `pairs a
   call with its result into one block` (one `operation-block`, no
   `tool-result-block`); `renders an orphan result on its own`; `remembers a
@@ -836,10 +859,13 @@ the diff**, duration only when it is worth reading" — and two of them ended
 up nowhere at all.
 
 - **`+N −M` goes with the diff.** `room/ToolDiffView.tsx` gains a stat line
-  carrying `+{added} −{removed}` and — only when the operation's header drew
-  no argument (`showPath={summary === ''}`, i.e. an orphan result) — `diff.path`.
-  For Edit / Write the path *is* the header's `primary_arg`; printing it again
-  is the stacking §3.1.1 #3 undoes. The stat uses U+2212 MINUS, as
+  carrying `+{added} −{removed}` and — unless the operation's header already
+  drew it (`showPath={summary !== diff.path}`) — `diff.path`. For Edit /
+  Write the path *is* the header's `primary_arg`; printing it again is the
+  stacking §3.1.1 #3 undoes. Any other header keeps it: an orphan result has
+  no argument at all, and an argument that is a command or a description
+  does not name the file (PR #1451 R2 attack A4 — an earlier draft used
+  `summary === ''`, which hid the path behind any non-empty argument). The stat uses U+2212 MINUS, as
   `tool-result-facts.ts` uses, so it lines up under `tabular-nums`), rendered
   above the hunks and **visible while the diff is folded**. `+0 −0` is a
   normal edit result and still renders (contract rule 7).
