@@ -21,11 +21,11 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
-import { buildSectionPayload, startCollector, type Collector } from './collector'
+import { buildSectionPayload, startCollector, type Collector, type SectionReport } from './collector'
 import type { ProfileSectionKey } from './types'
-import { createExecutor, type Executor } from './executor'
+import { createExecutor, type Executor, type ExecutorStatus } from './executor'
 import { hashSection } from './hash'
-import { buildWorkspacesSection } from './sections'
+import { buildTabsSection, buildWorkspacesSection } from './sections'
 import { syncIdOfSync } from './host-identity'
 import { clearSectionStore, saveConflict } from './section-store'
 import { PROJECTIONS, SECTION_SCHEMA_ORDINAL, fingerprintOf, sectionFingerprint } from './projections'
@@ -106,8 +106,21 @@ interface Run {
   direction: { value: 'push' | 'pull' | null }
 }
 
+interface AttachOptions {
+  /** Every status the executor emits, in order (`onStatus`). */
+  statuses?: ExecutorStatus[]
+  /** Every collector report, in the order the executor received it. */
+  reports?: string[]
+  /** Holds the collector's report of this section back until the first PUT goes out — which waits for the index —
+   *  so the report is judged against a known SOT instead of being held for the index. Delivered in a microtask of
+   *  its own (a collector report comes from a timer, never from inside a request). */
+  deferReport?: string
+  /** Runs once, in a microtask of its own, when the first PUT goes out: the index has landed, the period is open. */
+  midway?: (run: Run) => void
+}
+
 /** One client's session: attach with `direction`, connect, and let everything play out. */
-async function attach(clientId: string, direction: 'push' | 'pull', master = M): Promise<Run> {
+async function attach(clientId: string, direction: 'push' | 'pull', master = M, opts: AttachOptions = {}): Promise<Run> {
   h.clientId = clientId
   const run: Run = { settled: vi.fn<() => void>(), direction: { value: direction } }
   // what start.ts does in the callback
@@ -122,12 +135,36 @@ async function attach(clientId: string, direction: 'push' | 'pull', master = M):
     buildNow: (key) => buildSectionPayload(key as ProfileSectionKey), // what start.ts wires
     initialDirection: () => run.direction.value,
     onInitialSettled: run.settled,
+    ...(opts.statuses === undefined ? {} : { onStatus: (st: ExecutorStatus) => void opts.statuses!.push(st) }),
   })
   const ex = executor
-  collector = startCollector({ onSection: (r) => ex.onSection(r) })
+  const report = (r: SectionReport): void => {
+    opts.reports?.push(r.key)
+    ex.onSection(r)
+  }
+  const deferred: SectionReport[] = []
+  let released = opts.deferReport === undefined
+  let firstPut = true
+  if (opts.deferReport !== undefined || opts.midway !== undefined) {
+    api.putSection.mockImplementation(async (_h, _p, key, body) => {
+      if (firstPut) {
+        firstPut = false
+        queueMicrotask(() => {
+          released = true
+          for (const r of deferred.splice(0)) report(r)
+          opts.midway?.(run)
+        })
+      }
+      return daemon.put(key, body)
+    })
+  }
+  collector = startCollector({ onSection: (r) => (!released && r.key === opts.deferReport ? void deferred.push(r) : report(r)) })
   await collector.primeAll()
   executor.onReconnected()
   for (let i = 0; i < 6; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+  // a report that never went out, or a midway that never ran, would make the test prove nothing
+  expect(released).toBe(true)
+  if (opts.midway !== undefined) expect(firstPut).toBe(false)
   return run
 }
 
@@ -247,6 +284,211 @@ describe('a second client attaches', () => {
 
     expect(executor!.status().sections.workspaces).toBe('locked:conflict')
     expect(run.settled).toHaveBeenCalledTimes(1)
+  })
+})
+
+/* ─── #1450: a push attach over a workspace id both sides hold, empty here ─── */
+
+describe('#1450 — PUSH attach: a workspace EMPTY here that has tabs on the SOT is pushed empty, never pulled', () => {
+  const EMPTY = { order: [], tabs: {} }
+
+  /** A's `unsorted` holds a tmux tab; A pushes it. `unsorted` is a fixed id (features/workspace/store.ts): B has one too. */
+  async function aPushedUnsorted(): Promise<void> {
+    world('named-by-A', [ws('unsorted', ['ta1'])], [tab('ta1')])
+    const run = await attach(A, 'push')
+    expect(run.settled).toHaveBeenCalledTimes(1)
+    expect(daemon.rows.get('tabs.unsorted')).toMatchObject({ rev: 1, writer: A })
+    leave()
+    problems.length = 0
+  }
+
+  /** A Hosts tab: a device-local pane kind, never synced (#1380) — `isSyncableTab` leaves it out of the payload. */
+  function hostsTab(id: string): Tab {
+    return { id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content: { kind: 'hosts' } } } }
+  }
+
+  function expectPushedEmpty(run: Run): void {
+    expect(daemon.rows.get('tabs.unsorted')).toMatchObject({ rev: 2, writer: B })
+    expect(daemon.rows.get('tabs.unsorted')!.payload).toEqual(EMPTY)
+    expect(daemon.live()).toEqual(['settings', 'tabs.unsorted', 'tabs.wb1', 'workspaces'])
+    expect(daemon.rows.get('workspaces')!.writer).toBe(B)
+    expect(useTabStore.getState().tabs.ta1).toBeUndefined()
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'unsorted')!.tabs).not.toContain('ta1')
+    const status = executor!.status()
+    expect(status.profile).toBe('synced')
+    expect(Object.values(status.sections).filter((s) => s !== 'synced')).toEqual([])
+    expect(run.settled).toHaveBeenCalledTimes(1)
+    expect(run.direction.value).toBeNull()
+  }
+
+  it('(a) the empty report is judged after the index landed: SOT `tabs.unsorted` becomes empty (rev +1, by B), B gets nothing', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('unsorted', []), ws('wb1', ['tb1'])], [tab('tb1')])
+    const run = await attach(B, 'push', M, { deferReport: 'tabs.unsorted' })
+    expectPushedEmpty(run)
+  })
+
+  it('(b) B\'s only tab there is a Hosts tab: B keeps it, the SOT `tabs.unsorted` is empty', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('unsorted', ['hb1']), ws('wb1', ['tb1'])], [hostsTab('hb1'), tab('tb1')])
+    const run = await attach(B, 'push', M, { deferReport: 'tabs.unsorted' })
+    expectPushedEmpty(run)
+    expect(useTabStore.getState().tabs.hb1).toBeDefined()
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'unsorted')!.tabs).toEqual(['hb1'])
+  })
+
+  it('(c) the empty report arrives BEFORE the index (held, judged when the index lands): the same end', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('unsorted', []), ws('wb1', ['tb1'])], [tab('tb1')])
+    const reports: string[] = []
+    let reportedBeforeIndex: string[] | null = null
+    api.listProfiles.mockImplementation(async () => {
+      reportedBeforeIndex ??= [...reports]
+      return daemon.list()
+    })
+    const run = await attach(B, 'push', M, { reports })
+    expect(reportedBeforeIndex).toContain('tabs.unsorted') // the order this case is about
+    expectPushedEmpty(run)
+  })
+
+  it('(f) a reconnect in the middle of the push attach: the same end', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('unsorted', []), ws('wb1', ['tb1'])], [tab('tb1')])
+    let openAtReconnect: 'push' | 'pull' | null = null
+    const run = await attach(B, 'push', M, {
+      deferReport: 'tabs.unsorted',
+      midway: (r) => {
+        openAtReconnect = r.direction.value
+        executor!.onReconnected()
+      },
+    })
+    expect(openAtReconnect).toBe('push')
+    expectPushedEmpty(run)
+  })
+
+  /* ─── guards: what the exemption must NOT reach ─── */
+
+  const lockedConflicts = (statuses: ExecutorStatus[], key: string) => statuses.filter((st) => st.sections[key] === 'locked:conflict')
+
+  /** A writes a row on the SOT directly (another machine). */
+  const sotWrite = async (key: string, payload: unknown, fp: [string, number]): Promise<{ rev: number; hash: string }> => {
+    const plain = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
+    const row: Row = { rev: (daemon.rows.get(key)?.rev ?? 0) + 1, hash: await hashSection(plain), payload: plain, fingerprint: fp[0], ordinal: fp[1], writer: A }
+    daemon.rows.set(key, row)
+    return { rev: row.rev, hash: row.hash! }
+  }
+
+  it('(d) push period still open: a workspace A adds arrives by a `workspaces` pull — its empty report is still a placeholder; B takes A\'s tabs, writes nothing there', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+    // the period is held open by `tabs.wb1`, whose create keeps failing (network) until released
+    let holdOpen = true
+    api.putSection.mockImplementation(async (_h, _p, key, body) =>
+      holdOpen && key === 'tabs.wb1' ? { kind: 'failed', reason: 'network', status: 0, message: 'dropped' } : daemon.put(key, body),
+    )
+    const statuses: ExecutorStatus[] = []
+    const run = await attach(B, 'push', M, { statuses })
+    expect(run.direction.value).toBe('push') // still open
+    expect(executor!.status().sections.workspaces).toBe('synced') // … and `workspaces` already synced
+    const seen = statuses.length
+    const writesBefore = daemon.writes.length
+
+    // A adds w2 with a tab: `workspaces`, then `tabs.w2` — two writes, B hears them in that order
+    const w2 = ws('w2', ['tw2'])
+    const wsWritten = await sotWrite('workspaces', buildWorkspacesSection([...useWorkspaceStore.getState().workspaces, w2]), ['fp-workspaces', 1])
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'workspaces', rev: wsWritten.rev, hash: wsWritten.hash, writerClientId: A })
+    const tabsWritten = await sotWrite('tabs.w2', buildTabsSection(w2, { tw2: tab('tw2') }), ['fp-tabs', 1])
+    await vi.advanceTimersByTimeAsync(100)
+    expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toContain('w2') // pulled in: the placeholder is coming
+    for (let i = 0; i < 2; i += 1) await vi.advanceTimersByTimeAsync(1_000) // the collector reports the empty `tabs.w2`
+    executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'tabs.w2', rev: tabsWritten.rev, hash: tabsWritten.hash, writerClientId: A })
+    for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w2')!.tabs).toEqual(['tw2'])
+    expect(useTabStore.getState().tabs.tw2).toBeDefined()
+    expect(daemon.writes.slice(writesBefore).filter((w) => w.key === 'tabs.w2')).toEqual([])
+    expect(daemon.rows.get('tabs.w2')).toMatchObject({ rev: tabsWritten.rev, writer: A })
+    expect(lockedConflicts(statuses.slice(seen), 'tabs.w2')).toEqual([])
+
+    holdOpen = false
+    executor!.syncNow()
+    for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    expect(run.direction.value).toBeNull()
+    expect(executor!.status().profile).toBe('synced')
+  })
+
+  it('(g) as (d), but the empty `tabs.w2` report lands WHILE the `workspaces` apply is still awaited (stores written, hash not back): still a placeholder', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+    let holdOpen = true
+    api.putSection.mockImplementation(async (_h, _p, key, body) =>
+      holdOpen && key === 'tabs.wb1' ? { kind: 'failed', reason: 'network', status: 0, message: 'dropped' } : daemon.put(key, body),
+    )
+    const statuses: ExecutorStatus[] = []
+    const reports: string[] = []
+    const run = await attach(B, 'push', M, { statuses, reports })
+    expect(run.direction.value).toBe('push')
+    expect(executor!.status().sections.workspaces).toBe('synced')
+    const seen = statuses.length
+    const writesBefore = daemon.writes.length
+
+    const w2 = ws('w2', ['tw2'])
+    const wsWritten = await sotWrite('workspaces', buildWorkspacesSection([...useWorkspaceStore.getState().workspaces, w2]), ['fp-workspaces', 1])
+    const tabsWritten = await sotWrite('tabs.w2', buildTabsSection(w2, { tw2: tab('tw2') }), ['fp-tabs', 1])
+
+    // The apply writes the stores synchronously, then awaits the hash of what it wrote (apply-to-stores `rebuilt`):
+    // the FIRST hash of a `workspaces` payload listing w2 is held here until released.
+    const hash = vi.mocked(hashSection)
+    const original = hash.getMockImplementation()!
+    let release: (() => void) | null = null
+    const isWorkspacesWithW2 = (p: unknown): boolean => {
+      const order = (p as { order?: unknown }).order
+      return Array.isArray(order) && order.includes('w2') && !order.includes('tw2')
+    }
+    hash.mockImplementation(async (payload: unknown) => {
+      if (release === null && isWorkspacesWithW2(payload)) await new Promise<void>((r) => (release = r))
+      return original(payload)
+    })
+    try {
+      executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'workspaces', rev: wsWritten.rev, hash: wsWritten.hash, writerClientId: A })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(release).not.toBeNull() // the apply is in its await …
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toContain('w2') // … with the stores already written
+      const reportsBefore = reports.length
+      executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'tabs.w2', rev: tabsWritten.rev, hash: tabsWritten.hash, writerClientId: A })
+      for (let i = 0; i < 2; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+      expect(reports.slice(reportsBefore)).toContain('tabs.w2') // the empty report went in during the await
+      release!()
+      for (let i = 0; i < 6; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    } finally {
+      hash.mockImplementation(original)
+    }
+
+    expect(lockedConflicts(statuses.slice(seen), 'tabs.w2')).toEqual([])
+    expect(daemon.writes.slice(writesBefore).filter((w) => w.key === 'tabs.w2')).toEqual([])
+    expect(daemon.rows.get('tabs.w2')).toMatchObject({ rev: tabsWritten.rev, writer: A })
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w2')!.tabs).toEqual(['tw2'])
+    expect(useTabStore.getState().tabs.tw2).toBeDefined()
+
+    holdOpen = false
+    executor!.syncNow()
+    for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    expect(run.direction.value).toBeNull()
+    expect(executor!.status().profile).toBe('synced')
+  })
+
+  it('(e) PULL attach with the same setup: B takes the SOT\'s tab, and `tabs.unsorted` is NEVER locked on the way', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('unsorted', []), ws('wb1', ['tb1'])], [tab('tb1')])
+    const statuses: ExecutorStatus[] = []
+    const run = await attach(B, 'pull', M, { statuses })
+    expect(useWorkspaceStore.getState().workspaces.map((w) => [w.id, w.tabs])).toEqual([['unsorted', ['ta1']]])
+    expect(useTabStore.getState().tabs.ta1).toBeDefined()
+    expect(statuses.length).toBeGreaterThan(0)
+    expect(lockedConflicts(statuses, 'tabs.unsorted')).toEqual([]) // the history, not only the end
+    expect(daemon.writes.filter((w) => w.clientId === B)).toEqual([])
+    expect(run.settled).toHaveBeenCalledTimes(1)
+    expect(executor!.status().profile).toBe('synced')
   })
 })
 

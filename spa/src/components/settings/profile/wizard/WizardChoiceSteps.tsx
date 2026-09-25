@@ -231,7 +231,11 @@ export function LocalStep({ localId, onLocal, worldReason }: { localId: string; 
       <p data-testid="profile-wizard-local-consequence" className="mt-2 text-text-secondary">
         {localId === MASTER_PROFILE_ID || !slaves[localId]
           ? t('settings.profile.wizard.local.keep')
-          : t('settings.profile.wizard.local.move', { name: slaves[localId].name, master: masterName })}
+          : master.name !== null
+            ? t('settings.profile.wizard.local.move', { name: slaves[localId].name, master: master.name })
+            : // unnamed: the run names it after this device, AT RUN TIME (it may be numbered past a save chosen in
+              // step 4) — so no exact name is promised here, and not "Home" either (#1450)
+              t('settings.profile.wizard.local.move_unnamed', { name: slaves[localId].name })}
       </p>
       {worldReason !== null && (
         <p data-testid="profile-wizard-local-world" data-reason={worldReason} role="status" className={NOTICE}>{t(WORLD_KEY[worldReason])}</p>

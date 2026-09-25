@@ -326,12 +326,22 @@ describe('step 3 — which local profile becomes the master', () => {
     expect(screen.queryByTestId('profile-wizard-local-on-screen-s1')).toBeNull()
   })
 
-  it('a local profile chosen: the consequence is said in plain words — a move, the old master kept as a local profile', async () => {
+  it('a local profile chosen, the master UNNAMED: a move, and the old master is kept named after this device — no exact name promised, never "Home" (#1450)', async () => {
     await toLocal()
     expect(screen.getByTestId('profile-wizard-local-consequence')).toHaveTextContent(en['settings.profile.wizard.local.keep'])
     click('profile-wizard-local-s1')
-    expect(screen.getByTestId('profile-wizard-local-consequence')).toHaveTextContent(en['settings.profile.wizard.local.move'].replace('{{name}}', 'Scratch').replace('{{master}}', 'Home'))
+    // the name is picked at run time (it may be numbered past a save chosen later): the sentence names none
+    const said = screen.getByTestId('profile-wizard-local-consequence')
+    expect(said).toHaveTextContent(en['settings.profile.wizard.local.move_unnamed'].replace('{{name}}', 'Scratch'))
+    expect(said.textContent).not.toContain(en['nav.home'])
     expect(promoteToMaster).not.toHaveBeenCalled() // said, not done: that is step 5
+  })
+
+  it('a local profile chosen, the master NAMED: that name is kept as it is', async () => {
+    useLocalProfilesStore.setState({ master: { name: 'Desk' } })
+    await toLocal()
+    click('profile-wizard-local-s1')
+    expect(screen.getByTestId('profile-wizard-local-consequence')).toHaveTextContent(en['settings.profile.wizard.local.move'].replace('{{name}}', 'Scratch').replace('{{master}}', 'Desk'))
   })
 
   it('no local profile: the step is still there, with one choice, and Next works', async () => {
