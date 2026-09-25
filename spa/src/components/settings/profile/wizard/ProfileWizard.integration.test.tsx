@@ -202,6 +202,9 @@ describe('the wizard, through its controls, against a daemon', () => {
     const legacy = { hosts: { [M]: { id: M, name: 'mlab', ip: '10.0.0.1', port: 7860, token: 'legacy-tok', order: 0 } }, hostOrder: [M] }
     daemon.rows.set('hosts', { rev: 1, hash: 'a'.repeat(64), payload: legacy, fingerprint: 'fp-hosts', ordinal: 1, writer: 'c_oooooooooooo' })
     const rowBefore = JSON.stringify(daemon.rows.get('hosts'))
+    // An unchanged world pushed again needs no request at all (#1450: its empty `tabs.wa` is no longer taken for a
+    // placeholder and pulled) — so the push has something to send, or "the sync did talk to the host" proves nothing.
+    if (direction === 'push') useWorkspaceStore.setState({ workspaces: [workspace('wa', 'SENTINEL-B')], activeWorkspaceId: 'wa' })
     vi.clearAllMocks()
     api.listProfiles.mockImplementation(async () => daemon.list())
     api.getSection.mockImplementation(async (_h, _p, key) => daemon.get(key))
