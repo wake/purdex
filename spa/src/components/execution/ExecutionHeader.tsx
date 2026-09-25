@@ -54,6 +54,12 @@ const MENU_ITEM = 'flex items-center gap-2 w-full px-2 py-1 rounded text-left ho
 
 export const TERMINATE_CONFIRM_MS = 4000
 
+/** No layout box: `display:none` (the other side of `@md`), or not rendered. */
+const boxless = (el: HTMLElement | null) => {
+  const r = el?.getBoundingClientRect()
+  return !r || (r.width === 0 && r.height === 0)
+}
+
 export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState(false)
@@ -72,20 +78,36 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
   // all-zero rect and pin the panel to the top-left. Watch the header's own
   // box and close any panel whose anchor has lost its box — asking the anchor
   // directly keeps the breakpoint in CSS instead of a copied pixel value.
+  // The hidden anchor of a panel closed that way. FloatingPanel's unmount hands
+  // focus back to it, which a browser can't do for a `display:none` element
+  // (focus falls to <body>); the effect below then moves focus to a trigger
+  // that is visible on this side of the breakpoint. It runs after the panel's
+  // unmount cleanup (React runs every passive destroy before any create), so
+  // the panel's restore can't take focus back afterwards.
+  const refocusFrom = useRef<HTMLElement | null>(null)
   useEffect(() => {
     const root = rootRef.current
     if (!root || (!costOpen && !overflowOpen)) return
-    const boxless = (el: HTMLElement | null) => {
-      const r = el?.getBoundingClientRect()
-      return !r || (r.width === 0 && r.height === 0)
-    }
     const ro = new ResizeObserver(() => {
-      if (costOpen && boxless(costFromOverflow ? overflowRef.current : costRef.current)) setCostOpen(false)
-      if (overflowOpen && boxless(overflowRef.current)) setOverflowOpen(false)
+      const costAnchor = costFromOverflow ? overflowRef.current : costRef.current
+      if (costOpen && boxless(costAnchor)) { refocusFrom.current = costAnchor; setCostOpen(false) }
+      if (overflowOpen && boxless(overflowRef.current)) { refocusFrom.current = overflowRef.current; setOverflowOpen(false) }
     })
     ro.observe(root)
     return () => ro.disconnect()
   }, [costOpen, overflowOpen, costFromOverflow])
+  useEffect(() => {
+    const hidden = refocusFrom.current
+    if (!hidden) return
+    refocusFrom.current = null
+    // Only when focus went nowhere useful (body, or the hidden anchor itself);
+    // focus the user moved elsewhere while the panel was open stays put.
+    const active = document.activeElement
+    if (active && active !== document.body && active !== hidden) return
+    const target = [costRef.current, overflowRef.current, nameRef.current]
+      .find((el) => el && !el.disabled && !boxless(el))
+    target?.focus()
+  }, [costOpen, overflowOpen])
   useEffect(() => {
     if (!confirming) return
     const id = setTimeout(() => setConfirming(false), TERMINATE_CONFIRM_MS)

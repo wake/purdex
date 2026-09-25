@@ -410,6 +410,75 @@ describe('ExecutionHeader', () => {
         fireResize()
         expect(screen.queryByTestId('cost-panel')).toBeNull()
       })
+
+      // Codex re-review (PR #1464): FloatingPanel hands focus back to the
+      // anchor it opened from, which is now `display:none` — a real browser
+      // can't focus it and focus lands on <body>. The header moves focus to the
+      // trigger that is visible on this side of the breakpoint instead.
+      it('wide → narrow: focus moves to the visible overflow trigger, not the hidden cost button', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        costBtn().focus()
+        fireEvent.click(costBtn())
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(document.activeElement).toBe(trigger)
+      })
+
+      it('narrow → wide: focus moves to the visible cost button, not the hidden overflow trigger', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        // The overflow menu itself.
+        trigger.focus()
+        fireEvent.click(trigger)
+        fireResize()
+        expect(screen.getByTestId('header-overflow-panel')).toBeInTheDocument()
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+        expect(document.activeElement).toBe(costBtn())
+        // The cost panel opened from the overflow menu.
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        trigger.focus()
+        fireEvent.click(trigger)
+        fireEvent.click(screen.getByTestId('overflow-cost'))
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(document.activeElement).toBe(costBtn())
+      })
+
+      it('does not steal focus the user has moved elsewhere while the panel was open', () => {
+        render(<>
+          <ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />
+          <input data-testid="elsewhere" />
+        </>)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        costBtn().focus()
+        fireEvent.click(costBtn())
+        fireResize()
+        screen.getByTestId('elsewhere').focus()
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(document.activeElement).toBe(screen.getByTestId('elsewhere'))
+      })
     })
 
     it('cost=null → no aria-expanded and click does nothing', () => {
