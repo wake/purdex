@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import en from '../../../../locales/en.json'
 import zhTW from '../../../../locales/zh-TW.json'
 import { ProfileWizard } from './ProfileWizard'
-import { ATTACH_REASONS, offeredProfileName } from './wizard-run'
+import { ATTACH_REASONS } from './wizard-run'
 import { reasonKey, requestKey } from './wizard-shared'
 import { useProfileStore } from '../../../../stores/useProfileStore'
 import { useHostStore } from '../../../../stores/useHostStore'
@@ -326,16 +326,14 @@ describe('step 3 — which local profile becomes the master', () => {
     expect(screen.queryByTestId('profile-wizard-local-on-screen-s1')).toBeNull()
   })
 
-  it('a local profile chosen, the master UNNAMED: a move, and the old master is kept under the name the run will give it (#1450)', async () => {
+  it('a local profile chosen, the master UNNAMED: a move, and the old master is kept named after this device — no exact name promised, never "Home" (#1450)', async () => {
     await toLocal()
     expect(screen.getByTestId('profile-wizard-local-consequence')).toHaveTextContent(en['settings.profile.wizard.local.keep'])
     click('profile-wizard-local-s1')
-    // what `promoteToMaster` will be handed for this draft (no pull save yet: nothing else to number past)
-    const demoted = offeredProfileName([])
-    expect(demoted).not.toBe(en['nav.home'])
-    expect(screen.getByTestId('profile-wizard-local-consequence')).toHaveTextContent(
-      en['settings.profile.wizard.local.move_unnamed'].replace('{{name}}', 'Scratch').replace('{{master}}', en['nav.home']).replace('{{demoted}}', demoted),
-    )
+    // the name is picked at run time (it may be numbered past a save chosen later): the sentence names none
+    const said = screen.getByTestId('profile-wizard-local-consequence')
+    expect(said).toHaveTextContent(en['settings.profile.wizard.local.move_unnamed'].replace('{{name}}', 'Scratch'))
+    expect(said.textContent).not.toContain(en['nav.home'])
     expect(promoteToMaster).not.toHaveBeenCalled() // said, not done: that is step 5
   })
 

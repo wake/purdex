@@ -11,7 +11,7 @@ import type { UnsettledReason } from '../../../../lib/profile/master-world'
 import type { SotProfilesView } from '../useSotProfiles'
 import type { SotDelete } from '../useSotDelete'
 import type { Attachment } from '../../../../lib/profile/api'
-import { countWorld, offeredProfileName, worldToBeMaster, type PullPremiseReason } from './wizard-run'
+import { countWorld, worldToBeMaster, type PullPremiseReason } from './wizard-run'
 import { BTN, INPUT, NOTICE, requestKey } from './wizard-shared'
 
 const BADGE = 'rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-secondary'
@@ -202,8 +202,7 @@ const WORLD_KEY: Record<UnsettledReason, string> = {
   'no-parked-master': 'settings.profile.wizard.refused.no_parked_master',
 }
 
-/** `demotedAlso`: the names the run would number the demoted master past for the current draft (wizard-run's `promote`). */
-export function LocalStep({ localId, onLocal, worldReason, demotedAlso }: { localId: string; onLocal: (id: string) => void; worldReason: UnsettledReason | null; demotedAlso: readonly string[] }) {
+export function LocalStep({ localId, onLocal, worldReason }: { localId: string; onLocal: (id: string) => void; worldReason: UnsettledReason | null }) {
   const t = useI18nStore((s) => s.t)
   const slaves = useLocalProfilesStore((s) => s.slaves)
   const slaveOrder = useLocalProfilesStore((s) => s.slaveOrder)
@@ -234,8 +233,9 @@ export function LocalStep({ localId, onLocal, worldReason, demotedAlso }: { loca
           ? t('settings.profile.wizard.local.keep')
           : master.name !== null
             ? t('settings.profile.wizard.local.move', { name: slaves[localId].name, master: master.name })
-            : // unnamed: the run names it after this device, at run time — said as "right now", not promised (#1450)
-              t('settings.profile.wizard.local.move_unnamed', { name: slaves[localId].name, master: masterName, demoted: offeredProfileName(demotedAlso) })}
+            : // unnamed: the run names it after this device, AT RUN TIME (it may be numbered past a save chosen in
+              // step 4) — so no exact name is promised here, and not "Home" either (#1450)
+              t('settings.profile.wizard.local.move_unnamed', { name: slaves[localId].name })}
       </p>
       {worldReason !== null && (
         <p data-testid="profile-wizard-local-world" data-reason={worldReason} role="status" className={NOTICE}>{t(WORLD_KEY[worldReason])}</p>

@@ -1616,7 +1616,7 @@
   "settings.profile.wizard.local.what": "A device syncs exactly one of its profiles: its master. Choose which profile of this device that should be.",
   "settings.profile.wizard.local.keep": "The master stays the master. Nothing on this device is moved.",
   "settings.profile.wizard.local.move": "“{{name}}” will BECOME the master — a move, not a copy. “{{master}}”, the master until now, is kept on this device as a local profile and stops being the one that syncs. This is done in the last step, and it is not undone if a later step fails.",
-  "settings.profile.wizard.local.move_unnamed": "“{{name}}” will BECOME the master — a move, not a copy. The master until now (shown as “{{master}}”) is kept on this device as a local profile named after this device (right now: “{{demoted}}”) and stops being the one that syncs. This is done in the last step, and it is not undone if a later step fails.",
+  "settings.profile.wizard.local.move_unnamed": "“{{name}}” will BECOME the master — a move, not a copy. The master until now is kept on this device as a local profile named after this device, and stops being the one that syncs. This is done in the last step, and it is not undone if a later step fails.",
   "settings.profile.wizard.local.catching_up": "This window is catching up with a profile switch made in another window. The next step opens as soon as it has.",
   "settings.profile.wizard.direction.what": "The first time, one side has to win wherever both hold something. After that, changes flow both ways.",
   "settings.profile.wizard.direction.push": "Push — this device overwrites the profile on the host",
