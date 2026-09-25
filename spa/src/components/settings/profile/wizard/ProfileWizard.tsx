@@ -490,7 +490,7 @@ export function ProfileWizard({ onClose }: { onClose: () => void }) {
             />
           )}
 
-          {step === 'local' && <LocalStep localId={localId} onLocal={setLocalId} worldReason={worldReason} />}
+          {step === 'local' && <LocalStep localId={localId} onLocal={setLocalId} worldReason={worldReason} demotedAlso={effectiveDirection === 'pull' && saveFirst ? [saveName.value] : []} />}
 
           {step === 'direction' && (
             <DirectionStep

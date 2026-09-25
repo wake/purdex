@@ -1616,6 +1616,7 @@
   "settings.profile.wizard.local.what": "一台裝置只會同步它其中一個工作台，也就是工作台主檔。請選擇這台裝置要用哪一個。",
   "settings.profile.wizard.local.keep": "工作台主檔維持不變，這台裝置上不會有任何搬動。",
   "settings.profile.wizard.local.move": "「{{name}}」會「變成」工作台主檔——是搬移，不是複製。原本的工作台主檔「{{master}}」會留在這台裝置上變成一個本機工作台，不再是同步的那一個。這件事在最後一步才執行；之後的步驟如果失敗，它不會被還原。",
+  "settings.profile.wizard.local.move_unnamed": "「{{name}}」會「變成」工作台主檔——是搬移，不是複製。原本的工作台主檔（目前顯示為「{{master}}」）會留在這台裝置上變成一個本機工作台，以這台裝置命名（此刻是「{{demoted}}」），不再是同步的那一個。這件事在最後一步才執行；之後的步驟如果失敗，它不會被還原。",
   "settings.profile.wizard.local.catching_up": "這個視窗正在跟上另一個視窗剛做的工作台切換，跟上之後就可以進到下一步。",
   "settings.profile.wizard.direction.what": "第一次同步時，兩邊都有內容的地方必須由其中一邊勝出；之後的變更就是雙向流動。",
   "settings.profile.wizard.direction.push": "推——用這台裝置的內容覆蓋主機上的工作台",
